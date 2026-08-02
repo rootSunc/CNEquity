@@ -1,10 +1,9 @@
 """Render source-health reports into one self-contained page.
 
 No CDN, no build step, no external font — same rule as the `asl serve` bundle,
-for a different reason: this page is published to GitHub Pages and read by
-people whose network is, by construction, the thing in question. A stylesheet
-fetched from elsewhere is one more host that can be the reason the page looks
-broken.
+and here the reason is sharper: this page is read by someone whose network is,
+by construction, the thing in question. A stylesheet fetched from elsewhere is
+one more host that can be why the page looks broken.
 
 The page's job is to be *hard to misread*. Three things are therefore structural
 rather than footnotes:
@@ -33,8 +32,6 @@ from ashare_lake.diagnostics.source_health import (
     HealthReport,
     ProbeStatus,
 )
-
-REPO_URL = "https://github.com/rootSunc/ashare-lake"
 
 # Vantage keys are free-form (the CLI takes whatever you pass), so this is a
 # display hint rather than a whitelist: an unknown key still renders, under its
@@ -175,8 +172,8 @@ def render_page(reports: list[HealthReport]) -> str:
         "<main>",
         "<h1>A 股公开数据源健康度</h1>",
         '<p class="sub">这些源是 AkShare、各类取数 skill、以及你自己的爬虫共同依赖的那十几个端点。'
-        '本页由 <a href="' + REPO_URL + '">ashare-lake</a> 每天自动探测——它本来就要跑全市场日更，'
-        "顺手把结果公开出来。</p>",
+        "本页读的是 <code>asl sources</code> 最近一次写进湖里的报告——不是实时探测，"
+        "刷新页面不会重新请求任何人。</p>",
         '<div class="vantages">',
     ]
     for report in reports:
@@ -253,9 +250,8 @@ def render_page(reports: list[HealthReport]) -> str:
 
     footer = [
         "<footer>",
-        f'生成于 {_e(generated)} · 由 <a href="{REPO_URL}">ashare-lake</a> 的 '
-        "<code>asl sources probe</code> 产出 · "
-        f'<a href="{REPO_URL}/blob/main/docs/operations/source-health.md">这张表是怎么来的</a>',
+        f"页面生成于 {_e(generated)} · 数据由 <code>asl sources</code> 写入 "
+        "<code>meta/source_health/</code> · 重新探测：<code>asl sources --vantage cn</code>",
         "</footer>",
         "</main>",
     ]

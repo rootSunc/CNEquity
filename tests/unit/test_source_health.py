@@ -253,3 +253,97 @@ def test_page_escapes_source_detail():
 def test_page_needs_at_least_one_report():
     with pytest.raises(ValueError):
         render_page([])
+
+
+# --- the local viewer ------------------------------------------------------
+
+
+def _serve_client(config):
+    from fastapi.testclient import TestClient
+
+    from ashare_lake.serve.app import create_app
+
+    return TestClient(create_app(config))
+
+
+def _store(config, vantage: str, payload) -> None:
+    root = config.meta_root / "source_health"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{vantage}.json").write_text(
+        payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def test_dashboard_renders_the_stored_report(config):
+    _store(config, "cn", _report("cn", {}).to_dict())
+    body = _serve_client(config).get("/source-health").text
+    assert "大陆出口" in body
+    assert sh.PROBES[0].label in body
+
+
+def test_dashboard_shows_every_vantage_side_by_side(config):
+    _store(config, "cn", _report("cn", {}).to_dict())
+    _store(config, "overseas", _report("overseas", {}).to_dict())
+    body = _serve_client(config).get("/source-health").text
+    assert "大陆出口" in body and "海外出口" in body
+
+
+def test_dashboard_never_probes(config, monkeypatch):
+    """A GET that reaches out to a dozen third parties is what the read-only
+    stance exists to prevent; the CLI owns probing."""
+    monkeypatch.setattr(
+        sh, "run_probes", lambda *a, **k: pytest.fail("the dashboard probed a source")
+    )
+    _store(config, "cn", _report("cn", {}).to_dict())
+    assert _serve_client(config).get("/source-health").status_code == 200
+
+
+def test_dashboard_without_a_report_says_how_to_make_one(config):
+    resp = _serve_client(config).get("/source-health")
+    assert resp.status_code == 404
+    assert "asl sources" in resp.text
+
+
+def test_a_corrupt_report_is_skipped_not_fatal(config):
+    """Half-written or hand-edited files must not take the page down."""
+    _store(config, "cn", _report("cn", {}).to_dict())
+    _store(config, "broken", "{not json")
+    body = _serve_client(config).get("/source-health").text
+    assert "大陆出口" in body
+
+
+def test_probe_writes_into_the_lake_by_default(config, monkeypatch, tmp_path):
+    from click.testing import CliRunner
+
+    from ashare_lake.cli.main import cli
+    from ashare_lake.config.bootstrap import path_for_toml
+
+    monkeypatch.setattr(sh, "PROBES", (_probe(key="a"),))
+    monkeypatch.setattr(sh, "PROBES_BY_KEY", {p.key: p for p in sh.PROBES})
+    cfg_path = tmp_path / "c.toml"
+    cfg_path.write_text(f'[data]\nroot = "{path_for_toml(config.data_root)}"\n')
+
+    result = CliRunner().invoke(cli, ["sources", "--config", str(cfg_path), "--vantage", "cn"])
+    assert result.exit_code == 0, result.output
+    written = config.meta_root / "source_health" / "cn.json"
+    assert written.exists()
+    assert json.loads(written.read_text("utf-8"))["vantage"] == "cn"
+
+
+def test_probe_exits_zero_when_a_source_is_down(config, monkeypatch, tmp_path):
+    """A red source is the command's output, not its failure — a non-zero exit
+    would make a scheduled run fail on exactly the days it matters."""
+    from click.testing import CliRunner
+
+    from ashare_lake.cli.main import cli
+    from ashare_lake.config.bootstrap import path_for_toml
+
+    monkeypatch.setattr(sh, "PROBES", (_probe(run=lambda cfg: 1 / 0),))
+    monkeypatch.setattr(sh, "PROBES_BY_KEY", {p.key: p for p in sh.PROBES})
+    cfg_path = tmp_path / "c.toml"
+    cfg_path.write_text(f'[data]\nroot = "{path_for_toml(config.data_root)}"\n')
+
+    result = CliRunner().invoke(cli, ["sources", "--config", str(cfg_path)])
+    assert result.exit_code == 0
+    assert "down" in result.output

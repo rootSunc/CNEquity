@@ -392,6 +392,40 @@ def create_app(config: Config, *, token: str | None = None) -> FastAPI:
         html = page.read_text(encoding="utf-8")
         return HTMLResponse(html.replace(_BUNDLE_SRC, f"{_BUNDLE_SRC}?v={_bundle_stamp()}"))
 
+    @app.get("/source-health", response_class=HTMLResponse, include_in_schema=False)
+    def source_health(request: Request) -> HTMLResponse:
+        """Render whatever `asl sources` last wrote into the lake.
+
+        Reads, never probes. Probing reaches out to a dozen third-party hosts,
+        and a GET that does it turns an unauthenticated local service into
+        something a stray browser tab can point at other people's endpoints —
+        the same reason nothing here triggers ingestion. The CLI owns that.
+        """
+        import json as _json
+
+        from ashare_lake.diagnostics.health_page import render_page
+        from ashare_lake.diagnostics.source_health import HealthReport
+
+        root = request.app.state.view.config.meta_root / "source_health"
+        reports = []
+        for path in sorted(root.glob("*.json")) if root.exists() else []:
+            try:
+                reports.append(HealthReport.from_dict(_json.loads(path.read_text("utf-8"))))
+            except (ValueError, OSError) as exc:  # a half-written or hand-edited file
+                logger.warning("skipping source-health report %s: %s", path.name, exc)
+        if not reports:
+            return HTMLResponse(
+                "<!doctype html><meta charset=utf-8>"
+                "<style>body{font:15px/1.7 system-ui;margin:3rem auto;max-width:34rem}"
+                "code{background:#f6f8fa;padding:.1rem .3rem;border-radius:4px}</style>"
+                "<h1>还没有探测记录</h1>"
+                "<p>先跑一次探测，报告会写进湖里，这个页面读它：</p>"
+                "<pre><code>asl sources --vantage cn</code></pre>"
+                "<p>探测放在 CLI 上是有意的——这个面板只读，不会替你去请求十几个第三方主机。</p>",
+                status_code=404,
+            )
+        return HTMLResponse(render_page(reports))
+
     @app.get("/api/health", response_model=Health)
     def health(view: View) -> Health:
         # The overview page loads this first, so it is where the cache gets its

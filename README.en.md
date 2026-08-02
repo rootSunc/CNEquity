@@ -335,21 +335,23 @@ delisted". Not *not built yet* — **impossible without a lake**.
 official `mcp` SDK resolves to 15 additional packages including a second HTTP
 stack. Details: [MCP reference](docs/reference/mcp.md).
 
-## A public side effect: A-share source health
+## Source health: `asl sources`
 
-**[rootsunc.github.io/ashare-lake](https://rootsunc.github.io/ashare-lake/)** — refreshed every trading day.
-
-Is EastMoney blocking you today? Is that CLS endpoint still alive? Did Shenwan's
-certificate expire again? These sources are not this project's: AkShare, every
-fetch-on-demand skill, and your own scraper all hit the same dozen endpoints,
-and when one changes there is nowhere to look it up — you spend an afternoon
-suspecting your own code first. This lake sweeps them every trading day anyway,
-so publishing what it learns costs one extra request per source.
+Is EastMoney blocking you today? Did Shenwan's certificate expire again? These
+sources are not this project's: AkShare, every fetch-on-demand skill, and your
+own scraper all hit the same dozen endpoints, and when one changes there is
+nowhere to look it up — you spend an afternoon suspecting your own code first.
+This lake sweeps them every trading day anyway, so one extra request per source
+answers it.
 
 ```bash
-asl sources probe --vantage cn --out reports/cn.json
-asl sources page --report reports/cn.json --out site/index.html
+asl sources --vantage cn     # probe once; the report lands in meta/source_health/
+asl serve                    # -> http://127.0.0.1:8787/source-health
 ```
+
+**Probing is a CLI action, viewing is the dashboard.** The dashboard is
+read-only and will not reach out to a dozen third-party hosts on your behalf —
+the same reason it does not trigger ingestion.
 
 Three rules make the table trustworthy:
 
@@ -359,7 +361,8 @@ Three rules make the table trustworthy:
   because it truncates a backfill silently.
 - **`blocked` is not `down`.** Several sources refuse non-mainland egress at the
   WAF, so the same host can be green from Shanghai and red from Virginia at the
-  same second. Vantages sit side by side and are never merged.
+  same second. `--vantage` records which egress a report came from, and vantages
+  are rendered side by side, never merged.
 - **One probe is not an SLA.** One request per source, run serially — a health
   check should not cause the outage it exists to observe.
 
@@ -446,8 +449,8 @@ backtest includes ST names in its early cross-sections. `asl audit` reports the
 gap as `trading_status_coverage_start` — do not assume it is clean.
 
 **Q: EastMoney is returning 403 / resetting connections. Now what?**
-Check the [source health page](https://rootsunc.github.io/ashare-lake/) first —
-if the mainland column is red too, it is not your network. The EastMoney hosts
+Run `asl sources --only eastmoney_push2,eastmoney_push2his` first — if that is
+red too, it is not your code. The EastMoney hosts
 (push2 / push2his / datacenter) share one WAF and go dark together, and
 `push2his` is the most sensitive to non-mainland egress (this project ships
 Chrome TLS impersonation and CDN stickiness for it). Bars on the daily path come

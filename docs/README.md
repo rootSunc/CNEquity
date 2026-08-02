@@ -39,7 +39,7 @@ CLI 是 `asl`，Python 包是 `ashare_lake`。推荐：`pip install ashare-lake`
 ## 运维
 
 - [Runbook](operations/runbook.md) · [脚本说明](operations/scripts.md) · [故障排查](operations/troubleshooting.md)
-- [数据源健康度](operations/source-health.md)（公开页面 + `asl sources`）
+- [数据源健康度](operations/source-health.md)（`asl sources` + `asl serve /source-health`）
 
 ## 架构
 

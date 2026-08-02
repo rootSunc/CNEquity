@@ -1,27 +1,25 @@
 # 数据源健康度：这张表是怎么来的
 
-公开页面：**[A 股公开数据源健康度](https://rootsunc.github.io/ashare-lake/)**
-
-这些源不是本项目专属的——AkShare、各类取数 skill、你自己写的爬虫，走的是同一批端点。其中某一个变了，通常没有地方可查，你得先花半天怀疑自己的代码。这个湖本来就每个交易日跑全市场，它知道；把它知道的公开出来，每个源多发一个请求而已。
+这些源不是本项目专属的——AkShare、各类取数 skill、你自己写的爬虫，走的是同一批端点。其中某一个变了，通常没有地方可查，你得先花半天怀疑自己的代码。这个湖本来就每个交易日跑全市场，顺手多发一个请求就知道了。
 
 ---
 
-## 自己跑
+## 怎么用
 
 ```bash
-asl sources probe --vantage cn --out reports/cn.json
-asl sources page --report reports/cn.json --out site/index.html
+asl sources --vantage cn     # 探测一遍，报告写进 meta/source_health/cn.json
+asl serve                    # → http://127.0.0.1:8787/source-health
 ```
 
-`--vantage` 是**必须认真填**的：它记录这次探测是从哪个出口发出去的。见下面「为什么视角决定结论」。
+**探测在 CLI，展示在 serve。** 面板只读——它不会替你去请求十几个第三方主机，和它不触发采集是同一个理由：一个无鉴权的本地服务，不该能被一个走神的浏览器标签页指向别人的接口。
 
 只测某几个源：
 
 ```bash
-asl sources probe --only eastmoney_push2,sina,tdx_protocol
+asl sources --only eastmoney_push2,sina,tdx_protocol
 ```
 
-不带 `--out` 时 JSON 打到 stdout，人读的那份表打到 stderr——可以直接 `| jq`。
+`--vantage` 是**必须认真填**的：它记录这次探测从哪个出口发出去。见下面「为什么视角决定结论」。每个 vantage 一个文件，页面把它们并排渲染。
 
 ---
 
@@ -51,21 +49,18 @@ asl sources probe --only eastmoney_push2,sina,tdx_protocol
 
 ## 为什么视角决定结论
 
-好几个源在 WAF 层拒绝非大陆出口。**同一个主机、同一秒，大陆列可以是绿的、海外列是红的，两个都是真的。**
+好几个源在 WAF 层拒绝非大陆出口。**同一个主机、同一秒，大陆探测可以是绿的、海外探测是红的，两个都是真的。**
 
-所以：
+所以每份报告带 `vantage` 标签，页面把不同视角**并排**放，不合并成一个结论——合并等于凭空造一个哪次探测都没测到的「事实」。
 
-- 每份报告带 `vantage` 标签，页面把不同视角**并排**放，不合并成一个结论。合并等于凭空造一个哪次探测都没测到的「事实」。
-- GitHub Actions 的 runner 在境外，它产出的那份固定标 `overseas`。把它当成「官方状态」就会报出大陆用户根本没有的故障。
-- 大陆那一列由跑日更的人自己产出并提交到 `docs/source-health/cn.json`：
+在两个网络里各跑一次，页面就有两列：
 
-  ```bash
-  asl sources probe --vantage cn --out docs/source-health/cn.json
-  ```
+```bash
+asl sources --vantage cn          # 大陆出口
+asl sources --vantage overseas    # 挂代理 / 海外机器上再跑一次
+```
 
-  没有这个文件，页面就只显示一列。
-
----
+文件名不决定列名，JSON 里的 `vantage` 字段才决定。同名会覆盖，所以同一个出口重复跑就是刷新那一列。
 
 ## 一次探测不是 SLA
 
@@ -83,17 +78,17 @@ URL 常量、东财的鉴权头、上交所需要的 Chrome TLS 伪装、同花�
 
 ---
 
-## 定时发布
+## 报告存在哪
 
-`.github/workflows/source-health.yml`，工作日 09:20 UTC（17:20 北京时间，收盘后、日更晚间组之前）。
+`{data_root}/meta/source_health/<vantage>.json`，和湖的其它元数据放在一起。`asl serve` 启动时不读，访问 `/source-health` 时才读——所以先跑探测再刷新页面即可，不用重启。
 
-流程：探测（overseas）→ 收集 `docs/source-health/*.json` 里已提交的其它视角 → 渲染 → 发布到 GitHub Pages。
+**没有内置的定时发布。** 想每天自动跑就挂进你现有的调度里（见 [runbook](runbook.md)）：
 
-**探测失败不会让 job 失败。** 源变红是这个 workflow 的**输出**而不是它的错误；非零退出会让页面恰好在最该更新的那天发不出去。
+```bash
+asl sources --vantage cn >> logs/source-health.log 2>&1
+```
 
-启用需要仓库 Settings → Pages → Source 选 **GitHub Actions**。
-
----
+**探测失败不会让命令失败。** 源变红是这条命令的**输出**而不是它的错误；非零退出会让调度在最该记录的那天报错并跳过。
 
 ## 加一个源
 
@@ -120,4 +115,4 @@ SourceProbe(
 
 ## 相关文档
 
-- [CLI](../reference/cli.md#asl-sources) · [逐源限制](../datasets/sources.md) · [故障排查](troubleshooting.md)
+- [CLI](../reference/cli.md#asl-sources) · [serve 面板](../modules/serve.md) · [逐源限制](../datasets/sources.md) · [故障排查](troubleshooting.md)

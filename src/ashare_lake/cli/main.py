@@ -1446,6 +1446,9 @@ def serve(config_path: str, host: str, port: int, token: str | None):
     click.echo(f"lake:      {cfg.data_root}")
     click.echo(f"dashboard: http://{host}:{port}/" + (f"?token={token}" if token else ""))
     click.echo(f"api docs:  http://{host}:{port}/api/docs")
+    click.echo(
+        f"sources:   http://{host}:{port}/source-health" + (f"?token={token}" if token else "")
+    )
     uvicorn.run(create_app(cfg, token=token), host=host, port=port, log_level="info")
 
 
@@ -1641,12 +1644,7 @@ def _guard_mcp_data_root(cfg, config_path: str) -> None:
     )
 
 
-@cli.group("sources")
-def sources_grp():
-    """Probe the public sources this lake depends on, and publish the result."""
-
-
-@sources_grp.command("probe")
+@cli.command("sources")
 @click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
 @click.option(
     "--vantage",
@@ -1657,68 +1655,46 @@ def sources_grp():
     "not interpretable.",
 )
 @click.option("--only", default=None, help="Comma-separated probe keys; default is all of them.")
-@click.option("--out", default=None, help="Write the JSON report here (default: stdout).")
-def sources_probe(config_path: str, vantage: str, only: str | None, out: str | None):
-    """One request per source; report what actually came back.
+@click.option(
+    "--out",
+    default=None,
+    help="Where to write the JSON report. Defaults to meta/source_health/<vantage>.json "
+    "inside the lake, which is where `asl serve` reads it from.",
+)
+def sources(config_path: str, vantage: str, only: str | None, out: str | None):
+    """Probe the public sources this lake depends on.
 
-    Serial and polite: these are the same hosts the daily pipeline uses, and a
-    health check that trips a rate-limit ban would be causing the outage it is
-    meant to observe.
+    One request per source, serial and polite: these are the same hosts the
+    daily pipeline uses, and a health check that trips a rate-limit ban would be
+    causing the outage it is meant to observe.
+
+    The report lands in the lake, and `asl serve` renders it at /source-health.
+    Probing is a CLI action on purpose — the dashboard stays read-only, and an
+    unauthenticated local service that can reach out to a dozen third parties
+    is not something to leave listening.
     """
-    import logging
-
     from ashare_lake.diagnostics.source_health import STATUS_LABELS, ProbeStatus, run_probes
 
-    logging.basicConfig(level=logging.WARNING, force=True)
+    _progress_logging(quiet=True)
+    cfg = _cfg(config_path)
     keys = [k.strip() for k in only.split(",") if k.strip()] if only else None
-    report = run_probes(_cfg(config_path), vantage=vantage, only=keys)
+    report = run_probes(cfg, vantage=vantage, only=keys)
 
     for result in report.results:
-        latency = f"{result.latency_ms:>6}ms" if result.latency_ms is not None else "     —"
+        latency = f"{result.latency_ms:>6}ms" if result.latency_ms is not None else "     \u2014"
         label = STATUS_LABELS[ProbeStatus(result.status)]
-        click.echo(
-            f"{result.status:<8}{label:<5}{latency}  {result.key:<22}{result.detail}", err=True
-        )
+        click.echo(f"{result.status:<8}{label:<5}{latency}  {result.key:<22}{result.detail}")
 
-    payload = json.dumps(report.to_dict(), indent=2, ensure_ascii=False)
-    if out:
-        path = Path(out)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(payload + "\n", encoding="utf-8")
-        click.echo(f"Wrote {path}", err=True)
-    else:
-        click.echo(payload)
+    path = Path(out) if out else cfg.meta_root / "source_health" / f"{vantage}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(report.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    click.echo(f"\nWrote {path}")
+    click.echo("View it with: asl serve  \u2192  http://127.0.0.1:8787/source-health")
 
     # Exit 0 even when sources are down. A red source is this command's *output*,
-    # not its failure — a non-zero exit would make the scheduled job that
-    # publishes the page fail on exactly the days the page matters most.
-
-
-@sources_grp.command("page")
-@click.option(
-    "--report",
-    "report_paths",
-    multiple=True,
-    required=True,
-    help="A JSON report from `asl sources probe`; repeat for each vantage.",
-)
-@click.option("--out", required=True, help="Write the HTML page here.")
-def sources_page(report_paths: tuple[str, ...], out: str):
-    """Render one or more reports into a single self-contained page."""
-    from ashare_lake.diagnostics.health_page import render_page
-    from ashare_lake.diagnostics.source_health import HealthReport
-
-    reports = []
-    for raw_path in report_paths:
-        path = Path(raw_path)
-        if not path.exists():
-            raise click.ClickException(f"Report not found: {path}")
-        reports.append(HealthReport.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-
-    page = Path(out)
-    page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text(render_page(reports), encoding="utf-8")
-    click.echo(f"Wrote {page} ({len(reports)} vantage(s))")
+    # not its failure.
 
 
 @cli.command("servers")
