@@ -228,6 +228,27 @@ claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
 
 **没有新增依赖**：stdio JSON-RPC 是手写的，官方 `mcp` SDK 会拉进 15 个包（含第二套 HTTP 栈）。细节见 [MCP 参考](docs/reference/mcp.md)。
 
+## 顺带公开：A 股数据源健康度
+
+**[rootsunc.github.io/ashare-lake](https://rootsunc.github.io/ashare-lake/)** —— 每个交易日自动更新。
+
+东财今天被封了吗？财联社那个接口还活着吗？申万的证书是不是又过期了？这些源不是本项目专属的：AkShare、各类取数 skill、你自己写的爬虫，走的是同一批端点。变了通常没地方查，得先花半天怀疑自己的代码。
+
+这个湖本来就每个交易日跑全市场，顺手把结果公开出来，每个源多发一个请求而已。
+
+```bash
+asl sources probe --vantage cn --out reports/cn.json
+asl sources page --report reports/cn.json --out site/index.html
+```
+
+三条让这张表可信的规矩：
+
+- **HTTP 200 不等于可用。** 东财用 200 返回风控页，新浪用 200 返回空数组。每个探测断言**响应体**，「空响应」单独一档——它看起来比失败健康，实际更危险（回填静默截断）。
+- **「被拒」不等于「挂了」。** 好几个源在 WAF 层拒绝非大陆出口，同一主机同一秒可以大陆绿、海外红。两个视角**并排**放，不合并成一个结论。
+- **一次探测不是 SLA。** 每源只发一个请求，串行——健康检查不该自己制造它要观测的故障。
+
+口径与加新源见 [数据源健康度](docs/operations/source-health.md)。
+
 ## 有什么数据
 
 下表覆盖注册表全部 **39** 个数据集（36 curated + 3 derived，与 `domain/datasets.py` 同步）。  

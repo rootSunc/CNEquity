@@ -299,6 +299,36 @@ delisted". Not *not built yet* — **impossible without a lake**.
 official `mcp` SDK resolves to 15 additional packages including a second HTTP
 stack. Details: [MCP reference](docs/reference/mcp.md).
 
+## A public side effect: A-share source health
+
+**[rootsunc.github.io/ashare-lake](https://rootsunc.github.io/ashare-lake/)** — refreshed every trading day.
+
+Is EastMoney blocking you today? Is that CLS endpoint still alive? Did Shenwan's
+certificate expire again? These sources are not this project's: AkShare, every
+fetch-on-demand skill, and your own scraper all hit the same dozen endpoints,
+and when one changes there is nowhere to look it up — you spend an afternoon
+suspecting your own code first. This lake sweeps them every trading day anyway,
+so publishing what it learns costs one extra request per source.
+
+```bash
+asl sources probe --vantage cn --out reports/cn.json
+asl sources page --report reports/cn.json --out site/index.html
+```
+
+Three rules make the table trustworthy:
+
+- **HTTP 200 is not "up".** EastMoney answers a challenge page with 200, Sina
+  answers an empty array with 200. Every probe asserts on the *payload*, and
+  `empty` is its own status — it looks healthier than a failure and is worse,
+  because it truncates a backfill silently.
+- **`blocked` is not `down`.** Several sources refuse non-mainland egress at the
+  WAF, so the same host can be green from Shanghai and red from Virginia at the
+  same second. Vantages sit side by side and are never merged.
+- **One probe is not an SLA.** One request per source, run serially — a health
+  check should not cause the outage it exists to observe.
+
+Details and how to add a source: [source health](docs/operations/source-health.md).
+
 ## Datasets
 
 All **39** registered datasets (36 curated + 3 derived; kept in sync with

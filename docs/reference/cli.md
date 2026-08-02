@@ -386,6 +386,45 @@ claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
 
 ---
 
+## asl sources
+
+探测本湖依赖的公开数据源，并渲染成一页可发布的表。产出即[公开健康度页面](https://rootsunc.github.io/ashare-lake/)。
+
+### asl sources probe
+
+每个源发**一个**请求，断言响应体（不是状态行），串行且尊重各源限速。
+
+| 选项 | 说明 |
+|------|------|
+| `--config` | 配置文件路径（探测不读湖，但要用里面的限速与超时） |
+| `--vantage` | 这次探测从哪个出口发出：`cn` / `overseas` / 任意标签（默认 `local`） |
+| `--only` | 逗号分隔的 probe key，默认全部；传空串则一个都不测 |
+| `--out` | JSON 报告写到这里（默认 stdout；人读的表始终走 stderr） |
+
+**`--vantage` 要认真填。** 好几个源在 WAF 层拒绝非大陆出口，同一主机同一秒可以大陆绿、海外红，两个都是真的。没有这个标签的报告无法解读。
+
+**源挂了不影响退出码。** 源变红是这条命令的输出而不是它的失败——非零退出会让发布页面的定时任务恰好在最该更新的那天失败。
+
+状态五档：`ok` 可用 · `empty` 空响应 · `blocked` 被拒 · `down` 不可达 · `skipped` 未探测。`empty` 单独一档是因为它看起来比失败健康、实际更危险（回填静默截断）。
+
+### asl sources page
+
+| 选项 | 说明 |
+|------|------|
+| `--report` | `probe` 产出的 JSON，可重复——每个视角一个 |
+| `--out` | 输出 HTML |
+
+自包含单页，无 CDN、无外部字体。多个视角**并排**渲染，不合并。
+
+```bash
+asl sources probe --vantage cn --out reports/cn.json
+asl sources page --report reports/cn.json --out site/index.html
+```
+
+口径、加新源的方法、定时发布见 [数据源健康度](../operations/source-health.md)。
+
+---
+
 ## asl servers test
 
 测试 TDX 连接（并行探测主机池，返回首个能出数的服务器）。

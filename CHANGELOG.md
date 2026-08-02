@@ -42,6 +42,32 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   by `coverage_start`. The window is written to the run metadata so `--resume`
   reuses it instead of silently reverting to full depth days later.
 
+- **`asl sources probe` / `asl sources page`: a public A-share source health
+  board.** Fourteen probes over the endpoints this lake depends on — TDX, three
+  EastMoney hosts, Sina, CNINFO, both THS hosts, baostock, both exchanges,
+  Shenwan, PBoC, NBS — rendered into one self-contained page and published
+  daily by `.github/workflows/source-health.yml`. These endpoints are not this
+  project's: AkShare, agent skill files and hand-rolled scrapers all depend on
+  them, and there is nowhere to look up whether one changed.
+
+  **HTTP 200 is not "up".** EastMoney answers a challenge page with 200, Sina
+  answers an unknown symbol with an empty array, THS answers a rate-limited page
+  with 200 and no rows. Every probe therefore asserts on the payload — `total`,
+  `klines`, the `PK` magic of an xlsx — and `empty` is its own status, because a
+  source answering politely with nothing is what truncates a backfill silently
+  and looks healthier than a failure.
+
+  **Vantage is recorded and never merged.** Several of these refuse non-mainland
+  egress at the WAF, so one column can be green and another red for the same
+  host at the same second. The scheduled job labels its report `overseas`
+  (GitHub's runners are outside the mainland) and renders it beside any `cn`
+  report committed under `docs/source-health/`; publishing either as *the*
+  status would report an outage half the readers do not have.
+
+  Probes call the adapters' own URL constants and clients, so the fragile part
+  is the part under test. They run serially and once per source: a health check
+  that trips a rate-limit ban would cause the outage it exists to observe.
+
 - **`scripts/survivorship_gap.py`** — measures the bias on the lake's own bars
   and emits a dependency-free SVG. Same equal-weight basket, same dates, the
   only difference being whether delisted names are still in it: 2016–2021 reads
