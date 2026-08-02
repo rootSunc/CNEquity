@@ -27,6 +27,8 @@ DuckDB / Polars / `load()`.
   every trading day
 - **Stable research semantics:** adjust · universe · PIT; 39 registered datasets;
   daily bars back to ~2001
+- **Serves AI agents:** `asl mcp` exposes the whole lake as MCP tools, with the
+  query contract travelling in the responses
 
 CLI: `asl` · package: `ashare_lake` · **data layer only** (backtests stay
 downstream) · opt-in intraday data (1m / 5m bars, transaction records; all off
@@ -215,6 +217,48 @@ because a second copy is a copy that drifts.
 Binding to a non-loopback address requires `--token`. Details:
 [serve module docs](docs/modules/serve.md).
 
+## Serve it to an AI agent: `asl mcp`
+
+`asl serve` shows the lake to a person; `asl mcp` shows it to a model. Same
+read-only stance — ingestion stays on the CLI, where a person runs it.
+
+```bash
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
+```
+
+**Six tools, not 39.** An agent picks from a flat list every turn, so one tool
+per dataset would spend most of the context window on names it will not call.
+These are cut by question shape, and the dataset becomes an argument:
+
+| Tool | What it is for |
+|--|--|
+| `describe_lake` | What is here, how far back, and the rules that make an answer correct |
+| `resolve_symbol` | "茅台" → `600519.SH`, delisted names included |
+| `query_bars` | Daily / index / minute bars, with `adjust` and `universe` |
+| `query_fundamentals` | Statement items; `as_of` is **required** |
+| `query_dataset` | Any other dataset |
+| `run_sql` | One read-only DuckDB SELECT, for aggregation across datasets |
+
+**The contract travels in the responses, not in the docs** — a model does not
+read `docs/`. Bars without `adjust` come back with a warning; bars with it
+report how many rows had no factor and silently used 1.0; `query_fundamentals`
+refuses to default `as_of` and says why. Every payload carries `total` /
+`truncated`, so a page of 200 out of 4,300 rows cannot be averaged and reported
+as the market's.
+
+`run_sql` accepts exactly one SELECT, decided by DuckDB's own parser rather than
+a regex — the lake ingests `news_headlines` and `flash_news_wire`, vendor text
+nobody here wrote, so SQL reaching the tool can be shaped by ingested content.
+
+Questions this answers that a fetch-on-demand toolkit structurally cannot: "the
+percentile of Moutai's PE over the last five years", "this factor's IC in 2018,
+without look-ahead", "what the last 60 sessions looked like for stocks that
+delisted". Not *not built yet* — **impossible without a lake**.
+
+**No new dependencies**: the stdio JSON-RPC loop is hand-written, because the
+official `mcp` SDK resolves to 15 additional packages including a second HTTP
+stack. Details: [MCP reference](docs/reference/mcp.md).
+
 ## Datasets
 
 All **39** registered datasets (36 curated + 3 derived; kept in sync with
@@ -285,6 +329,7 @@ Full index: [docs/README.md](docs/README.md). Common entry points:
 [catalog](docs/datasets/catalog.md) ·
 [runbook](docs/operations/runbook.md) ·
 [CLI](docs/reference/cli.md) ·
+[MCP](docs/reference/mcp.md) ·
 [serve dashboard](docs/modules/serve.md).
 
 ## License

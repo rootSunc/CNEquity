@@ -1507,6 +1507,62 @@ def query(config_path: str, sql: str, dataset: str | None, symbol: str | None):
         con.close()
 
 
+@cli.command("mcp")
+@click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
+def mcp_cmd(config_path: str):
+    """Serve this lake to an AI agent over MCP (stdio).
+
+    Not meant to be typed: an MCP client spawns it and talks JSON-RPC on the
+    pipe. Register it once, e.g.
+
+      claude mcp add ashare-lake -- asl mcp --config /path/to/ashare-lake.toml
+
+    Read-only, like `asl serve`. The tools query the lake; ingestion stays on
+    the CLI, where a person runs it.
+    """
+    import logging
+    import sys
+
+    from ashare_lake.mcp_server import serve_stdio
+
+    cfg = _cfg(config_path)
+    _guard_mcp_data_root(cfg, config_path)
+
+    # stdout is the JSON-RPC wire. Anything else written there is a parse error
+    # on the client with no indication of where it came from, so every log
+    # record — ours and every library's — goes to stderr, which MCP clients
+    # capture as the server's log.
+    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    serve_stdio(cfg)
+
+
+def _guard_mcp_data_root(cfg, config_path: str) -> None:
+    """Refuse to serve a lake with nothing in it, and say why it is empty.
+
+    A relative ``data.root`` resolves against the working directory, and this is
+    the one entry point where the working directory belongs to somebody else —
+    an MCP client spawns the process from wherever it happens to be. The lake
+    then resolves to a path that does not exist, every tool answers "no parquet
+    data", and the agent reports that the data is missing. Which is true of that
+    path and false of the user's lake.
+
+    Cheap enough to do on every start: one directory walk that stops at the
+    first file.
+    """
+    curated = cfg.curated_root
+    if curated.exists() and next(curated.rglob("*.parquet"), None) is not None:
+        return
+    raise click.ClickException(
+        f"No curated data under {curated}.\n"
+        f"  config:    {resolve_config_path(config_path).resolve()}\n"
+        f"  data.root: {cfg.data_root}\n"
+        "If that is not your lake, `data.root` is relative and resolved against "
+        "the working directory the client started this process in. Make both "
+        "`--config` and `[data].root` absolute paths.\n"
+        "If it is your lake and it is genuinely empty, run `asl init` first."
+    )
+
+
 @cli.command("servers")
 @click.argument("action", type=click.Choice(["test"]))
 @click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)

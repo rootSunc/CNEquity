@@ -8,6 +8,32 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`asl mcp`: the lake as an MCP server, read-only, over stdio.** Six tools cut
+  by question shape rather than one per dataset — `describe_lake`,
+  `resolve_symbol`, `query_bars`, `query_fundamentals`, `query_dataset`,
+  `run_sql`. An agent picks from a flat list every turn, so 39 dataset tools
+  would spend most of the context window on names it will not call and still
+  leave it guessing which one answers the question.
+
+  **The query contract travels in the responses, not in the docs**, because a
+  model does not read `docs/`. `describe_lake` returns the adjustment, PIT,
+  `snapshot_only` and `universe` rules; a bar query without `adjust` comes back
+  with a warning; one with `adjust` reports how many rows had no factor and
+  silently used 1.0; `query_fundamentals` refuses to default `as_of` and says
+  why. Every payload carries `total` / `returned` / `truncated`, so a page of
+  200 out of 4,300 rows cannot be averaged and reported as the market's.
+
+  `run_sql` accepts exactly one SELECT, decided by DuckDB's own parser rather
+  than a regex: the lake ingests `news_headlines` and `flash_news_wire`, vendor
+  text nobody here wrote, so SQL reaching the tool can be shaped by ingested
+  content. A read-only connection alone would still allow `COPY ... TO`.
+
+  **No new dependencies.** The stdio JSON-RPC loop is ~200 lines rather than the
+  official `mcp` SDK, which resolves to 15 additional packages — cryptography,
+  pyjwt and truststore for an OAuth flow a local server never performs,
+  opentelemetry for tracing nothing exports, and a second HTTP stack beside the
+  pinned httpx. `pip install ashare-lake` with no extras stays intact.
+
 - **`trade_ticks`: transaction records (分笔), opt-in and watchlist-scoped.**
   Two new TDX wire commands (`0x0fc5` same-session, `0x0fb5` historical),
   an adapter that assembles a session whole or not at all, and the dataset

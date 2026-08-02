@@ -21,6 +21,7 @@
 - **真数上手**：`pip install` → `asl demo`，几分钟出可复权日线
 - **日更能挂着跑**：水位 / 失败重试 / 质量审计；作者自用每天自动跑
 - **研究口径一次定好**：复权 · universe · PIT；39 个注册数据集，日线可回溯到约 2001
+- **能接给 AI agent**：`asl mcp` 把整个湖当 MCP 工具暴露，口径随响应一起返回
 
 CLI：`asl` · 包名：`ashare_lake` · **只做数据层**（回测和信号留给下游）· 可选日内数据（1m / 5m 分钟线、分笔，默认全关）· 只读面板 `asl serve`
 
@@ -175,6 +176,33 @@ asl serve --port 9000 --config configs/ashare-lake.toml
 
 绑到非 loopback 地址必须给 `--token`。细节见 [serve 模块文档](docs/modules/serve.md)。
 
+## 接给 AI agent：`asl mcp`
+
+`asl serve` 把湖给人看，`asl mcp` 把湖给模型用。同样只读——采集仍然只在 CLI 上，由人来跑。
+
+```bash
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
+```
+
+**6 个工具，不是 39 个。** agent 每轮都要从平铺列表里选，按数据集给工具会让上下文里大半是它不会调的名字。这里按问题形状切，数据集降级成参数：
+
+| 工具 | 用途 |
+|--|--|
+| `describe_lake` | 湖里有什么、覆盖到哪、以及让答案正确的口径 |
+| `resolve_symbol` | 「茅台」→ `600519.SH`，含退市股 |
+| `query_bars` | 日线 / 指数 / 分钟线，带 `adjust`、`universe` |
+| `query_fundamentals` | 财报科目，**必须**给 `as_of` |
+| `query_dataset` | 其余任意数据集 |
+| `run_sql` | 单条只读 DuckDB SELECT，跨数据集聚合 |
+
+**口径写在响应里，不写在文档里**——模型不会去读 `docs/`。不带 `adjust` 的行情返回 warning；带了但缺因子会报「N/M 行 `adj_is_exact=false`」；不给 `as_of` 直接报错并解释为什么没有默认值。分页永远带 `total` / `truncated`，避免模型把 200 行的均值当全市场报出去。
+
+`run_sql` 只收一条 SELECT，用 DuckDB 自己的解析器判定而不是正则——湖里有 `news_headlines` / `flash_news_wire` 这类供应商文本，到达工具的 SQL 可能被湖里摄入的内容影响。
+
+它能答、而「取数 skill」类项目结构上答不了的问题：「茅台过去五年 PE 的分位数」「2018 年这个因子的 IC，别用未来数据」「过去三年退市的票退市前 60 天什么形态」——**没有湖就做不到**，临时 HTTP 调用变不出历史。
+
+**没有新增依赖**：stdio JSON-RPC 是手写的，官方 `mcp` SDK 会拉进 15 个包（含第二套 HTTP 栈）。细节见 [MCP 参考](docs/reference/mcp.md)。
+
 ## 有什么数据
 
 下表覆盖注册表全部 **39** 个数据集（36 curated + 3 derived，与 `domain/datasets.py` 同步）。  
@@ -226,7 +254,7 @@ asl serve --port 9000 --config configs/ashare-lake.toml
 
 ## 文档
 
-完整索引：[docs/README.md](docs/README.md)。常用入口：[安装](docs/getting-started/installation.md) · [快速开始](docs/getting-started/quickstart.md) · [数据集目录](docs/datasets/catalog.md) · [Runbook](docs/operations/runbook.md) · [CLI](docs/reference/cli.md) · [serve 面板](docs/modules/serve.md)。
+完整索引：[docs/README.md](docs/README.md)。常用入口：[MCP](docs/reference/mcp.md) · [安装](docs/getting-started/installation.md) · [快速开始](docs/getting-started/quickstart.md) · [数据集目录](docs/datasets/catalog.md) · [Runbook](docs/operations/runbook.md) · [CLI](docs/reference/cli.md) · [serve 面板](docs/modules/serve.md)。
 
 ## 许可
 

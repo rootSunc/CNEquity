@@ -356,6 +356,24 @@ asl stats refresh
 
 ---
 
+## asl mcp
+
+把这个湖接给 AI agent（MCP over stdio）。只读，和 `asl serve` 同样的边界。
+
+| 选项 | 说明 |
+|------|------|
+| `--config` | 配置文件路径，**建议绝对路径**（客户端从哪个目录拉起进程不确定） |
+
+不用手敲：由 MCP 客户端拉起并在管道上讲 JSON-RPC。注册一次即可：
+
+```bash
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
+```
+
+6 个工具（`describe_lake` / `resolve_symbol` / `query_bars` / `query_fundamentals` / `query_dataset` / `run_sql`）、口径随响应返回、`run_sql` 只收单条 SELECT：见 [MCP 参考](mcp.md)。
+
+---
+
 ## asl servers test
 
 测试 TDX 连接（并行探测主机池，返回首个能出数的服务器）。
