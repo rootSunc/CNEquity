@@ -34,6 +34,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   opentelemetry for tracing nothing exports, and a second HTTP stack beside the
   pinned httpx. `pip install ashare-lake` with no extras stays intact.
 
+- **`asl init --profile quick` / `--since`** — a first backfill that is
+  *shallower, never narrower*. `quick` fetches the last three calendar years for
+  the full cross-section; filtering symbols instead would build the survivorship
+  bias this lake exists to repair straight into it, and a missing name looks
+  exactly like a name that never traded, where fewer years is recorded honestly
+  by `coverage_start`. The window is written to the run metadata so `--resume`
+  reuses it instead of silently reverting to full depth days later.
+
 - **`trade_ticks`: transaction records (分笔), opt-in and watchlist-scoped.**
   Two new TDX wire commands (`0x0fc5` same-session, `0x0fb5` historical),
   an adapter that assembles a session whole or not at all, and the dataset
@@ -72,6 +80,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   dataset. The dataset panel's 日内频率 fact is now 行粒度.
 
 ### Fixed
+
+- **A backfill with a non-default start was silently lenient.** Whether a bar
+  batch fetches strictly — raising on a mid-pagination failure instead of
+  keeping the pages that arrived — was inferred from `start == 2016-01-01`,
+  which was the only start a backfill ever had. `asl init --since` picks its
+  own, so `_window_backfill` now asks the orchestrator's `_backfill` flag and
+  keeps the date test as a fallback. Without this, the shallow init path would
+  have been the one that loses a symbol's older years without saying so.
 
 - **Intraday backfill no longer date-slices tip-paged TDX walks.** Minute-bar
   sources page backwards from today, so a 10-day chunk sitting near the horizon

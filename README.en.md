@@ -111,6 +111,17 @@ asl run daily     # every trading day afterwards (no intraday data)
 asl status
 ```
 
+**Start shallow.** `asl init --profile quick` backfills only the last three
+years, with the full cross-section. It is *shallower, never narrower* — filtering
+symbols would build the bias in the chart above straight into the lake, while
+fewer years is recorded honestly by `coverage_start`. Deepening later does not
+mean re-running init:
+
+```bash
+asl init --profile quick                    # or --since 2019-01-01
+asl backfill daily_bars --start 2016-01-01 --end <your coverage_start>
+```
+
 ```python
 from ashare_lake.query import load
 

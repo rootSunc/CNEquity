@@ -35,6 +35,18 @@
 | `--resume` | 续跑最近未完成 init |
 | `--run-id` | 续跑指定 init run（隐含 resume） |
 | `--keep-going` | phase 失败后继续后续 phase |
+| `--profile full\|quick` | 回填多少历史。`quick` = 最近 3 年，`full`（默认）= 各 step 自己的起点（`daily_bars` 为 2016-01-01） |
+| `--since YYYY-MM-DD` | 显式指定历史起点，覆盖 `--profile` |
+
+**`quick` 是更浅，不是更窄。** 全市场标的一个不少，只是每只少几年。按标的裁剪会把这个湖本来要修掉的幸存者偏差直接建进去，而且一个缺席的标的看起来和「这只票从没交易过」一模一样；少几年的历史则由 `coverage_start` 如实记录。
+
+窗口会写进 run metadata，`--resume` 自动沿用——否则几天后从新进程续跑会默认回到全深度，去抓你当初特意跳过的年份。
+
+之后加深不必重跑 init：
+
+```bash
+asl backfill daily_bars --start 2016-01-01 --end <你的 coverage_start>
+```
 
 退出：result `status != success` 时退出 1。
 

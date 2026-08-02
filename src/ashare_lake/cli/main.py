@@ -20,6 +20,7 @@ from ashare_lake.orchestrator.run_lock import RunLockError
 from ashare_lake.quality.audit import run_audit
 from ashare_lake.query.on_demand import OnDemandService
 from ashare_lake.query.views import ensure_duckdb_views
+from ashare_lake.steps.common import BACKFILL_START
 from ashare_lake.storage.layout import init_data_layout
 from ashare_lake.storage.source_snapshots import (
     DEFAULT_SNAPSHOT_RETENTION_DAYS,
@@ -30,6 +31,27 @@ from ashare_lake.storage.staging_cleanup import clean_staging
 USER_CONFIG = "configs/ashare-lake.toml"
 EXAMPLE_CONFIG = "configs/ashare-lake.example.toml"
 DEFAULT_CONFIG = USER_CONFIG
+
+# `asl init --profile quick`. Three years is the shortest window that still
+# spans a full A-share cycle plus two annual report seasons, so the lake it
+# builds can answer a real question rather than only prove the pipeline runs.
+QUICK_PROFILE_YEARS = 3
+
+
+def _init_history_start(profile: str, since_str: str | None, trade_date: date) -> date | None:
+    """History floor for an init run, or None to use each step's own default."""
+    if since_str:
+        return date.fromisoformat(since_str)
+    if profile == "quick":
+        # Calendar arithmetic, not 365*N: a leap year in the window would
+        # otherwise move the floor by a day for no reason anyone could explain.
+        # Feb 29 has no counterpart three years back, so it lands on Mar 1.
+        year = trade_date.year - QUICK_PROFILE_YEARS
+        try:
+            return trade_date.replace(year=year)
+        except ValueError:
+            return date(year, 3, 1)
+    return None
 
 
 def resolve_config_path(config_path: str) -> Path:
@@ -154,6 +176,20 @@ def demo_cmd(
     is_flag=True,
     help="Continue init phases after a phase failure instead of stopping.",
 )
+@click.option(
+    "--profile",
+    type=click.Choice(["full", "quick"]),
+    default="full",
+    show_default=True,
+    help=f"How much history to fetch. quick = the last {QUICK_PROFILE_YEARS} years "
+    f"instead of everything from {BACKFILL_START.isoformat()}.",
+)
+@click.option(
+    "--since",
+    "since_str",
+    default=None,
+    help="Explicit history start (YYYY-MM-DD); overrides --profile.",
+)
 def init(
     config_path: str,
     layout_only: bool,
@@ -161,8 +197,21 @@ def init(
     resume: bool,
     resume_run_id: str | None,
     keep_going: bool,
+    profile: str,
+    since_str: str | None,
 ):
-    """Initialize data lake and run configured init phases (first full backfill)."""
+    """Initialize data lake and run configured init phases (first full backfill).
+
+    `--profile quick` makes the first run SHALLOWER, never NARROWER: every
+    symbol is still fetched, just fewer years each. Dropping symbols instead
+    would build the survivorship bias this lake exists to avoid straight into
+    it, and `coverage_start` records a shallow lake honestly where a missing
+    name would look like a name that never traded.
+
+    Deepen later without re-running init:
+
+      asl backfill daily_bars --start 2016-01-01 --end <your coverage_start>
+    """
     cfg = _cfg(config_path)
     init_data_layout(cfg)
     if layout_only:
@@ -170,6 +219,16 @@ def init(
         return
 
     td = date.fromisoformat(trade_date) if trade_date else date.today()
+
+    history_start = _init_history_start(profile, since_str, td)
+    if history_start is not None:
+        cfg._backfill_start = history_start
+        click.echo(
+            f"History window: {history_start.isoformat()} .. {td.isoformat()} "
+            f"(full universe, {profile if not since_str else 'custom'} depth). "
+            "Deepen later with `asl backfill daily_bars --start <earlier>`."
+        )
+
     engine = JobEngine(cfg)
 
     if not resume and not resume_run_id:

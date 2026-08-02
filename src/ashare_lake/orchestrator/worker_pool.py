@@ -42,8 +42,21 @@ def _worker_tdx_config(
     return cfg
 
 
-def _window_backfill(start: date) -> bool:
-    return start == BACKFILL_START
+def _window_backfill(config: Config, start: date) -> bool:
+    """Whether this batch is fetching history, which decides how strict it is.
+
+    Strict means a page failure mid-pagination raises instead of keeping the
+    pages that did arrive — the difference between a batch that fails loudly
+    and a symbol quietly missing its older years.
+
+    The window start alone used to decide this, and 2016-01-01 was the only
+    start a backfill ever had. It is not any more: `asl init --since` picks its
+    own, and inferring "not a backfill" from that would have made a shallower
+    init silently lenient. The orchestrator already knows — it sets
+    ``_backfill`` on the config for exactly these phases — so ask it, and keep
+    the date test for callers that reach here without the flag set.
+    """
+    return bool(getattr(config, "_backfill", False)) or start == BACKFILL_START
 
 
 def _empty_pool_result() -> dict[str, Any]:
@@ -196,7 +209,7 @@ def fetch_daily_bars_parallel(
         batch_start: date,
         batch_end: date,
     ) -> dict[str, Any]:
-        backfill = _window_backfill(batch_start)
+        backfill = _window_backfill(config, batch_start)
         manifest.start_batch(
             run_id,
             batch_id,
@@ -285,7 +298,7 @@ def fetch_daily_bars_parallel(
             config.tdx_allow_mock,
             manifest_path,
             config.failover_enabled,
-            _window_backfill(batch_start),
+            _window_backfill(config, batch_start),
             str(config.config_path) if config.config_path else "",
         )
 

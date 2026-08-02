@@ -591,6 +591,12 @@ class JobEngine:
 
         phases = self._init_phases_list(run_id)
         meta = self.manifest.get_run_metadata(run_id)
+        # Pick the original run's history window back up unless this invocation
+        # named one, so the resumed phases fetch the same depth as the ones that
+        # already ran rather than a lake with two different floors.
+        recorded = meta.get("history_start")
+        if recorded and not getattr(self.config, "_backfill_start", None):
+            self.config._backfill_start = date.fromisoformat(str(recorded))
         meta["resumed_at"] = date.today().isoformat()
         self.manifest.update_run_metadata(run_id, meta)
 
@@ -666,10 +672,15 @@ class JobEngine:
             )
 
         phases = self._init_phases_list()
-        run_id = self.manifest.start_run(
-            "init",
-            {"phases": phases, "trade_date": trade_date.isoformat()},
-        )
+        metadata: dict[str, Any] = {"phases": phases, "trade_date": trade_date.isoformat()}
+        # Record the history window with the run, not just on this process's
+        # config. A resume days later runs from a fresh CLI invocation, and
+        # without this it would silently pick the default depth and spend hours
+        # fetching years the operator chose not to have.
+        history_start = getattr(self.config, "_backfill_start", None)
+        if history_start:
+            metadata["history_start"] = history_start.isoformat()
+        run_id = self.manifest.start_run("init", metadata)
         return self._execute_init_phases(
             run_id,
             trade_date,

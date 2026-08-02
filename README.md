@@ -92,6 +92,13 @@ asl run daily     # 之后每个交易日（不含日内数据）
 asl status
 ```
 
+**先浅后深**：`asl init --profile quick` 只回填最近 3 年，全市场标的一个不少。它是**更浅，不是更窄**——按标的裁剪会把上面那张图里的偏差直接建进湖里，而少几年历史由 `coverage_start` 如实记录。之后加深不必重跑 init：
+
+```bash
+asl init --profile quick                    # 或 --since 2019-01-01
+asl backfill daily_bars --start 2016-01-01 --end <你的 coverage_start>
+```
+
 ```python
 from ashare_lake.query import load
 
