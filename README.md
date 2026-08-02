@@ -39,7 +39,7 @@ CLI：`asl` · 包名：`ashare_lake` · **只做数据层**（回测和信号�
 ## 为什么要一个湖，而不是每次现拉
 
 <p align="center">
-  <img src="docs/assets/survivorship-gap.svg" alt="同一篮子、同一区间，唯一差别是退市股还在不在里面" width="820" />
+  <img src="docs/assets/survivorship-gap.zh.svg" alt="同一篮子、同一区间，唯一差别是退市股还在不在里面" width="820" />
 </p>
 
 同一个等权买入持有，同样的起止日期，唯一差别是**后来退市的票还在不在篮子里**。用「今天还在的股票」当历史股票池——几乎所有按当前名单发数的源只能给你这个——2016–2021 五年收益从 **5.9% 变成 12.0%**，虚高一倍。
@@ -51,7 +51,7 @@ CLI：`asl` · 包名：`ashare_lake` · **只做数据层**（回测和信号�
 在你自己的湖上复现：
 
 ```bash
-python scripts/survivorship_gap.py --svg docs/assets/survivorship-gap.svg
+python scripts/survivorship_gap.py --lang zh --svg docs/assets/survivorship-gap.zh.svg
 ```
 
 ## 30 秒拿到真数
@@ -260,23 +260,21 @@ claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
 
 **没有新增依赖**：stdio JSON-RPC 是手写的，官方 `mcp` SDK 会拉进 15 个包（含第二套 HTTP 栈）。细节见 [MCP 参考](docs/reference/mcp.md)。
 
-## 顺带公开：A 股数据源健康度
+## 数据源健康度：`asl sources`
 
-**[rootsunc.github.io/ashare-lake](https://rootsunc.github.io/ashare-lake/)** —— 每个交易日自动更新。
-
-东财今天被封了吗？财联社那个接口还活着吗？申万的证书是不是又过期了？这些源不是本项目专属的：AkShare、各类取数 skill、你自己写的爬虫，走的是同一批端点。变了通常没地方查，得先花半天怀疑自己的代码。
-
-这个湖本来就每个交易日跑全市场，顺手把结果公开出来，每个源多发一个请求而已。
+东财今天被封了吗？申万的证书是不是又过期了？这些源不是本项目专属的——AkShare、各类取数 skill、你自己写的爬虫，走的是同一批端点。变了通常没地方查，得先花半天怀疑自己的代码。这个湖本来就每个交易日跑全市场，顺手多发一个请求就知道了。
 
 ```bash
-asl sources probe --vantage cn --out reports/cn.json
-asl sources page --report reports/cn.json --out site/index.html
+asl sources --vantage cn     # 探测一遍，报告写进 meta/source_health/
+asl serve                    # → http://127.0.0.1:8787/source-health
 ```
+
+**探测在 CLI 上，展示在 serve 上。** 面板只读，不会替你去请求十几个第三方主机——和它不触发采集是同一个理由。
 
 三条让这张表可信的规矩：
 
 - **HTTP 200 不等于可用。** 东财用 200 返回风控页，新浪用 200 返回空数组。每个探测断言**响应体**，「空响应」单独一档——它看起来比失败健康，实际更危险（回填静默截断）。
-- **「被拒」不等于「挂了」。** 好几个源在 WAF 层拒绝非大陆出口，同一主机同一秒可以大陆绿、海外红。两个视角**并排**放，不合并成一个结论。
+- **「被拒」不等于「挂了」。** 好几个源在 WAF 层拒绝非大陆出口，同一主机同一秒可以大陆绿、海外红。`--vantage` 记录这次从哪个出口发的，多个视角**并排**放，不合并成一个结论。
 - **一次探测不是 SLA。** 每源只发一个请求，串行——健康检查不该自己制造它要观测的故障。
 
 口径与加新源见 [数据源健康度](docs/operations/source-health.md)。
@@ -338,7 +336,7 @@ asl sources page --report reports/cn.json --out site/index.html
 **没有。** `trading_status` 的 ST / 停牌覆盖目前只从约 2016 起，而 `daily_bars` 到 2001。2016 之前的窗口不做 ST 过滤，长周期回测里早期截面会混进 ST。`asl audit` 的 `trading_status_coverage_start` 会报这个缺口——别默认它是干净的。
 
 **Q：东财接口 403 / 连接重置了怎么办？**
-先看 [数据源健康度页面](https://rootsunc.github.io/ashare-lake/)——如果那边大陆列也是红的，就不是你的网络。东财系（push2 / push2his / datacenter）共用一套风控，被封会成片失联；`push2his` 对非大陆出口尤其敏感（本项目为它内置了 Chrome TLS 伪装和 CDN sticky）。日更主路径的行情走 TDX，不受这套风控影响。
+先 `asl sources --only eastmoney_push2,eastmoney_push2his` 跑一遍——如果这里也是红的，就不是你的代码。东财系（push2 / push2his / datacenter）共用一套风控，被封会成片失联；`push2his` 对非大陆出口尤其敏感（本项目为它内置了 Chrome TLS 伪装和 CDN sticky）。日更主路径的行情走 TDX，不受这套风控影响。
 
 **Q：baostock 跑着跑着就不返回了？**
 免费额度的约束是**累计量**不是间隔：实测一个会话约 43 次查询后进黑名单，冷却约 40 分钟。默认配置是 `batch_size=20` + `batch_rest_seconds=120`，实测能扛完 1658 只的估值回填。不要为了快去调大它。
