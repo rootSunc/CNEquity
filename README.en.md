@@ -34,6 +34,35 @@ CLI: `asl` · package: `ashare_lake` · **data layer only** (backtests stay
 downstream) · opt-in intraday data (1m / 5m bars, transaction records; all off
 by default) · read-only dashboard `asl serve`
 
+## Why a lake, rather than fetching on demand
+
+<p align="center">
+  <img src="docs/assets/survivorship-gap.svg" alt="Same basket, same dates — the only difference is whether the delisted names are still in it" width="820" />
+</p>
+
+The same equal-weight buy-and-hold, the same start and end dates. The only
+difference is **whether the names that later delisted are still in the basket**.
+Use "the stocks that exist today" as a historical universe — which is all a
+current-roster vendor can give you — and the 2016–2021 five-year return goes
+from **5.9% to 12.0%**, twice what it was.
+
+That is a floor, not an estimate: delisted names are carried to their last
+printed bar (usually before a long suspension, well above what a holder
+recovered), only names with an exact adjustment factor are counted, and this
+lake's own delisted coverage may still be incomplete. All three shrink the
+measured gap rather than widen it.
+
+The point is that the error **is not visible**. Those names are not zero, they
+are absent, so nothing in the output looks wrong. That is why delisted names,
+adjustment factors and PIT are first-class here rather than a 40th dataset on a
+coverage list.
+
+Reproduce it on your own lake:
+
+```bash
+python scripts/survivorship_gap.py --svg docs/assets/survivorship-gap.svg
+```
+
 ## Data in ~30 seconds
 
 ```bash

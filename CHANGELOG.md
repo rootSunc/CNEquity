@@ -42,6 +42,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   by `coverage_start`. The window is written to the run metadata so `--resume`
   reuses it instead of silently reverting to full depth days later.
 
+- **`scripts/survivorship_gap.py`** — measures the bias on the lake's own bars
+  and emits a dependency-free SVG. Same equal-weight basket, same dates, the
+  only difference being whether delisted names are still in it: 2016–2021 reads
+  5.9% complete against 12.0% survivors-only. A floor rather than an estimate —
+  delisted names are carried to their last printed bar, only exact-adjustment
+  names count, and the lake's own delisted coverage may be incomplete, all of
+  which shrink the measured gap.
+
 - **`trade_ticks`: transaction records (分笔), opt-in and watchlist-scoped.**
   Two new TDX wire commands (`0x0fc5` same-session, `0x0fb5` historical),
   an adapter that assembles a session whole or not at all, and the dataset
