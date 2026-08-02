@@ -328,6 +328,9 @@ def test_audit_with_run_id(cfg_path, monkeypatch):
 
 
 def test_servers_connection_failure(cfg_path, monkeypatch):
+    """`asl servers test` now delegates to the tdx probe, which asserts that
+    real bars came back rather than that a socket opened. Still exits 1, and
+    the reason it reports is the vendor's, not "connection failed"."""
     import ashare_lake.adapters.tdx_protocol.client as tdx_client
 
     monkeypatch.setattr(
@@ -337,7 +340,8 @@ def test_servers_connection_failure(cfg_path, monkeypatch):
     )
     result = CliRunner().invoke(cli, ["servers", "test", "--config", cfg_path])
     assert result.exit_code == 1
-    assert "TDX connection failed" in result.output
+    assert "unreachable" in result.output
+    assert "asl sources --only tdx_protocol" in result.output
 
 
 def test_compact_uses_latest_run(cfg_path, monkeypatch):

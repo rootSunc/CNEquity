@@ -1697,28 +1697,35 @@ def sources(config_path: str, vantage: str, only: str | None, out: str | None):
     # not its failure.
 
 
-@cli.command("servers")
+@cli.command("servers", hidden=True)
 @click.argument("action", type=click.Choice(["test"]))
 @click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
 def servers(action: str, config_path: str):
-    """Test TDX server connectivity."""
-    try:
-        from ashare_lake.adapters.tdx_protocol.client import _quotes_client
+    """Deprecated alias for `asl sources --only tdx_protocol`.
 
-        cfg = _cfg(config_path)
-        client = _quotes_client(cfg)
-        _ = client
-        click.echo("TDX connection OK")
-    except ImportError:
-        click.echo("TDX wire client unavailable — this is a bug, please report it")
-    except Exception as exc:
-        click.echo(f"TDX connection failed: {exc}", err=True)
-        raise SystemExit(1) from exc
+    That probe is strictly the stronger check: it asserts that real bars came
+    back, where this one only proved a socket opened. Kept working — it is in
+    the quickstart and in people's runbooks — but off the top-level list.
+    """
+    from ashare_lake.diagnostics.source_health import PROBES_BY_KEY, ProbeStatus, run_probe
+
+    click.echo("note: `asl servers test` is now `asl sources --only tdx_protocol`", err=True)
+    result = run_probe(PROBES_BY_KEY["tdx_protocol"], _cfg(config_path))
+    if result.status == ProbeStatus.OK.value:
+        click.echo(f"TDX connection OK ({result.detail}, {result.latency_ms}ms)")
+        return
+    click.echo(f"TDX {result.status}: {result.detail}", err=True)
+    raise SystemExit(1)
 
 
-@cli.group("push2his")
+@cli.group("push2his", hidden=True)
 def push2his_grp():
-    """push2his CDN edge sticky / probe (sector_bars kline)."""
+    """push2his CDN edge sticky / probe (sector_bars kline).
+
+    Hidden from the top-level list rather than removed: it is a debugging tool
+    for one CDN host, and it was competing for attention with the commands that
+    make up the pipeline's actual state machine. Still fully supported.
+    """
 
 
 @push2his_grp.command("remember")
