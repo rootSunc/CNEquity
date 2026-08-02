@@ -37,6 +37,13 @@
 | `--keep-going` | phase 失败后继续后续 phase |
 | `--profile full\|quick` | 回填多少历史。`quick` = 最近 3 年，`full`（默认）= 各 step 自己的起点（`daily_bars` 为 2016-01-01） |
 | `--since YYYY-MM-DD` | 显式指定历史起点，覆盖 `--profile` |
+| `--quiet` | 只留 warning 及以上，不打逐批进度 |
+
+**默认会打进度。** 全市场回填是几十个批次、可能跑几小时；之前它一声不吭直到最后吐 JSON，和卡死没法区分——而看起来卡死的进程会被 kill 掉，白扔已经跑完的几小时。现在每个批次一行：
+
+```
+14:22:07 INFO ...worker_pool: daily_bars 12/54 batches · 1,043,882 rows · 18m04s elapsed · ~1h03m left
+```
 
 **`quick` 是更浅，不是更窄。** 全市场标的一个不少，只是每只少几年。按标的裁剪会把这个湖本来要修掉的幸存者偏差直接建进去，而且一个缺席的标的看起来和「这只票从没交易过」一模一样；少几年的历史则由 `coverage_start` 如实记录。
 
@@ -91,6 +98,7 @@ macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致�
 | `--group` | `core` \| `capital` \| `signals` \| `fundamentals` \| `macro_risk` \| `research` \| `intraday` |
 | `--backfill` | 强制 backfill 语义（慎用） |
 | `--stale-only` | 只重抓仍落后于最后交易日的数据集（与 `--group` 互斥） |
+| `--quiet` | 只留 warning 及以上，不打逐步进度 |
 
 ### --stale-only：当天的第二次机会
 

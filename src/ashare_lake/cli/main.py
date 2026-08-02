@@ -54,6 +54,29 @@ def _init_history_start(profile: str, since_str: str | None, trade_date: date) -
     return None
 
 
+def _progress_logging(quiet: bool = False) -> None:
+    """Send the pipeline's own INFO records to the terminal.
+
+    Long fetches were silent until they finished: `asl init` runs for hours and
+    printed nothing until the closing JSON, which is indistinguishable from
+    hung — and a process that looks hung gets killed. The steps and the worker
+    pool already log their progress; nothing was listening.
+
+    Third-party loggers stay at WARNING. httpx logs a line per request, which
+    on a full-market sweep is hundreds of thousands of lines and buries exactly
+    the progress this exists to surface.
+    """
+    import logging
+
+    logging.basicConfig(
+        level=logging.WARNING if quiet else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
+    )
+    for noisy in ("httpx", "httpcore", "urllib3", "curl_cffi"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
 def resolve_config_path(config_path: str) -> Path:
     path = Path(config_path)
     if config_path == USER_CONFIG and not path.exists():
@@ -190,6 +213,7 @@ def demo_cmd(
     default=None,
     help="Explicit history start (YYYY-MM-DD); overrides --profile.",
 )
+@click.option("--quiet", is_flag=True, help="Only warnings and errors; no per-batch progress.")
 def init(
     config_path: str,
     layout_only: bool,
@@ -199,6 +223,7 @@ def init(
     keep_going: bool,
     profile: str,
     since_str: str | None,
+    quiet: bool,
 ):
     """Initialize data lake and run configured init phases (first full backfill).
 
@@ -212,6 +237,7 @@ def init(
 
       asl backfill daily_bars --start 2016-01-01 --end <your coverage_start>
     """
+    _progress_logging(quiet)
     cfg = _cfg(config_path)
     init_data_layout(cfg)
     if layout_only:
@@ -404,6 +430,7 @@ def _run_stale_only(cfg, engine, trade_date: date | None, *, backfill: bool) -> 
     help="As-of trade date YYYY-MM-DD (default: today). Use to catch up on weekends/holidays.",
 )
 @click.option("--backfill", is_flag=True)
+@click.option("--quiet", is_flag=True, help="Only warnings and errors; no per-step progress.")
 @click.option(
     "--stale-only",
     is_flag=True,
@@ -417,8 +444,10 @@ def run_daily(
     trade_date_str: str | None,
     backfill: bool,
     stale_only: bool,
+    quiet: bool,
 ):
     """Run daily ingestion job (Wave DAG or schedule group)."""
+    _progress_logging(quiet)
     cfg = _cfg(config_path)
     engine = JobEngine(cfg)
     td = date.fromisoformat(trade_date_str) if trade_date_str else None
@@ -717,17 +746,7 @@ def backfill(
     workers: int,
 ):
     """Backfill a dataset."""
-    # Multi-hour sweeps (baostock ST, EM sector kline) need visible progress on
-    # stdout; adapters log at INFO. Keep WARNING+ for third-party noise.
-    import logging
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        force=True,
-    )
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    _progress_logging()
     if fetch_semantics(dataset) == "snapshot" and not get_dataset(dataset).backfill_source:
         raise click.ClickException(
             f"{dataset}: backfill not supported — fetch semantics are snapshot "
