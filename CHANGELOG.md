@@ -42,13 +42,17 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   by `coverage_start`. The window is written to the run metadata so `--resume`
   reuses it instead of silently reverting to full depth days later.
 
-- **`asl sources probe` / `asl sources page`: a public A-share source health
-  board.** Fourteen probes over the endpoints this lake depends on — TDX, three
-  EastMoney hosts, Sina, CNINFO, both THS hosts, baostock, both exchanges,
-  Shenwan, PBoC, NBS — rendered into one self-contained page and published
-  daily by `.github/workflows/source-health.yml`. These endpoints are not this
-  project's: AkShare, agent skill files and hand-rolled scrapers all depend on
-  them, and there is nowhere to look up whether one changed.
+- **`asl sources`: a local A-share source health board.** Fourteen probes over
+  the endpoints this lake depends on — TDX, three EastMoney hosts, Sina, CNINFO,
+  both THS hosts, baostock, both exchanges, Shenwan, PBoC, NBS. The report lands
+  in `meta/source_health/<vantage>.json` and `asl serve` renders it at
+  `/source-health`. These endpoints are not this project's: AkShare, agent skill
+  files and hand-rolled scrapers all depend on them, and there is nowhere to look
+  up whether one changed.
+
+  Probing is a CLI action and viewing is the dashboard. A GET that reaches out to
+  a dozen third-party hosts is what the dashboard's read-only stance exists to
+  prevent — the same reason nothing there triggers ingestion.
 
   **HTTP 200 is not "up".** EastMoney answers a challenge page with 200, Sina
   answers an unknown symbol with an empty array, THS answers a rate-limited page
@@ -58,15 +62,33 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   and looks healthier than a failure.
 
   **Vantage is recorded and never merged.** Several of these refuse non-mainland
-  egress at the WAF, so one column can be green and another red for the same
-  host at the same second. The scheduled job labels its report `overseas`
-  (GitHub's runners are outside the mainland) and renders it beside any `cn`
-  report committed under `docs/source-health/`; publishing either as *the*
-  status would report an outage half the readers do not have.
+  egress at the WAF, so one column can be green and another red for the same host
+  at the same second. `--vantage` labels each report and the page renders them
+  side by side; merging would invent a fact neither probe established.
 
-  Probes call the adapters' own URL constants and clients, so the fragile part
-  is the part under test. They run serially and once per source: a health check
-  that trips a rate-limit ban would cause the outage it exists to observe.
+  Probes call the adapters' own URL constants and clients, so the fragile part is
+  the part under test. They run serially and once per source: a health check that
+  trips a rate-limit ban would cause the outage it exists to observe.
+
+- **`asl mcp --live`: MCP for an agent with no lake.** Where the lake holds
+  nothing, symbol lookup and unadjusted daily bars are fetched from the vendor on
+  demand and never written. Everything else refuses by name with the reason —
+  fundamentals because a vendor returns today's view of a restated figure and
+  there is no honest `as_of`; `run_sql` because it queries parquet that live mode
+  does not produce. Every payload carries `origin: "lake" | "live"`, both
+  labelled, so a missing field cannot default to "lake". Off unless asked: a user
+  whose lake is broken must get "no parquet data" and go fix it. Capped at 50
+  symbols and 800 days per call, with `symbols` required.
+
+- **Progress while a long fetch runs.** `asl init` and `asl run daily` set up no
+  logging at all, so an hours-long backfill printed nothing until the closing
+  JSON — indistinguishable from hung, and a process that looks hung gets killed
+  along with the hours it had banked. The steps and the worker pool already
+  logged; nothing was listening. Adds a line per batch from the parent, with
+  rows, elapsed and a rough estimate. `--quiet` opts out.
+
+- **`survivorship_gap.py --lang`** — the chart's labels are localised, so the
+  Chinese README embeds a Chinese chart. Same numbers, same geometry.
 
 - **`scripts/survivorship_gap.py`** — measures the bias on the lake's own bars
   and emits a dependency-free SVG. Same equal-weight basket, same dates, the
@@ -113,7 +135,20 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   only the latter, intraday transaction records were displayed as a daily
   dataset. The dataset panel's 日内频率 fact is now 行粒度.
 
+### Changed
+
+- **`asl servers test` and `asl push2his` are off the top-level command list.**
+  Both keep working — they are in the quickstart and in runbooks — but `servers
+  test` is now an alias for `asl sources --only tdx_protocol`, which asserts that
+  real bars came back rather than that a socket opened, and `push2his` debugs one
+  CDN host. They were competing for attention with the commands that make up the
+  pipeline's actual state machine.
+
 ### Fixed
+
+- **The dashboard's own tests depended on the wall clock.** Freshness is judged
+  against the last trading day *today*, so a fixture with fixed dates passed on
+  the day it was written and reported every dataset stale from then on.
 
 - **A backfill with a non-default start was silently lenient.** Whether a bar
   batch fetches strictly — raising on a mid-pagination failure instead of
