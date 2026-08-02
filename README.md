@@ -237,9 +237,23 @@ asl serve --port 9000 --config configs/ashare-lake.toml
 
 `asl serve` 把湖给人看，`asl mcp` 把湖给模型用。同样只读——采集仍然只在 CLI 上，由人来跑。
 
+**三条接入路径，按你手上有什么选：**
+
 ```bash
+# ① 已经有湖 —— 完整口径：复权、universe、PIT、行级溯源
 claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
+
+# ② 还没有湖，想先试试 —— 30 秒的真数据（5 只票 × 30 个交易日）
+asl demo
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/configs/ashare-lake.demo.toml
+
+# ③ 完全不想建湖 —— 现拉现给，不落盘
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml --live
 ```
+
+`--config` **一定要绝对路径**：MCP 客户端从哪个目录拉起进程是不确定的，相对路径会解析到别的地方。
+
+**③ 是有代价的，而且代价写在每条响应里。** 现拉的数据没有复权因子、没有 universe 过滤、没有 PIT、没经过写前校验，所以它只支持 `resolve_symbol` 和未复权日线，其余工具会明确拒绝并说明原因；每条响应带 `origin: "live"` 和一段警告，agent 不会把它当成湖里的数据用。想要正确的收益序列、历史分位数、无未来函数的财报——那些需要湖，见[上面那张图](#为什么要一个湖而不是每次现拉)。
 
 **6 个工具，不是 39 个。** agent 每轮都要从平铺列表里选，按数据集给工具会让上下文里大半是它不会调的名字。这里按问题形状切，数据集降级成参数：
 

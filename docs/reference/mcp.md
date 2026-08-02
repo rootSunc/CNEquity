@@ -2,8 +2,18 @@
 
 `asl serve` 把湖给人看，`asl mcp` 把湖给模型用。同样**只读**：这里没有任何触发采集、重试、清理的入口，采集仍然只在 CLI 上，由人来跑。
 
+三条路，按你手上有什么选：
+
 ```bash
+# ① 已经有湖 —— 完整口径
 claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
+
+# ② 还没有湖，先试试 —— asl demo 给 30 秒真数据
+asl demo
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/configs/ashare-lake.demo.toml
+
+# ③ 不建湖 —— 现拉现给，不落盘
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml --live
 ```
 
 传输是 stdio：客户端拉起进程，在管道上讲 JSON-RPC，不需要手动执行。
@@ -55,6 +65,33 @@ agent 每轮都要从一个平铺列表里选工具。按数据集给工具会�
 ### 溯源是汇总的，不是逐行的
 
 curated 每行都带 `source` / `data_version` / `fetched_at`，逐行返回会让行情载荷大出约三倍去重复同样的三个值。默认返回 `sources` 汇总；需要逐行时传 `include_provenance: true`。
+
+---
+
+## `--live`：没有湖也能接，但要知道少了什么
+
+`--live` 让「湖里没有」的查询**现场去源上拉、不落盘**，直接给 agent。它是**入口，不是终点**。
+
+**能力只有两项**：`resolve_symbol` 和**未复权**日线。其余全部明确拒绝——不是返回空，是报错并说明原因，因为空结果会被 agent 读成「这件事没发生过」。
+
+| 工具 | live 下 | 为什么 |
+|--|--|--|
+| `resolve_symbol` | ✅ | 但用的是当前证券主数据，**退市股根本不在里面** |
+| `query_bars`（daily_bars） | ✅ 未复权 | 带 `adjust` / `universe` 直接报错，见下 |
+| `query_bars`（分钟线 / 指数） | ❌ | 行情协议这条路只给日线 |
+| `query_fundamentals` | ❌ | 源返回的是「今天看到的」重述后数值，没有诚实的 `as_of` |
+| `query_dataset` | ❌ | 每个数据集是各自的适配器 + 分页 + 质量检查，一次性拉是「披着同样列名的另一个序列」 |
+| `run_sql` | ❌ | 它查的是磁盘上的 parquet，而 live 什么都不写 |
+
+**为什么 `adjust` 会被拒绝而不是「尽力而为」**：复权因子是本项目从新浪单独派生、存进湖里的一个数据集，不是行情源挂在 bar 上的字段。把未复权价当复权价给出去，跨一次除权就是错的，而且**从数字上看不出来**。
+
+**每条 live 响应都带 `origin: "live"` 和一段警告**，列明缺的是什么（复权、universe、PIT、写前校验、溯源）。湖里来的带 `origin: "lake"`——两边都标，所以「没有 origin 字段」不会被默认当成湖。
+
+**默认关闭，永不自动推断。** 一个有湖的用户如果湖坏了，必须拿到「no parquet data」然后去修，而不是悄悄拿到一份来自别处的、看起来差不多的答案。
+
+**每次调用有上限**：最多 50 个标的、800 天，且**必须显式给 `symbols`**——agent 会循环，而这些正是日更流水线依赖的主机；让模型自作主张扫全市场，是替用户挣一个他没问过的问题换来的封禁。
+
+除了限速器自己的状态文件（那正是给请求限速用的），**磁盘上不会多出任何东西**，有测试守着。
 
 ---
 

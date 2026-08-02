@@ -383,12 +383,17 @@ asl stats refresh
 | 选项 | 说明 |
 |------|------|
 | `--config` | 配置文件路径，**建议绝对路径**（客户端从哪个目录拉起进程不确定） |
+| `--live` | 湖里没有的，现拉现给、不落盘。只支持 `resolve_symbol` 与未复权日线，其余工具明确拒绝 |
 
-不用手敲：由 MCP 客户端拉起并在管道上讲 JSON-RPC。注册一次即可：
+不用手敲：由 MCP 客户端拉起并在管道上讲 JSON-RPC。三条路按手上有什么选：
 
 ```bash
-claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
+asl demo                                   # 没湖想先试试：30 秒真数据
+claude mcp add ashare-lake -- asl mcp --config /abs/path/ashare-lake.toml
+claude mcp add ashare-lake -- asl mcp --config /abs/path/ashare-lake.toml --live
 ```
+
+`--live` **默认关，永不自动推断**：湖坏了的用户必须拿到 `no parquet data` 去修，而不是悄悄拿到一份来自别处、看起来差不多的答案。每次调用最多 50 个标的 / 800 天，且必须显式给 `symbols`。每条响应带 `origin: "lake" | "live"`。
 
 6 个工具（`describe_lake` / `resolve_symbol` / `query_bars` / `query_fundamentals` / `query_dataset` / `run_sql`）、口径随响应返回、`run_sql` 只收单条 SELECT：见 [MCP 参考](mcp.md)。
 

@@ -298,9 +298,30 @@ Binding to a non-loopback address requires `--token`. Details:
 `asl serve` shows the lake to a person; `asl mcp` shows it to a model. Same
 read-only stance — ingestion stays on the CLI, where a person runs it.
 
+**Three ways in, depending on what you already have:**
+
 ```bash
+# 1. You have a lake — the full contract: adjustment, universe, PIT, provenance
 claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml
+
+# 2. No lake, just trying it — 30 seconds of real data (5 names x 30 sessions)
+asl demo
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/configs/ashare-lake.demo.toml
+
+# 3. No lake at all — fetched live, never written to disk
+claude mcp add ashare-lake -- asl mcp --config /abs/path/to/ashare-lake.toml --live
 ```
+
+Use an **absolute** `--config` path: an MCP client starts the process from a
+directory of its own choosing, and a relative one resolves somewhere else.
+
+**Option 3 costs you something, and the cost is stated in every response.**
+Live data has no adjustment factors, no universe filter, no point-in-time
+cutoff and no write-time validation, so it serves `resolve_symbol` and
+unadjusted daily bars only — every other tool refuses and says why. Each
+payload carries `origin: "live"` and a warning, so the model does not spend
+lake-grade confidence on it. Correct return series, historical percentiles and
+look-ahead-free fundamentals need a lake; see [the chart above](#why-a-lake-rather-than-fetching-on-demand).
 
 **Six tools, not 39.** An agent picks from a flat list every turn, so one tool
 per dataset would spend most of the context window on names it will not call.

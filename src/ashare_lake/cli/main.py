@@ -1590,7 +1590,14 @@ def query(config_path: str, sql: str, dataset: str | None, symbol: str | None):
 
 @cli.command("mcp")
 @click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
-def mcp_cmd(config_path: str):
+@click.option(
+    "--live",
+    is_flag=True,
+    help="Where the lake holds nothing, fetch from the vendor on demand and do "
+    "not store it. Serves symbol lookup and unadjusted daily bars only; every "
+    "other tool refuses rather than answer without adjustment, universe or PIT.",
+)
+def mcp_cmd(config_path: str, live: bool):
     """Serve this lake to an AI agent over MCP (stdio).
 
     Not meant to be typed: an MCP client spawns it and talks JSON-RPC on the
@@ -1607,7 +1614,11 @@ def mcp_cmd(config_path: str):
     from ashare_lake.mcp_server import serve_stdio
 
     cfg = _cfg(config_path)
-    _guard_mcp_data_root(cfg, config_path)
+    # Opt-in, never inferred. A lake user whose lake is broken must get "no
+    # parquet data" and go fix it, not a quietly different answer from a vendor.
+    cfg._mcp_live = live
+    if not live:
+        _guard_mcp_data_root(cfg, config_path)
 
     # stdout is the JSON-RPC wire. Anything else written there is a parse error
     # on the client with no indication of where it came from, so every log
@@ -1640,7 +1651,9 @@ def _guard_mcp_data_root(cfg, config_path: str) -> None:
         "If that is not your lake, `data.root` is relative and resolved against "
         "the working directory the client started this process in. Make both "
         "`--config` and `[data].root` absolute paths.\n"
-        "If it is your lake and it is genuinely empty, run `asl init` first."
+        "If it is your lake and it is genuinely empty: `asl init` builds one, "
+        "`asl demo` makes a 5-symbol sample in 30 seconds, and `--live` serves "
+        "symbol lookup and raw daily bars straight from the vendor without one."
     )
 
 

@@ -48,7 +48,8 @@ TOOLS: list[dict] = [
             "which series have no real history). Cheap, reads no data. Call it "
             "before answering anything factual about A-share data, and use its "
             "coverage_start/coverage_end to tell 'this lake has no such data' apart "
-            "from 'this did not happen'."
+            "from 'this did not happen'. It also reports `live_mode` — when that is "
+            "on, some answers come from the vendor rather than the lake and say so."
         ),
         "inputSchema": {
             "type": "object",
@@ -89,7 +90,10 @@ TOOLS: list[dict] = [
             "levels must match what a quote screen shows today. Pass "
             "universe='all_a' for cross-sectional work to drop names that were "
             "not tradable that day. datasets: daily_bars, index_bars, "
-            "minute_bars (1m), minute_bars_5m (5m)."
+            "minute_bars (1m), minute_bars_5m (5m). Every response carries "
+            "`origin`: 'lake' is stored and validated; 'live' was fetched just now "
+            "and cannot be adjusted or universe-filtered — read its warning before "
+            "using the numbers for anything but a current quote."
         ),
         "inputSchema": {
             "type": "object",

@@ -438,3 +438,142 @@ def test_mcp_serves_a_populated_lake(lake, tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output.splitlines()[0])["result"] == {}
+
+
+# --- live mode: no lake, no writes ------------------------------------------
+
+
+@pytest.fixture
+def empty(tmp_path):
+    return Config(data_root=tmp_path / "nothing")
+
+
+def _fake_live(monkeypatch):
+    from ashare_lake.mcp_server import live
+
+    monkeypatch.setattr(
+        live,
+        "instruments",
+        lambda cfg: pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "name": ["贵州茅台"],
+                "exchange": ["SH"],
+                "asset_type": ["stock"],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        live,
+        "daily_bars",
+        lambda cfg, **k: pl.DataFrame(
+            {"symbol": ["600519.SH"], "trade_date": [date(2026, 7, 31)], "close": [1350.6]}
+        ),
+    )
+
+
+def test_live_is_off_unless_asked(empty):
+    """A lake user whose lake is broken must get 'no parquet data' and go fix
+    it, not a quietly different answer from a vendor."""
+    with pytest.raises(tools.ToolError, match="no parquet data"):
+        tools.resolve_symbol(empty, query="茅台")
+
+
+def test_live_serves_symbol_lookup(empty, monkeypatch):
+    _fake_live(monkeypatch)
+    empty._mcp_live = True
+    payload = tools.resolve_symbol(empty, query="茅台")
+    assert payload["origin"] == "live"
+    assert payload["rows"][0][0] == "600519.SH"
+    assert "NOT stored" in payload["warning"]
+
+
+def test_live_bars_are_labelled_and_warned(empty, monkeypatch):
+    _fake_live(monkeypatch)
+    empty._mcp_live = True
+    payload = tools.query_bars(empty, symbols=["600519.SH"])
+    assert payload["origin"] == "live"
+    assert "No adjustment" in payload["warning"]
+
+
+def test_lake_rows_are_labelled_too(lake):
+    """Both origins are stated, so 'origin' is never absent-and-therefore-lake."""
+    assert tools.query_bars(lake, symbols=["600519.SH"])["origin"] == "lake"
+    assert tools.resolve_symbol(lake, query="茅台")["origin"] == "lake"
+
+
+def test_live_refuses_adjustment(empty, monkeypatch):
+    """A vendor's bar has no factor attached; serving it as adjusted would be
+    wrong in a way the numbers do not show."""
+    _fake_live(monkeypatch)
+    empty._mcp_live = True
+    with pytest.raises(tools.ToolError, match="cannot honour adjust"):
+        tools.query_bars(empty, symbols=["600519.SH"], adjust="hfq")
+
+
+def test_live_refuses_universe(empty, monkeypatch):
+    _fake_live(monkeypatch)
+    empty._mcp_live = True
+    with pytest.raises(tools.ToolError, match="cannot honour universe"):
+        tools.query_bars(empty, symbols=["600519.SH"], universe="all_a")
+
+
+def test_live_refuses_point_in_time(empty, monkeypatch):
+    """There is no honest as_of against a source that returns today's view."""
+    empty._mcp_live = True
+    with pytest.raises(tools.ToolError, match="look-ahead"):
+        tools.query_fundamentals(empty, as_of="2018-04-30")
+
+
+def test_live_refuses_sql(empty):
+    empty._mcp_live = True
+    with pytest.raises(tools.ToolError, match="parquet on disk"):
+        tools.run_sql(empty, sql="SELECT 1")
+
+
+def test_live_refuses_other_datasets_by_name(empty):
+    empty._mcp_live = True
+    with pytest.raises(tools.ToolError, match="asl init"):
+        tools.query_dataset(empty, dataset="fund_flow")
+
+
+def test_live_will_not_sweep_the_market(empty):
+    """An agent looping without symbols is how a user earns a rate-limit ban
+    for a question they did not ask."""
+    empty._mcp_live = True
+    with pytest.raises(tools.ToolError, match="explicit `symbols`"):
+        tools.query_bars(empty)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"symbols": [f"{i:06d}.SH" for i in range(80)]}, "at most"),
+        ({"symbols": ["600519.SH"], "start": "2016-01-01", "end": "2026-01-01"}, "at most"),
+    ],
+)
+def test_live_caps_each_call(empty, kwargs, match):
+    empty._mcp_live = True
+    with pytest.raises(tools.ToolError, match=match):
+        tools.query_bars(empty, **kwargs)
+
+
+def test_live_writes_nothing(empty, monkeypatch):
+    _fake_live(monkeypatch)
+    empty._mcp_live = True
+    tools.query_bars(empty, symbols=["600519.SH"])
+    tools.resolve_symbol(empty, query="茅台")
+    assert not list(empty.data_root.rglob("*.parquet"))
+
+
+def test_describe_lake_announces_live_mode(empty, monkeypatch):
+    """It changes how every other line of the contract should be read, so it
+    goes first."""
+    empty._mcp_live = True
+    payload = tools.describe_lake(empty)
+    assert payload["live_mode"] is True
+    assert "LIVE MODE IS ON" in payload["contract"][0]
+    assert (
+        tools.describe_lake(lake_config := Config(data_root=empty.data_root))["live_mode"] is False
+    )
+    assert lake_config is not None

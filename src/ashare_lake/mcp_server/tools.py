@@ -31,6 +31,7 @@ import polars as pl
 
 from ashare_lake.config import Config
 from ashare_lake.domain.datasets import DATASETS, TIER_LABELS
+from ashare_lake.mcp_server import live
 from ashare_lake.query.reader import ReaderError, load
 
 # What a tool returns before the caller says otherwise. Low enough that a
@@ -124,6 +125,15 @@ def _symbols(value: Any) -> list[str] | None:
     return [str(s).strip() for s in value if str(s).strip()]
 
 
+class LakeEmpty(ToolError):
+    """The lake holds nothing for this dataset — distinct from a bad argument.
+
+    Only this case may fall through to a live fetch. A malformed `as_of` or an
+    unknown symbol must keep failing, or live mode would turn every mistake into
+    a plausible answer from a different source.
+    """
+
+
 def _read(config: Config, dataset: str, **kwargs: Any) -> pl.DataFrame:
     # config is threaded through explicitly rather than left to load()'s
     # auto-detection: the fallback resolves ./configs/ashare-lake.toml from the
@@ -133,7 +143,22 @@ def _read(config: Config, dataset: str, **kwargs: Any) -> pl.DataFrame:
     try:
         return load(dataset, config=config, **kwargs)
     except ReaderError as exc:
+        if "no parquet data" in str(exc):
+            raise LakeEmpty(str(exc)) from exc
         raise ToolError(str(exc)) from exc
+
+
+def _live_only(config: Config, tool: str, reason: str) -> None:
+    """Refuse a tool that live mode cannot serve honestly, and say why.
+
+    Silence or an empty result would read as "this did not happen"; the agent
+    has to know the difference between no data and no lake.
+    """
+    raise ToolError(
+        f"{tool} needs a lake — {reason} "
+        f"Live mode serves only {' and '.join(live.SUPPORTED)}. "
+        "Build one with `asl init` (or `asl demo` for a 5-symbol sample)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +221,22 @@ def describe_lake(config: Config, *, include_empty: bool = False) -> dict:
         )
 
     populated = [r for r in rows if r["has_data"]]
+    contract = list(_CONTRACT)
+    if live.enabled(config):
+        # Stated first, because it changes how every other line should be read.
+        contract.insert(
+            0,
+            "LIVE MODE IS ON. Where this lake holds nothing, resolve_symbol and "
+            "unadjusted daily_bars are fetched from the vendor on demand and NOT "
+            "stored; those responses carry origin='live' and a warning. Every "
+            "other tool refuses rather than answering from a source that cannot "
+            "honour adjustment, universe or point-in-time. A lake is what makes "
+            "the rest of this contract true.",
+        )
     return {
         "data_root": str(config.data_root),
-        "contract": _CONTRACT,
+        "live_mode": live.enabled(config),
+        "contract": contract,
         "datasets": rows,
         "summary": {
             "with_data": len(populated),
@@ -229,17 +267,28 @@ def resolve_symbol(config: Config, *, query: str, limit: int | None = None) -> d
         raise ToolError("query must be a non-empty name fragment or code")
     limit = _clamp_limit(limit)
 
-    df = _read(config, "instruments")
+    origin = "lake"
+    try:
+        df = _read(config, "instruments")
+    except LakeEmpty:
+        if not live.enabled(config):
+            raise
+        origin = "live"
+        df = live.instruments(config)
     code = text.split(".")[0].upper()
     matched = df.filter(
         pl.col("symbol").str.to_uppercase().str.starts_with(code)
         | pl.col("name").fill_null("").str.contains(text, literal=True)
     )
     # Live names first: a query matching both a listed stock and its delisted
-    # predecessor should lead with the one that trades today.
-    matched = matched.sort(
-        [pl.col("delist_date").is_not_null(), pl.col("symbol")],
-    )
+    # predecessor should lead with the one that trades today. Guarded like the
+    # projection below, because a live security master is a current roster and
+    # a vendor that omits the column should degrade to plain code order rather
+    # than fail the lookup.
+    order = [pl.col("symbol")]
+    if "delist_date" in matched.columns:
+        order.insert(0, pl.col("delist_date").is_not_null())
+    matched = matched.sort(order)
     out = matched.select(
         [
             c
@@ -249,6 +298,12 @@ def resolve_symbol(config: Config, *, query: str, limit: int | None = None) -> d
     )
     payload = _frame_payload(out, limit=limit)
     payload["query"] = text
+    payload["origin"] = origin
+    if origin == "live":
+        payload["warning"] = (
+            live.LIVE_WARNING + " The current security master has no delisted "
+            "names in it at all, so a delisted code will simply not be found."
+        )
     if payload["total"] == 0:
         payload["note"] = (
             f"No instrument matches {text!r}. Symbols are '<code>.<EX>' "
@@ -290,20 +345,44 @@ def query_bars(
     if universe not in (None, "all_a"):
         raise ToolError(f"universe must be 'all_a' or omitted, got {universe!r}")
 
-    df = _read(
-        config,
-        dataset,
-        start=start,
-        end=end,
-        symbols=_symbols(symbols),
-        adjust=adjust,
-        universe=universe,
-    )
+    origin = "lake"
+    try:
+        df = _read(
+            config,
+            dataset,
+            start=start,
+            end=end,
+            symbols=_symbols(symbols),
+            adjust=adjust,
+            universe=universe,
+        )
+    except LakeEmpty:
+        if not live.enabled(config):
+            raise
+        if dataset != "daily_bars":
+            _live_only(config, dataset, "the quote protocol serves daily bars here.")
+        if adjust or universe:
+            raise ToolError(
+                f"live mode cannot honour {'adjust' if adjust else 'universe'}: "
+                "adjustment factors and trading_status are datasets this lake "
+                "derives, not fields on a vendor's bar. Drop the argument to get "
+                "raw prices, or build a lake — an unadjusted series across a "
+                "split is wrong in a way the numbers do not show."
+            ) from None
+        origin = "live"
+        try:
+            df = live.daily_bars(config, symbols=_symbols(symbols), start=start, end=end)
+        except live.LiveUnavailable as exc:
+            raise ToolError(str(exc)) from exc
     payload = _frame_payload(
         df, limit=_clamp_limit(limit), offset=offset, include_provenance=include_provenance
     )
     payload["dataset"] = dataset
     payload["adjust"] = adjust
+    payload["origin"] = origin
+    if origin == "live":
+        payload["warning"] = live.LIVE_WARNING
+        return payload
     if adjust is None and not df.is_empty():
         payload["warning"] = (
             "Unadjusted prices. Any comparison across an ex-dividend or split "
@@ -345,15 +424,27 @@ def query_fundamentals(
             "without a cutoff the answer would include figures announced after "
             "the date being studied. Use today's date for a current view."
         )
-    df = _read(
-        config,
-        "financial_statement_items",
-        as_of=as_of,
-        symbols=_symbols(symbols),
-        items=_symbols(items),
-        all_vintages=all_vintages,
-    )
+    try:
+        df = _read(
+            config,
+            "financial_statement_items",
+            as_of=as_of,
+            symbols=_symbols(symbols),
+            items=_symbols(items),
+            all_vintages=all_vintages,
+        )
+    except LakeEmpty:
+        if live.enabled(config):
+            _live_only(
+                config,
+                "query_fundamentals",
+                "a vendor returns today's view of a restated figure, so there is "
+                "no honest as_of. Answering a 2018 question with 2026 knowledge "
+                "is the exact look-ahead this dataset is stored to prevent.",
+            )
+        raise
     payload = _frame_payload(df, limit=_clamp_limit(limit), offset=offset)
+    payload["origin"] = "lake"
     payload["as_of"] = as_of
     payload["semantics"] = (
         "Every row was publicly announced on or before as_of; for a restated "
@@ -396,11 +487,23 @@ def query_dataset(
     if dataset in BAR_DATASETS:
         raise ToolError(f"{dataset} is a bar dataset; use query_bars so adjustment is applied")
 
-    df = _read(config, dataset, start=start, end=end, symbols=_symbols(symbols))
+    try:
+        df = _read(config, dataset, start=start, end=end, symbols=_symbols(symbols))
+    except LakeEmpty:
+        if live.enabled(config):
+            _live_only(
+                config,
+                dataset,
+                "each of these comes from its own adapter with its own pagination "
+                "and quality checks, and a live one-shot would be a different "
+                "series wearing the same column names.",
+            )
+        raise
     payload = _frame_payload(
         df, limit=_clamp_limit(limit), offset=offset, include_provenance=include_provenance
     )
     payload["dataset"] = dataset
+    payload["origin"] = "lake"
     payload["history_mode"] = _history_mode(dataset)
     if payload["history_mode"] == "snapshot_only":
         payload["warning"] = (
@@ -466,6 +569,12 @@ def run_sql(config: Config, *, sql: str, limit: int | None = None) -> dict:
 
     text = _guard_sql(sql)
     limit = _clamp_limit(limit)
+    if live.enabled(config) and not any(config.curated_root.rglob("*.parquet")):
+        _live_only(
+            config,
+            "run_sql",
+            "it queries the parquet on disk, and in live mode nothing is written there.",
+        )
 
     import duckdb
 
