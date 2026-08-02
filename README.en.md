@@ -34,6 +34,17 @@ CLI: `asl` · package: `ashare_lake` · **data layer only** (backtests stay
 downstream) · opt-in intraday data (1m / 5m bars, transaction records; all off
 by default) · read-only dashboard `asl serve`
 
+<p align="center">
+  <a href="#why-a-lake-rather-than-fetching-on-demand">Why a lake</a> ·
+  <a href="#data-in-30-seconds">30 seconds</a> ·
+  <a href="#what-you-can-ask-it">What you can ask</a> ·
+  <a href="#why-not-just-akshare--tushare">vs. the alternatives</a> ·
+  <a href="#self-hosted-daily-lake">Self-hosted lake</a> ·
+  <a href="#serve-it-to-an-ai-agent">AI agents</a> ·
+  <a href="#datasets">Datasets</a> ·
+  <a href="#faq">FAQ</a>
+</p>
+
 ## Why a lake, rather than fetching on demand
 
 <p align="center">
@@ -104,6 +115,31 @@ asl query --config configs/ashare-lake.demo.toml --sql "
 Commands work on macOS / Linux / Windows (PowerShell or cmd). Venv and
 schedulers: [installation](docs/getting-started/installation.md) /
 [runbook](docs/operations/runbook.md).
+
+## What you can ask it
+
+Once the lake is built, these are one-liners. **The ★ rows are impossible
+without a local history** — not unimplemented, impossible: an on-demand HTTP
+call cannot produce a series it was never given.
+
+| What you want to know | How you get it |
+|--|--|
+| How much Moutai returned over five years, adjusted | `load("daily_bars", symbols=[...], adjust="hfq")` |
+| ★ Where Moutai's PE sits in its own five-year distribution | `SELECT quantile_cont(pe_ttm, 0.5) FROM valuation_metrics WHERE symbol=…` |
+| ★ This factor's IC in 2018, with no look-ahead | `load("financial_statement_items", as_of="2018-04-30")` |
+| ★ What the last 60 sessions looked like for stocks that delisted | `delisting_events` + `daily_bars` (delisted names are still here) |
+| ★ Equal-weight market return, free of survivorship bias | `scripts/survivorship_gap.py` (the chart above) |
+| Who was on today's dragon-tiger list, and who was buying | `load("dragon_tiger", start=…, end=…)` |
+| How this name's margin balance has moved | `load("margin_trading", symbols=[…])` |
+| Whether anything unlocks in the next three months | `load("share_unlock_schedule", start=…)` |
+| Which sectors money went into today | `load("sector_fund_flow")` |
+| ★ How Shenwan classified the market in 2021 | `load("industry_members")` (monthly revision history, 2020+) |
+| ★ Who was in CSI 300 three years ago | `load("index_constituents")` (CNI rebalance history) |
+| Today's filings | `load("announcement_index", as_of=…)` |
+
+With [`asl mcp`](#serve-it-to-an-ai-agent) wired up, you ask these in plain
+language — the query contract (adjustment, PIT, which series have no history)
+comes back with the data, so you are not re-explaining it every turn.
 
 ## Why not just AkShare / Tushare
 
@@ -257,7 +293,7 @@ because a second copy is a copy that drifts.
 Binding to a non-loopback address requires `--token`. Details:
 [serve module docs](docs/modules/serve.md).
 
-## Serve it to an AI agent: `asl mcp`
+## Serve it to an AI agent
 
 `asl serve` shows the lake to a person; `asl mcp` shows it to a model. Same
 read-only stance — ingestion stays on the CLI, where a person runs it.
@@ -384,6 +420,68 @@ More: [runbook](docs/operations/runbook.md) ·
 
 > Getting-started docs are Chinese-first; this English README is the short path.
 > Full index: [docs/](docs/README.md).
+
+## FAQ
+
+**Q: How long does `asl init` take, and how much disk?**
+A full backfill is hours and multiple GB. If you do not want to wait,
+`asl init --profile quick` fetches only the last three years — for the *full*
+cross-section. Filtering symbols instead would build the survivorship bias in
+the chart above straight into the lake, and a missing name looks exactly like a
+name that never traded, where fewer years is recorded honestly by
+`coverage_start`. Deepen later with `asl backfill daily_bars --start 2016-01-01`;
+no need to re-run init.
+
+**Q: Why store only back-adjusted factors and derive forward-adjusted at query time?**
+Forward-adjusted prices move with "today" — compute one now and again next week
+and the same 2015 bar has different numbers. What lands on disk has to be
+immutable, so only hfq is stored and qfq is derived in `load(adjust="qfq")` as
+`hfq_factor / hfq_anchor` ([ADR-0004](docs/adr/0004-store-hfq-derive-qfq-at-query.md)).
+A price written adjusted cannot be undone; a factor series can be recomputed.
+
+**Q: Does `universe="all_a"` already exclude historical ST names?**
+**No.** `trading_status` covers ST/suspension from roughly 2016, while
+`daily_bars` reaches 2001. Windows before that are not ST-filtered, so a long
+backtest includes ST names in its early cross-sections. `asl audit` reports the
+gap as `trading_status_coverage_start` — do not assume it is clean.
+
+**Q: EastMoney is returning 403 / resetting connections. Now what?**
+Check the [source health page](https://rootsunc.github.io/ashare-lake/) first —
+if the mainland column is red too, it is not your network. The EastMoney hosts
+(push2 / push2his / datacenter) share one WAF and go dark together, and
+`push2his` is the most sensitive to non-mainland egress (this project ships
+Chrome TLS impersonation and CDN stickiness for it). Bars on the daily path come
+from TDX, which is a different protocol and a different blast radius.
+
+**Q: baostock stops responding partway through a sweep.**
+The free tier's binding constraint is cumulative volume, not spacing: measured,
+about 43 queries in a session earns a blacklist with a ~40 minute cooldown. The
+defaults (`batch_size=20`, `batch_rest_seconds=120`) carried 1,658 symbols of
+valuation history without a single block. Do not raise them for speed.
+
+**Q: Why can't I get minute bars from two years ago?**
+The vendor keeps about **95** trading days of 1m and **491** of 5m. That is the
+vendor's retention, not this lake's backlog — an earlier window returns nothing,
+not less, and no backfill source extends it. `asl backfill minute_bars --start`
+refuses a window before the horizon instead of scanning a day for nothing.
+15m/30m/60m are not stored because they aggregate from 5m exactly.
+
+**Q: Why was AkShare dropped after v0.3?**
+It wraps the same public EastMoney / THS / Sina APIs this project already called
+directly, so it bought a parsing layer, 14 transitive packages and a mini-racer
+collision rather than a second source. Everything is direct HTTP now, and the
+TDX binary client is vendored (mootdx upstream is dormant; the protocol is not).
+
+**Q: Why is `workers` pinned to 1 on macOS?**
+The TDX client is not fork-safe and a ProcessPool dies with BrokenProcessPool,
+so `asl config init` writes `workers = 1` there. Windows uses spawn and does not
+have that problem — its default of 1 is merely conservative, and you can raise
+it once `asl doctor` is clean. The Linux template ships 8.
+
+**Q: Can I redistribute the data commercially?**
+The code is MIT. **The bars and filings on disk are not** — they remain subject
+to their upstream terms. This repo ships no data lake and grants no
+redistribution right. See [legal](docs/legal-and-data-sources.md).
 
 ## Project status
 
