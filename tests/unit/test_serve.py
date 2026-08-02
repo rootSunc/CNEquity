@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 import pytest
@@ -65,14 +65,29 @@ def _full_row(dataset: str, **values) -> dict:
     return {**row, **values}
 
 
+# The lake below is dated, and freshness is judged against the last trading day
+# *today*. Left to the wall clock these tests pass on the day they are written
+# and report every dataset stale from then on — which is what happened. The
+# fixture dates are the readable part of every assertion in this file, so the
+# clock is what gets pinned, not the data.
+FROZEN_TODAY = date(2026, 7, 31)
+
+
+class _FrozenDate(date):
+    @classmethod
+    def today(cls) -> date:
+        return FROZEN_TODAY
+
+
 @pytest.fixture
-def lake(config):
+def lake(config, monkeypatch):
     """A tiny lake spanning several dataset shapes, measured.
 
     Rows carry their full schema so ``load()`` — which validates against the
     contract — can read them; the browsing tests go through it.
     """
-    last, prev = date(2026, 7, 31), date(2026, 7, 30)
+    monkeypatch.setattr("ashare_lake.serve.lake.date", _FrozenDate)
+    last, prev = FROZEN_TODAY, FROZEN_TODAY - timedelta(days=1)
     bar = lambda sym, day, src="tdx_protocol": _full_row(  # noqa: E731
         "daily_bars", symbol=sym, trade_date=day, source=src
     )
