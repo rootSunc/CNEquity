@@ -28,6 +28,12 @@ def to_sina_symbol(symbol: str) -> str:
 
 
 def _normalize_sina_rows(data: list) -> list[dict]:
+    """Normalize Sina factor rows into ashare-lake factor columns.
+
+    Stocks carry their factor in ``f``. ETFs/LOFs return ``f=1`` and put their
+    factor in ``s``; the caller converts fund qfq ``s`` as ``1/s`` and uses fund
+    hfq ``s`` directly as the multiplier.
+    """
     rows: list[dict] = []
     for index, item in enumerate(data):
         if not isinstance(item, dict):
@@ -36,10 +42,16 @@ def _normalize_sina_rows(data: list) -> list[dict]:
         row = dict(item)
         if "d" in row and "date" not in row:
             row["date"] = row.pop("d")
-        factor_val = row.pop("f", None)
-        if factor_val is not None:
-            row.setdefault("qfq_factor", factor_val)
-            row.setdefault("hfq_factor", factor_val)
+        fund_factor = row.pop("s", None)
+        price_factor = row.pop("f", None)
+        if fund_factor is not None:
+            row.setdefault("qfq_factor", fund_factor)
+            row.setdefault("hfq_factor", fund_factor)
+            row["_factor_mode"] = "fund"
+        elif price_factor is not None:
+            row.setdefault("qfq_factor", price_factor)
+            row.setdefault("hfq_factor", price_factor)
+            row["_factor_mode"] = "stock"
         rows.append(row)
     return rows
 
@@ -70,9 +82,14 @@ def fetch_adj_factor_series(
 ) -> pl.DataFrame:
     """Fetch external cumulative adjustment factors from Sina Finance.
 
-    Sina qfq_factor is a divisor (adj_price = raw / qfq_factor).
-    Sina hfq_factor is a multiplier (adj_price = raw * hfq_factor).
+    Sina stock qfq_factor is a divisor (adj_price = raw / qfq_factor).
+    Sina stock hfq_factor is a multiplier (adj_price = raw * hfq_factor).
     Returned ``factor`` column matches cnequity schema: adj_price = raw * factor.
+
+    ETFs/LOFs encode their factor in Sina's ``s`` field. For fund hfq rows,
+    ``s`` is already a multiplier: ``adj_price = raw * s``. For fund qfq rows,
+    ``s`` is a divisor: ``adj_price = raw / s``, so the returned qfq factor is
+    ``1/s``.
     """
     sina_symbol = to_sina_symbol(symbol)
     url = _SINA_URLS[adjust_type].format(symbol=sina_symbol)
@@ -84,6 +101,7 @@ def fetch_adj_factor_series(
         response = client.get(url)
         response.raise_for_status()
         rows = _parse_sina_factor_payload(response.text)
+        fund_mode = any(row.get("_factor_mode") == "fund" for row in rows)
     finally:
         if owns_client:
             client.close()
@@ -109,7 +127,11 @@ def fetch_adj_factor_series(
             f"Sina {adjust_type} factor series contains "
             f"{invalid.height} non-positive or non-finite value(s)"
         )
-    if adjust_type == "qfq":
+    if fund_mode and adjust_type == "qfq":
+        df = df.with_columns((1.0 / pl.col("sina_factor")).alias("factor"))
+    elif fund_mode:
+        df = df.with_columns(pl.col("sina_factor").alias("factor"))
+    elif adjust_type == "qfq":
         df = df.with_columns((1.0 / pl.col("sina_factor")).alias("factor"))
     else:
         df = df.with_columns(pl.col("sina_factor").alias("factor"))

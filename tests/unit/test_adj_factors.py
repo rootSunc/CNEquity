@@ -145,6 +145,68 @@ def test_fetch_adj_factor_series_rejects_invalid_factor(raw_factor):
         fetch_adj_factor_series("600519.SH", "qfq", client=FakeClient())
 
 
+def test_fetch_adj_factor_series_etf_hfq_uses_hfq_s_directly():
+    payload = {
+        "data": [
+            {"d": "2026-07-06", "f": "1", "s": "3.0"},
+            {"d": "1900-01-01", "f": "1", "s": "1.0"},
+        ]
+    }
+    body = f"var foo = {json.dumps(payload)};"
+    requested: list[str] = []
+
+    class FakeResponse:
+        text = body
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def get(self, url):
+            requested.append(url)
+            return FakeResponse()
+
+        def close(self):
+            return None
+
+    df = fetch_adj_factor_series("588170.SH", "hfq", client=FakeClient())
+
+    assert len(requested) == 1
+    assert "hfq.js" in requested[0]
+    assert df.sort("trade_date")["factor"].to_list() == [1.0, 3.0]
+
+
+def test_fetch_adj_factor_series_etf_qfq_converts_s_divisor():
+    payload = {
+        "data": [
+            {"d": "2026-07-06", "f": "1", "s": "1.0"},
+            {"d": "1900-01-01", "f": "1", "s": "3.0"},
+        ]
+    }
+    body = f"var foo = {json.dumps(payload)};"
+    requested: list[str] = []
+
+    class FakeResponse:
+        text = body
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def get(self, url):
+            requested.append(url)
+            return FakeResponse()
+
+        def close(self):
+            return None
+
+    df = fetch_adj_factor_series("588170.SH", "qfq", client=FakeClient())
+
+    assert len(requested) == 1
+    assert "qfq.js" in requested[0]
+    assert df.sort("trade_date")["factor"].to_list() == [1 / 3, 1.0]
+
+
 def test_align_factors_to_bars_forward_fill():
     bars = pl.DataFrame(
         {
