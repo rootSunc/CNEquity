@@ -184,6 +184,29 @@ def test_client_get_sends_ut_on_push2_requests():
     assert "secid=1.600519" in seen["url"]
 
 
+def test_client_get_keeps_query_string_when_adding_ut():
+    # clist.py builds the full query string and then lets get() add `ut`.
+    # httpx >= 0.28 replaced the URL query with the params dict, dropping every
+    # field and leaving an empty clist response; the merge must preserve them.
+    client = EastMoneyClient(min_interval=0.0)
+    seen: dict = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"data": None})
+
+    client._client = httpx.Client(transport=httpx.MockTransport(_handler))
+    client.get(
+        "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=100&fields=f12,f62"
+    )
+    client.close()
+    assert "pn=1" in seen["url"]
+    assert "pz=100" in seen["url"]
+    assert "fields=f12" in seen["url"]
+    assert "f62" in seen["url"]
+    assert f"ut={em._PUSH2_UT}" in seen["url"]
+
+
 # --- client plumbing --------------------------------------------------------
 
 
@@ -286,7 +309,9 @@ def test_eastmoney_client_get_routes_push2his_through_the_same_pool(monkeypatch)
         timeout=30.0,
     )
     assert resp.status_code == 200
-    assert seen["params"] == {"secid": "1.600519", "ut": em._PUSH2_UT}
+    assert seen["params"] is None  # merged into the URL, not handed to httpx
+    assert "secid=1.600519" in seen["url"]
+    assert f"ut={em._PUSH2_UT}" in seen["url"]
     assert seen["timeout"] == 30.0
     client.close()
 
