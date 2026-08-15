@@ -3,7 +3,7 @@ name: Source health
 on:
   schedule:
     # Weekly, after the weekend, from GitHub's overseas runners. The report is
-    # a vantage point, not a universal SLA; mainland users should run `asl
+    # a vantage point, not a universal SLA; mainland users should run `cml
     # sources --vantage cn` in their own scheduler as well.
     - cron: "17 3 * * 1"
   workflow_dispatch:
@@ -33,15 +33,15 @@ jobs:
           pip install .
       - name: Probe public sources
         env:
-          HEALTH_ROOT: ${{ runner.temp }}/ashare-lake-health
+          HEALTH_ROOT: ${{ runner.temp }}/cn-market-lake-health
         run: |
           set -o pipefail
           mkdir -p "$HEALTH_ROOT"
-          asl config init \
-            --config "$HEALTH_ROOT/ashare-lake.toml" \
+          cml config init \
+            --config "$HEALTH_ROOT/cn-market-lake.toml" \
             --data-root "$HEALTH_ROOT/data"
-          asl sources \
-            --config "$HEALTH_ROOT/ashare-lake.toml" \
+          cml sources \
+            --config "$HEALTH_ROOT/cn-market-lake.toml" \
             --vantage github-actions \
             --only tdx_protocol,sina,eastmoney_push2,eastmoney_push2his,cninfo \
             --out "$HEALTH_ROOT/source-health.json" \
@@ -49,7 +49,7 @@ jobs:
       - name: Add report to job summary
         if: always()
         env:
-          HEALTH_ROOT: ${{ runner.temp }}/ashare-lake-health
+          HEALTH_ROOT: ${{ runner.temp }}/cn-market-lake-health
         run: |
           if [ -f "$HEALTH_ROOT/source-health.txt" ]; then
             {
@@ -70,7 +70,7 @@ jobs:
         with:
           name: source-health-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/ashare-lake-health/source-health.json
-            ${{ runner.temp }}/ashare-lake-health/source-health.txt
+            ${{ runner.temp }}/cn-market-lake-health/source-health.json
+            ${{ runner.temp }}/cn-market-lake-health/source-health.txt
           if-no-files-found: warn
           retention-days: 30

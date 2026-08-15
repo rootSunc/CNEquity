@@ -8,7 +8,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LABEL="com.asharelake.daily"
+LABEL="com.cnmarketlake.daily"
 TEMPLATE="$REPO_ROOT/scripts/launchd/$LABEL.plist.template"
 DEST_DIR="$HOME/Library/LaunchAgents"
 DEST="$DEST_DIR/$LABEL.plist"
@@ -18,12 +18,12 @@ if [[ "$(uname)" != "Darwin" ]]; then
   echo "  15 11 * * *  $REPO_ROOT/scripts/daily_pipeline.sh" >&2
   exit 1
 fi
-if [[ ! -x "$REPO_ROOT/.venv/bin/asl" ]]; then
-  echo "install_scheduler: $REPO_ROOT/.venv/bin/asl not found — create the venv first." >&2
+if [[ ! -x "$REPO_ROOT/.venv/bin/cml" ]]; then
+  echo "install_scheduler: $REPO_ROOT/.venv/bin/cml not found — create the venv first." >&2
   exit 1
 fi
 
-mkdir -p "$DEST_DIR" "$REPO_ROOT/data/ashare-lake/logs"
+mkdir -p "$DEST_DIR" "$REPO_ROOT/data/cn-market-lake/logs"
 sed "s#__REPO_ROOT__#$REPO_ROOT#g" "$TEMPLATE" >"$DEST"
 
 # Reload if already present.
@@ -33,6 +33,6 @@ launchctl load "$DEST"
 echo "install_scheduler: loaded $LABEL"
 echo "  plist:    $DEST"
 echo "  schedule: daily 11:15 local (Europe/Helsinki deployment)"
-echo "  logs:     $REPO_ROOT/data/ashare-lake/logs/"
-echo "  verify:   launchctl list | grep asharelake"
+echo "  logs:     $REPO_ROOT/data/cn-market-lake/logs/"
+echo "  verify:   launchctl list | grep cnmarketlake"
 echo "  test now: launchctl start $LABEL"

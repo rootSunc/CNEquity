@@ -1,7 +1,7 @@
 import time
 from concurrent.futures import ProcessPoolExecutor
 
-from ashare_lake.domain.rate_limit import RateLimiter, wait_source
+from cn_market_lake.domain.rate_limit import RateLimiter, wait_source
 
 INTERVAL = 0.05
 

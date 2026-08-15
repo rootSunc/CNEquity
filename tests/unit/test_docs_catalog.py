@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ashare_lake.domain.datasets import DATASETS, datasets_by_tier
+from cn_market_lake.domain.datasets import DATASETS, datasets_by_tier
 
 CATALOG = Path(__file__).resolve().parents[2] / "docs" / "datasets" / "catalog.md"
 
@@ -77,9 +77,9 @@ def _shipped_step_groups() -> dict[str, str]:
     import sys
     from unittest.mock import patch
 
-    from ashare_lake.config import load_config
+    from cn_market_lake.config import load_config
 
-    example = Path(__file__).resolve().parents[2] / "configs" / "ashare-lake.example.toml"
+    example = Path(__file__).resolve().parents[2] / "configs" / "cn-market-lake.example.toml"
     with patch.object(sys, "platform", "linux"):
         cfg = load_config(example)
     return {

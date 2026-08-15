@@ -1,9 +1,9 @@
 import sys
 from pathlib import Path
 
-import ashare_lake.steps  # noqa: F401 — register steps
-from ashare_lake.config import Config, ScheduleGroup, WaveConfig, load_config, validate_config
-from ashare_lake.config.bootstrap import path_for_toml
+import cn_market_lake.steps  # noqa: F401 — register steps
+from cn_market_lake.config import Config, ScheduleGroup, WaveConfig, load_config, validate_config
+from cn_market_lake.config.bootstrap import path_for_toml
 
 
 def test_validate_config_rejects_unknown_group_step(tmp_path):
@@ -59,7 +59,7 @@ def test_example_config_validates(monkeypatch):
     # is stable on Darwin CI/dev machines.
     monkeypatch.setattr(sys, "platform", "linux")
     root = Path(__file__).resolve().parents[2]
-    cfg = load_config(root / "configs" / "ashare-lake.example.toml")
+    cfg = load_config(root / "configs" / "cn-market-lake.example.toml")
     assert validate_config(cfg) == []
     # Free-source anti-blacklist defaults (time may be slow; bans are worse).
     assert cfg.source_intervals["baostock"] == 1.0
@@ -86,7 +86,7 @@ def test_example_config_validates(monkeypatch):
         "fundamentals",
         "macro_risk",
         "research",
-        # Defined but deliberately unscheduled — `asl run daily --group
+        # Defined but deliberately unscheduled — `cml run daily --group
         # intraday` is the only way in, and [minute_bars].enabled gates it.
         "intraday",
         # Ticks get their own group rather than a fourth step in `intraday`,
@@ -100,7 +100,7 @@ def test_example_config_validates(monkeypatch):
 def test_example_config_ships_a_tick_scope_that_cannot_sweep_the_market(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     root = Path(__file__).resolve().parents[2]
-    cfg = load_config(root / "configs" / "ashare-lake.example.toml")
+    cfg = load_config(root / "configs" / "cn-market-lake.example.toml")
     assert cfg.trade_ticks_scope == "watchlist"
     assert cfg.trade_ticks_max_symbols == 200
 
@@ -154,7 +154,7 @@ def test_validate_config_allows_multiprocess_on_linux(tmp_path, monkeypatch):
 
 def test_validate_config_allows_multiprocess_on_windows(tmp_path, monkeypatch):
     # Windows uses spawn, not fork — so the macOS hard reject does not apply.
-    # `asl config init` still defaults workers=1; users may raise it later.
+    # `cml config init` still defaults workers=1; users may raise it later.
     monkeypatch.setattr(sys, "platform", "win32")
     cfg = Config(
         data_root=tmp_path / "data",
@@ -209,12 +209,12 @@ def test_rate_limited_sources_are_all_declared_in_the_example_config():
     import re
 
     root = Path(__file__).resolve().parents[2]
-    cfg = load_config(root / "configs" / "ashare-lake.example.toml")
+    cfg = load_config(root / "configs" / "cn-market-lake.example.toml")
     declared = set(cfg.sources) | {"tdx_protocol"}
 
     literal = re.compile(r"""rate_limit\(\s*["'](\w+)["']\s*\)""")
     used: dict[str, str] = {}
-    for path in (root / "src" / "ashare_lake").rglob("*.py"):
+    for path in (root / "src" / "cn_market_lake").rglob("*.py"):
         for name in literal.findall(path.read_text(encoding="utf-8")):
             used.setdefault(name, path.relative_to(root).as_posix())
 

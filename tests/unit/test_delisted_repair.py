@@ -5,15 +5,15 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.domain.schemas import DAILY_BARS_SCHEMA
-from ashare_lake.steps.delisted import (
+from cn_market_lake.config import Config
+from cn_market_lake.domain.schemas import DAILY_BARS_SCHEMA
+from cn_market_lake.steps.delisted import (
     _ingested_symbols,
     catalog_path,
     delisted_symbols_in_window,
     repair_delisted_instruments,
 )
-from ashare_lake.storage.parquet import StagingWriter
+from cn_market_lake.storage.parquet import StagingWriter
 
 _BAR_COLS = [c for c in DAILY_BARS_SCHEMA if c not in ("source", "data_version", "fetched_at")]
 
@@ -136,7 +136,7 @@ def test_repair_picks_up_orphan_bars_not_in_the_catalog(tmp_path):
 
 def test_instruments_rows_fills_null_list_date_from_recovery_spans(tmp_path):
     """A prior repair with no bars must not shadow a later backfill's list_date."""
-    from ashare_lake.steps.delisted import _instruments_rows
+    from cn_market_lake.steps.delisted import _instruments_rows
 
     cfg = _cfg(tmp_path, {})
     # Hollow row as left by repair when bars were missing.

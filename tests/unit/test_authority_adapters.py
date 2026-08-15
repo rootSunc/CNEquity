@@ -6,8 +6,8 @@ from datetime import date
 
 import pytest
 
-from ashare_lake.adapters.exchange import st_lists
-from ashare_lake.adapters.nbs import pmi_release
+from cn_market_lake.adapters.exchange import st_lists
+from cn_market_lake.adapters.nbs import pmi_release
 
 # --- NBS release -------------------------------------------------------------
 

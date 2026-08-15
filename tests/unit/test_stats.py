@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 import polars as pl
 import pytest
 
-from ashare_lake.file_lock import exclusive_lock
-from ashare_lake.storage import stats as stats_module
-from ashare_lake.storage.stats import (
+from cn_market_lake.file_lock import exclusive_lock
+from cn_market_lake.storage import stats as stats_module
+from cn_market_lake.storage.stats import (
     load_partition_stats,
     load_provenance_stats,
     load_summary,
@@ -257,7 +257,7 @@ def test_missing_stats_load_as_empty_frames_not_errors(config):
 
 
 def _start_run(config) -> str:
-    from ashare_lake.orchestrator.manifest import Manifest
+    from cn_market_lake.orchestrator.manifest import Manifest
 
     return Manifest(config.manifest_path).start_run("daily")
 
@@ -348,7 +348,7 @@ def test_refresh_yields_to_a_rebuild_already_running(config):
 def test_period_elapsed_fraction_tracks_the_calendar():
     from datetime import date
 
-    from ashare_lake.quality.dataset_checks import period_elapsed_fraction as frac
+    from cn_market_lake.quality.dataset_checks import period_elapsed_fraction as frac
 
     assert frac("2026-08", "month", date(2026, 8, 8)) == 8 / 31
     assert frac("2026-08", "month", date(2026, 8, 31)) == 1.0
@@ -359,7 +359,7 @@ def test_period_elapsed_fraction_tracks_the_calendar():
 
 
 def test_partial_month_is_not_flagged_as_a_shrink():
-    from ashare_lake.quality.dataset_checks import check_partition_row_mutation
+    from cn_market_lake.quality.dataset_checks import check_partition_row_mutation
 
     # Real numbers from the audit that surfaced this: sector_bars, 8 days in.
     finding = check_partition_row_mutation(
@@ -381,7 +381,7 @@ def test_symbol_counts_are_prorated_too():
     names accumulate over the month exactly like rows, so an 8-day partition
     holds ~26% of them and tripped the threshold on the symbol ratio alone.
     """
-    from ashare_lake.quality.dataset_checks import check_partition_row_mutation
+    from cn_market_lake.quality.dataset_checks import check_partition_row_mutation
 
     for dataset, cur_rows, prev_rows, cur_syms, prev_syms in [
         ("dragon_tiger", 355, 1977, 235, 900),
@@ -401,7 +401,7 @@ def test_symbol_counts_are_prorated_too():
 
 
 def test_a_real_shrink_still_fires_mid_period():
-    from ashare_lake.quality.dataset_checks import check_partition_row_mutation
+    from cn_market_lake.quality.dataset_checks import check_partition_row_mutation
 
     finding = check_partition_row_mutation(
         "sector_bars",

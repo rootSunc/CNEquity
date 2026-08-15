@@ -2,8 +2,8 @@ from datetime import date, datetime, time
 
 import pytest
 
-from ashare_lake.adapters.tdx_protocol._wire import MAX_TICK_PAGE
-from ashare_lake.adapters.tdx_protocol.trade_ticks import (
+from cn_market_lake.adapters.tdx_protocol._wire import MAX_TICK_PAGE
+from cn_market_lake.adapters.tdx_protocol.trade_ticks import (
     AFTER_HOURS,
     DIRECTIONS,
     MAX_SESSION_PAGES,

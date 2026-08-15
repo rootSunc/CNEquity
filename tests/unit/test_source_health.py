@@ -13,9 +13,9 @@ from datetime import date
 import httpx
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.diagnostics import source_health as sh
-from ashare_lake.diagnostics.health_page import render_page
+from cn_market_lake.config import Config
+from cn_market_lake.diagnostics import source_health as sh
+from cn_market_lake.diagnostics.health_page import render_page
 
 
 @pytest.fixture
@@ -261,7 +261,7 @@ def test_page_needs_at_least_one_report():
 def _serve_client(config):
     from fastapi.testclient import TestClient
 
-    from ashare_lake.serve.app import create_app
+    from cn_market_lake.serve.app import create_app
 
     return TestClient(create_app(config))
 
@@ -302,7 +302,7 @@ def test_dashboard_never_probes(config, monkeypatch):
 def test_dashboard_without_a_report_says_how_to_make_one(config):
     resp = _serve_client(config).get("/source-health")
     assert resp.status_code == 404
-    assert "asl sources" in resp.text
+    assert "cml sources" in resp.text
 
 
 def test_a_corrupt_report_is_skipped_not_fatal(config):
@@ -316,8 +316,8 @@ def test_a_corrupt_report_is_skipped_not_fatal(config):
 def test_probe_writes_into_the_lake_by_default(config, monkeypatch, tmp_path):
     from click.testing import CliRunner
 
-    from ashare_lake.cli.main import cli
-    from ashare_lake.config.bootstrap import path_for_toml
+    from cn_market_lake.cli.main import cli
+    from cn_market_lake.config.bootstrap import path_for_toml
 
     monkeypatch.setattr(sh, "PROBES", (_probe(key="a"),))
     monkeypatch.setattr(sh, "PROBES_BY_KEY", {p.key: p for p in sh.PROBES})
@@ -336,8 +336,8 @@ def test_probe_exits_zero_when_a_source_is_down(config, monkeypatch, tmp_path):
     would make a scheduled run fail on exactly the days it matters."""
     from click.testing import CliRunner
 
-    from ashare_lake.cli.main import cli
-    from ashare_lake.config.bootstrap import path_for_toml
+    from cn_market_lake.cli.main import cli
+    from cn_market_lake.config.bootstrap import path_for_toml
 
     monkeypatch.setattr(sh, "PROBES", (_probe(run=lambda cfg: 1 / 0),))
     monkeypatch.setattr(sh, "PROBES_BY_KEY", {p.key: p for p in sh.PROBES})

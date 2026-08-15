@@ -5,13 +5,13 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.domain.schemas import DAILY_BARS_SCHEMA
-from ashare_lake.domain.symbols import is_tdx_servable, split_by_quote_source
-from ashare_lake.steps.bars import fetch_bars_via_sina
-from ashare_lake.steps.delisted import catalog_path
-from ashare_lake.steps.reference import _merge_untdxable_instruments
-from ashare_lake.storage.parquet import StagingWriter
+from cn_market_lake.config import Config
+from cn_market_lake.domain.schemas import DAILY_BARS_SCHEMA
+from cn_market_lake.domain.symbols import is_tdx_servable, split_by_quote_source
+from cn_market_lake.steps.bars import fetch_bars_via_sina
+from cn_market_lake.steps.delisted import catalog_path
+from cn_market_lake.steps.reference import _merge_untdxable_instruments
+from cn_market_lake.storage.parquet import StagingWriter
 
 _BAR_COLS = [c for c in DAILY_BARS_SCHEMA if c not in ("source", "data_version", "fetched_at")]
 

@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         感谢反馈。**安全问题**请走
-        [SECURITY.md](https://github.com/rootSunc/ashare-lake/security/advisories/new)，
+        [SECURITY.md](https://github.com/rootSunc/cn-market-lake/security/advisories/new)，
         不要开公开 issue。
   - type: textarea
     id: what
@@ -22,7 +22,7 @@ body:
       label: 复现步骤
       description: 尽量精简的命令/配置（打码本机路径与代理）。
       placeholder: |
-        asl run daily --group reference --config configs/ashare-lake.toml
+        cml run daily --group reference --config configs/cn-market-lake.toml
     validations:
       required: true
   - type: input

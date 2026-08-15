@@ -8,9 +8,9 @@ from datetime import date, datetime, timezone
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.mcp_server import protocol, tools
-from ashare_lake.mcp_server.catalog import DESCRIPTORS, HANDLERS
+from cn_market_lake.config import Config
+from cn_market_lake.mcp_server import protocol, tools
+from cn_market_lake.mcp_server.catalog import DESCRIPTORS, HANDLERS
 
 
 def _prov(source: str = "test") -> dict:
@@ -439,8 +439,8 @@ def test_mcp_refuses_a_lake_with_nothing_in_it(tmp_path):
     path, false of the user's lake."""
     from click.testing import CliRunner
 
-    from ashare_lake.cli.main import cli
-    from ashare_lake.config.bootstrap import path_for_toml
+    from cn_market_lake.cli.main import cli
+    from cn_market_lake.config.bootstrap import path_for_toml
 
     cfg_path = tmp_path / "empty.toml"
     cfg_path.write_text(f'[data]\nroot = "{path_for_toml(tmp_path / "nowhere")}"\n')
@@ -454,8 +454,8 @@ def test_mcp_refuses_a_lake_with_nothing_in_it(tmp_path):
 def test_mcp_serves_a_populated_lake(lake, tmp_path):
     from click.testing import CliRunner
 
-    from ashare_lake.cli.main import cli
-    from ashare_lake.config.bootstrap import path_for_toml
+    from cn_market_lake.cli.main import cli
+    from cn_market_lake.config.bootstrap import path_for_toml
 
     cfg_path = tmp_path / "lake.toml"
     cfg_path.write_text(f'[data]\nroot = "{path_for_toml(lake.data_root)}"\n')
@@ -478,7 +478,7 @@ def empty(tmp_path):
 
 
 def _fake_live(monkeypatch):
-    from ashare_lake.mcp_server import live
+    from cn_market_lake.mcp_server import live
 
     monkeypatch.setattr(
         live,
@@ -562,7 +562,7 @@ def test_live_refuses_sql(empty):
 
 def test_live_refuses_other_datasets_by_name(empty):
     empty._mcp_live = True
-    with pytest.raises(tools.ToolError, match="asl init"):
+    with pytest.raises(tools.ToolError, match="cml init"):
         tools.query_dataset(empty, dataset="fund_flow")
 
 

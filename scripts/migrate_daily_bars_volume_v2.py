@@ -22,7 +22,7 @@ was written with that much "turnover" rather than the zero the schema promises
 — 439,774 rows in the reference lake. ``volume`` escaped it through ``int()``
 truncation; ``amount`` is a float and kept it, which quietly turned
 ``amount > 0`` into "was quoted" instead of "traded". New rows are fixed at the
-adapter boundary (``ashare_lake.adapters.tdx_protocol._decode``); this pass
+adapter boundary (``cn_market_lake.adapters.tdx_protocol._decode``); this pass
 fixes the ones already on disk.
 
 ``fetched_at`` is deliberately **not** restamped: these rows were fetched when
@@ -33,12 +33,12 @@ v2 row means "volume is 股". Readers can tell the two apart.
 
 EastMoney is in the no-conversion list because the only EastMoney rows in the
 lake are all-zero suspension placeholders, where ×100 and ×1 agree. Its *live*
-unit is 手 and its adapter now converts; see ``ashare_lake.domain.units``.
+unit is 手 and its adapter now converts; see ``cn_market_lake.domain.units``.
 
 Usage::
 
-    scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --dry-run
-    scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --apply
+    scripts/migrate_daily_bars_volume_v2.py --config configs/cn-market-lake.toml --dry-run
+    scripts/migrate_daily_bars_volume_v2.py --config configs/cn-market-lake.toml --apply
 
 ``--dry-run`` (the default) reports what would change and touches nothing.
 Take a backup before ``--apply``; this edits curated data in place.
@@ -55,12 +55,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import polars as pl
 
-from ashare_lake.adapters.tdx_protocol._decode import DECODED_ZERO
-from ashare_lake.config import load_config
-from ashare_lake.domain.units import SHARES_PER_LOT
-from ashare_lake.storage.atomic import write_parquet_atomic
+from cn_market_lake.adapters.tdx_protocol._decode import DECODED_ZERO
+from cn_market_lake.config import load_config
+from cn_market_lake.domain.units import SHARES_PER_LOT
+from cn_market_lake.storage.atomic import write_parquet_atomic
 
-DEFAULT_CONFIG = ROOT / "configs/ashare-lake.toml"
+DEFAULT_CONFIG = ROOT / "configs/cn-market-lake.toml"
 
 # Sources whose v1 rows were stored in 手 and need rescaling.
 LOTS_SOURCES = ("tdx_protocol", "sina")
@@ -81,7 +81,7 @@ def migrate_frame(df: pl.DataFrame) -> tuple[pl.DataFrame, int, int, int]:
     # every suspended day landed with a turnover of 5.9e-39 yuan instead of the
     # zero the schema promises. `volume` escaped it via int() truncation;
     # `amount` is a float and kept it. Fixed at the adapter boundary in
-    # ashare_lake.adapters.tdx_protocol._decode; this clears the rows already
+    # cn_market_lake.adapters.tdx_protocol._decode; this clears the rows already
     # written. Left alone, `amount > 0` means "was quoted", not "traded".
     denormal_amount = stale & (pl.col("amount").abs() < DECODED_ZERO) & (pl.col("amount") != 0)
 

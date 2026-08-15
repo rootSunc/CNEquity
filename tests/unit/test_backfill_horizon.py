@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from ashare_lake.cli import main as cli_main
-from ashare_lake.domain.datasets import DatasetSpec, get_dataset
+from cn_market_lake.cli import main as cli_main
+from cn_market_lake.domain.datasets import DatasetSpec, get_dataset
 
 
 def test_horizon_guard_refuses_a_window_the_source_cannot_serve():
@@ -155,7 +155,7 @@ def test_minute_bars_declares_symbol_chunking_not_date_chunking():
 def test_symbol_chunked_backfill_walks_full_window_per_symbol_batch(monkeypatch):
     monkeypatch.setattr(cli_main, "JobEngine", FakeEngine)
     symbols = [f"{i:06d}.SH" for i in range(250)]
-    monkeypatch.setattr("ashare_lake.steps.intraday.resolve_scope", lambda _cfg: symbols)
+    monkeypatch.setattr("cn_market_lake.steps.intraday.resolve_scope", lambda _cfg: symbols)
     cfg = type(
         "Cfg",
         (),
@@ -192,7 +192,7 @@ def test_symbol_chunked_backfill_stops_and_reports_resume_symbol(monkeypatch):
 
     monkeypatch.setattr(cli_main, "JobEngine", FailingSecond)
     symbols = [f"{i:06d}.SH" for i in range(250)]
-    monkeypatch.setattr("ashare_lake.steps.intraday.resolve_scope", lambda _cfg: symbols)
+    monkeypatch.setattr("cn_market_lake.steps.intraday.resolve_scope", lambda _cfg: symbols)
     cfg = type(
         "Cfg",
         (),
@@ -267,7 +267,7 @@ def test_symbols_flag_points_each_dataset_at_its_own_config_block():
     `--symbols` tick pull silently scoped the wrong dataset and then fetched
     nothing.
     """
-    from ashare_lake.config import Config
+    from cn_market_lake.config import Config
 
     cfg = Config(data_root=Path("/tmp/lake"))
     cli_main._override_scope(cfg, "trade_ticks", ["600519.SH", "000001.SZ"])
@@ -284,7 +284,7 @@ def test_symbols_flag_points_each_dataset_at_its_own_config_block():
 
 def test_symbols_flag_lifts_the_tick_ceiling_for_a_hand_typed_list():
     """The ceiling stops an unnoticed sweep, not a list the user just typed."""
-    from ashare_lake.config import Config
+    from cn_market_lake.config import Config
 
     cfg = Config(data_root=Path("/tmp/lake"))
     cfg.trade_ticks_max_symbols = 2
@@ -318,7 +318,7 @@ def test_top_holders_floor_is_the_pit_boundary_not_the_data_boundary():
     ~112k rows across 1999-2002 and writes none of them. Refusing the window is
     the difference between a clear message and four wasted hours.
     """
-    from ashare_lake.domain.datasets import get_dataset
+    from cn_market_lake.domain.datasets import get_dataset
 
     assert get_dataset("top_holders").history_floor_date == date(2003, 1, 1)
     with pytest.raises(cli_main.click.ClickException) as excinfo:
@@ -353,7 +353,7 @@ def test_cli_backfill_takes_the_symbol_chunked_path_when_both_dates_given(monkey
 
     monkeypatch.setattr(cli_main, "JobEngine", FakeEngine)
     symbols = [f"{i:06d}.SH" for i in range(250)]
-    monkeypatch.setattr("ashare_lake.steps.intraday.resolve_scope", lambda _cfg: symbols)
+    monkeypatch.setattr("cn_market_lake.steps.intraday.resolve_scope", lambda _cfg: symbols)
     cfg = types.SimpleNamespace(
         minute_bars_scope="index:000300.SH",
         minute_bars_symbols=[],
@@ -385,7 +385,7 @@ def test_cli_backfill_exits_nonzero_when_the_result_is_not_success(monkeypatch):
             return "failed"
 
     monkeypatch.setattr(cli_main, "JobEngine", AllFail)
-    monkeypatch.setattr("ashare_lake.steps.intraday.resolve_scope", lambda _cfg: ["600519.SH"])
+    monkeypatch.setattr("cn_market_lake.steps.intraday.resolve_scope", lambda _cfg: ["600519.SH"])
     cfg = types.SimpleNamespace(
         minute_bars_scope="watchlist",
         minute_bars_symbols=["600519.SH"],

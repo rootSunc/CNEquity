@@ -5,8 +5,8 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.steps.delisted import catalog_path, delisted_coverage_report
+from cn_market_lake.config import Config
+from cn_market_lake.steps.delisted import catalog_path, delisted_coverage_report
 
 
 def _cfg(tmp_path, catalog: dict[str, str]) -> Config:
@@ -53,7 +53,7 @@ def test_coverage_verifies_definite_and_bar_proven_overlap(tmp_path, monkeypatch
         cfg,
         [("600001.SH", date(2020, 1, 3)), ("600002.SH", date(2025, 2, 3))],
     )
-    monkeypatch.setattr("ashare_lake.steps.delisted.pending_codes", lambda cfg: [])
+    monkeypatch.setattr("cn_market_lake.steps.delisted.pending_codes", lambda cfg: [])
 
     report = delisted_coverage_report(cfg, date(2019, 1, 1), date(2024, 12, 31))
 
@@ -74,7 +74,7 @@ def test_coverage_separates_definite_unknown_terminal_and_identity_gaps(tmp_path
     _write_bars(cfg, "600003.SH", date(2019, 2, 1), date(2021, 6, 4))
     _write_bars(cfg, "600519.SH", date(2026, 7, 24))
     _write_instruments(cfg, [("600003.SH", None)])
-    monkeypatch.setattr("ashare_lake.steps.delisted.pending_codes", lambda cfg: [])
+    monkeypatch.setattr("cn_market_lake.steps.delisted.pending_codes", lambda cfg: [])
 
     report = delisted_coverage_report(cfg, date(2019, 1, 1), date(2024, 12, 31))
 
@@ -91,7 +91,7 @@ def test_pending_discovery_blocks_an_otherwise_complete_report(tmp_path, monkeyp
     _write_bars(cfg, "600001.SH", date(2019, 1, 2), date(2020, 1, 3))
     _write_bars(cfg, "600519.SH", date(2026, 7, 24))
     _write_instruments(cfg, [("600001.SH", date(2020, 1, 3))])
-    monkeypatch.setattr("ashare_lake.steps.delisted.pending_codes", lambda cfg: ["600999.SH"])
+    monkeypatch.setattr("cn_market_lake.steps.delisted.pending_codes", lambda cfg: ["600999.SH"])
 
     report = delisted_coverage_report(cfg, date(2019, 1, 1), date(2024, 12, 31))
 

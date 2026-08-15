@@ -6,6 +6,17 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Renamed the project from `ashare-lake` to `CNMarketLake`.** The old name
+  collided with established projects in the same space (mpquant/Ashare,
+  AKShare) and did not surface in searches for "A股 数据湖". Package:
+  `pip install cn-market-lake` (`ashare-lake` on PyPI will no longer be
+  updated). CLI: `cml` (was `asl`). Import: `from cn_market_lake...` (was
+  `from ashare_lake...`). Config/data defaults: `cn-market-lake.toml`,
+  `data/cn-market-lake/` (was `ashare-lake.toml`, `data/ashare-lake/`) —
+  existing local configs and data directories are not renamed automatically.
+
 ## [0.6.0] — 2026-08-10
 
 ### Fixed

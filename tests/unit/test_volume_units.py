@@ -7,14 +7,14 @@ from datetime import date, timedelta
 import polars as pl
 import pytest
 
-from ashare_lake.adapters.baostock.delisted_bars import _fetch_one
-from ashare_lake.adapters.eastmoney import bars as em_bars
-from ashare_lake.adapters.sina import bars as sina_bars
-from ashare_lake.adapters.tdx_protocol.bars import _parse_bar_rows
-from ashare_lake.adapters.ths.stock_bars import _parse_stock_kline
-from ashare_lake.domain.schemas import data_version_for
-from ashare_lake.domain.units import SHARES_PER_LOT, lots_to_shares
-from ashare_lake.quality.unit_checks import (
+from cn_market_lake.adapters.baostock.delisted_bars import _fetch_one
+from cn_market_lake.adapters.eastmoney import bars as em_bars
+from cn_market_lake.adapters.sina import bars as sina_bars
+from cn_market_lake.adapters.tdx_protocol.bars import _parse_bar_rows
+from cn_market_lake.adapters.ths.stock_bars import _parse_stock_kline
+from cn_market_lake.domain.schemas import data_version_for
+from cn_market_lake.domain.units import SHARES_PER_LOT, lots_to_shares
+from cn_market_lake.quality.unit_checks import (
     UNIT_CHECK_MIN_ROWS,
     daily_bars_volume_unit_findings,
 )
@@ -203,7 +203,7 @@ def test_both_worker_paths_stamp_the_dataset_version():
     """
     import inspect
 
-    from ashare_lake.orchestrator import worker_pool
+    from cn_market_lake.orchestrator import worker_pool
 
     source = inspect.getsource(worker_pool)
     calls = [line.strip() for line in source.splitlines() if "normalize_with_source(df" in line]

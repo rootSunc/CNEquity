@@ -3,8 +3,8 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.steps.ticks import (
+from cn_market_lake.config import Config
+from cn_market_lake.steps.ticks import (
     DATASET,
     TradeTicksScopeError,
     _sessions,
@@ -138,7 +138,7 @@ def test_failed_symbol_days_become_an_audit_finding(tmp_path, monkeypatch):
     def _fake_batch(symbols, sessions, **kwargs):
         return pl.DataFrame(rows), ["000001.SZ@2026-07-30"]
 
-    monkeypatch.setattr("ashare_lake.steps.ticks.fetch_trade_ticks_batch", _fake_batch)
+    monkeypatch.setattr("cn_market_lake.steps.ticks.fetch_trade_ticks_batch", _fake_batch)
     result = capture_trade_ticks(config, date(2026, 7, 31), "run-1")
     assert result["failed_symbol_days"] == 1
     finding = result["context_updates"]["audit_findings"][0]
@@ -156,7 +156,7 @@ def test_a_sweep_that_returns_nothing_at_all_raises(tmp_path, monkeypatch):
     config._backfill_end = date(2026, 7, 31)
     _write_calendar(config, [date(2026, 7, 30), date(2026, 7, 31)])
     monkeypatch.setattr(
-        "ashare_lake.steps.ticks.fetch_trade_ticks_batch",
+        "cn_market_lake.steps.ticks.fetch_trade_ticks_batch",
         lambda symbols, sessions, **kwargs: (pl.DataFrame(), []),
     )
     with pytest.raises(RuntimeError, match="no rows for any of"):
@@ -170,7 +170,7 @@ def test_a_batch_failing_outright_costs_only_that_batch(tmp_path, monkeypatch):
     config._backfill_end = date(2026, 7, 30)
     _write_calendar(config, [date(2026, 7, 30)])
     monkeypatch.setattr(
-        "ashare_lake.steps.ticks.fetch_trade_ticks_batch",
+        "cn_market_lake.steps.ticks.fetch_trade_ticks_batch",
         lambda symbols, sessions, **kwargs: (_ for _ in ()).throw(ConnectionError("boom")),
     )
     with pytest.raises(RuntimeError, match="no rows for any of"):

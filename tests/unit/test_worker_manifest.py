@@ -5,14 +5,14 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.config import load_config
-from ashare_lake.config.bootstrap import path_for_toml
-from ashare_lake.orchestrator.engine import JobEngine
-from ashare_lake.orchestrator.manifest import Manifest
-from ashare_lake.orchestrator.worker_pool import fetch_daily_bars_parallel
-from ashare_lake.storage import StagingWriter
-from ashare_lake.storage.layout import init_data_layout
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.config import load_config
+from cn_market_lake.config.bootstrap import path_for_toml
+from cn_market_lake.orchestrator.engine import JobEngine
+from cn_market_lake.orchestrator.manifest import Manifest
+from cn_market_lake.orchestrator.worker_pool import fetch_daily_bars_parallel
+from cn_market_lake.storage import StagingWriter
+from cn_market_lake.storage.layout import init_data_layout
 
 
 @pytest.fixture
@@ -134,8 +134,8 @@ def test_symbol_batch_ids_unique_per_window(worker_config, monkeypatch):
 
 
 def test_retry_reruns_failed_symbol_batch_only(worker_config, monkeypatch):
-    from ashare_lake.adapters.tdx_protocol import client as tdx
-    from ashare_lake.derive.adj_factors import AdjFactorsResult
+    from cn_market_lake.adapters.tdx_protocol import client as tdx
+    from cn_market_lake.derive.adj_factors import AdjFactorsResult
 
     calls: list[list[str]] = []
 
@@ -149,13 +149,13 @@ def test_retry_reruns_failed_symbol_batch_only(worker_config, monkeypatch):
             raise tdx.TdxSourceError("simulated failure")
         return tdx._mock_bars(symbols, start, end)
 
-    monkeypatch.setattr("ashare_lake.orchestrator.worker_pool.fetch_daily_bars", _fetch)
+    monkeypatch.setattr("cn_market_lake.orchestrator.worker_pool.fetch_daily_bars", _fetch)
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.compute_adj_factors",
+        "cn_market_lake.derive.adj_factors.compute_adj_factors",
         lambda *args, **kwargs: AdjFactorsResult(0, 0, [], []),
     )
     monkeypatch.setattr(
-        "ashare_lake.steps.bars.load_symbols",
+        "cn_market_lake.steps.bars.load_symbols",
         lambda _cfg: ["600519.SH", "000001.SZ"],
     )
     worker_config.tdx_allow_mock = False
@@ -190,8 +190,8 @@ def test_retry_reruns_failed_symbol_batch_only(worker_config, monkeypatch):
 
 
 def test_retry_requeues_stale_running_batch(worker_config, monkeypatch):
-    from ashare_lake.adapters.tdx_protocol import client as tdx
-    from ashare_lake.derive.adj_factors import AdjFactorsResult
+    from cn_market_lake.adapters.tdx_protocol import client as tdx
+    from cn_market_lake.derive.adj_factors import AdjFactorsResult
 
     calls: list[list[str]] = []
     worker_config.batch_stale_seconds = 60
@@ -200,9 +200,9 @@ def test_retry_requeues_stale_running_batch(worker_config, monkeypatch):
         calls.append(list(symbols))
         return tdx._mock_bars(symbols, start, end)
 
-    monkeypatch.setattr("ashare_lake.orchestrator.worker_pool.fetch_daily_bars", _fetch)
+    monkeypatch.setattr("cn_market_lake.orchestrator.worker_pool.fetch_daily_bars", _fetch)
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.compute_adj_factors",
+        "cn_market_lake.derive.adj_factors.compute_adj_factors",
         lambda *args, **kwargs: AdjFactorsResult(0, 0, [], []),
     )
 

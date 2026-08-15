@@ -12,8 +12,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from unittest.mock import MagicMock
 
-import ashare_lake.adapters.eastmoney.share_unlock as su
-from ashare_lake.adapters.eastmoney.datacenter import fetch_datacenter
+import cn_market_lake.adapters.eastmoney.share_unlock as su
+from cn_market_lake.adapters.eastmoney.datacenter import fetch_datacenter
 
 
 def _row(code: str, day: date, exch_suffix: str = "SH") -> dict:
@@ -90,7 +90,7 @@ def test_without_stop_after_the_count_guard_still_fires():
     """The early-stop escape hatch must not weaken the truncation guard."""
     import pytest
 
-    from ashare_lake.adapters.eastmoney.datacenter import EastMoneyDatacenterError
+    from cn_market_lake.adapters.eastmoney.datacenter import EastMoneyDatacenterError
 
     class _Client:
         def get(self, url):

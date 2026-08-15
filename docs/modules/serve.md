@@ -1,6 +1,6 @@
 # serve 模块
 
-只读湖面板。`asl serve` 起 uvicorn，提供 `/api/*` JSON 与一个页面。
+只读湖面板。`cml serve` 起 uvicorn，提供 `/api/*` JSON 与一个页面。
 
 | 文件 | 职责 |
 |------|------|
@@ -25,9 +25,9 @@
 
 ## 两个刻意不做的事
 
-**不打开 `data/duckdb/ashare-lake.duckdb`。** DuckDB 是「多读或单写」，面板持着读句柄会让夜间跑批里的 `ensure_duckdb_views()` 拿不到写锁——面板会搞挂它在报告的那条流水线。视图在进程私有的内存库里从注册表重建，是毫秒级的。
+**不打开 `data/duckdb/cn-market-lake.duckdb`。** DuckDB 是「多读或单写」，面板持着读句柄会让夜间跑批里的 `ensure_duckdb_views()` 拿不到写锁——面板会搞挂它在报告的那条流水线。视图在进程私有的内存库里从注册表重建，是毫秒级的。
 
-**不重算审计 findings。** `lake_health()` 要走一遍湖；面板读 `asl audit --full` 已经写好的 `meta/quality/health-latest.json`。一次页面访问不该花一次审计的代价——代价是显示的是上次审计的快照，页面上标了日期。
+**不重算审计 findings。** `lake_health()` 要走一遍湖；面板读 `cml audit --full` 已经写好的 `meta/quality/health-latest.json`。一次页面访问不该花一次审计的代价——代价是显示的是上次审计的快照，页面上标了日期。
 
 ---
 
@@ -92,7 +92,7 @@
 
 区别是运营上真实的：滚动视野意味着窗口往前滑、老数据会掉出去；固定底意味着它只会变长。
 
-**行粒度**：`intraday_frequency` 是**行为字段**——它的消费者（audit 的会话检查、reader 的复权集合、`asl backfill --symbols`）都假定存在 `bar_time` 列和「每交易日 N 根」。`trade_ticks` 故意不设它，正是为了不继承这些 bar 形状的代码路径。代价是面板显示 `—`，日内分笔看起来和日频数据集一样。
+**行粒度**：`intraday_frequency` 是**行为字段**——它的消费者（audit 的会话检查、reader 的复权集合、`cml backfill --symbols`）都假定存在 `bar_time` 列和「每交易日 N 根」。`trade_ticks` 故意不设它，正是为了不继承这些 bar 形状的代码路径。代价是面板显示 `—`，日内分笔看起来和日频数据集一样。
 
 新增的 `row_grain` 纯描述、不带行为，三个日内数据集都设（`1m` / `5m` / `tick`），面板显示 `日` / `1m bar` / `5m bar` / `分笔（3 秒快照聚合，非 bar）`。两者同时存在时必须一致，`test_dataset_registry` 守着。
 
@@ -194,6 +194,6 @@ source 按名称字母序占槽，不按行数排名——一个源恰好长大�
 
 ## 相关文档
 
-- [CLI 参考 · asl serve](../reference/cli.md#asl-serve)
+- [CLI 参考 · cml serve](../reference/cli.md#cml-serve)
 - [storage 模块 · stats.py](storage.md#statspy)
 - [frontend/README.md](../../frontend/README.md)

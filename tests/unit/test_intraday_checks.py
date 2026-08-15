@@ -3,10 +3,10 @@ from datetime import date, datetime, timedelta
 import polars as pl
 import pytest
 
-from ashare_lake.adapters.tdx_protocol.minute_bars import in_session
-from ashare_lake.config import Config
-from ashare_lake.domain.schemas import with_provenance
-from ashare_lake.quality.intraday_checks import (
+from cn_market_lake.adapters.tdx_protocol.minute_bars import in_session
+from cn_market_lake.config import Config
+from cn_market_lake.domain.schemas import with_provenance
+from cn_market_lake.quality.intraday_checks import (
     RECONCILE_MIN_SYMBOL_DAYS,
     dataset_findings,
     minute_bars_findings,

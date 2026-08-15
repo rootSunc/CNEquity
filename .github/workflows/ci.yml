@@ -68,7 +68,7 @@ jobs:
           pip install -e . --group dev
 
       - name: Test
-        run: pytest --cov=ashare_lake --cov-report=term-missing --cov-report=xml
+        run: pytest --cov=cn_market_lake --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage
         if: matrix.python-version == '3.12'

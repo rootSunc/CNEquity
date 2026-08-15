@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-import ashare_lake.adapters.eastmoney.trading_status as ts
+import cn_market_lake.adapters.eastmoney.trading_status as ts
 
 
 class _FakeResponse:

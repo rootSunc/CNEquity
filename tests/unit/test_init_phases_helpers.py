@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ashare_lake.orchestrator.init_phases import (
+from cn_market_lake.orchestrator.init_phases import (
     FINALIZE_STEPS,
     INIT_PHASE_STEPS,
     expected_steps,

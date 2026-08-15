@@ -4,9 +4,9 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.quality.historical_validity import historical_universe_validity
-from ashare_lake.quality.st_coverage import (
+from cn_market_lake.config import Config
+from cn_market_lake.quality.historical_validity import historical_universe_validity
+from cn_market_lake.quality.st_coverage import (
     build_st_scope,
     publish_st_coverage_receipt,
     write_st_checkpoint,
@@ -80,7 +80,7 @@ def _survivorship(*, verified: bool) -> dict:
 def test_manifest_is_ready_only_when_all_universe_checks_pass(tmp_path, monkeypatch):
     cfg = _lake(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.quality.historical_validity.delisted_coverage_report",
+        "cn_market_lake.quality.historical_validity.delisted_coverage_report",
         lambda *args, **kwargs: _survivorship(verified=True),
     )
 
@@ -94,7 +94,7 @@ def test_manifest_is_ready_only_when_all_universe_checks_pass(tmp_path, monkeypa
 def test_manifest_explains_each_blocking_boundary(tmp_path, monkeypatch):
     cfg = _lake(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.quality.historical_validity.delisted_coverage_report",
+        "cn_market_lake.quality.historical_validity.delisted_coverage_report",
         lambda *args, **kwargs: _survivorship(verified=False),
     )
 

@@ -9,8 +9,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-import ashare_lake.adapters.eastmoney.em_auth as em
-from ashare_lake.adapters.eastmoney.em_auth import EastMoneyClient
+import cn_market_lake.adapters.eastmoney.em_auth as em
+from cn_market_lake.adapters.eastmoney.em_auth import EastMoneyClient
 
 
 def _reset_state() -> None:

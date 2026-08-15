@@ -4,10 +4,10 @@ from datetime import date
 
 import polars as pl
 
-import ashare_lake.steps  # noqa: F401 — register steps
-from ashare_lake.config import Config
-from ashare_lake.steps.finalize import _reconcile_watermarks, _update_watermarks
-from ashare_lake.storage.state import StateStore
+import cn_market_lake.steps  # noqa: F401 — register steps
+from cn_market_lake.config import Config
+from cn_market_lake.steps.finalize import _reconcile_watermarks, _update_watermarks
+from cn_market_lake.storage.state import StateStore
 
 _VAL_SCHEMA_ROWS = ("pe_ttm", "pb", "ps_ttm", "total_mv", "float_mv")
 
@@ -109,7 +109,7 @@ def test_an_outage_accumulates_staleness_instead_of_being_masked(tmp_path):
     alike. Anchored to the data, each day the source misses adds a day of lag
     until it crosses the staleness tolerance and gets reported.
     """
-    from ashare_lake.domain.datasets import is_stale
+    from cn_market_lake.domain.datasets import is_stale
 
     cfg = Config(data_root=tmp_path / "data")
     state = StateStore(cfg.meta_root)

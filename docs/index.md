@@ -1,18 +1,18 @@
-# ashare-lake
+# CNMarketLake
 
 一个免费、零注册、自托管的 A 股历史数据层：多源采集，落地 Parquet，保留溯源，并把复权、Universe 和 PIT 口径做成可复查的查询合同。
 
 ## 先跑起来
 
 ```bash
-pip install ashare-lake
-asl demo
+pip install cn-market-lake
+cml demo
 ```
 
-`asl demo` 使用真实 TDX 日线写入独立的 `data/ashare-lake-demo/`，不会碰全量湖。想直接验证研究口径，再运行：
+`cml demo` 使用真实 TDX 日线写入独立的 `data/cn-market-lake-demo/`，不会碰全量湖。想直接验证研究口径，再运行：
 
 ```bash
-asl demo --research --symbols 600519.SH
+cml demo --research --symbols 600519.SH
 ```
 
 它会额外读取 Sina 的后复权因子，输出 raw 与 hfq 收益对照。网络受限时先使用不带 `--research` 的基础 demo。
@@ -27,7 +27,7 @@ asl demo --research --symbols 600519.SH
 | 直接接 DuckDB / Polars | [DuckDB 与 Polars Recipe](recipes/duckdb-polars.md) |
 | 接给 AI agent | [MCP 参考](reference/mcp.md) |
 | 线上跑批与故障恢复 | [Runbook](operations/runbook.md) |
-| 论文 / 报告引用 | [引用 ashare-lake](citation.md) |
+| 论文 / 报告引用 | [引用 cn-market-lake](citation.md) |
 
 ## 设计边界
 
@@ -37,6 +37,6 @@ asl demo --research --symbols 600519.SH
 
 ## 继续阅读
 
-从 [安装](getting-started/installation.md) 开始；全量页面与模块地图见仓库的[完整文档索引](https://github.com/rootSunc/ashare-lake/blob/main/docs/README.md)。
+从 [安装](getting-started/installation.md) 开始；全量页面与模块地图见仓库的[完整文档索引](https://github.com/rootSunc/cn-market-lake/blob/main/docs/README.md)。
 
-项目方向见仓库根目录的 [ROADMAP](https://github.com/rootSunc/ashare-lake/blob/main/ROADMAP.md)，欢迎通过 [Issues](https://github.com/rootSunc/ashare-lake/issues) 或 [Discussions](https://github.com/rootSunc/ashare-lake/discussions) 反馈。
+项目方向见仓库根目录的 [ROADMAP](https://github.com/rootSunc/cn-market-lake/blob/main/ROADMAP.md)，欢迎通过 [Issues](https://github.com/rootSunc/cn-market-lake/issues) 或 [Discussions](https://github.com/rootSunc/cn-market-lake/discussions) 反馈。

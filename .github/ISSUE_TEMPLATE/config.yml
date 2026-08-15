@@ -1,14 +1,14 @@
 blank_issues_enabled: true
 contact_links:
   - name: 安全漏洞
-    url: https://github.com/rootSunc/ashare-lake/security/advisories/new
+    url: https://github.com/rootSunc/cn-market-lake/security/advisories/new
     about: 私密披露 — 请勿开公开 issue
   - name: 文档与定位
-    url: https://rootsunc.github.io/ashare-lake/comparison/
+    url: https://rootsunc.github.io/cn-market-lake/comparison/
     about: 提功能前先看与 akshare / Tushare / Baostock 的差异
   - name: 快速开始与 Recipes
-    url: https://rootsunc.github.io/ashare-lake/
+    url: https://rootsunc.github.io/cn-market-lake/
     about: 先用真实 demo 和可复制 Recipe 验证问题是否已经有答案
   - name: 使用帮助与想法
-    url: https://github.com/rootSunc/ashare-lake/discussions
+    url: https://github.com/rootSunc/cn-market-lake/discussions
     about: 适合开放式问题、使用经验和还没有明确实现范围的想法

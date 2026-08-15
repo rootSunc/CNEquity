@@ -28,7 +28,7 @@ import pytest
 # friction. Re-adding an import would bring all three back.
 RETIRED_PACKAGES = ("mootdx", "tdxpy", "py_mini_racer", "mini_racer", "akshare")
 
-SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "ashare_lake"
+SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "cn_market_lake"
 VENDORED = SRC_ROOT / "adapters" / "tdx_protocol" / "_wire"
 
 
@@ -88,7 +88,7 @@ def test_vendored_wire_client_needs_no_third_party_package():
     for path in VENDORED.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for name in _unguarded_imports(tree):
-            if name in stdlib or name == "ashare_lake" or name == "__future__":
+            if name in stdlib or name == "cn_market_lake" or name == "__future__":
                 continue
             offenders.append(f"{path.name}: {name}")
 
@@ -101,10 +101,10 @@ def test_importing_the_lake_does_not_load_a_retired_package():
     """A subprocess, so a package already imported by the suite cannot mask this."""
     code = (
         "import sys;"
-        "import ashare_lake.steps;"
-        "import ashare_lake.adapters.tdx_protocol.client;"
-        "import ashare_lake.derive.sector_routing;"
-        "import ashare_lake.adapters.tdx_protocol.quotes;"
+        "import cn_market_lake.steps;"
+        "import cn_market_lake.adapters.tdx_protocol.client;"
+        "import cn_market_lake.derive.sector_routing;"
+        "import cn_market_lake.adapters.tdx_protocol.quotes;"
         f"bad=[m for m in sys.modules if m.split('.')[0] in {RETIRED_PACKAGES!r}];"
         "print(','.join(sorted(bad)))"
     )
@@ -145,7 +145,7 @@ def test_vendored_client_satisfies_every_callback_the_wire_expects():
     """
     import ast
 
-    from ashare_lake.adapters.tdx_protocol._wire import TdxWireClient
+    from cn_market_lake.adapters.tdx_protocol._wire import TdxWireClient
 
     expected: set[str] = set()
     for path in VENDORED.rglob("*.py"):

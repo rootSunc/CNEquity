@@ -1,6 +1,6 @@
 # cninfo 适配器
 
-路径：`src/ashare_lake/adapters/cninfo/`
+路径：`src/cn_market_lake/adapters/cninfo/`
 
 巨潮资讯（CNINFO）公告与监管数据。
 

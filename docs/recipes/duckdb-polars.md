@@ -5,7 +5,7 @@
 ## DuckDB：跨数据集聚合
 
 ```bash
-asl query --config configs/ashare-lake.toml --sql "
+cml query --config configs/cn-market-lake.toml --sql "
   SELECT symbol, max(trade_date) AS last_date, avg(adj_close) AS avg_hfq_close
   FROM daily_bars_adj
   WHERE trade_date >= DATE '2024-01-01'
@@ -16,14 +16,14 @@ asl query --config configs/ashare-lake.toml --sql "
 "
 ```
 
-`daily_bars_adj` 是只读视图，带 `adj_*` 与 `adj_is_exact`。`asl query` 只接受单条 `SELECT`，适合把 SQL 交给脚本或 MCP agent。
+`daily_bars_adj` 是只读视图，带 `adj_*` 与 `adj_is_exact`。`cml query` 只接受单条 `SELECT`，适合把 SQL 交给脚本或 MCP agent。
 
 ## Polars：LazyFrame 特征管道
 
 ```python
 import polars as pl
 
-from ashare_lake.query import scan
+from cn_market_lake.query import scan
 
 bars = (
     scan(
@@ -49,7 +49,7 @@ features = bars.select(
 ## 连接到 AI agent
 
 ```bash
-asl mcp --config /abs/path/to/ashare-lake.toml
+cml mcp --config /abs/path/to/cn-market-lake.toml
 ```
 
-MCP 服务只读，返回值会声明 `origin`、截断状态、复权与 PIT 口径；采集和维护仍由 `asl` CLI 执行。其它 MCP 客户端可复用同一条 `command` / `args` 配置，完整工具契约见 [MCP 参考](../reference/mcp.md)。
+MCP 服务只读，返回值会声明 `origin`、截断状态、复权与 PIT 口径；采集和维护仍由 `cml` CLI 执行。其它 MCP 客户端可复用同一条 `command` / `args` 配置，完整工具契约见 [MCP 参考](../reference/mcp.md)。

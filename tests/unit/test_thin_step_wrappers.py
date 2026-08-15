@@ -7,10 +7,10 @@ from datetime import date
 import polars as pl
 import pytest
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.config import Config
-from ashare_lake.steps import commodity, macro_risk, newsboard, research
-from ashare_lake.storage.state import StateStore
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.config import Config
+from cn_market_lake.steps import commodity, macro_risk, newsboard, research
+from cn_market_lake.storage.state import StateStore
 
 
 @pytest.fixture

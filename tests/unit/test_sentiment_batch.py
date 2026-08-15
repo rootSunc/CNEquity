@@ -4,8 +4,8 @@ from unittest.mock import patch
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.derive.sentiment_scores import compute_sentiment_scores
+from cn_market_lake.config import Config
+from cn_market_lake.derive.sentiment_scores import compute_sentiment_scores
 
 
 @pytest.fixture
@@ -58,7 +58,7 @@ def headlines_lake(tmp_path):
 
 def test_batch_sentiment_uses_headlines_without_http(headlines_lake):
     with patch(
-        "ashare_lake.derive.sentiment_scores.fetch_stock_news",
+        "cn_market_lake.derive.sentiment_scores.fetch_stock_news",
     ) as fetch_news:
         df = compute_sentiment_scores(headlines_lake, date(2024, 6, 28))
         fetch_news.assert_not_called()
@@ -79,7 +79,7 @@ def test_batch_sentiment_http_fallback_when_no_headlines(news_batch_lake):
         "aggregate_sentiment": 0.8,
     }
     with patch(
-        "ashare_lake.derive.sentiment_scores.fetch_stock_news",
+        "cn_market_lake.derive.sentiment_scores.fetch_stock_news",
         return_value=news_payload,
     ):
         df = compute_sentiment_scores(news_batch_lake, date(2024, 6, 28))
@@ -93,7 +93,7 @@ def test_batch_sentiment_http_fallback_when_no_headlines(news_batch_lake):
 
 def test_batch_sentiment_soft_fails_http_channel(news_batch_lake):
     with patch(
-        "ashare_lake.derive.sentiment_scores.fetch_stock_news",
+        "cn_market_lake.derive.sentiment_scores.fetch_stock_news",
         side_effect=RuntimeError("boom"),
     ):
         df = compute_sentiment_scores(news_batch_lake, date(2024, 6, 28))

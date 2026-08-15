@@ -2,7 +2,7 @@
 # B1 — Remove the launchd agent installed by install_scheduler.sh.
 set -euo pipefail
 
-LABEL="com.asharelake.daily"
+LABEL="com.cnmarketlake.daily"
 DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 if [[ "$(uname)" != "Darwin" ]]; then

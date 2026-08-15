@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from datetime import date
 
-from ashare_lake.adapters.baostock._session import fetch_per_symbol
+from cn_market_lake.adapters.baostock._session import fetch_per_symbol
 
 
 class _NoQueryBaostock:
@@ -48,7 +48,7 @@ def test_completes_normally_without_tripping_the_watchdog():
 
 def test_mid_sweep_login_failure_returns_partial(monkeypatch):
     """A dead baostock session mid-sweep must not discard already-fetched rows."""
-    from ashare_lake.adapters.baostock import _session as sess
+    from cn_market_lake.adapters.baostock import _session as sess
 
     monkeypatch.setattr(sess, "_RELOGIN_EVERY", 2)
     monkeypatch.setattr(sess, "_LOGIN_RETRIES", 2)

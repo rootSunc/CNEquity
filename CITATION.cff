@@ -1,7 +1,7 @@
 cff-version: 1.2.0
-message: "If ashare-lake supports your research or data work, please cite this repository."
+message: "If CNMarketLake supports your research or data work, please cite this repository."
 type: software
-title: "ashare-lake"
+title: "CNMarketLake"
 abstract: >-
   A free, self-hosted historical data layer for A-shares with multi-source
   ingestion, provenance, adjustment semantics, point-in-time fundamentals,
@@ -9,10 +9,10 @@ abstract: >-
 version: 0.6.0
 date-released: 2026-08-10
 authors:
-  - name: "ashare-lake Contributors"
+  - name: "CNMarketLake Contributors"
 license: Apache-2.0
-repository-code: "https://github.com/rootSunc/ashare-lake"
-url: "https://rootsunc.github.io/ashare-lake/"
+repository-code: "https://github.com/rootSunc/cn-market-lake"
+url: "https://rootsunc.github.io/cn-market-lake/"
 keywords:
   - A-shares
   - financial data

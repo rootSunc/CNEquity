@@ -1,16 +1,16 @@
 # frontend
 
-Source for the `asl serve` dashboard bundle.
+Source for the `cml serve` dashboard bundle.
 
 ```bash
 cd frontend && npm ci && npm run build
 ```
 
-Outputs are `src/ashare_lake/serve/static/bundle.js` and
-`src/ashare_lake/serve/static/styles.css`, and both are **committed**. That is
+Outputs are `src/cn_market_lake/serve/static/bundle.js` and
+`src/cn_market_lake/serve/static/styles.css`, and both are **committed**. That is
 the trade this directory exists to make:
 
-- `pip install ashare-lake` needs no node. The bundle ships in the wheel.
+- `pip install cn-market-lake` needs no node. The bundle ships in the wheel.
 - Only a contributor changing the dashboard needs npm, and only to re-run
   `npm run build` before committing.
 - CI runs `npm run check`, which rebuilds and fails if the committed assets do

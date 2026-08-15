@@ -1,6 +1,6 @@
 """Coverage verification.
 
-`asl audit` asks whether the data that landed is correct; this asks whether the
+`cml audit` asks whether the data that landed is correct; this asks whether the
 data that should have landed did. Every defect that ran unnoticed for weeks this
 session was the second kind — a step raising on contact, the run recording a
 failed batch, and nothing summing those into "this has not succeeded since the
@@ -18,9 +18,9 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.domain.datasets import DATASETS
-from ashare_lake.quality.verify import verify_dataset, verify_lake
+from cn_market_lake.config import Config
+from cn_market_lake.domain.datasets import DATASETS
+from cn_market_lake.quality.verify import verify_dataset, verify_lake
 
 ANCHOR = date(2026, 8, 7)
 
@@ -122,7 +122,7 @@ def test_repair_command_carries_the_window(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
     cfg.curated_root.mkdir(parents=True, exist_ok=True)
     gap = verify_dataset(cfg, DATASETS["daily_bars"], anchor=ANCHOR, watermark=None)[0]
-    assert gap.repair_command("my.toml") == "asl backfill daily_bars --config my.toml"
+    assert gap.repair_command("my.toml") == "cml backfill daily_bars --config my.toml"
 
 
 def test_verify_lake_skips_unknown_dataset_names(tmp_path):
@@ -168,7 +168,7 @@ def test_a_retired_source_short_of_its_last_session_is_still_a_gap(tmp_path):
 
 
 def test_is_stale_respects_retirement():
-    from ashare_lake.domain.datasets import is_stale
+    from cn_market_lake.domain.datasets import is_stale
 
     retired = date(2024, 8, 16)
     assert is_stale("northbound_flows", retired, ANCHOR) is False
@@ -182,8 +182,8 @@ def test_is_stale_respects_retirement():
 
 def _cli_lake(tmp_path):
     """A config + lake whose daily_bars is missing one session."""
-    from ashare_lake.config import load_config
-    from ashare_lake.config.bootstrap import path_for_toml
+    from cn_market_lake.config import load_config
+    from cn_market_lake.config.bootstrap import path_for_toml
 
     cfg_path = tmp_path / "cfg.toml"
     cfg_path.write_text(
@@ -211,14 +211,14 @@ steps = ["daily_bars"]
 def test_cli_reports_the_gap_and_exits_nonzero(tmp_path):
     from click.testing import CliRunner
 
-    from ashare_lake.cli.main import cli
+    from cn_market_lake.cli.main import cli
 
     res = CliRunner().invoke(
         cli, ["verify", "--config", str(_cli_lake(tmp_path)), "--dataset", "daily_bars"]
     )
     assert res.exit_code == 1, "a gap must be scriptable as a failure"
     assert "2026-08-05" in res.output
-    assert "asl backfill daily_bars" in res.output
+    assert "cml backfill daily_bars" in res.output
 
 
 def test_cli_repair_does_not_claim_success_when_the_step_failed(tmp_path, monkeypatch):
@@ -227,7 +227,7 @@ def test_cli_repair_does_not_claim_success_when_the_step_failed(tmp_path, monkey
     said 全部修复完成 immediately under it."""
     from click.testing import CliRunner
 
-    from ashare_lake.cli import main as cli_main
+    from cn_market_lake.cli import main as cli_main
 
     monkeypatch.setattr(
         cli_main,
@@ -247,7 +247,7 @@ def test_cli_repair_says_so_when_the_window_is_genuinely_empty(tmp_path, monkeyp
     """Succeeded but wrote nothing is not a repair — re-running will not help."""
     from click.testing import CliRunner
 
-    from ashare_lake.cli import main as cli_main
+    from cn_market_lake.cli import main as cli_main
 
     monkeypatch.setattr(
         cli_main,

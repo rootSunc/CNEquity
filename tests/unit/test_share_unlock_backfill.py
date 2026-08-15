@@ -13,8 +13,8 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.steps.macro_risk import (
+from cn_market_lake.config import Config
+from cn_market_lake.steps.macro_risk import (
     _UNLOCK_STRIDE_DAYS,
     _backfill_share_unlock_schedule,
 )
@@ -40,7 +40,7 @@ def test_strides_under_the_horizon_not_every_day(tmp_path, monkeypatch):
         calls.append(d)
         return pl.DataFrame([_row(d + timedelta(days=30))])
 
-    monkeypatch.setattr("ashare_lake.steps.macro_risk.fetch_share_unlock_schedule", fake_fetch)
+    monkeypatch.setattr("cn_market_lake.steps.macro_risk.fetch_share_unlock_schedule", fake_fetch)
     monkeypatch.setattr(cfg, "rate_limit", lambda source: None)
 
     _backfill_share_unlock_schedule(cfg, date(2026, 7, 1), "run-1")
@@ -67,7 +67,7 @@ def test_walks_newest_stride_first(tmp_path, monkeypatch):
         calls.append(d)
         return pl.DataFrame()
 
-    monkeypatch.setattr("ashare_lake.steps.macro_risk.fetch_share_unlock_schedule", fake_fetch)
+    monkeypatch.setattr("cn_market_lake.steps.macro_risk.fetch_share_unlock_schedule", fake_fetch)
     monkeypatch.setattr(cfg, "rate_limit", lambda source: None)
 
     _backfill_share_unlock_schedule(cfg, date(2026, 7, 1), "run-1")
@@ -92,7 +92,7 @@ def test_flushes_per_stride_not_once_at_the_end(tmp_path, monkeypatch):
     def fake_fetch(d: date, *, horizon_days: int = 180, **_kw) -> pl.DataFrame:
         return pl.DataFrame([_row(d + timedelta(days=30))])
 
-    monkeypatch.setattr("ashare_lake.steps.macro_risk.fetch_share_unlock_schedule", fake_fetch)
+    monkeypatch.setattr("cn_market_lake.steps.macro_risk.fetch_share_unlock_schedule", fake_fetch)
     monkeypatch.setattr(cfg, "rate_limit", lambda source: None)
 
     out = _backfill_share_unlock_schedule(cfg, date(2026, 7, 1), "run-1")
@@ -107,7 +107,7 @@ def test_uses_the_patient_sweep_retry_budget_not_the_daily_default(tmp_path, mon
     pages (8, 27, 28) of the 63-page market-wide report every stride re-walks
     from page 1 — a transient-load pattern the daily call's 3/5s budget isn't
     sized for. The backfill must ask for the more patient one."""
-    from ashare_lake.steps.macro_risk import (
+    from cn_market_lake.steps.macro_risk import (
         _UNLOCK_SWEEP_BACKOFF_SECONDS,
         _UNLOCK_SWEEP_RETRIES,
     )
@@ -121,7 +121,7 @@ def test_uses_the_patient_sweep_retry_budget_not_the_daily_default(tmp_path, mon
         seen.update(kw)
         return pl.DataFrame()
 
-    monkeypatch.setattr("ashare_lake.steps.macro_risk.fetch_share_unlock_schedule", fake_fetch)
+    monkeypatch.setattr("cn_market_lake.steps.macro_risk.fetch_share_unlock_schedule", fake_fetch)
     monkeypatch.setattr(cfg, "rate_limit", lambda source: None)
 
     _backfill_share_unlock_schedule(cfg, date(2026, 7, 1), "run-1")
@@ -136,7 +136,7 @@ def test_empty_range_writes_nothing(tmp_path, monkeypatch):
     cfg._backfill_end = date(2026, 1, 2)  # under one stride — a single call
 
     monkeypatch.setattr(
-        "ashare_lake.steps.macro_risk.fetch_share_unlock_schedule",
+        "cn_market_lake.steps.macro_risk.fetch_share_unlock_schedule",
         lambda d, **k: pl.DataFrame(),
     )
     monkeypatch.setattr(cfg, "rate_limit", lambda source: None)

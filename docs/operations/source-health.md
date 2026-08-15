@@ -7,8 +7,8 @@
 ## 怎么用
 
 ```bash
-asl sources --vantage cn     # 探测一遍，报告写进 meta/source_health/cn.json
-asl serve                    # → http://127.0.0.1:8787/source-health
+cml sources --vantage cn     # 探测一遍，报告写进 meta/source_health/cn.json
+cml serve                    # → http://127.0.0.1:8787/source-health
 ```
 
 **探测在 CLI，展示在 serve。** 面板只读——它不会替你去请求十几个第三方主机，和它不触发采集是同一个理由：一个无鉴权的本地服务，不该能被一个走神的浏览器标签页指向别人的接口。
@@ -16,7 +16,7 @@ asl serve                    # → http://127.0.0.1:8787/source-health
 只测某几个源：
 
 ```bash
-asl sources --only eastmoney_push2,sina,tdx_protocol
+cml sources --only eastmoney_push2,sina,tdx_protocol
 ```
 
 `--vantage` 是**必须认真填**的：它记录这次探测从哪个出口发出去。见下面「为什么视角决定结论」。每个 vantage 一个文件，页面把它们并排渲染。
@@ -56,8 +56,8 @@ asl sources --only eastmoney_push2,sina,tdx_protocol
 在两个网络里各跑一次，页面就有两列：
 
 ```bash
-asl sources --vantage cn          # 大陆出口
-asl sources --vantage overseas    # 挂代理 / 海外机器上再跑一次
+cml sources --vantage cn          # 大陆出口
+cml sources --vantage overseas    # 挂代理 / 海外机器上再跑一次
 ```
 
 文件名不决定列名，JSON 里的 `vantage` 字段才决定。同名会覆盖，所以同一个出口重复跑就是刷新那一列。
@@ -80,24 +80,24 @@ URL 常量、东财的鉴权头、上交所需要的 Chrome TLS 伪装、同花�
 
 ## 报告存在哪
 
-`{data_root}/meta/source_health/<vantage>.json`，和湖的其它元数据放在一起。`asl serve` 启动时不读，访问 `/source-health` 时才读——所以先跑探测再刷新页面即可，不用重启。
+`{data_root}/meta/source_health/<vantage>.json`，和湖的其它元数据放在一起。`cml serve` 启动时不读，访问 `/source-health` 时才读——所以先跑探测再刷新页面即可，不用重启。
 
 **本地没有强制的定时发布。** 想每天自动跑就挂进你现有的调度里（见 [runbook](runbook.md)）：
 
 ```bash
-asl sources --vantage cn >> logs/source-health.log 2>&1
+cml sources --vantage cn >> logs/source-health.log 2>&1
 ```
 
 **探测失败不会让命令失败。** 源变红是这条命令的**输出**而不是它的错误；如果调度需要门禁，请解析 JSON 中的 `status`，按业务决定是否阻断日更。
 
 仓库还提供一个每周运行的 GitHub Actions workflow：它从海外 runner 探测 TDX、Sina、东财和巨潮，
 把文本摘要写入 Job Summary，并上传 JSON artifact。这个报告只代表
-`github-actions` 视角；大陆机器仍应运行 `asl sources --vantage cn`，不要把海外的 `blocked`
+`github-actions` 视角；大陆机器仍应运行 `cml sources --vantage cn`，不要把海外的 `blocked`
 误读成全局故障。
 
 ## 加一个源
 
-`src/ashare_lake/diagnostics/source_health.py` 里加一个 `SourceProbe`：
+`src/cn_market_lake/diagnostics/source_health.py` 里加一个 `SourceProbe`：
 
 ```python
 SourceProbe(
@@ -120,4 +120,4 @@ SourceProbe(
 
 ## 相关文档
 
-- [CLI](../reference/cli.md#asl-sources) · [serve 面板](../modules/serve.md) · [逐源限制](../datasets/sources.md) · [故障排查](troubleshooting.md)
+- [CLI](../reference/cli.md#cml-sources) · [serve 面板](../modules/serve.md) · [逐源限制](../datasets/sources.md) · [故障排查](troubleshooting.md)

@@ -1,6 +1,6 @@
 # 贡献指南
 
-**只用数据的用户**：`pip install ashare-lake` → 见 [快速开始](docs/getting-started/quickstart.md)。  
+**只用数据的用户**：`pip install cn-market-lake` → 见 [快速开始](docs/getting-started/quickstart.md)。  
 本文面向向仓库提交代码的贡献者。
 
 安全问题请走 [SECURITY.md](SECURITY.md)，不要开公开 issue。
@@ -15,7 +15,7 @@
 - 为现有数据集补一条离线 recipe、查询示例或字段说明
 - 给已有 adapter 增加 schema 边界测试和清晰的源限制说明
 - 修复中英文文档、CLI help 与实际默认值之间的漂移
-- 改进 `asl demo`、`asl status` 或 dashboard 的错误提示
+- 改进 `cml demo`、`cml status` 或 dashboard 的错误提示
 
 数据源接入需要同时提交来源、保留期、限流和合规说明；请不要把真实数据文件提交到仓库。
 较大的方向可以先在 issue / discussion 中确认范围。
@@ -30,7 +30,7 @@ pip install -e . --group dev
 # 见 docs/getting-started/installation.md
 ```
 
-请勿提交 `configs/ashare-lake.toml`、`data/`、`logs/`。
+请勿提交 `configs/cn-market-lake.toml`、`data/`、`logs/`。
 
 ```bash
 ruff format .
@@ -42,7 +42,7 @@ pytest tests/integration
 
 ## 约定
 
-- 代码在 `src/ashare_lake/`，按职责拆分（`domain`、`adapters`、`orchestrator`、
+- 代码在 `src/cn_market_lake/`，按职责拆分（`domain`、`adapters`、`orchestrator`、
   `steps`、`storage`、`derive`、`quality`、`query`、`config`、`cli`）。
 - Step 按 L0–L8 分层放在 `steps/`；新模块需在 `steps/__init__.py` 中 import 以注册。
 - 新数据集：在 `domain/schemas.py` 声明 schema + 主键、分区键，以及溯源列

@@ -1,8 +1,8 @@
-site_name: ashare-lake
+site_name: CNMarketLake
 site_description: 可日更、可溯源的 A 股研究数据湖
-site_url: https://rootsunc.github.io/ashare-lake/
-repo_name: rootSunc/ashare-lake
-repo_url: https://github.com/rootSunc/ashare-lake
+site_url: https://rootsunc.github.io/cn-market-lake/
+repo_name: rootSunc/cn-market-lake
+repo_url: https://github.com/rootSunc/cn-market-lake
 edit_uri: edit/main/docs/
 exclude_docs: "/README.md"
 
@@ -90,8 +90,8 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/rootSunc/ashare-lake
+      link: https://github.com/rootSunc/cn-market-lake
       name: GitHub
   generator: false
 
-copyright: Copyright © ashare-lake Contributors
+copyright: Copyright © CNMarketLake Contributors

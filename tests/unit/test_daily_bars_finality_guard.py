@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from ashare_lake.steps.bars import (
+from cn_market_lake.steps.bars import (
     _reject_unfinished_daily_bar_window,
     step_daily_bars,
 )
@@ -78,15 +78,15 @@ def test_step_applies_guard_before_loading_or_fetching(config, monkeypatch, cont
         raise RuntimeError("stop before fetch")
 
     monkeypatch.setattr(
-        "ashare_lake.steps.bars._reject_unfinished_daily_bar_window",
+        "cn_market_lake.steps.bars._reject_unfinished_daily_bar_window",
         stop_before_fetch,
     )
     monkeypatch.setattr(
-        "ashare_lake.steps.bars.load_symbols",
+        "cn_market_lake.steps.bars.load_symbols",
         lambda cfg: events.append("symbols") or ["600519.SH"],
     )
     monkeypatch.setattr(
-        "ashare_lake.steps.bars.fetch_daily_bars_parallel",
+        "cn_market_lake.steps.bars.fetch_daily_bars_parallel",
         lambda *args, **kwargs: events.append("fetch"),
     )
 

@@ -47,10 +47,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import duckdb  # noqa: E402
 
-from ashare_lake.config import load_config  # noqa: E402
-from ashare_lake.query.views import ensure_duckdb_views  # noqa: E402
+from cn_market_lake.config import load_config  # noqa: E402
+from cn_market_lake.query.views import ensure_duckdb_views  # noqa: E402
 
-DEFAULT_CONFIG = ROOT / "configs/ashare-lake.toml"
+DEFAULT_CONFIG = ROOT / "configs/cn-market-lake.toml"
 
 # Mid-year anchors so a window never starts on a New Year gap, and five-year
 # holds because that is the horizon a backtest is usually defending.
@@ -125,7 +125,7 @@ def measure(con: duckdb.DuckDBPyConnection, start: date, end: date) -> Window:
     if not names:
         raise SystemExit(
             f"No stocks with bars on {start}. Is the lake backfilled that far? "
-            "Check `asl status` / coverage_start for daily_bars."
+            "Check `cml status` / coverage_start for daily_bars."
         )
     return Window(
         start=start,

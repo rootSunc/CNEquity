@@ -3,12 +3,12 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.config import Config
-from ashare_lake.query.universe import tradable_symbols_on_date
-from ashare_lake.steps.finalize import step_compact
-from ashare_lake.storage import StagingWriter
-from ashare_lake.storage.instruments import compact_instruments
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.config import Config
+from cn_market_lake.query.universe import tradable_symbols_on_date
+from cn_market_lake.steps.finalize import step_compact
+from cn_market_lake.storage import StagingWriter
+from cn_market_lake.storage.instruments import compact_instruments
 
 
 def _prov(source: str = "tdx_protocol") -> dict:
@@ -131,7 +131,7 @@ def test_compact_instruments_via_step_respects_manifest_gate(tmp_path):
 
 
 def test_audit_emits_instruments_delist_suppressed_error(tmp_path):
-    from ashare_lake.steps.finalize import step_audit, step_compact
+    from cn_market_lake.steps.finalize import step_audit, step_compact
 
     root = tmp_path / "data"
     cfg = Config(data_root=root)
@@ -225,7 +225,7 @@ def test_tradable_universe_excludes_etf(tmp_path):
 
 
 def test_tdx_instrument_frame_marks_cdr_asset_type():
-    from ashare_lake.adapters.tdx_protocol.client import _filter_instrument_frame
+    from cn_market_lake.adapters.tdx_protocol.client import _filter_instrument_frame
 
     pdf = pl.DataFrame({"code": ["600519", "689009"], "name": ["Moutai", "Ninebot"]})
     out = _filter_instrument_frame(pdf, "SH")
@@ -234,7 +234,7 @@ def test_tdx_instrument_frame_marks_cdr_asset_type():
 
 
 def test_tdx_instrument_frame_marks_etf_asset_type():
-    from ashare_lake.adapters.tdx_protocol.client import _filter_instrument_frame
+    from cn_market_lake.adapters.tdx_protocol.client import _filter_instrument_frame
 
     sh_out = _filter_instrument_frame(
         pl.DataFrame(
@@ -257,7 +257,7 @@ def test_tdx_instrument_frame_marks_etf_asset_type():
 
 
 def test_enrich_instrument_list_dates_fills_nulls(tmp_path, monkeypatch):
-    from ashare_lake.adapters.eastmoney import instruments as em_inst
+    from cn_market_lake.adapters.eastmoney import instruments as em_inst
 
     cfg = Config(data_root=tmp_path / "data", sources={"eastmoney": True})
     df = pl.DataFrame([_instrument("600519.SH")])

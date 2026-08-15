@@ -1,12 +1,12 @@
-<h1 align="center">ASL · ashare-lake</h1>
+<h1 align="center">CML · CNMarketLake</h1>
 <p align="center"><b>本地可日更的 A 股研究湖，为人和 AI agent 保存可复查的历史</b></p>
 
 <p align="center">
-  <a href="https://github.com/rootSunc/ashare-lake/actions/workflows/ci.yml"><img src="https://github.com/rootSunc/ashare-lake/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://pypi.org/project/ashare-lake/"><img src="https://img.shields.io/pypi/v/ashare-lake.svg" alt="PyPI"></a>
+  <a href="https://github.com/rootSunc/cn-market-lake/actions/workflows/ci.yml"><img src="https://github.com/rootSunc/cn-market-lake/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/cn-market-lake/"><img src="https://img.shields.io/pypi/v/cn-market-lake.svg" alt="PyPI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
-  <a href="https://rootsunc.github.io/ashare-lake/"><img src="https://img.shields.io/badge/docs-site-2f80ed.svg" alt="Docs site"></a>
+  <a href="https://rootsunc.github.io/cn-market-lake/"><img src="https://img.shields.io/badge/docs-site-2f80ed.svg" alt="Docs site"></a>
   <a href="README.en.md"><img src="https://img.shields.io/badge/docs-English-lightgrey.svg" alt="English"></a>
 </p>
 
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/asl-serve-hero-demo.png" alt="ashare-lake 示意控制台：合成的全覆盖热力图演示" width="1100" />
+  <img src="docs/assets/cml-serve-hero-demo.png" alt="CNMarketLake 示意控制台：合成的全覆盖热力图演示" width="1100" />
 </p>
 
 > 上图是用于 README 的合成演示图，覆盖热力图明确标注为 `ILLUSTRATIVE DEMO`，不代表当前生产数据状态。真实控制台只读，不会修改数据湖。
@@ -24,7 +24,7 @@
 ## 架构
 
 <p align="center">
-  <img src="architecture-diagram-v2.png" alt="ashare-lake 架构图" width="1100" />
+  <img src="architecture-diagram-v2.png" alt="CNMarketLake 架构图" width="1100" />
 </p>
 <p align="center"><sub>公开数据源 → 适配与编排 → 本地 Parquet 湖 → 质量、查询与只读服务</sub></p>
 
@@ -32,7 +32,7 @@
 
 ## 先看它是否适合你
 
-ashare-lake 不是又一个“临时请求一次行情”的接口。它更适合这些场景：
+CNMarketLake 不是又一个”临时请求一次行情”的接口。它更适合这些场景：
 
 - 你要反复研究多年行情，不想每次重拉、清洗和拼复权；
 - 你在意退市股、历史成分股和 PIT，不能接受不知不觉使用未来数据；
@@ -44,7 +44,7 @@ ashare-lake 不是又一个“临时请求一次行情”的接口。它更适�
 第一次使用，按这条路径即可：
 
 ```text
-asl demo → asl init → asl run daily → load() / asl serve → asl mcp（可选）
+cml demo → cml init → cml run daily → load() / cml serve → cml mcp（可选）
 ```
 
 ## 30 秒跑通
@@ -52,43 +52,43 @@ asl demo → asl init → asl run daily → load() / asl serve → asl mcp（可
 需要 Python 3.10+，无需 token、积分或账号：
 
 ```bash
-pip install ashare-lake
-asl demo
+pip install cn-market-lake
+cml demo
 ```
 
-`asl demo` 默认拉取 5 只股票最近约 30 个交易日的真实数据，写入独立目录
-`data/ashare-lake-demo/`，不会覆盖正式数据湖。需要能访问 TDX 行情主机；若连接失败，先检查：
+`cml demo` 默认拉取 5 只股票最近约 30 个交易日的真实数据，写入独立目录
+`data/cn-market-lake-demo/`，不会覆盖正式数据湖。需要能访问 TDX 行情主机；若连接失败，先检查：
 
 ```bash
-asl sources --only tdx_protocol
+cml sources --only tdx_protocol
 ```
 
 <p align="center">
-  <img src="docs/assets/asl-demo.png" alt="asl demo 分阶段采集真实日线并打印结果" width="820" />
+  <img src="docs/assets/cml-demo.png" alt="cml demo 分阶段采集真实日线并打印结果" width="820" />
 </p>
 
 然后在 Python 中读取：
 
 ```python
-from ashare_lake.query import load
+from cn_market_lake.query import load
 
-bars = load("daily_bars", data_root="data/ashare-lake-demo")
+bars = load("daily_bars", data_root="data/cn-market-lake-demo")
 print(bars.tail())
 ```
 
 想直接比较原始价格与后复权口径：
 
 ```bash
-asl demo --research --symbols 600519.SH
+cml demo --research --symbols 600519.SH
 ```
 
 ## 5 分钟开始建湖
 
 ```bash
-pip install ashare-lake
-asl config init            # 生成 configs/ashare-lake.toml
-asl init                   # 全市场标的，默认回溯最近 3 年
-asl run daily              # 之后每个交易日执行这一条
+pip install cn-market-lake
+cml config init            # 生成 configs/cn-market-lake.toml
+cml init                   # 全市场标的，默认回溯最近 3 年
+cml run daily              # 之后每个交易日执行这一条
 ```
 
 默认策略是“浅而不窄”：历史先取最近 3 年，但全市场标的一个不缺。这样不会因为只保留今天仍上市的股票，提前把幸存者偏差写进数据湖。每个数据集的真实起点会记录在 `coverage_start`。
@@ -96,10 +96,10 @@ asl run daily              # 之后每个交易日执行这一条
 需要更长历史时可以一次拉满，也可以以后补深：
 
 ```bash
-asl init --profile full
+cml init --profile full
 
 # 或对单个数据集补历史
-asl backfill daily_bars --start 2016-01-01 --end <coverage_start>
+cml backfill daily_bars --start 2016-01-01 --end <coverage_start>
 ```
 
 默认初始化通常是小时级、GB 级，实际取决于网络、数据源状态和机器配置。详细安装说明见[快速开始](docs/getting-started/quickstart.md)和[安装指南](docs/getting-started/installation.md)。
@@ -112,7 +112,7 @@ asl backfill daily_bars --start 2016-01-01 --end <coverage_start>
 
 同一个等权买入持有、同样的起止日期，唯一差别是后来退市的股票是否仍在历史股票池中。用“今天还在的股票”回看历史，2016–2021 五年收益会从 **5.9% 变成 12.0%**，看起来几乎翻倍。
 
-这类错误很难从结果里发现：那些股票不是收益为零，而是根本没有进入计算。ashare-lake 因此把退市股、复权因子、历史成分与 PIT 当作基础能力，而不是附加字段。
+这类错误很难从结果里发现：那些股票不是收益为零，而是根本没有进入计算。CNMarketLake 因此把退市股、复权因子、历史成分与 PIT 当作基础能力，而不是附加字段。
 
 复现实验：
 
@@ -134,7 +134,7 @@ python scripts/survivorship_gap.py --lang zh --svg docs/assets/survivorship-gap.
 常用查询：
 
 ```python
-from ashare_lake.query import load
+from cn_market_lake.query import load
 
 bars = load(
     "daily_bars",
@@ -233,11 +233,11 @@ roe = load(
 ## 日常使用与运维
 
 ```bash
-asl run daily                 # 执行当天全部日更分组
-asl status                    # 查看 FRESH / STALE / EMPTY
-asl serve                     # 打开 http://127.0.0.1:8787
-asl sources                   # 检查上游数据源健康度
-asl retry --run-id <run_id>   # 只重试失败批次
+cml run daily                 # 执行当天全部日更分组
+cml status                    # 查看 FRESH / STALE / EMPTY
+cml serve                     # 打开 http://127.0.0.1:8787
+cml sources                   # 检查上游数据源健康度
+cml retry --run-id <run_id>   # 只重试失败批次
 ```
 
 单个 step 失败时，系统会记录 failed batch，其他步骤继续落盘；重试不会把整条任务重新跑一遍。浏览器控制台就是 README 首图中的界面，可查看覆盖、新鲜度、容量、跑批和质量结果。
@@ -246,17 +246,17 @@ asl retry --run-id <run_id>   # 只重试失败批次
 
 ```bash
 # 交易日收盘后执行；非交易日会自动跳过
-30 16 * * 1-5  cd /path/to/lake && asl run daily >> logs/daily.log 2>&1
+30 16 * * 1-5  cd /path/to/lake && cml run daily >> logs/daily.log 2>&1
 ```
 
 更多运维方式见[运行手册](docs/operations/runbook.md)、[数据源健康检查](docs/operations/source-health.md)和[故障排查](docs/operations/troubleshooting.md)。
 
 ## 接给 AI agent
 
-`asl mcp` 以只读方式把本地湖提供给模型；采集、重试和清理仍由 CLI 完成。
+`cml mcp` 以只读方式把本地湖提供给模型；采集、重试和清理仍由 CLI 完成。
 
 ```bash
-asl mcp --config "$(pwd)/configs/ashare-lake.toml"
+cml mcp --config "$(pwd)/configs/cn-market-lake.toml"
 ```
 
 把上面的命令作为 MCP server 注册到任意兼容客户端即可。大多数客户端
@@ -265,16 +265,16 @@ asl mcp --config "$(pwd)/configs/ashare-lake.toml"
 ```json
 {
   "mcpServers": {
-    "ashare-lake": {
-      "command": "asl",
-      "args": ["mcp", "--config", "/abs/path/to/ashare-lake.toml"]
+    "cn-market-lake": {
+      "command": "cml",
+      "args": ["mcp", "--config", "/abs/path/to/cn-market-lake.toml"]
     }
   }
 }
 ```
 
 因此 Codex、Claude、Cline、Cursor、Windsurf、Gemini CLI 以及其它支持
-MCP stdio 的 agent 都可以复用同一条 `command` / `args` 配置；ashare-lake
+MCP stdio 的 agent 都可以复用同一条 `command` / `args` 配置；CNMarketLake
 不依赖任何特定模型或厂商 SDK。
 
 `--config` 必须使用绝对路径。接好后可以直接问：
@@ -284,13 +284,13 @@ MCP stdio 的 agent 都可以复用同一条 `command` / `args` 配置；ashare-
 - “计算 2018 年财报因子的 IC，不要使用未来数据。”
 - “过去三年退市的股票，退市前 60 天有什么共同形态？”
 
-还没有正式湖时，可以先运行 `asl demo`，再使用生成的 demo 配置。完整说明见[MCP 参考](docs/reference/mcp.md)。
+还没有正式湖时，可以先运行 `cml demo`，再使用生成的 demo 配置。完整说明见[MCP 参考](docs/reference/mcp.md)。
 
 ## 与 AkShare、Tushare、Qlib 有什么不同
 
-AkShare 和取数工具解决“怎样调用数据源”，Tushare 提供云端数据服务，Qlib / vn.py 更偏研究或交易平台。ashare-lake 做的是中间的数据基础设施：把多源数据落成可日更、可复查、可溯源的本地 Parquet 湖。
+AkShare 和取数工具解决”怎样调用数据源”，Tushare 提供云端数据服务，Qlib / vn.py 更偏研究或交易平台。CNMarketLake 做的是中间的数据基础设施：把多源数据落成可日更、可复查、可溯源的本地 Parquet 湖。
 
-| 你在意的能力 | ashare-lake | 常规取数工具 | 云端数据服务 | 研究 / 交易平台 |
+| 你在意的能力 | CNMarketLake | 常规取数工具 | 云端数据服务 | 研究 / 交易平台 |
 |---|---|---|---|---|
 | 本地可续跑的数据底座 | **内置** | 通常自建 | 通常不提供 | 依平台而定 |
 | 历史结果能否复查 | **行级溯源** | 缺少统一契约 | 依平台字段 | 依模块而定 |
@@ -309,9 +309,9 @@ AkShare 和取数工具解决“怎样调用数据源”，Tushare 提供云端�
 需要从 2001 年开始的日线：
 
 ```bash
-asl init --since 2001-01-01
+cml init --since 2001-01-01
 # 或事后补深
-asl backfill daily_bars --start 2001-01-01
+cml backfill daily_bars --start 2001-01-01
 ```
 
 </details>
@@ -326,7 +326,7 @@ asl backfill daily_bars --start 2001-01-01
 <details>
 <summary><b>东财返回 403 或连接重置怎么办？</b></summary>
 
-先运行 `asl sources --only eastmoney_push2,eastmoney_push2his`。日更主路径行情走 TDX，不受东财行情接口风控影响。
+先运行 `cml sources --only eastmoney_push2,eastmoney_push2his`。日更主路径行情走 TDX，不受东财行情接口风控影响。
 
 </details>
 
@@ -356,4 +356,4 @@ asl backfill daily_bars --start 2001-01-01
 
 ---
 
-如果 ashare-lake 帮你省下了搭建数据底座的时间，欢迎点个 ⭐，让更多做 A 股研究的人看到它。
+如果 CNMarketLake 帮你省下了搭建数据底座的时间，欢迎点个 ⭐，让更多做 A 股研究的人看到它。

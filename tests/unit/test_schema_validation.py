@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 import polars as pl
 import pytest
 
-from ashare_lake.domain.schemas import (
+from cn_market_lake.domain.schemas import (
     FETCHED_AT_DTYPE,
     SchemaValidationError,
     validate_dataframe,

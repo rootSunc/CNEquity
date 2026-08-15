@@ -5,8 +5,8 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.derive.sector_routing import (
+from cn_market_lake.config import Config
+from cn_market_lake.derive.sector_routing import (
     OHLC_EM,
     OHLC_TDX,
     build_sector_routing,
@@ -104,14 +104,14 @@ def test_load_sector_routing_reads_persisted_file(tmp_path):
 
 
 def test_latest_em_boards_from_lake_missing_root_returns_empty(tmp_path):
-    from ashare_lake.derive import sector_routing as sr
+    from cn_market_lake.derive import sector_routing as sr
 
     cfg = Config(data_root=tmp_path / "data")
     assert sr._latest_em_boards_from_lake(cfg) == []
 
 
 def test_latest_em_boards_from_lake_no_partitions_returns_empty(tmp_path):
-    from ashare_lake.derive import sector_routing as sr
+    from cn_market_lake.derive import sector_routing as sr
 
     cfg = Config(data_root=tmp_path / "data")
     (cfg.curated_root / "sector_bars").mkdir(parents=True)
@@ -119,7 +119,7 @@ def test_latest_em_boards_from_lake_no_partitions_returns_empty(tmp_path):
 
 
 def test_latest_em_boards_from_lake_no_files_returns_empty(tmp_path):
-    from ashare_lake.derive import sector_routing as sr
+    from cn_market_lake.derive import sector_routing as sr
 
     cfg = Config(data_root=tmp_path / "data")
     (cfg.curated_root / "sector_bars" / "trade_date=2026-07-14").mkdir(parents=True)
@@ -127,7 +127,7 @@ def test_latest_em_boards_from_lake_no_files_returns_empty(tmp_path):
 
 
 def test_latest_em_boards_from_lake_reads_latest_partition(tmp_path):
-    from ashare_lake.derive import sector_routing as sr
+    from cn_market_lake.derive import sector_routing as sr
 
     cfg = Config(data_root=tmp_path / "data")
     part = cfg.curated_root / "sector_bars" / "trade_date=2026-07-14"
@@ -144,7 +144,7 @@ def test_latest_em_boards_from_lake_reads_latest_partition(tmp_path):
 
 
 def test_derive_sector_routing_falls_back_to_lake_snapshot_when_live_fails(tmp_path, monkeypatch):
-    from ashare_lake.derive import sector_routing as sr
+    from cn_market_lake.derive import sector_routing as sr
 
     cfg = Config(data_root=tmp_path / "data")
     part = cfg.curated_root / "sector_bars" / "trade_date=2026-07-14"
@@ -172,7 +172,7 @@ def test_derive_sector_routing_falls_back_to_lake_snapshot_when_live_fails(tmp_p
 
 
 def test_derive_sector_routing_raises_when_both_live_and_lake_fail(tmp_path, monkeypatch):
-    from ashare_lake.derive import sector_routing as sr
+    from cn_market_lake.derive import sector_routing as sr
 
     cfg = Config(data_root=tmp_path / "data")
     monkeypatch.setattr(
@@ -185,7 +185,7 @@ def test_derive_sector_routing_raises_when_both_live_and_lake_fail(tmp_path, mon
 
 
 def test_derive_sector_routing_raises_when_tdx_fails(tmp_path, monkeypatch):
-    from ashare_lake.derive import sector_routing as sr
+    from cn_market_lake.derive import sector_routing as sr
 
     cfg = Config(data_root=tmp_path / "data")
     monkeypatch.setattr(
@@ -203,7 +203,7 @@ def test_derive_sector_routing_raises_when_tdx_fails(tmp_path, monkeypatch):
 
 
 def test_fetch_tdx_indices_live_filters_88xxxx(monkeypatch):
-    from ashare_lake.derive import sector_routing as sr
+    from cn_market_lake.derive import sector_routing as sr
 
     class _Client:
         def __init__(self):
@@ -220,7 +220,7 @@ def test_fetch_tdx_indices_live_filters_88xxxx(monkeypatch):
     client = _Client()
     # Imported inside the function from client — patch the source module.
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.client._quotes_client",
+        "cn_market_lake.adapters.tdx_protocol.client._quotes_client",
         lambda _config=None: client,
     )
     rows = sr._fetch_tdx_indices_live()

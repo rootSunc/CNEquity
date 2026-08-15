@@ -1,10 +1,10 @@
 from datetime import date
 
-from ashare_lake.config import Config
-from ashare_lake.orchestrator.engine import JobEngine
-from ashare_lake.orchestrator.manifest import Manifest
-from ashare_lake.orchestrator.registry import StepEntry
-from ashare_lake.storage.layout import init_data_layout
+from cn_market_lake.config import Config
+from cn_market_lake.orchestrator.engine import JobEngine
+from cn_market_lake.orchestrator.manifest import Manifest
+from cn_market_lake.orchestrator.registry import StepEntry
+from cn_market_lake.storage.layout import init_data_layout
 
 
 def _batch(manifest: Manifest, run_id: str, batch_id: str, status: str) -> None:
@@ -18,7 +18,7 @@ def test_warning_batch_is_retryable_and_not_success(tmp_path, monkeypatch):
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("backfill")
     monkeypatch.setattr(
-        "ashare_lake.orchestrator.engine.get_step",
+        "cn_market_lake.orchestrator.engine.get_step",
         lambda name: StepEntry(
             fn=lambda *args: {"status": "warning", "rows_read": 3, "rows_written": 2},
             group="test",
@@ -42,7 +42,7 @@ def test_partial_failure_fields_are_promoted_to_warning(tmp_path, monkeypatch):
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("ticks")
     monkeypatch.setattr(
-        "ashare_lake.orchestrator.engine.get_step",
+        "cn_market_lake.orchestrator.engine.get_step",
         lambda name: StepEntry(
             fn=lambda *args: {
                 "rows_read": 10,
@@ -77,7 +77,7 @@ def test_one_successful_retry_supersedes_all_prior_attempts(tmp_path, monkeypatc
 
         return StepEntry(fn=run, group="test", requires_workers=False)
 
-    monkeypatch.setattr("ashare_lake.orchestrator.engine.get_step", get_step)
+    monkeypatch.setattr("cn_market_lake.orchestrator.engine.get_step", get_step)
 
     result = engine._retry_run_locked(run_id, date(2024, 6, 28), auto_finalize=False)
 
@@ -96,7 +96,7 @@ def test_warning_retry_does_not_supersede_prior_failure(tmp_path, monkeypatch):
     run_id = manifest.start_run("backfill")
     _batch(manifest, run_id, "failed-1", "failed")
     monkeypatch.setattr(
-        "ashare_lake.orchestrator.engine.get_step",
+        "cn_market_lake.orchestrator.engine.get_step",
         lambda name: StepEntry(
             fn=lambda *args: {"status": "warning", "rows_read": 1, "rows_written": 1},
             group="test",
@@ -136,7 +136,7 @@ def test_init_retry_restores_the_failed_steps_backfill_mode(tmp_path, monkeypatc
 
         return StepEntry(fn=run, group="test", requires_workers=False)
 
-    monkeypatch.setattr("ashare_lake.orchestrator.engine.get_step", get_step)
+    monkeypatch.setattr("cn_market_lake.orchestrator.engine.get_step", get_step)
 
     result = engine._retry_run_locked(run_id, date(2024, 6, 28), auto_finalize=False)
 

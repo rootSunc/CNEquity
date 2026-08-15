@@ -13,7 +13,7 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.adapters.eastmoney import shareholders as sh
+from cn_market_lake.adapters.eastmoney import shareholders as sh
 
 PERIOD = date(2025, 6, 30)
 WIN_START = date(2025, 1, 1)
@@ -257,8 +257,8 @@ def test_is_org_leaves_unknown_as_null_rather_than_false():
 
 
 def test_registered_with_pit_and_the_rank_in_the_key():
-    from ashare_lake.domain.datasets import DATASETS
-    from ashare_lake.domain.schemas import PRIMARY_KEYS
+    from cn_market_lake.domain.datasets import DATASETS
+    from cn_market_lake.domain.schemas import PRIMARY_KEYS
 
     for name in ("share_structure", "shareholder_counts", "top_holders"):
         assert DATASETS[name].pit is True, f"{name} must be point-in-time"

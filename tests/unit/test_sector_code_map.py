@@ -5,8 +5,8 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.derive.sector_code_map import (
+from cn_market_lake.config import Config
+from cn_market_lake.derive.sector_code_map import (
     _latest_bars,
     _latest_member_boards,
     bk_to_board_code,

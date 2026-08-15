@@ -4,14 +4,14 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.adapters.sina.adj_factors import (
+from cn_market_lake.adapters.sina.adj_factors import (
     _parse_sina_factor_payload,
     fetch_adj_factor_series,
     to_sina_symbol,
 )
-from ashare_lake.config import load_config
-from ashare_lake.config.bootstrap import path_for_toml
-from ashare_lake.derive.adj_factors import (
+from cn_market_lake.config import load_config
+from cn_market_lake.config.bootstrap import path_for_toml
+from cn_market_lake.derive.adj_factors import (
     _align_factors_to_bars,
     _cache_path,
     compute_adj_factors,
@@ -102,7 +102,7 @@ def test_align_factors_to_bars_leading_bar_before_any_event_defaults_one():
 
 
 def test_factor_continuity_findings_flags_break():
-    from ashare_lake.derive.adj_factors import _factor_continuity_findings
+    from cn_market_lake.derive.adj_factors import _factor_continuity_findings
 
     out = pl.DataFrame(
         {
@@ -121,7 +121,7 @@ def test_factor_continuity_findings_flags_break():
 
 
 def test_factor_continuity_findings_allows_normal_steps():
-    from ashare_lake.derive.adj_factors import _factor_continuity_findings
+    from cn_market_lake.derive.adj_factors import _factor_continuity_findings
 
     # A real 10-for-1 split (10x) and small dividend steps are within bounds.
     out = pl.DataFrame(
@@ -181,7 +181,7 @@ steps = ["derive_adj_factors"]
         return pl.DataFrame({"trade_date": [date(2024, 6, 28)], "factor": [0.5]})
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         fake_fetch,
     )
     return cfg
@@ -243,7 +243,7 @@ def test_compute_adj_factors_skips_cdr(adj_config, monkeypatch):
         return pl.DataFrame({"trade_date": [date(2024, 6, 28)], "factor": [0.5]})
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         fake_fetch,
     )
 
@@ -266,7 +266,7 @@ def test_compute_adj_factors_reuses_cache_on_non_event_day(adj_config, monkeypat
         return pl.DataFrame({"trade_date": [date(2024, 6, 29)], "factor": [0.8]})
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         fake_fetch,
     )
 
@@ -297,7 +297,7 @@ def test_compute_adj_factors_refreshes_corporate_action_symbol(adj_config, monke
         return pl.DataFrame({"trade_date": [date(2024, 6, 29)], "factor": [0.8]})
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         fake_fetch,
     )
 
@@ -322,7 +322,7 @@ def test_compute_adj_factors_append_only_skips_existing_partitions(adj_config, m
         return pl.DataFrame({"trade_date": [date(2024, 6, 29)], "factor": [0.8]})
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         fake_fetch,
     )
 
@@ -363,7 +363,7 @@ def test_compute_adj_factors_event_refresh_merges_into_existing(adj_config, monk
         )
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         fake_fetch,
     )
 
@@ -401,7 +401,7 @@ def test_compute_adj_factors_refreshes_new_listing(adj_config, monkeypatch):
         return pl.DataFrame({"trade_date": [date(2024, 6, 29)], "factor": [1.0]})
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         fake_fetch,
     )
 
@@ -410,13 +410,13 @@ def test_compute_adj_factors_refreshes_new_listing(adj_config, monkeypatch):
 
 
 def test_resolve_factors_raises_without_cache(adj_config, monkeypatch):
-    from ashare_lake.derive.adj_factors import AdjFactorsFetchError, _resolve_factors
+    from cn_market_lake.derive.adj_factors import AdjFactorsFetchError, _resolve_factors
 
     def boom(*_a, **_kw):
         raise RuntimeError("sina down")
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         boom,
     )
     sym_bars = pl.DataFrame({"trade_date": [date(2024, 6, 28)]})
@@ -432,14 +432,14 @@ def test_resolve_factors_raises_without_cache(adj_config, monkeypatch):
 
 
 def test_compute_adj_factors_fails_over_threshold(adj_config, monkeypatch):
-    from ashare_lake.derive.adj_factors import FAIL_RATIO_THRESHOLD, AdjFactorsDeriveError
-    from ashare_lake.steps.finalize import step_derive_adj_factors
+    from cn_market_lake.derive.adj_factors import FAIL_RATIO_THRESHOLD, AdjFactorsDeriveError
+    from cn_market_lake.steps.finalize import step_derive_adj_factors
 
     def boom(*_a, **_kw):
         raise RuntimeError("sina down")
 
     monkeypatch.setattr(
-        "ashare_lake.derive.adj_factors.fetch_adj_factor_series",
+        "cn_market_lake.derive.adj_factors.fetch_adj_factor_series",
         boom,
     )
     result = compute_adj_factors(adj_config)
@@ -452,14 +452,14 @@ def test_compute_adj_factors_fails_over_threshold(adj_config, monkeypatch):
 
 
 # --- self-healing history ----------------------------------------------------
-# The derive is append-only from its watermark, so `asl backfill daily_bars`
+# The derive is append-only from its watermark, so `cml backfill daily_bars`
 # lands history *behind* the watermark and never gets a factor. On a real lake
 # that left 260 stocks with none at all and ~220k unadjusted rows, which read as
 # "Sina does not cover 北交所" until a targeted re-derive filled them from 2016.
 
 
 def test_uncovered_symbols_finds_history_behind_the_watermark(adj_config):
-    from ashare_lake.derive.adj_factors import _uncovered_symbols
+    from cn_market_lake.derive.adj_factors import _uncovered_symbols
 
     # Bars from 2016; factors only from 2024 — the backfilled years are naked.
     _write_bar(adj_config, "600519.SH", date(2016, 1, 4))
@@ -470,7 +470,7 @@ def test_uncovered_symbols_finds_history_behind_the_watermark(adj_config):
 
 
 def test_a_symbol_covered_from_its_first_bar_is_not_reprocessed(adj_config):
-    from ashare_lake.derive.adj_factors import _uncovered_symbols
+    from cn_market_lake.derive.adj_factors import _uncovered_symbols
 
     _write_bar(adj_config, "600519.SH", date(2024, 6, 28))
     _write_adj_partition(adj_config, "600519.SH", date(2024, 6, 28))
@@ -485,7 +485,7 @@ def test_todays_bar_alone_does_not_mark_a_symbol_uncovered(adj_config):
     of the whole market, daily. New sessions are what the incremental path is
     for; only the backward direction belongs here.
     """
-    from ashare_lake.derive.adj_factors import _uncovered_symbols
+    from cn_market_lake.derive.adj_factors import _uncovered_symbols
 
     _write_bar(adj_config, "600519.SH", date(2024, 6, 28))
     _write_bar(adj_config, "600519.SH", date(2024, 6, 29))

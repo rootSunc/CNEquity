@@ -10,7 +10,7 @@
 
 ## 示例的共同约定
 
-- 示例配置使用 `configs/ashare-lake.demo.toml`；全量湖则替换为自己的绝对路径配置。
+- 示例配置使用 `configs/cn-market-lake.demo.toml`；全量湖则替换为自己的绝对路径配置。
 - 研究读取优先 `strict_adj=True`，缺因子就失败，不把缺失默认为 1.0。
 - 数据覆盖范围以 `list_datasets()` 返回的 `coverage_start` / `coverage_end` 为准，不根据仓库默认值猜测。
-- 代码只读取湖；采集、重试和 compact 仍由 `asl` 命令负责。
+- 代码只读取湖；采集、重试和 compact 仍由 `cml` 命令负责。

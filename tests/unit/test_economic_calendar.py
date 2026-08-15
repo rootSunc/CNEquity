@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from ashare_lake.adapters.eastmoney.economic_calendar import (
+from cn_market_lake.adapters.eastmoney.economic_calendar import (
     _parse_float,
     fetch_economic_calendar,
     fetch_economic_calendar_window,
@@ -49,7 +49,7 @@ def test_fetch_economic_calendar_window_filters_and_parses(monkeypatch):
         _raw_item(PUBLISH_DATE="not-a-date"),  # unparsable, skipped
     ]
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.economic_calendar.fetch_datacenter",
+        "cn_market_lake.adapters.eastmoney.economic_calendar.fetch_datacenter",
         lambda client, report, **kwargs: rows,
     )
     df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
@@ -79,7 +79,7 @@ def test_fetch_economic_calendar_window_handles_bad_star_and_lowercase_keys(monk
         }
     ]
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.economic_calendar.fetch_datacenter",
+        "cn_market_lake.adapters.eastmoney.economic_calendar.fetch_datacenter",
         lambda client, report, **kwargs: rows,
     )
     df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
@@ -91,7 +91,7 @@ def test_fetch_economic_calendar_window_handles_bad_star_and_lowercase_keys(monk
 
 def test_fetch_economic_calendar_window_empty_when_no_rows(monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.economic_calendar.fetch_datacenter",
+        "cn_market_lake.adapters.eastmoney.economic_calendar.fetch_datacenter",
         lambda client, report, **kwargs: [],
     )
     df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
@@ -100,7 +100,7 @@ def test_fetch_economic_calendar_window_empty_when_no_rows(monkeypatch):
 
 def test_fetch_economic_calendar_window_none_data(monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.economic_calendar.fetch_datacenter",
+        "cn_market_lake.adapters.eastmoney.economic_calendar.fetch_datacenter",
         lambda client, report, **kwargs: None,
     )
     df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
@@ -116,7 +116,7 @@ def test_fetch_economic_calendar_uses_rolling_window(monkeypatch):
         return "sentinel"
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.economic_calendar.fetch_economic_calendar_window",
+        "cn_market_lake.adapters.eastmoney.economic_calendar.fetch_economic_calendar_window",
         _fake_window,
     )
     out = fetch_economic_calendar(date(2024, 6, 28))

@@ -6,13 +6,13 @@ from datetime import date
 
 import pytest
 
-from ashare_lake.adapters.eastmoney.corporate_actions import (
+from cn_market_lake.adapters.eastmoney.corporate_actions import (
     _map_action_type,
     _num,
     _parse_row,
     fetch_corporate_actions_eastmoney,
 )
-from ashare_lake.adapters.eastmoney.datacenter import EastMoneyDatacenterError
+from cn_market_lake.adapters.eastmoney.datacenter import EastMoneyDatacenterError
 
 
 def test_num_handles_bad_values():
@@ -127,13 +127,13 @@ def test_fetch_corporate_actions_eastmoney_backfill_filter_and_dedupe(monkeypatc
         ]
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.corporate_actions.fetch_datacenter",
+        "cn_market_lake.adapters.eastmoney.corporate_actions.fetch_datacenter",
         _fake_fetch_datacenter,
     )
     client = _Client()
     df = fetch_corporate_actions_eastmoney(date(2024, 6, 28), backfill=True, client=client)
     # No range predicate: EastMoney rejects those on date columns now
-    # (InputMismatchException, code=9501), which took `asl backfill
+    # (InputMismatchException, code=9501), which took `cml backfill
     # corporate_actions` from working to failing outright. The window is bounded
     # by early-stopping the newest-first paging instead.
     assert seen_filters[0] == ""
@@ -152,7 +152,7 @@ def test_fetch_corporate_actions_eastmoney_tip_filter_and_empty(monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.corporate_actions.fetch_datacenter",
+        "cn_market_lake.adapters.eastmoney.corporate_actions.fetch_datacenter",
         _fake_fetch_datacenter,
     )
     df = fetch_corporate_actions_eastmoney(date(2024, 6, 28), backfill=False, client=_Client())
@@ -169,10 +169,10 @@ def test_fetch_corporate_actions_eastmoney_owns_and_closes_default_client(monkey
         return client
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.corporate_actions.EastMoneyClient", _factory
+        "cn_market_lake.adapters.eastmoney.corporate_actions.EastMoneyClient", _factory
     )
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.corporate_actions.fetch_datacenter",
+        "cn_market_lake.adapters.eastmoney.corporate_actions.fetch_datacenter",
         lambda *a, **k: [],
     )
     fetch_corporate_actions_eastmoney(date(2024, 6, 28))
@@ -183,7 +183,9 @@ def test_fetch_corporate_actions_eastmoney_reraises_datacenter_error_and_closes(
     def _boom(*a, **k):
         raise EastMoneyDatacenterError("boom")
 
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.corporate_actions.fetch_datacenter", _boom)
+    monkeypatch.setattr(
+        "cn_market_lake.adapters.eastmoney.corporate_actions.fetch_datacenter", _boom
+    )
     client = _Client()
     with pytest.raises(EastMoneyDatacenterError):
         fetch_corporate_actions_eastmoney(date(2024, 6, 28), client=client)
@@ -193,7 +195,9 @@ def test_fetch_corporate_actions_eastmoney_wraps_unexpected_error(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("timeout")
 
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.corporate_actions.fetch_datacenter", _boom)
+    monkeypatch.setattr(
+        "cn_market_lake.adapters.eastmoney.corporate_actions.fetch_datacenter", _boom
+    )
     with pytest.raises(EastMoneyDatacenterError, match="corporate_actions failed"):
         fetch_corporate_actions_eastmoney(date(2024, 6, 28), client=_Client())
 
@@ -215,7 +219,7 @@ def test_fetch_corporate_actions_eastmoney_uses_config_retries_and_rate_limit(mo
         return []
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.corporate_actions.fetch_datacenter",
+        "cn_market_lake.adapters.eastmoney.corporate_actions.fetch_datacenter",
         _fake_fetch_datacenter,
     )
     fetch_corporate_actions_eastmoney(date(2024, 6, 28), client=_Client(), config=_Cfg())
@@ -237,7 +241,9 @@ def test_backfill_stops_paging_once_past_the_floor(monkeypatch):
         captured["stop_after"] = stop_after
         return pages[0]
 
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.corporate_actions.fetch_datacenter", _fake)
+    monkeypatch.setattr(
+        "cn_market_lake.adapters.eastmoney.corporate_actions.fetch_datacenter", _fake
+    )
     fetch_corporate_actions_eastmoney(_date(2026, 8, 7), backfill=True, client=_Client())
     stop = captured["stop_after"]
     assert stop(pages[0]) is False, "a page inside the window must not stop paging"

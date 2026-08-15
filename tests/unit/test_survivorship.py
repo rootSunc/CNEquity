@@ -4,8 +4,8 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.quality.cross_checks import (
+from cn_market_lake.config import Config
+from cn_market_lake.quality.cross_checks import (
     RETIRED_GAP_DAYS,
     universe_survivorship_findings,
 )

@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ashare_lake.adapters.eastmoney.datacenter import (
+from cn_market_lake.adapters.eastmoney.datacenter import (
     EastMoneyDatacenterError,
     fetch_datacenter,
 )
@@ -142,7 +142,7 @@ def test_fetch_datacenter_clamps_page_size_to_500():
 def test_server_busy_is_retried_then_reported_as_throttling():
     import pytest
 
-    from ashare_lake.adapters.eastmoney.datacenter import (
+    from cn_market_lake.adapters.eastmoney.datacenter import (
         EastMoneyDatacenterError,
         fetch_datacenter,
     )
@@ -165,7 +165,7 @@ def test_server_busy_is_retried_then_reported_as_throttling():
 def test_a_real_schema_break_still_fails_immediately():
     import pytest
 
-    from ashare_lake.adapters.eastmoney.datacenter import (
+    from cn_market_lake.adapters.eastmoney.datacenter import (
         EastMoneyDatacenterError,
         fetch_datacenter,
     )

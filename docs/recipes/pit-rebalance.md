@@ -9,10 +9,10 @@ from pathlib import Path
 
 import polars as pl
 
-from ashare_lake.config import load_config
-from ashare_lake.query import load
+from cn_market_lake.config import load_config
+from cn_market_lake.query import load
 
-cfg = load_config(Path("configs/ashare-lake.toml"))
+cfg = load_config(Path("configs/cn-market-lake.toml"))
 rebalance_date = "2024-04-30"
 
 facts = load(

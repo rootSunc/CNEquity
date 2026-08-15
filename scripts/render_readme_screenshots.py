@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render macOS-style terminal screenshots for README (docs/assets/*.png).
 
-Requires Pillow. Content is a cleaned transcript of a short live `asl demo`
+Requires Pillow. Content is a cleaned transcript of a short live `cml demo`
 run — edit the string constants below when CLI copy changes.
 """
 
@@ -23,12 +23,12 @@ _FONT_CANDIDATES = [
 ]
 
 DEMO = """\
-$ asl demo --symbols 600519.SH,000001.SZ --days 5
+$ cml demo --symbols 600519.SH,000001.SZ --days 5
 
-=== [1/6] Prepare demo lake at data/ashare-lake-demo ===
-data_root = …/data/ashare-lake-demo
-config    = configs/ashare-lake.demo.toml
-Note: this is a SEPARATE lake from a full `asl init` — safe to wipe.
+=== [1/6] Prepare demo lake at data/cn-market-lake-demo ===
+data_root = …/data/cn-market-lake-demo
+config    = configs/cn-market-lake.demo.toml
+Note: this is a SEPARATE lake from a full `cml init` — safe to wipe.
 
 === [2/6] Probe TDX ===
 Probing TDX hosts (first successful server wins)…
@@ -56,11 +56,11 @@ Bars run …: status=success rows_written≈16
 │ 600519.SH │ 2026-07-21 │ 1338.98 │ 1344.70 │ 1296.87 │ 1308.00 │  77147 │ tdx_protocol │
 └───────────┴────────────┴─────────┴─────────┴─────────┴─────────┴────────┴──────────────┘
 
-Demo lake ready under: data/ashare-lake-demo
+Demo lake ready under: data/cn-market-lake-demo
 """
 
 QUERY = """\
-$ asl query --config configs/ashare-lake.demo.toml --sql \\
+$ cml query --config configs/cn-market-lake.demo.toml --sql \\
     "SELECT symbol, trade_date, close, volume, source
      FROM daily_bars
      ORDER BY trade_date DESC, symbol
@@ -82,13 +82,13 @@ $ asl query --config configs/ashare-lake.demo.toml --sql \\
 
 LOAD = """\
 $ python
->>> from ashare_lake.query import load
+>>> from cn_market_lake.query import load
 >>> bars = load(
 ...     "daily_bars",
 ...     symbols=["600519.SH"],
 ...     start="2026-07-21",
 ...     end="2026-07-24",
-...     data_root="data/ashare-lake-demo",
+...     data_root="data/cn-market-lake-demo",
 ... )
 >>> bars.select(["symbol", "trade_date", "close", "source"])
 shape: (4, 4)
@@ -170,9 +170,9 @@ def render_terminal(text: str, out: Path, *, title: str) -> None:
 
 
 def main() -> None:
-    render_terminal(DEMO, ASSETS / "asl-demo.png", title="asl demo")
-    render_terminal(QUERY, ASSETS / "asl-query.png", title="asl query")
-    render_terminal(LOAD, ASSETS / "asl-load.png", title="python — load()")
+    render_terminal(DEMO, ASSETS / "cml-demo.png", title="cml demo")
+    render_terminal(QUERY, ASSETS / "cml-query.png", title="cml query")
+    render_terminal(LOAD, ASSETS / "cml-load.png", title="python — load()")
 
 
 if __name__ == "__main__":

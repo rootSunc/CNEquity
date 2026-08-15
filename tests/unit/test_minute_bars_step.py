@@ -3,16 +3,16 @@ from datetime import date, datetime, timedelta
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.domain.datasets import get_dataset
-from ashare_lake.domain.schemas import with_provenance
-from ashare_lake.steps import intraday
-from ashare_lake.steps.intraday import (
+from cn_market_lake.config import Config
+from cn_market_lake.domain.datasets import get_dataset
+from cn_market_lake.domain.schemas import with_provenance
+from cn_market_lake.steps import intraday
+from cn_market_lake.steps.intraday import (
     MinuteBarsScopeError,
     capture_intraday_bars,
     resolve_scope,
 )
-from ashare_lake.storage import StagingWriter
+from cn_market_lake.storage import StagingWriter
 
 
 @pytest.fixture
@@ -129,9 +129,9 @@ def test_5m_step_runs_when_configured(cfg, monkeypatch):
 
 
 def test_each_intraday_dataset_has_its_own_registered_step():
-    import ashare_lake.steps  # noqa: F401 — register steps
-    from ashare_lake.domain.datasets import intraday_datasets
-    from ashare_lake.orchestrator.registry import STEP_REGISTRY
+    import cn_market_lake.steps  # noqa: F401 — register steps
+    from cn_market_lake.domain.datasets import intraday_datasets
+    from cn_market_lake.orchestrator.registry import STEP_REGISTRY
 
     for frequency, dataset in intraday_datasets().items():
         assert dataset in STEP_REGISTRY, f"{frequency} has no step"
@@ -300,8 +300,8 @@ def test_registered_step_delegates_with_its_own_dataset_and_frequency(cfg, monke
     defaults, every generated step would silently call through with whichever
     dataset the loop last saw.
     """
-    import ashare_lake.steps  # noqa: F401 — register steps
-    from ashare_lake.orchestrator.registry import STEP_REGISTRY
+    import cn_market_lake.steps  # noqa: F401 — register steps
+    from cn_market_lake.orchestrator.registry import STEP_REGISTRY
 
     cfg.minute_bars_enabled = True
     cfg.minute_bars_scope = "watchlist"
@@ -320,7 +320,7 @@ def test_registered_step_delegates_with_its_own_dataset_and_frequency(cfg, monke
 
 
 def test_approx_trading_days_uses_the_real_calendar_when_available(cfg):
-    from ashare_lake.steps.intraday import _approx_trading_days
+    from cn_market_lake.steps.intraday import _approx_trading_days
 
     start, end = date(2026, 7, 27), date(2026, 7, 31)
     rows = [

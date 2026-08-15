@@ -8,9 +8,9 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.orchestrator.manifest import Manifest
-from ashare_lake.steps.delisted import (
+from cn_market_lake.config import Config
+from cn_market_lake.orchestrator.manifest import Manifest
+from cn_market_lake.steps.delisted import (
     catalog_path,
     delisted_catalog_reconciliation_report,
     reconcile_delisted_catalog,

@@ -1,4 +1,4 @@
-"""Tests for asl config init / packaged example template."""
+"""Tests for cml config init / packaged example template."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from ashare_lake.cli.main import cli
-from ashare_lake.config.bootstrap import (
+from cn_market_lake.cli.main import cli
+from cn_market_lake.config.bootstrap import (
     example_toml_text,
     render_example_toml,
     write_user_config,
@@ -22,7 +22,7 @@ def test_packaged_example_matches_repo_checkout():
     the test skip itself whenever pytest ran from anywhere but the repo root,
     which is exactly when drift would go unnoticed.
     """
-    repo_example = Path(__file__).resolve().parents[2] / "configs" / "ashare-lake.example.toml"
+    repo_example = Path(__file__).resolve().parents[2] / "configs" / "cn-market-lake.example.toml"
     assert example_toml_text() == repo_example.read_text(encoding="utf-8")
 
 
@@ -57,7 +57,7 @@ def test_path_for_toml_makes_windows_tmp_paths_parseable():
     except ModuleNotFoundError:
         import tomli as tomllib
 
-    from ashare_lake.config.bootstrap import _toml_escape, path_for_toml
+    from cn_market_lake.config.bootstrap import _toml_escape, path_for_toml
 
     # Simulate the GitHub Actions runner layout without requiring Windows.
     raw = Path(r"C:\Users\runneradmin\AppData\Local\Temp\pytest-0\test_cli0\data")
@@ -82,9 +82,9 @@ def test_render_keeps_linux_workers():
 
 
 def test_write_user_config_defaults_to_absolute_data_root(tmp_path, monkeypatch):
-    """Bare ``asl config init`` must not leave ``./data/...`` for doctor to reject."""
+    """Bare ``cml config init`` must not leave ``./data/...`` for doctor to reject."""
     monkeypatch.chdir(tmp_path)
-    out = tmp_path / "configs" / "ashare-lake.toml"
+    out = tmp_path / "configs" / "cn-market-lake.toml"
     write_user_config(out, platform="linux")
     try:
         import tomllib
@@ -94,11 +94,11 @@ def test_write_user_config_defaults_to_absolute_data_root(tmp_path, monkeypatch)
     payload = tomllib.loads(out.read_text(encoding="utf-8"))
     root = Path(payload["data"]["root"])
     assert root.is_absolute()
-    assert root == (tmp_path / "data" / "ashare-lake").resolve()
+    assert root == (tmp_path / "data" / "cn-market-lake").resolve()
 
 
 def test_write_user_config_refuses_overwrite(tmp_path):
-    out = tmp_path / "configs" / "ashare-lake.toml"
+    out = tmp_path / "configs" / "cn-market-lake.toml"
     write_user_config(out, platform="linux")
     assert out.is_file()
     with pytest.raises(FileExistsError):
@@ -115,7 +115,7 @@ def test_write_user_config_refuses_overwrite(tmp_path):
 
 
 def test_cli_config_init_and_validate(tmp_path):
-    out = tmp_path / "ashare-lake.toml"
+    out = tmp_path / "cn-market-lake.toml"
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -146,4 +146,4 @@ def test_resolve_config_missing_suggests_config_init(tmp_path, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(cli, ["config", "validate"])
     assert result.exit_code != 0
-    assert "asl config init" in result.output
+    assert "cml config init" in result.output

@@ -1,6 +1,6 @@
 # 查询指南
 
-下游读数的推荐路径是 `ashare_lake.query.load()`。本文说明复权、Universe、PIT 与常见陷阱。
+下游读数的推荐路径是 `cn_market_lake.query.load()`。本文说明复权、Universe、PIT 与常见陷阱。
 
 API 签名见 [Python API 参考](../reference/python-api.md)。
 
@@ -9,7 +9,7 @@ API 签名见 [Python API 参考](../reference/python-api.md)。
 ## 基本用法
 
 ```python
-from ashare_lake.query import load, scan, list_datasets
+from cn_market_lake.query import load, scan, list_datasets
 
 # 物化 DataFrame
 df = load("daily_bars", start="2024-01-01", end="2024-12-31")
@@ -22,7 +22,7 @@ meta = list_datasets()  # 或 list_datasets(config=cfg)
 # snapshot_only → 无诚实历史；coverage_start 为盘上分区起点
 ```
 
-配置解析顺序：`config=` → `data_root=` → `configs/ashare-lake.toml`
+配置解析顺序：`config=` → `data_root=` → `configs/cn-market-lake.toml`
 
 `list_datasets()` 是研究侧的**可用起点合同**：`history_mode` 区分 `by_date` / `snapshot_with_backfill` / `snapshot_only`；`coverage_start` 来自分区目录（含 `report_period=YYYYQn`）。详见 [数据集目录 — 历史可用性](catalog.md#历史可用性history_mode)。
 
@@ -80,7 +80,7 @@ bars = load("daily_bars", start="2024-01-01", universe="all_a")
 
 ### 历史 ST 限制
 
-日更只抓当天 `trading_status`。停牌可由 `asl derive trading_status --start/--end` 按年重建，覆盖可与 `daily_bars` 同起点（约 2001）。**ST 标签**仍依赖 baostock，约从 **2016** 起；此前 `all_a` 不会剔除历史 ST（会剔除已派生的停牌）。
+日更只抓当天 `trading_status`。停牌可由 `cml derive trading_status --start/--end` 按年重建，覆盖可与 `daily_bars` 同起点（约 2001）。**ST 标签**仍依赖 baostock，约从 **2016** 起；此前 `all_a` 不会剔除历史 ST（会剔除已派生的停牌）。
 
 审计项 `trading_status_coverage_start` 区分总覆盖与 `st_coverage_start`。
 
@@ -95,7 +95,7 @@ instruments 每次日更从代码空间扫描的「在市但缺失」桶补齐�
 
 - BJ 行的 `source` 是 `sina`，且 **`amount` 为 null**（Sina 不给成交额），
   换手额类因子对北交所会缺失
-- 新上市的北交所票要等下一次 `asl delisted discover` 扫到才会进 instruments，
+- 新上市的北交所票要等下一次 `cml delisted discover` 扫到才会进 instruments，
   不是当天自动出现
 
 ---
@@ -149,7 +149,7 @@ Symbol 格式：`{code}.{SH|SZ|BJ}`，与 `domain/symbols.py` 一致。
 ## DuckDB SQL
 
 ```bash
-asl query --sql "SELECT * FROM instruments LIMIT 5"
+cml query --sql "SELECT * FROM instruments LIMIT 5"
 ```
 
 常用视图：
@@ -162,7 +162,7 @@ asl query --sql "SELECT * FROM instruments LIMIT 5"
 | `daily_bars_adj` | 含 adj_* 与 adj_is_exact |
 | `{dataset}` | 各 curated/derived 数据集 |
 
-数据库：`{data.root}/duckdb/ashare-lake.duckdb`（只读连接）。
+数据库：`{data.root}/duckdb/cn-market-lake.duckdb`（只读连接）。
 
 ---
 
@@ -172,7 +172,7 @@ asl query --sql "SELECT * FROM instruments LIMIT 5"
 
 ```python
 import polars as pl
-pl.scan_parquet("data/ashare-lake/curated/daily_bars/**/*.parquet")
+pl.scan_parquet("data/cn-market-lake/curated/daily_bars/**/*.parquet")
 ```
 
 需自行实现复权与 universe 逻辑；生产推荐 `load()`。

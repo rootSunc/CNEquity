@@ -1,8 +1,8 @@
 # cli 模块
 
-路径：`src/ashare_lake/cli/main.py`
+路径：`src/cn_market_lake/cli/main.py`
 
-Click 命令组 `asl` 的实现入口（`pyproject.toml` `[project.scripts]` 与 `__main__.py`）。
+Click 命令组 `cml` 的实现入口（`pyproject.toml` `[project.scripts]` 与 `__main__.py`）。
 
 **完整命令与参数**见 [CLI 参考](../reference/cli.md)；入门流程见 [快速开始](../getting-started/quickstart.md)。
 
@@ -14,8 +14,8 @@ Click 命令组 `asl` 的实现入口（`pyproject.toml` `[project.scripts]` 与
 |--------|------|
 | 命令定义 | `cli/main.py` |
 | demo 编排 | `cli/demo.py` |
-| 配置路径解析 | `resolve_config_path`（缺省时引导 `asl config init`） |
-| step 注册 | 启动时 `import ashare_lake.steps` |
+| 配置路径解析 | `resolve_config_path`（缺省时引导 `cml config init`） |
+| step 注册 | 启动时 `import cn_market_lake.steps` |
 
 ### 退出码（供 cron / Task Scheduler）
 

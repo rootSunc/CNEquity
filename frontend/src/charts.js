@@ -183,7 +183,7 @@ export function provenanceSeries(el, data) {
   const t = tokens();
   const points = data.points;
   if (!points.length) {
-    el.innerHTML = '<p class="muted">没有溯源度量——先跑 <code>asl stats rebuild</code>。</p>';
+    el.innerHTML = '<p class="muted">没有溯源度量——先跑 <code>cml stats rebuild</code>。</p>';
     return null;
   }
 
@@ -371,7 +371,7 @@ const SEVERITY = [
 export function severityTimeline(el, runs) {
   const t = tokens();
   if (!runs.length) {
-    el.innerHTML = '<p class="muted">还没有审计产物——跑一次 <code>asl audit</code>。</p>';
+    el.innerHTML = '<p class="muted">还没有审计产物——跑一次 <code>cml audit</code>。</p>';
     return null;
   }
   // Oldest first: a timeline that reads right-to-left is a timeline nobody reads.

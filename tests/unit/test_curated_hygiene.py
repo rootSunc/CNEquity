@@ -4,9 +4,9 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.quality.audit import _unregistered_curated_dirs
-from ashare_lake.quality.dataset_checks import (
+from cn_market_lake.config import Config
+from cn_market_lake.quality.audit import _unregistered_curated_dirs
+from cn_market_lake.quality.dataset_checks import (
     check_mixed_partition_granularity,
     check_partition_fragmentation,
 )
@@ -80,7 +80,7 @@ def test_flags_a_dataset_that_is_almost_all_parquet_footer(tmp_path):
     assert finding["check"] == "partition_fragmentation"
     assert finding["partitions"] == 60
     assert finding["rows_per_partition"] == 1.0
-    assert "asl repartition trading_calendar" in finding["message"]
+    assert "cml repartition trading_calendar" in finding["message"]
 
 
 def test_a_well_filled_dataset_is_not_flagged(tmp_path):
@@ -143,7 +143,7 @@ def test_mixed_day_and_year_partitions_are_an_error(tmp_path):
     assert finding["configured_granularity"] == "year"
     assert finding["stale_partitions"] == 1
     assert finding["pk_duplicate_rows"] == 1
-    assert "asl repartition trading_calendar" in finding["message"]
+    assert "cml repartition trading_calendar" in finding["message"]
 
 
 def test_year_only_layout_matching_registry_is_clean(tmp_path):

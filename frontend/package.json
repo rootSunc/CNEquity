@@ -1,14 +1,14 @@
 {
-  "name": "ashare-lake-dashboard",
+  "name": "cn-market-lake-dashboard",
   "private": true,
   "version": "0.0.0",
-  "description": "Bundle for asl serve. Built output is committed so pip install needs no node.",
+  "description": "Bundle for cml serve. Built output is committed so pip install needs no node.",
   "type": "module",
   "scripts": {
     "build": "npm run build:js && npm run build:css",
-    "build:js": "esbuild src/main.js --bundle --minify --format=iife --target=es2020 --outfile=../src/ashare_lake/serve/static/bundle.js --legal-comments=none",
-    "build:css": "esbuild src/styles.css --bundle --minify --outfile=../src/ashare_lake/serve/static/styles.css --legal-comments=none",
-    "check": "npm run build && git diff --exit-code -- ../src/ashare_lake/serve/static/bundle.js ../src/ashare_lake/serve/static/styles.css"
+    "build:js": "esbuild src/main.js --bundle --minify --format=iife --target=es2020 --outfile=../src/cn_market_lake/serve/static/bundle.js --legal-comments=none",
+    "build:css": "esbuild src/styles.css --bundle --minify --outfile=../src/cn_market_lake/serve/static/styles.css --legal-comments=none",
+    "check": "npm run build && git diff --exit-code -- ../src/cn_market_lake/serve/static/bundle.js ../src/cn_market_lake/serve/static/styles.css"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

@@ -5,8 +5,8 @@
 ## 1. 生成可验证的小湖
 
 ```bash
-pip install ashare-lake
-asl demo --research --symbols 600519.SH
+pip install cn-market-lake
+cml demo --research --symbols 600519.SH
 ```
 
 `--research` 会把窗口扩展到约三年，额外从 Sina 派生 hfq 因子。命令末尾会打印类似下面的摘要（收益会随 as-of 交易日变化）：
@@ -15,7 +15,7 @@ asl demo --research --symbols 600519.SH
 600519.SH: raw return -24.25% → hfq return -14.39% (756 exact rows, ...)
 ```
 
-如果只需要确认 TDX 连通性，可以先跑不带 `--research` 的 `asl demo`；网络受限时不要把失败的研究输出当成“没有复权变化”。
+如果只需要确认 TDX 连通性，可以先跑不带 `--research` 的 `cml demo`；网络受限时不要把失败的研究输出当成“没有复权变化”。
 
 ## 2. 在 Python 中复核合同
 
@@ -24,10 +24,10 @@ from pathlib import Path
 
 import polars as pl
 
-from ashare_lake.config import load_config
-from ashare_lake.query import load
+from cn_market_lake.config import load_config
+from cn_market_lake.query import load
 
-cfg = load_config(Path("configs/ashare-lake.demo.toml"))
+cfg = load_config(Path("configs/cn-market-lake.demo.toml"))
 raw = load(
     "daily_bars",
     symbols=["600519.SH"],
@@ -60,7 +60,7 @@ comparison = (
 )
 
 print(comparison.tail(1))
-comparison.write_parquet("data/ashare-lake-demo/research-baseline.parquet")
+comparison.write_parquet("data/cn-market-lake-demo/research-baseline.parquet")
 ```
 
 这里的 `raw_close` 是湖内保留的原始价格，`adj_close` 是查询时把派生的 hfq 因子应用到原始价格的结果。湖内只持久化 hfq；qfq 通过 `load(adjust="qfq")` 按查询窗口推导，详见 [ADR-0004](../adr/0004-store-hfq-derive-qfq-at-query.md)。
@@ -68,7 +68,7 @@ comparison.write_parquet("data/ashare-lake-demo/research-baseline.parquet")
 ## 3. 进入真实研究前的检查
 
 ```python
-from ashare_lake.query import list_datasets
+from cn_market_lake.query import list_datasets
 
 print(
     list_datasets(config=cfg)

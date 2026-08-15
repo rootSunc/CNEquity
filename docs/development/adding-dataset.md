@@ -11,7 +11,7 @@
 - [ ] `adapters/<source>/`：拉取与字段映射（或 `derive/` 若派生）
 - [ ] `steps/<layer>.py`：`@register_step` 实现
 - [ ] `steps/__init__.py`：import 新模块
-- [ ] `configs/ashare-lake.example.toml`：加入 wave 或 group（若日更）
+- [ ] `configs/cn-market-lake.example.toml`：加入 wave 或 group（若日更）
 - [ ] 单元测试：归一化 + 至少一个边界 case
 - [ ] `docs/datasets/catalog.md` + `schema.md` / `sources.md` 更新
 - [ ] `query/views.py` 自动发现（curated 目录存在即可）；特殊视图再改 views

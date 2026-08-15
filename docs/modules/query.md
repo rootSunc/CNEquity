@@ -1,6 +1,6 @@
 # query 模块
 
-路径：`src/ashare_lake/query/`
+路径：`src/cn_market_lake/query/`
 
 消费层：`load()` / DuckDB 视图 / universe / on-demand。
 

@@ -12,7 +12,7 @@ from datetime import date
 
 import pytest
 
-from ashare_lake.adapters.ths.stock_bars import (
+from cn_market_lake.adapters.ths.stock_bars import (
     _STOCK_KLINE_URL,
     _parse_stock_kline,
     fetch_stock_bars,
@@ -57,7 +57,7 @@ def test_empty_payload_is_not_an_error():
 def test_missing_year_is_skipped_not_fatal(monkeypatch):
     """A year file absent means the symbol had not listed — normal for a window
     that starts before the IPO, and it must not abort the fetch."""
-    from ashare_lake.adapters.ths import stock_bars as mod
+    from cn_market_lake.adapters.ths import stock_bars as mod
 
     def fake_get(url, *, config=None, timeout=20.0):
         if "2014" in url:
@@ -103,15 +103,15 @@ def _plan(tmp_path, rows, start=date(2001, 1, 1), end=date(2015, 12, 31), symbol
     """Build a history plan against a throwaway instruments table."""
     import polars as pl
 
-    from ashare_lake.config import Config
-    from ashare_lake.steps import bars as mod
+    from cn_market_lake.config import Config
+    from cn_market_lake.steps import bars as mod
 
     root = tmp_path / "curated" / "instruments"
     root.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(rows).write_parquet(root / "part-000.parquet")
     cfg = Config(data_root=tmp_path)  # curated_root derives as data_root/curated
     syms = symbols or [r["symbol"] for r in rows]
-    import ashare_lake.steps.bars as b
+    import cn_market_lake.steps.bars as b
 
     orig = b.load_symbols
     b.load_symbols = lambda _c: syms
@@ -161,7 +161,7 @@ def test_calendar_derives_sessions_from_bars_and_closes_the_rest(tmp_path):
     """
     import polars as pl
 
-    from ashare_lake.adapters.calendar.exchange_calendar import build_trading_calendar
+    from cn_market_lake.adapters.calendar.exchange_calendar import build_trading_calendar
 
     root = tmp_path / "curated" / "daily_bars"
     root.mkdir(parents=True)
@@ -187,7 +187,7 @@ def test_seed_still_wins_inside_its_own_range(tmp_path):
     """A stray bar row must not flip a known holiday to a trading day."""
     import polars as pl
 
-    from ashare_lake.adapters.calendar.exchange_calendar import build_trading_calendar
+    from cn_market_lake.adapters.calendar.exchange_calendar import build_trading_calendar
 
     root = tmp_path / "curated" / "daily_bars"
     root.mkdir(parents=True)
@@ -212,7 +212,7 @@ def test_index_map_excludes_the_wrong_csi1000_series():
     corrupts every excess-return number computed against it, so absence is the
     safer state.
     """
-    from ashare_lake.adapters.ths.index_bars import INDEX_CODE_MAP
+    from cn_market_lake.adapters.ths.index_bars import INDEX_CODE_MAP
 
     assert "000852.SH" not in INDEX_CODE_MAP
     assert "399852" not in INDEX_CODE_MAP.values()
@@ -222,7 +222,7 @@ def test_index_map_excludes_the_wrong_csi1000_series():
 def test_index_kline_rows_carry_frequency():
     """`index_bars` keys on frequency; the adapter supplies it rather than
     leaving each caller to remember."""
-    from ashare_lake.adapters.ths.index_bars import _parse_index_kline
+    from cn_market_lake.adapters.ths.index_bars import _parse_index_kline
 
     rows = _parse_index_kline(
         {"data": "20151231,3700.00,3740.00,3690.00,3731.00,123456,9876543210.00"},
@@ -236,7 +236,7 @@ def test_index_kline_rows_carry_frequency():
 def test_index_symbol_without_a_code_raises():
     """An unmapped symbol is a caller error — silently fetching nothing would
     read as 'this index has no history'."""
-    from ashare_lake.adapters.ths.index_bars import fetch_index_bars_history
+    from cn_market_lake.adapters.ths.index_bars import fetch_index_bars_history
 
     with pytest.raises(KeyError, match="no 同花顺 index code"):
         fetch_index_bars_history("000852.SH", date(2010, 1, 1), date(2010, 12, 31))

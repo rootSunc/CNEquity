@@ -7,12 +7,12 @@ body:
     attributes:
       value: |
         这张表用于上游数据源回归，不要附带湖数据或代理凭据。
-        安全问题请走私密 [SECURITY.md](https://github.com/rootSunc/ashare-lake/security/advisories/new)。
+        安全问题请走私密 [SECURITY.md](https://github.com/rootSunc/cn-market-lake/security/advisories/new)。
   - type: input
     id: source
     attributes:
       label: 源 key
-      description: '`asl sources --only ...` 使用的 key，例如 tdx_protocol、sina、eastmoney_push2。'
+      description: '`cml sources --only ...` 使用的 key，例如 tdx_protocol、sina、eastmoney_push2。'
       placeholder: "sina"
     validations:
       required: true
@@ -32,9 +32,9 @@ body:
     id: command
     attributes:
       label: 最小复现命令与输出
-      description: "请打码本地路径、代理地址、token；优先附 `asl sources --vantage <label> --only <source>` 的输出。"
+      description: "请打码本地路径、代理地址、token；优先附 `cml sources --vantage <label> --only <source>` 的输出。"
       placeholder: |
-        asl sources --vantage overseas --only sina
+        cml sources --vantage overseas --only sina
         ...
     validations:
       required: true
@@ -42,7 +42,7 @@ body:
     id: environment
     attributes:
       label: 环境
-      placeholder: "ashare-lake 0.5.0, Python 3.12, macOS / Linux / Windows, cn / overseas"
+      placeholder: "cn-market-lake 0.5.0, Python 3.12, macOS / Linux / Windows, cn / overseas"
     validations:
       required: true
   - type: checkboxes

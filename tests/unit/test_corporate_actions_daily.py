@@ -3,9 +3,9 @@ from unittest.mock import patch
 
 import polars as pl
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.config import Config
-from ashare_lake.steps.events import step_corporate_actions
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.config import Config
+from cn_market_lake.steps.events import step_corporate_actions
 
 
 def test_corporate_actions_daily_uses_eastmoney(tmp_path):
@@ -23,7 +23,7 @@ def test_corporate_actions_daily_uses_eastmoney(tmp_path):
         }
     )
     with patch(
-        "ashare_lake.steps.events.fetch_corporate_actions_eastmoney",
+        "cn_market_lake.steps.events.fetch_corporate_actions_eastmoney",
         return_value=em_df,
     ):
         result = step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
@@ -38,7 +38,7 @@ def test_corporate_actions_daily_uses_eastmoney(tmp_path):
 def test_corporate_actions_daily_empty_is_ok(tmp_path):
     cfg = Config(data_root=tmp_path / "data", sources={"eastmoney": True})
     with patch(
-        "ashare_lake.steps.events.fetch_corporate_actions_eastmoney",
+        "cn_market_lake.steps.events.fetch_corporate_actions_eastmoney",
         return_value=pl.DataFrame(),
     ):
         result = step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
@@ -49,7 +49,7 @@ def test_corporate_actions_daily_empty_is_ok(tmp_path):
 
 def test_parse_row_maps_current_eastmoney_columns():
     """Guards against EM column drift (EX_DIVIDEND_DATE/PRETAX_BONUS_RMB/IT_RATIO)."""
-    from ashare_lake.adapters.eastmoney.corporate_actions import _parse_row
+    from cn_market_lake.adapters.eastmoney.corporate_actions import _parse_row
 
     cash = _parse_row(
         {

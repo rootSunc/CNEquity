@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from ashare_lake.adapters.cninfo.announcements import (
+from cn_market_lake.adapters.cninfo.announcements import (
     _symbol_from_cninfo,
     fetch_announcement_index,
 )
@@ -105,7 +105,7 @@ def test_fetch_announcement_index_owns_and_closes_default_client(monkeypatch):
         created.append(client)
         return client
 
-    monkeypatch.setattr("ashare_lake.adapters.cninfo.announcements.httpx.Client", _factory)
+    monkeypatch.setattr("cn_market_lake.adapters.cninfo.announcements.httpx.Client", _factory)
     df = fetch_announcement_index(date(2024, 6, 28))
     assert df.is_empty()
     assert created[0].closed is True

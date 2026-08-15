@@ -14,11 +14,11 @@ from datetime import date
 
 import pytest
 
-from ashare_lake.config import load_config
-from ashare_lake.config.bootstrap import path_for_toml
-from ashare_lake.orchestrator.manifest import Manifest
-from ashare_lake.orchestrator.worker_pool import fetch_daily_bars_parallel
-from ashare_lake.storage.layout import init_data_layout
+from cn_market_lake.config import load_config
+from cn_market_lake.config.bootstrap import path_for_toml
+from cn_market_lake.orchestrator.manifest import Manifest
+from cn_market_lake.orchestrator.worker_pool import fetch_daily_bars_parallel
+from cn_market_lake.storage.layout import init_data_layout
 
 
 @pytest.fixture
@@ -65,11 +65,11 @@ def test_broken_pool_falls_back_to_serial(worker_config, monkeypatch):
             return _F()
 
     monkeypatch.setattr(
-        "ashare_lake.orchestrator.worker_pool.ProcessPoolExecutor",
+        "cn_market_lake.orchestrator.worker_pool.ProcessPoolExecutor",
         lambda *a, **k: _DeadPool(),
     )
     monkeypatch.setattr(
-        "ashare_lake.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
+        "cn_market_lake.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
     )
 
     serial: list[str] = []
@@ -95,7 +95,7 @@ def test_broken_pool_falls_back_to_serial(worker_config, monkeypatch):
             }
         )
 
-    monkeypatch.setattr("ashare_lake.orchestrator.worker_pool.fetch_daily_bars", _fake_fetch)
+    monkeypatch.setattr("cn_market_lake.orchestrator.worker_pool.fetch_daily_bars", _fake_fetch)
     # Let the real normalize_with_source stamp source/data_version/fetched_at so
     # the staging write passes schema validation.
 
@@ -149,11 +149,11 @@ def test_broken_pool_skips_batches_already_success(worker_config, monkeypatch):
             return _F()
 
     monkeypatch.setattr(
-        "ashare_lake.orchestrator.worker_pool.ProcessPoolExecutor",
+        "cn_market_lake.orchestrator.worker_pool.ProcessPoolExecutor",
         lambda *a, **k: _DeadPool(),
     )
     monkeypatch.setattr(
-        "ashare_lake.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
+        "cn_market_lake.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
     )
 
     fetched: list[str] = []
@@ -177,7 +177,7 @@ def test_broken_pool_skips_batches_already_success(worker_config, monkeypatch):
             }
         )
 
-    monkeypatch.setattr("ashare_lake.orchestrator.worker_pool.fetch_daily_bars", _fake_fetch)
+    monkeypatch.setattr("cn_market_lake.orchestrator.worker_pool.fetch_daily_bars", _fake_fetch)
 
     result = fetch_daily_bars_parallel(
         worker_config,

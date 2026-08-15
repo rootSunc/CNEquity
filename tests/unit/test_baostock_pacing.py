@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from types import SimpleNamespace
 
-from ashare_lake.adapters.baostock._session import fetch_per_symbol
+from cn_market_lake.adapters.baostock._session import fetch_per_symbol
 
 
 class _NoQueryBaostock:

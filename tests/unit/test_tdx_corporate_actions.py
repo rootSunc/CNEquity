@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pandas as pd
 import polars as pl
 
-from ashare_lake.adapters.tdx_protocol import corporate_actions as ca
+from cn_market_lake.adapters.tdx_protocol import corporate_actions as ca
 
 
 def test_rows_from_xdxr_cash_bonus_allotment_and_skips():

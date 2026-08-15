@@ -1,6 +1,6 @@
 # steps 模块
 
-路径：`src/ashare_lake/steps/`
+路径：`src/cn_market_lake/steps/`
 
 内置采集步骤定义。每个 step 是一个 `@register_step` 函数，负责调用 adapter、校验 schema、写 staging。
 
@@ -13,7 +13,7 @@
 `steps/__init__.py` import 所有子模块触发注册：
 
 ```python
-from ashare_lake.steps import reference, bars, events, ...  # noqa
+from cn_market_lake.steps import reference, bars, events, ...  # noqa
 ```
 
 当前 **40 个**注册 step（37 采集 + 3 finalize）。
@@ -46,7 +46,7 @@ from ashare_lake.steps import reference, bars, events, ...  # noqa
 
 两个 step 由 `_register_intraday_steps()` 从注册表生成——加一个频率是加一条 `DatasetSpec`，不是在四个模块里各改一处。
 
-`group="intraday"`，**不在默认 daily wave 上**，且 `[minute_bars].enabled` 默认 false——不该把 8.4GB/年 落在没主动要它的用户头上。入口只有 `asl run daily --group intraday` 和 `asl backfill <dataset>`。
+`group="intraday"`，**不在默认 daily wave 上**，且 `[minute_bars].enabled` 默认 false——不该把 8.4GB/年 落在没主动要它的用户头上。入口只有 `cml run daily --group intraday` 和 `cml backfill <dataset>`。
 
 一个数据集只放一个频率：视野差 5 倍，而一个数据集只有一个水位和一个 `coverage_start`，混在一起两边都会说谎。抓哪些频率由 `[minute_bars].frequencies` 列出；范围由 `[minute_bars].scope` 决定：`index:<symbol>`（默认沪深300，约 300 只）/ `watchlist` / `all`。
 
@@ -113,7 +113,7 @@ from ashare_lake.steps import reference, bars, events, ...  # noqa
 | sector_fund_flow | sector_fund_flow | eastmoney |
 | news_headlines | news_headlines | eastmoney |
 
-`sector_bars` 为 snapshot 语义；历史由 `asl backfill sector_bars` 写入（一次性）。
+`sector_bars` 为 snapshot 语义；历史由 `cml backfill sector_bars` 写入（一次性）。
 日更与历史**刻意同源**（同花顺）：早先用 TDX 历史拼东财日更，同一 `sector_code`
 下混进了两个指数基期，拼接日出现跨 439 个板块 +79% 的假跳变。`[sources.ths]`
 关闭时该 step 直接报错，不会静默回落到别的源。
@@ -159,7 +159,7 @@ def step_xxx(cfg: Config, trade_date: date, run_id: str, ctx: dict) -> dict:
 
 ## Wave 配置示例
 
-见 `configs/ashare-lake.example.toml`：
+见 `configs/cn-market-lake.example.toml`：
 
 - Wave 1：L0 并行
 - Wave 2：corporate_actions → daily_bars 串行（除权触发重抓）

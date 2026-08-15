@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.query.on_demand import OnDemandService
+from cn_market_lake.config import Config
+from cn_market_lake.query.on_demand import OnDemandService
 
 
 def test_fetch_cache_roundtrip(tmp_path, monkeypatch):
@@ -13,7 +13,7 @@ def test_fetch_cache_roundtrip(tmp_path, monkeypatch):
     svc = OnDemandService(cfg)
 
     monkeypatch.setattr(
-        "ashare_lake.query.on_demand.fetch_stock_news",
+        "cn_market_lake.query.on_demand.fetch_stock_news",
         lambda symbol, **k: {"symbol": symbol, "items": [{"title": "t"}]},
     )
     monkeypatch.setattr(Config, "rate_limit", lambda self, name: None)
@@ -24,7 +24,7 @@ def test_fetch_cache_roundtrip(tmp_path, monkeypatch):
 
     # Second hit uses cache (remote would raise if called).
     monkeypatch.setattr(
-        "ashare_lake.query.on_demand.fetch_stock_news",
+        "cn_market_lake.query.on_demand.fetch_stock_news",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("cache miss")),
     )
     second = svc.fetch("stock_news", "600519.SH")
@@ -68,7 +68,7 @@ def test_research_reports_error_path_skips_cache(tmp_path, monkeypatch):
         def get(self, url):
             raise RuntimeError("offline")
 
-    monkeypatch.setattr("ashare_lake.query.on_demand.EastMoneyClient", BoomClient)
+    monkeypatch.setattr("cn_market_lake.query.on_demand.EastMoneyClient", BoomClient)
     out = svc.fetch("research_reports", "600519.SH")
     assert out["items"] == []
     assert "error" in out

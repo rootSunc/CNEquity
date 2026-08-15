@@ -1,4 +1,4 @@
-"""Offline coverage for `asl demo` (real network is mocked)."""
+"""Offline coverage for `cml demo` (real network is mocked)."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ import polars as pl
 import pytest
 from click.testing import CliRunner
 
-from ashare_lake.cli.main import cli
-from ashare_lake.domain.schemas import validate_dataframe, with_provenance
-from ashare_lake.orchestrator.registry import STEP_REGISTRY, StepEntry
+from cn_market_lake.cli.main import cli
+from cn_market_lake.domain.schemas import validate_dataframe, with_provenance
+from cn_market_lake.orchestrator.registry import STEP_REGISTRY, StepEntry
 
 
 def _inst_frame(symbols: list[str]) -> pl.DataFrame:
@@ -58,20 +58,20 @@ def _bars_frame(symbols: list[str], start: date, end: date) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def test_asl_demo_offline(tmp_path, monkeypatch):
+def test_cml_demo_offline(tmp_path, monkeypatch):
     symbols = ["600519.SH", "000001.SZ"]
-    monkeypatch.setattr("ashare_lake.cli.demo._probe_tdx", lambda cfg: None)
+    monkeypatch.setattr("cn_market_lake.cli.demo._probe_tdx", lambda cfg: None)
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.client.fetch_instruments",
+        "cn_market_lake.adapters.tdx_protocol.client.fetch_instruments",
         lambda **kwargs: _inst_frame(symbols),
     )
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.client.normalize_with_source",
+        "cn_market_lake.adapters.tdx_protocol.client.normalize_with_source",
         lambda df: df,
     )
 
     def fake_calendar(config, trade_date, run_id, context):
-        from ashare_lake.storage.atomic import write_parquet_atomic
+        from cn_market_lake.storage.atomic import write_parquet_atomic
 
         rows = []
         d = date(2024, 5, 1)
@@ -98,7 +98,7 @@ def test_asl_demo_offline(tmp_path, monkeypatch):
         return {"rows_read": df.height, "rows_written": df.height}
 
     def fake_daily_bars(config, trade_date, run_id, context):
-        from ashare_lake.storage import StagingWriter
+        from cn_market_lake.storage import StagingWriter
 
         start = getattr(config, "_backfill_start", date(2024, 6, 1))
         end = getattr(config, "_backfill_end", trade_date)
@@ -107,8 +107,8 @@ def test_asl_demo_offline(tmp_path, monkeypatch):
         return {"rows_read": df.height, "rows_written": df.height}
 
     def fake_compact(config, trade_date, run_id, context):
-        from ashare_lake.storage.parquet import compact_dataset
-        from ashare_lake.storage.state import StateStore
+        from cn_market_lake.storage.parquet import compact_dataset
+        from cn_market_lake.storage.state import StateStore
 
         n = compact_dataset(config.staging_root, config.curated_root, "daily_bars", run_id)
         StateStore(config.meta_root).set_date("daily_bars", trade_date)
@@ -158,7 +158,7 @@ def test_demo_help_lists_command():
 
 
 def test_return_summary_compares_raw_and_adjusted_series():
-    from ashare_lake.cli.demo import _return_summary
+    from cn_market_lake.cli.demo import _return_summary
 
     raw = pl.DataFrame(
         {
@@ -180,7 +180,7 @@ def test_return_summary_compares_raw_and_adjusted_series():
 
 
 def test_research_demo_derives_factors_and_requires_exact_rows(monkeypatch):
-    from ashare_lake.cli.demo import _run_research_demo
+    from cn_market_lake.cli.demo import _run_research_demo
 
     calls: dict[str, object] = {}
 
@@ -207,8 +207,8 @@ def test_research_demo_derives_factors_and_requires_exact_rows(monkeypatch):
         calls.setdefault("loads", []).append((dataset, kwargs))
         return adjusted if kwargs.get("adjust") else raw
 
-    monkeypatch.setattr("ashare_lake.derive.adj_factors.compute_adj_factors", fake_compute)
-    monkeypatch.setattr("ashare_lake.query.reader.load", fake_load)
+    monkeypatch.setattr("cn_market_lake.derive.adj_factors.compute_adj_factors", fake_compute)
+    monkeypatch.setattr("cn_market_lake.query.reader.load", fake_load)
 
     result = _run_research_demo(
         object(),
@@ -227,13 +227,13 @@ def test_research_demo_derives_factors_and_requires_exact_rows(monkeypatch):
 
 
 def test_write_demo_toml_escapes_windows_paths(tmp_path):
-    """Bare ``C:\\Users\\…`` is invalid TOML; follow-up ``asl query`` would fail."""
+    """Bare ``C:\\Users\\…`` is invalid TOML; follow-up ``cml query`` would fail."""
     try:
         import tomllib
     except ModuleNotFoundError:
         import tomli as tomllib
 
-    from ashare_lake.cli.demo import _write_demo_toml
+    from cn_market_lake.cli.demo import _write_demo_toml
 
     out = tmp_path / "demo.toml"
     # Simulate a native Windows resolve() result even on Unix CI.
@@ -254,16 +254,16 @@ def test_probe_tdx_closes_its_client():
     """
     from unittest.mock import patch
 
-    from ashare_lake.cli import demo as demo_mod
+    from cn_market_lake.cli import demo as demo_mod
 
     client = object()
     with (
         patch.object(demo_mod, "_quotes_client", create=True),
         patch(
-            "ashare_lake.adapters.tdx_protocol.client._quotes_client",
+            "cn_market_lake.adapters.tdx_protocol.client._quotes_client",
             return_value=client,
         ),
-        patch("ashare_lake.adapters.tdx_protocol.session.close_quotes_client") as closer,
+        patch("cn_market_lake.adapters.tdx_protocol.session.close_quotes_client") as closer,
     ):
         demo_mod._probe_tdx(object())
 
@@ -274,7 +274,7 @@ def _minute_frame(symbols: list[str], day: date, bars: int = 240) -> pl.DataFram
     """A synthetic full session, right-labelled like the real source."""
     from datetime import datetime, timedelta
 
-    from ashare_lake.adapters.tdx_protocol.minute_bars import in_session
+    from cn_market_lake.adapters.tdx_protocol.minute_bars import in_session
 
     stamps: list[datetime] = []
     stamp = datetime(day.year, day.month, day.day, 9, 31)
@@ -301,21 +301,21 @@ def _minute_frame(symbols: list[str], day: date, bars: int = 240) -> pl.DataFram
     return with_provenance(pl.DataFrame(rows), source="tdx_protocol", data_version="v1")
 
 
-def test_asl_demo_intraday_offline(tmp_path, monkeypatch):
-    """`asl demo --intraday` adds a 7th step and prints a real session."""
+def test_cml_demo_intraday_offline(tmp_path, monkeypatch):
+    """`cml demo --intraday` adds a 7th step and prints a real session."""
     symbols = ["600519.SH", "000001.SZ"]
-    monkeypatch.setattr("ashare_lake.cli.demo._probe_tdx", lambda cfg: None)
+    monkeypatch.setattr("cn_market_lake.cli.demo._probe_tdx", lambda cfg: None)
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.client.fetch_instruments",
+        "cn_market_lake.adapters.tdx_protocol.client.fetch_instruments",
         lambda **kwargs: _inst_frame(symbols),
     )
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.client.normalize_with_source",
+        "cn_market_lake.adapters.tdx_protocol.client.normalize_with_source",
         lambda df: df,
     )
 
     def fake_calendar(config, trade_date, run_id, context):
-        from ashare_lake.storage.atomic import write_parquet_atomic
+        from cn_market_lake.storage.atomic import write_parquet_atomic
 
         rows = []
         d = date(2024, 5, 1)
@@ -337,7 +337,7 @@ def test_asl_demo_intraday_offline(tmp_path, monkeypatch):
         return {"rows_read": df.height, "rows_written": df.height}
 
     def fake_daily_bars(config, trade_date, run_id, context):
-        from ashare_lake.storage import StagingWriter
+        from cn_market_lake.storage import StagingWriter
 
         start = getattr(config, "_backfill_start", date(2024, 6, 1))
         end = getattr(config, "_backfill_end", trade_date)
@@ -346,7 +346,7 @@ def test_asl_demo_intraday_offline(tmp_path, monkeypatch):
         return {"rows_read": df.height, "rows_written": df.height}
 
     def fake_minute_bars(config, trade_date, run_id, context):
-        from ashare_lake.storage import StagingWriter
+        from cn_market_lake.storage import StagingWriter
 
         # The demo must have configured the watchlist scope before we ran.
         assert config.minute_bars_enabled
@@ -356,7 +356,7 @@ def test_asl_demo_intraday_offline(tmp_path, monkeypatch):
         return {"rows_read": df.height, "rows_written": df.height}
 
     def fake_compact(config, trade_date, run_id, context):
-        from ashare_lake.storage.parquet import compact_dataset
+        from cn_market_lake.storage.parquet import compact_dataset
 
         total = 0
         for dataset in ("daily_bars", "minute_bars"):
@@ -399,9 +399,9 @@ def test_asl_demo_intraday_offline(tmp_path, monkeypatch):
         STEP_REGISTRY.update(originals)
 
 
-def test_asl_demo_without_intraday_stays_six_steps(tmp_path, monkeypatch):
+def test_cml_demo_without_intraday_stays_six_steps(tmp_path, monkeypatch):
     """The default demo must not fetch intraday bars or mention them."""
-    from ashare_lake.cli import demo as demo_mod
+    from cn_market_lake.cli import demo as demo_mod
 
     called = []
     monkeypatch.setattr(demo_mod, "_run_intraday_demo", lambda *a, **k: called.append(1) or {})
@@ -410,8 +410,8 @@ def test_asl_demo_without_intraday_stays_six_steps(tmp_path, monkeypatch):
 
 
 def test_run_intraday_demo_raises_when_the_step_fails(tmp_path):
-    from ashare_lake.cli.demo import _run_intraday_demo
-    from ashare_lake.config import Config
+    from cn_market_lake.cli.demo import _run_intraday_demo
+    from cn_market_lake.config import Config
 
     cfg = Config(data_root=tmp_path / "lake")
     for sub in ("staging", "curated", "meta", "derived"):
@@ -426,8 +426,8 @@ def test_run_intraday_demo_raises_when_the_step_fails(tmp_path):
 
 
 def test_run_intraday_demo_raises_when_no_rows_come_back(tmp_path, monkeypatch):
-    from ashare_lake.cli.demo import _run_intraday_demo
-    from ashare_lake.config import Config
+    from cn_market_lake.cli.demo import _run_intraday_demo
+    from cn_market_lake.config import Config
 
     cfg = Config(data_root=tmp_path / "lake")
     for sub in ("staging", "curated", "meta", "derived"):
@@ -438,7 +438,7 @@ def test_run_intraday_demo_raises_when_no_rows_come_back(tmp_path, monkeypatch):
             return {"status": "success"}
 
     monkeypatch.setattr(
-        "ashare_lake.query.reader.load", lambda *a, **k: pl.DataFrame({"symbol": []})
+        "cn_market_lake.query.reader.load", lambda *a, **k: pl.DataFrame({"symbol": []})
     )
     with pytest.raises(click.ClickException, match="returned no rows"):
         _run_intraday_demo(cfg, SucceedingEngine(), ["600519.SH"], date(2024, 6, 28), days=5)

@@ -1,7 +1,7 @@
 # Vendored upstream (tdxpy, MIT). Measured for importability by test_tdx_decoupling,
 # not line-exercised — same rationale as ruff's extend-exclude for this tree.
 ignore:
-  - "src/ashare_lake/adapters/tdx_protocol/_wire/**/*"
+  - "src/cn_market_lake/adapters/tdx_protocol/_wire/**/*"
 
 coverage:
   status:

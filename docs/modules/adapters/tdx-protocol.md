@@ -1,6 +1,6 @@
 # tdx_protocol 适配器
 
-路径：`src/ashare_lake/adapters/tdx_protocol/`
+路径：`src/cn_market_lake/adapters/tdx_protocol/`
 
 通过**内置的通达信协议客户端**连接行情服务器（无需本地通达信客户端）。A 股日线、指数、证券列表、除权等的核心主源。
 
@@ -32,7 +32,7 @@
 - `servers = "host:port"`：固定单服
 - `allow_mock = false`（生产）：连接失败抛异常，不造假数据
 
-`asl servers test` 验证连通性。
+`cml servers test` 验证连通性。
 
 ---
 

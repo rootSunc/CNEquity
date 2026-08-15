@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ashare_lake.config import Config
-from ashare_lake.domain.datasets import DATASETS
-from ashare_lake.query.parquet_scan import parquet_glob
-from ashare_lake.query.views import _view_glob, ensure_duckdb_views
+from cn_market_lake.config import Config
+from cn_market_lake.domain.datasets import DATASETS
+from cn_market_lake.query.parquet_scan import parquet_glob
+from cn_market_lake.query.views import _view_glob, ensure_duckdb_views
 
 
 def test_view_glob_uses_forward_slashes():
@@ -26,7 +26,7 @@ def test_parquet_glob_is_posix(tmp_path):
 def test_ensure_duckdb_views_accepts_native_windows_style_root(tmp_path):
     # Build a root whose str() would contain backslashes on Windows; on Unix
     # resolve().as_posix() is a no-op, so the assertion still holds.
-    data_root = tmp_path / "ashare-lake"
+    data_root = tmp_path / "cn-market-lake"
     cfg = Config(data_root=data_root)
     db = ensure_duckdb_views(cfg)
     assert db.exists()

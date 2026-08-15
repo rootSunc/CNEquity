@@ -2,10 +2,10 @@ from datetime import date
 
 import polars as pl
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.config import Config
-from ashare_lake.steps.finalize import step_compact
-from ashare_lake.storage import StagingWriter
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.config import Config
+from cn_market_lake.steps.finalize import step_compact
+from cn_market_lake.storage import StagingWriter
 
 
 def test_compact_only_merges_datasets_staged_in_run(tmp_path):

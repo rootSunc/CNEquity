@@ -7,8 +7,8 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.storage import atomic as atomic_mod
-from ashare_lake.storage.atomic import write_parquet_atomic
+from cn_market_lake.storage import atomic as atomic_mod
+from cn_market_lake.storage.atomic import write_parquet_atomic
 
 
 def _tiny_df() -> pl.DataFrame:

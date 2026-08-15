@@ -1,10 +1,10 @@
-# ASL · ashare-lake — 免费、自托管的 A 股历史数据层
+# CML · CNMarketLake — 免费、自托管的 A 股历史数据层
 
 **别再每次重拉、自己拼复权了。** 一条命令，把可日更的研究数据落到本地。自动保存历史口径，供 Python、DuckDB、Polars 和 AI agent 使用。
 
-CLI：`asl` · 包名：`ashare_lake` · **Python ≥ 3.10** · **只做数据层**（回测和信号留给下游）。
+CLI：`cml` · 包名：`cn_market_lake` · **Python ≥ 3.10** · **只做数据层**（回测和信号留给下游）。
 
-- **真数上手**：`asl demo` 几分钟出真实日线（不是 mock）；`--research` 可验证复权口径
+- **真数上手**：`cml demo` 几分钟出真实日线（不是 mock）；`--research` 可验证复权口径
 - **日更能挂着跑**：水位 / 失败重试 / 质量审计
 - **研究口径一次定好**：复权 · universe · PIT；相对拉数库多编排，相对云端宽表可本地续跑
 
@@ -13,17 +13,17 @@ CLI：`asl` · 包名：`ashare_lake` · **Python ≥ 3.10** · **只做数据�
 需要 **Python 3.10+**，且能访问 TDX 行情主机（大陆出口更稳）。
 
 ```bash
-pip install ashare-lake
-asl demo
+pip install cn-market-lake
+cml demo
 ```
 
-写入 `data/ashare-lake-demo/`（几只流动性股票 × 约 30 个交易日），并打印样例表。
+写入 `data/cn-market-lake-demo/`（几只流动性股票 × 约 30 个交易日），并打印样例表。
 
-要验证复权口径，可运行 `asl demo --research --symbols 600519.SH`；它会额外读取 Sina 复权因子，
+要验证复权口径，可运行 `cml demo --research --symbols 600519.SH`；它会额外读取 Sina 复权因子，
 并打印约三年窗口的 raw / hfq 收益对照。
 
 ```bash
-asl query --config configs/ashare-lake.demo.toml --sql "
+cml query --config configs/cn-market-lake.demo.toml --sql "
   SELECT symbol, trade_date, close, volume, source
   FROM daily_bars
   WHERE symbol = '600519.SH'
@@ -35,21 +35,21 @@ asl query --config configs/ashare-lake.demo.toml --sql "
 全量日更（仍不必 clone；在含配置的工作目录执行）：
 
 ```bash
-asl config init                              # → configs/ashare-lake.toml（data.root 写为绝对路径）
+cml config init                              # → configs/cn-market-lake.toml（data.root 写为绝对路径）
 # 或显式指定：
-# asl config init --data-root /data/ashare-lake --force
-asl config validate --config configs/ashare-lake.toml
-asl init --config configs/ashare-lake.toml
-asl run daily --config configs/ashare-lake.toml
+# cml config init --data-root /data/cn-market-lake --force
+cml config validate --config configs/cn-market-lake.toml
+cml init --config configs/cn-market-lake.toml
+cml run daily --config configs/cn-market-lake.toml
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rootSunc/ashare-lake/main/docs/assets/asl-demo.png" alt="asl demo" width="820" />
+  <img src="https://raw.githubusercontent.com/rootSunc/cn-market-lake/main/docs/assets/cml-demo.png" alt="cml demo" width="820" />
 </p>
 
 ## 有什么数据
 
-数据集名即 `load()` 的第一个参数。字段见 [schema](https://github.com/rootSunc/ashare-lake/blob/main/docs/datasets/schema.md)，编排元数据见 [catalog](https://github.com/rootSunc/ashare-lake/blob/main/docs/datasets/catalog.md)。
+数据集名即 `load()` 的第一个参数。字段见 [schema](https://github.com/rootSunc/cn-market-lake/blob/main/docs/datasets/schema.md)，编排元数据见 [catalog](https://github.com/rootSunc/cn-market-lake/blob/main/docs/datasets/catalog.md)。
 
 | 类别 | 数据集 |
 |------|--------|
@@ -66,20 +66,20 @@ asl run daily --config configs/ashare-lake.toml
 ## 读数据
 
 ```python
-from ashare_lake.query import load
+from cn_market_lake.query import load
 
 bars = load("daily_bars", start="2020-01-01", end="2025-12-31", adjust="hfq")
 roe = load("financial_statement_items", items=["roe"], as_of="2024-04-30")
 ```
 
-无 extras —— `pip install ashare-lake` 即装齐所有数据源。
+无 extras —— `pip install cn-market-lake` 即装齐所有数据源。
 
 ## 完整文档
 
 详细 schema、runbook、定位对照与合规说明以 GitHub 为准：
 
-- [仓库](https://github.com/rootSunc/ashare-lake)
-- [文档站](https://rootsunc.github.io/ashare-lake/) · [仓库文档](https://github.com/rootSunc/ashare-lake/tree/main/docs)
-- [Changelog](https://github.com/rootSunc/ashare-lake/blob/main/CHANGELOG.md)
+- [仓库](https://github.com/rootSunc/cn-market-lake)
+- [文档站](https://rootsunc.github.io/cn-market-lake/) · [仓库文档](https://github.com/rootSunc/cn-market-lake/tree/main/docs)
+- [Changelog](https://github.com/rootSunc/cn-market-lake/blob/main/CHANGELOG.md)
 
 代码 Apache-2.0。落盘行情 / 公告仍受上游条款约束——本包不附带、也不再分发数据湖。

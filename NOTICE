@@ -1,5 +1,5 @@
-ashare-lake
-Copyright 2026 ashare-lake Contributors
+CNMarketLake
+Copyright 2026 CNMarketLake Contributors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,4 +16,4 @@ limitations under the License.
 ---------------------------------------------------------------------------
 This product includes software derived from tdxpy 0.2.7
 (https://github.com/mootdx/tdxpy), licensed under the MIT License.
-See src/ashare_lake/adapters/tdx_protocol/_wire/LICENSE.tdxpy.
+See src/cn_market_lake/adapters/tdx_protocol/_wire/LICENSE.tdxpy.

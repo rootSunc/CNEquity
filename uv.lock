@@ -47,62 +47,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ashare-lake"
-version = "0.6.0"
-source = { editable = "." }
-dependencies = [
-    { name = "baostock" },
-    { name = "click" },
-    { name = "curl-cffi" },
-    { name = "duckdb" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "openpyxl" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "polars" },
-    { name = "pyarrow" },
-    { name = "snownlp" },
-    { name = "tomli", marker = "python_full_version < '3.11'" },
-    { name = "uvicorn" },
-    { name = "xlrd" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-timeout" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "baostock", specifier = ">=0.8" },
-    { name = "click", specifier = ">=8.1" },
-    { name = "curl-cffi", specifier = ">=0.7" },
-    { name = "duckdb", specifier = ">=1.0" },
-    { name = "fastapi", specifier = ">=0.110" },
-    { name = "httpx", specifier = ">=0.25" },
-    { name = "openpyxl", specifier = ">=3.0" },
-    { name = "pandas", specifier = ">=2.0" },
-    { name = "polars", specifier = ">=1.0" },
-    { name = "pyarrow", specifier = ">=15.0" },
-    { name = "snownlp", specifier = ">=0.12" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
-    { name = "uvicorn", specifier = ">=0.27" },
-    { name = "xlrd", specifier = ">=2.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-cov", specifier = ">=5.0" },
-    { name = "pytest-timeout", specifier = ">=2.3" },
-    { name = "ruff", specifier = ">=0.15,<0.16" },
-]
-
-[[package]]
 name = "baostock"
 version = "0.9.3"
 source = { registry = "https://pypi.org/simple" }
@@ -244,6 +188,62 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/76/d4/81420972a676e8ffea40450d8c8c92943e7218a78fe9b64359836cc9876b/click-8.4.2.tar.gz", hash = "sha256:9a6cea6e60b17ebe0a44c5cc636d94f09bd66142c1cd7d8b4cd731c4917a15f6", size = 338000, upload-time = "2026-06-24T17:45:15.148Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/e2/79c688af8b210d232694e31e59da9f6ec747bae31c3f5946e4e9b98860d5/click-8.4.2-py3-none-any.whl", hash = "sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76", size = 119243, upload-time = "2026-06-24T17:45:13.73Z" },
+]
+
+[[package]]
+name = "cn-market-lake"
+version = "0.6.0"
+source = { editable = "." }
+dependencies = [
+    { name = "baostock" },
+    { name = "click" },
+    { name = "curl-cffi" },
+    { name = "duckdb" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "openpyxl" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "polars" },
+    { name = "pyarrow" },
+    { name = "snownlp" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "uvicorn" },
+    { name = "xlrd" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "baostock", specifier = ">=0.8" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "curl-cffi", specifier = ">=0.7" },
+    { name = "duckdb", specifier = ">=1.0" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "httpx", specifier = ">=0.25" },
+    { name = "openpyxl", specifier = ">=3.0" },
+    { name = "pandas", specifier = ">=2.0" },
+    { name = "polars", specifier = ">=1.0" },
+    { name = "pyarrow", specifier = ">=15.0" },
+    { name = "snownlp", specifier = ">=0.12" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
+    { name = "uvicorn", specifier = ">=0.27" },
+    { name = "xlrd", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
+    { name = "ruff", specifier = ">=0.15,<0.16" },
 ]
 
 [[package]]

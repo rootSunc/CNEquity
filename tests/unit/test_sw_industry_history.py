@@ -9,7 +9,7 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from ashare_lake.adapters.sw import industry_history as sw
+from cn_market_lake.adapters.sw import industry_history as sw
 
 
 def test_exchange_and_code_to_symbol():

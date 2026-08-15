@@ -7,8 +7,8 @@ from datetime import date, datetime, timezone
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.quality.macro_checks import (
+from cn_market_lake.config import Config
+from cn_market_lake.quality.macro_checks import (
     MONTHLY_STALE_DAYS,
     macro_revision_findings,
     macro_staleness_findings,

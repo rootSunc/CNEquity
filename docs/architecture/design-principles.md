@@ -23,7 +23,7 @@ curated 行带 `source`（adapter 名）、`data_version`、`fetched_at`（UTC�
 
 ## 能查的问题放在引擎侧
 
-`asl audit --full` 能抓的，别只靠下游自检。例如复权收益极值、adj_factors × corporate_actions 对账、PK 重复、mock 行、分区行数突变。
+`cml audit --full` 能抓的，别只靠下游自检。例如复权收益极值、adj_factors × corporate_actions 对账、PK 重复、mock 行、分区行数突变。
 
 ## 单人可运维
 

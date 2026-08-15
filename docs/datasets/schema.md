@@ -1,6 +1,6 @@
 # Schema 契约
 
-ashare-lake 的 curated 数据集统一带溯源列，并声明明确主键。
+cn-market-lake 的 curated 数据集统一带溯源列，并声明明确主键。
 
 ### 全局约定
 
@@ -133,8 +133,8 @@ TDX 的单位**按频率而非按源**：日线（`frequency=9`）是手，同�
 **迁移（v1 → v2）。** 湖里既有的行在任何一种口径下都是错的，必须重写：
 
 ```bash
-scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --dry-run
-scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --apply
+scripts/migrate_daily_bars_volume_v2.py --config configs/cn-market-lake.toml --dry-run
+scripts/migrate_daily_bars_volume_v2.py --config configs/cn-market-lake.toml --apply
 ```
 
 `source ∈ {tdx_protocol, sina}` 且 `data_version=v1` 的行 `volume ×100`；其余 v1 行原样保留（本就是股）；所有被处理的行改写为 `data_version=v2`。已是 v2 的行跳过，脚本幂等、可中断续跑。**`fetched_at` 不重新打戳**——这些行确实是当时抓的，改掉就抹掉了数据被观测到的时间；记录本次重新解释的列是 `data_version`，这正是它的用途。`--apply` 会就地改写 curated，请先备份。
@@ -177,7 +177,7 @@ scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --appl
 
 **无成交分钟。** TDX 的 volume 打包浮点解码把原始 0 映射成 `2**-127`（≈5.88e-39）而非 0.0（见 `_wire/helper.get_volume`）。日内路径显式归零，`volume=0`、`amount=0`，与全湖的停牌约定一致。冷门股一天有几十个这样的分钟，停牌股则是一整个交易日。
 
-**历史视野（重要）。** 实测 2026-08-01：TDX 每个标的保留 **22,800 根 1m** 与 **23,568 根 5m**。上限是**根数**而非日期——除以一个完整交易日（240 / 48 根）即为 95 / 491 个交易日，对每个交易日都有报价的标的成立。**更早的窗口返回的不是更少数据，而是没有数据**，且没有任何回填源能补深。完整机制与例外见 [catalog.md 历史视野](catalog.md)；`asl backfill` 会直接拒绝越界窗口，`list_datasets()` 的 `history_horizon_days` 是程序化契约。
+**历史视野（重要）。** 实测 2026-08-01：TDX 每个标的保留 **22,800 根 1m** 与 **23,568 根 5m**。上限是**根数**而非日期——除以一个完整交易日（240 / 48 根）即为 95 / 491 个交易日，对每个交易日都有报价的标的成立。**更早的窗口返回的不是更少数据，而是没有数据**，且没有任何回填源能补深。完整机制与例外见 [catalog.md 历史视野](catalog.md)；`cml backfill` 会直接拒绝越界窗口，`list_datasets()` 的 `history_horizon_days` 是程序化契约。
 
 **为什么一个数据集只放一个频率。** 1m 视野 95 天、5m 视野 491 天，而一个数据集只有一个水位、一个 `coverage_start`、一个 `history_horizon_days`。混在一起，这三样对两个频率都是错的。`frequency` 仍在 schema 与主键里，所以两者共用同一份列定义、同一套质量检查。
 
@@ -252,7 +252,7 @@ scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --appl
 | source / data_version / fetched_at | | 溯源（`eastmoney` / `sina`） |
 
 主键：`(symbol, trade_date)`。分区：`trade_date`。  
-日更：`macro_risk` 组。历史：`asl backfill commodity_bars [--start 2020-01-01 --end …]`。  
+日更：`macro_risk` 组。历史：`cml backfill commodity_bars [--start 2020-01-01 --end …]`。  
 `required=false`。外盘 v1 **仅黄金**；不进 A 股回测引擎。
 
 #### corporate_actions
@@ -327,7 +327,7 @@ scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --appl
   但配的是首次披露日（statement 报表自带的 `NOTICE_DATE` 是「最后一次重述日」，
   往往晚 1–2 年，直接用会让基本面在 PIT 查询里整体迟到）。因此存在小幅前视：
   修订后的数字在首次披露日其实还不知道。只有日更逐日累积的版本才是严格 PIT。
-- **历史深度**：`asl backfill financial_statement_items` 默认走东财报告期自 **2001** 起
+- **历史深度**：`cml backfill financial_statement_items` 默认走东财报告期自 **2001** 起
   （可用 `--start` / `--end` 分块）；不走 baostock。盘上实际起点见 `list_datasets().coverage_start`。
 
 #### fund_flow
@@ -559,7 +559,7 @@ PIT 查询过滤 `announce_date <= as_of`。
 
 #### stock_news（按需缓存）
 
-缓存 JSON：``meta/on_demand/stock_news/{symbol}.json``；经 ``asl query --dataset stock_news --symbol`` 拉取。
+缓存 JSON：``meta/on_demand/stock_news/{symbol}.json``；经 ``cml query --dataset stock_news --symbol`` 拉取。
 
 | 字段 | 类型 | 说明 |
 |-------|------|-------|
@@ -580,7 +580,7 @@ Compact 时按主键分组，保留 `fetched_at` 最大的一行。
 
 ### DuckDB 视图
 
-优先用 `asl init` / compact 生成的 `{data_root}/duckdb/ashare-lake.duckdb` 视图，
+优先用 `cml init` / compact 生成的 `{data_root}/duckdb/cn-market-lake.duckdb` 视图，
 不要手写整层 glob。`hive_partitioning=true` **仅**适用于按日分区的数据集
 （目录值为 `YYYY-MM-DD`）；年/月分区必须 `hive_partitioning=false`（真实日期在文件列里）。
 见 [lake-layout](../architecture/lake-layout.md)。

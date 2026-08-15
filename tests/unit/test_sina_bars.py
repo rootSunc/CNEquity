@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ashare_lake.adapters.sina import bars as sina
+from cn_market_lake.adapters.sina import bars as sina
 
 
 def test_parse_payload_null_and_bad_json():

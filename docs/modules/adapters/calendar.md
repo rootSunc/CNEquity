@@ -1,6 +1,6 @@
 # calendar 适配器
 
-路径：`src/ashare_lake/adapters/calendar/`
+路径：`src/cn_market_lake/adapters/calendar/`
 
 A 股**交易日历** — 节假日排除、回测窗口对齐的地基。
 

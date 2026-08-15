@@ -1,6 +1,6 @@
 # pboc 适配器
 
-路径：`src/ashare_lake/adapters/pboc/`
+路径：`src/cn_market_lake/adapters/pboc/`
 
 中国人民银行 调查统计司，为 `macro_indicators` 提供 **社会融资规模增量**（`social_financing`）。
 
@@ -32,7 +32,7 @@
 154 507。**所以问题不只是慢，而是它在传播一个已被修正的数值**——这种源作为备源也
 不安全（ADR-0003：备源不得静默写 canonical），因此直接移除，不保留 failover。
 
-见 [issue #10](https://github.com/rootSunc/ashare-lake/issues/10)。
+见 [issue #10](https://github.com/rootSunc/cn-market-lake/issues/10)。
 
 ---
 

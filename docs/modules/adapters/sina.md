@@ -1,6 +1,6 @@
 # sina 适配器
 
-路径：`src/ashare_lake/adapters/sina/`
+路径：`src/cn_market_lake/adapters/sina/`
 
 新浪行情接口，当前主要用于 **后复权（hfq）累积因子**。
 

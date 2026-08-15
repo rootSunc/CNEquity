@@ -1,6 +1,6 @@
 # 数据集目录
 
-ashare-lake 交付 **42 个注册数据集**（39 curated + 3 derived：`adj_factors`、`industry_index`、`delisting_events`），按选股用途分为 L0–L8 八层。另有 **on-demand** 数据集不进 curated 主路径。其中日内数据集 `minute_bars` / `minute_bars_5m` 默认关闭，需在 `[minute_bars]` 显式开启；分笔 `trade_ticks` 同样默认关闭，开关在**独立的** `[trade_ticks]`。
+cn-market-lake 交付 **42 个注册数据集**（39 curated + 3 derived：`adj_factors`、`industry_index`、`delisting_events`），按选股用途分为 L0–L8 八层。另有 **on-demand** 数据集不进 curated 主路径。其中日内数据集 `minute_bars` / `minute_bars_5m` 默认关闭，需在 `[minute_bars]` 显式开启；分笔 `trade_ticks` 同样默认关闭，开关在**独立的** `[trade_ticks]`。
 
 权威字段定义：[schema.md](schema.md)。逐源限制：[sources.md](sources.md)。
 
@@ -35,7 +35,7 @@ ashare-lake 交付 **42 个注册数据集**（39 curated + 3 derived：`adj_fac
 | 模式 | 含义 | 示例 |
 |------|------|------|
 | **batch** | 日更/周更，走 staging → compact → curated | daily_bars, fund_flow |
-| **derived** | 由 curated 计算，可 `asl derive` 重算 | adj_factors |
+| **derived** | 由 curated 计算，可 `cml derive` 重算 | adj_factors |
 | **on-demand** | 按 symbol 抓取，缓存于 meta | stock_news, research_reports |
 
 ### 拉取语义（fetch_semantics）
@@ -45,7 +45,7 @@ ashare-lake 交付 **42 个注册数据集**（39 curated + 3 derived：`adj_fac
 | `by_date` | 可按日期回补缺口 | daily_bars, margin_trading |
 | `snapshot` | 仅抓 run 当日快照，禁止伪造历史 | valuation_metrics, sector_members |
 
-`snapshot` 数据集若配置了 `backfill_source`（如 `valuation_metrics` → baostock、`sector_bars` → ths），允许 `asl backfill` 走专用历史源。
+`snapshot` 数据集若配置了 `backfill_source`（如 `valuation_metrics` → baostock、`sector_bars` → ths），允许 `cml backfill` 走专用历史源。
 
 ### 历史可用性（history_mode）
 
@@ -111,9 +111,9 @@ ashare-lake 交付 **42 个注册数据集**（39 curated + 3 derived：`adj_fac
 
 活跃标的间高度一致：1m 实测 `600519.SH` / `000001.SZ` / `300750.SZ` / `688981.SH` / `603005.SH` 均为 95±1 天，跨交易所、跨流动性。
 
-`asl backfill minute_bars --start` 早于视野会直接报错而不是扫一整天返回空。要拉冷门标的的深历史，先把 `[minute_bars].scope` 收窄成 watchlist。程序化读法：`list_datasets()` 的 `history_horizon_days` 列。
+`cml backfill minute_bars --start` 早于视野会直接报错而不是扫一整天返回空。要拉冷门标的的深历史，先把 `[minute_bars].scope` 收窄成 watchlist。程序化读法：`list_datasets()` 的 `history_horizon_days` 列。
 
-`asl backfill trade_ticks --start` 同样会拦，但文案不同：分笔的底对所有标的一致，**没有哪个更窄的范围能拉到更早的数据**。
+`cml backfill trade_ticks --start` 同样会拦，但文案不同：分笔的底对所有标的一致，**没有哪个更窄的范围能拉到更早的数据**。
 
 ### `trade_ticks` 的容量（实测）
 
@@ -135,7 +135,7 @@ ashare-lake 交付 **42 个注册数据集**（39 curated + 3 derived：`adj_fac
 源端在同一个 491 天窗口内也提供它们，但**它们能从 5m 精确聚合**：48 根 5m 分别被 3 / 6 / 12 整除，且收盘分钟边界完全对齐（实测聚合得到 16 / 8 / 4 根，标签为 09:45…15:00 / 10:00…15:00 / 10:30…15:00）。存它们等于用三个数据集装一个 `group_by_dynamic` 就能得到的东西。
 
 ```python
-from ashare_lake.query import load
+from cn_market_lake.query import load
 import polars as pl
 
 bars = load("minute_bars_5m", start="2026-07-01", symbols=["600519.SH"])
@@ -160,7 +160,7 @@ bars_15m = (
 
 带 `announce_date` 的 PIT 数据集（`load(..., as_of=)`）：`financial_statement_items`、`announcement_index`。
 
-按需数据集（`[on_demand].datasets`）：默认 `stock_news`、`research_reports`（已实现）。`announcement_body` / `financial_reports` 尚未实现。访问：`asl query --dataset <name> --symbol <code>.SH`。
+按需数据集（`[on_demand].datasets`）：默认 `stock_news`、`research_reports`（已实现）。`announcement_body` / `financial_reports` 尚未实现。访问：`cml query --dataset <name> --symbol <code>.SH`。
 
 注册表源码：`domain/datasets.py`（`DatasetSpec`）、`domain/schemas.py`（Polars dtype / `PRIMARY_KEYS`）；`test_dataset_registry.py` 断言同步。
 
@@ -170,7 +170,7 @@ bars_15m = (
 
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | 备注 |
 |--------|--------|------|------|------|------|------|
-| instruments | —（单文件 merge） | symbol | by_date | — | tdx_protocol | EM 补 list_date；baostock 回填退市股（`asl backfill instruments`）；merge 保留退市 |
+| instruments | —（单文件 merge） | symbol | by_date | — | tdx_protocol | EM 补 list_date；baostock 回填退市股（`cml backfill instruments`）；merge 保留退市 |
 | trading_calendar | trade_date | trade_date | by_date | ✓ | exchange_calendar | 种子 CSV 2016–2027 |
 | trading_status | trade_date（按月） | symbol, trade_date | by_date | ✓ | eastmoney | baostock ST 回填；派生停牌写月分区 |
 
@@ -187,9 +187,9 @@ bars_15m = (
 
 两个日内数据集共用一组质量检查：主键重复（通用 `pk_unique`）、时段外 bar、`trade_date` 与 `bar_time` 不一致、会话缺口，以及**与日频的成交量+成交额双向对账**。
 | trade_ticks | trade_date | symbol, trade_date, tick_seq | by_date | ✓ | tdx_protocol | 分笔。**可选**，默认关；`[trade_ticks]` 独立配置；**不是逐笔成交**（见下）；源端回溯至 **2024-01-02**；watchlist 200 只约 7MB/日；required=false |
-| commodity_bars | trade_date | symbol, trade_date | by_date | ✓ | eastmoney+sina | 国内主连 + COMEX金 `GC0.CMX`；`asl backfill commodity_bars`；required=false |
-| adj_factors | trade_date | symbol, trade_date, adjust_type | derived | ✓ | sina | 仅 hfq；`asl derive adj_factors` |
-| delisting_events | —（单文件 merge） | symbol | derived | — | sina | 每只退市股的结尾形态；`asl delisted backfill` 产出 |
+| commodity_bars | trade_date | symbol, trade_date | by_date | ✓ | eastmoney+sina | 国内主连 + COMEX金 `GC0.CMX`；`cml backfill commodity_bars`；required=false |
+| adj_factors | trade_date | symbol, trade_date, adjust_type | derived | ✓ | sina | 仅 hfq；`cml derive adj_factors` |
+| delisting_events | —（单文件 merge） | symbol | derived | — | sina | 每只退市股的结尾形态；`cml delisted backfill` 产出 |
 
 ---
 
@@ -197,9 +197,9 @@ bars_15m = (
 
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | 备注 |
 |--------|--------|------|------|------|------|------|
-| corporate_actions | ex_date（按年） | symbol, ex_date, action_type | by_date | ✓ | eastmoney（日更） | 回填：tdx_protocol；混粒度用 `asl repartition` |
+| corporate_actions | ex_date（按年） | symbol, ex_date, action_type | by_date | ✓ | eastmoney（日更） | 回填：tdx_protocol；混粒度用 `cml repartition` |
 | announcement_index | announce_date | announcement_id | by_date PIT | ✓ | cninfo | `as_of` 过滤 |
-| earnings_disclosure_schedule | report_period | symbol, report_period | by_date | — | eastmoney | 预约披露时间表（RPT_PUBLIC_BS_APPOIN）；现值语义非 PIT：变更覆盖 scheduled_date（first_scheduled_date 保留首约，actual_date 披露后回填）；`asl backfill` 走 2016 起全报告期 |
+| earnings_disclosure_schedule | report_period | symbol, report_period | by_date | — | eastmoney | 预约披露时间表（RPT_PUBLIC_BS_APPOIN）；现值语义非 PIT：变更覆盖 scheduled_date（first_scheduled_date 保留首约，actual_date 披露后回填）；`cml backfill` 走 2016 起全报告期 |
 
 ---
 
@@ -207,7 +207,7 @@ bars_15m = (
 
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | 备注 |
 |--------|--------|------|------|------|------|------|
-| financial_statement_items | report_period | symbol, report_period, statement_type, item_code | by_date PIT | — | eastmoney | 按报告期分区；`asl backfill` 默认自 2001 起（`--start`/`--end` 分块）；baostock 不用于 FSI |
+| financial_statement_items | report_period | symbol, report_period, statement_type, item_code | by_date PIT | — | eastmoney | 按报告期分区；`cml backfill` 默认自 2001 起（`--start`/`--end` 分块）；baostock 不用于 FSI |
 | valuation_metrics | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 回填：baostock |
 | analyst_consensus | forecast_date | symbol, forecast_date | snapshot | ✓ | eastmoney | |
 | share_structure | change_date | symbol, change_date, announce_date | by_date PIT | — | eastmoney | 总股本/流通/限售/自由流通。**按变动日期扫，不是按报告期**：END_DATE 是股本变动日，2025Q3 有 88 个不同日期 |
@@ -239,12 +239,12 @@ bars_15m = (
 | industry_members | as_of_date | symbol, classification_system, as_of_date | snapshot | ✓ | eastmoney |
 | industry_index | trade_date（按年） | trade_date, industry_code, level, weighting | derived | ✓ | derived (industry_members × hfq daily_bars) |
 
-`industry_index` 归 L5 而非 L1：观测单位是行业而不是标的，且由本层的成员关系算出，指数与成分不会打架。`asl derive industry_index` 重算。
+`industry_index` 归 L5 而非 L1：观测单位是行业而不是标的，且由本层的成员关系算出，指数与成分不会打架。`cml derive industry_index` 重算。
 
 快照类仅积累「每日一份成员关系」，历史分位数需多日分区累积。
 
-历史回填（C2）：`asl backfill industry_members` = 申万 SwClass2021 月度（`classification_system=sw`，2020 起）；
-`asl backfill index_constituents` = 国证调样史（399001/399006，约 2021-12 起）。中证 000300/000905 仍仅日更 EM 快照。
+历史回填（C2）：`cml backfill industry_members` = 申万 SwClass2021 月度（`classification_system=sw`，2020 起）；
+`cml backfill index_constituents` = 国证调样史（399001/399006，约 2021-12 起）。中证 000300/000905 仍仅日更 EM 快照。
 
 ---
 
@@ -269,7 +269,7 @@ bars_15m = (
 | flash_news_wire | publish_date | wire_id, wire_source | snapshot | ✓ | eastmoney | 7×24 快讯线 |
 | economic_calendar | event_date（按年） | event_id | snapshot | ✓ | —（源已下线） | EM `RPT_ECONOMICCALENDAR` 已退役（code 9501），保留 schema 等替代源；`required=false`，空表不判 UNHEALTHY |
 
-`sector_bars` 日更只有当日 OHLC；历史由 `asl backfill sector_bars` 一次性写入（国内网络或代理）。
+`sector_bars` 日更只有当日 OHLC；历史由 `cml backfill sector_bars` 一次性写入（国内网络或代理）。
 海外一键脚本见引擎 `scripts/china_egress_backfill.sh`（含 `trading_status` ST 回填）。
 
 ---
@@ -298,7 +298,7 @@ bars_15m = (
 |-----------|--------|
 | reference.py | instruments, trading_calendar, trading_status |
 | bars.py | daily_bars, index_bars |
-| intraday.py | minute_bars, minute_bars_5m（可选；不在默认 wave 上，`asl run daily --group intraday`） |
+| intraday.py | minute_bars, minute_bars_5m（可选；不在默认 wave 上，`cml run daily --group intraday`） |
 | events.py | corporate_actions, announcement_index, earnings_disclosure_schedule |
 | fundamentals.py | valuation_metrics, financial_statement_items |
 | capital.py | fund_flow, northbound_*, margin_trading, dragon_tiger, block_trades |

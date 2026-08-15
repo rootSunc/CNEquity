@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from ashare_lake.domain.market_time import shanghai_now, shanghai_today
+from cn_market_lake.domain.market_time import shanghai_now, shanghai_today
 
 
 def test_exchange_clock_is_independent_of_host_timezone():

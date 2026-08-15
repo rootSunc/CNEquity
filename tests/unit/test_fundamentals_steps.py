@@ -7,9 +7,9 @@ from datetime import date
 import polars as pl
 import pytest
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.config import Config
-from ashare_lake.steps import fundamentals as fund
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.config import Config
+from cn_market_lake.steps import fundamentals as fund
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ def test_valuation_metrics_disabled(cfg):
 
 def test_backfill_valuation_locked_nothing_to_do(cfg, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
+        "cn_market_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
         lambda config: {"purged": 0},
     )
     monkeypatch.setattr(fund, "load_symbols", lambda config: ["600519.SH"])
@@ -81,7 +81,7 @@ def test_backfill_valuation_locked_nothing_to_do(cfg, monkeypatch):
 
 def test_backfill_valuation_locked_history_end_before_start(cfg, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
+        "cn_market_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
         lambda config: {"purged": 0},
     )
     monkeypatch.setattr(fund, "load_symbols", lambda config: ["600519.SH"])
@@ -94,7 +94,7 @@ def test_backfill_valuation_locked_history_end_before_start(cfg, monkeypatch):
 
 def test_backfill_valuation_locked_writes_chunks(cfg, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
+        "cn_market_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
         lambda config: {"purged": 1},
     )
     monkeypatch.setattr(fund, "load_symbols", lambda config: ["600519.SH", "000001.SZ"])
@@ -121,7 +121,7 @@ def test_backfill_valuation_locked_writes_chunks(cfg, monkeypatch):
         return df, []
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.baostock.valuation.fetch_valuation_history",
+        "cn_market_lake.adapters.baostock.valuation.fetch_valuation_history",
         fake_history,
     )
     # Shrink chunk size so the loop body runs once with our tiny universe.
@@ -136,7 +136,7 @@ def test_backfill_valuation_locked_writes_chunks(cfg, monkeypatch):
 
 def test_backfill_valuation_locked_aborts_on_runtime_error(cfg, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
+        "cn_market_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
         lambda config: {"purged": 0},
     )
     monkeypatch.setattr(fund, "load_symbols", lambda config: ["600519.SH"])
@@ -148,7 +148,7 @@ def test_backfill_valuation_locked_aborts_on_runtime_error(cfg, monkeypatch):
         raise RuntimeError("baostock banned")
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.baostock.valuation.fetch_valuation_history",
+        "cn_market_lake.adapters.baostock.valuation.fetch_valuation_history",
         boom,
     )
     result = fund._backfill_valuation_metrics_locked(cfg, date(2024, 6, 28), "run-abort")

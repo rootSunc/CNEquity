@@ -3,7 +3,7 @@
 from datetime import date
 from unittest.mock import MagicMock
 
-from ashare_lake.adapters.eastmoney.rotation import (
+from cn_market_lake.adapters.eastmoney.rotation import (
     _hot_symbol,
     fetch_hot_rank,
     fetch_news_headlines,
@@ -30,7 +30,7 @@ def test_fetch_hot_rank_normalizes(monkeypatch):
         def __exit__(self, *a):
             pass
 
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.rotation.EastMoneyClient", lambda: CM())
+    monkeypatch.setattr("cn_market_lake.adapters.eastmoney.rotation.EastMoneyClient", lambda: CM())
     df = fetch_hot_rank(date(2026, 7, 14), top_n=10)
     assert df.height == 1
     assert df["symbol"][0] == "002185.SZ"
@@ -67,7 +67,7 @@ def test_fetch_news_headlines_filters_date(monkeypatch):
         def __exit__(self, *a):
             pass
 
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.rotation.EastMoneyClient", lambda: CM())
+    monkeypatch.setattr("cn_market_lake.adapters.eastmoney.rotation.EastMoneyClient", lambda: CM())
     df = fetch_news_headlines(date(2026, 7, 14))
     assert df.height == 1
     assert df["news_id"][0] == "n1"

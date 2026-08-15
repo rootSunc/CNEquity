@@ -12,15 +12,15 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.orchestrator.engine import JobEngine
-from ashare_lake.quality.st_coverage import (
+from cn_market_lake.config import Config
+from cn_market_lake.orchestrator.engine import JobEngine
+from cn_market_lake.quality.st_coverage import (
     build_st_scope,
     load_st_checkpoint,
     st_evidence_coverage_report,
 )
-from ashare_lake.steps import reference
-from ashare_lake.steps.reference import _backfill_trading_status_st
+from cn_market_lake.steps import reference
+from cn_market_lake.steps.reference import _backfill_trading_status_st
 
 
 def _write_instruments(config: Config, symbols: list[str]) -> None:
@@ -45,7 +45,7 @@ def _patch(monkeypatch, *, returns):
         written.append(df)
         return {"rows_read": df.height, "rows_written": df.height}
 
-    monkeypatch.setattr("ashare_lake.adapters.baostock.st_history.fetch_st_history", fake_fetch)
+    monkeypatch.setattr("cn_market_lake.adapters.baostock.st_history.fetch_st_history", fake_fetch)
     monkeypatch.setattr(reference, "write_fetched", fake_write)
     return written
 
@@ -87,7 +87,7 @@ def test_new_run_rechecks_positive_rows_that_never_reached_storage(tmp_path, mon
         captured["symbols"] = symbols
         return pl.DataFrame(schema={"symbol": pl.Utf8}), []
 
-    monkeypatch.setattr("ashare_lake.adapters.baostock.st_history.fetch_st_history", fake_fetch)
+    monkeypatch.setattr("cn_market_lake.adapters.baostock.st_history.fetch_st_history", fake_fetch)
     _backfill_trading_status_st(cfg, date(2026, 7, 1), "run2")
 
     assert captured["symbols"] == ["600000.SH"]
@@ -137,7 +137,7 @@ def _patch_with_calls(monkeypatch, *, returns):
         calls.append(list(symbols))
         return returns
 
-    monkeypatch.setattr("ashare_lake.adapters.baostock.st_history.fetch_st_history", fake_fetch)
+    monkeypatch.setattr("cn_market_lake.adapters.baostock.st_history.fetch_st_history", fake_fetch)
     monkeypatch.setattr(
         reference,
         "write_fetched",
@@ -150,7 +150,7 @@ def test_receipt_is_published_only_after_successful_compact(tmp_path, monkeypatc
     cfg = Config(data_root=tmp_path / "data")
     _write_instruments(cfg, ["600000.SH"])
     monkeypatch.setattr(
-        "ashare_lake.adapters.baostock.st_history.fetch_st_history",
+        "cn_market_lake.adapters.baostock.st_history.fetch_st_history",
         lambda *args, **kwargs: (
             pl.DataFrame([_st_row("600000.SH", date(2020, 5, 6))]),
             [],
@@ -178,7 +178,7 @@ def test_partial_st_rows_do_not_compact_or_publish_coverage(tmp_path, monkeypatc
     cfg = Config(data_root=tmp_path / "data")
     _write_instruments(cfg, ["600000.SH", "600001.SH"])
     monkeypatch.setattr(
-        "ashare_lake.adapters.baostock.st_history.fetch_st_history",
+        "cn_market_lake.adapters.baostock.st_history.fetch_st_history",
         lambda *args, **kwargs: (
             pl.DataFrame([_st_row("600000.SH", date(2020, 5, 6))]),
             ["600001.SH"],

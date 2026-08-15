@@ -7,9 +7,9 @@ from datetime import date, datetime
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.domain.schemas import with_provenance
-from ashare_lake.query.reader import list_datasets, load
+from cn_market_lake.config import Config
+from cn_market_lake.domain.schemas import with_provenance
+from cn_market_lake.query.reader import list_datasets, load
 
 DAY = date(2026, 7, 31)
 PREV = date(2026, 7, 30)

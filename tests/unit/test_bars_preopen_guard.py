@@ -14,7 +14,7 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.steps.bars import _reject_preopen_placeholder
+from cn_market_lake.steps.bars import _reject_preopen_placeholder
 
 TD = date(2026, 7, 22)
 

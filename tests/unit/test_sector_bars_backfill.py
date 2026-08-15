@@ -6,9 +6,9 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.steps import rotation as rot
-from ashare_lake.steps.rotation import (
+from cn_market_lake.config import Config
+from cn_market_lake.steps import rotation as rot
+from cn_market_lake.steps.rotation import (
     _backfill_sector_bars,
     _sector_bars_completed,
     clear_sector_bars_backfill_state,
@@ -38,7 +38,7 @@ def _patch_history(monkeypatch, *, returns):
         written.append(df)
         return {"rows_read": df.height, "rows_written": df.height}
 
-    monkeypatch.setattr("ashare_lake.adapters.ths.boards.sweep_board_bars", fake_sweep)
+    monkeypatch.setattr("cn_market_lake.adapters.ths.boards.sweep_board_bars", fake_sweep)
     monkeypatch.setattr(rot, "write_fetched", fake_write)
     return written
 
@@ -73,7 +73,7 @@ def test_marks_succeeded_boards_and_resumes(tmp_path, monkeypatch):
         captured["skip"] = skip_sectors
         return [], [], []
 
-    monkeypatch.setattr("ashare_lake.adapters.ths.boards.sweep_board_bars", fake_sweep)
+    monkeypatch.setattr("cn_market_lake.adapters.ths.boards.sweep_board_bars", fake_sweep)
     again = _backfill_sector_bars(cfg, date(2026, 7, 14), "run2")
     assert "already swept" in again["note"]
     assert captured["skip"] == {"885611"}
@@ -174,7 +174,7 @@ def test_narrow_gap_fill_does_not_satisfy_the_full_window(tmp_path, monkeypatch)
         captured["skip"] = skip_sectors
         return [], [], []
 
-    monkeypatch.setattr("ashare_lake.adapters.ths.boards.sweep_board_bars", fake_sweep)
+    monkeypatch.setattr("cn_market_lake.adapters.ths.boards.sweep_board_bars", fake_sweep)
     cfg._backfill_start = None
     cfg._backfill_end = None
     _backfill_sector_bars(cfg, date(2026, 7, 21), "run2")

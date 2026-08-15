@@ -2,13 +2,13 @@
 
 from unittest.mock import patch
 
-from ashare_lake.adapters.eastmoney.em_auth import EastMoneyClient
-from ashare_lake.config import Config
+from cn_market_lake.adapters.eastmoney.em_auth import EastMoneyClient
+from cn_market_lake.config import Config
 
 
 def test_eastmoney_client_passes_config_proxy(tmp_path):
     cfg = Config(data_root=tmp_path / "data", eastmoney_proxy="http://127.0.0.1:7890")
-    with patch("ashare_lake.adapters.eastmoney.em_auth.httpx.Client") as mock_client:
+    with patch("cn_market_lake.adapters.eastmoney.em_auth.httpx.Client") as mock_client:
         mock_client.return_value = mock_client
         client = EastMoneyClient(config=cfg)
         client.close()
@@ -21,7 +21,7 @@ def test_eastmoney_client_passes_config_proxy(tmp_path):
 
 def test_eastmoney_client_no_proxy_by_default(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    with patch("ashare_lake.adapters.eastmoney.em_auth.httpx.Client") as mock_client:
+    with patch("cn_market_lake.adapters.eastmoney.em_auth.httpx.Client") as mock_client:
         mock_client.return_value = mock_client
         client = EastMoneyClient(config=cfg)
         client.close()

@@ -1,8 +1,8 @@
-# ASL · ashare-lake — 本地可日更的 A 股研究湖
+# CML · CNMarketLake — 本地可日更的 A 股研究湖
 
 本地可日更、可溯源的金融数据研究底座：多源采集、编排、标准化，交付带溯源、列契约稳定的 Parquet 湖。
 
-CLI 是 `asl`，Python 包是 `ashare_lake`。推荐：`pip install ashare-lake` → `asl demo` 试玩，或 `asl config init` 写出配置再跑全量。数据湖根目录默认 `./data/ashare-lake`。
+CLI 是 `cml`，Python 包是 `cn_market_lake`。推荐：`pip install cn-market-lake` → `cml demo` 试玩，或 `cml config init` 写出配置再跑全量。数据湖根目录默认 `./data/cn-market-lake`。
 
 **建议顺序**： [安装](getting-started/installation.md) → [快速开始](getting-started/quickstart.md) → [配置](getting-started/configuration.md)。卡在网络 / TDX / workers 时看 [排障](operations/troubleshooting.md)。
 
@@ -10,7 +10,7 @@ CLI 是 `asl`，Python 包是 `ashare_lake`。推荐：`pip install ashare-lake`
 
 产品边界与近期方向：[ROADMAP](../ROADMAP.md)。
 
-可搜索的在线文档站：[rootsunc.github.io/ashare-lake](https://rootsunc.github.io/ashare-lake/)。
+可搜索的在线文档站：[rootsunc.github.io/cn-market-lake](https://rootsunc.github.io/cn-market-lake/)。
 
 面向使用者的文档以中文为准；[CHANGELOG](../CHANGELOG.md) 与 [ADR](adr/) 保持英文。英文简介见 [README.en.md](../README.en.md)。
 
@@ -48,7 +48,7 @@ CLI 是 `asl`，Python 包是 `ashare_lake`。推荐：`pip install ashare-lake`
 ## 运维
 
 - [Runbook](operations/runbook.md) · [脚本说明](operations/scripts.md) · [故障排查](operations/troubleshooting.md)
-- [数据源健康度](operations/source-health.md)（`asl sources` + `asl serve /source-health`）
+- [数据源健康度](operations/source-health.md)（`cml sources` + `cml serve /source-health`）
 
 ## 架构
 

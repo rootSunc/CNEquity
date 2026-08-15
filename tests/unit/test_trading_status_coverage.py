@@ -2,15 +2,15 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.quality.audit import run_audit
-from ashare_lake.quality.st_coverage import (
+from cn_market_lake.config import Config
+from cn_market_lake.quality.audit import run_audit
+from cn_market_lake.quality.st_coverage import (
     build_st_scope,
     publish_st_coverage_receipt,
     write_st_checkpoint,
 )
-from ashare_lake.query.universe import coverage_start_date, trading_status_coverage_start
-from ashare_lake.steps.finalize import step_audit
+from cn_market_lake.query.universe import coverage_start_date, trading_status_coverage_start
+from cn_market_lake.steps.finalize import step_audit
 
 
 def _write_status_partition(

@@ -15,8 +15,8 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.quality.cross_checks import adj_factor_coverage_findings
+from cn_market_lake.config import Config
+from cn_market_lake.quality.cross_checks import adj_factor_coverage_findings
 
 
 def _lake(tmp_path, *, stocks, priced, factored, etfs=()):

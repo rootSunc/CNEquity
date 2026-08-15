@@ -1,4 +1,4 @@
-from ashare_lake.domain.symbols import (
+from cn_market_lake.domain.symbols import (
     format_symbol,
     is_all_a_symbol,
     is_cdr_symbol,

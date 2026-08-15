@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from ashare_lake.adapters.eastmoney.datacenter import (
+from cn_market_lake.adapters.eastmoney.datacenter import (
     EastMoneyDatacenterError,
     fetch_datacenter,
 )
-from ashare_lake.adapters.eastmoney.datacenter_contracts import (
+from cn_market_lake.adapters.eastmoney.datacenter_contracts import (
     datacenter_contracts,
     required_datacenter_contracts,
 )
-from ashare_lake.adapters.eastmoney.share_unlock import _UNLOCK_COLUMNS, _UNLOCK_REPORT
+from cn_market_lake.adapters.eastmoney.share_unlock import _UNLOCK_COLUMNS, _UNLOCK_REPORT
 
 # Floor: every fetch_datacenter call site must appear here. Add new reports
 # when a new adapter lands — the live probe iterates the same list.

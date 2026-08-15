@@ -1,6 +1,6 @@
 """Long fetches have to say what they are doing.
 
-`asl init` runs for hours. Before this it printed nothing until the closing
+`cml init` runs for hours. Before this it printed nothing until the closing
 JSON, which is indistinguishable from hung — and a process that looks hung gets
 killed, losing the hours it had already banked.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from ashare_lake.orchestrator.worker_pool import _hms
+from cn_market_lake.orchestrator.worker_pool import _hms
 
 
 def test_durations_read_as_durations():
@@ -21,7 +21,7 @@ def test_durations_read_as_durations():
 def test_progress_is_logged_per_batch(caplog, config, monkeypatch):
     """One line per batch, from the parent, so serial and pooled runs read the
     same way."""
-    from ashare_lake.orchestrator import worker_pool
+    from cn_market_lake.orchestrator import worker_pool
 
     monkeypatch.setattr(
         worker_pool,
@@ -35,7 +35,7 @@ def test_progress_is_logged_per_batch(caplog, config, monkeypatch):
 
     config.workers = 1
     config.batch_size = 1
-    with caplog.at_level(logging.INFO, logger="ashare_lake.orchestrator.worker_pool"):
+    with caplog.at_level(logging.INFO, logger="cn_market_lake.orchestrator.worker_pool"):
         worker_pool.fetch_daily_bars_parallel(
             config,
             ["600519.SH", "000001.SZ", "300750.SZ"],
@@ -51,7 +51,7 @@ def test_progress_is_logged_per_batch(caplog, config, monkeypatch):
 
 def test_a_failed_batch_still_advances_the_counter(caplog, config, monkeypatch):
     """Otherwise a run with failures looks stalled at 4/54 forever."""
-    from ashare_lake.orchestrator import worker_pool
+    from cn_market_lake.orchestrator import worker_pool
 
     def _boom(*a, **k):
         raise RuntimeError("source down")
@@ -59,7 +59,7 @@ def test_a_failed_batch_still_advances_the_counter(caplog, config, monkeypatch):
     monkeypatch.setattr(worker_pool, "fetch_daily_bars", _boom)
     config.workers = 1
     config.batch_size = 1
-    with caplog.at_level(logging.INFO, logger="ashare_lake.orchestrator.worker_pool"):
+    with caplog.at_level(logging.INFO, logger="cn_market_lake.orchestrator.worker_pool"):
         out = worker_pool.fetch_daily_bars_parallel(
             config,
             ["600519.SH", "000001.SZ"],
@@ -74,7 +74,7 @@ def test_a_failed_batch_still_advances_the_counter(caplog, config, monkeypatch):
 
 
 def test_quiet_silences_progress_but_not_warnings():
-    from ashare_lake.cli.main import _progress_logging
+    from cn_market_lake.cli.main import _progress_logging
 
     _progress_logging(quiet=True)
     assert logging.getLogger().level == logging.WARNING
@@ -85,7 +85,7 @@ def test_quiet_silences_progress_but_not_warnings():
 def test_http_clients_stay_quiet():
     """httpx logs a line per request; a full-market sweep would bury the
     progress this exists to surface."""
-    from ashare_lake.cli.main import _progress_logging
+    from cn_market_lake.cli.main import _progress_logging
 
     _progress_logging()
     assert logging.getLogger("httpx").level == logging.WARNING

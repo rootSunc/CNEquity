@@ -25,8 +25,8 @@ function pageShell(content, active = "overview") {
   return `<div class="app-shell">
     <header class="topbar">
       <a class="brand-lockup" href="#/" aria-label="返回概览">
-        <span class="brand-mark">ASL</span>
-        <span class="brand-copy"><strong>ashare-lake</strong><small>research lake</small></span>
+        <span class="brand-mark">CML</span>
+        <span class="brand-copy"><strong>CNMarketLake</strong><small>research lake</small></span>
       </a>
       <nav class="nav" aria-label="主导航">${nav}</nav>
       <div class="topbar-meta"><span class="console-mode">只读控制台</span>
@@ -822,7 +822,7 @@ async function route() {
     else await renderOverview();
     window.scrollTo(0, 0);
   } catch (err) {
-    setPage(`<section class="error-state"><div class="eyebrow">ashare-lake</div><h1>加载失败</h1><p class="sub err">${esc(err.message)}</p><a class="button button-primary" href="#/">返回概览</a></section>`);
+    setPage(`<section class="error-state"><div class="eyebrow">CNMarketLake</div><h1>加载失败</h1><p class="sub err">${esc(err.message)}</p><a class="button button-primary" href="#/">返回概览</a></section>`);
   }
 }
 

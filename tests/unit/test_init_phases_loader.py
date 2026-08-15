@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from ashare_lake.config import load_config
-from ashare_lake.config.bootstrap import path_for_toml
+from cn_market_lake.config import load_config
+from cn_market_lake.config.bootstrap import path_for_toml
 
 
 def test_load_init_phases_reads_job_init_phases_names(tmp_path):
@@ -26,6 +26,6 @@ names = ["phase1_reference", "phase4_finalize"]
 
 def test_example_config_loads_init_phases():
     root = Path(__file__).resolve().parents[2]
-    cfg = load_config(root / "configs" / "ashare-lake.example.toml")
+    cfg = load_config(root / "configs" / "cn-market-lake.example.toml")
     assert "phase1_reference" in cfg.init_phases
     assert "phase4_finalize" in cfg.init_phases

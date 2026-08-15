@@ -12,15 +12,15 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.derive.industry_index import (
+from cn_market_lake.config import Config
+from cn_market_lake.derive.industry_index import (
     LEVELS,
     _hfq_returns,
     _members_as_of,
     compute_industry_index,
     derive_industry_index,
 )
-from ashare_lake.storage.state import StateStore
+from cn_market_lake.storage.state import StateStore
 
 
 def _members(rows: list[tuple[str, str, date]]) -> pl.DataFrame:
@@ -85,7 +85,7 @@ def test_unrealistic_turnover_is_treated_as_missing(monkeypatch, tmp_path):
             },
         ]
     )
-    monkeypatch.setattr("ashare_lake.query.reader.load", lambda *a, **k: bars)
+    monkeypatch.setattr("cn_market_lake.query.reader.load", lambda *a, **k: bars)
     out = _hfq_returns(object(), date(2026, 7, 1), date(2026, 7, 22), ["600000.SH"])
     assert out.height == 1  # first bar has no prior close
     row = out.row(0, named=True)
@@ -161,7 +161,7 @@ def test_compute_industry_index_aggregates_levels(tmp_path, monkeypatch):
         ]
     )
     monkeypatch.setattr(
-        "ashare_lake.derive.industry_index._hfq_returns",
+        "cn_market_lake.derive.industry_index._hfq_returns",
         lambda *a, **k: rets,
     )
 
@@ -214,7 +214,7 @@ def test_derive_industry_index_writes_and_watermarks(tmp_path, monkeypatch):
         }
     )
     monkeypatch.setattr(
-        "ashare_lake.derive.industry_index.compute_industry_index",
+        "cn_market_lake.derive.industry_index.compute_industry_index",
         lambda *a, **k: frame,
     )
     summary = derive_industry_index(cfg, start=date(2026, 5, 15), end=date(2026, 5, 15))
@@ -295,7 +295,7 @@ def test_catchup_after_watermark_keeps_first_day(tmp_path, monkeypatch):
             },
         ]
     )
-    monkeypatch.setattr("ashare_lake.query.reader.load", lambda *a, **k: bars)
+    monkeypatch.setattr("cn_market_lake.query.reader.load", lambda *a, **k: bars)
     StateStore(cfg.meta_root).update_max_date("industry_index", date(2026, 7, 31))
 
     summary = derive_industry_index(cfg, end=date(2026, 8, 3))
@@ -367,7 +367,7 @@ def test_rows_without_an_exact_factor_are_dropped_not_aborted(monkeypatch):
         seen.update(kwargs)
         return bars
 
-    monkeypatch.setattr("ashare_lake.query.reader.load", _fake_load)
+    monkeypatch.setattr("cn_market_lake.query.reader.load", _fake_load)
     out = _hfq_returns(object(), date(2026, 8, 5), date(2026, 8, 7), ["600000.SH", "920055.BJ"])
 
     assert seen["strict_adj"] is False, "must not abort the derive on a row-level gap"

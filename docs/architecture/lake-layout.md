@@ -33,7 +33,7 @@ staging/{dataset}/run_id={run_id}/part-{batch_id}.parquet
 - 非 worker step 通常单 part
 - **不保证** PK 唯一；去重在 compact 阶段完成
 
-清理：`asl clean`（终态 + 已 compact 的 run；`--force` 可清 incomplete/未 compact，retry 将全量重抓）
+清理：`cml clean`（终态 + 已 compact 的 run；`--force` 可清 incomplete/未 compact，retry 将全量重抓）
 
 ---
 
@@ -80,7 +80,7 @@ audit 的 `partition_fragmentation` 会在某个数据集明显配细了时告�
 
 **目录值是自描述的**：`2024` / `2024-06` / `2024-06-03` 三种形状读的时候直接按
 形状解析，不看配置。所以改粒度不需要迁移——老的按天目录照常能读，只是比新写入的碎。
-`asl repartition <dataset>` 把历史改写成配置的粒度（只是省空间和文件句柄，不影响正确性）；
+`cml repartition <dataset>` 把历史改写成配置的粒度（只是省空间和文件句柄，不影响正确性）；
 不带参数则列出当前布局和配置不一致的数据集。
 
 粗粒度目录关闭 Hive 解析：polars 会按同名列的类型去解析目录值，
@@ -140,17 +140,17 @@ compact 成功后更新。用于：
 
 - 增量抓取窗口（`incremental_window`）
 - 下游缓存失效键
-- `asl status --datasets` 新鲜度判断
+- `cml status --datasets` 新鲜度判断
 
 ---
 
 ## duckdb/
 
 ```
-duckdb/ashare-lake.duckdb
+duckdb/cn-market-lake.duckdb
 ```
 
-- 启动时 / `asl query` 前由 `query/views.py` 确保视图存在
+- 启动时 / `cml query` 前由 `query/views.py` 确保视图存在
 - 每个 curated/derived 数据集对应视图
 - 额外视图：`daily_bars_hfq`、`daily_bars_qfq`、`daily_bars_adj`（带复权列）
 

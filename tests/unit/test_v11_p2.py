@@ -3,17 +3,17 @@ from datetime import date
 import polars as pl
 import pytest
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.adapters.eastmoney.consensus import fetch_analyst_consensus
-from ashare_lake.adapters.eastmoney.institutional import (
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.adapters.eastmoney.consensus import fetch_analyst_consensus
+from cn_market_lake.adapters.eastmoney.institutional import (
     _quarter_end_dates,
     fetch_institutional_holdings,
 )
-from ashare_lake.config import Config
-from ashare_lake.derive.sentiment_scores import compute_sentiment_scores
-from ashare_lake.domain.schemas import validate_dataframe
-from ashare_lake.orchestrator.registry import get_step
-from ashare_lake.query import load
+from cn_market_lake.config import Config
+from cn_market_lake.derive.sentiment_scores import compute_sentiment_scores
+from cn_market_lake.domain.schemas import validate_dataframe
+from cn_market_lake.orchestrator.registry import get_step
+from cn_market_lake.query import load
 
 
 class FakeDatacenterClient:

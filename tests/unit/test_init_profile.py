@@ -1,4 +1,4 @@
-"""`asl init --profile quick` — the shallow first backfill, and what keeps it honest."""
+"""`cml init --profile quick` — the shallow first backfill, and what keeps it honest."""
 
 from __future__ import annotations
 
@@ -7,16 +7,16 @@ from datetime import date
 import pytest
 from click.testing import CliRunner
 
-from ashare_lake.cli.main import QUICK_PROFILE_YEARS, _init_history_start, cli
-from ashare_lake.config import Config
-from ashare_lake.config.bootstrap import path_for_toml
-from ashare_lake.orchestrator.engine import JobEngine
-from ashare_lake.orchestrator.worker_pool import _window_backfill
-from ashare_lake.steps.common import BACKFILL_START
+from cn_market_lake.cli.main import QUICK_PROFILE_YEARS, _init_history_start, cli
+from cn_market_lake.config import Config
+from cn_market_lake.config.bootstrap import path_for_toml
+from cn_market_lake.orchestrator.engine import JobEngine
+from cn_market_lake.orchestrator.worker_pool import _window_backfill
+from cn_market_lake.steps.common import BACKFILL_START
 
 
 def _write_config(tmp_path) -> str:
-    cfg_path = tmp_path / "ashare-lake.toml"
+    cfg_path = tmp_path / "cn-market-lake.toml"
     cfg_path.write_text(
         f"""
 [data]
@@ -82,14 +82,14 @@ def test_quick_profile_reaches_the_engine(tmp_path, monkeypatch):
 
 
 def test_default_init_is_the_shallow_window(tmp_path, monkeypatch):
-    """A bare `asl init` takes the quick window — a usable lake on the first run.
+    """A bare `cml init` takes the quick window — a usable lake on the first run.
 
     Measured per 10 symbols on one connection: 3 years ~4.8s against ~15.1s for
     everything from 2001. Going shallower than that buys little (1 year ~3.9s,
     the per-symbol round trip dominating once the window is short) and costs
     the multi-year windows factor work needs, so `quick` is the floor, not 1y.
     """
-    # Derived, not hardcoded: a bare `asl init` anchors on today, so a literal
+    # Derived, not hardcoded: a bare `cml init` anchors on today, so a literal
     # date here passes only on the day it was written and fails at the next
     # midnight for reasons that have nothing to do with the behaviour under test.
     today = date.today()
@@ -101,7 +101,7 @@ def test_default_init_is_the_shallow_window(tmp_path, monkeypatch):
     start, output = _capture_backfill_start(tmp_path, monkeypatch, [])
     assert start == expected
     assert "History window" in output
-    assert "asl backfill daily_bars" in output, "must say how to deepen"
+    assert "cml backfill daily_bars" in output, "must say how to deepen"
 
 
 def test_full_profile_still_takes_everything(tmp_path, monkeypatch):
@@ -112,7 +112,7 @@ def test_full_profile_still_takes_everything(tmp_path, monkeypatch):
 
 def test_quick_profile_prints_how_to_deepen(tmp_path, monkeypatch):
     _, output = _capture_backfill_start(tmp_path, monkeypatch, ["--profile", "quick"])
-    assert "asl backfill daily_bars" in output
+    assert "cml backfill daily_bars" in output
 
 
 # --- the two traps a shallower window opens --------------------------------
@@ -139,7 +139,7 @@ def test_resume_reuses_the_original_window(tmp_path, monkeypatch):
     """A resume runs from a fresh process days later. Without the window on the
     run record it would default to full depth and fetch years the operator
     deliberately skipped."""
-    from ashare_lake.orchestrator.manifest import Manifest
+    from cn_market_lake.orchestrator.manifest import Manifest
 
     cfg = Config(data_root=tmp_path / "data")
     cfg.manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +167,7 @@ def test_resume_reuses_the_original_window(tmp_path, monkeypatch):
 
 
 def test_resume_does_not_override_an_explicit_window(tmp_path, monkeypatch):
-    from ashare_lake.orchestrator.manifest import Manifest
+    from cn_market_lake.orchestrator.manifest import Manifest
 
     cfg = Config(data_root=tmp_path / "data")
     cfg.manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,7 +209,7 @@ def test_init_records_the_window_on_the_run(tmp_path, monkeypatch):
 @pytest.mark.parametrize("profile", ["full", "quick"])
 def test_every_profile_keeps_the_full_cross_section(profile, tmp_path, monkeypatch):
     """Shallower, never narrower. A symbol filter here would bake in the exact
-    survivorship bias `asl delisted backfill` exists to repair."""
+    survivorship bias `cml delisted backfill` exists to repair."""
     start, _ = _capture_backfill_start(tmp_path, monkeypatch, ["--profile", profile])
     cfg = Config(data_root=tmp_path / "data")
     if start:

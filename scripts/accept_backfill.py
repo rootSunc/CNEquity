@@ -14,10 +14,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import polars as pl
 
-from ashare_lake.config import load_config
-from ashare_lake.query.reader import load
+from cn_market_lake.config import load_config
+from cn_market_lake.query.reader import load
 
-DEFAULT_CONFIG = ROOT / "configs/ashare-lake.toml"
+DEFAULT_CONFIG = ROOT / "configs/cn-market-lake.toml"
 CORE_DATASETS = (
     "instruments",
     "daily_bars",
@@ -219,7 +219,7 @@ def cmd_check(cfg, compare_path: Path | None, start: str, end: str, symbol: str)
             and (hfq["adj_close"] == hfq["close"]).all()
         ):
             print(
-                "  WARN: adj_close == close (adj_factors likely missing; run asl derive adj_factors)"
+                "  WARN: adj_close == close (adj_factors likely missing; run cml derive adj_factors)"
             )
             print(
                 hfq.select(

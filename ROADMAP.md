@@ -1,12 +1,12 @@
 # Roadmap
 
-ashare-lake is a data layer, not a trading strategy or a hosted quote service. The roadmap is
+cn-market-lake is a data layer, not a trading strategy or a hosted quote service. The roadmap is
 ordered around one promise: make reproducible A-share history easy to build, inspect, and consume.
 
 ## Now · 0.6
 
 - Make the first-run path prove the research value, not only that a quote request works. The optional
-  `asl demo --research` path now derives a real hfq series and prints a raw-vs-adjusted return.
+  `cml demo --research` path now derives a real hfq series and prints a raw-vs-adjusted return.
 - Keep the README, PyPI description, CLI help, and getting-started docs generated from the same
   defaults and history semantics.
 - Publish source-health and coverage evidence that can be checked without trusting a marketing claim.

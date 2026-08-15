@@ -4,16 +4,16 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.domain.schemas import DAILY_BARS_SCHEMA, VALUATION_METRICS_SCHEMA
-from ashare_lake.quality.cross_checks import (
+from cn_market_lake.config import Config
+from cn_market_lake.domain.schemas import DAILY_BARS_SCHEMA, VALUATION_METRICS_SCHEMA
+from cn_market_lake.quality.cross_checks import (
     last_complete_em_valuation_tip,
     last_dense_valuation_date,
     valuation_day_coverage_ratio,
 )
-from ashare_lake.steps.finalize import _reconcile_watermarks, _watermark_date_for
-from ashare_lake.steps.fundamentals import _valuation_history_end
-from ashare_lake.storage.state import StateStore
+from cn_market_lake.steps.finalize import _reconcile_watermarks, _watermark_date_for
+from cn_market_lake.steps.fundamentals import _valuation_history_end
+from cn_market_lake.storage.state import StateStore
 
 
 def _write_day(root, dataset, d: date, symbols: list[str], *, source: str, schema: dict):
@@ -144,8 +144,8 @@ def test_watermark_date_ignores_sparse_tip(tmp_path):
 
 
 def test_baostock_single_flight_refuses_overlap(tmp_path):
-    from ashare_lake.orchestrator.run_lock import run_lock
-    from ashare_lake.steps.fundamentals import _backfill_valuation_metrics
+    from cn_market_lake.orchestrator.run_lock import run_lock
+    from cn_market_lake.steps.fundamentals import _backfill_valuation_metrics
 
     cfg = _lake(tmp_path)
     with run_lock(cfg.meta_root, "baostock"):

@@ -56,15 +56,15 @@ jobs:
         run: twine check dist/*
       - name: Smoke-test the built wheel
         env:
-          SMOKE_ROOT: ${{ runner.temp }}/ashare-lake-wheel-smoke
+          SMOKE_ROOT: ${{ runner.temp }}/cn-market-lake-wheel-smoke
         run: |
           python -m venv "$SMOKE_ROOT"
           wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
           test -n "$wheel"
           "$SMOKE_ROOT/bin/python" -m pip install --upgrade pip
           "$SMOKE_ROOT/bin/pip" install "$wheel"
-          "$SMOKE_ROOT/bin/asl" --version
-          "$SMOKE_ROOT/bin/asl" demo --help
+          "$SMOKE_ROOT/bin/cml" --version
+          "$SMOKE_ROOT/bin/cml" demo --help
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:
@@ -79,7 +79,7 @@ jobs:
       id-token: write
     environment:
       name: pypi
-      url: https://pypi.org/p/ashare-lake
+      url: https://pypi.org/p/cn-market-lake
     steps:
       - name: Download distributions
         uses: actions/download-artifact@v4

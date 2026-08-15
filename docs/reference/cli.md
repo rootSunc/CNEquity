@@ -1,14 +1,14 @@
 # CLI 参考
 
-命令：`asl`（`ashare_lake.cli.main:cli`）
+命令：`cml`（`cn_market_lake.cli.main:cli`）
 
-全局默认：`--config configs/ashare-lake.toml`
+全局默认：`--config configs/cn-market-lake.toml`
 
 ---
 
-## asl demo
+## cml demo
 
-一分钟真源小样（涨星 / 上手用）。拉少量流动性股票的近期日线，**不是**全市场 `asl init`。
+一分钟真源小样（涨星 / 上手用）。拉少量流动性股票的近期日线，**不是**全市场 `cml init`。
 
 | 选项 | 说明 |
 |------|------|
@@ -16,23 +16,23 @@
 | `--days` | 约多少个交易日的 `daily_bars`（默认 30） |
 | `--intraday` | 额外抓同一批标的的 1m 线（最多约 5 个交易日），打印一根完整会话 |
 | `--research` | 额外从 Sina 派生 hfq 因子，并打印 raw / hfq 收益对照；会把窗口扩展到约 3 年 |
-| `--data-root` | 独立湖根目录（默认 `data/ashare-lake-demo`） |
+| `--data-root` | 独立湖根目录（默认 `data/cn-market-lake-demo`） |
 | `--trade-date` | 截至日 YYYY-MM-DD（默认今天 / 最近交易日） |
-| `--config-out` | 写出供后续 `asl query` 使用的小配置（默认 `configs/ashare-lake.demo.toml`） |
+| `--config-out` | 写出供后续 `cml query` 使用的小配置（默认 `configs/cn-market-lake.demo.toml`） |
 
 流程：建目录 → 探测 TDX → 拉 instruments 并裁成 demo 宇宙 → 交易日历 → `daily_bars` + compact → 打印样例表；加 `--research` 时再派生 Sina hfq 并校验 exact 覆盖，加 `--intraday` 时再跑 `minute_bars`。终端有分阶段进度与 INFO 日志。需要能访问 TDX；`allow_mock` 不会打开。
 
 只想验证研究口径，不必初始化全市场：
 
 ```bash
-asl demo --research --symbols 600519.SH
+cml demo --research --symbols 600519.SH
 ```
 
 `--research` 需要额外访问 Sina；网络受限时先运行不带该选项的基础 demo。
 
 ---
 
-## asl init
+## cml init
 
 初始化数据湖并执行 init phases。
 
@@ -61,34 +61,34 @@ asl demo --research --symbols 600519.SH
 之后加深不必重跑 init：
 
 ```bash
-asl backfill daily_bars --start 2016-01-01 --end <你的 coverage_start>
+cml backfill daily_bars --start 2016-01-01 --end <你的 coverage_start>
 ```
 
 退出：result `status != success` 时退出 1。
 
 ---
 
-## asl config init
+## cml config init
 
 从包内模板写出用户配置（PyPI 安装后无需 clone 仓库）。
 
 | 选项 | 说明 |
 |------|------|
-| `--config` | 输出路径（默认 `configs/ashare-lake.toml`） |
+| `--config` | 输出路径（默认 `configs/cn-market-lake.toml`） |
 | `--data-root` | 写入 `[data].root` |
 | `--force` | 覆盖已存在文件 |
 
-macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致）。模板源：`ashare_lake.config.templates`（与仓库 `configs/ashare-lake.example.toml` 保持同步）。
+macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致）。模板源：`cn_market_lake.config.templates`（与仓库 `configs/cn-market-lake.example.toml` 保持同步）。
 
 ---
 
-## asl config validate
+## cml config validate
 
 校验 TOML 与 step 引用。有错退出 1。
 
 ---
 
-## asl doctor
+## cml doctor
 
 环境与配置体检：`data.root` 是否绝对路径 / 可写、声明的依赖能否 import。不访问网络；无配置也能跑（新鲜安装）。有实质性风险时退出 1。
 
@@ -96,11 +96,11 @@ macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致�
 |------|------|
 | `--json` | 机器可读输出 |
 
-`asl doctor --fix` 已移除（只服务于已卸掉的 mini-racer 冲突修复）。
+`cml doctor --fix` 已移除（只服务于已卸掉的 mini-racer 冲突修复）。
 
 ---
 
-## asl run daily
+## cml run daily
 
 | 选项 | 说明 |
 |------|------|
@@ -117,23 +117,23 @@ macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致�
 
 ```cron
 # 主 pipeline
-5 16 * * 1-5 /path/to/ashare-lake/scripts/daily_pipeline.sh
+5 16 * * 1-5 /path/to/cn-market-lake/scripts/daily_pipeline.sh
 
 # 收尾补抓：只跑仍然落后的，没有就空转
-5 20 * * 1-5 cd /path/to/ashare-lake && asl run daily --stale-only
+5 20 * * 1-5 cd /path/to/cn-market-lake && cml run daily --stale-only
 ```
 
-新鲜度判据与 `asl status --datasets` 完全一致（含每数据集的 `max_staleness_days` 容忍），所以两者不会各说各话。没有落后的数据集时不建 run、直接退出 0，可以安全挂在定时器上。
+新鲜度判据与 `cml status --datasets` 完全一致（含每数据集的 `max_staleness_days` 容忍），所以两者不会各说各话。没有落后的数据集时不建 run、直接退出 0，可以安全挂在定时器上。
 
-派生数据集不在其中：它们由 curated 重算，该跑的是 `asl derive`，不是重抓。
+派生数据集不在其中：它们由 curated 重算，该跑的是 `cml derive`，不是重抓。
 
-无 `--group` 时跑完整 `[job.daily.waves]` DAG。`intraday` 组不在默认调度里：需先开 `[minute_bars].enabled`，再 `asl run daily --group intraday`。
+无 `--group` 时跑完整 `[job.daily.waves]` DAG。`intraday` 组不在默认调度里：需先开 `[minute_bars].enabled`，再 `cml run daily --group intraday`。
 
 成功或 `skipped_non_trading_day` 退出 0。
 
 ---
 
-## asl backfill \<dataset\>
+## cml backfill \<dataset\>
 
 单数据集 backfill。snapshot 且无 `backfill_source` 时拒绝。
 
@@ -145,7 +145,7 @@ macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致�
 | `--symbols` | 仅日内数据集：临时覆盖 `[minute_bars].scope`，并隐式开启抓取 |
 
 ```bash
-asl backfill minute_bars_5m --start 2026-05-01 --end 2026-07-31 \
+cml backfill minute_bars_5m --start 2026-05-01 --end 2026-07-31 \
   --symbols 600519.SH,000001.SZ
 ```
 
@@ -163,15 +163,15 @@ Checkpoint：`meta/state/sector_bars_backfill.json`。失败超过 50% 时 step 
 
 ```bash
 # 首次或换源后全量
-asl backfill sector_bars --config configs/ashare-lake.toml --force
+cml backfill sector_bars --config configs/cn-market-lake.toml --force
 
 # 续跑失败板
-asl backfill sector_bars --config configs/ashare-lake.toml --retry-failed
+cml backfill sector_bars --config configs/cn-market-lake.toml --retry-failed
 ```
 
 ---
 
-## asl compact
+## cml compact
 
 | 选项 | 说明 |
 |------|------|
@@ -181,7 +181,7 @@ asl backfill sector_bars --config configs/ashare-lake.toml --retry-failed
 
 ---
 
-## asl delisted
+## cml delisted
 
 重建退市宇宙（幸存者偏差修复）。
 
@@ -198,13 +198,13 @@ asl backfill sector_bars --config configs/ashare-lake.toml --retry-failed
 （bars 已在湖里时）→ `backfill`（补缺口）→ `coverage`。
 
 ```bash
-asl delisted status
-asl delisted reconcile
-asl delisted reconcile --apply   # 仅在没有 active ingestion run 时执行
-asl delisted coverage --start 2016-01-01 --end 2025-12-31
-asl delisted repair
-asl delisted backfill --since 2016-01-01
-asl delisted discover --limit 500   # 扩大 band 后的续扫
+cml delisted status
+cml delisted reconcile
+cml delisted reconcile --apply   # 仅在没有 active ingestion run 时执行
+cml delisted coverage --start 2016-01-01 --end 2025-12-31
+cml delisted repair
+cml delisted backfill --since 2016-01-01
+cml delisted discover --limit 500   # 扩大 band 后的续扫
 ```
 
 `coverage` 的通过声明刻意很窄：它证明退市目录已扫完，且已知与窗口重叠的退市标的具备一致的末根有效成交和证券主数据；它不证明两端之间每个交易日都连续。数据源在停牌或正式摘牌前可能保留零成交占位行，门禁不会把它们误当成末次交易。目录末日晚于窗口、但窗口内又没有行情可证明已经上市的标的会进入 `unknown_overlap`，不会被静默排除。
@@ -217,7 +217,7 @@ asl delisted discover --limit 500   # 扩大 band 后的续扫
 
 ---
 
-## asl repartition [dataset]
+## cml repartition [dataset]
 
 | 选项 | 说明 |
 |------|------|
@@ -232,13 +232,13 @@ asl delisted discover --limit 500   # 扩大 band 后的续扫
 重复执行是幂等的。
 
 ```bash
-asl repartition --all --dry-run   # 先看影响
-asl repartition trading_calendar  # 单个数据集
+cml repartition --all --dry-run   # 先看影响
+cml repartition trading_calendar  # 单个数据集
 ```
 
 ---
 
-## asl derive [name]
+## cml derive [name]
 
 | name | 说明 |
 |------|------|
@@ -248,12 +248,12 @@ asl repartition trading_calendar  # 单个数据集
 | `sector_code_map` | BK* ↔ BOARD_CODE 身份映射（lake-only；推荐成分 join） |
 
 ```bash
-asl derive trading_status --start 2001-01-01 --end 2001-12-31
+cml derive trading_status --start 2001-01-01 --end 2001-12-31
 ```
 
 ---
 
-## asl audit
+## cml audit
 
 | 选项 | 说明 |
 |------|------|
@@ -266,7 +266,7 @@ asl derive trading_status --start 2001-01-01 --end 2001-12-31
 
 ---
 
-## asl status
+## cml status
 
 | 选项 | 说明 |
 |------|------|
@@ -276,7 +276,7 @@ asl derive trading_status --start 2001-01-01 --end 2001-12-31
 
 ---
 
-## asl retry --run-id \<id\>
+## cml retry --run-id \<id\>
 
 重试失败 batch / 补 init 缺失 step。init run 走 `resume_init`。
 
@@ -284,7 +284,7 @@ asl derive trading_status --start 2001-01-01 --end 2001-12-31
 
 ---
 
-## asl clean
+## cml clean
 
 删除已 compact 的终态 run staging，以及超龄 orphan。终态含 `success` / `warning` / `failed`（需 incomplete=0 且有成功 compact batch）。
 
@@ -292,17 +292,17 @@ asl derive trading_status --start 2001-01-01 --end 2001-12-31
 |------|------|
 | `--dry-run` | 仅报告可删 staging |
 | `--orphan-retention-days` | 无 manifest 的 orphan 保留天数（默认 7） |
-| `--force` | 也删尚未 cleanup-ready 的 staging（incomplete / 未 compact）；成功 fetch batch 会被 demote，`asl retry` 全量重抓。**不要**对 success-without-compact 用 force——先 `asl compact --run-id` |
+| `--force` | 也删尚未 cleanup-ready 的 staging（incomplete / 未 compact）；成功 fetch batch 会被 demote，`cml retry` 全量重抓。**不要**对 success-without-compact 用 force——先 `cml compact --run-id` |
 
 ---
 
-## asl catalog
+## cml catalog
 
-JSON 列出 curated 各数据集文件数与行数。每次都全扫；固定的度量走 `asl stats`。
+JSON 列出 curated 各数据集文件数与行数。每次都全扫；固定的度量走 `cml stats`。
 
 ---
 
-## asl serve
+## cml serve
 
 只读湖面板：分层总览、逐数据集覆盖与新鲜度、溯源分布、覆盖热力图。
 
@@ -313,20 +313,20 @@ JSON 列出 curated 各数据集文件数与行数。每次都全扫；固定的
 | `--token` | 无 | 要求 `Authorization: Bearer <token>` 或 `?token=` |
 
 ```bash
-asl serve
+cml serve
 ```
 
 页面在 `/`，单数据集在 `#/dataset/<name>`（状态 / 元数据 / 数据 三个 tab），跑批在 `#/runs`（含实时甘特），质量在 `#/quality`，OpenAPI 在 `/api/docs`（由 handler 生成，不会与实现漂移）。
 
 **面板不写湖。** 没有端点会跑批、重试或清理——那些留给 CLI。唯一的例外是 `meta/stats` 会在后台按需重建，因为它是湖的缓存而不是湖的一部分。
 
-数值全部来自已落盘的产物（注册表、目录布局、`meta/stats`、`meta/quality/health-latest.json`、manifest），**请求路径上不扫 curated**。所以：先 `asl stats rebuild` 才有行数与体积；findings 显示的是上次 `asl audit --full` 的快照，页面上标了日期。
+数值全部来自已落盘的产物（注册表、目录布局、`meta/stats`、`meta/quality/health-latest.json`、manifest），**请求路径上不扫 curated**。所以：先 `cml stats rebuild` 才有行数与体积；findings 显示的是上次 `cml audit --full` 的快照，页面上标了日期。
 
 端点与热力图语义见 [serve 模块](../modules/serve.md)。
 
 ---
 
-## asl stats
+## cml stats
 
 湖的自我度量表，写到 `meta/stats/`。`list_datasets()` 只看目录名，答不了「这个分区有多少行、多大、谁写的」——那些在这里。
 
@@ -342,9 +342,9 @@ asl serve
 
 不含 `tier` / `layer` / `history_mode`：那些在 `domain/datasets.py`，写进数据文件的副本只会过期。
 
-用 parquet 而非 duckdb 文件：写入是「临时文件 + 原子 rename」，读端零阻塞；duckdb 文件要独占写锁，会让 `asl serve` 和夜间跑批互相挡路。
+用 parquet 而非 duckdb 文件：写入是「临时文件 + 原子 rename」，读端零阻塞；duckdb 文件要独占写锁，会让 `cml serve` 和夜间跑批互相挡路。
 
-### asl stats rebuild
+### cml stats rebuild
 
 | 选项 | 说明 |
 |------|------|
@@ -353,7 +353,7 @@ asl serve
 
 全量重建：参考湖（1.5GB / 6600 万行 / 21k 分区）约 6 秒——只读 `source`、`data_version`、`fetched_at` 三列。增量刷新是可行的（跑批动过的分区可以从 `ingestion_batches.window_start/window_end` 反推），但没到需要的规模。
 
-### asl stats refresh
+### cml stats refresh
 
 只在「湖动过了」时才重建，否则空转返回。
 
@@ -369,23 +369,23 @@ asl serve
 
 ```bash
 # 兜底：定时器上跑，没变化就是空转
-asl stats refresh
+cml stats refresh
 ```
 
-面板（M2）走 `stats_freshness()` 判过期 + 后台线程调 `refresh_stats_if_stale()`；线程策略留在调用方，模块本身是同步的。`asl run daily && asl stats rebuild` 也可以，但 `refresh` 更省。
+面板（M2）走 `stats_freshness()` 判过期 + 后台线程调 `refresh_stats_if_stale()`；线程策略留在调用方，模块本身是同步的。`cml run daily && cml stats rebuild` 也可以，但 `refresh` 更省。
 
-### asl stats show
+### cml stats show
 
 | 选项 | 说明 |
 |------|------|
 | `--dataset` | 单个数据集的逐分区明细 |
 | `--by-source` | 改看 source / data_version 分布 |
 
-无 stats 时报错并提示先 `asl stats rebuild`。
+无 stats 时报错并提示先 `cml stats rebuild`。
 
 ---
 
-## asl query
+## cml query
 
 **DuckDB 模式**（默认）：
 
@@ -402,9 +402,9 @@ asl stats refresh
 
 ---
 
-## asl mcp
+## cml mcp
 
-把这个湖接给 AI agent（MCP over stdio）。只读，和 `asl serve` 同样的边界。
+把这个湖接给 AI agent（MCP over stdio）。只读，和 `cml serve` 同样的边界。
 
 | 选项 | 说明 |
 |------|------|
@@ -414,12 +414,12 @@ asl stats refresh
 不用手敲：由 MCP 客户端拉起并在管道上讲 JSON-RPC。三条路按手上有什么选：
 
 ```bash
-asl demo                                   # 没湖想先试试：30 秒真数据
-asl mcp --config /abs/path/ashare-lake.toml
-asl mcp --config /abs/path/ashare-lake.toml --live
+cml demo                                   # 没湖想先试试：30 秒真数据
+cml mcp --config /abs/path/cn-market-lake.toml
+cml mcp --config /abs/path/cn-market-lake.toml --live
 ```
 
-上面的 `asl mcp ...` 是标准 MCP stdio server 命令，Claude 只是其中一种
+上面的 `cml mcp ...` 是标准 MCP stdio server 命令，Claude 只是其中一种
 客户端。Codex、Cline、Cursor、Windsurf、Gemini CLI 或其它兼容客户端，均
 使用相同的 `command` / `args`；客户端的注册入口不同，但不需要改 server。
 
@@ -429,7 +429,7 @@ asl mcp --config /abs/path/ashare-lake.toml --live
 
 ---
 
-## asl sources
+## cml sources
 
 探测本湖依赖的公开数据源。每个源发**一个**请求，断言响应体（不是状态行），串行且尊重各源限速。
 
@@ -438,11 +438,11 @@ asl mcp --config /abs/path/ashare-lake.toml --live
 | `--config` | 配置文件路径（探测不读湖，但要用里面的限速与超时） |
 | `--vantage` | 这次探测从哪个出口发出：`cn` / `overseas` / 任意标签（默认 `local`） |
 | `--only` | 逗号分隔的 probe key，默认全部；传空串则一个都不测 |
-| `--out` | JSON 报告路径。默认写进湖里的 `meta/source_health/<vantage>.json`，也就是 `asl serve` 读的位置 |
+| `--out` | JSON 报告路径。默认写进湖里的 `meta/source_health/<vantage>.json`，也就是 `cml serve` 读的位置 |
 
 ```bash
-asl sources --vantage cn
-asl serve                    # → http://127.0.0.1:8787/source-health
+cml sources --vantage cn
+cml serve                    # → http://127.0.0.1:8787/source-health
 ```
 
 **探测在 CLI，展示在 serve。** 面板只读，不会替你去请求十几个第三方主机——和它不触发采集是同一个理由。多次探测（不同 `--vantage`）会并排显示，不合并。
@@ -457,13 +457,13 @@ asl serve                    # → http://127.0.0.1:8787/source-health
 
 ---
 
-## asl servers test
+## cml servers test
 
 测试 TDX 连接（并行探测主机池，返回首个能出数的服务器）。
 
 ---
 
-## asl --version
+## cml --version
 
 包版本号。
 

@@ -1,10 +1,10 @@
 # baostock 适配器
 
-路径：`src/ashare_lake/adapters/baostock/`
+路径：`src/cn_market_lake/adapters/baostock/`
 
 [Baostock](http://baostock.com) 开源证券数据接口。用于 **历史回填** 场景，非日更主源。
 
-**依赖**：随 `pip install ashare-lake` / 可编辑安装一并提供，无需额外 extras。
+**依赖**：随 `pip install cn-market-lake` / 可编辑安装一并提供，无需额外 extras。
 
 ---
 
@@ -22,7 +22,7 @@
 ## valuation.py
 
 - `valuation_metrics` 的 `DatasetSpec.backfill_source = "baostock"`
-- `asl backfill valuation_metrics` 走此路径
+- `cml backfill valuation_metrics` 走此路径
 - 日更仍用东财快照
 
 ---

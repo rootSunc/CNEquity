@@ -1,6 +1,6 @@
 # eastmoney 适配器
 
-路径：`src/ashare_lake/adapters/eastmoney/`
+路径：`src/cn_market_lake/adapters/eastmoney/`
 
 东方财富 HTTP API（datacenter、clist、行情接口等）。资金面、估值快照、结构成员、新闻、ST/停牌等的主要 HTTP 源。
 
@@ -21,7 +21,7 @@
 ### datacenter 列契约
 
 EM 改列名会整报 `code=9501`。适配器里的 `_REPORT` / `_COLUMNS` 是运行时真源；
-[`datacenter_contracts.py`](../../../src/ashare_lake/adapters/eastmoney/datacenter_contracts.py)
+[`datacenter_contracts.py`](../../../src/cn_market_lake/adapters/eastmoney/datacenter_contracts.py)
 只做清单导入，供离线测试与直播探针迭代。改列后：
 
 1. 更新对应 adapter 常量  
@@ -66,7 +66,7 @@ EM 改列名会整报 `code=9501`。适配器里的 `_REPORT` / `_COLUMNS` 是�
 [逐源限制](../../datasets/sources.md) 与 [steps](../steps.md)。本适配器不再参与
 `sector_bars` 采集。
 
-可选 `asl derive sector_routing` 生成 EM×TDX 名称映射（**不参与** sector_bars 采集）。
+可选 `cml derive sector_routing` 生成 EM×TDX 名称映射（**不参与** sector_bars 采集）。
 
 ### 代理
 

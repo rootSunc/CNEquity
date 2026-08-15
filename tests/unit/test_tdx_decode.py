@@ -1,4 +1,4 @@
-from ashare_lake.adapters.tdx_protocol._decode import DECODED_ZERO, decoded_quantity
+from cn_market_lake.adapters.tdx_protocol._decode import DECODED_ZERO, decoded_quantity
 
 
 def test_denormal_zero_is_snapped_to_zero():

@@ -6,7 +6,7 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.adapters.eastmoney.news_wire import fetch_flash_news_wire
+from cn_market_lake.adapters.eastmoney.news_wire import fetch_flash_news_wire
 
 
 def test_fetch_flash_news_wire_adds_wire_fields(monkeypatch):
@@ -25,7 +25,7 @@ def test_fetch_flash_news_wire_adds_wire_fields(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.news_wire.fetch_news_headlines",
+        "cn_market_lake.adapters.eastmoney.news_wire.fetch_news_headlines",
         lambda _d, page_size=200: base,
     )
     df = fetch_flash_news_wire(date(2026, 7, 14))

@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 import pytest
 
-from ashare_lake.adapters.eastmoney.datacenter import (
+from cn_market_lake.adapters.eastmoney.datacenter import (
     _MAX_PAGE_NUMBER,
     EastMoneyDatacenterError,
     fetch_datacenter,

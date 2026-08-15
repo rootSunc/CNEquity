@@ -12,8 +12,8 @@ from datetime import date, datetime, timezone
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.quality import authority_checks as ac
+from cn_market_lake.config import Config
+from cn_market_lake.quality import authority_checks as ac
 
 TD = date(2026, 8, 1)
 OBS = date(2026, 7, 31)
@@ -59,7 +59,7 @@ def _lake(tmp_path, *, pmi: float | None = None, status: dict[str, str] | None =
 
 def _publish(monkeypatch, value: float, obs: date = OBS):
     """Stand in for the NBS release; the check imports the adapter lazily."""
-    import ashare_lake.adapters.nbs.pmi_release as nbs
+    import cn_market_lake.adapters.nbs.pmi_release as nbs
 
     monkeypatch.setattr(
         nbs,
@@ -101,7 +101,7 @@ def test_missing_curated_month_is_left_to_the_staleness_check(monkeypatch, tmp_p
 
 
 def test_unreachable_publisher_is_silent(monkeypatch, tmp_path):
-    import ashare_lake.adapters.nbs.pmi_release as nbs
+    import cn_market_lake.adapters.nbs.pmi_release as nbs
 
     monkeypatch.setattr(nbs, "fetch_latest_pmi", lambda **_kw: None)
     assert ac.macro_pmi_vs_nbs(_lake(tmp_path, pmi=49.2), TD) == []
@@ -111,7 +111,7 @@ def test_pmi_check_is_off_without_the_source_flag(monkeypatch, tmp_path):
     def _boom(**_kw):
         raise AssertionError("must not reach the network when [sources.nbs] is absent")
 
-    import ashare_lake.adapters.nbs.pmi_release as nbs
+    import cn_market_lake.adapters.nbs.pmi_release as nbs
 
     monkeypatch.setattr(nbs, "fetch_latest_pmi", _boom)
     cfg = _lake(tmp_path, pmi=49.2)
@@ -123,7 +123,7 @@ def test_pmi_check_is_off_without_the_source_flag(monkeypatch, tmp_path):
 
 
 def _exchange(monkeypatch, names: dict[str, str]):
-    import ashare_lake.adapters.exchange.st_lists as ex
+    import cn_market_lake.adapters.exchange.st_lists as ex
 
     monkeypatch.setattr(ex, "fetch_exchange_names", lambda **_kw: names)
 
@@ -191,7 +191,7 @@ def test_unreachable_exchanges_are_silent(monkeypatch, tmp_path):
 
 
 def test_st_check_is_off_without_the_source_flag(monkeypatch, tmp_path):
-    import ashare_lake.adapters.exchange.st_lists as ex
+    import cn_market_lake.adapters.exchange.st_lists as ex
 
     def _boom(**_kw):
         raise AssertionError("must not reach the network when [sources.exchange] is absent")
@@ -225,7 +225,7 @@ def test_a_clean_run_still_leaves_evidence(monkeypatch, tmp_path):
 
 
 def test_a_failing_publisher_does_not_break_the_run(monkeypatch, tmp_path):
-    import ashare_lake.adapters.nbs.pmi_release as nbs
+    import cn_market_lake.adapters.nbs.pmi_release as nbs
 
     def _boom(**_kw):
         raise RuntimeError("site down")

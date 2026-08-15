@@ -7,18 +7,18 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.adapters.eastmoney.bars import fetch_daily_bars_clist
-from ashare_lake.config import Config, FailoverDatasetSpec
-from ashare_lake.domain.schemas import with_provenance
-from ashare_lake.orchestrator.manifest import Manifest
-from ashare_lake.steps.bars import (
+from cn_market_lake.adapters.eastmoney.bars import fetch_daily_bars_clist
+from cn_market_lake.config import Config, FailoverDatasetSpec
+from cn_market_lake.domain.schemas import with_provenance
+from cn_market_lake.orchestrator.manifest import Manifest
+from cn_market_lake.steps.bars import (
     _finish_daily_bars,
     _gapfill_tip_via_clist,
     _reject_preopen_placeholder,
     _staged_daily_bar_symbols,
 )
-from ashare_lake.storage import StagingWriter
-from ashare_lake.storage.layout import init_data_layout
+from cn_market_lake.storage import StagingWriter
+from cn_market_lake.storage.layout import init_data_layout
 
 
 def _cfg(tmp_path) -> Config:
@@ -90,11 +90,11 @@ def test_fetch_daily_bars_clist_stamps_trade_date(monkeypatch):
             pass
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.bars.fetch_clist_pages",
+        "cn_market_lake.adapters.eastmoney.bars.fetch_clist_pages",
         lambda client, fields: raw,
     )
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.bars.EastMoneyClient",
+        "cn_market_lake.adapters.eastmoney.bars.EastMoneyClient",
         lambda **kwargs: _Client(),
     )
     tip = date(2026, 7, 24)
@@ -131,7 +131,7 @@ def test_tip_gapfill_writes_only_missing_keys(tmp_path, monkeypatch):
         }
     )
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.bars.fetch_daily_bars_clist",
+        "cn_market_lake.adapters.eastmoney.bars.fetch_daily_bars_clist",
         lambda trade_date, symbols=None, client=None, config=None: clist,
     )
 
@@ -159,7 +159,7 @@ def test_tip_tdx_fail_clist_recovers_step(tmp_path, monkeypatch):
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     tip = date(2026, 7, 24)
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.bars.fetch_daily_bars_clist",
+        "cn_market_lake.adapters.eastmoney.bars.fetch_daily_bars_clist",
         lambda trade_date, symbols=None, client=None, config=None: pl.DataFrame(
             {
                 "symbol": ["600519.SH"],
@@ -221,8 +221,8 @@ def test_multiday_uses_kline_not_clist(tmp_path, monkeypatch):
             }
         )
 
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.bars.fetch_daily_bars_clist", _clist)
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.bars.fetch_daily_bars", _kline)
+    monkeypatch.setattr("cn_market_lake.adapters.eastmoney.bars.fetch_daily_bars_clist", _clist)
+    monkeypatch.setattr("cn_market_lake.adapters.eastmoney.bars.fetch_daily_bars", _kline)
 
     result = _finish_daily_bars(
         cfg,

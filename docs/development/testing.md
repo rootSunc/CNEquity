@@ -77,7 +77,7 @@ pytest -m network           # 仅外网探针（东财 datacenter 列契约等�
 ## 覆盖率
 
 ```bash
-pytest --cov=ashare_lake --cov-report=term-missing
+pytest --cov=cn_market_lake --cov-report=term-missing
 ```
 
 `pyproject.toml` 已配置 `coverage.run.source`。

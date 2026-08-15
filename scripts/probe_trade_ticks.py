@@ -24,11 +24,11 @@ from pathlib import Path
 
 import polars as pl
 
-from ashare_lake.adapters.tdx_protocol._wire import MAX_TICK_PAGE
-from ashare_lake.adapters.tdx_protocol.client import _quotes_client
-from ashare_lake.config import load_config
-from ashare_lake.domain.rate_limit import wait_spec
-from ashare_lake.query.parquet_scan import parquet_glob
+from cn_market_lake.adapters.tdx_protocol._wire import MAX_TICK_PAGE
+from cn_market_lake.adapters.tdx_protocol.client import _quotes_client
+from cn_market_lake.config import load_config
+from cn_market_lake.domain.rate_limit import wait_spec
+from cn_market_lake.query.parquet_scan import parquet_glob
 
 # A liquidity spread plus the awkward cases: a fund (whose price coefficient is
 # 0.001, not the stocks' 0.01), and a Beijing name (which has no TDX route at
@@ -167,7 +167,7 @@ def probe_depth(client, symbol: str, days: list[date], spec) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="configs/ashare-lake.toml")
+    parser.add_argument("--config", default="configs/cn-market-lake.toml")
     parser.add_argument("--date", default=REFERENCE_DATE.isoformat())
     parser.add_argument("--json-out", default=None)
     parser.add_argument("--skip-depth", action="store_true")

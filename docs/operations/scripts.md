@@ -5,7 +5,7 @@
 运维与一次性工具脚本。生产日更以 `daily_pipeline.sh` 为主路径。
 
 > 以下脚本面向 **自托管本机/VPS**（含 macOS launchd、大陆出口回填）。开源贡献者只需
-> CLI（`asl init` / `run`）即可；调度与告警按需选用，并非唯一部署方式。
+> CLI（`cml init` / `run`）即可；调度与告警按需选用，并非唯一部署方式。
 
 ---
 
@@ -19,25 +19,25 @@
 
 ```
 for group in core capital signals fundamentals macro_risk research; do
-  asl run daily --group $group
+  cml run daily --group $group
 done
-asl status --datasets            # 探针：有 STALE 才继续
-  └─ sleep ASL_STALE_RETRY_DELAY_SEC
-     asl run daily --stale-only  # 只重抓仍落后的
+cml status --datasets            # 探针：有 STALE 才继续
+  └─ sleep CML_STALE_RETRY_DELAY_SEC
+     cml run daily --stale-only  # 只重抓仍落后的
 health_notify.sh
 backup_meta.sh
-asl clean
+cml clean
 ```
 
 **收尾补抓**排在健康检查之前，所以补抓成功不会误报。`snapshot` 数据集只抓 run 当天，源端在那一个窗口中断就永久丢那天（重放会伪造行）——而立刻重试大概率撞上同一场中断，所以先等再抓，**但只在真有 STALE 时才等**，干净的日子零成本。详见 [runbook · 收尾补抓](runbook.md#收尾补抓)。
 
-**环境变量**（仅本脚本读取；`asl` CLI 不读）：`ASL_CONFIG`, `ASL_LOG_DIR`, `ASL_GROUPS`,
-`ASL_GATE_GROUPS`（默认 `core`，失败标为 gate；其余组标 soft）、
-`ASL_SOFT_FAIL_OK`（默认 `1`：gate OK 时 soft 失败 exit 0；`0`=仍 exit 1）、
-`ASL_STALE_RETRY`（默认 `1`；`0` 关闭收尾补抓）、
-`ASL_STALE_RETRY_DELAY_SEC`（默认 `1800`）、
-`ASL_TRADE_DATE`、
-`ASL_BIN`（覆盖 `asl` 路径；供用 stub 跑通控制流的测试用）。
+**环境变量**（仅本脚本读取；`cml` CLI 不读）：`CML_CONFIG`, `CML_LOG_DIR`, `CML_GROUPS`,
+`CML_GATE_GROUPS`（默认 `core`，失败标为 gate；其余组标 soft）、
+`CML_SOFT_FAIL_OK`（默认 `1`：gate OK 时 soft 失败 exit 0；`0`=仍 exit 1）、
+`CML_STALE_RETRY`（默认 `1`；`0` 关闭收尾补抓）、
+`CML_STALE_RETRY_DELAY_SEC`（默认 `1800`）、
+`CML_TRADE_DATE`、
+`CML_BIN`（覆盖 `cml` 路径；供用 stub 跑通控制流的测试用）。
 
 结束时打印分组摘要（`group: OK|FAILED [gate|soft]`）外加 `stale-retry: OK|FAILED|not needed|skipped`，便于区分「门禁挂了」与「东财挂了」。补抓失败算 soft。
 
@@ -45,15 +45,15 @@ asl clean
 
 ### install_scheduler.sh / uninstall_scheduler.sh
 
-从 `scripts/launchd/com.asharelake.daily.plist.template` 生成用户 launchd plist，加载 `daily_pipeline.sh`。
+从 `scripts/launchd/com.cnmarketlake.daily.plist.template` 生成用户 launchd plist，加载 `daily_pipeline.sh`。
 
 ---
 
 ### health_notify.sh
 
 ```bash
-asl audit --full
-asl status --datasets
+cml audit --full
+cml status --datasets
 ```
 
 失败时 macOS `osascript` 通知，退出码非零。
@@ -102,14 +102,14 @@ python scripts/accept_backfill.py check --compare /tmp/counts.json
 [Schema 契约 · 成交量单位](../datasets/schema.md)。
 
 ```bash
-scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --dry-run
-scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --apply
+scripts/migrate_daily_bars_volume_v2.py --config configs/cn-market-lake.toml --dry-run
+scripts/migrate_daily_bars_volume_v2.py --config configs/cn-market-lake.toml --apply
 ```
 
 - `--dry-run`（默认）只统计不落盘；`--apply` **就地改写 curated**，先跑 `backup_meta.sh` 并备份 curated。
 - 幂等：已是 `v2` 的行跳过，中断后可直接续跑。
 - `fetched_at` 不重新打戳——记录这次重新解释的列是 `data_version`。
-- 跑完用 `asl audit` 确认 `daily_bars_volume_unit` 无 finding。
+- 跑完用 `cml audit` 确认 `daily_bars_volume_unit` 无 finding。
 
 ---
 
@@ -123,7 +123,7 @@ scripts/migrate_daily_bars_volume_v2.py --config configs/ashare-lake.toml --appl
 
 ## launchd 模板
 
-`scripts/launchd/com.asharelake.daily.plist.template`
+`scripts/launchd/com.cnmarketlake.daily.plist.template`
 
 - `ProgramArguments` 指向 `daily_pipeline.sh`
 - `StartCalendarInterval`：Hour=11, Minute=15（Europe/Helsinki；夏令时 16:15 CST、冬令时 17:15 CST）

@@ -12,13 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from ashare_lake.config import load_config
-from ashare_lake.orchestrator.engine import JobEngine
-from ashare_lake.orchestrator.manifest import Manifest
-from ashare_lake.steps.finalize import step_compact
-from ashare_lake.storage.state import StateStore
+from cn_market_lake.config import load_config
+from cn_market_lake.orchestrator.engine import JobEngine
+from cn_market_lake.orchestrator.manifest import Manifest
+from cn_market_lake.steps.finalize import step_compact
+from cn_market_lake.storage.state import StateStore
 
-CONFIG = ROOT / "configs" / "ashare-lake.toml"
+CONFIG = ROOT / "configs" / "cn-market-lake.toml"
 TRADE_DATE = date(2026, 6, 26)
 
 
@@ -140,7 +140,7 @@ def main() -> int:
         return 1
     _print("FAILURE CONTRACT CHECK", "passed")
 
-    _print("Phase 4", "asl retry — restore network")
+    _print("Phase 4", "cml retry — restore network")
     retry = engine.run_job("retry", retry_failed_only=True, run_id=fail_id, trade_date=TRADE_DATE)
     final = Manifest(cfg.manifest_path).run_summary(fail_id)
     _print("retry result", retry)

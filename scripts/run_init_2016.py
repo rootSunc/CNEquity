@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full init from 2016-01-01: thin wrapper around ``asl init``."""
+"""Full init from 2016-01-01: thin wrapper around ``cml init``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = ROOT / "configs" / "ashare-lake.toml"
+CONFIG = ROOT / "configs" / "cn-market-lake.toml"
 TRADE_DATE = "2026-07-06"
 
 
@@ -16,7 +16,7 @@ def main() -> int:
     cmd = [
         sys.executable,
         "-m",
-        "ashare_lake.cli.main",
+        "cn_market_lake.cli.main",
         "init",
         "--config",
         str(CONFIG),

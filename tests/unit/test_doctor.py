@@ -7,15 +7,15 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
-from ashare_lake.cli.main import cli
-from ashare_lake.diagnostics.packages import (
+from cn_market_lake.cli.main import cli
+from cn_market_lake.diagnostics.packages import (
     REQUIRED_PACKAGES,
     PackageStatus,
     RequiredPackage,
     probe_packages,
 )
-from ashare_lake.diagnostics.render import render_text, to_dict
-from ashare_lake.diagnostics.report import Severity, build_report
+from cn_market_lake.diagnostics.render import render_text, to_dict
+from cn_market_lake.diagnostics.report import Severity, build_report
 
 
 def _config(tmp_path, *, data_root=None):
@@ -58,7 +58,7 @@ def test_required_packages_are_all_declared_dependencies():
 def test_missing_package_is_an_error(tmp_path, monkeypatch):
     """A hard dependency that will not import means a damaged install."""
     monkeypatch.setattr(
-        "ashare_lake.diagnostics.report.probe_packages",
+        "cn_market_lake.diagnostics.report.probe_packages",
         lambda: [
             PackageStatus(RequiredPackage("baostock", "历史回填"), importable=False),
             PackageStatus(RequiredPackage("pandas", "XLS"), importable=True),
@@ -74,7 +74,7 @@ def test_missing_package_is_an_error(tmp_path, monkeypatch):
 
 def test_all_packages_present_produces_no_finding(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.diagnostics.report.probe_packages",
+        "cn_market_lake.diagnostics.report.probe_packages",
         lambda: [PackageStatus(RequiredPackage("baostock", "历史回填"), importable=True)],
     )
     report = build_report(config=_config(tmp_path))
@@ -85,7 +85,7 @@ def test_all_packages_present_produces_no_finding(tmp_path, monkeypatch):
 
 
 def test_relative_data_root_is_an_error(tmp_path):
-    report = build_report(config=_config(tmp_path, data_root=Path("./data/ashare-lake")))
+    report = build_report(config=_config(tmp_path, data_root=Path("./data/cn-market-lake")))
     finding = next(f for f in report.findings if "相对路径" in f.title)
     assert finding.severity is Severity.ERROR
     assert not report.ok
@@ -104,7 +104,7 @@ def test_unwritable_data_root_is_an_error(tmp_path, monkeypatch):
     root = tmp_path / "lake"
     root.mkdir()
     monkeypatch.setattr(
-        "ashare_lake.diagnostics.report._data_root_writable",
+        "cn_market_lake.diagnostics.report._data_root_writable",
         lambda _path: False,
     )
     report = build_report(config=_config(tmp_path, data_root=root))
@@ -160,12 +160,12 @@ def test_doctor_exit_code_follows_report_errors(
     tmp_path, monkeypatch, flag, severity, expected_exit
 ):
     """Only ERROR findings fail the command; warnings must stay exit 0."""
-    from ashare_lake.diagnostics.report import Finding, Report
+    from cn_market_lake.diagnostics.report import Finding, Report
 
     monkeypatch.setattr(
-        "ashare_lake.diagnostics.report.build_report",
+        "cn_market_lake.diagnostics.report.build_report",
         lambda config=None, config_path=None: Report(
-            environment={"ashare-lake": "test"},
+            environment={"cn-market-lake": "test"},
             packages=[],
             findings=[Finding(severity=severity, title="synthetic")],
         ),

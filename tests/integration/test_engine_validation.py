@@ -2,10 +2,10 @@ from datetime import date
 
 import pytest
 
-import ashare_lake.steps  # noqa: F401 — register steps
-from ashare_lake.orchestrator.deps import UnknownStepError
-from ashare_lake.orchestrator.engine import JobEngine
-from ashare_lake.storage.layout import init_data_layout
+import cn_market_lake.steps  # noqa: F401 — register steps
+from cn_market_lake.orchestrator.deps import UnknownStepError
+from cn_market_lake.orchestrator.engine import JobEngine
+from cn_market_lake.storage.layout import init_data_layout
 
 
 def test_run_job_rejects_unknown_steps(config):

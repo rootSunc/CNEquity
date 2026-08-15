@@ -2,8 +2,8 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.quality.audit import _index_bars_coverage_findings
+from cn_market_lake.config import Config
+from cn_market_lake.quality.audit import _index_bars_coverage_findings
 
 
 def _write_calendar(root, rows):

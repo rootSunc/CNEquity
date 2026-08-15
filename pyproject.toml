@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ashare-lake"
+name = "cn-market-lake"
 version = "0.6.0"
 description = "Self-hosted A-share Parquet data lake with multi-source ingest and daily orchestration"
 # Short PyPI page (absolute links only). GitHub keeps README.md / README.en.md.
@@ -11,10 +11,11 @@ readme = "README.pypi.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE*", "NOTICE"]
-authors = [{ name = "ashare-lake Contributors" }]
+authors = [{ name = "CNMarketLake Contributors" }]
 keywords = [
   "a-share",
   "china-stocks",
+  "china-market",
   "data-lake",
   "mcp",
   "ai-agent",
@@ -37,7 +38,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Office/Business :: Financial :: Investment",
 ]
-# One install, no extras: `pip install ashare-lake` brings every runtime source
+# One install, no extras: `pip install cn-market-lake` brings every runtime source
 # the daily pipeline and the backfill paths need. Splitting these out again would
 # bring back the failure mode that motivated folding them in — a source enabled
 # in config with no package behind it, degrading silently on a scheduled run.
@@ -56,7 +57,7 @@ dependencies = [
   # the ST board (push2 clist) and the PMI / 货币供应量 datacenter reports — so it
   # bought a parsing layer, 14 transitive packages and the mini-racer collision
   # rather than a second source. See issue #3.
-  # Baostock: valuation / ST / delisted-bar history for `asl init` and backfills.
+  # Baostock: valuation / ST / delisted-bar history for `cml init` and backfills.
   "baostock>=0.8",
   # SnowNLP: on-demand stock_news sentiment ([sentiment] use_snownlp).
   "snownlp>=0.12",
@@ -67,7 +68,7 @@ dependencies = [
   "xlrd>=2.0",
   # stdlib tomllib is 3.11+; config loader falls back to tomli on 3.10.
   "tomli>=2; python_version < '3.11'",
-  # `asl serve` — the read-only lake dashboard. FastAPI earns its ~8 packages on
+  # `cml serve` — the read-only lake dashboard. FastAPI earns its ~8 packages on
   # the response models and the OpenAPI page they generate: /api/docs is the
   # API reference, so it cannot drift from the handlers, and the same models are
   # what keep the CLI's JSON and the dashboard's JSON one contract instead of
@@ -77,7 +78,7 @@ dependencies = [
 ]
 
 # No [project.optional-dependencies]. Everything is a hard dependency.
-# `pip install "ashare-lake[tdx]"` from an older doc still installs correctly —
+# `pip install "cn-market-lake[tdx]"` from an older doc still installs correctly —
 # pip prints "does not provide the extra 'tdx'" and carries on, uv is silent —
 # so declaring empty extras would only advertise things that no longer exist.
 
@@ -96,21 +97,21 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/rootSunc/ashare-lake"
-Documentation = "https://rootsunc.github.io/ashare-lake/"
-Source = "https://github.com/rootSunc/ashare-lake"
-Changelog = "https://github.com/rootSunc/ashare-lake/blob/main/CHANGELOG.md"
-Citation = "https://github.com/rootSunc/ashare-lake/blob/main/CITATION.cff"
-Issues = "https://github.com/rootSunc/ashare-lake/issues"
+Homepage = "https://github.com/rootSunc/cn-market-lake"
+Documentation = "https://rootsunc.github.io/cn-market-lake/"
+Source = "https://github.com/rootSunc/cn-market-lake"
+Changelog = "https://github.com/rootSunc/cn-market-lake/blob/main/CHANGELOG.md"
+Citation = "https://github.com/rootSunc/cn-market-lake/blob/main/CITATION.cff"
+Issues = "https://github.com/rootSunc/cn-market-lake/issues"
 
 [project.scripts]
-asl = "ashare_lake.cli.main:cli"
+cml = "cn_market_lake.cli.main:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-ashare_lake = [
+cn_market_lake = [
     "py.typed",
     "adapters/calendar/seeds/*.csv",
     "adapters/ths/seeds/*.json",
@@ -136,7 +137,7 @@ src = ["src", "tests"]
 # Vendored upstream code (tdxpy, MIT). Kept byte-close to its source so it can be
 # re-synced or diffed against upstream; reformatting it to our rules would only
 # make that harder, and the style is not ours to own.
-extend-exclude = ["src/ashare_lake/adapters/tdx_protocol/_wire"]
+extend-exclude = ["src/cn_market_lake/adapters/tdx_protocol/_wire"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]
@@ -147,7 +148,7 @@ ignore = ["E501"]
 "scripts/*.py" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["ashare_lake"]
+known-first-party = ["cn_market_lake"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -164,7 +165,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["ashare_lake"]
+source = ["cn_market_lake"]
 branch = true
 # Vendored upstream (tdxpy, MIT). Same boundary as ruff extend-exclude: we own
 # the facade around it, not every struct.unpack line inside.

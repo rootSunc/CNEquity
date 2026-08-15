@@ -4,7 +4,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from ashare_lake.cli.main import cli
+from cn_market_lake.cli.main import cli
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -19,7 +19,7 @@ def test_cli_reference_covers_the_research_demo_flag():
 
 
 def test_source_health_note_does_not_describe_removed_eastmoney_sticky_state():
-    from ashare_lake.diagnostics.source_health import PROBES_BY_KEY
+    from cn_market_lake.diagnostics.source_health import PROBES_BY_KEY
 
     note = PROBES_BY_KEY["eastmoney_push2his"].note
     assert "sticky" not in note.lower()
@@ -27,9 +27,9 @@ def test_source_health_note_does_not_describe_removed_eastmoney_sticky_state():
 
 
 def test_citation_metadata_tracks_the_current_package_version():
-    from ashare_lake import __version__
+    from cn_market_lake import __version__
 
     citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
     assert f"version: {__version__}" in citation
     assert "license: Apache-2.0" in citation
-    assert 'repository-code: "https://github.com/rootSunc/ashare-lake"' in citation
+    assert 'repository-code: "https://github.com/rootSunc/cn-market-lake"' in citation

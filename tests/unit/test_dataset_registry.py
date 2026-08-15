@@ -1,6 +1,6 @@
 """Invariants tying the DatasetSpec registry to schemas, PKs, and steps."""
 
-from ashare_lake.domain.datasets import (
+from cn_market_lake.domain.datasets import (
     DATASETS,
     FETCH_SEMANTICS,
     PARTITION_COLS,
@@ -15,7 +15,7 @@ from ashare_lake.domain.datasets import (
     history_mode,
     pit_dataset_names,
 )
-from ashare_lake.domain.schemas import DATASET_SCHEMAS, PRIMARY_KEYS
+from cn_market_lake.domain.schemas import DATASET_SCHEMAS, PRIMARY_KEYS
 
 
 def test_every_dataset_has_schema_and_pk():
@@ -121,8 +121,8 @@ def test_report_period_datasets_are_partitioned_by_quarter():
 
 def test_registered_fetch_steps_cover_curated_datasets():
     """Every curated dataset is producible by a registered step."""
-    import ashare_lake.steps  # noqa: F401 — register steps
-    from ashare_lake.orchestrator.registry import STEP_REGISTRY
+    import cn_market_lake.steps  # noqa: F401 — register steps
+    from cn_market_lake.orchestrator.registry import STEP_REGISTRY
 
     # market_breadth/sentiment_scores are derive-style steps registered under
     # their dataset names; instruments etc. match step names directly.
@@ -133,7 +133,7 @@ def test_registered_fetch_steps_cover_curated_datasets():
 def test_is_stale_respects_per_dataset_tolerance():
     from datetime import date
 
-    from ashare_lake.domain.datasets import is_stale
+    from cn_market_lake.domain.datasets import is_stale
 
     anchor = date(2026, 7, 8)
     # daily default tolerance = 1 → 07-07 fresh, 07-06 stale
@@ -155,7 +155,7 @@ def test_row_grain_agrees_with_intraday_frequency_wherever_both_are_set():
     describes what a row covers. A dataset holding 5m bars that advertises "1m"
     would be a catalog lying about its own contents.
     """
-    from ashare_lake.domain.datasets import DATASETS
+    from cn_market_lake.domain.datasets import DATASETS
 
     for spec in DATASETS.values():
         if spec.intraday_frequency:
@@ -170,7 +170,7 @@ def test_every_intraday_dataset_declares_a_row_grain():
     indistinguishable from a daily dataset in the catalog and the dashboard,
     which is the confusion this pair of fields exists to avoid.
     """
-    from ashare_lake.domain.datasets import DATASETS
+    from cn_market_lake.domain.datasets import DATASETS
 
     assert DATASETS["trade_ticks"].row_grain == "tick"
     assert DATASETS["trade_ticks"].intraday_frequency is None

@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 
-from ashare_lake.adapters.sina.global_futures import (
+from cn_market_lake.adapters.sina.global_futures import (
     OFFSHORE_CONTRACTS,
     fetch_offshore_commodity_bars_range,
 )
-from ashare_lake.domain.schemas import validate_dataframe, with_provenance
+from cn_market_lake.domain.schemas import validate_dataframe, with_provenance
 
 
 def test_offshore_contracts_unique():
@@ -58,7 +58,7 @@ def test_fetch_offshore_parses_sina_payload():
         raise_for_status=MagicMock(),
         json=MagicMock(return_value=payload),
     )
-    with patch("ashare_lake.adapters.sina.global_futures.httpx.Client", return_value=fake):
+    with patch("cn_market_lake.adapters.sina.global_futures.httpx.Client", return_value=fake):
         fake.__enter__ = MagicMock(return_value=fake)
         fake.__exit__ = MagicMock(return_value=None)
         # Client is constructed as context? Our code doesn't use context manager —

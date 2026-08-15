@@ -5,11 +5,11 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.domain.schemas import PRIMARY_KEYS
-from ashare_lake.query import load
-from ashare_lake.query.reader import ReaderError
-from ashare_lake.storage.parquet import StagingWriter, compact_dataset
+from cn_market_lake.config import Config
+from cn_market_lake.domain.schemas import PRIMARY_KEYS
+from cn_market_lake.query import load
+from cn_market_lake.query.reader import ReaderError
+from cn_market_lake.storage.parquet import StagingWriter, compact_dataset
 
 _DATASET = "financial_statement_items"
 

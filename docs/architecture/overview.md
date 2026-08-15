@@ -1,6 +1,6 @@
 # 架构总览
 
-ashare-lake 是 A 股数据的**采集编排层**：在多个外部数据源之上，通过自研 Wave 引擎并行拉取、校验、落湖，并以稳定 schema 交付给下游选股/因子项目。
+cn-market-lake 是 A 股数据的**采集编排层**：在多个外部数据源之上，通过自研 Wave 引擎并行拉取、校验、落湖，并以稳定 schema 交付给下游选股/因子项目。
 
 引擎本身不产生 alpha。它主要挡住三件事：回测用的数据是否干净（PIT、universe、复权）、日更是否按时到、数字对不上时能不能追到源。
 
@@ -52,7 +52,7 @@ ashare-lake 是 A 股数据的**采集编排层**：在多个外部数据源之�
   → curated/derived 就绪，meta/state 水位前移
 ```
 
-失败路径：batch failed → 水位不动 → `asl retry --run-id` 只重跑失败 batch → 成功后自动 compact→derive→audit。
+失败路径：batch failed → 水位不动 → `cml retry --run-id` 只重跑失败 batch → 成功后自动 compact→derive→audit。
 
 ---
 
@@ -74,7 +74,7 @@ Job (daily / init / backfill / retry)
 
 ## 与下游的契约边界
 
-下游应通过 `ashare_lake.query.load()` 读数。核心条款：
+下游应通过 `cn_market_lake.query.load()` 读数。核心条款：
 
 | 条款 | 说明 |
 |------|------|
@@ -94,7 +94,7 @@ Job (daily / init / backfill / retry)
 
 用之前心里有数（不少是踩过坑之后的现状，不是待办清单）：
 
-- **幸存者偏差（当前最大的正确性缺口）**：历史若按当前上市名单回填，退市股会缺失；`universe="all_a"` 无法补救数据本身不在的问题。audit 的 `universe_survivorship_absent` 会以 error 报出——补齐退市股前别拿收益序列做结论。补齐路径：`asl delisted backfill` + `repair`。
+- **幸存者偏差（当前最大的正确性缺口）**：历史若按当前上市名单回填，退市股会缺失；`universe="all_a"` 无法补救数据本身不在的问题。audit 的 `universe_survivorship_absent` 会以 error 报出——补齐退市股前别拿收益序列做结论。补齐路径：`cml delisted backfill` + `repair`。
 - **复权因子**：老股 hfq 曾大面积断裂；现在是 append-only merge，加上 `adj_factor_reconciliation` audit。残余多为 `corporate_actions` 缺事件。
 - **估值历史**：以前不少是当日快照；`valuation_metrics` 已可用 baostock 回填。
 - **ST / 停牌**：日更只抓当天，更早窗口 `universe="all_a"` 不会按历史 ST 剔除（audit 会报覆盖起点）。

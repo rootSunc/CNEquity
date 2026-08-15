@@ -3,10 +3,10 @@ from datetime import date
 import polars as pl
 import pytest
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.config import Config, ScheduleGroup, WaveConfig, validate_config
-from ashare_lake.domain.schemas import validate_dataframe
-from ashare_lake.orchestrator.registry import get_step
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.config import Config, ScheduleGroup, WaveConfig, validate_config
+from cn_market_lake.domain.schemas import validate_dataframe
+from cn_market_lake.orchestrator.registry import get_step
 
 
 def test_m3_steps_are_registered():
@@ -50,8 +50,8 @@ def cfg(tmp_path):
 
 
 def test_step_fund_flow_writes_staging(cfg, monkeypatch):
-    from ashare_lake.steps import capital as cap
-    from ashare_lake.storage.state import StateStore
+    from cn_market_lake.steps import capital as cap
+    from cn_market_lake.storage.state import StateStore
 
     StateStore(cfg.meta_root).set_date("fund_flow", date(2024, 6, 27))
 
@@ -80,8 +80,8 @@ def test_valuation_snapshot_filters_to_bar_universe(cfg, monkeypatch):
     """The EastMoney clist returns delisted names with no bar; the daily snapshot
     must drop them so valuation stays in lock-step with daily_bars (audit:
     valuation_bars_orphan_symbol)."""
-    from ashare_lake.steps import fundamentals as fund
-    from ashare_lake.storage.state import StateStore
+    from cn_market_lake.steps import fundamentals as fund
+    from cn_market_lake.storage.state import StateStore
 
     # Bar universe: only 600519.SH has ever traded.
     bars_part = cfg.curated_root / "daily_bars" / "trade_date=2024-06-28"
@@ -137,7 +137,7 @@ def test_northbound_reads_the_hsgt_report_not_an_index_fund_flow_kline():
     two legs of a zero-sum decomposition, not two geographic channels — so the
     column carried plausible-looking numbers that were never northbound at all.
     """
-    from ashare_lake.adapters.eastmoney import capital
+    from cn_market_lake.adapters.eastmoney import capital
 
     assert capital._NORTH_FLOW_REPORT == "RPT_MUTUAL_DEAL_HISTORY"
     assert capital._NORTHBOUND_CHANNELS == {"001": "SH", "003": "SZ"}
@@ -151,14 +151,14 @@ def test_backup_snapshot_failure_does_not_abort_the_ca_backfill(tmp_path, monkey
     `snapshot_corporate_actions_backup` writes an EastMoney snapshot for
     cross-source audit. When EastMoney changed its filter grammar it started
     raising, and the raise propagated out of the step — aborting
-    `asl backfill corporate_actions` before TDX, the actual canonical source,
+    `cml backfill corporate_actions` before TDX, the actual canonical source,
     was contacted at all.
     """
     from datetime import date
 
     import polars as pl
 
-    from ashare_lake.steps import events
+    from cn_market_lake.steps import events
 
     monkeypatch.setattr(events, "load_symbols", lambda cfg: ["600519.SH"])
 

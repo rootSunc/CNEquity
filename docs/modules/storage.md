@@ -1,6 +1,6 @@
 # storage 模块
 
-路径：`src/ashare_lake/storage/`
+路径：`src/cn_market_lake/storage/`
 
 数据湖物理读写：目录初始化、staging/curated Parquet、compact 合并、instruments 特殊逻辑、水位、原子写、快照与清理。
 
@@ -17,7 +17,7 @@
 | `atomic.py` | 写临时文件 → rename |
 | `stats.py` | `rebuild_stats()` — `meta/stats/` 行数 / 字节 / 溯源分布度量表 |
 | `source_snapshots.py` | `SnapshotStore` — failover 备源落地 |
-| `staging_cleanup.py` | `clean_staging()` — `asl clean` |
+| `staging_cleanup.py` | `clean_staging()` — `cml clean` |
 
 ---
 
@@ -91,7 +91,7 @@ staging/, curated/, derived/, raw/, meta/, duckdb/, backups/, meta/locks/
 
 刷新：`stats_freshness(config)` 比对 sidecar 的 `latest_run_id` 与 manifest 最新 run（run id 而非时钟——改变湖的是采集）；`refresh_stats_if_stale(config)` 过期才重建，非阻塞锁下抢不到就返回 `None`。线程策略留给调用方。
 
-字段与设计取舍见 [CLI 参考 · asl stats](../reference/cli.md#asl-stats)。
+字段与设计取舍见 [CLI 参考 · cml stats](../reference/cli.md#cml-stats)。
 
 ---
 
@@ -107,13 +107,13 @@ staging/, curated/, derived/, raw/, meta/, duckdb/, backups/, meta/locks/
 
 ## staging_cleanup.py
 
-`asl clean` 逻辑：
+`cml clean` 逻辑：
 
 | 条件 | 行为 |
 |------|------|
 | run 已终态（success / warning / failed）且无 incomplete batch，并已记录成功的 compact | 删除其 staging（compact 后 staging 已冗余） |
 | 无 manifest 记录的 orphan staging | 超过 retention 天删除 |
-| incomplete 或尚未 compact 的 run | 默认保留（可 `asl retry`）；`--force` 删除并 demote 成功 batch |
+| incomplete 或尚未 compact 的 run | 默认保留（可 `cml retry`）；`--force` 删除并 demote 成功 batch |
 
 ---
 

@@ -1,7 +1,7 @@
 import pytest
 
-from ashare_lake.config import load_config
-from ashare_lake.config.bootstrap import path_for_toml
+from cn_market_lake.config import load_config
+from cn_market_lake.config.bootstrap import path_for_toml
 
 
 @pytest.fixture

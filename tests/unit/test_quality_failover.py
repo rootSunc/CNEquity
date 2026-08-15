@@ -7,8 +7,8 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config, FailoverDatasetSpec
-from ashare_lake.quality import failover as fo
+from cn_market_lake.config import Config, FailoverDatasetSpec
+from cn_market_lake.quality import failover as fo
 
 
 def _bars_df(symbol: str = "600519.SH", trade_date: date = date(2024, 6, 28)) -> pl.DataFrame:
@@ -76,7 +76,7 @@ def test_write_backup_snapshot_skips_empty_dataframe(tmp_path):
 def test_write_backup_snapshot_handles_no_path_returned(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.quality.failover.SnapshotStore.write", lambda self, *a, **k: None
+        "cn_market_lake.quality.failover.SnapshotStore.write", lambda self, *a, **k: None
     )
     # Must not raise even though the store reports it wrote nothing.
     fo.write_backup_snapshot(
@@ -106,7 +106,7 @@ def test_snapshot_daily_bars_clist_fetches_when_df_not_provided(tmp_path, monkey
     cfg = _cfg(tmp_path)
     calls: list = []
     monkeypatch.setattr(
-        "ashare_lake.quality.failover.fetch_daily_bars_clist",
+        "cn_market_lake.quality.failover.fetch_daily_bars_clist",
         lambda trade_date, symbols=None, config=None: calls.append(1) or _bars_df(),
     )
     out = fo.snapshot_daily_bars_clist(cfg, trade_date=date(2024, 6, 28), run_id="run-1")
@@ -120,7 +120,7 @@ def test_snapshot_daily_bars_clist_fetches_when_df_not_provided(tmp_path, monkey
 def test_snapshot_daily_bars_clist_empty_fetch_returns_empty(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.quality.failover.fetch_daily_bars_clist",
+        "cn_market_lake.quality.failover.fetch_daily_bars_clist",
         lambda trade_date, symbols=None, config=None: pl.DataFrame(),
     )
     out = fo.snapshot_daily_bars_clist(cfg, trade_date=date(2024, 6, 28), run_id="run-1")
@@ -143,7 +143,7 @@ def test_snapshot_daily_bars_backup_noop_when_spec_missing(tmp_path):
 def test_snapshot_daily_bars_backup_noop_for_single_day_window(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.quality.failover.fetch_em_daily_bars",
+        "cn_market_lake.quality.failover.fetch_em_daily_bars",
         lambda *a, **k: pytest.fail("must not fetch a single-day tip window"),
     )
     fo.snapshot_daily_bars_backup(
@@ -159,7 +159,7 @@ def test_snapshot_daily_bars_backup_noop_for_single_day_window(tmp_path, monkeyp
 def test_snapshot_daily_bars_backup_noop_when_fetch_empty(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.quality.failover.fetch_em_daily_bars",
+        "cn_market_lake.quality.failover.fetch_em_daily_bars",
         lambda *a, **k: pl.DataFrame(),
     )
     fo.snapshot_daily_bars_backup(
@@ -176,7 +176,7 @@ def test_snapshot_daily_bars_backup_noop_when_fetch_empty(tmp_path, monkeypatch)
 def test_snapshot_daily_bars_backup_writes_snapshot(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.quality.failover.fetch_em_daily_bars",
+        "cn_market_lake.quality.failover.fetch_em_daily_bars",
         lambda symbols, start, end: _bars_df(trade_date=end),
     )
     fo.snapshot_daily_bars_backup(
@@ -209,7 +209,7 @@ def test_snapshot_corporate_actions_backup_noop_when_spec_missing(tmp_path):
 def test_snapshot_corporate_actions_backup_noop_when_fetch_empty(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.quality.failover.fetch_corporate_actions_eastmoney",
+        "cn_market_lake.quality.failover.fetch_corporate_actions_eastmoney",
         lambda trade_date, backfill, config=None: pl.DataFrame(),
     )
     fo.snapshot_corporate_actions_backup(
@@ -234,7 +234,7 @@ def test_snapshot_corporate_actions_backup_writes_snapshot(tmp_path, monkeypatch
         schema_overrides={"allotment_ratio": pl.Float64, "allotment_price": pl.Float64},
     )
     monkeypatch.setattr(
-        "ashare_lake.quality.failover.fetch_corporate_actions_eastmoney",
+        "cn_market_lake.quality.failover.fetch_corporate_actions_eastmoney",
         lambda trade_date, backfill, config=None: ca_df,
     )
     fo.snapshot_corporate_actions_backup(
@@ -270,11 +270,11 @@ def test_snapshot_corporate_actions_tdx_backup_noop_when_tdx_disabled(tmp_path):
 def test_snapshot_corporate_actions_tdx_backup_noop_when_empty(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path, tdx_enabled=True)
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.client.quotes_client_factory",
+        "cn_market_lake.adapters.tdx_protocol.client.quotes_client_factory",
         lambda config: lambda: None,
     )
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.corporate_actions.fetch_corporate_actions_tdx",
+        "cn_market_lake.adapters.tdx_protocol.corporate_actions.fetch_corporate_actions_tdx",
         lambda symbols, **k: pl.DataFrame(),
     )
     fo.snapshot_corporate_actions_tdx_backup(
@@ -303,11 +303,11 @@ def test_snapshot_corporate_actions_tdx_backup_writes_snapshot(tmp_path, monkeyp
         schema_overrides={"allotment_ratio": pl.Float64, "allotment_price": pl.Float64},
     )
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.client.quotes_client_factory",
+        "cn_market_lake.adapters.tdx_protocol.client.quotes_client_factory",
         lambda config: lambda: None,
     )
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.corporate_actions.fetch_corporate_actions_tdx",
+        "cn_market_lake.adapters.tdx_protocol.corporate_actions.fetch_corporate_actions_tdx",
         lambda symbols, **k: tdx_df,
     )
     fo.snapshot_corporate_actions_tdx_backup(

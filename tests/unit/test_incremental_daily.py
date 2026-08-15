@@ -3,15 +3,15 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.steps import capital as cap
-from ashare_lake.steps.common import (
+from cn_market_lake.config import Config
+from cn_market_lake.steps import capital as cap
+from cn_market_lake.steps.common import (
     SnapshotBackfillError,
     fetch_incremental_daily,
     incremental_trade_dates,
     list_trading_dates,
 )
-from ashare_lake.storage.state import StateStore
+from cn_market_lake.storage.state import StateStore
 
 
 def _seed_trading_calendar(cfg: Config, start: date, end: date) -> None:

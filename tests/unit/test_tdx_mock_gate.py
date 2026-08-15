@@ -9,8 +9,8 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.adapters.tdx_protocol import client as tdx
-from ashare_lake.domain.schemas import MOCK_SOURCE, with_provenance
+from cn_market_lake.adapters.tdx_protocol import client as tdx
+from cn_market_lake.domain.schemas import MOCK_SOURCE, with_provenance
 
 START = date(2024, 6, 24)
 END = date(2024, 6, 28)
@@ -66,7 +66,7 @@ def test_trading_status_raises_without_allow_mock(monkeypatch):
         raise RuntimeError("simulated EastMoney outage")
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.client.fetch_trading_status_eastmoney",
+        "cn_market_lake.adapters.tdx_protocol.client.fetch_trading_status_eastmoney",
         _boom,
     )
     with pytest.raises(tdx.TdxSourceError, match="trading_status"):

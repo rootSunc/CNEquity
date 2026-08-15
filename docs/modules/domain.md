@@ -1,6 +1,6 @@
 # domain 模块
 
-路径：`src/ashare_lake/domain/`
+路径：`src/cn_market_lake/domain/`
 
 **数据契约层**：schema 类型、主键、数据集元数据、符号规则、跨进程限速、情绪打分工具。不含 I/O 与编排。
 
@@ -72,7 +72,7 @@
 | `history_floor_date` | 源端的**固定日历底**（不随今天移动）；与上一项二选一，同时设时它优先 |
 | `backfill_chunk_days` | 单次回填子跑覆盖的日历天数（by-date 源用） |
 | `backfill_chunk_symbols` | 单次回填子跑的标的数（**tip-paged 源用**，与上一项互斥） |
-| `intraday_frequency` | bar 频率（`1m` / `5m`）。**行为字段**：设了就会被 audit 的会话检查、reader 的复权集合、`asl backfill --symbols` 认领 |
+| `intraday_frequency` | bar 频率（`1m` / `5m`）。**行为字段**：设了就会被 audit 的会话检查、reader 的复权集合、`cml backfill --symbols` 认领 |
 | `row_grain` | 一行覆盖多久（`1m` / `5m` / `tick`）。**纯描述**，不驱动任何行为 |
 
 **两组容易混的字段：**

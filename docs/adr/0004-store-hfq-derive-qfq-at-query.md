@@ -79,5 +79,5 @@ That requirement is met at **query time**, not in `derived/adj_factors`.
 ## References
 
 - adj_factors cache / silent-staleness concerns (addressed by append-only + audit)
-- `src/ashare_lake/adapters/sina/adj_factors.py` — Sina hfq/qfq fetch
-- `src/ashare_lake/query/reader.py` — `_apply_adjustment`
+- `src/cn_market_lake/adapters/sina/adj_factors.py` — Sina hfq/qfq fetch
+- `src/cn_market_lake/query/reader.py` — `_apply_adjustment`

@@ -3,15 +3,15 @@ from datetime import date
 import polars as pl
 import pytest
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.adapters.cninfo.regulatory import fetch_regulatory_events
-from ashare_lake.adapters.eastmoney.share_unlock import fetch_share_unlock_schedule
-from ashare_lake.adapters.macro.indicators import fetch_macro_indicators
-from ashare_lake.config import Config
-from ashare_lake.derive.market_breadth import compute_market_breadth
-from ashare_lake.domain.schemas import validate_dataframe
-from ashare_lake.orchestrator.registry import get_step
-from ashare_lake.query import load
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.adapters.cninfo.regulatory import fetch_regulatory_events
+from cn_market_lake.adapters.eastmoney.share_unlock import fetch_share_unlock_schedule
+from cn_market_lake.adapters.macro.indicators import fetch_macro_indicators
+from cn_market_lake.config import Config
+from cn_market_lake.derive.market_breadth import compute_market_breadth
+from cn_market_lake.domain.schemas import validate_dataframe
+from cn_market_lake.orchestrator.registry import get_step
+from cn_market_lake.query import load
 
 
 class FakeDatacenterClient:
@@ -76,7 +76,7 @@ def test_v11_steps_registered():
 
 def _no_social_financing(monkeypatch):
     """Keep tests hermetic — 社融 is a live MOFCOM call."""
-    from ashare_lake.adapters.macro import indicators as macro_indicators
+    from cn_market_lake.adapters.macro import indicators as macro_indicators
 
     monkeypatch.setattr(macro_indicators, "_social_financing_rows", lambda _td, config=None: [])
 
@@ -148,7 +148,7 @@ def test_macro_m2_reads_the_yoy_column_not_a_positional_fallback():
     and the lake stored M0 month-over-month growth under the name `m2_yoy`.
     Reading a named field cannot fail that way.
     """
-    from ashare_lake.adapters.macro.indicators import _EM_MONTHLY_SERIES, _eastmoney_monthly
+    from cn_market_lake.adapters.macro.indicators import _EM_MONTHLY_SERIES, _eastmoney_monthly
 
     assert _EM_MONTHLY_SERIES["m2_yoy"]["value_column"] == "BASIC_CURRENCY_SAME"
     rows = _eastmoney_monthly(
@@ -161,7 +161,7 @@ def test_macro_m2_reads_the_yoy_column_not_a_positional_fallback():
 
 def test_macro_monthly_obs_dates_land_on_month_end_and_respect_trade_date():
     """Month-start REPORT_DATE is converted; future months are not published early."""
-    from ashare_lake.adapters.macro.indicators import _eastmoney_monthly
+    from cn_market_lake.adapters.macro.indicators import _eastmoney_monthly
 
     rows = _eastmoney_monthly(
         FakeDatacenterClient(_EM_MONTHLY_BATCHES),  # type: ignore[arg-type]
@@ -173,7 +173,7 @@ def test_macro_monthly_obs_dates_land_on_month_end_and_respect_trade_date():
 
 
 def test_social_financing_comes_from_pboc(monkeypatch):
-    from ashare_lake.adapters.macro import indicators as macro_indicators
+    from cn_market_lake.adapters.macro import indicators as macro_indicators
 
     monkeypatch.setattr(
         macro_indicators,
@@ -199,7 +199,7 @@ def test_social_financing_comes_from_pboc(monkeypatch):
 
 @pytest.mark.parametrize("enabled", [False])
 def test_social_financing_honours_sources_pboc(tmp_path, enabled):
-    from ashare_lake.adapters.macro.indicators import _social_financing_rows
+    from cn_market_lake.adapters.macro.indicators import _social_financing_rows
 
     cfg = Config(data_root=tmp_path / "data")
     cfg.sources = {"pboc": enabled}
@@ -321,7 +321,7 @@ def test_load_macro_indicators_by_date_range(tmp_path):
 
 
 def test_parse_series_obs_date_handles_month_formats():
-    from ashare_lake.adapters.macro.indicators import _parse_series_obs_date
+    from cn_market_lake.adapters.macro.indicators import _parse_series_obs_date
 
     # Monthly-only helper: every accepted form maps to the month's last day.
     # EastMoney reports monthly observations at month *start*, and curated has
@@ -339,8 +339,8 @@ def test_parse_series_obs_date_handles_month_formats():
 def test_lake_health_snapshot(tmp_path):
     import polars as pl
 
-    from ashare_lake.config import Config
-    from ashare_lake.quality.audit import lake_health
+    from cn_market_lake.config import Config
+    from cn_market_lake.quality.audit import lake_health
 
     # The health snapshot is an offline unit test. Without a curated
     # instruments file, the delisted-universe report falls back to the source

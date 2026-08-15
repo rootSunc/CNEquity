@@ -1,6 +1,6 @@
 # quality 模块
 
-路径：`src/ashare_lake/quality/`
+路径：`src/cn_market_lake/quality/`
 
 数据质量保障：run 级审计、湖级健康、跨数据集对账、主备源 diff、failover 快照写入。
 
@@ -36,7 +36,7 @@
 
 ### lake_health(cfg, anchor_date) → dict
 
-`asl audit --full` 使用。检查：
+`cml audit --full` 使用。检查：
 
 | 项 | 说明 |
 |----|------|
@@ -55,7 +55,7 @@
 这不会改变运维 `healthy` 的含义；日更可以健康，但长窗口研究仍被标记为 `universe_ready=false`。需要让命令对研究缺口返回非零时，显式运行：
 
 ```bash
-asl audit --full --research-start 2020-01-01 --research-end 2024-12-31
+cml audit --full --research-start 2020-01-01 --research-end 2024-12-31
 ```
 
 该合同不替下游证明复权精确性、特征覆盖或财报 PIT 语义，这些由研究工作台继续组合门禁。
@@ -92,7 +92,7 @@ asl audit --full --research-start 2020-01-01 --research-end 2024-12-31
 `instruments`；风险警示板名单经 **东财 HTTP** 进入 `trading_status`。不同厂商、
 不同协议、同一个交易所事实。已移除的 AkShare ST 并集只是看起来独立——它查的是
 和东财适配器完全相同的 push2 端点与 `fs` 过滤条件，永远不可能给出不同答案
-（[issue #3](https://github.com/rootSunc/ashare-lake/issues/3)）。
+（[issue #3](https://github.com/rootSunc/cn-market-lake/issues/3)）。
 
 容差 `ST_CROSSCHECK_MAX_DISAGREEMENT = 3`：改名当天两个 step 分别抓取，
 个位数的边界名单属于正常抖动。
@@ -157,7 +157,7 @@ findings，然后照常写入。curated 仍然只持有最新发布值，finding
 
 两者都要发网络请求，因此**都按 `[sources.*]` 开关控制，且缺省为关**
 （与 `daily_bars_close_crosscheck_findings` 一致）——没有配置就意味着离线湖，
-`asl audit` 不该悄悄开始发请求。源不可达时静默跳过。
+`cml audit` 不该悄悄开始发请求。源不可达时静默跳过。
 
 ### 为什么用发布稿而不是统计局的查询接口
 

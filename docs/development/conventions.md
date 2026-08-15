@@ -6,7 +6,7 @@
 
 ## 包布局
 
-所有代码在 `src/ashare_lake/`：
+所有代码在 `src/cn_market_lake/`：
 
 | 子包 | 职责 |
 |------|------|

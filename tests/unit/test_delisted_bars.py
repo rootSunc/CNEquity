@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from ashare_lake.adapters.baostock.delisted_bars import (
+from cn_market_lake.adapters.baostock.delisted_bars import (
     _fetch_one,
     _is_stock,
     roster_on,

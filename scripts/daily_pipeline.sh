@@ -6,7 +6,7 @@
 # Groups run sequentially on purpose: the engine is pinned to workers=1 because
 # mootdx is not fork-safe, and running one source-heavy group at a time avoids
 # hammering the same upstream. A non-trading-day run is a cheap no-op (each
-# `asl run daily` exits 0 with skipped_non_trading_day).
+# `cml run daily` exits 0 with skipped_non_trading_day).
 #
 # One group failing does not abort the rest — we want as much of the day's data
 # as possible — but any failure makes the pipeline exit non-zero after the
@@ -23,27 +23,27 @@
 # mostly re-hits the same outage, so the pass sleeps first — but only when
 # something is actually stale, so a healthy day pays nothing. For an outage
 # lasting hours a separate late-evening cron line is still the better tool:
-#   5 20 * * 1-5 asl run daily --stale-only
+#   5 20 * * 1-5 cml run daily --stale-only
 #
 # Usage: scripts/daily_pipeline.sh [YYYY-MM-DD]
-# Env: ASL_CONFIG, ASL_LOG_DIR, ASL_GROUPS (space-separated override),
-#      ASL_GATE_GROUPS (space-separated; default "core" — failure ⇒ hard fail),
-#      ASL_SOFT_FAIL_OK=1 (default) — gate OK 时东财/soft 失败只告警、exit 0；
+# Env: CML_CONFIG, CML_LOG_DIR, CML_GROUPS (space-separated override),
+#      CML_GATE_GROUPS (space-separated; default "core" — failure ⇒ hard fail),
+#      CML_SOFT_FAIL_OK=1 (default) — gate OK 时东财/soft 失败只告警、exit 0；
 #        设为 0 则 soft 失败仍 exit 1（国内全组日更可用），
-#      ASL_STALE_RETRY=1 (default) — 收尾补抓仍落后的数据集；0 关闭，
-#      ASL_STALE_RETRY_DELAY_SEC=1800 (default) — 补抓前等多久，
-#      ASL_TRADE_DATE (same as optional CLI arg — catch up a prior session).
+#      CML_STALE_RETRY=1 (default) — 收尾补抓仍落后的数据集；0 关闭，
+#      CML_STALE_RETRY_DELAY_SEC=1800 (default) — 补抓前等多久，
+#      CML_TRADE_DATE (same as optional CLI arg — catch up a prior session).
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Overridable so the control flow can be exercised against a stub instead of a
 # real lake and a real network.
-ASL="${ASL_BIN:-$REPO_ROOT/.venv/bin/asl}"
-CONFIG="${ASL_CONFIG:-$REPO_ROOT/configs/ashare-lake.toml}"
-LOG_DIR="${ASL_LOG_DIR:-$REPO_ROOT/data/ashare-lake/logs}"
+CML="${CML_BIN:-$REPO_ROOT/.venv/bin/cml}"
+CONFIG="${CML_CONFIG:-$REPO_ROOT/configs/cn-market-lake.toml}"
+LOG_DIR="${CML_LOG_DIR:-$REPO_ROOT/data/cn-market-lake/logs}"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/daily-$(date +%Y%m%d).log"
-TRADE_DATE="${1:-${ASL_TRADE_DATE:-}}"
+TRADE_DATE="${1:-${CML_TRADE_DATE:-}}"
 # Expanded below as ${DATE_ARGS[@]+"${DATE_ARGS[@]}"}: macOS ships bash 3.2,
 # where "${arr[@]}" on an empty array is an unbound-variable error under `set -u`
 # (fixed in bash 4.4). Every scheduled run omits --trade-date, so the array is
@@ -53,15 +53,15 @@ if [[ -n "$TRADE_DATE" ]]; then
   DATE_ARGS=(--trade-date "$TRADE_DATE")
 fi
 
-# Order mirrors configs/ashare-lake.toml [job.daily.groups] cadence
+# Order mirrors configs/cn-market-lake.toml [job.daily.groups] cadence
 # (core 16:00 → research 18:30). Sequential, not by wall-clock time.
 # NB: not named GROUPS — that is a reserved bash builtin (user group IDs).
-GROUP_LIST="${ASL_GROUPS:-core capital signals fundamentals macro_risk research}"
-GATE_GROUP_LIST="${ASL_GATE_GROUPS:-core}"
+GROUP_LIST="${CML_GROUPS:-core capital signals fundamentals macro_risk research}"
+GATE_GROUP_LIST="${CML_GATE_GROUPS:-core}"
 # Overseas Mac: expected EM lag must not paint the whole day red.
-SOFT_FAIL_OK="${ASL_SOFT_FAIL_OK:-1}"
-STALE_RETRY="${ASL_STALE_RETRY:-1}"
-STALE_RETRY_DELAY_SEC="${ASL_STALE_RETRY_DELAY_SEC:-1800}"
+SOFT_FAIL_OK="${CML_SOFT_FAIL_OK:-1}"
+STALE_RETRY="${CML_STALE_RETRY:-1}"
+STALE_RETRY_DELAY_SEC="${CML_STALE_RETRY_DELAY_SEC:-1800}"
 
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
 
@@ -83,7 +83,7 @@ summary_status=()
 
 for g in $GROUP_LIST; do
   log "--- group: $g ---"
-  if "$ASL" run daily --group "$g" --config "$CONFIG" ${DATE_ARGS[@]+"${DATE_ARGS[@]}"} >>"$LOG" 2>&1; then
+  if "$CML" run daily --group "$g" --config "$CONFIG" ${DATE_ARGS[@]+"${DATE_ARGS[@]}"} >>"$LOG" 2>&1; then
     log "group $g OK"
     summary_names+=("$g")
     summary_status+=("OK")
@@ -101,20 +101,20 @@ for g in $GROUP_LIST; do
 done
 
 # Second attempt at whatever is still behind, before the health check so a
-# successful repair does not page anyone. `asl status --datasets` exits 1 when
+# successful repair does not page anyone. `cml status --datasets` exits 1 when
 # something is STALE, which makes it the probe: on a clean day this costs one
 # directory walk and skips the sleep entirely.
 stale_retry_status="skipped"
 if [[ "$STALE_RETRY" == "1" ]]; then
   log "--- stale probe ---"
-  if "$ASL" status --datasets --config "$CONFIG" >>"$LOG" 2>&1; then
+  if "$CML" status --datasets --config "$CONFIG" >>"$LOG" 2>&1; then
     log "nothing stale — no retry needed"
     stale_retry_status="not needed"
   else
     log "something is stale; waiting ${STALE_RETRY_DELAY_SEC}s before re-fetching"
     sleep "$STALE_RETRY_DELAY_SEC"
     log "--- stale retry ---"
-    if "$ASL" run daily --stale-only --config "$CONFIG" \
+    if "$CML" run daily --stale-only --config "$CONFIG" \
       ${DATE_ARGS[@]+"${DATE_ARGS[@]}"} >>"$LOG" 2>&1; then
       log "stale retry OK"
       stale_retry_status="OK"
@@ -142,11 +142,11 @@ fi
 
 # Staging is per-run scratch; once a run succeeded and compact merged it into
 # curated it is pure duplication. Nothing ran this automatically before, so it
-# grew to ~60% of the curated layer. `asl clean` only drops staging whose run
+# grew to ~60% of the curated layer. `cml clean` only drops staging whose run
 # succeeded *and* compacted (or is an unknown orphan past retention) — the
 # staging of a failed run is resumable state and is always kept.
 log "--- clean staging ---"
-if ! "$ASL" clean --config "$CONFIG" >>"$LOG" 2>&1; then
+if ! "$CML" clean --config "$CONFIG" >>"$LOG" 2>&1; then
   log "staging cleanup FAILED (non-fatal)"
 fi
 

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import polars as pl
 
-from ashare_lake.steps import bars
+from cn_market_lake.steps import bars
 
 
 def test_backfill_window_defaults_and_overrides(tmp_path):
@@ -66,7 +66,7 @@ def test_sweep_stock_bars_planned_abort_streak(monkeypatch):
         calls["n"] += 1
         raise RuntimeError("down")
 
-    monkeypatch.setattr("ashare_lake.adapters.ths.stock_bars.fetch_stock_bars", boom)
+    monkeypatch.setattr("cn_market_lake.adapters.ths.stock_bars.fetch_stock_bars", boom)
     batches = []
     failed = bars.sweep_stock_bars_planned(
         plan,
@@ -86,7 +86,7 @@ def test_daily_bars_no_trade_amount_is_exactly_zero():
     ``int()`` hid it on ``volume``; ``amount`` is a float and kept it, so
     ``amount > 0`` came to mean "was quoted" rather than "traded".
     """
-    from ashare_lake.adapters.tdx_protocol.bars import _parse_bar_rows
+    from cn_market_lake.adapters.tdx_protocol.bars import _parse_bar_rows
 
     denormal = 2.0**-127
     pdf = pl.DataFrame(
@@ -108,7 +108,7 @@ def test_daily_bars_no_trade_amount_is_exactly_zero():
 
 
 def test_daily_bars_real_quantities_are_untouched_by_the_zero_snap():
-    from ashare_lake.adapters.tdx_protocol.bars import _parse_bar_rows
+    from cn_market_lake.adapters.tdx_protocol.bars import _parse_bar_rows
 
     pdf = pl.DataFrame(
         [

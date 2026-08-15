@@ -5,12 +5,12 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.adapters.baostock.instruments import fetch_instrument_basics
-from ashare_lake.config import Config
-from ashare_lake.steps.delisted import known_delisted_instruments
-from ashare_lake.steps.reference import _merge_delisted_instruments
-from ashare_lake.storage.instruments import compact_instruments
-from ashare_lake.storage.parquet import StagingWriter
+from cn_market_lake.adapters.baostock.instruments import fetch_instrument_basics
+from cn_market_lake.config import Config
+from cn_market_lake.steps.delisted import known_delisted_instruments
+from cn_market_lake.steps.reference import _merge_delisted_instruments
+from cn_market_lake.storage.instruments import compact_instruments
+from cn_market_lake.storage.parquet import StagingWriter
 
 
 class _FakeResultSet:
@@ -115,7 +115,7 @@ def _config_with_baostock(tmp_path, enabled=True):
 def test_merge_appends_delisted_and_fills_list_dates(tmp_path, monkeypatch):
     cfg = _config_with_baostock(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.adapters.baostock.instruments.import_baostock",
+        "cn_market_lake.adapters.baostock.instruments.import_baostock",
         lambda: _FakeBaostock(_ROWS),
     )
     live = _live_snapshot(["600519.SH", "000001.SZ"])
@@ -149,7 +149,7 @@ def test_merge_skips_names_baostock_calls_listed_but_snapshot_omits(tmp_path, mo
     """Ambiguous rows must not inject untradable symbols into all_a."""
     cfg = _config_with_baostock(tmp_path)
     monkeypatch.setattr(
-        "ashare_lake.adapters.baostock.instruments.import_baostock",
+        "cn_market_lake.adapters.baostock.instruments.import_baostock",
         lambda: _FakeBaostock(_ROWS),
     )
     live = _live_snapshot(["600519.SH"])

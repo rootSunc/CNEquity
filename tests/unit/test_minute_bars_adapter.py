@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta
 
 import pytest
 
-from ashare_lake.adapters.tdx_protocol.minute_bars import (
+from cn_market_lake.adapters.tdx_protocol.minute_bars import (
     FREQUENCIES,
     TdxMinuteBarsError,
     _parse_stamp,
@@ -241,7 +241,7 @@ class RecordingQuotes:
 
 
 def _patch_client(monkeypatch):
-    from ashare_lake.adapters.tdx_protocol import client as client_mod
+    from cn_market_lake.adapters.tdx_protocol import client as client_mod
 
     RecordingQuotes.instances = []
     monkeypatch.setattr(client_mod, "_quotes_client", lambda config: RecordingQuotes())
@@ -409,7 +409,7 @@ def test_single_worker_calls_heartbeat_before_each_symbol(monkeypatch):
 
 
 def test_single_worker_records_a_raised_symbol_without_failing_the_batch(monkeypatch):
-    from ashare_lake.adapters.tdx_protocol import client as client_mod
+    from cn_market_lake.adapters.tdx_protocol import client as client_mod
 
     class Flaky:
         def bars(self, symbol, frequency, market, start, offset):
@@ -428,7 +428,7 @@ def test_single_worker_records_a_raised_symbol_without_failing_the_batch(monkeyp
 
 
 def test_wire_client_unavailable_raises_a_named_error(monkeypatch):
-    from ashare_lake.adapters.tdx_protocol import client as client_mod
+    from cn_market_lake.adapters.tdx_protocol import client as client_mod
 
     monkeypatch.setattr(client_mod, "_CONNECT_RETRY_BACKOFF_SEC", 0)
 
@@ -441,7 +441,7 @@ def test_wire_client_unavailable_raises_a_named_error(monkeypatch):
 
 
 def test_general_fetch_failure_resets_server_cache_and_raises(monkeypatch):
-    from ashare_lake.adapters.tdx_protocol import client as client_mod
+    from cn_market_lake.adapters.tdx_protocol import client as client_mod
 
     monkeypatch.setattr(client_mod, "_CONNECT_RETRY_BACKOFF_SEC", 0)
     reset_calls = []
@@ -490,7 +490,7 @@ def test_unparseable_row_is_skipped_without_breaking_the_page():
 
 
 def test_connect_with_retry_succeeds_after_one_failure(monkeypatch):
-    from ashare_lake.adapters.tdx_protocol import client as client_mod
+    from cn_market_lake.adapters.tdx_protocol import client as client_mod
 
     monkeypatch.setattr(client_mod, "_CONNECT_RETRY_BACKOFF_SEC", 0)
     reset_calls = []
@@ -512,7 +512,7 @@ def test_connect_with_retry_succeeds_after_one_failure(monkeypatch):
 
 
 def test_connect_with_retry_raises_the_last_error_once_exhausted(monkeypatch):
-    from ashare_lake.adapters.tdx_protocol import client as client_mod
+    from cn_market_lake.adapters.tdx_protocol import client as client_mod
 
     monkeypatch.setattr(client_mod, "_CONNECT_RETRY_BACKOFF_SEC", 0)
     monkeypatch.setattr(client_mod, "reset_tdx_server_cache", lambda: None)

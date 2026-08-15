@@ -3,8 +3,8 @@ from datetime import date, datetime, timezone
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.query.reader import ReaderError, load, resolve_config
+from cn_market_lake.config import Config
+from cn_market_lake.query.reader import ReaderError, load, resolve_config
 
 
 def _prov(source: str = "test") -> dict:
@@ -251,7 +251,7 @@ def test_load_raises_when_dataset_has_no_parquet_files(lake):
         load("corporate_actions", config=lake)
 
 
-def test_resolve_config_raises_without_ashare_lake_toml(tmp_path, monkeypatch):
+def test_resolve_config_raises_without_cn_market_lake_toml(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ReaderError, match="No config found"):
         resolve_config()
@@ -271,8 +271,8 @@ def test_load_index_bars_rejects_universe_filter(lake):
 def test_scan_returns_lazyframe_with_pushdown(tmp_path):
     import polars as pl
 
-    from ashare_lake.config import Config
-    from ashare_lake.query.reader import ReaderError, scan
+    from cn_market_lake.config import Config
+    from cn_market_lake.query.reader import ReaderError, scan
 
     cfg = Config(data_root=tmp_path)
     out_dir = tmp_path / "curated" / "daily_bars" / "trade_date=2024-06-28"
@@ -302,8 +302,8 @@ def test_scan_returns_lazyframe_with_pushdown(tmp_path):
 def test_list_datasets_catalog(tmp_path):
     import polars as pl
 
-    from ashare_lake.config import Config
-    from ashare_lake.query.reader import list_datasets
+    from cn_market_lake.config import Config
+    from cn_market_lake.query.reader import list_datasets
 
     cfg = Config(data_root=tmp_path)
     out_dir = tmp_path / "curated" / "daily_bars" / "trade_date=2024-06-28"
@@ -337,7 +337,7 @@ def test_list_datasets_catalog(tmp_path):
 def test_dataset_schema_contract():
     import polars as pl
 
-    from ashare_lake.query.reader import dataset_schema
+    from cn_market_lake.query.reader import dataset_schema
 
     schema = dataset_schema("daily_bars")
     assert schema["trade_date"] == pl.Date

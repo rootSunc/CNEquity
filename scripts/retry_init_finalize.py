@@ -12,13 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-import ashare_lake.steps  # noqa: F401
-from ashare_lake.config import load_config
-from ashare_lake.orchestrator.engine import JobEngine
+import cn_market_lake.steps  # noqa: F401
+from cn_market_lake.config import load_config
+from cn_market_lake.orchestrator.engine import JobEngine
 
 RUN_ID = "12dfdb4d-46b6-46e8-b587-baae161e23a1"
 TRADE_DATE = date(2026, 7, 6)
-CONFIG = ROOT / "configs/ashare-lake.toml"
+CONFIG = ROOT / "configs/cn-market-lake.toml"
 
 
 def main() -> int:

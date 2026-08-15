@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from ashare_lake.adapters.eastmoney.bars import _secid, fetch_daily_bars
+from cn_market_lake.adapters.eastmoney.bars import _secid, fetch_daily_bars
 
 
 class _Response:
@@ -98,7 +98,7 @@ def test_fetch_daily_bars_owns_and_closes_default_client(monkeypatch):
         created.append(client)
         return client
 
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.bars.EastMoneyClient", _factory)
+    monkeypatch.setattr("cn_market_lake.adapters.eastmoney.bars.EastMoneyClient", _factory)
     df = fetch_daily_bars(["600519.SH"], date(2024, 6, 1), date(2024, 6, 28))
     assert df.is_empty()
     assert created[0].closed is True

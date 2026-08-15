@@ -1,6 +1,6 @@
 # macro 适配器
 
-路径：`src/ashare_lake/adapters/macro/`
+路径：`src/cn_market_lake/adapters/macro/`
 
 宏观经济指标采集，写入 `macro_indicators` 数据集。
 
@@ -28,7 +28,7 @@
 
 PMI 与 M2 曾经走 AkShare。它的两个包装函数请求的正是上表里同一个东财
 datacenter 端点，所以直连没有换发布方，只是去掉了一层解析，并接上本项目自己的
-重试 / 限速 / TLS 处理。见 [issue #3](https://github.com/rootSunc/ashare-lake/issues/3)。
+重试 / 限速 / TLS 处理。见 [issue #3](https://github.com/rootSunc/cn-market-lake/issues/3)。
 
 > `m2_yoy` 必须读 `BASIC_CURRENCY_SAME`。AkShare 路径用中文列名做子串匹配、
 > 匹配不上时回落到「最后一列」，而它的关键词 `M2-同比增长` 从来匹配不上真实列名
@@ -56,7 +56,7 @@ datacenter 端点，所以直连没有换发布方，只是去掉了一层解析
 ## 与权威发布方的对照（2026-08-01 实测）
 
 #9 只验证了「直连东财 == AkShare 包装」，没验证东财本身是否可信。
-[issue #10](https://github.com/rootSunc/ashare-lake/issues/10) 补上了这一步：
+[issue #10](https://github.com/rootSunc/cn-market-lake/issues/10) 补上了这一步：
 
 | 指标 | 本项目取值 | 权威发布 | 结论 |
 |------|-----------|----------|------|

@@ -2,12 +2,12 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.adapters.calendar.exchange_calendar import (
+from cn_market_lake.adapters.calendar.exchange_calendar import (
     build_trading_calendar,
     calendar_forward_coverage_days,
     calendar_seed_end,
 )
-from ashare_lake.adapters.calendar.holidays_cn import EXTRA_TRADING_DATES
+from cn_market_lake.adapters.calendar.holidays_cn import EXTRA_TRADING_DATES
 
 
 def test_cny_holiday_not_trading():

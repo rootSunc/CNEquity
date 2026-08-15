@@ -1,9 +1,9 @@
 # Python API 参考
 
-模块：`ashare_lake.query`
+模块：`cn_market_lake.query`
 
 ```python
-from ashare_lake.query import load, scan, list_datasets, dataset_schema
+from cn_market_lake.query import load, scan, list_datasets, dataset_schema
 ```
 
 ---
@@ -41,7 +41,7 @@ def load(
 | `symbols` | symbol 白名单 |
 | `strict_adj` | True 时缺复权因子抛 `ReaderError` |
 | `all_vintages` | True 时返回 `as_of` 前的**全部**版本（研究财报修订用）；截面选股勿开，会重复计同一事实 |
-| `config` / `data_root` | 湖位置；默认读 `configs/ashare-lake.toml` |
+| `config` / `data_root` | 湖位置；默认读 `configs/cn-market-lake.toml` |
 
 ### 返回
 
@@ -94,7 +94,7 @@ def dataset_schema(dataset: str) -> dict[str, pl.DataType]
 ## 配置解析
 
 ```python
-from ashare_lake.query.reader import resolve_config
+from cn_market_lake.query.reader import resolve_config
 
 cfg = resolve_config(config=my_cfg)
 cfg = resolve_config(data_root="/path/to/lake")
@@ -138,14 +138,14 @@ idx = load("index_bars", start="2024-01-01", symbols=["000300.SH"])
 ### 显式 data_root（无需 toml）
 
 ```python
-bars = load("daily_bars", start="2024-06-01", data_root="/data/ashare-lake")
+bars = load("daily_bars", start="2024-06-01", data_root="/data/cn-market-lake")
 ```
 
 ---
 
 ## DuckDB 等价
 
-视图由 `query/views.py` 维护。SQL 用户可用 `asl query` 或直连 duckdb 文件，语义应与 `load()` 对齐（复权视图见 `daily_bars_adj`）。
+视图由 `query/views.py` 维护。SQL 用户可用 `cml query` 或直连 duckdb 文件，语义应与 `load()` 对齐（复权视图见 `daily_bars_adj`）。
 
 ---
 

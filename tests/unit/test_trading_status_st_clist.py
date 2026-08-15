@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import ashare_lake.adapters.eastmoney.trading_status as ts
+import cn_market_lake.adapters.eastmoney.trading_status as ts
 
 
 def test_fetch_st_symbols_uses_clist_failover(monkeypatch):

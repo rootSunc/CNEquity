@@ -9,9 +9,9 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.query import load
-from ashare_lake.steps.delisted import classify_ending, write_delisting_events
+from cn_market_lake.config import Config
+from cn_market_lake.query import load
+from cn_market_lake.steps.delisted import classify_ending, write_delisting_events
 
 
 def _series(closes: list[float], gaps: dict[int, int] | None = None) -> pl.DataFrame:

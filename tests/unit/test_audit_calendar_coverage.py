@@ -1,7 +1,7 @@
 from datetime import date
 
-from ashare_lake.config import Config
-from ashare_lake.quality.audit import run_audit
+from cn_market_lake.config import Config
+from cn_market_lake.quality.audit import run_audit
 
 
 def test_audit_warns_when_calendar_forward_coverage_under_90_days(tmp_path):

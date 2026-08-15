@@ -3,8 +3,8 @@ from datetime import date, datetime
 import polars as pl
 import pytest
 
-from ashare_lake.config import Config
-from ashare_lake.quality.tick_checks import (
+from cn_market_lake.config import Config
+from cn_market_lake.quality.tick_checks import (
     DATASET,
     daily_reconciliation_findings,
     direction_findings,

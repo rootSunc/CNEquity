@@ -11,17 +11,17 @@ import polars as pl
 import pytest
 from click.testing import CliRunner
 
-from ashare_lake.cli.main import cli
-from ashare_lake.config.bootstrap import path_for_toml
-from ashare_lake.derive.adj_factors import AdjFactorsResult
-from ashare_lake.orchestrator.engine import JobEngine
-from ashare_lake.orchestrator.run_lock import RunLockError
-from ashare_lake.storage.source_snapshots import SnapshotCleanupResult
-from ashare_lake.storage.staging_cleanup import StagingCleanupResult
+from cn_market_lake.cli.main import cli
+from cn_market_lake.config.bootstrap import path_for_toml
+from cn_market_lake.derive.adj_factors import AdjFactorsResult
+from cn_market_lake.orchestrator.engine import JobEngine
+from cn_market_lake.orchestrator.run_lock import RunLockError
+from cn_market_lake.storage.source_snapshots import SnapshotCleanupResult
+from cn_market_lake.storage.staging_cleanup import StagingCleanupResult
 
 
 def _write_config(tmp_path, *, extra: str = "") -> str:
-    cfg_path = tmp_path / "ashare-lake.toml"
+    cfg_path = tmp_path / "cn-market-lake.toml"
     cfg_path.write_text(
         f"""
 [data]
@@ -120,7 +120,7 @@ def test_status_latest_run(cfg_path, monkeypatch):
         def count_stale_running_runs(self, **kwargs):
             return 0
 
-    monkeypatch.setattr("ashare_lake.cli.main.Manifest", FakeManifest)
+    monkeypatch.setattr("cn_market_lake.cli.main.Manifest", FakeManifest)
     result = CliRunner().invoke(cli, ["status", "--config", cfg_path])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
@@ -130,11 +130,11 @@ def test_status_latest_run(cfg_path, monkeypatch):
 
 def test_status_datasets_all_fresh(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.cli.main._last_trading_day",
+        "cn_market_lake.cli.main._last_trading_day",
         lambda cfg, today: date(2024, 6, 28),
     )
     monkeypatch.setattr(
-        "ashare_lake.query.reader.list_datasets",
+        "cn_market_lake.query.reader.list_datasets",
         lambda config=None: pl.DataFrame(
             {
                 "dataset": ["daily_bars"],
@@ -145,7 +145,7 @@ def test_status_datasets_all_fresh(cfg_path, monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr("ashare_lake.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cn_market_lake.domain.datasets.is_stale", lambda *a, **k: False)
     result = CliRunner().invoke(cli, ["status", "--datasets", "--config", cfg_path])
     assert result.exit_code == 0, result.output
     assert "last trading day: 2024-06-28" in result.output
@@ -160,7 +160,7 @@ def test_retry_unknown_run(cfg_path, monkeypatch):
         def __init__(self, cfg):
             self.manifest = FakeManifest()
 
-    monkeypatch.setattr("ashare_lake.cli.main.JobEngine", FakeEngine)
+    monkeypatch.setattr("cn_market_lake.cli.main.JobEngine", FakeEngine)
     result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--run-id", "missing"])
     assert result.exit_code != 0
     assert "Unknown run_id" in result.output
@@ -181,7 +181,7 @@ def test_retry_init_run(cfg_path, monkeypatch):
         def run_job(self, *a, **k):
             raise AssertionError("non-init path should not run")
 
-    monkeypatch.setattr("ashare_lake.cli.main.JobEngine", FakeEngine)
+    monkeypatch.setattr("cn_market_lake.cli.main.JobEngine", FakeEngine)
     result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--run-id", "init-1"])
     assert result.exit_code == 0, result.output
     assert "init-1" in result.output
@@ -201,14 +201,14 @@ def test_retry_failed_job(cfg_path, monkeypatch):
             assert kwargs.get("retry_failed_only") is True
             return {"run_id": kwargs["run_id"], "status": "failed"}
 
-    monkeypatch.setattr("ashare_lake.cli.main.JobEngine", FakeEngine)
+    monkeypatch.setattr("cn_market_lake.cli.main.JobEngine", FakeEngine)
     result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--run-id", "d1"])
     assert result.exit_code == 1
 
 
 def test_derive_adj_factors(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.cli.main.compute_adj_factors",
+        "cn_market_lake.cli.main.compute_adj_factors",
         lambda cfg, full=False: AdjFactorsResult(rows=12, task_count=12, failed=[], findings=[]),
     )
     result = CliRunner().invoke(cli, ["derive", "adj_factors", "--config", cfg_path])
@@ -218,7 +218,7 @@ def test_derive_adj_factors(cfg_path, monkeypatch):
 
 def test_derive_industry_index(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.derive.industry_index.derive_industry_index",
+        "cn_market_lake.derive.industry_index.derive_industry_index",
         lambda cfg, full=False, start=None, end=None: {"rows": 3, "note": "ok"},
     )
     result = CliRunner().invoke(cli, ["derive", "industry_index", "--config", cfg_path])
@@ -234,7 +234,7 @@ def test_derive_unknown_target(cfg_path):
 
 def test_clean_dry_run(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.cli.main.clean_staging",
+        "cn_market_lake.cli.main.clean_staging",
         lambda cfg, **kwargs: StagingCleanupResult(
             removed_run_ids=["r1"],
             orphan_run_ids=[],
@@ -243,7 +243,7 @@ def test_clean_dry_run(cfg_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "ashare_lake.cli.main.clean_source_snapshots",
+        "cn_market_lake.cli.main.clean_source_snapshots",
         lambda meta_root, **kwargs: SnapshotCleanupResult(
             removed_run_dirs=[], kept_run_dirs=["s1"], bytes_freed=20
         ),
@@ -257,7 +257,7 @@ def test_clean_dry_run(cfg_path, monkeypatch):
 
 
 def test_catalog_lists_datasets(tmp_path, cfg_path):
-    from ashare_lake.config import load_config
+    from cn_market_lake.config import load_config
 
     cfg = load_config(cfg_path)
     part = cfg.curated_root / "daily_bars" / "trade_date=2024-06-28"
@@ -292,7 +292,7 @@ def test_query_on_demand(cfg_path, monkeypatch):
         def fetch(self, dataset, symbol):
             return {"dataset": dataset, "symbol": symbol, "rows": 0}
 
-    monkeypatch.setattr("ashare_lake.cli.main.OnDemandService", FakeSvc)
+    monkeypatch.setattr("cn_market_lake.cli.main.OnDemandService", FakeSvc)
     result = CliRunner().invoke(
         cli,
         ["query", "--config", cfg_path, "--dataset", "daily_bars", "--symbol", "600519.SH"],
@@ -313,7 +313,7 @@ def test_query_sql(cfg_path, monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("ashare_lake.cli.main.ensure_duckdb_views", lambda cfg: db)
+    monkeypatch.setattr("cn_market_lake.cli.main.ensure_duckdb_views", lambda cfg: db)
     monkeypatch.setattr("duckdb.connect", lambda *a, **k: FakeCon())
     result = CliRunner().invoke(cli, ["query", "--config", cfg_path, "--sql", "SELECT 1 AS n"])
     assert result.exit_code == 0, result.output
@@ -321,17 +321,17 @@ def test_query_sql(cfg_path, monkeypatch, tmp_path):
 
 
 def test_audit_with_run_id(cfg_path, monkeypatch):
-    monkeypatch.setattr("ashare_lake.cli.main.run_audit", lambda cfg, rid, d: 2)
+    monkeypatch.setattr("cn_market_lake.cli.main.run_audit", lambda cfg, rid, d: 2)
     result = CliRunner().invoke(cli, ["audit", "--config", cfg_path, "--run-id", "r1"])
     assert result.exit_code == 0, result.output
     assert "2 findings" in result.output
 
 
 def test_servers_connection_failure(cfg_path, monkeypatch):
-    """`asl servers test` now delegates to the tdx probe, which asserts that
+    """`cml servers test` now delegates to the tdx probe, which asserts that
     real bars came back rather than that a socket opened. Still exits 1, and
     the reason it reports is the vendor's, not "connection failed"."""
-    import ashare_lake.adapters.tdx_protocol.client as tdx_client
+    import cn_market_lake.adapters.tdx_protocol.client as tdx_client
 
     monkeypatch.setattr(
         tdx_client,
@@ -341,7 +341,7 @@ def test_servers_connection_failure(cfg_path, monkeypatch):
     result = CliRunner().invoke(cli, ["servers", "test", "--config", cfg_path])
     assert result.exit_code == 1
     assert "unreachable" in result.output
-    assert "asl sources --only tdx_protocol" in result.output
+    assert "cml sources --only tdx_protocol" in result.output
 
 
 def test_compact_uses_latest_run(cfg_path, monkeypatch):
@@ -361,8 +361,8 @@ def test_compact_uses_latest_run(cfg_path, monkeypatch):
             assert run_id == "latest-1"
             return {"rows_written": 9}
 
-    monkeypatch.setattr("ashare_lake.cli.main.Manifest", FakeManifest)
-    monkeypatch.setattr("ashare_lake.cli.main.JobEngine", FakeEngine)
+    monkeypatch.setattr("cn_market_lake.cli.main.Manifest", FakeManifest)
+    monkeypatch.setattr("cn_market_lake.cli.main.JobEngine", FakeEngine)
     result = CliRunner().invoke(cli, ["compact", "--config", cfg_path])
     assert result.exit_code == 0, result.output
     assert "latest-1" in result.output
@@ -376,7 +376,7 @@ def test_compact_no_runs(cfg_path, monkeypatch):
         def latest_run(self):
             return None
 
-    monkeypatch.setattr("ashare_lake.cli.main.Manifest", FakeManifest)
+    monkeypatch.setattr("cn_market_lake.cli.main.Manifest", FakeManifest)
     result = CliRunner().invoke(cli, ["compact", "--config", cfg_path])
     assert result.exit_code != 0
     assert "No runs found" in result.output
@@ -384,7 +384,7 @@ def test_compact_no_runs(cfg_path, monkeypatch):
 
 def test_repartition_lists_candidates(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.storage.repartition.repartition_candidates",
+        "cn_market_lake.storage.repartition.repartition_candidates",
         lambda cfg: ["index_bars"],
     )
     result = CliRunner().invoke(cli, ["repartition", "--config", cfg_path])
@@ -393,14 +393,14 @@ def test_repartition_lists_candidates(cfg_path, monkeypatch):
 
 
 def test_repartition_dataset_dry_run(cfg_path, monkeypatch):
-    from ashare_lake.storage.repartition import RepartitionResult
+    from cn_market_lake.storage.repartition import RepartitionResult
 
     monkeypatch.setattr(
-        "ashare_lake.storage.repartition.repartition_candidates",
+        "cn_market_lake.storage.repartition.repartition_candidates",
         lambda cfg: ["index_bars"],
     )
     monkeypatch.setattr(
-        "ashare_lake.storage.repartition.repartition_dataset",
+        "cn_market_lake.storage.repartition.repartition_dataset",
         lambda cfg, name, dry_run=False: RepartitionResult(
             dataset=name,
             changed=True,
@@ -424,7 +424,7 @@ def test_repartition_dataset_dry_run(cfg_path, monkeypatch):
 
 def test_audit_full_healthy(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.quality.audit.lake_health",
+        "cn_market_lake.quality.audit.lake_health",
         lambda cfg, d, **kwargs: {
             "last_trading_day": "2024-06-28",
             "findings_by_severity": {"error": 0, "warning": 0, "info": 1},
@@ -447,7 +447,7 @@ def test_audit_full_healthy(cfg_path, monkeypatch):
 
 def test_audit_full_unhealthy(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.quality.audit.lake_health",
+        "cn_market_lake.quality.audit.lake_health",
         lambda cfg, d, **kwargs: {
             "last_trading_day": "2024-06-28",
             "findings_by_severity": {"error": 1, "warning": 0, "info": 0},
@@ -470,7 +470,7 @@ def test_audit_full_unhealthy(cfg_path, monkeypatch):
 
 def test_audit_full_research_window_is_a_strict_independent_gate(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.quality.audit.lake_health",
+        "cn_market_lake.quality.audit.lake_health",
         lambda cfg, d, **kwargs: {
             "last_trading_day": "2024-06-28",
             "findings_by_severity": {},
@@ -500,7 +500,7 @@ def test_audit_full_research_window_is_a_strict_independent_gate(cfg_path, monke
 
 def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.derive.trading_status_history.derive_suspension_history",
+        "cn_market_lake.derive.trading_status_history.derive_suspension_history",
         lambda cfg, start=None, end=None: 7,
     )
     result = CliRunner().invoke(
@@ -520,7 +520,7 @@ def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
     assert "7 rows" in result.output
 
     monkeypatch.setattr(
-        "ashare_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
+        "cn_market_lake.storage.valuation_orphans.purge_valuation_orphan_symbols",
         lambda cfg: {"purged_symbols": 2},
     )
     result = CliRunner().invoke(cli, ["derive", "valuation_orphans", "--config", cfg_path])
@@ -530,7 +530,7 @@ def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
 
 def test_delisted_discover_and_status(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.discover_delisted",
+        "cn_market_lake.steps.delisted.discover_delisted",
         lambda cfg, limit=None: SimpleNamespace(
             probed=10,
             delisted=2,
@@ -547,12 +547,12 @@ def test_delisted_discover_and_status(cfg_path, monkeypatch):
     assert '"probed": 10' in result.output
 
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.classify_catalog",
+        "cn_market_lake.steps.delisted.classify_catalog",
         lambda cfg: ({"600001.SH": date(2020, 1, 2)}, set()),
     )
-    monkeypatch.setattr("ashare_lake.steps.delisted.pending_codes", lambda cfg: ["000002"])
+    monkeypatch.setattr("cn_market_lake.steps.delisted.pending_codes", lambda cfg: ["000002"])
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.delisted_symbols_in_window",
+        "cn_market_lake.steps.delisted.delisted_symbols_in_window",
         lambda cfg, start: ["600001.SH"],
     )
     result = CliRunner().invoke(cli, ["delisted", "status", "--config", cfg_path])
@@ -568,7 +568,7 @@ def test_delisted_coverage_uses_exit_status_as_a_strict_gate(cfg_path, monkeypat
         "verified": True,
     }
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.delisted_coverage_report",
+        "cn_market_lake.steps.delisted.delisted_coverage_report",
         lambda cfg, start, end, sample=15: report,
     )
 
@@ -601,11 +601,11 @@ def test_delisted_reconcile_is_dry_run_unless_apply_is_explicit(cfg_path, monkey
     seen = []
     report = {"read_only": True, "counts": {"safe_correction": 1}}
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.delisted_catalog_reconciliation_report",
+        "cn_market_lake.steps.delisted.delisted_catalog_reconciliation_report",
         lambda cfg, sample=15: seen.append("dry-run") or report,
     )
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.reconcile_delisted_catalog",
+        "cn_market_lake.steps.delisted.reconcile_delisted_catalog",
         lambda cfg, sample=15: seen.append("apply") or {**report, "read_only": False},
     )
 
@@ -633,16 +633,16 @@ def test_delisted_repair(cfg_path, monkeypatch):
         def run_step(self, name, trade_date, run_id):
             return {"rows_written": 1}
 
-    monkeypatch.setattr("ashare_lake.cli.main.JobEngine", FakeEngine)
+    monkeypatch.setattr("cn_market_lake.cli.main.JobEngine", FakeEngine)
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.repair_delisted_instruments",
+        "cn_market_lake.steps.delisted.repair_delisted_instruments",
         lambda cfg, run_id, start=None: {"rows_written": 3, "updated": 3},
     )
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.purge_subscription_placeholders",
+        "cn_market_lake.steps.delisted.purge_subscription_placeholders",
         lambda cfg: 1,
     )
-    monkeypatch.setattr("ashare_lake.cli.main.ensure_duckdb_views", lambda cfg: Path("/tmp/x"))
+    monkeypatch.setattr("cn_market_lake.cli.main.ensure_duckdb_views", lambda cfg: Path("/tmp/x"))
     result = CliRunner().invoke(cli, ["delisted", "repair", "--config", cfg_path])
     assert result.exit_code == 0, result.output
     assert "repair-1" in result.output
@@ -663,9 +663,9 @@ def test_delisted_backfill(cfg_path, monkeypatch):
         def run_step(self, name, trade_date, run_id):
             return {"rows_written": 4}
 
-    monkeypatch.setattr("ashare_lake.cli.main.JobEngine", FakeEngine)
+    monkeypatch.setattr("cn_market_lake.cli.main.JobEngine", FakeEngine)
     monkeypatch.setattr(
-        "ashare_lake.steps.delisted.backfill_delisted_bars",
+        "cn_market_lake.steps.delisted.backfill_delisted_bars",
         lambda cfg, run_id, since: {"rows_written": 8, "symbols": 2},
     )
     result = CliRunner().invoke(
@@ -717,7 +717,7 @@ def test_backfill_success_compacts(cfg_path, monkeypatch):
             assert name == "compact"
             return {"rows_written": 1}
 
-    monkeypatch.setattr("ashare_lake.cli.main.JobEngine", FakeEngine)
+    monkeypatch.setattr("cn_market_lake.cli.main.JobEngine", FakeEngine)
     result = CliRunner().invoke(
         cli,
         [
@@ -737,13 +737,13 @@ def test_backfill_success_compacts(cfg_path, monkeypatch):
 
 
 def test_catchup_already_fresh_core_only(cfg_path, monkeypatch):
-    monkeypatch.setattr("ashare_lake.steps.common.is_trading_day", lambda cfg, d: True)
+    monkeypatch.setattr("cn_market_lake.steps.common.is_trading_day", lambda cfg, d: True)
     monkeypatch.setattr(
-        "ashare_lake.cli.main._dataset_watermark",
+        "cn_market_lake.cli.main._dataset_watermark",
         lambda cfg, name: date(2024, 6, 28),
     )
     monkeypatch.setattr(
-        "ashare_lake.cli.main._gate_fresh_for_catchup",
+        "cn_market_lake.cli.main._gate_fresh_for_catchup",
         lambda cfg, td, core_only=False: {
             "daily_bars": True,
             "adj_factors": True,
@@ -760,9 +760,9 @@ def test_catchup_already_fresh_core_only(cfg_path, monkeypatch):
         def run_job(self, *a, **k):
             raise AssertionError("should skip when already fresh")
 
-    monkeypatch.setattr("ashare_lake.cli.main.JobEngine", FakeEngine)
-    from ashare_lake.cli import main as cli_main
-    from ashare_lake.config import ScheduleGroup
+    monkeypatch.setattr("cn_market_lake.cli.main.JobEngine", FakeEngine)
+    from cn_market_lake.cli import main as cli_main
+    from cn_market_lake.config import ScheduleGroup
 
     real_cfg = cli_main._cfg
 

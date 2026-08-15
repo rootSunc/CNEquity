@@ -1,6 +1,6 @@
 # orchestrator 模块
 
-路径：`src/ashare_lake/orchestrator/`
+路径：`src/cn_market_lake/orchestrator/`
 
 采集编排核心：Job 执行、Wave DAG、批级 manifest、多进程 worker、init 分阶段、compact 门禁与 run 锁。
 
@@ -92,10 +92,10 @@ Batch 状态：`pending` → `running` → `success` | `failed` | `stale`
 - `reconcile_orphaned_runs(stale_after_seconds=batch_stale_seconds)`：关闭无活动的
   `running` run；活动时钟 = `max(run.started_at, batch heartbeat/started)`；
   更新幂等（`WHERE status='running'`）
-- `count_stale_running_runs()`：只读信号，供 `asl status` 报告孤儿数
-- `run_summary(run_id)`：供 `asl status` 输出
+- `count_stale_running_runs()`：只读信号，供 `cml status` 报告孤儿数
+- `run_summary(run_id)`：供 `cml status` 输出
 
-运维也可显式：`asl clean --reconcile-runs`（默认窗口同 `batch_stale_seconds`）。
+运维也可显式：`cml clean --reconcile-runs`（默认窗口同 `batch_stale_seconds`）。
 
 ---
 
@@ -106,7 +106,7 @@ Batch 状态：`pending` → `running` → `success` | `failed` | `stale`
 1. 从 instruments 取 symbol 列表，按 `batch_size` 切分
 2. 每 batch 在子进程执行 adapter 拉取 → staging
 3. 子进程独立 TDX 连接（主进程不可 fork 共享连接）
-4. manifest 记录每 batch 状态，支持 `asl retry` 粒度
+4. manifest 记录每 batch 状态，支持 `cml retry` 粒度
 
 分页：突破 TDX 单次 800 条限制，增量模式早停于水位之后。
 

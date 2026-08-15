@@ -3,7 +3,7 @@ from datetime import date
 import polars as pl
 import pytest
 
-from ashare_lake.adapters.tdx_protocol.bars import (
+from cn_market_lake.adapters.tdx_protocol.bars import (
     TdxBarsPaginationError,
     fetch_bars_paginated,
 )

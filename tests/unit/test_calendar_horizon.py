@@ -15,8 +15,8 @@ from datetime import date
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.quality.cross_checks import trading_calendar_horizon_findings
+from cn_market_lake.config import Config
+from cn_market_lake.quality.cross_checks import trading_calendar_horizon_findings
 
 
 def _meta():
@@ -37,7 +37,7 @@ def _calendar(tmp_path, last_trading_day: date) -> Config:
 
 
 def test_silent_while_inside_the_holiday_table(tmp_path):
-    from ashare_lake.adapters.calendar.holidays_cn import CLOSED_DATES
+    from cn_market_lake.adapters.calendar.holidays_cn import CLOSED_DATES
 
     inside = date.fromisoformat(max(CLOSED_DATES))
     assert trading_calendar_horizon_findings(_calendar(tmp_path, inside), date(2026, 8, 7)) == []
@@ -46,7 +46,7 @@ def test_silent_while_inside_the_holiday_table(tmp_path):
 def test_fires_once_the_calendar_outruns_the_table(tmp_path):
     from datetime import timedelta
 
-    from ashare_lake.adapters.calendar.holidays_cn import CLOSED_DATES
+    from cn_market_lake.adapters.calendar.holidays_cn import CLOSED_DATES
 
     table_end = date.fromisoformat(max(CLOSED_DATES))
     beyond = table_end + timedelta(days=90)
@@ -61,11 +61,11 @@ def test_fires_once_the_calendar_outruns_the_table(tmp_path):
 def test_holidays_past_the_table_really_are_marked_as_sessions():
     """The failure the check exists to catch, demonstrated rather than asserted
     in prose: 2028-01-26 is 春节 and the builder calls it a trading day."""
-    from ashare_lake.adapters.calendar.exchange_calendar import (
+    from cn_market_lake.adapters.calendar.exchange_calendar import (
         build_trading_calendar,
         ensure_seed_csv,
     )
-    from ashare_lake.adapters.calendar.holidays_cn import CLOSED_DATES
+    from cn_market_lake.adapters.calendar.holidays_cn import CLOSED_DATES
 
     spring_festival = date(2028, 1, 26)
     assert spring_festival > date.fromisoformat(max(CLOSED_DATES))
@@ -75,7 +75,7 @@ def test_holidays_past_the_table_really_are_marked_as_sessions():
 
 def test_earliest_bar_date_considers_index_bars_too(tmp_path):
     """The calendar start must follow whichever bar dataset reaches furthest."""
-    from ashare_lake.steps.reference import _earliest_bar_date
+    from cn_market_lake.steps.reference import _earliest_bar_date
 
     cfg = Config(data_root=tmp_path / "lake")
     for dataset, day in (("daily_bars", date(2001, 1, 2)), ("index_bars", date(1990, 12, 19))):

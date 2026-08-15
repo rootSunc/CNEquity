@@ -2,7 +2,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
-from ashare_lake.storage.state import StateStore
+from cn_market_lake.storage.state import StateStore
 
 
 def _update_max_worker(meta_root: str, day: int) -> None:

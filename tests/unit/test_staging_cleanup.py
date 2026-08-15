@@ -2,12 +2,12 @@ from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 
-from ashare_lake.config import Config
-from ashare_lake.config.bootstrap import path_for_toml
-from ashare_lake.file_lock import exclusive_lock
-from ashare_lake.orchestrator.manifest import Manifest
-from ashare_lake.storage import StagingWriter
-from ashare_lake.storage.staging_cleanup import (
+from cn_market_lake.config import Config
+from cn_market_lake.config.bootstrap import path_for_toml
+from cn_market_lake.file_lock import exclusive_lock
+from cn_market_lake.orchestrator.manifest import Manifest
+from cn_market_lake.storage import StagingWriter
+from cn_market_lake.storage.staging_cleanup import (
     clean_staging,
     clean_stale_lock_files,
     list_staging_run_ids,
@@ -289,13 +289,13 @@ def test_clean_stale_lock_files_dry_run_keeps_file(tmp_path):
 
 
 def test_engine_run_step_records_a_compact_batch(tmp_path):
-    """`asl backfill` / `asl compact` route through the engine so cleanup can fire.
+    """`cml backfill` / `cml compact` route through the engine so cleanup can fire.
 
     Calling step_compact directly leaves no compact batch in the manifest, and
     run_ready_for_staging_cleanup then refuses that run's staging forever.
     """
-    import ashare_lake.steps  # noqa: F401 — register steps
-    from ashare_lake.orchestrator.engine import JobEngine
+    import cn_market_lake.steps  # noqa: F401 — register steps
+    from cn_market_lake.orchestrator.engine import JobEngine
 
     cfg = Config(data_root=tmp_path / "data", daily_waves=[])
     engine = JobEngine(cfg)
@@ -314,12 +314,12 @@ def test_backfill_finishes_run_only_after_compact(tmp_path, monkeypatch):
     """Backfill must not mark the run terminal before compact is recorded."""
     from click.testing import CliRunner
 
-    import ashare_lake.steps  # noqa: F401 — register steps
-    from ashare_lake.cli.main import cli
-    from ashare_lake.orchestrator import registry
-    from ashare_lake.orchestrator.engine import JobEngine
+    import cn_market_lake.steps  # noqa: F401 — register steps
+    from cn_market_lake.cli.main import cli
+    from cn_market_lake.orchestrator import registry
+    from cn_market_lake.orchestrator.engine import JobEngine
 
-    cfg_path = tmp_path / "ashare-lake.toml"
+    cfg_path = tmp_path / "cn-market-lake.toml"
     cfg_path.write_text(
         f"""
 [data]

@@ -8,8 +8,8 @@ import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
-from ashare_lake.serve.app import create_app
-from ashare_lake.storage.stats import rebuild_stats
+from cn_market_lake.serve.app import create_app
+from cn_market_lake.storage.stats import rebuild_stats
 
 FETCHED = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
 
@@ -45,7 +45,7 @@ def _full_row(dataset: str, **values) -> dict:
     Built from DATASET_SCHEMAS rather than hand-written, so a schema change
     cannot leave these fixtures quietly wrong.
     """
-    from ashare_lake.domain.schemas import DATASET_SCHEMAS
+    from cn_market_lake.domain.schemas import DATASET_SCHEMAS
 
     blank = {
         pl.Utf8: "x",
@@ -86,7 +86,7 @@ def lake(config, monkeypatch):
     Rows carry their full schema so ``load()`` — which validates against the
     contract — can read them; the browsing tests go through it.
     """
-    monkeypatch.setattr("ashare_lake.serve.lake.date", _FrozenDate)
+    monkeypatch.setattr("cn_market_lake.serve.lake.date", _FrozenDate)
     last, prev = FROZEN_TODAY, FROZEN_TODAY - timedelta(days=1)
     bar = lambda sym, day, src="tdx_protocol": _full_row(  # noqa: E731
         "daily_bars", symbol=sym, trade_date=day, source=src
@@ -135,7 +135,7 @@ def client(lake):
 
 def test_health_counts_every_registered_dataset(client):
     body = client.get("/api/health").json()
-    from ashare_lake.domain.datasets import DATASETS
+    from cn_market_lake.domain.datasets import DATASETS
 
     assert body["datasets"] == len(DATASETS)
     assert body["fresh"] + body["stale"] + body["empty"] + body["not_applicable"] == len(DATASETS)
@@ -277,7 +277,7 @@ def test_gaps_ignore_non_sessions(client):
 def test_detail_names_the_fix_without_offering_to_run_it(client):
     commands = client.get("/api/datasets/daily_bars").json()["commands"]
     assert commands
-    assert all(c["cmd"].startswith("asl ") and c["why"] for c in commands)
+    assert all(c["cmd"].startswith("cml ") and c["why"] for c in commands)
 
 
 def test_provenance_series_buckets_and_says_so(client):
@@ -289,7 +289,7 @@ def test_provenance_series_buckets_and_says_so(client):
 
 def test_provenance_series_stays_chartable_on_a_long_history(config):
     """11k daily points would be a megabyte of JSON to draw a few hundred px."""
-    from ashare_lake.serve.lake import LakeView
+    from cn_market_lake.serve.lake import LakeView
 
     root = config.curated_root / "daily_bars"
     for year in range(2001, 2027):
@@ -345,7 +345,7 @@ def test_heatmap_says_whether_a_gap_is_a_fault_or_the_datasets_shape(client):
 
 def test_every_snapshot_dataset_is_exempt_from_fault_gaps(client):
     """The rule is read off fetch_semantics, not a hand-kept list of names."""
-    from ashare_lake.domain.datasets import DATASETS
+    from cn_market_lake.domain.datasets import DATASETS
 
     rows = {r["dataset"]: r for r in client.get("/api/heatmap").json()["rows"]}
     for name, spec in DATASETS.items():
@@ -495,7 +495,7 @@ def test_a_token_is_required_when_one_is_configured(lake):
 def test_the_page_reaches_nothing_outside_this_host(client):
     """No CDN. A lake behind a proxy would render a page that never loads."""
     body = client.get("/").text
-    assert "<title>ashare-lake</title>" in body
+    assert "<title>CNMarketLake</title>" in body
     for external in ("http://", "https://", "//cdn", 'src="//'):
         assert external not in body, f"page reaches outside for {external!r}"
 
@@ -529,7 +529,7 @@ def test_static_serves_only_what_is_packaged(client):
 def test_a_non_loopback_bind_demands_a_token():
     from click.testing import CliRunner
 
-    from ashare_lake.cli.main import cli
+    from cn_market_lake.cli.main import cli
 
     result = CliRunner().invoke(cli, ["serve", "--host", "0.0.0.0", "--config", "nope.toml"])
     assert result.exit_code != 0
@@ -538,8 +538,8 @@ def test_a_non_loopback_bind_demands_a_token():
 
 
 def test_stats_are_refreshed_in_the_background_when_the_lake_moves(lake):
-    from ashare_lake.orchestrator.manifest import Manifest
-    from ashare_lake.serve.lake import LakeView
+    from cn_market_lake.orchestrator.manifest import Manifest
+    from cn_market_lake.serve.lake import LakeView
 
     view = LakeView(lake)
     assert view.refresh_stats_in_background() is False  # already current
@@ -554,7 +554,7 @@ def test_an_unmeasured_lake_still_answers(config):
     Driven through LakeView rather than the endpoint because /api/health kicks
     off the background rebuild, which would race this to the assertion.
     """
-    from ashare_lake.serve.lake import LakeView
+    from cn_market_lake.serve.lake import LakeView
 
     day = date(2026, 7, 31)
     _write(config.curated_root / "daily_bars", f"trade_date={day}", [_row("600519.SH", day)])
@@ -689,7 +689,7 @@ def test_heatmap_cell_coverage_is_exact_at_the_interval_edges(client, lake):
     row = rows["daily_bars"]
     assert len(row["cells"]) == len(days)
     # Recompute independently from the partition spans and compare char for char.
-    from ashare_lake.storage.stats import load_partition_stats
+    from cn_market_lake.storage.stats import load_partition_stats
 
     stats = load_partition_stats(lake)
     spans = [

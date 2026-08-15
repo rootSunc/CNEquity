@@ -1,4 +1,4 @@
-"""`asl run daily --stale-only` — the same-day second attempt.
+"""`cml run daily --stale-only` — the same-day second attempt.
 
 The gap it closes: a ``snapshot`` dataset fetches only the run day, so an outage
 during the one scheduled window loses that day for good. valuation_metrics lost
@@ -14,7 +14,7 @@ import polars as pl
 import pytest
 from click.testing import CliRunner
 
-from ashare_lake.cli.main import cli, stale_fetch_steps
+from cn_market_lake.cli.main import cli, stale_fetch_steps
 
 ANCHOR = date(2026, 7, 31)
 BEHIND = date(2026, 7, 29)
@@ -36,7 +36,7 @@ def _write(config, dataset: str, day: date) -> None:
 
 
 def _watermark(config, dataset: str, day: date) -> None:
-    from ashare_lake.storage.state import StateStore
+    from cn_market_lake.storage.state import StateStore
 
     StateStore(config.meta_root).set_date(dataset, day)
 
@@ -56,7 +56,7 @@ def test_only_datasets_behind_the_anchor_are_selected(lake):
     assert "daily_bars" not in steps
 
 
-def test_derived_datasets_are_left_to_asl_derive(lake):
+def test_derived_datasets_are_left_to_cml_derive(lake):
     """Re-fetching is not what a computed dataset needs."""
     _write(lake, "adj_factors", BEHIND)
     _watermark(lake, "adj_factors", BEHIND)
@@ -79,7 +79,7 @@ def test_nothing_stale_is_a_clean_no_op(config, monkeypatch):
     """Safe on a timer: it must not create a run when there is nothing to do."""
     _write(config, "daily_bars", ANCHOR)
     _watermark(config, "daily_bars", ANCHOR)
-    monkeypatch.setattr("ashare_lake.cli.main._last_trading_day", lambda cfg, today: ANCHOR)
+    monkeypatch.setattr("cn_market_lake.cli.main._last_trading_day", lambda cfg, today: ANCHOR)
 
     result = CliRunner().invoke(
         cli, ["run", "daily", "--stale-only", "--config", str(config.config_path)]

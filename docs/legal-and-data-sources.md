@@ -9,8 +9,8 @@
 
 ## 数据不是随仓库附带的
 
-- Git 仓库 **不包含** 生产数据湖（`data/`）、本地配置（`configs/ashare-lake.toml`）或运行日志。
-- 运行 `asl init` / `asl run` 后，数据落在你本机（或你指定的 `data.root`）。这些内容的版权与使用限制由 **各数据源提供方** 决定，而非本项目的 Apache-2.0 许可。
+- Git 仓库 **不包含** 生产数据湖（`data/`）、本地配置（`configs/cn-market-lake.toml`）或运行日志。
+- 运行 `cml init` / `cml run` 后，数据落在你本机（或你指定的 `data.root`）。这些内容的版权与使用限制由 **各数据源提供方** 决定，而非本项目的 Apache-2.0 许可。
 
 ## 上游来源（摘要）
 

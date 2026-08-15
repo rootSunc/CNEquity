@@ -7,7 +7,7 @@
 ## Init（全量回填）
 
 
-触发：`asl init`
+触发：`cml init`
 
 ```
 init_data_layout()
@@ -38,7 +38,7 @@ run_init_phases() — 按 [job.init.phases] 顺序
 
 ## 日更（Daily Run）
 
-触发：`asl run daily` 或 `--group <name>`
+触发：`cml run daily` 或 `--group <name>`
 
 ```
 检查是否交易日
@@ -82,15 +82,15 @@ finalize（波次末尾或分组内显式 steps）：
 3. failed / running / stale batch 涉及的数据集 → 整个数据集本 run 不 compact
 4. 原子写：先写临时文件再 rename（`storage/atomic.py`）
 
-手动触发：`asl compact --run-id <id>`
+手动触发：`cml compact --run-id <id>`
 
 ---
 
 ## 审计（Audit）
 
-**单次 run**：`asl audit --run-id <id>` → `meta/quality/findings/{run_id}.json`
+**单次 run**：`cml audit --run-id <id>` → `meta/quality/findings/{run_id}.json`
 
-**湖级健康**：`asl audit --full` → 汇总新鲜度、STALE、error/warning findings；UNHEALTHY 时退出码 1。
+**湖级健康**：`cml audit --full` → 汇总新鲜度、STALE、error/warning findings；UNHEALTHY 时退出码 1。
 
 关键检查：
 
@@ -102,7 +102,7 @@ finalize（波次末尾或分组内显式 steps）：
 
 ## 重试（Retry）
 
-触发：`asl retry --run-id <id>`
+触发：`cml retry --run-id <id>`
 
 ```
 run_lock 获取
@@ -118,7 +118,7 @@ run_lock 获取
 
 ## 单数据集回填（Backfill）
 
-触发：`asl backfill <dataset>`
+触发：`cml backfill <dataset>`
 
 - `fetch_semantics="snapshot"` 且无 `backfill_source` 的数据集**禁止** backfill
 - 有 `backfill_source` 的（如 `valuation_metrics` → baostock）允许历史回放
@@ -131,7 +131,7 @@ run_lock 获取
 不经过 staging/curated 主路径：
 
 ```
-asl query --dataset stock_news --symbol 600519.SH
+cml query --dataset stock_news --symbol 600519.SH
   → OnDemandService.fetch()
   → meta/on_demand/{dataset}/{symbol}.json 缓存
 ```
@@ -147,7 +147,7 @@ batch failed
   → 水位不动
   → staging 保留（可 retry）
   → audit findings 记录
-  → 人工：asl status → asl retry
+  → 人工：cml status → cml retry
   → compact 成功后下游 load() 可见新数据
 ```
 

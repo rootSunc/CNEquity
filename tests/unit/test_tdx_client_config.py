@@ -1,7 +1,7 @@
 import pytest
 
-from ashare_lake.adapters.tdx_protocol import client as tdx
-from ashare_lake.config import Config
+from cn_market_lake.adapters.tdx_protocol import client as tdx
+from cn_market_lake.config import Config
 
 
 def _install_fake_quotes(monkeypatch, *, factory=None, hosts=None):
@@ -16,8 +16,8 @@ def _install_fake_quotes(monkeypatch, *, factory=None, hosts=None):
         def factory(**kwargs):
             return object()
 
-    from ashare_lake.adapters.tdx_protocol import hosts as hosts_mod
-    from ashare_lake.adapters.tdx_protocol import quotes as quotes_mod
+    from cn_market_lake.adapters.tdx_protocol import hosts as hosts_mod
+    from cn_market_lake.adapters.tdx_protocol import quotes as quotes_mod
 
     monkeypatch.setattr(hosts_mod, "HQ_HOSTS", tuple(hosts))
     monkeypatch.setattr(quotes_mod.Quotes, "factory", staticmethod(factory))
@@ -121,7 +121,7 @@ def test_serves_data_true_when_bars_return(monkeypatch):
             self.closed = True
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.quotes.Quotes.factory",
+        "cn_market_lake.adapters.tdx_protocol.quotes.Quotes.factory",
         staticmethod(lambda **kwargs: _Client()),
     )
     assert tdx._serves_data("1.2.3.4", 7709, timeout=5) is True
@@ -136,7 +136,7 @@ def test_serves_data_false_on_empty_or_error(monkeypatch):
             pass
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.quotes.Quotes.factory",
+        "cn_market_lake.adapters.tdx_protocol.quotes.Quotes.factory",
         staticmethod(lambda **kwargs: _Empty()),
     )
     assert tdx._serves_data("1.2.3.4", 7709, timeout=5) is False
@@ -145,14 +145,14 @@ def test_serves_data_false_on_empty_or_error(monkeypatch):
         raise OSError("down")
 
     monkeypatch.setattr(
-        "ashare_lake.adapters.tdx_protocol.quotes.Quotes.factory",
+        "cn_market_lake.adapters.tdx_protocol.quotes.Quotes.factory",
         staticmethod(_boom),
     )
     assert tdx._serves_data("1.2.3.4", 7709, timeout=5) is False
 
 
 def test_bundled_hosts_start_with_verified_live_set():
-    from ashare_lake.adapters.tdx_protocol.hosts import HQ_HOSTS, VERIFIED_HOSTS
+    from cn_market_lake.adapters.tdx_protocol.hosts import HQ_HOSTS, VERIFIED_HOSTS
 
     assert HQ_HOSTS[: len(VERIFIED_HOSTS)] == VERIFIED_HOSTS
     assert len(HQ_HOSTS) > len(VERIFIED_HOSTS)

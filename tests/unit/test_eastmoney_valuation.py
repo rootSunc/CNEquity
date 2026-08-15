@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from ashare_lake.adapters.eastmoney.valuation import fetch_valuation_metrics
+from cn_market_lake.adapters.eastmoney.valuation import fetch_valuation_metrics
 
 
 class _Client:
@@ -28,7 +28,7 @@ def test_fetch_valuation_metrics_maps_fields(monkeypatch):
         }
     ]
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.valuation.fetch_clist_pages",
+        "cn_market_lake.adapters.eastmoney.valuation.fetch_clist_pages",
         lambda client, fields: raw,
     )
     client = _Client()
@@ -53,9 +53,9 @@ def test_fetch_valuation_metrics_owns_and_closes_default_client(monkeypatch):
         created.append(client)
         return client
 
-    monkeypatch.setattr("ashare_lake.adapters.eastmoney.valuation.EastMoneyClient", _factory)
+    monkeypatch.setattr("cn_market_lake.adapters.eastmoney.valuation.EastMoneyClient", _factory)
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.valuation.fetch_clist_pages",
+        "cn_market_lake.adapters.eastmoney.valuation.fetch_clist_pages",
         lambda client, fields: [],
     )
     df = fetch_valuation_metrics(date(2024, 6, 28))
@@ -65,7 +65,7 @@ def test_fetch_valuation_metrics_owns_and_closes_default_client(monkeypatch):
 
 def test_fetch_valuation_metrics_empty_when_no_rows(monkeypatch):
     monkeypatch.setattr(
-        "ashare_lake.adapters.eastmoney.valuation.fetch_clist_pages",
+        "cn_market_lake.adapters.eastmoney.valuation.fetch_clist_pages",
         lambda client, fields: [],
     )
     df = fetch_valuation_metrics(date(2024, 6, 28), client=_Client())

@@ -1,9 +1,9 @@
 # README assets
 
-READMEs embed the survivorship chart, `asl-demo.png`, the clearly labelled
-illustrative `asl-serve-hero-demo.png`, and the root-level
+READMEs embed the survivorship chart, `cml-demo.png`, the clearly labelled
+illustrative `cml-serve-hero-demo.png`, and the root-level
 `architecture-diagram-v2.png` architecture diagram. The factual dashboard
-capture remains available as `asl-serve-hero.png` for documentation and QA.
+capture remains available as `cml-serve-hero.png` for documentation and QA.
 Other PNGs below are for docs / social / re-exports.
 PyPI uses the short `README.pypi.md`, which points at absolute
 `raw.githubusercontent.com` URLs for the one demo screenshot it embeds.
@@ -48,15 +48,15 @@ boundaries change.
 
 | File | Shows |
 |------|--------|
-| `asl-demo.png` | `asl demo` phased progress + sample bars — embedded in both READMEs |
-| `asl-query.png` | `asl query` SQL result with `source` (kept for re-exports) |
-| `asl-load.png` | Python `load()` REPL (kept for re-exports) |
+| `cml-demo.png` | `cml demo` phased progress + sample bars — embedded in both READMEs |
+| `cml-query.png` | `cml query` SQL result with `source` (kept for re-exports) |
+| `cml-load.png` | Python `load()` REPL (kept for re-exports) |
 
 ```bash
 .venv/bin/python scripts/render_readme_screenshots.py
 ```
 
-Banner copy should track `asl demo` (no mootdx). Sample bar numbers may be
+Banner copy should track `cml demo` (no mootdx). Sample bar numbers may be
 from an older live run; re-render after UX copy changes.
 
 ## Dashboard screenshots
@@ -66,22 +66,22 @@ lake with something in it.
 
 | File | Shows |
 |------|--------|
-| `asl-serve-hero-demo.png` | Synthetic README illustration: a clearly labelled full-coverage heatmap |
-| `asl-serve-hero.png` | 1440×820 factual current overview: health, 42 datasets, KPIs, coverage heatmap and action state |
-| `asl-serve.png` | 1440px-wide full-page overview (source / docs) |
-| `asl-serve-dataset.png` | `trade_ticks` metadata tab (for docs; not in README) |
+| `cml-serve-hero-demo.png` | Synthetic README illustration: a clearly labelled full-coverage heatmap |
+| `cml-serve-hero.png` | 1440×820 factual current overview: health, 42 datasets, KPIs, coverage heatmap and action state |
+| `cml-serve.png` | 1440px-wide full-page overview (source / docs) |
+| `cml-serve-dataset.png` | `trade_ticks` metadata tab (for docs; not in README) |
 
 ```bash
-asl stats rebuild
-asl serve --config configs/ashare-lake.toml --port 8791
+cml stats rebuild
+cml serve --config configs/cn-market-lake.toml --port 8791
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --headless=new --disable-gpu --hide-scrollbars \
   --window-size=1440,820 --virtual-time-budget=9000 \
-  --screenshot=docs/assets/asl-serve-hero.png \
+  --screenshot=docs/assets/cml-serve-hero.png \
   "http://127.0.0.1:8791/"
 ```
 
-Capture `asl-serve.png` separately as a full-page screenshot at the same
+Capture `cml-serve.png` separately as a full-page screenshot at the same
 1440px viewport width. Before saving either image, confirm the page shows
 “运行正常”; “度量表过期” is a transient stats state and should be cleared with
-`asl stats rebuild` rather than advertised in the README.
+`cml stats rebuild` rather than advertised in the README.
