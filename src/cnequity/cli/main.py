@@ -1210,6 +1210,12 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
                 f"({result.fail_ratio:.1%})",
                 err=True,
             )
+        if result.best_effort_failed:
+            click.echo(
+                f"Best-effort BJ factors unavailable: "
+                f"{len(result.best_effort_failed)} symbol×type fetch failure(s)",
+                err=True,
+            )
     elif name == "industry_index":
         from cnequity.derive.industry_index import derive_industry_index
 

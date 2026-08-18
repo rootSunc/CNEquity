@@ -156,8 +156,6 @@ def symbol_from_clist_etf(code: str, market_id: int) -> str | None:
         return None
     if market_id == 1:
         exchange = "SH"
-    elif market_id == 2:
-        exchange = "BJ"
     elif is_etf_symbol(code, "SH"):
         exchange = "SH"
     elif is_etf_symbol(code, "SZ"):

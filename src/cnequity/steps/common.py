@@ -440,6 +440,7 @@ class DailyBarOwnership:
     generic: list[str] = field(default_factory=list)
     delegated_delisted: list[str] = field(default_factory=list)
     expected_no_data: list[str] = field(default_factory=list)
+    placeholder: list[str] = field(default_factory=list)
 
 
 def classify_daily_bar_ownership(
@@ -466,11 +467,14 @@ def classify_daily_bar_ownership(
             and bar_universe is not None
             and symbol not in bar_universe
         ):
-            # An ETF with no listing date and no traded bar in the lake is an
-            # issued-but-not-yet-listed placeholder (e.g. 589430.SH). Requiring
-            # TDX rows for it would fail the whole batch; it has no tradable
-            # session to fetch.
-            out.expected_no_data.append(symbol)
+            # An ETF with no listing date and no traded bar in the lake is
+            # treated as an issued-but-not-yet-listed placeholder (e.g.
+            # 589430.SH): fetching it would fail the whole batch. It is NOT
+            # verified no-data, so it goes to its own bucket and is surfaced as
+            # a warning rather than silently counted as expected_no_data. A
+            # listed ETF whose list_date enrichment or bar ingestion lagged
+            # would otherwise be dropped as a quiet data gap.
+            out.placeholder.append(symbol)
         else:
             out.generic.append(symbol)
     return out

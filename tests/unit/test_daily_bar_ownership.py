@@ -25,10 +25,12 @@ def test_daily_bar_ownership_is_explicit_for_every_symbol():
     assert result.generic == ["600001.SH"]
     assert result.delegated_delisted == ["600003.SH"]
     assert result.expected_no_data == ["600002.SH", "600004.SH"]
-    assert set(result.generic + result.delegated_delisted + result.expected_no_data) == set(symbols)
+    assert set(
+        result.generic + result.delegated_delisted + result.expected_no_data + result.placeholder
+    ) == set(symbols)
 
 
-def test_unlisted_etf_placeholder_is_expected_no_data():
+def test_unlisted_etf_placeholder_is_separate_bucket():
     symbols = ["589430.SH", "588200.SH"]
     spans = {
         "589430.SH": (None, None, "etf"),
@@ -43,7 +45,8 @@ def test_unlisted_etf_placeholder_is_expected_no_data():
         bar_universe={"588200.SH"},
     )
 
-    assert result.expected_no_data == ["589430.SH"]
+    assert result.placeholder == ["589430.SH"]
+    assert result.expected_no_data == []
     assert result.generic == ["588200.SH"]
 
 

@@ -115,6 +115,7 @@ def _ownership_context(
     from cnequity.steps.delisted import delisted_recovery_covers
 
     delegated_complete = delisted_recovery_covers(config, start, end, ownership.delegated_delisted)
+    findings: list[dict] = []
     finding = {
         "dataset": "daily_bars",
         "severity": "info" if delegated_complete else "warning",
@@ -123,19 +124,38 @@ def _ownership_context(
             f"generic={len(ownership.generic)}, "
             f"delegated_delisted={len(ownership.delegated_delisted)}, "
             f"expected_no_data={len(ownership.expected_no_data)}, "
+            f"placeholder={len(ownership.placeholder)}, "
             f"delegated_complete={delegated_complete}"
         ),
         "start": start.isoformat(),
         "end": end.isoformat(),
     }
+    findings.append(finding)
+    if ownership.placeholder:
+        preview = ", ".join(sorted(ownership.placeholder)[:8])
+        suffix = "..." if len(ownership.placeholder) > 8 else ""
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "warning",
+                "check": "daily_bars_etf_placeholder_skipped",
+                "message": (
+                    f"{len(ownership.placeholder)} unlisted ETF placeholder(s) "
+                    "skipped (no list_date and no traded bar; not verified "
+                    f"no-data): {preview}{suffix}"
+                ),
+                "symbols": sorted(ownership.placeholder),
+            }
+        )
     return {
         "daily_bars_ownership": {
             "generic": len(ownership.generic),
             "delegated_delisted": len(ownership.delegated_delisted),
             "expected_no_data": len(ownership.expected_no_data),
+            "placeholder": len(ownership.placeholder),
             "delegated_complete": delegated_complete,
         },
-        "audit_findings": [finding],
+        "audit_findings": findings,
     }, delegated_complete
 
 
@@ -237,6 +257,7 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
             ownership.generic.extend(routed.generic)
             ownership.delegated_delisted.extend(routed.delegated_delisted)
             ownership.expected_no_data.extend(routed.expected_no_data)
+            ownership.placeholder.extend(routed.placeholder)
             if routed.generic:
                 remaining.append((batch_id, routed.generic, spec_start, spec_end))
             if routed.delegated_delisted:
@@ -249,7 +270,7 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
                     spec_end,
                     batch_id=delegated_id,
                 )
-            elif not routed.generic:
+            elif not routed.generic and not routed.placeholder:
                 # The original failed batch now has only proven no-data symbols.
                 from cnequity.orchestrator.manifest import Manifest
 
@@ -258,6 +279,18 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
                     batch_id,
                     "success",
                     error_message="all symbols are expected-no-data for this window",
+                )
+            elif not routed.generic and routed.placeholder:
+                # Unlisted ETF placeholders are skipped but not verified no-data;
+                # mark the retry batch as warning so it cannot be mistaken for a
+                # completed, proven-empty batch.
+                from cnequity.orchestrator.manifest import Manifest
+
+                Manifest(config.manifest_path).finish_batch(
+                    run_id,
+                    batch_id,
+                    "warning",
+                    error_message="all symbols are unlisted ETF placeholders (skipped, not verified)",
                 )
         result = (
             fetch_daily_bars_parallel(
@@ -1070,7 +1103,7 @@ def step_daily_bars_history(config: Config, trade_date: date, run_id: str, conte
     requests = sum((end.year - s.year + 1) for _, s in plan)
     logger.info(
         "daily_bars_history: %d symbols, %s..%s, ~%d year-requests "
-        "(北交所 excluded — Sina has no factor coverage for it)",
+        "(ETF factors unverified and 北交所 has no Sina coverage — both excluded)",
         len(plan),
         start,
         end,
@@ -1110,11 +1143,11 @@ def _history_plan(config: Config, start: date, end: date) -> list[tuple[str, dat
 
     Two filters and a per-symbol window, which together cut the sweep by ~78%:
 
-    * Stocks and ETFs/LOFs. Both carry Sina hfq factors and an enriched
-      ``list_date``, so deeper raw bars are served as hfq with one convention.
-      北交所 is excluded because Sina has no factor coverage for it. An ETF with
-      no ``list_date`` is an unlisted placeholder (or an enrichment gap) with no
-      verifiable history, so it is skipped rather than planned and failed.
+    * Stocks only. ETF/LOF factors are not yet reliable (Sina varies the factor
+      field per fund and omits some ETFs), so deeper raw bars could not be
+      served as hfq with one verified convention; fetching them would spend
+      hours on data the research path must refuse anyway. 北交所 is excluded
+      because Sina has no factor coverage for it.
     * Nothing listed after the window. A 2016 IPO has no pre-2016 history, and
       asking for it is ~2600 symbols' worth of empty year files.
     * The rest start at their listing year rather than at ``start``.
@@ -1135,14 +1168,9 @@ def _history_plan(config: Config, start: date, end: date) -> list[tuple[str, dat
     plan: list[tuple[str, date]] = []
     for sym in symbols:
         row = meta.get(sym)
-        if row is None:
-            continue
-        asset_type = row.get("asset_type")
-        if asset_type not in ("stock", "etf"):
+        if row is None or row.get("asset_type") != "stock":
             continue
         listed = row.get("list_date")
-        if asset_type == "etf" and listed is None:
-            continue
         if listed is not None:
             if listed > end:
                 continue

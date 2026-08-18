@@ -700,6 +700,38 @@ def test_compute_adj_factors_fails_over_threshold(adj_config, monkeypatch):
         step_derive_adj_factors(adj_config, date(2024, 6, 28), "run-adj", {})
 
 
+def test_compute_adj_factors_bj_failure_is_best_effort(adj_config, monkeypatch):
+    """A missing BJ factor must not fail daily:core, but remains retryable."""
+    from cnequity.storage.state import StateStore
+    from cnequity.steps.finalize import step_derive_adj_factors
+
+    _write_bar(adj_config, "830799.BJ", date(2024, 6, 28))
+
+    def fake_fetch(symbol, adjust_type, client=None):
+        if symbol == "830799.BJ":
+            raise RuntimeError("empty data")
+        return pl.DataFrame({"trade_date": [date(2024, 6, 28)], "factor": [0.5]})
+
+    monkeypatch.setattr(
+        "cnequity.derive.adj_factors.fetch_adj_factor_series",
+        fake_fetch,
+    )
+
+    result = compute_adj_factors(adj_config)
+
+    assert result.failed == []
+    assert "830799.BJ:hfq" in result.best_effort_failed
+    assert result.fail_ratio == 0
+    assert result.findings[0]["check"] == "adj_factor_fetch_failed_best_effort"
+    assert result.findings[0]["severity"] == "info"
+    assert StateStore(adj_config.meta_root).get_string_set("adj_factors", "retry_symbols") == {
+        "830799.BJ"
+    }
+
+    out = step_derive_adj_factors(adj_config, date(2024, 6, 28), "run-adj", {})
+    assert "failed_tasks" not in out
+
+
 def test_failed_symbol_is_retried_after_global_watermark_advances(adj_config, monkeypatch):
     """A per-symbol failure must not disappear behind another symbol's partition."""
     from cnequity.storage.state import StateStore
@@ -757,20 +789,13 @@ def test_uncovered_symbols_finds_history_behind_the_watermark(adj_config):
     assert _uncovered_symbols(adj_config) == {"600519.SH"}
 
 
-def test_uncovered_symbols_includes_etfs(adj_config):
+def test_uncovered_symbols_keeps_bj_for_best_effort(adj_config):
+    """BJ stays in the self-heal set so partial Sina coverage is still tried."""
     from cnequity.derive.adj_factors import _uncovered_symbols
 
-    _write_bar(adj_config, "510300.SH", date(2024, 6, 28))
-    inst_dir = adj_config.curated_root / "instruments"
-    inst_dir.mkdir(parents=True)
-    pl.DataFrame(
-        {
-            "symbol": ["510300.SH", "600519.SH"],
-            "asset_type": ["etf", "stock"],
-        }
-    ).write_parquet(inst_dir / "part-merged.parquet")
+    _write_bar(adj_config, "830799.BJ", date(2024, 6, 28))
 
-    assert "510300.SH" in _uncovered_symbols(adj_config)
+    assert "830799.BJ" in _uncovered_symbols(adj_config)
 
 
 def test_a_symbol_covered_from_its_first_bar_is_not_reprocessed(adj_config):

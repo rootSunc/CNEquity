@@ -134,16 +134,16 @@ def _plan(tmp_path, rows, start=date(2001, 1, 1), end=date(2015, 12, 31), symbol
         b.load_symbols = orig
 
 
-def test_plan_includes_etfs_and_skips_symbols_listed_after_the_window(tmp_path):
-    """ETFs carry Sina hfq factors and an enriched list_date, so their deeper
-    raw bars can be served as hfq; a 2016 IPO has no pre-2016 history to fetch."""
+def test_plan_skips_etfs_and_symbols_listed_after_the_window(tmp_path):
+    """ETF/LOF factors are not reliable, so deeper raw bars could never be
+    served as hfq; a 2016 IPO has no pre-2016 history to fetch."""
     rows = [
         {"symbol": "600519.SH", "list_date": date(2001, 8, 27), "asset_type": "stock"},
         {"symbol": "510300.SH", "list_date": date(2012, 5, 4), "asset_type": "etf"},
         {"symbol": "301000.SZ", "list_date": date(2021, 6, 1), "asset_type": "stock"},
     ]
     plan = _plan(tmp_path, rows)
-    assert [s for s, _ in plan] == ["600519.SH", "510300.SH"]
+    assert [s for s, _ in plan] == ["600519.SH"]
 
 
 def test_plan_starts_at_the_listing_year(tmp_path):
