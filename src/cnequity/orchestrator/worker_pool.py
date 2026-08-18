@@ -78,6 +78,7 @@ def _empty_pool_result() -> dict[str, Any]:
         "rows_written": 0,
         "had_error": False,
         "failed_symbols": [],
+        "failed_batch_ids": [],
     }
 
 
@@ -251,6 +252,7 @@ def fetch_daily_bars_parallel(
     total_read = 0
     total_written = 0
     failed_symbols: list[str] = []
+    failed_batch_ids: list[str] = []
     rl = config.tdx_rate_limit_spec()
     rate_limit_tuple = (rl.state_dir, rl.source, rl.min_interval, rl.lock_timeout) if rl else None
 
@@ -323,6 +325,7 @@ def fetch_daily_bars_parallel(
             "rows_written": total_written,
             "had_error": had_error,
             "failed_symbols": list(dict.fromkeys(failed_symbols)),
+            "failed_batch_ids": list(dict.fromkeys(failed_batch_ids)),
         }
 
     # A full-market bar sweep is ~54 batches and can run for an hour. Without a
@@ -360,6 +363,7 @@ def fetch_daily_bars_parallel(
             except Exception:
                 had_error = True
                 failed_symbols.extend(batch_symbols)
+                failed_batch_ids.append(batch_id)
                 _progress(batch_symbols, failed=True)
         return _outcome(had_error)
 
@@ -419,6 +423,7 @@ def fetch_daily_bars_parallel(
                     batch = pending.pop(batch_id, None)
                     if batch is not None:
                         failed_symbols.extend(batch[1])
+                        failed_batch_ids.append(batch_id)
                     _progress(batch[1] if batch else [], failed=True)
                     logger.warning("%s batch %s failed: %s", dataset, batch_id, exc)
     except BrokenProcessPool:
@@ -453,6 +458,7 @@ def fetch_daily_bars_parallel(
             except Exception as exc:
                 had_error = True
                 failed_symbols.extend(batch[1])
+                failed_batch_ids.append(batch_id)
                 logger.warning("%s batch %s failed on serial retry: %s", dataset, batch_id, exc)
 
     return _outcome(had_error)

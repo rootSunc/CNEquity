@@ -314,6 +314,10 @@ def test_tip_total_loss_still_raises(tmp_path, monkeypatch):
         "cnequity.adapters.eastmoney.bars.fetch_daily_bars_clist",
         lambda trade_date, symbols=None, client=None, config=None: pl.DataFrame(),
     )
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars",
+        lambda symbols, start, end, client=None, config=None: pl.DataFrame(),
+    )
     with pytest.raises(RuntimeError, match="produced no staged tip rows"):
         _finish_daily_bars(
             cfg,
@@ -355,6 +359,10 @@ def test_tip_partial_miss_after_gapfill_warns_instead_of_failing_step(tmp_path, 
             }
         ),
     )
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars",
+        lambda symbols, start, end, client=None, config=None: pl.DataFrame(),
+    )
     result = _finish_daily_bars(
         cfg,
         tip,
@@ -375,6 +383,86 @@ def test_tip_partial_miss_after_gapfill_warns_instead_of_failing_step(tmp_path, 
     assert any(
         f["check"] == "daily_bars_tip_missing_symbols" and "000001.SZ" in f["message"]
         for f in findings
+    )
+
+
+def test_tip_missing_etf_recovered_by_kline_and_batch_superseded(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily:core")
+    tip = date(2026, 8, 18)
+    batch_id = "2026-08-18_2026-08-18-batch-0"
+    manifest.start_batch(
+        run_id,
+        batch_id,
+        task_id="daily_bars",
+        dataset="daily_bars",
+        symbols=["600519.SH", "161728.SZ"],
+        window_start=tip.isoformat(),
+        window_end=tip.isoformat(),
+    )
+    manifest.finish_batch(
+        run_id,
+        batch_id,
+        "failed",
+        error_message=(
+            "daily_bars: TDX returned no rows for 1 requested symbol(s): 161728.SZ"
+        ),
+    )
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_clist",
+        lambda trade_date, symbols=None, client=None, config=None: pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [tip],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.0],
+                "close": [10.5],
+                "volume": [100],
+                "amount": [1000.0],
+            }
+        ),
+    )
+
+    def _kline(symbols, start, end, **kwargs):
+        return pl.DataFrame(
+            {
+                "symbol": symbols,
+                "trade_date": [tip] * len(symbols),
+                "open": [1.5] * len(symbols),
+                "high": [1.6] * len(symbols),
+                "low": [1.4] * len(symbols),
+                "close": [1.557] * len(symbols),
+                "volume": [100] * len(symbols),
+                "amount": [100.0] * len(symbols),
+            }
+        )
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
+
+    result = _finish_daily_bars(
+        cfg,
+        tip,
+        run_id,
+        start=tip,
+        end=tip,
+        expected_tdx_symbols=["600519.SH", "161728.SZ"],
+        tdx_result={
+            "rows_read": 0,
+            "rows_written": 0,
+            "had_error": True,
+            "failed_symbols": ["161728.SZ"],
+            "failed_batch_ids": [batch_id],
+        },
+        sina_result=None,
+    )
+
+    assert _staged_daily_bar_symbols(cfg, run_id, tip) == {"600519.SH", "161728.SZ"}
+    assert manifest.get_batch(run_id, batch_id)["status"] == "superseded"
+    assert any(
+        f["check"] == "daily_bars_kline_gapfill"
+        for f in result["context_updates"]["audit_findings"]
     )
 
 

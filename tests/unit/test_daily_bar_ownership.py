@@ -50,6 +50,25 @@ def test_unlisted_etf_placeholder_is_separate_bucket():
     assert result.generic == ["588200.SH"]
 
 
+def test_unlisted_stock_placeholder_is_separate_bucket():
+    symbols = ["601123.SH", "600519.SH"]
+    spans = {
+        "601123.SH": (None, None, "stock"),
+        "600519.SH": (date(2001, 8, 27), None, "stock"),
+    }
+
+    result = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        date(2026, 8, 18),
+        date(2026, 8, 18),
+        bar_universe={"600519.SH"},
+    )
+
+    assert result.placeholder == ["601123.SH"]
+    assert result.generic == ["600519.SH"]
+
+
 def test_traded_etf_without_list_date_stays_generic():
     symbols = ["510300.SH"]
     spans = {"510300.SH": (None, None, "etf")}

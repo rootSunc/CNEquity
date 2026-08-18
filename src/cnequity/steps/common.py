@@ -462,18 +462,18 @@ def classify_daily_bar_ownership(
         elif delist_date is not None and delist_date <= end:
             out.delegated_delisted.append(symbol)
         elif (
-            asset_type == "etf"
-            and list_date is None
+            list_date is None
             and bar_universe is not None
             and symbol not in bar_universe
         ):
-            # An ETF with no listing date and no traded bar in the lake is
-            # treated as an issued-but-not-yet-listed placeholder (e.g.
-            # 589430.SH): fetching it would fail the whole batch. It is NOT
-            # verified no-data, so it goes to its own bucket and is surfaced as
-            # a warning rather than silently counted as expected_no_data. A
-            # listed ETF whose list_date enrichment or bar ingestion lagged
-            # would otherwise be dropped as a quiet data gap.
+            # A stock/ETF with no listing date and no traded bar in the lake is
+            # treated as an issued-but-not-yet-listed placeholder (e.g. an IPO
+            # still in subscription, or 589430.SH): fetching it would fail the
+            # whole batch. It is NOT verified no-data, so it goes to its own
+            # bucket and is surfaced as a warning rather than silently counted
+            # as expected_no_data. A listed instrument whose list_date
+            # enrichment or bar ingestion lagged would otherwise be dropped as
+            # a quiet data gap.
             out.placeholder.append(symbol)
         else:
             out.generic.append(symbol)
