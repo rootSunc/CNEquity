@@ -69,6 +69,23 @@ def test_unlisted_stock_placeholder_is_separate_bucket():
     assert result.generic == ["600519.SH"]
 
 
+def test_unlisted_etf_with_delist_date_is_placeholder_not_delegated():
+    symbols = ["517233.SH"]
+    spans = {"517233.SH": (None, date(2026, 8, 18), "etf")}
+
+    result = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        date(2026, 8, 18),
+        date(2026, 8, 18),
+        bar_universe=set(),
+    )
+
+    assert result.placeholder == ["517233.SH"]
+    assert result.delegated_delisted == []
+    assert result.generic == []
+
+
 def test_traded_etf_without_list_date_stays_generic():
     symbols = ["510300.SH"]
     spans = {"510300.SH": (None, None, "etf")}

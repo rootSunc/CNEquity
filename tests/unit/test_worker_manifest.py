@@ -133,7 +133,9 @@ def test_symbol_batch_ids_unique_per_window(worker_config, monkeypatch):
     assert len({b["batch_id"] for b in batches}) == 2
 
 
-def test_partial_tdx_symbol_batch_is_not_staged_as_success(worker_config, monkeypatch):
+def test_partial_tdx_symbol_batch_stages_available_rows_and_reports_missing(
+    worker_config, monkeypatch
+):
     import polars as pl
 
     from cnequity.domain.schemas import with_provenance
@@ -173,11 +175,13 @@ def test_partial_tdx_symbol_batch_is_not_staged_as_success(worker_config, monkey
     )
 
     assert result["had_error"] is True
-    assert result["failed_symbols"] == ["600519.SH", "000001.SZ"]
-    assert result["rows_written"] == 0
+    assert result["failed_symbols"] == ["000001.SZ"]
+    assert result["rows_written"] == 1
     batch = manifest.get_batches_for_run(run_id)[0]
     assert batch["status"] == "failed"
-    assert not list(worker_config.staging_root.glob("daily_bars/**/*.parquet"))
+    staged = list(worker_config.staging_root.glob("daily_bars/**/*.parquet"))
+    assert staged
+    assert pl.read_parquet(staged[0])["symbol"].to_list() == ["600519.SH"]
 
 
 def test_wrong_date_tdx_batch_is_not_staged_as_success(worker_config, monkeypatch):

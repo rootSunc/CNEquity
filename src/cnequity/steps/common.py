@@ -459,8 +459,6 @@ def classify_daily_bar_ownership(
             out.expected_no_data.append(symbol)
         elif delist_date is not None and delist_date < start:
             out.expected_no_data.append(symbol)
-        elif delist_date is not None and delist_date <= end:
-            out.delegated_delisted.append(symbol)
         elif (
             list_date is None
             and bar_universe is not None
@@ -475,6 +473,8 @@ def classify_daily_bar_ownership(
             # enrichment or bar ingestion lagged would otherwise be dropped as
             # a quiet data gap.
             out.placeholder.append(symbol)
+        elif delist_date is not None and delist_date <= end:
+            out.delegated_delisted.append(symbol)
         else:
             out.generic.append(symbol)
     return out
