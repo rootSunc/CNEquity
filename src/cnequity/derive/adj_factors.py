@@ -214,6 +214,15 @@ def _bars_for_derive(
     )
     if not incremental.is_empty():
         frames.append(incremental)
+    # An existing watermark partition can be incomplete: daily_bars may have
+    # landed more rows after an earlier derive finished (retry, gap-fill, manual
+    # compact). The watermark is a date, not a coverage receipt, so compare the
+    # latest factor partition against the bars it should cover instead of
+    # treating it as complete.
+    if watermark is not None:
+        missing = _bars_missing_factor_partition(config, watermark)
+        if not missing.is_empty():
+            frames.append(missing)
     # Ex-date / new-listing / explicit rebackfill: realign full history for those symbols.
     if refresh_set:
         refreshed = _load_daily_bar_dates(config, symbols=sorted(refresh_set))
@@ -226,6 +235,34 @@ def _bars_for_derive(
         .unique(subset=["symbol", "trade_date"], keep="last")
         .sort(["symbol", "trade_date"])
     )
+
+
+def _bars_missing_factor_partition(config: Config, watermark: date) -> pl.DataFrame:
+    """Bars on *watermark* that the latest adj_factors partition has no row for."""
+    # Lazy import: query.reader imports STORED_ADJUST_TYPE from this module.
+    from cnequity.query.parquet_scan import dataset_has_parquet
+
+    bars = _load_daily_bar_dates(config, start=watermark).filter(
+        pl.col("trade_date") == watermark
+    )
+    if bars.is_empty():
+        return bars
+    cdr_symbols = [s for s in bars["symbol"].unique().to_list() if _is_cdr(s)]
+    if cdr_symbols:
+        bars = bars.filter(~pl.col("symbol").is_in(cdr_symbols))
+        if bars.is_empty():
+            return bars
+
+    part = config.derived_root / "adj_factors" / f"trade_date={watermark.isoformat()}"
+    if not dataset_has_parquet(part):
+        return bars
+
+    files = sorted(part.rglob("*.parquet"))
+    factors = pl.concat(
+        [pl.read_parquet(path).select("symbol") for path in files],
+        how="diagonal_relaxed",
+    ).unique()
+    return bars.join(factors, on="symbol", how="anti")
 
 
 def _align_factors_to_bars(

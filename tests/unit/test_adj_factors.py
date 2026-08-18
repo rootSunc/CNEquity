@@ -583,6 +583,36 @@ def test_compute_adj_factors_append_only_skips_existing_partitions(adj_config, m
     assert pl.read_parquet(new_path)["factor"][0] == 0.5
 
 
+def test_compute_adj_factors_fills_partial_watermark_partition(adj_config, monkeypatch):
+    """A watermark partition is reconciled when bars arrive after an earlier derive."""
+    _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
+    _write_factor_cache(adj_config, "000001.SZ", date(2024, 6, 27), factor=1.0)
+    _write_adj_partition(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
+    _write_adj_partition(adj_config, "000001.SZ", date(2024, 6, 27), factor=1.0)
+    _write_bar(adj_config, "000001.SZ", date(2024, 6, 28))
+
+    calls: list[str] = []
+
+    def fake_fetch(symbol, adjust_type, client=None):
+        calls.append(symbol)
+        return pl.DataFrame({"trade_date": [date(2024, 6, 28)], "factor": [1.0]})
+
+    monkeypatch.setattr(
+        "cnequity.derive.adj_factors.fetch_adj_factor_series",
+        fake_fetch,
+    )
+
+    result = compute_adj_factors(adj_config)
+
+    assert result.rows == 1
+    assert calls == []  # both symbols already have cached factor series
+    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
+    df = pl.read_parquet(out)
+    assert set(df["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
+    old = df.filter(pl.col("symbol") == "600519.SH")["factor"][0]
+    assert old == 0.5
+
+
 def test_compute_adj_factors_event_refresh_merges_into_existing(adj_config, monkeypatch):
     """Ex-date refresh rewrites the affected symbol via partition merge, not full replace."""
     _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
