@@ -434,33 +434,55 @@ def _finish_daily_bars(
         findings.extend(sina_findings)
 
     tip = start == end
+    bar_date = end
+    stale_retry = tip and bar_date != trade_date
     if tip:
-        gap = _gapfill_tip_via_clist(
-            config, trade_date, run_id, expected_symbols=expected_tdx_symbols
-        )
-        rows_read += int(gap.get("rows_read", 0))
-        rows_written += int(gap.get("rows_written", 0))
-        findings.extend(gap.get("audit_findings") or [])
-        staged = _staged_daily_bar_symbols(config, run_id, trade_date)
         expected_symbols = set(expected_tdx_symbols) | set(expected_fallback_symbols or [])
-        missing_staged = [s for s in expected_symbols if s not in staged]
-        if missing_staged:
-            # clist is a live snapshot and can omit a listed ETF/LOF that TDX
-            # also misses. Per-symbol kline is slow but is the existing
-            # multi-day recovery path, so reuse it for a small tip leftover
-            # instead of leaving the original failed worker batch to block
-            # compact forever.
-            kline = _gapfill_multiday_via_kline(
-                config,
-                run_id,
-                symbols=sorted(missing_staged),
-                start=trade_date,
-                end=trade_date,
-                require_complete=False,
+        if stale_retry:
+            # clist is a live snapshot, so it cannot be re-stamped onto a past
+            # session. A retry of an older tip must use per-symbol kline for
+            # the actual bar date instead.
+            missing_staged = sorted(
+                expected_symbols - _staged_daily_bar_symbols(config, run_id, bar_date)
             )
-            rows_read += int(kline.get("rows_read", 0))
-            rows_written += int(kline.get("rows_written", 0))
-            findings.extend(kline.get("audit_findings") or [])
+            if missing_staged:
+                kline = _gapfill_multiday_via_kline(
+                    config,
+                    run_id,
+                    symbols=missing_staged,
+                    start=bar_date,
+                    end=bar_date,
+                    require_complete=False,
+                )
+                rows_read += int(kline.get("rows_read", 0))
+                rows_written += int(kline.get("rows_written", 0))
+                findings.extend(kline.get("audit_findings") or [])
+        else:
+            gap = _gapfill_tip_via_clist(
+                config, trade_date, run_id, expected_symbols=expected_tdx_symbols
+            )
+            rows_read += int(gap.get("rows_read", 0))
+            rows_written += int(gap.get("rows_written", 0))
+            findings.extend(gap.get("audit_findings") or [])
+            staged = _staged_daily_bar_symbols(config, run_id, bar_date)
+            missing_staged = [s for s in expected_symbols if s not in staged]
+            if missing_staged:
+                # clist is a live snapshot and can omit a listed ETF/LOF that
+                # TDX also misses. Per-symbol kline is slow but is the existing
+                # multi-day recovery path, so reuse it for a small tip leftover
+                # instead of leaving the original failed worker batch to block
+                # compact forever.
+                kline = _gapfill_multiday_via_kline(
+                    config,
+                    run_id,
+                    symbols=sorted(missing_staged),
+                    start=bar_date,
+                    end=bar_date,
+                    require_complete=False,
+                )
+                rows_read += int(kline.get("rows_read", 0))
+                rows_written += int(kline.get("rows_written", 0))
+                findings.extend(kline.get("audit_findings") or [])
     elif failed_symbols or expected_tdx_symbols or expected_fallback_symbols:
         all_expected_symbols = list(
             dict.fromkeys((expected_tdx_symbols or []) + (expected_fallback_symbols or []))
@@ -505,15 +527,15 @@ def _finish_daily_bars(
             superseded_by="multiday-kline-gapfill",
         )
 
-    _reject_preopen_placeholder(config, run_id, trade_date)
+    _reject_preopen_placeholder(config, run_id, bar_date)
 
     if tip:
-        staged = _staged_daily_bar_symbols(config, run_id, trade_date)
+        staged = _staged_daily_bar_symbols(config, run_id, bar_date)
         expected_symbols = set(expected_tdx_symbols) | set(expected_fallback_symbols or [])
         missing_staged = sorted(expected_symbols - staged)
         if expected_symbols and not staged:
             raise RuntimeError(
-                f"daily_bars {trade_date}: TDX failed and EastMoney clist/kline gap-fill "
+                f"daily_bars {bar_date}: TDX failed and EastMoney clist/kline gap-fill "
                 "produced no staged tip rows"
             )
         if missing_staged:
@@ -530,7 +552,7 @@ def _finish_daily_bars(
                     "severity": "warning",
                     "check": "daily_bars_tip_missing_symbols",
                     "message": (
-                        f"daily_bars {trade_date}: {len(missing_staged)} expected tip "
+                        f"daily_bars {bar_date}: {len(missing_staged)} expected tip "
                         "key(s) remain missing after TDX and EastMoney clist/kline gap-fill "
                         f"(may be suspended): {preview}{suffix}"
                     ),

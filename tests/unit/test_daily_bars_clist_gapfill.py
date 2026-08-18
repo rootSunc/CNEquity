@@ -466,6 +466,86 @@ def test_tip_missing_etf_recovered_by_kline_and_batch_superseded(tmp_path, monke
     )
 
 
+def test_historical_retry_uses_kline_not_live_clist(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily:core")
+    historical = date(2026, 8, 18)
+    current = date(2026, 8, 19)
+    batch_id = "2026-08-18_2026-08-18-batch-0"
+    manifest.start_batch(
+        run_id,
+        batch_id,
+        task_id="daily_bars",
+        dataset="daily_bars",
+        symbols=["161728.SZ"],
+        window_start=historical.isoformat(),
+        window_end=historical.isoformat(),
+    )
+    manifest.finish_batch(
+        run_id,
+        batch_id,
+        "failed",
+        error_message=(
+            "daily_bars: TDX returned no rows for 1 requested symbol(s): 161728.SZ"
+        ),
+    )
+
+    calls: list[tuple] = []
+
+    def _no_clist(*args, **kwargs):
+        calls.append(("clist", args, kwargs))
+        return pl.DataFrame()
+
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_clist",
+        _no_clist,
+    )
+
+    def _kline(symbols, start, end, **kwargs):
+        calls.append(("kline", symbols, start, end))
+        return pl.DataFrame(
+            {
+                "symbol": symbols,
+                "trade_date": [historical] * len(symbols),
+                "open": [1.5] * len(symbols),
+                "high": [1.6] * len(symbols),
+                "low": [1.4] * len(symbols),
+                "close": [1.557] * len(symbols),
+                "volume": [100] * len(symbols),
+                "amount": [100.0] * len(symbols),
+            }
+        )
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
+
+    result = _finish_daily_bars(
+        cfg,
+        current,
+        run_id,
+        start=historical,
+        end=historical,
+        expected_tdx_symbols=["161728.SZ"],
+        tdx_result={
+            "rows_read": 0,
+            "rows_written": 0,
+            "had_error": True,
+            "failed_symbols": ["161728.SZ"],
+            "failed_batch_ids": [batch_id],
+        },
+        sina_result=None,
+    )
+
+    assert "clist" not in [call[0] for call in calls]
+    assert ("kline", ["161728.SZ"], historical, historical) in calls
+    assert _staged_daily_bar_symbols(cfg, run_id, historical) == {"161728.SZ"}
+    assert manifest.get_batch(run_id, batch_id)["status"] == "superseded"
+    assert any(
+        f["check"] == "daily_bars_kline_gapfill"
+        for f in result["context_updates"]["audit_findings"]
+    )
+
+
 def test_multiday_uses_kline_not_clist(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     run_id = Manifest(cfg.manifest_path).start_run("backfill")
