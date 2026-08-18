@@ -230,11 +230,15 @@ def fetch_clist_pages(
     return list(rows_by_key.values())
 
 
-def clist_rows_to_symbols(rows: list[dict]) -> list[tuple[str, dict]]:
+def clist_rows_to_symbols(
+    rows: list[dict],
+    *,
+    symbol_resolver=symbol_from_clist,
+) -> list[tuple[str, dict]]:
     out: list[tuple[str, dict]] = []
     for item in rows:
         market_id = _to_int(item.get("f13"), default=0, minimum=0)
-        sym = symbol_from_clist(str(item.get("f12", "")), market_id)
+        sym = symbol_resolver(str(item.get("f12", "")), market_id)
         if sym:
             out.append((sym, item))
     return out

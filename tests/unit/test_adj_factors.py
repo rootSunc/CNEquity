@@ -757,6 +757,22 @@ def test_uncovered_symbols_finds_history_behind_the_watermark(adj_config):
     assert _uncovered_symbols(adj_config) == {"600519.SH"}
 
 
+def test_uncovered_symbols_includes_etfs(adj_config):
+    from cnequity.derive.adj_factors import _uncovered_symbols
+
+    _write_bar(adj_config, "510300.SH", date(2024, 6, 28))
+    inst_dir = adj_config.curated_root / "instruments"
+    inst_dir.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["510300.SH", "600519.SH"],
+            "asset_type": ["etf", "stock"],
+        }
+    ).write_parquet(inst_dir / "part-merged.parquet")
+
+    assert "510300.SH" in _uncovered_symbols(adj_config)
+
+
 def test_a_symbol_covered_from_its_first_bar_is_not_reprocessed(adj_config):
     from cnequity.derive.adj_factors import _uncovered_symbols
 

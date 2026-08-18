@@ -78,11 +78,22 @@ def test_a_few_missing_names_stay_below_the_threshold(tmp_path):
     assert adj_factor_coverage_findings(cfg, date(2026, 8, 7)) == []
 
 
-def test_etfs_do_not_count_against_coverage(tmp_path):
-    """ETFs legitimately have no hfq factor and would bury the real signal."""
+def test_unfactored_etfs_count_against_coverage(tmp_path):
+    """ETFs now carry Sina hfq factors, so a missing one is a real gap."""
     sh = [f"6000{i:02d}.SH" for i in range(20)]
     etf = [f"5100{i:02d}.SH" for i in range(50)]
     cfg = _lake(tmp_path, stocks=sh, priced=sh + etf, factored=sh, etfs=etf)
+
+    findings = adj_factor_coverage_findings(cfg, date(2026, 8, 7))
+    assert len(findings) == 1
+    assert findings[0]["exchange"] == "SH"
+    assert findings[0]["symbols_missing"] == 50
+
+
+def test_factored_etfs_are_silent(tmp_path):
+    sh = [f"6000{i:02d}.SH" for i in range(20)]
+    etf = [f"5100{i:02d}.SH" for i in range(50)]
+    cfg = _lake(tmp_path, stocks=sh, priced=sh + etf, factored=sh + etf, etfs=etf)
     assert adj_factor_coverage_findings(cfg, date(2026, 8, 7)) == []
 
 

@@ -5,9 +5,18 @@ from __future__ import annotations
 import math
 from datetime import date, datetime
 
-from cnequity.domain.symbols import format_symbol, infer_exchange_from_code, is_all_a_symbol
+from cnequity.domain.symbols import (
+    format_symbol,
+    infer_exchange_from_code,
+    is_all_a_symbol,
+    is_etf_symbol,
+)
 
 ALL_A_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
+# EastMoney clist ETF/LOF boards (see quote.eastmoney.com center/gridlist
+# fund_etf). Kept separate from ALL_A_FS, which is equity-only, so instruments
+# can still fill list_date on ETFs whose board the A-share filter omits.
+ETF_CLIST_FS = "b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0827"
 DATACENTER_BASE = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 PUSH2_CLIST_HOSTS = (
     "https://push2.eastmoney.com",
@@ -130,6 +139,32 @@ def symbol_from_clist(code: str, market_id: int) -> str | None:
     else:
         exchange = infer_exchange_from_code(code)
     if not is_all_a_symbol(code, exchange):
+        return None
+    return format_symbol(code, exchange)
+
+
+def symbol_from_clist_etf(code: str, market_id: int) -> str | None:
+    """Resolve a clist ETF/LOF row (``f12``/``f13``) to a canonical symbol.
+
+    ETFs are excluded from ``is_all_a_symbol`` on purpose (they are not part of
+    the all_a research universe), so the A-share resolver cannot represent them.
+    The market id is unreliable on push2delay (returns 0 for every row), so fall
+    back to the ETF code prefix when it is absent.
+    """
+    code = str(code).strip().zfill(6)
+    if len(code) != 6 or not code.isdigit():
+        return None
+    if market_id == 1:
+        exchange = "SH"
+    elif market_id == 2:
+        exchange = "BJ"
+    elif is_etf_symbol(code, "SH"):
+        exchange = "SH"
+    elif is_etf_symbol(code, "SZ"):
+        exchange = "SZ"
+    else:
+        return None
+    if not is_etf_symbol(code, exchange):
         return None
     return format_symbol(code, exchange)
 

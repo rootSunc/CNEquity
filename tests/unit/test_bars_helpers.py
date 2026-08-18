@@ -21,7 +21,7 @@ def test_backfill_window_defaults_and_overrides(tmp_path):
     assert bars._backfill_window(cfg2, date(2025, 1, 10)) == (date(2024, 1, 1), date(2024, 6, 1))
 
 
-def test_history_plan_filters_etf_and_future_listings(tmp_path, monkeypatch):
+def test_history_plan_filters_etf_placeholder_and_future_listings(tmp_path, monkeypatch):
     curated = tmp_path / "curated"
     inst = curated / "instruments" / "year=2025"
     inst.mkdir(parents=True)
@@ -29,6 +29,7 @@ def test_history_plan_filters_etf_and_future_listings(tmp_path, monkeypatch):
         [
             {"symbol": "600519.SH", "list_date": date(2001, 8, 27), "asset_type": "stock"},
             {"symbol": "510300.SH", "list_date": date(2012, 5, 28), "asset_type": "etf"},
+            {"symbol": "589430.SH", "list_date": None, "asset_type": "etf"},
             {"symbol": "688001.SH", "list_date": date(2024, 6, 1), "asset_type": "stock"},
             {"symbol": "301001.SZ", "list_date": date(2026, 1, 1), "asset_type": "stock"},
             {"symbol": "920001.BJ", "list_date": date(2020, 1, 1), "asset_type": "stock"},
@@ -43,6 +44,7 @@ def test_history_plan_filters_etf_and_future_listings(tmp_path, monkeypatch):
         lambda config: [
             "600519.SH",
             "510300.SH",
+            "589430.SH",
             "688001.SH",
             "301001.SZ",
             "920001.BJ",
@@ -55,7 +57,9 @@ def test_history_plan_filters_etf_and_future_listings(tmp_path, monkeypatch):
     assert by_sym["600519.SH"] == date(2020, 1, 1)
     assert "688001.SH" in by_sym
     assert by_sym["688001.SH"] == date(2024, 1, 1)  # listing year Jan 1
-    assert "510300.SH" not in by_sym  # etf
+    assert "510300.SH" in by_sym
+    assert by_sym["510300.SH"] == date(2020, 1, 1)  # etf now included
+    assert "589430.SH" not in by_sym  # unlisted etf placeholder
     assert "301001.SZ" not in by_sym  # listed after window
     assert "920001.BJ" not in by_sym  # BJ prefix filtered
     assert "830001.BJ" not in by_sym  # legacy BJ code must be filtered too

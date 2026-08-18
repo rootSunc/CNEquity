@@ -27,6 +27,7 @@ from cnequity.steps.common import (
     instrument_metadata,
     is_trading_day,
     list_trading_dates,
+    load_bar_universe,
     load_curated_instruments,
     load_symbols,
 )
@@ -81,11 +82,28 @@ def _backfill_window(config: Config, trade_date: date) -> tuple[date, date]:
     return start, end
 
 
-def _instrument_spans(config: Config) -> dict[str, tuple[date | None, date | None]]:
+def _instrument_spans(config: Config) -> dict[str, tuple[date | None, date | None, str | None]]:
     return {
-        row["symbol"]: (row["list_date"], row["delist_date"])
+        row["symbol"]: (row["list_date"], row["delist_date"], row.get("asset_type"))
         for row in instrument_metadata(config).iter_rows(named=True)
     }
+
+
+def _etf_placeholder_bar_universe(
+    config: Config,
+    spans: dict[str, tuple[date | None, date | None, str | None]],
+) -> set[str] | None:
+    """Traded-bar universe only when an unlisted ETF placeholder is in scope.
+
+    Scanning every daily_bars file is expensive; skip it unless there is at
+    least one ETF with no listing date that ``classify_daily_bar_ownership`` may
+    need to prove has never traded.
+    """
+    if not any(
+        asset_type == "etf" and list_date is None for list_date, _, asset_type in spans.values()
+    ):
+        return None
+    return load_bar_universe(config)
 
 
 def _ownership_context(
@@ -205,10 +223,17 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         end = max(e for _, e in windows)
         _reject_unfinished_daily_bar_window(config, end)
         spans = _instrument_spans(config)
+        bar_universe = _etf_placeholder_bar_universe(config, spans)
         remaining: list[tuple[str, list[str], date, date]] = []
         ownership = DailyBarOwnership()
         for batch_id, symbols, spec_start, spec_end in batch_specs:
-            routed = classify_daily_bar_ownership(symbols, spans, spec_start, spec_end)
+            routed = classify_daily_bar_ownership(
+                symbols,
+                spans,
+                spec_start,
+                spec_end,
+                bar_universe=bar_universe,
+            )
             ownership.generic.extend(routed.generic)
             ownership.delegated_delisted.extend(routed.delegated_delisted)
             ownership.expected_no_data.extend(routed.expected_no_data)
@@ -271,7 +296,14 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
     if rebackfill:
         symbols = list(dict.fromkeys(rebackfill + symbols))
 
-    ownership = classify_daily_bar_ownership(symbols, _instrument_spans(config), start, end)
+    spans = _instrument_spans(config)
+    ownership = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        start,
+        end,
+        bar_universe=_etf_placeholder_bar_universe(config, spans),
+    )
     _record_delegated_ownership_batch(
         config,
         run_id,
@@ -1038,7 +1070,7 @@ def step_daily_bars_history(config: Config, trade_date: date, run_id: str, conte
     requests = sum((end.year - s.year + 1) for _, s in plan)
     logger.info(
         "daily_bars_history: %d symbols, %s..%s, ~%d year-requests "
-        "(ETF and 北交所 excluded — neither has adjustment factors)",
+        "(北交所 excluded — Sina has no factor coverage for it)",
         len(plan),
         start,
         end,
@@ -1078,10 +1110,11 @@ def _history_plan(config: Config, start: date, end: date) -> list[tuple[str, dat
 
     Two filters and a per-symbol window, which together cut the sweep by ~78%:
 
-    * Stocks only. ETFs dominate the symbols with no ``list_date`` (2189 of
-      2195) and have no adjustment factors, so deeper raw bars for them could
-      never be served as hfq — fetching them would spend hours on data the
-      research path must refuse anyway. 北交所 is excluded for the same reason.
+    * Stocks and ETFs/LOFs. Both carry Sina hfq factors and an enriched
+      ``list_date``, so deeper raw bars are served as hfq with one convention.
+      北交所 is excluded because Sina has no factor coverage for it. An ETF with
+      no ``list_date`` is an unlisted placeholder (or an enrichment gap) with no
+      verifiable history, so it is skipped rather than planned and failed.
     * Nothing listed after the window. A 2016 IPO has no pre-2016 history, and
       asking for it is ~2600 symbols' worth of empty year files.
     * The rest start at their listing year rather than at ``start``.
@@ -1102,9 +1135,14 @@ def _history_plan(config: Config, start: date, end: date) -> list[tuple[str, dat
     plan: list[tuple[str, date]] = []
     for sym in symbols:
         row = meta.get(sym)
-        if row is None or row.get("asset_type") != "stock":
+        if row is None:
+            continue
+        asset_type = row.get("asset_type")
+        if asset_type not in ("stock", "etf"):
             continue
         listed = row.get("list_date")
+        if asset_type == "etf" and listed is None:
+            continue
         if listed is not None:
             if listed > end:
                 continue
