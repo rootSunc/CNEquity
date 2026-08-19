@@ -4,7 +4,32 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.2.1] — 2026-08-19
+
+**主要变更：修复 `trading_status`（ST / 停牌）数据获取，新增 baostock 备份数据源。**
+
+### Added
+
+- **`cne config validate` now rejects malformed `[[failover.datasets]]` entries.** Unknown dataset names, unrecognized primary/backup sources, and duplicate entries fail validation instead of silently disabling the trading_status failover.
+- **`trading_status` failover to a baostock daily snapshot.** When the EastMoney
+  ST/suspension fetching fails, SH/SZ fall back to `query_all_stock(day)`
+  (single-request snapshot) with a freshness gate, per-symbol fill
+  classification (a previously non-tradable name is never washed to `normal`),
+  counted BJ defaults, dynamic provenance, and `source_snapshots` audit trail.
+  Opt-in via `[[failover.datasets]] name = "trading_status"`; removing the entry
+  restores the previous behavior.
+- **EastMoney suspension fetch adapted to the 2026-08 datacenter contract.**
+  `RPT_CUSTOM_SUSPEND_DATA_INTERFACE` now requires a `DATETIME`/`MARKET`
+  filter (five markets, deduplicated) and the renamed
+  `SUSPEND_START_DATE`/`SUSPEND_END_TIME` columns; an all-market empty batch
+  fails loudly instead of masquerading as "no suspensions".
+
+### Fixed
+
+- **`trading_status` daily runs no longer fail end-to-end when EastMoney
+  push2/datacenter legs are unreachable** (IP throttle or contract drift):
+  with the failover entry configured the step degrades to the baostock
+  snapshot and is tagged `warning` with audit findings.
 
 ## [0.7.2] — 2026-08-16
 

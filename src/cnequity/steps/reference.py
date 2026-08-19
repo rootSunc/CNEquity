@@ -24,6 +24,10 @@ from cnequity.domain.symbols import (
     parse_symbol,
 )
 from cnequity.orchestrator.registry import register_step
+from cnequity.quality.failover import (
+    fetch_trading_status_backup,
+    snapshot_trading_status_backup,
+)
 from cnequity.quality.st_coverage import (
     ST_EVIDENCE_VERSION,
     build_st_scope,
@@ -243,23 +247,27 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
     expected_symbols = set(symbols)
     rl = config.tdx_rate_limit_spec()
 
-    # EastMoney is the only daily ST feed. An AkShare union used to sit here as a
-    # "second source", but `ak.stock_zh_a_st_em` requests the same push2 clist
-    # endpoint with the same `fs=m:0+f:4,m:1+f:4` filter that
-    # adapters/eastmoney/trading_status.py already queries — same vendor, same
-    # board, same filter — so it could only ever repeat this answer or fail. The
-    # push2 → push2delay failover in the EastMoney client is the real robustness
-    # here. The one genuinely independent ST reading, baostock's per-day `isST`,
-    # is a per-symbol sweep and stays where it is affordable: the `--backfill`
-    # path below. See issue #3.
+    # EastMoney is the primary daily ST/suspension feed; the baostock snapshot
+    # is the failover when EastMoney's push2/datacenter legs fail (see
+    # [[failover.datasets]] name="trading_status"). BJ ST tags are not covered
+    # by either vendor; the coordinator counts BJ defaults explicitly.
+    degraded: dict = {}
+
     def _fetch(day: date):
-        frame = fetch_trading_status(
-            symbols,
-            day,
-            rate_limit=rl,
-            allow_mock=config.tdx_allow_mock,
-            config=config,
-        )
+        nonlocal degraded
+        try:
+            frame = fetch_trading_status(
+                symbols,
+                day,
+                rate_limit=rl,
+                allow_mock=config.tdx_allow_mock,
+                config=config,
+            )
+        except Exception as primary_exc:
+            backup, degraded = fetch_trading_status_backup(config, symbols, day)
+            if backup is None or backup.is_empty():
+                raise primary_exc
+            frame = backup
         if frame.is_empty():
             return frame
         if "symbol" not in frame.columns:
@@ -288,13 +296,31 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
         if _findings:
             result["context_updates"] = {"audit_findings": _findings}
         return result
-    # This adapter is an EastMoney current-state snapshot even though it is
-    # exposed through the TDX facade. Preserve the actual evidence owner so
-    # downstream PIT precedence never mistakes it for exchange history.
-    df = with_provenance(df.drop("source", strict=False), source="eastmoney", data_version="v1")
+    # The adapter is a current-state snapshot even when it is exposed through
+    # the TDX facade. Record the actual evidence owner so downstream PIT
+    # precedence never mistakes a degraded day for exchange history.
+    origin = degraded.get("source", "eastmoney")
+    df = with_provenance(df.drop("source", strict=False), source=origin, data_version="v1")
     result = write_simple(config, run_id, "trading_status", df)
-    if _findings:
-        result["context_updates"] = {"audit_findings": _findings}
+    findings = list(_findings)
+    if degraded.get("failover_used"):
+        snapshot_trading_status_backup(config, df=df, run_id=run_id, trade_date=trade_date)
+        findings.append(
+            {
+                "dataset": "trading_status",
+                "check": "failover_degraded",
+                "severity": "warning",
+                "detail": (
+                    "primary (eastmoney) failed; baostock backup used "
+                    f"(n_filled={degraded.get('n_filled', 0)}, "
+                    f"n_scope_defaults={degraded.get('n_scope_defaults', 0)}, "
+                    f"n_bj_defaulted={degraded.get('n_bj_defaulted', 0)})"
+                ),
+            }
+        )
+        result["status"] = "warning"
+    if findings:
+        result["context_updates"] = {"audit_findings": findings}
     return result
 
 

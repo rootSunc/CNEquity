@@ -71,7 +71,7 @@ CNEquity 从 A 股开始，解决的是一件很具体的事：把分散在不�
 | **L0 · 基础参考** | | | | | |
 | `instruments` | 证券主数据 | tdx_protocol | baostock | 可回补 | core |
 | `trading_calendar` | 交易日历 | tdx_protocol | exchange | 可回补 | core |
-| `trading_status` | 交易状态（停复牌/ST） | tdx_protocol | eastmoney | 可回补 | core |
+| `trading_status` | 交易状态（停复牌/ST） | eastmoney | baostock | 可回补 | core |
 | **L1 · 行情** | | | | | |
 | `adj_factors` | 复权因子 | sina | — | 可回补 | — |
 | `commodity_bars` ○ | 商品期货主连 | sina | eastmoney | 可回补 | macro_risk |
@@ -251,6 +251,17 @@ cne retry --run-id <run_id>   # 只重试失败批次
 ```
 
 更多运维方式见[运行手册](docs/operations/runbook.md)、[数据源健康检查](docs/operations/source-health.md)和[故障排查](docs/operations/troubleshooting.md)。
+
+#### 遗漏交易日怎么补（快照数据集）
+
+`trading_status` 及其它 `fetch_semantics="snapshot"` 数据集失败后，能否自动补齐取决于**你何时重跑**：
+
+- **当天复跑（trade_date 仍为 D）`cne run daily`** → **自动补齐 D**。失败日 watermark 不会推进，D 仍在增量窗口 `[watermark+1, D]` 内，重跑时会重新抓取。
+- **隔天普通 `cne run daily`（trade_date = D+1）** → **不会**自动补齐 D。快照语义对 watermark 之前的日期只写入审计 finding、刻意不重放（避免把今天的标签回填到过去会话，即 "snapshot fetch semantics cannot backfill historical values"）。此时二选一：
+  - `cne retry --run-id <失败的那次 run>` —— 只重放失败批次，效果等同于当天重跑；
+  - `cne backfill trading_status --start D --end D` —— 显式按日回填。
+
+**时间语义**：`trading_status` 主源是 EastMoney；启用 `[[failover.datasets]] name="trading_status" ... backup="baostock"` 后，baostock 兜底带**新鲜度闸**——当日数据尚未生成（baostock 当日晚间才结算当日会话）时拒绝兜底，宁缺勿假。因此 **16:00 核心波次**在"东财故障 + baostock 未出当日数据"时当天必然失败；请把补跑安排在 **18:00 之后**（此时 baostock 已有当日批次，备份可正常兜底）。
 
 ## 接给 AI agent
 

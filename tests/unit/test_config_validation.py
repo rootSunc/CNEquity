@@ -190,6 +190,63 @@ def test_enabled_intraday_capture_needs_at_least_one_frequency(tmp_path):
     assert any("frequencies is empty" in e for e in validate_config(cfg))
 
 
+def _failover_toml(root: Path, extra: str) -> Path:
+    path = root / "c.toml"
+    path.write_text(
+        f'[data]\nroot = "/tmp/lake"\n\n'
+        '[[job.daily.waves]]\nname = "w"\nparallel = true\nsteps = ["instruments"]\n\n'
+        '[failover]\nenabled = true\n\n'
+        "[sources.baostock]\nenabled = true\n\n"
+        "[sources.eastmoney]\nenabled = true\n\n"
+        f"{extra}",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_validate_config_accepts_trading_status_failover(tmp_path):
+    """The shipped trading_status entry (eastmoney → baostock) must validate."""
+    path = _failover_toml(
+        tmp_path,
+        '[[failover.datasets]]\nname = "trading_status"\n'
+        'primary = "eastmoney"\nbackup = "baostock"\n',
+    )
+    errors = validate_config(load_config(path))
+    assert not any("failover" in e for e in errors)
+
+
+def test_validate_config_rejects_unknown_failover_dataset(tmp_path):
+    path = _failover_toml(
+        tmp_path,
+        '[[failover.datasets]]\nname = "not_a_dataset"\n'
+        'primary = "eastmoney"\nbackup = "baostock"\n',
+    )
+    errors = validate_config(load_config(path))
+    assert any("not_a_dataset" in e and "not a registered dataset" in e for e in errors)
+
+
+def test_validate_config_rejects_unknown_failover_source(tmp_path):
+    path = _failover_toml(
+        tmp_path,
+        '[[failover.datasets]]\nname = "trading_status"\n'
+        'primary = "eastmoney"\nbackup = "nope_source"\n',
+    )
+    errors = validate_config(load_config(path))
+    assert any("backup='nope_source'" in e and "not a known source" in e for e in errors)
+
+
+def test_validate_config_rejects_duplicate_failover_datasets(tmp_path):
+    path = _failover_toml(
+        tmp_path,
+        '[[failover.datasets]]\nname = "trading_status"\n'
+        'primary = "eastmoney"\nbackup = "baostock"\n'
+        '[[failover.datasets]]\nname = "trading_status"\n'
+        'primary = "eastmoney"\nbackup = "baostock"\n',
+    )
+    errors = validate_config(load_config(path))
+    assert any("declared more than once" in e for e in errors)
+
+
 def test_fetch_workers_below_one_is_rejected(tmp_path):
     cfg = Config(
         data_root=tmp_path / "data",

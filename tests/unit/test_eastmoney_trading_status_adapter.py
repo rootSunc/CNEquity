@@ -26,8 +26,10 @@ class _FakeClient:
         self.payload = payload or {}
         self.get_raises = get_raises
         self.closed = False
+        self.urls: list[str] = []
 
     def get(self, url):
+        self.urls.append(url)
         if self.get_raises is not None:
             raise self.get_raises
         return _FakeResponse(self.payload)
@@ -57,51 +59,73 @@ def test_fetch_st_symbols_skips_non_all_a_items(monkeypatch):
     assert out == {"600519.SH"}
 
 
-def test_fetch_suspended_symbols_parses_result_rows():
+def _row(code: str, start: str, end: str | None) -> dict:
+    return {
+        "SECURITY_CODE": code,
+        "SUSPEND_START_DATE": start,
+        "SUSPEND_END_TIME": end,
+    }
+
+
+def test_suspension_covers_new_columns():
+    d = date(2026, 8, 18)
+    assert ts._suspension_covers(_row("600984", "2026-08-11 00:00:00", None), d) is True
+    assert ts._suspension_covers(_row("600984", "2026-08-11 00:00:00", "null"), d) is True
+    assert (
+        ts._suspension_covers(_row("600984", "2026-08-11 00:00:00", "2026-08-18 09:30:00"), d)
+        is True
+    )
+    assert (
+        ts._suspension_covers(_row("600984", "2026-08-11 00:00:00", "2026-08-17 09:30:00"), d)
+        is False
+    )
+    assert ts._suspension_covers(_row("600984", "2026-08-20 00:00:00", None), d) is False
+
+
+def test_fetch_suspended_symbols_uses_new_contract_filter(monkeypatch):
+    from urllib.parse import unquote
+
+    payload = {"result": {"data": [_row("600984", "2026-08-11 00:00:00", None)]}}
+    client = _FakeClient(payload)
+    out = ts._fetch_suspended_symbols(client, date(2026, 8, 18))
+
+    assert out == {"600984.SH"}
+    assert len(client.urls) == len(ts._SUSPEND_MARKETS)
+    for url, market in zip(client.urls, ts._SUSPEND_MARKETS, strict=False):
+        decoded = unquote(url)
+        assert "DATETIME='2026-08-18'" in decoded
+        assert f'MARKET="{market}"' in decoded
+
+
+def test_fetch_suspended_symbols_dedupes_codes_across_markets(monkeypatch):
     payload = {
         "result": {
             "data": [
-                {
-                    "SECURITY_CODE": "600519",
-                    "TRADE_MARKET": "SH",
-                    "STOP_DATE": "2024-06-27",
-                    "RESUME_DATE": "null",
-                },
-                {
-                    "SECURITY_CODE": "810001",
-                    "TRADE_MARKET": "SH",
-                    "STOP_DATE": "2024-06-27",
-                    "RESUME_DATE": "null",
-                },  # excluded, not all_a
+                _row("600984", "2026-08-11 00:00:00", None),
+                _row("600984", "2026-08-11 00:00:00", None),
+                _row("810001", "2026-08-11 00:00:00", None),  # not all_a → excluded
             ]
         }
     }
     client = _FakeClient(payload)
-    out = ts._fetch_suspended_symbols(client, date(2024, 6, 28))
-    assert out == {"600519.SH"}
+    out = ts._fetch_suspended_symbols(client, date(2026, 8, 18))
+    assert out == {"600984.SH"}
 
 
-def test_fetch_suspended_symbols_raises_on_transport_failure(monkeypatch):
-    monkeypatch.setattr(datacenter.time, "sleep", lambda _seconds: None)
-    client = _FakeClient(get_raises=RuntimeError("network down"))
-    with pytest.raises(RuntimeError, match="network down"):
-        ts._fetch_suspended_symbols(client, date(2024, 6, 28))
+def test_fetch_suspended_symbols_raises_when_all_batches_empty():
+    empty_batch = {"success": False, "message": "返回数据为空", "code": 9201}
+    client = _FakeClient(empty_batch)
+    with pytest.raises(RuntimeError, match="empty across all markets"):
+        ts._fetch_suspended_symbols(client, date(2026, 8, 18))
 
 
-def test_fetch_suspended_symbols_paginates_until_reported_total():
+def test_fetch_suspended_symbols_paginates_a_single_market():
     page1 = {
         "success": True,
         "result": {
             "pages": 2,
             "count": 501,
-            "data": [
-                {
-                    "SECURITY_CODE": "600519",
-                    "STOP_DATE": "2024-06-27",
-                    "RESUME_DATE": "null",
-                }
-            ]
-            * 500,
+            "data": [_row("600984", "2026-08-11 00:00:00", None)] * 500,
         },
     }
     page2 = {
@@ -109,31 +133,25 @@ def test_fetch_suspended_symbols_paginates_until_reported_total():
         "result": {
             "pages": 2,
             "count": 501,
-            "data": [
-                {
-                    "SECURITY_CODE": "000001",
-                    "STOP_DATE": "2024-06-28",
-                    "RESUME_DATE": "2024-07-01",
-                }
-            ],
+            "data": [_row("000001", "2026-08-18 00:00:00", None)],
         },
     }
+    empty_batch = {"success": False, "message": "返回数据为空", "code": 9201}
 
     class _PagedClient:
         def __init__(self):
-            self.responses = [page1, page2]
+            self.responses = [page1, page2] + [empty_batch] * (len(ts._SUSPEND_MARKETS) - 1)
             self.urls: list[str] = []
 
         def get(self, url):
             self.urls.append(url)
-            payload = self.responses.pop(0)
-            return _FakeResponse(payload)
+            return _FakeResponse(self.responses.pop(0))
 
     client = _PagedClient()
-    out = ts._fetch_suspended_symbols(client, date(2024, 6, 28))
+    out = ts._fetch_suspended_symbols(client, date(2026, 8, 18))
 
-    assert out == {"600519.SH", "000001.SZ"}
-    assert len(client.urls) == 2
+    assert out == {"600984.SH", "000001.SZ"}
+    assert len(client.urls) == len(ts._SUSPEND_MARKETS) + 1  # one extra page on market 1
     assert "pageNumber=2" in client.urls[1]
 
 
@@ -142,29 +160,32 @@ def test_fetch_suspended_symbols_rejects_rows_outside_requested_interval():
         {
             "result": {
                 "data": [
-                    {
-                        "SECURITY_CODE": "600519",
-                        "STOP_DATE": "2024-06-01",
-                        "RESUME_DATE": "2024-06-27",
-                    }
+                    _row("600519", "2026-06-01 00:00:00", "2026-06-27 00:00:00"),
                 ]
             }
         }
     )
 
-    with pytest.raises(RuntimeError, match="2024-06-28"):
-        ts._fetch_suspended_symbols(client, date(2024, 6, 28))
+    with pytest.raises(RuntimeError, match="2026-06-28"):
+        ts._fetch_suspended_symbols(client, date(2026, 6, 28))
 
 
 def test_fetch_suspended_symbols_raises_on_malformed_response():
     client = _FakeClient({})
     with pytest.raises(RuntimeError, match="without a result object"):
-        ts._fetch_suspended_symbols(client, date(2024, 6, 28))
+        ts._fetch_suspended_symbols(client, date(2026, 6, 28))
 
 
 def test_fetch_suspended_symbols_rejects_non_object_rows():
     client = _FakeClient({"result": {"data": [None]}})
     with pytest.raises(RuntimeError, match="non-object row"):
+        ts._fetch_suspended_symbols(client, date(2026, 6, 28))
+
+
+def test_fetch_suspended_symbols_raises_on_transport_failure(monkeypatch):
+    monkeypatch.setattr(datacenter.time, "sleep", lambda _seconds: None)
+    client = _FakeClient(get_raises=RuntimeError("network down"))
+    with pytest.raises(RuntimeError, match="network down"):
         ts._fetch_suspended_symbols(client, date(2024, 6, 28))
 
 

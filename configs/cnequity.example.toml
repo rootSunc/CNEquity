@@ -223,6 +223,16 @@ backup = "tdx_protocol"
 compare_fields = ["cash_dividend", "bonus_ratio", "transfer_ratio"]
 price_tolerance_bps = 10
 
+# trading_status: EastMoney is the daily ST/suspension feed; the baostock
+# snapshot (`query_all_stock`) is its fallback. Removing this entry (or
+# disabling [failover] / [sources.baostock]) restores the pre-change behavior
+# where a primary failure fails the whole step. The entry is dataset-scoped:
+# it covers both the ST and the suspension facet of trading_status together.
+[[failover.datasets]]
+name = "trading_status"
+primary = "eastmoney"
+backup = "baostock"
+
 [universe]
 default = "all_a"
 

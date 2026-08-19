@@ -266,8 +266,10 @@ _SPECS = [
     ),
     DatasetSpec(
         "trading_status",
-        primary_source="tdx_protocol",
-        backup_source="eastmoney",
+        # Daily feed is EastMoney (TDX facade name notwithstanding); baostock
+        # is the failover (see [[failover.datasets]] name="trading_status").
+        primary_source="eastmoney",
+        backup_source="baostock",
         tier="L0",
         partition_col="trade_date",
         partition_granularity="month",
