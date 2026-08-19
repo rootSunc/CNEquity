@@ -8,7 +8,10 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.eastmoney.clist import clist_rows_to_symbols, fetch_clist_pages
+from cnequity.adapters.eastmoney.clist import (
+    clist_rows_to_symbols_tolerant,
+    fetch_clist_pages,
+)
 from cnequity.adapters.eastmoney.common import (
     _to_float,
     exchange_from_datacenter,
@@ -144,12 +147,7 @@ def fetch_fund_flow(
         client = EastMoneyClient(config=config)
     try:
         rows_raw = fetch_clist_pages(client, fields=_FUND_FLOW_FIELDS)
-        mapped_rows = clist_rows_to_symbols(rows_raw)
-        if len(mapped_rows) != len(rows_raw):
-            raise RuntimeError(
-                "EastMoney fund_flow clist returned "
-                f"{len(rows_raw) - len(mapped_rows)} unmappable security row(s)"
-            )
+        mapped_rows = clist_rows_to_symbols_tolerant(rows_raw, dataset="fund_flow")
         rows = []
         for sym, item in mapped_rows:
             rows.append(

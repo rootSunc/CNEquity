@@ -65,7 +65,12 @@ def fetch_index_constituents(
                 filter_expr=f'(INDEX_CODE="{index_code}")',
                 page_size=5000,
             )
-            matched = 0
+            # RPT_INDEX_CONSTITUENT is a change log: TRADE_DATE is when a member
+            # joined or changed, not a per-day snapshot. The constituents as of
+            # *as_of_date* are the latest TRADE_DATE <= as_of_date per security,
+            # so a strict date equality would fail on any day the index did not
+            # rebalance.
+            latest: dict[str, tuple[date, str]] = {}
             for item in raw:
                 returned_code = str(item.get("INDEX_CODE") or "").zfill(6)
                 if returned_code != index_code.zfill(6):
@@ -76,30 +81,30 @@ def fetch_index_constituents(
                     )
                     continue
                 returned_date = str(item.get("TRADE_DATE") or "")[:10]
-                if returned_date != as_of_date.isoformat():
-                    logger.warning(
-                        "EastMoney index constituents: requested %s for %s, received %s",
-                        index_code,
-                        as_of_date.isoformat(),
-                        returned_date or "<missing>",
-                    )
+                try:
+                    change_date = date.fromisoformat(returned_date)
+                except ValueError:
+                    continue
+                if change_date > as_of_date:
                     continue
                 code = str(item.get("SECURITY_CODE", "")).zfill(6)
                 exch = exchange_from_datacenter(item)
                 sym = symbol_from_em(code, 1 if exch == "SH" else (2 if exch == "BJ" else 0))
                 if not sym:
                     continue
-                matched += 1
+                if sym not in latest or change_date > latest[sym][0]:
+                    latest[sym] = (change_date, returned_code)
+            for sym, (_, effective_code) in latest.items():
                 rows.append(
                     {
-                        "index_symbol": _index_symbol(returned_code),
+                        "index_symbol": _index_symbol(effective_code),
                         "symbol": sym,
                         "as_of_date": as_of_date,
                         # EastMoney RPT_INDEX_CONSTITUENT no longer exposes constituent weights.
                         "weight": 0.0,
                     }
                 )
-            if matched == 0:
+            if not latest:
                 missing_indices.append(index_sym)
     finally:
         if owns:

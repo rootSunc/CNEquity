@@ -163,6 +163,32 @@ def test_index_constituents_daily_writes(cfg, monkeypatch):
     assert result["rows_written"] == 50
 
 
+def test_fetch_index_constituents_uses_latest_change_date(monkeypatch):
+    from cnequity.adapters.eastmoney.index_constituents import fetch_index_constituents
+
+    class _Client:
+        def close(self):
+            pass
+
+    rows = [
+        {"INDEX_CODE": "000300", "SECURITY_CODE": "600519", "TRADE_MARKET": "SH",
+         "TRADE_DATE": "2024-01-10"},
+        {"INDEX_CODE": "000300", "SECURITY_CODE": "000001", "TRADE_MARKET": "SZ",
+         "TRADE_DATE": "2023-06-01"},
+        {"INDEX_CODE": "000300", "SECURITY_CODE": "000002", "TRADE_MARKET": "SZ",
+         "TRADE_DATE": "2024-07-01"},
+        {"INDEX_CODE": "000001", "SECURITY_CODE": "600000", "TRADE_MARKET": "SH",
+         "TRADE_DATE": "2024-01-10"},
+    ]
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.index_constituents.fetch_datacenter",
+        lambda *a, **k: rows,
+    )
+    df = fetch_index_constituents(date(2024, 6, 28), indices=["000300.SH"], client=_Client())
+    assert set(df["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
+    assert df["as_of_date"].to_list() == [date(2024, 6, 28)] * 2
+
+
 def test_index_constituents_daily_rejects_partial_snapshot(cfg, monkeypatch):
     def fake_fetch(trade_date, **kwargs):
         return pl.DataFrame(
