@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -1568,8 +1570,24 @@ def retry(config_path: str, run_id: str | None, failed_groups: bool):
             click.echo(
                 f"retrying failed daily group run {run['run_id']} ({run['job_name']})"
             )
-            result = _retry_single_run(engine, run["run_id"])
-            if result.get("status") != "success":
+            # A full-group retry is memory-heavy (fund_flow, valuation,
+            # index_constituents). Running each group in its own process frees
+            # that arena before the next group starts, so one heavy group cannot
+            # OOM the pod that is retrying several.
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from cnequity.cli.main import cli; cli.main()",
+                    "retry",
+                    "--config",
+                    config_path,
+                    "--run-id",
+                    run["run_id"],
+                ],
+                check=False,
+            )
+            if proc.returncode != 0:
                 failed = True
         if failed:
             raise SystemExit(1)

@@ -291,26 +291,27 @@ def test_retry_failed_groups_retries_latest_failed_per_group(cfg_path, monkeypat
                 {"run_id": "capital-old", "job_name": "daily:capital", "status": "failed"},
             ]
 
-        def get_run(self, run_id):
-            return {"run_id": run_id, "job_name": "daily:research"}
-
     class FakeEngine:
         def __init__(self, cfg):
             self.manifest = FakeManifest()
-            self.calls = []
-
-        def run_job(self, job_name, **kwargs):
-            assert job_name == "retry"
-            assert kwargs.get("retry_failed_only") is True
-            self.calls.append(kwargs["run_id"])
-            return {"run_id": kwargs["run_id"], "status": "success"}
 
     monkeypatch.setattr("cnequity.cli.main.JobEngine", lambda cfg: FakeEngine(cfg))
+    calls = []
+
+    class _Proc:
+        returncode = 0
+
+    monkeypatch.setattr(
+        "cnequity.cli.main.subprocess.run",
+        lambda argv, **kwargs: calls.append(argv) or _Proc(),
+    )
     result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--failed-groups"])
     assert result.exit_code == 0, result.output
     # core's latest succeeded, capital's latest succeeded, only research failed.
     assert result.output.count("retrying failed daily group run") == 1
     assert "research-new" in result.output
+    assert len(calls) == 1
+    assert calls[0][-1] == "research-new"
 
 
 def test_retry_failed_groups_none(cfg_path, monkeypatch):
