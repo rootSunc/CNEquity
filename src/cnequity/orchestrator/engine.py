@@ -494,6 +494,13 @@ class JobEngine:
         self, run_id: str, trade_date: date, *, auto_finalize: bool = True
     ) -> dict[str, Any]:
         run_meta = self.manifest.get_run_metadata(run_id)
+        # A retry must re-fetch the date the original run targeted, not today.
+        # Retrying a previous-day catchup with shanghai_today() would ask the
+        # data source for a not-yet-published session and never backfill the
+        # run's own trade_date (e.g. margin_trading on an 8/18 catchup run).
+        original = run_meta.get("trade_date")
+        if original:
+            trade_date = date.fromisoformat(original)
         self.config._backfill = bool(run_meta.get("backfill"))
         scope = run_meta.get("backfill_scope") or {}
         for attr, key in (
