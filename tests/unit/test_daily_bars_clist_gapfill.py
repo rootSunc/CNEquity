@@ -315,8 +315,8 @@ def test_tip_total_loss_still_raises(tmp_path, monkeypatch):
         lambda trade_date, symbols=None, client=None, config=None: pl.DataFrame(),
     )
     monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.bars.fetch_daily_bars",
-        lambda symbols, start, end, client=None, config=None: pl.DataFrame(),
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_with_status",
+        lambda symbols, start, end, client=None, config=None: (pl.DataFrame(), []),
     )
     with pytest.raises(RuntimeError, match="produced no staged tip rows"):
         _finish_daily_bars(
@@ -360,8 +360,8 @@ def test_tip_partial_miss_after_gapfill_warns_instead_of_failing_step(tmp_path, 
         ),
     )
     monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.bars.fetch_daily_bars",
-        lambda symbols, start, end, client=None, config=None: pl.DataFrame(),
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_with_status",
+        lambda symbols, start, end, client=None, config=None: (pl.DataFrame(), []),
     )
     result = _finish_daily_bars(
         cfg,
@@ -384,6 +384,53 @@ def test_tip_partial_miss_after_gapfill_warns_instead_of_failing_step(tmp_path, 
         f["check"] == "daily_bars_tip_missing_symbols" and "000001.SZ" in f["message"]
         for f in findings
     )
+
+
+def test_tip_batch_kline_failure_fails_instead_of_success(tmp_path, monkeypatch):
+    # A large EastMoney kline miss (transport outage) must fail the tip step so
+    # the retry job can recover the session, instead of being masked as a
+    # successful run the way the handful of legitimate absences are.
+    cfg = _cfg(tmp_path)
+    run_id = Manifest(cfg.manifest_path).start_run("daily:core")
+    tip = date(2026, 8, 19)
+    symbols = [f"6{i:05d}.SH" for i in range(10)]
+    staged_symbol = symbols[0]
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_clist",
+        lambda trade_date, symbols=None, client=None, config=None: pl.DataFrame(
+            {
+                "symbol": [staged_symbol],
+                "trade_date": [tip],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.0],
+                "close": [10.5],
+                "volume": [100],
+                "amount": [1000.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_with_status",
+        lambda symbols, start, end, client=None, config=None: (pl.DataFrame(), symbols),
+    )
+    with pytest.raises(RuntimeError, match="failing step for retry"):
+        _finish_daily_bars(
+            cfg,
+            tip,
+            run_id,
+            start=tip,
+            end=tip,
+            expected_tdx_symbols=symbols,
+            tdx_result={
+                "rows_read": 0,
+                "rows_written": 0,
+                "had_error": True,
+                "failed_symbols": symbols,
+                "failed_batch_ids": [],
+            },
+            sina_result=None,
+        )
 
 
 def test_tip_missing_etf_recovered_by_kline_and_batch_superseded(tmp_path, monkeypatch):
@@ -439,7 +486,10 @@ def test_tip_missing_etf_recovered_by_kline_and_batch_superseded(tmp_path, monke
             }
         )
 
-    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_with_status",
+        lambda symbols, start, end, **kwargs: (_kline(symbols, start, end, **kwargs), []),
+    )
 
     result = _finish_daily_bars(
         cfg,
@@ -517,7 +567,10 @@ def test_historical_retry_uses_kline_not_live_clist(tmp_path, monkeypatch):
             }
         )
 
-    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_with_status",
+        lambda symbols, start, end, **kwargs: (_kline(symbols, start, end, **kwargs), []),
+    )
 
     result = _finish_daily_bars(
         cfg,
@@ -585,7 +638,10 @@ def test_multiday_uses_kline_not_clist(tmp_path, monkeypatch):
         return pl.DataFrame(rows)
 
     monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars_clist", _clist)
-    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_with_status",
+        lambda symbols, start, end, **kwargs: (_kline(symbols, start, end, **kwargs), []),
+    )
 
     result = _finish_daily_bars(
         cfg,
@@ -626,7 +682,10 @@ def test_multiday_partial_symbol_is_gapfilled_without_overwriting_primary_rows(
         days = [date(2024, 6, 20), date(2024, 6, 21), date(2024, 6, 24)]
         return pl.concat([_bar_frame(symbols, day) for day in days])
 
-    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_with_status",
+        lambda symbols, start, end, **kwargs: (_kline(symbols, start, end, **kwargs), []),
+    )
     result = _finish_daily_bars(
         cfg,
         end,
@@ -658,7 +717,10 @@ def test_multiday_fallback_failure_is_gapfilled_by_symbol(tmp_path, monkeypatch)
         days = [date(2024, 6, 20), date(2024, 6, 21), date(2024, 6, 24)]
         return pl.concat([_bar_frame(symbols, day) for day in days])
 
-    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.bars.fetch_daily_bars_with_status",
+        lambda symbols, start, end, **kwargs: (_kline(symbols, start, end, **kwargs), []),
+    )
     result = _finish_daily_bars(
         cfg,
         end,

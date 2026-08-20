@@ -423,6 +423,7 @@ def _finish_daily_bars(
     failed_symbols = list(tdx_result.get("failed_symbols") or [])
     failed_batch_ids = list(tdx_result.get("failed_batch_ids") or [])
     fallback_failed_symbols: set[str] = set()
+    tip_fetch_failed: set[str] = set()
 
     if sina_result:
         rows_read += int(sina_result.get("rows_read", 0))
@@ -457,6 +458,7 @@ def _finish_daily_bars(
                 rows_read += int(kline.get("rows_read", 0))
                 rows_written += int(kline.get("rows_written", 0))
                 findings.extend(kline.get("audit_findings") or [])
+                tip_fetch_failed |= set(kline.get("fetch_failed_symbols") or [])
         else:
             gap = _gapfill_tip_via_clist(
                 config, trade_date, run_id, expected_symbols=expected_tdx_symbols
@@ -483,6 +485,7 @@ def _finish_daily_bars(
                 rows_read += int(kline.get("rows_read", 0))
                 rows_written += int(kline.get("rows_written", 0))
                 findings.extend(kline.get("audit_findings") or [])
+                tip_fetch_failed |= set(kline.get("fetch_failed_symbols") or [])
     elif failed_symbols or expected_tdx_symbols or expected_fallback_symbols:
         all_expected_symbols = list(
             dict.fromkeys((expected_tdx_symbols or []) + (expected_fallback_symbols or []))
@@ -538,7 +541,14 @@ def _finish_daily_bars(
                 f"daily_bars {bar_date}: TDX failed and EastMoney clist/kline gap-fill "
                 "produced no staged tip rows"
             )
-        if missing_staged:
+        fetch_fail_batch = len(tip_fetch_failed) > _TIP_GAPFILL_FETCH_FAIL_LIMIT
+        missing_share = len(missing_staged) / len(expected_symbols) if expected_symbols else 0.0
+        missing_batch = (
+            len(missing_staged) > _TIP_GAPFILL_FETCH_FAIL_LIMIT
+            and missing_share > _TIP_GAPFILL_MISSING_SHARE_LIMIT
+        )
+        batch_issue = fetch_fail_batch or missing_batch
+        if missing_staged and not batch_issue:
             # A handful of keys can legitimately stay missing (suspension,
             # trading halt) even after TDX, clist, and kline gap-fill all had a
             # shot at them. Failing the whole market-wide tip over that would
@@ -559,12 +569,22 @@ def _finish_daily_bars(
                     "missing_keys": len(missing_staged),
                 }
             )
-        if failed_batch_ids:
+        if failed_batch_ids and not batch_issue:
             _resolve_failed_daily_bar_batches(
                 config,
                 run_id,
                 failed_batch_ids,
                 superseded_by="tip-gapfill",
+            )
+        if batch_issue:
+            # A large kline miss after every gap-fill path is a source outage,
+            # not the handful of suspensions the finding above tolerates. Keep
+            # the step failed and leave the original batches unresolved so the
+            # retry job can recover them instead of masking a lost session.
+            raise RuntimeError(
+                f"daily_bars {bar_date}: EastMoney kline gap-fill left "
+                f"{len(missing_staged)} expected tip key(s) missing "
+                f"({len(tip_fetch_failed)} fetch failure(s)); failing step for retry"
             )
         # A tip is usable once at least one expected key is staged; a handful
         # of legitimately-missing symbols must not fail the whole run — see
@@ -798,7 +818,7 @@ def _gapfill_multiday_via_kline(
     """Stage EastMoney kline for failed or partially covered symbols."""
     import polars as pl
 
-    from cnequity.adapters.eastmoney.bars import fetch_daily_bars as fetch_em_kline
+    from cnequity.adapters.eastmoney.bars import fetch_daily_bars_with_status as fetch_em_kline
     from cnequity.domain.schemas import data_version_for, with_provenance
     from cnequity.orchestrator.manifest import Manifest
     from cnequity.quality.failover import failover_spec, write_backup_snapshot
@@ -808,13 +828,14 @@ def _gapfill_multiday_via_kline(
     if spec is None or not config.sources.get(spec.backup, True) or not symbols:
         return {"rows_read": 0, "rows_written": 0, "filled": False}
 
-    df = fetch_em_kline(symbols, start, end, config=config)
+    df, fetch_failed = fetch_em_kline(symbols, start, end, config=config)
     if df.is_empty():
         return {
             "rows_read": 0,
             "rows_written": 0,
             "filled": False,
             "complete": False,
+            "fetch_failed_symbols": fetch_failed,
             "audit_findings": [
                 {
                     "dataset": "daily_bars",
@@ -823,7 +844,13 @@ def _gapfill_multiday_via_kline(
                     "message": (
                         f"TDX coverage was incomplete for {len(symbols)} symbol(s) over "
                         f"{start}..{end}; EastMoney kline returned no rows"
+                        + (
+                            f" ({len(fetch_failed)} fetch failure(s))"
+                            if fetch_failed
+                            else ""
+                        )
                     ),
+                    "fetch_failed": len(fetch_failed),
                 }
             ],
         }
@@ -864,8 +891,14 @@ def _gapfill_multiday_via_kline(
                         f"EastMoney kline added no new rows for {len(symbols)} symbol(s) over "
                         f"{start}..{end}; {len(missing_keys)} key(s) remain absent "
                         "(may be suspended)"
+                        + (
+                            f"; {len(fetch_failed)} fetch failure(s)"
+                            if fetch_failed
+                            else ""
+                        )
                     ),
                     "missing_keys": len(missing_keys),
+                    "fetch_failed": len(fetch_failed),
                     "complete": False,
                 }
             )
@@ -874,6 +907,7 @@ def _gapfill_multiday_via_kline(
             "rows_written": 0,
             "filled": True,
             "complete": not missing_keys,
+            "fetch_failed_symbols": fetch_failed,
             "audit_findings": audit_findings,
         }
 
@@ -913,6 +947,7 @@ def _gapfill_multiday_via_kline(
         "rows_written": gap_df.height,
         "filled": True,
         "complete": not missing_keys,
+        "fetch_failed_symbols": fetch_failed,
         "audit_findings": [
             {
                 "dataset": "daily_bars",
@@ -923,6 +958,7 @@ def _gapfill_multiday_via_kline(
                     f"{len(symbols)} partially covered symbol(s) ({start}..{end})"
                 ),
                 "missing_keys": len(missing_keys),
+                "fetch_failed": len(fetch_failed),
                 "complete": not missing_keys,
             }
         ],
@@ -930,6 +966,14 @@ def _gapfill_multiday_via_kline(
     if not require_complete and missing_keys:
         result["audit_findings"][0]["message"] += "; unresolved keys may be suspended"
     return result
+
+
+# Tip gap-fill tolerates a handful of missing keys (suspension/halt), but a
+# larger kline miss means the EastMoney fetch itself failed as a batch. Above
+# these limits the step must fail so the retry job can recover the session
+# instead of masking it as a successful run.
+_TIP_GAPFILL_FETCH_FAIL_LIMIT = 5
+_TIP_GAPFILL_MISSING_SHARE_LIMIT = 0.02
 
 
 # A bar captured before the session opens is the previous close stamped on every
