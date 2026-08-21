@@ -436,6 +436,15 @@ def test_rows_filter_by_symbol(client):
     assert page["rows"][0][symbol_at] == "600519.SH"
 
 
+def test_rows_filter_by_bare_symbol(client):
+    page = client.get(
+        "/api/datasets/daily_bars/rows", params={"period": "2026-07-30", "symbol": "600519"}
+    ).json()
+    assert page["total"] == 1
+    symbol_at = page["columns"].index("symbol")
+    assert page["rows"][0][symbol_at] == "600519.SH"
+
+
 def test_rows_page_without_rescanning_the_whole_dataset(client):
     first = client.get(
         "/api/datasets/daily_bars/rows", params={"period": "2026-07-30", "limit": 1}

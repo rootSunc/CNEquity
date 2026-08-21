@@ -873,7 +873,7 @@ class LakeView:
             else:
                 kwargs["start"], kwargs["end"] = part.start, part.end
         if symbol:
-            kwargs["symbols"] = [symbol]
+            kwargs["symbols"] = self._resolve_symbols(symbol)
         if as_of:
             kwargs["as_of"] = as_of
         if adjust:
@@ -898,6 +898,35 @@ class LakeView:
             "offset": offset,
             "limit": limit,
         }
+
+    def _resolve_symbols(self, symbol: str) -> list[str]:
+        """Resolve a dashboard query to canonical lake symbols.
+
+        The data tab accepts the full ``600519.SH`` form, but a six-digit code
+        like ``513180`` is a common habit for an ETF or stock. Resolve those
+        through instruments so a bare code is not silently shown as empty.
+        """
+        stripped = (symbol or "").strip()
+        if not stripped or "." in stripped:
+            return [stripped] if stripped else []
+        code = stripped.split(".")[0].upper()
+        if not code.isdigit():
+            return [stripped]
+
+        def build() -> list[str]:
+            from cnequity.query.reader import load as load_dataset
+
+            try:
+                instruments = load_dataset("instruments", config=self.config)
+            except Exception:
+                return []
+            return sorted(
+                instruments.filter(pl.col("symbol").str.starts_with(code + "."))[
+                    "symbol"
+                ].to_list()
+            )
+
+        return self._cached(f"bare-symbol:{code}", build)
 
     def heatmap(self, *, days: int = 90) -> dict:
         """Coverage grid: one row per dataset, one cell per recent trading day.
