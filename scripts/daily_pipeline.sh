@@ -19,6 +19,11 @@
 # and 07-31 exactly that way — the per-host retries inside the adapter were
 # already there and were exhausted. What was missing was a second window.
 #
+# After the groups and that retry, rebuild meta/stats once so the dashboard's
+# date/partition views immediately see the partitions compacted by this run.
+# A full rebuild is intentional: stats_freshness() compares only run ids and can
+# miss partitions that land after its sidecar was written while runs overlap.
+#
 # The wait before that second attempt is the point of it. Retrying immediately
 # mostly re-hits the same outage, so the pass sleeps first — but only when
 # something is actually stale, so a healthy day pays nothing. For an outage
@@ -126,6 +131,14 @@ if [[ "$STALE_RETRY" == "1" ]]; then
       soft_failed+=("stale-retry")
     fi
   fi
+fi
+
+# Rebuild the lake measurement tables after all writes, including the stale
+# retry. Full rebuild is the point: the dashboard reads these tables for the
+# date picker, and a same-run overlap can make a freshness-only refresh a no-op.
+log "--- stats rebuild ---"
+if ! "$CNE" stats rebuild --config "$CONFIG" >>"$LOG" 2>&1; then
+  log "stats rebuild FAILED (non-fatal)"
 fi
 
 # Health check (fires desktop notification on problems) and backup run
