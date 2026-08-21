@@ -613,6 +613,57 @@ def test_compute_adj_factors_fills_partial_watermark_partition(adj_config, monke
     assert old == 0.5
 
 
+def test_compute_adj_factors_reconciles_recent_partition_behind_watermark(
+    adj_config, monkeypatch
+):
+    """A late bar in an older partition is not stranded after watermark advance."""
+    pl.DataFrame(
+        {
+            "trade_date": [date(2024, 6, 28), date(2024, 6, 29)],
+            "factor": [0.5, 0.5],
+        }
+    ).write_parquet(_cache_path(adj_config, "600519.SH", "hfq"))
+    pl.DataFrame(
+        {
+            "trade_date": [date(2024, 6, 27), date(2024, 6, 28)],
+            "factor": [1.0, 1.0],
+        }
+    ).write_parquet(_cache_path(adj_config, "000001.SZ", "hfq"))
+    # A prior factor row makes the symbol already covered, so the late bar is
+    # found by recent partition reconciliation, not by the full-history heal.
+    _write_adj_partition(adj_config, "600519.SH", date(2024, 6, 27), factor=0.5)
+    _write_adj_partition(adj_config, "000001.SZ", date(2024, 6, 27), factor=1.0)
+    _write_bar(adj_config, "600519.SH", date(2024, 6, 29))
+
+    calls: list[str] = []
+
+    def unexpected_fetch(symbol, adjust_type, client=None):
+        calls.append(symbol)
+        raise AssertionError("cached factor series must be reused")
+
+    monkeypatch.setattr(
+        "cnequity.derive.adj_factors.fetch_adj_factor_series",
+        unexpected_fetch,
+    )
+
+    seed = compute_adj_factors(adj_config)
+    assert seed.rows == 2
+    assert calls == []
+
+    # The 06-28 row for 000001.SZ lands after the derive watermark reached 06-29.
+    _write_bar(adj_config, "000001.SZ", date(2024, 6, 28))
+
+    result = compute_adj_factors(adj_config)
+
+    assert result.rows == 1
+    assert calls == []
+    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
+    df = pl.read_parquet(out)
+    assert set(df["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
+    added = df.filter(pl.col("symbol") == "000001.SZ")["factor"][0]
+    assert added == 1.0
+
+
 def test_compute_adj_factors_event_refresh_merges_into_existing(adj_config, monkeypatch):
     """Ex-date refresh rewrites the affected symbol via partition merge, not full replace."""
     _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
@@ -732,8 +783,8 @@ def test_compute_adj_factors_fails_over_threshold(adj_config, monkeypatch):
 
 def test_compute_adj_factors_bj_failure_is_best_effort(adj_config, monkeypatch):
     """A missing BJ factor must not fail daily:core, but remains retryable."""
-    from cnequity.storage.state import StateStore
     from cnequity.steps.finalize import step_derive_adj_factors
+    from cnequity.storage.state import StateStore
 
     _write_bar(adj_config, "830799.BJ", date(2024, 6, 28))
 
