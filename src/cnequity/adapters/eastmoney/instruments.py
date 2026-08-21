@@ -8,6 +8,12 @@ from datetime import date, datetime, timezone
 import polars as pl
 
 from cnequity.adapters.eastmoney.clist import clist_rows_to_symbols, fetch_clist_pages
+from cnequity.adapters.eastmoney.common import (
+    ALL_A_FS,
+    ETF_CLIST_FS,
+    symbol_from_clist,
+    symbol_from_clist_etf,
+)
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 from cnequity.config import Config
 
@@ -41,14 +47,27 @@ def _parse_list_date(value: object) -> date | None:
 def fetch_list_date_map(
     *, client: EastMoneyClient | None = None, config: Config | None = None
 ) -> dict[str, date]:
-    """Return symbol -> list_date for all A-shares from EastMoney clist."""
+    """Return symbol -> list_date for A-shares and ETFs from EastMoney clist."""
     owns = client is None
     if client is None:
         client = EastMoneyClient(config=config)
     try:
-        rows = fetch_clist_pages(client, fields="f12,f13,f26")
         out: dict[str, date] = {}
-        for sym, item in clist_rows_to_symbols(rows):
+        # The A-share board is the primary stock source and stays fail-loud so
+        # a broken snapshot is never mistaken for "no stock list dates exist".
+        rows = fetch_clist_pages(client, fields="f12,f13,f26", fs=ALL_A_FS)
+        for sym, item in clist_rows_to_symbols(rows, symbol_resolver=symbol_from_clist):
+            list_date = _parse_list_date(item.get("f26"))
+            if list_date is not None:
+                out[sym] = list_date
+        # The ETF/LOF board is secondary enrichment; a failure there must not
+        # discard the stock dates we already collected.
+        try:
+            etf_rows = fetch_clist_pages(client, fields="f12,f13,f26", fs=ETF_CLIST_FS)
+        except Exception as exc:  # noqa: BLE001 — enrichment is best-effort
+            logger.warning("EastMoney clist ETF/LOF list_date fetch failed: %s", exc)
+            return out
+        for sym, item in clist_rows_to_symbols(etf_rows, symbol_resolver=symbol_from_clist_etf):
             list_date = _parse_list_date(item.get("f26"))
             if list_date is not None:
                 out[sym] = list_date

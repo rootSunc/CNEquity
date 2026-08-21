@@ -63,15 +63,15 @@ def test_fetch_suspended_symbols_parses_result_rows():
             "data": [
                 {
                     "SECURITY_CODE": "600519",
-                    "TRADE_MARKET": "SH",
-                    "STOP_DATE": "2024-06-27",
-                    "RESUME_DATE": "null",
+                    "TRADE_MARKET": "上交所主板",
+                    "SUSPEND_START_DATE": "2024-06-27 00:00:00",
+                    "PREDICT_RESUME_DATE": None,
                 },
                 {
                     "SECURITY_CODE": "810001",
-                    "TRADE_MARKET": "SH",
-                    "STOP_DATE": "2024-06-27",
-                    "RESUME_DATE": "null",
+                    "TRADE_MARKET": "上交所主板",
+                    "SUSPEND_START_DATE": "2024-06-27 00:00:00",
+                    "PREDICT_RESUME_DATE": None,
                 },  # excluded, not all_a
             ]
         }
@@ -97,8 +97,8 @@ def test_fetch_suspended_symbols_paginates_until_reported_total():
             "data": [
                 {
                     "SECURITY_CODE": "600519",
-                    "STOP_DATE": "2024-06-27",
-                    "RESUME_DATE": "null",
+                    "SUSPEND_START_DATE": "2024-06-27 00:00:00",
+                    "PREDICT_RESUME_DATE": None,
                 }
             ]
             * 500,
@@ -112,8 +112,8 @@ def test_fetch_suspended_symbols_paginates_until_reported_total():
             "data": [
                 {
                     "SECURITY_CODE": "000001",
-                    "STOP_DATE": "2024-06-28",
-                    "RESUME_DATE": "2024-07-01",
+                    "SUSPEND_START_DATE": "2024-06-28 00:00:00",
+                    "PREDICT_RESUME_DATE": "2024-07-01 00:00:00",
                 }
             ],
         },
@@ -134,6 +134,8 @@ def test_fetch_suspended_symbols_paginates_until_reported_total():
 
     assert out == {"600519.SH", "000001.SZ"}
     assert len(client.urls) == 2
+    assert "MARKET" in client.urls[0]
+    assert "DATETIME" in client.urls[0]
     assert "pageNumber=2" in client.urls[1]
 
 
@@ -144,8 +146,8 @@ def test_fetch_suspended_symbols_rejects_rows_outside_requested_interval():
                 "data": [
                     {
                         "SECURITY_CODE": "600519",
-                        "STOP_DATE": "2024-06-01",
-                        "RESUME_DATE": "2024-06-27",
+                        "SUSPEND_START_DATE": "2024-06-01 00:00:00",
+                        "PREDICT_RESUME_DATE": "2024-06-27 00:00:00",
                     }
                 ]
             }

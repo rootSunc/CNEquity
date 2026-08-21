@@ -19,6 +19,11 @@ def test_hot_symbol_parsing():
     assert _hot_symbol("SH600519") == "600519.SH"
 
 
+def test_hot_symbol_routes_bse_code_with_wrong_market_prefix():
+    assert _hot_symbol("SZ920059") == "920059.BJ"
+    assert _hot_symbol("SH920059") == "920059.BJ"
+
+
 def test_hot_symbol_rejects_malformed_or_non_a_codes():
     assert _hot_symbol("SZ00abc1") is None
     assert _hot_symbol("SZ810001") is None
@@ -219,6 +224,25 @@ def test_fetch_hot_rank_can_reject_an_incomplete_top_n(monkeypatch):
     monkeypatch.setattr("cnequity.adapters.eastmoney.rotation.EastMoneyClient", lambda: CM())
     with pytest.raises(RuntimeError, match="only 1 unique A-share symbols; expected 10"):
         fetch_hot_rank(date(2026, 7, 14), top_n=10, require_top_n=True)
+
+
+def test_fetch_hot_rank_accepts_an_incomplete_top_n(monkeypatch):
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"data": [{"sc": "SZ002185", "rk": 1, "rc": 0, "hisRc": 2}]}
+    mock_client.post.return_value = mock_resp
+
+    class CM:
+        def __enter__(self):
+            return mock_client
+
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.rotation.EastMoneyClient", lambda: CM())
+    df = fetch_hot_rank(date(2026, 7, 14), top_n=10, require_top_n=False)
+    assert df.height == 1
+    assert df["symbol"][0] == "002185.SZ"
 
 
 def test_fetch_hot_rank_rejects_negative_top_n():

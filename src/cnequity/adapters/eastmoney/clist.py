@@ -230,11 +230,48 @@ def fetch_clist_pages(
     return list(rows_by_key.values())
 
 
-def clist_rows_to_symbols(rows: list[dict]) -> list[tuple[str, dict]]:
+def clist_rows_to_symbols(
+    rows: list[dict],
+    *,
+    symbol_resolver=symbol_from_clist,
+) -> list[tuple[str, dict]]:
     out: list[tuple[str, dict]] = []
     for item in rows:
         market_id = _to_int(item.get("f13"), default=0, minimum=0)
-        sym = symbol_from_clist(str(item.get("f12", "")), market_id)
+        sym = symbol_resolver(str(item.get("f12", "")), market_id)
         if sym:
             out.append((sym, item))
     return out
+
+
+def clist_rows_to_symbols_tolerant(
+    rows: list[dict],
+    *,
+    dataset: str,
+    symbol_resolver=symbol_from_clist,
+) -> list[tuple[str, dict]]:
+    """Map clist rows to A-share symbols, skipping non-A-share rows.
+
+    EastMoney sometimes mixes a few reserved-band securities (for example the
+    ``81xxxx`` range) into the A-share clist. Those are legitimately unmappable
+    and must not fail the whole snapshot; a total mapping failure still surfaces
+    as "no rows returned" downstream.
+    """
+    mapped = clist_rows_to_symbols(rows, symbol_resolver=symbol_resolver)
+    if len(mapped) == len(rows):
+        return mapped
+    mapped_codes = {str(item.get("f12", "")).strip().zfill(6) for _, item in mapped}
+    skipped = sorted(
+        {
+            str(item.get("f12", "")).strip()
+            for item in rows
+            if str(item.get("f12", "")).strip().zfill(6) not in mapped_codes
+        }
+    )
+    logger.warning(
+        "EastMoney %s clist skipped %d unmappable security row(s): %s",
+        dataset,
+        len(rows) - len(mapped),
+        ", ".join(skipped),
+    )
+    return mapped

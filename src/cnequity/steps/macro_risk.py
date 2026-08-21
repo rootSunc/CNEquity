@@ -14,7 +14,7 @@ from cnequity.derive.market_breadth import MARKET_BREADTH_METRICS, compute_marke
 from cnequity.orchestrator.registry import register_step
 from cnequity.quality.macro_checks import macro_revision_findings
 from cnequity.steps.common import BACKFILL_START
-from cnequity.steps.http_common import run_incremental_fetched
+from cnequity.steps.http_common import run_incremental_fetched, write_fetched
 
 _REQUIRED_DAILY_MACRO_INDICATORS = frozenset({"cnbond_yield_10y", "shibor_3m"})
 _MARKET_BREADTH_METRICS = frozenset(MARKET_BREADTH_METRICS)
@@ -154,6 +154,37 @@ def _validate_market_breadth_snapshot(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
+def _recompute_market_breadth(
+    config: Config,
+    trade_date: date,
+    run_id: str,
+) -> dict:
+    """Recompute every available daily_bars session locally and stage the result."""
+    from cnequity.query.parquet_scan import list_hive_partition_dates
+
+    dates = [
+        d
+        for d in list_hive_partition_dates(config.curated_root / "daily_bars", "trade_date")
+        if d <= trade_date
+    ]
+    frames: list[pl.DataFrame] = []
+    for d in dates:
+        snapshot = compute_market_breadth(config, d)
+        if snapshot.is_empty():
+            continue
+        _validate_market_breadth_snapshot(snapshot)
+        frames.append(snapshot)
+    if not frames:
+        return {"rows_read": 0, "rows_written": 0}
+    return write_fetched(
+        config,
+        run_id,
+        "market_breadth",
+        pl.concat(frames, how="diagonal_relaxed"),
+        source="derived",
+    )
+
+
 @register_step("macro_indicators", group="macro_risk")
 def step_macro_indicators(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if not config.sources.get("eastmoney", True):
@@ -231,15 +262,7 @@ def step_market_breadth(config: Config, trade_date: date, run_id: str, context: 
             floor=date(2001, 1, 1),
             existing_dates_fn=lambda days: _existing_market_breadth_dates(config, days),
         )
-    return run_incremental_fetched(
-        config,
-        trade_date,
-        run_id,
-        "market_breadth",
-        lambda d: _validate_market_breadth_snapshot(compute_market_breadth(config, d)),
-        source="derived",
-        allow_empty=True,
-    )
+    return _recompute_market_breadth(config, trade_date, run_id)
 
 
 @register_step("share_unlock_schedule", group="macro_risk", depends_on=["instruments"])

@@ -145,6 +145,68 @@ def test_fetch_adj_factor_series_rejects_invalid_factor(raw_factor):
         fetch_adj_factor_series("600519.SH", "qfq", client=FakeClient())
 
 
+def test_fetch_adj_factor_series_etf_hfq_uses_hfq_s_directly():
+    payload = {
+        "data": [
+            {"d": "2026-07-06", "f": "1", "s": "3.0"},
+            {"d": "1900-01-01", "f": "1", "s": "1.0"},
+        ]
+    }
+    body = f"var foo = {json.dumps(payload)};"
+    requested: list[str] = []
+
+    class FakeResponse:
+        text = body
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def get(self, url):
+            requested.append(url)
+            return FakeResponse()
+
+        def close(self):
+            return None
+
+    df = fetch_adj_factor_series("588170.SH", "hfq", client=FakeClient())
+
+    assert len(requested) == 1
+    assert "hfq.js" in requested[0]
+    assert df.sort("trade_date")["factor"].to_list() == [1.0, 3.0]
+
+
+def test_fetch_adj_factor_series_etf_qfq_converts_s_divisor():
+    payload = {
+        "data": [
+            {"d": "2026-07-06", "f": "1", "s": "1.0"},
+            {"d": "1900-01-01", "f": "1", "s": "3.0"},
+        ]
+    }
+    body = f"var foo = {json.dumps(payload)};"
+    requested: list[str] = []
+
+    class FakeResponse:
+        text = body
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def get(self, url):
+            requested.append(url)
+            return FakeResponse()
+
+        def close(self):
+            return None
+
+    df = fetch_adj_factor_series("588170.SH", "qfq", client=FakeClient())
+
+    assert len(requested) == 1
+    assert "qfq.js" in requested[0]
+    assert df.sort("trade_date")["factor"].to_list() == [1 / 3, 1.0]
+
+
 def test_align_factors_to_bars_forward_fill():
     bars = pl.DataFrame(
         {
@@ -521,6 +583,87 @@ def test_compute_adj_factors_append_only_skips_existing_partitions(adj_config, m
     assert pl.read_parquet(new_path)["factor"][0] == 0.5
 
 
+def test_compute_adj_factors_fills_partial_watermark_partition(adj_config, monkeypatch):
+    """A watermark partition is reconciled when bars arrive after an earlier derive."""
+    _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
+    _write_factor_cache(adj_config, "000001.SZ", date(2024, 6, 27), factor=1.0)
+    _write_adj_partition(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
+    _write_adj_partition(adj_config, "000001.SZ", date(2024, 6, 27), factor=1.0)
+    _write_bar(adj_config, "000001.SZ", date(2024, 6, 28))
+
+    calls: list[str] = []
+
+    def fake_fetch(symbol, adjust_type, client=None):
+        calls.append(symbol)
+        return pl.DataFrame({"trade_date": [date(2024, 6, 28)], "factor": [1.0]})
+
+    monkeypatch.setattr(
+        "cnequity.derive.adj_factors.fetch_adj_factor_series",
+        fake_fetch,
+    )
+
+    result = compute_adj_factors(adj_config)
+
+    assert result.rows == 1
+    assert calls == []  # both symbols already have cached factor series
+    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
+    df = pl.read_parquet(out)
+    assert set(df["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
+    old = df.filter(pl.col("symbol") == "600519.SH")["factor"][0]
+    assert old == 0.5
+
+
+def test_compute_adj_factors_reconciles_recent_partition_behind_watermark(
+    adj_config, monkeypatch
+):
+    """A late bar in an older partition is not stranded after watermark advance."""
+    pl.DataFrame(
+        {
+            "trade_date": [date(2024, 6, 28), date(2024, 6, 29)],
+            "factor": [0.5, 0.5],
+        }
+    ).write_parquet(_cache_path(adj_config, "600519.SH", "hfq"))
+    pl.DataFrame(
+        {
+            "trade_date": [date(2024, 6, 27), date(2024, 6, 28)],
+            "factor": [1.0, 1.0],
+        }
+    ).write_parquet(_cache_path(adj_config, "000001.SZ", "hfq"))
+    # A prior factor row makes the symbol already covered, so the late bar is
+    # found by recent partition reconciliation, not by the full-history heal.
+    _write_adj_partition(adj_config, "600519.SH", date(2024, 6, 27), factor=0.5)
+    _write_adj_partition(adj_config, "000001.SZ", date(2024, 6, 27), factor=1.0)
+    _write_bar(adj_config, "600519.SH", date(2024, 6, 29))
+
+    calls: list[str] = []
+
+    def unexpected_fetch(symbol, adjust_type, client=None):
+        calls.append(symbol)
+        raise AssertionError("cached factor series must be reused")
+
+    monkeypatch.setattr(
+        "cnequity.derive.adj_factors.fetch_adj_factor_series",
+        unexpected_fetch,
+    )
+
+    seed = compute_adj_factors(adj_config)
+    assert seed.rows == 2
+    assert calls == []
+
+    # The 06-28 row for 000001.SZ lands after the derive watermark reached 06-29.
+    _write_bar(adj_config, "000001.SZ", date(2024, 6, 28))
+
+    result = compute_adj_factors(adj_config)
+
+    assert result.rows == 1
+    assert calls == []
+    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
+    df = pl.read_parquet(out)
+    assert set(df["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
+    added = df.filter(pl.col("symbol") == "000001.SZ")["factor"][0]
+    assert added == 1.0
+
+
 def test_compute_adj_factors_event_refresh_merges_into_existing(adj_config, monkeypatch):
     """Ex-date refresh rewrites the affected symbol via partition merge, not full replace."""
     _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
@@ -638,6 +781,38 @@ def test_compute_adj_factors_fails_over_threshold(adj_config, monkeypatch):
         step_derive_adj_factors(adj_config, date(2024, 6, 28), "run-adj", {})
 
 
+def test_compute_adj_factors_bj_failure_is_best_effort(adj_config, monkeypatch):
+    """A missing BJ factor must not fail daily:core, but remains retryable."""
+    from cnequity.steps.finalize import step_derive_adj_factors
+    from cnequity.storage.state import StateStore
+
+    _write_bar(adj_config, "830799.BJ", date(2024, 6, 28))
+
+    def fake_fetch(symbol, adjust_type, client=None):
+        if symbol == "830799.BJ":
+            raise RuntimeError("empty data")
+        return pl.DataFrame({"trade_date": [date(2024, 6, 28)], "factor": [0.5]})
+
+    monkeypatch.setattr(
+        "cnequity.derive.adj_factors.fetch_adj_factor_series",
+        fake_fetch,
+    )
+
+    result = compute_adj_factors(adj_config)
+
+    assert result.failed == []
+    assert "830799.BJ:hfq" in result.best_effort_failed
+    assert result.fail_ratio == 0
+    assert result.findings[0]["check"] == "adj_factor_fetch_failed_best_effort"
+    assert result.findings[0]["severity"] == "info"
+    assert StateStore(adj_config.meta_root).get_string_set("adj_factors", "retry_symbols") == {
+        "830799.BJ"
+    }
+
+    out = step_derive_adj_factors(adj_config, date(2024, 6, 28), "run-adj", {})
+    assert "failed_tasks" not in out
+
+
 def test_failed_symbol_is_retried_after_global_watermark_advances(adj_config, monkeypatch):
     """A per-symbol failure must not disappear behind another symbol's partition."""
     from cnequity.storage.state import StateStore
@@ -693,6 +868,15 @@ def test_uncovered_symbols_finds_history_behind_the_watermark(adj_config):
     _write_adj_partition(adj_config, "600519.SH", date(2024, 6, 28))
 
     assert _uncovered_symbols(adj_config) == {"600519.SH"}
+
+
+def test_uncovered_symbols_keeps_bj_for_best_effort(adj_config):
+    """BJ stays in the self-heal set so partial Sina coverage is still tried."""
+    from cnequity.derive.adj_factors import _uncovered_symbols
+
+    _write_bar(adj_config, "830799.BJ", date(2024, 6, 28))
+
+    assert "830799.BJ" in _uncovered_symbols(adj_config)
 
 
 def test_a_symbol_covered_from_its_first_bar_is_not_reprocessed(adj_config):

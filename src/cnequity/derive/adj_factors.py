@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Only hfq is persisted; qfq is derived at query time (ADR-0004).
 STORED_ADJUST_TYPE = "hfq"
 
-# Derive step fails when uncached fetch failures exceed this share of symbol×type tasks.
+# Derive step fails when mandatory uncached fetch failures exceed this share of symbol×type tasks.
 FAIL_RATIO_THRESHOLD = 0.05
 
 # A single trading day's hfq factor step beyond this ratio cannot come from any real
@@ -39,6 +39,17 @@ MAX_FACTOR_STEP_RATIO = 20.0
 # normally finds none; this bounds the first run after a deep `cne backfill
 # daily_bars`, which would otherwise realign the whole market in one go.
 UNCOVERED_REFRESH_LIMIT = 500
+
+# A daily-bars gap-fill can insert rows into a partition behind the derived
+# watermark (for example a 2026-08-19 row landed after the 2026-08-20 derive).
+# Reconcile a short recent window each run so those late rows do not stay at
+# factor=1.0 with adj_is_exact=false indefinitely.
+RECENT_FACTOR_RECONCILE_DAYS = 3
+
+# Sina only covers a subset of Beijing Exchange factor series. Keep trying and
+# self-healing BJ symbols, but classify their failures as best-effort so a known
+# source gap cannot fail `daily:core`.
+BEST_EFFORT_EXCHANGES = frozenset({"BJ"})
 
 _EMPTY_BAR_DATES = pl.DataFrame(schema={"symbol": pl.Utf8, "trade_date": pl.Date})
 _ADJ_PK = ["symbol", "trade_date", "adjust_type"]
@@ -58,7 +69,7 @@ class AdjFactorsDeriveError(RuntimeError):
 
 
 class AdjFactorsResult:
-    __slots__ = ("rows", "task_count", "failed", "findings")
+    __slots__ = ("rows", "task_count", "failed", "best_effort_failed", "findings")
 
     def __init__(
         self,
@@ -66,10 +77,12 @@ class AdjFactorsResult:
         task_count: int,
         failed: list[str],
         findings: list[dict],
+        best_effort_failed: list[str] | None = None,
     ) -> None:
         self.rows = rows
         self.task_count = task_count
         self.failed = failed
+        self.best_effort_failed = best_effort_failed or []
         self.findings = findings
 
     @property
@@ -78,6 +91,11 @@ class AdjFactorsResult:
             return 0.0
         return len(self.failed) / self.task_count
 
+    @property
+    def all_failed(self) -> list[str]:
+        """Every uncached failure, including best-effort exchanges."""
+        return self.failed + self.best_effort_failed
+
 
 def _is_cdr(symbol: str) -> bool:
     try:
@@ -85,6 +103,27 @@ def _is_cdr(symbol: str) -> bool:
     except ValueError:
         return False
     return is_cdr_symbol(info.code, info.exchange)
+
+
+def _is_bj(symbol: str) -> bool:
+    try:
+        info = parse_symbol(symbol)
+    except ValueError:
+        return False
+    return info.exchange in BEST_EFFORT_EXCHANGES
+
+
+def _failed_symbol(fail_key: str) -> str:
+    return fail_key.rsplit(":", 1)[0]
+
+
+def _partition_failures(failed: list[str]) -> tuple[list[str], list[str]]:
+    """Split failures into mandatory and best-effort (BJ) buckets."""
+    hard, best_effort = [], []
+    for key in failed:
+        symbol = _failed_symbol(key)
+        (best_effort if _is_bj(symbol) else hard).append(key)
+    return hard, best_effort
 
 
 def _adj_factors_watermark(config: Config) -> date | None:
@@ -181,6 +220,21 @@ def _bars_for_derive(
     )
     if not incremental.is_empty():
         frames.append(incremental)
+    # An existing watermark partition can be incomplete: daily_bars may have
+    # landed more rows after an earlier derive finished (retry, gap-fill, manual
+    # compact). The watermark is a date, not a coverage receipt, so compare the
+    # latest factor partition against the bars it should cover instead of
+    # treating it as complete. Also look back over recent sessions: a late
+    # gap-fill row can land in an older partition after the watermark already
+    # advanced past it.
+    if watermark is not None:
+        missing = _bars_missing_factor_partitions(
+            config,
+            watermark,
+            lookback_days=RECENT_FACTOR_RECONCILE_DAYS,
+        )
+        if not missing.is_empty():
+            frames.append(missing)
     # Ex-date / new-listing / explicit rebackfill: realign full history for those symbols.
     if refresh_set:
         refreshed = _load_daily_bar_dates(config, symbols=sorted(refresh_set))
@@ -193,6 +247,53 @@ def _bars_for_derive(
         .unique(subset=["symbol", "trade_date"], keep="last")
         .sort(["symbol", "trade_date"])
     )
+
+
+def _bars_missing_factor_partitions(
+    config: Config,
+    watermark: date,
+    *,
+    lookback_days: int,
+) -> pl.DataFrame:
+    """Bars in a recent window that the factor partitions have no row for."""
+    # Lazy import: query.reader imports STORED_ADJUST_TYPE from this module.
+    from cnequity.query.parquet_scan import dataset_has_parquet
+
+    start = watermark - timedelta(days=max(0, lookback_days - 1))
+    bars = _load_daily_bar_dates(config, start=start).filter(
+        pl.col("trade_date") <= watermark
+    )
+    if bars.is_empty():
+        return bars
+    cdr_symbols = [s for s in bars["symbol"].unique().to_list() if _is_cdr(s)]
+    if cdr_symbols:
+        bars = bars.filter(~pl.col("symbol").is_in(cdr_symbols))
+        if bars.is_empty():
+            return bars
+
+    factor_frames: list[pl.DataFrame] = []
+    for trade_date in bars["trade_date"].unique().sort().to_list():
+        part = (
+            config.derived_root
+            / "adj_factors"
+            / f"trade_date={trade_date.isoformat()}"
+        )
+        if not dataset_has_parquet(part):
+            continue
+        factors = _read_parquet_files(sorted(part.rglob("*.parquet")))
+        if factors.is_empty() or not {"symbol", "trade_date"}.issubset(factors.columns):
+            continue
+        factor_frames.append(factors.select(["symbol", "trade_date"]).unique())
+
+    if not factor_frames:
+        return bars
+    factors = pl.concat(factor_frames, how="diagonal_relaxed")
+    return bars.join(factors, on=["symbol", "trade_date"], how="anti")
+
+
+def _bars_missing_factor_partition(config: Config, watermark: date) -> pl.DataFrame:
+    """Backward-compatible single-partition wrapper for direct callers/tests."""
+    return _bars_missing_factor_partitions(config, watermark, lookback_days=0)
 
 
 def _align_factors_to_bars(
@@ -283,6 +384,8 @@ def _uncovered_symbols(config: Config) -> set[str]:
     marks `adj_is_exact`. Measured on a real lake: 260 stocks with no factor at
     all and ~220k unadjusted bar rows, which read as "Sina does not cover
     北交所" until a targeted re-derive filled three of them going back to 2016.
+    BJ remains in this set: Sina has partial BJ coverage, so we keep trying;
+    its failures are classified as best-effort and do not fail the derive.
 
     Compared per symbol rather than per row: a (symbol, trade_date) anti-join
     against a 338M-row daily_bars on every run would cost more than the derive.
@@ -327,10 +430,12 @@ def _uncovered_symbols(config: Config) -> set[str]:
     uncovered = joined.filter(
         pl.col("fac_first").is_null() | (pl.col("fac_first") > pl.col("bar_first"))
     )
-    # Only stocks. ETFs and LOFs have no hfq factor series to fetch — 91 of the
-    # 103 names left after the first self-heal run were ETFs, and without this
-    # they would be re-fetched on every run forever. CDRs go for the same
-    # reason: the task loop already drops them, so they can never be covered.
+    # Stocks only. ETF/LOF factors are not reliable enough to self-heal: Sina
+    # serves the factor in a different field per fund (`s`` vs ``u``), and some
+    # ETFs have no factor rows at all, so treating them as covered would both
+    # hide real gaps and report flat factor=1.0 as valid. CDRs go for the same
+    # reason as before: the task loop already drops them, so they can never be
+    # covered.
     candidates = {s for s in uncovered["symbol"].to_list() if not _is_cdr(s)}
     inst_root = config.curated_root / "instruments"
     if dataset_has_parquet(inst_root):
@@ -449,12 +554,26 @@ def _factor_continuity_findings(out: pl.DataFrame) -> list[dict]:
     return findings
 
 
-def _fetch_failure_finding(symbol: str, adjust_type: str, exc: Exception) -> dict:
+def _fetch_failure_finding(
+    symbol: str,
+    adjust_type: str,
+    exc: Exception,
+    *,
+    best_effort: bool = False,
+) -> dict:
+    if best_effort:
+        severity = "info"
+        check = "adj_factor_fetch_failed_best_effort"
+        detail = " (BJ factors are best-effort)"
+    else:
+        severity = "error"
+        check = "adj_factor_fetch_failed"
+        detail = ""
     return {
         "dataset": "adj_factors",
-        "severity": "error",
-        "check": "adj_factor_fetch_failed",
-        "message": f"No cached adj factors for {symbol} ({adjust_type}): {exc}",
+        "severity": severity,
+        "check": check,
+        "message": f"No cached adj factors for {symbol} ({adjust_type}): {exc}{detail}",
         "symbol": symbol,
         "adjust_type": adjust_type,
     }
@@ -476,7 +595,12 @@ def _process_symbol_adj(
         try:
             factors = _resolve_factors(config, sym, adj, sym_bars, force=force, client=client)
         except AdjFactorsFetchError as exc:
-            return None, f"{sym}:{adj}", _fetch_failure_finding(sym, adj, exc)
+            best_effort = _is_bj(sym)
+            return (
+                None,
+                f"{sym}:{adj}",
+                _fetch_failure_finding(sym, adj, exc, best_effort=best_effort),
+            )
         if factors is None or factors.is_empty():
             return None, None, None
         aligned = _align_factors_to_bars(sym_bars, sym, factors, adj)
@@ -647,6 +771,8 @@ def _compute_adj_factors_locked(
             skipped_cdr,
         )
 
+    hard_task_count = sum(1 for sym, _, _, _ in tasks if not _is_bj(sym))
+
     frames: list[pl.DataFrame] = []
     failed: list[str] = []
     findings: list[dict] = []
@@ -688,14 +814,25 @@ def _compute_adj_factors_locked(
                     frames.append(aligned)
                     succeeded.add(sym)
 
+    failed, best_effort_failed = _partition_failures(failed)
+    all_failed_symbols = {
+        _failed_symbol(item) for item in [*failed, *best_effort_failed]
+    }
+
     if not frames:
         _update_retry_symbols(
             config,
             previous=retry_symbols,
             succeeded=succeeded,
-            failed={item.rsplit(":", 1)[0] for item in failed},
+            failed=all_failed_symbols,
         )
-        return AdjFactorsResult(0, len(tasks), failed, findings)
+        return AdjFactorsResult(
+            0,
+            hard_task_count,
+            failed,
+            findings,
+            best_effort_failed,
+        )
 
     out = pl.concat(frames, how="diagonal_relaxed").unique(subset=_ADJ_PK, keep="last")
     findings.extend(_factor_continuity_findings(out))
@@ -706,6 +843,12 @@ def _compute_adj_factors_locked(
         config,
         previous=retry_symbols,
         succeeded=succeeded,
-        failed={item.rsplit(":", 1)[0] for item in failed},
+        failed=all_failed_symbols,
     )
-    return AdjFactorsResult(total, len(tasks), failed, findings)
+    return AdjFactorsResult(
+        total,
+        hard_task_count,
+        failed,
+        findings,
+        best_effort_failed,
+    )

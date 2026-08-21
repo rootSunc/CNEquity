@@ -27,6 +27,7 @@ from cnequity.steps.common import (
     instrument_metadata,
     is_trading_day,
     list_trading_dates,
+    load_bar_universe,
     load_curated_instruments,
     load_symbols,
 )
@@ -81,11 +82,26 @@ def _backfill_window(config: Config, trade_date: date) -> tuple[date, date]:
     return start, end
 
 
-def _instrument_spans(config: Config) -> dict[str, tuple[date | None, date | None]]:
+def _instrument_spans(config: Config) -> dict[str, tuple[date | None, date | None, str | None]]:
     return {
-        row["symbol"]: (row["list_date"], row["delist_date"])
+        row["symbol"]: (row["list_date"], row["delist_date"], row.get("asset_type"))
         for row in instrument_metadata(config).iter_rows(named=True)
     }
+
+
+def _placeholder_bar_universe(
+    config: Config,
+    spans: dict[str, tuple[date | None, date | None, str | None]],
+) -> set[str] | None:
+    """Traded-bar universe only when an unlisted instrument placeholder is in scope.
+
+    Scanning every daily_bars file is expensive; skip it unless there is at
+    least one instrument with no listing date that
+    ``classify_daily_bar_ownership`` may need to prove has never traded.
+    """
+    if not any(list_date is None for list_date, _, _ in spans.values()):
+        return None
+    return load_bar_universe(config)
 
 
 def _ownership_context(
@@ -97,6 +113,7 @@ def _ownership_context(
     from cnequity.steps.delisted import delisted_recovery_covers
 
     delegated_complete = delisted_recovery_covers(config, start, end, ownership.delegated_delisted)
+    findings: list[dict] = []
     finding = {
         "dataset": "daily_bars",
         "severity": "info" if delegated_complete else "warning",
@@ -105,19 +122,38 @@ def _ownership_context(
             f"generic={len(ownership.generic)}, "
             f"delegated_delisted={len(ownership.delegated_delisted)}, "
             f"expected_no_data={len(ownership.expected_no_data)}, "
+            f"placeholder={len(ownership.placeholder)}, "
             f"delegated_complete={delegated_complete}"
         ),
         "start": start.isoformat(),
         "end": end.isoformat(),
     }
+    findings.append(finding)
+    if ownership.placeholder:
+        preview = ", ".join(sorted(ownership.placeholder)[:8])
+        suffix = "..." if len(ownership.placeholder) > 8 else ""
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "warning",
+                "check": "daily_bars_unlisted_placeholder_skipped",
+                "message": (
+                    f"{len(ownership.placeholder)} unlisted instrument placeholder(s) "
+                    "skipped (no list_date and no traded bar; not verified "
+                    f"no-data): {preview}{suffix}"
+                ),
+                "symbols": sorted(ownership.placeholder),
+            }
+        )
     return {
         "daily_bars_ownership": {
             "generic": len(ownership.generic),
             "delegated_delisted": len(ownership.delegated_delisted),
             "expected_no_data": len(ownership.expected_no_data),
+            "placeholder": len(ownership.placeholder),
             "delegated_complete": delegated_complete,
         },
-        "audit_findings": [finding],
+        "audit_findings": findings,
     }, delegated_complete
 
 
@@ -205,13 +241,21 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         end = max(e for _, e in windows)
         _reject_unfinished_daily_bar_window(config, end)
         spans = _instrument_spans(config)
+        bar_universe = _placeholder_bar_universe(config, spans)
         remaining: list[tuple[str, list[str], date, date]] = []
         ownership = DailyBarOwnership()
         for batch_id, symbols, spec_start, spec_end in batch_specs:
-            routed = classify_daily_bar_ownership(symbols, spans, spec_start, spec_end)
+            routed = classify_daily_bar_ownership(
+                symbols,
+                spans,
+                spec_start,
+                spec_end,
+                bar_universe=bar_universe,
+            )
             ownership.generic.extend(routed.generic)
             ownership.delegated_delisted.extend(routed.delegated_delisted)
             ownership.expected_no_data.extend(routed.expected_no_data)
+            ownership.placeholder.extend(routed.placeholder)
             if routed.generic:
                 remaining.append((batch_id, routed.generic, spec_start, spec_end))
             if routed.delegated_delisted:
@@ -224,15 +268,24 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
                     spec_end,
                     batch_id=delegated_id,
                 )
-            elif not routed.generic:
+            elif not routed.generic and not routed.placeholder:
                 # The original failed batch now has only proven no-data symbols.
-                from cnequity.orchestrator.manifest import Manifest
-
-                Manifest(config.manifest_path).finish_batch(
+                _resolve_failed_daily_bar_batches(
+                    config,
                     run_id,
-                    batch_id,
-                    "success",
-                    error_message="all symbols are expected-no-data for this window",
+                    [batch_id],
+                    superseded_by="ownership-expected-no-data",
+                )
+            elif not routed.generic and routed.placeholder:
+                # Unlisted placeholders are skipped but not verified no-data;
+                # resolving the failed batch keeps compact usable while the
+                # ownership audit finding still records that it was not proven
+                # empty.
+                _resolve_failed_daily_bar_batches(
+                    config,
+                    run_id,
+                    [batch_id],
+                    superseded_by="ownership-placeholder",
                 )
         result = (
             fetch_daily_bars_parallel(
@@ -271,7 +324,14 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
     if rebackfill:
         symbols = list(dict.fromkeys(rebackfill + symbols))
 
-    ownership = classify_daily_bar_ownership(symbols, _instrument_spans(config), start, end)
+    spans = _instrument_spans(config)
+    ownership = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        start,
+        end,
+        bar_universe=_placeholder_bar_universe(config, spans),
+    )
     _record_delegated_ownership_batch(
         config,
         run_id,
@@ -312,6 +372,37 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
     return _merge_ownership_result(out, config, ownership, start, end)
 
 
+def _resolve_failed_daily_bar_batches(
+    config: Config,
+    run_id: str,
+    batch_ids: list[str],
+    *,
+    superseded_by: str,
+) -> None:
+    """Close failed worker batches after a verified retry/gap-fill path.
+
+    A worker batch is marked ``failed`` as soon as TDX misses a symbol, before
+    the step-level EastMoney gap-fill has a chance to stage the missing keys.
+    Leaving that terminal failure behind would block compaction even after the
+    rows were recovered. ``superseded`` keeps the failure in the ledger for
+    audit while excluding it from compact/retry eligibility.
+    """
+    if not batch_ids:
+        return
+    from cnequity.orchestrator.manifest import Manifest
+
+    Manifest(config.manifest_path).supersede_batches(
+        run_id,
+        batch_ids,
+        superseded_by=superseded_by,
+    )
+    logger.info(
+        "daily_bars: resolved %d failed batch(es) via %s",
+        len(batch_ids),
+        superseded_by,
+    )
+
+
 def _finish_daily_bars(
     config: Config,
     trade_date: date,
@@ -324,13 +415,15 @@ def _finish_daily_bars(
     tdx_result: dict,
     sina_result: dict | None,
 ) -> dict:
-    """Apply tip clist / multi-day kline gap-fill, then pre-open rejection."""
+    """Apply tip clist/kline or multi-day kline gap-fill, then pre-open rejection."""
     rows_read = int(tdx_result.get("rows_read", 0))
     rows_written = int(tdx_result.get("rows_written", 0))
     findings: list[dict] = []
     had_error = bool(tdx_result.get("had_error"))
     failed_symbols = list(tdx_result.get("failed_symbols") or [])
+    failed_batch_ids = list(tdx_result.get("failed_batch_ids") or [])
     fallback_failed_symbols: set[str] = set()
+    tip_fetch_failed: set[str] = set()
 
     if sina_result:
         rows_read += int(sina_result.get("rows_read", 0))
@@ -342,13 +435,57 @@ def _finish_daily_bars(
         findings.extend(sina_findings)
 
     tip = start == end
+    bar_date = end
+    stale_retry = tip and bar_date != trade_date
     if tip:
-        gap = _gapfill_tip_via_clist(
-            config, trade_date, run_id, expected_symbols=expected_tdx_symbols
-        )
-        rows_read += int(gap.get("rows_read", 0))
-        rows_written += int(gap.get("rows_written", 0))
-        findings.extend(gap.get("audit_findings") or [])
+        expected_symbols = set(expected_tdx_symbols) | set(expected_fallback_symbols or [])
+        if stale_retry:
+            # clist is a live snapshot, so it cannot be re-stamped onto a past
+            # session. A retry of an older tip must use per-symbol kline for
+            # the actual bar date instead.
+            missing_staged = sorted(
+                expected_symbols - _staged_daily_bar_symbols(config, run_id, bar_date)
+            )
+            if missing_staged:
+                kline = _gapfill_multiday_via_kline(
+                    config,
+                    run_id,
+                    symbols=missing_staged,
+                    start=bar_date,
+                    end=bar_date,
+                    require_complete=False,
+                )
+                rows_read += int(kline.get("rows_read", 0))
+                rows_written += int(kline.get("rows_written", 0))
+                findings.extend(kline.get("audit_findings") or [])
+                tip_fetch_failed |= set(kline.get("fetch_failed_symbols") or [])
+        else:
+            gap = _gapfill_tip_via_clist(
+                config, trade_date, run_id, expected_symbols=expected_tdx_symbols
+            )
+            rows_read += int(gap.get("rows_read", 0))
+            rows_written += int(gap.get("rows_written", 0))
+            findings.extend(gap.get("audit_findings") or [])
+            staged = _staged_daily_bar_symbols(config, run_id, bar_date)
+            missing_staged = [s for s in expected_symbols if s not in staged]
+            if missing_staged:
+                # clist is a live snapshot and can omit a listed ETF/LOF that
+                # TDX also misses. Per-symbol kline is slow but is the existing
+                # multi-day recovery path, so reuse it for a small tip leftover
+                # instead of leaving the original failed worker batch to block
+                # compact forever.
+                kline = _gapfill_multiday_via_kline(
+                    config,
+                    run_id,
+                    symbols=sorted(missing_staged),
+                    start=bar_date,
+                    end=bar_date,
+                    require_complete=False,
+                )
+                rows_read += int(kline.get("rows_read", 0))
+                rows_written += int(kline.get("rows_written", 0))
+                findings.extend(kline.get("audit_findings") or [])
+                tip_fetch_failed |= set(kline.get("fetch_failed_symbols") or [])
     elif failed_symbols or expected_tdx_symbols or expected_fallback_symbols:
         all_expected_symbols = list(
             dict.fromkeys((expected_tdx_symbols or []) + (expected_fallback_symbols or []))
@@ -385,24 +522,38 @@ def _finish_daily_bars(
             rows_written += int(gap.get("rows_written", 0))
             findings.extend(gap.get("audit_findings") or [])
 
-    _reject_preopen_placeholder(config, run_id, trade_date)
+    if failed_batch_ids and not had_error:
+        _resolve_failed_daily_bar_batches(
+            config,
+            run_id,
+            failed_batch_ids,
+            superseded_by="multiday-kline-gapfill",
+        )
+
+    _reject_preopen_placeholder(config, run_id, bar_date)
 
     if tip:
-        staged = _staged_daily_bar_symbols(config, run_id, trade_date)
+        staged = _staged_daily_bar_symbols(config, run_id, bar_date)
         expected_symbols = set(expected_tdx_symbols) | set(expected_fallback_symbols or [])
-        missing_staged = expected_symbols - staged
+        missing_staged = sorted(expected_symbols - staged)
         if expected_symbols and not staged:
             raise RuntimeError(
-                f"daily_bars {trade_date}: TDX failed and EastMoney clist gap-fill "
+                f"daily_bars {bar_date}: TDX failed and EastMoney clist/kline gap-fill "
                 "produced no staged tip rows"
             )
-        if missing_staged:
+        fetch_fail_batch = len(tip_fetch_failed) > _TIP_GAPFILL_FETCH_FAIL_LIMIT
+        missing_share = len(missing_staged) / len(expected_symbols) if expected_symbols else 0.0
+        missing_batch = (
+            len(missing_staged) > _TIP_GAPFILL_FETCH_FAIL_LIMIT
+            and missing_share > _TIP_GAPFILL_MISSING_SHARE_LIMIT
+        )
+        batch_issue = fetch_fail_batch or missing_batch
+        if missing_staged and not batch_issue:
             # A handful of keys can legitimately stay missing (suspension,
-            # trading halt) even after TDX and the clist gap-fill both had a
+            # trading halt) even after TDX, clist, and kline gap-fill all had a
             # shot at them. Failing the whole market-wide tip over that would
             # make every run fail on any given day some symbol is halted;
-            # surface it as a finding instead, same as the multi-day kline
-            # gap-fill already does for its own leftover keys.
+            # surface it as a finding instead.
             preview = ", ".join(sorted(missing_staged)[:8])
             suffix = "..." if len(missing_staged) > 8 else ""
             findings.append(
@@ -411,12 +562,29 @@ def _finish_daily_bars(
                     "severity": "warning",
                     "check": "daily_bars_tip_missing_symbols",
                     "message": (
-                        f"daily_bars {trade_date}: {len(missing_staged)} expected tip "
-                        "key(s) remain missing after TDX and EastMoney clist gap-fill "
+                        f"daily_bars {bar_date}: {len(missing_staged)} expected tip "
+                        "key(s) remain missing after TDX and EastMoney clist/kline gap-fill "
                         f"(may be suspended): {preview}{suffix}"
                     ),
                     "missing_keys": len(missing_staged),
                 }
+            )
+        if failed_batch_ids and not batch_issue:
+            _resolve_failed_daily_bar_batches(
+                config,
+                run_id,
+                failed_batch_ids,
+                superseded_by="tip-gapfill",
+            )
+        if batch_issue:
+            # A large kline miss after every gap-fill path is a source outage,
+            # not the handful of suspensions the finding above tolerates. Keep
+            # the step failed and leave the original batches unresolved so the
+            # retry job can recover them instead of masking a lost session.
+            raise RuntimeError(
+                f"daily_bars {bar_date}: EastMoney kline gap-fill left "
+                f"{len(missing_staged)} expected tip key(s) missing "
+                f"({len(tip_fetch_failed)} fetch failure(s)); failing step for retry"
             )
         # A tip is usable once at least one expected key is staged; a handful
         # of legitimately-missing symbols must not fail the whole run — see
@@ -650,7 +818,7 @@ def _gapfill_multiday_via_kline(
     """Stage EastMoney kline for failed or partially covered symbols."""
     import polars as pl
 
-    from cnequity.adapters.eastmoney.bars import fetch_daily_bars as fetch_em_kline
+    from cnequity.adapters.eastmoney.bars import fetch_daily_bars_with_status as fetch_em_kline
     from cnequity.domain.schemas import data_version_for, with_provenance
     from cnequity.orchestrator.manifest import Manifest
     from cnequity.quality.failover import failover_spec, write_backup_snapshot
@@ -660,13 +828,14 @@ def _gapfill_multiday_via_kline(
     if spec is None or not config.sources.get(spec.backup, True) or not symbols:
         return {"rows_read": 0, "rows_written": 0, "filled": False}
 
-    df = fetch_em_kline(symbols, start, end, config=config)
+    df, fetch_failed = fetch_em_kline(symbols, start, end, config=config)
     if df.is_empty():
         return {
             "rows_read": 0,
             "rows_written": 0,
             "filled": False,
             "complete": False,
+            "fetch_failed_symbols": fetch_failed,
             "audit_findings": [
                 {
                     "dataset": "daily_bars",
@@ -675,7 +844,13 @@ def _gapfill_multiday_via_kline(
                     "message": (
                         f"TDX coverage was incomplete for {len(symbols)} symbol(s) over "
                         f"{start}..{end}; EastMoney kline returned no rows"
+                        + (
+                            f" ({len(fetch_failed)} fetch failure(s))"
+                            if fetch_failed
+                            else ""
+                        )
                     ),
+                    "fetch_failed": len(fetch_failed),
                 }
             ],
         }
@@ -716,8 +891,14 @@ def _gapfill_multiday_via_kline(
                         f"EastMoney kline added no new rows for {len(symbols)} symbol(s) over "
                         f"{start}..{end}; {len(missing_keys)} key(s) remain absent "
                         "(may be suspended)"
+                        + (
+                            f"; {len(fetch_failed)} fetch failure(s)"
+                            if fetch_failed
+                            else ""
+                        )
                     ),
                     "missing_keys": len(missing_keys),
+                    "fetch_failed": len(fetch_failed),
                     "complete": False,
                 }
             )
@@ -726,6 +907,7 @@ def _gapfill_multiday_via_kline(
             "rows_written": 0,
             "filled": True,
             "complete": not missing_keys,
+            "fetch_failed_symbols": fetch_failed,
             "audit_findings": audit_findings,
         }
 
@@ -765,6 +947,7 @@ def _gapfill_multiday_via_kline(
         "rows_written": gap_df.height,
         "filled": True,
         "complete": not missing_keys,
+        "fetch_failed_symbols": fetch_failed,
         "audit_findings": [
             {
                 "dataset": "daily_bars",
@@ -775,6 +958,7 @@ def _gapfill_multiday_via_kline(
                     f"{len(symbols)} partially covered symbol(s) ({start}..{end})"
                 ),
                 "missing_keys": len(missing_keys),
+                "fetch_failed": len(fetch_failed),
                 "complete": not missing_keys,
             }
         ],
@@ -782,6 +966,14 @@ def _gapfill_multiday_via_kline(
     if not require_complete and missing_keys:
         result["audit_findings"][0]["message"] += "; unresolved keys may be suspended"
     return result
+
+
+# Tip gap-fill tolerates a handful of missing keys (suspension/halt), but a
+# larger kline miss means the EastMoney fetch itself failed as a batch. Above
+# these limits the step must fail so the retry job can recover the session
+# instead of masking it as a successful run.
+_TIP_GAPFILL_FETCH_FAIL_LIMIT = 5
+_TIP_GAPFILL_MISSING_SHARE_LIMIT = 0.02
 
 
 # A bar captured before the session opens is the previous close stamped on every
@@ -1038,7 +1230,7 @@ def step_daily_bars_history(config: Config, trade_date: date, run_id: str, conte
     requests = sum((end.year - s.year + 1) for _, s in plan)
     logger.info(
         "daily_bars_history: %d symbols, %s..%s, ~%d year-requests "
-        "(ETF and 北交所 excluded — neither has adjustment factors)",
+        "(ETF factors unverified and 北交所 has no Sina coverage — both excluded)",
         len(plan),
         start,
         end,
@@ -1078,10 +1270,11 @@ def _history_plan(config: Config, start: date, end: date) -> list[tuple[str, dat
 
     Two filters and a per-symbol window, which together cut the sweep by ~78%:
 
-    * Stocks only. ETFs dominate the symbols with no ``list_date`` (2189 of
-      2195) and have no adjustment factors, so deeper raw bars for them could
-      never be served as hfq — fetching them would spend hours on data the
-      research path must refuse anyway. 北交所 is excluded for the same reason.
+    * Stocks only. ETF/LOF factors are not yet reliable (Sina varies the factor
+      field per fund and omits some ETFs), so deeper raw bars could not be
+      served as hfq with one verified convention; fetching them would spend
+      hours on data the research path must refuse anyway. 北交所 is excluded
+      because Sina has no factor coverage for it.
     * Nothing listed after the window. A 2016 IPO has no pre-2016 history, and
       asking for it is ~2600 symbols' worth of empty year files.
     * The rest start at their listing year rather than at ``start``.

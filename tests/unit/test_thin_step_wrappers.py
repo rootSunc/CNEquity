@@ -250,6 +250,25 @@ def test_rotation_snapshot_steps_reject_empty_feeds(cfg, monkeypatch):
         rotation.step_sector_fund_flow(cfg, date(2024, 6, 28), "r-flow-empty", {})
 
 
+def test_rotation_hot_rank_accepts_partial_snapshot(cfg, monkeypatch):
+    monkeypatch.setattr(
+        rotation,
+        "fetch_hot_rank",
+        lambda *a, **k: pl.DataFrame(
+            {
+                "symbol": ["600519.SH", "000001.SZ"],
+                "trade_date": [date(2024, 6, 28), date(2024, 6, 28)],
+                "rank": [1, 2],
+                "rank_change": [0, 0],
+                "hist_rank": [1, 2],
+            }
+        ),
+    )
+
+    result = rotation.step_hot_rank(cfg, date(2024, 6, 28), "r-hot-partial", {})
+    assert result["rows_written"] == 2
+
+
 def test_sector_fund_flow_rejects_missing_board_category(cfg, monkeypatch):
     monkeypatch.setattr(
         rotation,

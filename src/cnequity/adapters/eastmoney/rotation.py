@@ -48,6 +48,10 @@ def _hot_symbol(sc: str) -> str | None:
     mkt, code = text[:2], text[2:].zfill(6)
     if mkt not in {"SH", "SZ", "BJ"} or len(code) != 6 or not code.isdigit():
         return None
+    # EastMoney can stamp a BSE (92xxxx) code with an SH/SZ market prefix.
+    # Route by the numeric code so those names are not dropped as malformed.
+    if mkt in {"SH", "SZ"} and infer_exchange_from_code(code) == "BJ":
+        mkt = "BJ"
     if not is_all_a_symbol(code, mkt):
         return None
     return format_symbol(code, mkt)
@@ -148,6 +152,13 @@ def fetch_hot_rank(
         raise RuntimeError(
             f"EastMoney hot rank returned only {len(rows_by_symbol)} unique A-share "
             f"symbols; expected {top_n}"
+        )
+    elif len(rows_by_symbol) < top_n:
+        logger.warning(
+            "EastMoney hot rank returned only %d unique A-share symbols; expected %d "
+            "- accepting the partial snapshot",
+            len(rows_by_symbol),
+            top_n,
         )
     rows = list(rows_by_symbol.values())
     return (

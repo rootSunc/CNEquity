@@ -6,7 +6,11 @@ from datetime import date
 
 import pytest
 
-from cnequity.adapters.eastmoney.bars import _secid, fetch_daily_bars
+from cnequity.adapters.eastmoney.bars import (
+    _secid,
+    fetch_daily_bars,
+    fetch_daily_bars_with_status,
+)
 
 
 class _Response:
@@ -120,6 +124,28 @@ def test_fetch_daily_bars_continues_after_symbol_failure():
     )
     assert df.height == 1
     assert df.row(0, named=True)["symbol"] == "600519.SH"
+
+
+def test_fetch_daily_bars_with_status_reports_fetch_failures():
+    client = _Client(
+        {"1.600519": ["20240628,10.0,10.5,11.0,9.0,1000,10500.0"]},
+        raise_for={"0.000001"},
+    )
+    df, failed = fetch_daily_bars_with_status(
+        ["000001.SZ", "600519.SH"], date(2024, 6, 1), date(2024, 6, 28), client=client
+    )
+    assert failed == ["000001.SZ"]
+    assert df.height == 1
+    assert df.row(0, named=True)["symbol"] == "600519.SH"
+
+
+def test_fetch_daily_bars_with_status_empty_series_is_not_a_failure():
+    client = _Client({})
+    df, failed = fetch_daily_bars_with_status(
+        ["600519.SH"], date(2024, 6, 1), date(2024, 6, 28), client=client
+    )
+    assert df.is_empty()
+    assert failed == []
 
 
 def test_fetch_daily_bars_empty_when_no_rows():

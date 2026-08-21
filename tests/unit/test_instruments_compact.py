@@ -579,7 +579,7 @@ def test_fetch_list_date_map_closes_owned_client_on_success(monkeypatch):
     monkeypatch.setattr(
         em_inst,
         "fetch_clist_pages",
-        lambda client, fields: [{"f12": "600519", "f13": 1, "f26": "20010827"}],
+        lambda client, fields, fs=None: [{"f12": "600519", "f13": 1, "f26": "20010827"}],
     )
     assert em_inst.fetch_list_date_map() == {"600519.SH": date(2001, 8, 27)}
     assert created[0].closed is True
@@ -591,7 +591,7 @@ def test_fetch_list_date_map_infers_exchange_when_clist_market_is_missing(monkey
     monkeypatch.setattr(
         em_inst,
         "fetch_clist_pages",
-        lambda client, fields: [
+        lambda client, fields, fs=None: [
             {"f12": "600519", "f13": 0, "f26": "20010827"},
             {"f12": "000001", "f13": "0", "f26": "19910403"},
             {"f12": "920001", "f13": "bad", "f26": "20240701"},
@@ -610,7 +610,7 @@ def test_fetch_list_date_map_skips_nonfinite_list_date(monkeypatch):
     monkeypatch.setattr(
         em_inst,
         "fetch_clist_pages",
-        lambda client, fields: [
+        lambda client, fields, fs=None: [
             {"f12": "600519", "f13": 1, "f26": "inf"},
             {"f12": "000001", "f13": 0, "f26": "19910403"},
         ],
@@ -627,7 +627,7 @@ def test_fetch_list_date_map_skips_invalid_eight_digit_date(monkeypatch):
     monkeypatch.setattr(
         em_inst,
         "fetch_clist_pages",
-        lambda client, fields: [
+        lambda client, fields, fs=None: [
             {"f12": "600519", "f13": 1, "f26": "20241340"},
             {"f12": "000001", "f13": 0, "f26": "19910403"},
         ],
@@ -636,6 +636,29 @@ def test_fetch_list_date_map_skips_invalid_eight_digit_date(monkeypatch):
     assert em_inst.fetch_list_date_map(client=object()) == {
         "000001.SZ": date(1991, 4, 3),
     }
+
+
+def test_fetch_list_date_map_includes_etf_board(monkeypatch):
+    from cnequity.adapters.eastmoney import instruments as em_inst
+
+    def _pages(client, fields, fs=None):
+        if "MK" in (fs or ""):
+            return [{"f12": "588200", "f13": 1, "f26": "20221026"}]
+        return [{"f12": "600519", "f13": 1, "f26": "20010827"}]
+
+    monkeypatch.setattr(em_inst, "fetch_clist_pages", _pages)
+    assert em_inst.fetch_list_date_map(client=object()) == {
+        "600519.SH": date(2001, 8, 27),
+        "588200.SH": date(2022, 10, 26),
+    }
+
+
+def test_symbol_from_clist_etf_infers_exchange_from_prefix():
+    from cnequity.adapters.eastmoney import common as em_common
+
+    assert em_common.symbol_from_clist_etf("588200", 0) == "588200.SH"
+    assert em_common.symbol_from_clist_etf("159915", 0) == "159915.SZ"
+    assert em_common.symbol_from_clist_etf("600519", 1) is None
 
 
 def test_fetch_list_date_map_closes_owned_client_on_error(monkeypatch):
@@ -656,7 +679,7 @@ def test_fetch_list_date_map_closes_owned_client_on_error(monkeypatch):
 
     monkeypatch.setattr(em_inst, "EastMoneyClient", _factory)
 
-    def _boom(client, fields):
+    def _boom(client, fields, fs=None):
         raise RuntimeError("clist failed")
 
     monkeypatch.setattr(em_inst, "fetch_clist_pages", _boom)

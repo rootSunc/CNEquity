@@ -405,23 +405,31 @@ def instrument_metadata(config: Config) -> pl.DataFrame:
     """Disk-only symbol/listing spans used for deterministic routing."""
     curated_frame = load_curated_instruments(config)
     staged_frame = _load_staged_instruments(config)
+    empty = pl.DataFrame(
+        schema={
+            "symbol": pl.Utf8,
+            "list_date": pl.Date,
+            "delist_date": pl.Date,
+            "asset_type": pl.Utf8,
+        }
+    )
     if curated_frame is not None:
         frame = curated_frame
     elif staged_frame is not None:
         frame = staged_frame
     else:
-        return pl.DataFrame(
-            schema={"symbol": pl.Utf8, "list_date": pl.Date, "delist_date": pl.Date}
-        )
+        return empty
     if "symbol" not in frame.columns:
-        return pl.DataFrame(
-            schema={"symbol": pl.Utf8, "list_date": pl.Date, "delist_date": pl.Date}
-        )
-    columns = [name for name in ("symbol", "list_date", "delist_date") if name in frame.columns]
+        return empty
+    columns = [
+        name
+        for name in ("symbol", "list_date", "delist_date", "asset_type")
+        if name in frame.columns
+    ]
     out = frame.select(columns)
-    for name in ("list_date", "delist_date"):
+    for name, dtype in (("list_date", pl.Date), ("delist_date", pl.Date), ("asset_type", pl.Utf8)):
         if name not in out.columns:
-            out = out.with_columns(pl.lit(None, dtype=pl.Date).alias(name))
+            out = out.with_columns(pl.lit(None, dtype=dtype).alias(name))
     return out
 
 
@@ -432,22 +440,39 @@ class DailyBarOwnership:
     generic: list[str] = field(default_factory=list)
     delegated_delisted: list[str] = field(default_factory=list)
     expected_no_data: list[str] = field(default_factory=list)
+    placeholder: list[str] = field(default_factory=list)
 
 
 def classify_daily_bar_ownership(
     symbols: list[str],
-    spans: dict[str, tuple[date | None, date | None]],
+    spans: dict[str, tuple[date | None, date | None, str | None]],
     start: date,
     end: date,
+    *,
+    bar_universe: set[str] | None = None,
 ) -> DailyBarOwnership:
     """Route symbols without treating a silent exclusion as completion."""
     out = DailyBarOwnership()
     for symbol in symbols:
-        list_date, delist_date = spans.get(symbol, (None, None))
+        list_date, delist_date, asset_type = spans.get(symbol, (None, None, None))
         if list_date is not None and list_date > end:
             out.expected_no_data.append(symbol)
         elif delist_date is not None and delist_date < start:
             out.expected_no_data.append(symbol)
+        elif (
+            list_date is None
+            and bar_universe is not None
+            and symbol not in bar_universe
+        ):
+            # A stock/ETF with no listing date and no traded bar in the lake is
+            # treated as an issued-but-not-yet-listed placeholder (e.g. an IPO
+            # still in subscription, or 589430.SH): fetching it would fail the
+            # whole batch. It is NOT verified no-data, so it goes to its own
+            # bucket and is surfaced as a warning rather than silently counted
+            # as expected_no_data. A listed instrument whose list_date
+            # enrichment or bar ingestion lagged would otherwise be dropped as
+            # a quiet data gap.
+            out.placeholder.append(symbol)
         elif delist_date is not None and delist_date <= end:
             out.delegated_delisted.append(symbol)
         else:

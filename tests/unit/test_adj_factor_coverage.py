@@ -79,7 +79,8 @@ def test_a_few_missing_names_stay_below_the_threshold(tmp_path):
 
 
 def test_etfs_do_not_count_against_coverage(tmp_path):
-    """ETFs legitimately have no hfq factor and would bury the real signal."""
+    """ETF/LOF factors are not reliable (Sina varies the field per fund and
+    omits some ETFs), so they must not bury the stock coverage signal."""
     sh = [f"6000{i:02d}.SH" for i in range(20)]
     etf = [f"5100{i:02d}.SH" for i in range(50)]
     cfg = _lake(tmp_path, stocks=sh, priced=sh + etf, factored=sh, etfs=etf)

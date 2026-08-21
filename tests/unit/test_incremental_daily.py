@@ -331,6 +331,7 @@ def test_market_breadth_daily_rejects_partial_derived_snapshot(tmp_path, monkeyp
     from cnequity.steps.macro_risk import step_market_breadth
 
     cfg = Config(data_root=tmp_path / "data")
+    (cfg.curated_root / "daily_bars" / "trade_date=2024-06-28").mkdir(parents=True)
     monkeypatch.setattr(
         "cnequity.steps.macro_risk.compute_market_breadth",
         lambda _config, day: pl.DataFrame(
@@ -340,6 +341,46 @@ def test_market_breadth_daily_rejects_partial_derived_snapshot(tmp_path, monkeyp
 
     with pytest.raises(RuntimeError, match="incomplete derived snapshot"):
         step_market_breadth(cfg, date(2024, 6, 28), "run-breadth-partial", {})
+
+
+def test_market_breadth_daily_recomputes_all_daily_bars_dates(tmp_path, monkeypatch):
+    from cnequity.steps.macro_risk import step_market_breadth
+
+    cfg = Config(data_root=tmp_path / "data")
+    for day in (date(2024, 6, 27), date(2024, 6, 28)):
+        (cfg.curated_root / "daily_bars" / f"trade_date={day.isoformat()}").mkdir(parents=True)
+    metrics = [
+        "advance_count",
+        "decline_count",
+        "flat_count",
+        "limit_up_count",
+        "limit_down_count",
+        "advance_ratio",
+        "total_count",
+    ]
+
+    def fake_breadth(_config, day):
+        return pl.DataFrame(
+            {
+                "trade_date": [day] * len(metrics),
+                "metric_id": metrics,
+                "value": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0],
+            }
+        )
+
+    monkeypatch.setattr(
+        "cnequity.steps.macro_risk.compute_market_breadth",
+        fake_breadth,
+    )
+
+    result = step_market_breadth(cfg, date(2024, 6, 28), "run-breadth-full", {})
+
+    assert result["rows_written"] == 14
+    staged = list((cfg.staging_root / "market_breadth").rglob("*.parquet"))
+    assert len(staged) == 1
+    df = pl.read_parquet(staged[0])
+    assert df["trade_date"].n_unique() == 2
+    assert df.height == 14
 
 
 def test_fetch_incremental_daily_rejects_rows_from_a_different_trade_date(tmp_path):

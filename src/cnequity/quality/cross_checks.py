@@ -640,9 +640,10 @@ def _iso(value) -> str:
 def adj_factor_coverage_findings(config: Config, trade_date: date) -> list[dict]:
     """Flag exchanges whose stocks largely have no adjustment factor.
 
-    See ``ADJ_COVERAGE_WARN_RATIO``. Scoped to ``asset_type='stock'``: ETFs and
-    LOFs legitimately have no hfq factor series and would otherwise bury the
-    signal this exists to raise.
+    See ``ADJ_COVERAGE_WARN_RATIO``. Scoped to ``asset_type='stock'``: ETF/LOF
+    factors are not reliable (Sina varies the field per fund and omits some
+    ETFs), so including them would report both false gaps and flat factor=1.0
+    as covered.
     """
     bars_root = config.curated_root / "daily_bars"
     fac_root = config.derived_root / "adj_factors"

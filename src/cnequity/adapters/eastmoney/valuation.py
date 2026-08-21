@@ -6,7 +6,10 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.eastmoney.clist import clist_rows_to_symbols, fetch_clist_pages
+from cnequity.adapters.eastmoney.clist import (
+    clist_rows_to_symbols_tolerant,
+    fetch_clist_pages,
+)
 from cnequity.adapters.eastmoney.common import _to_float
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 
@@ -24,12 +27,7 @@ def fetch_valuation_metrics(
         client = EastMoneyClient(config=config)
     try:
         rows_raw = fetch_clist_pages(client, fields=_VALUATION_FIELDS)
-        mapped_rows = clist_rows_to_symbols(rows_raw)
-        if len(mapped_rows) != len(rows_raw):
-            raise RuntimeError(
-                "EastMoney valuation_metrics clist returned "
-                f"{len(rows_raw) - len(mapped_rows)} unmappable security row(s)"
-            )
+        mapped_rows = clist_rows_to_symbols_tolerant(rows_raw, dataset="valuation_metrics")
         rows = []
         for sym, item in mapped_rows:
             rows.append(

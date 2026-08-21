@@ -240,7 +240,12 @@ class EastMoneyClient:
         headers.update(build_eastmoney_headers(url, self._client))
         params = apply_push2_token(url, kwargs.pop("params", None))
         if params is not None:
-            kwargs["params"] = params
+            # Merge into the URL's own query string. httpx >= 0.28 replaced the
+            # URL query with `params` instead of merging, which dropped every
+            # push2 clist field (clist.py builds the full query string and
+            # relies on this call to add `ut`). Merge ourselves so the request
+            # is identical on every httpx version.
+            url = str(httpx.URL(url).copy_merge_params(params))
         return self._client.get(url, headers=headers, **kwargs)
 
     def post(self, url: str, **kwargs) -> httpx.Response:

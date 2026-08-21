@@ -135,8 +135,8 @@ def _plan(tmp_path, rows, start=date(2001, 1, 1), end=date(2015, 12, 31), symbol
 
 
 def test_plan_skips_etfs_and_symbols_listed_after_the_window(tmp_path):
-    """ETFs have no adjustment factors, so deeper raw bars could never be served
-    as hfq; a 2016 IPO has no pre-2016 history to fetch."""
+    """ETF/LOF factors are not reliable, so deeper raw bars could never be
+    served as hfq; a 2016 IPO has no pre-2016 history to fetch."""
     rows = [
         {"symbol": "600519.SH", "list_date": date(2001, 8, 27), "asset_type": "stock"},
         {"symbol": "510300.SH", "list_date": date(2012, 5, 4), "asset_type": "etf"},

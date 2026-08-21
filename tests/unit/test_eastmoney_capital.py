@@ -55,8 +55,8 @@ def test_fetch_fund_flow_and_margin(monkeypatch):
     )
     monkeypatch.setattr(
         cap,
-        "clist_rows_to_symbols",
-        lambda rows: [("600519.SH", rows[0])],
+        "clist_rows_to_symbols_tolerant",
+        lambda rows, **kwargs: [("600519.SH", rows[0])],
     )
     client = SimpleNamespace(close=lambda: None)
     df = cap.fetch_fund_flow(date(2025, 1, 2), client=client)
@@ -115,14 +115,15 @@ def test_fund_flow_closes_owned_client_when_clist_fails(monkeypatch):
     assert created[0].closed is True
 
 
-def test_fund_flow_rejects_unmappable_clist_rows(monkeypatch):
+def test_fund_flow_skips_unmappable_clist_rows(monkeypatch):
     monkeypatch.setattr(
         cap,
         "fetch_clist_pages",
         lambda *args, **kwargs: [{"f12": "600519", "f13": 1}, {"f12": "123456"}],
     )
-    with pytest.raises(RuntimeError, match="fund_flow clist returned 1 unmappable"):
-        cap.fetch_fund_flow(date(2025, 1, 2), client=SimpleNamespace(close=lambda: None))
+    df = cap.fetch_fund_flow(date(2025, 1, 2), client=SimpleNamespace(close=lambda: None))
+    assert df.height == 1
+    assert df["symbol"][0] == "600519.SH"
 
 
 def test_capital_adapters_close_owned_client_when_parsing_fails(monkeypatch):
@@ -144,7 +145,7 @@ def test_capital_adapters_close_owned_client_when_parsing_fails(monkeypatch):
     monkeypatch.setattr(cap, "fetch_clist_pages", lambda *args, **kwargs: [{}])
     monkeypatch.setattr(
         cap,
-        "clist_rows_to_symbols",
+        "clist_rows_to_symbols_tolerant",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("bad clist row")),
     )
     with pytest.raises(RuntimeError, match="bad clist row"):

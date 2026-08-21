@@ -1,6 +1,9 @@
 import pytest
 
-from cnequity.adapters.eastmoney.clist import clist_rows_to_symbols
+from cnequity.adapters.eastmoney.clist import (
+    clist_rows_to_symbols,
+    clist_rows_to_symbols_tolerant,
+)
 from cnequity.adapters.eastmoney.common import (
     _to_int,
     exchange_from_datacenter,
@@ -25,6 +28,14 @@ def test_to_int_applies_business_bounds():
 def test_clist_rows_infer_exchange_for_invalid_market_id():
     rows = clist_rows_to_symbols([{"f12": "600519", "f13": float("inf")}])
     assert rows == [("600519.SH", {"f12": "600519", "f13": float("inf")})]
+
+
+def test_clist_rows_to_symbols_tolerant_skips_reserved_band():
+    rows = clist_rows_to_symbols_tolerant(
+        [{"f12": "600519", "f13": 1}, {"f12": "810011", "f13": 0}],
+        dataset="fund_flow",
+    )
+    assert rows == [("600519.SH", {"f12": "600519", "f13": 1})]
 
 
 def test_common_symbol_helpers_infer_legacy_beijing_codes():

@@ -15,7 +15,7 @@ from cnequity.domain.symbols import format_symbol, infer_exchange_from_code, is_
 # Do NOT use all-A market fs here.
 _ST_FS = "m:0+f:4,m:1+f:4"
 _SUSPEND_REPORT = "RPT_CUSTOM_SUSPEND_DATA_INTERFACE"
-_SUSPEND_COLUMNS = "SECURITY_CODE,TRADE_MARKET,STOP_DATE,RESUME_DATE"
+_SUSPEND_COLUMNS = "SECURITY_CODE,TRADE_MARKET,SUSPEND_START_DATE,PREDICT_RESUME_DATE"
 # Smaller pages: large pz on push2 often 502s (esp. overseas).
 _ST_PAGE_SIZE = 100
 
@@ -35,11 +35,11 @@ def _em_date(value: object) -> date | None:
 
 
 def _suspension_covers(item: dict, trade_date: date) -> bool:
-    stop_date = _em_date(item.get("STOP_DATE"))
+    stop_date = _em_date(item.get("SUSPEND_START_DATE"))
     if stop_date is None or stop_date > trade_date:
         return False
 
-    resume_raw = str(item.get("RESUME_DATE") or "").strip().lower()
+    resume_raw = str(item.get("PREDICT_RESUME_DATE") or "").strip().lower()
     if not resume_raw or resume_raw == "null":
         return True
     resume_date = _em_date(resume_raw)
@@ -69,7 +69,7 @@ def _fetch_suspended_symbols(client: EastMoneyClient, trade_date: date) -> set[s
         client,
         _SUSPEND_REPORT,
         _SUSPEND_COLUMNS,
-        filter_expr=f"(STOP_DATE<='{ds}')(RESUME_DATE>='{ds}'~RESUME_DATE='null')",
+        filter_expr=f'(MARKET="全部")(DATETIME=\'{ds}\')',
     )
 
     matching_rows = [item for item in rows if _suspension_covers(item, trade_date)]

@@ -358,7 +358,7 @@ def step_derive_industry_index(
 ) -> dict:
     from cnequity.derive.industry_index import derive_industry_index
 
-    summary = derive_industry_index(config)
+    summary = derive_industry_index(config, end=trade_date, full=True)
     rows = int(summary.get("rows") or 0)
     out: dict = {"rows_read": rows, "rows_written": rows}
     note = str(summary.get("note") or "")

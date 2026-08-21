@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -1210,6 +1212,12 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
                 f"({result.fail_ratio:.1%})",
                 err=True,
             )
+        if result.best_effort_failed:
+            click.echo(
+                f"Best-effort BJ factors unavailable: "
+                f"{len(result.best_effort_failed)} symbol×type fetch failure(s)",
+                err=True,
+            )
     elif name == "industry_index":
         from cnequity.derive.industry_index import derive_industry_index
 
@@ -1512,13 +1520,8 @@ def status(config_path: str, show_datasets: bool):
     click.echo(json.dumps(summary, indent=2, default=str))
 
 
-@cli.command()
-@click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
-@click.option("--run-id", required=True)
-def retry(config_path: str, run_id: str):
-    """Retry failed batches and missing init steps for a run."""
-    cfg = _cfg(config_path)
-    engine = JobEngine(cfg)
+def _retry_single_run(engine: JobEngine, run_id: str) -> dict:
+    """Retry one run and print its JSON result, returning the parsed result."""
     run = engine.manifest.get_run(run_id)
     if run is None:
         raise click.ClickException(f"Unknown run_id: {run_id}")
@@ -1530,7 +1533,69 @@ def retry(config_path: str, run_id: str):
     except RunLockError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps(result, indent=2, default=str))
-    if result.get("status") not in ("success",):
+    return result
+
+
+def _failed_daily_group_runs(engine: JobEngine) -> list[dict]:
+    """Latest run of each ``daily:*`` group, keeping only those that failed."""
+    latest: dict[str, dict] = {}
+    for run in engine.manifest.list_runs():
+        name = run["job_name"]
+        if not name.startswith("daily:"):
+            continue
+        # list_runs() is newest-first, so the first hit per group is its latest.
+        latest.setdefault(name, dict(run))
+    return [latest[name] for name in sorted(latest) if latest[name]["status"] == "failed"]
+
+
+@cli.command()
+@click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
+@click.option("--run-id", default=None, help="Retry a specific run.")
+@click.option(
+    "--failed-groups",
+    is_flag=True,
+    help="Retry the most recent failed run of each daily group (core, research, ...).",
+)
+def retry(config_path: str, run_id: str | None, failed_groups: bool):
+    """Retry failed batches and missing init steps for a run."""
+    cfg = _cfg(config_path)
+    engine = JobEngine(cfg)
+    if failed_groups:
+        runs = _failed_daily_group_runs(engine)
+        if not runs:
+            click.echo("no failed daily group run to retry")
+            return
+        failed = False
+        for run in runs:
+            click.echo(
+                f"retrying failed daily group run {run['run_id']} ({run['job_name']})"
+            )
+            # A full-group retry is memory-heavy (fund_flow, valuation,
+            # index_constituents). Running each group in its own process frees
+            # that arena before the next group starts, so one heavy group cannot
+            # OOM the pod that is retrying several.
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from cnequity.cli.main import cli; cli.main()",
+                    "retry",
+                    "--config",
+                    config_path,
+                    "--run-id",
+                    run["run_id"],
+                ],
+                check=False,
+            )
+            if proc.returncode != 0:
+                failed = True
+        if failed:
+            raise SystemExit(1)
+        return
+    if not run_id:
+        raise click.ClickException("provide --run-id or --failed-groups")
+    result = _retry_single_run(engine, run_id)
+    if result.get("status") != "success":
         raise SystemExit(1)
 
 

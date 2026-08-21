@@ -120,15 +120,21 @@ def fetch_daily_bars_clist(
     return pl.DataFrame(rows).unique(subset=["symbol", "trade_date"], keep="last")
 
 
-def fetch_daily_bars(
+def fetch_daily_bars_with_status(
     symbols: list[str],
     start: date,
     end: date,
     *,
     client: EastMoneyClient | None = None,
     config=None,
-) -> pl.DataFrame:
-    """Per-symbol historical kline (slow). Prefer :func:`fetch_daily_bars_clist` for tip."""
+) -> tuple[pl.DataFrame, list[str]]:
+    """Per-symbol historical kline (slow). Prefer :func:`fetch_daily_bars_clist` for tip.
+
+    Returns ``(df, fetch_failed_symbols)``. ``fetch_failed_symbols`` holds symbols
+    whose request raised (transport/HTTP error); a symbol that returns an empty
+    kline series is legitimate (suspension/halt) and is *not* counted here, so
+    callers can tell a batch outage apart from ordinary missing sessions.
+    """
     owns = client is None
     if client is None:
         client = EastMoneyClient(config=config)
@@ -137,6 +143,7 @@ def fetch_daily_bars(
     end_s = end.strftime("%Y%m%d")
     rows: list[dict] = []
     rejected = 0
+    fetch_failed: list[str] = []
     try:
         for sym in symbols:
             params = {
@@ -154,6 +161,7 @@ def fetch_daily_bars(
                 klines = (resp.json().get("data") or {}).get("klines") or []
             except Exception as exc:
                 logger.warning("EastMoney kline failed for %s: %s", sym, exc)
+                fetch_failed.append(sym)
                 continue
 
             for line in klines:
@@ -199,9 +207,28 @@ def fetch_daily_bars(
     if rejected:
         logger.warning("EastMoney kline: rejected %s malformed row(s)", rejected)
     if not rows:
-        return pl.DataFrame()
+        return pl.DataFrame(), fetch_failed
     return (
         pl.DataFrame(rows)
         .unique(subset=["symbol", "trade_date"], keep="last")
-        .sort(["trade_date", "symbol"])
+        .sort(["trade_date", "symbol"]),
+        fetch_failed,
     )
+
+
+def fetch_daily_bars(
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    client: EastMoneyClient | None = None,
+    config=None,
+) -> pl.DataFrame:
+    """Per-symbol historical kline (slow). Prefer :func:`fetch_daily_bars_clist` for tip.
+
+    Compatibility wrapper returning only the DataFrame; callers that need to tell
+    connection failures apart from empty (suspended) sessions should use
+    :func:`fetch_daily_bars_with_status`.
+    """
+    df, _ = fetch_daily_bars_with_status(symbols, start, end, client=client, config=config)
+    return df

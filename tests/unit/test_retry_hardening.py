@@ -37,6 +37,35 @@ def test_retry_pending_when_batches_still_running(tmp_path):
     assert result["incomplete_by_status"]["running"] == 1
 
 
+def test_retry_uses_original_run_trade_date(tmp_path, monkeypatch):
+    cfg = Config(data_root=tmp_path / "data", tdx_allow_mock=True)
+    init_data_layout(cfg)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily:capital", {"trade_date": "2026-08-18"})
+    manifest.start_batch(run_id, "batch-margin", "margin_trading", "margin_trading")
+    manifest.finish_batch(run_id, "batch-margin", "failed", error_message="boom")
+    manifest.finish_run(run_id, "failed")
+
+    engine = JobEngine(cfg)
+    calls = []
+
+    def fake_run_step(dataset, trade_date, run_id, context, **kwargs):
+        calls.append((dataset, trade_date))
+        return {"status": "success", "rows": 0}
+
+    monkeypatch.setattr(engine, "_run_step", fake_run_step)
+
+    engine.run_job(
+        "retry",
+        date(2026, 8, 19),
+        run_id=run_id,
+        retry_failed_only=True,
+    )
+    # The run targets 2026-08-18; a retry on 2026-08-19 must still fetch 08-18
+    # instead of asking the source for a not-yet-published session.
+    assert ("margin_trading", date(2026, 8, 18)) in calls
+
+
 def test_worker_batch_specs_reads_manifest_window(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     init_data_layout(cfg)

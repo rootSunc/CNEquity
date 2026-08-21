@@ -9,10 +9,10 @@ from cnequity.steps.common import classify_daily_bar_ownership
 def test_daily_bar_ownership_is_explicit_for_every_symbol():
     symbols = ["600001.SH", "600002.SH", "600003.SH", "600004.SH"]
     spans = {
-        "600001.SH": (date(2000, 1, 1), None),
-        "600002.SH": (date(2000, 1, 1), date(2015, 12, 31)),
-        "600003.SH": (date(2000, 1, 1), date(2020, 6, 1)),
-        "600004.SH": (date(2025, 1, 1), None),
+        "600001.SH": (date(2000, 1, 1), None, "stock"),
+        "600002.SH": (date(2000, 1, 1), date(2015, 12, 31), "stock"),
+        "600003.SH": (date(2000, 1, 1), date(2020, 6, 1), "stock"),
+        "600004.SH": (date(2025, 1, 1), None, "stock"),
     }
 
     result = classify_daily_bar_ownership(
@@ -25,7 +25,95 @@ def test_daily_bar_ownership_is_explicit_for_every_symbol():
     assert result.generic == ["600001.SH"]
     assert result.delegated_delisted == ["600003.SH"]
     assert result.expected_no_data == ["600002.SH", "600004.SH"]
-    assert set(result.generic + result.delegated_delisted + result.expected_no_data) == set(symbols)
+    assert set(
+        result.generic + result.delegated_delisted + result.expected_no_data + result.placeholder
+    ) == set(symbols)
+
+
+def test_unlisted_etf_placeholder_is_separate_bucket():
+    symbols = ["589430.SH", "588200.SH"]
+    spans = {
+        "589430.SH": (None, None, "etf"),
+        "588200.SH": (date(2022, 10, 26), None, "etf"),
+    }
+
+    result = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        date(2026, 8, 18),
+        date(2026, 8, 18),
+        bar_universe={"588200.SH"},
+    )
+
+    assert result.placeholder == ["589430.SH"]
+    assert result.expected_no_data == []
+    assert result.generic == ["588200.SH"]
+
+
+def test_unlisted_stock_placeholder_is_separate_bucket():
+    symbols = ["601123.SH", "600519.SH"]
+    spans = {
+        "601123.SH": (None, None, "stock"),
+        "600519.SH": (date(2001, 8, 27), None, "stock"),
+    }
+
+    result = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        date(2026, 8, 18),
+        date(2026, 8, 18),
+        bar_universe={"600519.SH"},
+    )
+
+    assert result.placeholder == ["601123.SH"]
+    assert result.generic == ["600519.SH"]
+
+
+def test_unlisted_etf_with_delist_date_is_placeholder_not_delegated():
+    symbols = ["517233.SH"]
+    spans = {"517233.SH": (None, date(2026, 8, 18), "etf")}
+
+    result = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        date(2026, 8, 18),
+        date(2026, 8, 18),
+        bar_universe=set(),
+    )
+
+    assert result.placeholder == ["517233.SH"]
+    assert result.delegated_delisted == []
+    assert result.generic == []
+
+
+def test_traded_etf_without_list_date_stays_generic():
+    symbols = ["510300.SH"]
+    spans = {"510300.SH": (None, None, "etf")}
+
+    result = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        date(2026, 8, 18),
+        date(2026, 8, 18),
+        bar_universe={"510300.SH"},
+    )
+
+    assert result.generic == ["510300.SH"]
+
+
+def test_unlisted_etf_without_bar_universe_stays_generic():
+    """Without a traded-bar universe the classifier stays conservative."""
+    symbols = ["589430.SH"]
+    spans = {"589430.SH": (None, None, "etf")}
+
+    result = classify_daily_bar_ownership(
+        symbols,
+        spans,
+        date(2026, 8, 18),
+        date(2026, 8, 18),
+    )
+
+    assert result.generic == ["589430.SH"]
 
 
 def test_incomplete_delisted_ownership_blocks_compaction_and_retries(tmp_path, monkeypatch):
