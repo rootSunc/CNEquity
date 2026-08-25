@@ -178,11 +178,25 @@ class Manifest:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO ingestion_batches (
+                INSERT INTO ingestion_batches (
                     run_id, batch_id, task_id, dataset, status, symbols_json,
                     window_start, window_end, started_at, heartbeat_at, retry_count,
                     blocks_compaction
                 ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, 0, ?)
+                ON CONFLICT(run_id, batch_id) DO UPDATE SET
+                    task_id = excluded.task_id,
+                    dataset = excluded.dataset,
+                    status = 'running',
+                    symbols_json = excluded.symbols_json,
+                    window_start = excluded.window_start,
+                    window_end = excluded.window_end,
+                    rows_read = 0,
+                    rows_written = 0,
+                    started_at = excluded.started_at,
+                    finished_at = NULL,
+                    error_message = NULL,
+                    heartbeat_at = excluded.heartbeat_at,
+                    blocks_compaction = excluded.blocks_compaction
                 """,
                 (
                     run_id,
@@ -242,14 +256,14 @@ class Manifest:
         rows_read: int = 0,
         rows_written: int = 0,
         error_message: str | None = None,
-        retry_count: int = 0,
+        retry_count: int | None = None,
     ) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
                 UPDATE ingestion_batches
                 SET status = ?, finished_at = ?, rows_read = ?, rows_written = ?,
-                    error_message = ?, retry_count = ?,
+                    error_message = ?, retry_count = COALESCE(?, retry_count),
                     blocks_compaction = CASE
                         WHEN ? IN ('warning', 'failed', 'stale') THEN 1
                         ELSE blocks_compaction
@@ -324,17 +338,54 @@ class Manifest:
             )
             return cur.rowcount
 
-    def get_retryable_batches(self, run_id: str) -> list[sqlite3.Row]:
+    def increment_batch_retry_counts(self, run_id: str, batch_ids: list[str]) -> int:
+        """Persist one orchestrator retry attempt for each selected batch."""
+        ids = sorted(set(batch_ids))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"""
+                UPDATE ingestion_batches
+                SET retry_count = retry_count + 1
+                WHERE run_id = ? AND batch_id IN ({placeholders})
+                  AND status IN ('failed', 'warning')
+                """,
+                (run_id, *ids),
+            )
+            return cur.rowcount
+
+    def get_retryable_batches(
+        self, run_id: str, *, max_retries: int | None = None
+    ) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            retry_clause = "" if max_retries is None else " AND retry_count < ?"
+            params: tuple[object, ...] = (run_id,)
+            if max_retries is not None:
+                params += (max_retries,)
+            cur = conn.execute(
+                f"""
+                SELECT * FROM ingestion_batches
+                WHERE run_id = ? AND status IN ('failed', 'warning')
+                {retry_clause}
+                ORDER BY started_at, batch_id
+                """,
+                params,
+            )
+            return cur.fetchall()
+
+    def exhausted_retry_count(self, run_id: str, *, max_retries: int) -> int:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                SELECT * FROM ingestion_batches
+                SELECT COUNT(*) AS cnt FROM ingestion_batches
                 WHERE run_id = ? AND status IN ('failed', 'warning')
-                ORDER BY started_at, batch_id
+                  AND retry_count >= ?
                 """,
-                (run_id,),
+                (run_id, max_retries),
             )
-            return cur.fetchall()
+            return int(cur.fetchone()["cnt"])
 
     def get_failed_batches(self, run_id: str) -> list[sqlite3.Row]:
         """Backward-compatible alias for every immediately retryable batch."""

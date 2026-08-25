@@ -74,6 +74,22 @@ def test_late_batch_completion_cannot_resurrect_stale_batch(tmp_path):
     assert batch["rows_written"] == 0
 
 
+def test_retry_count_survives_batch_restart_and_finish(tmp_path):
+    manifest = Manifest(Config(data_root=tmp_path / "data").manifest_path)
+    run_id = "run-retry-count"
+    manifest.start_batch(run_id, "batch-0", "daily_bars", "daily_bars")
+    manifest.finish_batch(run_id, "batch-0", "failed", error_message="timeout")
+    assert manifest.increment_batch_retry_counts(run_id, ["batch-0"]) == 1
+
+    manifest.start_batch(run_id, "batch-0", "daily_bars", "daily_bars")
+    manifest.finish_batch(run_id, "batch-0", "failed", error_message="timeout again")
+
+    batch = manifest.get_batches_for_run(run_id)[0]
+    assert batch["retry_count"] == 1
+    assert manifest.get_retryable_batches(run_id, max_retries=1) == []
+    assert manifest.exhausted_retry_count(run_id, max_retries=1) == 1
+
+
 def test_compact_promotes_stale_running_batch(tmp_path):
     cfg = Config(data_root=tmp_path / "data", batch_stale_seconds=60)
     run_id = "run-compact-stale"

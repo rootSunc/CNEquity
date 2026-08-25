@@ -33,6 +33,22 @@ from cnequity.steps.common import is_trading_day
 
 logger = logging.getLogger(__name__)
 
+_TRANSIENT_RETRY_MARKERS = (
+    "connection",
+    "network",
+    "server",
+    "socket",
+    "temporarily unavailable",
+    "tdx fetch failed",
+    "timed out",
+    "timeout",
+)
+
+
+def _is_transient_retry_error(error_message: str | None) -> bool:
+    message = (error_message or "").lower()
+    return any(marker in message for marker in _TRANSIENT_RETRY_MARKERS)
+
 
 def _has_partial_failures(result: dict[str, Any]) -> bool:
     """Return whether a step reported an incomplete or failed scope.
@@ -488,6 +504,29 @@ class JobEngine:
             )
         return specs
 
+    def _retryable_batches_with_worker_budget(self, run_id: str) -> list:
+        """Apply the durable cap only where retries reuse one batch identity.
+
+        Worker retries restart the same batch id, so ``retry_count`` is a
+        stable logical-attempt budget. Non-worker steps create a new UUID and
+        rely on retry lineage to supersede every predecessor after success;
+        filtering those predecessors by a per-row count could strand one.
+        """
+        return [
+            batch
+            for batch in self.manifest.get_retryable_batches(run_id)
+            if not get_step(batch["task_id"]).requires_workers
+            or batch["retry_count"] < self.config.max_retries
+        ]
+
+    def _exhausted_worker_retry_count(self, run_id: str) -> int:
+        return sum(
+            1
+            for batch in self.manifest.get_retryable_batches(run_id)
+            if get_step(batch["task_id"]).requires_workers
+            and batch["retry_count"] >= self.config.max_retries
+        )
+
     def _retry_run(
         self, run_id: str, trade_date: date, *, auto_finalize: bool = True
     ) -> dict[str, Any]:
@@ -496,10 +535,56 @@ class JobEngine:
         # crashed valuation/backfill runs sat until the next daily job.
         self._reconcile_orphans()
         with run_lock(self.config.meta_root, run_id):
-            return self._retry_run_locked(run_id, trade_date, auto_finalize=auto_finalize)
+            retry_passes = 0
+            total_retried = 0
+            all_results: list[dict[str, Any]] = []
+            all_missing_steps: list[str] = []
+            total_stale_marked = 0
+            total_timeout = {"running_to_stale": 0, "stale_to_failed": 0}
+            automatic_batch_ids: set[str] | None = None
+            while True:
+                result = self._retry_run_locked(
+                    run_id,
+                    trade_date,
+                    auto_finalize=auto_finalize,
+                    retry_batch_ids=automatic_batch_ids,
+                )
+                total_retried += int(result.get("retried", 0))
+                all_results.extend(result.get("results", []))
+                all_missing_steps.extend(result.get("missing_steps", []))
+                total_stale_marked += int(result.get("stale_marked_failed", 0))
+                for key in total_timeout:
+                    total_timeout[key] += int(result.get("batch_timeout", {}).get(key, 0))
+                if result.get("retried", 0):
+                    retry_passes += 1
+                if result["status"] not in {"failed", "warning"}:
+                    break
+                remaining = self._retryable_batches_with_worker_budget(run_id)
+                automatic_batch_ids = {
+                    batch["batch_id"]
+                    for batch in remaining
+                    if get_step(batch["task_id"]).requires_workers
+                    and _is_transient_retry_error(batch["error_message"])
+                }
+                if not automatic_batch_ids:
+                    break
+                time.sleep(self.config.retry_backoff_seconds)
+            result["retried"] = total_retried
+            result["retry_passes"] = retry_passes
+            result["results"] = all_results
+            result["missing_steps"] = list(dict.fromkeys(all_missing_steps))
+            result["stale_marked_failed"] = total_stale_marked
+            result["batch_timeout"] = total_timeout
+            result["retry_exhausted"] = self._exhausted_worker_retry_count(run_id)
+            return result
 
     def _retry_run_locked(
-        self, run_id: str, trade_date: date, *, auto_finalize: bool = True
+        self,
+        run_id: str,
+        trade_date: date,
+        *,
+        auto_finalize: bool = True,
+        retry_batch_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         run_meta = self.manifest.get_run_metadata(run_id)
         # The caller (cne retry) has no session date of its own — it passes
@@ -532,12 +617,36 @@ class JobEngine:
             stale_after_seconds=self.config.batch_stale_seconds,
         )
         stale_marked = timeout["running_to_stale"] + timeout["stale_to_failed"]
-        failed = self.manifest.get_retryable_batches(run_id)
-        missing_init = self._missing_init_steps(run_id) if self._is_init_run(run_id) else []
+        failed = self._retryable_batches_with_worker_budget(run_id)
+        if retry_batch_ids is not None:
+            failed = [batch for batch in failed if batch["batch_id"] in retry_batch_ids]
+        missing_init = (
+            self._missing_init_steps(run_id)
+            if retry_batch_ids is None and self._is_init_run(run_id)
+            else []
+        )
 
         if not failed and not missing_init:
             incomplete = self.manifest.incomplete_batch_count(run_id)
             if incomplete > 0:
+                exhausted = self._exhausted_worker_retry_count(run_id)
+                status = self._retry_batch_status(run_id)
+                if exhausted and status in {"failed", "warning"}:
+                    if auto_finalize:
+                        self.manifest.finish_run(run_id, status)
+                    return {
+                        "run_id": run_id,
+                        "status": status,
+                        "retried": 0,
+                        "retry_exhausted": exhausted,
+                        "incomplete_batches": incomplete,
+                        "incomplete_by_status": (
+                            self.manifest.incomplete_batch_counts_by_status(run_id)
+                        ),
+                        "stale_marked_failed": stale_marked,
+                        "batch_timeout": timeout,
+                        "results": [],
+                    }
                 return self._pending_retry_payload(
                     run_id, stale_marked=stale_marked, timeout=timeout
                 )
@@ -572,35 +681,40 @@ class JobEngine:
 
         context = self._merge_retry_context(run_id, trade_date)
 
-        worker_batches_by_dataset: dict[str, list] = defaultdict(list)
-        step_batches_by_dataset: dict[str, list] = defaultdict(list)
+        self.manifest.increment_batch_retry_counts(
+            run_id,
+            [batch["batch_id"] for batch in failed if get_step(batch["task_id"]).requires_workers],
+        )
+
+        worker_batches_by_step: dict[str, list] = defaultdict(list)
+        step_batches_by_step: dict[str, list] = defaultdict(list)
         for batch in failed:
-            dataset = batch["dataset"]
-            if get_step(dataset).requires_workers:
-                worker_batches_by_dataset[dataset].append(batch)
+            step_name = batch["task_id"]
+            if get_step(step_name).requires_workers:
+                worker_batches_by_step[step_name].append(batch)
             else:
-                step_batches_by_dataset[dataset].append(batch)
+                step_batches_by_step[step_name].append(batch)
 
         results: list[dict[str, Any]] = []
         retried = len(failed)
         init_phases = self._init_phases_list(run_id) if self._is_init_run(run_id) else []
 
-        for dataset, worker_batches in worker_batches_by_dataset.items():
+        for step_name, worker_batches in worker_batches_by_step.items():
             context["_retry_batch_specs"] = self._worker_batch_specs(worker_batches, trade_date)
             previous_backfill = self.config._backfill
             if init_phases:
-                self.config._backfill = step_backfill(dataset, init_phases)
+                self.config._backfill = step_backfill(step_name, init_phases)
             try:
-                results.append(self._run_step(dataset, trade_date, run_id, context))
+                results.append(self._run_step(step_name, trade_date, run_id, context))
             finally:
                 self.config._backfill = previous_backfill
                 context.pop("_retry_batch_specs", None)
 
-        for dataset, batches in step_batches_by_dataset.items():
+        for step_name, batches in step_batches_by_step.items():
             previous_backfill = self.config._backfill
             if init_phases:
-                self.config._backfill = step_backfill(dataset, init_phases)
-            if dataset == "corporate_actions":
+                self.config._backfill = step_backfill(step_name, init_phases)
+            if step_name == "corporate_actions":
                 retry_symbols: list[str] = []
                 for batch in batches:
                     retry_symbols.extend(json.loads(batch["symbols_json"] or "[]"))
@@ -609,7 +723,7 @@ class JobEngine:
             try:
                 results.append(
                     self._run_step(
-                        dataset,
+                        step_name,
                         trade_date,
                         run_id,
                         context,

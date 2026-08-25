@@ -6,6 +6,17 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **TDX instrument discovery excludes unlisted exchange placeholders.** SH/SZ
+  security lists can advertise IPO and fund-application codes with a positive
+  sub-tick `pre_close` sentinel. Those rows are now excluded before they enter
+  the instrument universe and generate guaranteed-empty daily-bar batches.
+- **Transient worker failures consume a durable, bounded retry budget.** Batch
+  restarts no longer reset `retry_count`; one retry/resume invocation repeats
+  network-failed worker batches with configured pacing until they recover or
+  reach `max_retries`, and reports exhausted batches explicitly.
+
 ## [0.7.3] — 2026-08-23
 
 ### Added

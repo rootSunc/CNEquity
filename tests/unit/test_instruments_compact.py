@@ -591,6 +591,24 @@ def test_tdx_instrument_frame_marks_etf_asset_type():
     assert sz_types == {"000001.SZ": "stock", "159915.SZ": "etf"}
 
 
+def test_tdx_instrument_frame_rejects_unlisted_pre_close_sentinel():
+    from cnequity.adapters.tdx_protocol.client import _filter_instrument_frame
+
+    sentinel = 5.877471754111438e-39
+    out = _filter_instrument_frame(
+        pl.DataFrame(
+            {
+                "code": ["600519", "601123", "510300", "588999"],
+                "name": ["Moutai", "IPO applicant", "HS300", "Fund applicant"],
+                "pre_close": [1418.0, sentinel, 4.2, sentinel],
+            }
+        ),
+        "SH",
+    )
+
+    assert out["symbol"].to_list() == ["600519.SH", "510300.SH"]
+
+
 def test_enrich_instrument_list_dates_fills_nulls(tmp_path, monkeypatch):
     from cnequity.adapters.eastmoney import instruments as em_inst
 

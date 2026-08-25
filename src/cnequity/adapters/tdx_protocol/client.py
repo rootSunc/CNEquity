@@ -76,6 +76,10 @@ _TDX_MAX_CANDIDATES = 16
 _TDX_PROBE_CONCURRENCY = 8  # parallel probes; first live responder wins
 _TDX_FETCH_ATTEMPTS = 3  # server rotations before a bar fetch fails loud
 _TDX_SYMBOL_REQUEST_TIMEOUT_SECONDS = 30.0
+# TDX exposes not-yet-listed stock/fund placeholders with a tiny positive
+# ``pre_close`` sentinel (observed as 5.877471754111438e-39).  The smallest
+# valid price tick for the supported SH/SZ stock and ETF universe is 0.001.
+_TDX_MIN_LISTED_PRE_CLOSE = 0.001
 
 
 def reset_tdx_server_cache() -> None:
@@ -261,6 +265,14 @@ def _filter_instrument_frame(pdf: pl.DataFrame, exch: str) -> pl.DataFrame:
     mask = mask & valid_codes
     for blocked in range(81, 90):
         mask = mask & ~codes.str.starts_with(str(blocked))
+    if "pre_close" in pdf.columns:
+        pre_close = pdf["pre_close"].cast(pl.Float64, strict=False)
+        # Keep nulls for compatibility with alternate clients/fixtures that do
+        # not populate this optional field.  TDX's explicit sub-tick sentinel,
+        # however, means the security is advertised but not listed/tradable.
+        mask = mask & (
+            pre_close.is_null() | (pre_close.is_finite() & (pre_close >= _TDX_MIN_LISTED_PRE_CLOSE))
+        )
     filtered = pdf.filter(mask)
     if filtered.is_empty():
         return pl.DataFrame(
