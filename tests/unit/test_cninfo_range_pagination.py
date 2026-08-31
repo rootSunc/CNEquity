@@ -414,6 +414,125 @@ def test_single_day_repeated_page_101_is_terminal_but_resumable(tmp_path):
     assert [call["pageNum"] for call in second.calls] == [101, 1]
 
 
+def test_dense_single_day_uses_categories_and_reconciles_exact_total(monkeypatch, tmp_path):
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    target = date(2024, 5, 7)
+    checkpoint = tmp_path / "cninfo.json"
+
+    class Client:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def post(self, _url, data):
+            self.calls.append(dict(data))
+            category = data["category"]
+            if not category:
+                return _Response(
+                    {
+                        "announcements": [_row("a", target.isoformat())],
+                        "totalRecordNum": 2,
+                        "totalpages": 101,
+                        "hasMore": True,
+                    }
+                )
+            identifier = {"cat-a": "a", "cat-b": "b"}[category]
+            return _Response(
+                {
+                    "announcements": [_row(identifier, target.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    client = Client()
+    metrics: dict = {}
+    frame = fetch_announcement_index_range(
+        target,
+        client=client,
+        checkpoint_path=checkpoint,
+        metrics=metrics,
+    )
+
+    assert set(frame["announcement_id"].to_list()) == {"a", "b"}
+    assert [call["category"] for call in client.calls] == ["", "cat-a", "cat-b"]
+    assert metrics["category_partitions"] == 1
+    assert metrics["category_buckets"] == 2
+    saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+    parent = saved["slices"][f"szse:{target}:{target}"]
+    assert "category_partitioned" not in saved
+    assert parent["status"] == "complete"
+    assert parent["partition_strategy"] == "category"
+    assert saved["slices"][f"szse|category=cat-a:{target}:{target}"]["status"] == "complete"
+
+
+def test_dense_single_day_rejects_incomplete_category_coverage(monkeypatch, tmp_path):
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    target = date(2024, 5, 8)
+    checkpoint = tmp_path / "cninfo.json"
+
+    class Client:
+        def post(self, _url, data):
+            if not data["category"]:
+                return _Response(
+                    {
+                        "announcements": [_row("a", target.isoformat())],
+                        "totalRecordNum": 3,
+                        # CNINFO can cap its own page count.  The authoritative
+                        # record total is what proves this terminal page is
+                        # still incomplete and triggers category recovery.
+                        "totalpages": 1,
+                        "hasMore": False,
+                    }
+                )
+            identifier = {"cat-a": "a", "cat-b": "b"}[data["category"]]
+            return _Response(
+                {
+                    "announcements": [_row(identifier, target.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    with pytest.raises(RuntimeError, match="category coverage.*2.*unfiltered total is 3"):
+        fetch_announcement_index_range(target, client=Client(), checkpoint_path=checkpoint)
+
+    saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+    parent = saved["slices"][f"szse:{target}:{target}"]
+    assert parent["status"] == "failed"
+    assert parent["rows"] == []
+
+
+def test_dense_single_day_rejects_same_count_identity_replacement(monkeypatch):
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    target = date(2024, 5, 9)
+
+    class Client:
+        def post(self, _url, data):
+            if not data["category"]:
+                return _Response(
+                    {
+                        "announcements": [_row("a", target.isoformat())],
+                        "totalRecordNum": 2,
+                        "totalpages": 101,
+                        "hasMore": True,
+                    }
+                )
+            identifier = {"cat-a": "b", "cat-b": "c"}[data["category"]]
+            return _Response(
+                {
+                    "announcements": [_row(identifier, target.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    with pytest.raises(RuntimeError, match="replaced 1 identity"):
+        fetch_announcement_index_range(target, client=Client())
+
+
 def test_cninfo_step_uses_registry_date_chunks_for_default_backfill(tmp_path, monkeypatch):
     """The step must bound a direct/default backfill, not just CLI ranges."""
     config = Config(data_root=tmp_path / "data", raw_archive_enabled=False)

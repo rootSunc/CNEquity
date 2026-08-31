@@ -100,6 +100,250 @@ def test_each_cninfo_http_page_archives_exact_wire_and_transport_metadata(tmp_pa
     assert "set-cookie" not in metadata
 
 
+def test_dense_day_category_archive_replays_only_with_complete_reconciliation(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    target = date(2024, 1, 3)
+
+    class CategoryClient:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def post(self, _url, data):
+            self.calls.append(dict(data))
+            category = data["category"]
+            if not category:
+                return _Response(
+                    {
+                        "announcements": [_row("a", day=target.isoformat())],
+                        "totalRecordNum": 2,
+                        "totalpages": 101,
+                        "hasMore": True,
+                    }
+                )
+            identifier = {"cat-a": "a", "cat-b": "b"}[category]
+            return _Response(
+                {
+                    "announcements": [_row(identifier, day=target.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    config = _config(tmp_path)
+    live = fetch_announcement_index_range(target, client=CategoryClient(), config=config)
+    archive = RawPayloadArchive(config.meta_root)
+    records = archive.records("announcement_index")
+    replayed = replay_announcement_index_range(archive, target)
+
+    assert set(live["announcement_id"].to_list()) == {"a", "b"}
+    assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
+    assert {
+        record.pagination["column"] for record in records if record.request_params.get("category")
+    } == {"szse|category=cat-a", "szse|category=cat-b"}
+
+    incomplete = [record for record in records if record.request_params.get("category") != "cat-b"]
+    with pytest.raises(RawArchiveError, match="category children are incomplete"):
+        replay_announcement_index_range(archive, target, records=incomplete)
+
+    cat_b = next(record for record in records if record.request_params.get("category") == "cat-b")
+    cat_b.request_params["category"] = "cat-a"
+    with pytest.raises(RawArchiveError, match="column/category disagrees"):
+        replay_announcement_index_range(archive, target, records=records)
+
+
+def test_conflicting_record_total_aliases_fail_live_and_replay(tmp_path):
+    target = date(2024, 1, 2)
+    payload = {
+        "announcements": [_row("a", day=target.isoformat())],
+        "total": 1,
+        "totalRecordNum": 2,
+        "totalpages": 101,
+        "hasMore": True,
+    }
+    config = _config(tmp_path)
+    client = _Client({("szse", f"{target}~{target}", 1): _Response(payload)})
+
+    with pytest.raises(RuntimeError, match="record totals disagree"):
+        fetch_announcement_index_range(target, client=client, config=config)
+    with pytest.raises(RawArchiveError, match="record totals disagree"):
+        replay_announcement_index_range(RawPayloadArchive(config.meta_root), target)
+
+
+def test_category_replay_rejects_parent_capture_missing_page_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    target = date(2024, 1, 2)
+
+    class RepeatedControlClient:
+        def post(self, _url, data):
+            category = data["category"]
+            if not category:
+                return _Response(
+                    {
+                        "announcements": [_row("a", day=target.isoformat())],
+                        "totalRecordNum": 2,
+                        "totalpages": 2,
+                        "hasMore": True,
+                    }
+                )
+            identifier = {"cat-a": "a", "cat-b": "b"}[category]
+            return _Response(
+                {
+                    "announcements": [_row(identifier, day=target.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    config = _config(tmp_path)
+    archive = RawPayloadArchive(config.meta_root)
+    fetch_announcement_index_range(
+        target,
+        client=RepeatedControlClient(),
+        config=config,
+        max_pages_per_slice=2,
+    )
+    incomplete = [
+        record
+        for record in archive.records("announcement_index")
+        if not (
+            not record.request_params.get("category") and record.request_params.get("pageNum") == 1
+        )
+    ]
+
+    with pytest.raises(RawArchiveError, match="missing page 1"):
+        replay_announcement_index_range(archive, target, records=incomplete, max_pages_per_slice=2)
+
+
+def test_broad_archive_replays_nested_dense_day_without_duplicate_exchange(monkeypatch, tmp_path):
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    first = date(2024, 1, 3)
+    second = date(2024, 1, 4)
+
+    class NestedCategoryClient:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def post(self, _url, data):
+            self.calls.append(dict(data))
+            period = data["seDate"]
+            category = data["category"]
+            if period == "2024-01-03~2024-01-04":
+                return _Response(
+                    {
+                        "announcements": [_row("broad", day=first.isoformat())],
+                        "totalRecordNum": 3,
+                        "totalpages": 101,
+                        "hasMore": True,
+                    }
+                )
+            if period == "2024-01-03~2024-01-03" and not category:
+                return _Response(
+                    {
+                        "announcements": [_row("a", day=first.isoformat())],
+                        "totalRecordNum": 2,
+                        "totalpages": 101,
+                        "hasMore": True,
+                    }
+                )
+            if period == "2024-01-03~2024-01-03":
+                identifier = {"cat-a": "a", "cat-b": "b"}[category]
+                return _Response(
+                    {
+                        "announcements": [_row(identifier, day=first.isoformat())],
+                        "totalRecordNum": 1,
+                        "totalpages": 1,
+                        "hasMore": False,
+                    }
+                )
+            return _Response(
+                {
+                    "announcements": [_row("c", day=second.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    config = _config(tmp_path)
+    client = NestedCategoryClient()
+    live = fetch_announcement_index_range(first, second, client=client, config=config)
+    replayed = replay_announcement_index_range(RawPayloadArchive(config.meta_root), first, second)
+
+    assert set(live["announcement_id"].to_list()) == {"a", "b", "c"}
+    assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
+    assert {call["column"] for call in client.calls} == {"szse"}
+
+
+def test_category_partition_marker_does_not_leak_into_next_refresh(monkeypatch, tmp_path):
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    target = date(2024, 1, 5)
+    checkpoint = tmp_path / "checkpoint.json"
+    config = _config(tmp_path)
+
+    class DenseClient:
+        def post(self, _url, data):
+            if not data["category"]:
+                return _Response(
+                    {
+                        "announcements": [_row("a", day=target.isoformat())],
+                        "totalRecordNum": 2,
+                        "totalpages": 101,
+                        "hasMore": True,
+                    }
+                )
+            identifier = {"cat-a": "a", "cat-b": "b"}[data["category"]]
+            return _Response(
+                {
+                    "announcements": [_row(identifier, day=target.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    fetch_announcement_index_range(
+        target, client=DenseClient(), config=config, checkpoint_path=checkpoint
+    )
+
+    class OrdinaryClient:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def post(self, _url, data):
+            self.calls.append(dict(data))
+            if data["column"] == "sse":
+                return _Response(
+                    {
+                        "announcements": [],
+                        "totalRecordNum": 0,
+                        "totalpages": 0,
+                        "hasMore": False,
+                    }
+                )
+            return _Response(
+                {
+                    "announcements": [_row("fresh", day=target.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    ordinary = OrdinaryClient()
+    refreshed = fetch_announcement_index_range(
+        target, client=ordinary, config=config, checkpoint_path=checkpoint
+    )
+    replayed = replay_announcement_index_range(RawPayloadArchive(config.meta_root), target)
+
+    assert [call["column"] for call in ordinary.calls] == ["szse", "sse"]
+    assert refreshed["announcement_id"].to_list() == ["fresh"]
+    assert replayed["announcement_id"].to_list() == ["fresh"]
+
+
 def test_identical_response_bytes_keep_distinct_page_observations_and_replay_revisions(tmp_path):
     # Identical bytes on pages 1 and 2 trigger the live no-progress split;
     # distinct observation sidecars preserve both actual page requests.

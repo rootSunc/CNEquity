@@ -39,10 +39,47 @@ logger = logging.getLogger(__name__)
 _CNINFO_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 _PAGE_SIZE = 30
 
+# CNINFO's ``column`` selector is not an exchange partition on this endpoint:
+# live probes return the same all-market rows for ``szse`` and ``sse``.  The
+# documented site categories are the only stable server-side partition that
+# can make an otherwise unsplittable, >100-page day retrievable.  A category
+# walk is accepted only when its deduplicated identities exactly reconcile to
+# the unfiltered query's ``totalRecordNum``; the list is therefore a coverage
+# mechanism, never permission to publish a partial result.
+_CNINFO_CATEGORIES: tuple[str, ...] = (
+    "category_ndbg_szsh",
+    "category_bndbg_szsh",
+    "category_yjdbg_szsh",
+    "category_sjdbg_szsh",
+    "category_yjygjxz_szsh",
+    "category_qyfpxzcs_szsh",
+    "category_dshgg_szsh",
+    "category_jshgg_szsh",
+    "category_gddh_szsh",
+    "category_rcjy_szsh",
+    "category_gszl_szsh",
+    "category_zj_szsh",
+    "category_sf_szsh",
+    "category_zf_szsh",
+    "category_gqjl_szsh",
+    "category_pg_szsh",
+    "category_jj_szsh",
+    "category_gszq_szsh",
+    "category_kzzq_szsh",
+    "category_qtrz_szsh",
+    "category_gqbd_szsh",
+    "category_bcgz_szsh",
+    "category_cqdq_szsh",
+    "category_fxts_szsh",
+    "category_tbclts_szsh",
+    "category_tszlq_szsh",
+)
+_BUCKET_SEPARATOR = "|category="
+
 # The checkpoint must be tied to the request/normalization contract.  Bumping
 # this value forces a clean walk instead of mixing rows fetched under an older
 # CNINFO response shape with the current parser.
-CNINFO_SOURCE_REVISION = "cninfo-hisAnnouncement-v2"
+CNINFO_SOURCE_REVISION = "cninfo-hisAnnouncement-v3"
 
 # Keep a single date-range walk bounded.  CNINFO has been observed to replay
 # page 1 indefinitely under load; broad ranges can therefore be safely split
@@ -313,12 +350,15 @@ class _NeedDateSplit(RuntimeError):
 
 def _pagination_total_records(data: dict, *, column: str, page: int) -> int | None:
     """Read optional record totals used to reconcile unique primary keys."""
+    values: dict[str, int] = {}
     for key in (
         "total",
         "totalCount",
         "totalcount",
         "totalRecords",
         "totalrecords",
+        "totalRecordNum",
+        "totalrecordnum",
         "recordCount",
         "recordcount",
         "count",
@@ -342,12 +382,75 @@ def _pagination_total_records(data: dict, *, column: str, page: int) -> int | No
             raise RuntimeError(
                 f"CNINFO {key} for {column} page {page} is not a non-negative integer"
             )
-        return total
+        values[key] = total
+    if not values:
+        return None
+    if len(set(values.values())) != 1:
+        rendered = ", ".join(f"{key}={value}" for key, value in values.items())
+        raise RuntimeError(f"CNINFO record totals disagree for {column} page {page}: {rendered}")
+    # CNINFO's current wire contract names this field totalRecordNum.  The
+    # aliases remain readable for old captures, but can no longer override a
+    # conflicting authoritative value.
+    for key in ("totalRecordNum", "totalrecordnum"):
+        if key in values:
+            return values[key]
+    return next(iter(values.values()))
+
+
+def _pagination_total_record_num(data: dict, *, column: str, page: int) -> int | None:
+    """Return CNINFO's authoritative current-contract record count, if present."""
+    for key in ("totalRecordNum", "totalrecordnum"):
+        if key not in data or data[key] is None or str(data[key]).strip() == "":
+            continue
+        # The general parser performs type/range and cross-alias validation.
+        return _pagination_total_records(data, column=column, page=page)
     return None
 
 
 def _checkpoint_key(column: str, start: date, end: date) -> str:
     return f"{column}:{start.isoformat()}:{end.isoformat()}"
+
+
+def _bucket_column(column: str, category: str | None) -> str:
+    return f"{column}{_BUCKET_SEPARATOR}{category}" if category else column
+
+
+def _bucket_parts(value: str) -> tuple[str, str | None]:
+    column, separator, category = value.partition(_BUCKET_SEPARATOR)
+    return column, category if separator and category else None
+
+
+def _reconcile_category_rows(
+    rows: list[dict],
+    *,
+    expected_total: int,
+    label: str,
+    column: str,
+    day: date,
+    required_identities: set[str] | None = None,
+) -> list[dict]:
+    """Prove that category buckets cover the unfiltered single-day result."""
+
+    by_identity: dict[str, dict] = {}
+    for row in rows:
+        identity = _announcement_id(row)
+        if identity is None:
+            raise RuntimeError(
+                f"CNINFO {label} category coverage for {column} {day} contains an unkeyed row"
+            )
+        by_identity[str(identity)] = row
+    if len(by_identity) != expected_total:
+        raise RuntimeError(
+            f"CNINFO {label} category coverage for {column} {day} returned "
+            f"{len(by_identity)} unique rows; unfiltered total is {expected_total}"
+        )
+    missing_control = set(required_identities or ()) - set(by_identity)
+    if missing_control:
+        raise RuntimeError(
+            f"CNINFO {label} category coverage for {column} {day} replaced "
+            f"{len(missing_control)} identity/identities observed in the unfiltered control"
+        )
+    return list(by_identity.values())
 
 
 def _empty_checkpoint(identity: str, *, source_revision: str | None = None) -> dict[str, Any]:
@@ -636,6 +739,8 @@ def _best_effort_pagination_metadata(
             "totalcount",
             "totalRecords",
             "totalrecords",
+            "totalRecordNum",
+            "totalrecordnum",
             "recordCount",
             "recordcount",
             "count",
@@ -821,6 +926,8 @@ def _fetch_page_slice(
     raw_archive: RawPayloadArchive | None = None,
     run_id: str | None = None,
     request_scope: str | None = None,
+    category: str | None = None,
+    invocation_partitioned: list[bool] | None = None,
 ) -> list[dict]:
     """Fetch one bounded slice, recursively splitting unsafe walks."""
     if start > end:
@@ -835,7 +942,8 @@ def _fetch_page_slice(
 
     state = checkpoint or _empty_checkpoint(label, source_revision=source_revision)
     slices = state.setdefault("slices", {})
-    key = _checkpoint_key(column, start, end)
+    bucket_column = _bucket_column(column, category)
+    key = _checkpoint_key(bucket_column, start, end)
     record = slices.get(key)
     if (
         isinstance(record, dict)
@@ -858,6 +966,7 @@ def _fetch_page_slice(
                 "unique_keys": [],
                 "page_signatures": [],
                 "expected_total": None,
+                "authoritative_total": None,
                 "reported_pages": None,
                 "completed_at": None,
                 "raw_row_count": 0,
@@ -879,6 +988,12 @@ def _fetch_page_slice(
     ):
         rows = record.get("rows", [])
         if isinstance(rows, list):
+            if (
+                category is None
+                and record.get("partition_strategy") == "category"
+                and invocation_partitioned is not None
+            ):
+                invocation_partitioned[0] = True
             if metrics is not None:
                 metrics["checkpoint_slices"] = int(metrics.get("checkpoint_slices", 0)) + 1
             return [row for row in rows if isinstance(row, dict)]
@@ -897,6 +1012,7 @@ def _fetch_page_slice(
                 "unique_keys": [],
                 "page_signatures": [],
                 "expected_total": None,
+                "authoritative_total": None,
                 "reported_pages": None,
                 "completed_at": None,
                 "raw_row_count": 0,
@@ -929,6 +1045,7 @@ def _fetch_page_slice(
                 "unique_keys": [],
                 "page_signatures": [],
                 "expected_total": None,
+                "authoritative_total": None,
                 "reported_pages": None,
                 "completed_at": None,
                 "raw_row_count": 0,
@@ -971,6 +1088,7 @@ def _fetch_page_slice(
                     "unique_keys": [],
                     "page_signatures": [],
                     "expected_total": None,
+                    "authoritative_total": None,
                     "reported_pages": None,
                     "completed_at": None,
                     "raw_row_count": 0,
@@ -1005,6 +1123,8 @@ def _fetch_page_slice(
                 raw_archive=raw_archive,
                 run_id=run_id,
                 request_scope=request_scope,
+                category=category,
+                invocation_partitioned=invocation_partitioned,
             ) + _fetch_page_slice(
                 client,
                 start=mid + timedelta(days=1),
@@ -1023,6 +1143,8 @@ def _fetch_page_slice(
                 raw_archive=raw_archive,
                 run_id=run_id,
                 request_scope=request_scope,
+                category=category,
+                invocation_partitioned=invocation_partitioned,
             )
 
     if not isinstance(record, dict):
@@ -1036,12 +1158,14 @@ def _fetch_page_slice(
             "unique_keys": [],
             "page_signatures": [],
             "expected_total": None,
+            "authoritative_total": None,
             "reported_pages": None,
             "completed_at": None,
             "raw_row_count": 0,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "source_revision": source_revision,
+            "category": category,
             "raw_archives": [],
             "capture_id": uuid.uuid4().hex,
         }
@@ -1064,6 +1188,7 @@ def _fetch_page_slice(
                     "unique_keys": [],
                     "page_signatures": [],
                     "expected_total": None,
+                    "authoritative_total": None,
                     "reported_pages": None,
                     "completed_at": None,
                     "raw_row_count": 0,
@@ -1080,11 +1205,113 @@ def _fetch_page_slice(
     seen_signatures = set(str(value) for value in record.get("page_signatures", []))
     expected_total = record.get("expected_total")
     expected_total = int(expected_total) if expected_total is not None else None
+    authoritative_total = record.get("authoritative_total")
+    authoritative_total = int(authoritative_total) if authoritative_total is not None else None
     reported_pages = record.get("reported_pages")
     reported_pages = int(reported_pages) if reported_pages is not None else None
 
     def split_or_raise(reason: str) -> list[dict]:
         if start >= end:
+            can_partition_by_category = (
+                category is None
+                and authoritative_total is not None
+                and (
+                    "exceeded" in reason
+                    or "repeated page" in reason
+                    or "no unique-key progress" in reason
+                    or "does not match reported total" in reason
+                )
+            )
+            if can_partition_by_category:
+                control_identities: set[str] = set()
+                for control_row in [*raw_rows, *batch]:
+                    _validate_source_date(control_row, start, column=column)
+                    control_identity = _announcement_id(control_row)
+                    if control_identity is None:
+                        raise RuntimeError(
+                            f"CNINFO {label} unfiltered control for {column} {start} "
+                            "contains an unkeyed row"
+                        )
+                    control_identities.add(str(control_identity))
+                record["status"] = "category_split"
+                record["rows"] = []
+                record["next_page"] = 1
+                record["pages"] = 0
+                record["unique_keys"] = []
+                record["page_signatures"] = []
+                record["control_total"] = authoritative_total
+                record["reported_pages"] = reported_pages
+                record["raw_row_count"] = 0
+                record["completed_at"] = None
+                _write_checkpoint(checkpoint_path, state)
+                bucket_rows: list[dict] = []
+                try:
+                    for bucket in _CNINFO_CATEGORIES:
+                        bucket_rows.extend(
+                            _fetch_page_slice(
+                                client,
+                                start=start,
+                                end=end,
+                                column=column,
+                                category=bucket,
+                                label=label,
+                                config=config,
+                                metrics=metrics,
+                                checkpoint=state,
+                                checkpoint_path=checkpoint_path,
+                                max_pages_per_slice=max_pages_per_slice,
+                                depth=depth + 1,
+                                refresh=refresh,
+                                checkpoint_ttl_days=checkpoint_ttl_days,
+                                source_revision=source_revision,
+                                raw_archive=raw_archive,
+                                run_id=run_id,
+                                request_scope=request_scope,
+                                invocation_partitioned=invocation_partitioned,
+                            )
+                        )
+                    reconciled = _reconcile_category_rows(
+                        bucket_rows,
+                        expected_total=authoritative_total,
+                        label=label,
+                        column=column,
+                        day=start,
+                        required_identities=control_identities,
+                    )
+                except Exception as exc:
+                    record["status"] = "failed"
+                    record["failure_reason"] = f"category partition failed: {exc}"
+                    record["failure_page"] = 1
+                    record["failed_at"] = datetime.now(timezone.utc).isoformat()
+                    record["next_page"] = 1
+                    record["rows"] = []
+                    _write_checkpoint(checkpoint_path, state)
+                    raise
+                record["status"] = "complete"
+                record["rows"] = reconciled
+                record["next_page"] = 1
+                record["pages"] = 0
+                record["unique_keys"] = sorted(str(_announcement_id(row)) for row in reconciled)
+                record["page_signatures"] = []
+                record["expected_total"] = authoritative_total
+                record["authoritative_total"] = authoritative_total
+                record["raw_row_count"] = len(reconciled)
+                record["completed_at"] = datetime.now(timezone.utc).isoformat()
+                record["partition_strategy"] = "category"
+                # This endpoint's exchange column is not an actual partition.
+                # Once a category walk has reconciled the all-market control
+                # total, asking the nominal second exchange would repeat the
+                # same 26-bucket observation and double the request load.
+                if invocation_partitioned is not None:
+                    invocation_partitioned[0] = True
+                _write_checkpoint(checkpoint_path, state)
+                if metrics is not None:
+                    metrics["category_partitions"] = int(metrics.get("category_partitions", 0)) + 1
+                    metrics["category_buckets"] = int(metrics.get("category_buckets", 0)) + len(
+                        _CNINFO_CATEGORIES
+                    )
+                return reconciled
+
             # A repeated page or a max-page boundary on one calendar day has
             # no narrower date interval to fall back to. Persist the exact
             # resumable boundary and a terminal reason before raising: this is
@@ -1113,6 +1340,7 @@ def _fetch_page_slice(
             record["unique_keys"] = sorted(seen_keys) if resume_current_page else []
             record["page_signatures"] = sorted(seen_signatures) if resume_current_page else []
             record["expected_total"] = expected_total if resume_current_page else None
+            record["authoritative_total"] = authoritative_total if resume_current_page else None
             record["reported_pages"] = reported_pages if resume_current_page else None
             record["raw_row_count"] = len(raw_rows) if resume_current_page else 0
             _write_checkpoint(checkpoint_path, state)
@@ -1127,6 +1355,7 @@ def _fetch_page_slice(
         record["unique_keys"] = []
         record["page_signatures"] = []
         record["expected_total"] = None
+        record["authoritative_total"] = None
         record["reported_pages"] = None
         record["completed_at"] = None
         record["raw_row_count"] = 0
@@ -1152,6 +1381,8 @@ def _fetch_page_slice(
             raw_archive=raw_archive,
             run_id=run_id,
             request_scope=request_scope,
+            category=category,
+            invocation_partitioned=invocation_partitioned,
         ) + _fetch_page_slice(
             client,
             start=mid + timedelta(days=1),
@@ -1170,6 +1401,8 @@ def _fetch_page_slice(
             raw_archive=raw_archive,
             run_id=run_id,
             request_scope=request_scope,
+            category=category,
+            invocation_partitioned=invocation_partitioned,
         )
 
     while True:
@@ -1182,7 +1415,7 @@ def _fetch_page_slice(
             "stock": "",
             "searchkey": "",
             "secid": "",
-            "category": "",
+            "category": category or "",
             "trade": "",
             "seDate": f"{start.strftime('%Y-%m-%d')}~{end.strftime('%Y-%m-%d')}",
         }
@@ -1194,7 +1427,7 @@ def _fetch_page_slice(
                 kwargs["config"] = config
             if raw_archive is not None:
                 kwargs["on_response"] = (
-                    lambda response, parsed, attempt, _archive=raw_archive, _record=record, _label=label, _payload=payload, _column=column, _page=page, _start=start, _end=end, _run_id=run_id, _request_scope=request_scope: (
+                    lambda response, parsed, attempt, _archive=raw_archive, _record=record, _label=label, _payload=payload, _column=bucket_column, _page=page, _start=start, _end=end, _run_id=run_id, _request_scope=request_scope: (
                         _archive_cninfo_response(
                             _archive,
                             record=_record,
@@ -1218,11 +1451,22 @@ def _fetch_page_slice(
             has_more = _pagination_has_more(data, column=column, page=page)
             has_more_present = data.get("hasMore") is not None
             page_total = _pagination_total_records(data, column=column, page=page)
+            page_authoritative_total = _pagination_total_record_num(data, column=column, page=page)
             if expected_total is None:
                 expected_total = page_total
             elif page_total is not None and page_total != expected_total:
                 raise RuntimeError(
                     f"CNINFO {label} total record count changed for {column} "
+                    f"slice {start.isoformat()}..{end.isoformat()}"
+                )
+            if authoritative_total is None:
+                authoritative_total = page_authoritative_total
+            elif (
+                page_authoritative_total is not None
+                and page_authoritative_total != authoritative_total
+            ):
+                raise RuntimeError(
+                    f"CNINFO {label} totalRecordNum changed for {column} "
                     f"slice {start.isoformat()}..{end.isoformat()}"
                 )
             if batch and total_pages == 0:
@@ -1283,6 +1527,7 @@ def _fetch_page_slice(
             record["unique_keys"] = sorted(seen_keys)
             record["page_signatures"] = sorted(seen_signatures)
             record["expected_total"] = expected_total
+            record["authoritative_total"] = authoritative_total
             record["reported_pages"] = reported_pages
             record["raw_row_count"] = len(raw_rows)
             _write_checkpoint(checkpoint_path, state)
@@ -1296,6 +1541,7 @@ def _fetch_page_slice(
             record["unique_keys"] = sorted(seen_keys)
             record["page_signatures"] = sorted(seen_signatures)
             record["expected_total"] = expected_total
+            record["authoritative_total"] = authoritative_total
             record["reported_pages"] = reported_pages
             record["raw_row_count"] = len(raw_rows)
             _write_checkpoint(checkpoint_path, state)
@@ -1316,6 +1562,7 @@ def _fetch_page_slice(
         record["unique_keys"] = sorted(seen_keys)
         record["page_signatures"] = sorted(seen_signatures)
         record["expected_total"] = expected_total
+        record["authoritative_total"] = authoritative_total
         record["reported_pages"] = reported_pages
         record["raw_row_count"] = len(raw_rows)
         _write_checkpoint(checkpoint_path, state)
@@ -1358,9 +1605,11 @@ def _fetch_page_slice(
     record["unique_keys"] = sorted(seen_keys)
     record["page_signatures"] = sorted(seen_signatures)
     record["expected_total"] = expected_total
+    record["authoritative_total"] = authoritative_total
     record["reported_pages"] = reported_pages
     record["raw_row_count"] = len(raw_rows)
     record["completed_at"] = datetime.now(timezone.utc).isoformat()
+    record.pop("partition_strategy", None)
     _write_checkpoint(checkpoint_path, state)
     if metrics is not None:
         metrics["slices_completed"] = int(metrics.get("slices_completed", 0)) + 1
@@ -1461,6 +1710,7 @@ def fetch_cninfo_rows(
     started = time.perf_counter()
     try:
         rows: list[dict] = []
+        invocation_partitioned = [False]
         for column in ("szse", "sse"):
             rows.extend(
                 _fetch_page_slice(
@@ -1480,8 +1730,11 @@ def fetch_cninfo_rows(
                     raw_archive=raw_archive,
                     run_id=run_id,
                     request_scope=request_scope,
+                    invocation_partitioned=invocation_partitioned,
                 )
             )
+            if invocation_partitioned[0]:
+                break
         if metrics is not None:
             unique_ids = {
                 identity
@@ -1534,11 +1787,28 @@ def _replay_request_context(
         raw_pagination = record.get("pagination", {})
         request = dict(raw_request) if isinstance(raw_request, Mapping) else {}
         pagination = dict(raw_pagination) if isinstance(raw_pagination, Mapping) else {}
-    column = str(request.get("column") or pagination.get("column") or "").strip()
-    date_range = str(
-        request.get("seDate")
-        or f"{pagination.get('slice_start', '')}~{pagination.get('slice_end', '')}"
+    request_column = str(request.get("column") or "").strip()
+    archived_column = str(pagination.get("column") or "").strip()
+    category = str(request.get("category") or "").strip() or None
+    request_bucket = _bucket_column(request_column, category) if request_column else ""
+    if request_bucket and archived_column and request_bucket != archived_column:
+        raise RawArchiveError(
+            "CNINFO archived request column/category disagrees with pagination metadata: "
+            f"request={request_bucket!r}, pagination={archived_column!r}"
+        )
+    column = request_bucket or archived_column
+    request_date_range = str(request.get("seDate") or "").strip()
+    pagination_start = str(pagination.get("slice_start") or "").strip()
+    pagination_end = str(pagination.get("slice_end") or "").strip()
+    pagination_date_range = (
+        f"{pagination_start}~{pagination_end}" if pagination_start and pagination_end else ""
     )
+    if request_date_range and pagination_date_range and request_date_range != pagination_date_range:
+        raise RawArchiveError(
+            "CNINFO archived request date range disagrees with pagination metadata: "
+            f"request={request_date_range!r}, pagination={pagination_date_range!r}"
+        )
+    date_range = request_date_range or pagination_date_range
     parts = date_range.split("~", 1)
     if len(parts) != 2:
         return None
@@ -1547,9 +1817,19 @@ def _replay_request_context(
         end = date.fromisoformat(parts[1].strip()[:10])
     except ValueError:
         return None
-    raw_page = request.get("pageNum", pagination.get("page", 1))
+    request_page = request.get("pageNum")
+    pagination_page = pagination.get("page")
     try:
-        page = int(raw_page)
+        page = int(request_page if request_page is not None else pagination_page or 1)
+        if (
+            request_page is not None
+            and pagination_page is not None
+            and int(request_page) != int(pagination_page)
+        ):
+            raise RawArchiveError(
+                "CNINFO archived request page disagrees with pagination metadata: "
+                f"request={request_page!r}, pagination={pagination_page!r}"
+            )
     except (TypeError, ValueError):
         return None
     if not column or page < 1 or start > end:
@@ -1582,6 +1862,12 @@ def _replay_group_contains(
     parent: tuple[str, date, date],
     child: tuple[str, date, date],
 ) -> bool:
+    parent_column, parent_category = _bucket_parts(parent[0])
+    child_column, child_category = _bucket_parts(child[0])
+    if parent_column != child_column:
+        return False
+    if parent_category is None and child_category in _CNINFO_CATEGORIES:
+        return parent[1:] == child[1:]
     return (
         parent[0] == child[0]
         and parent[1] <= child[1]
@@ -1624,16 +1910,17 @@ def _replay_group_rows(
         capture_candidates = [
             items for items in captures.values() if any(int(item["page"]) == 1 for item in items)
         ]
-        if capture_candidates:
-            # Do not synthesize a source observation by combining pages from
-            # different runs/captures. Prefer the newest capture that starts
-            # at page 1. Its pagination contract is validated below; if that
-            # newest observation is interrupted, replay fails closed instead
-            # of silently falling back to older source truth.
-            pages = max(
-                capture_candidates,
-                key=lambda items: max(str(item.get("captured_at", "")) for item in items),
-            )
+        if not capture_candidates:
+            raise RawArchiveError(f"CNINFO archived slice is missing page 1: {key!r}")
+        # Do not synthesize a source observation by combining pages from
+        # different runs/captures. Prefer the newest capture that starts
+        # at page 1. Its pagination contract is validated below; if that
+        # newest observation is interrupted, replay fails closed instead
+        # of silently falling back to older source truth.
+        pages = max(
+            capture_candidates,
+            key=lambda items: max(str(item.get("captured_at", "")) for item in items),
+        )
         selected_lineage = (
             str(pages[0].get("run_id", "")),
             str(pages[0].get("request_scope", "")),
@@ -1702,6 +1989,7 @@ def _replay_group_rows(
         split = False
         signatures: set[str] = set()
         preflight_total: int | None = None
+        preflight_authoritative_total: int | None = None
         preflight_pages: int | None = None
         preflight_rows = 0
         root_terminal = False
@@ -1710,6 +1998,9 @@ def _replay_group_rows(
             item["batch"] = batch
             try:
                 reported_total = _pagination_total_records(
+                    item["response"], column=key[0], page=int(item["page"])
+                )
+                authoritative_total = _pagination_total_record_num(
                     item["response"], column=key[0], page=int(item["page"])
                 )
                 reported_pages = _pagination_total_pages(
@@ -1725,6 +2016,11 @@ def _replay_group_rows(
                     preflight_total = reported_total
                 elif preflight_total != reported_total:
                     raise RawArchiveError(f"CNINFO archived total changed: {key!r}")
+            if authoritative_total is not None:
+                if preflight_authoritative_total is None:
+                    preflight_authoritative_total = authoritative_total
+                elif preflight_authoritative_total != authoritative_total:
+                    raise RawArchiveError(f"CNINFO archived totalRecordNum changed: {key!r}")
             if reported_pages is not None:
                 if preflight_pages is None:
                     preflight_pages = reported_pages
@@ -1766,15 +2062,70 @@ def _replay_group_rows(
             if preflight_pages is None and page >= max_pages_per_slice and not root_terminal:
                 split = True
         if (
-            key[1] < key[2]
-            and root_terminal
+            root_terminal
             and preflight_total is not None
             and preflight_rows != preflight_total
+            and (key[1] < key[2] or preflight_authoritative_total is not None)
         ):
             split = True
         if split:
             if not children:
                 raise RawArchiveError(f"CNINFO archived slice cannot replay split: {key!r}")
+            category_children = [
+                child for child in children if _bucket_parts(child[0])[1] is not None
+            ]
+            if category_children:
+                categories = {_bucket_parts(child[0])[1] for child in category_children}
+                if len(category_children) != len(children) or categories != set(_CNINFO_CATEGORIES):
+                    raise RawArchiveError(
+                        "CNINFO archived category children are incomplete after the "
+                        f"control row count does not match its total: {key!r}"
+                    )
+                if preflight_authoritative_total is None:
+                    raise RawArchiveError(
+                        "CNINFO archived category split lacks authoritative "
+                        f"totalRecordNum: {key!r}"
+                    )
+                control_identities: set[str] = set()
+                for item in ordered:
+                    for control_row in item["batch"]:
+                        try:
+                            _validate_source_date(
+                                control_row,
+                                key[1],
+                                column=_bucket_parts(key[0])[0],
+                            )
+                        except RuntimeError as exc:
+                            raise RawArchiveError(str(exc)) from exc
+                        control_identity = _announcement_id(control_row)
+                        if control_identity is None:
+                            raise RawArchiveError(
+                                f"CNINFO archived unfiltered control has an unkeyed row: {key!r}"
+                            )
+                        control_identities.add(str(control_identity))
+                bucket_rows: list[dict] = []
+                for child in category_children:
+                    bucket_rows.extend(
+                        _replay_group_rows(
+                            child,
+                            groups,
+                            max_pages_per_slice=max_pages_per_slice,
+                            active=active,
+                            lineage=selected_lineage,
+                            captured_after=selected_capture_end,
+                        )
+                    )
+                try:
+                    return _reconcile_category_rows(
+                        bucket_rows,
+                        expected_total=preflight_authoritative_total,
+                        label="archived announcement",
+                        column=_bucket_parts(key[0])[0],
+                        day=key[1],
+                        required_identities=control_identities,
+                    )
+                except RuntimeError as exc:
+                    raise RawArchiveError(str(exc)) from exc
             coverage_cursor = key[1]
             for child in children:
                 if child[1] != coverage_cursor:
@@ -2013,8 +2364,22 @@ def replay_cninfo_rows(
             )
         )
     if selected_invocation:
-        root_columns = {root[0] for root in roots}
+        root_columns = {_bucket_parts(root[0])[0] for root in roots}
         missing_columns = {"szse", "sse"} - root_columns
+        has_complete_category_parent = any(
+            {
+                _bucket_parts(child[0])[1]
+                for child in groups
+                if _replay_group_contains(parent, child) and _bucket_parts(child[0])[1] is not None
+            }
+            == set(_CNINFO_CATEGORIES)
+            for parent in groups
+            if _bucket_parts(parent[0])[1] is None
+        )
+        if has_complete_category_parent:
+            # The reconciled category walk is all-market; the endpoint's sse
+            # and szse column values are aliases, not independent exchanges.
+            missing_columns.clear()
         if missing_columns:
             raise RawArchiveError(
                 "CNINFO latest archived invocation is missing exchange column(s): "
