@@ -38,14 +38,64 @@ logger = logging.getLogger(__name__)
 
 _CNINFO_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 _PAGE_SIZE = 30
+#: The site section this endpoint is read through. Not a market selector.
+_CNINFO_COLUMN = "szse"
 
-# CNINFO's ``column`` selector is not an exchange partition on this endpoint:
-# live probes return the same all-market rows for ``szse`` and ``sse``.  The
-# documented site categories are the only stable server-side partition that
-# can make an otherwise unsplittable, >100-page day retrievable.  A category
-# walk is accepted only when its deduplicated identities exactly reconcile to
-# the unfiltered query's ``totalRecordNum``; the list is therefore a coverage
-# mechanism, never permission to publish a partial result.
+# The server answers at most 100 pages (3000 rows) for any one query: page 101
+# silently replays page 1 while ``totalpages`` keeps reporting the real count
+# (measured 2026-08-28: 6537 rows, ``totalpages=217``, page 101 == page 1). A
+# dense disclosure day therefore cannot be read as a single query, and the
+# repeated-page guard alone would only turn that into a failed step.
+#
+# What makes such a day retrievable is a *filter that partitions it*. These are
+# the axes this walk may split on, tried in the order below, and each split is
+# accepted only when the deduplicated identities of its buckets reconcile
+# exactly to the parent query's ``totalRecordNum``. Coverage is proven per day,
+# per split, from the source's own count — the lists here are a mechanism for
+# reaching rows, never permission to publish part of a day.
+#
+# ``column`` is deliberately absent: it is not a partition at all. Live probes
+# return the identical all-market result for ``szse``, ``sse`` and ``bj``, so
+# walking more than one of them is the same day fetched twice.
+
+#: Market boards. Measured to sum exactly to the unfiltered total on every day
+#: probed (2010, 2015, 2018, 2026), so this is the first and cheapest split.
+_CNINFO_MARKET_PLATES: tuple[str, ...] = ("sz", "sh", "bj")
+
+#: Sub-boards, for a market that is itself too dense. ``szzx`` (中小板) merged
+#: into ``szmb`` in 2021 and answers 0 for later days; it stays for history.
+_CNINFO_PLATE_BOARDS: dict[str, tuple[str, ...]] = {
+    "sz": ("szmb", "szzx", "szcy"),
+    "sh": ("shmb", "shkcp"),
+}
+
+#: CSRC 行业门类 A–S. Also measured to sum exactly to the parent total, and it
+#: cuts the dominant board differently from the disclosure categories below.
+_CNINFO_TRADES: tuple[str, ...] = (
+    "农、林、牧、渔业",
+    "采矿业",
+    "制造业",
+    "电力、热力、燃气及水生产和供应业",
+    "建筑业",
+    "批发和零售业",
+    "交通运输、仓储和邮政业",
+    "住宿和餐饮业",
+    "信息传输、软件和信息技术服务业",
+    "金融业",
+    "房地产业",
+    "租赁和商务服务业",
+    "科学研究和技术服务业",
+    "水利、环境和公共设施管理业",
+    "居民服务、修理和其他服务业",
+    "教育",
+    "卫生和社会工作",
+    "文化、体育和娱乐业",
+    "综合",
+)
+
+#: Disclosure categories — the last resort, because an announcement can carry
+#: more than one and a few carry none, so this cover reconciles less often
+#: than the ones above.
 _CNINFO_CATEGORIES: tuple[str, ...] = (
     "category_ndbg_szsh",
     "category_bndbg_szsh",
@@ -74,12 +124,15 @@ _CNINFO_CATEGORIES: tuple[str, ...] = (
     "category_tbclts_szsh",
     "category_tszlq_szsh",
 )
-_BUCKET_SEPARATOR = "|category="
+#: Request-body keys this walk may set to narrow a query, in the order they
+#: appear in a bucket identity.
+_PARTITION_AXES: tuple[str, ...] = ("plate", "trade", "category")
+_BUCKET_SEPARATOR = "|"
 
 # The checkpoint must be tied to the request/normalization contract.  Bumping
 # this value forces a clean walk instead of mixing rows fetched under an older
 # CNINFO response shape with the current parser.
-CNINFO_SOURCE_REVISION = "cninfo-hisAnnouncement-v3"
+CNINFO_SOURCE_REVISION = "cninfo-hisAnnouncement-v4"
 
 # Keep a single date-range walk bounded.  CNINFO has been observed to replay
 # page 1 indefinitely under load; broad ranges can therefore be safely split
@@ -411,43 +464,93 @@ def _checkpoint_key(column: str, start: date, end: date) -> str:
     return f"{column}:{start.isoformat()}:{end.isoformat()}"
 
 
-def _bucket_column(column: str, category: str | None) -> str:
-    return f"{column}{_BUCKET_SEPARATOR}{category}" if category else column
+class PartitionCoverageError(RuntimeError):
+    """A candidate split did not provably cover the query it replaced.
+
+    Distinct from a transport or contract failure: it means *this* cover is
+    unusable, so the caller may try the next axis instead of giving up. What it
+    never means is that the shortfall can be published.
+    """
 
 
-def _bucket_parts(value: str) -> tuple[str, str | None]:
-    column, separator, category = value.partition(_BUCKET_SEPARATOR)
-    return column, category if separator and category else None
+def _bucket_column(column: str, filters: Mapping[str, str] | None) -> str:
+    """Encode the applied filters into the checkpoint / archive identity."""
+    suffix = "".join(
+        f"{_BUCKET_SEPARATOR}{axis}={filters[axis]}"
+        for axis in _PARTITION_AXES
+        if filters and filters.get(axis)
+    )
+    return f"{column}{suffix}"
 
 
-def _reconcile_category_rows(
+def _bucket_parts(value: str) -> tuple[str, dict[str, str]]:
+    column, _, encoded = value.partition(_BUCKET_SEPARATOR)
+    filters: dict[str, str] = {}
+    for part in encoded.split(_BUCKET_SEPARATOR) if encoded else ():
+        axis, separator, filter_value = part.partition("=")
+        if separator and filter_value:
+            filters[axis] = filter_value
+    return column, filters
+
+
+def _partition_axis(parent: Mapping[str, str], child: Mapping[str, str]) -> str | None:
+    """The single axis a child bucket refines, or ``None`` if it is not one."""
+    changed = [axis for axis in _PARTITION_AXES if child.get(axis) != parent.get(axis)]
+    return changed[0] if len(changed) == 1 else None
+
+
+def _partition_candidates(filters: Mapping[str, str]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Covers still available for a cell, cheapest and most reliable first.
+
+    Each entry replaces one query with a set of narrower ones. ``plate``
+    appears twice because a market that is itself too dense splits again into
+    its own boards; the rest are orthogonal filters that have not been applied
+    to this cell yet.
+    """
+    candidates: list[tuple[str, tuple[str, ...]]] = []
+    plate = filters.get("plate")
+    if plate is None:
+        candidates.append(("plate", _CNINFO_MARKET_PLATES))
+    elif plate in _CNINFO_PLATE_BOARDS:
+        candidates.append(("plate", _CNINFO_PLATE_BOARDS[plate]))
+    if "trade" not in filters:
+        candidates.append(("trade", _CNINFO_TRADES))
+    if "category" not in filters:
+        candidates.append(("category", _CNINFO_CATEGORIES))
+    # An axis with no values cannot cover anything; offering it would only
+    # turn a real split into an empty one.
+    return tuple((axis, values) for axis, values in candidates if values)
+
+
+def _reconcile_partition_rows(
     rows: list[dict],
     *,
     expected_total: int,
     label: str,
     column: str,
     day: date,
+    axis: str,
     required_identities: set[str] | None = None,
 ) -> list[dict]:
-    """Prove that category buckets cover the unfiltered single-day result."""
+    """Prove that one split's buckets cover the query they replaced."""
 
     by_identity: dict[str, dict] = {}
     for row in rows:
         identity = _announcement_id(row)
         if identity is None:
-            raise RuntimeError(
-                f"CNINFO {label} category coverage for {column} {day} contains an unkeyed row"
+            raise PartitionCoverageError(
+                f"CNINFO {label} {axis} coverage for {column} {day} contains an unkeyed row"
             )
         by_identity[str(identity)] = row
     if len(by_identity) != expected_total:
-        raise RuntimeError(
-            f"CNINFO {label} category coverage for {column} {day} returned "
+        raise PartitionCoverageError(
+            f"CNINFO {label} {axis} coverage for {column} {day} returned "
             f"{len(by_identity)} unique rows; unfiltered total is {expected_total}"
         )
     missing_control = set(required_identities or ()) - set(by_identity)
     if missing_control:
-        raise RuntimeError(
-            f"CNINFO {label} category coverage for {column} {day} replaced "
+        raise PartitionCoverageError(
+            f"CNINFO {label} {axis} coverage for {column} {day} replaced "
             f"{len(missing_control)} identity/identities observed in the unfiltered control"
         )
     return list(by_identity.values())
@@ -926,8 +1029,7 @@ def _fetch_page_slice(
     raw_archive: RawPayloadArchive | None = None,
     run_id: str | None = None,
     request_scope: str | None = None,
-    category: str | None = None,
-    invocation_partitioned: list[bool] | None = None,
+    filters: Mapping[str, str] | None = None,
 ) -> list[dict]:
     """Fetch one bounded slice, recursively splitting unsafe walks."""
     if start > end:
@@ -942,7 +1044,8 @@ def _fetch_page_slice(
 
     state = checkpoint or _empty_checkpoint(label, source_revision=source_revision)
     slices = state.setdefault("slices", {})
-    bucket_column = _bucket_column(column, category)
+    filters = dict(filters or {})
+    bucket_column = _bucket_column(column, filters)
     key = _checkpoint_key(bucket_column, start, end)
     record = slices.get(key)
     if (
@@ -988,12 +1091,6 @@ def _fetch_page_slice(
     ):
         rows = record.get("rows", [])
         if isinstance(rows, list):
-            if (
-                category is None
-                and record.get("partition_strategy") == "category"
-                and invocation_partitioned is not None
-            ):
-                invocation_partitioned[0] = True
             if metrics is not None:
                 metrics["checkpoint_slices"] = int(metrics.get("checkpoint_slices", 0)) + 1
             return [row for row in rows if isinstance(row, dict)]
@@ -1123,8 +1220,7 @@ def _fetch_page_slice(
                 raw_archive=raw_archive,
                 run_id=run_id,
                 request_scope=request_scope,
-                category=category,
-                invocation_partitioned=invocation_partitioned,
+                filters=filters,
             ) + _fetch_page_slice(
                 client,
                 start=mid + timedelta(days=1),
@@ -1143,8 +1239,7 @@ def _fetch_page_slice(
                 raw_archive=raw_archive,
                 run_id=run_id,
                 request_scope=request_scope,
-                category=category,
-                invocation_partitioned=invocation_partitioned,
+                filters=filters,
             )
 
     if not isinstance(record, dict):
@@ -1165,7 +1260,7 @@ def _fetch_page_slice(
             "started_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "source_revision": source_revision,
-            "category": category,
+            "filters": dict(filters),
             "raw_archives": [],
             "capture_id": uuid.uuid4().hex,
         }
@@ -1212,105 +1307,121 @@ def _fetch_page_slice(
 
     def split_or_raise(reason: str) -> list[dict]:
         if start >= end:
-            can_partition_by_category = (
-                category is None
-                and authoritative_total is not None
-                and (
-                    "exceeded" in reason
-                    or "repeated page" in reason
-                    or "no unique-key progress" in reason
-                    or "does not match reported total" in reason
-                )
+            splittable = authoritative_total is not None and (
+                "exceeded" in reason
+                or "repeated page" in reason
+                or "no unique-key progress" in reason
+                or "does not match reported total" in reason
             )
-            if can_partition_by_category:
+            if splittable:
+                # The unfiltered walk reached the server's cap, so it is a
+                # *control*, not a result: every identity it did return must
+                # still be present after the split, or the split answered a
+                # different question.
                 control_identities: set[str] = set()
                 for control_row in [*raw_rows, *batch]:
                     _validate_source_date(control_row, start, column=column)
                     control_identity = _announcement_id(control_row)
                     if control_identity is None:
                         raise RuntimeError(
-                            f"CNINFO {label} unfiltered control for {column} {start} "
+                            f"CNINFO {label} unfiltered control for {bucket_column} {start} "
                             "contains an unkeyed row"
                         )
                     control_identities.add(str(control_identity))
-                record["status"] = "category_split"
-                record["rows"] = []
-                record["next_page"] = 1
-                record["pages"] = 0
-                record["unique_keys"] = []
-                record["page_signatures"] = []
-                record["control_total"] = authoritative_total
-                record["reported_pages"] = reported_pages
-                record["raw_row_count"] = 0
-                record["completed_at"] = None
-                _write_checkpoint(checkpoint_path, state)
-                bucket_rows: list[dict] = []
-                try:
-                    for bucket in _CNINFO_CATEGORIES:
-                        bucket_rows.extend(
-                            _fetch_page_slice(
-                                client,
-                                start=start,
-                                end=end,
-                                column=column,
-                                category=bucket,
-                                label=label,
-                                config=config,
-                                metrics=metrics,
-                                checkpoint=state,
-                                checkpoint_path=checkpoint_path,
-                                max_pages_per_slice=max_pages_per_slice,
-                                depth=depth + 1,
-                                refresh=refresh,
-                                checkpoint_ttl_days=checkpoint_ttl_days,
-                                source_revision=source_revision,
-                                raw_archive=raw_archive,
-                                run_id=run_id,
-                                request_scope=request_scope,
-                                invocation_partitioned=invocation_partitioned,
+                coverage_failure: PartitionCoverageError | None = None
+                for axis, values in _partition_candidates(filters):
+                    record["status"] = f"{axis}_split"
+                    record["rows"] = []
+                    record["next_page"] = 1
+                    record["pages"] = 0
+                    record["unique_keys"] = []
+                    record["page_signatures"] = []
+                    record["control_total"] = authoritative_total
+                    record["reported_pages"] = reported_pages
+                    record["raw_row_count"] = 0
+                    record["completed_at"] = None
+                    _write_checkpoint(checkpoint_path, state)
+                    bucket_rows: list[dict] = []
+                    try:
+                        for value in values:
+                            bucket_rows.extend(
+                                _fetch_page_slice(
+                                    client,
+                                    start=start,
+                                    end=end,
+                                    column=column,
+                                    label=label,
+                                    config=config,
+                                    metrics=metrics,
+                                    checkpoint=state,
+                                    checkpoint_path=checkpoint_path,
+                                    max_pages_per_slice=max_pages_per_slice,
+                                    depth=depth + 1,
+                                    refresh=refresh,
+                                    checkpoint_ttl_days=checkpoint_ttl_days,
+                                    source_revision=source_revision,
+                                    raw_archive=raw_archive,
+                                    run_id=run_id,
+                                    request_scope=request_scope,
+                                    filters={**filters, axis: value},
+                                )
                             )
+                        reconciled = _reconcile_partition_rows(
+                            bucket_rows,
+                            expected_total=authoritative_total,
+                            label=label,
+                            column=bucket_column,
+                            day=start,
+                            axis=axis,
+                            required_identities=control_identities,
                         )
-                    reconciled = _reconcile_category_rows(
-                        bucket_rows,
-                        expected_total=authoritative_total,
-                        label=label,
-                        column=column,
-                        day=start,
-                        required_identities=control_identities,
-                    )
-                except Exception as exc:
+                    except PartitionCoverageError as exc:
+                        # This cover cannot prove it read the whole day — but a
+                        # different filter may still partition it, so try the
+                        # next axis before failing the slice.
+                        coverage_failure = exc
+                        if metrics is not None:
+                            metrics.setdefault("partition_rejected", []).append(
+                                {"axis": axis, "reason": str(exc)}
+                            )
+                        continue
+                    except Exception as exc:
+                        record["status"] = "failed"
+                        record["failure_reason"] = f"{axis} partition failed: {exc}"
+                        record["failure_page"] = 1
+                        record["failed_at"] = datetime.now(timezone.utc).isoformat()
+                        record["next_page"] = 1
+                        record["rows"] = []
+                        _write_checkpoint(checkpoint_path, state)
+                        raise
+                    record["status"] = "complete"
+                    record["rows"] = reconciled
+                    record["next_page"] = 1
+                    record["pages"] = 0
+                    record["unique_keys"] = sorted(str(_announcement_id(row)) for row in reconciled)
+                    record["page_signatures"] = []
+                    record["expected_total"] = authoritative_total
+                    record["authoritative_total"] = authoritative_total
+                    record["raw_row_count"] = len(reconciled)
+                    record["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    record["partition_strategy"] = axis
+                    _write_checkpoint(checkpoint_path, state)
+                    if metrics is not None:
+                        metrics["partition_splits"] = int(metrics.get("partition_splits", 0)) + 1
+                        metrics["partition_buckets"] = int(
+                            metrics.get("partition_buckets", 0)
+                        ) + len(values)
+                        metrics.setdefault("partition_axes", []).append(axis)
+                    return reconciled
+                if coverage_failure is not None:
                     record["status"] = "failed"
-                    record["failure_reason"] = f"category partition failed: {exc}"
+                    record["failure_reason"] = str(coverage_failure)
                     record["failure_page"] = 1
                     record["failed_at"] = datetime.now(timezone.utc).isoformat()
                     record["next_page"] = 1
                     record["rows"] = []
                     _write_checkpoint(checkpoint_path, state)
-                    raise
-                record["status"] = "complete"
-                record["rows"] = reconciled
-                record["next_page"] = 1
-                record["pages"] = 0
-                record["unique_keys"] = sorted(str(_announcement_id(row)) for row in reconciled)
-                record["page_signatures"] = []
-                record["expected_total"] = authoritative_total
-                record["authoritative_total"] = authoritative_total
-                record["raw_row_count"] = len(reconciled)
-                record["completed_at"] = datetime.now(timezone.utc).isoformat()
-                record["partition_strategy"] = "category"
-                # This endpoint's exchange column is not an actual partition.
-                # Once a category walk has reconciled the all-market control
-                # total, asking the nominal second exchange would repeat the
-                # same 26-bucket observation and double the request load.
-                if invocation_partitioned is not None:
-                    invocation_partitioned[0] = True
-                _write_checkpoint(checkpoint_path, state)
-                if metrics is not None:
-                    metrics["category_partitions"] = int(metrics.get("category_partitions", 0)) + 1
-                    metrics["category_buckets"] = int(metrics.get("category_buckets", 0)) + len(
-                        _CNINFO_CATEGORIES
-                    )
-                return reconciled
+                    raise coverage_failure
 
             # A repeated page or a max-page boundary on one calendar day has
             # no narrower date interval to fall back to. Persist the exact
@@ -1381,8 +1492,7 @@ def _fetch_page_slice(
             raw_archive=raw_archive,
             run_id=run_id,
             request_scope=request_scope,
-            category=category,
-            invocation_partitioned=invocation_partitioned,
+            filters=filters,
         ) + _fetch_page_slice(
             client,
             start=mid + timedelta(days=1),
@@ -1401,8 +1511,7 @@ def _fetch_page_slice(
             raw_archive=raw_archive,
             run_id=run_id,
             request_scope=request_scope,
-            category=category,
-            invocation_partitioned=invocation_partitioned,
+            filters=filters,
         )
 
     while True:
@@ -1411,12 +1520,12 @@ def _fetch_page_slice(
             "pageSize": _PAGE_SIZE,
             "column": column,
             "tabName": "fulltext",
-            "plate": "",
+            "plate": filters.get("plate", ""),
             "stock": "",
             "searchkey": "",
             "secid": "",
-            "category": category or "",
-            "trade": "",
+            "category": filters.get("category", ""),
+            "trade": filters.get("trade", ""),
             "seDate": f"{start.strftime('%Y-%m-%d')}~{end.strftime('%Y-%m-%d')}",
         }
         try:
@@ -1469,10 +1578,15 @@ def _fetch_page_slice(
                     f"CNINFO {label} totalRecordNum changed for {column} "
                     f"slice {start.isoformat()}..{end.isoformat()}"
                 )
-            if batch and total_pages == 0:
+            if batch and total_pages == 0 and (page_authoritative_total or 0) > _PAGE_SIZE:
+                # ``totalpages`` is floor(totalRecordNum / _PAGE_SIZE), so 0 is
+                # the ordinary answer for a bucket holding fewer than one full
+                # page — every small ``category`` bucket reports it. It is only
+                # a contradiction when the source itself claims more records
+                # than a single page could carry.
                 raise RuntimeError(
                     f"CNINFO {label} for {column} page {page} declared totalpages=0 "
-                    "but returned rows"
+                    f"but reports {page_authoritative_total} records"
                 )
             if isinstance(total_pages, int):
                 if reported_pages is None:
@@ -1509,6 +1623,11 @@ def _fetch_page_slice(
             # Archive failures are integrity/policy failures, not pagination
             # evidence.  Preserve the concrete error and never substitute an
             # unarchived network retry.
+            raise
+        except PartitionCoverageError:
+            # Raised by ``split_or_raise`` after it has already recorded this
+            # slice's terminal state. Re-wrapping it here would overwrite that
+            # with a page-level failure that resumes mid-walk.
             raise
         except RuntimeError as exc:
             # Validation/pagination contract errors are safe split candidates
@@ -1568,14 +1687,18 @@ def _fetch_page_slice(
         _write_checkpoint(checkpoint_path, state)
         if metrics is not None:
             metrics["pages"] = int(metrics.get("pages", 0)) + 1
-        if isinstance(total_pages, int) and page >= total_pages:
-            break
-        # A reported page count is authoritative for continuation. Only use a
-        # record total as an early stop when the endpoint omitted totalpages;
-        # otherwise a stale low count could silently truncate later pages.
+        # The record total is what the slice is reconciled against, so it also
+        # decides when the walk is done.
         if expected_total is not None and len(raw_rows) >= expected_total:
-            if total_pages is None:
-                break
+            break
+        # ``totalpages`` is floor(totalRecordNum / _PAGE_SIZE): the final
+        # partial page is not counted at all. Measured 2026-01-01 — 1375 rows,
+        # ``totalpages=45``, and page 46 holding the last 25 with
+        # ``hasMore=false``. Stopping at the reported count would therefore
+        # drop the tail of almost every day, so it can only end a walk that has
+        # no record total to go by.
+        if expected_total is None and isinstance(total_pages, int) and page >= total_pages:
+            break
         if page >= max_pages_per_slice:
             return split_or_raise(f"slice exceeded {max_pages_per_slice} pages")
         if isinstance(total_pages, int):
@@ -1709,32 +1832,29 @@ def fetch_cninfo_rows(
         metrics.setdefault("started_at", datetime.now().astimezone().isoformat())
     started = time.perf_counter()
     try:
-        rows: list[dict] = []
-        invocation_partitioned = [False]
-        for column in ("szse", "sse"):
-            rows.extend(
-                _fetch_page_slice(
-                    client,
-                    start=start,
-                    end=end,
-                    column=column,
-                    label=label,
-                    config=config,
-                    metrics=metrics,
-                    checkpoint=checkpoint,
-                    checkpoint_path=path,
-                    max_pages_per_slice=max_pages_per_slice,
-                    refresh=refresh,
-                    checkpoint_ttl_days=checkpoint_ttl_days,
-                    source_revision=source_revision,
-                    raw_archive=raw_archive,
-                    run_id=run_id,
-                    request_scope=request_scope,
-                    invocation_partitioned=invocation_partitioned,
-                )
-            )
-            if invocation_partitioned[0]:
-                break
+        # One walk, not one per exchange: ``column`` selects a site section,
+        # not a market. Live probes return the identical all-market rows for
+        # ``szse``, ``sse`` and ``bj`` (2026-08-28: 6537 each, same first page),
+        # so the old two-column loop fetched every dense day twice and threw
+        # the duplicate away at the announcement-id dedupe.
+        rows: list[dict] = _fetch_page_slice(
+            client,
+            start=start,
+            end=end,
+            column=_CNINFO_COLUMN,
+            label=label,
+            config=config,
+            metrics=metrics,
+            checkpoint=checkpoint,
+            checkpoint_path=path,
+            max_pages_per_slice=max_pages_per_slice,
+            refresh=refresh,
+            checkpoint_ttl_days=checkpoint_ttl_days,
+            source_revision=source_revision,
+            raw_archive=raw_archive,
+            run_id=run_id,
+            request_scope=request_scope,
+        )
         if metrics is not None:
             unique_ids = {
                 identity
@@ -1789,11 +1909,13 @@ def _replay_request_context(
         pagination = dict(raw_pagination) if isinstance(raw_pagination, Mapping) else {}
     request_column = str(request.get("column") or "").strip()
     archived_column = str(pagination.get("column") or "").strip()
-    category = str(request.get("category") or "").strip() or None
-    request_bucket = _bucket_column(request_column, category) if request_column else ""
+    request_filters = {
+        axis: value for axis in _PARTITION_AXES if (value := str(request.get(axis) or "").strip())
+    }
+    request_bucket = _bucket_column(request_column, request_filters) if request_column else ""
     if request_bucket and archived_column and request_bucket != archived_column:
         raise RawArchiveError(
-            "CNINFO archived request column/category disagrees with pagination metadata: "
+            "CNINFO archived request filters disagree with pagination metadata: "
             f"request={request_bucket!r}, pagination={archived_column!r}"
         )
     column = request_bucket or archived_column
@@ -1862,12 +1984,22 @@ def _replay_group_contains(
     parent: tuple[str, date, date],
     child: tuple[str, date, date],
 ) -> bool:
-    parent_column, parent_category = _bucket_parts(parent[0])
-    child_column, child_category = _bucket_parts(child[0])
+    parent_column, parent_filters = _bucket_parts(parent[0])
+    child_column, child_filters = _bucket_parts(child[0])
     if parent_column != child_column:
         return False
-    if parent_category is None and child_category in _CNINFO_CATEGORIES:
-        return parent[1:] == child[1:]
+    axis = _partition_axis(parent_filters, child_filters)
+    if axis is not None and child_filters.get(axis) is not None:
+        cover = next(
+            (
+                values
+                for candidate_axis, values in _partition_candidates(parent_filters)
+                if candidate_axis == axis
+            ),
+            (),
+        )
+        if child_filters[axis] in cover:
+            return parent[1:] == child[1:]
     return (
         parent[0] == child[0]
         and parent[1] <= child[1]
@@ -2071,19 +2203,33 @@ def _replay_group_rows(
         if split:
             if not children:
                 raise RawArchiveError(f"CNINFO archived slice cannot replay split: {key!r}")
-            category_children = [
-                child for child in children if _bucket_parts(child[0])[1] is not None
+            parent_filters = _bucket_parts(key[0])[1]
+            partition_children = [
+                child for child in children if _bucket_parts(child[0])[1] != parent_filters
             ]
-            if category_children:
-                categories = {_bucket_parts(child[0])[1] for child in category_children}
-                if len(category_children) != len(children) or categories != set(_CNINFO_CATEGORIES):
+            if partition_children:
+                axes = {
+                    _partition_axis(parent_filters, _bucket_parts(child[0])[1])
+                    for child in partition_children
+                }
+                axis = axes.pop() if len(axes) == 1 else None
+                cover = next(
+                    (
+                        values
+                        for candidate_axis, values in _partition_candidates(parent_filters)
+                        if candidate_axis == axis
+                    ),
+                    (),
+                )
+                values = {_bucket_parts(child[0])[1].get(axis) for child in partition_children}
+                if len(partition_children) != len(children) or values != set(cover):
                     raise RawArchiveError(
-                        "CNINFO archived category children are incomplete after the "
+                        "CNINFO archived partition children are incomplete after the "
                         f"control row count does not match its total: {key!r}"
                     )
                 if preflight_authoritative_total is None:
                     raise RawArchiveError(
-                        "CNINFO archived category split lacks authoritative "
+                        "CNINFO archived partition split lacks authoritative "
                         f"totalRecordNum: {key!r}"
                     )
                 control_identities: set[str] = set()
@@ -2104,7 +2250,7 @@ def _replay_group_rows(
                             )
                         control_identities.add(str(control_identity))
                 bucket_rows: list[dict] = []
-                for child in category_children:
+                for child in partition_children:
                     bucket_rows.extend(
                         _replay_group_rows(
                             child,
@@ -2116,12 +2262,13 @@ def _replay_group_rows(
                         )
                     )
                 try:
-                    return _reconcile_category_rows(
+                    return _reconcile_partition_rows(
                         bucket_rows,
                         expected_total=preflight_authoritative_total,
                         label="archived announcement",
-                        column=_bucket_parts(key[0])[0],
+                        column=key[0],
                         day=key[1],
+                        axis=str(axis),
                         required_identities=control_identities,
                     )
                 except RuntimeError as exc:
@@ -2363,28 +2510,11 @@ def replay_cninfo_rows(
                 active=set(),
             )
         )
-    if selected_invocation:
-        root_columns = {_bucket_parts(root[0])[0] for root in roots}
-        missing_columns = {"szse", "sse"} - root_columns
-        has_complete_category_parent = any(
-            {
-                _bucket_parts(child[0])[1]
-                for child in groups
-                if _replay_group_contains(parent, child) and _bucket_parts(child[0])[1] is not None
-            }
-            == set(_CNINFO_CATEGORIES)
-            for parent in groups
-            if _bucket_parts(parent[0])[1] is None
-        )
-        if has_complete_category_parent:
-            # The reconciled category walk is all-market; the endpoint's sse
-            # and szse column values are aliases, not independent exchanges.
-            missing_columns.clear()
-        if missing_columns:
-            raise RawArchiveError(
-                "CNINFO latest archived invocation is missing exchange column(s): "
-                + ", ".join(sorted(missing_columns))
-            )
+    if selected_invocation and not roots:
+        # Every column value this endpoint accepts returns the same all-market
+        # result, so there is no second exchange an archive could be missing —
+        # only an archive with no replayable root at all.
+        raise RawArchiveError("CNINFO latest archived invocation has no replayable root slice")
     return rows
 
 
@@ -2399,7 +2529,7 @@ def _announcement_rows_to_frame(rows: list[dict], *, start: date, end: date) -> 
         if start == end:
             # Preserve the public single-day contract and its useful error
             # wording for callers/tests that use the legacy API.
-            _validate_source_date(item, start, column="szse/sse")
+            _validate_source_date(item, start, column=_CNINFO_COLUMN)
         try:
             source_date = _source_date(item)
         except ValueError as exc:

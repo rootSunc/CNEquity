@@ -73,11 +73,9 @@ def _row(identifier: str, title: str = "公告", day: str = "2024-01-01"):
 def test_each_cninfo_http_page_archives_exact_wire_and_transport_metadata(tmp_path):
     first = {"announcements": [_row("a", "v1")], "totalpages": 2, "hasMore": True}
     second = {"announcements": [_row("a", "v2")], "totalpages": 2, "hasMore": False}
-    empty = {"announcements": [], "totalpages": 0, "hasMore": False}
     pages = {
         ("szse", "2024-01-01~2024-01-01", 1): _Response(first, b'{"wire":"page-1"}'),
         ("szse", "2024-01-01~2024-01-01", 2): _Response(second, b'{"wire":"page-2"}'),
-        ("sse", "2024-01-01~2024-01-01", 1): _Response(empty, b'{"wire":"empty"}'),
     }
     config = _config(tmp_path)
     client = _Client(pages)
@@ -86,7 +84,7 @@ def test_each_cninfo_http_page_archives_exact_wire_and_transport_metadata(tmp_pa
     records = RawPayloadArchive(config.meta_root).records("announcement_index")
 
     assert frame["title"].to_list() == ["v2"]
-    assert len(records) == len(client.calls) == 3
+    assert len(records) == len(client.calls) == 2
     by_page = {
         record.request_params["pageNum"]: record
         for record in records
@@ -100,20 +98,23 @@ def test_each_cninfo_http_page_archives_exact_wire_and_transport_metadata(tmp_pa
     assert "set-cookie" not in metadata
 
 
-def test_dense_day_category_archive_replays_only_with_complete_reconciliation(
+def test_dense_day_partition_archive_replays_only_with_complete_reconciliation(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    monkeypatch.setattr(announcements, "_CNINFO_MARKET_PLATES", ("sz", "sh"))
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {})
+    monkeypatch.setattr(announcements, "_CNINFO_TRADES", ())
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ())
     target = date(2024, 1, 3)
 
-    class CategoryClient:
+    class PlateClient:
         def __init__(self):
             self.calls: list[dict] = []
 
         def post(self, _url, data):
             self.calls.append(dict(data))
-            category = data["category"]
-            if not category:
+            plate = data["plate"]
+            if not plate:
                 return _Response(
                     {
                         "announcements": [_row("a", day=target.isoformat())],
@@ -122,7 +123,7 @@ def test_dense_day_category_archive_replays_only_with_complete_reconciliation(
                         "hasMore": True,
                     }
                 )
-            identifier = {"cat-a": "a", "cat-b": "b"}[category]
+            identifier = {"sz": "a", "sh": "b"}[plate]
             return _Response(
                 {
                     "announcements": [_row(identifier, day=target.isoformat())],
@@ -133,7 +134,7 @@ def test_dense_day_category_archive_replays_only_with_complete_reconciliation(
             )
 
     config = _config(tmp_path)
-    live = fetch_announcement_index_range(target, client=CategoryClient(), config=config)
+    live = fetch_announcement_index_range(target, client=PlateClient(), config=config)
     archive = RawPayloadArchive(config.meta_root)
     records = archive.records("announcement_index")
     replayed = replay_announcement_index_range(archive, target)
@@ -141,16 +142,16 @@ def test_dense_day_category_archive_replays_only_with_complete_reconciliation(
     assert set(live["announcement_id"].to_list()) == {"a", "b"}
     assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
     assert {
-        record.pagination["column"] for record in records if record.request_params.get("category")
-    } == {"szse|category=cat-a", "szse|category=cat-b"}
+        record.pagination["column"] for record in records if record.request_params.get("plate")
+    } == {"szse|plate=sz", "szse|plate=sh"}
 
-    incomplete = [record for record in records if record.request_params.get("category") != "cat-b"]
-    with pytest.raises(RawArchiveError, match="category children are incomplete"):
+    incomplete = [record for record in records if record.request_params.get("plate") != "sh"]
+    with pytest.raises(RawArchiveError, match="partition children are incomplete"):
         replay_announcement_index_range(archive, target, records=incomplete)
 
-    cat_b = next(record for record in records if record.request_params.get("category") == "cat-b")
-    cat_b.request_params["category"] = "cat-a"
-    with pytest.raises(RawArchiveError, match="column/category disagrees"):
+    sh = next(record for record in records if record.request_params.get("plate") == "sh")
+    sh.request_params["plate"] = "sz"
+    with pytest.raises(RawArchiveError, match="request filters disagree"):
         replay_announcement_index_range(archive, target, records=records)
 
 
@@ -278,15 +279,18 @@ def test_broad_archive_replays_nested_dense_day_without_duplicate_exchange(monke
     assert {call["column"] for call in client.calls} == {"szse"}
 
 
-def test_category_partition_marker_does_not_leak_into_next_refresh(monkeypatch, tmp_path):
-    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+def test_partition_marker_does_not_leak_into_next_refresh(monkeypatch, tmp_path):
+    monkeypatch.setattr(announcements, "_CNINFO_MARKET_PLATES", ("sz", "sh"))
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {})
+    monkeypatch.setattr(announcements, "_CNINFO_TRADES", ())
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ())
     target = date(2024, 1, 5)
     checkpoint = tmp_path / "checkpoint.json"
     config = _config(tmp_path)
 
     class DenseClient:
         def post(self, _url, data):
-            if not data["category"]:
+            if not data["plate"]:
                 return _Response(
                     {
                         "announcements": [_row("a", day=target.isoformat())],
@@ -295,7 +299,7 @@ def test_category_partition_marker_does_not_leak_into_next_refresh(monkeypatch, 
                         "hasMore": True,
                     }
                 )
-            identifier = {"cat-a": "a", "cat-b": "b"}[data["category"]]
+            identifier = {"sz": "a", "sh": "b"}[data["plate"]]
             return _Response(
                 {
                     "announcements": [_row(identifier, day=target.isoformat())],
@@ -315,15 +319,6 @@ def test_category_partition_marker_does_not_leak_into_next_refresh(monkeypatch, 
 
         def post(self, _url, data):
             self.calls.append(dict(data))
-            if data["column"] == "sse":
-                return _Response(
-                    {
-                        "announcements": [],
-                        "totalRecordNum": 0,
-                        "totalpages": 0,
-                        "hasMore": False,
-                    }
-                )
             return _Response(
                 {
                     "announcements": [_row("fresh", day=target.isoformat())],
@@ -339,7 +334,8 @@ def test_category_partition_marker_does_not_leak_into_next_refresh(monkeypatch, 
     )
     replayed = replay_announcement_index_range(RawPayloadArchive(config.meta_root), target)
 
-    assert [call["column"] for call in ordinary.calls] == ["szse", "sse"]
+    assert [call["column"] for call in ordinary.calls] == ["szse"]
+    assert [call["plate"] for call in ordinary.calls] == [""]
     assert refreshed["announcement_id"].to_list() == ["fresh"]
     assert replayed["announcement_id"].to_list() == ["fresh"]
 
@@ -561,37 +557,46 @@ def test_same_run_retry_cannot_mix_new_parent_with_old_child(tmp_path, monkeypat
         )
 
 
-def test_same_run_retry_cannot_mix_new_szse_with_old_sse(tmp_path, monkeypatch):
+def test_same_run_retry_cannot_replay_a_half_written_invocation(tmp_path, monkeypatch):
+    """A newer capture that stopped mid-walk is not a usable replay source.
+
+    There is no second exchange column to lose any more — one walk answers the
+    whole market — so the way an invocation goes partial now is a page that
+    never came back. Replay must say so rather than quietly serving the page
+    it did get, or the previous run's rows.
+    """
     monkeypatch.setattr(announcements, "_POST_RETRIES", 1)
     config = _config(tmp_path)
-    old = _Client(
+    complete = _Client(
         {
             ("szse", "2024-01-01~2024-01-01", 1): _Response(
-                {"announcements": [_row("old-szse")], "hasMore": False}
+                {"announcements": [_row("old-1")], "totalpages": 2, "hasMore": True}
             ),
-            ("sse", "2024-01-01~2024-01-01", 1): _Response(
-                {"announcements": [_row("old-sse")], "hasMore": False}
+            ("szse", "2024-01-01~2024-01-01", 2): _Response(
+                {"announcements": [_row("old-2")], "totalpages": 2, "hasMore": False}
             ),
         }
     )
     fetch_announcement_index_range(
-        date(2024, 1, 1), client=old, config=config, run_id="same-column-run"
+        date(2024, 1, 1), client=complete, config=config, run_id="same-run"
     )
 
-    class InterruptedSse:
+    class InterruptedSecondPage:
         def post(self, _url, data):
-            if data["column"] == "szse":
-                return _Response({"announcements": [_row("new-szse")], "hasMore": False})
-            raise RuntimeError("sse interrupted before response")
+            if data["pageNum"] == 1:
+                return _Response(
+                    {"announcements": [_row("new-1")], "totalpages": 2, "hasMore": True}
+                )
+            raise RuntimeError("page 2 interrupted before response")
 
-    with pytest.raises(RuntimeError, match="sse interrupted"):
+    with pytest.raises(RuntimeError, match="page 2 interrupted"):
         fetch_announcement_index_range(
             date(2024, 1, 1),
-            client=InterruptedSse(),
+            client=InterruptedSecondPage(),
             config=config,
-            run_id="same-column-run",
+            run_id="same-run",
         )
-    with pytest.raises(RawArchiveError, match="missing exchange column.*sse"):
+    with pytest.raises(RawArchiveError):
         replay_announcement_index_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))
 
 
@@ -830,9 +835,9 @@ def test_checkpoint_cannot_reuse_rows_when_required_wire_archive_is_missing(tmp_
     fetch_announcement_index_range(
         date(2024, 1, 1), client=second, config=config, checkpoint_path=checkpoint, refresh=False
     )
-    # The active capture must cover both exchange columns; it cannot combine
-    # a surviving historic observation with the newly fetched page.
-    assert [call["pageNum"] for call in second.calls] == [1, 1]
+    # A checkpoint whose wire evidence is gone cannot be resumed from its
+    # normalized rows: the page is fetched again so the capture is complete.
+    assert [call["pageNum"] for call in second.calls] == [1]
 
 
 def test_replay_rejects_distinct_raw_rows_over_source_total(tmp_path):
@@ -978,7 +983,7 @@ def test_regulatory_pages_use_same_archive_and_replay_path(tmp_path):
     archive = RawPayloadArchive(config.meta_root)
     replayed = replay_regulatory_events_range(archive, date(2024, 1, 1))
     records = archive.records("regulatory_events")
-    assert len(records) == 2
+    assert len(records) == 1
     assert live.to_dicts() == replayed.to_dicts()
 
 
@@ -994,5 +999,5 @@ def test_regulatory_replay_rejects_archived_row_outside_requested_date(tmp_path)
         fetch_regulatory_events_range(
             date(2024, 1, 1), client=client, config=config, run_id="bad-date-run"
         )
-    with pytest.raises(RawArchiveError, match="after requested|missing exchange column"):
+    with pytest.raises(RawArchiveError, match="after requested|no replayable root"):
         replay_regulatory_events_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))

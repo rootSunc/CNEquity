@@ -79,19 +79,15 @@ def test_fetch_announcement_index_paginates_and_dedupes(monkeypatch):
                     "announcementTitle": "半年报(更正)",
                     "announcementType": "定期报告",
                     "adjunctUrl": "/a1b.pdf",
-                }
-            ],
-        ],
-        "sse": [
-            [
+                },
                 {
                     "secCode": "600519",
                     "announcementId": "B1",
                     "announcementTitle": "分红公告",
                     "announcementType": "分红送配",
                     "adjunctUrl": "/b1.pdf",
-                }
-            ]
+                },
+            ],
         ],
     }
     client = _FakeClient(pages)
@@ -101,7 +97,10 @@ def test_fetch_announcement_index_paginates_and_dedupes(monkeypatch):
     a1 = df.filter(df["symbol"] == "000001.SZ")
     assert a1["title"].to_list() == ["半年报(更正)"]
     assert set(df["symbol"].to_list()) == {"000001.SZ", "600519.SH"}
-    assert len(client.calls) == 3  # szse page1, szse page2, sse page1
+    # One walk, not one per exchange: `column` selects a site section, and
+    # every value of it answers with the same all-market result.
+    assert len(client.calls) == 2
+    assert {call["column"] for call in client.calls} == {"szse"}
 
 
 def test_cninfo_rejects_a_row_from_a_different_announcement_date():
@@ -324,7 +323,7 @@ def test_fetch_announcement_index_uses_rate_limiter_when_config_given():
 
     client = _FakeClient({"szse": [[]], "sse": [[]]})
     fetch_announcement_index(date(2024, 6, 28), client=client, config=_Cfg())
-    assert calls == ["cninfo", "cninfo"]
+    assert calls == ["cninfo"]
 
 
 class _OverrunClient:
@@ -366,7 +365,7 @@ class _OverrunClient:
 def test_fetch_announcement_index_stops_at_totalpages_even_when_hasmore_lies():
     client = _OverrunClient(total_pages=3)
     df = fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert client.calls == 4  # szse pages 1..3, then sse's single (empty) page
+    assert client.calls == 3  # pages 1..3
     assert df.height == 3
 
 
@@ -439,7 +438,7 @@ def test_cninfo_fetchers_continue_after_a_full_page_without_pagination_metadata(
     client = NoPaginationMetadataClient()
     df = fetch(date(2024, 1, 31), client=client)
     assert df.height == 31
-    assert client.calls == 3  # szse pages 1..2, then the empty sse page
+    assert client.calls == 2  # a short page ends the walk without metadata
 
 
 def test_fetch_announcement_index_rejects_empty_page_before_totalpages():
@@ -486,7 +485,7 @@ def test_fetch_announcement_index_uses_totalpages_when_hasmore_is_false():
 
     client = StaleHasMoreClient()
     df = fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert client.calls == 3
+    assert client.calls == 2
     assert set(df["announcement_id"].to_list()) == {"P1", "P2"}
 
 
@@ -494,7 +493,7 @@ def test_fetch_announcement_index_uses_totalpages_when_hasmore_is_false():
 def test_fetch_announcement_index_accepts_string_totalpages(total_pages):
     client = _OverrunClient(total_pages=3, reported_total_pages=total_pages)
     df = fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert client.calls == 4
+    assert client.calls == 3
     assert df.height == 3
 
 
@@ -522,7 +521,7 @@ def test_fetch_announcement_index_normalizes_string_hasmore():
         }
     )
     df = fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert len(client.calls) == 3
+    assert len(client.calls) == 2
     assert df.height == 1
 
 
@@ -531,7 +530,6 @@ def test_fetch_announcement_index_normalizes_string_hasmore():
     [
         ("totalpages", 1.5, "totalpages.*non-negative integer"),
         ("totalpages", True, "totalpages.*non-negative integer"),
-        ("totalpages", 0, "totalpages=0 but returned rows"),
         ("hasMore", "sometimes", "hasMore.*boolean"),
     ],
 )
@@ -572,3 +570,88 @@ def test_fetch_announcement_index_raises_runtime_error_on_transport_failure(monk
 
     with pytest.raises(RuntimeError, match="CNINFO announcement pagination failed"):
         fetch_announcement_index(date(2024, 6, 28), client=_BoomClient())
+
+
+def test_totalpages_zero_is_a_short_page_not_a_contradiction():
+    """CNINFO reports floor(records / 30), so a small bucket says zero pages.
+
+    Measured on the live endpoint: a `category` bucket holding 25 rows answers
+    `totalpages=0`, and 2026-01-01's 1375 rows answer `totalpages=45` with the
+    last 25 on page 46. Treating the count as a page total drops the tail of
+    almost every day; treating zero as impossible fails every small bucket.
+    """
+
+    class ShortPageClient:
+        def __init__(self):
+            self.calls = 0
+
+        def post(self, url, data):
+            self.calls += 1
+            rows = [
+                {
+                    "secCode": "000001",
+                    "announcementId": f"A{index}",
+                    "announcementTitle": "公告",
+                }
+                for index in range(25)
+            ]
+            return _FakeResponse(
+                {
+                    "announcements": rows if data["pageNum"] == 1 else [],
+                    "totalRecordNum": 25,
+                    "totalpages": 0,
+                    "hasMore": False,
+                }
+            )
+
+        def close(self):
+            pass
+
+    client = ShortPageClient()
+    df = fetch_announcement_index(date(2024, 1, 31), client=client)
+    assert df.height == 25
+    assert client.calls == 1
+
+
+def test_a_partial_last_page_is_still_read():
+    """The walk follows the record total past the reported page count."""
+
+    class UnderReportedPagesClient:
+        def __init__(self):
+            self.calls = 0
+
+        def post(self, url, data):
+            self.calls += 1
+            page = data["pageNum"]
+            if page == 1:
+                rows = [
+                    {
+                        "secCode": "000001",
+                        "announcementId": f"A{index}",
+                        "announcementTitle": "公告",
+                    }
+                    for index in range(30)
+                ]
+            elif page == 2:
+                rows = [
+                    {"secCode": "000001", "announcementId": "tail", "announcementTitle": "公告"}
+                ]
+            else:
+                rows = []
+            return _FakeResponse(
+                {
+                    "announcements": rows,
+                    "totalRecordNum": 31,
+                    "totalpages": 1,  # floor(31 / 30)
+                    "hasMore": page == 1,
+                }
+            )
+
+        def close(self):
+            pass
+
+    client = UnderReportedPagesClient()
+    df = fetch_announcement_index(date(2024, 1, 31), client=client)
+    assert client.calls == 2
+    assert df.height == 31
+    assert "tail" in df["announcement_id"].to_list()

@@ -174,7 +174,7 @@ def test_range_checkpoint_resumes_at_failed_page(monkeypatch, tmp_path):
         date(2024, 3, 1), date(2024, 3, 1), client=second, checkpoint_path=checkpoint
     )
     assert set(frame["announcement_id"]) == {"p1", "p2"}
-    assert [call["pageNum"] for call in second.calls] == [2, 1]
+    assert [call["pageNum"] for call in second.calls] == [2]
 
 
 def test_cninfo_total_is_raw_rows_while_final_frame_uses_unique_keys(tmp_path):
@@ -278,7 +278,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
         source_revision="provider-v1",
     )
     assert first_frame["title"].to_list() == ["v1"]
-    assert len(first.calls) == 2
+    assert len(first.calls) == 1
 
     # Refresh is the safe default: a completed same-date page is read again,
     # so a corrected announcement replaces the old payload.
@@ -290,7 +290,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
         source_revision="provider-v1",
     )
     assert refreshed_frame["title"].to_list() == ["v2"]
-    assert len(refreshed.calls) == 2
+    assert len(refreshed.calls) == 1
 
     class NoRequests(RevisingClient):
         def post(self, _url, data):
@@ -319,7 +319,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
         source_revision="provider-v2",
     )
     assert revised_frame["title"].to_list() == ["v3"]
-    assert len(revised_source.calls) == 2
+    assert len(revised_source.calls) == 1
 
     saved = json.loads(checkpoint.read_text())
     old = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
@@ -336,7 +336,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
         source_revision="provider-v2",
     )
     assert expired_frame["title"].to_list() == ["v4"]
-    assert len(expired.calls) == 2
+    assert len(expired.calls) == 1
 
     invalidate_cninfo_checkpoint(checkpoint)
     assert not checkpoint.exists()
@@ -411,11 +411,25 @@ def test_single_day_repeated_page_101_is_terminal_but_resumable(tmp_path):
         refresh=False,
     )
     assert frame.height == 101
-    assert [call["pageNum"] for call in second.calls] == [101, 1]
+    assert [call["pageNum"] for call in second.calls] == [101]
 
 
-def test_dense_single_day_uses_categories_and_reconciles_exact_total(monkeypatch, tmp_path):
-    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+def _only_plate_partitions(monkeypatch, values=("sz", "sh")):
+    """Narrow the ladder to one cheap axis so a fake day stays readable."""
+    monkeypatch.setattr(announcements, "_CNINFO_MARKET_PLATES", values)
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {})
+    monkeypatch.setattr(announcements, "_CNINFO_TRADES", ())
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ())
+
+
+def test_dense_single_day_splits_by_plate_and_reconciles_exact_total(monkeypatch, tmp_path):
+    """A day past the server's 100-page cap is read through a partition.
+
+    The unfiltered query cannot return more than 3000 rows, so the walk is
+    only allowed to call the day complete when the buckets it read instead
+    account for every row the source itself says exists.
+    """
+    _only_plate_partitions(monkeypatch)
     target = date(2024, 5, 7)
     checkpoint = tmp_path / "cninfo.json"
 
@@ -425,8 +439,8 @@ def test_dense_single_day_uses_categories_and_reconciles_exact_total(monkeypatch
 
         def post(self, _url, data):
             self.calls.append(dict(data))
-            category = data["category"]
-            if not category:
+            plate = data["plate"]
+            if not plate:
                 return _Response(
                     {
                         "announcements": [_row("a", target.isoformat())],
@@ -435,7 +449,7 @@ def test_dense_single_day_uses_categories_and_reconciles_exact_total(monkeypatch
                         "hasMore": True,
                     }
                 )
-            identifier = {"cat-a": "a", "cat-b": "b"}[category]
+            identifier = {"sz": "a", "sh": "b"}[plate]
             return _Response(
                 {
                     "announcements": [_row(identifier, target.isoformat())],
@@ -455,37 +469,89 @@ def test_dense_single_day_uses_categories_and_reconciles_exact_total(monkeypatch
     )
 
     assert set(frame["announcement_id"].to_list()) == {"a", "b"}
-    assert [call["category"] for call in client.calls] == ["", "cat-a", "cat-b"]
-    assert metrics["category_partitions"] == 1
-    assert metrics["category_buckets"] == 2
+    assert [call["plate"] for call in client.calls] == ["", "sz", "sh"]
+    assert metrics["partition_splits"] == 1
+    assert metrics["partition_buckets"] == 2
+    assert metrics["partition_axes"] == ["plate"]
     saved = json.loads(checkpoint.read_text(encoding="utf-8"))
     parent = saved["slices"][f"szse:{target}:{target}"]
-    assert "category_partitioned" not in saved
     assert parent["status"] == "complete"
-    assert parent["partition_strategy"] == "category"
-    assert saved["slices"][f"szse|category=cat-a:{target}:{target}"]["status"] == "complete"
+    assert parent["partition_strategy"] == "plate"
+    assert saved["slices"][f"szse|plate=sz:{target}:{target}"]["status"] == "complete"
 
 
-def test_dense_single_day_rejects_incomplete_category_coverage(monkeypatch, tmp_path):
+def test_dense_single_day_falls_through_to_the_next_axis(monkeypatch, tmp_path):
+    """A cover that cannot prove coverage is skipped, not published."""
+    monkeypatch.setattr(announcements, "_CNINFO_MARKET_PLATES", ("sz",))
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {})
+    monkeypatch.setattr(announcements, "_CNINFO_TRADES", ())
     monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    target = date(2024, 5, 10)
+
+    class Client:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def post(self, _url, data):
+            self.calls.append(dict(data))
+            if data["plate"]:
+                # Half the day: this cover is real but incomplete.
+                return _Response(
+                    {
+                        "announcements": [_row("a", target.isoformat())],
+                        "totalRecordNum": 1,
+                        "totalpages": 1,
+                        "hasMore": False,
+                    }
+                )
+            if data["category"]:
+                identifier = {"cat-a": "a", "cat-b": "b"}[data["category"]]
+                return _Response(
+                    {
+                        "announcements": [_row(identifier, target.isoformat())],
+                        "totalRecordNum": 1,
+                        "totalpages": 1,
+                        "hasMore": False,
+                    }
+                )
+            return _Response(
+                {
+                    "announcements": [_row("a", target.isoformat())],
+                    "totalRecordNum": 2,
+                    "totalpages": 101,
+                    "hasMore": True,
+                }
+            )
+
+    client = Client()
+    metrics: dict = {}
+    frame = fetch_announcement_index_range(target, client=client, metrics=metrics)
+
+    assert set(frame["announcement_id"].to_list()) == {"a", "b"}
+    assert metrics["partition_axes"] == ["category"]
+    assert [entry["axis"] for entry in metrics["partition_rejected"]] == ["plate"]
+
+
+def test_dense_single_day_rejects_incomplete_coverage(monkeypatch, tmp_path):
+    _only_plate_partitions(monkeypatch)
     target = date(2024, 5, 8)
     checkpoint = tmp_path / "cninfo.json"
 
     class Client:
         def post(self, _url, data):
-            if not data["category"]:
+            if not data["plate"]:
                 return _Response(
                     {
                         "announcements": [_row("a", target.isoformat())],
                         "totalRecordNum": 3,
                         # CNINFO can cap its own page count.  The authoritative
                         # record total is what proves this terminal page is
-                        # still incomplete and triggers category recovery.
+                        # still incomplete and triggers partition recovery.
                         "totalpages": 1,
                         "hasMore": False,
                     }
                 )
-            identifier = {"cat-a": "a", "cat-b": "b"}[data["category"]]
+            identifier = {"sz": "a", "sh": "b"}[data["plate"]]
             return _Response(
                 {
                     "announcements": [_row(identifier, target.isoformat())],
@@ -495,7 +561,7 @@ def test_dense_single_day_rejects_incomplete_category_coverage(monkeypatch, tmp_
                 }
             )
 
-    with pytest.raises(RuntimeError, match="category coverage.*2.*unfiltered total is 3"):
+    with pytest.raises(RuntimeError, match="plate coverage.*2.*unfiltered total is 3"):
         fetch_announcement_index_range(target, client=Client(), checkpoint_path=checkpoint)
 
     saved = json.loads(checkpoint.read_text(encoding="utf-8"))
@@ -505,12 +571,13 @@ def test_dense_single_day_rejects_incomplete_category_coverage(monkeypatch, tmp_
 
 
 def test_dense_single_day_rejects_same_count_identity_replacement(monkeypatch):
-    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ("cat-a", "cat-b"))
+    """Matching the total is not enough: the control's rows must still be there."""
+    _only_plate_partitions(monkeypatch)
     target = date(2024, 5, 9)
 
     class Client:
         def post(self, _url, data):
-            if not data["category"]:
+            if not data["plate"]:
                 return _Response(
                     {
                         "announcements": [_row("a", target.isoformat())],
@@ -519,7 +586,7 @@ def test_dense_single_day_rejects_same_count_identity_replacement(monkeypatch):
                         "hasMore": True,
                     }
                 )
-            identifier = {"cat-a": "b", "cat-b": "c"}[data["category"]]
+            identifier = {"sz": "b", "sh": "c"}[data["plate"]]
             return _Response(
                 {
                     "announcements": [_row(identifier, target.isoformat())],
@@ -584,8 +651,12 @@ def test_failed_contract_checkpoint_restarts_at_page_one(tmp_path):
 
     class BadTotal:
         def post(self, _url, data):
-            if data["column"] == "sse":
-                return _Response({"announcements": [], "total": 0, "totalpages": 0})
+            # Claims two records and then runs out of pages: a whole-slice
+            # contract failure, not a resumable page failure.
+            if data["pageNum"] > 1:
+                return _Response(
+                    {"announcements": [], "total": 2, "totalpages": 1, "hasMore": False}
+                )
             return _Response(
                 {
                     "announcements": [_row("old", target.isoformat())],
@@ -608,8 +679,6 @@ def test_failed_contract_checkpoint_restarts_at_page_one(tmp_path):
 
         def post(self, _url, data):
             self.calls.append(dict(data))
-            if data["column"] == "sse":
-                return _Response({"announcements": [], "total": 0, "totalpages": 0})
             return _Response(
                 {
                     "announcements": [
@@ -803,3 +872,91 @@ def test_failed_later_cninfo_slice_persists_cumulative_request_retries(tmp_path)
     performance = manifest.get_run_metadata(run_id)["performance"]["announcement_index"]
     assert performance["retries"] == 5
     assert performance["slice_count"] == 2
+
+
+def test_the_partition_ladder_narrows_one_axis_at_a_time():
+    """The order is the point: cheap exact covers before expensive loose ones."""
+    from cnequity.adapters.cninfo.announcements import _partition_candidates
+
+    unfiltered = dict(_partition_candidates({}))
+    assert list(unfiltered) == ["plate", "trade", "category"]
+    assert unfiltered["plate"] == announcements._CNINFO_MARKET_PLATES
+
+    # A market that is itself too dense splits again into its own boards.
+    market = dict(_partition_candidates({"plate": "sh"}))
+    assert market["plate"] == announcements._CNINFO_PLATE_BOARDS["sh"]
+
+    # A board has no further plate to try, and an axis already applied is not
+    # offered a second time.
+    board = _partition_candidates({"plate": "shmb", "trade": "制造业"})
+    assert [axis for axis, _ in board] == ["category"]
+    assert _partition_candidates({"plate": "shmb", "trade": "制造业", "category": "x"}) == ()
+
+
+def test_a_dense_market_splits_again_into_its_boards(monkeypatch, tmp_path):
+    """One cover is not always enough: 2026-04-30's sh needed shmb/shkcp."""
+    monkeypatch.setattr(announcements, "_CNINFO_MARKET_PLATES", ("sh",))
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {"sh": ("shmb", "shkcp")})
+    monkeypatch.setattr(announcements, "_CNINFO_TRADES", ())
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ())
+    target = date(2024, 5, 11)
+
+    class Client:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def post(self, _url, data):
+            self.calls.append(dict(data))
+            plate = data["plate"]
+            if plate in ("", "sh"):
+                # Both the day and the market exceed the server's page cap.
+                return _Response(
+                    {
+                        "announcements": [_row("a", target.isoformat())],
+                        "totalRecordNum": 2,
+                        "totalpages": 101,
+                        "hasMore": True,
+                    }
+                )
+            identifier = {"shmb": "a", "shkcp": "b"}[plate]
+            return _Response(
+                {
+                    "announcements": [_row(identifier, target.isoformat())],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    client = Client()
+    metrics: dict = {}
+    frame = fetch_announcement_index_range(target, client=client, metrics=metrics)
+
+    assert set(frame["announcement_id"].to_list()) == {"a", "b"}
+    assert [call["plate"] for call in client.calls] == ["", "sh", "shmb", "shkcp"]
+    assert metrics["partition_axes"] == ["plate", "plate"]
+
+
+def test_an_exhausted_ladder_fails_loud_rather_than_publishing_part_of_a_day(monkeypatch):
+    monkeypatch.setattr(announcements, "_CNINFO_MARKET_PLATES", ("sz",))
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {})
+    monkeypatch.setattr(announcements, "_CNINFO_TRADES", ())
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ())
+    target = date(2024, 5, 12)
+
+    class Client:
+        def post(self, _url, data):
+            return _Response(
+                {
+                    "announcements": [_row("a", target.isoformat())],
+                    "totalRecordNum": 2,
+                    "totalpages": 101,
+                    "hasMore": True,
+                }
+            )
+
+    # The one available cover reproduces the same over-cap answer, so nothing
+    # proves the day was read. A partial frame is never the answer here: the
+    # walk reports the cap it could not get under and leaves the day failed.
+    with pytest.raises(RuntimeError, match="exceeded 100 reported pages"):
+        fetch_announcement_index_range(target, client=Client())

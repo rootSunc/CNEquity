@@ -245,7 +245,7 @@ class _OverrunClient:
 def test_regulatory_stops_at_totalpages_even_when_hasmore_lies():
     client = _OverrunClient(total_pages=3)
     df = fetch_regulatory_events(date(2024, 1, 31), client=client)
-    assert client.calls == 4  # szse pages 1..3, then sse's single (empty) page
+    assert client.calls == 3  # pages 1..3, one walk
     assert df.height == 3
 
 
@@ -293,7 +293,7 @@ def test_regulatory_uses_totalpages_when_hasmore_is_false():
 
     client = StaleHasMoreClient()
     df = fetch_regulatory_events(date(2024, 1, 31), client=client)
-    assert client.calls == 3
+    assert client.calls == 2  # one walk, stopped by totalpages
     assert set(df["event_id"].to_list()) == {"reg-R1", "reg-R2"}
 
 
