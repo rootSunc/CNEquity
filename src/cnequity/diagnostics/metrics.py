@@ -28,6 +28,10 @@ COUNTER_KEYS = (
     "cache_hits",
     "fallback_requests",
     "retries",
+    # Explicit spelling for adapter/request retries. ``retries`` remains in
+    # the public payload for compatibility; the manifest stores this field on
+    # each batch separately from the orchestrator retry budget.
+    "request_retries",
     "failed_requests",
     "rows_read",
     "rows_written",
@@ -209,6 +213,14 @@ def stage_metrics(
                     item[key] = max(0, int(metrics[key] or 0))
                 except (TypeError, ValueError):
                     pass
+        # Existing adapters emit ``retries`` for request attempts. Preserve
+        # that contract while making the batch/manifest hand-off explicit for
+        # new callers. Do not infer retries from request counts or failures.
+        if "request_retries" not in metrics and "retries" in metrics:
+            try:
+                item["request_retries"] = max(0, int(metrics["retries"] or 0))
+            except (TypeError, ValueError):
+                pass
         if "peak_memory_bytes" in metrics:
             try:
                 item["peak_memory_bytes"] = max(0, int(metrics["peak_memory_bytes"] or 0))
@@ -290,6 +302,7 @@ def run_offline_benchmark(
             "requests": 0,
             "bytes_read": 0,
             "retries": 0,
+            "request_retries": 0,
             "failed_requests": 0,
         }
         active_lock = threading.Lock()
@@ -310,6 +323,7 @@ def run_offline_benchmark(
                         if should_retry:
                             with active_lock:
                                 counters["retries"] += 1
+                                counters["request_retries"] += 1
                                 counters["failed_requests"] += 1
                             attempt += 1
                             continue
@@ -353,6 +367,7 @@ def run_offline_benchmark(
         "bytes_read": sum(item["bytes_read"] for item in per_source.values()),
         "bytes_attempted": sum(item["bytes_attempted"] for item in per_source.values()),
         "retries": sum(item["retries"] for item in per_source.values()),
+        "request_retries": sum(item["request_retries"] for item in per_source.values()),
         "failed_requests": sum(item["failed_requests"] for item in per_source.values()),
         "elapsed_seconds": round(total_elapsed, 6),
         "request_seconds": round(sum(item["request_seconds"] for item in per_source.values()), 6),
@@ -482,6 +497,7 @@ def persist_offline_benchmark(manifest: Any, run_id: str, result: Mapping[str, A
             {
                 "requests": totals.get("requests", 0),
                 "retries": totals.get("retries", 0),
+                "request_retries": totals.get("request_retries", totals.get("retries", 0)),
                 "failed_requests": totals.get("failed_requests", 0),
                 "bytes_read": totals.get("bytes_read", 0),
                 "request_seconds": totals.get("request_seconds", 0.0),

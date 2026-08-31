@@ -372,6 +372,7 @@ def step_regulatory_events(config: Config, trade_date: date, run_id: str, contex
             fetch_regulatory_events_range,
             date_col="event_date",
             floor=date(2010, 1, 1),
+            batch_id=context.get("_batch_id"),
         )
     from cnequity.steps.events import _fetch_cninfo_single, _record_cninfo_metrics
 
@@ -400,6 +401,12 @@ def step_regulatory_events(config: Config, trade_date: date, run_id: str, contex
         ),
     )
     if len(metrics) > 1:
-        _record_cninfo_metrics(config, run_id, "regulatory_events", metrics)
+        _record_cninfo_metrics(
+            config,
+            run_id,
+            "regulatory_events",
+            metrics,
+            batch_id=context.get("_batch_id"),
+        )
     result["metrics"] = metrics
     return result

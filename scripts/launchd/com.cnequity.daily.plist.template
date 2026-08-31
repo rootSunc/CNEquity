@@ -29,14 +29,17 @@
   <key>RunAtLoad</key>
   <false/>
 
-  <!-- This Mac is the gate/data host, not the mainland EastMoney extension
-       host.  EquityLab's catchup adds the local breadth pass when the daily
-       gate needs it; keeping the scheduled run on core avoids spending hours
-       retrying capital/research endpoints that require a mainland egress. -->
+  <!-- Run every configured daily group.  Source-specific soft failures are
+       reported by the pipeline, but a core-only plist silently left the
+       capital/signals/fundamentals/macro/research groups behind. -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>CNE_GROUPS</key>
-    <string>core</string>
+    <string>core capital signals fundamentals macro_risk research</string>
+    <!-- The delayed stale pass has its own agent below.  Keep this explicit so
+         an upgraded install cannot accidentally reintroduce a 30-minute wait. -->
+    <key>CNE_STALE_RETRY</key>
+    <string>0</string>
     <key>CNE_SOURCE_VANTAGE</key>
     <string>__SOURCE_VANTAGE__</string>
   </dict>

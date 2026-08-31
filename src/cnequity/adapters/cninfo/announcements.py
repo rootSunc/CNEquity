@@ -226,6 +226,11 @@ def _validate_source_date_range(item: dict, start: date, end: date, *, column: s
             None,
         )
         raise RuntimeError(f"CNINFO {column} row has invalid announcement date {raw!r}") from exc
+    if source_date is None and start != end:
+        raise RuntimeError(
+            f"CNINFO {column} row is missing announcement date in broad range "
+            f"{start.isoformat()}..{end.isoformat()}"
+        )
     if source_date is not None and not (start <= source_date <= end):
         raise RuntimeError(
             f"CNINFO {column} row date {source_date.isoformat()} is outside "
@@ -415,7 +420,10 @@ def _checkpoint_running_is_fresh(
     if ttl_days is None:
         return True
     raw_timestamp = (
-        record.get("updated_at") or record.get("started_at") or (checkpoint or {}).get("updated_at")
+        record.get("failed_at")
+        or record.get("updated_at")
+        or record.get("started_at")
+        or (checkpoint or {}).get("updated_at")
     )
     if not isinstance(raw_timestamp, str):
         return False
@@ -508,6 +516,10 @@ def _cninfo_archive(
         capture_scope=scope,
         capture_nonce=nonce,
     )
+    # Persisted archive lineage is deliberately distinct from the ephemeral
+    # evidence nonce. It lets offline replay keep both exchange columns and
+    # every recursive slice inside one top-level fetch invocation.
+    archive._invocation_id = uuid.uuid4().hex
     return archive if archive.enabled else None
 
 
@@ -683,6 +695,9 @@ def _archive_cninfo_response(
         end=end,
         capture_id=capture_id,
     )
+    invocation_id = str(getattr(archive, "_invocation_id", "") or "")
+    if invocation_id:
+        pagination["invocation_id"] = invocation_id
     pagination["attempt"] = attempt
     http_metadata = _response_http_metadata(
         response,
@@ -860,6 +875,7 @@ def _fetch_page_slice(
         and not refresh
         and _checkpoint_completed_is_fresh(record, ttl_days=checkpoint_ttl_days)
         and _checkpoint_archive_reusable(record, raw_archive)
+        and raw_archive is None
     ):
         rows = record.get("rows", [])
         if isinstance(rows, list):
@@ -892,12 +908,60 @@ def _fetch_page_slice(
             }
         )
 
+    if (
+        isinstance(record, dict)
+        and record.get("status") == "failed"
+        and not _checkpoint_running_is_fresh(
+            record,
+            checkpoint=state,
+            ttl_days=checkpoint_ttl_days,
+        )
+    ):
+        # Failed slices obey the same TTL as interrupted running slices. Once
+        # expired, their accepted pages may not be mixed with a corrected
+        # provider response.
+        record.update(
+            {
+                "status": "running",
+                "next_page": 1,
+                "pages": 0,
+                "rows": [],
+                "unique_keys": [],
+                "page_signatures": [],
+                "expected_total": None,
+                "reported_pages": None,
+                "completed_at": None,
+                "raw_row_count": 0,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "source_revision": source_revision,
+                "raw_archives": [],
+                "capture_id": uuid.uuid4().hex,
+            }
+        )
+        record.pop("failure_reason", None)
+        record.pop("failure_page", None)
+        record.pop("failed_at", None)
+        _write_checkpoint(checkpoint_path, state)
+    elif isinstance(record, dict) and record.get("status") == "failed":
+        # A single-day slice cannot be made safer by another date split, but
+        # it can still be retried after the provider recovers.  Keep the
+        # accepted rows/page boundary and make the transition explicit so a
+        # checkpoint reader never mistakes this terminal observation for a
+        # completed slice.  The next invocation resumes at ``next_page``.
+        record["status"] = "running"
+        record.pop("failure_reason", None)
+        record.pop("failure_page", None)
+        record.pop("failed_at", None)
+        _write_checkpoint(checkpoint_path, state)
+
     # A previously split parent can be resumed without requesting its broad
     # page again. Child records carry their own progress/checkpoints.
     if isinstance(record, dict) and record.get("status") == "split":
-        if raw_archive is not None and not _checkpoint_archive_reusable(record, raw_archive):
-            # An old split checkpoint without page evidence must be rebuilt at
-            # the parent so the split-triggering response is archived too.
+        if raw_archive is not None:
+            # A new archive invocation has a new evidence lineage. Rebuild the
+            # parent and all descendants in this capture rather than combining
+            # an old split-triggering page with newly resumed children.
             record.update(
                 {
                     "status": "running",
@@ -987,7 +1051,10 @@ def _fetch_page_slice(
         # A running checkpoint from before per-page archival must not resume
         # from its normalized rows when raw evidence is required.  Restarting
         # page 1 re-establishes a complete audit trail.
-        if raw_archive is not None and not _checkpoint_archive_reusable(record, raw_archive):
+        if raw_archive is not None:
+            # The new invocation has a new evidence nonce. Historic sidecars
+            # remain valid audit records, but cannot prove rows published by
+            # this capture, so rebuild a complete active receipt from page 1.
             record.update(
                 {
                     "status": "running",
@@ -1018,6 +1085,39 @@ def _fetch_page_slice(
 
     def split_or_raise(reason: str) -> list[dict]:
         if start >= end:
+            # A repeated page or a max-page boundary on one calendar day has
+            # no narrower date interval to fall back to. Persist the exact
+            # resumable boundary and a terminal reason before raising: this is
+            # an operator-visible failed slice, never a silently truncated
+            # success, and a later run can retry the same page.
+            # Only failures at the current, unaccepted page can safely resume
+            # there. Whole-slice contract failures (row-count mismatch or a
+            # page cap) invalidate already accepted rows and must restart at
+            # page 1 after the provider/configuration is corrected.
+            resume_current_page = (
+                "repeated page" in reason
+                or "no unique-key progress" in reason
+                or "empty page before the reported end" in reason
+            )
+            record["status"] = "failed"
+            record["failure_reason"] = reason
+            record["failure_page"] = page if resume_current_page else 1
+            record["failed_at"] = datetime.now(timezone.utc).isoformat()
+            record["rows"] = raw_rows if resume_current_page else []
+            record["next_page"] = (
+                max(1, int(record.get("next_page", page))) if resume_current_page else 1
+            )
+            record["pages"] = (
+                max(0, int(record.get("pages", page - 1))) if resume_current_page else 0
+            )
+            record["unique_keys"] = sorted(seen_keys) if resume_current_page else []
+            record["page_signatures"] = sorted(seen_signatures) if resume_current_page else []
+            record["expected_total"] = expected_total if resume_current_page else None
+            record["reported_pages"] = reported_pages if resume_current_page else None
+            record["raw_row_count"] = len(raw_rows) if resume_current_page else 0
+            _write_checkpoint(checkpoint_path, state)
+            if metrics is not None:
+                metrics["terminal_failures"] = int(metrics.get("terminal_failures", 0)) + 1
             raise RuntimeError(
                 f"CNINFO {label} pagination failed for {column} page {page}: {reason}"
             )
@@ -1171,7 +1271,11 @@ def _fetch_page_slice(
             # for a broad range. Transport failures remain fail-loud and keep
             # the current page in the checkpoint for a later resume.
             message = str(exc)
-            if "repeated page" in message or "no unique-key progress" in message:
+            if (
+                "repeated page" in message
+                or "no unique-key progress" in message
+                or (start < end and ("announcement date" in message or "row date" in message))
+            ):
                 return split_or_raise(message)
             record["rows"] = raw_rows
             record["next_page"] = page
@@ -1346,6 +1450,7 @@ def fetch_cninfo_rows(
             raw_archive._capture_source = "cninfo"
             raw_archive._capture_scope = request_scope
             raw_archive._capture_nonce = nonce
+            raw_archive._invocation_id = uuid.uuid4().hex
     if raw_archive is not None and not raw_archive.enabled:
         raw_archive = None
     if metrics is not None:
@@ -1491,6 +1596,8 @@ def _replay_group_rows(
     *,
     max_pages_per_slice: int,
     active: set[tuple[str, date, date]],
+    lineage: tuple[str, str] | None = None,
+    captured_after: str | None = None,
 ) -> list[dict]:
     """Replay one archived slice using the live walk's split/stop rules."""
     if key in active:
@@ -1498,8 +1605,40 @@ def _replay_group_rows(
     active.add(key)
     try:
         pages = groups.get(key, [])
+        if lineage is not None:
+            run_id, request_scope = lineage
+            pages = [
+                item
+                for item in pages
+                if str(item.get("run_id", "")) == run_id
+                and str(item.get("request_scope", "")) == request_scope
+                and (captured_after is None or str(item.get("captured_at", "")) >= captured_after)
+            ]
         if not pages:
             raise RawArchiveError(f"CNINFO archived slice has no pages: {key!r}")
+        captures: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for item in pages:
+            captures.setdefault(
+                (str(item.get("run_id", "")), str(item.get("capture_id", ""))), []
+            ).append(item)
+        capture_candidates = [
+            items for items in captures.values() if any(int(item["page"]) == 1 for item in items)
+        ]
+        if capture_candidates:
+            # Do not synthesize a source observation by combining pages from
+            # different runs/captures. Prefer the newest capture that starts
+            # at page 1. Its pagination contract is validated below; if that
+            # newest observation is interrupted, replay fails closed instead
+            # of silently falling back to older source truth.
+            pages = max(
+                capture_candidates,
+                key=lambda items: max(str(item.get("captured_at", "")) for item in items),
+            )
+        selected_lineage = (
+            str(pages[0].get("run_id", "")),
+            str(pages[0].get("request_scope", "")),
+        )
+        selected_capture_end = max(str(item.get("captured_at", "")) for item in pages)
         by_page: dict[int, dict[str, Any]] = {}
         for item in pages:
             page = int(item["page"])
@@ -1508,14 +1647,46 @@ def _replay_group_rows(
             # last successfully parsed attempt is what post_with_retry would
             # have returned; retain all page observations in the archive, but
             # replay only that selected attempt.
-            if previous is None or int(item.get("attempt", 0)) >= int(previous.get("attempt", 0)):
+            if previous is None or (
+                int(item.get("attempt", 0)),
+                str(item.get("captured_at", "")),
+            ) >= (int(previous.get("attempt", 0)), str(previous.get("captured_at", ""))):
                 by_page[page] = item
         ordered = [by_page[page] for page in sorted(by_page)]
+        for item in ordered:
+            status = item.get("response_status")
+            if status is not None:
+                try:
+                    status_int = int(status)
+                except (TypeError, ValueError) as exc:
+                    raise RawArchiveError(
+                        f"CNINFO archived response status is invalid: {key!r}"
+                    ) from exc
+                if not 200 <= status_int < 300:
+                    raise RawArchiveError(
+                        f"CNINFO latest archived capture has HTTP status {status_int}: {key!r}"
+                    )
+            if item["pagination"].get("json_parsed") is False:
+                raise RawArchiveError(
+                    f"CNINFO latest archived capture has an unparsed JSON page: {key!r}"
+                )
+            response = _replay_response(store=item["store"], record=item["record"])
+            if response is None:
+                raise RawArchiveError(
+                    f"CNINFO latest archived capture JSON is not an object: {key!r}"
+                )
+            item["response"] = response
         children = sorted(
             (
                 child
                 for child in groups
                 if _replay_group_contains(key, child)
+                and any(
+                    str(item.get("run_id", "")) == selected_lineage[0]
+                    and str(item.get("request_scope", "")) == selected_lineage[1]
+                    and str(item.get("captured_at", "")) >= selected_capture_end
+                    for item in groups[child]
+                )
                 and not any(
                     child != middle
                     and _replay_group_contains(key, middle)
@@ -1525,24 +1696,96 @@ def _replay_group_rows(
             ),
             key=lambda value: (value[1], value[2]),
         )
-        split = bool(children)
+        # Historic child groups do not imply that the currently selected root
+        # capture split. Only this capture's own pagination evidence can make
+        # replay descend into its same-lineage children.
+        split = False
         signatures: set[str] = set()
+        preflight_total: int | None = None
+        preflight_pages: int | None = None
+        preflight_rows = 0
+        root_terminal = False
         for item in ordered:
             batch = _announcement_batch(item["response"], column=key[0], page=item["page"])
             item["batch"] = batch
+            try:
+                reported_total = _pagination_total_records(
+                    item["response"], column=key[0], page=int(item["page"])
+                )
+                reported_pages = _pagination_total_pages(
+                    item["response"], column=key[0], page=int(item["page"])
+                )
+                has_more = _pagination_has_more(
+                    item["response"], column=key[0], page=int(item["page"])
+                )
+            except RuntimeError as exc:
+                raise RawArchiveError(str(exc)) from exc
+            if reported_total is not None:
+                if preflight_total is None:
+                    preflight_total = reported_total
+                elif preflight_total != reported_total:
+                    raise RawArchiveError(f"CNINFO archived total changed: {key!r}")
+            if reported_pages is not None:
+                if preflight_pages is None:
+                    preflight_pages = reported_pages
+                elif preflight_pages != reported_pages:
+                    raise RawArchiveError(f"CNINFO archived page total changed: {key!r}")
+            if key[1] < key[2]:
+                for row in batch:
+                    try:
+                        _validate_source_date_range(row, key[1], key[2], column=key[0])
+                    except RuntimeError:
+                        # The live walker treats a broad-range date contract
+                        # failure as a split trigger. Replay may descend only
+                        # when same-lineage children fully cover the parent;
+                        # that coverage is enforced below.
+                        split = True
             signature = _pagination_page_signature(batch)
             if batch and signature in signatures:
                 split = True
             signatures.add(signature)
-            reported_pages = item["pagination"].get("reported_total_pages")
-            try:
-                if reported_pages is not None and int(reported_pages) > max_pages_per_slice:
-                    split = True
-            except (TypeError, ValueError):
-                pass
+            page = int(item["page"])
+            preflight_rows += len(batch)
+            if preflight_pages is not None and preflight_pages > max_pages_per_slice:
+                split = True
+            if not batch and (
+                (preflight_pages is not None and preflight_pages > 0 and page <= preflight_pages)
+                or (preflight_pages is None and has_more)
+            ):
+                split = True
+            if preflight_pages is not None and page >= preflight_pages:
+                root_terminal = True
+            elif (
+                preflight_pages is None
+                and preflight_total is not None
+                and preflight_rows >= preflight_total
+            ):
+                root_terminal = True
+            elif preflight_pages is None and not has_more:
+                root_terminal = True
+            if preflight_pages is None and page >= max_pages_per_slice and not root_terminal:
+                split = True
+        if (
+            key[1] < key[2]
+            and root_terminal
+            and preflight_total is not None
+            and preflight_rows != preflight_total
+        ):
+            split = True
         if split:
             if not children:
                 raise RawArchiveError(f"CNINFO archived slice cannot replay split: {key!r}")
+            coverage_cursor = key[1]
+            for child in children:
+                if child[1] != coverage_cursor:
+                    raise RawArchiveError(
+                        f"CNINFO archived split children do not fully cover parent: {key!r}"
+                    )
+                coverage_cursor = child[2] + timedelta(days=1)
+            if coverage_cursor != key[2] + timedelta(days=1):
+                raise RawArchiveError(
+                    f"CNINFO archived split children do not fully cover parent: {key!r}"
+                )
             rows: list[dict] = []
             for child in children:
                 rows.extend(
@@ -1551,43 +1794,56 @@ def _replay_group_rows(
                         groups,
                         max_pages_per_slice=max_pages_per_slice,
                         active=active,
+                        lineage=selected_lineage,
+                        captured_after=selected_capture_end,
                     )
                 )
             return rows
 
         rows = []
         expected_total: int | None = None
+        expected_pages: int | None = None
+        pagination_complete = False
         for index, item in enumerate(ordered):
             page = int(item["page"])
             if page != index + 1:
                 raise RawArchiveError(f"CNINFO archived slice is missing page {index + 1}: {key!r}")
             batch = item["batch"]
-            pagination = item["pagination"]
             rows.extend(batch)
-            reported = pagination.get("reported_total_records")
-            if reported is not None:
-                try:
-                    reported_int = int(reported)
-                except (TypeError, ValueError) as exc:
-                    raise RawArchiveError(f"CNINFO archived total is invalid: {key!r}") from exc
+            try:
+                reported_int = _pagination_total_records(item["response"], column=key[0], page=page)
+                reported_pages_int = _pagination_total_pages(
+                    item["response"], column=key[0], page=page
+                )
+                has_more = _pagination_has_more(item["response"], column=key[0], page=page)
+            except RuntimeError as exc:
+                raise RawArchiveError(str(exc)) from exc
+            if reported_int is not None:
                 if expected_total is None:
                     expected_total = reported_int
                 elif expected_total != reported_int:
                     raise RawArchiveError(f"CNINFO archived total changed: {key!r}")
-            reported_pages = pagination.get("reported_total_pages")
-            if reported_pages is not None:
-                try:
-                    reported_pages_int = int(reported_pages)
-                except (TypeError, ValueError) as exc:
-                    raise RawArchiveError(
-                        f"CNINFO archived page total is invalid: {key!r}"
-                    ) from exc
+            if reported_pages_int is not None:
                 if reported_pages_int == 0 and batch:
                     raise RawArchiveError(f"CNINFO archived page total is zero with rows: {key!r}")
-                if page >= reported_pages_int:
+                if expected_pages is None:
+                    expected_pages = reported_pages_int
+                elif expected_pages != reported_pages_int:
+                    raise RawArchiveError(f"CNINFO archived page total changed: {key!r}")
+                if page >= expected_pages:
+                    pagination_complete = True
                     break
-            has_more_present = "has_more" in pagination
-            has_more = pagination.get("has_more", False)
+                # An explicit page count is authoritative, matching the live
+                # walker. An early hasMore=false cannot hide a missing tail.
+                continue
+            if (
+                reported_pages_int is None
+                and expected_total is not None
+                and len(rows) >= expected_total
+            ):
+                pagination_complete = True
+                break
+            has_more_present = item["response"].get("hasMore") is not None
             if not has_more:
                 if not has_more_present and len(batch) >= _PAGE_SIZE:
                     if index + 1 >= len(ordered):
@@ -1595,7 +1851,12 @@ def _replay_group_rows(
                             f"CNINFO archived slice is missing a full-page tail: {key!r}"
                         )
                     continue
+                pagination_complete = True
                 break
+        if ordered and not pagination_complete:
+            raise RawArchiveError(
+                f"CNINFO archived slice is missing page {int(ordered[-1]['page']) + 1}: {key!r}"
+            )
         # Replay must enforce the same raw-row contract as the live walk.  The
         # final normalized frame may dedupe repeated announcement IDs, but
         # the archived wire rows must equal the provider's declared total.
@@ -1639,24 +1900,6 @@ def replay_cninfo_rows(
             continue
         if end is not None and slice_start > end:
             continue
-        status = (
-            record.response_status
-            if isinstance(record, RawPayloadRecord)
-            else record.get("response_status")
-        )
-        if status is not None:
-            try:
-                if not 200 <= int(status) < 300:
-                    continue
-            except (TypeError, ValueError):
-                continue
-        if pagination.get("json_parsed") is False:
-            # A failed HTTP/JSON attempt is archived for auditability, but it
-            # is not an input to the successful post_with_retry parse.
-            continue
-        response = _replay_response(store, record)
-        if response is None:
-            continue
         attempt = pagination.get("attempt", 0)
         try:
             attempt = int(attempt)
@@ -1667,13 +1910,85 @@ def replay_cninfo_rows(
             {
                 "page": page,
                 "attempt": attempt,
-                "response": response,
+                # Archive enumeration is content-address/hash ordered, not
+                # observation ordered. Use the wire timestamp as the retry
+                # tie-breaker so equal attempt numbers from later captures
+                # supersede older provider revisions deterministically.
+                "captured_at": (
+                    record.captured_at
+                    if isinstance(record, RawPayloadRecord)
+                    else str(record.get("captured_at", ""))
+                ),
+                "run_id": (
+                    str(record.run_id or "")
+                    if isinstance(record, RawPayloadRecord)
+                    else str(record.get("run_id", ""))
+                ),
+                "request_scope": (
+                    str(record.request_scope or "")
+                    if isinstance(record, RawPayloadRecord)
+                    else str(record.get("request_scope", ""))
+                ),
+                "capture_id": str(pagination.get("capture_id", "")),
+                "invocation_id": str(pagination.get("invocation_id", "")),
+                "response_status": (
+                    record.response_status
+                    if isinstance(record, RawPayloadRecord)
+                    else record.get("response_status")
+                ),
+                "record": record,
+                "store": store,
                 "request": request,
                 "pagination": pagination,
             }
         )
     if not groups:
         return []
+    invocation_items = [
+        item for items in groups.values() for item in items if str(item.get("invocation_id", ""))
+    ]
+    selected_invocation = ""
+    if invocation_items:
+        requested_start = start or min(key[1] for key in groups)
+        requested_end = end or max(key[2] for key in groups)
+
+        def invocation_declares_range(invocation_id: str) -> bool:
+            invocation_keys = {
+                key
+                for key, items in groups.items()
+                if any(str(item.get("invocation_id", "")) == invocation_id for item in items)
+            }
+            return bool(invocation_keys) and (
+                min(key[1] for key in invocation_keys) <= requested_start
+                and max(key[2] for key in invocation_keys) >= requested_end
+            )
+
+        invocation_ids = {str(item["invocation_id"]) for item in invocation_items}
+        if start is None and end is None and len(invocation_ids) > 1:
+            raise RawArchiveError(
+                "CNINFO archive contains multiple fetch invocations; an explicit replay "
+                "date range is required to prevent silent historical truncation"
+            )
+        candidates = [
+            item
+            for item in invocation_items
+            if invocation_declares_range(str(item["invocation_id"]))
+        ]
+        if not candidates:
+            raise RawArchiveError(
+                "CNINFO archive has no invocation covering requested range "
+                f"{requested_start.isoformat()}..{requested_end.isoformat()}"
+            )
+        selected_invocation = str(
+            max(candidates, key=lambda item: str(item.get("captured_at", "")))["invocation_id"]
+        )
+        groups = {
+            key: [
+                item for item in items if str(item.get("invocation_id", "")) == selected_invocation
+            ]
+            for key, items in groups.items()
+        }
+        groups = {key: items for key, items in groups.items() if items}
     roots = sorted(
         (
             key
@@ -1697,6 +2012,14 @@ def replay_cninfo_rows(
                 active=set(),
             )
         )
+    if selected_invocation:
+        root_columns = {root[0] for root in roots}
+        missing_columns = {"szse", "sse"} - root_columns
+        if missing_columns:
+            raise RawArchiveError(
+                "CNINFO latest archived invocation is missing exchange column(s): "
+                + ", ".join(sorted(missing_columns))
+            )
     return rows
 
 
@@ -1730,7 +2053,10 @@ def _announcement_rows_to_frame(rows: list[dict], *, start: date, end: date) -> 
         # API contract, but cannot be assigned honestly in a broad interval.
         if source_date is None:
             if start != end:
-                continue
+                raise RawArchiveError(
+                    "CNINFO archived broad-range row is missing announcement date; "
+                    "refusing silent data loss"
+                )
             source_date = start
         _validate_source_date_range(item, start, end, column="announcement")
         sym = _symbol_from_cninfo(str(item.get("secCode", "")))
@@ -1840,6 +2166,10 @@ def replay_announcement_index_range(
     max_pages_per_slice: int = _DEFAULT_MAX_PAGES_PER_SLICE,
 ) -> pl.DataFrame:
     """Rebuild announcement rows from archived CNINFO responses offline."""
+    if start is None and end is not None:
+        start = end
+    elif start is not None and end is None:
+        end = start
     raw_rows = replay_cninfo_rows(
         archive,
         "announcement_index",
@@ -1854,10 +2184,6 @@ def replay_announcement_index_range(
         if not observed:
             return pl.DataFrame()
         start, end = min(observed), max(observed)
-    elif start is None:
-        start = end
-    elif end is None:
-        end = start
     assert start is not None and end is not None
     return _announcement_rows_to_frame(raw_rows, start=start, end=end)
 

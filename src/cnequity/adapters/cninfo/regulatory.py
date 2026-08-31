@@ -19,7 +19,7 @@ from cnequity.adapters.cninfo.announcements import (
     fetch_cninfo_rows,
     replay_cninfo_rows,
 )
-from cnequity.storage.raw_archive import RawPayloadArchive, RawPayloadRecord
+from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive, RawPayloadRecord
 
 logger = logging.getLogger(__name__)
 
@@ -166,15 +166,26 @@ def replay_regulatory_events_range(
     pattern = re.compile("|".join(re.escape(k) for k, _ in _KEYWORD_TYPES))
     rows: list[dict] = []
     for item in raw_rows:
-        source_date = _source_date(item)
+        try:
+            source_date = _source_date(item)
+        except ValueError as exc:
+            raise RawArchiveError("CNINFO archived regulatory row has invalid date") from exc
         if source_date is None:
             if start is None or end is None or start != end:
-                continue
+                raise RawArchiveError(
+                    "CNINFO archived broad-range regulatory row is missing its date"
+                )
             source_date = start
         if start is not None and source_date < start:
-            continue
+            raise RawArchiveError(
+                f"CNINFO archived regulatory row date {source_date.isoformat()} is before "
+                f"requested {start.isoformat()}"
+            )
         if end is not None and source_date > end:
-            continue
+            raise RawArchiveError(
+                f"CNINFO archived regulatory row date {source_date.isoformat()} is after "
+                f"requested {end.isoformat()}"
+            )
         title = str(item.get("announcementTitle") or "")
         if not pattern.search(title):
             continue

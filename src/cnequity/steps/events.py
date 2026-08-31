@@ -6,7 +6,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 
@@ -31,6 +31,7 @@ from cnequity.adapters.tdx_protocol.client import (
 )
 from cnequity.adapters.ths.corporate_actions import fetch_corporate_actions_ths
 from cnequity.config import Config
+from cnequity.domain.datasets import get_dataset
 from cnequity.domain.schemas import with_provenance
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.registry import register_step
@@ -57,21 +58,34 @@ _CNINFO_CHECKPOINT_TTL_DAYS = 7
 logger = logging.getLogger(__name__)
 
 
-def _cninfo_checkpoint(config: Config, dataset: str):
-    """Stable checkpoint path for a resumable CNINFO backfill."""
-    return config.meta_root / "checkpoints" / f"{dataset}.json"
+def _cninfo_checkpoint(config: Config, dataset: str, start: date, end: date):
+    """Stable, range-scoped checkpoint path for a resumable CNINFO fetch."""
+    return (
+        config.meta_root / "checkpoints" / dataset / f"{start.isoformat()}_{end.isoformat()}.json"
+    )
 
 
-def _record_cninfo_metrics(config: Config, run_id: str, dataset: str, metrics: dict) -> None:
+def _record_cninfo_metrics(
+    config: Config,
+    run_id: str,
+    dataset: str,
+    metrics: dict,
+    *,
+    batch_id: str | None = None,
+) -> None:
     """Persist source/page metrics in the run manifest without making them a gate."""
     try:
         manifest = Manifest(config.manifest_path)
         manifest.record_performance_metrics(run_id, dataset, metrics)
+        if batch_id:
+            manifest.record_batch_telemetry(run_id, batch_id, metrics)
     except Exception as exc:  # noqa: BLE001 — telemetry must not lose data
         logger.warning("%s: unable to persist CNINFO metrics: %s", dataset, exc)
 
 
-def _cninfo_checkpoint_options(config: Config, dataset: str) -> dict:
+def _cninfo_checkpoint_options(
+    config: Config, dataset: str, start: date, end: date | None = None
+) -> dict:
     """Resolve the production checkpoint policy for one CNINFO feed.
 
     Running checkpoints are useful only when they are tied to the provider
@@ -93,7 +107,7 @@ def _cninfo_checkpoint_options(config: Config, dataset: str) -> dict:
         "refresh": bool(getattr(config, "cninfo_checkpoint_refresh", True)),
     }
     if getattr(config, "meta_root", None) is not None:
-        options["checkpoint_path"] = _cninfo_checkpoint(config, dataset)
+        options["checkpoint_path"] = _cninfo_checkpoint(config, dataset, start, end or start)
     return options
 
 
@@ -113,7 +127,11 @@ def _fetch_cninfo_single(
     accepts_var_kwargs = any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
     )
-    options = {**_cninfo_checkpoint_options(config, dataset), "config": config, "metrics": metrics}
+    options = {
+        **_cninfo_checkpoint_options(config, dataset, day),
+        "config": config,
+        "metrics": metrics,
+    }
     label = "announcement" if dataset == "announcement_index" else "regulatory"
     options.update(
         {
@@ -136,92 +154,262 @@ def _cninfo_range_backfill(
     *,
     date_col: str,
     floor: date,
+    batch_id: str | None = None,
 ) -> dict:
-    """Use one range-aware CNINFO walk behind the normal day-stage helper.
+    """Use bounded range-aware CNINFO walks behind the normal day-stage helper.
 
-    ``walk_day_backfill`` still skips already-curated sessions and flushes
-    staged rows in bounded chunks. The adapter call is made once per run so a
-    busy disclosure day can recursively split its date range instead of
-    repeating a fragile deep page walk for every session.
+    CNINFO's pagination is not a durable cursor: broad ``seDate`` requests
+    have returned the same page again at a deep offset (and occasionally
+    failed at a much shallower one).  Running the complete historical window
+    through one request would make the whole backfill depend on that single
+    page walk and would also retain every row until the final compact.  The
+    registry therefore gives these feeds a small calendar chunk.  Each chunk
+    gets its own source capture and checkpoint identity, while the adapter's
+    recursive split remains the last line of defence for an unusually busy
+    window/day.
+
+    A chunk is published at most once (the registry value is below
+    ``walk_day_backfill``'s 60-day flush boundary), which is important for the
+    exact-wire capture receipt: consuming one receipt per chunk cannot make a
+    later flush fail with "capture already consumed".  The caller's private
+    backfill bounds are restored even when a page walk raises, so a failed
+    chunk can be resumed with the same persisted checkpoint on the next run.
     """
     from cnequity.steps.common import walk_day_backfill
 
-    start = getattr(config, "_backfill_start", None) or floor
-    end = min(getattr(config, "_backfill_end", None) or trade_date, trade_date)
-    metrics: dict = {"run_id": run_id}
-    cached: dict[str, pl.DataFrame] = {}
+    requested_start = getattr(config, "_backfill_start", None) or floor
+    requested_end = min(getattr(config, "_backfill_end", None) or trade_date, trade_date)
+    if requested_start > requested_end:
+        return {
+            "rows_read": 0,
+            "rows_written": 0,
+            "days_fetched": 0,
+            "days_skipped": 0,
+            "days_empty": 0,
+            "slices": [],
+        }
+
+    # Keep the window bounded even when the caller invokes the step directly
+    # (the CLI's generic ``_backfill_chunked`` path is only selected when both
+    # --start and --end were supplied).  A malformed registry value must not
+    # turn into an infinite loop or silently disable the guard.
+    configured_chunk_days = get_dataset(dataset).backfill_chunk_days
+    chunk_days = int(configured_chunk_days or 0)
+    if chunk_days < 1:
+        raise RuntimeError(f"{dataset}: CNINFO backfill chunk size must be a positive integer")
+
+    original_start_present = hasattr(config, "_backfill_start")
+    original_end_present = hasattr(config, "_backfill_end")
+    original_start = getattr(config, "_backfill_start", None)
+    original_end = getattr(config, "_backfill_end", None)
+    slices: list[dict] = []
+    total_rows_read = 0
+    total_rows_written = 0
+    total_days_fetched = 0
+    total_days_skipped = 0
+    total_days_empty = 0
+    overall_status = "success"
+    all_findings: list[dict] = []
+    all_metrics: list[dict] = []
     label = "announcement" if dataset == "announcement_index" else "regulatory"
-    request_scope = f"range:{label}:{start.isoformat()}:{end.isoformat()}"
 
-    def fetch_one(day: date) -> pl.DataFrame:
-        if "frame" not in cached:
-            # Keep the source observation tied to this run even when a
-            # lightweight range adapter accepts an explicit run_id instead of
-            # reading it from the metrics object.  Signature filtering below
-            # preserves narrow offline doubles for archive-disabled tests.
-            options = {
-                "config": config,
-                "metrics": metrics,
-                "run_id": run_id,
-                "request_scope": request_scope,
-            }
-            options.update(_cninfo_checkpoint_options(config, dataset))
-            try:
-                parameters = inspect.signature(fetch_range).parameters
-            except (TypeError, ValueError):
-                parameters = {}
-            accepts_var_kwargs = any(
-                parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    def run_slice(start: date, end: date) -> dict:
+        """Fetch and stage one bounded date window."""
+        metrics: dict = {
+            "run_id": run_id,
+            "slice_start": start.isoformat(),
+            "slice_end": end.isoformat(),
+        }
+        # Register before fetching so a failing later slice participates in
+        # the run-level retry total as well as successful earlier slices.
+        all_metrics.append(metrics)
+        cached: dict[str, pl.DataFrame] = {}
+        request_scope = f"range:{label}:{start.isoformat()}:{end.isoformat()}"
+
+        def fetch_one(day: date) -> pl.DataFrame:
+            if "frame" not in cached:
+                # Keep the source observation tied to this run even when a
+                # lightweight range adapter accepts an explicit run_id instead
+                # of reading it from the metrics object. Signature filtering
+                # preserves narrow offline doubles for archive-disabled tests.
+                options = {
+                    "config": config,
+                    "metrics": metrics,
+                    "run_id": run_id,
+                    "request_scope": request_scope,
+                }
+                options.update(_cninfo_checkpoint_options(config, dataset, start, end))
+                try:
+                    parameters = inspect.signature(fetch_range).parameters
+                except (TypeError, ValueError):
+                    parameters = {}
+                accepts_var_kwargs = any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                )
+                if not accepts_var_kwargs:
+                    options = {key: value for key, value in options.items() if key in parameters}
+                try:
+                    cached["frame"] = fetch_range(start, end, **options)
+                except Exception:
+                    # The adapter persists its page checkpoint before
+                    # propagating a transport/contract failure. Preserve the
+                    # matching per-slice metrics as well; the next run can
+                    # identify the exact bounded window that needs a retry.
+                    metrics["status"] = "failed"
+                    _record_cninfo_metrics(config, run_id, dataset, metrics, batch_id=batch_id)
+                    raise
+                _record_cninfo_metrics(config, run_id, dataset, metrics, batch_id=batch_id)
+            frame = cached["frame"]
+            if frame.is_empty() or date_col not in frame.columns:
+                return pl.DataFrame()
+            return frame.filter(pl.col(date_col) == day)
+
+        def publish(part: pl.DataFrame, batch_id: str) -> object:
+            # CNINFO range adapters archive each POST response before returning
+            # their normalized frame. Verification happens immediately before
+            # the writer boundary; a missing/captureless receipt therefore
+            # leaves no staging artifact to be mistaken for success.
+            evidence = (
+                verify_raw_archive(
+                    config,
+                    dataset,
+                    run_id,
+                    source="cninfo",
+                    request_scope=request_scope,
+                )
+                if config.should_archive_raw(dataset)
+                else None
             )
-            if not accepts_var_kwargs:
-                options = {key: value for key, value in options.items() if key in parameters}
-            cached["frame"] = fetch_range(start, end, **options)
-            _record_cninfo_metrics(config, run_id, dataset, metrics)
-        frame = cached["frame"]
-        if frame.is_empty() or date_col not in frame.columns:
-            return pl.DataFrame()
-        return frame.filter(pl.col(date_col) == day)
-
-    def publish(part: pl.DataFrame, batch_id: str) -> object:
-        # CNINFO range adapters archive each POST response before returning the
-        # normalized frame.  Verification happens immediately before the
-        # writer boundary; a missing/captureless receipt therefore leaves no
-        # staging artifact to be mistaken for a resumable success.
-        evidence = (
-            verify_raw_archive(
+            return write_fetched(
                 config,
-                dataset,
                 run_id,
+                dataset,
+                part,
                 source="cninfo",
-                request_scope=request_scope,
+                # ``walk_day_backfill`` numbers parts from zero on every
+                # invocation. Include the slice in the staging key so a later
+                # slice cannot replace an earlier ``bf-0000`` in this run.
+                batch_id=f"{start.isoformat()}_{end.isoformat()}-{batch_id}",
+                raw_archive_evidence=evidence,
             )
-            if config.should_archive_raw(dataset)
-            else None
+
+        # ``walk_day_backfill`` reads these private bounds to decide its date
+        # list. They are set by the outer loop and restored in the caller's
+        # finally block.
+        result = walk_day_backfill(
+            config,
+            end,
+            run_id,
+            dataset,
+            fetch_one,
+            source="cninfo",
+            date_col=date_col,
+            floor=start,
+            calendar_days=True,
+            # CNINFO returns a fully bounded range response. A missing day in
+            # that successful response is a valid negative observation for
+            # sparse announcements/regulatory events, not a fetch failure.
+            allow_empty_days=True,
+            publish_fn=publish,
         )
-        return write_fetched(
+        result["metrics"] = metrics
+        return result
+
+    def aggregate_cninfo_metrics() -> dict:
+        return {
+            "run_id": run_id,
+            "dataset": dataset,
+            "slices": all_metrics,
+            "slice_count": len(all_metrics),
+            "requests": sum(int(item.get("requests", 0) or 0) for item in all_metrics),
+            "retries": sum(int(item.get("retries", 0) or 0) for item in all_metrics),
+            "pages": sum(int(item.get("pages", 0) or 0) for item in all_metrics),
+            "split_reasons": sum(int(item.get("split_reasons", 0) or 0) for item in all_metrics),
+        }
+
+    try:
+        cursor = requested_start
+        while cursor <= requested_end:
+            slice_end = min(cursor + timedelta(days=chunk_days - 1), requested_end)
+            config._backfill_start = cursor
+            config._backfill_end = slice_end
+            result = run_slice(cursor, slice_end)
+            rows_read = int(result.get("rows_read", 0) or 0)
+            rows_written = int(result.get("rows_written", 0) or 0)
+            days_fetched = int(result.get("days_fetched", 0) or 0)
+            days_skipped = int(result.get("days_skipped", 0) or 0)
+            days_empty = int(result.get("days_empty", 0) or 0)
+            total_rows_read += rows_read
+            total_rows_written += rows_written
+            total_days_fetched += days_fetched
+            total_days_skipped += days_skipped
+            total_days_empty += days_empty
+            slice_info = {
+                "start": cursor,
+                "end": slice_end,
+                "status": result.get("status", "success"),
+                "rows_read": rows_read,
+                "rows_written": rows_written,
+                "days_fetched": days_fetched,
+                "days_skipped": days_skipped,
+                "days_empty": days_empty,
+            }
+            slices.append(slice_info)
+            updates = result.get("context_updates")
+            if isinstance(updates, dict):
+                findings = updates.get("audit_findings")
+                if isinstance(findings, list):
+                    all_findings.extend(item for item in findings if isinstance(item, dict))
+            if result.get("status") == "warning":
+                overall_status = "warning"
+            cursor = slice_end + timedelta(days=1)
+    except Exception:
+        # The normal aggregate below is unreachable when a later date slice
+        # raises. Persist cumulative metrics here before propagating so batch
+        # telemetry reflects all request retries already spent in this step.
+        _record_cninfo_metrics(
             config,
             run_id,
             dataset,
-            part,
-            source="cninfo",
+            aggregate_cninfo_metrics(),
             batch_id=batch_id,
-            raw_archive_evidence=evidence,
         )
+        raise
+    finally:
+        if original_start_present:
+            config._backfill_start = original_start
+        else:
+            try:
+                delattr(config, "_backfill_start")
+            except AttributeError:
+                pass
+        if original_end_present:
+            config._backfill_end = original_end
+        else:
+            try:
+                delattr(config, "_backfill_end")
+            except AttributeError:
+                pass
 
-    result = walk_day_backfill(
-        config,
-        trade_date,
-        run_id,
-        dataset,
-        fetch_one,
-        source="cninfo",
-        date_col=date_col,
-        floor=floor,
-        calendar_days=True,
-        publish_fn=publish,
-    )
-    if metrics:
-        result["metrics"] = metrics
+    # Persist one aggregate performance document. Per-slice metrics remain in
+    # the document so operators can identify the exact date window that was
+    # slow or failed, while aggregate counters make run-level SLOs cheap to
+    # query.
+    aggregate_metrics = aggregate_cninfo_metrics()
+    _record_cninfo_metrics(config, run_id, dataset, aggregate_metrics, batch_id=batch_id)
+    result = {
+        "rows_read": total_rows_read,
+        "rows_written": total_rows_written,
+        "days_fetched": total_days_fetched,
+        "days_skipped": total_days_skipped,
+        "days_empty": total_days_empty,
+        "slices": slices,
+        "status": overall_status,
+        "metrics": aggregate_metrics,
+    }
+    if all_findings:
+        result["context_updates"] = {"audit_findings": all_findings}
     return result
 
 
@@ -921,6 +1109,7 @@ def step_announcement_index(config: Config, trade_date: date, run_id: str, conte
             fetch_announcement_index_range,
             date_col="announce_date",
             floor=date(2010, 1, 1),
+            batch_id=context.get("_batch_id"),
         )
     metrics: dict = {"run_id": run_id}
     result = run_incremental_fetched(
@@ -946,6 +1135,12 @@ def step_announcement_index(config: Config, trade_date: date, run_id: str, conte
         ),
     )
     if len(metrics) > 1:
-        _record_cninfo_metrics(config, run_id, "announcement_index", metrics)
+        _record_cninfo_metrics(
+            config,
+            run_id,
+            "announcement_index",
+            metrics,
+            batch_id=context.get("_batch_id"),
+        )
     result["metrics"] = metrics
     return result

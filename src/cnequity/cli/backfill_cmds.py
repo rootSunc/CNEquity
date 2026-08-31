@@ -347,6 +347,15 @@ def _run_backfill(cfg, dataset: str, start: date | None, end: date | None) -> di
 
 
 def _backfill_once(cfg, dataset: str) -> dict:
+    # CNINFO range steps also protect direct step invocations with an internal
+    # 31-day window, but the CLI must make each window a separate run so the
+    # compact boundary drains staging before the next window is fetched.  If
+    # no explicit range was supplied, the step's historical floor is the
+    # honest default for both feeds; an omitted --end means today.
+    if dataset in {"announcement_index", "regulatory_events"}:
+        start = getattr(cfg, "_backfill_start", None) or date(2010, 1, 1)
+        end = getattr(cfg, "_backfill_end", None) or shanghai_today()
+        return _backfill_chunked(cfg, dataset, start, end, get_dataset(dataset).backfill_chunk_days)
     engine = JobEngine(cfg)
     _recover_compactable_backfill_staging(engine, dataset)
     # Do not finish_run until after compact — otherwise a kill between the two

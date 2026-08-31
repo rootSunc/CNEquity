@@ -744,6 +744,13 @@ _SPECS = [
         partition_col="announce_date",
         pit=True,
         reconciliation_lookback_days=30,
+        # CNINFO's ``hisAnnouncement`` endpoint is page-limited and has been
+        # observed to replay an earlier page once a broad request gets deep
+        # enough.  Keep each historical request below one calendar month so a
+        # source-side pagination defect cannot turn a multi-year backfill into
+        # an unbounded walk.  The adapter still recursively halves a busy
+        # month/day and fails closed when a single day cannot be split.
+        backfill_chunk_days=31,
     ),
     # Current-state timetable (revisions overwrite scheduled_date; not PIT).
     DatasetSpec(
@@ -1056,6 +1063,9 @@ _SPECS = [
         partition_col="event_date",
         partition_granularity="year",
         reconciliation_lookback_days=30,
+        # Keep this in lock-step with announcement_index: both feeds share the
+        # CNINFO endpoint and therefore the same deep-page/repeated-page risk.
+        backfill_chunk_days=31,
     ),
     # derived — ``layer`` is where the parquet lives, ``tier`` what the data is
     # for, so these carry the tier of the question they answer, not "derived".

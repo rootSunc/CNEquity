@@ -346,16 +346,19 @@ class JobEngine:
             # even when a worker process is not available to expose a batch.
             stages = ("fetch", "stage")
 
-        if name in self._SELF_RECORDING_STEPS and (
-            error is None
-            or all(
-                self.manifest.get_dataset_result(run_id, dataset, stage) is not None
-                for stage in stages
-            )
+        existing_receipts = [
+            self.manifest.get_dataset_result(run_id, dataset, stage) for stage in stages
+        ]
+        if name in self._SELF_RECORDING_STEPS and all(
+            receipt is not None and receipt["status"] == status for receipt in existing_receipts
         ):
             # The step already recorded this outcome (success path, or a
             # failure it caught and recorded before re-raising). Do not
-            # overwrite it with the engine's coarser message.
+            # overwrite it with the engine's coarser message.  A successful
+            # return is not evidence by itself: a compatibility implementation
+            # or test double may omit the self-recording call, in which case
+            # the engine must backfill the receipt below. A receipt from a
+            # previous failed retry is likewise not evidence for this attempt.
             return
 
         error_code = type(error).__name__ if error is not None else None
@@ -519,6 +522,8 @@ class JobEngine:
                 "degraded",
             }:
                 raise ValueError(f"step {name} returned invalid status {step_status!r}")
+            step_metrics = self._step_metrics(out)
+            request_retry_count = self._request_retry_count(step_metrics)
             if not uses_worker_batches:
                 physical_dataset = out.get("dataset")
                 if physical_dataset and physical_dataset != name:
@@ -534,6 +539,13 @@ class JobEngine:
                         if step_status == "success"
                         else f"step completed with status={step_status}"
                     ),
+                    # Worker retries reuse one batch and increment their
+                    # durable budget before execution. Non-worker retries use
+                    # a fresh batch id, so mark every retry-lineage attempt as
+                    # one requeue; summing the ledger counts actual attempts
+                    # without turning this value into a retry cap.
+                    retry_count=1 if retry_of else None,
+                    request_retry_count=request_retry_count,
                 )
                 if step_status == "success" and retry_of:
                     self.manifest.supersede_batches(
@@ -552,7 +564,7 @@ class JobEngine:
                 run_id,
                 name,
                 elapsed,
-                self._step_metrics(out),
+                step_metrics,
             )
             logger.info(
                 "Step %s %s in %.1fs (%s rows)",
@@ -575,6 +587,7 @@ class JobEngine:
                     batch_id,
                     "failed",
                     error_message=str(exc),
+                    retry_count=1 if retry_of else None,
                 )
             self._record_step_result(
                 name=name,
@@ -597,6 +610,7 @@ class JobEngine:
             "cache_hits",
             "fallback_requests",
             "retries",
+            "request_retries",
             "failed_requests",
             "rows_read",
             "rows_written",
@@ -622,7 +636,22 @@ class JobEngine:
             fallback = out.get("fallback_symbols") or out.get("fallback_symbol_names")
             if isinstance(fallback, (list, tuple, set)):
                 metrics["fallback_requests"] = len(fallback)
+        # ``retries`` is the established adapter metric name. Keep it in the
+        # result for compatibility, while handing the manifest an explicit
+        # request-level spelling so it cannot be confused with the
+        # orchestrator's batch retry budget.
+        if "request_retries" not in metrics and "retries" in metrics:
+            metrics["request_retries"] = metrics["retries"]
         return metrics
+
+    @staticmethod
+    def _request_retry_count(metrics: dict[str, Any]) -> int:
+        """Return only adapter-observed request retries from step metrics."""
+        value = metrics.get("request_retries", 0)
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
 
     def _is_init_run(self, run_id: str) -> bool:
         run = self.manifest.get_run(run_id)

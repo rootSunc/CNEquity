@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# B1 — Install (or reinstall) the launchd agent that runs the daily pipeline.
-# Generates a plist from the template with this repo's absolute path, drops it
-# in ~/Library/LaunchAgents, and loads it. Idempotent: re-run to update.
+# B1 — Install (or reinstall) the launchd agents for daily and stale-only runs.
+# Generates plists from the templates with this repo's absolute path, drops
+# them in ~/Library/LaunchAgents, and loads them. Idempotent: re-run to update.
 #
 # Usage: scripts/install_scheduler.sh
 # Uninstall: scripts/uninstall_scheduler.sh
@@ -9,14 +9,19 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="com.cnequity.daily"
+STALE_LABEL="com.cnequity.stale"
 TEMPLATE="$REPO_ROOT/scripts/launchd/$LABEL.plist.template"
+STALE_TEMPLATE="$REPO_ROOT/scripts/launchd/$STALE_LABEL.plist.template"
 DEST_DIR="$HOME/Library/LaunchAgents"
 DEST="$DEST_DIR/$LABEL.plist"
+STALE_DEST="$DEST_DIR/$STALE_LABEL.plist"
 SOURCE_VANTAGE="${CNE_SOURCE_VANTAGE:-local}"
+LAUNCHCTL="${CNE_LAUNCHCTL:-launchctl}"
 
 if [[ "$(uname)" != "Darwin" ]]; then
   echo "install_scheduler: launchd is macOS-only. On Linux use cron:" >&2
   echo "  15 11 * * *  $REPO_ROOT/scripts/daily_pipeline.sh" >&2
+  echo "  5 20 * * *   $REPO_ROOT/scripts/stale_pipeline.sh" >&2
   exit 1
 fi
 if [[ ! -x "$REPO_ROOT/.venv/bin/cne" ]]; then
@@ -29,19 +34,56 @@ if [[ ! "$SOURCE_VANTAGE" =~ ^[A-Za-z0-9._-]+$ ]]; then
 fi
 
 mkdir -p "$DEST_DIR" "$REPO_ROOT/data/cnequity/logs"
-sed \
-  -e "s#__REPO_ROOT__#$REPO_ROOT#g" \
-  -e "s#__SOURCE_VANTAGE__#$SOURCE_VANTAGE#g" \
-  "$TEMPLATE" >"$DEST"
 
-# Reload if already present.
-launchctl unload "$DEST" 2>/dev/null || true
-launchctl load "$DEST"
+# Values are inserted into XML text nodes, so escape XML first and then the
+# `#`-delimited sed replacement syntax. A checkout such as ``CN&Equity`` must
+# remain both a valid path after plist decoding and a well-formed plist.
+xml_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\\\&apos;/g"
+}
+REPO_ROOT_XML="$(xml_escape "$REPO_ROOT")"
+SOURCE_VANTAGE_XML="$(xml_escape "$SOURCE_VANTAGE")"
+REPO_ROOT_SED="$(printf '%s' "$REPO_ROOT_XML" | sed 's/[\\&#]/\\&/g')"
+SOURCE_VANTAGE_SED="$(printf '%s' "$SOURCE_VANTAGE_XML" | sed 's/[\\&#]/\\&/g')"
+render_template() {
+  local template="$1" dest="$2" tmp
+  tmp="$(mktemp "${dest}.XXXXXX")"
+  if ! sed \
+    -e "s#__REPO_ROOT__#$REPO_ROOT_SED#g" \
+    -e "s#__SOURCE_VANTAGE__#$SOURCE_VANTAGE_SED#g" \
+    "$template" >"$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! mv -f "$tmp" "$dest"; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
 
-echo "install_scheduler: loaded $LABEL"
-echo "  plist:    $DEST"
-echo "  schedule: daily 11:15 host-local time (edit the plist template to move it)"
+render_template "$TEMPLATE" "$DEST"
+render_template "$STALE_TEMPLATE" "$STALE_DEST"
+
+# Reload if already present.  Both agents share the shell-level scheduler lock,
+# so a stale pass never overlaps the multi-group run even when an operator
+# starts it manually during the daily window.
+"$LAUNCHCTL" unload "$DEST" 2>/dev/null || true
+"$LAUNCHCTL" unload "$STALE_DEST" 2>/dev/null || true
+"$LAUNCHCTL" load "$DEST"
+"$LAUNCHCTL" load "$STALE_DEST"
+
+echo "install_scheduler: loaded $LABEL and $STALE_LABEL"
+echo "  daily plist:  $DEST"
+echo "  stale plist:  $STALE_DEST"
+echo "  daily schedule: daily 11:15 host-local time"
+echo "  stale schedule: daily 20:05 host-local time"
 echo "  source vantage: $SOURCE_VANTAGE"
 echo "  logs:     $REPO_ROOT/data/cnequity/logs/"
 echo "  verify:   launchctl list | grep cnequity"
 echo "  test now: launchctl start $LABEL"
+echo "  test stale: launchctl start $STALE_LABEL"

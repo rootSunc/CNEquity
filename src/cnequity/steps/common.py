@@ -936,6 +936,7 @@ def walk_day_backfill(
     flush_days: int = 60,
     existing_dates_fn: Callable[[list[date]], set[date]] | None = None,
     calendar_days: bool = False,
+    allow_empty_days: bool = False,
     publish_fn: Callable[[pl.DataFrame, str], object] | None = None,
 ) -> dict:
     """Walk trading days for a dataset whose fetch answers one day at a time.
@@ -1047,7 +1048,7 @@ def walk_day_backfill(
             )
     flush()
 
-    if empty_days:
+    if empty_days and not allow_empty_days:
         logger.warning(
             "%s backfill: %d trading day(s) returned no rows (e.g. %s) — "
             "left absent; a rerun retries them",
@@ -1058,11 +1059,12 @@ def walk_day_backfill(
     result = {
         "rows_read": rows_written,
         "rows_written": rows_written,
-        "days_fetched": len(todo) - len(empty_days),
+        "days_fetched": len(todo) if allow_empty_days else len(todo) - len(empty_days),
         "days_skipped": len(days) - len(todo),
-        "days_empty": len(empty_days),
+        "days_empty": 0 if allow_empty_days else len(empty_days),
+        "days_confirmed_empty": len(empty_days) if allow_empty_days else 0,
     }
-    if empty_days:
+    if empty_days and not allow_empty_days:
         # Keep direct step calls truthful as well as engine-managed calls. The
         # engine promotes ``days_empty`` to warning, but callers that invoke a
         # backfill step directly would otherwise receive ``success`` while

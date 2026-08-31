@@ -199,6 +199,7 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
     manifest = Manifest(manifest_path) if manifest_path else None
 
     batch_metrics: dict[str, Any] = {}
+    prior_request_retries = 0
     if manifest:
         previous = manifest.get_batch(run_id, batch_id)
         # A worker may start after another process has already committed this
@@ -220,7 +221,12 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
                 },
             }
         if previous is not None:
-            batch_metrics["retries"] = int(previous["retry_count"] or 0)
+            # Keep the durable worker requeue budget separate from retries
+            # performed inside the adapter.  ``fetch_daily_bars`` has always
+            # used ``retries`` for request attempts; seeding that counter with
+            # the batch retry count made the two kinds impossible to audit.
+            batch_metrics["orchestrator_retries"] = int(previous["retry_count"] or 0)
+            prior_request_retries = int(previous["request_retry_count"] or 0)
         manifest.start_batch(
             run_id,
             batch_id,
@@ -265,12 +271,17 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
         batch_metrics["bytes_written"] = df.estimated_size()
         batch_metrics["changed_partitions"] = 1
         if manifest:
+            request_retries = prior_request_retries + max(
+                0,
+                int(batch_metrics.get("request_retries", batch_metrics.get("retries", 0)) or 0),
+            )
             manifest.finish_batch(
                 run_id,
                 batch_id,
                 "success",
                 rows_read=df.height,
                 rows_written=df.height,
+                request_retry_count=request_retries,
             )
         return {
             "rows_read": df.height,
@@ -283,7 +294,17 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
         failed_scope = _failed_symbols_for_error(exc, symbols)
         if manifest:
             manifest.set_batch_symbols(run_id, batch_id, failed_scope)
-            manifest.finish_batch(run_id, batch_id, "failed", error_message=str(exc))
+            request_retries = prior_request_retries + max(
+                0,
+                int(batch_metrics.get("request_retries", batch_metrics.get("retries", 0)) or 0),
+            )
+            manifest.finish_batch(
+                run_id,
+                batch_id,
+                "failed",
+                error_message=str(exc),
+                request_retry_count=request_retries,
+            )
         # Tip windows: step-level clist gap-fill. Multi-day: kline snapshot only
         # (staging gap-fill also happens at the step for failed_symbols).
         raise
@@ -363,8 +384,13 @@ def fetch_daily_bars_parallel(
     ) -> dict[str, Any]:
         backfill = _window_backfill(config, batch_start)
         previous = manifest.get_batch(run_id, batch_id)
+        prior_request_retries = (
+            int(previous["request_retry_count"] or 0) if previous is not None else 0
+        )
         batch_metrics: dict[str, Any] = {
-            "retries": int(previous["retry_count"] or 0) if previous is not None else 0
+            "orchestrator_retries": (
+                int(previous["retry_count"] or 0) if previous is not None else 0
+            )
         }
         manifest.start_batch(
             run_id,
@@ -410,6 +436,11 @@ def fetch_daily_bars_parallel(
                 "success",
                 rows_read=df.height,
                 rows_written=df.height,
+                request_retry_count=prior_request_retries
+                + max(
+                    0,
+                    int(batch_metrics.get("request_retries", batch_metrics.get("retries", 0)) or 0),
+                ),
             )
             return {
                 "rows_read": df.height,
@@ -421,7 +452,17 @@ def fetch_daily_bars_parallel(
         except Exception as exc:
             failed_scope = _failed_symbols_for_error(exc, batch_symbols)
             manifest.set_batch_symbols(run_id, batch_id, failed_scope)
-            manifest.finish_batch(run_id, batch_id, "failed", error_message=str(exc))
+            manifest.finish_batch(
+                run_id,
+                batch_id,
+                "failed",
+                error_message=str(exc),
+                request_retry_count=prior_request_retries
+                + max(
+                    0,
+                    int(batch_metrics.get("request_retries", batch_metrics.get("retries", 0)) or 0),
+                ),
+            )
             raise
 
     def _outcome(had_error: bool) -> dict[str, Any]:

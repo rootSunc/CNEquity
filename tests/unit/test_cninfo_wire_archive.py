@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cnequity.adapters.cninfo import announcements
 from cnequity.adapters.cninfo.announcements import (
     fetch_announcement_index_range,
     replay_announcement_index_range,
@@ -140,6 +141,428 @@ def test_identical_response_bytes_keep_distinct_page_observations_and_replay_rev
     assert live["announcement_id"].to_list() == replayed["announcement_id"].to_list()
     assert live["title"].to_list() == replayed["title"].to_list()
 
+    incomplete = [
+        record
+        for record in archive.records("announcement_index")
+        if record.request_params.get("seDate") != "2024-01-02~2024-01-02"
+    ]
+    with pytest.raises(RawArchiveError, match="do not fully cover parent"):
+        replay_announcement_index_range(
+            archive,
+            date(2024, 1, 1),
+            date(2024, 1, 2),
+            records=incomplete,
+            max_pages_per_slice=2,
+        )
+
+
+def test_new_complete_broad_capture_is_not_replaced_by_historic_split_children(tmp_path):
+    repeated = _Response(
+        {"announcements": [_row("same", "old-root")], "totalpages": 2, "hasMore": True}
+    )
+    empty = _Response({"announcements": [], "hasMore": False})
+    config = _config(tmp_path)
+    old = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-02", 1): repeated,
+            ("szse", "2024-01-01~2024-01-02", 2): repeated,
+            ("szse", "2024-01-01~2024-01-01", 1): _Response(
+                {"announcements": [_row("old-1", "old-1")], "hasMore": False}
+            ),
+            ("szse", "2024-01-02~2024-01-02", 1): _Response(
+                {
+                    "announcements": [_row("old-2", "old-2", "2024-01-02")],
+                    "hasMore": False,
+                }
+            ),
+            ("sse", "2024-01-01~2024-01-02", 1): empty,
+            ("sse", "2024-01-01~2024-01-01", 1): empty,
+            ("sse", "2024-01-02~2024-01-02", 1): empty,
+        }
+    )
+    fetch_announcement_index_range(
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+        client=old,
+        config=config,
+        run_id="old-split-run",
+        max_pages_per_slice=2,
+    )
+
+    new = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-02", 1): _Response(
+                {
+                    "announcements": [
+                        _row("new-1", "new-1"),
+                        _row("new-2", "new-2", "2024-01-02"),
+                    ],
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            ),
+            ("sse", "2024-01-01~2024-01-02", 1): empty,
+        }
+    )
+    latest = fetch_announcement_index_range(
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+        client=new,
+        config=config,
+        run_id="new-complete-run",
+        max_pages_per_slice=2,
+    )
+    replayed = replay_announcement_index_range(
+        RawPayloadArchive(config.meta_root),
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+        max_pages_per_slice=2,
+    )
+    assert set(latest["announcement_id"]) == {"new-1", "new-2"}
+    assert set(replayed["announcement_id"]) == {"new-1", "new-2"}
+
+
+def test_replay_descends_into_children_when_broad_row_has_no_date(tmp_path):
+    config = _config(tmp_path)
+    missing = _row("missing", "broad")
+    missing.pop("announcementDate")
+    empty = _Response({"announcements": [], "hasMore": False})
+    client = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-02", 1): _Response(
+                {"announcements": [missing], "hasMore": False}
+            ),
+            ("szse", "2024-01-01~2024-01-01", 1): _Response(
+                {"announcements": [_row("day-1", "day-1")], "hasMore": False}
+            ),
+            ("szse", "2024-01-02~2024-01-02", 1): _Response(
+                {
+                    "announcements": [_row("day-2", "day-2", "2024-01-02")],
+                    "hasMore": False,
+                }
+            ),
+            ("sse", "2024-01-01~2024-01-02", 1): empty,
+        }
+    )
+    live = fetch_announcement_index_range(
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+        client=client,
+        config=config,
+        run_id="missing-date-split-run",
+    )
+    replayed = replay_announcement_index_range(
+        RawPayloadArchive(config.meta_root), date(2024, 1, 1), date(2024, 1, 2)
+    )
+    assert set(live["announcement_id"]) == {"day-1", "day-2"}
+    assert set(replayed["announcement_id"]) == {"day-1", "day-2"}
+
+
+def test_same_run_retry_cannot_mix_new_parent_with_old_child(tmp_path, monkeypatch):
+    monkeypatch.setattr(announcements, "_POST_RETRIES", 1)
+    config = _config(tmp_path)
+    empty = _Response({"announcements": [], "hasMore": False})
+    old_missing = _row("old-root", "old-root")
+    old_missing.pop("announcementDate")
+    old = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-02", 1): _Response(
+                {"announcements": [old_missing], "hasMore": False}
+            ),
+            ("szse", "2024-01-01~2024-01-01", 1): _Response(
+                {"announcements": [_row("old-1", "old-1")], "hasMore": False}
+            ),
+            ("szse", "2024-01-02~2024-01-02", 1): _Response(
+                {
+                    "announcements": [_row("old-2", "old-2", "2024-01-02")],
+                    "hasMore": False,
+                }
+            ),
+            ("sse", "2024-01-01~2024-01-02", 1): empty,
+        }
+    )
+    fetch_announcement_index_range(
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+        client=old,
+        config=config,
+        run_id="same-run",
+    )
+
+    new_missing = _row("new-root", "new-root")
+    new_missing.pop("announcementDate")
+
+    class InterruptedRetry:
+        def post(self, _url, data):
+            window = data["seDate"]
+            if data["column"] == "sse":
+                return empty
+            if window == "2024-01-01~2024-01-02":
+                return _Response({"announcements": [new_missing], "hasMore": False})
+            if window == "2024-01-01~2024-01-01":
+                return _Response({"announcements": [_row("new-1", "new-1")], "hasMore": False})
+            raise RuntimeError("new day two interrupted")
+
+    with pytest.raises(RuntimeError, match="new day two interrupted"):
+        fetch_announcement_index_range(
+            date(2024, 1, 1),
+            date(2024, 1, 2),
+            client=InterruptedRetry(),
+            config=config,
+            run_id="same-run",
+        )
+    with pytest.raises(RawArchiveError, match="do not fully cover parent"):
+        replay_announcement_index_range(
+            RawPayloadArchive(config.meta_root), date(2024, 1, 1), date(2024, 1, 2)
+        )
+
+
+def test_same_run_retry_cannot_mix_new_szse_with_old_sse(tmp_path, monkeypatch):
+    monkeypatch.setattr(announcements, "_POST_RETRIES", 1)
+    config = _config(tmp_path)
+    old = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-01", 1): _Response(
+                {"announcements": [_row("old-szse")], "hasMore": False}
+            ),
+            ("sse", "2024-01-01~2024-01-01", 1): _Response(
+                {"announcements": [_row("old-sse")], "hasMore": False}
+            ),
+        }
+    )
+    fetch_announcement_index_range(
+        date(2024, 1, 1), client=old, config=config, run_id="same-column-run"
+    )
+
+    class InterruptedSse:
+        def post(self, _url, data):
+            if data["column"] == "szse":
+                return _Response({"announcements": [_row("new-szse")], "hasMore": False})
+            raise RuntimeError("sse interrupted before response")
+
+    with pytest.raises(RuntimeError, match="sse interrupted"):
+        fetch_announcement_index_range(
+            date(2024, 1, 1),
+            client=InterruptedSse(),
+            config=config,
+            run_id="same-column-run",
+        )
+    with pytest.raises(RawArchiveError, match="missing exchange column.*sse"):
+        replay_announcement_index_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))
+
+
+def test_replay_exact_daily_range_prefers_newer_invocation_over_old_broad(tmp_path):
+    config = _config(tmp_path)
+    empty = _Response({"announcements": [], "hasMore": False})
+    broad = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-02", 1): _Response(
+                {
+                    "announcements": [
+                        _row("old-1", "old-1"),
+                        _row("old-2", "old-2", "2024-01-02"),
+                    ],
+                    "hasMore": False,
+                }
+            ),
+            ("sse", "2024-01-01~2024-01-02", 1): empty,
+        }
+    )
+    fetch_announcement_index_range(
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+        client=broad,
+        config=config,
+        run_id="old-broad-invocation",
+    )
+    daily = _Client(
+        {
+            ("szse", "2024-01-02~2024-01-02", 1): _Response(
+                {
+                    "announcements": [_row("new-2", "new-2", "2024-01-02")],
+                    "hasMore": False,
+                }
+            ),
+            ("sse", "2024-01-02~2024-01-02", 1): empty,
+        }
+    )
+    fetch_announcement_index_range(
+        date(2024, 1, 2), client=daily, config=config, run_id="new-daily-invocation"
+    )
+    replayed = replay_announcement_index_range(
+        RawPayloadArchive(config.meta_root), date(2024, 1, 2)
+    )
+    assert replayed["announcement_id"].to_list() == ["new-2"]
+    end_only = replay_announcement_index_range(
+        RawPayloadArchive(config.meta_root), end=date(2024, 1, 2)
+    )
+    assert end_only["announcement_id"].to_list() == ["new-2"]
+
+    broad_replay = replay_announcement_index_range(
+        RawPayloadArchive(config.meta_root), date(2024, 1, 1), date(2024, 1, 2)
+    )
+    assert set(broad_replay["announcement_id"]) == {"old-1", "old-2"}
+    with pytest.raises(RawArchiveError, match="explicit replay date range"):
+        replay_announcement_index_range(RawPayloadArchive(config.meta_root))
+
+
+def test_replay_fails_closed_on_newest_interrupted_capture(tmp_path, monkeypatch):
+    monkeypatch.setattr(announcements, "_POST_RETRIES", 1)
+    config = _config(tmp_path)
+    complete = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-01", 1): _Response(
+                {
+                    "announcements": [_row("old", "complete")],
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            ),
+            ("sse", "2024-01-01~2024-01-01", 1): _Response(
+                {"announcements": [], "totalpages": 0, "hasMore": False}
+            ),
+        }
+    )
+    fetch_announcement_index_range(
+        date(2024, 1, 1), client=complete, config=config, run_id="complete-run"
+    )
+
+    class Interrupted:
+        def post(self, _url, data):
+            if data["pageNum"] == 1:
+                return _Response(
+                    {
+                        "announcements": [_row("partial", "partial")],
+                        "totalpages": 2,
+                        "hasMore": True,
+                    }
+                )
+            raise RuntimeError("page two interrupted")
+
+    with pytest.raises(RuntimeError, match="page 2"):
+        fetch_announcement_index_range(
+            date(2024, 1, 1),
+            client=Interrupted(),
+            config=config,
+            run_id="interrupted-run",
+        )
+
+    with pytest.raises(RawArchiveError, match="missing page 2"):
+        replay_announcement_index_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))
+
+
+def test_replay_rejects_page_total_drift_within_capture(tmp_path):
+    config = _config(tmp_path)
+    client = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-01", 1): _Response(
+                {
+                    "announcements": [_row("p1")],
+                    "totalpages": 2,
+                    "hasMore": True,
+                }
+            ),
+            ("szse", "2024-01-01~2024-01-01", 2): _Response(
+                {
+                    "announcements": [_row("p2")],
+                    "totalpages": 3,
+                    "hasMore": False,
+                }
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="totalpages changed"):
+        fetch_announcement_index_range(
+            date(2024, 1, 1), client=client, config=config, run_id="drift-run"
+        )
+    with pytest.raises(RawArchiveError, match="page total changed"):
+        replay_announcement_index_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))
+
+
+def test_replay_uses_live_strict_pagination_value_parsing(tmp_path):
+    config = _config(tmp_path)
+    client = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-01", 1): _Response(
+                {
+                    "announcements": [_row("x")],
+                    "totalpages": True,
+                    "hasMore": False,
+                }
+            )
+        }
+    )
+    with pytest.raises(RuntimeError, match="not a non-negative integer"):
+        fetch_announcement_index_range(
+            date(2024, 1, 1), client=client, config=config, run_id="bool-pages-run"
+        )
+    with pytest.raises(RawArchiveError, match="not a non-negative integer"):
+        replay_announcement_index_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))
+
+
+def test_replay_does_not_fall_back_after_newest_json_parse_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(announcements, "_POST_RETRIES", 1)
+    config = _config(tmp_path)
+    complete = _Client(
+        {
+            ("szse", "2024-01-01~2024-01-01", 1): _Response(
+                {"announcements": [_row("old")], "totalpages": 1, "hasMore": False}
+            ),
+            ("sse", "2024-01-01~2024-01-01", 1): _Response(
+                {"announcements": [], "totalpages": 0, "hasMore": False}
+            ),
+        }
+    )
+    fetch_announcement_index_range(
+        date(2024, 1, 1), client=complete, config=config, run_id="old-json-run"
+    )
+
+    class InvalidJson(_Response):
+        def __init__(self):
+            super().__init__({}, wire=b"not-json")
+
+        def json(self):
+            raise ValueError("invalid json")
+
+    class InvalidClient:
+        def post(self, _url, data):
+            return InvalidJson()
+
+    with pytest.raises(RuntimeError, match="page 1"):
+        fetch_announcement_index_range(
+            date(2024, 1, 1),
+            client=InvalidClient(),
+            config=config,
+            run_id="new-invalid-json-run",
+        )
+    with pytest.raises(RawArchiveError, match="unparsed JSON"):
+        replay_announcement_index_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))
+
+
+def test_replay_rejects_latest_non_object_json_capture(tmp_path, monkeypatch):
+    monkeypatch.setattr(announcements, "_POST_RETRIES", 1)
+    config = _config(tmp_path)
+
+    class ListResponse(_Response):
+        def __init__(self):
+            self.payload = []
+            self.content = b"[]"
+
+    class ListClient:
+        def post(self, _url, data):
+            return ListResponse()
+
+    with pytest.raises(RuntimeError, match="not an object"):
+        fetch_announcement_index_range(
+            date(2024, 1, 1),
+            client=ListClient(),
+            config=config,
+            run_id="list-json-run",
+        )
+    with pytest.raises(RawArchiveError, match="unparsed JSON|JSON is not an object"):
+        replay_announcement_index_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))
+
 
 def test_checkpoint_cannot_reuse_rows_when_required_wire_archive_is_missing(tmp_path):
     payload = {"announcements": [_row("a")], "totalpages": 1, "hasMore": False}
@@ -163,7 +586,9 @@ def test_checkpoint_cannot_reuse_rows_when_required_wire_archive_is_missing(tmp_
     fetch_announcement_index_range(
         date(2024, 1, 1), client=second, config=config, checkpoint_path=checkpoint, refresh=False
     )
-    assert [call["pageNum"] for call in second.calls] == [1]
+    # The active capture must cover both exchange columns; it cannot combine
+    # a surviving historic observation with the newly fetched page.
+    assert [call["pageNum"] for call in second.calls] == [1, 1]
 
 
 def test_replay_rejects_distinct_raw_rows_over_source_total(tmp_path):
@@ -311,3 +736,19 @@ def test_regulatory_pages_use_same_archive_and_replay_path(tmp_path):
     records = archive.records("regulatory_events")
     assert len(records) == 2
     assert live.to_dicts() == replayed.to_dicts()
+
+
+def test_regulatory_replay_rejects_archived_row_outside_requested_date(tmp_path):
+    payload = {
+        "announcements": [_row("r", "行政处罚公告", "2024-01-02")],
+        "totalpages": 1,
+        "hasMore": False,
+    }
+    config = _config(tmp_path)
+    client = _Client({("szse", "2024-01-01~2024-01-01", 1): _Response(payload)})
+    with pytest.raises(RuntimeError, match="row date"):
+        fetch_regulatory_events_range(
+            date(2024, 1, 1), client=client, config=config, run_id="bad-date-run"
+        )
+    with pytest.raises(RawArchiveError, match="after requested|missing exchange column"):
+        replay_regulatory_events_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))

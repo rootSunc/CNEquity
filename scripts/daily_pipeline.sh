@@ -12,26 +12,18 @@
 # as possible — but any failure makes the pipeline exit non-zero after the
 # health check reports it.
 #
-# After the groups, anything still behind the last trading day gets one more
-# attempt. This matters because a `snapshot` dataset only ever fetches the run
-# day: a source outage during its one scheduled window loses that day for good,
-# since replaying it later would forge rows. valuation_metrics lost 2026-07-30
-# and 07-31 exactly that way — the per-host retries inside the adapter were
-# already there and were exhausted. What was missing was a second window.
-#
-# The wait before that second attempt is the point of it. Retrying immediately
-# mostly re-hits the same outage, so the pass sleeps first — but only when
-# something is actually stale, so a healthy day pays nothing. For an outage
-# lasting hours a separate late-evening cron line is still the better tool:
-#   5 20 * * 1-5 cne run daily --stale-only
+# A late stale-only pass is installed separately (see stale_pipeline.sh), so a
+# source outage cannot hold the six-group pipeline open for half an hour. The
+# old in-process delayed retry remains available as an explicit compatibility
+# switch (`CNE_STALE_RETRY=1`) for callers that still want that behaviour.
 #
 # Usage: scripts/daily_pipeline.sh [YYYY-MM-DD]
 # Env: CNE_CONFIG, CNE_LOG_DIR, CNE_GROUPS (space-separated override),
 #      CNE_GATE_GROUPS (space-separated; default "core" — failure ⇒ hard fail),
 #      CNE_SOFT_FAIL_OK=1 (default) — gate OK 时东财/soft 失败只告警、exit 0；
 #        设为 0 则 soft 失败仍 exit 1（国内全组日更可用），
-#      CNE_STALE_RETRY=1 (default) — 收尾补抓仍落后的数据集；0 关闭，
-#      CNE_STALE_RETRY_DELAY_SEC=1800 (default) — 补抓前等多久，
+#      CNE_STALE_RETRY=0 (default) — 兼容开关；设为 1 才在本进程收尾补抓，
+#      CNE_STALE_RETRY_DELAY_SEC=1800 (default) — 兼容补抓前等多久，
 #      CNE_SOURCE_HEALTH=1 (default) — 每日串行探测并积累 SLO 样本；0 关闭，
 #      CNE_SOURCE_VANTAGE=local — 当前网络出口的稳定标签，
 #      CNE_TRADE_DATE (same as optional CLI arg — catch up a prior session).
@@ -62,12 +54,28 @@ GROUP_LIST="${CNE_GROUPS:-core capital signals fundamentals macro_risk research}
 GATE_GROUP_LIST="${CNE_GATE_GROUPS:-core}"
 # Overseas Mac: expected EM lag must not paint the whole day red.
 SOFT_FAIL_OK="${CNE_SOFT_FAIL_OK:-1}"
-STALE_RETRY="${CNE_STALE_RETRY:-1}"
+STALE_RETRY="${CNE_STALE_RETRY:-0}"
 STALE_RETRY_DELAY_SEC="${CNE_STALE_RETRY_DELAY_SEC:-1800}"
 SOURCE_HEALTH="${CNE_SOURCE_HEALTH:-1}"
 SOURCE_VANTAGE="${CNE_SOURCE_VANTAGE:-local}"
 
+# `mkdir` is the portable atomic primitive available in macOS Bash 3.2. Keep
+# one lock around the entire script so the independently scheduled stale pass
+# cannot overlap a group, health check, or metadata backup.
+. "$REPO_ROOT/scripts/scheduler_lock.sh"
+
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
+
+lock_rc=0
+scheduler_lock_acquire "$REPO_ROOT" daily || lock_rc=$?
+if [[ "$lock_rc" -eq 1 ]]; then
+  log "another daily/stale scheduler run is active — skipping"
+  exit 0
+elif [[ "$lock_rc" -ne 0 ]]; then
+  log "unable to acquire scheduler lock (rc=$lock_rc)"
+  exit 1
+fi
+scheduler_lock_install_traps
 
 _is_gate_group() {
   local g="$1" x

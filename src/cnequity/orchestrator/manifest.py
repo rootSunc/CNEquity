@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -54,6 +54,11 @@ class BatchRecord:
     rows_read: int = 0
     rows_written: int = 0
     retry_count: int = 0
+    # ``retry_count`` is orchestrator-owned: a durable retry budget for worker
+    # batches and a one-attempt lineage marker for non-worker retry batches.
+    # Request retries are adapter-local observations and must not be mixed into
+    # it, or a transient HTTP retry could consume a worker retry slot.
+    request_retry_count: int = 0
     started_at: str | None = None
     finished_at: str | None = None
     error_message: str | None = None
@@ -140,6 +145,7 @@ class Manifest:
                     rows_read INTEGER DEFAULT 0,
                     rows_written INTEGER DEFAULT 0,
                     retry_count INTEGER DEFAULT 0,
+                    request_retry_count INTEGER DEFAULT 0,
                     started_at TEXT,
                     finished_at TEXT,
                     error_message TEXT,
@@ -171,6 +177,14 @@ class Manifest:
             if "blocks_compaction" not in cols:
                 conn.execute(
                     "ALTER TABLE ingestion_batches ADD COLUMN blocks_compaction INTEGER DEFAULT 1"
+                )
+            if "request_retry_count" not in cols:
+                # Additive migration for manifests created before request
+                # retry telemetry was separated from the orchestrator retry
+                # budget.  Existing rows remain explicitly unknown/zero; no
+                # historical request retries are inferred from logs.
+                conn.execute(
+                    "ALTER TABLE ingestion_batches ADD COLUMN request_retry_count INTEGER DEFAULT 0"
                 )
 
             # ``dataset_results`` was added after the original two-table
@@ -288,8 +302,8 @@ class Manifest:
                 INSERT INTO ingestion_batches (
                     run_id, batch_id, task_id, dataset, status, symbols_json,
                     window_start, window_end, started_at, heartbeat_at, retry_count,
-                    blocks_compaction
-                ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, 0, ?)
+                    request_retry_count, blocks_compaction
+                ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, 0, 0, ?)
                 ON CONFLICT(run_id, batch_id) DO UPDATE SET
                     task_id = excluded.task_id,
                     dataset = excluded.dataset,
@@ -365,13 +379,25 @@ class Manifest:
         rows_written: int = 0,
         error_message: str | None = None,
         retry_count: int | None = None,
+        request_retry_count: int | None = None,
     ) -> None:
+        if request_retry_count is not None:
+            try:
+                request_retry_count = int(request_retry_count)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("request_retry_count must be an integer") from exc
+            if request_retry_count < 0:
+                raise ValueError("request_retry_count must be non-negative")
         with self._connect() as conn:
             conn.execute(
                 """
                 UPDATE ingestion_batches
                 SET status = ?, finished_at = ?, rows_read = ?, rows_written = ?,
                     error_message = ?, retry_count = COALESCE(?, retry_count),
+                    request_retry_count = CASE
+                        WHEN ? IS NULL THEN request_retry_count
+                        ELSE MAX(COALESCE(request_retry_count, 0), ?)
+                    END,
                     blocks_compaction = CASE
                         WHEN ? IN ('warning', 'failed', 'stale') THEN 1
                         ELSE blocks_compaction
@@ -385,11 +411,91 @@ class Manifest:
                     rows_written,
                     error_message,
                     retry_count,
+                    request_retry_count,
+                    request_retry_count,
                     status,
                     run_id,
                     batch_id,
                 ),
             )
+
+    def record_batch_telemetry(
+        self,
+        run_id: str,
+        batch_id: str,
+        metrics: Mapping[str, Any] | None = None,
+        *,
+        request_retry_count: int | None = None,
+    ) -> bool:
+        """Persist adapter-observed retry telemetry for one batch.
+
+        ``retry_count`` remains the orchestrator-owned requeue counter/budget.
+        Adapters report request-level retries through
+        ``request_retry_count`` (or the legacy ``retries`` metric when the
+        explicit key is absent).  The value is monotonic so a late telemetry
+        callback cannot erase an observation made by the worker that finished
+        the batch.  This method intentionally does not derive a value from
+        logs, response counts, or elapsed time.
+
+        Returns ``True`` when the batch exists and was updated.
+        """
+        if request_retry_count is None and metrics is not None:
+            if "request_retries" in metrics:
+                request_retry_count = metrics.get("request_retries")
+            elif "orchestrator_retries" not in metrics:
+                # Existing adapters use ``retries`` for their own request
+                # attempts. Keep that contract while callers migrate to the
+                # unambiguous ``request_retries`` spelling.
+                request_retry_count = metrics.get("retries")
+        if request_retry_count is None:
+            return False
+        try:
+            request_retry_count = int(request_retry_count)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("request_retry_count must be an integer") from exc
+        if request_retry_count < 0:
+            raise ValueError("request_retry_count must be non-negative")
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE ingestion_batches
+                SET request_retry_count = MAX(COALESCE(request_retry_count, 0), ?)
+                WHERE run_id = ? AND batch_id = ?
+                """,
+                (request_retry_count, run_id, batch_id),
+            )
+            return bool(cur.rowcount)
+
+    # Clear aliases for callers that describe this as an adapter report.
+    record_adapter_telemetry = record_batch_telemetry
+
+    def get_retry_telemetry(self, run_id: str) -> dict[str, int]:
+        """Aggregate observed and orchestrator retries for one run.
+
+        The two components are kept separate so operators can distinguish a
+        batch being requeued from an adapter retrying a request.  ``retries``
+        is their explicit sum, never an estimate.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(retry_count), 0) AS orchestrator_retries,
+                       COALESCE(SUM(request_retry_count), 0) AS request_retries
+                FROM ingestion_batches WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        orchestrator = int(row["orchestrator_retries"] if row is not None else 0)
+        request = int(row["request_retries"] if row is not None else 0)
+        return {
+            "orchestrator_retries": orchestrator,
+            "request_retries": request,
+            "retries": orchestrator + request,
+        }
+
+    # ``retry_telemetry`` is a concise compatibility spelling used by status
+    # consumers; both names return the same explicit aggregation.
+    retry_telemetry = get_retry_telemetry
 
     def resolve_failed_batch(
         self,
@@ -1038,6 +1144,7 @@ class Manifest:
             "dataset_results": dataset_status["results"],
             "dataset_status": public_dataset_status,
             "dataset_result_counts": dataset_status["counts"],
+            "retry_telemetry": self.get_retry_telemetry(run_id),
         }
 
     def update_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
@@ -1192,6 +1299,7 @@ class Manifest:
                         "cache_hits",
                         "fallback_requests",
                         "retries",
+                        "request_retries",
                         "failed_requests",
                         "rows_read",
                         "rows_written",
@@ -1203,15 +1311,27 @@ class Manifest:
             )
             # Batch retries are tracked independently from stage payloads.  This
             # keeps retry telemetry available even when a non-worker step fails
-            # before it can return its own metrics object.
+            # before it can return its own metrics object. Request retries are
+            # an adapter observation; orchestrator retries are the retry budget
+            # used by the run-level recovery loop.
             retry_row = conn.execute(
-                "SELECT COALESCE(SUM(retry_count), 0) AS retries "
+                "SELECT COALESCE(SUM(retry_count), 0) AS orchestrator_retries, "
+                "COALESCE(SUM(request_retry_count), 0) AS request_retries "
                 "FROM ingestion_batches WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
+            orchestrator_retries = int(
+                retry_row["orchestrator_retries"] if retry_row is not None else 0
+            )
+            request_retries = max(
+                int(totals.get("request_retries", 0) or 0),
+                int(retry_row["request_retries"] if retry_row is not None else 0),
+            )
+            aggregate["orchestrator_retries"] = orchestrator_retries
+            aggregate["request_retries"] = request_retries
             aggregate["retries"] = max(
                 int(totals.get("retries", 0) or 0),
-                int(retry_row["retries"] if retry_row is not None else 0),
+                orchestrator_retries + request_retries,
             )
             aggregate["failed_requests"] = int(totals.get("failed_requests", 0) or 0)
             aggregate["request_seconds"] = float(totals.get("request_seconds", 0.0) or 0.0)

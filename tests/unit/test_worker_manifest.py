@@ -2,6 +2,7 @@ import os
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -130,6 +131,170 @@ def test_manifest_accepts_str_db_path(tmp_path):
     assert run_id
 
 
+def test_request_retries_are_separate_from_batch_retry_budget(tmp_path):
+    db = tmp_path / "meta" / "manifest.db"
+    manifest = Manifest(db)
+    run_id = manifest.start_run("daily")
+    manifest.start_batch(run_id, "batch-0", "daily_bars", "daily_bars")
+    manifest.finish_batch(run_id, "batch-0", "failed", request_retry_count=2)
+    assert manifest.increment_batch_retry_counts(run_id, ["batch-0"]) == 1
+
+    # A second worker reports its cumulative request-retry observation without
+    # consuming another orchestrator retry slot.
+    manifest.start_batch(run_id, "batch-0", "daily_bars", "daily_bars")
+    manifest.finish_batch(run_id, "batch-0", "success", request_retry_count=5)
+    row = manifest.get_batch(run_id, "batch-0")
+    assert row is not None
+    assert row["retry_count"] == 1
+    assert row["request_retry_count"] == 5
+    assert manifest.get_retry_telemetry(run_id) == {
+        "orchestrator_retries": 1,
+        "request_retries": 5,
+        "retries": 6,
+    }
+
+
+def test_worker_pool_persists_adapter_request_retries(worker_config, monkeypatch):
+    import polars as pl
+
+    init_data_layout(worker_config)
+    manifest = Manifest(worker_config.manifest_path)
+    run_id = manifest.start_run("daily")
+
+    def _fetch(symbols, start, end, **kwargs):
+        kwargs["metrics"]["retries"] = 2
+        return pl.DataFrame(
+            {
+                "symbol": symbols,
+                "trade_date": [start] * len(symbols),
+                "open": [1.0] * len(symbols),
+                "high": [1.0] * len(symbols),
+                "low": [1.0] * len(symbols),
+                "close": [1.0] * len(symbols),
+                "volume": [100] * len(symbols),
+                "amount": [100.0] * len(symbols),
+            }
+        )
+
+    monkeypatch.setattr("cnequity.orchestrator.worker_pool.fetch_daily_bars", _fetch)
+    fetch_daily_bars_parallel(
+        worker_config,
+        ["600519.SH"],
+        date(2024, 6, 28),
+        date(2024, 6, 28),
+        run_id,
+    )
+
+    row = manifest.get_batches_for_run(run_id)[0]
+    assert row["retry_count"] == 0
+    assert row["request_retry_count"] == 2
+
+
+def test_self_recording_step_gets_engine_receipt_when_implementation_omits_it(tmp_path):
+    from cnequity.config import Config
+
+    cfg = Config(data_root=tmp_path / "data")
+    engine = JobEngine(cfg)
+    run_id = engine.manifest.start_run("daily:core")
+    engine._record_step_result(
+        name="derive_adj_factors",
+        entry=SimpleNamespace(group="finalize"),
+        run_id=run_id,
+        status="success",
+        out={"rows_written": 7},
+    )
+
+    receipt = engine.manifest.get_dataset_result(run_id, "adj_factors", "derive")
+    assert receipt is not None
+    assert receipt["status"] == "success"
+    assert receipt["rows_written"] == 7
+
+
+def test_self_recording_retry_does_not_reuse_failed_receipt(tmp_path):
+    from cnequity.config import Config
+
+    engine = JobEngine(Config(data_root=tmp_path / "data"))
+    run_id = engine.manifest.start_run("daily:core")
+    engine.manifest.record_dataset_result(
+        run_id,
+        "adj_factors",
+        "derive",
+        "failed",
+        criticality="core",
+        rows_written=0,
+    )
+
+    engine._record_step_result(
+        name="derive_adj_factors",
+        entry=SimpleNamespace(group="finalize"),
+        run_id=run_id,
+        status="success",
+        out={"rows_written": 11},
+    )
+
+    receipt = engine.manifest.get_dataset_result(run_id, "adj_factors", "derive")
+    assert receipt is not None
+    assert receipt["status"] == "success"
+    assert receipt["rows_written"] == 11
+
+
+def test_non_worker_retry_lineage_records_one_orchestrator_requeue(tmp_path, monkeypatch):
+    from cnequity.config import Config
+
+    cfg = Config(data_root=tmp_path / "data")
+    engine = JobEngine(cfg)
+    run_id = engine.manifest.start_run("daily:core")
+    entry = SimpleNamespace(
+        group="core",
+        requires_workers=False,
+        fn=lambda *_args, **_kwargs: {"rows_read": 1, "rows_written": 1},
+    )
+    monkeypatch.setattr("cnequity.orchestrator.engine.get_step", lambda _name: entry)
+
+    result = engine._run_step(
+        "fixture_dataset",
+        date(2024, 6, 28),
+        run_id,
+        {},
+        retry_of=["failed-predecessor"],
+    )
+
+    assert result["status"] == "success"
+    batch = engine.manifest.get_batches_for_run(run_id)[0]
+    assert batch["retry_count"] == 1
+    assert engine.manifest.get_retry_telemetry(run_id)["orchestrator_retries"] == 1
+
+
+def test_cninfo_failure_metrics_reach_running_batch_retry_telemetry(tmp_path):
+    from cnequity.config import Config
+    from cnequity.steps.events import _record_cninfo_metrics
+
+    cfg = Config(data_root=tmp_path / "data")
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("backfill")
+    manifest.start_batch(run_id, "batch-0", "announcement_index", "announcement_index")
+
+    _record_cninfo_metrics(
+        cfg,
+        run_id,
+        "announcement_index",
+        {"requests": 4, "retries": 3, "status": "failed"},
+        batch_id="batch-0",
+    )
+    # Re-recording an aggregate for the same attempt is monotonic, not
+    # additive, so telemetry callbacks cannot double-count retries.
+    _record_cninfo_metrics(
+        cfg,
+        run_id,
+        "announcement_index",
+        {"requests": 4, "retries": 3, "status": "failed"},
+        batch_id="batch-0",
+    )
+
+    row = manifest.get_batch(run_id, "batch-0")
+    assert row["request_retry_count"] == 3
+
+
 def test_dataset_results_schema_migrates_and_round_trips(tmp_path):
     """A pre-stage-4 result table gains the new columns in place."""
     db = tmp_path / "meta" / "manifest.db"
@@ -171,6 +336,47 @@ def test_dataset_results_schema_migrates_and_round_trips(tmp_path):
         "error_code",
         "error_message",
     } <= columns
+
+
+def test_batch_request_retry_column_migrates_old_manifest(tmp_path):
+    db = tmp_path / "meta" / "manifest.db"
+    manifest = Manifest(db)
+    with manifest._connect() as conn:
+        conn.execute("ALTER TABLE ingestion_batches RENAME TO ingestion_batches_new")
+        conn.execute(
+            """
+            CREATE TABLE ingestion_batches (
+                run_id TEXT NOT NULL,
+                batch_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                dataset TEXT NOT NULL,
+                status TEXT NOT NULL,
+                symbols_json TEXT DEFAULT '[]',
+                window_start TEXT,
+                window_end TEXT,
+                rows_read INTEGER DEFAULT 0,
+                rows_written INTEGER DEFAULT 0,
+                retry_count INTEGER DEFAULT 0,
+                started_at TEXT,
+                finished_at TEXT,
+                error_message TEXT,
+                heartbeat_at TEXT,
+                blocks_compaction INTEGER DEFAULT 1,
+                PRIMARY KEY (run_id, batch_id)
+            )
+            """
+        )
+        conn.execute("DROP TABLE ingestion_batches_new")
+
+    migrated = Manifest(db)
+    with migrated._connect() as conn:
+        columns = {item[1] for item in conn.execute("PRAGMA table_info(ingestion_batches)")}
+    assert "request_retry_count" in columns
+
+    run_id = migrated.start_run("daily")
+    migrated.start_batch(run_id, "batch-0", "daily_bars", "daily_bars")
+    migrated.finish_batch(run_id, "batch-0", "success", request_retry_count=2)
+    assert migrated.get_batch(run_id, "batch-0")["request_retry_count"] == 2
 
 
 def test_dataset_result_aggregate_distinguishes_degraded_from_core_failure(tmp_path):

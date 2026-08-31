@@ -40,6 +40,38 @@ def test_horizon_guard_is_a_no_op_without_a_horizon():
     backfill_cmds._guard_history_horizon("minute_bars", None)
 
 
+@pytest.mark.parametrize("dataset", ["announcement_index", "regulatory_events"])
+def test_cninfo_default_backfill_is_date_chunked_without_explicit_range(dataset, monkeypatch):
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace()
+    seen: dict = {}
+
+    def _chunked(config, name, start, end, chunk_days):
+        seen.update(
+            config=config,
+            dataset=name,
+            start=start,
+            end=end,
+            chunk_days=chunk_days,
+        )
+        return {"status": "success", "rows_written": 0}
+
+    monkeypatch.setattr(backfill_cmds, "_backfill_chunked", _chunked)
+    monkeypatch.setattr(backfill_cmds, "shanghai_today", lambda: date(2026, 8, 31))
+
+    result = backfill_cmds._backfill_once(cfg, dataset)
+
+    assert result["status"] == "success"
+    assert seen == {
+        "config": cfg,
+        "dataset": dataset,
+        "start": date(2010, 1, 1),
+        "end": date(2026, 8, 31),
+        "chunk_days": 31,
+    }
+
+
 def test_earliest_available_converts_trading_days_to_calendar_days():
     spec = DatasetSpec("x", tier="L1", history_horizon_days=242)
     # A year of sessions is a calendar year, not 242 calendar days.
