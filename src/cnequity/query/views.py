@@ -11,6 +11,7 @@ from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.domain.partitions import uses_hive
 from cnequity.domain.schemas import DATASET_SCHEMAS, PRIMARY_KEYS
+from cnequity.domain.trading_status import evidence_rank_sql
 from cnequity.storage.revisions import resolve_committed_root
 
 
@@ -88,8 +89,16 @@ def _sql_literal(value: str) -> str:
 
 
 def _canonical_order_sql(name: str, columns: set[str]) -> str:
-    """Return the DuckDB ordering used to select one canonical lake row."""
+    """Return the DuckDB ordering used to select one canonical lake row.
+
+    Mirrors :func:`cnequity.domain.canonical.dedupe_by_primary_key`, including
+    the datasets whose evidence class outranks recency.
+    """
     order_by: list[str] = []
+    if name == "trading_status":
+        evidence = evidence_rank_sql(columns)
+        if evidence is not None:
+            order_by.append(f"{evidence} DESC")
     if "fetched_at" in columns:
         order_by.append("fetched_at DESC NULLS LAST")
     if "source" in columns:

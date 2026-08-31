@@ -11,6 +11,11 @@ INIT_PHASE_STEPS: dict[str, list[str]] = {
     "phase2c_daily_bars_backfill": ["daily_bars"],
     "phase3_index_and_status": ["index_bars", "trading_status"],
     "phase4_finalize": ["compact", "derive_adj_factors", "derive_industry_index", "audit"],
+    # Reconstructing suspensions needs the bars *committed*, which only happens
+    # in phase4, so this cannot run earlier — and it needs a compact of its own
+    # to publish what it stages. The daily job keeps it current from there with
+    # a short tail window; this is the one pass that reaches the whole history.
+    "phase5_derive_and_publish": ["trading_status_derive", "compact"],
 }
 
 INIT_BACKFILL_PHASES = frozenset(
@@ -24,6 +29,8 @@ INIT_BACKFILL_PHASES = frozenset(
         # index_bars needs the same 2016+ history as daily_bars for market/beta
         # factors. trading_status ignores backfill (single-day snapshot fetch).
         "phase3_index_and_status",
+        # Backfill is how the derive is told to reach past its daily tail.
+        "phase5_derive_and_publish",
     }
 )
 
@@ -36,6 +43,7 @@ DEFAULT_INIT_PHASES = [
     "phase2c_daily_bars_backfill",
     "phase3_index_and_status",
     "phase4_finalize",
+    "phase5_derive_and_publish",
 ]
 
 
@@ -64,6 +72,8 @@ def step_backfill(step: str, phases: list[str]) -> bool:
         return "phase1_reference" in phases
     if step in ("index_bars", "trading_status"):
         return "phase3_index_and_status" in phases
+    if step == "trading_status_derive":
+        return "phase5_derive_and_publish" in phases
     return False
 
 

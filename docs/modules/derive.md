@@ -11,7 +11,7 @@
 | 文件 | 输出 | 触发 |
 |------|------|------|
 | `adj_factors.py` | `derived/adj_factors` | `cne derive adj_factors` / daily finalize |
-| `trading_status_history.py` | 写入 `curated/trading_status` | `cne derive trading_status` |
+| `trading_status_history.py` | staging `trading_status` | `trading_status_derive` step / `cne derive trading_status` |
 | `market_breadth.py` | `market_breadth` | macro_risk step 内调用 |
 | `sentiment_scores.py` | `sentiment_scores` | research step 内调用 |
 
@@ -49,12 +49,19 @@
 
 ## trading_status_history.py
 
-`derive_suspension_history(cfg, *, start=None, end=None)` / `cne derive trading_status [--start] [--end]`：
+`derive_suspension_history(cfg, run_id, *, start=None, end=None)`、`trading_status_derive` step
+（日更 core wave，`daily_bars` 之后、`compact` 之前，默认回看 90 天）、
+`cne derive trading_status [--start] [--end]`（自建一次 run 走 derive + compact）：
 
 - 对比 `daily_bars` 有成交（`volume > 0`）的日期与 `trading_calendar`；停牌 OHLC 占位行不算成交
-- 推断历史停牌区间
-- 按 `DATASETS["trading_status"].partition_for`（月分区 `trade_date=YYYY-MM`）合并写入 `trading_status`（`status="suspended"`）
+- 推断历史停牌区间，**写入 staging**，由 compact 合并并发布 committed 修订
+- 只报**区间内**缺口：每个标的的窗口被自身首末 bar 夹住，所以尚未入湖的最新交易日不会被误判为全市场停牌
 - `start` / `end` 限制日历窗口（按年分块重建，避免全历史 cross-join OOM）
+
+行冲突不在这里解决：`domain/trading_status.py` 的**证据等级**决定谁胜出——
+交易所记录、以及当日收盘后读到的板快照（point-in-time）> 派生停牌 > 事后
+盖到旧交易日上的当前态快照。日更 EastMoney 快照因此不会再抹掉派生停牌行，
+而 Baostock / 退市 / 当日收盘后的快照仍能纠正它。
 
 覆盖可与 `daily_bars` 同起点（约 2001）。与 Baostock ST 历史回填互补；显式配置 Tushare Pro 后，可用 `bak_basic` 覆盖 2016、`stock_st` 覆盖 2017-01-01 起的 BJ。实际 ST 证据起止范围以 `historical_st_evidence` 收据和 `cne audit --full` 为准，两者都不替代 EastMoney 当日 ST 列表。
 

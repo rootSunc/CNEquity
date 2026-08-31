@@ -24,8 +24,10 @@ run_init_phases() — 按 [job.init.phases] 顺序
   │     daily_bars（分页回填 2016+，symbol-batch 并行）
   ├── phase3_index_and_status
   │     index_bars（backfill）, trading_status（当日快照）
-  └── phase4_finalize
-        compact → derive_adj_factors → audit
+  ├── phase4_finalize
+  │     compact → derive_adj_factors → audit
+  └── phase5_derive_and_publish
+        trading_status_derive（全历史反推停牌）→ compact
 ```
 
 **阶段语义**（`orchestrator/init_phases.py`）：

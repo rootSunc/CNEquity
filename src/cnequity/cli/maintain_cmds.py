@@ -52,6 +52,44 @@ def compact(config_path: str, run_id: str | None):
     )
 
 
+def _derive_trading_status(cfg, *, start: date | None, end: date | None) -> dict:
+    """Run the derive step and publish it, as the daily job would.
+
+    The rows have to reach a committed revision to be worth anything: a
+    consumer reading the lake — including `daily_bars`'s own interior-gap
+    check — reads the committed generation, not the mutable curated directory
+    a direct write would land in. So this is a one-step run through the
+    engine, followed by the same compact the daily job ends with.
+    """
+    engine = JobEngine(cfg)
+    trade_date = shanghai_today()
+    run_id = engine.manifest.start_run(
+        "derive_trading_status",
+        {
+            "trade_date": trade_date.isoformat(),
+            "derive_start": start.isoformat() if start else None,
+            "derive_end": end.isoformat() if end else None,
+        },
+    )
+    context = {"derive_start": start, "derive_end": end, "derive_full": True}
+    summary: dict = {"run_id": run_id}
+    try:
+        derived = engine.run_step("trading_status_derive", trade_date, run_id, context)
+        summary["rows_staged"] = derived.get("rows_written", 0)
+        summary["compact"] = engine.run_step("compact", trade_date, run_id)
+    except Exception as exc:
+        engine.manifest.finish_run(run_id, "failed", error_message=str(exc))
+        raise
+    status = summary["compact"].get("status", "success")
+    engine.manifest.finish_run(
+        run_id,
+        status,
+        rows_written=summary["rows_staged"],
+    )
+    summary["status"] = status
+    return summary
+
+
 @cli.command()
 @click.argument("name", default="adj_factors")
 @config_option
@@ -95,10 +133,8 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
         summary = derive_industry_index(cfg, start=start, end=end, full=full)
         click.echo(json.dumps(summary, indent=2, default=str))
     elif name == "trading_status":
-        from cnequity.derive.trading_status_history import derive_suspension_history
-
-        rows = derive_suspension_history(cfg, start=start, end=end)
-        click.echo(f"Derived historical suspension: {rows} rows into trading_status")
+        summary = _derive_trading_status(cfg, start=start, end=end)
+        click.echo(json.dumps(summary, indent=2, default=str))
     elif name == "sector_routing":
         from cnequity.derive.sector_routing import derive_sector_routing
 

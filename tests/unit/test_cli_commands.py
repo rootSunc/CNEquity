@@ -763,9 +763,14 @@ def test_audit_full_can_select_scoped_research_universe(cfg_path, monkeypatch):
 
 
 def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
+    seen: dict = {}
+
+    def fake_derive(cfg, run_id, *, start=None, end=None, batch_id="derive-0"):
+        seen.update(run_id=run_id, start=start, end=end)
+        return 7
+
     monkeypatch.setattr(
-        "cnequity.derive.trading_status_history.derive_suspension_history",
-        lambda cfg, start=None, end=None: 7,
+        "cnequity.derive.trading_status_history.derive_suspension_history", fake_derive
     )
     result = CliRunner().invoke(
         cli,
@@ -781,7 +786,15 @@ def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "7 rows" in result.output
+    # The window is honoured, and the rows are staged against a real run so
+    # the compact that follows can publish them.
+    assert seen["start"] == date(2020, 1, 1)
+    assert seen["end"] == date(2020, 1, 31)
+    assert seen["run_id"]
+    summary = json.loads(result.output)
+    assert summary["rows_staged"] == 7
+    assert summary["run_id"] == seen["run_id"]
+    assert "compact" in summary
 
     monkeypatch.setattr(
         "cnequity.storage.valuation_orphans.purge_valuation_orphan_symbols",

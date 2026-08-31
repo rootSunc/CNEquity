@@ -332,7 +332,9 @@ steps = ["instruments", "trading_calendar", "trading_status"]
 [[job.daily.waves]]
 name = "corp_actions_to_bars"
 parallel = false
-steps = ["corporate_actions", "daily_bars"]
+# `trading_status_derive` reconstructs suspensions from daily_bars interior
+# gaps, so it runs after the bars and before `compact` publishes the revision.
+steps = ["corporate_actions", "daily_bars", "trading_status_derive"]
 
 [[job.daily.waves]]
 name = "parallel_core"
@@ -434,6 +436,7 @@ names = [
   "phase2c_daily_bars_backfill",
   "phase3_index_and_status",
   "phase4_finalize",
+  "phase5_derive_and_publish",
 ]
 
 [on_demand]

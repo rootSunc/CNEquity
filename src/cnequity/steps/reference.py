@@ -536,6 +536,56 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
     return result
 
 
+# How far back the daily run re-examines sessions for interior bar gaps. A halt
+# only becomes visible here once the symbol trades again, so the window has to
+# outlive an ordinary suspension rather than just cover the last few sessions.
+# Anything older is closed by an explicit rebuild (`cne derive trading_status`,
+# which walks the full history) — the daily step deliberately does not pay for
+# a whole-history cross-join every evening.
+DERIVE_TAIL_DAYS = 90
+
+
+@register_step("trading_status_derive", group="core", depends_on=["daily_bars"])
+def step_trading_status_derive(
+    config: Config, trade_date: date, run_id: str, context: dict
+) -> dict:
+    """Stage suspensions reconstructed from `daily_bars` interior gaps.
+
+    Runs before compact so the rows are published as part of this run's
+    committed generation. Nothing here reads the mutable curated directory,
+    and compact resolves any collision with the vendor board by evidence class
+    (`domain/trading_status`), so re-running the step is a no-op rather than a
+    fight with the daily snapshot.
+
+    Today's bars are still in staging at this point, which costs nothing: a
+    halt is only visible as a gap once the symbol has traded again, so the
+    newest session never contributes a row either way.
+
+    In backfill mode — `cne backfill`, and init's `phase5_derive_and_publish`,
+    which runs after the bars have been committed — the window is dropped and
+    the whole bar history is reconstructed in one pass.
+    """
+    from cnequity.derive.trading_status_history import derive_suspension_history
+
+    start = context.get("derive_start")
+    end = context.get("derive_end")
+    full = context.get("derive_full") or getattr(config, "_backfill", False)
+    if start is None and end is None and not full:
+        start = trade_date - timedelta(days=DERIVE_TAIL_DAYS)
+        end = trade_date
+    rows = derive_suspension_history(
+        config,
+        run_id,
+        start=start,
+        end=end,
+        # Distinct from the vendor snapshot's batch: both write the same
+        # dataset under this run_id, and a shared batch id would make one
+        # staging file overwrite the other.
+        batch_id=str(context.get("_batch_id") or "derive-0"),
+    )
+    return {"rows_read": rows, "rows_written": rows}
+
+
 def _is_all_a(symbol: str) -> bool:
     try:
         info = parse_symbol(symbol)

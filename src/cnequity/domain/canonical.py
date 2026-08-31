@@ -6,8 +6,11 @@ import polars as pl
 
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
+from cnequity.domain.trading_status import evidence_rank_expr as _trading_status_evidence_rank
 
 _SOURCE_RANK = "__canonical_source_rank"
+_EVIDENCE_RANK = "__canonical_evidence_rank"
+_HELPER_COLUMNS = (_SOURCE_RANK, _EVIDENCE_RANK)
 
 
 def _source_rank_expr(dataset: str, columns: set[str]) -> pl.Expr | None:
@@ -25,15 +28,33 @@ def _source_rank_expr(dataset: str, columns: set[str]) -> pl.Expr | None:
     return rank
 
 
+def _evidence_rank_expr(dataset: str, schema) -> pl.Expr | None:
+    """Authority ordering that outranks recency, for datasets that need one.
+
+    Recency is the right default: a later fetch of the same key is normally a
+    correction. ``trading_status`` is the exception — two of its feeds report
+    current state rather than what happened in a given session, so a fresher
+    row there can be a *worse* answer. See ``domain/trading_status`` for the
+    classes and why the derived history depends on them.
+    """
+    if dataset == "trading_status":
+        return _trading_status_evidence_rank(schema)
+    return None
+
+
 def _sort_for_canonical(frame, dataset: str):
-    """Order freshest rows, then source priority, before PK collapse."""
-    columns = (
-        set(frame.collect_schema().names())
-        if isinstance(frame, pl.LazyFrame)
-        else set(frame.columns)
-    )
+    """Order by evidence class, then recency and source priority, before PK collapse."""
+    schema = frame.collect_schema() if isinstance(frame, pl.LazyFrame) else frame.schema
+    columns = set(schema.names())
     sort_cols: list[str] = []
     descending: list[bool] = []
+    evidence = _evidence_rank_expr(dataset, schema)
+    if evidence is not None:
+        # Most significant key: a restated current-state snapshot must not win
+        # a collision just because it was fetched later.
+        frame = frame.with_columns(evidence.alias(_EVIDENCE_RANK))
+        sort_cols.append(_EVIDENCE_RANK)
+        descending.append(False)
     if "fetched_at" in columns:
         sort_cols.append("fetched_at")
         descending.append(False)
@@ -70,7 +91,7 @@ def dedupe_by_primary_key(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
     if any(column in df.columns for column in ("fetched_at", "source", "data_version")):
         df = _sort_for_canonical(df, dataset)
     out = df.unique(subset=primary_key, keep="last", maintain_order=True)
-    return out.drop(_SOURCE_RANK, strict=False)
+    return out.drop(*_HELPER_COLUMNS, strict=False)
 
 
 def dedupe_lazy_by_primary_key(lf: pl.LazyFrame, dataset: str) -> pl.LazyFrame:
@@ -82,5 +103,5 @@ def dedupe_lazy_by_primary_key(lf: pl.LazyFrame, dataset: str) -> pl.LazyFrame:
     if any(column in columns for column in ("fetched_at", "source", "data_version")):
         lf = _sort_for_canonical(lf, dataset)
     return lf.unique(subset=primary_key, keep="last", maintain_order=True).drop(
-        _SOURCE_RANK, strict=False
+        *_HELPER_COLUMNS, strict=False
     )

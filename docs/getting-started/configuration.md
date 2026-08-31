@@ -207,6 +207,7 @@ names = [
   "phase2c_daily_bars_backfill",
   "phase3_index_and_status",
   "phase4_finalize",
+  "phase5_derive_and_publish",
 ]
 ```
 

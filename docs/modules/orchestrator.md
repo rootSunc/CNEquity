@@ -126,6 +126,7 @@ INIT_PHASE_STEPS = {
     "phase2c_daily_bars_backfill": ["daily_bars"],
     "phase3_index_and_status": ["index_bars", "trading_status"],
     "phase4_finalize": ["compact", "derive_adj_factors", "audit"],
+    "phase5_derive_and_publish": ["trading_status_derive", "compact"],
 }
 ```
 
