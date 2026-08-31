@@ -57,6 +57,7 @@ def fetch_regulatory_events(
     raw_archive: RawPayloadArchive | None = None,
     run_id: str | None = None,
     request_scope: str | None = None,
+    findings: list[dict[str, Any]] | None = None,
 ) -> pl.DataFrame:
     return fetch_regulatory_events_range(
         trade_date,
@@ -72,6 +73,7 @@ def fetch_regulatory_events(
         raw_archive=raw_archive,
         run_id=run_id,
         request_scope=request_scope,
+        findings=findings,
     )
 
 
@@ -90,6 +92,7 @@ def fetch_regulatory_events_range(
     raw_archive: RawPayloadArchive | None = None,
     run_id: str | None = None,
     request_scope: str | None = None,
+    findings: list[dict[str, Any]] | None = None,
 ) -> pl.DataFrame:
     """Fetch regulatory events over a date interval with resumable slicing."""
     if end is None:
@@ -110,6 +113,7 @@ def fetch_regulatory_events_range(
         raw_archive=raw_archive,
         run_id=run_id,
         request_scope=request_scope,
+        findings=findings,
     )
     rows: list[dict] = []
     for item in raw_rows:

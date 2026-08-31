@@ -7,10 +7,16 @@ from datetime import date
 import pytest
 
 from cnequity.adapters.cninfo.announcements import (
+    _CNINFO_CATEGORIES,
     _symbol_from_cninfo,
     fetch_announcement_index,
 )
 from cnequity.adapters.cninfo.regulatory import fetch_regulatory_events
+
+
+def test_cninfo_categories_match_the_server_bucket_contract():
+    assert len(_CNINFO_CATEGORIES) == 26
+    assert all(bucket.startswith("category_") and bucket.endswith("_szsh") for bucket in _CNINFO_CATEGORIES)
 
 
 def test_symbol_from_cninfo_maps_exchange_prefixes():
@@ -48,9 +54,10 @@ class _FakeClient:
 
     def post(self, url, data):
         self.calls.append(data)
-        column = data["column"]
+        bucket = data["category"]
         page = data["pageNum"]
-        batches = self.pages.get(column, [])
+        legacy_key = "szse" if bucket == _CNINFO_CATEGORIES[0] else "sse"
+        batches = self.pages.get(bucket, self.pages.get(legacy_key, []) if bucket in _CNINFO_CATEGORIES[:2] else [])
         idx = page - 1
         batch = batches[idx] if idx < len(batches) else []
         has_more = idx + 1 < len(batches)
@@ -101,7 +108,7 @@ def test_fetch_announcement_index_paginates_and_dedupes(monkeypatch):
     a1 = df.filter(df["symbol"] == "000001.SZ")
     assert a1["title"].to_list() == ["半年报(更正)"]
     assert set(df["symbol"].to_list()) == {"000001.SZ", "600519.SH"}
-    assert len(client.calls) == 3  # szse page1, szse page2, sse page1
+    assert len(client.calls) == 27  # 26 category buckets plus one extra page
 
 
 def test_cninfo_rejects_a_row_from_a_different_announcement_date():
@@ -324,7 +331,7 @@ def test_fetch_announcement_index_uses_rate_limiter_when_config_given():
 
     client = _FakeClient({"szse": [[]], "sse": [[]]})
     fetch_announcement_index(date(2024, 6, 28), client=client, config=_Cfg())
-    assert calls == ["cninfo", "cninfo"]
+    assert calls == ["cninfo"] * 26
 
 
 class _OverrunClient:
@@ -350,7 +357,7 @@ class _OverrunClient:
             "announcementTitle": "x",
             "adjunctUrl": "/x.pdf",
         }
-        if data["column"] == "sse":
+        if data["category"] != _CNINFO_CATEGORIES[0]:
             return _FakeResponse({"announcements": [], "hasMore": False, "totalpages": 0})
         reported_total_pages = (
             self.total_pages if self.reported_total_pages is None else self.reported_total_pages
@@ -366,7 +373,7 @@ class _OverrunClient:
 def test_fetch_announcement_index_stops_at_totalpages_even_when_hasmore_lies():
     client = _OverrunClient(total_pages=3)
     df = fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert client.calls == 4  # szse pages 1..3, then sse's single (empty) page
+    assert client.calls == 28  # first bucket pages 1..3 plus 25 empty buckets
     assert df.height == 3
 
 
@@ -377,7 +384,7 @@ def test_fetch_announcement_index_rejects_a_repeated_page():
 
         def post(self, url, data):
             self.calls += 1
-            if data["column"] == "sse":
+            if data["category"] != _CNINFO_CATEGORIES[0]:
                 return _FakeResponse({"announcements": [], "hasMore": False})
             return _FakeResponse(
                 {
@@ -393,9 +400,13 @@ def test_fetch_announcement_index_rejects_a_repeated_page():
             )
 
     client = RepeatedPageClient()
-    with pytest.raises(RuntimeError, match="announcement.*repeated page"):
-        fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert client.calls == 2
+    findings: list[dict] = []
+    df = fetch_announcement_index(date(2024, 1, 31), client=client, findings=findings)
+    assert df.height == 1
+    assert findings[0]["check"] == "cninfo_truncation_at_100_pages"
+    assert findings[0]["bucket"] == _CNINFO_CATEGORIES[0]
+    assert findings[0]["page"] == 2
+    assert client.calls == 27
 
 
 @pytest.mark.parametrize(
@@ -412,7 +423,7 @@ def test_cninfo_fetchers_continue_after_a_full_page_without_pagination_metadata(
 
         def post(self, url, data):
             self.calls += 1
-            if data["column"] == "sse":
+            if data["category"] != _CNINFO_CATEGORIES[0]:
                 return _FakeResponse({"announcements": []})
             page = data["pageNum"]
             if page == 1:
@@ -439,7 +450,7 @@ def test_cninfo_fetchers_continue_after_a_full_page_without_pagination_metadata(
     client = NoPaginationMetadataClient()
     df = fetch(date(2024, 1, 31), client=client)
     assert df.height == 31
-    assert client.calls == 3  # szse pages 1..2, then the empty sse page
+    assert client.calls == 27  # first bucket pages 1..2 plus 25 empty buckets
 
 
 def test_fetch_announcement_index_rejects_empty_page_before_totalpages():
@@ -475,7 +486,7 @@ def test_fetch_announcement_index_uses_totalpages_when_hasmore_is_false():
 
         def post(self, url, data):
             self.calls += 1
-            if data["column"] == "sse":
+            if data["category"] != _CNINFO_CATEGORIES[0]:
                 return _FakeResponse({"announcements": [], "hasMore": False, "totalpages": 0})
             item = {
                 "secCode": "000001",
@@ -486,7 +497,7 @@ def test_fetch_announcement_index_uses_totalpages_when_hasmore_is_false():
 
     client = StaleHasMoreClient()
     df = fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert client.calls == 3
+    assert client.calls == 27
     assert set(df["announcement_id"].to_list()) == {"P1", "P2"}
 
 
@@ -494,7 +505,7 @@ def test_fetch_announcement_index_uses_totalpages_when_hasmore_is_false():
 def test_fetch_announcement_index_accepts_string_totalpages(total_pages):
     client = _OverrunClient(total_pages=3, reported_total_pages=total_pages)
     df = fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert client.calls == 4
+    assert client.calls == 28
     assert df.height == 3
 
 
@@ -522,7 +533,7 @@ def test_fetch_announcement_index_normalizes_string_hasmore():
         }
     )
     df = fetch_announcement_index(date(2024, 1, 31), client=client)
-    assert len(client.calls) == 3
+    assert len(client.calls) == 27
     assert df.height == 1
 
 
@@ -531,7 +542,6 @@ def test_fetch_announcement_index_normalizes_string_hasmore():
     [
         ("totalpages", 1.5, "totalpages.*non-negative integer"),
         ("totalpages", True, "totalpages.*non-negative integer"),
-        ("totalpages", 0, "totalpages=0 but returned rows"),
         ("hasMore", "sometimes", "hasMore.*boolean"),
     ],
 )
@@ -558,6 +568,29 @@ def test_fetch_announcement_index_rejects_malformed_pagination_metadata(field, v
 
     with pytest.raises(RuntimeError, match=message):
         fetch_announcement_index(date(2024, 1, 31), client=MalformedMetaClient())
+
+
+def test_fetch_announcement_index_accepts_totalpages_zero_with_rows():
+    class SmallBucketClient:
+        def post(self, url, data):
+            if data["category"] != _CNINFO_CATEGORIES[0]:
+                return _FakeResponse({"announcements": [], "totalpages": 0, "hasMore": False})
+            return _FakeResponse(
+                {
+                    "announcements": [
+                        {
+                            "secCode": "000001",
+                            "announcementId": "small",
+                            "announcementTitle": "公告",
+                        }
+                    ],
+                    "totalpages": 0,
+                    "hasMore": False,
+                }
+            )
+
+    df = fetch_announcement_index(date(2024, 1, 31), client=SmallBucketClient())
+    assert df["announcement_id"].to_list() == ["small"]
 
 
 def test_fetch_announcement_index_raises_runtime_error_on_transport_failure(monkeypatch):

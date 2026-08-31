@@ -8,6 +8,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **CNINFO 公告按类别分桶分页。** 公告索引和监管事件改用 26 个公告类别分桶，跨桶去重；遇到服务端 100 页截断时保留可达数据并记录 `cninfo_truncation_at_100_pages` 审计告警，真实传输失败仍保持失败。
 - **Checks against the bodies that publish the numbers, not a second vendor.**
   Every price arbiter in the lake compared one redistributor against another,
   which can show that two feeds do not differ but never that either is right.

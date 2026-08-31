@@ -104,6 +104,7 @@ def _fetch_cninfo_single(
     metrics: dict,
     *,
     dataset: str = "announcement_index",
+    findings: list[dict] | None = None,
 ) -> pl.DataFrame:
     """Call a CNINFO adapter with metrics while keeping lightweight test doubles compatible."""
     try:
@@ -113,7 +114,12 @@ def _fetch_cninfo_single(
     accepts_var_kwargs = any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
     )
-    options = {**_cninfo_checkpoint_options(config, dataset), "config": config, "metrics": metrics}
+    options = {
+        **_cninfo_checkpoint_options(config, dataset),
+        "config": config,
+        "metrics": metrics,
+        "findings": findings,
+    }
     label = "announcement" if dataset == "announcement_index" else "regulatory"
     options.update(
         {
@@ -136,6 +142,7 @@ def _cninfo_range_backfill(
     *,
     date_col: str,
     floor: date,
+    findings: list[dict] | None = None,
 ) -> dict:
     """Use one range-aware CNINFO walk behind the normal day-stage helper.
 
@@ -164,6 +171,7 @@ def _cninfo_range_backfill(
                 "metrics": metrics,
                 "run_id": run_id,
                 "request_scope": request_scope,
+                "findings": findings,
             }
             options.update(_cninfo_checkpoint_options(config, dataset))
             try:
@@ -222,6 +230,10 @@ def _cninfo_range_backfill(
     )
     if metrics:
         result["metrics"] = metrics
+    if findings:
+        updates = result.setdefault("context_updates", {})
+        updates["audit_findings"] = [*(updates.get("audit_findings") or []), *findings]
+        result["status"] = "warning"
     return result
 
 
@@ -912,6 +924,7 @@ def step_earnings_disclosure_schedule(
 def step_announcement_index(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if not config.sources.get("cninfo", True):
         raise RuntimeError("announcement_index: cninfo source disabled in config")
+    findings: list[dict] = []
     if getattr(config, "_backfill", False):
         return _cninfo_range_backfill(
             config,
@@ -921,6 +934,7 @@ def step_announcement_index(config: Config, trade_date: date, run_id: str, conte
             fetch_announcement_index_range,
             date_col="announce_date",
             floor=date(2010, 1, 1),
+            findings=findings,
         )
     metrics: dict = {"run_id": run_id}
     result = run_incremental_fetched(
@@ -934,6 +948,7 @@ def step_announcement_index(config: Config, trade_date: date, run_id: str, conte
             config,
             metrics,
             dataset="announcement_index",
+            findings=findings,
         ),
         source="cninfo",
         date_col="announce_date",
@@ -948,4 +963,8 @@ def step_announcement_index(config: Config, trade_date: date, run_id: str, conte
     if len(metrics) > 1:
         _record_cninfo_metrics(config, run_id, "announcement_index", metrics)
     result["metrics"] = metrics
+    if findings:
+        updates = result.setdefault("context_updates", {})
+        updates["audit_findings"] = [*(updates.get("audit_findings") or []), *findings]
+        result["status"] = "warning"
     return result

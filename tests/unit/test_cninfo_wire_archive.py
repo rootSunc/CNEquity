@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cnequity.adapters.cninfo import announcements
 from cnequity.adapters.cninfo.announcements import (
     fetch_announcement_index_range,
     replay_announcement_index_range,
@@ -46,8 +47,12 @@ class _Client:
 
     def post(self, _url, data):
         self.calls.append(dict(data))
-        key = (data["column"], data["seDate"], data["pageNum"])
-        return self.pages[key]
+        column = "szse" if data["category"] == announcements._CNINFO_CATEGORIES[0] else "sse"
+        key = (column, data["seDate"], data["pageNum"])
+        return self.pages.get(
+            key,
+            _Response({"announcements": [], "totalpages": 0, "hasMore": False}),
+        )
 
 
 def _config(tmp_path: Path):
@@ -85,11 +90,11 @@ def test_each_cninfo_http_page_archives_exact_wire_and_transport_metadata(tmp_pa
     records = RawPayloadArchive(config.meta_root).records("announcement_index")
 
     assert frame["title"].to_list() == ["v2"]
-    assert len(records) == len(client.calls) == 3
+    assert len(records) == len(client.calls) == 27
     by_page = {
         record.request_params["pageNum"]: record
         for record in records
-        if record.request_params["column"] == "szse"
+        if record.request_params["category"] == announcements._CNINFO_CATEGORIES[0]
     }
     assert hashlib.sha256(b'{"wire":"page-1"}').hexdigest() == by_page[1].payload_sha256
     assert by_page[2].pagination["reported_total_pages"] == 2
@@ -131,7 +136,7 @@ def test_identical_response_bytes_keep_distinct_page_observations_and_replay_rev
         record
         for record in archive.records("announcement_index")
         if record.request_params["seDate"] == "2024-01-01~2024-01-02"
-        and record.request_params["column"] == "szse"
+        and record.request_params["category"] == announcements._CNINFO_CATEGORIES[0]
     ]
     replayed = replay_announcement_index_range(
         archive, date(2024, 1, 1), date(2024, 1, 2), max_pages_per_slice=2
@@ -156,7 +161,7 @@ def test_checkpoint_cannot_reuse_rows_when_required_wire_archive_is_missing(tmp_
         date(2024, 1, 1), client=first, config=config, checkpoint_path=checkpoint
     )
     saved = json.loads(checkpoint.read_text(encoding="utf-8"))
-    reference = saved["slices"]["szse:2024-01-01:2024-01-01"]["raw_archives"][0]
+    reference = saved["slices"]["category_ndbg_szsh:2024-01-01:2024-01-01"]["raw_archives"][0]
     (config.meta_root / reference["payload_path"]).unlink()
 
     second = _Client(pages)
@@ -204,7 +209,7 @@ def test_replay_rejects_tampered_cninfo_wire_payload(tmp_path):
     record = next(
         item
         for item in archive.records("announcement_index")
-        if item.request_params["column"] == "szse"
+        if item.request_params["category"] == announcements._CNINFO_CATEGORIES[0]
     )
     path = config.meta_root / record.payload_path
     path.write_bytes(b"tampered")
@@ -309,5 +314,5 @@ def test_regulatory_pages_use_same_archive_and_replay_path(tmp_path):
     archive = RawPayloadArchive(config.meta_root)
     replayed = replay_regulatory_events_range(archive, date(2024, 1, 1))
     records = archive.records("regulatory_events")
-    assert len(records) == 2
+    assert len(records) == 26
     assert live.to_dicts() == replayed.to_dicts()

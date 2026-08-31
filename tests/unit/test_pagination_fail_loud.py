@@ -228,7 +228,7 @@ class _OverrunClient:
     def post(self, url, **kwargs):
         self.calls += 1
         data = kwargs["data"]
-        if data["column"] == "sse":
+        if data["category"] != cninfo_announcements._CNINFO_CATEGORIES[0]:
             return _Response({"announcements": [], "hasMore": False, "totalpages": 0})
         item = {
             "secCode": "000001",
@@ -245,8 +245,40 @@ class _OverrunClient:
 def test_regulatory_stops_at_totalpages_even_when_hasmore_lies():
     client = _OverrunClient(total_pages=3)
     df = fetch_regulatory_events(date(2024, 1, 31), client=client)
-    assert client.calls == 4  # szse pages 1..3, then sse's single (empty) page
+    assert client.calls == 28  # first bucket pages 1..3 plus 25 empty buckets
     assert df.height == 3
+
+
+def test_regulatory_repeated_page_is_audited_and_keeps_partial_rows():
+    class RepeatedPageClient:
+        def __init__(self):
+            self.calls = 0
+
+        def post(self, url, **kwargs):
+            self.calls += 1
+            data = kwargs["data"]
+            if data["category"] != cninfo_announcements._CNINFO_CATEGORIES[0]:
+                return _Response({"announcements": [], "hasMore": False})
+            return _Response(
+                {
+                    "announcements": [
+                        {
+                            "secCode": "000001",
+                            "announcementId": "reg-repeat",
+                            "announcementTitle": "行政处罚决定",
+                        }
+                    ],
+                    "hasMore": True,
+                }
+            )
+
+    findings: list[dict] = []
+    client = RepeatedPageClient()
+    df = fetch_regulatory_events(date(2024, 1, 31), client=client, findings=findings)
+    assert df.height == 1
+    assert findings[0]["dataset"] == "regulatory"
+    assert findings[0]["check"] == "cninfo_truncation_at_100_pages"
+    assert client.calls == 27
 
 
 def test_regulatory_rejects_empty_page_before_totalpages():
@@ -280,8 +312,8 @@ def test_regulatory_uses_totalpages_when_hasmore_is_false():
 
         def post(self, url, **kwargs):
             self.calls += 1
-            column = kwargs["data"]["column"]
-            if column == "sse":
+            category = kwargs["data"]["category"]
+            if category != cninfo_announcements._CNINFO_CATEGORIES[0]:
                 return _Response({"announcements": [], "hasMore": False, "totalpages": 0})
             page = kwargs["data"]["pageNum"]
             item = {
@@ -293,7 +325,7 @@ def test_regulatory_uses_totalpages_when_hasmore_is_false():
 
     client = StaleHasMoreClient()
     df = fetch_regulatory_events(date(2024, 1, 31), client=client)
-    assert client.calls == 3
+    assert client.calls == 27
     assert set(df["event_id"].to_list()) == {"reg-R1", "reg-R2"}
 
 

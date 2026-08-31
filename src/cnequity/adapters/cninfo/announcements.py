@@ -39,6 +39,35 @@ logger = logging.getLogger(__name__)
 _CNINFO_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 _PAGE_SIZE = 30
 
+_CNINFO_CATEGORIES: tuple[str, ...] = (
+    "category_ndbg_szsh",
+    "category_bndbg_szsh",
+    "category_yjdbg_szsh",
+    "category_sjdbg_szsh",
+    "category_yjygjxz_szsh",
+    "category_qyfpxzcs_szsh",
+    "category_dshgg_szsh",
+    "category_jshgg_szsh",
+    "category_gddh_szsh",
+    "category_rcjy_szsh",
+    "category_gszl_szsh",
+    "category_zj_szsh",
+    "category_sf_szsh",
+    "category_zf_szsh",
+    "category_gqjl_szsh",
+    "category_pg_szsh",
+    "category_jj_szsh",
+    "category_gszq_szsh",
+    "category_kzzq_szsh",
+    "category_qtrz_szsh",
+    "category_gqbd_szsh",
+    "category_bcgz_szsh",
+    "category_cqdq_szsh",
+    "category_fxts_szsh",
+    "category_tbclts_szsh",
+    "category_tszlq_szsh",
+)
+
 # The checkpoint must be tied to the request/normalization contract.  Bumping
 # this value forces a clean walk instead of mixing rows fetched under an older
 # CNINFO response shape with the current parser.
@@ -343,6 +372,26 @@ def _pagination_total_records(data: dict, *, column: str, page: int) -> int | No
 
 def _checkpoint_key(column: str, start: date, end: date) -> str:
     return f"{column}:{start.isoformat()}:{end.isoformat()}"
+
+
+def _cninfo_bucket_request(bucket: str) -> tuple[str, str]:
+    if bucket.startswith("category_"):
+        return "szse", bucket
+    return bucket, ""
+
+
+def _truncation_finding(*, dataset: str, bucket: str, page: int) -> dict[str, Any]:
+    return {
+        "dataset": dataset,
+        "severity": "warning",
+        "check": "cninfo_truncation_at_100_pages",
+        "message": (
+            f"CNINFO {dataset} {bucket} hit the server's 100-page cap at page {page}; "
+            f"rows past page {page - 1} are not fetchable for this bucket"
+        ),
+        "bucket": bucket,
+        "page": page,
+    }
 
 
 def _empty_checkpoint(identity: str, *, source_revision: str | None = None) -> dict[str, Any]:
@@ -806,6 +855,7 @@ def _fetch_page_slice(
     raw_archive: RawPayloadArchive | None = None,
     run_id: str | None = None,
     request_scope: str | None = None,
+    findings: list[dict[str, Any]] | None = None,
 ) -> list[dict]:
     """Fetch one bounded slice, recursively splitting unsafe walks."""
     if start > end:
@@ -817,6 +867,8 @@ def _fetch_page_slice(
             f"CNINFO {label} pagination exceeded split depth for "
             f"{start.isoformat()}..{end.isoformat()}"
         )
+    request_column, category = _cninfo_bucket_request(column)
+    truncated = False
 
     state = checkpoint or _empty_checkpoint(label, source_revision=source_revision)
     slices = state.setdefault("slices", {})
@@ -941,6 +993,7 @@ def _fetch_page_slice(
                 raw_archive=raw_archive,
                 run_id=run_id,
                 request_scope=request_scope,
+                findings=findings,
             ) + _fetch_page_slice(
                 client,
                 start=mid + timedelta(days=1),
@@ -959,6 +1012,7 @@ def _fetch_page_slice(
                 raw_archive=raw_archive,
                 run_id=run_id,
                 request_scope=request_scope,
+                findings=findings,
             )
 
     if not isinstance(record, dict):
@@ -1076,13 +1130,13 @@ def _fetch_page_slice(
         payload = {
             "pageNum": page,
             "pageSize": _PAGE_SIZE,
-            "column": column,
+            "column": request_column,
             "tabName": "fulltext",
             "plate": "",
             "stock": "",
             "searchkey": "",
             "secid": "",
-            "category": "",
+            "category": category,
             "trade": "",
             "seDate": f"{start.strftime('%Y-%m-%d')}~{end.strftime('%Y-%m-%d')}",
         }
@@ -1125,7 +1179,7 @@ def _fetch_page_slice(
                     f"CNINFO {label} total record count changed for {column} "
                     f"slice {start.isoformat()}..{end.isoformat()}"
                 )
-            if batch and total_pages == 0:
+            if batch and total_pages == 0 and not category:
                 raise RuntimeError(
                     f"CNINFO {label} for {column} page {page} declared totalpages=0 "
                     "but returned rows"
@@ -1138,11 +1192,22 @@ def _fetch_page_slice(
                         f"CNINFO {label} totalpages changed for {column} "
                         f"slice {start.isoformat()}..{end.isoformat()}"
                     )
-                if total_pages > max_pages_per_slice:
+                if total_pages > max_pages_per_slice and not (category and start == end):
                     return split_or_raise(f"slice exceeded {max_pages_per_slice} reported pages")
             if batch:
                 page_signature = _pagination_page_signature(batch)
                 if page_signature in seen_signatures:
+                    if category and start == end:
+                        truncated = True
+                        if findings is not None:
+                            findings.append(
+                                _truncation_finding(
+                                    dataset=label,
+                                    bucket=column,
+                                    page=page,
+                                )
+                            )
+                        break
                     return split_or_raise("pagination repeated page")
                 seen_signatures.add(page_signature)
                 page_keys = {
@@ -1226,6 +1291,17 @@ def _fetch_page_slice(
             if total_pages is None:
                 break
         if page >= max_pages_per_slice:
+            if category and start == end:
+                truncated = True
+                if findings is not None:
+                    findings.append(
+                        _truncation_finding(
+                            dataset=label,
+                            bucket=column,
+                            page=page + 1,
+                        )
+                    )
+                break
             return split_or_raise(f"slice exceeded {max_pages_per_slice} pages")
         if isinstance(total_pages, int):
             page += 1
@@ -1242,12 +1318,12 @@ def _fetch_page_slice(
     # malformed response (for example total=1 with two distinct rows) pass as
     # complete.  Legitimate duplicate identities remain valid because both
     # raw rows still count toward the reported total.
-    if expected_total is not None and len(raw_rows) != expected_total:
+    if not truncated and expected_total is not None and len(raw_rows) != expected_total:
         return split_or_raise(
             f"raw row count {len(raw_rows)} does not match reported total {expected_total} "
             f"(unique keys={len(seen_keys)})"
         )
-    record["status"] = "complete"
+    record["status"] = "truncated" if truncated else "complete"
     record["rows"] = raw_rows
     record["next_page"] = page + 1
     record["pages"] = page
@@ -1292,6 +1368,7 @@ def fetch_cninfo_rows(
     raw_archive: RawPayloadArchive | None = None,
     run_id: str | None = None,
     request_scope: str | None = None,
+    findings: list[dict[str, Any]] | None = None,
 ) -> list[dict]:
     """Fetch raw rows over a date range with safe recursive slicing.
 
@@ -1356,7 +1433,7 @@ def fetch_cninfo_rows(
     started = time.perf_counter()
     try:
         rows: list[dict] = []
-        for column in ("szse", "sse"):
+        for column in _CNINFO_CATEGORIES:
             rows.extend(
                 _fetch_page_slice(
                     client,
@@ -1375,6 +1452,7 @@ def fetch_cninfo_rows(
                     raw_archive=raw_archive,
                     run_id=run_id,
                     request_scope=request_scope,
+                    findings=findings,
                 )
             )
         if metrics is not None:
@@ -1429,7 +1507,9 @@ def _replay_request_context(
         raw_pagination = record.get("pagination", {})
         request = dict(raw_request) if isinstance(raw_request, Mapping) else {}
         pagination = dict(raw_pagination) if isinstance(raw_pagination, Mapping) else {}
-    column = str(request.get("column") or pagination.get("column") or "").strip()
+    request_column = str(request.get("column") or pagination.get("column") or "").strip()
+    category = str(request.get("category") or pagination.get("category") or "").strip()
+    column = category or request_column
     date_range = str(
         request.get("seDate")
         or f"{pagination.get('slice_start', '')}~{pagination.get('slice_end', '')}"
@@ -1770,6 +1850,7 @@ def fetch_announcement_index_range(
     raw_archive: RawPayloadArchive | None = None,
     run_id: str | None = None,
     request_scope: str | None = None,
+    findings: list[dict[str, Any]] | None = None,
 ) -> pl.DataFrame:
     """Fetch announcement index over ``start..end`` with resumable slicing."""
     if end is None:
@@ -1789,6 +1870,7 @@ def fetch_announcement_index_range(
         raw_archive=raw_archive,
         run_id=run_id,
         request_scope=request_scope,
+        findings=findings,
     )
     return _announcement_rows_to_frame(rows, start=start, end=end)
 
@@ -1807,6 +1889,7 @@ def fetch_announcement_index(
     raw_archive: RawPayloadArchive | None = None,
     run_id: str | None = None,
     request_scope: str | None = None,
+    findings: list[dict[str, Any]] | None = None,
 ) -> pl.DataFrame:
     # Range pagination is shared with regulatory_events. A one-day range
     # intentionally retains the historical exact-date validation behaviour.
@@ -1825,6 +1908,7 @@ def fetch_announcement_index(
             raw_archive=raw_archive,
             run_id=run_id,
             request_scope=request_scope,
+            findings=findings,
         )
     except RuntimeError as exc:
         logger.warning("CNINFO announcement page failed: %s", exc)

@@ -44,7 +44,7 @@ def test_long_range_is_recursively_date_sliced(monkeypatch):
         def post(self, _url, data):
             self.calls.append(dict(data))
             start, end = data["seDate"].split("~")
-            if data["column"] == "sse":
+            if data["category"] != announcements._CNINFO_CATEGORIES[0]:
                 return _Response({"announcements": [], "totalpages": 0, "hasMore": False})
             if (start, end) == ("2024-01-01", "2024-01-10"):
                 # The broad query is too long; its children are bounded.
@@ -89,7 +89,7 @@ def test_repeated_page_is_sliced_when_range_has_multiple_days():
         def post(self, _url, data):
             self.calls.append(dict(data))
             start, end = data["seDate"].split("~")
-            if data["column"] == "sse":
+            if data["category"] != announcements._CNINFO_CATEGORIES[0]:
                 return _Response({"announcements": [], "hasMore": False})
             if (start, end) == ("2024-02-01", "2024-02-02"):
                 return _Response(
@@ -127,7 +127,7 @@ def test_range_checkpoint_resumes_at_failed_page(monkeypatch, tmp_path):
 
         def post(self, _url, data):
             self.calls.append(dict(data))
-            if data["column"] == "sse":
+            if data["category"] != announcements._CNINFO_CATEGORIES[0]:
                 return _Response({"announcements": [], "hasMore": False})
             if data["pageNum"] == 1:
                 return _Response(
@@ -147,14 +147,14 @@ def test_range_checkpoint_resumes_at_failed_page(monkeypatch, tmp_path):
             checkpoint_path=checkpoint,
         )
     saved = json.loads(checkpoint.read_text())
-    slice_state = saved["slices"]["szse:2024-03-01:2024-03-01"]
+    slice_state = saved["slices"]["category_ndbg_szsh:2024-03-01:2024-03-01"]
     assert slice_state["next_page"] == 2
     assert [call["pageNum"] for call in first.calls] == [1, 2]
 
     class ResumesPageTwo(FailsPageTwo):
         def post(self, _url, data):
             self.calls.append(dict(data))
-            if data["column"] == "sse":
+            if data["category"] != announcements._CNINFO_CATEGORIES[0]:
                 return _Response({"announcements": [], "hasMore": False})
             if data["pageNum"] == 2:
                 return _Response(
@@ -170,7 +170,12 @@ def test_range_checkpoint_resumes_at_failed_page(monkeypatch, tmp_path):
         date(2024, 3, 1), date(2024, 3, 1), client=second, checkpoint_path=checkpoint
     )
     assert set(frame["announcement_id"]) == {"p1", "p2"}
-    assert [call["pageNum"] for call in second.calls] == [2, 1]
+    assert [
+        call["pageNum"]
+        for call in second.calls
+        if call["category"] == announcements._CNINFO_CATEGORIES[0]
+    ] == [2]
+    assert len(second.calls) == 26
 
 
 def test_cninfo_total_is_raw_rows_while_final_frame_uses_unique_keys(tmp_path):
@@ -182,7 +187,7 @@ def test_cninfo_total_is_raw_rows_while_final_frame_uses_unique_keys(tmp_path):
 
         def post(self, _url, data):
             self.calls.append(dict(data))
-            if data["column"] == "sse":
+            if data["category"] != announcements._CNINFO_CATEGORIES[0]:
                 return _Response(
                     {"announcements": [], "total": 0, "totalpages": 0, "hasMore": False}
                 )
@@ -210,7 +215,7 @@ def test_cninfo_total_is_raw_rows_while_final_frame_uses_unique_keys(tmp_path):
     assert metrics["unique_keys"] == 1
     assert metrics["duplicate_rows"] == 1
     saved = json.loads(checkpoint.read_text())
-    szse = saved["slices"]["szse:2024-04-01:2024-04-01"]
+    szse = saved["slices"]["category_ndbg_szsh:2024-04-01:2024-04-01"]
     assert szse["raw_row_count"] == 2
     assert szse["unique_keys"] == ["same"]
     assert len(szse["page_signatures"]) == 1
@@ -222,7 +227,7 @@ def test_cninfo_rejects_raw_row_overrun_even_when_ids_are_distinct():
 
     class OverrunClient:
         def post(self, _url, data):
-            if data["column"] == "sse":
+            if data["category"] != announcements._CNINFO_CATEGORIES[0]:
                 return _Response({"announcements": [], "total": 0, "totalpages": 0})
             return _Response(
                 {
@@ -250,7 +255,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
 
         def post(self, _url, data):
             self.calls.append(dict(data))
-            if data["column"] == "sse":
+            if data["category"] != announcements._CNINFO_CATEGORIES[0]:
                 return _Response({"announcements": [], "totalpages": 0, "hasMore": False})
             return _Response(
                 {
@@ -274,7 +279,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
         source_revision="provider-v1",
     )
     assert first_frame["title"].to_list() == ["v1"]
-    assert len(first.calls) == 2
+    assert len(first.calls) == 26
 
     # Refresh is the safe default: a completed same-date page is read again,
     # so a corrected announcement replaces the old payload.
@@ -286,7 +291,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
         source_revision="provider-v1",
     )
     assert refreshed_frame["title"].to_list() == ["v2"]
-    assert len(refreshed.calls) == 2
+    assert len(refreshed.calls) == 26
 
     class NoRequests(RevisingClient):
         def post(self, _url, data):
@@ -315,7 +320,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
         source_revision="provider-v2",
     )
     assert revised_frame["title"].to_list() == ["v3"]
-    assert len(revised_source.calls) == 2
+    assert len(revised_source.calls) == 26
 
     saved = json.loads(checkpoint.read_text())
     old = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
@@ -332,7 +337,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
         source_revision="provider-v2",
     )
     assert expired_frame["title"].to_list() == ["v4"]
-    assert len(expired.calls) == 2
+    assert len(expired.calls) == 26
 
     invalidate_cninfo_checkpoint(checkpoint)
     assert not checkpoint.exists()

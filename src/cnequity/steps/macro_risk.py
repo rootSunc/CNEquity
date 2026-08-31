@@ -361,6 +361,7 @@ def _backfill_share_unlock_schedule(config: Config, trade_date: date, run_id: st
 def step_regulatory_events(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if not config.sources.get("cninfo", True):
         raise RuntimeError("regulatory_events: cninfo source disabled in config")
+    findings: list[dict] = []
     if getattr(config, "_backfill", False):
         from cnequity.steps.events import _cninfo_range_backfill
 
@@ -372,6 +373,7 @@ def step_regulatory_events(config: Config, trade_date: date, run_id: str, contex
             fetch_regulatory_events_range,
             date_col="event_date",
             floor=date(2010, 1, 1),
+            findings=findings,
         )
     from cnequity.steps.events import _fetch_cninfo_single, _record_cninfo_metrics
 
@@ -387,6 +389,7 @@ def step_regulatory_events(config: Config, trade_date: date, run_id: str, contex
             config,
             metrics,
             dataset="regulatory_events",
+            findings=findings,
         ),
         source="cninfo",
         allow_empty=True,
@@ -402,4 +405,8 @@ def step_regulatory_events(config: Config, trade_date: date, run_id: str, contex
     if len(metrics) > 1:
         _record_cninfo_metrics(config, run_id, "regulatory_events", metrics)
     result["metrics"] = metrics
+    if findings:
+        updates = result.setdefault("context_updates", {})
+        updates["audit_findings"] = [*(updates.get("audit_findings") or []), *findings]
+        result["status"] = "warning"
     return result
