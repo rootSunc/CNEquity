@@ -1063,8 +1063,10 @@ _SPECS = [
         partition_col="event_date",
         partition_granularity="year",
         reconciliation_lookback_days=30,
-        # Keep this in lock-step with announcement_index: both feeds share the
-        # CNINFO endpoint and therefore the same deep-page/repeated-page risk.
+        # Derived from announcement_index rather than fetched (see
+        # ``derive/regulatory_events``), so the lookback re-reads the same tail
+        # its source does and the chunk size only bounds how much one compact
+        # has to hold.
         backfill_chunk_days=31,
     ),
     # derived — ``layer`` is where the parquet lives, ``tier`` what the data is

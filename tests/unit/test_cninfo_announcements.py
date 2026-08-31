@@ -10,7 +10,6 @@ from cnequity.adapters.cninfo.announcements import (
     _symbol_from_cninfo,
     fetch_announcement_index,
 )
-from cnequity.adapters.cninfo.regulatory import fetch_regulatory_events
 
 
 def test_symbol_from_cninfo_maps_exchange_prefixes():
@@ -120,9 +119,6 @@ def test_cninfo_rejects_a_row_from_a_different_announcement_date():
 
     with pytest.raises(RuntimeError, match="does not match requested 2024-06-28"):
         fetch_announcement_index(date(2024, 6, 28), client=_FakeClient(pages))
-
-    with pytest.raises(RuntimeError, match="does not match requested 2024-06-28"):
-        fetch_regulatory_events(date(2024, 6, 28), client=_FakeClient(pages))
 
 
 def test_cninfo_accepts_the_live_endpoint_epoch_millisecond_announcement_time():
@@ -273,47 +269,6 @@ def test_cninfo_rejects_non_list_announcement_batch():
         fetch_announcement_index(date(2024, 6, 28), client=MalformedClient())
 
 
-def test_regulatory_skips_rows_without_stable_identity():
-    from cnequity.adapters.cninfo.regulatory import fetch_regulatory_events
-
-    pages = {
-        "szse": [
-            [
-                {
-                    "secCode": "000001",
-                    "announcementTitle": "行政处罚公告",
-                },
-                {
-                    "secCode": "000001",
-                    "announcementId": "R1",
-                    "announcementTitle": "行政处罚公告",
-                },
-            ]
-        ],
-        "sse": [[]],
-    }
-    df = fetch_regulatory_events(date(2024, 6, 28), client=_FakeClient(pages))
-    assert df["event_id"].to_list() == ["reg-R1"]
-
-
-def test_regulatory_skips_non_object_rows_and_keeps_valid_rows():
-    pages = {
-        "szse": [
-            [
-                None,
-                {
-                    "secCode": "000001",
-                    "announcementId": "R1",
-                    "announcementTitle": "行政处罚公告",
-                },
-            ]
-        ],
-        "sse": [[]],
-    }
-    df = fetch_regulatory_events(date(2024, 6, 28), client=_FakeClient(pages))
-    assert df["event_id"].to_list() == ["reg-R1"]
-
-
 def test_fetch_announcement_index_uses_rate_limiter_when_config_given():
     calls: list[str] = []
 
@@ -397,14 +352,9 @@ def test_fetch_announcement_index_rejects_a_repeated_page():
     assert client.calls == 2
 
 
-@pytest.mark.parametrize(
-    ("fetch", "title"),
-    [
-        (fetch_announcement_index, "公告"),
-        (fetch_regulatory_events, "行政处罚决定"),
-    ],
-)
-def test_cninfo_fetchers_continue_after_a_full_page_without_pagination_metadata(fetch, title):
+def test_cninfo_fetchers_continue_after_a_full_page_without_pagination_metadata():
+    title = "公告"
+
     class NoPaginationMetadataClient:
         def __init__(self):
             self.calls = 0
@@ -436,7 +386,7 @@ def test_cninfo_fetchers_continue_after_a_full_page_without_pagination_metadata(
             return _FakeResponse({"announcements": batch})
 
     client = NoPaginationMetadataClient()
-    df = fetch(date(2024, 1, 31), client=client)
+    df = fetch_announcement_index(date(2024, 1, 31), client=client)
     assert df.height == 31
     assert client.calls == 2  # a short page ends the walk without metadata
 

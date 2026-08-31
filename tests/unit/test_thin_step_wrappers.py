@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
@@ -190,24 +190,29 @@ def test_macro_risk_guards_and_writes(cfg, monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr(
-        macro_risk,
-        "fetch_regulatory_events",
-        lambda d, config=None: pl.DataFrame(
-            {
-                "event_id": ["e1"],
-                "symbol": ["600519.SH"],
-                "event_date": [d],
-                "event_type": ["inquiry"],
-                "title": ["t"],
-            }
-        ),
-    )
-    assert macro_risk.step_macro_indicators(cfg, date(2024, 6, 28), "r", {})["rows_written"] == 1
-    assert (
-        macro_risk.step_share_unlock_schedule(cfg, date(2024, 6, 28), "r", {})["rows_written"] == 1
-    )
-    assert macro_risk.step_regulatory_events(cfg, date(2024, 6, 28), "r", {})["rows_written"] == 1
+    # regulatory_events reads the announcements the lake already indexed
+    # instead of asking CNINFO for the same day a second time.
+    day = date(2024, 6, 28)
+    announcements = cfg.curated_root / "announcement_index" / f"announce_date={day.isoformat()}"
+    announcements.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "announcement_id": ["A1"],
+            "symbol": ["600519.SH"],
+            "title": ["关于收到行政处罚决定书的公告"],
+            "announce_date": [day],
+            "category": ["其他"],
+            "url": ["/a.pdf"],
+            "source": ["cninfo"],
+            "data_version": ["v1"],
+            "fetched_at": [datetime(2024, 6, 28, tzinfo=timezone.utc)],
+        }
+    ).write_parquet(announcements / "part-merged.parquet")
+    StateStore(cfg.meta_root).set_date("announcement_index", day)
+
+    assert macro_risk.step_macro_indicators(cfg, day, "r", {})["rows_written"] == 1
+    assert macro_risk.step_share_unlock_schedule(cfg, day, "r", {})["rows_written"] == 1
+    assert macro_risk.step_regulatory_events(cfg, day, "r", {})["rows_written"] == 1
 
 
 def test_newsboard_and_commodity(cfg, monkeypatch):

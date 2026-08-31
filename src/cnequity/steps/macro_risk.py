@@ -6,10 +6,6 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.cninfo.regulatory import (
-    fetch_regulatory_events,
-    fetch_regulatory_events_range,
-)
 from cnequity.adapters.eastmoney.share_unlock import fetch_share_unlock_schedule
 from cnequity.adapters.macro.indicators import fetch_macro_indicators
 from cnequity.config import Config
@@ -17,7 +13,7 @@ from cnequity.derive.market_breadth import MARKET_BREADTH_METRICS, compute_marke
 from cnequity.orchestrator.registry import register_step
 from cnequity.quality.macro_checks import macro_revision_findings
 from cnequity.steps.common import BACKFILL_START
-from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive
+from cnequity.steps.http_common import run_incremental_fetched
 
 _REQUIRED_DAILY_MACRO_INDICATORS = frozenset({"cnbond_yield_10y", "shibor_3m"})
 _MARKET_BREADTH_METRICS = frozenset(MARKET_BREADTH_METRICS)
@@ -357,56 +353,100 @@ def _backfill_share_unlock_schedule(config: Config, trade_date: date, run_id: st
     return {"rows_read": rows_written, "rows_written": rows_written}
 
 
-@register_step("regulatory_events", group="macro_risk", depends_on=["instruments"])
-def step_regulatory_events(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if not config.sources.get("cninfo", True):
-        raise RuntimeError("regulatory_events: cninfo source disabled in config")
+#: Regulatory events only exist from the disclosures the lake indexes, so a
+#: derive window can never usefully precede the announcement history.
+_REGULATORY_FLOOR = date(2010, 1, 1)
+
+
+def _regulatory_window(config: Config, trade_date: date) -> tuple[date, date]:
+    """The calendar window this run should (re-)derive."""
+    from cnequity.steps.common import incremental_window
+
     if getattr(config, "_backfill", False):
-        from cnequity.steps.events import _cninfo_range_backfill
+        start = getattr(config, "_backfill_start", None) or _REGULATORY_FLOOR
+        end = min(getattr(config, "_backfill_end", None) or trade_date, trade_date)
+        return max(start, _REGULATORY_FLOOR), end
+    return incremental_window(config, "regulatory_events", trade_date), trade_date
 
-        return _cninfo_range_backfill(
-            config,
-            trade_date,
-            run_id,
-            "regulatory_events",
-            fetch_regulatory_events_range,
-            date_col="event_date",
-            floor=date(2010, 1, 1),
-            batch_id=context.get("_batch_id"),
-        )
-    from cnequity.steps.events import _fetch_cninfo_single, _record_cninfo_metrics
 
-    metrics: dict = {"run_id": run_id}
-    result = run_incremental_fetched(
-        config,
-        trade_date,
-        run_id,
-        "regulatory_events",
-        lambda d: _fetch_cninfo_single(
-            fetch_regulatory_events,
-            d,
-            config,
-            metrics,
-            dataset="regulatory_events",
-        ),
-        source="cninfo",
-        allow_empty=True,
-        date_col="event_date",
-        raw_archive_evidence_factory=lambda: verify_raw_archive(
-            config,
-            "regulatory_events",
-            run_id,
-            source="cninfo",
-            request_scope=(f"range:regulatory:{trade_date.isoformat()}:{trade_date.isoformat()}"),
-        ),
-    )
-    if len(metrics) > 1:
-        _record_cninfo_metrics(
-            config,
-            run_id,
-            "regulatory_events",
-            metrics,
-            batch_id=context.get("_batch_id"),
+def _announcement_coverage(config: Config, start: date, end: date) -> tuple[date, list[dict]]:
+    """Clamp the window to what `announcement_index` has actually indexed."""
+    from cnequity.storage.state import StateStore
+
+    watermark = StateStore(config.meta_root).get_date("announcement_index")
+    if watermark is None:
+        raise RuntimeError(
+            "regulatory_events is derived from announcement_index, which has no "
+            "coverage yet — run the announcement_index step (or "
+            "`cne backfill announcement_index`) first"
         )
-    result["metrics"] = metrics
+    if watermark >= end:
+        return end, []
+    return watermark, [
+        {
+            "dataset": "regulatory_events",
+            "severity": "warning",
+            "check": "pending_source_coverage",
+            "message": (
+                f"regulatory_events: announcement_index only covers through "
+                f"{watermark.isoformat()}; {start.isoformat()}..{end.isoformat()} is "
+                "derived up to that date and the rest follows once the "
+                "announcements are indexed"
+            ),
+            "covered_through": watermark.isoformat(),
+            "requested_end": end.isoformat(),
+        }
+    ]
+
+
+@register_step("regulatory_events", group="macro_risk", depends_on=["announcement_index"])
+def step_regulatory_events(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """Project regulatory events out of the announcements already in the lake.
+
+    Not a fetch: this used to re-issue `announcement_index`'s own request and
+    keep the few rows whose title matched, which paid for every announcement
+    twice and let the two datasets disagree about the same day. See
+    `derive/regulatory_events.py`.
+    """
+    from cnequity.derive.regulatory_events import derive_regulatory_events
+    from cnequity.domain.schemas import with_provenance
+    from cnequity.steps.common import write_simple
+
+    if not config.sources.get("cninfo", True):
+        # The rows are CNINFO's disclosures either way, so turning the source
+        # off stops this dataset too rather than quietly re-deriving a tail
+        # nothing is refreshing any more.
+        raise RuntimeError("regulatory_events: cninfo source disabled in config")
+    start, requested_end = _regulatory_window(config, trade_date)
+    end, findings = _announcement_coverage(config, start, requested_end)
+    if start > end:
+        return {
+            "rows_read": 0,
+            "rows_written": 0,
+            "status": "degraded" if findings else "success",
+            "context_updates": {"audit_findings": findings} if findings else {},
+        }
+
+    derived = derive_regulatory_events(config, start=start, end=end)
+    if derived.announcements == 0:
+        # Nothing to search is not the same as nothing to find. Refuse rather
+        # than record an empty window that looks like a clean answer.
+        raise RuntimeError(
+            f"regulatory_events: announcement_index has no rows in "
+            f"{start.isoformat()}..{end.isoformat()}; backfill the announcements "
+            "for that window first (`cne backfill announcement_index`)"
+        )
+    frame = derived.events
+    if frame.is_empty():
+        result: dict = {"rows_read": 0, "rows_written": 0}
+    else:
+        # The evidence is still CNINFO's announcement; only the path to it
+        # changed, so the rows keep naming their real owner.
+        frame = with_provenance(frame, source="cninfo", data_version="v1")
+        result = write_simple(config, run_id, "regulatory_events", frame)
+    result["window"] = {"start": start.isoformat(), "end": end.isoformat()}
+    result["announcements_scanned"] = derived.announcements
+    if findings:
+        result["context_updates"] = {"audit_findings": findings}
+        result["status"] = "degraded"
     return result

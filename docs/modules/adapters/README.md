@@ -41,7 +41,7 @@ adapters/
 | eastmoney | [eastmoney.md](eastmoney.md) | 资金面、估值、结构、新闻等 |
 | sina | [sina.md](sina.md) | adj_factors；BJ / 部分外盘 |
 | baostock | [baostock.md](baostock.md) | valuation 回填, ST 历史, 退市股 |
-| cninfo | [cninfo.md](cninfo.md) | announcement_index, regulatory_events |
+| cninfo | [cninfo.md](cninfo.md) | announcement_index |
 | pboc | [pboc.md](pboc.md) | macro_indicators（社会融资规模增量） |
 | nbs | [../quality.md](../quality.md) | 制造业 PMI 发布稿，供 `macro_pmi_vs_nbs` 对照 |
 | exchange | [../quality.md](../quality.md) | 交易所上市列表，供 `st_labels_vs_exchange` 对照 |

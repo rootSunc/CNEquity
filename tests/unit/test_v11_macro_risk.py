@@ -4,7 +4,6 @@ import polars as pl
 import pytest
 
 import cnequity.steps  # noqa: F401
-from cnequity.adapters.cninfo.regulatory import fetch_regulatory_events
 from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError
 from cnequity.adapters.eastmoney.share_unlock import fetch_share_unlock_schedule
 from cnequity.adapters.macro.indicators import fetch_macro_indicators
@@ -367,24 +366,21 @@ def test_share_unlock_missing_numeric_fields_remain_null():
 
 
 def test_regulatory_events_filters_titles():
-    client = FakeCninfoClient(
-        [
+    from cnequity.derive.regulatory_events import regulatory_events_from_announcements
+
+    events = regulatory_events_from_announcements(
+        pl.DataFrame(
             {
-                "announcementId": "123",
-                "secCode": "600519",
-                "announcementTitle": "关于收到行政处罚决定书的公告",
-            },
-            {
-                "announcementId": "456",
-                "secCode": "600519",
-                "announcementTitle": "2024年半年度报告摘要",
-            },
-        ]
+                "announcement_id": ["123", "456"],
+                "symbol": ["600519.SH", "600519.SH"],
+                "title": ["关于收到行政处罚决定书的公告", "2024年半年度报告摘要"],
+                "announce_date": [date(2024, 6, 28), date(2024, 6, 28)],
+            }
+        )
     )
-    df = fetch_regulatory_events(date(2024, 6, 28), client=client)  # type: ignore[arg-type]
-    assert df.height == 1
-    assert df["event_type"][0] == "penalty"
-    assert df["event_id"][0] == "reg-123"
+    assert events.height == 1
+    assert events["event_type"][0] == "penalty"
+    assert events["event_id"][0] == "reg-123"
 
 
 @pytest.fixture

@@ -287,7 +287,7 @@ bars_15m = (
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 |
 |--------|--------|------|------|------|------|
 | share_unlock_schedule | unlock_date | symbol, unlock_date | by_date | ✓ | eastmoney |
-| regulatory_events | event_date | event_id | by_date | ✓ | cninfo |
+| regulatory_events | event_date | event_id | by_date | ✓ | cninfo（派生自 announcement_index） |
 
 ---
 

@@ -12,6 +12,7 @@
 |------|------|------|
 | `adj_factors.py` | `derived/adj_factors` | `cne derive adj_factors` / daily finalize |
 | `trading_status_history.py` | staging `trading_status` | `trading_status_derive` step / `cne derive trading_status` |
+| `regulatory_events.py` | staging `regulatory_events` | `regulatory_events` step |
 | `market_breadth.py` | `market_breadth` | macro_risk step 内调用 |
 | `sentiment_scores.py` | `sentiment_scores` | research step 内调用 |
 
@@ -66,6 +67,22 @@
 覆盖可与 `daily_bars` 同起点（约 2001）。与 Baostock ST 历史回填互补；显式配置 Tushare Pro 后，可用 `bak_basic` 覆盖 2016、`stock_st` 覆盖 2017-01-01 起的 BJ。实际 ST 证据起止范围以 `historical_st_evidence` 收据和 `cne audit --full` 为准，两者都不替代 EastMoney 当日 ST 列表。
 
 ---
+
+## regulatory_events.py
+
+`regulatory_events_from_announcements(frame)` / `derive_regulatory_events(cfg, start=, end=)`，
+由 `regulatory_events` step 调用：
+
+- 从**已提交的** `announcement_index` 行里按标题关键词筛出监管事件
+  （行政处罚 / 处罚决定 / 立案 / 调查 / 监管函 / 警示函 / 处分），首个命中的
+  关键词决定 `event_type`
+- `event_id = "reg-" + announcement_id`，事件与它来自的公告始终可 join
+- 不发任何请求。CNINFO 该端点没有服务端过滤，以前这个数据集用与
+  `announcement_index` 完全相同的请求把全天公告重抓一遍（实测 2026-01-01：
+  46 页 1375 条换 6 条事件），两次抓取还相隔一小时，同一天可能对不上
+- 窗口取不到 `announcement_index` 的水位之后：多出来的日期记 `pending_source_coverage`
+  finding 并把这次 step 标为 `degraded`，等公告入湖后的下一次运行补上
+- 窗口内 `announcement_index` 一行都没有时直接报错，而不是写一个看起来干净的空结果
 
 ## market_breadth.py
 

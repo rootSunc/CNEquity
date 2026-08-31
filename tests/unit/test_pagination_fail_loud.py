@@ -5,7 +5,6 @@ from datetime import date
 import pytest
 
 from cnequity.adapters.cninfo import announcements as cninfo_announcements
-from cnequity.adapters.cninfo.regulatory import fetch_regulatory_events
 from cnequity.adapters.eastmoney import clist
 from cnequity.adapters.eastmoney.clist import fetch_clist_pages
 
@@ -187,20 +186,6 @@ def test_clist_rejects_missing_total_when_rows_are_present():
         )
 
 
-def test_regulatory_raises_on_page_failure(monkeypatch):
-    monkeypatch.setattr(cninfo_announcements.time, "sleep", lambda *_: None)
-
-    class FailPost:
-        def post(self, url, **kwargs):
-            raise RuntimeError("cninfo 503")
-
-        def close(self):
-            return None
-
-    with pytest.raises(RuntimeError, match="regulatory pagination failed"):
-        fetch_regulatory_events(date(2024, 6, 28), client=FailPost())
-
-
 class _Response:
     def __init__(self, payload):
         self._payload = payload
@@ -242,91 +227,12 @@ class _OverrunClient:
         return None
 
 
-def test_regulatory_stops_at_totalpages_even_when_hasmore_lies():
-    client = _OverrunClient(total_pages=3)
-    df = fetch_regulatory_events(date(2024, 1, 31), client=client)
-    assert client.calls == 3  # pages 1..3, one walk
-    assert df.height == 3
-
-
-def test_regulatory_rejects_empty_page_before_totalpages():
-    class EmptyPageClient:
-        def post(self, url, **kwargs):
-            page = kwargs["data"]["pageNum"]
-            if page == 1:
-                return _Response(
-                    {
-                        "announcements": [
-                            {
-                                "secCode": "000001",
-                                "announcementId": "R1",
-                                "announcementTitle": "行政处罚决定",
-                            }
-                        ],
-                        "hasMore": True,
-                        "totalpages": 2,
-                    }
-                )
-            return _Response({"announcements": [], "hasMore": False, "totalpages": 2})
-
-    with pytest.raises(RuntimeError, match="empty page before the reported end"):
-        fetch_regulatory_events(date(2024, 1, 31), client=EmptyPageClient())
-
-
-def test_regulatory_uses_totalpages_when_hasmore_is_false():
-    class StaleHasMoreClient:
-        def __init__(self):
-            self.calls = 0
-
-        def post(self, url, **kwargs):
-            self.calls += 1
-            column = kwargs["data"]["column"]
-            if column == "sse":
-                return _Response({"announcements": [], "hasMore": False, "totalpages": 0})
-            page = kwargs["data"]["pageNum"]
-            item = {
-                "secCode": "000001",
-                "announcementId": f"R{page}",
-                "announcementTitle": "行政处罚决定",
-            }
-            return _Response({"announcements": [item], "hasMore": False, "totalpages": 2})
-
-    client = StaleHasMoreClient()
-    df = fetch_regulatory_events(date(2024, 1, 31), client=client)
-    assert client.calls == 2  # one walk, stopped by totalpages
-    assert set(df["event_id"].to_list()) == {"reg-R1", "reg-R2"}
-
-
-def test_regulatory_rejects_malformed_pagination_metadata():
-    class Malformed:
-        def post(self, url, **kwargs):
-            return _Response(
-                {
-                    "announcements": [
-                        {
-                            "secCode": "000001",
-                            "announcementId": "R1",
-                            "announcementTitle": "行政处罚决定",
-                        }
-                    ],
-                    "totalpages": "unknown",
-                    "hasMore": True,
-                }
-            )
-
-        def close(self):
-            return None
-
-    with pytest.raises(RuntimeError, match="regulatory pagination failed.*totalpages"):
-        fetch_regulatory_events(date(2024, 1, 31), client=Malformed())
-
-
-def test_regulatory_survives_one_transient_error(monkeypatch):
+def test_cninfo_survives_one_transient_error(monkeypatch):
     """A single 504 must not kill a multi-year backfill walk over one page.
 
-    Hit in production: `regulatory_events` backfilled 2010-2026 died on page 8
-    with a 504 from cninfo, and because `walk_day_backfill` restarts the whole
-    step on any raise, that one blip meant redoing the entire walk from day 1.
+    Hit in production: a 2010-2026 CNINFO backfill died on page 8 with a 504,
+    and because `walk_day_backfill` restarts the whole step on any raise, that
+    one blip meant redoing the entire walk from day 1.
     """
     monkeypatch.setattr(cninfo_announcements.time, "sleep", lambda *_: None)
 
@@ -349,6 +255,6 @@ def test_regulatory_survives_one_transient_error(monkeypatch):
         def close(self):
             return None
 
-    df = fetch_regulatory_events(date(2024, 6, 28), client=FlakyOnceThenOk())
+    df = cninfo_announcements.fetch_announcement_index(date(2024, 6, 28), client=FlakyOnceThenOk())
     assert df.is_empty()  # no announcements this run, but no raise either
     assert calls["n"] >= 2, "expected a retry, not a fail on the first attempt"

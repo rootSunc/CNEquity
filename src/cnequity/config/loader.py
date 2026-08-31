@@ -368,9 +368,12 @@ class Config:
         # point-in-time sensitive, or have no honest historical source.
         from cnequity.domain.datasets import DATASETS, history_mode_for
 
+        # ``regulatory_events`` is absent on purpose: it is derived from
+        # ``announcement_index`` rows, so the wire capture that backs it is the
+        # announcement one. Archiving it again would store the same CNINFO
+        # pages twice under two dataset names.
         return dataset in {
             "announcement_index",
-            "regulatory_events",
             "financial_statement_items",
             "corporate_actions",
         } or (dataset in DATASETS and history_mode_for(DATASETS[dataset]) == "snapshot_only")

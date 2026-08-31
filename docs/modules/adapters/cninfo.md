@@ -11,7 +11,6 @@
 | 文件 | 数据集 |
 |------|--------|
 | `announcements.py` | announcement_index |
-| `regulatory.py` | regulatory_events |
 | `__init__.py` | 导出 |
 
 ---
@@ -49,9 +48,13 @@
 
 ## regulatory_events
 
-- 监管处罚、立案调查等
-- 分区：`event_date`
-- 主键：`event_id`
+**不在本适配器里**：该端点没有服务端过滤，"行政处罚/立案/监管函"只能按标题
+关键词筛。以前它用与 `announcement_index` 完全相同的请求再抓一遍全天公告
+（实测 2026-01-01：46 页、1375 条，只留下 6 条），密集日就是 220 页重来一遍，
+而且两次抓取相隔一小时，同一天可能出现两个数据集互相矛盾。
+
+现在它是 `announcement_index` 的投影，见
+[`derive/regulatory_events.py`](../derive.md)。
 
 ---
 

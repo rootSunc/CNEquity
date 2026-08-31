@@ -151,7 +151,6 @@ def test_delta_namespace_rejects_user_symlinked_snapshot_root(tmp_path):
     "dataset",
     [
         "announcement_index",
-        "regulatory_events",
         "financial_statement_items",
         "corporate_actions",
         "analyst_consensus",

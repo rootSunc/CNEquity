@@ -15,10 +15,6 @@ from cnequity.adapters.cninfo.announcements import (
     fetch_announcement_index_range,
     replay_announcement_index_range,
 )
-from cnequity.adapters.cninfo.regulatory import (
-    fetch_regulatory_events_range,
-    replay_regulatory_events_range,
-)
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
 
 
@@ -57,7 +53,7 @@ def _config(tmp_path: Path):
         raw_archive_enabled=True,
         raw_archive_compression="none",
         raw_archive_max_payload_bytes=None,
-        should_archive_raw=lambda dataset: dataset in {"announcement_index", "regulatory_events"},
+        should_archive_raw=lambda dataset: dataset == "announcement_index",
     )
 
 
@@ -967,37 +963,3 @@ def test_raw_archive_rejects_symlinked_roots_and_payload_boundaries(tmp_path):
             captured_at=datetime.fromisoformat(record.captured_at),
         )
     assert external_sidecar.read_text(encoding="utf-8") == "{}"
-
-
-def test_regulatory_pages_use_same_archive_and_replay_path(tmp_path):
-    payload = {"announcements": [_row("r", "行政处罚公告")], "totalpages": 1, "hasMore": False}
-    empty = {"announcements": [], "totalpages": 0, "hasMore": False}
-    config = _config(tmp_path)
-    client = _Client(
-        {
-            ("szse", "2024-01-01~2024-01-01", 1): _Response(payload),
-            ("sse", "2024-01-01~2024-01-01", 1): _Response(empty),
-        }
-    )
-    live = fetch_regulatory_events_range(date(2024, 1, 1), client=client, config=config)
-    archive = RawPayloadArchive(config.meta_root)
-    replayed = replay_regulatory_events_range(archive, date(2024, 1, 1))
-    records = archive.records("regulatory_events")
-    assert len(records) == 1
-    assert live.to_dicts() == replayed.to_dicts()
-
-
-def test_regulatory_replay_rejects_archived_row_outside_requested_date(tmp_path):
-    payload = {
-        "announcements": [_row("r", "行政处罚公告", "2024-01-02")],
-        "totalpages": 1,
-        "hasMore": False,
-    }
-    config = _config(tmp_path)
-    client = _Client({("szse", "2024-01-01~2024-01-01", 1): _Response(payload)})
-    with pytest.raises(RuntimeError, match="row date"):
-        fetch_regulatory_events_range(
-            date(2024, 1, 1), client=client, config=config, run_id="bad-date-run"
-        )
-    with pytest.raises(RawArchiveError, match="after requested|no replayable root"):
-        replay_regulatory_events_range(RawPayloadArchive(config.meta_root), date(2024, 1, 1))
