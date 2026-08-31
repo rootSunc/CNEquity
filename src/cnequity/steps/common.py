@@ -361,6 +361,37 @@ def _dense_empty_day_finding(dataset: str, empty_days: list[date]) -> dict:
     }
 
 
+def _fetch_failed_day_finding(dataset: str, failures: list[tuple[date, str]]) -> dict:
+    """Record days the source could not be read, so a hole is never silent."""
+    days = [day for day, _ in failures]
+    return {
+        "dataset": dataset,
+        "severity": "error",
+        "check": "fetch_failed_days",
+        "message": (
+            f"{dataset}: {len(failures)} day(s) could not be fetched "
+            f"({', '.join(day.isoformat() for day in days[:8])}); the rest of the "
+            "window was staged and these are retried while they remain in the "
+            "reconciliation window"
+        ),
+        "days_failed": len(failures),
+        "sample_dates": [day.isoformat() for day in days[:8]],
+        "errors": [f"{day.isoformat()}: {error}" for day, error in failures[:8]],
+    }
+
+
+def _reconciliation_window_retries(dataset: str) -> bool:
+    """Whether *dataset* re-reads a rolling tail on every incremental run.
+
+    Only such a dataset may stage the days around one it could not read: its
+    next runs come back for the failed day on their own. Everything else keeps
+    the fail-loud contract, because staging past an unread day there would
+    advance the watermark over a hole nothing would ever revisit.
+    """
+    spec = DATASETS.get(dataset)
+    return int(getattr(spec, "reconciliation_lookback_days", 0) or 0) > 0
+
+
 def _validate_trade_date(
     df: pl.DataFrame,
     dataset: str,
@@ -443,8 +474,25 @@ def fetch_incremental_daily(
 
     frames: list[pl.DataFrame] = []
     empty_days: list[date] = []
+    failed_days: list[tuple[date, str]] = []
+    first_failure: Exception | None = None
+    fetched_days = 0
+    # One unreadable day used to discard the whole window, so a single bad day
+    # inside a 30-day reconciliation tail blinded the dataset until it rolled
+    # out of that tail. Isolate the days from each other; the guard above keeps
+    # this to datasets whose own window comes back for the failure.
+    tolerate_failed_day = _reconciliation_window_retries(dataset)
     for d in fetch_dates:
-        part = fetch_fn(d)
+        try:
+            part = fetch_fn(d)
+        except Exception as exc:  # noqa: BLE001 — re-raised below when total
+            if not tolerate_failed_day:
+                raise
+            first_failure = first_failure or exc
+            failed_days.append((d, str(exc)))
+            logger.warning("%s: %s could not be fetched: %s", dataset, d.isoformat(), exc)
+            continue
+        fetched_days += 1
         if part.is_empty():
             if not allow_empty:
                 raise RuntimeError(f"{dataset}: no rows returned for {d.isoformat()}")
@@ -458,8 +506,14 @@ def fetch_incremental_daily(
         # offending response can no longer be attributed to one request.
         _validate_trade_date(part, dataset, d, date_col=date_col)
         frames.append(part)
+    if first_failure is not None and fetched_days == 0:
+        # Nothing was readable: that is a source outage, not one bad day, and
+        # there is no partial result worth keeping.
+        raise first_failure
     if empty_days:
         findings.append(_dense_empty_day_finding(dataset, empty_days))
+    if failed_days:
+        findings.append(_fetch_failed_day_finding(dataset, failed_days))
     if not frames:
         return pl.DataFrame(), findings
     combined = pl.concat(frames, how="diagonal_relaxed")

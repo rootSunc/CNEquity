@@ -599,3 +599,99 @@ def test_step_fund_flow_single_day_when_caught_up(tmp_path, monkeypatch):
     assert fetched == [date(2024, 6, 28)]
     assert result["rows_written"] == 1
     assert "context_updates" not in result
+
+
+def _announcement_row(day: date) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "announcement_id": [f"A-{day.isoformat()}"],
+            "symbol": ["600519.SH"],
+            "title": ["公告"],
+            "announce_date": [day],
+            "category": ["其他"],
+            "url": ["/a.pdf"],
+        }
+    )
+
+
+def test_one_unreadable_day_no_longer_discards_the_rest_of_the_window(tmp_path):
+    """A 30-day reconciliation tail must not go blind over one bad day.
+
+    `announcement_index` re-reads the last 30 days on every run, so a day the
+    source refuses used to fail the step — and with it every other day in that
+    window — until the bad day rolled out of the tail.
+    """
+    cfg = Config(data_root=tmp_path / "data")
+    broken = date(2024, 6, 26)
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 25))
+
+    def _fetch(day: date) -> pl.DataFrame:
+        if day == broken:
+            raise RuntimeError("CNINFO announcement pagination failed for szse page 1")
+        return _announcement_row(day)
+
+    df, findings = fetch_incremental_daily(
+        cfg, "announcement_index", date(2024, 6, 28), _fetch, date_col="announce_date"
+    )
+
+    assert broken not in df["announce_date"].to_list()
+    assert df.height >= 1
+    failed = next(f for f in findings if f["check"] == "fetch_failed_days")
+    assert failed["severity"] == "error"
+    assert failed["sample_dates"] == [broken.isoformat()]
+    assert "pagination failed" in failed["errors"][0]
+
+
+def test_a_failed_day_publishes_the_others_and_reports_degraded(tmp_path):
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 25))
+
+    def _fetch(day: date) -> pl.DataFrame:
+        if day == date(2024, 6, 26):
+            raise RuntimeError("source refused the day")
+        return _announcement_row(day)
+
+    result = http_common.run_incremental_fetched(
+        cfg,
+        date(2024, 6, 28),
+        "run-partial-window",
+        "announcement_index",
+        _fetch,
+        source="cninfo",
+        date_col="announce_date",
+    )
+
+    # `degraded`, not `warning`: the complete days publish, because holding
+    # them back is what turned one bad day into a blind dataset.
+    assert result["status"] == "degraded"
+    assert result["rows_written"] >= 1
+    checks = {f["check"] for f in result["context_updates"]["audit_findings"]}
+    assert "fetch_failed_days" in checks
+
+
+def test_a_window_that_fails_entirely_still_fails_loud(tmp_path):
+    cfg = Config(data_root=tmp_path / "data")
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 25))
+
+    def _fetch(day: date) -> pl.DataFrame:
+        raise RuntimeError("cninfo down")
+
+    with pytest.raises(RuntimeError, match="cninfo down"):
+        fetch_incremental_daily(
+            cfg, "announcement_index", date(2024, 6, 28), _fetch, date_col="announce_date"
+        )
+
+
+def test_a_dataset_without_a_reconciliation_tail_keeps_failing_loud(tmp_path):
+    """Nothing would come back for the hole, so the window stays all-or-nothing."""
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
+    StateStore(cfg.meta_root).set_date("margin_trading", date(2024, 6, 25))
+
+    def _fetch(day: date) -> pl.DataFrame:
+        if day == date(2024, 6, 27):
+            raise RuntimeError("source refused the day")
+        return pl.DataFrame({"trade_date": [day], "symbol": ["600519.SH"], "value": [1.0]})
+
+    with pytest.raises(RuntimeError, match="source refused the day"):
+        fetch_incremental_daily(cfg, "margin_trading", date(2024, 6, 28), _fetch)

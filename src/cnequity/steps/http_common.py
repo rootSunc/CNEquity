@@ -489,6 +489,24 @@ def write_fetched(
     return result
 
 
+def _incomplete_window_status(findings: list[dict]) -> str | None:
+    """Public status for a window that did not come back whole.
+
+    ``warning`` blocks this run's compact, which is what a missing *session* of
+    a dense dataset needs: publishing past it would let the watermark claim a
+    session nobody observed. A day the source refused is different — the days
+    around it are complete in themselves, and holding them back would let one
+    bad day inside the reconciliation tail blind the dataset for as long as it
+    stays in that tail. Those publish, and say so as ``degraded``.
+    """
+    checks = {finding.get("check") for finding in findings}
+    if "session_dense_empty_days" in checks:
+        return "warning"
+    if "fetch_failed_days" in checks:
+        return "degraded"
+    return None
+
+
 def run_incremental_fetched(
     config: Config,
     trade_date: date,
@@ -557,14 +575,12 @@ def run_incremental_fetched(
             _mark_snapshot_capture(config, dataset, trade_date)
         if findings:
             out["context_updates"] = {"audit_findings": findings}
-            # A session-dense dataset is only complete when every requested
-            # trading session has a response. Keep the staged subset visible,
-            # but make the step retryable and block compact from checkpointing
-            # past the missing session. Snapshot coverage gaps are deliberately
-            # not promoted here: those missed historical snapshots cannot be
-            # replayed without manufacturing point-in-time values.
-            if any(f.get("check") == "session_dense_empty_days" for f in findings):
-                out["status"] = "warning"
+            # Snapshot coverage gaps are deliberately not promoted here: those
+            # missed historical snapshots cannot be replayed without
+            # manufacturing point-in-time values.
+            status = _incomplete_window_status(findings)
+            if status is not None:
+                out["status"] = status
         return out
     evidence = raw_archive_evidence
     if config.should_archive_raw(dataset) and raw_payload is None and evidence is None:
@@ -588,8 +604,9 @@ def run_incremental_fetched(
     _mark_snapshot_capture(config, dataset, trade_date)
     if findings:
         result["context_updates"] = {"audit_findings": findings}
-        if any(f.get("check") == "session_dense_empty_days" for f in findings):
-            result["status"] = "warning"
+        status = _incomplete_window_status(findings)
+        if status is not None:
+            result["status"] = status
     return result
 
 
