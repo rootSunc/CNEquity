@@ -55,9 +55,13 @@ jobs:
     strategy:
       fail-fast: false
       # Keep the minimum supported interpreter and the current stable one.
+      # `requires-python` is `>=3.10` with no upper bound, so pip already
+      # installs this package on 3.14 whether or not anything ever ran it
+      # there — the same untested-claim gap the httpx floor job below exists
+      # to close. 3.14 is a matrix entry rather than an assumption.
       # Windows below covers the platform-specific file-lock/path behavior.
       matrix:
-        python-version: ["3.10", "3.12", "3.13"]
+        python-version: ["3.10", "3.12", "3.13", "3.14"]
         # "latest" = whatever pip resolves, which is what a fresh
         # `pip install cnequity` gets. See the floor job in `include`.
         httpx: ["latest"]
@@ -153,7 +157,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
 
       - name: Install
