@@ -41,7 +41,10 @@ runs; the migration only makes the old rows say it in the new column.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from datetime import date, datetime, time
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -63,6 +66,24 @@ LEGACY_ST_STATUSES = frozenset({"st", "*st"})
 #: from a vendor board: a delisted security appears on no daily board, so no
 #: snapshot can say it stopped trading.
 DELISTED_SOURCE = "derived_delisted"
+
+#: Provenance for suspension rows reconstructed from a missing daily-bar
+#: session. The daily feeds (EastMoney current snapshot, ST backfill) cannot
+#: assert a symbol was halted, so the bar gap is the only evidence and it is
+#: explicitly provisional: ``status_evidence_rank`` keeps it below a finalized
+#: authority so a genuine source can correct it later.
+DERIVED_BAR_GAP_SOURCE = "derived_bar_gap"
+
+#: Sources whose snapshots are current-state observations. A snapshot fetched
+#: on the same session after the 15:00 closing auction is point-in-time fact;
+#: the same current-state answer stamped onto an older date is not.
+_CURRENT_SNAPSHOT_SOURCES = frozenset({"eastmoney", "tdx_protocol"})
+
+#: A snapshot fetched on ``trade_date`` at or after this time (Asia/Shanghai)
+#: is treated as same-session evidence instead of a late current-state guess.
+_SESSION_FINAL = time(15, 0)
+
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def risk_warning_expr(columns: Iterable[str]) -> pl.Expr:
@@ -113,3 +134,87 @@ def is_risk_warning(status: str | None, risk_warning: bool | None = None) -> boo
     if risk_warning:
         return True
     return str(status or "").strip().lower() in LEGACY_ST_STATUSES
+
+
+def _as_shanghai_datetime(value: Any) -> datetime | None:
+    """Normalize a provenance timestamp to an aware Asia/Shanghai datetime.
+
+    Accepts ISO strings, naive datetimes (assumed UTC, matching stored
+    ``fetched_at``), and aware datetimes.
+    """
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=ZoneInfo("UTC"))
+    return value.astimezone(_SHANGHAI)
+
+
+def status_evidence_rank(row: Mapping[str, Any]) -> int:
+    """Precedence for a collision with a derived bar-gap suspension.
+
+    Historical Baostock evidence and a finalized same-session EastMoney
+    snapshot are point-in-time facts. A later current-state snapshot stamped
+    onto an older date is not. Unknown sources win conservatively so a newly
+    introduced authority is never overwritten without an explicit policy.
+
+    Lower rank wins (kept by ``keep="last"`` after an ascending sort); rank 0
+    is the authority that may correct a derived row.
+    """
+    source = str(row.get("source") or "")
+    if source == "baostock":
+        return 0
+    if source in _CURRENT_SNAPSHOT_SOURCES:
+        fetched = _as_shanghai_datetime(row.get("fetched_at"))
+        trade_date = row.get("trade_date")
+        if (
+            fetched is not None
+            and isinstance(trade_date, date)
+            and fetched.date() == trade_date
+            and fetched.time() >= _SESSION_FINAL
+        ):
+            return 0
+        return 2
+    if source == DELISTED_SOURCE:
+        # A formal delisting is a fact about the security, not an observation
+        # of one session, so it outranks a current-state snapshot that simply
+        # never learned the name is gone.
+        return 0
+    if source == DERIVED_BAR_GAP_SOURCE:
+        return 1
+    return 0
+
+
+def evidence_rank_expr(fetched_at_timezone: str | None) -> pl.Expr:
+    """Polars expression reproducing :func:`status_evidence_rank` row-wise.
+
+    ``fetched_at_timezone`` is the stored column's time zone — ``None`` for a
+    naive legacy timestamp, which is treated as UTC (``fetched_at`` is written
+    timezone-aware elsewhere). Kept next to the row function so compact's
+    columnar merge cannot drift from the derive writer's row-wise decision.
+    """
+    fetched = pl.col("fetched_at")
+    if fetched_at_timezone:
+        fetched = fetched.dt.convert_time_zone("Asia/Shanghai")
+    else:
+        fetched = fetched.dt.replace_time_zone("UTC").dt.convert_time_zone("Asia/Shanghai")
+    same_session = (
+        pl.col("trade_date").is_not_null()
+        & (fetched.dt.date() == pl.col("trade_date"))
+        & (fetched.dt.time() >= _SESSION_FINAL)
+    )
+    return (
+        pl.when(pl.col("source") == "baostock")
+        .then(pl.lit(0))
+        .when(pl.col("source").is_in(list(_CURRENT_SNAPSHOT_SOURCES)))
+        .then(pl.when(same_session).then(pl.lit(0)).otherwise(pl.lit(2)))
+        .when(pl.col("source") == DELISTED_SOURCE)
+        .then(pl.lit(0))
+        .when(pl.col("source") == DERIVED_BAR_GAP_SOURCE)
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
+    )

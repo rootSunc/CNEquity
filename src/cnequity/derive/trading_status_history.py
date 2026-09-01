@@ -7,8 +7,11 @@ suspended day, however; those rows carry ``volume=0``. A listed symbol with no
 and covers the whole bar history — filling the trading_status gap that free ST
 feeds (EastMoney's current-snapshot ST board) cannot reach.
 
-Only sparse ``suspended`` rows are written; real daily rows (EastMoney) win on
-any primary-key overlap.
+The derived rows are only provisional suspension evidence
+(``source=derived_bar_gap``, rank 1). They are staged into the
+``trading_status`` dataset and published by compact (`staging → compact →
+commit`) so committed readers see them and a later authority (rank 0) can
+correct them.
 
 Optional ``start`` / ``end`` bound the calendar cross-join so a 2001→today
 rebuild can run year-by-year without OOM.
@@ -17,77 +20,22 @@ rebuild can run year-by-year without OOM.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
-from datetime import date, datetime, time
-from typing import Any
-from zoneinfo import ZoneInfo
+from datetime import date, datetime
 
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import validate_dataframe, with_provenance
 from cnequity.domain.trading_status import (
-    DELISTED_SOURCE,
+    DERIVED_BAR_GAP_SOURCE,
     STATUS_SUSPENDED,
-    normalize_legacy,
 )
 from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
-from cnequity.storage.parquet import CuratedWriter
+from cnequity.steps.common import reject_unfinished_eod_window
+from cnequity.storage import StagingWriter
 
 logger = logging.getLogger(__name__)
-
-_DERIVED_SOURCE = "derived_bar_gap"
-_STATUS_SPEC = DATASETS["trading_status"]
-_CURRENT_SNAPSHOT_SOURCES = frozenset({"eastmoney", "tdx_protocol"})
-_SHANGHAI = ZoneInfo("Asia/Shanghai")
-_SESSION_FINAL = time(15, 0)
-
-
-def _as_shanghai_datetime(value: Any) -> datetime | None:
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    if not isinstance(value, datetime):
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=ZoneInfo("UTC"))
-    return value.astimezone(_SHANGHAI)
-
-
-def status_evidence_rank(row: Mapping[str, Any]) -> int:
-    """Precedence for a collision with a derived bar-gap suspension.
-
-    Historical Baostock evidence and a finalized same-session EastMoney
-    snapshot are point-in-time facts. A later current-state snapshot stamped
-    onto an older date is not. Unknown sources win conservatively so a newly
-    introduced authority is never overwritten without an explicit policy.
-    """
-    source = str(row.get("source") or "")
-    if source == "baostock":
-        return 0
-    if source in _CURRENT_SNAPSHOT_SOURCES:
-        fetched = _as_shanghai_datetime(row.get("fetched_at"))
-        trade_date = row.get("trade_date")
-        if (
-            fetched is not None
-            and isinstance(trade_date, date)
-            and fetched.date() == trade_date
-            and fetched.time() >= _SESSION_FINAL
-        ):
-            return 0
-        return 2
-    if source == DELISTED_SOURCE:
-        # A formal delisting is a fact about the security, not an observation
-        # of one session, so it outranks a current-state snapshot that simply
-        # never learned the name is gone.
-        return 0
-    if source == _DERIVED_SOURCE:
-        return 1
-    return 0
 
 
 def _suspended_pairs(
@@ -196,12 +144,29 @@ def derive_suspension_history(
     *,
     start: date | None = None,
     end: date | None = None,
+    run_id: str = "derive",
+    batch_id: str | None = None,
+    now: datetime | None = None,
 ) -> int:
-    """Write derived ``suspended`` rows into curated trading_status. Returns row count.
+    """Stage derived ``suspended`` rows into trading_status. Returns row count.
 
-    When *start* / *end* are set, only that calendar window is considered — use
-    yearly chunks for a full-history rebuild to keep the cross-join bounded.
+    Rows are written through :class:`StagingWriter` into the ``trading_status``
+    dataset under *run_id*; compact (in the same run) merges them by evidence
+    rank and publishes a committed revision. Compact is responsible for
+    partitioning by the month, deduplicating against existing authored rows,
+    and keeping the derived row only when no authority contradicts it.
+
+    When *start* / *end* are set, only that calendar window is considered —
+    use yearly chunks for a full-history rebuild to keep the cross-join
+    bounded. Callers that schedule the derive against the current session
+    (``end == today``) must run it only once that session's bar is finalized;
+    the same unfinished-session guard as daily_bars applies here, and a daily
+    run should pass ``end`` strictly before the session whose bar is only
+    staged (not yet committed) in the same run. ``now`` is injectable for a
+    deterministic timezone boundary in tests.
     """
+    if end is not None:
+        reject_unfinished_eod_window(config, end, what="trading_status", now=now)
     pairs = _suspended_pairs(config, start=start, end=end)
     if pairs.is_empty():
         return 0
@@ -214,69 +179,17 @@ def derive_suspension_history(
         # `st_coverage` is what tracks where ST evidence is actually absent.
         pl.lit(None, dtype=pl.Boolean).alias("risk_warning"),
     )
-    rows = with_provenance(rows, source=_DERIVED_SOURCE, data_version="v1")
+    rows = with_provenance(rows, source=DERIVED_BAR_GAP_SOURCE, data_version="v1")
     rows = validate_dataframe(rows, "trading_status")
-
-    # trading_status is month-partitioned — never write day dirs that fight the
-    # registry (audit: mixed_partition_granularity) and republish PKs.
-    writer = CuratedWriter(config.curated_root)
-    pcol = _STATUS_SPEC.partition_col or "trade_date"
-    part_vals = [
-        _STATUS_SPEC.partition_for(td) if isinstance(td, date) else str(td)
-        for td in rows["trade_date"].to_list()
-    ]
-    rows = rows.with_columns(pl.Series("_part", part_vals))
-    total = 0
-    for key, group in rows.partition_by("_part", as_dict=True).items():
-        val = str(key[0] if isinstance(key, tuple) else key)
-        group = group.drop("_part")
-        existing_dir = writer.partition_path("trading_status", pcol, val)
-        frames = [group]
-        stray_parts: list = []
-        if existing_dir.exists():
-            for f in existing_dir.rglob("*.parquet"):
-                # Existing partitions may predate the status/risk_warning
-                # split; normalize before validating so an old lake is
-                # migrated by the rewrite instead of failing the derive.
-                frames.append(
-                    validate_dataframe(normalize_legacy(pl.read_parquet(f)), "trading_status")
-                )
-                if f.name != "part-merged.parquet":
-                    stray_parts.append(f)
-        merged = pl.concat(frames, how="diagonal_relaxed")
-        if "fetched_at" not in merged.columns:
-            merged = merged.with_columns(pl.lit(None, dtype=pl.Datetime("us")).alias("fetched_at"))
-        merged = merged.with_columns(
-            pl.struct(["source", "trade_date", "fetched_at"])
-            .map_elements(status_evidence_rank, return_dtype=pl.Int64)
-            .alias("_evidence_rank")
-        )
-        # Keep the best evidence, but make ties independent of filesystem
-        # traversal order.  Within one evidence class the newest observation
-        # wins; source and version then provide a stable final tie-breaker.
-        # Null provenance is sorted first so a known timestamp is retained by
-        # ``keep="last"`` instead of a legacy row silently winning.
-        sort_cols = ["_evidence_rank"]
-        descending = [True]
-        for column in ("fetched_at", "source", "data_version"):
-            if column in merged.columns:
-                sort_cols.append(column)
-                descending.append(False)
-        merged = (
-            merged.sort(
-                sort_cols,
-                descending=descending,
-                nulls_last=False,
-                maintain_order=True,
-            )
-            .unique(subset=["symbol", "trade_date"], keep="last")
-            .drop("_evidence_rank")
-        )
-        # Reuse compact's filename so we overwrite the single canonical part
-        # rather than adding a second file (which would double-count on read).
-        writer.write_partition("trading_status", pcol, val, merged, "part-merged.parquet")
-        for stray in stray_parts:
-            stray.unlink(missing_ok=True)
-        total += group.height
-    logger.info("derived %d historical suspension rows into trading_status", total)
-    return total
+    StagingWriter(config.staging_root).write_batch(
+        "trading_status",
+        run_id,
+        batch_id or "derived-suspension",
+        rows,
+    )
+    logger.info(
+        "derived %d historical suspension rows into trading_status staging for run %s",
+        rows.height,
+        run_id,
+    )
+    return rows.height

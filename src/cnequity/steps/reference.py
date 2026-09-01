@@ -536,6 +536,54 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
     return result
 
 
+# Suspension backfill from bar gaps runs daily; a bounded trailing window
+# keeps the calendar cross-join cheap while still covering missed captions and
+# newly disclosed gaps. Deep history backfills are done through the CLI/init.
+_DAILY_DERIVE_LOOKBACK_DAYS = 30
+
+
+def _trading_status_derive_scope(config: Config, trade_date: date) -> tuple[date | None, date]:
+    """(start, end) window the derive step should scan.
+
+    A daily run must never include the *current* session: its bar is only
+    staged (compact publishes it later in this same run), so a derive reading
+    committed bars would misreport it as a suspension. End at the previous
+    calendar day and bound the scan to a trailing window. Backfill/init runs
+    follow the configured history window instead.
+    """
+    if getattr(config, "_backfill", False):
+        start = getattr(config, "_backfill_start", None)
+        end = getattr(config, "_backfill_end", None) or trade_date
+        return start, min(end, trade_date)
+    start = trade_date - timedelta(days=_DAILY_DERIVE_LOOKBACK_DAYS - 1)
+    return start, trade_date - timedelta(days=1)
+
+
+@register_step("trading_status_derive", group="core", depends_on=["daily_bars"])
+def step_trading_status_derive(
+    config: Config, trade_date: date, run_id: str, context: dict
+) -> dict:
+    """Derive historical suspension rows from committed daily_bars gaps.
+
+    Stages `is_trading=false` rows into the trading_status dataset so the same
+    run's compact publishes them as a committed revision. Runs after daily_bars
+    (whose bars only become committed later in the run), handling a bounded
+    trailing window on daily runs and the full history window under
+    backfill/init.
+    """
+    from cnequity.derive.trading_status_history import derive_suspension_history
+
+    start, end = _trading_status_derive_scope(config, trade_date)
+    rows = derive_suspension_history(
+        config,
+        start=start,
+        end=end,
+        run_id=run_id,
+        batch_id="derived-daily",
+    )
+    return {"rows_read": rows, "rows_written": rows}
+
+
 def _is_all_a(symbol: str) -> bool:
     try:
         info = parse_symbol(symbol)

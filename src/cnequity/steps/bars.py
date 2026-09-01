@@ -17,7 +17,7 @@ from cnequity.adapters.tdx_protocol.client import (
 )
 from cnequity.config import Config
 from cnequity.domain.frames import with_columns_unless_blank
-from cnequity.domain.market_time import A_SHARE_FINAL_AT, shanghai_now
+from cnequity.domain.market_time import A_SHARE_FINAL_AT
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.symbols import split_by_quote_source
 from cnequity.orchestrator.registry import register_step
@@ -29,7 +29,6 @@ from cnequity.steps.common import (
     classify_daily_bar_ownership,
     incremental_window,
     instrument_metadata,
-    is_trading_day,
     list_trading_dates,
     load_bar_universe,
     load_curated_instruments,
@@ -37,6 +36,7 @@ from cnequity.steps.common import (
     load_negative_evidence,
     load_symbols,
     record_negative_evidence,
+    reject_unfinished_eod_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,27 +56,15 @@ def _reject_unfinished_daily_bar_window(
 ) -> None:
     """Reject a window whose newest daily bar is still forming in Shanghai.
 
-    TDX ``start=0`` includes the current daily K. Once trading begins that row
-    has plausible OHLC and non-zero volume, so content checks cannot distinguish
-    it from a settled bar. Refuse the fetch before any symbol batch starts: a
-    market-wide sweep that crosses 15:00 would otherwise mix partial and final
-    bars in one curated partition.
-
-    Historical windows and non-trading days are unaffected. ``now`` is
-    injectable so the timezone boundary is deterministic in tests.
+    Thin wrapper over :func:`cnequity.steps.common.reject_unfinished_eod_window`
+    preserving the daily_bars message label. TDX ``start=0`` includes the
+    current daily K: once trading begins that row has plausible OHLC and
+    non-zero volume, so content checks cannot distinguish it from a settled
+    bar. Refuse the fetch before any symbol batch starts so a market-wide
+    sweep that crosses 15:05 never mixes partial and final bars in one
+    curated partition.
     """
-    local_now = shanghai_now(now)
-    today = local_now.date()
-    if end < today or local_now.time() >= _DAILY_BAR_FINAL_AT:
-        return
-    if not is_trading_day(config, today):
-        return
-    raise RuntimeError(
-        f"daily_bars {end}: the current A-share session is not final until "
-        f"{_DAILY_BAR_FINAL_AT.strftime('%H:%M')} Asia/Shanghai "
-        f"(now {local_now.strftime('%H:%M:%S')}); refusing to stage an "
-        "in-progress daily bar. Re-run after the cutoff."
-    )
+    reject_unfinished_eod_window(config, end, what="daily_bars", now=now)
 
 
 def _backfill_window(config: Config, trade_date: date) -> tuple[date, date]:

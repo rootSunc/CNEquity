@@ -6,6 +6,7 @@ import polars as pl
 
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
+from cnequity.domain.trading_status import evidence_rank_expr
 
 _SOURCE_RANK = "__canonical_source_rank"
 
@@ -26,24 +27,48 @@ def _source_rank_expr(dataset: str, columns: set[str]) -> pl.Expr | None:
 
 
 def _sort_for_canonical(frame, dataset: str):
-    """Order freshest rows, then source priority, before PK collapse."""
-    columns = (
-        set(frame.collect_schema().names())
-        if isinstance(frame, pl.LazyFrame)
-        else set(frame.columns)
-    )
+    """Order rows before PK collapse so ``keep="last"`` picks the intended row.
+
+    Most datasets prefer the freshest observation, then source priority.
+    ``trading_status`` instead keys on :func:`status_evidence_rank`: rank 0
+    (authority) is sorted last so it survives collision with a derived
+    bar-gap suspension, and a newer ordinary current-state snapshot (rank 2)
+    can never overwrite it. Within one evidence class the newest observation
+    still wins.
+    """
+    schema = frame.collect_schema()
+    columns = set(schema.names())
     sort_cols: list[str] = []
     descending: list[bool] = []
-    if "fetched_at" in columns:
+
+    if (
+        dataset == "trading_status"
+        and "source" in columns
+        and "fetched_at" in columns
+        and isinstance(schema.get("fetched_at"), pl.Datetime)
+    ):
+        fetched_dtype = schema.get("fetched_at")
+        fetched_timezone = getattr(fetched_dtype, "time_zone", None)
+        frame = frame.with_columns(evidence_rank_expr(fetched_timezone).alias(_SOURCE_RANK))
+        sort_cols.append(_SOURCE_RANK)
+        # Lower rank is more authoritative; descending puts rank 0 last so
+        # ``unique(..., keep="last")`` keeps the authority over a derived row.
+        descending.append(True)
         sort_cols.append("fetched_at")
         descending.append(False)
-    rank = _source_rank_expr(dataset, columns)
-    if rank is not None:
-        frame = frame.with_columns(rank.alias(_SOURCE_RANK))
-        sort_cols.extend([_SOURCE_RANK, "source"])
-        # ``unique(..., keep="last")`` selects the last row after sorting.
-        # Primary therefore needs the greatest rank at the end of the sort.
-        descending.extend([False, False])
+        sort_cols.append("source")
+        descending.append(False)
+    else:
+        if "fetched_at" in columns:
+            sort_cols.append("fetched_at")
+            descending.append(False)
+        rank = _source_rank_expr(dataset, columns)
+        if rank is not None:
+            frame = frame.with_columns(rank.alias(_SOURCE_RANK))
+            sort_cols.extend([_SOURCE_RANK, "source"])
+            # ``unique(..., keep="last")`` selects the last row after sorting.
+            # Primary therefore needs the greatest rank at the end of the sort.
+            descending.extend([False, False])
     if "data_version" in columns:
         sort_cols.append("data_version")
         descending.append(False)

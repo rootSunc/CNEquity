@@ -95,9 +95,35 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
         summary = derive_industry_index(cfg, start=start, end=end, full=full)
         click.echo(json.dumps(summary, indent=2, default=str))
     elif name == "trading_status":
+        from datetime import timedelta
+
         from cnequity.derive.trading_status_history import derive_suspension_history
 
-        rows = derive_suspension_history(cfg, start=start, end=end)
+        # The current session's bar is only published by its own compact, so a
+        # manual derive defaults to the previous day and must not turn the
+        # current day's still-uncommitted bar into a suspension. An explicit
+        # ``--end today`` is allowed only once the session is finalized (the
+        # derive path applies the same unfinished-session guard as daily_bars).
+        trade_date = shanghai_today()
+        end = end or trade_date - timedelta(days=1)
+        engine = JobEngine(cfg)
+        run_id = engine.manifest.start_run(
+            "derive",
+            {"trade_date": trade_date.isoformat(), "target": "trading_status"},
+        )
+        try:
+            rows = derive_suspension_history(cfg, start=start, end=end, run_id=run_id)
+            if rows:
+                engine.run_step("compact", trade_date, run_id)
+            engine.manifest.finish_run(
+                run_id,
+                "success",
+                rows_read=rows,
+                rows_written=rows,
+            )
+        except Exception as exc:
+            engine.manifest.finish_run(run_id, "failed", error_message=str(exc))
+            raise
         click.echo(f"Derived historical suspension: {rows} rows into trading_status")
     elif name == "sector_routing":
         from cnequity.derive.sector_routing import derive_sector_routing

@@ -765,7 +765,7 @@ def test_audit_full_can_select_scoped_research_universe(cfg_path, monkeypatch):
 def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
     monkeypatch.setattr(
         "cnequity.derive.trading_status_history.derive_suspension_history",
-        lambda cfg, start=None, end=None: 7,
+        lambda cfg, start=None, end=None, run_id=None, **kwargs: 7,
     )
     result = CliRunner().invoke(
         cli,

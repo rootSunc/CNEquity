@@ -16,6 +16,7 @@ from cnequity.adapters.tdx_protocol.client import fetch_instruments
 from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS, fetch_semantics
 from cnequity.domain.frames import with_columns_unless_blank
+from cnequity.domain.market_time import A_SHARE_FINAL_AT, shanghai_now
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.domain.symbols import is_subscription_placeholder
 from cnequity.storage import StagingWriter
@@ -25,6 +26,39 @@ logger = logging.getLogger(__name__)
 
 INCREMENTAL_LOOKBACK_DAYS = 5
 BACKFILL_START = date(2016, 1, 1)
+
+
+def reject_unfinished_eod_window(
+    config: Config,
+    end: date,
+    *,
+    what: str = "daily data",
+    now: datetime | None = None,
+) -> None:
+    """Reject an ``end`` session whose daily observation is still forming.
+
+    TDX-style current-day K rows have plausible OHLC and non-zero volume once
+    trading begins, so content checks cannot tell a settled session from a
+    forming one. Refuse before any work starts: a market-wide sweep that
+    crosses the settlement buffer would otherwise mix partial and final
+    observations in one curated partition.
+
+    Historical windows and non-trading days are unaffected. ``now`` is
+    injectable so the timezone boundary is deterministic in tests.
+    """
+    local_now = shanghai_now(now)
+    today = local_now.date()
+    if end < today or local_now.time() >= A_SHARE_FINAL_AT:
+        return
+    if not is_trading_day(config, today):
+        return
+    raise RuntimeError(
+        f"{what} {end}: the current A-share session is not final until "
+        f"{A_SHARE_FINAL_AT.strftime('%H:%M')} Asia/Shanghai "
+        f"(now {local_now.strftime('%H:%M:%S')}); refusing to stage an "
+        "in-progress observation. Re-run after the cutoff."
+    )
+
 
 # These feeds are rolling *calendar*-date disclosures.  A weekend or exchange
 # holiday can still contain a publication, so using ``list_trading_dates``
