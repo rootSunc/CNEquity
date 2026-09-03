@@ -108,7 +108,7 @@ class JobEngine:
         trade_date = trade_date or shanghai_today()
         self.config._backfill = backfill
 
-        if run_id and retry_failed_only:
+        if (run_id and retry_failed_only) or (job_name == "retry" and run_id):
             return self._retry_run(run_id, trade_date)
 
         # Close crashed peers before we start — otherwise cne status / compact
@@ -155,6 +155,14 @@ class JobEngine:
                 ),
                 "bse_tip_repair": bool(getattr(self.config, "_bse_tip_repair", False)),
             }
+        wave_list = waves or self.config.daily_waves
+        if steps and waves is None:
+            wave_list = [WaveConfig(name="targeted", parallel=True, steps=steps)]
+
+        all_steps = [name for wave in wave_list for name in wave.steps]
+        validate_steps_registered(all_steps)
+        metadata["expected_steps"] = list(all_steps)
+
         lock_name = DAILY_INGESTION_LOCK if job_name.startswith("daily") else None
         with self._optional_job_lock(lock_name):
             if not run_id:
@@ -164,13 +172,6 @@ class JobEngine:
                     run_id,
                     lambda merged: merged.update(metadata),
                 )
-
-            wave_list = waves or self.config.daily_waves
-            if steps and waves is None:
-                wave_list = [WaveConfig(name="targeted", parallel=True, steps=steps)]
-
-            all_steps = [name for wave in wave_list for name in wave.steps]
-            validate_steps_registered(all_steps)
 
             context: dict[str, Any] = {"run_id": run_id, "trade_date": trade_date}
             results: list[dict[str, Any]] = []
@@ -641,6 +642,52 @@ class JobEngine:
         batches = self.manifest.get_batches_for_run(run_id)
         return missing_steps(phases, batches)
 
+    def _resolve_expected_steps(self, run_id: str) -> list[str]:
+        """Resolve expected steps for a run: metadata snapshot first, TOML fallback second."""
+        meta = self.manifest.get_run_metadata(run_id) or {}
+        recorded = meta.get("expected_steps")
+        if recorded and isinstance(recorded, (list, tuple)):
+            return [str(s) for s in recorded if s]
+
+        run = self.manifest.get_run(run_id)
+        job_name = str(run["job_name"]) if run and run["job_name"] else ""
+
+        if job_name == "init":
+            from cnequity.orchestrator.init_phases import expected_steps as _expected_init_steps
+
+            phases = self._init_phases_list(run_id)
+            return _expected_init_steps(phases)
+
+        if job_name.startswith("daily:"):
+            group_name = job_name.split(":", 1)[1]
+            group = self.config.schedule_groups.get(group_name)
+            if group and group.steps:
+                return list(group.steps)
+            logger.warning(
+                "Run %s group '%s' not found in current schedule_groups config; skipping missing steps check",
+                run_id,
+                group_name,
+            )
+            return []
+
+        if job_name == "daily":
+            return [step for wave in self.config.daily_waves for step in wave.steps]
+
+        return []
+
+    def _missing_run_steps(self, run_id: str) -> list[str]:
+        """Return steps expected for run_id that have not recorded any batch yet."""
+        if self._is_init_run(run_id):
+            return self._missing_init_steps(run_id)
+        expected = self._resolve_expected_steps(run_id)
+        if not expected:
+            return []
+        batches = self.manifest.get_batches_for_run(run_id)
+        present = {str(b["dataset"]) for b in batches if b["dataset"]} | {
+            str(b["task_id"]) for b in batches if b["task_id"]
+        }
+        return [s for s in expected if s not in present]
+
     def _run_finalize_steps(
         self,
         run_id: str,
@@ -830,6 +877,8 @@ class JobEngine:
             result["retry_exhausted"] = self._exhausted_worker_retry_count(run_id)
             if result.get("status") != "pending":
                 public_status = self._overall_status(run_id, str(result.get("status")))
+                if result.get("missing_steps") and public_status == "success":
+                    public_status = "failed"
                 # `_retry_run_locked` historically closes a terminal run with
                 # batch status ``warning``. Reconcile that legacy spelling
                 # after all retry/finalize receipts have been written.
@@ -880,13 +929,13 @@ class JobEngine:
         failed = self._retryable_batches_with_worker_budget(run_id)
         if retry_batch_ids is not None:
             failed = [batch for batch in failed if batch["batch_id"] in retry_batch_ids]
-        missing_init = (
-            self._missing_init_steps(run_id)
-            if retry_batch_ids is None and self._is_init_run(run_id)
+        missing_steps = (
+            self._missing_run_steps(run_id)
+            if retry_batch_ids is None
             else []
         )
 
-        if not failed and not missing_init:
+        if not failed and not missing_steps:
             incomplete = self.manifest.incomplete_batch_count(run_id)
             if incomplete > 0:
                 exhausted = self._exhausted_worker_retry_count(run_id)
@@ -1006,30 +1055,43 @@ class JobEngine:
                 self.config._backfill = previous_backfill
                 context.pop("_retry_symbols", None)
 
-        if missing_init:
-            for step in missing_init:
+        if missing_steps:
+            for step in missing_steps:
                 prev_backfill = self.config._backfill
-                self.config._backfill = step_backfill(step, init_phases)
+                if init_phases:
+                    self.config._backfill = step_backfill(step, init_phases)
                 try:
                     results.append(self._run_step(step, trade_date, run_id, context))
                 finally:
                     self.config._backfill = prev_backfill
-            retried += len(missing_init)
+            retried += len(missing_steps)
 
-        if auto_finalize and self.manifest.incomplete_batch_count(run_id) == 0:
+        remaining_missing = (
+            self._missing_run_steps(run_id)
+            if retry_batch_ids is None
+            else []
+        )
+
+        if (
+            auto_finalize
+            and self.manifest.incomplete_batch_count(run_id) == 0
+            and not remaining_missing
+        ):
             # A retry may have staged new rows after an earlier compact/finalize
             # attempt. Re-run the finalize chain so curated data and coverage
             # receipts cannot lag behind the now-successful fetch.
             results.extend(self._run_finalize_steps(run_id, trade_date, context, force=True))
 
         status = self._retry_batch_status(run_id)
+        if remaining_missing and status == "success":
+            status = "failed"
         if auto_finalize and status != "pending":
             self.manifest.finish_run(run_id, status)
         payload: dict[str, Any] = {
             "run_id": run_id,
             "status": status,
             "retried": retried,
-            "missing_steps": missing_init,
+            "missing_steps": remaining_missing,
             "stale_marked_failed": stale_marked,
             "batch_timeout": timeout,
             "results": results,
@@ -1222,7 +1284,13 @@ class JobEngine:
             )
 
         phases = self._init_phases_list()
-        metadata: dict[str, Any] = {"phases": phases, "trade_date": trade_date.isoformat()}
+        from cnequity.orchestrator.init_phases import expected_steps as _expected_init_steps
+
+        metadata: dict[str, Any] = {
+            "phases": phases,
+            "expected_steps": _expected_init_steps(phases),
+            "trade_date": trade_date.isoformat(),
+        }
         # Record the history window with the run, not just on this process's
         # config. A resume days later runs from a fresh CLI invocation, and
         # without this it would silently pick the default depth and spend hours
