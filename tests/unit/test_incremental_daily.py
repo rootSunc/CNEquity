@@ -599,3 +599,110 @@ def test_step_fund_flow_single_day_when_caught_up(tmp_path, monkeypatch):
     assert fetched == [date(2024, 6, 28)]
     assert result["rows_written"] == 1
     assert "context_updates" not in result
+
+
+def test_calendar_date_dataset_tolerates_zero_rows_on_non_trading_day(tmp_path, monkeypatch):
+    import dataclasses
+
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 28), date(2024, 7, 1))
+    # 2024-06-30 is Sunday (non-trading day)
+    assert not is_trading_day(cfg, date(2024, 6, 30))
+    from cnequity.domain.datasets import DATASETS
+
+    monkeypatch.setitem(
+        DATASETS,
+        "announcement_index",
+        dataclasses.replace(DATASETS["announcement_index"], reconciliation_lookback_days=0),
+    )
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 29))
+
+    df, findings = fetch_incremental_daily(
+        cfg,
+        "announcement_index",
+        date(2024, 6, 30),
+        lambda d: pl.DataFrame(),
+        allow_empty=False,
+        date_col="announce_date",
+    )
+    assert df.is_empty()
+    assert findings == []
+
+
+def test_calendar_date_dataset_fails_loud_on_trading_day_zero_rows(tmp_path, monkeypatch):
+    import dataclasses
+
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 28), date(2024, 7, 1))
+    # 2024-06-28 is Friday (trading day)
+    assert is_trading_day(cfg, date(2024, 6, 28))
+    from cnequity.domain.datasets import DATASETS
+
+    monkeypatch.setitem(
+        DATASETS,
+        "announcement_index",
+        dataclasses.replace(DATASETS["announcement_index"], reconciliation_lookback_days=0),
+    )
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 27))
+
+    with pytest.raises(RuntimeError, match="announcement_index: no rows returned for 2024-06-28"):
+        fetch_incremental_daily(
+            cfg,
+            "announcement_index",
+            date(2024, 6, 28),
+            lambda d: pl.DataFrame(),
+            allow_empty=False,
+            date_col="announce_date",
+        )
+
+
+def test_calendar_date_dataset_multi_day_with_weekend_empty_and_valid_rows(tmp_path, monkeypatch):
+    import dataclasses
+
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 28), date(2024, 7, 1))
+    # 2024-06-28 Friday (watermark)
+    # 2024-06-29 Saturday: has rows
+    # 2024-06-30 Sunday: 0 rows (non-trading day, tolerated)
+    # 2024-07-01 Monday: has rows
+    from cnequity.domain.datasets import DATASETS
+
+    monkeypatch.setitem(
+        DATASETS,
+        "announcement_index",
+        dataclasses.replace(DATASETS["announcement_index"], reconciliation_lookback_days=0),
+    )
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 28))
+
+    def mock_fetch(d: date) -> pl.DataFrame:
+        if d == date(2024, 6, 29):
+            return pl.DataFrame(
+                {
+                    "announcement_id": ["sat-1"],
+                    "announce_date": [d],
+                    "title": ["Saturday announcement"],
+                }
+            )
+        elif d == date(2024, 6, 30):
+            return pl.DataFrame()
+        elif d == date(2024, 7, 1):
+            return pl.DataFrame(
+                {
+                    "announcement_id": ["mon-1"],
+                    "announce_date": [d],
+                    "title": ["Monday announcement"],
+                }
+            )
+        return pl.DataFrame()
+
+    df, findings = fetch_incremental_daily(
+        cfg,
+        "announcement_index",
+        date(2024, 7, 1),
+        mock_fetch,
+        allow_empty=False,
+        date_col="announce_date",
+    )
+    assert df.height == 2
+    assert sorted(df["announcement_id"].to_list()) == ["mon-1", "sat-1"]
+    assert findings == []

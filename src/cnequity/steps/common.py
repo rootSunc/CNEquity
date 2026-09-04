@@ -417,6 +417,8 @@ def fetch_incremental_daily(
             )
         frame = fetch_fn(trade_date)
         if frame.is_empty() and not allow_empty:
+            if dataset in CALENDAR_DATE_DATASETS and not is_trading_day(config, trade_date):
+                return pl.DataFrame(), []
             raise RuntimeError(f"{dataset}: no rows returned for {trade_date.isoformat()}")
         _validate_trade_date(frame, dataset, trade_date, date_col=date_col)
         return frame, []
@@ -447,6 +449,13 @@ def fetch_incremental_daily(
         part = fetch_fn(d)
         if part.is_empty():
             if not allow_empty:
+                if dataset in CALENDAR_DATE_DATASETS and not is_trading_day(config, d):
+                    logger.info(
+                        "%s: 0 rows returned for non-trading calendar date %s (tolerated)",
+                        dataset,
+                        d.isoformat(),
+                    )
+                    continue
                 raise RuntimeError(f"{dataset}: no rows returned for {d.isoformat()}")
             spec = DATASETS.get(dataset)
             if spec is not None and spec.coverage_mode == "session_dense":
