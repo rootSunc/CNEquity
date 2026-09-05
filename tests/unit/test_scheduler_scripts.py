@@ -11,8 +11,11 @@ import os
 import plistlib
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DAILY = ROOT / "scripts" / "daily_pipeline.sh"
@@ -21,6 +24,31 @@ EVENTS = ROOT / "scripts" / "events_pipeline.sh"
 DAILY_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.daily.plist.template"
 STALE_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.stale.plist.template"
 EVENTS_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.events.plist.template"
+
+
+def _ensure_unix_shell() -> None:
+    if sys.platform == "win32":
+        pytest.skip("scheduler wrappers are Unix shell scripts")
+
+
+def _run(
+    script: Path, *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    _ensure_unix_shell()
+    return subprocess.run(
+        [str(script), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _popen(script: Path, env: dict[str, str]) -> subprocess.Popen[str]:
+    _ensure_unix_shell()
+    return subprocess.Popen(
+        [str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
 
 
 def _stub_cne(tmp_path: Path) -> Path:
@@ -96,13 +124,7 @@ def test_events_pipeline_forwards_group_and_date_and_returns_cne_failure(tmp_pat
     env["CNE_STUB_STATUS"] = "5"
     env["CNE_EVENTS_GROUP"] = "news_wire"
 
-    result = subprocess.run(
-        [str(EVENTS), "2026-08-30"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run(EVENTS, "2026-08-30", env=env)
 
     assert result.returncode == 5
     assert _call_args(calls) == [
@@ -129,7 +151,7 @@ def test_an_event_sweep_is_not_blocked_by_the_daily_wrapper(tmp_path):
     daily_lock.mkdir(parents=True)
     (daily_lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
 
-    result = subprocess.run([str(EVENTS)], env=env, capture_output=True, text=True, check=False)
+    result = _run(EVENTS, env=env)
 
     assert result.returncode == 0
     assert "skipping" not in result.stdout
@@ -142,13 +164,7 @@ def test_stale_pipeline_forwards_target_date_and_returns_cne_failure(tmp_path):
     env = _stale_env(tmp_path, cne, calls)
     env["CNE_STUB_STATUS"] = "7"
 
-    result = subprocess.run(
-        [str(STALE), "2026-08-28"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run(STALE, "2026-08-28", env=env)
 
     assert result.returncode == 7
     assert _call_args(calls) == [
@@ -169,15 +185,13 @@ def test_daily_and_stale_wrappers_share_an_atomic_nonblocking_lock(tmp_path):
     env = _stale_env(tmp_path, cne, calls)
     env["CNE_STUB_SLEEP"] = "1"
 
-    first = subprocess.Popen(
-        [str(STALE)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    first = _popen(STALE, env)
     lock_dir = tmp_path / "locks" / "daily.lock"
     deadline = time.monotonic() + 2
     while not lock_dir.exists() and time.monotonic() < deadline:
         time.sleep(0.02)
 
-    second = subprocess.run([str(STALE)], env=env, capture_output=True, text=True, check=False)
+    second = _run(STALE, env=env)
     first_stdout, first_stderr = first.communicate(timeout=5)
 
     assert lock_dir.exists() is False
@@ -197,7 +211,7 @@ def test_stale_pipeline_recovers_lock_owned_by_dead_process(tmp_path):
     lock.mkdir(parents=True)
     (lock / "pid").write_text("99999999\n", encoding="utf-8")
 
-    result = subprocess.run([str(STALE)], env=env, capture_output=True, text=True, check=False)
+    result = _run(STALE, env=env)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert _call_args(calls).count("--stale-only") == 1
@@ -211,7 +225,7 @@ def test_stale_pipeline_does_not_remove_ownerless_lock(tmp_path):
     lock = tmp_path / "locks" / "daily.lock"
     lock.mkdir(parents=True)
 
-    result = subprocess.run([str(STALE)], env=env, capture_output=True, text=True, check=False)
+    result = _run(STALE, env=env)
 
     assert result.returncode == 0
     assert "skipping" in result.stdout
@@ -249,13 +263,7 @@ def test_installer_xml_escapes_checkout_path(tmp_path):
         }
     )
 
-    result = subprocess.run(
-        [str(repo / "scripts" / "install_scheduler.sh")],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run(repo / "scripts" / "install_scheduler.sh", env=env)
     assert result.returncode == 0, result.stdout + result.stderr
     daily = plistlib.loads(
         (home / "Library" / "LaunchAgents" / "com.cnequity.daily.plist").read_bytes()
@@ -311,8 +319,8 @@ def _daily_env(tmp_path: Path, cne: Path, calls: Path, **extra: str) -> dict[str
     return env
 
 
-def _run_daily(env: dict[str, str]) -> subprocess.CompletedProcess:
-    return subprocess.run([str(DAILY)], env=env, capture_output=True, text=True, check=False)
+def _run_daily(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return _run(DAILY, env=env)
 
 
 def test_daily_pipeline_fails_hard_when_a_gate_group_fails(tmp_path):
@@ -375,13 +383,7 @@ def test_health_notify_honours_the_same_cne_override_as_the_pipeline(tmp_path):
     calls = tmp_path / "calls"
     env = _daily_env(tmp_path, cne, calls)
 
-    result = subprocess.run(
-        [str(ROOT / "scripts" / "health_notify.sh")],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run(ROOT / "scripts" / "health_notify.sh", env=env)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OK" in result.stdout

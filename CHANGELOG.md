@@ -408,13 +408,21 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   announcements and its tests now use `timezone.utc`, as the rest of the tree
   already does. That import is on the package path, so 3.10 CI never reached
   collection.
+- **Python 3.10 could not collect `test_contracts`.** The module imported
+  stdlib `tomllib` at the top; that module is 3.11+. The config loader and
+  the other TOML tests already fall back to `tomli`.
 - **Windows refused the raw-archive symlink-boundary fixture.** POSIX
   `rename()` replaces an empty destination directory; Windows raises
   `FileExistsError`. The test now moves the dataset directory onto a path that
   does not already exist.
 - **Windows CI flaked the cross-process rate-limiter assertion.** `time.sleep`
   returned at 48% of a 50ms interval; the floor is now 30% of 100ms — still
-  several times a no-op wait.
+  several times a no-op wait. The source-concurrency hold uses the same
+  30% floor: Windows CI measured 0.0527 against an 0.064 threshold.
+- **Windows CI executed the Unix scheduler wrappers as PE binaries.**
+  `test_scheduler_scripts` drove `.sh` entry points with `subprocess`
+  (`WinError 193`). Those invocations now skip on Windows, matching
+  `backup_meta.sh`. The launchd template assertions still run.
 - **Windows CI aborted the unit suite with `KeyboardInterrupt` after the
   process-pool rate-limiter tests.** A worker exiting on Windows can inject
   `CTRL_C_EVENT` into the parent's console group (CPython 33725); the session

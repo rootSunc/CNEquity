@@ -6,7 +6,10 @@ import copy
 import json
 from pathlib import Path
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore
 from click.testing import CliRunner
 
 from cnequity.cli.main import cli
