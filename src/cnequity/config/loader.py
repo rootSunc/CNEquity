@@ -93,6 +93,7 @@ class Config:
     universe_default: str = "all_a"
     daily_waves: list[WaveConfig] = field(default_factory=list)
     schedule_groups: dict[str, ScheduleGroup] = field(default_factory=dict)
+    event_groups: dict[str, ScheduleGroup] = field(default_factory=dict)
     init_phases: list[str] = field(default_factory=list)
     on_demand_enabled: bool = True
     on_demand_datasets: list[str] = field(default_factory=list)
@@ -566,6 +567,15 @@ def load_config(path: str | Path) -> Config:
             parallel=bool(group.get("parallel", True)),
         )
 
+    event_groups: dict[str, ScheduleGroup] = {}
+    event_groups_raw = raw.get("job", {}).get("events", {}).get("groups", {})
+    for name, group in event_groups_raw.items():
+        event_groups[name] = ScheduleGroup(
+            at=group.get("at", "events"),
+            steps=list(group.get("steps", [])),
+            parallel=bool(group.get("parallel", True)),
+        )
+
     duckdb_raw = raw.get("duckdb", {})
     duckdb_path_str = duckdb_raw.get("path")
     duckdb_path = (
@@ -657,6 +667,7 @@ def load_config(path: str | Path) -> Config:
         universe_default=str(raw.get("universe", {}).get("default", "all_a")),
         daily_waves=daily_waves,
         schedule_groups=schedule_groups,
+        event_groups=event_groups,
         init_phases=init_phases,
         on_demand_enabled=bool(on_demand.get("enabled", True)),
         on_demand_datasets=list(on_demand.get("datasets", [])),
@@ -869,6 +880,12 @@ def validate_config(cfg: Config) -> list[str]:
     for group_name, group in cfg.schedule_groups.items():
         for step in group.steps:
             referenced.append((f"group '{group_name}'", step))
+
+    for group_name, group in cfg.event_groups.items():
+        if not group.steps:
+            errors.append(f"event group '{group_name}' has no steps")
+        for step in group.steps:
+            referenced.append((f"event group '{group_name}'", step))
 
     for location, step in referenced:
         if step not in STEP_REGISTRY:

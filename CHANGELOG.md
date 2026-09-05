@@ -8,6 +8,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **解耦 7x24 持续事件/舆情流水线与日常批处理。** 新增 `cne run events [--group <group>]` 子命令及独立 `events_ingestion` 运行锁；将 `corporate_events`（上市公司公告/监管事件）与 `news_wire`（快讯/新闻头条）从 daily 固定波次解耦，支持非交易日/周末独立运转并绕过交易日门禁；`cne run daily` 新增 `--ignore-calendar` 参数支持非交易日演练。
 - **Checks against the bodies that publish the numbers, not a second vendor.**
   Every price arbiter in the lake compared one redistributor against another,
   which can show that two feeds do not differ but never that either is right.

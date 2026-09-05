@@ -80,9 +80,20 @@ def test_capital_group_runs_compact_last():
         "margin_trading",
         "valuation_metrics",
         "sector_members",
-        "announcement_index",
         "compact",
     ]
+    levels = step_execution_levels(steps)
+    assert levels[-1] == ["compact"]
+
+
+def test_corporate_events_group_runs_compact_last():
+    steps = ["announcement_index", "regulatory_events", "compact"]
+    levels = step_execution_levels(steps)
+    assert levels[-1] == ["compact"]
+
+
+def test_news_wire_group_runs_compact_last():
+    steps = ["flash_news_wire", "news_headlines", "compact"]
     levels = step_execution_levels(steps)
     assert levels[-1] == ["compact"]
 

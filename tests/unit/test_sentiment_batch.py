@@ -248,3 +248,73 @@ def test_stock_news_error_payload_counts_toward_breaker(tmp_path, monkeypatch):
     monkeypatch.setattr(scores, "fetch_stock_news", _error)
     assert scores._stock_news_sentiment(cfg, date(2024, 6, 28)).is_empty()
     assert len(calls) == 5, "error payloads must trip the five-failure breaker"
+
+
+def test_step_sentiment_scores_with_prior_event_run_data(tmp_path):
+    from cnequity.steps.research import step_sentiment_scores
+    from cnequity.storage.layout import init_data_layout
+
+    root = tmp_path / "data"
+    cfg = Config(data_root=root, sources={"eastmoney": True}, sentiment_use_snownlp=False)
+    init_data_layout(cfg)
+
+    trade_date = date(2024, 6, 28)
+
+    # 1. Seed calendar
+    cal_path = cfg.curated_root / "trading_calendar" / "part-merged.parquet"
+    cal_path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame([{"trade_date": trade_date, "is_trading": True}]).write_parquet(cal_path)
+
+    # 2. Simulate prior corporate_events run having populated curated announcement_index
+    ann_dir = cfg.curated_root / "announcement_index" / f"announce_date={trade_date.isoformat()}"
+    ann_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "announcement_id": ["ann_101"],
+            "symbol": ["600519.SH"],
+            "title": ["贵州茅台净利润大增"],
+            "announce_date": [trade_date],
+            "category": ["年报"],
+            "url": ["http://test"],
+            "source": ["cninfo"],
+            "data_version": ["v1"],
+            "fetched_at": ["2024-06-28T18:00:00+00:00"],
+        }
+    ).write_parquet(ann_dir / "part-0.parquet")
+
+    # 3. Simulate prior news_wire run having populated curated news_headlines
+    news_dir = cfg.curated_root / "news_headlines" / f"publish_date={trade_date.isoformat()}"
+    news_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "news_id": ["news_201"],
+            "publish_date": [trade_date],
+            "publish_time": ["12:00:00"],
+            "title": ["重大利好消息"],
+            "summary": [""],
+            "related_symbols": ["600519.SH"],
+            "channel": ["fast_news"],
+            "source": ["eastmoney"],
+            "data_version": ["v1"],
+            "fetched_at": ["2024-06-28T18:00:00+00:00"],
+        }
+    ).write_parquet(news_dir / "part-0.parquet")
+
+    # 4. Execute step_sentiment_scores during daily research pass
+    run_id = "test-research-run"
+    result = step_sentiment_scores(cfg, trade_date, run_id, {})
+
+    assert result.get("status") != "failed"
+    assert result.get("rows_written", 0) > 0
+
+    # 5. Staged parquet should exist with both announcement and news score channels
+    from cnequity.storage.parquet import StagingWriter
+
+    staged = StagingWriter(cfg.staging_root).list_run_files("sentiment_scores", run_id)
+    assert len(staged) > 0
+    staged_df = pl.read_parquet(staged[0])
+    assert "600519.SH" in staged_df["symbol"].to_list()
+    channels = set(staged_df["score_channel"].to_list())
+    assert "announcement_keywords" in channels
+    assert "news_headlines" in channels
+

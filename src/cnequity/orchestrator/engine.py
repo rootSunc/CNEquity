@@ -28,7 +28,11 @@ from cnequity.orchestrator.init_phases import (
 )
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.registry import get_step
-from cnequity.orchestrator.run_lock import DAILY_INGESTION_LOCK, run_lock
+from cnequity.orchestrator.run_lock import (
+    DAILY_INGESTION_LOCK,
+    EVENTS_INGESTION_LOCK,
+    run_lock,
+)
 from cnequity.steps.common import is_trading_day
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,8 @@ class JobEngine:
         run_id: str | None = None,
         retry_failed_only: bool = False,
         finalize_run: bool = True,
+        ignore_calendar: bool = False,
+        calendar_exempt: bool = False,
     ) -> dict[str, Any]:
         trade_date = trade_date or shanghai_today()
         self.config._backfill = backfill
@@ -115,7 +121,14 @@ class JobEngine:
         # keep seeing ghosts, and concurrent baostock jobs pile onto a blacklist.
         self._reconcile_orphans()
 
-        if not backfill and job_name != "init" and not is_trading_day(self.config, trade_date):
+        is_calendar_exempt = (
+            backfill
+            or job_name == "init"
+            or job_name.startswith("events")
+            or ignore_calendar
+            or calendar_exempt
+        )
+        if not is_calendar_exempt and not is_trading_day(self.config, trade_date):
             logger.info(
                 "Skipping job %s: %s is not a trading day",
                 job_name,
@@ -155,7 +168,12 @@ class JobEngine:
                 ),
                 "bse_tip_repair": bool(getattr(self.config, "_bse_tip_repair", False)),
             }
-        lock_name = DAILY_INGESTION_LOCK if job_name.startswith("daily") else None
+        if job_name.startswith("daily"):
+            lock_name = DAILY_INGESTION_LOCK
+        elif job_name.startswith("events"):
+            lock_name = EVENTS_INGESTION_LOCK
+        else:
+            lock_name = None
         with self._optional_job_lock(lock_name):
             if not run_id:
                 run_id = self.manifest.start_run(job_name, metadata)

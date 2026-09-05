@@ -354,7 +354,7 @@ def step_sector_fund_flow(config: Config, trade_date: date, run_id: str, context
     )
 
 
-@register_step("news_headlines", group="research")
+@register_step("news_headlines", group="news_wire")
 def step_news_headlines(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     return _run_rotation_step(
         config,

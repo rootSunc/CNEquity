@@ -18,7 +18,7 @@ from cnequity.steps.http_common import (
 )
 
 
-@register_step("flash_news_wire", group="research")
+@register_step("flash_news_wire", group="news_wire")
 def step_flash_news_wire(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if not config.sources.get("eastmoney", True):
         raise RuntimeError("flash_news_wire: eastmoney source disabled in config")

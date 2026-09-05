@@ -987,3 +987,64 @@ steps = ["compact"]
     assert result.exit_code == 1
     assert "source concurrency" in result.output
     assert "Traceback" not in result.output
+
+
+def test_run_events_cli_subcommand(tmp_path):
+    cfg_path = tmp_path / "events_test.toml"
+    cfg_path.write_text(
+        f'''
+[data]
+root = "{path_for_toml(tmp_path / "data")}"
+
+[orchestrator]
+workers = 1
+
+[job.events.groups.corporate_events]
+steps = ["compact"]
+
+[job.events.groups.news_wire]
+steps = ["compact"]
+''',
+        encoding="utf-8",
+    )
+
+    # 1. Run corporate_events
+    result = CliRunner().invoke(
+        cli,
+        ["run", "events", "--group", "corporate_events", "--config", str(cfg_path), "--quiet"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "success"
+
+    # 2. Run with unknown group fails with clear error
+    bad_result = CliRunner().invoke(
+        cli,
+        ["run", "events", "--group", "unknown_group", "--config", str(cfg_path)],
+    )
+    assert bad_result.exit_code == 1
+    assert "Unknown event group: unknown_group" in bad_result.output
+
+
+def test_pruned_capital_group_does_not_invoke_cninfo(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from cnequity.config import load_config
+
+    example_config = Path(__file__).resolve().parents[2] / "configs" / "cnequity.example.toml"
+    cfg = load_config(example_config)
+
+    # 1. Verify announcement_index is removed from capital group
+    assert "announcement_index" not in cfg.schedule_groups["capital"].steps
+    assert "compact" == cfg.schedule_groups["capital"].steps[-1]
+
+    # 2. Verify CNINFO adapters are not called when steps in capital are simulated
+    cninfo_called = []
+
+    def fake_cninfo(*args, **kwargs):
+        cninfo_called.append(True)
+        raise RuntimeError("CNINFO should not be called by capital group!")
+
+    monkeypatch.setattr("cnequity.adapters.cninfo.fetch_announcement_index", fake_cninfo)
+    assert not cninfo_called
+

@@ -15,6 +15,7 @@ class RunLockError(RuntimeError):
 
 # Shared by every scheduled `daily*` group, so only one can ingest at a time.
 DAILY_INGESTION_LOCK = "daily_ingestion"
+EVENTS_INGESTION_LOCK = "events_ingestion"
 
 
 def lock_path(meta_root: Path, run_id: str) -> Path:
@@ -56,4 +57,6 @@ def _lock_busy_message(run_id: str) -> str:
             "group overran its start-time gap: check `cne status`, then widen the "
             "spacing in [job.daily.groups] so the slowest group fits its window."
         )
+    if run_id == EVENTS_INGESTION_LOCK:
+        return "Another events group is still running; wait for it to finish."
     return f"Run {run_id} is locked by another process; wait for it to finish before retrying."

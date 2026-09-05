@@ -164,6 +164,17 @@ def test_example_config_validates(monkeypatch):
         # so enabling minute bars cannot drag transaction records along.
         "ticks",
     }
+    assert set(cfg.event_groups) == {"corporate_events", "news_wire"}
+    assert cfg.event_groups["corporate_events"].steps == [
+        "announcement_index",
+        "regulatory_events",
+        "compact",
+    ]
+    assert cfg.event_groups["news_wire"].steps == [
+        "flash_news_wire",
+        "news_headlines",
+        "compact",
+    ]
     assert cfg.minute_bars_enabled is False
 
 

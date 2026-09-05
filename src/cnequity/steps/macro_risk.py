@@ -357,7 +357,7 @@ def _backfill_share_unlock_schedule(config: Config, trade_date: date, run_id: st
     return {"rows_read": rows_written, "rows_written": rows_written}
 
 
-@register_step("regulatory_events", group="macro_risk", depends_on=["instruments"])
+@register_step("regulatory_events", group="corporate_events", depends_on=["instruments"])
 def step_regulatory_events(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if not config.sources.get("cninfo", True):
         raise RuntimeError("regulatory_events: cninfo source disabled in config")

@@ -313,6 +313,11 @@ def _run_stale_only(
 )
 @click.option("--backfill", is_flag=True)
 @click.option(
+    "--ignore-calendar",
+    is_flag=True,
+    help="Bypass trading calendar check (execute even on weekends/holidays).",
+)
+@click.option(
     "--repair-gaps",
     is_flag=True,
     help="Before the daily/stale run, repair verified historical gaps that have an honest source.",
@@ -330,6 +335,7 @@ def run_daily(
     group_name: str | None,
     trade_date_str: str | None,
     backfill: bool,
+    ignore_calendar: bool,
     repair_gaps: bool,
     stale_only: bool,
     quiet: bool,
@@ -371,9 +377,15 @@ def run_daily(
                     )
                 ],
                 backfill=backfill,
+                ignore_calendar=ignore_calendar,
             )
         else:
-            result = engine.run_job("daily", trade_date=td, backfill=backfill)
+            result = engine.run_job(
+                "daily",
+                trade_date=td,
+                backfill=backfill,
+                ignore_calendar=ignore_calendar,
+            )
     except RunLockError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(
@@ -384,6 +396,90 @@ def run_daily(
     )
     # Exit non-zero on failure so schedulers (launchd/cron) and the daily
     # pipeline can detect it; a non-trading-day skip is a success (exit 0).
+    exit_code = _run_status_exit_code(result["status"])
+    if exit_code:
+        raise SystemExit(exit_code)
+
+
+@run.command("events")
+@config_option
+@click.option(
+    "--group",
+    "group_name",
+    default=None,
+    help="Event group: corporate_events, news_wire",
+)
+@click.option(
+    "--trade-date",
+    "trade_date_str",
+    default=None,
+    help="As-of calendar date YYYY-MM-DD (default: today).",
+)
+@click.option("--backfill", is_flag=True)
+@click.option("--quiet", is_flag=True, help="Only warnings and errors; no per-step progress.")
+def run_events(
+    config_path: str,
+    group_name: str | None,
+    trade_date_str: str | None,
+    backfill: bool,
+    quiet: bool,
+):
+    """Run event-driven ingestion job (e.g. corporate_events, news_wire)."""
+    _progress_logging(quiet)
+    try:
+        cfg = _cfg(config_path)
+        cfg._validate_source_limits()
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    engine = JobEngine(cfg)
+    td = date.fromisoformat(trade_date_str) if trade_date_str else None
+    try:
+        if group_name:
+            group = cfg.event_groups.get(group_name)
+            if not group:
+                valid = ", ".join(cfg.event_groups.keys()) or "none configured"
+                raise click.ClickException(
+                    f"Unknown event group: {group_name}. Configured: {valid}"
+                )
+            result = engine.run_job(
+                f"events:{group_name}",
+                trade_date=td,
+                waves=[
+                    WaveConfig(
+                        name=f"group:{group_name}",
+                        parallel=getattr(group, "parallel", True),
+                        steps=group.steps,
+                    )
+                ],
+                backfill=backfill,
+                ignore_calendar=True,
+            )
+        else:
+            if not cfg.event_groups:
+                raise click.ClickException("No event groups configured under [job.events.groups]")
+            waves = [
+                WaveConfig(
+                    name=f"group:{name}",
+                    parallel=getattr(grp, "parallel", True),
+                    steps=grp.steps,
+                )
+                for name, grp in cfg.event_groups.items()
+            ]
+            result = engine.run_job(
+                "events",
+                trade_date=td,
+                waves=waves,
+                backfill=backfill,
+                ignore_calendar=True,
+            )
+    except RunLockError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        json.dumps(
+            {"run_id": result["run_id"], "status": result["status"]},
+            indent=2,
+        )
+    )
     exit_code = _run_status_exit_code(result["status"])
     if exit_code:
         raise SystemExit(exit_code)
