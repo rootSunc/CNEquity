@@ -14,7 +14,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CNE="${CNE:-$REPO_ROOT/.venv/bin/cne}"
+# CNE_BIN is the documented override; the older CNE spelling still works.
+CNE="${CNE_BIN:-${CNE:-$REPO_ROOT/.venv/bin/cne}}"
 CONFIG="${CNE_CONFIG:-$REPO_ROOT/configs/cnequity.toml}"
 LOG_DIR="${CNE_LOG_DIR:-$REPO_ROOT/data/cnequity/logs}"
 mkdir -p "$LOG_DIR"

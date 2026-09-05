@@ -205,3 +205,122 @@ def test_installer_xml_escapes_checkout_path(tmp_path):
     )
     assert daily["ProgramArguments"][-1] == str(repo / "scripts" / "daily_pipeline.sh")
     assert stale["ProgramArguments"][-1] == str(repo / "scripts" / "stale_pipeline.sh")
+
+
+def _stub_cne_failing_groups(tmp_path: Path) -> Path:
+    """A stub that fails only the groups named in ``CNE_STUB_FAIL_GROUPS``."""
+    path = tmp_path / "cne"
+    path.write_text(
+        """#!/bin/sh
+printf 'argc=%s\\n' "$#" >> "$CNE_CALL_LOG"
+for arg in "$@"; do printf '<%s>\\n' "$arg" >> "$CNE_CALL_LOG"; done
+group=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--group" ]; then group="$arg"; fi
+  prev="$arg"
+done
+for bad in ${CNE_STUB_FAIL_GROUPS:-}; do
+  if [ "$bad" = "$group" ]; then exit 1; fi
+done
+exit 0
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _daily_env(tmp_path: Path, cne: Path, calls: Path, **extra: str) -> dict[str, str]:
+    env = _stale_env(tmp_path, cne, calls)
+    env.update(
+        {
+            "CNE_GROUPS": "core research",
+            # Keep the run to the group loop: no probes, no desktop popup, and
+            # a data root with no meta/ so backup_meta exits before writing.
+            "CNE_SOURCE_HEALTH": "0",
+            "CNE_NOTIFY": "0",
+            "CNE_DATA_ROOT": str(tmp_path / "lake"),
+        }
+    )
+    env.update(extra)
+    return env
+
+
+def _run_daily(env: dict[str, str]) -> subprocess.CompletedProcess:
+    return subprocess.run([str(DAILY)], env=env, capture_output=True, text=True, check=False)
+
+
+def test_daily_pipeline_fails_hard_when_a_gate_group_fails(tmp_path):
+    """The gate decides whether anyone gets paged, and nothing exercised it."""
+    cne = _stub_cne_failing_groups(tmp_path)
+    env = _daily_env(tmp_path, cne, tmp_path / "calls", CNE_STUB_FAIL_GROUPS="core")
+
+    result = _run_daily(env)
+
+    assert result.returncode == 1
+    assert "GATE FAILED: core" in result.stdout
+    # A failing gate group must not stop the others from getting their turn.
+    assert "group research OK" in result.stdout
+
+
+def test_daily_pipeline_keeps_a_soft_group_failure_warn_only(tmp_path):
+    """Overseas EastMoney lag must not paint an otherwise good day red."""
+    cne = _stub_cne_failing_groups(tmp_path)
+    env = _daily_env(tmp_path, cne, tmp_path / "calls", CNE_STUB_FAIL_GROUPS="research")
+
+    result = _run_daily(env)
+
+    assert result.returncode == 0
+    assert "warn-only" in result.stdout
+    assert "research" in result.stdout
+
+
+def test_daily_pipeline_can_be_told_to_fail_on_a_soft_group(tmp_path):
+    cne = _stub_cne_failing_groups(tmp_path)
+    env = _daily_env(
+        tmp_path,
+        cne,
+        tmp_path / "calls",
+        CNE_STUB_FAIL_GROUPS="research",
+        CNE_SOFT_FAIL_OK="0",
+    )
+
+    result = _run_daily(env)
+
+    assert result.returncode == 1
+    assert "EM/soft FAILED: research" in result.stdout
+
+
+def test_daily_pipeline_exits_0_when_every_group_succeeds(tmp_path):
+    cne = _stub_cne_failing_groups(tmp_path)
+    env = _daily_env(tmp_path, cne, tmp_path / "calls")
+
+    result = _run_daily(env)
+
+    assert result.returncode == 0
+    assert "DONE ok" in result.stdout
+
+
+def test_health_notify_honours_the_same_cne_override_as_the_pipeline(tmp_path):
+    """`daily_pipeline.sh` runs this script and honours CNE_BIN; this one
+    hardcoded the repo venv, so an override left the health gate probing a
+    different — or absent — binary while the pipeline used the real one.
+    """
+    cne = _stub_cne_failing_groups(tmp_path)
+    calls = tmp_path / "calls"
+    env = _daily_env(tmp_path, cne, calls)
+
+    result = subprocess.run(
+        [str(ROOT / "scripts" / "health_notify.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK" in result.stdout
+    # It really went through the stub, not some other cne on the machine.
+    assert "audit" in _call_args(calls)
+    assert "--datasets" in _call_args(calls)

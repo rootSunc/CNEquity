@@ -6,12 +6,15 @@
 # pipeline.
 #
 # Usage: scripts/health_notify.sh
-# Env: CNE_CONFIG (config path), CNE_LOG_DIR (log destination),
+# Env: CNE_BIN (cne path), CNE_CONFIG (config path), CNE_LOG_DIR (log destination),
 #      CNE_NOTIFY=0 to suppress the desktop notification.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CNE="$REPO_ROOT/.venv/bin/cne"
+# Same override as daily_pipeline.sh/stale_pipeline.sh: this script is one of
+# the steps that pipeline runs, so a CNE_BIN it honours and this one ignores
+# meant the health gate silently probed a different (or absent) binary.
+CNE="${CNE_BIN:-$REPO_ROOT/.venv/bin/cne}"
 CONFIG="${CNE_CONFIG:-$REPO_ROOT/configs/cnequity.toml}"
 LOG_DIR="${CNE_LOG_DIR:-$REPO_ROOT/data/cnequity/logs}"
 mkdir -p "$LOG_DIR"
