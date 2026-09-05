@@ -204,3 +204,36 @@ def test_repair_surfaces_incomplete_bars(ops, cfg_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert '"status": "warning"' in captured.out
     assert manifest.finished[0][1] == "warning"
+
+
+def test_repair_does_not_let_a_degraded_step_read_as_success(ops, cfg_path, monkeypatch, capsys):
+    """The merge listed only the spellings seen at the time.
+
+    That is how `cne backfill` came to report success for a sweep whose every
+    slice had failed — `degraded` fell past the elif onto the success branch.
+    """
+
+    class FakeManifest:
+        def __init__(self):
+            self.finished = None
+
+        def start_run(self, *a, **k):
+            return "repair-degraded"
+
+        def finish_run(self, *args, **kwargs):
+            self.finished = (args, kwargs)
+
+    manifest = FakeManifest()
+    _fake_engine(monkeypatch, ops, manifest)
+    monkeypatch.setattr(
+        "cnequity.steps.delisted.repair_delisted_instruments",
+        lambda cfg, run_id, start=None: {
+            "rows_written": 1,
+            "still_need_bars": ["600071.SH"],
+            "status": "degraded",
+        },
+    )
+    monkeypatch.setattr("cnequity.steps.delisted.purge_subscription_placeholders", lambda cfg: 0)
+
+    assert ops.main(["--config", cfg_path, "repair"]) == 1
+    assert manifest.finished[0][1] == "warning"

@@ -126,10 +126,14 @@ def repair(cfg, *, since: str | None) -> int:
     # the merge in case an older curated copy still carried them.
     result["purged_placeholders_after_compact"] = purge_subscription_placeholders(cfg)
 
+    # Anything that is not success has to survive the merge. Listing only the
+    # spellings seen today is how `cne backfill` came to report success for a
+    # sweep whose every slice had failed: `degraded` fell through the elif and
+    # landed on the success branch.
     statuses = (result.get("status", "success"), compact_out.get("status", "success"))
     if "failed" in statuses:
         run_status = "failed"
-    elif "warning" in statuses:
+    elif any(status != "success" for status in statuses):
         run_status = "warning"
     else:
         run_status = "success"
