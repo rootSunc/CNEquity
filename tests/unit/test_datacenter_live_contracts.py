@@ -36,6 +36,10 @@ def test_live_datacenter_contract_page1(contract):
                 page_size=1,
                 max_retries=2,
                 retry_backoff_seconds=1.0,
+                # This is a schema probe, not a report download. Without an
+                # explicit stop the one-row page size makes a large report
+                # walk 100 pages and hit EastMoney's pageNumber ceiling.
+                stop_after=lambda _batch: True,
             )
         except EastMoneyDatacenterError as exc:
             pytest.fail(f"{contract.name} ({contract.report}): {exc}")

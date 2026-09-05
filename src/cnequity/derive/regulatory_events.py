@@ -105,7 +105,9 @@ def regulatory_events_from_announcements(announcements: pl.DataFrame) -> pl.Data
             _event_type_expr().alias("event_type"),
             pl.col("title"),
         )
-        .unique(subset=["event_id"], keep="last")
+        # keep="last" is only defined against an order, and re-deriving a
+        # day has to produce the same rows every time.
+        .unique(subset=["event_id"], keep="last", maintain_order=True)
     )
     return events
 

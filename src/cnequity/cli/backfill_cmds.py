@@ -329,7 +329,11 @@ def _recover_compactable_backfill_staging(engine: JobEngine, dataset: str) -> li
     recovered: list[str] = []
     for run in engine.manifest.list_runs("backfill"):
         run_id = str(run["run_id"])
-        if run["status"] not in ("success", "warning", "failed"):
+        # Name the in-flight states, not the terminal ones. Listing the
+        # terminal spellings is how `degraded` — a status this same release
+        # taught the engine to return — came to be skipped here, leaving the
+        # staged rows of exactly the runs most likely to have some.
+        if run["status"] in ("running", "stale"):
             continue
         batches = engine.manifest.get_batches_for_run(run_id)
         if any(batch["dataset"] == "compact" and batch["status"] == "success" for batch in batches):

@@ -277,7 +277,7 @@ def _validate_stability_at(
             )
         if generated_date is not None:
             tail_age = (generated_date - max(dates)).days
-            if 0 <= tail_age > 7:
+            if tail_age > 7:
                 errors.append(
                     f"{path}: latest trade_date {max(dates).isoformat()} is more than 7 days "
                     "before generated_at"

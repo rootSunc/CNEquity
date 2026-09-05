@@ -153,6 +153,57 @@ def test_backfill_recovers_terminal_staging_before_new_run(tmp_path):
     assert engine.calls[0][2] == run_id
 
 
+def test_backfill_recovers_staging_from_a_degraded_run(tmp_path):
+    """`degraded` is terminal, and it is the tier a partial sweep lands in.
+
+    The recovery filter used to name the terminal spellings it knew, so the
+    runs most likely to have left rows in staging were the ones it skipped.
+    """
+    cfg = Config(data_root=tmp_path / "data")
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("backfill")
+    batch_id = "st-degraded"
+    manifest.start_batch(
+        run_id,
+        batch_id,
+        task_id="trading_status",
+        dataset="trading_status",
+        blocks_compaction=False,
+    )
+    manifest.finish_batch(run_id, batch_id, "failed", error_message="source refused the window")
+    manifest.finish_run(run_id, "degraded", error_message="one or more steps failed")
+    StagingWriter(cfg.staging_root).write_batch(
+        "trading_status",
+        run_id,
+        "batch-00000",
+        pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [date(2024, 6, 28)],
+                "is_trading": [True],
+                "status": ["normal"],
+                "source": ["baostock"],
+                "data_version": ["v1"],
+                "fetched_at": [datetime.now(timezone.utc)],
+            }
+        ),
+    )
+
+    class FakeEngine:
+        def __init__(self):
+            self.config = cfg
+            self.manifest = manifest
+            self.calls = []
+
+        def run_step(self, name, trade_date, recovered_run_id):
+            self.calls.append((name, trade_date, recovered_run_id))
+            return {"status": "success"}
+
+    engine = FakeEngine()
+    assert _recover_compactable_backfill_staging(engine, "trading_status") == [run_id]
+    assert engine.calls[0][0] == "compact"
+
+
 def test_backfill_reconciles_orphaned_running_staging_before_recovery(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     manifest = Manifest(cfg.manifest_path)

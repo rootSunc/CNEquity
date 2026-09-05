@@ -59,9 +59,21 @@ scheduler_lock_acquire() {
       return 1
     fi
     if [[ -n "$owner" ]]; then
-      # The recorded process is gone.  Remove only the marker and empty lock
-      # directory; never recurse into a user directory.
-      rm -f "$lock_pid" 2>/dev/null || return 2
+      # The recorded process is gone.  Take the removal exclusively before
+      # touching the directory: `mv` is atomic, so of two processes that both
+      # read the same dead marker exactly one moves it and the other finds it
+      # gone and backs off.  Reading the marker and then deleting the
+      # directory as two independent steps is not the same thing — the loser
+      # of that race deletes the *winner's* freshly created lock in the
+      # moment before its pid is written, and both then believe they hold it.
+      # A process that has not written a marker has nothing to move, so its
+      # young lock can never be mistaken for this stale one.
+      if ! mv "$lock_pid" "$lock_dir/.reclaimed.$$" 2>/dev/null; then
+        return 1
+      fi
+      # Remove only the marker and the empty lock directory; never recurse
+      # into a user directory.
+      rm -f "$lock_dir/.reclaimed.$$" 2>/dev/null || return 2
       rmdir "$lock_dir" 2>/dev/null || return 1
       attempt=$((attempt + 1))
       continue

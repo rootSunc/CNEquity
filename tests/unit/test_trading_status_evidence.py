@@ -118,6 +118,24 @@ def test_a_frame_without_provenance_has_no_opinion():
     assert evidence_rank_sql({"symbol", "trade_date"}) is None
 
 
+def test_a_text_fetched_at_makes_both_readers_decline():
+    """The two readers have to agree about when they cannot answer.
+
+    polars declines a `fetched_at` it cannot read as an instant and lets the
+    caller fall back to its ordinary ordering. A DuckDB view that only knew
+    the column *names* applied the CASE to the same fragment and ordered it
+    differently — which is the one thing this pair exists to prevent.
+    """
+    typed = {"symbol": "VARCHAR", "source": "VARCHAR", "trade_date": "DATE"}
+    assert evidence_rank_sql({**typed, "fetched_at": "VARCHAR"}) is None
+    assert evidence_rank_expr({**typed, "fetched_at": pl.Date}) is None
+
+    for timestamp_type in ("TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "TIMESTAMP_NS"):
+        assert evidence_rank_sql({**typed, "fetched_at": timestamp_type}) is not None
+    # Bare names carry no type to object to, and neither form invents one.
+    assert evidence_rank_sql(set(typed) | {"fetched_at"}) is not None
+
+
 def test_a_restated_snapshot_does_not_overwrite_a_derived_halt():
     derived = _status_row(
         DERIVED_BAR_GAP_SOURCE, SAME_SESSION, is_trading=False, status="suspended"

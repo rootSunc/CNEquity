@@ -1086,11 +1086,17 @@ def _fetch_page_slice(
         and record.get("status") == "complete"
         and not refresh
         and _checkpoint_completed_is_fresh(record, ttl_days=checkpoint_ttl_days)
-        and _checkpoint_archive_reusable(record, raw_archive)
-        and raw_archive is None
     ):
+        # The archives are verified for their own sake, not for the answer:
+        # a tampered sidecar has to stop the run rather than be quietly
+        # replaced by a fresh fetch. Whether the rows may be replayed is a
+        # separate question, and under an archive it is always no — a new
+        # invocation has a new evidence lineage, so these sidecars cannot back
+        # what this capture publishes (the split and running branches below
+        # rebuild for the same reason).
+        _checkpoint_archive_reusable(record, raw_archive)
         rows = record.get("rows", [])
-        if isinstance(rows, list):
+        if raw_archive is None and isinstance(rows, list):
             if metrics is not None:
                 metrics["checkpoint_slices"] = int(metrics.get("checkpoint_slices", 0)) + 1
             return [row for row in rows if isinstance(row, dict)]
@@ -1167,6 +1173,34 @@ def _fetch_page_slice(
         record.pop("failure_reason", None)
         record.pop("failure_page", None)
         record.pop("failed_at", None)
+        _write_checkpoint(checkpoint_path, state)
+
+    # An interrupted partition. Unlike a date split, this parent cannot be
+    # resumed from its children: proving a cover needs the identities the
+    # *unfiltered* query returned, and those live only in the capped walk that
+    # triggered the split. So the walk is repeated — deliberately, not by
+    # falling through an unrecognised status — and the buckets it reaches are
+    # still individually checkpointed underneath.
+    if isinstance(record, dict) and str(record.get("status", "")).endswith("_split"):
+        record.update(
+            {
+                "status": "running",
+                "next_page": 1,
+                "pages": 0,
+                "rows": [],
+                "unique_keys": [],
+                "page_signatures": [],
+                "expected_total": None,
+                "authoritative_total": None,
+                "reported_pages": None,
+                "completed_at": None,
+                "raw_row_count": 0,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "raw_archives": [],
+                "capture_id": uuid.uuid4().hex,
+            }
+        )
         _write_checkpoint(checkpoint_path, state)
 
     # A previously split parent can be resumed without requesting its broad

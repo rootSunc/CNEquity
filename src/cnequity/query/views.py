@@ -88,7 +88,7 @@ def _sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _canonical_order_sql(name: str, columns: set[str]) -> str:
+def _canonical_order_sql(name: str, columns: set[str] | dict[str, str]) -> str:
     """Return the DuckDB ordering used to select one canonical lake row.
 
     Mirrors :func:`cnequity.domain.canonical.dedupe_by_primary_key`, including
@@ -121,7 +121,7 @@ def _view_select_sql(
     glob_path: str,
     hive: bool,
     *,
-    columns: set[str] | None = None,
+    columns: set[str] | dict[str, str] | None = None,
 ) -> str:
     """Build a canonical dataset view over all parquet fragments.
 
@@ -176,7 +176,12 @@ def ensure_duckdb_views(config: Config, *, require_data: bool = False) -> Path:
                 f"read_parquet('{glob_path}', "
                 f"hive_partitioning={str(hive).lower()}, union_by_name=true)"
             )
-            columns = {row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()}
+            # Types, not just names: the canonical ordering declines a
+            # `fetched_at` that some fragment stored as text, and it can
+            # only decline what it can see.
+            columns = {
+                row[0]: row[1] for row in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
+            }
             con.execute(
                 f"""
                 CREATE OR REPLACE VIEW {name} AS

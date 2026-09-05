@@ -246,16 +246,27 @@ def evidence_rank_expr(schema: Iterable[str] | Mapping[str, pl.DataType]) -> pl.
     )
 
 
-def evidence_rank_sql(columns: Iterable[str]) -> str | None:
+def evidence_rank_sql(columns: Iterable[str] | Mapping[str, str]) -> str | None:
     """SQL form of :func:`evidence_rank_expr` for the DuckDB read path.
 
     DuckDB is a separate reader from the polars one, and a lake that answers
     two different things depending on which one you asked is worse than a lake
     that answers the wrong thing consistently. ``tests`` pin the two forms to
     the same fixtures for that reason.
+
+    Pass ``{column: type}`` where the reader knows the types. The polars form
+    above declines a ``fetched_at`` that is not a timestamp and lets the caller
+    fall back to its ordinary ordering; a name-only view would apply the CASE
+    to the same fragment and order it differently — the exact divergence this
+    pairing exists to prevent. Bare names keep the old behaviour, which is what
+    :func:`evidence_rank_expr` does with a schema it cannot type either.
     """
     if not set(_EVIDENCE_INPUTS).issubset(set(columns)):
         return None
+    if isinstance(columns, Mapping):
+        fetched_type = str(columns.get("fetched_at") or "").strip().upper()
+        if not fetched_type.startswith("TIMESTAMP"):
+            return None
     boards = ", ".join(f"'{name}'" for name in sorted(CURRENT_SNAPSHOT_SOURCES))
     local = f"make_timestamp(epoch_us(fetched_at) + {_SHANGHAI_OFFSET_US})"
     final_at = SESSION_FINAL_AT.strftime("%H:%M:%S")
