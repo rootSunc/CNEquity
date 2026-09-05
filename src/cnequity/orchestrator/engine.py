@@ -17,6 +17,7 @@ from cnequity.orchestrator.deps import step_execution_levels, validate_steps_reg
 from cnequity.orchestrator.init_phases import (
     DEFAULT_INIT_PHASES,
     INIT_PHASE_STEPS,
+    RESOLVED_BATCH_STATUSES,
     current_phase_statuses,
     init_run_complete,
     missing_steps,
@@ -26,9 +27,14 @@ from cnequity.orchestrator.init_phases import (
     step_backfill,
     step_succeeded,
 )
+from cnequity.orchestrator.init_phases import expected_steps as init_expected_steps
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.registry import get_step
-from cnequity.orchestrator.run_lock import DAILY_INGESTION_LOCK, run_lock
+from cnequity.orchestrator.run_lock import (
+    DAILY_INGESTION_LOCK,
+    EVENTS_INGESTION_LOCK,
+    run_lock,
+)
 from cnequity.steps.common import is_trading_day
 
 logger = logging.getLogger(__name__)
@@ -77,6 +83,26 @@ def _has_partial_failures(result: dict[str, Any]) -> bool:
     return False
 
 
+def job_family(job_name: str) -> str:
+    """The scheduling family a job belongs to: ``daily:capital`` -> ``daily``.
+
+    Two things are decided per family rather than per job: which ingestion lock
+    the run takes, and whether it is bound to the exchange calendar.
+    """
+    return job_name.split(":", 1)[0]
+
+
+#: Families that ingest on the natural calendar rather than on exchange
+#: sessions. `validate_config` keeps such a job to calendar-scoped feeds, so
+#: running one on a Sunday asks a source only for days it actually publishes.
+CALENDAR_JOB_FAMILIES = frozenset({"events"})
+
+_JOB_LOCKS = {
+    "daily": DAILY_INGESTION_LOCK,
+    "events": EVENTS_INGESTION_LOCK,
+}
+
+
 def _criticality_for_group(group: str) -> str:
     """Map scheduler groups to the run-level criticality contract."""
     if group in {"core", "finalize"}:
@@ -115,7 +141,13 @@ class JobEngine:
         # keep seeing ghosts, and concurrent baostock jobs pile onto a blacklist.
         self._reconcile_orphans()
 
-        if not backfill and job_name != "init" and not is_trading_day(self.config, trade_date):
+        family = job_family(job_name)
+        if (
+            not backfill
+            and job_name != "init"
+            and family not in CALENDAR_JOB_FAMILIES
+            and not is_trading_day(self.config, trade_date)
+        ):
             logger.info(
                 "Skipping job %s: %s is not a trading day",
                 job_name,
@@ -131,6 +163,12 @@ class JobEngine:
                 "status": "skipped_non_trading_day",
                 "trade_date": trade_date.isoformat(),
             }
+
+        wave_list = waves or self.config.daily_waves
+        if steps and waves is None:
+            wave_list = [WaveConfig(name="targeted", parallel=True, steps=steps)]
+        all_steps = [name for wave in wave_list for name in wave.steps]
+        validate_steps_registered(all_steps)
 
         metadata = {"trade_date": trade_date.isoformat(), "backfill": backfill}
         if backfill:
@@ -155,22 +193,24 @@ class JobEngine:
                 ),
                 "bse_tip_repair": bool(getattr(self.config, "_bse_tip_repair", False)),
             }
-        lock_name = DAILY_INGESTION_LOCK if job_name.startswith("daily") else None
+        lock_name = _JOB_LOCKS.get(family)
         with self._optional_job_lock(lock_name):
             if not run_id:
-                run_id = self.manifest.start_run(job_name, metadata)
+                # Pin the plan to the run. A retry days later must know what
+                # this run set out to do even if the process died before
+                # reaching half of it, and it must not re-derive that from a
+                # config that has been edited since. An init run is resumed
+                # from its recorded phases instead, and a caller that joins an
+                # existing run keeps that run's original plan.
+                run_id = self.manifest.start_run(
+                    job_name,
+                    {**metadata, "planned_steps": list(dict.fromkeys(all_steps))},
+                )
             else:
                 self.manifest.mutate_run_metadata(
                     run_id,
                     lambda merged: merged.update(metadata),
                 )
-
-            wave_list = waves or self.config.daily_waves
-            if steps and waves is None:
-                wave_list = [WaveConfig(name="targeted", parallel=True, steps=steps)]
-
-            all_steps = [name for wave in wave_list for name in wave.steps]
-            validate_steps_registered(all_steps)
 
             context: dict[str, Any] = {"run_id": run_id, "trade_date": trade_date}
             results: list[dict[str, Any]] = []
@@ -670,6 +710,99 @@ class JobEngine:
         batches = self.manifest.get_batches_for_run(run_id)
         return missing_steps(phases, batches)
 
+    def _planned_steps(self, run_id: str) -> list[str]:
+        """The step list *run_id* was started with, or empty if it has none."""
+        planned = self.manifest.get_run_metadata(run_id).get("planned_steps")
+        if not isinstance(planned, list):
+            return []
+        return [step for step in planned if isinstance(step, str)]
+
+    def _steps_with_batches(self, run_id: str) -> set[str]:
+        """Step names this run has a batch for, however that batch ended.
+
+        A batch carries both the logical task and the physical dataset, and the
+        two differ where a step writes elsewhere (``daily_bars_history`` into
+        ``daily_bars``). Both spellings count as "this step ran", so a run
+        resumed from an older release, whose receipts are keyed by dataset
+        alone, is not told to run everything a second time.
+        """
+        names: set[str] = set()
+        for batch in self.manifest.get_batches_for_run(run_id):
+            names.add(str(batch["task_id"]))
+            names.add(str(batch["dataset"]))
+        return names
+
+    def _missing_run_steps(self, run_id: str) -> list[str]:
+        """Planned steps of *run_id* that never produced a batch at all.
+
+        A process killed mid-DAG (OOM, SIGKILL) leaves nothing behind for the
+        steps it never reached: no failed batch, no receipt, nothing to retry.
+        The ledger alone therefore reads as a clean run, which is how a daily
+        job that died after its third step used to come back from ``cne retry``
+        marked ``success`` with the rest of the day silently missing.
+
+        Init runs describe their plan as phases and keep that path. Every other
+        run carries the step list it was started with; a run started before
+        that snapshot existed says nothing here rather than having a plan
+        invented for it out of today's config.
+        """
+        if self._is_init_run(run_id):
+            return self._missing_init_steps(run_id)
+        planned = self._planned_steps(run_id)
+        if not planned:
+            return []
+        present = self._steps_with_batches(run_id)
+        return [step for step in planned if step not in present]
+
+    def _split_runnable_missing(
+        self, run_id: str, missing: list[str], *, in_run: set[str]
+    ) -> tuple[list[str], list[str]]:
+        """Split *missing* into steps whose inputs are ready and steps that are blocked.
+
+        Running a step whose upstream in this same run is still broken would
+        publish an answer built on input known to be incomplete. A blocked step
+        stays missing, which keeps the run out of ``success`` until the
+        upstream is repaired. Dependencies outside the run were satisfied by an
+        earlier run, exactly as ``step_execution_levels`` assumes.
+        """
+        resolved: set[str] = set()
+        unresolved: set[str] = set()
+        for batch in self.manifest.get_batches_for_run(run_id):
+            # A step answers to its task id and to the dataset it wrote, and the
+            # two differ for the derive steps (`derive_industry_index` writes
+            # `industry_index`). Track both spellings, or a dependent looks
+            # blocked by an upstream that in fact succeeded.
+            names = {str(batch["task_id"]), str(batch["dataset"])}
+            if batch["status"] in RESOLVED_BATCH_STATUSES:
+                resolved |= names
+            else:
+                unresolved |= names
+        satisfied = resolved - unresolved
+
+        ready: list[str] = []
+        blocked: list[str] = []
+        for step in missing:
+            deps = [dep for dep in get_step(step).depends_on if dep in in_run]
+            if all(dep in satisfied or dep in ready for dep in deps):
+                ready.append(step)
+            else:
+                blocked.append(step)
+        return ready, blocked
+
+    def _gate_on_missing_steps(self, run_id: str, status: str) -> tuple[str, list[str]]:
+        """Refuse a terminal success while planned steps have never run.
+
+        Batch receipts can only speak for the steps that produced one, so a
+        truncated run looks spotless: everything it managed to start finished.
+        The run's own plan is the only thing that says otherwise, and callers
+        (the daily pipeline, ``cne status``) read the run status to decide
+        whether the day is complete.
+        """
+        if status == "pending":
+            return status, []
+        missing = self._missing_run_steps(run_id)
+        return ("failed" if missing else status), missing
+
     def _run_finalize_steps(
         self,
         run_id: str,
@@ -859,12 +992,25 @@ class JobEngine:
             result["retry_exhausted"] = self._exhausted_worker_retry_count(run_id)
             if result.get("status") != "pending":
                 public_status = self._overall_status(run_id, str(result.get("status")))
+                # Dataset receipts describe the steps that ran. They cannot see
+                # the ones that never started, so the run's own plan has the
+                # last word over an aggregate that looks clean.
+                public_status, unresolved = self._gate_on_missing_steps(run_id, public_status)
                 # `_retry_run_locked` historically closes a terminal run with
                 # batch status ``warning``. Reconcile that legacy spelling
                 # after all retry/finalize receipts have been written.
                 if public_status != result.get("status"):
-                    self.manifest.finish_run(run_id, public_status)
+                    self.manifest.finish_run(
+                        run_id,
+                        public_status,
+                        error_message=(
+                            f"planned steps never ran: {', '.join(unresolved)}"
+                            if unresolved
+                            else None
+                        ),
+                    )
                 result["status"] = public_status
+                result["missing_steps_unresolved"] = unresolved
             return result
 
     def _retry_run_locked(
@@ -909,13 +1055,11 @@ class JobEngine:
         failed = self._retryable_batches_with_worker_budget(run_id)
         if retry_batch_ids is not None:
             failed = [batch for batch in failed if batch["batch_id"] in retry_batch_ids]
-        missing_init = (
-            self._missing_init_steps(run_id)
-            if retry_batch_ids is None and self._is_init_run(run_id)
-            else []
-        )
+        # A targeted pass retries the batch ids it was given and nothing else;
+        # the broad pass is the one that owns the rest of the plan.
+        missing = self._missing_run_steps(run_id) if retry_batch_ids is None else []
 
-        if not failed and not missing_init:
+        if not failed and not missing:
             incomplete = self.manifest.incomplete_batch_count(run_id)
             if incomplete > 0:
                 exhausted = self._exhausted_worker_retry_count(run_id)
@@ -1035,15 +1179,35 @@ class JobEngine:
                 self.config._backfill = previous_backfill
                 context.pop("_retry_symbols", None)
 
-        if missing_init:
-            for step in missing_init:
+        ran_missing: list[str] = []
+        blocked_missing: list[str] = []
+        if missing:
+            # Recompute readiness now: the batch retries above either repaired
+            # the upstream a missing step needs, or failed again and left it
+            # unrunnable.
+            in_run = set(self._planned_steps(run_id)) | set(missing)
+            if init_phases:
+                in_run |= set(init_expected_steps(init_phases))
+            ran_missing, blocked_missing = self._split_runnable_missing(
+                run_id, missing, in_run=in_run
+            )
+            for step in ran_missing:
                 prev_backfill = self.config._backfill
-                self.config._backfill = step_backfill(step, init_phases)
+                if init_phases:
+                    self.config._backfill = step_backfill(step, init_phases)
                 try:
                     results.append(self._run_step(step, trade_date, run_id, context))
                 finally:
                     self.config._backfill = prev_backfill
-            retried += len(missing_init)
+            retried += len(ran_missing)
+            if blocked_missing:
+                logger.warning(
+                    "Run %s: %d planned step(s) never ran and cannot run yet — "
+                    "their inputs in this run are still failing: %s",
+                    run_id,
+                    len(blocked_missing),
+                    ", ".join(blocked_missing),
+                )
 
         if auto_finalize and self.manifest.incomplete_batch_count(run_id) == 0:
             # A retry may have staged new rows after an earlier compact/finalize
@@ -1051,14 +1215,25 @@ class JobEngine:
             # receipts cannot lag behind the now-successful fetch.
             results.extend(self._run_finalize_steps(run_id, trade_date, context, force=True))
 
-        status = self._retry_batch_status(run_id)
+        status, still_missing = self._gate_on_missing_steps(
+            run_id, self._retry_batch_status(run_id)
+        )
         if auto_finalize and status != "pending":
-            self.manifest.finish_run(run_id, status)
+            self.manifest.finish_run(
+                run_id,
+                status,
+                error_message=(
+                    f"planned steps never ran: {', '.join(still_missing)}"
+                    if still_missing
+                    else None
+                ),
+            )
         payload: dict[str, Any] = {
             "run_id": run_id,
             "status": status,
             "retried": retried,
-            "missing_steps": missing_init,
+            "missing_steps": ran_missing,
+            "missing_steps_unresolved": still_missing,
             "stale_marked_failed": stale_marked,
             "batch_timeout": timeout,
             "results": results,

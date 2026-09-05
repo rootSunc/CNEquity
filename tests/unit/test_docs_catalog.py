@@ -92,9 +92,13 @@ def _shipped_step_groups() -> dict[str, str]:
     example = Path(__file__).resolve().parents[2] / "configs" / "cnequity.example.toml"
     with patch.object(sys, "platform", "linux"):
         cfg = load_config(example)
+    # Events groups are scheduled the same way and documented in the same
+    # column; leaving them out here is how a doc row would quietly stop being
+    # checked the moment a feed moved between the two jobs.
+    groups = {**cfg.schedule_groups, **cfg.events_groups}
     return {
         step: f"{name}@{group.at}"
-        for name, group in cfg.schedule_groups.items()
+        for name, group in groups.items()
         for step in group.steps
         if step != "compact"
     }

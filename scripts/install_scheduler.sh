@@ -10,11 +10,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="com.cnequity.daily"
 STALE_LABEL="com.cnequity.stale"
+EVENTS_LABEL="com.cnequity.events"
 TEMPLATE="$REPO_ROOT/scripts/launchd/$LABEL.plist.template"
 STALE_TEMPLATE="$REPO_ROOT/scripts/launchd/$STALE_LABEL.plist.template"
+EVENTS_TEMPLATE="$REPO_ROOT/scripts/launchd/$EVENTS_LABEL.plist.template"
 DEST_DIR="$HOME/Library/LaunchAgents"
 DEST="$DEST_DIR/$LABEL.plist"
 STALE_DEST="$DEST_DIR/$STALE_LABEL.plist"
+EVENTS_DEST="$DEST_DIR/$EVENTS_LABEL.plist"
 SOURCE_VANTAGE="${CNE_SOURCE_VANTAGE:-local}"
 LAUNCHCTL="${CNE_LAUNCHCTL:-launchctl}"
 
@@ -22,6 +25,7 @@ if [[ "$(uname)" != "Darwin" ]]; then
   echo "install_scheduler: launchd is macOS-only. On Linux use cron:" >&2
   echo "  15 11 * * *  $REPO_ROOT/scripts/daily_pipeline.sh" >&2
   echo "  5 20 * * *   $REPO_ROOT/scripts/stale_pipeline.sh" >&2
+  echo "  0 14 * * *   $REPO_ROOT/scripts/events_pipeline.sh" >&2
   exit 1
 fi
 if [[ ! -x "$REPO_ROOT/.venv/bin/cne" ]]; then
@@ -68,22 +72,30 @@ render_template() {
 
 render_template "$TEMPLATE" "$DEST"
 render_template "$STALE_TEMPLATE" "$STALE_DEST"
+render_template "$EVENTS_TEMPLATE" "$EVENTS_DEST"
 
-# Reload if already present.  Both agents share the shell-level scheduler lock,
-# so a stale pass never overlaps the multi-group run even when an operator
-# starts it manually during the daily window.
+# Reload if already present.  The daily and stale agents share the shell-level
+# scheduler lock, so a stale pass never overlaps the multi-group run even when
+# an operator starts it manually during the daily window.  The events agent
+# deliberately holds its own: those feeds publish around the clock and must not
+# be skipped because the evening batch is still going.
 "$LAUNCHCTL" unload "$DEST" 2>/dev/null || true
 "$LAUNCHCTL" unload "$STALE_DEST" 2>/dev/null || true
+"$LAUNCHCTL" unload "$EVENTS_DEST" 2>/dev/null || true
 "$LAUNCHCTL" load "$DEST"
 "$LAUNCHCTL" load "$STALE_DEST"
+"$LAUNCHCTL" load "$EVENTS_DEST"
 
-echo "install_scheduler: loaded $LABEL and $STALE_LABEL"
+echo "install_scheduler: loaded $LABEL, $STALE_LABEL and $EVENTS_LABEL"
 echo "  daily plist:  $DEST"
 echo "  stale plist:  $STALE_DEST"
+echo "  events plist: $EVENTS_DEST"
 echo "  daily schedule: daily 11:15 host-local time"
 echo "  stale schedule: daily 20:05 host-local time"
+echo "  events schedule: every calendar day 14:00 host-local time"
 echo "  source vantage: $SOURCE_VANTAGE"
 echo "  logs:     $REPO_ROOT/data/cnequity/logs/"
 echo "  verify:   launchctl list | grep cnequity"
 echo "  test now: launchctl start $LABEL"
 echo "  test stale: launchctl start $STALE_LABEL"
+echo "  test events: launchctl start $EVENTS_LABEL"

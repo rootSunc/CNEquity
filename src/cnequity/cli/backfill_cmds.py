@@ -451,9 +451,9 @@ def _backfill_symbol_chunked(cfg, dataset: str, start: date, end: date, chunk_sy
                 err=True,
             )
             result = engine.run_job("backfill", steps=[dataset], backfill=True, finalize_run=False)
-            result = _finish_backfill_run(engine, result)
             if _run_had_step_failure(engine, result["run_id"]):
                 result["status"] = "failed"
+            result = _finish_backfill_run(engine, result)
             rows_read += int(result.get("rows_read", 0))
             rows_written += int(result.get("rows_written", 0))
             chunks.append(
@@ -511,9 +511,9 @@ def _backfill_chunked(cfg, dataset: str, start: date, end: date, chunk_days: int
         cfg._backfill_start, cfg._backfill_end = cursor, slice_end
         click.echo(f"[{dataset}] slice {cursor}..{slice_end}", err=True)
         result = engine.run_job("backfill", steps=[dataset], backfill=True, finalize_run=False)
-        result = _finish_backfill_run(engine, result)
         if _run_had_step_failure(engine, result["run_id"]):
             result["status"] = "failed"
+        result = _finish_backfill_run(engine, result)
         rows_read += int(result.get("rows_read", 0))
         rows_written += int(result.get("rows_written", 0))
         slices.append(

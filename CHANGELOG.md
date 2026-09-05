@@ -6,6 +6,53 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`cne run events` — a job for the feeds that publish 7x24.** Disclosures and
+  news do not stop for a weekend, but `announcement_index`, `regulatory_events`,
+  `news_headlines` and `flash_news_wire` were scheduled inside `daily` groups:
+  the trading-day gate skipped the whole job on the very days they kept
+  publishing, and every `daily*` group shares one non-blocking
+  `daily_ingestion` lock, so an event sweep could only run in the gaps the
+  heavy evening groups left. They now live in `[job.events.groups]`, run on the
+  natural calendar, and take their own `events_ingestion` lock, so neither job
+  waits for or skips the other. `validate_config` keeps the split honest: an
+  events group may only schedule calendar-scoped datasets, and a step may not
+  be scheduled in both jobs. Shipped scheduling adds
+  `scripts/events_pipeline.sh` and a `com.cnequity.events` launchd agent (every
+  calendar day, no weekday filter). `sentiment_scores` stays in `research` and
+  is unaffected: it always read committed announcements and headlines out of
+  the lake, never same-run fetches. Existing configs keep working untouched —
+  the four steps go on running inside their daily groups until you move them
+  into `[job.events.groups]`, which is how `configs/cnequity.example.toml` now
+  ships them. `cne run daily --stale-only` skips whatever the events job owns,
+  so the two never re-fetch the same feed under different locks.
+- **`DatasetSpec.session_scope`** declares whether a dataset's date axis is an
+  exchange session or a natural calendar day — one registry entry now decides
+  the incremental walk, the empty-day guard and what the events job may
+  schedule, instead of three separate lists.
+
+### Fixed
+
+- **A closed day with no disclosures is no longer a failed fetch.**
+  `announcement_index` walks calendar days, so its window contains days the
+  exchanges never opened, and a market-wide zero-row Sunday (2026-08-02, for
+  one) raised `no rows returned` — failing the step, the `capital` group, and
+  every step that depended on it. A feed that is queried one calendar day at a
+  time now tolerates an empty non-session day; on a day the market did hold,
+  zero rows still fails loud, and a live page (`flash_news_wire`) keeps failing
+  loud on any day, because an empty page says nothing about the calendar.
+- **A run killed mid-DAG is no longer retried into a `success`.** The retry
+  path only checked for never-started steps on `init` runs. A daily job killed
+  by the OOM killer left no batch at all for the steps it never reached, so the
+  ledger looked clean: `cne retry` repaired what had failed and closed the run
+  as `success` with the rest of the day silently missing. Every run now records
+  the step list it was started with (`planned_steps`), the retry runs the
+  planned steps that never started — skipping any whose input in that run is
+  still failing — and refuses to mark a run `success` while a planned step has
+  never run. Runs created before this release carry no plan and keep their old
+  behaviour rather than having one inferred from today's config.
+
 ## [0.8.0] — 2026-09-05
 
 ### Added

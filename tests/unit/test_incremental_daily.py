@@ -8,6 +8,7 @@ from cnequity.steps import capital as cap
 from cnequity.steps import http_common
 from cnequity.steps.common import (
     SnapshotBackfillError,
+    empty_day_is_expected,
     fetch_incremental_daily,
     incremental_trade_dates,
     is_trading_day,
@@ -695,3 +696,85 @@ def test_a_dataset_without_a_reconciliation_tail_keeps_failing_loud(tmp_path):
 
     with pytest.raises(RuntimeError, match="source refused the day"):
         fetch_incremental_daily(cfg, "margin_trading", date(2024, 6, 28), _fetch)
+
+
+def test_a_closed_day_with_no_disclosures_is_not_a_failed_fetch(tmp_path):
+    """A weekend is walked (companies do file on Saturdays) but may be empty.
+
+    `announcement_index` steps through calendar days, so its window contains
+    days the exchanges never opened. Market-wide zero disclosures on such a day
+    is the ordinary case — failing the step there took `capital` down with it
+    and blocked every dependent step for the day.
+    """
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 7, 1))
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 28))
+    saturday, sunday, monday = date(2024, 6, 29), date(2024, 6, 30), date(2024, 7, 1)
+    fetched: list[date] = []
+
+    def _fetch(day: date) -> pl.DataFrame:
+        fetched.append(day)
+        return pl.DataFrame() if day == sunday else _announcement_row(day)
+
+    df, findings = fetch_incremental_daily(
+        cfg, "announcement_index", monday, _fetch, date_col="announce_date"
+    )
+
+    # The tail is walked day by day, weekend included.
+    assert fetched[-3:] == [saturday, sunday, monday]
+    published = df["announce_date"].to_list()
+    assert saturday in published and monday in published
+    assert sunday not in published
+    # Not a coverage gap and not a dense-empty day: nothing was missed.
+    assert findings == []
+
+
+def test_a_session_with_no_disclosures_still_fails_loud(tmp_path):
+    """The empty-day gate stays where it catches a broken source."""
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 26))
+
+    def _fetch(day: date) -> pl.DataFrame:
+        return pl.DataFrame() if day == date(2024, 6, 27) else _announcement_row(day)
+
+    with pytest.raises(RuntimeError, match="no rows returned for 2024-06-27"):
+        fetch_incremental_daily(
+            cfg, "announcement_index", date(2024, 6, 28), _fetch, date_col="announce_date"
+        )
+
+
+def test_a_session_scoped_dataset_never_tolerates_an_empty_day(tmp_path):
+    """The tolerance is declared per dataset, not inherited by every feed."""
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
+    StateStore(cfg.meta_root).set_date("margin_trading", date(2024, 6, 27))
+    assert not empty_day_is_expected(cfg, "margin_trading", date(2024, 6, 30))
+
+    def _fetch(day: date) -> pl.DataFrame:
+        return pl.DataFrame()
+
+    with pytest.raises(RuntimeError, match="margin_trading: no rows returned"):
+        fetch_incremental_daily(cfg, "margin_trading", date(2024, 6, 28), _fetch)
+
+
+def test_a_live_page_that_comes_back_empty_still_fails_loud(tmp_path):
+    """`flash_news_wire` is calendar-scoped too, but it is one live page.
+
+    Zero items on that page says something about the page, not about the
+    calendar, so the tolerance above must not reach it — an empty success would
+    leave the dataset unregistered in curated and quietly fail lake health.
+    """
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 7, 1))
+    sunday = date(2024, 6, 30)
+    assert not empty_day_is_expected(cfg, "flash_news_wire", sunday)
+
+    with pytest.raises(RuntimeError, match="flash_news_wire: no rows returned"):
+        fetch_incremental_daily(
+            cfg,
+            "flash_news_wire",
+            sunday,
+            lambda day: pl.DataFrame(),
+            date_col="publish_date",
+        )

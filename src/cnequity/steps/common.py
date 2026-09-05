@@ -14,7 +14,7 @@ import polars as pl
 from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
 from cnequity.adapters.tdx_protocol.client import fetch_instruments
 from cnequity.config import Config
-from cnequity.domain.datasets import DATASETS, fetch_semantics
+from cnequity.domain.datasets import DATASETS, calendar_scope_datasets, fetch_semantics
 from cnequity.domain.frames import with_columns_unless_blank
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.domain.symbols import is_subscription_placeholder
@@ -28,10 +28,13 @@ BACKFILL_START = date(2016, 1, 1)
 
 # These feeds are rolling *calendar*-date disclosures.  A weekend or exchange
 # holiday can still contain a publication, so using ``list_trading_dates``
-# here would silently make those rows impossible to fetch.  Keep this small
-# and explicit rather than weakening the trading-day contract for market
-# observations such as bars, flow, and breadth.
-CALENDAR_DATE_DATASETS = frozenset({"announcement_index", "regulatory_events"})
+# here would silently make those rows impossible to fetch.  The membership is
+# declared per dataset in ``domain/datasets`` (``session_scope="calendar"``)
+# rather than listed here, so one registry entry decides the incremental walk,
+# the empty-day guard below, and which steps the events job may schedule.
+# Everything else keeps the trading-day contract that market observations such
+# as bars, flow and breadth depend on.
+CALENDAR_DATE_DATASETS = calendar_scope_datasets()
 
 
 class SnapshotBackfillError(RuntimeError):
@@ -264,15 +267,33 @@ def list_trading_dates(config: Config, start: date, end: date) -> list[date]:
     )
 
 
+def walks_calendar_days(dataset: str) -> bool:
+    """True when the incremental walk asks this source for one calendar day at a time.
+
+    Both halves matter. The date axis has to be the natural calendar
+    (``session_scope``), and the source has to be queried *per day* rather than
+    read as one live page: a page that comes back empty is evidence about the
+    page, never about the calendar, so a live snapshot keeps its fail-loud
+    contract on an empty response whatever day it is.
+    """
+    return dataset in CALENDAR_DATE_DATASETS and fetch_semantics(dataset) == "by_date"
+
+
 def incremental_trade_dates(config: Config, dataset: str, trade_date: date) -> list[date]:
     """Dates to fetch for a daily dataset: [watermark+1, trade_date].
 
     Event calendars use literal calendar dates because disclosures are not
     constrained to exchange sessions.  All other by-date datasets retain the
     strict curated trading-session walk.
+
+    A calendar-scoped *snapshot* feed keeps the trading-day walk here even so:
+    its only request is the run day, and the older days in the window exist
+    solely to be reported as coverage gaps.  Widening that list would turn
+    every weekend into a warning for a lake whose news sweep runs on weekdays,
+    which says nothing about the day being fetched.
     """
     start = incremental_window(config, dataset, trade_date)
-    if dataset in CALENDAR_DATE_DATASETS:
+    if walks_calendar_days(dataset):
         return [start + timedelta(days=offset) for offset in range((trade_date - start).days + 1)]
     return list_trading_dates(config, start, trade_date)
 
@@ -306,6 +327,18 @@ def is_trading_day(config: Config, trade_date: date) -> bool:
             "refusing to classify it by weekday"
         )
     return bool(day_cal["is_trading"][0])
+
+
+def empty_day_is_expected(config: Config, dataset: str, day: date) -> bool:
+    """True when *dataset* returning zero rows for *day* proves nothing is wrong.
+
+    A calendar-scoped feed is walked day by day precisely because it publishes
+    outside exchange sessions — but a Sunday or a holiday with no disclosure at
+    all is the normal case for the market as a whole, not a failed fetch. The
+    strict non-empty gate stays exactly where it earns its keep: on a session
+    the market did hold, where zero rows means the source is broken.
+    """
+    return walks_calendar_days(dataset) and not is_trading_day(config, day)
 
 
 def _coverage_gap_findings(dataset: str, gap_dates: list[date]) -> list[dict]:
@@ -447,7 +480,11 @@ def fetch_incremental_daily(
                 "(live page stamped with trade_date; historical values unavailable)"
             )
         frame = fetch_fn(trade_date)
-        if frame.is_empty() and not allow_empty:
+        if (
+            frame.is_empty()
+            and not allow_empty
+            and not empty_day_is_expected(config, dataset, trade_date)
+        ):
             raise RuntimeError(f"{dataset}: no rows returned for {trade_date.isoformat()}")
         _validate_trade_date(frame, dataset, trade_date, date_col=date_col)
         return frame, []
@@ -494,6 +531,12 @@ def fetch_incremental_daily(
             continue
         fetched_days += 1
         if part.is_empty():
+            if empty_day_is_expected(config, dataset, d):
+                # The exchanges never opened: nothing was filed market-wide and
+                # there is nothing to publish. Move on without a finding — the
+                # day is not a gap, and calling it one would bury the real ones.
+                logger.debug("%s: %s is not a session and returned no rows", dataset, d)
+                continue
             if not allow_empty:
                 raise RuntimeError(f"{dataset}: no rows returned for {d.isoformat()}")
             spec = DATASETS.get(dataset)

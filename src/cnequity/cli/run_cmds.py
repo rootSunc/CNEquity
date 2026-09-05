@@ -1,4 +1,4 @@
-"""The scheduled path: `run daily` and `retry`.
+"""The scheduled path: `run daily`, `run events` and `retry`.
 
 Composition of these into a day's worth of work lives in
 `scripts/daily_pipeline.sh`, not here — the CLI runs one job, the script decides
@@ -109,6 +109,12 @@ def stale_fetch_plan(cfg, anchor: date) -> list[dict]:
                     return True
         return False
 
+    # `getattr`: the plan is also driven from lightweight stand-in configs
+    # (tests, tooling) that carry only the fields it reads.
+    events_owned = {
+        step for group in getattr(cfg, "events_groups", {}).values() for step in group.steps
+    }
+
     out: list[dict] = []
     for row in list_datasets(config=cfg).iter_rows(named=True):
         name = row["dataset"]
@@ -116,6 +122,12 @@ def stale_fetch_plan(cfg, anchor: date) -> list[dict]:
         if spec.layer == "derived" or name not in STEP_REGISTRY:
             continue
         if not is_dataset_enabled(name, cfg):
+            continue
+        if name in events_owned:
+            # The events job owns this feed and holds a different lock, so
+            # re-fetching it from the daily pass would ingest it concurrently
+            # with a sweep — and redundantly: every sweep re-reads its own
+            # window, which is what a stale-only pass is for.
             continue
         mode = history_mode_for(spec)
         snapshot_live = not spec.watermark and spec.fetch_semantics == "snapshot"
@@ -385,6 +397,71 @@ def run_daily(
     )
     # Exit non-zero on failure so schedulers (launchd/cron) and the daily
     # pipeline can detect it; a non-trading-day skip is a success (exit 0).
+    exit_code = _run_status_exit_code(result["status"])
+    if exit_code:
+        raise SystemExit(exit_code)
+
+
+@run.command("events")
+@config_option
+@click.option(
+    "--group",
+    "group_name",
+    default=None,
+    help="One events group from [job.events.groups] (default: every group, in order).",
+)
+@click.option(
+    "--trade-date",
+    "trade_date_str",
+    default=None,
+    help="As-of calendar date YYYY-MM-DD (default: today). Weekends and holidays included.",
+)
+@click.option("--quiet", is_flag=True, help="Only warnings and errors; no per-step progress.")
+def run_events(config_path: str, group_name: str | None, trade_date_str: str | None, quiet: bool):
+    """Run the continuous event streams (disclosures, news) on the natural calendar.
+
+    These feeds publish through weekends and holidays, so this job is not gated
+    on the trading calendar and takes its own ingestion lock: it neither waits
+    for the evening batch nor is skipped when the market was closed. Each group
+    publishes what it staged through its own `compact`.
+    """
+    _progress_logging(quiet)
+    try:
+        cfg = _cfg(config_path)
+        cfg._validate_source_limits()
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not cfg.events_groups:
+        raise click.ClickException(
+            "No [job.events.groups] in this config — see configs/cnequity.example.toml"
+        )
+    if group_name and group_name not in cfg.events_groups:
+        known = ", ".join(sorted(cfg.events_groups))
+        raise click.ClickException(f"Unknown events group: {group_name} (configured: {known})")
+
+    selected = (
+        [(group_name, cfg.events_groups[group_name])]
+        if group_name
+        else list(cfg.events_groups.items())
+    )
+    engine = JobEngine(cfg)
+    td = parse_date_option(trade_date_str, "--trade-date")
+    try:
+        result = engine.run_job(
+            f"events:{group_name}" if group_name else "events",
+            trade_date=td,
+            waves=[
+                WaveConfig(
+                    name=f"events:{name}",
+                    parallel=getattr(group, "parallel", True),
+                    steps=group.steps,
+                )
+                for name, group in selected
+            ],
+        )
+    except RunLockError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps({"run_id": result["run_id"], "status": result["status"]}, indent=2))
     exit_code = _run_status_exit_code(result["status"])
     if exit_code:
         raise SystemExit(exit_code)

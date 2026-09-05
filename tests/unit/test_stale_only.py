@@ -63,6 +63,32 @@ def test_only_datasets_behind_the_anchor_are_selected(lake):
     assert "daily_bars" not in steps
 
 
+def test_a_feed_the_events_job_owns_is_left_to_that_job(lake):
+    """Two jobs, two locks: the daily stale pass must not re-fetch an event feed."""
+    from cnequity.config.loader import ScheduleGroup
+
+    part = lake.curated_root / "announcement_index" / f"announce_date={BEHIND}"
+    part.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "announcement_id": ["A-1"],
+            "symbol": ["600519.SH"],
+            "announce_date": [BEHIND],
+            "source": ["cninfo"],
+            "data_version": ["v1"],
+            "fetched_at": [FETCHED],
+        }
+    ).write_parquet(part / "part-0.parquet")
+    _watermark(lake, "announcement_index", BEHIND)
+
+    assert "announcement_index" in stale_fetch_steps(lake, ANCHOR)
+
+    lake.events_groups = {
+        "disclosures": ScheduleGroup(at="20:00", steps=["announcement_index", "compact"])
+    }
+    assert "announcement_index" not in stale_fetch_steps(lake, ANCHOR)
+
+
 def test_derived_datasets_are_left_to_cne_derive(lake):
     """Re-fetching is not what a computed dataset needs."""
     _write(lake, "adj_factors", BEHIND)

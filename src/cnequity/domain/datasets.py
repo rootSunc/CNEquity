@@ -440,6 +440,13 @@ class DatasetSpec:
     # Default TTL for source-empty evidence when a caller has no more specific
     # deployment setting. Config.negative_evidence_ttl_days overrides it.
     negative_evidence_ttl_days: int = 7
+    # Whether one row's date axis is an exchange session or a natural calendar
+    # day. Disclosure and news feeds publish on weekends and holidays, so their
+    # incremental walk steps day by day and a session-free day that returns
+    # zero rows is a fact about the calendar, not a source failure. Session
+    # datasets keep the strict trading-day walk and keep failing loud on an
+    # empty day, which is what catches a silently broken EOD source.
+    session_scope: Literal["session", "calendar"] = "session"
 
     def __post_init__(self) -> None:
         """Materialise inferred contract fields without changing old APIs.
@@ -462,6 +469,8 @@ class DatasetSpec:
             raise ValueError("append_only datasets cannot have a reconciliation lookback")
         if self.negative_evidence_ttl_days < 0:
             raise ValueError("negative_evidence_ttl_days must be >= 0")
+        if self.session_scope not in {"session", "calendar"}:
+            raise ValueError("session_scope must be 'session' or 'calendar'")
 
         if self.pit_quality is None:
             if self.pit_grade == "partial":
@@ -743,6 +752,9 @@ _SPECS = [
         tier="L2",
         partition_col="announce_date",
         pit=True,
+        # Listed companies disclose on Saturdays, and CNINFO indexes those
+        # announcements under the calendar date they were published.
+        session_scope="calendar",
         reconciliation_lookback_days=30,
         # CNINFO's ``hisAnnouncement`` endpoint is page-limited and has been
         # observed to replay an earlier page once a broad request gets deep
@@ -1014,6 +1026,8 @@ _SPECS = [
         partition_col="publish_date",
         partition_granularity="month",
         fetch_semantics="snapshot",
+        # A news wire does not close for the weekend.
+        session_scope="calendar",
     ),
     DatasetSpec(
         "flash_news_wire",
@@ -1022,6 +1036,8 @@ _SPECS = [
         partition_col="publish_date",
         partition_granularity="month",
         fetch_semantics="snapshot",
+        # A news wire does not close for the weekend.
+        session_scope="calendar",
     ),
     # EM datacenter report RPT_ECONOMICCALENDAR was retired (code 9501); keep the
     # schema/registry for a replacement source, but do not fail lake health.
@@ -1062,6 +1078,8 @@ _SPECS = [
         tier="L8",
         partition_col="event_date",
         partition_granularity="year",
+        # Derived from announcement_index, so it inherits its calendar axis.
+        session_scope="calendar",
         reconciliation_lookback_days=30,
         # Derived from announcement_index rather than fetched (see
         # ``derive/regulatory_events``), so the lookback re-reads the same tail
@@ -1156,6 +1174,17 @@ def intraday_datasets() -> dict[str, str]:
     registry entry rather than an edit in four modules.
     """
     return {s.intraday_frequency: s.name for s in DATASETS.values() if s.intraday_frequency}
+
+
+def calendar_scope_datasets() -> frozenset[str]:
+    """Datasets whose date axis is the natural calendar, not exchange sessions.
+
+    The single source of truth for "this feed publishes on days the market is
+    closed": the incremental walk uses it to step calendar days, the empty-day
+    guard to tell a quiet Sunday from a broken source, and the events job to
+    decide which steps may run outside a trading session.
+    """
+    return frozenset(s.name for s in DATASETS.values() if s.session_scope == "calendar")
 
 
 def fetch_semantics(dataset: str) -> FetchSemantics:

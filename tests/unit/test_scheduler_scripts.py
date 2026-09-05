@@ -17,8 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DAILY = ROOT / "scripts" / "daily_pipeline.sh"
 STALE = ROOT / "scripts" / "stale_pipeline.sh"
+EVENTS = ROOT / "scripts" / "events_pipeline.sh"
 DAILY_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.daily.plist.template"
 STALE_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.stale.plist.template"
+EVENTS_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.events.plist.template"
 
 
 def _stub_cne(tmp_path: Path) -> Path:
@@ -75,6 +77,63 @@ def test_stale_template_is_a_late_independent_agent():
     assert payload["Label"] == "com.cnequity.stale"
     assert payload["ProgramArguments"][-1].endswith("scripts/stale_pipeline.sh")
     assert payload["StartCalendarInterval"] == {"Hour": 20, "Minute": 5}
+
+
+def test_events_template_runs_every_calendar_day_on_its_own_lock():
+    """The whole point: no trading-day gate, and not behind the daily lock."""
+    payload = plistlib.loads(EVENTS_PLIST.read_bytes())
+    assert payload["Label"] == "com.cnequity.events"
+    assert payload["ProgramArguments"][-1].endswith("scripts/events_pipeline.sh")
+    # A weekday filter here would put the market calendar back in the path.
+    assert "Weekday" not in payload["StartCalendarInterval"]
+    assert 'scheduler_lock_acquire "$REPO_ROOT" events' in EVENTS.read_text(encoding="utf-8")
+
+
+def test_events_pipeline_forwards_group_and_date_and_returns_cne_failure(tmp_path):
+    cne = _stub_cne(tmp_path)
+    calls = tmp_path / "calls"
+    env = _stale_env(tmp_path, cne, calls)
+    env["CNE_STUB_STATUS"] = "5"
+    env["CNE_EVENTS_GROUP"] = "news_wire"
+
+    result = subprocess.run(
+        [str(EVENTS), "2026-08-30"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 5
+    assert _call_args(calls) == [
+        "run",
+        "events",
+        "--config",
+        str(tmp_path / "cnequity.toml"),
+        "--trade-date",
+        "2026-08-30",
+        "--group",
+        "news_wire",
+    ]
+    assert "FAILED" in result.stdout
+
+
+def test_an_event_sweep_is_not_blocked_by_the_daily_wrapper(tmp_path):
+    """A sweep skipped because the evening batch is running is a sweep lost."""
+    cne = _stub_cne(tmp_path)
+    calls = tmp_path / "calls"
+    env = _stale_env(tmp_path, cne, calls)
+    env["CNE_STUB_SLEEP"] = "1"
+
+    daily_lock = tmp_path / "locks" / "daily.lock"
+    daily_lock.mkdir(parents=True)
+    (daily_lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    result = subprocess.run([str(EVENTS)], env=env, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0
+    assert "skipping" not in result.stdout
+    assert _call_args(calls)[:2] == ["run", "events"]
 
 
 def test_stale_pipeline_forwards_target_date_and_returns_cne_failure(tmp_path):
@@ -167,6 +226,7 @@ def test_installer_xml_escapes_checkout_path(tmp_path):
     shutil.copy2(ROOT / "scripts" / "install_scheduler.sh", repo / "scripts")
     shutil.copy2(DAILY_PLIST, repo / "scripts" / "launchd")
     shutil.copy2(STALE_PLIST, repo / "scripts" / "launchd")
+    shutil.copy2(EVENTS_PLIST, repo / "scripts" / "launchd")
     cne = repo / ".venv" / "bin" / "cne"
     cne.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     cne.chmod(0o755)
@@ -203,8 +263,12 @@ def test_installer_xml_escapes_checkout_path(tmp_path):
     stale = plistlib.loads(
         (home / "Library" / "LaunchAgents" / "com.cnequity.stale.plist").read_bytes()
     )
+    events = plistlib.loads(
+        (home / "Library" / "LaunchAgents" / "com.cnequity.events.plist").read_bytes()
+    )
     assert daily["ProgramArguments"][-1] == str(repo / "scripts" / "daily_pipeline.sh")
     assert stale["ProgramArguments"][-1] == str(repo / "scripts" / "stale_pipeline.sh")
+    assert events["ProgramArguments"][-1] == str(repo / "scripts" / "events_pipeline.sh")
 
 
 def _stub_cne_failing_groups(tmp_path: Path) -> Path:

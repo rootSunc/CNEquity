@@ -156,10 +156,10 @@ Wave DAG：每个 wave 含 `name`、`parallel`（wave 内 step 是否并行）�
 | 组名 | 典型时间 | 实测耗时 | 内容摘要 |
 |------|----------|----------|----------|
 | `core` | 16:00 | **~50 min** | L0 + L1 核心 + derive_adj_factors |
-| `capital` | 17:00 | 10.3 min | 资金面 + 估值 + 板块 + 公告索引 |
+| `capital` | 17:00 | 10.3 min | 资金面 + 估值 + 板块 |
 | `signals` | 17:20 | 5 s | 龙虎榜、大宗交易 |
 | `fundamentals` | 17:35 | 2.6 min | 财报、指数成分、行业 |
-| `macro_risk` | 17:55 | 2.4 min | 宏观、市场宽度、解禁、监管 |
+| `macro_risk` | 17:55 | 2.4 min | 宏观、市场宽度、解禁 |
 | `research` | 18:15 | 11.4 min | 机构持仓、一致预期、情绪 |
 | `intraday` | 18:45 | — | `minute_bars` / `minute_bars_5m`（**不在默认调度**；需先开 `[minute_bars]`） |
 
@@ -173,6 +173,35 @@ Wave DAG：每个 wave 含 `name`、`parallel`（wave 内 step 是否并行）�
 > 撞锁时报错会明确说明是被跳过,以及去哪里调间隔。
 
 `cne run daily --group <name>` 只跑该组 steps。
+
+---
+
+## 事件流调度组（7x24）
+
+`[job.events.groups.<name>]`：字段与调度组相同（`at`、`steps`、`parallel`），但属于
+另一个任务族——`cne run events`。区别只有两点，都是必需的：
+
+- **不看交易日历。** 上市公司周六也发公告，资讯源全天候更新；`daily*` 任务在非交易日
+  直接 `skipped_non_trading_day`，事件流不会。
+- **另一把锁。** 事件流拿 `events_ingestion`，不是 `daily_ingestion`，所以晚间批处理
+  跑到一半时事件流照样能跑，反之亦然。
+
+| 组名 | 典型时间 | 内容 | 代价 |
+|------|----------|------|------|
+| `disclosures` | 20:00 | `announcement_index` | 每次重读 30 天对账尾窗，不宜高频 |
+| `regulatory` | 20:20 | `regulatory_events` | 由**已提交**公告投影而来，必须排在 `disclosures` 之后 |
+| `news_wire` | 21:00 | `news_headlines`、`flash_news_wire` | 单张实时页，想要日内新鲜度就单独高频跑这一组 |
+
+`cne run events` 按配置文件里的先后顺序依次跑每个组（各自 `compact` 发布），
+`--group <name>` 只跑一个。定时器见
+[`scripts/events_pipeline.sh`](../operations/scripts.md) 与 `com.cnequity.events` agent。
+
+`validate_config` 在这里守两条：组里只能放**自然日**数据集
+（`DatasetSpec.session_scope = "calendar"`），且同一个 step 不能同时出现在 `[job.daily]`
+和 `[job.events]`——两个任务持不同的锁，同时抓同一个数据集就是并发写同一份 staging。
+
+`sentiment_scores` 仍留在 `research` 组：它读的是**湖里已提交的**公告和资讯，
+从来不是同一次 run 里现抓的，所以拆开之后行为不变。
 
 ---
 

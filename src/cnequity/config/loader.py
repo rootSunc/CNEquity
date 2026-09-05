@@ -93,6 +93,11 @@ class Config:
     universe_default: str = "all_a"
     daily_waves: list[WaveConfig] = field(default_factory=list)
     schedule_groups: dict[str, ScheduleGroup] = field(default_factory=dict)
+    # Continuous event streams. Same shape as a daily schedule group, but the
+    # job they belong to runs on the natural calendar and takes its own
+    # ingestion lock, so a disclosure or news sweep neither waits for the
+    # evening batch nor is skipped because the market was closed.
+    events_groups: dict[str, ScheduleGroup] = field(default_factory=dict)
     init_phases: list[str] = field(default_factory=list)
     on_demand_enabled: bool = True
     on_demand_datasets: list[str] = field(default_factory=list)
@@ -569,6 +574,15 @@ def load_config(path: str | Path) -> Config:
             parallel=bool(group.get("parallel", True)),
         )
 
+    events_groups: dict[str, ScheduleGroup] = {}
+    events_raw = raw.get("job", {}).get("events", {}).get("groups", {})
+    for name, group in events_raw.items():
+        events_groups[name] = ScheduleGroup(
+            at=group.get("at", "08:00"),
+            steps=list(group.get("steps", [])),
+            parallel=bool(group.get("parallel", True)),
+        )
+
     duckdb_raw = raw.get("duckdb", {})
     duckdb_path_str = duckdb_raw.get("path")
     duckdb_path = (
@@ -660,6 +674,7 @@ def load_config(path: str | Path) -> Config:
         universe_default=str(raw.get("universe", {}).get("default", "all_a")),
         daily_waves=daily_waves,
         schedule_groups=schedule_groups,
+        events_groups=events_groups,
         init_phases=init_phases,
         on_demand_enabled=bool(on_demand.get("enabled", True)),
         on_demand_datasets=list(on_demand.get("datasets", [])),
@@ -873,8 +888,59 @@ def validate_config(cfg: Config) -> list[str]:
         for step in group.steps:
             referenced.append((f"group '{group_name}'", step))
 
+    for group_name, group in cfg.events_groups.items():
+        if not group.steps:
+            errors.append(f"events group '{group_name}' has no steps")
+        for step in group.steps:
+            referenced.append((f"events group '{group_name}'", step))
+
     for location, step in referenced:
         if step not in STEP_REGISTRY:
             errors.append(f"{location}: unknown step '{step}' (not registered)")
 
+    errors.extend(_events_group_errors(cfg, STEP_REGISTRY))
+    return errors
+
+
+def _events_group_errors(cfg: Config, step_registry: Mapping[str, object]) -> list[str]:
+    """Check what may be scheduled as a 7x24 event stream.
+
+    The events job is exempt from the trading-day gate, and that exemption is
+    only honest for feeds whose date axis is the natural calendar. Scheduling a
+    session dataset there would ask a source for a day the market never held —
+    and, because the two jobs hold different locks, scheduling the same step in
+    both would let the daily batch and an event sweep ingest one dataset at the
+    same time. Both are configuration mistakes, caught before a run starts.
+    """
+    from cnequity.domain.datasets import calendar_scope_datasets
+    from cnequity.orchestrator.registry import FINALIZE_STEP_GROUPS
+
+    if not cfg.events_groups:
+        return []
+
+    calendar_steps = calendar_scope_datasets()
+    daily_steps = {step for wave in cfg.daily_waves for step in wave.steps}
+    daily_steps |= {step for group in cfg.schedule_groups.values() for step in group.steps}
+
+    errors: list[str] = []
+    for group_name, group in cfg.events_groups.items():
+        for step in group.steps:
+            entry = step_registry.get(step)
+            if entry is None or getattr(entry, "group", "") in FINALIZE_STEP_GROUPS:
+                # Unknown steps are reported by the caller; a finalize step
+                # (compact) publishes whatever the group staged and belongs to
+                # every job.
+                continue
+            if step not in calendar_steps:
+                errors.append(
+                    f"events group '{group_name}': '{step}' is a trading-session dataset. "
+                    "The events job runs on natural days, so only calendar-scoped feeds "
+                    f"belong here ({', '.join(sorted(calendar_steps))})"
+                )
+            elif step in daily_steps:
+                errors.append(
+                    f"events group '{group_name}': '{step}' is also scheduled in the daily "
+                    "job. The two jobs hold different locks and would ingest it twice — "
+                    "remove it from [job.daily]"
+                )
     return errors

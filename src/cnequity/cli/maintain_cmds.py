@@ -15,6 +15,7 @@ import polars as pl
 from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
+    _run_status_exit_code,
     config_option,
     parse_date_option,
 )
@@ -81,13 +82,23 @@ def _derive_trading_status(cfg, *, start: date | None, end: date | None) -> dict
     except Exception as exc:
         engine.manifest.finish_run(run_id, "failed", error_message=str(exc))
         raise
-    status = summary["compact"].get("status", "success")
+    step_statuses = {
+        str(derived.get("status", "success")),
+        str(summary["compact"].get("status", "success")),
+    }
+    if step_statuses.intersection({"failed", "blocked"}):
+        status = "failed"
+    elif step_statuses.intersection({"warning", "degraded"}):
+        status = "degraded"
+    else:
+        status = "success"
     engine.manifest.finish_run(
         run_id,
         status,
         rows_written=summary["rows_staged"],
     )
-    summary["status"] = status
+    persisted = engine.manifest.get_run(run_id)
+    summary["status"] = str(persisted["status"]) if persisted is not None else status
     return summary
 
 
@@ -136,6 +147,9 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
     elif name == "trading_status":
         summary = _derive_trading_status(cfg, start=start, end=end)
         click.echo(json.dumps(summary, indent=2, default=str))
+        exit_code = _run_status_exit_code(str(summary.get("status", "failed")))
+        if exit_code:
+            raise SystemExit(exit_code)
     elif name == "sector_routing":
         from cnequity.derive.sector_routing import derive_sector_routing
 

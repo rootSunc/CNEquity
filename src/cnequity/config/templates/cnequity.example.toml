@@ -375,7 +375,7 @@ at = "17:00"
 parallel = true
 steps = [
   "fund_flow", "northbound_holdings", "northbound_flows", "margin_trading",
-  "valuation_metrics", "sector_members", "announcement_index",
+  "valuation_metrics", "sector_members",
   "compact",
 ]
 
@@ -404,14 +404,17 @@ steps = [
 [job.daily.groups.macro_risk]
 at = "17:55"
 parallel = true
-steps = ["macro_indicators", "market_breadth", "share_unlock_schedule", "regulatory_events", "commodity_bars", "compact"]
+steps = ["macro_indicators", "market_breadth", "share_unlock_schedule", "commodity_bars", "compact"]
 
 [job.daily.groups.research]
 at = "18:15"
 parallel = true
 # Rotation / headlines before sentiment so batch can score lake news without HTTP.
+# `sentiment_scores` reads committed announcements and headlines out of the
+# lake, so it needs those feeds published — not fetched in the same run. They
+# are ingested by [job.events.groups] on their own calendar-day cadence.
 steps = ["institutional_holdings", "analyst_consensus",
-  "hot_rank", "sector_bars", "sector_fund_flow", "news_headlines", "flash_news_wire",
+  "hot_rank", "sector_bars", "sector_fund_flow",
   "sentiment_scores", "compact"]
 
 # Not scheduled by anything: `cne run daily --group intraday` only. Enable
@@ -428,6 +431,39 @@ steps = ["minute_bars", "minute_bars_5m", "compact"]
 at = "19:00"
 parallel = true
 steps = ["trade_ticks", "compact"]
+
+# 7x24 event streams. Disclosures and news are published on weekends and
+# holidays too, so these groups belong to their own job: `cne run events`
+# ignores the trading calendar and takes the `events_ingestion` lock, which the
+# evening batch does not hold. Only calendar-scoped datasets may be scheduled
+# here, and a step may not also appear under [job.daily] (`cne validate` checks
+# both) — the two jobs would otherwise ingest it twice, concurrently.
+#
+# `at` is when a scheduler fires the group. Firing it more often is safe and is
+# how you get intraday freshness: each sweep re-reads its own reconciliation
+# tail, so nothing is lost by a skipped tick, and a sweep that overlaps another
+# is dropped by the lock rather than queued.
+#
+#   0 20 * * *   cne run events --group disclosures
+#   */30 9-22 * * *   cne run events --group news_wire
+[job.events.groups.disclosures]
+at = "20:00"
+parallel = true
+steps = ["announcement_index", "compact"]
+
+# Separate group, deliberately after `disclosures`: `regulatory_events` is a
+# projection of *committed* announcements (derive/regulatory_events.py), so it
+# needs the compact above to have published them. `cne run events` runs the
+# groups in the order they appear here.
+[job.events.groups.regulatory]
+at = "20:20"
+parallel = true
+steps = ["regulatory_events", "compact"]
+
+[job.events.groups.news_wire]
+at = "21:00"
+parallel = true
+steps = ["news_headlines", "flash_news_wire", "compact"]
 
 [job.init.phases]
 names = [

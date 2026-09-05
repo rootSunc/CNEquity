@@ -94,6 +94,41 @@ def test_each_cninfo_http_page_archives_exact_wire_and_transport_metadata(tmp_pa
     assert "set-cookie" not in metadata
 
 
+@pytest.mark.parametrize(("row_count", "reported_pages"), [(31, 1), (25, 0)])
+def test_replay_uses_record_total_when_totalpages_omits_partial_page(
+    tmp_path, row_count, reported_pages
+):
+    """CNINFO's totalpages counts full pages, including zero for a short bucket."""
+    target = date(2024, 1, 1)
+    payloads = {}
+    rows = [_row(str(index)) for index in range(row_count)]
+    for page, offset in enumerate(range(0, row_count, 30), start=1):
+        payloads[("szse", "2024-01-01~2024-01-01", page)] = _Response(
+            {
+                "announcements": rows[offset : offset + 30],
+                "totalRecordNum": row_count,
+                "totalpages": reported_pages,
+                "hasMore": offset + 30 < row_count,
+            }
+        )
+    payloads[("sse", "2024-01-01~2024-01-01", 1)] = _Response(
+        {
+            "announcements": [],
+            "totalRecordNum": 0,
+            "totalpages": 0,
+            "hasMore": False,
+        }
+    )
+    config = _config(tmp_path)
+
+    live = fetch_announcement_index_range(target, client=_Client(payloads), config=config)
+    replayed = replay_announcement_index_range(RawPayloadArchive(config.meta_root), target)
+
+    assert live.height == replayed.height == row_count
+    assert set(replayed["announcement_id"]) == {str(index) for index in range(row_count)}
+    assert str(row_count - 1) in replayed["announcement_id"]
+
+
 def test_dense_day_partition_archive_replays_only_with_complete_reconciliation(
     monkeypatch, tmp_path
 ):

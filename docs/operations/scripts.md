@@ -49,9 +49,29 @@ cne clean
 
 ---
 
+### events_pipeline.sh
+
+**用途**：7x24 事件流（公告、监管事件、资讯）。`cne run events` 一次跑完
+`[job.events.groups]` 里的所有组，或用 `CNE_EVENTS_GROUP` 指定一个。
+
+**和 `daily_pipeline.sh` 分开的两个理由**，都不是风格问题：
+
+- 这些源**周末和节假日照发**，而 `cne run daily` 在非交易日直接跳过整个任务；
+- 它拿自己的 shell 锁（`events`）和自己的 ingestion 锁（`events_ingestion`），
+  所以晚间批处理正在跑并不会让这一次事件抓取被跳过。两个任务写的数据集不相交，
+  这一点由 `validate_config` 保证。
+
+**环境变量**：`CNE_CONFIG`、`CNE_LOG_DIR`、`CNE_BIN`、`CNE_TRADE_DATE`、
+`CNE_EVENTS_GROUP`（默认全部组）、`CNE_SCHEDULER_LOCK_DIR`。
+
+上一次还在跑时直接跳过并 exit 0：每组下次都会重读自己的窗口，跳过一次不丢数据。
+
+---
+
 ### install_scheduler.sh / uninstall_scheduler.sh
 
 从 `scripts/launchd/com.cnequity.daily.plist.template` 生成用户 launchd plist，加载 `daily_pipeline.sh`。
+同时安装 `com.cnequity.stale`（收尾补抓）与 `com.cnequity.events`（事件流，每个自然日 14:00 本机时区）。
 安装时用 `CNE_SOURCE_VANTAGE=cn scripts/install_scheduler.sh` 固化真实出口标签；省略时
 使用 `local`。标签仅允许字母、数字、点、下划线和连字符，防止生成无效 plist。
 
@@ -211,6 +231,14 @@ scripts/migrate_daily_bars_volume_v2.py --config configs/cnequity.toml --apply
 - `ProgramArguments` 指向 `daily_pipeline.sh`
 - `StartCalendarInterval`：Hour=11, Minute=15（本机时区；UTC+2/+3 机器约合 16:15/17:15 CST，均在收盘后）
 - 标准输出/错误重定向到 `{data.root}/logs/launchd.*.log`
+
+`scripts/launchd/com.cnequity.events.plist.template`
+
+- `ProgramArguments` 指向 `events_pipeline.sh`
+- `StartCalendarInterval`：Hour=14, Minute=0，**不带 `Weekday`**——事件流本来就要在
+  周末和节假日跑（UTC+2/+3 机器约合 20:00 CST）
+- 想要资讯的日内新鲜度就再加一个 `CNE_EVENTS_GROUP=news_wire` 的高频 agent/cron；
+  `disclosures` 每次重读 30 天尾窗，不适合高频
 
 ---
 

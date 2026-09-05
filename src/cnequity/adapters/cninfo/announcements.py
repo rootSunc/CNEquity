@@ -2215,15 +2215,17 @@ def _replay_group_rows(
                 or (preflight_pages is None and has_more)
             ):
                 split = True
-            if preflight_pages is not None and page >= preflight_pages:
+            # CNINFO reports ``totalpages`` as the number of *full* pages,
+            # not the last page number.  When a record total is available it
+            # is therefore the only safe completion signal: page N+1 may
+            # contain the final partial batch even when totalpages == N.
+            if preflight_total is not None and preflight_rows >= preflight_total:
                 root_terminal = True
             elif (
-                preflight_pages is None
-                and preflight_total is not None
-                and preflight_rows >= preflight_total
+                preflight_total is None and preflight_pages is not None and page >= preflight_pages
             ):
                 root_terminal = True
-            elif preflight_pages is None and not has_more:
+            elif preflight_total is None and preflight_pages is None and not has_more:
                 root_terminal = True
             if preflight_pages is None and page >= max_pages_per_slice and not root_terminal:
                 split = True
@@ -2344,6 +2346,9 @@ def _replay_group_rows(
             rows.extend(batch)
             try:
                 reported_int = _pagination_total_records(item["response"], column=key[0], page=page)
+                authoritative_int = _pagination_total_record_num(
+                    item["response"], column=key[0], page=page
+                )
                 reported_pages_int = _pagination_total_pages(
                     item["response"], column=key[0], page=page
                 )
@@ -2355,26 +2360,23 @@ def _replay_group_rows(
                     expected_total = reported_int
                 elif expected_total != reported_int:
                     raise RawArchiveError(f"CNINFO archived total changed: {key!r}")
+            if expected_total is not None and len(rows) >= expected_total:
+                pagination_complete = True
+                break
             if reported_pages_int is not None:
-                if reported_pages_int == 0 and batch:
+                if reported_pages_int == 0 and batch and (authoritative_int or 0) > _PAGE_SIZE:
                     raise RawArchiveError(f"CNINFO archived page total is zero with rows: {key!r}")
                 if expected_pages is None:
                     expected_pages = reported_pages_int
                 elif expected_pages != reported_pages_int:
                     raise RawArchiveError(f"CNINFO archived page total changed: {key!r}")
-                if page >= expected_pages:
+                if expected_total is None and page >= expected_pages:
                     pagination_complete = True
                     break
-                # An explicit page count is authoritative, matching the live
-                # walker. An early hasMore=false cannot hide a missing tail.
+                # With a record total, keep walking toward that total. Without
+                # one, the explicit page count is the best available contract;
+                # an early hasMore=false cannot hide a missing reported page.
                 continue
-            if (
-                reported_pages_int is None
-                and expected_total is not None
-                and len(rows) >= expected_total
-            ):
-                pagination_complete = True
-                break
             has_more_present = item["response"].get("hasMore") is not None
             if not has_more:
                 if not has_more_present and len(batch) >= _PAGE_SIZE:

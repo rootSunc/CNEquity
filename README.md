@@ -72,11 +72,13 @@ CNEquity 开源、免注册、自托管。它不负责给出交易信号，而�
 所有 curated 行都带有 `source`、`data_version` 和 `fetched_at`，可以追到来源和采集批次。分钟线、5 分钟线和分笔默认关闭，按需启用；部分只能获取当日快照的数据集不会被伪造成历史序列。
 
 完整字段、主键、历史模式和源端限制见[数据集目录](docs/datasets/catalog.md)。
+`events:*` 是 7×24 事件流组：公告和资讯周末也发，由 `cne run events` 按自然日跑，
+不受交易日门禁限制（见[配置 · 事件流调度组](docs/getting-started/configuration.md)）。
 
 <details>
 <summary><b>展开查看 42 个数据集及主备数据源</b></summary>
 
-| 数据集 | 说明 | 主源 | 备源 | 历史 | 日更组 |
+| 数据集 | 说明 | 主源 | 备源 | 历史 | 调度组 |
 |---|---|---|---|---|---|
 | **L0 · 基础参考** | | | | | |
 | `instruments` | 证券主数据 | tdx_protocol | baostock | 可回补 | core |
@@ -92,7 +94,7 @@ CNEquity 开源、免注册、自托管。它不负责给出交易信号，而�
 | `minute_bars_5m` ○ | 5 分钟线 | tdx_protocol | — | 可回补 | intraday |
 | `trade_ticks` ○ | 分笔快照 | tdx_protocol | — | 可回补 | ticks |
 | **L2 · 公司事件** | | | | | |
-| `announcement_index` | 公告索引 | cninfo | — | 可回补 | capital |
+| `announcement_index` | 公告索引 | cninfo | — | 可回补 | events:disclosures |
 | `corporate_actions` | 公司行为 | eastmoney | tdx_protocol | 可回补（回填走 `tdx_protocol`） | core |
 | `earnings_disclosure_schedule` | 业绩披露预约 | eastmoney | — | 可回补 | fundamentals |
 | **L3 · 基本面** | | | | | |
@@ -120,14 +122,14 @@ CNEquity 开源、免注册、自托管。它不负责给出交易信号，而�
 | `market_breadth` | 市场宽度 | derived | — | 可回补 | macro_risk |
 | **L7 · 舆情 / 轮动** | | | | | |
 | `economic_calendar` ○ | 经济日历 | eastmoney | — | 仅当日 | — |
-| `flash_news_wire` | 7×24 快讯 | eastmoney | — | 仅当日 | research |
+| `flash_news_wire` | 7×24 快讯 | eastmoney | — | 仅当日 | events:news_wire |
 | `hot_rank` | 人气榜 | eastmoney | — | 仅当日 | research |
-| `news_headlines` | 新闻标题 | eastmoney | — | 仅当日 | research |
+| `news_headlines` | 新闻标题 | eastmoney | — | 仅当日 | events:news_wire |
 | `sector_bars` | 板块行情 | ths | — | 回填 `ths` | research |
 | `sector_fund_flow` | 板块资金流 | eastmoney | — | 仅当日 | research |
 | `sentiment_scores` | 情绪评分 | derived | eastmoney | 可回补 | research |
 | **L8 · 风险合规** | | | | | |
-| `regulatory_events` | 监管事件 | cninfo | — | 可回补 | macro_risk |
+| `regulatory_events` | 监管事件 | cninfo | — | 可回补 | events:regulatory |
 | `share_unlock_schedule` | 解禁日程 | eastmoney | — | 可回补 | macro_risk |
 
 ○ 表示可选数据集，空表不算异常。逐项说明见[数据集目录](docs/datasets/catalog.md)，源端限制见[数据源说明](docs/datasets/sources.md)。

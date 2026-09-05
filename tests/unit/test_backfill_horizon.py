@@ -88,6 +88,7 @@ class FakeEngine:
         self.cfg = cfg
         self.windows: list[tuple[date, date]] = []
         self.compacted: list[str] = []
+        self.finished: list[tuple[str, str]] = []
         self.manifest = self
         FakeEngine.instances.append(self)
 
@@ -107,8 +108,8 @@ class FakeEngine:
         self.compacted.append(run_id)
         return {"rows_written": 10}
 
-    def finish_run(self, *args, **kwargs):
-        pass
+    def finish_run(self, run_id, status, *args, **kwargs):
+        self.finished.append((run_id, status))
 
     def aggregate_run_status(self, run_id):
         """The receipts behind the run status.
@@ -586,6 +587,7 @@ def test_a_non_core_slice_that_raised_fails_the_sweep_instead_of_reporting_succe
     # Stop at the first slice rather than grinding through a systemic failure.
     assert len(result["slices"]) == 1
     assert result["resume_from"] == date(2026, 7, 1)
+    assert FakeEngine.instances[-1].finished == [("run-1", "failed")]
 
 
 def test_a_symbol_chunked_slice_that_raised_also_fails_the_sweep(monkeypatch):
@@ -599,6 +601,7 @@ def test_a_symbol_chunked_slice_that_raised_also_fails_the_sweep(monkeypatch):
 
     assert result["status"] == "failed"
     assert result["resume_from_symbol"] == "600519.SH"
+    assert FakeEngine.instances[-1].finished == [("run-1", "failed")]
 
 
 class DegradedWithoutFailure(FakeEngine):

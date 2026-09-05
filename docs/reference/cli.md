@@ -175,6 +175,31 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 
 ---
 
+## cne run events
+
+7x24 事件流：公告、监管事件、资讯。**不看交易日历**（这些源周末和节假日照发），
+并且拿自己的 `events_ingestion` 锁，不与晚间批处理抢 `daily_ingestion`。
+
+| 选项 | 说明 |
+|------|------|
+| `--group` | `[job.events.groups]` 中的一个组；默认按配置顺序跑完所有组 |
+| `--trade-date` | 自然日 `YYYY-MM-DD`（默认今天），周末/节假日同样有效 |
+| `--quiet` | 只留 warning 及以上 |
+
+```cron
+# 每天（含周末）一次全量事件流
+0 14 * * *  /path/to/cnequity/scripts/events_pipeline.sh
+
+# 只要资讯的日内新鲜度：单张实时页，代价很低
+*/30 9-22 * * *  CNE_EVENTS_GROUP=news_wire /path/to/cnequity/scripts/events_pipeline.sh
+```
+
+`disclosures` 组每次都会重读 30 天对账尾窗，高频跑它是在重复付这份代价；
+`news_wire` 没有尾窗，适合高频。组按配置顺序执行，所以 `regulatory` 能读到
+`disclosures` 刚发布的公告。
+
+---
+
 ## cne backfill \<dataset\>
 
 单数据集 backfill。snapshot 且无 `backfill_source` 时拒绝。

@@ -16,6 +16,13 @@ class RunLockError(RuntimeError):
 # Shared by every scheduled `daily*` group, so only one can ingest at a time.
 DAILY_INGESTION_LOCK = "daily_ingestion"
 
+# The same contract for the continuous event streams, and deliberately a
+# *different* lock: those feeds publish around the clock and must not queue
+# behind — or be skipped because of — a heavy evening batch. The two jobs write
+# disjoint datasets (enforced in `validate_config`), so letting them overlap
+# costs nothing but bandwidth.
+EVENTS_INGESTION_LOCK = "events_ingestion"
+
 
 def lock_path(meta_root: Path, run_id: str) -> Path:
     return meta_root / "locks" / f"{run_id}.lock"
@@ -55,5 +62,12 @@ def _lock_busy_message(run_id: str) -> str:
             "and this one does not queue — it is skipped). Usually the previous "
             "group overran its start-time gap: check `cne status`, then widen the "
             "spacing in [job.daily.groups] so the slowest group fits its window."
+        )
+    if run_id == EVENTS_INGESTION_LOCK:
+        return (
+            "Another events group is still running (they share one ingestion lock, "
+            "and this one does not queue — it is skipped). Event sweeps are cheap "
+            "and frequent, so a skipped one costs nothing: the next tick re-reads "
+            "the same window. Check `cne status` if they are skipping every time."
         )
     return f"Run {run_id} is locked by another process; wait for it to finish before retrying."

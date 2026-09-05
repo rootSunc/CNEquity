@@ -200,6 +200,30 @@ def test_duckdb_views_dedupe_legacy_rows_by_source_without_fetch_time(tmp_path):
     assert rows == [("tdx_protocol", 1900.0)]
 
 
+def test_duckdb_trading_status_view_accepts_legacy_text_fetch_time(tmp_path):
+    data_root = tmp_path / "data"
+    partition = data_root / "curated" / "trading_status" / "trade_date=2024-06"
+    partition.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600519.SH"],
+            "trade_date": [date(2024, 6, 28)],
+            "is_trading": [True],
+            "status": ["normal"],
+            "risk_warning": [False],
+            "source": ["eastmoney"],
+            "data_version": ["v1"],
+            "fetched_at": ["2024-06-28T08:00:00+00:00"],
+        }
+    ).write_parquet(partition / "legacy-text-time.parquet")
+
+    db = ensure_duckdb_views(Config(data_root=data_root))
+    with duckdb.connect(str(db), read_only=True) as con:
+        rows = con.execute("SELECT symbol, fetched_at FROM trading_status").fetchall()
+
+    assert rows == [("600519.SH", "2024-06-28T08:00:00+00:00")]
+
+
 def test_duckdb_views_merge_optional_columns_by_name(tmp_path):
     data_root = tmp_path / "data"
     partition = data_root / "curated" / "daily_bars" / "trade_date=2024-06-28"

@@ -950,6 +950,26 @@ def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
     assert "purged_symbols" in result.output
 
 
+def test_derive_trading_status_failure_is_persisted_and_exits_nonzero(cfg_path, monkeypatch):
+    from cnequity.config import load_config
+
+    def fail_derive(*args, **kwargs):
+        raise RuntimeError("cannot derive suspension history")
+
+    monkeypatch.setattr(
+        "cnequity.derive.trading_status_history.derive_suspension_history", fail_derive
+    )
+
+    result = CliRunner().invoke(cli, ["derive", "trading_status", "--config", cfg_path])
+
+    assert result.exit_code == 1, result.output
+    summary = json.loads(result.output)
+    assert summary["status"] == "failed"
+    persisted = Manifest(load_config(cfg_path).manifest_path).get_run(summary["run_id"])
+    assert persisted is not None
+    assert persisted["status"] == "failed"
+
+
 def test_delisted_status_summarises_the_catalogue(cfg_path, monkeypatch):
     # The sweep that fills this catalogue is `scripts/delisted_ops.py discover`;
     # reading it stayed here because reading is the routine half.

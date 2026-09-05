@@ -190,7 +190,9 @@
 | 项 | 值 |
 |------|-------|
 | 主源 | cninfo |
+| 分组 | disclosures@20:00 |
 | 主键 | announcement_id |
+| 日期轴 | **自然日**（`session_scope = "calendar"`）：上市公司周六也披露。因此它属于 `cne run events` 而不是日更批，非交易日返回 0 行是正常现象而非抓取失败 |
 | 说明 | 正文 on-demand（`announcement_body`）尚未实现；批量路径仅索引 |
 
 #### share_structure / shareholder_counts

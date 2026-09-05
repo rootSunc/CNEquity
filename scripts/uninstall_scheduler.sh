@@ -4,9 +4,11 @@ set -euo pipefail
 
 LABEL="com.cnequity.daily"
 STALE_LABEL="com.cnequity.stale"
+EVENTS_LABEL="com.cnequity.events"
 DEST_DIR="$HOME/Library/LaunchAgents"
 DEST="$DEST_DIR/$LABEL.plist"
 STALE_DEST="$DEST_DIR/$STALE_LABEL.plist"
+EVENTS_DEST="$DEST_DIR/$EVENTS_LABEL.plist"
 LAUNCHCTL="${CNE_LAUNCHCTL:-launchctl}"
 
 if [[ "$(uname)" != "Darwin" ]]; then
@@ -15,7 +17,7 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 removed=0
-for pair in "$LABEL:$DEST" "$STALE_LABEL:$STALE_DEST"; do
+for pair in "$LABEL:$DEST" "$STALE_LABEL:$STALE_DEST" "$EVENTS_LABEL:$EVENTS_DEST"; do
   label="${pair%%:*}"
   plist="${pair#*:}"
   if [[ -f "$plist" ]]; then
