@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
+from cnequity.diagnostics import source_health
 from cnequity.diagnostics.source_health import HealthReport, ProbeResult
 from cnequity.diagnostics.source_slo import (
+    critical_probe_keys,
     evaluate_source_slo,
     load_health_history,
     store_health_report,
@@ -27,6 +29,26 @@ def _report(when: datetime, status: str = "ok", *, vantage: str = "cn") -> Healt
     )
 
 
+def _full_report(when: datetime, status: str = "ok", *, vantage: str = "cn") -> HealthReport:
+    return HealthReport(
+        vantage=vantage,
+        generated_at=when.isoformat(),
+        version="test",
+        results=[
+            ProbeResult(
+                key=key,
+                label=source_health.PROBES_BY_KEY[key].label,
+                host=source_health.PROBES_BY_KEY[key].host,
+                powers=list(source_health.PROBES_BY_KEY[key].powers),
+                status=status,
+                latency_ms=10,
+                detail="test",
+            )
+            for key in sorted(critical_probe_keys())
+        ],
+    )
+
+
 def test_store_keeps_latest_and_immutable_history(tmp_path):
     now = datetime(2026, 8, 29, 10, tzinfo=timezone.utc)
     latest, historical = store_health_report(tmp_path, _report(now))
@@ -39,11 +61,50 @@ def test_store_keeps_latest_and_immutable_history(tmp_path):
 
 def test_slo_requires_enough_fresh_observations():
     now = datetime(2026, 8, 29, 10, tzinfo=timezone.utc)
-    reports = [_report(now - timedelta(days=offset)) for offset in range(10)]
+    reports = [_full_report(now - timedelta(days=offset)) for offset in range(10)]
     result = evaluate_source_slo(reports, now=now, minimum_observations=10)
     assert result.passed
-    assert result.results[0].availability == 1.0
-    assert result.results[0].critical
+    tdx = next(item for item in result.results if item.key == "tdx_protocol")
+    assert tdx.availability == 1.0
+    assert tdx.critical
+
+
+def test_slo_missing_critical_probe_fails_closed_per_vantage():
+    now = datetime(2026, 8, 29, 10, tzinfo=timezone.utc)
+    reports = [_report(now - timedelta(days=offset), vantage="cn") for offset in range(10)]
+    result = evaluate_source_slo(reports, now=now, minimum_observations=10)
+
+    assert not result.passed
+    missing = {
+        item.key for item in result.results if item.vantage == "cn" and item.observations == 0
+    }
+    assert missing == critical_probe_keys() - {"tdx_protocol"}
+
+
+def test_slo_empty_report_vantage_fails_closed():
+    now = datetime(2026, 8, 29, 10, tzinfo=timezone.utc)
+    empty = HealthReport(vantage="overseas", generated_at=now.isoformat(), version="test")
+
+    result = evaluate_source_slo([empty], now=now, minimum_observations=1)
+
+    assert not result.passed
+    missing = {
+        item.key for item in result.results if item.vantage == "overseas" and item.observations == 0
+    }
+    assert missing == critical_probe_keys()
+
+
+def test_slo_all_skipped_report_vantage_fails_closed():
+    now = datetime(2026, 8, 29, 10, tzinfo=timezone.utc)
+    skipped = _full_report(now, status="skipped", vantage="overseas")
+
+    result = evaluate_source_slo([skipped], now=now, minimum_observations=1)
+
+    assert not result.passed
+    missing = {
+        item.key for item in result.results if item.vantage == "overseas" and item.observations == 0
+    }
+    assert missing == critical_probe_keys()
 
 
 def test_critical_slo_fails_on_availability_or_stale_latest():

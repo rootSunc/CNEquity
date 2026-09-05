@@ -23,6 +23,25 @@ CORE_DATASETS = frozenset(
     }
 )
 
+# Keep the native core gate in one place so evidence consumers cannot choose a
+# weaker target than the SLO evaluator itself.
+CORE_TARGET = 0.99
+
+
+def critical_probe_keys() -> frozenset[str]:
+    """Return probe keys that exercise at least one core dataset.
+
+    Keep this derived from the source-health registry rather than copying a
+    second list of probes into the SLO code.  The registry is the contract for
+    what a probe actually tests, and using it here also means a newly-added
+    core probe cannot silently disappear from the SLO gate.
+    """
+    from cnequity.diagnostics import source_health
+
+    return frozenset(
+        probe.key for probe in source_health.PROBES if set(probe.powers) & CORE_DATASETS
+    )
+
 
 @dataclass(frozen=True)
 class ProbeSLO:
@@ -104,7 +123,7 @@ def evaluate_source_slo(
     now: datetime | None = None,
     window_days: int = 30,
     minimum_observations: int = 10,
-    core_target: float = 0.99,
+    core_target: float = CORE_TARGET,
     other_target: float = 0.95,
     max_age: timedelta = timedelta(days=2),
 ) -> SourceSLOReport:
@@ -118,15 +137,21 @@ def evaluate_source_slo(
         raise ValueError("window_days and minimum_observations must be positive")
     current = now or datetime.now(timezone.utc)
     cutoff = current - timedelta(days=window_days)
+    critical_keys = critical_probe_keys()
     # A point probe is not a new day of availability evidence. Keep only the
     # latest observation per probe, vantage and UTC day so repeated manual
     # retries (or two schedules on Monday) cannot manufacture the minimum
     # sample count within a few minutes.
     daily: dict[tuple[str, str, date], tuple[datetime, object]] = {}
+    vantages: set[str] = set()
     for report in reports:
         generated = _parse_timestamp(report.generated_at)
         if generated < cutoff or generated > current + timedelta(minutes=5):
             continue
+        # The report itself is evidence that this vantage was probed. Keep it
+        # even when the probe selection was empty or every row was skipped;
+        # otherwise an unprobed vantage silently disappears from the gate.
+        vantages.add(report.vantage)
         for result in report.results:
             if result.status == ProbeStatus.SKIPPED.value:
                 continue
@@ -142,8 +167,10 @@ def evaluate_source_slo(
     results: list[ProbeSLO] = []
     for (key, vantage), samples in sorted(grouped.items()):
         samples.sort(key=lambda item: item[0])
-        powers = {dataset for _, item in samples for dataset in item.powers}
-        critical = bool(powers & CORE_DATASETS)
+        # Criticality belongs to the registry, not to a caller-controlled
+        # ``powers`` field in an archived report.  Otherwise a forged or stale
+        # payload could relabel a core probe as advisory and pass the gate.
+        critical = key in critical_keys
         target = core_target if critical else other_target
         successes = sum(item.status == ProbeStatus.OK.value for _, item in samples)
         observations = len(samples)
@@ -171,6 +198,38 @@ def evaluate_source_slo(
                 passed=passed,
             )
         )
+
+    # A report with no rows for one core probe must fail closed.  Since the
+    # result is explicitly keyed by ``probe`` *and* ``vantage``, check the
+    # registry per vantage instead of letting a green mainland observation
+    # cover a missing overseas observation (or vice versa).  Keep an explicit
+    # row so operators can see which probe/vantage is missing.
+    vantages = sorted(vantages) or ["unknown"]
+    observed_by_vantage = {
+        vantage: {key for key, row_vantage in grouped if row_vantage == vantage}
+        for vantage in vantages
+    }
+    existing_rows = {(item.key, item.vantage) for item in results if item.critical}
+    for vantage in vantages:
+        missing = critical_keys - observed_by_vantage.get(vantage, set())
+        for key in sorted(missing):
+            if (key, vantage) in existing_rows:
+                continue
+            results.append(
+                ProbeSLO(
+                    key=key,
+                    vantage=vantage,
+                    critical=True,
+                    observations=0,
+                    successes=0,
+                    availability=None,
+                    target=core_target,
+                    latest_status=None,
+                    latest_generated_at=None,
+                    fresh=False,
+                    passed=False,
+                )
+            )
     return SourceSLOReport(
         generated_at=current.isoformat(),
         window_days=window_days,

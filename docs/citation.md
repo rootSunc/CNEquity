@@ -7,7 +7,7 @@
 ```text
 CNEquity Contributors. (2026). CNEquity: A free, self-hosted historical
 financial data infrastructure for China markets, starting with A-shares
-(Version 0.7.3). Apache-2.0.
+(Version 0.8.0). Apache-2.0.
 https://github.com/rootSunc/cnequity
 ```
 

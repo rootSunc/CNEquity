@@ -6,8 +6,17 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-05
+
 ### Added
 
+- **Python 3.14 is a tested interpreter, not just an installable one.**
+  `requires-python` is `>=3.10` with no upper bound, so pip has been installing
+  this package on 3.14 since its release while CI stopped at 3.13 — the same
+  untested-claim gap the httpx floor job exists to close, one version up. 3.14
+  now runs the suite on Linux and is the interpreter the macOS job pins, and the
+  classifier says so. No source change was needed: every runtime dependency
+  imports and the full suite passes there unmodified.
 - **Checks against the bodies that publish the numbers, not a second vendor.**
   Every price arbiter in the lake compared one redistributor against another,
   which can show that two feeds do not differ but never that either is right.
@@ -102,6 +111,22 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **`regulatory_events` is derived from `announcement_index` instead of fetched
+  again.** CNINFO's endpoint has no server-side filter for it, so the dataset
+  re-issued `announcement_index`'s exact request and kept the few rows whose
+  title matched a keyword — 46 pages and 1,375 announcements for 6 events on
+  2026-01-01, and ~220 pages twice on a dense day, against a source paced at
+  one request per second. The two fetches also ran an hour apart, so the
+  datasets could disagree about the same day; now one is a projection of the
+  other. `cne backfill regulatory_events` reads the indexed announcements
+  instead of sweeping CNINFO a second time, and derives only the part of a
+  window they actually cover (see Fixed).
+- **Scheduled ingestion separates the normal daily run from late stale-data
+  recovery.** The daily launchd agent covers all six groups and no longer
+  waits inline for delayed sources; a second stale-only agent runs later.
+  Both wrappers share a non-blocking, PID-aware lock, and installation renders
+  both plists atomically with XML-safe paths.
+
 - **`trading_status` splits `status` from a new `risk_warning` column
   (ADR-0007).** `status` used to carry both the trading state and the ST / *ST
   designation, resolved by an `if/elif` in which halting won — so a halted ST
@@ -140,8 +165,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   reachable from neither the README nor any automation — one-off tooling that a
   published CLI turns into a permanent compatibility obligation. Nothing lost a
   capability:
-    - `cne servers test` (a deprecated, hidden alias) is **removed**; use
-      `cne sources --only tdx_protocol`, which asserts real bars came back.
+    - `cne servers test` remains as a deprecated, hidden compatibility alias
+      through the 0.8.x line. It keeps the v0.7.3 payload-probe semantics and
+      warns that removal is planned for 0.9.0; use `cne sources probe --only
+      tdx_protocol` as the replacement.
     - `cne stats refresh` → `cne stats rebuild --if-stale`. Its `--force` was
       already what plain `rebuild` does. `--if-stale` cannot be combined with
       `--dataset`: it decides on the whole lake's watermark.
@@ -188,6 +215,10 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Deprecated
 
+- **`cne servers test`** remains for one minor release as a compatibility
+  spelling. It runs the same `tdx_protocol` payload probe as v0.7.3, emits both
+  a `DeprecationWarning` and a CLI warning, and is planned for removal in
+  0.9.0. Use `cne sources probe --only tdx_protocol` as the replacement.
 - **`universe="all_a"` in the query layer.** It still resolves and keeps its
   permissive legacy semantics but emits a `DeprecationWarning`; choose an
   explicit profile such as `cn_a_sh_sz_research_v1`.
@@ -196,6 +227,138 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   Research code should pass `pit_mode` and record the choice.
 
 ### Fixed
+
+- **`scripts/delisted_ops.py repair` no longer treats `degraded` as success.**
+  The merge listed only `failed` and `warning`, so a `degraded` step fell
+  through onto the success branch — the same shape as the chunked backfill
+  that reported success for a sweep whose every slice had failed. Anything
+  other than success now survives the merge as a warning.
+
+- **`scripts/health_notify.sh` honours `CNE_BIN` like the pipeline that runs
+  it.** `daily_pipeline.sh` and `stale_pipeline.sh` both resolve `cne` through
+  `CNE_BIN`, the documented override; the health gate they call hardcoded the
+  repo's own `.venv`, so setting it left the alerting step probing a different
+  — or entirely absent — binary while the groups used the real one.
+  `china_egress_backfill.sh` now accepts `CNE_BIN` too, keeping its older
+  `CNE` spelling working. The daily pipeline's gate-vs-soft exit logic — the
+  code that decides whether a failure pages anyone — has tests for the first
+  time, as does the `STALE` exit code its stale probe gates on.
+
+- **Ordinary CLI mistakes stop printing Python tracebacks.** Three of the most
+  common ones raised straight through Click: a typo in any date option
+  (`date.fromisoformat`'s bare `ValueError`, from thirteen separate call
+  sites), a mistyped dataset name for `cne backfill` (a `KeyError` from the
+  registry), and a SQL error in `cne query --sql`. They are now the one-line
+  errors Click reports for every other bad input — the date says which option
+  and what shape it wants, the dataset name suggests its near misses, and
+  DuckDB's own message, which already names the line, column and near miss, is
+  kept intact.
+
+- **Naming a snapshot that does not exist is an error, not a traceback.**
+  `cne snapshot verify|restore|create` and `snapshot delta verify|apply|create`
+  printed a Python stack trace when the snapshot was missing or unreadable —
+  `export` and `import` already treated that as operator input and said so in
+  one line. They all do now, and the message names the snapshot the operator
+  typed instead of a manifest path they never wrote.
+
+- **`cne status --datasets` is readable again.** The flag is the freshness
+  probe the runbooks reach for, but `list_datasets` has grown to twenty
+  columns — contract fingerprints, revision ids, PIT storage lists — and the
+  table forced all of them into the terminal, shredding every value into
+  vertical slivers a character or two wide. It now prints what the flag
+  promises: dataset, layer, freshness, coverage range and watermark. The full
+  inventory moves to `--datasets --all-columns`; the STALE exit code that
+  scripts gate on is unchanged.
+
+- **A chunked `cne backfill` no longer reports success for a sweep that failed
+  outright.** `aggregate_run_status` deliberately calls a non-core step's
+  failure a *degraded* run rather than a failed one — in the daily job the
+  other datasets still landed and the lake stays usable — but the date- and
+  symbol-chunked sweeps only ever propagated `failed` and `warning`, so a
+  `degraded` slice left the aggregate at `success`. 35 of the 46 registered
+  steps are non-core, `announcement_index`, `financial_statement_items`,
+  `minute_bars` and `valuation_metrics` among them, so a sweep in which every
+  slice raised still printed `"status": "success"` and exited 0 — the
+  scheduled-pipeline failure mode where nothing was written and nothing said
+  so. A slice whose own receipt failed now fails the sweep and stops it with a
+  `resume_from`; a slice that was merely degraded keeps the sweep going but no
+  longer lets it claim success. The unchunked path already behaved this way.
+
+- **`cne backfill regulatory_events` no longer dies on its first slice.** The
+  CLI defaults that sweep to a 2010 floor and walks 31-day slices, stopping at
+  the first failure; the derive refuses a window with no announcements in it,
+  and its coverage guard clamped only the tail. So on any lake whose
+  announcements begin later — this project's own init starts at 2016 — slice
+  one asked for 2010, found nothing, and killed the sweep with advice to go
+  fetch disclosures that history never had. The window is now clamped at both
+  ends to what `announcement_index` actually indexed, and a slice outside that
+  range is reported as `before_source_coverage` rather than failed. A hole
+  *inside* the indexed range is still refused, and an incremental run's
+  reconciliation tail reaching past the first indexed day stays quiet — it is a
+  fixed lookback, not a coverage claim, and reporting it would leave a lake
+  younger than the tail permanently degraded.
+
+- **One unreadable day no longer blinds a whole reconciliation window.**
+  `announcement_index` re-reads the last 30 days on every run, and a single day
+  the source refused failed the step — discarding every other day in that
+  window — until the bad day rolled out of the tail. Days are now fetched
+  independently: the complete ones are staged, the failures are recorded as a
+  `fetch_failed_days` audit finding, and the step reports `degraded`. A window
+  where nothing was readable still fails loud, and a dataset with no
+  reconciliation tail keeps the all-or-nothing contract, because nothing would
+  come back for its hole.
+- **A dense disclosure day is readable again, and every day is now read to the
+  end.** `hisAnnouncement/query` returns at most 100 pages (3,000 rows) for one
+  query: `pageNum>100` silently replays page 1 while `totalpages` keeps
+  reporting the real count (measured 2026-08-28: 6,537 rows, `totalpages=217`,
+  page 101 == page 1). Two further contract facts came out of the same live
+  probe: `totalpages` is `floor(records / 30)`, so it omits the final partial
+  page (2026-01-01: 1,375 rows, `totalpages=45`, page 46 held the last 25), and
+  `column` is not an exchange selector at all — `szse`, `sse` and `bj` return
+  the identical all-market result.
+  - The walk now follows the record total rather than the page count, so the
+    tail of an ordinary day is no longer dropped, and `totalpages=0` reads as
+    "fewer than one page" instead of a contradiction.
+  - A day over the cap is split by a filter that actually partitions it —
+    `plate` market, then its boards, then CSRC industry, then disclosure
+    category — and each split is accepted only when the deduplicated buckets
+    reconcile exactly to the source's own `totalRecordNum`. A cover that cannot
+    prove coverage is skipped for the next one; when none can, the day fails
+    loudly rather than publishing the part that was reachable. Verified live:
+    2026-08-28 reads 6,537/6,537 rows through two splits.
+  - One walk per day instead of one per exchange column, halving the request
+    count for every announcement and regulatory fetch.
+- **Derived suspensions reach committed readers.** `derive_suspension_history`
+  wrote `is_trading=false` rows straight into the mutable curated directory, so
+  no committed reader ever saw them and the next compact rebuilt the partition
+  from the committed generation without them — which is why a `daily_bars`
+  interior gap could not be excused by the suspension that explained it. The
+  rows now go through `staging → compact → commit` like every other write, as a
+  registered `trading_status_derive` step in the daily job (90-day tail), a new
+  `phase5_derive_and_publish` init phase (whole history, after the bars are
+  committed), and behind `cne derive trading_status`.
+- **A restated vendor snapshot no longer erases better evidence.**
+  `trading_status` rows are now chosen by evidence class before recency, shared
+  by the polars and DuckDB read paths: an exchange record or a board read after
+  that session closed outranks a derived bar-gap suspension, which outranks a
+  current-state board stamped onto a session it never observed.
+- **CNINFO announcement and regulatory backfills are bounded, resumable and
+  fail closed.** Historical requests run in 31-day slices with range-scoped
+  checkpoints and unique staging identities. Pagination contract failures,
+  expired checkpoints, missing dates, incomplete exchange columns and partial
+  split trees can no longer publish truncated history. Exact wire archives now
+  retain a top-level invocation identity, and offline replay applies the same
+  page, date, total-count and retry-attempt rules as the live fetch without
+  mixing observations across runs, retries or date windows.
+- **Sparse event days no longer block compaction.** A successful bounded
+  CNINFO response is valid negative evidence for calendar days with no
+  announcement or regulatory event; those days are distinguished from source
+  failures instead of turning an otherwise complete backfill into a warning.
+- **Retry and receipt telemetry is truthful across adapters and orchestration.**
+  Worker/non-worker requeues and source-request retries have separate durable
+  counters, multi-slice failures retain the cumulative request total, legacy
+  manifests migrate additively, and a successful self-recording retry cannot
+  inherit the failed receipt from its previous attempt.
 
 - **Python 3.10 could not import the CNINFO adapter.** `datetime.UTC` is 3.11+;
   announcements and its tests now use `timezone.utc`, as the rest of the tree
@@ -1129,7 +1292,9 @@ First public release of the self-hosted A-share Parquet data layer.
 - TLS verify on by default for HTTP clients
 - Project URLs point at `rootSunc/cnequity`
 
-[Unreleased]: https://github.com/rootSunc/cnequity/compare/v0.7.2...main
+[Unreleased]: https://github.com/rootSunc/cnequity/compare/v0.8.0...main
+[0.8.0]: https://github.com/rootSunc/cnequity/compare/v0.7.3...v0.8.0
+[0.7.3]: https://github.com/rootSunc/cnequity/releases/tag/v0.7.3
 [0.7.2]: https://github.com/rootSunc/cnequity/releases/tag/v0.7.2
 [0.7.1]: https://github.com/rootSunc/cnequity/releases/tag/v0.7.1
 [0.7.0]: https://github.com/rootSunc/cnequity/releases/tag/v0.7.0

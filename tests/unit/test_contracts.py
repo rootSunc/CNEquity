@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 
+import tomllib
 from click.testing import CliRunner
 
 from cnequity.cli.main import cli
@@ -69,6 +71,7 @@ def test_contract_diff_finds_shape_pk_units_pit_and_history_breaks():
     assert "unit_contract_changed" in kinds
     assert "pit_semantics_changed" in kinds
     assert "history_semantics_changed" in kinds
+    assert "schema_version_not_bumped" in kinds
 
 
 def test_new_column_is_compatible_but_removed_dataset_is_breaking():
@@ -79,7 +82,22 @@ def test_new_column_is_compatible_but_removed_dataset_is_breaking():
     del new["datasets"]["hot_rank"]
     diff = diff_contracts(old, new)
     assert any(item["kind"] == "column_added" for item in diff["compatible"])
+    assert not any(item["kind"] == "schema_version_not_bumped" for item in diff["breaking"])
     assert any(item["kind"] == "dataset_removed" for item in diff["breaking"])
+
+
+def test_non_nullable_added_column_requires_schema_version_bump():
+    old = build_contract()
+    new = copy.deepcopy(old)
+    row = new["datasets"]["daily_bars"]
+    row["schema"]["required_new"] = "string"
+    row["columns"]["required_new"] = "string"
+    row["nullable_columns"] = []
+
+    diff = diff_contracts(old, new)
+
+    assert any(item["kind"] == "column_added" for item in diff["breaking"])
+    assert any(item["kind"] == "schema_version_not_bumped" for item in diff["breaking"])
 
 
 def test_export_and_cli_contract_commands(tmp_path):
@@ -112,3 +130,20 @@ def test_show_out_writes_a_single_dataset_record(tmp_path):
     written = json.loads(output.read_text(encoding="utf-8"))
     assert written["name"] == "daily_bars"
     assert "fingerprint" not in written
+
+
+def test_current_release_contract_is_versioned_and_packaged():
+    """The release cannot drift from the registry or omit its contract artifact."""
+
+    root = Path(__file__).resolve().parents[2]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    version = project["project"]["version"]
+    contract_path = root / "contracts" / f"v{version}.json"
+
+    assert contract_path.is_file(), f"missing release contract: {contract_path}"
+    document = json.loads(contract_path.read_text(encoding="utf-8"))
+    assert validate_contract(contract_path, against_registry=True) == []
+    assert document["fingerprint"] == contract_fingerprint(document)
+
+    data_files = project["tool"]["setuptools"]["data-files"]
+    assert f"contracts/v{version}.json" in data_files["share/cnequity/contracts"]

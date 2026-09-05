@@ -69,4 +69,4 @@ CLI 是 `cne`，Python 包是 `cnequity`。推荐：`pip install cnequity` → `
 
 ## 版本
 
-当前主线 **0.7.3**（见 [CHANGELOG](../CHANGELOG.md)）。从 0.3.x 升级先看其中的 *Upgrading from 0.3.x*，以及 [installation — 升级](getting-started/installation.md#从-03x-升级到-04)。
+当前主线 **0.8.0**（见 [CHANGELOG](../CHANGELOG.md)）。从 0.3.x 升级先看其中的 *Upgrading from 0.3.x*，以及 [installation — 升级](getting-started/installation.md#从-03x-升级到-04)。

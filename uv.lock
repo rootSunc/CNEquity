@@ -201,7 +201,7 @@ wheels = [
 
 [[package]]
 name = "cnequity"
-version = "0.7.3"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "baostock" },

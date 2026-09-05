@@ -107,7 +107,7 @@ CNEquity 开源、免注册、自托管。它不负责给出交易信号，而�
 | `dragon_tiger` | 龙虎榜 | eastmoney | — | 可回补 | signals |
 | `fund_flow` | 个股资金流 | eastmoney | — | 仅当日 | capital |
 | `institutional_holdings` | 机构持股 | eastmoney | — | 可回补 | research |
-| `margin_trading` | 融资融券 | eastmoney | — | 可回补 | capital |
+| `margin_trading` | 融资融券 | exchange | — | 可回补 | capital |
 | `northbound_flows` | 北向资金流向 | eastmoney | — | 可回补 | capital |
 | `northbound_holdings` | 北向持股 | eastmoney | — | 可回补 | capital |
 | **L5 · 结构行业** | | | | | |

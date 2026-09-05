@@ -76,6 +76,36 @@ workers = 0
     assert "ERROR:" in result.output
 
 
+def test_servers_test_keeps_legacy_payload_probe_semantics(cfg_path, monkeypatch):
+    from cnequity.diagnostics import source_health
+
+    seen: dict[str, object] = {}
+
+    def fake_probe(probe, cfg):
+        seen["probe"] = probe
+        seen["config"] = cfg
+        return source_health.ProbeResult(
+            key=probe.key,
+            label=probe.label,
+            host=probe.host,
+            powers=list(probe.powers),
+            status=source_health.ProbeStatus.OK.value,
+            latency_ms=7,
+            detail="9 根日线",
+        )
+
+    monkeypatch.setattr(source_health, "run_probe", fake_probe)
+
+    with pytest.warns(DeprecationWarning, match="0.9.0"):
+        result = CliRunner().invoke(cli, ["servers", "test", "--config", cfg_path])
+
+    assert result.exit_code == 0, result.output
+    assert seen["probe"] is source_health.PROBES_BY_KEY["tdx_protocol"]
+    assert "TDX connection OK (9 根日线, 7ms)" in result.output
+    assert "cne sources probe --only tdx_protocol" in result.output
+    assert "0.9.0" in result.output
+
+
 def test_backfill_recovers_terminal_staging_before_new_run(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     manifest = Manifest(cfg.manifest_path)

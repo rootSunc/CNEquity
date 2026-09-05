@@ -402,6 +402,32 @@ def sources_grp():
     """
 
 
+@cli.command("servers", hidden=True)
+@click.argument("action", type=click.Choice(["test"]))
+@config_option
+def servers(action: str, config_path: str):
+    """Deprecated alias for the legacy TDX payload probe."""
+
+    import warnings
+
+    from cnequity.diagnostics.source_health import PROBES_BY_KEY, ProbeStatus, run_probe
+
+    message = (
+        "`cne servers test` is deprecated; use `cne sources probe --only "
+        "tdx_protocol` for a payload health check. The alias is planned for "
+        "removal in 0.9.0."
+    )
+    warnings.warn(message, DeprecationWarning, stacklevel=2)
+    click.echo(f"warning: {message}", err=True)
+
+    result = run_probe(PROBES_BY_KEY["tdx_protocol"], _cfg(config_path))
+    if result.status == ProbeStatus.OK.value:
+        click.echo(f"TDX connection OK ({result.detail}, {result.latency_ms}ms)")
+        return
+    click.echo(f"TDX {result.status}: {result.detail}", err=True)
+    raise SystemExit(1)
+
+
 @sources_grp.command("slo")
 @config_option
 @click.option("--window-days", default=30, show_default=True, type=click.IntRange(min=1))

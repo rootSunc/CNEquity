@@ -395,6 +395,48 @@ def _record_pk(record: Mapping[str, Any]) -> list[Any] | None:
     return list(pk)
 
 
+def _column_is_nullable(record: Mapping[str, Any], column: str) -> bool:
+    """Return whether a proposed schema column can be absent/null.
+
+    The registry's compact JSON format historically represented a column as
+    its dtype only, and all additions under the ``additive`` policy therefore
+    carry the existing schema convention: a new column is nullable unless a
+    portable contract explicitly says otherwise.  Accept the optional
+    ``nullable_columns`` / ``required_columns`` declarations and descriptor
+    values as well, so a downstream producer can make a non-nullable addition
+    explicit without changing the public format.
+    """
+
+    nullable = _field(record, "nullable_columns")
+    if isinstance(nullable, Mapping) and column in nullable:
+        return bool(nullable[column])
+    if isinstance(nullable, Sequence) and not isinstance(nullable, (str, bytes)):
+        return column in nullable
+
+    required = _field(record, "required_columns")
+    if isinstance(required, Sequence) and not isinstance(required, (str, bytes)):
+        return column not in required
+
+    schema = _record_schema(record) or {}
+    descriptor = schema.get(column)
+    if isinstance(descriptor, Mapping):
+        if "nullable" in descriptor:
+            return bool(descriptor["nullable"])
+        if "required" in descriptor:
+            return not bool(descriptor["required"])
+    return True
+
+
+def _compatible_column_addition(new: Mapping[str, Any], column: str) -> bool:
+    """Whether a newly introduced column is backward-compatible."""
+
+    # Missing compatibility metadata is how pre-contract documents represent
+    # the long-standing additive default.  An explicitly different policy is
+    # not allowed to waive a schema-version bump.
+    policy = _field(new, "compatibility")
+    return policy in (None, "additive") and _column_is_nullable(new, column)
+
+
 def _field(record: Mapping[str, Any], name: str, default: Any = None) -> Any:
     if name in record:
         return record[name]
@@ -743,6 +785,7 @@ def _diff_record(name: str, old: Mapping[str, Any], new: Mapping[str, Any]) -> l
             )
         )
     for column in sorted(set(new_schema) - set(old_schema)):
+        compatible = _compatible_column_addition(new, column)
         changes.append(
             _change(
                 name,
@@ -750,7 +793,7 @@ def _diff_record(name: str, old: Mapping[str, Any], new: Mapping[str, Any]) -> l
                 f"datasets.{name}.schema.{column}",
                 None,
                 new_schema[column],
-                breaking=False,
+                breaking=not compatible,
             )
         )
     for column in sorted(set(old_schema) & set(new_schema)):
@@ -860,8 +903,18 @@ def _diff_record(name: str, old: Mapping[str, Any], new: Mapping[str, Any]) -> l
                 breaking=True,
             )
         )
+    added_columns = set(new_schema) - set(old_schema)
+    removed_columns = set(old_schema) - set(new_schema)
+    changed_columns = {
+        column
+        for column in set(old_schema) & set(new_schema)
+        if _dtype_name(old_schema[column]) != _dtype_name(new_schema[column])
+    }
+    schema_requires_bump = bool(removed_columns or changed_columns) or any(
+        not _compatible_column_addition(new, column) for column in added_columns
+    )
     if (
-        old_schema != new_schema
+        schema_requires_bump
         and isinstance(old_version, int)
         and isinstance(new_version, int)
         and new_version <= old_version

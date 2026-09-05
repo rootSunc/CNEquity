@@ -10,6 +10,11 @@ cne contract validate meta/dataset-contract.json
 cne contract diff meta/old-contract.json meta/dataset-contract.json
 ```
 
+从 0.8.0 起，每个发布版本的完整契约保存在仓库根目录的 `contracts/`
+目录中（例如 `contracts/v0.8.0.json`），作为下一版本发布审阅的稳定基线。
+0.7.3 及更早版本没有导出机器可读契约，因此 0.8.0 是首个可用于跨版本
+`contract diff` 的基线。
+
 省略 `show` 的数据集参数会输出 42 个数据集的完整契约。`export` 输出包含
 顶层 `fingerprint`（SHA-256）；同一 registry 在不同进程中导出的 fingerprint
 一致。`contract validate` 无参数时校验当前 registry；给出文件时校验便携式契约，

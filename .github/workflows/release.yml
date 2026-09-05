@@ -10,6 +10,11 @@ on:
       - "README.pypi.md"
       - "CHANGELOG.md"
       - "src/**"
+      - "contracts/**"
+      - "release-evidence/**"
+      - "sources/SOURCES.yml"
+      - "scripts/fresh_lake_e2e.py"
+      - "tests/**"
       - ".github/workflows/release.yml"
   workflow_dispatch:
 
@@ -25,6 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -33,8 +40,40 @@ jobs:
         run: python -m pip install --upgrade pip build twine
       - name: Install project and test tooling
         run: pip install -e . --group dev
+      - name: Prepare release evidence directory
+        run: mkdir -p evidence
+      - name: Validate the versioned dataset contract
+        run: |
+          set -euo pipefail
+          package_version=$(python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              print(tomllib.load(fh)["project"]["version"])
+          PY
+          )
+          contract="contracts/v${package_version}.json"
+          test -f "$contract" || {
+            echo "missing release contract: $contract" >&2
+            exit 1
+          }
+          cne contract validate "$contract" --against-registry \
+            | tee evidence/contract-validate.txt
+          cp "$contract" evidence/
+          printf 'package_version=%s\ncontract=%s\n' "$package_version" "$contract" \
+            > evidence/contract-metadata.txt
       - name: Run offline regression suite
-        run: pytest tests/unit -q
+        run: |
+          set -o pipefail
+          pytest -q | tee evidence/pytest-offline.txt
+      - name: Run fresh-lake snapshot recovery drill
+        run: |
+          set -o pipefail
+          python scripts/fresh_lake_e2e.py --skip-wheel-smoke \
+            | tee evidence/fresh-lake-e2e.json
+      - name: Generate source legal-policy report
+        run: |
+          cne sources policy > evidence/source-policy.json
+          python -m json.tool evidence/source-policy.json > /dev/null
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -54,6 +93,51 @@ jobs:
         run: python -m build
       - name: Validate distributions
         run: twine check dist/*
+      - name: Verify the release contract is in sdist and wheel
+        run: |
+          set -euo pipefail
+          package_version=$(python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              print(tomllib.load(fh)["project"]["version"])
+          PY
+          )
+          sdist=$(find dist -maxdepth 1 -name "*.tar.gz" -print -quit)
+          wheel=$(find dist -maxdepth 1 -name "*.whl" -print -quit)
+          test -n "$sdist" && test -n "$wheel"
+          tar -tzf "$sdist" | grep -Fx "cnequity-${package_version}/contracts/v${package_version}.json"
+          unzip -Z1 "$wheel" | grep -F "/share/cnequity/contracts/v${package_version}.json"
+      - name: Install built wheel into a clean runtime environment
+        env:
+          RUNTIME_ROOT: ${{ runner.temp }}/cnequity-release-runtime
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNTIME_ROOT"
+          "$RUNTIME_ROOT/bin/python" -m pip install --upgrade pip
+          wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
+          test -n "$wheel"
+          "$RUNTIME_ROOT/bin/pip" install "$wheel"
+          "$RUNTIME_ROOT/bin/python" -m pip list --format=json > evidence/runtime-pip-list.json
+      - name: Generate runtime SBOM and dependency audit
+        env:
+          RUNTIME_ROOT: ${{ runner.temp }}/cnequity-release-runtime
+          SCANNER_ROOT: ${{ runner.temp }}/cnequity-release-scanner
+        run: |
+          set -euo pipefail
+          # Scanner packages live in their own environment.  Both tools are
+          # explicitly pointed at the wheel-installed runtime so dev/editable
+          # packages from the build job cannot enter release evidence.
+          python -m venv "$SCANNER_ROOT"
+          "$SCANNER_ROOT/bin/python" -m pip install --upgrade pip pip-audit cyclonedx-bom
+          "$SCANNER_ROOT/bin/cyclonedx-py" environment \
+            "$RUNTIME_ROOT/bin/python" \
+            --output-format JSON --output-file evidence/sbom.cdx.json
+          runtime_site=$(
+            "$RUNTIME_ROOT/bin/python" -c \
+              'import sysconfig; print(sysconfig.get_path("purelib"))'
+          )
+          "$SCANNER_ROOT/bin/pip-audit" \
+            --path "$runtime_site" --format=json --output=evidence/pip-audit.json
       - name: Smoke-test the built wheel
         env:
           SMOKE_ROOT: ${{ runner.temp }}/cnequity-wheel-smoke
@@ -70,6 +154,13 @@ jobs:
         with:
           name: release-dist
           path: dist/*
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence
+          path: evidence/
+          if-no-files-found: error
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')

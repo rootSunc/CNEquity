@@ -868,7 +868,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "margin_trading",
-        primary_source="eastmoney",
+        primary_source="exchange",
         tier="L4",
         partition_col="trade_date",
         max_staleness_days=2,

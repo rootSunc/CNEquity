@@ -32,11 +32,7 @@ def pytest_sessionfinish(session, exitstatus):
     status. Wait for the terminal summary, then skip those handlers.
     """
     yield
-    if (
-        sys.platform == "win32"
-        and os.environ.get("CI") == "true"
-        and int(exitstatus or 0) == 0
-    ):
+    if sys.platform == "win32" and os.environ.get("CI") == "true" and int(exitstatus or 0) == 0:
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(0)

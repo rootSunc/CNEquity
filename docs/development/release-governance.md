@@ -34,22 +34,34 @@ Unknown source permissions, unknown historical availability and unknown PIT
 timestamps fail closed. A source being technically reachable is not evidence
 that redistribution or commercial use is allowed.
 
-## Release gate
+## Package release gate
 
 Before tagging:
 
 - `cne contract validate` succeeds and the diff against the last release is
   reviewed;
 - all offline tests and wheel smoke tests pass;
-- core dataset failures are absent; research/advisory failures are visible as
-  `degraded`, never silently converted to success;
 - snapshot create/verify/restore has been exercised into an empty target;
-- the current stability report contains the required consecutive trading-day
-  evidence for a production-readiness claim;
-- source SLO and legal-policy reports are attached to the release record.
+- the source legal-policy report, dependency audit and SBOM are attached to the
+  release workflow run.
 
 Release artifacts are built once in GitHub Actions and published with trusted
-publishing. Do not rebuild a wheel locally for the same tag.
+publishing. Do not rebuild a wheel locally for the same tag. Package publication
+does not depend on the state of any particular user's lake.
+
+## Production-readiness evidence
+
+A package release and a production-readiness claim are deliberately separate.
+Operators who claim that a deployed lake is production-ready should retain a
+current report with the required consecutive trading days, a passing 30-day
+source SLO, and no hidden core failures. `release-evidence/` and
+`scripts/validate_release_evidence.py` provide a strict, optional format for
+that claim; those reports are not required to tag or publish the package.
+
+The clean CI runner must not run stability or source-SLO checks against an
+empty fixture lake and describe them as production evidence. Unknown source
+permissions also continue to prohibit unsupported redistribution or commercial
+use, but do not prevent publication of CNEquity's Apache-2.0 source code.
 
 ## Incident ownership
 

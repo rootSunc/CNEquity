@@ -113,6 +113,14 @@ def test_market_breadth_is_session_dense():
     assert get_dataset("industry_index").coverage_mode == "session_dense"
 
 
+def test_margin_trading_registry_matches_the_default_exchange_owner():
+    spec = get_dataset("margin_trading")
+    assert spec.primary_source == "exchange"
+    # EastMoney is a deliberate operator-selected alternative, not an
+    # automatic fallback that could silently change provenance.
+    assert spec.backup_source is None
+
+
 def test_revisable_datasets_declare_rolling_windows_and_append_only_feeds():
     """The registry is the source of truth for incremental reconciliation.
 
