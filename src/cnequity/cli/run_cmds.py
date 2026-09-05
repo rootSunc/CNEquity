@@ -21,6 +21,7 @@ from cnequity.cli._shared import (
     _progress_logging,
     _run_status_exit_code,
     config_option,
+    parse_date_option,
 )
 from cnequity.cli.quality_cmds import _last_trading_day
 from cnequity.config import WaveConfig
@@ -346,7 +347,7 @@ def run_daily(
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     engine = JobEngine(cfg)
-    td = date.fromisoformat(trade_date_str) if trade_date_str else None
+    td = parse_date_option(trade_date_str, "--trade-date")
     if stale_only:
         if group_name:
             raise click.ClickException("--stale-only picks its own steps; drop --group.")

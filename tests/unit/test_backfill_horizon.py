@@ -624,3 +624,25 @@ def test_a_degraded_slice_keeps_the_sweep_going_but_not_its_success_claim(monkey
     assert result["status"] == "degraded"
     assert len(result["slices"]) == 3
     assert result["resume_from"] is None
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("daily_bar", "Did you mean: daily_bars"),
+        # A step name is not a backfill target; the docs say `cne backfill <dataset>`.
+        ("daily_bars_history", "Did you mean: daily_bars"),
+        ("zzzz", "unknown dataset 'zzzz'"),
+    ],
+)
+def test_a_mistyped_dataset_is_an_error_with_near_misses(name, expected):
+    """The registry lookup used to raise KeyError straight through the CLI."""
+    with pytest.raises(click.ClickException) as excinfo:
+        backfill_cmds._require_known_dataset(name)
+
+    assert expected in str(excinfo.value)
+    assert "cne status --datasets" in str(excinfo.value)
+
+
+def test_a_real_dataset_passes_the_name_check():
+    assert backfill_cmds._require_known_dataset("daily_bars") is None

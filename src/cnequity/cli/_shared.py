@@ -7,6 +7,7 @@ free to drift in default or help text. One decorator makes the contract single.
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 import click
 
@@ -69,6 +70,23 @@ def _progress_logging(quiet: bool = False) -> None:
     )
     for noisy in ("httpx", "httpcore", "urllib3", "curl_cffi"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def parse_date_option(value: str | None, flag: str) -> date | None:
+    """Parse an ISO date option the way Click reports every other bad input.
+
+    `date.fromisoformat` raises a bare ``ValueError``, and the thirteen call
+    sites that used it directly let that reach the operator as a Python
+    traceback — for something as ordinary as a typo in ``--start``.
+    """
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise click.BadParameter(
+            f"{value!r} is not an ISO date (YYYY-MM-DD)", param_hint=flag
+        ) from None
 
 
 def _run_status_exit_code(status: str) -> int:

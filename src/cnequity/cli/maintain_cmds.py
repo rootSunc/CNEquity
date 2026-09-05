@@ -16,6 +16,7 @@ from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
     config_option,
+    parse_date_option,
 )
 from cnequity.derive.adj_factors import compute_adj_factors
 from cnequity.domain.market_time import shanghai_today
@@ -114,8 +115,8 @@ def _derive_trading_status(cfg, *, start: date | None, end: date | None) -> dict
 def derive(name: str, config_path: str, full: bool, start_str: str | None, end_str: str | None):
     """Derive computed datasets."""
     cfg = _cfg(config_path)
-    start = date.fromisoformat(start_str) if start_str else None
-    end = date.fromisoformat(end_str) if end_str else None
+    start = parse_date_option(start_str, "--start")
+    end = parse_date_option(end_str, "--end")
     if start and end and start > end:
         raise click.ClickException("--start must be on or before --end")
     if name == "adj_factors":

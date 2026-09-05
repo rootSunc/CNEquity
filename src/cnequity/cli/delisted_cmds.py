@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
 
 import click
 
@@ -17,6 +16,7 @@ from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
     config_option,
+    parse_date_option,
 )
 from cnequity.domain.market_time import shanghai_today
 from cnequity.orchestrator.engine import JobEngine
@@ -51,7 +51,7 @@ def delisted_status(config_path: str, since: str, sample: int):
     )
 
     cfg = _cfg(config_path)
-    start = date.fromisoformat(since)
+    start = parse_date_option(since, "--since")
     catalog, live_missing = classify_catalog(cfg)
     in_window = {s: d for s, d in catalog.items() if d >= start}
     by_year = Counter(d.year for d in in_window.values())
@@ -95,7 +95,7 @@ def delisted_backfill(config_path: str, since: str):
     cfg = _cfg(config_path)
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("delisted_backfill", {"since": since})
-    result = backfill_delisted_bars(cfg, run_id, date.fromisoformat(since))
+    result = backfill_delisted_bars(cfg, run_id, parse_date_option(since, "--since"))
     compact_out = engine.run_step("compact", shanghai_today(), run_id)
     complete = (
         result.get("status", "success") == "success"

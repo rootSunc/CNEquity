@@ -97,7 +97,13 @@ def query(
 
     con = duckdb.connect(str(db_path), read_only=True)
     try:
-        df = con.execute(sql).pl()
+        # A typo in the SQL is the most ordinary thing that happens here, and
+        # DuckDB's own message already names the line, the column and the near
+        # miss. Keep that text and drop the Python traceback wrapped around it.
+        try:
+            df = con.execute(sql).pl()
+        except duckdb.Error as exc:
+            raise click.ClickException(str(exc)) from exc
         click.echo(df)
     finally:
         con.close()

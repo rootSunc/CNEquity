@@ -19,6 +19,7 @@ from cnequity.cli._shared import (
     _cfg,
     _progress_logging,
     config_option,
+    parse_date_option,
 )
 from cnequity.cli.backfill_cmds import _run_backfill
 from cnequity.domain.market_time import is_session_final, shanghai_today
@@ -72,8 +73,8 @@ def audit(
     if full:
         from cnequity.quality.audit import lake_health
 
-        start_date = date.fromisoformat(research_start) if research_start else None
-        end_date = date.fromisoformat(research_end) if research_end else None
+        start_date = parse_date_option(research_start, "--research-start")
+        end_date = parse_date_option(research_end, "--research-end")
         if start_date and end_date and start_date > end_date:
             raise click.ClickException("--research-start must be on or before --research-end")
         health = lake_health(
@@ -508,7 +509,7 @@ def stability(config_path: str, days: int, as_of: str | None, enforce: bool):
         Manifest(cfg.manifest_path),
         trading_days,
         required_days=days,
-        as_of=date.fromisoformat(as_of) if as_of else None,
+        as_of=parse_date_option(as_of, "--as-of"),
     )
     latest, historical = store_stability_report(cfg.meta_root, report)
     payload = report.to_dict()

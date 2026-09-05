@@ -18,6 +18,7 @@ from cnequity.cli._shared import (
     _progress_logging,
     _run_status_exit_code,
     config_option,
+    parse_date_option,
 )
 from cnequity.config import load_config, validate_config, write_user_config
 from cnequity.domain.market_time import shanghai_today
@@ -34,7 +35,7 @@ QUICK_PROFILE_YEARS = 3
 def _init_history_start(profile: str, since_str: str | None, trade_date: date) -> date | None:
     """History floor for an init run, or None to use each step's own default."""
     if since_str:
-        return date.fromisoformat(since_str)
+        return parse_date_option(since_str, "--since")
     if profile == "quick":
         # Calendar arithmetic, not 365*N: a leap year in the window would
         # otherwise move the floor by a day for no reason anyone could explain.
@@ -119,7 +120,7 @@ def demo_cmd(
     """
     from cnequity.cli.demo import run_demo, run_sample_demo
 
-    td = date.fromisoformat(trade_date_str) if trade_date_str else None
+    td = parse_date_option(trade_date_str, "--trade-date")
     runner = run_sample_demo if sample else run_demo
     runner(
         symbols=[s.strip() for s in symbols.split(",") if s.strip()],
@@ -215,7 +216,7 @@ def init(
         click.echo(f"Initialized layout at {cfg.data_root}")
         return
 
-    td = date.fromisoformat(trade_date) if trade_date else shanghai_today()
+    td = parse_date_option(trade_date, "--trade-date") or shanghai_today()
 
     history_start = _init_history_start(profile, since_str, td)
     if history_start is not None:

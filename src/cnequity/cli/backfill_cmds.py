@@ -7,6 +7,7 @@ recovering staging an interrupted terminal run left behind).
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 from datetime import date, timedelta
@@ -18,6 +19,7 @@ from cnequity.cli._shared import (
     _cfg,
     _progress_logging,
     config_option,
+    parse_date_option,
 )
 from cnequity.domain.datasets import fetch_semantics, get_dataset
 from cnequity.domain.market_time import shanghai_today
@@ -105,6 +107,7 @@ def backfill(
 ):
     """Backfill a dataset."""
     _progress_logging()
+    _require_known_dataset(dataset)
     if fetch_semantics(dataset) == "snapshot" and not get_dataset(dataset).backfill_source:
         raise click.ClickException(
             f"{dataset}: backfill not supported — fetch semantics are snapshot "
@@ -137,8 +140,8 @@ def backfill(
         if retry_failed and force:
             raise click.ClickException("Use either --retry-failed or --force, not both.")
         cfg._sector_bars_force = force
-    start_d = date.fromisoformat(start_str) if start_str else None
-    end_d = date.fromisoformat(end_str) if end_str else None
+    start_d = parse_date_option(start_str, "--start")
+    end_d = parse_date_option(end_str, "--end")
     if bse_tip_repair:
         if not symbols_str:
             raise click.ClickException("--bse-tip-repair requires --symbols")
@@ -342,6 +345,24 @@ def _recover_compactable_backfill_staging(engine: JobEngine, dataset: str) -> li
                 run_id,
             )
     return recovered
+
+
+def _require_known_dataset(dataset: str) -> None:
+    """Reject a mistyped name with the near misses, not a ``KeyError`` dump.
+
+    `cne backfill` takes a dataset, and the registry lookup that rejects an
+    unknown one raised straight through the CLI — so a typo printed a Python
+    traceback instead of telling the operator what to type.
+    """
+    from cnequity.domain.datasets import DATASETS
+
+    if dataset in DATASETS:
+        return
+    close = difflib.get_close_matches(dataset, sorted(DATASETS), n=3)
+    hint = f" Did you mean: {', '.join(close)}?" if close else ""
+    raise click.ClickException(
+        f"unknown dataset {dataset!r}.{hint} `cne status --datasets` lists every dataset."
+    )
 
 
 def _run_backfill(cfg, dataset: str, start: date | None, end: date | None) -> dict:

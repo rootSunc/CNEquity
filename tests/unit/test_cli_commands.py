@@ -1064,3 +1064,38 @@ steps = ["compact"]
     assert result.exit_code == 1
     assert "source concurrency" in result.output
     assert "Traceback" not in result.output
+
+
+def test_bad_sql_is_an_error_not_a_traceback(cfg_path):
+    """A SQL typo is the most ordinary thing that happens to this command.
+
+    DuckDB's own message names the line, column and near miss; only the Python
+    traceback wrapped around it needed to go.
+    """
+    result = CliRunner().invoke(
+        cli, ["query", "--config", cfg_path, "--sql", "SELECT * FROM nosuchtable"]
+    )
+
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "nosuchtable" in result.output
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["backfill", "daily_bars", "--start", "notadate"],
+        ["backfill", "daily_bars", "--end", "2026-13-45"],
+        ["run", "daily", "--trade-date", "notadate"],
+        ["derive", "adj_factors", "--start", "notadate"],
+        ["delisted", "backfill", "--since", "notadate"],
+    ],
+)
+def test_a_mistyped_date_is_a_usage_error_not_a_traceback(cfg_path, argv):
+    """`date.fromisoformat` raises a bare ValueError, which used to reach the
+    operator as a Python traceback from thirteen separate call sites."""
+    result = CliRunner().invoke(cli, [*argv, "--config", cfg_path])
+
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "is not an ISO date (YYYY-MM-DD)" in result.output
