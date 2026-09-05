@@ -350,8 +350,11 @@ def _backfill_once(cfg, dataset: str) -> dict:
     # CNINFO range steps also protect direct step invocations with an internal
     # 31-day window, but the CLI must make each window a separate run so the
     # compact boundary drains staging before the next window is fetched.  If
-    # no explicit range was supplied, the step's historical floor is the
-    # honest default for both feeds; an omitted --end means today.
+    # no explicit range was supplied, an omitted --end means today.
+    # `regulatory_events` is chunked alongside it for the same compact bound,
+    # though it no longer fetches: it derives from the announcements already
+    # indexed and clamps each slice to their range, so a floor that predates
+    # the lake's own history costs a skipped slice, not a failed sweep.
     if dataset in {"announcement_index", "regulatory_events"}:
         start = getattr(cfg, "_backfill_start", None) or date(2010, 1, 1)
         end = getattr(cfg, "_backfill_end", None) or shanghai_today()

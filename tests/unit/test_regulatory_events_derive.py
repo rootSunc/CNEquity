@@ -150,3 +150,72 @@ def test_without_any_announcement_coverage_the_step_says_so(tmp_path):
 
     with pytest.raises(RuntimeError, match="no coverage yet"):
         step_regulatory_events(cfg, DAY, "run-bare", {})
+
+
+def _backfill_slice(cfg: Config, start: date, end: date) -> None:
+    """Configure the step exactly as `_backfill_chunked` configures one slice."""
+    cfg._backfill = True
+    cfg._backfill_start = start
+    cfg._backfill_end = end
+
+
+def test_a_backfill_slice_before_the_first_indexed_day_does_not_kill_the_sweep(tmp_path):
+    """`cne backfill regulatory_events` defaults to a 2010 floor and walks
+    31-day slices, stopping at the first failure. A lake whose announcements
+    begin in 2016 (what `scripts/run_init_2016.py` builds) therefore died on
+    slice one, telling the operator to go fetch 2010 disclosures it never had.
+    """
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    _seed_announcements(cfg, [("A1", "关于收到监管函的公告")], day=date(2016, 1, 4))
+    _backfill_slice(cfg, date(2010, 1, 1), date(2010, 1, 31))
+
+    result = step_regulatory_events(cfg, date(2016, 1, 4), "run-2010", {})
+
+    assert result["rows_written"] == 0
+    # degraded, not failed: `_backfill_chunked` only stops on "failed".
+    assert result["status"] == "degraded"
+    finding = result["context_updates"]["audit_findings"][0]
+    assert finding["check"] == "before_source_coverage"
+    assert finding["covered_from"] == "2016-01-04"
+    assert finding["requested_start"] == "2010-01-01"
+
+
+def test_a_backfill_slice_straddling_the_first_indexed_day_derives_the_covered_part(tmp_path):
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    _seed_announcements(cfg, [("A1", "关于收到立案告知书的公告")], day=date(2016, 1, 4))
+    _backfill_slice(cfg, date(2015, 12, 20), date(2016, 1, 19))
+
+    result = step_regulatory_events(cfg, date(2016, 1, 4), "run-straddle", {})
+
+    assert result["rows_written"] == 1
+    # The window reports what was derived, not what was asked for.
+    assert result["window"]["start"] == "2016-01-04"
+    assert result["status"] == "degraded"
+
+
+def test_an_incremental_lookback_reaching_past_the_first_indexed_day_is_not_a_finding(tmp_path):
+    """The reconciliation tail is a fixed lookback, not a coverage claim.
+
+    Reporting it would leave a healthy lake younger than the tail permanently
+    degraded, every day, for nothing an operator can act on.
+    """
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    _seed_announcements(cfg, [("A1", "关于收到警示函的公告")])
+
+    result = step_regulatory_events(cfg, DAY, "run-young-lake", {})
+
+    assert result["rows_written"] == 1
+    # A clean step reports no status at all; the engine supplies "success".
+    assert "status" not in result
+    assert "context_updates" not in result
+
+
+def test_a_hole_inside_the_indexed_range_is_still_refused(tmp_path):
+    """Clamping the ends must not explain away a gap in the middle."""
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    _seed_announcements(cfg, [("A1", "关于收到监管函的公告")], day=date(2016, 1, 4))
+    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 28))
+    _backfill_slice(cfg, date(2020, 1, 1), date(2020, 1, 31))
+
+    with pytest.raises(RuntimeError, match="no rows in 2020-01-01"):
+        step_regulatory_events(cfg, date(2024, 6, 28), "run-hole", {})

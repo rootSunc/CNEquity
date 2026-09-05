@@ -2629,8 +2629,8 @@ def fetch_announcement_index(
     run_id: str | None = None,
     request_scope: str | None = None,
 ) -> pl.DataFrame:
-    # Range pagination is shared with regulatory_events. A one-day range
-    # intentionally retains the historical exact-date validation behaviour.
+    # A one-day range intentionally retains the historical exact-date
+    # validation behaviour.
     try:
         return fetch_announcement_index_range(
             trade_date,

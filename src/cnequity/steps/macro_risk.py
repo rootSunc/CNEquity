@@ -369,8 +369,21 @@ def _regulatory_window(config: Config, trade_date: date) -> tuple[date, date]:
     return incremental_window(config, "regulatory_events", trade_date), trade_date
 
 
-def _announcement_coverage(config: Config, start: date, end: date) -> tuple[date, list[dict]]:
-    """Clamp the window to what `announcement_index` has actually indexed."""
+def _announcement_coverage(config: Config, start: date, end: date) -> tuple[date, date, list[dict]]:
+    """Clamp the window to what `announcement_index` has actually indexed.
+
+    Both ends need clamping, not just the tail. `cne backfill regulatory_events`
+    defaults to a 2010 floor and walks 31-day slices, stopping at the first
+    failure — so on a lake whose announcements begin later (this project's own
+    init starts at 2016) the very first slice asked to derive a window with no
+    announcements in it, and the sweep died there telling the operator to go
+    fetch 2010 disclosures that its history never had.
+
+    A window outside the indexed range is a coverage fact, not a defect. A hole
+    *inside* it still is one, which is why the derive keeps refusing an empty
+    result there rather than recording a clean-looking zero.
+    """
+    from cnequity.query.universe import coverage_start_date
     from cnequity.storage.state import StateStore
 
     watermark = StateStore(config.meta_root).get_date("announcement_index")
@@ -380,23 +393,53 @@ def _announcement_coverage(config: Config, start: date, end: date) -> tuple[date
             "coverage yet — run the announcement_index step (or "
             "`cne backfill announcement_index`) first"
         )
-    if watermark >= end:
-        return end, []
-    return watermark, [
-        {
-            "dataset": "regulatory_events",
-            "severity": "warning",
-            "check": "pending_source_coverage",
-            "message": (
-                f"regulatory_events: announcement_index only covers through "
-                f"{watermark.isoformat()}; {start.isoformat()}..{end.isoformat()} is "
-                "derived up to that date and the rest follows once the "
-                "announcements are indexed"
-            ),
-            "covered_through": watermark.isoformat(),
-            "requested_end": end.isoformat(),
-        }
-    ]
+    findings: list[dict] = []
+    # None means nothing is committed yet. Leave the window alone so an empty
+    # derive is still refused loudly instead of being explained away.
+    earliest = coverage_start_date(config, "announcement_index", date_col="announce_date")
+    if earliest is not None and earliest > start:
+        requested_start, start = start, earliest
+        # An incremental run's reconciliation tail is a fixed lookback, not a
+        # claim that the history goes back that far: on a lake younger than the
+        # tail it would reach past the first indexed day every single day, and
+        # reporting that would make a healthy young lake permanently degraded.
+        # A backfill start *was* asked for, and so is a clamp that leaves the
+        # window empty — both change what the caller gets back.
+        if getattr(config, "_backfill", False) or start > end:
+            findings.append(
+                {
+                    "dataset": "regulatory_events",
+                    "severity": "warning",
+                    "check": "before_source_coverage",
+                    "message": (
+                        f"regulatory_events: announcement_index begins "
+                        f"{earliest.isoformat()}; "
+                        f"{requested_start.isoformat()}..{end.isoformat()} is "
+                        "derived from that date onward — the announcements before "
+                        "it were never indexed"
+                    ),
+                    "covered_from": earliest.isoformat(),
+                    "requested_start": requested_start.isoformat(),
+                }
+            )
+    if watermark < end:
+        findings.append(
+            {
+                "dataset": "regulatory_events",
+                "severity": "warning",
+                "check": "pending_source_coverage",
+                "message": (
+                    f"regulatory_events: announcement_index only covers through "
+                    f"{watermark.isoformat()}; {start.isoformat()}..{end.isoformat()} is "
+                    "derived up to that date and the rest follows once the "
+                    "announcements are indexed"
+                ),
+                "covered_through": watermark.isoformat(),
+                "requested_end": end.isoformat(),
+            }
+        )
+        end = watermark
+    return start, end, findings
 
 
 @register_step("regulatory_events", group="macro_risk", depends_on=["announcement_index"])
@@ -417,8 +460,8 @@ def step_regulatory_events(config: Config, trade_date: date, run_id: str, contex
         # off stops this dataset too rather than quietly re-deriving a tail
         # nothing is refreshing any more.
         raise RuntimeError("regulatory_events: cninfo source disabled in config")
-    start, requested_end = _regulatory_window(config, trade_date)
-    end, findings = _announcement_coverage(config, start, requested_end)
+    requested_start, requested_end = _regulatory_window(config, trade_date)
+    start, end, findings = _announcement_coverage(config, requested_start, requested_end)
     if start > end:
         return {
             "rows_read": 0,
