@@ -219,3 +219,34 @@ def test_a_hole_inside_the_indexed_range_is_still_refused(tmp_path):
 
     with pytest.raises(RuntimeError, match="no rows in 2020-01-01"):
         step_regulatory_events(cfg, date(2024, 6, 28), "run-hole", {})
+
+
+def test_a_window_with_announcements_but_no_events_is_a_clean_zero(tmp_path):
+    """The other half of the refusal above: nothing to *find* is an answer.
+
+    A week of ordinary disclosures really does contain no regulatory filings,
+    and that must record as an empty success — only a window with nothing to
+    *search* is refused.
+    """
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    _seed_announcements(cfg, [("A1", "2024年半年度报告摘要"), ("A2", "关于召开股东大会的通知")])
+
+    result = step_regulatory_events(cfg, DAY, "run-quiet-week", {})
+
+    assert result["rows_written"] == 0
+    assert result["announcements_scanned"] == 2
+    assert "status" not in result
+    assert not list((cfg.staging_root / "regulatory_events").rglob("*.parquet"))
+
+
+def test_turning_off_cninfo_stops_this_dataset_too(tmp_path):
+    """The rows are CNINFO's disclosures however they are obtained.
+
+    Deriving on regardless would keep publishing a tail nothing is refreshing.
+    """
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    _seed_announcements(cfg, [("A1", "关于收到监管函的公告")])
+    cfg.sources["cninfo"] = False
+
+    with pytest.raises(RuntimeError, match="cninfo source disabled"):
+        step_regulatory_events(cfg, DAY, "run-off", {})
