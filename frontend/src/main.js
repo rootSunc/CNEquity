@@ -28,6 +28,7 @@ function pageShell(content, active = "overview") {
         <span class="brand-mark">CNE</span>
         <span class="brand-copy"><strong>CNEquity</strong><small>research lake</small></span>
       </a>
+      <span class="rail-label">Workspace</span>
       <nav class="nav" aria-label="主导航">${nav}</nav>
       <div class="topbar-meta"><span class="console-mode">只读控制台</span>
         <button class="button button-ghost" id="refresh-page" type="button">刷新</button>
@@ -55,7 +56,7 @@ async function api(path) {
       const body = await res.json();
       if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
     } catch {
-      /* not JSON — keep the status line */
+      /* not JSON, keep the status line */
     }
     throw new Error(detail);
   }
@@ -64,19 +65,76 @@ async function api(path) {
 
 const fmt = (n) => (n ?? 0).toLocaleString();
 const compact = (n) => new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(n ?? 0);
-const mb = (b) => (!b ? "—" : b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`);
+const mb = (b) => (!b ? "-" : b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(0)} MB`);
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // --- overview ---------------------------------------------------------------
 
-const kpi = (n, label, note = "") => `<article class="metric-card"><div class="metric-label">${label}</div>
+const kpi = (n, label, note = "", tone = "") =>
+  `<article class="metric-card${tone ? ` metric-card-${tone}` : ""}"><div class="metric-label">${label}</div>
   <div class="metric-value">${n}</div>${note ? `<div class="metric-note">${note}</div>` : ""}</article>`;
 
+/** One tone map for every status word the API hands the console.
+ *
+ * Batch statuses, dataset freshness and audit severities were being coloured
+ * by three separate inline ternaries that had already drifted: `failed` was
+ * orange as a pill and red as a chip, in the same table row. They are one
+ * vocabulary; keep one table. An unlisted word falls through to the neutral
+ * chip rather than guessing at it. */
+const TONE = {
+  fresh: "fresh", success: "fresh", running: "running",
+  failed: "error", error: "error", stale: "stale", warning: "stale",
+  empty: "empty", info: "",
+};
+
 const statusPill = (status, label = status) => {
-  const tone = status === "fresh" || status === "success" ? "fresh" : status === "stale" || status === "failed" ? "stale" : status === "empty" ? "empty" : "running";
+  const tone = TONE[status] || "empty";
   return `<span class="status-pill status-pill-${tone}"><span class="dot ${tone === "running" ? "" : tone}"></span>${esc(label)}</span>`;
 };
+
+const chip = (label, tone = "", n) =>
+  `<span class="chip${tone ? ` chip-${tone}` : ""}">${esc(label)}${n === undefined ? "" : `<b>${fmt(n)}</b>`}</span>`;
+
+const chipRow = (items, empty = "-") =>
+  items.length ? `<div class="chip-row">${items.join("")}</div>` : `<span class="muted">${empty}</span>`;
+
+/** A status tally as chips instead of "success 12 · failed 1".
+ *
+ * The batch column is the densest cell on the runs table and it rendered as
+ * one run-on grey string, so a failed batch read exactly like a successful one
+ * until the whole cell went red. That said "something here is wrong"
+ * without saying which. Per-status chips carry that on the status itself. */
+const tally = (counts) => chipRow(Object.entries(counts || {}).map(([k, n]) => chip(k, TONE[k], n)));
+
+/** A zero is a result, not an absence. */
+const num = (n, cls = "") => (n ? (cls ? `<span class="${cls}">${fmt(n)}</span>` : fmt(n)) : '<span class="muted">0</span>');
+
+/** One table, one shape.
+ *
+ * Every report table below was hand-rolling `<table><tr><th>` with no
+ * thead/tbody and its own empty-row markup, so right-alignment and the empty
+ * state drifted panel by panel. Columns are declared once: a bare string is a
+ * plain header, `{h, n: true}` right-aligns the header the way the tabular
+ * numbers underneath it already are. */
+function dataTable(cols, rows, empty, cls = "") {
+  const head = cols
+    .map((c) => (typeof c === "string" ? { h: c } : c))
+    .map((c) => `<th${c.n ? ' class="n"' : ""}>${esc(c.h)}</th>`)
+    .join("");
+  const body = rows.length
+    ? rows.join("")
+    : `<tr><td colspan="${cols.length}" class="empty-table"><span>${empty}</span></td></tr>`;
+  return `<div class="scroll"><table${cls ? ` class="${cls}"` : ""}><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+/** Load-bearing prose, not a footnote.
+ *
+ * The quality panels carry the two sentences most likely to be read backwards
+ * `no_overlap` is "nothing comparable", not "agrees", and quarantine is
+ * evidence, not a bin. They were set as small grey text under the header and
+ * read as boilerplate. */
+const panelNote = (html) => `<p class="panel-note">${html}</p>`;
 
 // storage/stats.py emits exactly two of these; anything else falls through
 // unchanged rather than being silently mistranslated.
@@ -97,10 +155,10 @@ async function renderOverview() {
   const sev = h.findings_by_severity || {};
   const notes = [];
   // The reason strings come from the ingestion layer and are English, with a
-  // run UUID in them. Fine in a log, wrong in the banner of a Chinese page —
+  // run UUID in them. Fine in a log, wrong in the banner of a Chinese page.
   // the id is not something the reader can act on. Translate the ones that can
   // actually appear, keep the original as a tooltip for anyone debugging.
-  if (h.stats_stale) notes.push(`度量表过期（${esc(statsReason(h.stats_reason))}）——已在后台重建，稍后刷新。`);
+  if (h.stats_stale) notes.push(`度量表过期（${esc(statsReason(h.stats_reason))}）。已在后台重建，稍后刷新。`);
   if (h.stale_datasets.length) {
     notes.push(
       `STALE：${h.stale_datasets.map((d) => `<code class="ds-link" data-ds="${esc(d)}">${esc(d)}</code>`).join(" ")}`,
@@ -144,15 +202,15 @@ async function renderOverview() {
     <section class="status-hero status-${state}" aria-live="polite">
       <span class="status-icon" aria-hidden="true">${state === "healthy" ? "✓" : state === "error" ? "!" : "•"}</span>
       <div><strong>${stateLabel}</strong><span>${state === "healthy" ? "核心数据集已覆盖最新交易日。" : `${notes.length} 项事项需要核查，数据仍可只读访问。`}</span></div>
-      <span class="status-anchor">anchor ${esc(h.anchor || "—")}</span>
+      <span class="status-anchor">anchor ${esc(h.anchor || "-")}</span>
     </section>
     <section class="metric-grid" aria-label="关键指标">
-      ${kpi(h.datasets, "数据集", "已注册")}
-      ${kpi(h.fresh, "Fresh", "最新水位")}
-      ${kpi(`<span class="${h.stale ? "err" : ""}">${h.stale}</span>`, "Stale", "超过容忍窗口")}
+      ${kpi(num(h.datasets), "数据集", "已注册")}
+      ${kpi(num(h.fresh), "Fresh", "最新水位")}
+      ${kpi(num(h.stale, "err"), "Stale", "超过容忍窗口", h.stale ? "alert" : "")}
       ${kpi(`<span title="${fmt(h.rows)} 行">${compact(h.rows)}</span>`, "行数", "curated")}
       ${kpi(mb(h.bytes), "存储", "curated")}
-      ${kpi(`<span class="${sev.error ? "err" : ""}">${sev.error || 0}</span><span class="metric-secondary"> / ${sev.warning || 0}</span>`, "审计", "error / warning")}
+      ${kpi(`${num(sev.error, "err")}<span class="metric-secondary"> / ${fmt(sev.warning)}</span>`, "审计", "error / warning", sev.error ? "alert" : "")}
     </section>
     <section class="overview-grid">
       <article class="surface-panel heat-panel"><div class="panel-header"><div><div class="eyebrow">Coverage</div><h2>覆盖热力</h2></div><span class="panel-meta">${visibleHeatmapRows.length}/${hm.rows.length} 个数据集 · ${hm.days.length} 个交易日</span></div>
@@ -169,7 +227,7 @@ async function renderOverview() {
 
 async function renderDatasets() {
   const datasets = await api("/api/datasets");
-  const rows = (items) => items.map((d) => `<tr class="dataset-row"><td><span class="dot ${d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty"}"></span><span class="ds-link" data-ds="${esc(d.dataset)}">${esc(d.dataset)}</span></td><td>${esc(d.tier_label || d.tier)}</td><td>${esc(d.history_mode)}</td><td>${esc(d.granularity || "merge")}</td><td>${esc(d.watermark || "—")}</td><td class="n">${fmt(d.row_count)}</td><td class="n">${mb(d.bytes)}</td></tr>`).join("");
+  const rows = (items) => items.map((d) => `<tr class="dataset-row"><td><span class="dot ${d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty"}"></span><span class="ds-link" data-ds="${esc(d.dataset)}">${esc(d.dataset)}</span></td><td>${esc(d.tier_label || d.tier)}</td><td>${esc(d.history_mode)}</td><td>${esc(d.granularity || "merge")}</td><td>${esc(d.watermark || "-")}</td><td class="n">${fmt(d.row_count)}</td><td class="n">${mb(d.bytes)}</td></tr>`).join("");
   setPage(`<section class="page-heading"><div class="eyebrow">数据湖控制台 / 数据集</div><div class="heading-row"><div><h1>数据集</h1><p class="sub">按注册契约浏览 ${datasets.length} 个数据集，点击名称查看状态、元数据与数据。</p></div></div></section>
     <section class="surface-panel catalog-panel"><div class="catalog-toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><input id="dataset-search" type="search" placeholder="搜索数据集、层级或语义" autocomplete="off"></label><span class="panel-meta" id="dataset-count">${datasets.length} 个结果</span></div><div class="scroll"><table id="dataset-table"><thead><tr><th>数据集</th><th>分层</th><th>语义</th><th>粒度</th><th>水位</th><th class="n">行</th><th class="n">体积</th></tr></thead><tbody></tbody></table></div></section>`, "datasets");
   const table = document.querySelector("#dataset-table tbody");
@@ -177,7 +235,7 @@ async function renderDatasets() {
   const render = (query = "") => {
     const q = query.trim().toLowerCase();
     const filtered = datasets.filter((d) => [d.dataset, d.tier, d.tier_label, d.history_mode, d.granularity].some((v) => String(v || "").toLowerCase().includes(q)));
-    table.innerHTML = filtered.length ? rows(filtered) : '<tr><td colspan="7" class="empty-table">没有匹配的数据集。</td></tr>';
+    table.innerHTML = filtered.length ? rows(filtered) : '<tr><td colspan="7" class="empty-table"><span>没有匹配的数据集。</span></td></tr>';
     count.textContent = `${filtered.length} 个结果`;
   };
   document.getElementById("dataset-search").addEventListener("input", (e) => render(e.target.value));
@@ -185,20 +243,20 @@ async function renderDatasets() {
 }
 
 function membersTable(rows) {
-  const head = `<tr><th>数据集</th><th>语义</th><th>粒度</th><th>覆盖</th>
-    <th>水位</th><th class="n">行</th><th class="n">体积</th></tr>`;
-  const body = rows
-    .map((d) => {
-      const cls = d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty";
-      const cover = d.coverage_start ? `${d.coverage_start} → ${d.coverage_end}` : "—";
-      const opt = d.required ? "" : " <span style='opacity:.6'>(可选)</span>";
-      return `<tr><td><span class="dot ${cls}"></span><span class="ds-link" data-ds="${esc(d.dataset)}">${esc(d.dataset)}</span>${opt}</td>
-      <td>${d.history_mode}</td><td>${d.granularity || "merge"}</td><td>${cover}</td>
-      <td>${d.watermark || "—"}</td><td class="n">${fmt(d.row_count)}</td>
+  const body = rows.map((d) => {
+    const cls = d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty";
+    const cover = d.coverage_start ? `${d.coverage_start} → ${d.coverage_end}` : "-";
+    const opt = d.required ? "" : " <span style='opacity:.6'>(可选)</span>";
+    return `<tr class="data-row"><td><span class="dot ${cls}"></span><span class="ds-link" data-ds="${esc(d.dataset)}">${esc(d.dataset)}</span>${opt}</td>
+      <td>${d.history_mode}</td><td>${d.granularity || "merge"}</td><td class="cell-time">${cover}</td>
+      <td class="cell-time">${d.watermark || "-"}</td><td class="n">${fmt(d.row_count)}</td>
       <td class="n">${mb(d.bytes)}</td></tr>`;
-    })
-    .join("");
-  return `<table>${head}${body}</table>`;
+  });
+  return dataTable(
+    ["数据集", "语义", "粒度", "覆盖", "水位", { h: "行", n: true }, { h: "体积", n: true }],
+    body,
+    "这一层还没有注册数据集。",
+  );
 }
 
 // --- dataset detail ---------------------------------------------------------
@@ -230,43 +288,36 @@ function gapsNote(d) {
 }
 
 function stateTab(d, prov) {
-  const provTable = prov.length
-    ? `<table>
-    <tr><th>source</th><th>data_version</th><th class="n">行</th><th>fetched_at 跨度</th></tr>
-    ${prov
-      .map(
-        (p) => `<tr><td>${esc(p.source)}</td><td>${esc(p.data_version)}</td>
+  const provTable = dataTable(
+    ["source", "data_version", { h: "行", n: true }, "fetched_at 跨度"],
+    prov.map(
+      (p) => `<tr class="data-row"><td>${esc(p.source)}</td><td>${esc(p.data_version)}</td>
       <td class="n">${fmt(p.row_count)}</td>
-      <td class="muted">${(p.fetched_at_min || "").slice(0, 10)} → ${(p.fetched_at_max || "").slice(0, 10)}</td></tr>`,
-      )
-      .join("")}
-    </table>`
-    : '<p class="muted">无溯源度量。</p>';
+      <td class="muted cell-time">${esc((p.fetched_at_min || "").slice(0, 10))} → ${esc((p.fetched_at_max || "").slice(0, 10))}</td></tr>`,
+    ),
+    "无溯源度量。",
+  );
 
-  const findings = d.findings.length
-    ? `<table>
-    <tr><th>severity</th><th>check</th><th>message</th></tr>
-    ${d.findings
-      .map(
-        (f) => `<tr><td class="${f.severity === "error" ? "err" : ""}">${esc(f.severity)}</td>
+  const findings = dataTable(
+    ["severity", "check", "message"],
+    d.findings.map(
+      (f) => `<tr class="data-row"><td>${chip(f.severity, TONE[f.severity])}</td>
       <td>${esc(f.check)}</td><td>${esc(f.message)}</td></tr>`,
-      )
-      .join("")}</table>`
-    : '<p class="muted">上次审计没有该数据集的 findings。</p>';
+    ),
+    "上次审计没有该数据集的 findings。",
+  );
 
-  const batches = d.batches.length
-    ? `<div class="scroll"><table>
-    <tr><th>状态</th><th>窗口</th><th class="n">写入</th><th class="n">重试</th><th>开始</th><th>错误</th></tr>
-    ${d.batches
-      .map(
-        (b) => `<tr><td class="${b.status === "success" ? "" : "err"}">${esc(b.status)}</td>
-      <td class="muted">${esc(b.window_start || "—")} → ${esc(b.window_end || "—")}</td>
-      <td class="n">${fmt(b.rows_written)}</td><td class="n">${b.retry_count || ""}</td>
-      <td class="muted">${esc((b.started_at || "").slice(0, 19))}</td>
-      <td class="muted">${esc((b.error_message || "").slice(0, 90))}</td></tr>`,
-      )
-      .join("")}</table></div>`
-    : '<p class="muted">manifest 中没有该数据集的 batch。</p>';
+  const batches = dataTable(
+    ["状态", "窗口", { h: "写入", n: true }, { h: "重试", n: true }, "开始", "错误"],
+    d.batches.map(
+      (b) => `<tr class="data-row"><td>${statusPill(b.status)}</td>
+      <td class="muted cell-time">${esc(b.window_start || "-")} → ${esc(b.window_end || "-")}</td>
+      <td class="n">${fmt(b.rows_written)}</td><td class="n">${num(b.retry_count)}</td>
+      <td class="muted cell-time">${esc((b.started_at || "").slice(0, 19))}</td>
+      <td class="muted cell-truncate"${b.error_message ? ` title="${esc(b.error_message)}"` : ""}><span>${esc(b.error_message || "") || "-"}</span></td></tr>`,
+    ),
+    "manifest 中没有该数据集的 batch。",
+  );
 
   return `
     <h3>覆盖</h3>${coverageBar(d)}${gapsNote(d)}
@@ -280,7 +331,7 @@ const fact = (k, v) => `<div class="fact"><span class="k">${esc(k)}</span><span 
 
 /** What one row covers.
  *
- * Was keyed on `intraday`, the bar-frequency field — which `trade_ticks`
+ * Was keyed on `intraday`, the bar-frequency field, which `trade_ticks`
  * deliberately leaves unset so it cannot inherit bar-shaped checks. That
  * printed a dash, making intraday transaction records look like a daily
  * dataset. `row_grain` is set for all three intraday datasets.
@@ -296,7 +347,7 @@ function grainText(d) {
  * Two different limits reach this panel and they must not read the same. A
  * rolling per-symbol count (minute bars) moves forward every day; a fixed
  * calendar floor (trade_ticks) does not, and its horizon therefore grows.
- * Keying only on `history_horizon_days` printed "无上限" for the floor case —
+ * Keying only on `history_horizon_days` printed "无上限" for the floor case.
  * directly contradicting the 最早可得 line right underneath it.
  */
 function horizonText(d) {
@@ -306,13 +357,15 @@ function horizonText(d) {
 }
 
 function metaTab(d) {
-  const yn = (b) => (b ? "是" : "否");
+  // Flags read as state, not as prose: "是" beside "否" in the same grey
+  // column made the reader parse four identical rows to find the set one.
+  const yn = (b) => chip(b ? "是" : "否", b ? "fresh" : "");
   const contract = [
     fact("分层", `${d.tier} ${esc(d.tier_label)}`),
     fact("存储层", d.layer),
-    fact("分区键", d.partition_col ? `<code>${esc(d.partition_col)}</code>` : "—（单文件 merge）"),
-    fact("分区粒度", d.granularity || "—"),
-    fact("查询日期列", d.date_col ? `<code>${esc(d.date_col)}</code>` : "—"),
+    fact("分区键", d.partition_col ? `<code>${esc(d.partition_col)}</code>` : "单文件 merge"),
+    fact("分区粒度", d.granularity || "-"),
+    fact("查询日期列", d.date_col ? `<code>${esc(d.date_col)}</code>` : "-"),
     fact("主键", d.primary_key.map((c) => `<code>${esc(c)}</code>`).join(" ")),
   ].join("");
   const semantics = [
@@ -322,7 +375,7 @@ function metaTab(d) {
     fact("维护水位", yn(d.watermarked)),
   ].join("");
   const sources = [
-    fact("回填源", d.backfill_source ? esc(d.backfill_source) : "—"),
+    fact("回填源", d.backfill_source ? esc(d.backfill_source) : "-"),
     fact("源端历史视野", horizonText(d)),
     fact("最早可得", d.earliest_available || "不受源端限制"),
   ].join("");
@@ -336,7 +389,7 @@ function metaTab(d) {
         ? `${d.backfill_chunk_days} 天`
         : d.backfill_chunk_symbols
           ? `${d.backfill_chunk_symbols} 标的`
-          : "—",
+          : '<span class="muted">不分块</span>',
     ),
   ].join("");
 
@@ -393,7 +446,7 @@ function dataControls(d, dates) {
           .map((v) => `<option value="${esc(v)}">${esc(v)}</option>`)
           .join("")}</select></label>`;
   const symbol = `<label>标的 <input id="q-symbol" placeholder="600519.SH" size="12"></label>`;
-  // PIT datasets have no default "current" view — load() refuses without a
+  // PIT datasets have no default "current" view. load() refuses without a
   // cutoff, on purpose. Seed it with today so the tab opens on something, and
   // say what it means.
   const asOf = d.pit
@@ -418,7 +471,7 @@ function rowTable(page, primaryKey) {
   const body = page.rows
     .map((r) => `<tr>${r.map((v) => `<td>${v === null ? '<span class="muted">null</span>' : esc(v)}</td>`).join("")}</tr>`)
     .join("");
-  const shown = `${page.offset + 1}–${page.offset + page.rows.length} / ${fmt(page.total)}`;
+  const shown = `${page.offset + 1}-${page.offset + page.rows.length} / ${fmt(page.total)}`;
   return `<div class="scroll"><table class="rows"><tr>${head}</tr>${body}</table></div>
     <div class="controls">
       <button id="q-prev" ${page.offset === 0 ? "disabled" : ""}>上一页</button>
@@ -467,7 +520,7 @@ async function dataTab(d, host) {
 }
 
 async function renderDetail(name, tab) {
-  setPage(`<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>加载 ${esc(name)}…</span></div>`, "datasets");
+  setPage(`<div class="loading-state"><span>加载 ${esc(name)}…</span></div>`, "datasets");
   const enc = encodeURIComponent(name);
   const [d, series, prov] = await Promise.all([
     api(`/api/datasets/${enc}`),
@@ -486,8 +539,8 @@ async function renderDetail(name, tab) {
     <section class="metric-grid detail-metrics" aria-label="数据集关键指标">
       ${kpi(`<span title="${fmt(d.row_count)} 行">${compact(d.row_count)}</span>`, "行数", "curated")}
       ${kpi(mb(d.bytes), "存储", "curated")}
-      ${kpi(esc(d.watermark || "—"), "水位", d.watermarked ? "维护中" : "不维护水位")}
-      ${kpi(esc(d.coverage_end || "—"), "覆盖至", d.granularity || "merge")}
+      ${kpi(esc(d.watermark || "-"), "水位", d.watermarked ? "维护中" : "不维护水位")}
+      ${kpi(esc(d.coverage_end || "-"), "覆盖至", d.granularity || "merge")}
     </section>
     <section class="surface-panel detail-workspace">
     <nav class="tabs" aria-label="数据集详情标签页">
@@ -518,7 +571,7 @@ async function renderDetail(name, tab) {
 // --- runs -------------------------------------------------------------------
 
 const AGO = (iso) => {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (secs < 90) return `${Math.round(secs)} 秒前`;
   if (secs < 5400) return `${Math.round(secs / 60)} 分钟前`;
@@ -527,7 +580,7 @@ const AGO = (iso) => {
 };
 
 const DURATION = (a, b) => {
-  if (!a) return "—";
+  if (!a) return "-";
   const secs = Math.max(0, ((b ? new Date(b) : new Date()).getTime() - new Date(a).getTime()) / 1000);
   return secs < 90 ? `${Math.round(secs)}s` : `${Math.round(secs / 60)}m`;
 };
@@ -538,38 +591,38 @@ async function renderRuns() {
   const running = runs.filter((r) => r.status === "running").length;
   const failed = runs.filter((r) => r.status === "failed").length;
   const written = runs.reduce((sum, r) => sum + (r.rows_written || 0), 0);
-  const rows = runs
-    .map((r) => {
-      const bad = Object.keys(r.batch_status).some((s) => s === "failed" || s === "stale");
-      const tally = Object.entries(r.batch_status)
-        .map(([s, n]) => `${s} ${n}`)
-        .join(" · ");
-      return `<tr>
-        <td><a class="table-link" href="#/runs/${encodeURIComponent(r.run_id)}">${esc(r.job_name)}</a></td>
-        <td>${statusPill(r.status)}</td>
-        <td class="muted">${AGO(r.started_at)}</td>
-        <td class="n">${DURATION(r.started_at, r.finished_at)}</td>
-        <td class="n">${fmt(r.rows_written)}</td>
-        <td class="muted ${bad ? "err" : ""}">${esc(tally) || "—"}</td>
-        <td class="muted">${esc((r.error_message || "").slice(0, 60))}</td>
-      </tr>`;
-    })
-    .join("");
+  const rows = runs.map((r) => {
+    // The full message goes in the title. Slicing to 60 chars was the only
+    // thing standing between the reader and the rest of a stack trace, and it
+    // cut without saying it had cut.
+    const err = r.error_message || "";
+    return `<tr class="data-row">
+      <td><a class="table-link" href="#/runs/${encodeURIComponent(r.run_id)}">${esc(r.job_name)}</a></td>
+      <td>${statusPill(r.status)}</td>
+      <td class="muted cell-time">${AGO(r.started_at)}</td>
+      <td class="n">${DURATION(r.started_at, r.finished_at)}</td>
+      <td class="n">${fmt(r.rows_written)}</td>
+      <td class="cell-tally">${tally(r.batch_status)}</td>
+      <td class="muted cell-truncate"${err ? ` title="${esc(err)}"` : ""}><span>${esc(err) || "-"}</span></td>
+    </tr>`;
+  });
 
   setPage(`
     <section class="page-heading"><div class="eyebrow">数据湖控制台 / 跑批</div><div class="heading-row"><div><h1>跑批</h1><p class="sub">最近 ${runs.length} 个 run，查看执行状态、写入规模与 batch 时间线。</p></div></div></section>
     <section class="metric-grid run-metrics" aria-label="跑批关键指标">
-      ${kpi(runs.length, "最近运行", "最多 40 个")}
-      ${kpi(succeeded, "成功", "success")}
-      ${kpi(`<span class="${running ? "live" : ""}">${running}</span>`, "运行中", "running")}
-      ${kpi(`<span class="${failed ? "err" : ""}">${failed}</span>`, "失败", "failed")}
+      ${kpi(num(runs.length), "最近运行", "最多 40 个")}
+      ${kpi(num(succeeded), "成功", "success")}
+      ${kpi(num(running), "运行中", "running", running ? "live" : "")}
+      ${kpi(num(failed), "失败", "failed", failed ? "alert" : "")}
       ${kpi(`<span title="${fmt(written)} 行">${compact(written)}</span>`, "累计写入", "当前列表")}
     </section>
-    <section class="surface-panel table-panel"><div class="panel-header"><div><div class="eyebrow">Run history</div><h2>运行记录</h2></div><span class="panel-meta">点击任务名查看详情</span></div><div class="scroll"><table class="data-table">
-      <tr><th>job</th><th>状态</th><th>开始</th><th class="n">耗时</th>
-          <th class="n">写入</th><th>batch</th><th>错误</th></tr>
-      ${rows || '<tr><td colspan="7" class="empty-table">还没有运行记录。</td></tr>'}
-    </table></div></section>`, "runs");
+    <section class="surface-panel table-panel"><div class="panel-header"><div><div class="eyebrow">Run history</div><h2>运行记录</h2></div><span class="panel-meta">点击任务名查看详情</span></div>
+    ${dataTable(
+      ["job", "状态", "开始", { h: "耗时", n: true }, { h: "写入", n: true }, "batch", "错误"],
+      rows,
+      "还没有运行记录。",
+      "data-table",
+    )}</section>`, "runs");
 }
 
 let runStream = null;
@@ -592,7 +645,7 @@ function closeRunStream() {
  * Advance the clock between stream frames.
  *
  * The stream only fires when the manifest changes, and a batch heartbeats far
- * less often than once a second — measured at one frame in 70s on an intraday
+ * less often than once a second, measured at one frame in 70s on an intraday
  * backfill. Without a local tick the elapsed time and the running bar's leading
  * edge sit frozen under a badge that says 实时, which is worse than not
  * claiming it. The data still comes from the stream; only "now" moves here.
@@ -626,7 +679,7 @@ function paintRun(detail) {
   const stalled = detail.batches.filter((b) => b.stalled);
   document.getElementById("run-note").innerHTML = stalled.length
     ? `<div class="banner">${stalled.length} 个 batch 仍是 running 但已静默超过
-       ${Math.round(detail.stale_after_seconds / 60)} 分钟——下次 run 会把它们判为 failed：
+       ${Math.round(detail.stale_after_seconds / 60)} 分钟。下次 run 会把它们判为 failed：
        ${stalled.map((b) => `<code>${esc(b.dataset)}</code>`).join(" ")}</div>`
     : "";
 
@@ -634,15 +687,16 @@ function paintRun(detail) {
 
   const failed = detail.batches.filter((b) => b.error_message);
   document.getElementById("run-errors").innerHTML = failed.length
-    ? `<section class="surface-panel report-panel"><div class="panel-header"><div><div class="eyebrow">Failures</div><h2>失败的 Batch</h2></div><span class="panel-meta">${failed.length} 项</span></div><div class="scroll"><table>
-        <tr><th>数据集</th><th>状态</th><th class="n">重试</th><th>错误</th></tr>
-        ${failed
-          .map(
-            (b) => `<tr><td>${esc(b.dataset)}</td><td class="err">${esc(b.status)}</td>
-            <td class="n">${b.retry_count || ""}</td>
-            <td class="muted">${esc(b.error_message)}</td></tr>`,
-          )
-          .join("")}</table></div></section>`
+    ? `<section class="surface-panel report-panel"><div class="panel-header"><div><div class="eyebrow">Failures</div><h2>失败的 Batch</h2></div><span class="panel-meta">${failed.length} 项</span></div>
+       ${dataTable(
+         ["数据集", "状态", { h: "重试", n: true }, "错误"],
+         failed.map(
+           (b) => `<tr><td><code>${esc(b.dataset)}</code></td><td>${statusPill(b.status)}</td>
+             <td class="n">${num(b.retry_count)}</td>
+             <td class="muted">${esc(b.error_message)}</td></tr>`,
+         ),
+         "",
+       )}</section>`
     : "";
 }
 
@@ -653,7 +707,7 @@ async function renderRunDetail(runId) {
     <section class="metric-grid detail-metrics" aria-label="运行关键指标">
       ${kpi(DURATION(detail.started_at, detail.finished_at), "耗时", detail.status === "running" ? "持续更新" : "已结束")}
       ${kpi(`<span title="${fmt(detail.rows_written)} 行">${compact(detail.rows_written)}</span>`, "写入", "行")}
-      ${kpi(detail.batches.length, "Batch", "数据集任务")}
+      ${kpi(num(detail.batches.length), "Batch", "数据集任务")}
       ${kpi(AGO(detail.started_at), "开始", esc((detail.started_at || "").slice(0, 19)))}
     </section>
     <div id="run-note"></div>
@@ -693,113 +747,109 @@ async function renderQuality() {
   const quarantineBytes = q.quarantine.reduce((sum, item) => sum + (item.bytes || 0), 0);
   const cacheEntries = q.on_demand.reduce((sum, item) => sum + (item.entries || 0), 0);
 
-  const findingsRows = q.findings_runs
-    .map((r) => {
-      const sev = r.by_severity;
-      return `<tr>
-        <td><a class="table-link" href="#/quality/${encodeURIComponent(r.run_id)}">${esc(r.trade_date || "—")}</a></td>
-        <td class="n ${sev.error ? "err" : ""}">${sev.error || ""}</td>
-        <td class="n">${sev.warning || ""}</td>
-        <td class="n muted">${sev.info || ""}</td>
-        <td class="muted">${r.top_checks.map(([c, n]) => `${esc(c)}×${n}`).join("、")}</td>
-      </tr>`;
-    })
-    .join("");
+  // check×n joined by "、" was a wall of grey the eye slid off. Same counts,
+  // one chip each, so the frequent check is findable without reading the row.
+  const checks = (pairs) => chipRow(pairs.map(([c, n]) => chip(c, "", n)));
 
-  const diffRows = q.diff_runs
-    .map(
-      (r) => `<tr>
-        <td><a class="table-link" href="#/quality/${encodeURIComponent(r.run_id)}">${esc(r.trade_date || "—")}</a></td>
-        <td class="n">${r.diff_count}</td>
-        <td class="muted">${Object.entries(r.by_check).map(([c, n]) => `${esc(c)}×${n}`).join("、")}</td>
-      </tr>`,
-    )
-    .join("");
+  const findingsRows = q.findings_runs.map((r) => {
+    const sev = r.by_severity;
+    return `<tr class="data-row">
+      <td class="cell-time"><a class="table-link" href="#/quality/${encodeURIComponent(r.run_id)}">${esc(r.trade_date || "-")}</a></td>
+      <td class="n">${num(sev.error, "err")}</td>
+      <td class="n">${num(sev.warning)}</td>
+      <td class="n">${num(sev.info)}</td>
+      <td>${checks(r.top_checks)}</td>
+    </tr>`;
+  });
 
-  const quarantineRows = q.quarantine.length
-    ? q.quarantine
-        .map(
-          (e) => `<tr><td><code>${esc(e.name)}</code></td><td class="n">${fmt(e.files)}</td>
-            <td class="n">${mb(e.bytes)}</td><td class="muted">${esc(e.modified.slice(0, 10))}</td></tr>`,
-        )
-        .join("")
-    : `<tr><td colspan="4" class="muted">隔离区是空的。</td></tr>`;
+  const diffRows = q.diff_runs.map(
+    (r) => `<tr class="data-row">
+      <td class="cell-time"><a class="table-link" href="#/quality/${encodeURIComponent(r.run_id)}">${esc(r.trade_date || "-")}</a></td>
+      <td class="n">${num(r.diff_count)}</td>
+      <td>${checks(Object.entries(r.by_check))}</td>
+    </tr>`,
+  );
 
-  const onDemandRows = q.on_demand.length
-    ? q.on_demand
-        .map(
-          (e) => `<tr><td>${esc(e.dataset)}</td><td class="n">${fmt(e.entries)}</td>
-            <td class="n">${mb(e.bytes)}</td><td class="muted">${esc((e.newest || "").slice(0, 10)) || "—"}</td></tr>`,
-        )
-        .join("")
-    : `<tr><td colspan="4" class="muted">还没有人查过 on-demand 数据集（<code>stock_news</code> /
-       <code>research_reports</code>）——这是正常状态，不是缺口。</td></tr>`;
+  const quarantineRows = q.quarantine.map(
+    (e) => `<tr class="data-row"><td><code>${esc(e.name)}</code></td><td class="n">${fmt(e.files)}</td>
+      <td class="n">${mb(e.bytes)}</td><td class="muted cell-time">${esc(e.modified.slice(0, 10))}</td></tr>`,
+  );
+
+  const onDemandRows = q.on_demand.map(
+    (e) => `<tr class="data-row"><td>${esc(e.dataset)}</td><td class="n">${fmt(e.entries)}</td>
+      <td class="n">${mb(e.bytes)}</td><td class="muted cell-time">${esc((e.newest || "").slice(0, 10)) || "-"}</td></tr>`,
+  );
 
   setPage(`
     <section class="page-heading"><div class="eyebrow">数据湖控制台 / 质量</div><div class="heading-row"><div><h1>质量</h1><p class="sub">审计、跨源比对、隔离区与按需缓存的只读证据面板。</p></div></div></section>
     <section class="metric-grid quality-metrics" aria-label="质量关键指标">
-      ${kpi(q.findings_runs.length, "审计快照", q.findings_runs[0]?.trade_date || "暂无")}
-      ${kpi(`<span class="${latestFindings.error ? "err" : ""}">${latestFindings.error || 0}</span>`, "最新错误", "error")}
-      ${kpi(latestFindings.warning || 0, "最新警告", "warning")}
-      ${kpi(quarantineFiles, "隔离文件", mb(quarantineBytes))}
-      ${kpi(cacheEntries, "按需缓存", "entries")}
+      ${kpi(num(q.findings_runs.length), "审计快照", q.findings_runs[0]?.trade_date || "暂无")}
+      ${kpi(num(latestFindings.error, "err"), "最新错误", "error", latestFindings.error ? "alert" : "")}
+      ${kpi(num(latestFindings.warning), "最新警告", "warning")}
+      ${kpi(num(quarantineFiles), "隔离文件", mb(quarantineBytes))}
+      ${kpi(num(cacheEntries), "按需缓存", "entries")}
     </section>
     <div class="report-stack">
     <section class="surface-panel report-panel"><div class="panel-header"><div><div class="eyebrow">Audit findings</div><h2>审计趋势</h2></div><span class="panel-meta">按审计日</span></div>
     <div id="sev-chart"></div>
-    <div class="scroll"><table>
-      <tr><th>审计日</th><th class="n">error</th><th class="n">warning</th><th class="n">info</th><th>主要 check</th></tr>
-      ${findingsRows || '<tr><td colspan="5" class="muted">还没有 findings。</td></tr>'}
-    </table></div></section>
+    ${dataTable(
+      ["审计日", { h: "error", n: true }, { h: "warning", n: true }, { h: "info", n: true }, "主要 check"],
+      findingsRows,
+      "还没有 findings。",
+    )}</section>
 
     <section class="surface-panel report-panel"><div class="panel-header"><div><div class="eyebrow">Cross-source</div><h2>跨源比对</h2></div><span class="panel-meta">主源 vs 备源</span></div>
-    <p class="muted">主源与备源在同一天同一字段上的分歧。<code>no_overlap</code> 是「两边没有共同主键可比」，
-      不是「一致」——那是这张表最容易被读反的一行。</p>
-    <div class="scroll"><table>
-      <tr><th>审计日</th><th class="n">差异</th><th>按 check</th></tr>
-      ${diffRows || '<tr><td colspan="3" class="muted">还没有跨源比对产物。</td></tr>'}
-    </table></div></section>
+    ${panelNote(`主源与备源在同一天同一字段上的分歧。<strong><code>no_overlap</code> 是「两边没有共同主键可比」，
+      不是「一致」</strong>。这是这张表最容易被读反的一行。`)}
+    ${dataTable(
+      ["审计日", { h: "差异", n: true }, "按 check"],
+      diffRows,
+      "还没有跨源比对产物。",
+    )}</section>
 
     <section class="surface-panel report-panel"><div class="panel-header"><div><div class="eyebrow">Quarantine</div><h2>隔离区</h2></div><span class="panel-meta">保留问题证据</span></div>
-    <p class="muted"><strong>不是垃圾桶。</strong>这些是因为有问题而被撤出 curated 的数据，留着当证据。
-      删之前先看清楚是什么。</p>
-    <div class="scroll"><table>
-      <tr><th>目录</th><th class="n">文件</th><th class="n">体积</th><th>最后修改</th></tr>
-      ${quarantineRows}
-    </table></div></section>
+    ${panelNote(`<strong>不是垃圾桶。</strong>这些是因为有问题而被撤出 curated 的数据，留着当证据。
+      删之前先看清楚是什么。`)}
+    ${dataTable(
+      ["目录", { h: "文件", n: true }, { h: "体积", n: true }, "最后修改"],
+      quarantineRows,
+      "隔离区是空的。",
+    )}</section>
 
     <section class="surface-panel report-panel"><div class="panel-header"><div><div class="eyebrow">On-demand</div><h2>按需缓存</h2></div><span class="panel-meta">不进入 curated</span></div>
-    <p class="muted">按 symbol 抓取、缓存在 <code>meta/on_demand/</code>，不进 curated——
-      面板别处看不到它们。</p>
-    <div class="scroll"><table>
-      <tr><th>数据集</th><th class="n">条目</th><th class="n">体积</th><th>最新</th></tr>
-      ${onDemandRows}
-    </table></div></section></div>`, "quality");
+    ${panelNote(`按 symbol 抓取、缓存在 <code>meta/on_demand/</code>，不进 curated。面板别处看不到它们。`)}
+    ${dataTable(
+      ["数据集", { h: "条目", n: true }, { h: "体积", n: true }, "最新"],
+      onDemandRows,
+      `还没有人查过 on-demand 数据集（<code>stock_news</code> / <code>research_reports</code>）。这是正常状态，不是缺口。`,
+    )}</section></div>`, "quality");
 
   severityTimeline(document.getElementById("sev-chart"), q.findings_runs);
 }
 
 async function renderQualityRun(runId) {
   const d = await api(`/api/quality/runs/${encodeURIComponent(runId)}`);
+  // severity was coloured only when it read exactly "error", so a warning row
+  // looked identical to an info row. It is the column the reader sorts by eye.
   const table = (rows, cols) =>
-    rows.length
-      ? `<div class="scroll"><table><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr>
-          ${rows
-            .map(
-              (r) => `<tr>${cols
-                .map((c) => {
-                  const v = r[c];
-                  const cls = c === "severity" && v === "error" ? ' class="err"' : "";
-                  return `<td${cls}>${v === undefined || v === null ? '<span class="muted">—</span>' : esc(v)}</td>`;
-                })
-                .join("")}</tr>`,
-            )
-            .join("")}</table></div>`
-      : '<p class="muted">无。</p>';
+    dataTable(
+      cols,
+      rows.map(
+        (r) => `<tr class="data-row">${cols
+          .map((c) => {
+            const v = r[c];
+            if (v === undefined || v === null || v === "") return '<td><span class="muted">-</span></td>';
+            if (c === "severity") return `<td>${chip(v, TONE[v])}</td>`;
+            return `<td>${esc(v)}</td>`;
+          })
+          .join("")}</tr>`,
+      ),
+      "无。",
+    );
 
   setPage(`
     <section class="page-heading"><div class="eyebrow">数据湖控制台 / 质量 / 审计详情</div><div class="heading-row"><div><h1>${esc(d.trade_date || runId.slice(0, 8))}</h1><p class="sub"><code>${esc(d.run_id)}</code></p></div><div class="action-row"><a class="button button-ghost" href="#/quality">← 返回质量</a></div></div></section>
-    <section class="metric-grid detail-metrics" aria-label="审计关键指标">${kpi(d.findings.length, "Findings", "审计发现")}${kpi(d.diffs.length, "Diffs", "跨源差异")}</section>
+    <section class="metric-grid metrics-2" aria-label="审计关键指标">${kpi(num(d.findings.length), "Findings", "审计发现")}${kpi(num(d.diffs.length), "Diffs", "跨源差异")}</section>
     <div class="report-stack"><section class="surface-panel report-panel"><div class="panel-header"><div><div class="eyebrow">Findings</div><h2>审计发现</h2></div><span class="panel-meta">${d.findings.length} 项</span></div>${table(d.findings, ["severity", "dataset", "check", "message"])}</section>
     <section class="surface-panel report-panel"><div class="panel-header"><div><div class="eyebrow">Cross-source</div><h2>跨源差异</h2></div><span class="panel-meta">${d.diffs.length} 项</span></div>${table(d.diffs, ["severity", "dataset", "check", "field", "bps", "message"])}</section></div>`, "quality");
 }

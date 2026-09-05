@@ -44,23 +44,42 @@ function tokens() {
 
 const charts = new Map();
 
-/** Mount (or replace) a chart on *el*, keeping one instance per element. */
-function mount(el, option) {
+/** The 640px breakpoint from styles.css, asked once instead of spelled out at
+ * every chart that needs it: below it the rail collapses and the panels lose
+ * their padding, so the axis gutter has to come down with them. */
+const COMPACT = window.matchMedia("(max-width: 640px)");
+const compact = () => COMPACT.matches;
+
+/** Mount (or replace) a chart on *el*, keeping one instance per element.
+ *
+ * `build` is kept, not just the option it returns. The gutter is a function of
+ * the breakpoint, and `chart.resize()` only re-lays out the option the chart
+ * already holds — so a chart drawn wide keeps a 200px label gutter on a
+ * phone-sized window until something else redraws it. */
+function mount(el, build) {
   const existing = charts.get(el);
-  if (existing) existing.dispose();
+  if (existing) existing.chart.dispose();
   const chart = echarts.init(el, null, { renderer: "canvas" });
-  chart.setOption(option);
-  charts.set(el, chart);
+  chart.setOption(build());
+  charts.set(el, { chart, build });
   return chart;
 }
 
 export function disposeAll() {
-  for (const chart of charts.values()) chart.dispose();
+  for (const { chart } of charts.values()) chart.dispose();
   charts.clear();
 }
 
 window.addEventListener("resize", () => {
-  for (const chart of charts.values()) chart.resize();
+  for (const { chart } of charts.values()) chart.resize();
+});
+
+// Only on the transition, not on every resize frame: rebuilding is not free,
+// and it has to be a replace rather than a merge — a merge would leave the
+// compact axisLabel's `width` behind on the way back up — which resets the
+// heatmap's dataZoom. Crossing the breakpoint is rare enough to pay that.
+COMPACT.addEventListener("change", () => {
+  for (const { chart, build } of charts.values()) chart.setOption(build(), true);
 });
 
 // --- coverage heatmap --------------------------------------------------------
@@ -72,7 +91,7 @@ const CELL_CODE = { " ": 0, "#": 1, ".": 2, "-": 4 };
  * Dataset x trading-day coverage.
  *
  * `.` splits into two codes on the row's `gap_meaning`. The server decides
- * which — whether a hole is a fault or the dataset's shape is a question about
+ * which. Whether a hole is a fault or the dataset's shape is a question about
  * fetch semantics and cadence, and that lives in the registry, not here.
  */
 export function heatmap(el, data) {
@@ -102,9 +121,9 @@ export function heatmap(el, data) {
   const windowStart = Math.max(0, 100 - (90 / Math.max(days.length, 1)) * 100);
 
   el.style.height = `${Math.max(220, rows.length * 15 + 90)}px`;
-  return mount(el, {
+  return mount(el, () => ({
     animation: false,
-    grid: { left: 200, right: 20, top: 10, bottom: 62, containLabel: false },
+    grid: { left: compact() ? 118 : 200, right: compact() ? 8 : 20, top: 10, bottom: 62, containLabel: false },
     tooltip: {
       backgroundColor: t.surface,
       borderColor: t.line,
@@ -130,7 +149,9 @@ export function heatmap(el, data) {
       inverse: true,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: t.muted, fontSize: 11 },
+      axisLabel: compact()
+        ? { color: t.muted, fontSize: 9, width: 105, overflow: "truncate" }
+        : { color: t.muted, fontSize: 11 },
     },
     visualMap: {
       type: "piecewise",
@@ -167,7 +188,7 @@ export function heatmap(el, data) {
         progressive: 0,
       },
     ],
-  });
+  }));
 }
 
 // --- provenance over time ----------------------------------------------------
@@ -183,7 +204,7 @@ export function provenanceSeries(el, data) {
   const t = tokens();
   const points = data.points;
   if (!points.length) {
-    el.innerHTML = '<p class="muted">没有溯源度量——先跑 <code>cne stats rebuild</code>。</p>';
+    el.innerHTML = '<p class="muted">没有溯源度量。先跑 <code>cne stats rebuild</code>。</p>';
     return null;
   }
 
@@ -200,7 +221,7 @@ export function provenanceSeries(el, data) {
   }
 
   el.style.height = "230px";
-  return mount(el, {
+  return mount(el, () => ({
     animation: false,
     grid: { left: 62, right: 16, top: 12, bottom: 48 },
     tooltip: {
@@ -209,7 +230,7 @@ export function provenanceSeries(el, data) {
       backgroundColor: t.surface,
       borderColor: t.line,
       textStyle: { color: t.ink, fontSize: 12 },
-      valueFormatter: (v) => (v ? v.toLocaleString() + " 行" : "—"),
+      valueFormatter: (v) => (v ? v.toLocaleString() + " 行" : "-"),
     },
     legend: {
       data: keys,
@@ -245,7 +266,7 @@ export function provenanceSeries(el, data) {
       barMaxWidth: 40,
       data: periods.map((d) => bucket.get(`${d}|${key}`) || 0),
     })),
-  });
+  }));
 }
 
 // --- run gantt ---------------------------------------------------------------
@@ -261,7 +282,7 @@ const BATCH_COLORS = {
  * One run's batches on a time axis, grouped into a lane per dataset.
  *
  * A batch that is still running has no `finished_at`, so its bar is drawn to
- * "now" — which is what makes the chart readable while a job is in flight, and
+ * "now", which is what makes the chart readable while a job is in flight, and
  * why it is redrawn on every stream frame rather than only at the end.
  */
 export function runGantt(el, detail) {
@@ -296,9 +317,9 @@ export function runGantt(el, detail) {
   });
 
   el.style.height = `${Math.max(180, lanes.length * 26 + 80)}px`;
-  return mount(el, {
+  return mount(el, () => ({
     animation: false,
-    grid: { left: 170, right: 24, top: 12, bottom: 40 },
+    grid: { left: compact() ? 108 : 170, right: compact() ? 8 : 24, top: 12, bottom: 40 },
     tooltip: {
       backgroundColor: t.surface,
       borderColor: t.line,
@@ -328,7 +349,9 @@ export function runGantt(el, detail) {
       data: lanes,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: t.muted, fontSize: 11 },
+      axisLabel: compact()
+        ? { color: t.muted, fontSize: 9, width: 96, overflow: "truncate" }
+        : { color: t.muted, fontSize: 11 },
     },
     series: [
       {
@@ -353,7 +376,7 @@ export function runGantt(el, detail) {
         data,
       },
     ],
-  });
+  }));
 }
 
 // --- quality timeline --------------------------------------------------------
@@ -371,7 +394,7 @@ const SEVERITY = [
 export function severityTimeline(el, runs) {
   const t = tokens();
   if (!runs.length) {
-    el.innerHTML = '<p class="muted">还没有审计产物——跑一次 <code>cne audit</code>。</p>';
+    el.innerHTML = '<p class="muted">还没有审计产物。请跑一次 <code>cne audit</code>。</p>';
     return null;
   }
   // Oldest first: a timeline that reads right-to-left is a timeline nobody reads.
@@ -379,7 +402,7 @@ export function severityTimeline(el, runs) {
   const labels = ordered.map((r) => r.trade_date || r.run_id.slice(0, 8));
 
   el.style.height = "220px";
-  return mount(el, {
+  return mount(el, () => ({
     animation: false,
     grid: { left: 52, right: 16, top: 12, bottom: 48 },
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
@@ -401,5 +424,5 @@ export function severityTimeline(el, runs) {
       barMaxWidth: 44,
       data: ordered.map((r) => r.by_severity[name] || 0),
     })),
-  });
+  }));
 }
