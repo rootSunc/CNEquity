@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import tarfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
@@ -214,6 +216,22 @@ def contract_validate(
         raise SystemExit(1)
 
 
+@contextmanager
+def _snapshot_operator_errors() -> Iterator[None]:
+    """Surface snapshot input/data problems as Click errors, not tracebacks.
+
+    A snapshot that is missing, corrupt or fails verification is operator
+    input, and the store signals it with a plain ``FileNotFoundError`` or
+    ``ValueError``. ``export`` and ``import`` already made this call; the rest
+    of the group printed a Python traceback for the identical class of
+    failure, so naming a snapshot that does not exist looked like a crash.
+    """
+    try:
+        yield
+    except (OSError, ValueError, RuntimeError, KeyError, tarfile.TarError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @cli.group("snapshot")
 def snapshot_grp():
     """Create, verify and safely restore portable lake snapshots."""
@@ -247,7 +265,8 @@ def snapshot_create(
     """
     from cnequity.storage.snapshots import SnapshotStore
 
-    manifest = SnapshotStore(_cfg(config_path), snapshot_root).create(name, list(datasets))
+    with _snapshot_operator_errors():
+        manifest = SnapshotStore(_cfg(config_path), snapshot_root).create(name, list(datasets))
     click.echo(str(manifest))
 
 
@@ -271,7 +290,8 @@ def snapshot_verify(name: str, config_path: str, snapshot_root: Path | None):
 
     from cnequity.storage.snapshots import SnapshotStore
 
-    result = SnapshotStore(_cfg(config_path), snapshot_root).verify(name)
+    with _snapshot_operator_errors():
+        result = SnapshotStore(_cfg(config_path), snapshot_root).verify(name)
     click.echo(json.dumps(asdict(result), indent=2, ensure_ascii=False))
     if not result.passed:
         raise SystemExit(1)
@@ -297,7 +317,8 @@ def snapshot_restore(name: str, target: Path, config_path: str, snapshot_root: P
     """
     from cnequity.storage.snapshots import SnapshotStore
 
-    restored = SnapshotStore(_cfg(config_path), snapshot_root).restore(name, target)
+    with _snapshot_operator_errors():
+        restored = SnapshotStore(_cfg(config_path), snapshot_root).restore(name, target)
     click.echo(str(restored))
 
 
@@ -402,22 +423,23 @@ def _snapshot_delta_create(
         if raw.isdigit():
             from_revision = int(raw)
             baseline = None
-    if from_revision is not None:
-        manifest = SnapshotStore(_cfg(config_path), snapshot_root).create_delta(
-            name,
-            datasets=list(datasets),
-            target=target,
-            from_revision=from_revision,
-        )
-    else:
-        if baseline is None:
-            raise click.UsageError("provide --from BASELINE or --from-revision REVISION")
-        manifest = SnapshotStore(_cfg(config_path), snapshot_root).create_delta(
-            name,
-            baseline=baseline,
-            target=target,
-            datasets=list(datasets) if datasets else None,
-        )
+    if from_revision is None and baseline is None:
+        raise click.UsageError("provide --from BASELINE or --from-revision REVISION")
+    with _snapshot_operator_errors():
+        if from_revision is not None:
+            manifest = SnapshotStore(_cfg(config_path), snapshot_root).create_delta(
+                name,
+                datasets=list(datasets),
+                target=target,
+                from_revision=from_revision,
+            )
+        else:
+            manifest = SnapshotStore(_cfg(config_path), snapshot_root).create_delta(
+                name,
+                baseline=baseline,
+                target=target,
+                datasets=list(datasets) if datasets else None,
+            )
     click.echo(str(manifest))
 
 
@@ -488,7 +510,8 @@ def snapshot_delta_verify(name: str, config_path: str, snapshot_root: Path | Non
 
     from cnequity.storage.snapshots import SnapshotStore
 
-    result = SnapshotStore(_cfg(config_path), snapshot_root).verify_delta(name)
+    with _snapshot_operator_errors():
+        result = SnapshotStore(_cfg(config_path), snapshot_root).verify_delta(name)
     click.echo(json.dumps(asdict(result), indent=2, ensure_ascii=False))
     if not result.passed:
         raise SystemExit(1)
@@ -516,9 +539,10 @@ def snapshot_delta_apply(
 
     from cnequity.storage.snapshots import SnapshotStore
 
-    applied = SnapshotStore(_cfg(config_path), snapshot_root).apply_delta(
-        name, target, dry_run=dry_run
-    )
+    with _snapshot_operator_errors():
+        applied = SnapshotStore(_cfg(config_path), snapshot_root).apply_delta(
+            name, target, dry_run=dry_run
+        )
     click.echo(str(applied))
 
 

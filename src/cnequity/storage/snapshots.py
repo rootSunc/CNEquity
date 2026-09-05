@@ -1360,7 +1360,9 @@ class SnapshotStore:
         try:
             payload = _read_json_object(manifest)
         except FileNotFoundError:
-            raise FileNotFoundError(manifest) from None
+            # Name what the operator typed. The bare manifest path reads as a
+            # path they never wrote, on a command whose only argument was NAME.
+            raise FileNotFoundError(f"no snapshot named {name!r} ({manifest})") from None
         if payload.get("format") != "cnequity.lake-snapshot" or payload.get("format_version") != 1:
             raise ValueError(f"unsupported snapshot manifest: {manifest}")
         return snapshot, payload
@@ -1896,7 +1898,9 @@ class SnapshotStore:
             if payload.get("format_version") != 1:
                 raise ValueError(f"unsupported delta manifest: {manifest}")
             return package, payload
-        raise FileNotFoundError(self.delta_path(name) / "manifest.json")
+        raise FileNotFoundError(
+            f"no delta package named {name!r} ({self.delta_path(name) / 'manifest.json'})"
+        )
 
     @staticmethod
     def _dataset_layer(dataset: str) -> tuple[str, Path]:

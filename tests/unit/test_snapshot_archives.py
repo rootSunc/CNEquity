@@ -178,3 +178,35 @@ def test_write_fetched_raw_none_fails_before_staging_when_archive_required(tmp_p
 
     assert not (config.staging_root / dataset).exists()
     assert not (config.meta_root / "raw").exists()
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["snapshot", "verify", "nope"], "no snapshot named 'nope'"),
+        (["snapshot", "restore", "nope", "TARGET"], "no snapshot named 'nope'"),
+        (["snapshot", "delta", "verify", "nope"], "no delta package named 'nope'"),
+        (["snapshot", "delta", "apply", "nope", "TARGET"], "no delta package named 'nope'"),
+    ],
+)
+def test_naming_a_missing_snapshot_is_an_error_not_a_traceback(tmp_path, argv, expected):
+    """`export`/`import` already treated this as operator input; the rest did not.
+
+    Naming a snapshot that does not exist printed a Python traceback, and the
+    message was a bare manifest path the operator never typed.
+    """
+    config, store = _lake(tmp_path)
+    config_path = tmp_path / "cnequity.toml"
+    config_path.write_text(
+        f'[data]\nroot = "{path_for_toml(config.data_root)}"\n', encoding="utf-8"
+    )
+    argv = [str(tmp_path / "target") if part == "TARGET" else part for part in argv]
+
+    result = CliRunner().invoke(
+        cli, [*argv, "--config", str(config_path), "--snapshot-root", str(store.root)]
+    )
+
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.output
+    assert expected in result.output
