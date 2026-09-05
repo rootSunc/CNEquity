@@ -6,6 +6,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-06
+
 ### Added
 
 - **`cne run events` — a job for the feeds that publish 7x24.** Disclosures and
@@ -31,32 +33,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   exchange session or a natural calendar day — one registry entry now decides
   the incremental walk, the empty-day guard and what the events job may
   schedule, instead of three separate lists.
-
-### Fixed
-
-- **A closed day with no disclosures is no longer a failed fetch.**
-  `announcement_index` walks calendar days, so its window contains days the
-  exchanges never opened, and a market-wide zero-row Sunday (2026-08-02, for
-  one) raised `no rows returned` — failing the step, the `capital` group, and
-  every step that depended on it. A feed that is queried one calendar day at a
-  time now tolerates an empty non-session day; on a day the market did hold,
-  zero rows still fails loud, and a live page (`flash_news_wire`) keeps failing
-  loud on any day, because an empty page says nothing about the calendar.
-- **A run killed mid-DAG is no longer retried into a `success`.** The retry
-  path only checked for never-started steps on `init` runs. A daily job killed
-  by the OOM killer left no batch at all for the steps it never reached, so the
-  ledger looked clean: `cne retry` repaired what had failed and closed the run
-  as `success` with the rest of the day silently missing. Every run now records
-  the step list it was started with (`planned_steps`), the retry runs the
-  planned steps that never started — skipping any whose input in that run is
-  still failing — and refuses to mark a run `success` while a planned step has
-  never run. Runs created before this release carry no plan and keep their old
-  behaviour rather than having one inferred from today's config.
-
-## [0.8.0] — 2026-09-05
-
-### Added
-
+- **The local dashboard has a rebuilt console shell.** Dataset state, run
+  health and operational actions now share one responsive visual hierarchy and
+  the same success/degraded/failed vocabulary as the CLI and manifest.
 - **Python 3.14 is a tested interpreter, not just an installable one.**
   `requires-python` is `>=3.10` with no upper bound, so pip has been installing
   this package on 3.14 since its release while CI stopped at 3.13 — the same
@@ -275,6 +254,24 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A closed day with no disclosures is no longer a failed fetch.**
+  `announcement_index` walks calendar days, so its window contains days the
+  exchanges never opened, and a market-wide zero-row Sunday (2026-08-02, for
+  one) raised `no rows returned` — failing the step, the `capital` group, and
+  every step that depended on it. A feed that is queried one calendar day at a
+  time now tolerates an empty non-session day; on a day the market did hold,
+  zero rows still fails loud, and a live page (`flash_news_wire`) keeps failing
+  loud on any day, because an empty page says nothing about the calendar.
+- **A run killed mid-DAG is no longer retried into a `success`.** The retry
+  path only checked for never-started steps on `init` runs. A daily job killed
+  by the OOM killer left no batch at all for the steps it never reached, so the
+  ledger looked clean: `cne retry` repaired what had failed and closed the run
+  as `success` with the rest of the day silently missing. Every run now records
+  the step list it was started with (`planned_steps`), the retry runs the
+  planned steps that never started — skipping any whose input in that run is
+  still failing — and refuses to mark a run `success` while a planned step has
+  never run. Runs created before this release carry no plan and keep their old
+  behaviour rather than having one inferred from today's config.
 - **`scripts/delisted_ops.py repair` no longer treats `degraded` as success.**
   The merge listed only `failed` and `warning`, so a `degraded` step fell
   through onto the success branch — the same shape as the chunked backfill

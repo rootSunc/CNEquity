@@ -7,7 +7,7 @@ abstract: >-
   with A-shares and providing multi-source ingestion, provenance, adjustment
   semantics, point-in-time fundamentals, and reproducible Parquet storage.
 version: 0.8.0
-date-released: 2026-09-05
+date-released: 2026-09-06
 authors:
   - name: "CNEquity Contributors"
 license: Apache-2.0
