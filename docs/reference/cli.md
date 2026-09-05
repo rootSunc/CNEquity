@@ -320,7 +320,8 @@ cne verify --kind interior --repair         # 只补内部空洞
 
 | 选项 | 说明 |
 |------|------|
-| `--datasets` | 逐数据集新鲜度表；有 STALE 退出 1 |
+| `--datasets` | 逐数据集新鲜度表（dataset / layer / freshness / 覆盖区间 / watermark）；有 STALE 退出 1 |
+| `--all-columns` | 配合 `--datasets`：打印 `list_datasets` 的全部列（契约指纹、revision、PIT 存储列等），而非仅新鲜度 |
 | `--run <id\|latest>` | 指定 run（默认 `latest`）；摘要含每个数据集 stage 的 `dataset_results` 与聚合 `dataset_status` |
 | `--run-id <id>` | `--run` 的显式 id 别名；两者不能同时给 |
 

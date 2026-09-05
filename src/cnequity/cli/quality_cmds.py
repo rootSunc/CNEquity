@@ -278,17 +278,26 @@ def verify(config_path: str, only: str | None, repair: bool, kinds: str | None):
     is_flag=True,
     help="Per-dataset freshness: coverage, watermark, and staleness vs the last trading day.",
 )
+@click.option(
+    "--all-columns",
+    "all_columns",
+    is_flag=True,
+    help="With --datasets, print every column of the dataset inventory, not just freshness.",
+)
 def status(
     config_path: str,
     run_selector: str | None,
     run_id: str | None,
     show_datasets: bool,
+    all_columns: bool,
 ):
     """Show latest run status, or per-dataset freshness with --datasets."""
     cfg = _cfg(config_path)
 
     if run_selector and run_id:
         raise click.UsageError("use either --run or --run-id, not both")
+    if all_columns and not show_datasets:
+        raise click.UsageError("--all-columns only applies with --datasets")
 
     if show_datasets:
         import polars as pl_mod
@@ -316,8 +325,25 @@ def status(
             pl_mod.Series("freshness", [_freshness(r) for r in df.iter_rows(named=True)])
         )
         click.echo(f"last trading day: {anchor.isoformat()}")
+        # This flag is the freshness probe the runbooks reach for, but
+        # `list_datasets` has grown to twenty columns — contract fingerprints,
+        # revision ids, PIT storage lists — and forcing all of them into a
+        # terminal shredded every value into unreadable vertical slivers. Show
+        # the three things the flag promises; `--all-columns` still prints the
+        # whole inventory. Intersected with what is actually there, because the
+        # frame is narrower in tests and on older lakes.
+        freshness_columns = [
+            "dataset",
+            "layer",
+            "freshness",
+            "has_data",
+            "coverage_start",
+            "coverage_end",
+            "watermark",
+        ]
+        view = df if all_columns else df.select([c for c in freshness_columns if c in df.columns])
         with pl_mod.Config(tbl_rows=-1, tbl_cols=-1, fmt_str_lengths=32):
-            click.echo(df)
+            click.echo(view)
         stale = df.filter(pl_mod.col("freshness") == "STALE").height
         if stale:
             click.echo(f"\n{stale} dataset(s) STALE — check runs with `cne status` / `cne retry`.")

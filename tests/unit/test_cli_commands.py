@@ -327,6 +327,70 @@ def test_status_datasets_ignores_disabled_optional_capture(cfg_path, monkeypatch
     assert "STALE datasets" not in result.output
 
 
+def _wide_inventory(config=None):
+    """`list_datasets` as it really is: freshness plus governance metadata."""
+    return pl.DataFrame(
+        {
+            "dataset": ["daily_bars"],
+            "layer": ["curated"],
+            "has_data": [True],
+            "watermarked": [True],
+            "watermark": [date(2024, 6, 28)],
+            "coverage_start": [date(2024, 5, 20)],
+            "coverage_end": [date(2024, 6, 28)],
+            "revision_id": ["rev-000000000000"],
+            "contract_fingerprint": ["b7d1e4c9a2f30518cc7e6b4419aa02d5"],
+        }
+    )
+
+
+def test_status_datasets_shows_freshness_not_the_whole_inventory(cfg_path, monkeypatch):
+    """Twenty columns squeezed into a terminal shredded every value.
+
+    The flag is the freshness probe the runbooks reach for, so it prints what
+    it promises; the governance columns have `--all-columns`.
+    """
+    monkeypatch.setattr(
+        "cnequity.cli.quality_cmds._last_trading_day",
+        lambda cfg, today: date(2024, 6, 28),
+    )
+    monkeypatch.setattr("cnequity.query.reader.list_datasets", _wide_inventory)
+    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+
+    result = CliRunner().invoke(cli, ["status", "--datasets", "--config", cfg_path])
+
+    assert result.exit_code == 0, result.output
+    # 9 inventory columns + freshness, narrowed to the 7 that describe it.
+    assert "shape: (1, 7)" in result.output
+    assert "contract_fingerprint" not in result.output
+    assert "revision_id" not in result.output
+
+
+def test_status_datasets_all_columns_keeps_the_full_inventory(cfg_path, monkeypatch):
+    monkeypatch.setattr(
+        "cnequity.cli.quality_cmds._last_trading_day",
+        lambda cfg, today: date(2024, 6, 28),
+    )
+    monkeypatch.setattr("cnequity.query.reader.list_datasets", _wide_inventory)
+    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+
+    result = CliRunner().invoke(
+        cli, ["status", "--datasets", "--all-columns", "--config", cfg_path]
+    )
+
+    assert result.exit_code == 0, result.output
+    # Every column is still there; at this width polars shreds the headers,
+    # which is exactly why it is no longer the default.
+    assert "shape: (1, 10)" in result.output
+
+
+def test_status_all_columns_without_datasets_is_a_usage_error(cfg_path):
+    result = CliRunner().invoke(cli, ["status", "--all-columns", "--config", cfg_path])
+
+    assert result.exit_code != 0
+    assert "--all-columns only applies with --datasets" in result.output
+
+
 def test_retry_unknown_run(cfg_path, monkeypatch):
     class FakeManifest:
         def get_run(self, run_id):
