@@ -1099,3 +1099,34 @@ def test_a_mistyped_date_is_a_usage_error_not_a_traceback(cfg_path, argv):
     assert result.exit_code != 0
     assert "Traceback" not in result.output
     assert "is not an ISO date (YYYY-MM-DD)" in result.output
+
+
+def test_status_datasets_exits_1_when_something_is_stale(cfg_path, monkeypatch):
+    """`scripts/daily_pipeline.sh` uses this exit code as its stale probe.
+
+    On a clean day it costs one directory walk and skips the retry sleep; if
+    the non-zero exit ever stopped happening the pipeline would silently stop
+    re-fetching what it missed.
+    """
+    monkeypatch.setattr(
+        "cnequity.cli.quality_cmds._last_trading_day",
+        lambda cfg, today: date(2024, 6, 28),
+    )
+    monkeypatch.setattr(
+        "cnequity.query.reader.list_datasets",
+        lambda config=None: pl.DataFrame(
+            {
+                "dataset": ["daily_bars"],
+                "has_data": [True],
+                "watermarked": [True],
+                "watermark": [date(2024, 6, 1)],
+                "coverage_end": [date(2024, 6, 1)],
+            }
+        ),
+    )
+    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: True)
+
+    result = CliRunner().invoke(cli, ["status", "--datasets", "--config", cfg_path])
+
+    assert result.exit_code == 1, result.output
+    assert "STALE" in result.output
