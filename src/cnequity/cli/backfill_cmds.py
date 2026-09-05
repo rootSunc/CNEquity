@@ -276,6 +276,23 @@ def _finish_backfill_run(engine, result: dict) -> dict:
     return result
 
 
+def _run_had_step_failure(engine: JobEngine, run_id: str) -> bool:
+    """Whether a step in *run_id* actually failed, whatever tier softened it.
+
+    ``aggregate_run_status`` deliberately reports a *run* as degraded rather
+    than failed when the step that raised was not core: in the daily job the
+    other datasets still landed and the lake stays usable. A single-dataset
+    sweep has no such consolation — that one dataset is the entire job — and
+    35 of the registered steps are non-core, so reading the run tier here let
+    `cne backfill` print ``"status": "success"`` and exit 0 for a sweep whose
+    every slice had raised.
+    """
+    aggregate = engine.manifest.aggregate_run_status(run_id)
+    return bool(aggregate["core_failures"]) or any(
+        str(item["status"]) in {"failed", "blocked"} for item in aggregate["degraded_results"]
+    )
+
+
 def _recover_compactable_backfill_staging(engine: JobEngine, dataset: str) -> list[str]:
     """Compact staged rows left by an interrupted terminal backfill run.
 
@@ -410,6 +427,8 @@ def _backfill_symbol_chunked(cfg, dataset: str, start: date, end: date, chunk_sy
             )
             result = engine.run_job("backfill", steps=[dataset], backfill=True, finalize_run=False)
             result = _finish_backfill_run(engine, result)
+            if _run_had_step_failure(engine, result["run_id"]):
+                result["status"] = "failed"
             rows_read += int(result.get("rows_read", 0))
             rows_written += int(result.get("rows_written", 0))
             chunks.append(
@@ -427,8 +446,8 @@ def _backfill_symbol_chunked(cfg, dataset: str, start: date, end: date, chunk_sy
             if result["status"] == "failed":
                 status = "failed"
                 break
-            if result["status"] == "warning":
-                status = "warning" if status == "success" else status
+            if result["status"] in {"warning", "degraded"} and status == "success":
+                status = result["status"]
     finally:
         cfg.minute_bars_scope = original_scope
         cfg.minute_bars_symbols = original_symbols
@@ -468,6 +487,8 @@ def _backfill_chunked(cfg, dataset: str, start: date, end: date, chunk_days: int
         click.echo(f"[{dataset}] slice {cursor}..{slice_end}", err=True)
         result = engine.run_job("backfill", steps=[dataset], backfill=True, finalize_run=False)
         result = _finish_backfill_run(engine, result)
+        if _run_had_step_failure(engine, result["run_id"]):
+            result["status"] = "failed"
         rows_read += int(result.get("rows_read", 0))
         rows_written += int(result.get("rows_written", 0))
         slices.append(
@@ -483,8 +504,10 @@ def _backfill_chunked(cfg, dataset: str, start: date, end: date, chunk_days: int
             # and the window to resume from is the one printed here.
             status = "failed"
             break
-        if result["status"] == "warning":
-            status = "warning" if status == "success" else status
+        # `degraded` is an outcome, not a synonym for success: a slice the
+        # source could not supply must not leave the sweep claiming it did.
+        if result["status"] in {"warning", "degraded"} and status == "success":
+            status = result["status"]
         cursor = slice_end + timedelta(days=1)
     return {
         "dataset": dataset,

@@ -110,6 +110,19 @@ class FakeEngine:
     def finish_run(self, *args, **kwargs):
         pass
 
+    def aggregate_run_status(self, run_id):
+        """The receipts behind the run status.
+
+        A real run records one per dataset, and a non-core step that raised
+        leaves the *run* degraded while its own receipt says failed. That
+        receipt is what `_run_had_step_failure` reads, so a fake engine has to
+        carry it too; by default there is no hidden failure.
+        """
+        return {"core_failures": [], "degraded_results": self._degraded_results(run_id)}
+
+    def _degraded_results(self, run_id):
+        return []
+
 
 @pytest.fixture(autouse=True)
 def _reset_engines():
@@ -541,3 +554,73 @@ def test_cli_backfill_exits_nonzero_when_the_result_is_not_success(monkeypatch):
         _backfill_argv("minute_bars", "--start", "2026-07-01", "--end", "2026-07-10"),
     )
     assert result.exit_code == 1
+
+
+class NonCoreStepRaised(FakeEngine):
+    """A run where the step raised but the tier softened the run status.
+
+    `aggregate_run_status` calls a non-core failure a degraded *run*: in the
+    daily job the other datasets still landed. 35 of the registered steps are
+    non-core, so a single-dataset sweep that read only the run status called
+    this success.
+    """
+
+    def _status(self, index):
+        return "degraded"
+
+    def _degraded_results(self, run_id):
+        return [{"dataset": "regulatory_events", "status": "failed"}]
+
+
+def test_a_non_core_slice_that_raised_fails_the_sweep_instead_of_reporting_success(
+    monkeypatch,
+):
+    monkeypatch.setattr(backfill_cmds, "JobEngine", NonCoreStepRaised)
+    cfg = type("Cfg", (), {})()
+
+    result = backfill_cmds._backfill_chunked(
+        cfg, "regulatory_events", date(2026, 7, 1), date(2026, 7, 25), chunk_days=10
+    )
+
+    assert result["status"] == "failed"
+    # Stop at the first slice rather than grinding through a systemic failure.
+    assert len(result["slices"]) == 1
+    assert result["resume_from"] == date(2026, 7, 1)
+
+
+def test_a_symbol_chunked_slice_that_raised_also_fails_the_sweep(monkeypatch):
+    monkeypatch.setattr(backfill_cmds, "JobEngine", NonCoreStepRaised)
+    monkeypatch.setattr("cnequity.steps.intraday.resolve_scope", lambda _cfg: ["600519.SH"])
+    cfg = type("Cfg", (), {"minute_bars_scope": "", "minute_bars_symbols": []})()
+
+    result = backfill_cmds._backfill_symbol_chunked(
+        cfg, "minute_bars", date(2026, 7, 1), date(2026, 7, 25), 1
+    )
+
+    assert result["status"] == "failed"
+    assert result["resume_from_symbol"] == "600519.SH"
+
+
+class DegradedWithoutFailure(FakeEngine):
+    """A slice that genuinely had nothing to do — no receipt failed.
+
+    `regulatory_events` reports this for a window that predates the
+    announcements it derives from. The sweep must carry on to the slices that
+    *are* covered, and must not call the overall result a success.
+    """
+
+    def _status(self, index):
+        return "degraded" if index == 1 else "success"
+
+
+def test_a_degraded_slice_keeps_the_sweep_going_but_not_its_success_claim(monkeypatch):
+    monkeypatch.setattr(backfill_cmds, "JobEngine", DegradedWithoutFailure)
+    cfg = type("Cfg", (), {})()
+
+    result = backfill_cmds._backfill_chunked(
+        cfg, "regulatory_events", date(2026, 7, 1), date(2026, 7, 25), chunk_days=10
+    )
+
+    assert result["status"] == "degraded"
+    assert len(result["slices"]) == 3
+    assert result["resume_from"] is None
