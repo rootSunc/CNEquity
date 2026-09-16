@@ -35,7 +35,7 @@ import polars as pl
 
 from cnequity.adapters.tdx_protocol.minute_bars import SESSIONS, bars_per_session
 from cnequity.config import Config
-from cnequity.domain.datasets import intraday_dataset_names
+from cnequity.domain.datasets import intraday_dataset_names, intraday_datasets
 from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
@@ -258,6 +258,37 @@ def daily_reconciliation_findings(
             continue
         median = float(series.median())
         if RECONCILE_LOW <= median <= RECONCILE_HIGH:
+            # A healthy market-wide median can hide a completely wrong
+            # security. Apply the existing tolerance to individual sessions
+            # too, without claiming which of the two sources is at fault.
+            outliers = joined.filter(
+                (pl.col(column) < RECONCILE_LOW) | (pl.col(column) > RECONCILE_HIGH)
+            ).sort("symbol", "trade_date")
+            if not outliers.is_empty():
+                findings.append(
+                    {
+                        "dataset": dataset,
+                        "severity": "warning",
+                        "check": "minute_bars_daily_outliers",
+                        "message": (
+                            f"{outliers.height}/{len(series)} symbol-day(s) in {start}..{end} "
+                            f"have minute/daily {label} outside {RECONCILE_LOW}..{RECONCILE_HIGH} "
+                            f"despite median {median:.4f}; verify both sources before repair"
+                        ),
+                        "metric": label,
+                        "median_ratio": median,
+                        "outlier_symbol_days": outliers.height,
+                        "symbol_days": len(series),
+                        "examples": [
+                            {
+                                "symbol": row["symbol"],
+                                "trade_date": row["trade_date"].isoformat(),
+                                "ratio": row[column],
+                            }
+                            for row in outliers.head(5).iter_rows(named=True)
+                        ],
+                    }
+                )
             continue
         hint = (
             f"minute {label} far exceeds the day's — check for duplicated bars or a wrong frequency"
@@ -281,6 +312,78 @@ def daily_reconciliation_findings(
     return findings
 
 
+def missing_session_findings(
+    config: Config,
+    lf: pl.LazyFrame | None,
+    dataset: str,
+    start: date,
+    end: date,
+) -> list[dict]:
+    """Find entirely absent sessions proven to have traded by daily bars.
+
+    Counting only existing minute sessions cannot detect a whole missing
+    security or day. Restrict this check to the user's enabled capture scope;
+    a positive-volume daily bar is evidence, a calendar alone is not.
+    """
+    if not config.minute_bars_enabled:
+        return []
+    enabled = {intraday_datasets().get(freq) for freq in config.minute_bars_frequencies}
+    root = config.curated_root / "daily_bars"
+    if dataset not in enabled or not dataset_has_parquet(root):
+        return []
+    from cnequity.steps.intraday import MinuteBarsScopeError, resolve_scope
+
+    try:
+        symbols = resolve_scope(config)
+    except MinuteBarsScopeError as exc:
+        return [
+            {
+                "dataset": dataset,
+                "severity": "warning",
+                "check": "minute_bars_coverage_scope",
+                "message": f"Cannot verify configured minute coverage: {exc}",
+            }
+        ]
+    expected = (
+        dedupe_lazy_by_primary_key(
+            scan_parquet_root(root, partition_col="trade_date", start=start, end=end),
+            "daily_bars",
+        )
+        .filter(pl.col("symbol").is_in(symbols) & (pl.col("volume") > 0))
+        .select("symbol", "trade_date")
+        .unique()
+    )
+    missing = (
+        expected
+        if lf is None
+        else expected.join(
+            lf.select("symbol", "trade_date").unique(),
+            on=["symbol", "trade_date"],
+            how="anti",
+        )
+    )
+    gaps = missing.collect(engine="streaming").sort("symbol", "trade_date")
+    if gaps.is_empty():
+        return []
+    return [
+        {
+            "dataset": dataset,
+            "severity": "warning",
+            "check": "minute_bars_missing_session",
+            "message": (
+                f"{gaps.height} configured symbol-day(s) in {start}..{end} have positive-volume "
+                "daily bars but no minute bars; latest dataset date does not prove coverage"
+            ),
+            "missing_symbol_days": gaps.height,
+            "missing_symbols": gaps["symbol"].n_unique(),
+            "examples": [
+                {"symbol": row["symbol"], "trade_date": row["trade_date"].isoformat()}
+                for row in gaps.head(10).iter_rows(named=True)
+            ],
+        }
+    ]
+
+
 def dataset_findings(
     config: Config,
     dataset: str,
@@ -291,12 +394,12 @@ def dataset_findings(
     """Every intraday check for one dataset, or nothing when it is not in use."""
     start = trade_date - timedelta(days=lookback_days)
     lf = _scan_intraday(config, dataset, start, trade_date)
+    findings = missing_session_findings(config, lf, dataset, start, trade_date)
     if lf is None:
-        return []
+        return findings
     cols = lf.collect_schema().names()
     if not {"symbol", "trade_date", "bar_time", "frequency", "volume"}.issubset(cols):
         return []
-    findings: list[dict] = []
     findings.extend(off_session_findings(lf, dataset, start, trade_date))
     findings.extend(trade_date_mismatch_findings(lf, dataset, start, trade_date))
     findings.extend(session_coverage_findings(lf, dataset, start, trade_date))

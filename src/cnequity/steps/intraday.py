@@ -13,7 +13,11 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from cnequity.adapters.tdx_protocol.client import fetch_minute_bars, normalize_with_source
+from cnequity.adapters.tdx_protocol.client import (
+    fetch_minute_bars,
+    normalize_with_source,
+    reset_tdx_server_cache,
+)
 from cnequity.adapters.tdx_protocol.minute_bars import pages_for_window
 from cnequity.config import Config
 from cnequity.domain.datasets import get_dataset, intraday_datasets
@@ -347,15 +351,31 @@ def capture_intraday_bars(
     # whole window genuinely has no intraday bars. That is the right answer, but
     # it is indistinguishable from a silent fetch hole unless the count is
     # reported, so record both rather than only the failures.
+    failed = sorted(set(failed))
+    silent_symbols = sorted(set(symbols) - with_rows - set(failed))
     result: dict = {
         "rows_read": written,
         "rows_written": written,
         "symbols": len(symbols),
         "symbols_with_rows": len(with_rows),
         "failed_symbols": len(failed),
+        "failed_symbol_names": failed,
+        "empty_symbol_names": silent_symbols,
+        # The engine persists source_metrics in the run manifest. Keep the
+        # entire retry scope there, including empty responses that still need
+        # daily-bar/suspension evidence, rather than only a five-name log sample.
+        "source_metrics": {
+            "tdx_protocol": {
+                "frequency": frequency,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "failed_symbols": failed,
+                "empty_symbols": silent_symbols,
+            }
+        },
         "note": f"{frequency} {start}..{end} scope={config.minute_bars_scope}",
     }
-    silent = len(symbols) - len(with_rows) - len(failed)
+    silent = len(silent_symbols)
     if silent > 0:
         logger.info(
             "%s: %d symbol(s) returned no bars without erroring "
@@ -378,6 +398,12 @@ def capture_intraday_bars(
             ]
         }
     if written == 0 and symbols:
+        # The socket can stay connected while a host returns empty pages for
+        # an entire sweep. The existing all-empty guard already fails this
+        # attempt; make a later retry recheck reachability instead of reusing
+        # the process's cached host indefinitely. Do not retry here or turn
+        # empty responses into synthetic suspension evidence.
+        reset_tdx_server_cache()
         raise RuntimeError(
             f"{dataset}: no rows for any of {len(symbols)} symbol(s) over {start}..{end} "
             "— check TDX reachability and that the window is inside the source horizon"

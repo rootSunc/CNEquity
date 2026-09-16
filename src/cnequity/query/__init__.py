@@ -19,6 +19,7 @@ from cnequity.query.reader import (
     resolve_config,
     scan,
 )
+from cnequity.query.resample import resample_trade_bars
 from cnequity.query.state import DatasetState, dataset_state
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "list_datasets",
     "load",
     "resolve_config",
+    "resample_trade_bars",
     "scan",
     "PitMode",
     "PitQuality",

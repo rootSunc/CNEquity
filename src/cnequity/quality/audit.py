@@ -16,6 +16,7 @@ from cnequity.config import Config
 from cnequity.domain.datasets import PARTITION_COLS, curated_dataset_names, is_dataset_enabled
 from cnequity.domain.market_time import is_session_final
 from cnequity.quality.authority_checks import run_authority_checks
+from cnequity.quality.bar_finality import daily_bar_finality_findings
 from cnequity.quality.cross_checks import (
     ADJ_RECON_LOOKBACK_DAYS,
     adj_factor_arbitration_findings,
@@ -428,6 +429,7 @@ def _collect_lake_findings(
 
     findings.extend(_index_bars_coverage_findings(config, trade_date))
     findings.extend(daily_bars_calendar_findings(config, trade_date))
+    findings.extend(daily_bar_finality_findings(config, trade_date))
     findings.extend(trading_calendar_horizon_findings(config, trade_date))
     findings.extend(daily_bars_volume_unit_findings(config, trade_date))
     findings.extend(daily_bars_amount_completeness_findings(config, trade_date))

@@ -304,6 +304,7 @@ def test_step_reports_symbols_that_returned_no_rows(cfg, monkeypatch):
     assert result["symbols"] == 3
     assert result["symbols_with_rows"] == 2
     assert result["failed_symbols"] == 0
+    assert result["empty_symbol_names"] == ["600485.SH"]
     # Silence is not an error: a suspended name must not fail the step.
     assert "context_updates" not in result
 
@@ -423,6 +424,50 @@ def test_a_failing_batch_does_not_abort_the_whole_sweep(cfg, monkeypatch):
     assert result["rows_written"] > 0
     findings = result["context_updates"]["audit_findings"]
     assert "600485.SH" in findings[0]["message"]
+
+
+def test_capture_retry_scope_survives_manifest_round_trip(cfg, monkeypatch):
+    from cnequity.orchestrator.engine import JobEngine
+    from cnequity.orchestrator.manifest import Manifest
+
+    cfg.minute_bars_enabled = True
+    cfg.minute_bars_scope = "watchlist"
+    cfg.minute_bars_symbols = ["600519.SH", "000001.SZ", "600485.SH"]
+
+    def fetch(symbols, start, end, *, frequency, **kwargs):
+        frame, _ = _fake_fetch()(["600519.SH"], start, end, frequency=frequency)
+        return frame, ["000001.SZ", "000001.SZ"]
+
+    monkeypatch.setattr(intraday, "fetch_minute_bars", fetch)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("backfill")
+    result = capture_intraday_bars(
+        cfg, date(2026, 7, 31), run_id, dataset="minute_bars", frequency="1m"
+    )
+    assert result["failed_symbols"] == 1
+    assert result["empty_symbol_names"] == ["600485.SH"]
+    manifest.record_stage_metrics(run_id, "minute_bars", 1.0, JobEngine._step_metrics(result))
+    saved = Manifest(cfg.manifest_path).get_run_metadata(run_id)
+    scope = saved["metrics"]["stages"]["minute_bars"]["source_metrics"]["tdx_protocol"]
+    assert scope["failed_symbols"] == ["000001.SZ"]
+    assert scope["empty_symbols"] == ["600485.SH"]
+    assert scope["frequency"] == "1m"
+    assert scope["end"] == "2026-07-31"
+
+
+def test_all_empty_capture_invalidates_cached_host_before_retry(cfg, monkeypatch):
+    cfg.minute_bars_enabled = True
+    cfg.minute_bars_scope = "watchlist"
+    cfg.minute_bars_symbols = ["600519.SH", "000001.SZ"]
+    monkeypatch.setattr(intraday, "fetch_minute_bars", _fake_fetch(rows_per_symbol=0))
+    invalidations = []
+    monkeypatch.setattr(intraday, "reset_tdx_server_cache", lambda: invalidations.append(True))
+    with pytest.raises(RuntimeError, match="no rows for any"):
+        capture_intraday_bars(
+            cfg, date(2026, 7, 31), "empty-run", dataset="minute_bars", frequency="1m"
+        )
+    assert invalidations == [True]
+    assert not list(cfg.staging_root.rglob("*.parquet"))
 
 
 def test_all_batches_failing_still_raises(cfg, monkeypatch):

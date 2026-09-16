@@ -208,3 +208,72 @@ def test_incremental_negative_evidence_ttl_is_configurable(tmp_path):
 
     assert cfg.negative_evidence_ttl_days == 11
     assert validate_config(cfg) == []
+
+
+def test_streamed_identity_matches_legacy_json_bytes():
+    import hashlib
+    import json
+
+    from cnequity.steps.common import _row_fingerprint
+
+    rows = [
+        {"symbol": "测试.BJ", "day": date(2026, 9, 15), "flag": None},
+        {"symbol": 'a\\"', "day": datetime(2026, 9, 16, tzinfo=timezone.utc), "flag": False},
+    ]
+    normalized = [
+        {k: v.isoformat() if isinstance(v, date) else v for k, v in row.items()} for row in rows
+    ]
+    expected = hashlib.sha256(
+        json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    assert _row_fingerprint(iter(rows)) == expected
+    assert _row_fingerprint(iter(())) == hashlib.sha256(b"[]").hexdigest()
+
+
+def test_empty_negative_cache_skips_full_status_identity(tmp_path, monkeypatch):
+    from cnequity.steps.common import load_negative_evidence
+
+    cfg = Config(data_root=tmp_path)
+
+    def unexpected(*args):
+        raise AssertionError("empty cache must not scan the lake")
+
+    monkeypatch.setattr("cnequity.steps.common._instrument_identity", unexpected)
+    assert load_negative_evidence(cfg, "daily_bars") == []
+
+
+def test_live_negative_cache_still_validates_identity(tmp_path, monkeypatch):
+    from cnequity.steps.common import load_negative_evidence
+
+    cfg = Config(data_root=tmp_path)
+    now = datetime(2026, 9, 16, tzinfo=timezone.utc)
+    store = StateStore(cfg.meta_root)
+    store.record_negative_evidence(
+        "daily_bars",
+        [{"symbol": "920001.BJ", "window_start": "2026-09-15", "window_end": "2026-09-15"}],
+        ttl_days=2,
+        identity={"instruments_revision": 1},
+        now=now,
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.common._instrument_identity", lambda *args: {"instruments_revision": 2}
+    )
+    assert load_negative_evidence(cfg, "daily_bars", now=now) == []
+
+
+def test_direct_status_edit_invalidates_identity_without_revision_change(tmp_path, monkeypatch):
+    from cnequity.steps.common import _instrument_identity
+
+    cfg = Config(data_root=tmp_path)
+    metadata = pl.DataFrame(
+        {"symbol": ["920001.BJ"], "list_date": [date(2026, 1, 1)], "asset_type": ["stock"]}
+    )
+    status = pl.DataFrame(
+        {"symbol": ["920001.BJ"], "trade_date": [date(2026, 9, 15)], "is_trading": [False]}
+    )
+    monkeypatch.setattr("cnequity.steps.common.load_curated_trading_status", lambda cfg: status)
+    before = _instrument_identity(cfg, metadata)
+    status = status.with_columns(pl.lit(True).alias("is_trading"))
+    after = _instrument_identity(cfg, metadata)
+    assert before["trading_status_revision"] == after["trading_status_revision"]
+    assert before["trading_status_fingerprint"] != after["trading_status_fingerprint"]

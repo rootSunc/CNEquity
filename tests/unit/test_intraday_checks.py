@@ -79,6 +79,45 @@ def test_no_findings_when_the_dataset_is_unused(cfg):
     assert minute_bars_findings(cfg, TRADE_DATE) == []
 
 
+@pytest.mark.parametrize("has_minutes", [False, True])
+def test_entire_missing_sessions_checked_against_configured_daily_scope(cfg, has_minutes):
+    cfg.minute_bars_enabled = True
+    cfg.minute_bars_scope = "watchlist"
+    cfg.minute_bars_symbols = ["600519.SH", "000001.SZ", "600485.SH"]
+    cfg.minute_bars_frequencies = ["1m"]
+    previous = TRADE_DATE - timedelta(days=1)
+    _write_daily_bars(
+        cfg,
+        [
+            {"symbol": symbol, "trade_date": day, "volume": volume, "amount": volume * 10.0}
+            for symbol, day, volume in [
+                ("600519.SH", previous, 100),
+                ("600519.SH", TRADE_DATE, 100),
+                ("000001.SZ", TRADE_DATE, 100),
+                ("600485.SH", TRADE_DATE, 0),  # No trading evidence: do not flag.
+                ("600000.SH", TRADE_DATE, 100),  # Outside opted-in scope.
+            ]
+        ],
+    )
+    if has_minutes:
+        _write_minute_bars(cfg, _minute_rows(["600519.SH"], [TRADE_DATE], 240))
+    findings = [
+        f
+        for f in minute_bars_findings(cfg, TRADE_DATE)
+        if f["check"] == "minute_bars_missing_session"
+    ]
+    assert len(findings) == 1
+    assert findings[0]["dataset"] == "minute_bars"  # Disabled 5m is not required.
+    assert findings[0]["missing_symbol_days"] == (2 if has_minutes else 3)
+    assert findings[0]["missing_symbols"] == 2
+    assert {row["symbol"] for row in findings[0]["examples"]} == {"600519.SH", "000001.SZ"}
+
+
+def test_daily_scope_not_required_when_minute_capture_disabled(cfg):
+    _write_daily_bars(cfg, [{"symbol": "600519.SH", "trade_date": TRADE_DATE, "volume": 100}])
+    assert minute_bars_findings(cfg, TRADE_DATE) == []
+
+
 def test_full_sessions_produce_no_shape_findings(cfg):
     _write_minute_bars(cfg, _minute_rows(["600519.SH"], [TRADE_DATE], 240))
     checks = {f["check"] for f in minute_bars_findings(cfg, TRADE_DATE)}
@@ -234,6 +273,32 @@ def test_intraday_checks_use_one_canonical_bar_per_minute(cfg):
         if finding["check"] == "minute_bars_daily_reconciliation"
     ]
     assert findings == []
+
+
+@pytest.mark.parametrize("metric", ["volume", "amount"])
+def test_reconciliation_reports_outlier_hidden_by_healthy_median(cfg, metric):
+    symbols = [f"{600000 + i}.SH" for i in range(RECONCILE_MIN_SYMBOL_DAYS + 5)]
+    _write_minute_bars(cfg, _minute_rows(symbols, [TRADE_DATE], 240, volume=100))
+    rows = [
+        {"symbol": s, "trade_date": TRADE_DATE, "volume": 24000, "amount": 240000.0}
+        for s in symbols
+    ]
+    rows[0][metric] /= 2
+    if metric == "volume":
+        rows[0][metric] = int(rows[0][metric])
+    _write_daily_bars(cfg, rows)
+    findings = [
+        f
+        for f in minute_bars_findings(cfg, TRADE_DATE)
+        if f["check"] == "minute_bars_daily_outliers"
+    ]
+    assert len(findings) == 1
+    assert findings[0]["metric"] == metric
+    assert findings[0]["median_ratio"] == 1.0
+    assert findings[0]["outlier_symbol_days"] == 1
+    assert findings[0]["examples"] == [
+        {"symbol": symbols[0], "trade_date": TRADE_DATE.isoformat(), "ratio": 2.0}
+    ]
 
 
 def test_reconciliation_flags_a_volume_mismatch(cfg):
