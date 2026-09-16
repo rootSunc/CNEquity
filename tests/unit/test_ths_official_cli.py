@@ -80,3 +80,54 @@ def test_the_group_is_discoverable_from_the_root_help():
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "ths-official" in result.output
+
+
+def test_backfill_can_be_scoped_to_named_symbols(tmp_path, monkeypatch):
+    """A full sweep is 78 minutes; a handful lost to a DNS blip is not worth one.
+
+    The step has always taken a symbol list — only the CLI withheld it, so the
+    16 securities a transient transport error dropped could be recovered no
+    other way than re-running the market.
+    """
+    import cnequity.steps.fundamentals as fundamentals
+
+    seen: dict = {}
+
+    def _capture(config, run_id, **kwargs):
+        seen.update(kwargs)
+        return {"rows_read": 0, "rows_written": 0}
+
+    monkeypatch.setattr(fundamentals, "backfill_statement_gap_ths_official", _capture)
+    monkeypatch.setenv("HITHINK_FINANCE_API_KEY", "sk-test")
+    path = tmp_path / "cnequity.toml"
+    path.write_text(
+        f'[data]\nroot = "{path_for_toml(tmp_path / "lake")}"\n\n'
+        "[sources.ths_official]\nenabled = true\nverify = true\nbackfill = true\n"
+    )
+
+    _run(["ths-official", "backfill", "--config", str(path), "--symbols", "300543.SZ, 300545.SZ"])
+
+    assert seen["symbols"] == ["300543.SZ", "300545.SZ"]
+
+
+def test_backfill_without_symbols_still_means_the_whole_market(tmp_path, monkeypatch):
+    """The scoped path must not become the default by accident."""
+    import cnequity.steps.fundamentals as fundamentals
+
+    seen: dict = {}
+
+    def _capture(config, run_id, **kwargs):
+        seen.update(kwargs)
+        return {"rows_read": 0, "rows_written": 0}
+
+    monkeypatch.setattr(fundamentals, "backfill_statement_gap_ths_official", _capture)
+    monkeypatch.setenv("HITHINK_FINANCE_API_KEY", "sk-test")
+    path = tmp_path / "cnequity.toml"
+    path.write_text(
+        f'[data]\nroot = "{path_for_toml(tmp_path / "lake")}"\n\n'
+        "[sources.ths_official]\nenabled = true\nverify = true\nbackfill = true\n"
+    )
+
+    _run(["ths-official", "backfill", "--config", str(path)])
+
+    assert seen["symbols"] is None

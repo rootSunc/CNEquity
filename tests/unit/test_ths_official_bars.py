@@ -466,3 +466,37 @@ def test_every_chunk_gets_its_own_archive_receipt(tmp_path, monkeypatch):
     # Five symbols at two per chunk: three scopes, all distinct.
     assert len(scopes) == 3
     assert len(set(scopes)) == 3
+
+
+def test_the_sector_sweep_reports_progress(caplog):
+    """432 boards of requests printed nothing between "starting" and "done"."""
+    import logging
+    from datetime import date
+
+    import polars as pl
+
+    from cnequity.adapters.ths_official.sectors import HISTORY_FLOOR, fetch_sector_bars
+
+    class _Client:
+        def get(self, path, **params):
+            return {"item": []}
+
+    catalog = pl.DataFrame(
+        {
+            "thscode": [f"88{i:04d}.TI" for i in range(30)],
+            "sector_code": [f"88{i:04d}" for i in range(30)],
+            "sector_name": [f"board {i}" for i in range(30)],
+            "board_type": ["industry"] * 30,
+        }
+    )
+
+    with caplog.at_level(logging.INFO, logger="cnequity.adapters.ths_official.sectors"):
+        _, counters = fetch_sector_bars(
+            catalog, HISTORY_FLOOR, date(2026, 9, 16), client=_Client(), workers=1
+        )
+
+    lines = [r.message for r in caplog.records if "boards" in r.message]
+    assert lines, "the sweep reported nothing"
+    # A board the peer has no rows for is still progress through the sweep.
+    assert counters["boards"] == 0
+    assert "30/30 boards" in lines[-1]

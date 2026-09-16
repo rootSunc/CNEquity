@@ -140,7 +140,22 @@ def ths_snapshot(config_path: str, what: str, days: int, sample: int):
 @click.option("--end", default="2024-12-31", show_default=True, help="Last report period.")
 @click.option("--chunk-size", default=200, show_default=True, help="Securities per staged batch.")
 @click.option("--workers", default=4, show_default=True, help="Concurrent requests.")
-def ths_backfill(config_path: str, start: str, end: str, chunk_size: int, workers: int):
+@click.option(
+    "--symbols",
+    "symbols_str",
+    default=None,
+    help="Comma-separated symbols instead of the whole market. A full sweep is "
+    "78 minutes, so a handful lost to a transient transport error is not worth "
+    "re-running one for — the closing JSON names them under `failed_symbols`.",
+)
+def ths_backfill(
+    config_path: str,
+    start: str,
+    end: str,
+    chunk_size: int,
+    workers: int,
+    symbols_str: str | None,
+):
     """Fill the balance-sheet and cash-flow gap the lake carries for 2016-2024.
 
     Those two statements cover 0 to 37 securities a year over that window while
@@ -155,6 +170,11 @@ def ths_backfill(config_path: str, start: str, end: str, chunk_size: int, worker
 
     Needs `[sources.ths_official] backfill = true`; it changes what the lake
     holds. Stages rows — run `cne run compact --run-id <id>` afterwards.
+
+    `failed_symbols` in the closing JSON separates a vendor gap from a local
+    one: `Unknown thscode` means the peer does not carry that security, while a
+    transport error means the request never arrived. Feed the second kind back
+    through `--symbols` rather than re-running the market.
     """
     from cnequity.steps.fundamentals import backfill_statement_gap_ths_official
 
@@ -175,6 +195,7 @@ def ths_backfill(config_path: str, start: str, end: str, chunk_size: int, worker
         run_id,
         start=parse_date_option(start, "--start"),
         end=parse_date_option(end, "--end"),
+        symbols=[s.strip() for s in symbols_str.split(",") if s.strip()] if symbols_str else None,
         chunk_size=chunk_size,
         workers=workers,
     )

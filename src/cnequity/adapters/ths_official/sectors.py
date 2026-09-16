@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING
 
 import polars as pl
 
+from cnequity.progress import sweep_progress
+
 if TYPE_CHECKING:
     from cnequity.adapters.ths_official.client import ThsOfficialClient
 
@@ -138,6 +140,15 @@ def fetch_sector_bars(
     counters = {"requests": 0, "empty": 0, "failed": 0, "boards": 0}
     lock = threading.Lock()
     boards = catalog.to_dicts()
+    # 432 boards × the windows each one needs is minutes of requests with
+    # nothing on screen: measured at 99 log lines in the first 4.5 minutes of
+    # `resource-sectors`, every one of them lock contention and not one of them
+    # progress. Counted over boards finished, not rows, because a board that
+    # returns nothing is still progress through the sweep.
+    report = sweep_progress(
+        logger, "ths_official sector bars", len(boards), every=25, unit="boards"
+    )
+    done = 0
 
     def one_board(board: dict) -> None:
         local: list[dict] = []
@@ -184,9 +195,13 @@ def fetch_sector_bars(
                         "change_pct": None,
                     }
                 )
+        nonlocal done
         with lock:
             rows.extend(local)
             counters["boards"] += 1 if local else 0
+            done += 1
+            finished = done
+        report(finished)
 
     if workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:
