@@ -11,7 +11,13 @@ from cnequity.adapters.eastmoney.clist import clist_rows_to_symbols, fetch_clist
 from cnequity.adapters.eastmoney.common import _to_float
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 
-_VALUATION_FIELDS = "f12,f13,f9,f23,f45,f20,f21"
+# f130 is 市销率 TTM. f45 — which this used to read as ps_ttm — is an amount in
+# yuan, not a ratio: it put a median of 2.05e7 into `ps_ttm` for every EastMoney
+# row while baostock's median for the same column was 3.2. Verified against the
+# feed's own numbers, twice: total_mv / f132 (营业总收入 TTM) equals f130 exactly
+# for 600519 (1.591e12 / 1.732e11 = 9.184) and for 000001 (2.294e11 / 1.327e11
+# = 1.729).
+_VALUATION_FIELDS = "f12,f13,f9,f23,f130,f20,f21"
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +46,7 @@ def fetch_valuation_metrics(
                     "trade_date": trade_date,
                     "pe_ttm": _to_float(item.get("f9")),
                     "pb": _to_float(item.get("f23")),
-                    "ps_ttm": _to_float(item.get("f45")),
+                    "ps_ttm": _to_float(item.get("f130")),
                     "total_mv": _to_float(item.get("f20")),
                     "float_mv": _to_float(item.get("f21")),
                 }

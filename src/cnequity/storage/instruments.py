@@ -277,6 +277,30 @@ def compact_instruments(
 
     merged = pl.concat([incoming, preserved], how="diagonal_relaxed")
     merged = dedupe_by_primary_key(merged, "instruments")
+    # A delist_date that predates the listing is a self-contradiction, and the
+    # listing date is the half backed by evidence: delist_date here is inferred
+    # from a run of absences, and TDX lists a new code, drops it, then lists it
+    # for real. That sequence earned a delisting 13 days before the security
+    # started trading — rows that go on to reach `delisting_events` and the
+    # survivorship check as a delisting that never happened.
+    #
+    # Applied to the merged frame, not just the incoming snapshot: the same
+    # codes are routinely dropped from the live list again, and a contradiction
+    # does not stop being one because the vendor is no longer listing the name.
+    #
+    # Deliberately narrow: only an *inverted* pair is cleared. A genuinely
+    # retired name has list_date < delist_date and is never touched, so "never
+    # resurrect a name a prior run buried" still holds.
+    merged = merged.with_columns(
+        pl.when(
+            pl.col("list_date").is_not_null()
+            & pl.col("delist_date").is_not_null()
+            & (pl.col("delist_date") < pl.col("list_date"))
+        )
+        .then(None)
+        .otherwise(pl.col("delist_date"))
+        .alias("delist_date")
+    )
 
     before_business_digest = _business_digest(existing) if curated_files else None
     after_business_digest = _business_digest(merged)
