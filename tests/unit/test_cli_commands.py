@@ -741,11 +741,40 @@ def test_query_sql(cfg_path, monkeypatch, tmp_path):
     assert "1" in result.output
 
 
+def _stub_audit(monkeypatch, *, errors: int = 0, warnings: int = 0, total: int = 2):
+    def run_audit(cfg, rid, day, context=None):
+        if context is not None:
+            context["audit_by_severity"] = {"error": errors, "warning": warnings}
+            context["audit_error_findings"] = [
+                {"dataset": "daily_bars", "message": "boom"} for _ in range(errors)
+            ]
+        return total
+
+    monkeypatch.setattr("cnequity.cli.quality_cmds.run_audit", run_audit)
+
+
 def test_audit_with_run_id(cfg_path, monkeypatch):
-    monkeypatch.setattr("cnequity.cli.quality_cmds.run_audit", lambda cfg, rid, d: 2)
+    _stub_audit(monkeypatch)
     result = CliRunner().invoke(cli, ["audit", "--config", cfg_path, "--run-id", "r1"])
     assert result.exit_code == 0, result.output
     assert "2 findings" in result.output
+
+
+def test_per_run_audit_exits_non_zero_on_error_findings(cfg_path, monkeypatch):
+    """It is used as a gate, so recording an error and reporting success is a
+    gate that never fires."""
+    _stub_audit(monkeypatch, errors=1, warnings=3)
+    result = CliRunner().invoke(cli, ["audit", "--config", cfg_path, "--run-id", "r1"])
+    assert result.exit_code == 1, result.output
+    assert "1 error, 3 warning" in result.output
+    # Name what failed; a bare count sends the operator back to the JSON.
+    assert "boom" in result.output
+
+
+def test_per_run_audit_warnings_alone_do_not_fail(cfg_path, monkeypatch):
+    _stub_audit(monkeypatch, errors=0, warnings=5)
+    result = CliRunner().invoke(cli, ["audit", "--config", cfg_path, "--run-id", "r1"])
+    assert result.exit_code == 0, result.output
 
 
 def test_compact_uses_latest_run(cfg_path, monkeypatch):
@@ -1231,3 +1260,72 @@ def test_status_datasets_exits_1_when_something_is_stale(cfg_path, monkeypatch):
 
     assert result.exit_code == 1, result.output
     assert "STALE" in result.output
+
+
+def _stale_lake(monkeypatch, datasets: list[str]):
+    monkeypatch.setattr(
+        "cnequity.cli.quality_cmds._last_trading_day",
+        lambda cfg, today: date(2024, 6, 28),
+    )
+    monkeypatch.setattr(
+        "cnequity.query.reader.list_datasets",
+        lambda config=None: pl.DataFrame(
+            {
+                "dataset": datasets,
+                "has_data": [True] * len(datasets),
+                "watermarked": [True] * len(datasets),
+                "watermark": [date(2024, 6, 1)] * len(datasets),
+                "coverage_end": [date(2024, 6, 1)] * len(datasets),
+            }
+        ),
+    )
+    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: True)
+
+
+def test_freshness_gate_can_be_scoped_to_the_groups_this_host_runs(tmp_path, monkeypatch):
+    """A host scheduling `core` alone has twenty-odd datasets no job fetches, so
+    they are permanently stale by construction.
+
+    Unscoped, the gate failed every single day — 21 to 25 stale on
+    2026-09-12/13/14 — and the daily notification became something to dismiss,
+    with three genuinely UNHEALTHY days sitting unread inside the noise. The
+    command already worked out which schedule group owns each stale dataset and
+    printed "a schedule gap, not a failure"; it just failed anyway.
+    """
+    scoped = _write_config(
+        tmp_path,
+        extra=(
+            '\n[job.daily.groups.core]\nat = "16:00"\nsteps = ["daily_bars"]\n'
+            '\n[job.daily.groups.capital]\nat = "16:30"\nsteps = ["valuation_metrics"]\n'
+        ),
+    )
+    _stale_lake(monkeypatch, ["valuation_metrics"])
+
+    result = CliRunner().invoke(
+        cli, ["status", "--datasets", "--groups", "core", "--config", scoped]
+    )
+
+    assert result.exit_code == 0, result.output
+    # Still reported — scoping the gate must not hide the gap.
+    assert "STALE" in result.output
+    assert "1 in groups this host does not run" in result.output
+
+
+def test_a_scoped_gate_still_fails_on_its_own_group(cfg_path, monkeypatch):
+    """Scoping is not silencing: a dataset the host does schedule still fails."""
+    _stale_lake(monkeypatch, ["daily_bars"])
+
+    result = CliRunner().invoke(
+        cli, ["status", "--datasets", "--groups", "core", "--config", cfg_path]
+    )
+
+    assert result.exit_code == 1, result.output
+
+
+def test_an_unscoped_gate_still_fails_on_everything(cfg_path, monkeypatch):
+    """The default is unchanged: without --groups, any stale dataset fails."""
+    _stale_lake(monkeypatch, ["valuation_metrics"])
+
+    result = CliRunner().invoke(cli, ["status", "--datasets", "--config", cfg_path])
+
+    assert result.exit_code == 1, result.output

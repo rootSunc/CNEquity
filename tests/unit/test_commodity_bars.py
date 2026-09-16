@@ -422,3 +422,49 @@ def test_sina_int64_overflow_volume_is_dropped():
         contracts=(("AU0.SHF", "AU0", "沪金主连", "SHF"),),
         client=client,
     ).is_empty()
+
+
+def test_a_sina_rate_limit_cools_every_lane_instead_of_retrying_straight_away():
+    """Sina answers HTTP 456 when a sweep exceeds its anti-abuse budget, and the
+    budget is vendor-wide.
+
+    This sweep had no rate-limit awareness: the 456 raised straight out and,
+    with `strict=True`, one throttled contract failed the whole `commodity_bars`
+    step — having asked a vendor that just said "stop" as often as the retry
+    policy allowed. Two other Sina sweeps already cool the lane through
+    `defer_source`; this one is on the same budget.
+    """
+    import httpx
+
+    from cnequity.adapters.sina import domestic_futures as df
+
+    deferred: list[tuple[str, float]] = []
+
+    class _Config:
+        def defer_source(self, source, seconds):
+            deferred.append((source, seconds))
+
+    class _Resp:
+        status_code = 456
+        text = ""
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("456", request=None, response=self)
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, params=None):
+            self.calls += 1
+            return _Resp()
+
+    client = _Client()
+    with pytest.raises(httpx.HTTPStatusError):
+        df._get_with_cooldown(client, "NI0", config=_Config())
+
+    assert client.calls == df.SINA_FETCH_ATTEMPTS
+    # Cooled before every retry, and the whole vendor rather than this endpoint.
+    assert deferred == [("sina", df.SINA_RATE_LIMIT_COOLDOWN_SECONDS)] * (
+        df.SINA_FETCH_ATTEMPTS - 1
+    )

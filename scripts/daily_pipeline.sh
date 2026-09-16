@@ -150,7 +150,10 @@ fi
 # Health check (fires desktop notification on problems) and backup run
 # regardless of group outcomes so we always get a status signal and a snapshot.
 log "--- health check ---"
-if ! "$REPO_ROOT/scripts/health_notify.sh" >>"$LOG" 2>&1; then
+# Hand it the groups this run actually covered, not the raw override: with
+# CNE_GROUPS unset the list above defaults to all six, and the freshness gate
+# has to gate on the same set or it reports a gap the run did not leave.
+if ! CNE_GROUPS="$GROUP_LIST" "$REPO_ROOT/scripts/health_notify.sh" >>"$LOG" 2>&1; then
   log "health check reported problems"
 fi
 

@@ -6,13 +6,16 @@
 # locks are deliberately excluded — they are large or reproducible. Portable
 # research snapshots cover curated data.
 #
-# Usage: scripts/backup_meta.sh [DATA_ROOT] [BACKUP_DIR] [RETENTION_DAYS]
+# Usage: scripts/backup_meta.sh [DATA_ROOT] [BACKUP_DIR] [RETENTION_DAYS] [RETENTION_COUNT]
 # Defaults resolve to the repo's ./data/cnequity lake.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_ROOT_INPUT="${1:-${CNE_DATA_ROOT:-$REPO_ROOT/data/cnequity}}"
 RETENTION_DAYS="${3:-${CNE_BACKUP_RETENTION_DAYS:-14}}"
+# Age alone is not a bound when the caller runs more than once a day. 30 covers
+# two weeks of one-a-day with slack; 0 disables the count cap.
+RETENTION_COUNT="${4:-${CNE_BACKUP_RETENTION_COUNT:-30}}"
 
 META_DIR="$DATA_ROOT_INPUT/meta"
 if [[ ! -d "$META_DIR" ]]; then
@@ -64,8 +67,23 @@ if [[ ${#TAR_ARGS[@]} -eq 0 ]]; then
 fi
 tar -czf "$ARCHIVE" --exclude 'revisions/data' "${TAR_ARGS[@]}"
 
-# Rotate: drop archives older than RETENTION_DAYS.
+# Rotate by age *and* by count, whichever is stricter.
+#
+# Age alone assumed one archive a day. Nothing enforced that: any caller that
+# runs more often keeps every copy for the whole window, and a 45 MB archive
+# taken 262 times in one day is 11.8 GB that age-based rotation will not touch
+# for a fortnight. On the reference lake `backups/` had reached 14 GB — 35% of
+# the lake, larger than `curated/` itself.
 find "$BACKUP_DIR" -name 'meta-*.tar.gz' -type f -mtime "+$RETENTION_DAYS" -delete 2>/dev/null || true
+if [[ "$RETENTION_COUNT" -gt 0 ]]; then
+  # Newest first, skip the ones we keep, delete the rest. `ls -t` is safe here:
+  # the names are our own timestamped pattern, no spaces or newlines.
+  # shellcheck disable=SC2012
+  ls -t "$BACKUP_DIR"/meta-*.tar.gz 2>/dev/null \
+    | tail -n "+$((RETENTION_COUNT + 1))" \
+    | while IFS= read -r stale; do rm -f -- "$stale"; done
+fi
 
 SIZE="$(du -h "$ARCHIVE" | cut -f1)"
-echo "backup_meta: wrote $ARCHIVE ($SIZE); retention ${RETENTION_DAYS}d"
+KEPT="$(ls -1 "$BACKUP_DIR"/meta-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')"
+echo "backup_meta: wrote $ARCHIVE ($SIZE); retention ${RETENTION_DAYS}d/${RETENTION_COUNT} archives; ${KEPT} kept"

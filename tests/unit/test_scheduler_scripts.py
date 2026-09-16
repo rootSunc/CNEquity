@@ -459,3 +459,71 @@ def test_escalation_can_be_disabled(tmp_path):
 
     for _ in range(4):
         assert _run(DAILY, env=env).returncode == 0
+
+
+def test_health_notify_runs_the_whole_lake_audit_only_on_its_weekly_day(tmp_path):
+    """`cne audit --full` opens every curated Parquet file.
+
+    On a 25 GB lake that is I/O bound for hours, and it ran on every trading
+    day — making the health check, not ingestion, the cost of the pipeline.
+    """
+    cne = _stub_cne(tmp_path)
+    calls = tmp_path / "calls"
+    env = _daily_env(tmp_path, cne, calls)
+
+    env["CNE_FULL_AUDIT_DOW"] = "0"  # never
+    _run(ROOT / "scripts" / "health_notify.sh", env=env)
+    assert "--full" not in calls.read_text()
+    assert "audit" in calls.read_text()
+
+    calls.unlink()
+    env["CNE_FULL_AUDIT_DOW"] = "always"
+    _run(ROOT / "scripts" / "health_notify.sh", env=env)
+    assert "--full" in calls.read_text()
+
+
+def test_health_notify_scopes_the_freshness_gate_to_the_scheduled_groups(tmp_path):
+    """The gate and the scheduler have to agree on what this host fetches.
+
+    A core-only plist leaves twenty-odd datasets that no job here ever runs, so
+    unscoped the gate failed every day — 21 to 25 stale on 2026-09-12/13/14 —
+    and the daily notification became something to dismiss. CNE_GROUPS is the
+    same variable the plist and the pipeline use, so the two cannot drift.
+    """
+    cne = _stub_cne_failing_groups(tmp_path)
+    calls = tmp_path / "calls"
+    env = _daily_env(tmp_path, cne, calls)
+    env["CNE_GROUPS"] = "core"
+
+    result = _run(ROOT / "scripts" / "health_notify.sh", env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = _call_args(calls)
+    assert "--datasets" in args
+    assert "--groups" in args
+    assert "core" in args
+
+
+def test_health_notify_passes_no_scope_when_no_groups_are_configured(tmp_path):
+    """Without CNE_GROUPS there is nothing to scope to, and the gate must keep
+    its original meaning: any stale dataset fails."""
+    cne = _stub_cne_failing_groups(tmp_path)
+    calls = tmp_path / "calls"
+    env = _daily_env(tmp_path, cne, calls)
+    env.pop("CNE_GROUPS", None)
+
+    result = _run(ROOT / "scripts" / "health_notify.sh", env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--groups" not in _call_args(calls)
+
+
+def test_health_notify_titles_a_freshness_miss_as_lag_not_an_anomaly(tmp_path):
+    """ "数据异常" over a pure freshness miss is the kind of wrong that costs an
+    alert its meaning: nothing was anomalous, a scheduled group had not run."""
+    script = (ROOT / "scripts" / "health_notify.sh").read_text(encoding="utf-8")
+
+    assert 'title="cnequity 数据滞后"' in script
+    assert 'title="cnequity 数据异常"' in script
+    # The anomaly title is reserved for the audit/health arm of the gate.
+    assert "*health*|*error*) title=" in script

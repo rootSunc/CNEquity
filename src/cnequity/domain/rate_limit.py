@@ -542,3 +542,16 @@ def wait_spec(spec: RateLimitSpec | None) -> None:
             spec.min_interval,
             lock_timeout=spec.lock_timeout,
         )
+
+
+# Sina's anti-abuse budget, in one place because three different sweeps hit it:
+# the live BJ daily-bar fallback, delisted history recovery, and the domestic
+# futures board. It answers HTTP 456 — not 429 — and it cools the *vendor*, not
+# the endpoint, so a sweep that keeps asking after one strands the other lanes
+# too. Anything here that is retried at all is retried after a cooldown, never
+# immediately.
+SINA_RETRY_STATUS_CODES = frozenset({429, 456, 500, 502, 503, 504})
+SINA_RATE_LIMIT_STATUS_CODES = frozenset({429, 456})
+SINA_FETCH_ATTEMPTS = 3
+SINA_RATE_LIMIT_COOLDOWN_SECONDS = 30.0
+SINA_RATE_LIMIT_CIRCUIT_SECONDS = 120.0

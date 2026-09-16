@@ -28,6 +28,31 @@ from cnequity.quality.audit import run_audit
 from cnequity.storage.atomic import write_json_atomic
 
 
+def _gate_groups(raw: str | None) -> set[str] | None:
+    """Schedule groups the caller actually runs, or None for "gate on all"."""
+    if raw is None:
+        return None
+    names = {part for part in raw.replace(",", " ").split() if part}
+    return names or None
+
+
+def stale_datasets_by_group(cfg, datasets: list[str]) -> dict[str, list[str]]:
+    """Map stale dataset names to the schedule group that would fetch them.
+
+    Datasets owned by no group land under ``(unscheduled)``: nothing routine
+    fetches them, which is a different problem from a group that failed.
+    """
+    owner: dict[str, str] = {}
+    for scope in ("schedule_groups", "events_groups"):
+        for name, group in (getattr(cfg, scope, {}) or {}).items():
+            for step in group.steps:
+                owner.setdefault(step, name)
+    out: dict[str, list[str]] = {}
+    for dataset in datasets:
+        out.setdefault(owner.get(dataset, "(unscheduled)"), []).append(dataset)
+    return out
+
+
 @cli.command()
 @config_option
 @click.option("--run-id", default=None)
@@ -136,8 +161,20 @@ def audit(
     latest = manifest.latest_run() if not run_id else None
     rid = run_id or (latest["run_id"] if latest else "manual")
 
-    n = run_audit(cfg, rid, shanghai_today())
-    click.echo(f"Audit complete: {n} findings written")
+    severities: dict = {}
+    n = run_audit(cfg, rid, shanghai_today(), severities)
+    by_severity = severities.get("audit_by_severity", {})
+    errors = int(by_severity.get("error", 0))
+    warnings = int(by_severity.get("warning", 0))
+    click.echo(f"Audit complete: {n} findings written ({errors} error, {warnings} warning)")
+    # Exit like `--full` does. Callers use this as a gate, and a mode that
+    # records errors and still reports success is a gate that never fires —
+    # the daily health check had to shell out and re-read the findings file to
+    # learn what the command already knew.
+    if errors:
+        for finding in severities.get("audit_error_findings", []):
+            click.echo(f"  [error] {finding.get('dataset', ''):22} {finding.get('message', '')}")
+        raise SystemExit(1)
 
 
 def _last_trading_day(cfg, today: date) -> date:
@@ -285,12 +322,23 @@ def verify(config_path: str, only: str | None, repair: bool, kinds: str | None):
     is_flag=True,
     help="With --datasets, print every column of the dataset inventory, not just freshness.",
 )
+@click.option(
+    "--groups",
+    "gate_groups",
+    default=None,
+    help=(
+        "With --datasets, fail only on datasets owned by these schedule groups "
+        "(space or comma separated). Datasets in any other group are still "
+        "listed and still reported as a schedule gap, but do not fail the gate."
+    ),
+)
 def status(
     config_path: str,
     run_selector: str | None,
     run_id: str | None,
     show_datasets: bool,
     all_columns: bool,
+    gate_groups: str | None,
 ):
     """Show latest run status, or per-dataset freshness with --datasets."""
     cfg = _cfg(config_path)
@@ -299,11 +347,13 @@ def status(
         raise click.UsageError("use either --run or --run-id, not both")
     if all_columns and not show_datasets:
         raise click.UsageError("--all-columns only applies with --datasets")
+    if gate_groups and not show_datasets:
+        raise click.UsageError("--groups only applies with --datasets")
 
     if show_datasets:
         import polars as pl_mod
 
-        from cnequity.domain.datasets import is_dataset_enabled, is_stale
+        from cnequity.domain.datasets import DATASETS, is_dataset_enabled, is_stale
         from cnequity.query.reader import list_datasets
 
         anchor = _last_trading_day(cfg, shanghai_today())
@@ -319,6 +369,13 @@ def status(
             if not row["watermarked"]:
                 return "n/a"
             mark = row["watermark"] or row["coverage_end"]
+            # A source the exchanges retired has nothing further to publish, so
+            # it is not stale — but calling a watermark from 2024 "fresh" reads
+            # as current data. Name it for what it is.
+            spec = DATASETS.get(row["dataset"])
+            retired = getattr(spec, "source_retired_date", None) if spec else None
+            if retired is not None and mark is not None and mark >= retired:
+                return "retired"
             # Per-dataset tolerance (T+1, quarterly …) — inherent lag is not STALE.
             return "STALE" if is_stale(row["dataset"], mark, anchor) else "fresh"
 
@@ -345,9 +402,52 @@ def status(
         view = df if all_columns else df.select([c for c in freshness_columns if c in df.columns])
         with pl_mod.Config(tbl_rows=-1, tbl_cols=-1, fmt_str_lengths=32):
             click.echo(view)
-        stale = df.filter(pl_mod.col("freshness") == "STALE").height
+        stale_rows = df.filter(pl_mod.col("freshness") == "STALE")
+        stale = stale_rows.height
         if stale:
             click.echo(f"\n{stale} dataset(s) STALE — check runs with `cne status` / `cne retry`.")
+            # Which schedule group each one belongs to. A lake where every
+            # stale dataset sits in groups this host never runs is a schedule
+            # gap, not a broken pipeline, and the flat count cannot tell those
+            # apart — it reads as a total outage either way.
+            by_group = stale_datasets_by_group(cfg, stale_rows["dataset"].to_list())
+            if by_group:
+                summary = ", ".join(
+                    f"{group} {len(names)}" for group, names in sorted(by_group.items())
+                )
+                click.echo(f"by schedule group: {summary}")
+                click.echo(
+                    "a group you do not schedule is a schedule gap, not a failure — "
+                    "run it with `cne run daily --group <name>`."
+                )
+            # ...and until this flag existed, the gate said exactly that and then
+            # failed anyway. A host scheduling `core` alone has twenty-odd
+            # datasets no job ever fetches, so the freshness gate failed every
+            # single day — 21 to 25 stale on 2026-09-12/13/14 — and the daily
+            # "数据异常" notification became something to dismiss. Three real
+            # `UNHEALTHY` days sat inside that noise unread.
+            wanted = _gate_groups(gate_groups)
+            if wanted is not None:
+                # Exempt only what a *known* group other than mine owns. A
+                # dataset nothing schedules — `(unscheduled)`, or a config with
+                # no groups at all — still fails: "I cannot tell who fetches
+                # this" is not the same claim as "another host fetches it", and
+                # reading it as one would let a malformed config silence the
+                # gate completely.
+                gating = sorted(
+                    name
+                    for group, names in by_group.items()
+                    if group in wanted or group == "(unscheduled)"
+                    for name in names
+                )
+                skipped = stale - len(gating)
+                if skipped:
+                    click.echo(
+                        f"gating on {', '.join(sorted(wanted))}: "
+                        f"{len(gating)} stale here, {skipped} in groups this host does not run."
+                    )
+                if not gating:
+                    return
             raise SystemExit(1)
         return
 
@@ -448,6 +548,7 @@ def source_slo(config_path: str, window_days: int, minimum_observations: int, en
         history,
         window_days=window_days,
         minimum_observations=minimum_observations,
+        unreachable=frozenset(cfg.slo_unreachable_sources),
     )
     incidents = build_source_incidents(history)
     incident_path = store_source_incidents(cfg.meta_root, incidents)
@@ -460,16 +561,46 @@ def source_slo(config_path: str, window_days: int, minimum_observations: int, en
 
 
 @sources_grp.command("resilience")
+@config_option
 @click.option("--out", type=click.Path(path_type=Path), default=None)
 @click.option(
     "--enforce", is_flag=True, help="Exit 1 when a core dataset lacks an independent backup."
 )
-def source_resilience(out: Path | None, enforce: bool):
-    """Show source concentration, blast radius and independent backup gate."""
-    from cnequity.diagnostics.source_resilience import build_dependency_report
+@click.option(
+    "--with-availability",
+    is_flag=True,
+    help="Join measured probe availability onto each failure domain (reads the lake).",
+)
+@click.option("--window-days", default=30, show_default=True, type=click.IntRange(min=1))
+def source_resilience(
+    config_path: str,
+    out: Path | None,
+    enforce: bool,
+    with_availability: bool,
+    window_days: int,
+):
+    """Show source concentration, blast radius and independent backup gate.
+
+    Concentration alone does not decide a routing question. A domain carrying
+    29 datasets is only a problem in proportion to how often it is unreachable,
+    and that is measured, not declared — so `--with-availability` joins the
+    probe history this lake has already accumulated onto each failure domain.
+    """
+    from cnequity.diagnostics.source_resilience import (
+        annotate_measured_availability,
+        build_dependency_report,
+    )
 
     report = build_dependency_report()
     payload = report.to_dict()
+    if with_availability:
+        from cnequity.diagnostics.source_slo import evaluate_source_slo, load_health_history
+
+        cfg = _cfg(config_path)
+        slo = evaluate_source_slo(
+            load_health_history(cfg.meta_root), window_days=window_days
+        ).to_dict()
+        payload = annotate_measured_availability(payload, slo)
     if out is not None:
         write_json_atomic(out, payload, indent=2, ensure_ascii=False)
     click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
