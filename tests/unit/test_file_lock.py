@@ -331,11 +331,17 @@ def test_other_locks_keep_the_generic_message(tmp_path):
                 pass
 
 
-def test_a_blocking_wait_announces_itself(tmp_path, caplog):
+def test_a_blocking_wait_announces_itself(tmp_path, caplog, monkeypatch):
     """A blocking acquire was indistinguishable from a hang: no output, no
-    deadline, and the reason — someone else holds this — never said."""
+    deadline, and the reason — someone else holds this — never said.
+
+    The grace period is shortened here rather than slept through; what is
+    asserted is that a wait outlasting it gets announced."""
     import logging
 
+    from cnequity import file_lock as file_lock_mod
+
+    monkeypatch.setattr(file_lock_mod, "QUIET_LOCK_WAIT_SECONDS", 0.05)
     path = tmp_path / "compact.lock"
     with exclusive_lock(path, blocking=False):
         pass  # create the file so the second acquire has something to open
@@ -354,7 +360,7 @@ def test_a_blocking_wait_announces_itself(tmp_path, caplog):
         assert acquired.wait(10)
         with caplog.at_level(logging.INFO, logger="cnequity.file_lock"):
             with pytest.raises(LockUnavailable):
-                with exclusive_lock(path, blocking=True, timeout=0.2):
+                with exclusive_lock(path, blocking=True, timeout=0.5):
                     pass
         assert any("waiting for compact.lock" in r.message for r in caplog.records)
     finally:
@@ -393,3 +399,44 @@ def test_the_lake_mutation_lock_wait_is_bounded_by_default():
     signature = inspect.signature(lake_mutation_lock)
     assert signature.parameters["timeout"].default == DEFAULT_LOCK_WAIT_SECONDS
     assert DEFAULT_LOCK_WAIT_SECONDS > 0
+
+
+def test_a_brief_queue_is_waited_out_in_silence(tmp_path, caplog, monkeypatch):
+    """Routine contention is not a wait anyone is wondering about.
+
+    Several of these locks *are* the per-request rate limiter, taken and
+    released around every single request, so announcing on first contention put
+    one line in the log per request: 47 lines in the first 4.5 minutes of
+    `ths-official resource-sectors`, not one of them progress. That buries the
+    progress the logging exists to surface.
+    """
+    import logging
+
+    from cnequity import file_lock as file_lock_mod
+
+    monkeypatch.setattr(file_lock_mod, "QUIET_LOCK_WAIT_SECONDS", 5.0)
+    path = tmp_path / "concurrency-ths.lock"
+    with exclusive_lock(path, blocking=False):
+        pass
+
+    released = threading.Event()
+
+    def _hold():
+        with exclusive_lock(path, blocking=False):
+            time.sleep(0.15)
+        released.set()
+
+    thread = threading.Thread(target=_hold)
+    thread.start()
+    try:
+        # Let the holder take it, so this acquire really does queue.
+        deadline = time.monotonic() + 5
+        while not is_locked(path) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        with caplog.at_level(logging.INFO, logger="cnequity.file_lock"):
+            with exclusive_lock(path, blocking=True, timeout=30.0):
+                pass
+    finally:
+        thread.join(10)
+    assert released.is_set(), "the acquire must have queued, not walked straight in"
+    assert not [r for r in caplog.records if "waiting for" in r.message]

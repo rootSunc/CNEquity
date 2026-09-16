@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 #: that used to park every later command forever with nothing on screen.
 DEFAULT_LOCK_WAIT_SECONDS = 3600.0
 
+#: How long a blocking acquire waits before it says anything. The announcement
+#: exists so a long wait does not read as a hang; sub-second queueing is not a
+#: wait anyone is wondering about. Several of these locks *are* the per-request
+#: rate limiter — `concurrency-ths.lock` is taken and released around every
+#: single request — so announcing on first contention put a line in the log for
+#: each one: measured at 47 lines in the first 4.5 minutes of
+#: `ths-official resource-sectors`, none of them progress. That buries exactly
+#: what the progress logging exists to surface, for the same reason httpx is
+#: pinned to WARNING.
+QUIET_LOCK_WAIT_SECONDS = 3.0
+
 IS_WINDOWS = sys.platform == "win32"
 
 # Windows locks a byte *range*, not a whole file. One byte at offset 0 is enough
@@ -228,12 +239,28 @@ def exclusive_lock(
             try:
                 _acquire(handle, blocking=False)
             except LockUnavailable:
-                logger.info(
-                    "waiting for %s — another process holds it (up to %s)",
-                    path.name,
-                    _hms(timeout) if timeout is not None else "indefinitely",
+                # Wait out the routine queueing quietly, and only announce what
+                # is left — see QUIET_LOCK_WAIT_SECONDS.
+                grace = (
+                    QUIET_LOCK_WAIT_SECONDS
+                    if timeout is None
+                    else min(QUIET_LOCK_WAIT_SECONDS, timeout)
                 )
-                _acquire(handle, blocking=True, timeout=timeout)
+                try:
+                    _acquire(handle, blocking=True, timeout=grace)
+                except LockUnavailable:
+                    if timeout is not None and grace >= timeout:
+                        raise
+                    logger.info(
+                        "waiting for %s — another process holds it (up to %s)",
+                        path.name,
+                        _hms(timeout) if timeout is not None else "indefinitely",
+                    )
+                    _acquire(
+                        handle,
+                        blocking=True,
+                        timeout=None if timeout is None else timeout - grace,
+                    )
         else:
             _acquire(handle, blocking=blocking, timeout=timeout)
         _mark_held(path)
