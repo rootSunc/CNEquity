@@ -726,14 +726,19 @@ def backfill_statement_gap_ths_official(
         return {"rows_read": 0, "rows_written": 0, "status": "skipped", "reason": "no api key"}
 
     # Exact wire evidence for every staged row; `write_fetched` requires the
-    # receipt for any dataset the lake archives.
-    archive_scope = f"ths_gap:{start.isoformat()}:{end.isoformat()}"
-    archive = None
-    if config.should_archive_raw(dataset):
-        nonce = begin_capture(
-            config, dataset, run_id, source=THS_SOURCE, request_scope=archive_scope
-        )
-        archive = RawPayloadArchive(
+    # receipt for any dataset the lake archives. One capture per staged chunk,
+    # not one for the sweep: a receipt is consumed by the publish it backs, so
+    # a single scope spanning every chunk was spent by the first one and every
+    # request after it failed with "raw archive capture was already consumed" —
+    # measured at 7,930 such failures on a full-market run that wrote one chunk.
+    archives_raw = config.should_archive_raw(dataset)
+
+    def _chunk_archive(offset: int) -> tuple[str, RawPayloadArchive | None]:
+        scope = f"ths_gap:{start.isoformat()}:{end.isoformat()}:{offset:06d}"
+        if not archives_raw:
+            return scope, None
+        nonce = begin_capture(config, dataset, run_id, source=THS_SOURCE, request_scope=scope)
+        return scope, RawPayloadArchive(
             config.meta_root,
             enabled=True,
             datasets=[dataset],
@@ -742,12 +747,12 @@ def backfill_statement_gap_ths_official(
             capture_owner=config,
             capture_run_id=run_id,
             capture_source=THS_SOURCE,
-            capture_scope=archive_scope,
+            capture_scope=scope,
             capture_nonce=nonce,
         )
-    client = ThsOfficialClient(
-        api_key, config=config, archive=archive, archive_dataset=dataset, run_id=run_id
-    )
+
+    # The announce-date scan below needs no archive; the per-chunk clients do.
+    client = ThsOfficialClient(api_key, config=config, archive=None, run_id=run_id)
 
     start_period = f"{start.year}Q{(start.month - 1) // 3 + 1}"
     end_period = f"{end.year}Q{(end.month - 1) // 3 + 1}"
@@ -768,9 +773,21 @@ def backfill_statement_gap_ths_official(
     try:
         for offset in range(0, len(symbols), chunk_size):
             chunk = symbols[offset : offset + chunk_size]
-            rows, chunk_counters = fetch_statements(
-                chunk, start, end, client=client, announce_dates=announce_dates, workers=workers
+            archive_scope, archive = _chunk_archive(offset)
+            chunk_client = ThsOfficialClient(
+                api_key, config=config, archive=archive, archive_dataset=dataset, run_id=run_id
             )
+            try:
+                rows, chunk_counters = fetch_statements(
+                    chunk,
+                    start,
+                    end,
+                    client=chunk_client,
+                    announce_dates=announce_dates,
+                    workers=workers,
+                )
+            finally:
+                chunk_client.close()
             for key, value in chunk_counters.items():
                 counters[key] = counters.get(key, 0) + value
             if not rows:

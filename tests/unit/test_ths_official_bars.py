@@ -327,3 +327,142 @@ def test_the_etf_window_stays_under_the_silent_empty_limit():
     assert all((stop - begin).days <= ETF_MAX_WINDOW_DAYS for begin, stop in windows)
     assert windows[0][0] == date(2016, 1, 1)
     assert windows[-1][1] == date(2025, 12, 31)
+
+
+def test_an_unanswered_symbol_is_named_not_just_counted():
+    """Absent from the frame is how "the vendor said nothing" and "the request
+    never landed" look alike; only the second is a failed request."""
+
+    class _PartlyFailing:
+        def get(self, path, **params):
+            if params.get("thscode", "").startswith("600519"):
+                raise RuntimeError("transport failed — nodename nor servname provided")
+            return {"item": []}
+
+    frame, counters = fetch_daily_bars(
+        ["600519.SH", "000001.SZ"],
+        date(2010, 1, 4),
+        date(2010, 1, 8),
+        client=_PartlyFailing(),
+    )
+
+    assert frame.is_empty()
+    assert counters["unanswered_symbols"] == ["600519.SH"]
+    # The one that answered "nothing" is evidence; it must not be in there.
+    assert "000001.SZ" not in counters["unanswered_symbols"]
+    assert counters["empty"] == 1
+
+
+def test_a_failed_request_is_not_counted_as_the_peer_lacking_the_rows(tmp_path, monkeypatch):
+    """`only_curated` is the claim "the peer does not have these". A symbol
+    whose request never landed says nothing of the kind, and counting it there
+    inflated the number the operator reads before deciding to switch."""
+    import polars as pl
+
+    from cnequity.config import Config
+    from cnequity.steps import bars as bars_mod
+    from cnequity.storage.layout import init_data_layout
+
+    cfg = Config(data_root=tmp_path / "data")
+    init_data_layout(cfg)
+    cfg.sources.update({"ths_official": True})
+    cfg.ths_official_api_key = "k"
+
+    day = date(2010, 1, 4)
+    curated = pl.DataFrame(
+        {
+            "symbol": ["600519.SH", "000001.SZ"],
+            "trade_date": [day, day],
+            "open": [1.0, 1.0],
+            "high": [1.0, 1.0],
+            "low": [1.0, 1.0],
+            "close": [1.0, 1.0],
+            "volume": [1, 1],
+            "amount": [1.0, 1.0],
+        },
+        schema_overrides={"trade_date": pl.Date, "volume": pl.Int64},
+    )
+
+    def _fetch(chunk, start, end, *, client, workers):
+        # 600519 never answered; 000001 answered with nothing.
+        from cnequity.adapters.ths_official.bars import _OUTPUT_SCHEMA
+
+        return (
+            pl.DataFrame(schema=_OUTPUT_SCHEMA),
+            {
+                "requests": 2,
+                "empty": 1,
+                "failed": 1,
+                "bars": 0,
+                "unanswered_symbols": ["600519.SH"],
+            },
+        )
+
+    monkeypatch.setattr("cnequity.adapters.ths_official.bars.fetch_daily_bars", _fetch)
+    monkeypatch.setattr(
+        "cnequity.adapters.ths_official.client_from_config",
+        lambda config: type(
+            "C", (), {"close": lambda self: None, "get": lambda self, *a, **k: {}}
+        )(),
+    )
+
+    captured = {}
+
+    def _scan(*args, **kwargs):
+        captured["scanned"] = True
+        return curated.with_columns(pl.lit("ths").alias("source")).lazy()
+
+    monkeypatch.setattr("cnequity.query.parquet_scan.scan_parquet_root", _scan)
+    monkeypatch.setattr("cnequity.query.canonical.dedupe_lazy_by_primary_key", lambda lf, ds: lf)
+
+    out = bars_mod.repair_deep_history_ths_official(cfg, "run-1", start=day, end=day, dry_run=True)
+
+    assert out["unanswered"] == 1
+    assert out["unanswered_symbols"] == ["600519.SH"]
+    # Only the symbol that actually answered contributes to the claim.
+    assert out["only_curated"] == 1
+
+
+def test_every_chunk_gets_its_own_archive_receipt(tmp_path, monkeypatch):
+    """A receipt is consumed by the publish it backs. One scope spanning the
+    whole sweep was spent by the first chunk, and every request after it failed
+    with "raw archive capture was already consumed"."""
+
+    from cnequity.config import Config
+    from cnequity.steps import fundamentals as fund
+
+    cfg = Config(data_root=tmp_path / "data")
+    cfg.sources.update({"ths_official": True})
+    cfg.ths_official_api_key = "k"
+    cfg.ths_official_backfill_enabled = True
+    monkeypatch.setattr(Config, "should_archive_raw", lambda self, dataset: True, raising=False)
+
+    scopes: list[str] = []
+    monkeypatch.setattr(
+        "cnequity.storage.raw_archive.begin_capture",
+        lambda owner, dataset, run_id, *, source, request_scope: (
+            scopes.append(request_scope) or "nonce"
+        ),
+    )
+    monkeypatch.setattr("cnequity.storage.raw_archive.RawPayloadArchive", lambda *a, **k: object())
+    monkeypatch.setattr(
+        "cnequity.adapters.ths_official.ThsOfficialClient",
+        lambda *a, **k: type("C", (), {"close": lambda self: None})(),
+    )
+    monkeypatch.setattr(
+        "cnequity.adapters.ths_official.financials.fetch_statements",
+        lambda chunk, start, end, **kw: ([], {"requests": len(chunk)}),
+    )
+    monkeypatch.setattr(
+        fund,
+        "_borrowable_announce_dates",
+        lambda config, s, e: {(f"{i:06d}.SZ", "2016Q1") for i in range(5)},
+    )
+
+    fund.backfill_statement_gap_ths_official(
+        cfg, "run-1", start=date(2016, 1, 1), end=date(2016, 12, 31), chunk_size=2
+    )
+
+    # Five symbols at two per chunk: three scopes, all distinct.
+    assert len(scopes) == 3
+    assert len(set(scopes)) == 3

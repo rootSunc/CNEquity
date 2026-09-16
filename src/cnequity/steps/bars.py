@@ -3829,19 +3829,39 @@ def repair_deep_history_ths_official(
     if symbols is None:
         symbols = sorted(existing.get_column("symbol").unique().to_list())
 
-    totals = {"rows_written": 0, "compared": 0, "changed": 0, "only_curated": 0, "only_peer": 0}
+    totals = {
+        "rows_written": 0,
+        "compared": 0,
+        "changed": 0,
+        "only_curated": 0,
+        "only_peer": 0,
+        "unanswered": 0,
+    }
     counters: dict[str, int] = {}
+    unanswered_symbols: set[str] = set()
     try:
         for offset in range(0, len(symbols), chunk_size):
             chunk = symbols[offset : offset + chunk_size]
             frame, chunk_counters = fetch_daily_bars(
                 chunk, start, end, client=client, workers=workers
             )
+            unanswered = set(chunk_counters.pop("unanswered_symbols", ()) or ())
             for key, value in chunk_counters.items():
                 counters[key] = counters.get(key, 0) + value
-            if frame.is_empty():
+            if unanswered:
+                totals["unanswered"] += len(unanswered)
+                unanswered_symbols.update(unanswered)
+            if frame.is_empty() and not unanswered:
                 continue
-            before = existing.filter(pl.col("symbol").is_in(chunk))
+            # A symbol the vendor never answered for looks exactly like one it
+            # answered "nothing" for once the frame is built, so its curated
+            # rows would be counted as evidence the peer lacks them. They are
+            # evidence of a failed request and nothing else.
+            before = existing.filter(
+                pl.col("symbol").is_in(chunk) & ~pl.col("symbol").is_in(list(unanswered))
+            )
+            if before.is_empty() and frame.is_empty():
+                continue
             joined = before.join(frame, on=["symbol", "trade_date"], how="inner", suffix="_peer")
             changed = joined.filter(
                 (pl.col("close_peer") - pl.col("close")).abs() > pl.col("close").abs() * 5e-5
@@ -3899,6 +3919,9 @@ def repair_deep_history_ths_official(
 
     totals.update(counters)
     totals["symbols"] = len(symbols)
+    # Named so a reader can re-run exactly the scope that went unanswered
+    # rather than the whole window.
+    totals["unanswered_symbols"] = sorted(unanswered_symbols)
     totals["status"] = "dry_run" if dry_run else "applied"
     return totals
 

@@ -135,7 +135,11 @@ def fetch_daily_bars(
     endpoint = ETF_ENDPOINT if etf else _A_SHARE_ENDPOINT
     windows = split_windows(start, end, ETF_MAX_WINDOW_DAYS if etf else MAX_WINDOW_DAYS)
     rows: list[dict] = []
-    counters = {"requests": 0, "empty": 0, "failed": 0, "bars": 0}
+    counters: dict[str, object] = {"requests": 0, "empty": 0, "failed": 0, "bars": 0}
+    # Named, not just counted. A symbol the vendor never answered for is absent
+    # from the frame exactly like one it answered "nothing" for, and a caller
+    # that cannot tell them apart reports the first as evidence of the second.
+    unanswered: set[str] = set()
     lock = threading.Lock()
 
     def one_symbol(symbol: str) -> None:
@@ -159,6 +163,7 @@ def fetch_daily_bars(
             except Exception as exc:  # noqa: BLE001 — one refusal must not end the sweep
                 with lock:
                     counters["failed"] += 1
+                    unanswered.add(symbol)
                 logger.warning("ths_official bars failed for %s %s: %s", symbol, window_start, exc)
                 continue
             items = (data or {}).get("item") or []
@@ -194,6 +199,7 @@ def fetch_daily_bars(
         for symbol in symbols:
             one_symbol(symbol)
 
+    counters["unanswered_symbols"] = sorted(unanswered)
     if not rows:
         return pl.DataFrame(schema=_OUTPUT_SCHEMA), counters
     frame = pl.DataFrame(rows).select(
