@@ -223,9 +223,14 @@ def _load_staged_instruments(config: Config) -> pl.DataFrame | None:
 
 def _without_subscription_placeholders(frame: pl.DataFrame) -> pl.DataFrame:
     """Keep transport-level subscription stubs out of downstream universes."""
-    if frame.is_empty() or "name" not in frame.columns:
+    if frame.is_empty():
         return frame
-    keep = [not is_subscription_placeholder(name) for name in frame["name"].to_list()]
+    names = frame["name"].to_list() if "name" in frame.columns else [None] * frame.height
+    symbols = frame["symbol"].to_list() if "symbol" in frame.columns else [None] * frame.height
+    keep = [
+        not is_subscription_placeholder(name, symbol)
+        for name, symbol in zip(names, symbols, strict=True)
+    ]
     return frame.filter(pl.Series(keep))
 
 
@@ -695,62 +700,61 @@ def load_curated_trading_status(
     return dedupe_by_primary_key(frame, "trading_status")
 
 
-def _instrument_identity(config: Config, metadata: pl.DataFrame | None = None) -> dict:
-    """Build the identity carried by negative evidence records.
+def _row_fingerprint(rows: Iterable[dict]) -> str:
+    """Hash canonical JSON rows without materializing the full JSON array.
 
-    Revisions are the cheap authoritative invalidation signal after a normal
-    compact.  The metadata digest is a fallback for direct step invocations
-    and older lakes that predate revision receipts; changing a list/delist
-    span or asset type still invalidates an old absence claim there.
+    Preserve the existing negative-evidence identity byte for byte, including
+    date formatting, key ordering and JSON escaping.
     """
+    digest = hashlib.sha256()
+    digest.update(b"[")
+    separator = b""
+    for row in rows:
+        normalized = {
+            column: (value.isoformat() if isinstance(value, date) else value)
+            for column, value in row.items()
+        }
+        digest.update(separator)
+        digest.update(
+            json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str).encode()
+        )
+        separator = b","
+    digest.update(b"]")
+    return digest.hexdigest()
+
+
+def _instrument_identity(config: Config, metadata: pl.DataFrame | None = None) -> dict:
+    """Build a revision and content identity, including direct/legacy writes."""
     state = StateStore(config.meta_root)
     revision = state.get_revision("instruments")
     frame = metadata if metadata is not None else instrument_metadata(config)
-    rows = []
+    rows = iter(())
     if frame is not None and not frame.is_empty() and "symbol" in frame.columns:
         columns = [
             column
             for column in ("symbol", "list_date", "delist_date", "asset_type")
             if column in frame.columns
         ]
-        for row in frame.select(columns).sort("symbol").iter_rows(named=True):
-            rows.append(
-                {
-                    column: (value.isoformat() if isinstance(value, date) else value)
-                    for column, value in row.items()
-                }
-            )
-    encoded = json.dumps(rows, sort_keys=True, separators=(",", ":"), default=str).encode()
+        rows = frame.select(columns).sort("symbol").iter_rows(named=True)
+    instrument_digest = _row_fingerprint(rows)
 
-    # A cached "no rows" claim is also invalid when trading status changes.
-    # Catalog identity alone is insufficient: a symbol can remain the same
-    # instrument while moving from suspended to trading (or vice versa).  Use
-    # both the authoritative compact revision and a content fingerprint so
-    # direct step calls and older lakes without receipts are covered too.
+    # Keep the content fingerprint even with revision receipts: direct writes
+    # and legacy lakes must invalidate an absence claim when status changes.
     status_revision = state.get_revision("trading_status")
     status_frame = load_curated_trading_status(config)
-    status_rows: list[dict] = []
+    status_rows = iter(())
     if status_frame is not None and not status_frame.is_empty():
         volatile = {"source", "data_version", "fetched_at", "run_id", "capture_id"}
         status_columns = [column for column in status_frame.columns if column not in volatile]
         if status_columns:
-            for row in (
+            status_rows = (
                 status_frame.select(status_columns).sort(status_columns).iter_rows(named=True)
-            ):
-                status_rows.append(
-                    {
-                        column: (value.isoformat() if isinstance(value, date) else value)
-                        for column, value in row.items()
-                    }
-                )
-    status_encoded = json.dumps(
-        status_rows, sort_keys=True, separators=(",", ":"), default=str
-    ).encode()
+            )
     return {
         "instruments_revision": revision,
-        "instruments_fingerprint": hashlib.sha256(encoded).hexdigest(),
+        "instruments_fingerprint": instrument_digest,
         "trading_status_revision": status_revision,
-        "trading_status_fingerprint": hashlib.sha256(status_encoded).hexdigest(),
+        "trading_status_fingerprint": _row_fingerprint(status_rows),
     }
 
 
@@ -771,8 +775,14 @@ def load_negative_evidence(
     now: datetime | None = None,
 ) -> list[dict]:
     """Return current negative records for a dataset under its identity."""
+    store = StateStore(config.meta_root)
+    # No absence claims means no identity can affect the routing decision.
+    # Check live entries first, avoiding a full trading-status scan on the
+    # normal empty-cache path. Re-read with identity before returning evidence.
+    if not store.get_negative_evidence(dataset, now=now):
+        return []
     identity = _instrument_identity(config, metadata)
-    return StateStore(config.meta_root).get_negative_evidence(
+    return store.get_negative_evidence(
         dataset,
         identity=identity,
         now=now,

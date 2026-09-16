@@ -7,6 +7,7 @@ to change what it holds.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from datetime import date
 
 import click
@@ -103,6 +104,45 @@ def _derive_trading_status(cfg, *, start: date | None, end: date | None) -> dict
     return summary
 
 
+@contextmanager
+def _published_derive(cfg, dataset: str):
+    """Make CLI derives visible to revision-aware readers under the writer lock."""
+    from cnequity.file_lock import lake_mutation_lock
+    from cnequity.orchestrator.run_lock import run_lock
+    from cnequity.steps.finalize import (
+        _layer_file_identity,
+        _publish_derived_revision,
+        _record_dataset_result,
+    )
+    from cnequity.storage.revisions import RevisionStore
+
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run(f"derive:{dataset}", {"dataset": dataset})
+    outcome = {"status": "success", "rows_written": 0}
+    try:
+        with run_lock(cfg.meta_root, run_id), lake_mutation_lock(cfg.meta_root):
+            store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
+            store.ensure_current(dataset)
+            store.materialize_current(dataset)
+            before = _layer_file_identity(cfg.derived_root / dataset)
+            yield outcome
+            revision = _publish_derived_revision(cfg, dataset, run_id, shanghai_today(), before)
+            _record_dataset_result(
+                cfg,
+                run_id,
+                dataset,
+                "derive",
+                outcome["status"],
+                criticality="research",
+                revision_id=revision["revision_id"] if revision else None,
+                rows_written=outcome["rows_written"],
+            )
+            manifest.finish_run(run_id, outcome["status"], rows_written=outcome["rows_written"])
+    except Exception as exc:
+        manifest.finish_run(run_id, "failed", error_message=str(exc))
+        raise
+
+
 @cli.command()
 @click.argument("name", default="adj_factors")
 @config_option
@@ -132,7 +172,11 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
     if start and end and start > end:
         raise click.ClickException("--start must be on or before --end")
     if name == "adj_factors":
-        result = compute_adj_factors(cfg, full=full)
+        with _published_derive(cfg, name) as outcome:
+            result = compute_adj_factors(cfg, full=full)
+            outcome["rows_written"] = result.rows
+            if result.failed:
+                outcome["status"] = "degraded"
         click.echo(f"Derived {name}: {result.rows} rows")
         if result.failed:
             click.echo(
@@ -140,10 +184,13 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
                 f"({result.fail_ratio:.1%})",
                 err=True,
             )
+            raise SystemExit(1)
     elif name == "industry_index":
         from cnequity.derive.industry_index import derive_industry_index
 
-        summary = derive_industry_index(cfg, start=start, end=end, full=full)
+        with _published_derive(cfg, name) as outcome:
+            summary = derive_industry_index(cfg, start=start, end=end, full=full)
+            outcome["rows_written"] = summary.get("rows", 0)
         click.echo(json.dumps(summary, indent=2, default=str))
     elif name == "trading_status":
         summary = _derive_trading_status(cfg, start=start, end=end)

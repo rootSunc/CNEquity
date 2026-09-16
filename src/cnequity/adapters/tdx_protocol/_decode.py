@@ -3,9 +3,11 @@
 TDX packs quantities into a custom float, and ``_wire/helper.get_volume``
 decodes a raw zero to ``2**-127`` (~5.88e-39) rather than to ``0.0``: with
 every mantissa byte zero the exponent term ``2**(0*2 - 0x7F)`` still survives
-and nothing subtracts it back out. That decoder is a vendored upstream subset
-and is kept as-is; correcting the value here rather than there keeps it
-diffable against its origin.
+and nothing subtracts it back out. That zero behavior remains in the vendored
+decoder; correcting it here keeps the zero policy explicit. The decoder also
+has a documented local patch for negative exponents: the upstream reciprocal
+inflated small nonzero quantities (14 became 1544). That error must be fixed
+before raw bits are lost, rather than guessed from already decoded values.
 
 Left alone, that denormal reaches curated as a turnover of 5.9e-39 yuan on
 every no-trade bar, which contradicts the lake's stated suspension convention

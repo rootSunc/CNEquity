@@ -87,7 +87,10 @@ def get_volume(vol):
         if dw_edx >= 0:
             dbl_xmm0 = pow(2.0, dw_edx) * hleax
         else:
-            dbl_xmm0 = (1 / pow(2.0, dw_edx)) * hleax
+            # Local correctness patch: a negative exponent is already a
+            # fraction. Inverting it inflated small quantities (encoded 14
+            # decoded as 1544), including low-volume daily fund bars.
+            dbl_xmm0 = pow(2.0, dw_edx) * hleax
 
         dbl_xmm4 = dbl_xmm0
 

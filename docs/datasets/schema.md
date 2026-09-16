@@ -314,10 +314,11 @@ scripts/migrate_daily_bars_volume_v2.py --config configs/cnequity.toml --apply
 |--------|------|-------|
 | symbol | string |  |
 | ex_date | date |  |
-| action_type | string | cash_dividend/bonus/transfer/allotment |
+| action_type | string | cash_dividend/bonus/transfer/allotment/unit_split |
 | cash_dividend | float64 | **每股**（元，税前） |
 | bonus_ratio | float64 | **每股**（送股：每持有 1 股送出股数） |
 | transfer_ratio | float64 | **每股**（转股：每持有 1 股转增股数） |
+| split_factor | float64 | 份额拆分/合并：新份额 ÷ 原份额；中性值 1 |
 | allotment_ratio | float64 | **每股**（配股：每持有 1 股可配股数），可空 |
 | allotment_price | float64 | 配股价（元/股），**不是**比率，可空 |
 | source | string |  |
@@ -328,12 +329,18 @@ scripts/migrate_daily_bars_volume_v2.py --config configs/cnequity.toml --apply
 > 不是通达信（`xdxr`）/东财常见的「每 10 股」口径。Adapter 在入 staging 前
 > 把源侧「每 10 股」数值除以 10（例如「10 派 8.5 元」→ 0.85，「10 送 8 股」→ 0.8，
 > 「10 转 4 股」→ 0.4，「10 配 3 股」→ 0.3）。下游按真实持股统一核算，无需再除 10：
-> `shares_after = shares × (1 + bonus_ratio + transfer_ratio)`，
+> `shares_after = shares × (1 + bonus_ratio + transfer_ratio) × split_factor`，
 > `cash = shares × cash_dividend`。`allotment_price` 是每股价格而非比率，不做除 10。
 > 注意：TDX `xdxr` 不拆分送/转，会把送转合计写入 `bonus_ratio`（`transfer_ratio=0`）；
 > 总乘数正确，但送/转拆分仅在东财日更路径可区分。东财一条同时包含派息、送股、
 > 转增的方案会拆成多条 `(symbol, ex_date, action_type)` 记录，避免单一 `action_type`
 > 把其它分配分量置零。
+
+`unit_split` 单独表达基金份额拆分或合并：1 份变 3 份记 `split_factor=3`，
+10 份合为 1 份记 `0.1`，不假称送股或转增。旧记录缺失/空的 `split_factor` 按 1 解释；
+新拆分记录必须给出明确、有限、正且不等于 1 的比例。复权核验把拆分乘数纳入除权
+参考价计算；彼此冲突的拆分比例不能靠取最大值自动解决。拆分日期须为交易除权生效日，
+不能混用权益登记日或公告日期。此字段不代表金额，不应用“每 10 股除以 10”的换算。
 
 #### adj_factors
 

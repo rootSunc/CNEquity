@@ -213,3 +213,50 @@ def test_validate_wraps_engine_error_for_invalid_boolean_cast():
     with pytest.raises(SchemaValidationError, match="values cannot be cast") as exc_info:
         validate_dataframe(pl.DataFrame([row]), "trading_calendar")
     assert "is_trading" in str(exc_info.value)
+
+
+def _fund_action(**kwargs):
+    from cnequity.domain.schemas import with_provenance
+
+    row = {
+        "symbol": "159327.SZ",
+        "ex_date": date(2026, 7, 20),
+        "action_type": "cash_dividend",
+        "cash_dividend": 0.1,
+        "bonus_ratio": 0.0,
+        "transfer_ratio": 0.0,
+        "allotment_ratio": 0.0,
+        "allotment_price": 0.0,
+        **kwargs,
+    }
+    return with_provenance(pl.DataFrame([row]), "issuer", "v2")
+
+
+def test_legacy_action_has_neutral_unit_multiplier():
+    assert validate_dataframe(_fund_action(), "corporate_actions")["split_factor"][0] == 1.0
+
+
+@pytest.mark.parametrize("factor", [None, 0.0, -1.0, float("inf"), 1.0])
+def test_unit_split_requires_positive_non_neutral_factor(factor):
+    frame = _fund_action(action_type="unit_split", cash_dividend=0.0, split_factor=factor)
+    with pytest.raises(SchemaValidationError, match="split"):
+        validate_dataframe(frame, "corporate_actions")
+
+
+def test_unit_split_does_not_masquerade_as_bonus():
+    with pytest.raises(SchemaValidationError, match="split"):
+        validate_dataframe(_fund_action(split_factor=3.0), "corporate_actions")
+    frame = validate_dataframe(
+        _fund_action(action_type="unit_split", cash_dividend=0.0, split_factor=3.0),
+        "corporate_actions",
+    )
+    assert frame["bonus_ratio"][0] == 0 and frame["transfer_ratio"][0] == 0
+    assert frame["split_factor"][0] == 3
+
+
+def test_unit_split_does_not_double_count_a_stock_distribution():
+    frame = _fund_action(
+        action_type="unit_split", split_factor=3.0, cash_dividend=0.0, bonus_ratio=2.0
+    )
+    with pytest.raises(SchemaValidationError, match="stock distribution"):
+        validate_dataframe(frame, "corporate_actions")

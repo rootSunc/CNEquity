@@ -55,9 +55,24 @@ def test_cdr_symbol():
 def test_etf_symbol():
     assert is_etf_symbol("510300", "SH")
     assert is_etf_symbol("588000", "SH")
+    assert is_etf_symbol("530050", "SH")
+    assert is_etf_symbol("530060", "SH")
+    assert is_etf_symbol("501001", "SH")
+    assert is_etf_symbol("502003", "SH")
+    assert not is_etf_symbol("515473", "SH")
+    assert not is_etf_symbol("589493", "SH")
+    assert not is_etf_symbol("510301", "SH")
     assert is_etf_symbol("159915", "SZ")
     assert is_etf_symbol("160706", "SZ")
     assert not is_etf_symbol("600519", "SH")
     assert not is_etf_symbol("510300", "SZ")  # SH prefix on SZ
     assert not is_etf_symbol("159915", "SH")
     assert not is_etf_symbol("15991x", "SZ")
+
+
+def test_shanghai_lof_is_not_an_etf_subscription_code():
+    from cnequity.domain.symbols import is_subscription_placeholder
+
+    assert not is_subscription_placeholder("财通精选", "501001.SH")
+    assert not is_subscription_placeholder("证券分级", "502003.SH")
+    assert is_subscription_placeholder("某 ETF", "515473.SH")

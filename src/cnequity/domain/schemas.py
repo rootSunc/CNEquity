@@ -178,7 +178,7 @@ TRADING_STATUS_SCHEMA = {
 # per-10-share source values by 10 before staging. So "10派8.5元" → 0.85,
 # "10送8股" → 0.8, "10转4股" → 0.4, "10配3股" → 0.3. Downstream real-share
 # accounting is uniform: shares_after = shares * (1 + bonus_ratio +
-# transfer_ratio); cash = shares * cash_dividend. No /10 magic numbers.
+# transfer_ratio) * split_factor; cash = shares * cash_dividend. No /10 magic numbers.
 # allotment_price stays a per-share price (yuan paid per allotted share).
 CORPORATE_ACTIONS_SCHEMA = {
     "symbol": pl.Utf8,
@@ -187,6 +187,7 @@ CORPORATE_ACTIONS_SCHEMA = {
     "cash_dividend": pl.Float64,  # per share (yuan), pretax
     "bonus_ratio": pl.Float64,  # per share (送股: new shares per held share)
     "transfer_ratio": pl.Float64,  # per share (转股: new shares per held share)
+    "split_factor": pl.Float64,  # unit_split: units after / before; 1 is neutral
     "allotment_ratio": pl.Float64,  # per share (配股: offered shares per held share)
     "allotment_price": pl.Float64,  # per allotted share (yuan), NOT a ratio
     "source": pl.Utf8,
@@ -914,6 +915,51 @@ def validate_dataframe(
         from cnequity.domain.trading_status import normalize_legacy
 
         df = normalize_legacy(df)
+
+    if dataset == "corporate_actions":
+        # Old rows predate explicit fund unit splits and retain neutral units.
+        # A new split event must supply its ratio; never guess it from a bonus.
+        is_split = (
+            pl.col("action_type") == "unit_split" if "action_type" in df.columns else pl.lit(False)
+        )
+        if "split_factor" not in df.columns:
+            if df.filter(is_split).height:
+                raise SchemaValidationError("unit_split requires an explicit split_factor")
+            df = df.with_columns(pl.lit(1.0).alias("split_factor"))
+        factor = pl.col("split_factor").cast(pl.Float64, strict=False)
+        invalid = (
+            (pl.col("split_factor").is_not_null() & factor.is_null())
+            | (factor.is_not_null() & (~factor.is_finite() | (factor <= 0)))
+            | (is_split & (factor.is_null() | (factor == 1)))
+            | (~is_split & factor.is_not_null() & (factor != 1))
+        )
+        if df.filter(invalid).height:
+            raise SchemaValidationError("invalid unit split factor or action_type")
+        stock_terms = [
+            column
+            for column in (
+                "cash_dividend",
+                "bonus_ratio",
+                "transfer_ratio",
+                "allotment_ratio",
+                "allotment_price",
+            )
+            if column in df.columns
+        ]
+        if (
+            stock_terms
+            and df.filter(
+                is_split
+                & pl.any_horizontal(
+                    [
+                        pl.col(c).cast(pl.Float64, strict=False).fill_null(0) != 0
+                        for c in stock_terms
+                    ]
+                )
+            ).height
+        ):
+            raise SchemaValidationError("unit_split cannot carry stock distribution terms")
+        df = df.with_columns(factor.fill_null(1.0).alias("split_factor"))
 
     missing = [col for col in schema if col not in df.columns]
     if allow_missing_optional:

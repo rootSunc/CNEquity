@@ -24,7 +24,7 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.baostock._session import _login, import_baostock
+from cnequity.adapters.baostock._session import _login, _logout, import_baostock
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.symbols import (
     format_symbol,
@@ -139,8 +139,7 @@ def fetch_instrument_basics(*, bs=None, sleep=time.sleep, config=None) -> pl.Dat
             )
     finally:
         try:
-            with source_request(config, "baostock"):
-                bs.logout()
+            _logout(bs, config=config)
         except Exception:  # noqa: BLE001 — logout on a dead socket may raise
             pass
 

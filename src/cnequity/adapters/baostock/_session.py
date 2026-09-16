@@ -40,6 +40,8 @@ _DEFAULT_BATCH_REST = 120.0
 _PER_SYMBOL_DEADLINE_SECONDS = 45.0
 # Bound blocked reads (dropped conn can leave ESTABLISHED forever).
 _SOCKET_TIMEOUT_SECONDS = 30.0
+_LOGIN_DEADLINE_SECONDS = 30.0
+_LOGOUT_DEADLINE_SECONDS = 10.0
 
 
 def _request_context(config, source: str = "baostock"):
@@ -58,6 +60,10 @@ def _request_context(config, source: str = "baostock"):
 
 class _FetchDeadline(TimeoutError):
     """Raised in the fetching thread when one vendor query exceeds its budget."""
+
+
+class _AlarmDeadline(BaseException):
+    """Internal cancellation that the SDK's broad Exception handlers cannot eat."""
 
 
 def _fetch_with_deadline(fetch, deadline: float, on_deadline):
@@ -88,12 +94,14 @@ def _fetch_with_deadline(fetch, deadline: float, on_deadline):
 
         def _alarm_handler(_signum, _frame):
             on_deadline()
-            raise _FetchDeadline(f"vendor query exceeded {deadline:.1f}s deadline")
+            raise _AlarmDeadline(f"vendor query exceeded {deadline:.1f}s deadline")
 
         signal.signal(signal.SIGALRM, _alarm_handler)
         signal.setitimer(signal.ITIMER_REAL, deadline)
         try:
             return fetch()
+        except _AlarmDeadline as exc:
+            raise _FetchDeadline(str(exc)) from None
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, previous_handler)
@@ -131,23 +139,60 @@ def import_baostock():
     return bs
 
 
+class _SessionDeadline(RuntimeError):
+    """A session operation exceeded its total budget, even if recv kept moving."""
+
+
+def _session_call(operation, *, config, label: str, deadline: float):
+    expired = False
+
+    def expire():
+        nonlocal expired
+        expired = True
+        _force_close_baostock_socket()
+
+    def invoke():
+        # Keep the lease in the worker until the actual vendor call returns.
+        with _request_context(config):
+            return operation()
+
+    try:
+        result = _fetch_with_deadline(invoke, deadline, expire)
+    except _FetchDeadline as exc:
+        raise _SessionDeadline(f"baostock {label} exceeded {deadline:.1f}s deadline") from exc
+    # The vendor catches Exception around recv, including the alarm exception.
+    # Closing the socket gets it out of recv, but a swallowed deadline must
+    # still fail the session instead of looking like a successful login.
+    if expired:
+        raise _SessionDeadline(f"baostock {label} exceeded {deadline:.1f}s deadline")
+    return result
+
+
 def _login(bs, *, sleep=time.sleep, config=None) -> None:
     last_msg = "unknown"
     for attempt in range(_LOGIN_RETRIES):
-        with _request_context(config):
-            login = bs.login()
-        if getattr(login, "error_code", "0") == "0":
+        login = _session_call(
+            bs.login, config=config, label="login", deadline=_LOGIN_DEADLINE_SECONDS
+        )
+        if getattr(login, "error_code", None) == "0":
             return
-        last_msg = getattr(login, "error_msg", "unknown")
+        last_msg = getattr(login, "error_msg", "missing login response")
         if attempt + 1 < _LOGIN_RETRIES:
             sleep(_LOGIN_BACKOFF_SECONDS[min(attempt, len(_LOGIN_BACKOFF_SECONDS) - 1)])
     raise RuntimeError(f"baostock login failed: {last_msg}")
 
 
+def _logout(bs, *, config=None) -> None:
+    _session_call(bs.logout, config=config, label="logout", deadline=_LOGOUT_DEADLINE_SECONDS)
+
+
 def _relogin(bs, *, sleep=time.sleep, config=None) -> None:
     try:
-        with _request_context(config):
-            bs.logout()
+        _logout(bs, config=config)
+    except _SessionDeadline:
+        # Do not establish another connection while an orphaned logout may
+        # still own the vendor's process-global socket.
+        raise
     except Exception:  # noqa: BLE001 - logout on a dead socket may raise; ignore
         pass
     _login(bs, sleep=sleep, config=config)
@@ -271,12 +316,14 @@ def fetch_per_symbol(
 
     prev_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(_SOCKET_TIMEOUT_SECONDS)
-    _login(bs, sleep=sleep, config=config)
-    _ensure_socket_timeout()
+    logged_in = False
     rows: list[dict] = []
     failed: list[str] = []
     n_symbols = len(symbols)
     try:
+        _login(bs, sleep=sleep, config=config)
+        logged_in = True
+        _ensure_socket_timeout()
         for i, symbol in enumerate(symbols):
             _batch_rest(config, i, sleep=sleep)
             _pace_before_symbol(config, sleep=sleep)
@@ -361,11 +408,11 @@ def fetch_per_symbol(
                 rows.extend(got)
     finally:
         socket.setdefaulttimeout(prev_timeout)
-        try:
-            with _request_context(config):
-                bs.logout()
-        except Exception:  # noqa: BLE001
-            pass
+        if logged_in:
+            try:
+                _logout(bs, config=config)
+            except Exception as exc:  # noqa: BLE001 — retain completed query results
+                logger.warning("baostock logout failed: %s", exc)
 
     # Callers that split a long sweep into checkpoint-sized batches need the
     # same cooldown that the in-process loop applies before symbol N+1. Keep

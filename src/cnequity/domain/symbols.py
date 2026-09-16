@@ -29,8 +29,25 @@ CDR_PREFIXES = ("689",)
 # and TDX answered with a NAV series: 436,533 rows in `daily_bars` carrying a
 # close but zero volume and zero turnover on every single one, against 95-99%
 # non-zero volume for every genuine prefix beside it.
+SH_LOF_PREFIXES = ("501", "502")
+
 ETF_PREFIXES = {
-    "SH": ("510", "511", "512", "513", "514", "515", "516", "517", "518", "52", "56", "58"),
+    "SH": (
+        *SH_LOF_PREFIXES,
+        "510",
+        "511",
+        "512",
+        "513",
+        "514",
+        "515",
+        "516",
+        "517",
+        "518",
+        "52",
+        "53",
+        "56",
+        "58",
+    ),
     "SZ": ("15", "16"),
 }
 
@@ -163,11 +180,32 @@ def is_etf_symbol(code: str, exchange: str) -> bool:
     if not isinstance(code, str) or len(code) != 6 or not code.isdigit():
         return False
     prefixes = ETF_PREFIXES.get(exchange.upper(), ())
-    return any(code.startswith(p) for p in prefixes)
+    if not any(code.startswith(p) for p in prefixes):
+        return False
+    # SSE ETF secondary-market codes end in 0. Codes ending in 1 and 3
+    # identify creation/redemption and subscription respectively, even when
+    # TDX gives them the fund's normal name and a padded quote series.
+    # This rule does not apply to Shanghai LOFs or Shenzhen ETF/LOF codes.
+    return exchange.upper() != "SH" or code.startswith(SH_LOF_PREFIXES) or code.endswith("0")
 
 
-def is_subscription_placeholder(name: str | None) -> bool:
+def is_subscription_placeholder(name: str | None, symbol: str | None = None) -> bool:
     """TDX allotment / subscription stubs (``认购款``), not tradable securities."""
+    if symbol:
+        try:
+            info = parse_symbol(symbol)
+        except ValueError:
+            pass
+        else:
+            if (
+                info.exchange == "SH"
+                and len(info.code) == 6
+                and info.code.isdigit()
+                and info.code.startswith(ETF_PREFIXES["SH"])
+                and not info.code.startswith(SH_LOF_PREFIXES)
+                and info.code.endswith(("1", "3"))
+            ):
+                return True
     if not name:
         return False
     # Some TDX stock-list responses use C-style NUL padding for fixed-width

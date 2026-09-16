@@ -74,7 +74,7 @@ def roster_on(day: date, *, bs=None, login: bool = True, config=None) -> set[str
     stocks traded that day" and understate the gap to zero. Pass ``login=False``
     only when the caller already holds a session.
     """
-    from cnequity.adapters.baostock._session import _login
+    from cnequity.adapters.baostock._session import _login, _logout
 
     bs = bs or import_baostock()
     if login:
@@ -100,8 +100,10 @@ def roster_on(day: date, *, bs=None, login: bool = True, config=None) -> set[str
         return out
     finally:
         if login:
-            with source_request(config, "baostock"):
-                bs.logout()
+            try:
+                _logout(bs, config=config)
+            except Exception as exc:  # noqa: BLE001 — retain the completed roster
+                logger.warning("baostock roster logout failed: %s", exc)
 
 
 def _fetch_one(bs, symbol: str, start: date, end: date, *, config=None) -> list[dict] | None:

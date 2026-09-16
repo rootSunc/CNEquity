@@ -11,7 +11,8 @@ split "ST" from "*ST" — so every ST day maps to ``status="st"``; that is enoug
 for the universe filter (``EXCLUDED_STATUSES`` covers both). Every traded day
 is emitted, including ``status="normal"`` as explicit negative evidence. A
 missing row therefore remains unknown rather than being silently interpreted
-as non-ST. Suspension is reconstructed separately from bar gaps.
+as non-ST. Explicit source suspension rows are retained with their independent
+ST designation; bar absence alone does not establish suspension.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from cnequity.adapters.baostock._session import (
     to_baostock_symbol,
 )
 from cnequity.domain.rate_limit import source_request
-from cnequity.domain.trading_status import STATUS_NORMAL
+from cnequity.domain.trading_status import STATUS_NORMAL, STATUS_SUSPENDED
 
 __all__ = ["fetch_st_history", "to_baostock_symbol"]
 
@@ -73,8 +74,6 @@ def _fetch_one_st(bs, symbol: str, start: date, end: date, *, config=None) -> li
             continue
         if tradestatus not in ("0", "1"):
             return None
-        if tradestatus != "1":
-            continue
         if is_st not in ("0", "1"):
             return None
         try:
@@ -87,8 +86,8 @@ def _fetch_one_st(bs, symbol: str, start: date, end: date, *, config=None) -> li
             {
                 "symbol": symbol,
                 "trade_date": trade_date,
-                "is_trading": True,
-                "status": STATUS_NORMAL,
+                "is_trading": tradestatus == "1",
+                "status": STATUS_NORMAL if tradestatus == "1" else STATUS_SUSPENDED,
                 "risk_warning": is_st == "1",
             }
         )
@@ -113,7 +112,8 @@ def fetch_st_history(
     symbol is retried with a fresh session + backoff and the still-failing ones
     are returned so the caller can surface them and resume. A traded symbol
     that was never ST contributes explicit ``normal`` rows; a symbol with no
-    trading sessions in the requested window contributes zero rows.
+    source records in the requested window contributes zero rows. Source
+    suspensions are retained; they are evidence, not missing trading bars.
 
     ``bs`` / ``sleep`` / ``config`` are injectable for offline tests. Pass
     ``config`` in production for ``[sources.baostock]`` pacing.

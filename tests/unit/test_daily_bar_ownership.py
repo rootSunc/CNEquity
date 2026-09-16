@@ -33,16 +33,16 @@ def test_daily_bar_ownership_is_explicit_for_every_symbol():
 
 def test_delisted_etf_is_not_sent_to_stock_recovery_gate():
     result = classify_daily_bar_ownership(
-        ["517233.SH", "600003.SH"],
+        ["517230.SH", "600003.SH"],
         {
-            "517233.SH": (None, date(2026, 8, 18)),
+            "517230.SH": (None, date(2026, 8, 18)),
             "600003.SH": (date(2000, 1, 1), date(2026, 8, 18)),
         },
         date(2026, 8, 15),
         date(2026, 8, 21),
     )
 
-    assert result.generic == ["517233.SH"]
+    assert result.generic == ["517230.SH"]
     assert result.delegated_delisted == ["600003.SH"]
 
 

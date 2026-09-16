@@ -34,6 +34,7 @@ from cnequity.domain.symbols import (
     ETF_PREFIXES,
     PREFIX_WHITELIST,
     format_symbol,
+    is_all_a_symbol,
     is_cdr_symbol,
     is_etf_symbol,
 )
@@ -333,6 +334,8 @@ def _filter_instrument_frame(pdf: pl.DataFrame, exch: str) -> pl.DataFrame:
     rows = []
     for row in filtered.iter_rows(named=True):
         code = str(row[code_col]).strip().zfill(6)
+        if not (is_all_a_symbol(code, exch) or is_etf_symbol(code, exch)):
+            continue
         # TDX serves the name in a fixed-width field padded with NULs, which
         # survive the decode and reach curated as "C格林\x00\x00\x00". Substring
         # matching (ST detection) happens to be unaffected, but equality, joins

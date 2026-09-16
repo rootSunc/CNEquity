@@ -77,7 +77,7 @@ def _stage(cfg: Config, run_id: str, batch: str, symbols: list[str], day: date) 
         ("920184.BJ", True, False),  # Beijing
         ("158030.SZ", False, False),  # LOF
         ("159089.SZ", False, False),  # ETF
-        ("512743.SH", False, False),  # ETF
+        ("512740.SH", False, False),  # ETF
         ("110045.SH", False, False),  # convertible bond
     ],
 )
@@ -115,7 +115,7 @@ def _instrument_lake(tmp_path, **kwargs) -> Config:
     instruments.mkdir(parents=True)
     pl.DataFrame(
         {
-            "symbol": ["600519.SH", "920184.BJ", "158030.SZ", "512743.SH"],
+            "symbol": ["600519.SH", "920184.BJ", "158030.SZ", "512740.SH"],
             "name": ["贵州茅台", "北交所某股", "某 LOF", "某 ETF"],
             "asset_type": ["stock", "stock", "etf", "etf"],
             "list_date": [date(2001, 8, 27)] * 4,
@@ -132,6 +132,16 @@ def _capture_fetch_scope(monkeypatch) -> list[str]:
         requested.extend(symbols)
         return {"rows_read": 0, "rows_written": 0, "failed_symbols": []}
 
+    # Scope tests exercise routing without consulting a live exchange snapshot.
+    monkeypatch.setattr(
+        "cnequity.steps.bars._fetch_tip_via_exchange",
+        lambda *a, **k: {
+            "rows_read": 0,
+            "rows_written": 0,
+            "covered": set(),
+            "source_outcomes": {},
+        },
+    )
     monkeypatch.setattr("cnequity.steps.bars.fetch_daily_bars_parallel", fake_fetch)
     monkeypatch.setattr(
         "cnequity.steps.bars.fetch_bars_via_sina",
@@ -158,7 +168,7 @@ def test_daily_fetch_scope_excludes_fund_codes_but_keeps_beijing(tmp_path, monke
 
     assert "600519.SH" in requested
     assert "920184.BJ" not in requested  # routed to the Sina fallback, not TDX
-    assert not [symbol for symbol in requested if symbol in {"158030.SZ", "512743.SH"}]
+    assert not [symbol for symbol in requested if symbol in {"158030.SZ", "512740.SH"}]
 
 
 def test_all_instruments_restores_the_previous_fetch_scope(tmp_path, monkeypatch):
@@ -169,7 +179,7 @@ def test_all_instruments_restores_the_previous_fetch_scope(tmp_path, monkeypatch
     with pytest.raises(RuntimeError):
         step_daily_bars(cfg, D3, run_id, {})
 
-    assert {"158030.SZ", "512743.SH"} <= set(requested)
+    assert {"158030.SZ", "512740.SH"} <= set(requested)
 
 
 def test_explicit_backfill_scope_is_never_narrowed(tmp_path, monkeypatch):
@@ -337,11 +347,11 @@ def test_fallback_queue_puts_research_symbols_ahead_of_quote_codes():
     from cnequity.steps.bars import _research_first
 
     queue = _research_first(
-        {"158030.SZ", "600519.SH", "512743.SH", "000001.SZ", "920184.BJ", "junk"}
+        {"158030.SZ", "600519.SH", "512740.SH", "000001.SZ", "920184.BJ", "junk"}
     )
 
     assert queue[:3] == ["000001.SZ", "600519.SH", "920184.BJ"]
-    assert set(queue[3:]) == {"158030.SZ", "512743.SH", "junk"}
+    assert set(queue[3:]) == {"158030.SZ", "512740.SH", "junk"}
     # Deterministic, not shuffled: sorted within each class.
     assert queue[3:] == sorted(queue[3:])
     assert _research_first(queue) == queue
@@ -566,7 +576,8 @@ def test_exchange_tip_covers_the_board_and_leaves_tdx_the_remainder(tmp_path, mo
     result = _fetch_tip_via_exchange(cfg, ["600519.SH", "000001.SZ", "600001.SH"], D3, run_id)
 
     assert calls == [D3], "one board request set, not one per symbol"
-    assert result["covered"] == {"600519.SH", "000001.SZ"}
+    assert result["covered"] == {"600519.SH"}
+    # SZSE report turnover has a different trade scope; vendors retain ownership.
     staged = pl.read_parquet(
         cfg.staging_root / "daily_bars" / f"run_id={run_id}" / "part-exchange-tip-0000.parquet"
     )

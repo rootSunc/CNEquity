@@ -137,3 +137,89 @@ def test_mid_sweep_login_failure_returns_partial(monkeypatch):
     assert calls["fetch"] == 3  # retried the full _MAX_RETRIES
     assert failed == ["600000.SH"]
     assert rows == []
+
+
+def test_login_deadline_is_not_swallowed_and_restores_socket_default(monkeypatch):
+    import socket
+
+    import pytest
+
+    from cnequity.adapters.baostock import _session as sess
+
+    monkeypatch.setattr(sess, "_LOGIN_DEADLINE_SECONDS", 0.01)
+    monkeypatch.setattr(sess, "_force_close_baostock_socket", lambda: None)
+
+    class SlowLogin(_NoQueryBaostock):
+        def login(self):
+            self.logins += 1
+            try:
+                threading.Event().wait(1)
+            except Exception:
+                # The real SDK catches the watchdog exception around recv.
+                pass
+            return type("R", (), {"error_code": "0"})()
+
+    bs = SlowLogin()
+    previous = socket.getdefaulttimeout()
+    with pytest.raises(RuntimeError, match="login exceeded"):
+        sess.fetch_per_symbol([], date(2020, 1, 1), date(2020, 1, 2), lambda *a: [], bs=bs)
+    assert socket.getdefaulttimeout() == previous
+    assert bs.logins == 1
+    assert not bs.logged_out
+
+
+def test_logout_deadline_does_not_lose_completed_rows(monkeypatch):
+    from cnequity.adapters.baostock import _session as sess
+
+    monkeypatch.setattr(sess, "_LOGOUT_DEADLINE_SECONDS", 0.01)
+    monkeypatch.setattr(sess, "_force_close_baostock_socket", lambda: None)
+
+    class SlowLogout(_NoQueryBaostock):
+        def logout(self):
+            threading.Event().wait(1)
+
+    rows, failed = sess.fetch_per_symbol(
+        ["600000.SH"],
+        date(2020, 1, 1),
+        date(2020, 1, 2),
+        lambda *a: [{"symbol": "600000.SH"}],
+        bs=SlowLogout(),
+        sleep=lambda _: None,
+    )
+    assert rows == [{"symbol": "600000.SH"}]
+    assert failed == []
+
+
+def test_relogin_does_not_overlap_a_timed_out_logout(monkeypatch):
+    import pytest
+
+    from cnequity.adapters.baostock import _session as sess
+
+    monkeypatch.setattr(sess, "_LOGOUT_DEADLINE_SECONDS", 0.01)
+    monkeypatch.setattr(sess, "_force_close_baostock_socket", lambda: None)
+
+    class SlowLogout(_NoQueryBaostock):
+        def logout(self):
+            threading.Event().wait(1)
+
+    bs = SlowLogout()
+    with pytest.raises(RuntimeError, match="logout exceeded"):
+        sess._relogin(bs)
+    assert bs.logins == 0
+
+
+def test_sdk_exception_handler_cannot_swallow_query_deadline():
+    import pytest
+
+    from cnequity.adapters.baostock import _session as sess
+
+    def vendor():
+        try:
+            threading.Event().wait(1)
+        except Exception:
+            # An SDK may retry or return an apparently valid object here.
+            return "deadline was swallowed"
+        return "too late"
+
+    with pytest.raises(TimeoutError, match="exceeded"):
+        sess._fetch_with_deadline(vendor, 0.01, lambda: None)

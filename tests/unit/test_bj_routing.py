@@ -534,3 +534,32 @@ def test_recovered_beijing_names_are_enriched_not_stranded(tmp_path, monkeypatch
     bj = written["df"].filter(pl.col("symbol") == "920038.BJ")
     assert bj.height == 1
     assert bj["list_date"].item() == date(2026, 8, 5)
+
+
+def test_sina_circuit_survives_multiple_gapfill_passes_and_resets_next_run(tmp_path, monkeypatch):
+    cfg = Config(data_root=tmp_path, source_intervals={"sina_bars": 0.0})
+    monkeypatch.setattr(cfg, "defer_source", lambda *args: None)
+    calls = []
+    request = httpx.Request("GET", "https://example.test/sina")
+
+    def blocked(symbol, client):
+        calls.append(symbol)
+        raise httpx.HTTPStatusError(
+            "rate limited", request=request, response=httpx.Response(456, request=request)
+        )
+
+    day = date(2026, 7, 21)
+    fetch_bars_via_sina(cfg, ["600519.SH"], day, day, "same-run", fetch=blocked)
+    later = fetch_bars_via_sina(cfg, ["000001.SZ"], day, day, "same-run", fetch=blocked)
+    assert len(calls) == 2
+    assert later["source_outcomes"]["sina"]["failure_reasons"] == {"circuit_open": 1}
+    fetch_bars_via_sina(cfg, ["000001.SZ"], day, day, "next-run", fetch=blocked)
+    assert len(calls) == 4
+    # Config later crosses a process-pool boundary. Circuit state cannot hold
+    # a thread lock, even though the request workers within this call are threads.
+    import pickle
+
+    monkeypatch.undo()
+    # The normal limiter cache is intentionally process-local as well.
+    cfg._rate_limiters = None
+    pickle.dumps(cfg)

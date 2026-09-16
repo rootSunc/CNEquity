@@ -8,6 +8,7 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.symbols import filter_ingest_universe, is_cdr_symbol
 from cnequity.domain.trading_status import risk_warning_expr
 from cnequity.query.canonical import dedupe_by_primary_key
 from cnequity.query.parquet_scan import collect_parquet_root
@@ -106,6 +107,14 @@ def _limit_threshold(symbol: str, risk_warning: bool | None) -> float:
 def compute_market_breadth(config: Config, trade_date: date) -> pl.DataFrame:
     bars_root = config.curated_root / "daily_bars"
     today = _read_bars(bars_root, trade_date)
+    if today.is_empty():
+        return pl.DataFrame()
+
+    # The lake also holds ETFs, indices and other instruments. Market breadth
+    # counts A-share stocks, not every row added by a broader ingest scope.
+    stocks = filter_ingest_universe(today["symbol"].unique().to_list(), "all_a")
+    stocks = [s for s in stocks if not is_cdr_symbol(*s.rsplit(".", 1))]
+    today = today.filter(pl.col("symbol").is_in(stocks))
     if today.is_empty():
         return pl.DataFrame()
 

@@ -21,6 +21,12 @@ the running price, not the close, and comparing it against a settled curated bar
 would manufacture drift every intraday run. The snapshot's own ``time`` field
 gates this: it is only accepted from the close onward.
 
+**Turnover scope differs from auction bars.** The SZSE stock report totals
+can include trades outside the intraday auction series. Its price columns are
+useful authority evidence, but its volume/amount are not interchangeable with
+TDX/Sina/THS auction quantities. Ingestion must leave SZ symbols to compatible
+quote feeds; this adapter retains the original report totals for auditing.
+
 Neither exchange covers Beijing. BJ symbols are simply absent from the result
 and drop out of the shared universe the check compares over.
 """

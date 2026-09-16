@@ -401,8 +401,8 @@ def breadth_lake(tmp_path):
     ).write_parquet(cal / "part-0.parquet")
 
     for d, closes in (
-        (date(2024, 6, 27), {"A.SH": 10.0, "B.SH": 20.0, "C.SH": 30.0}),
-        (date(2024, 6, 28), {"A.SH": 11.0, "B.SH": 18.0, "C.SH": 30.0}),
+        (date(2024, 6, 27), {"600001.SH": 10.0, "600002.SH": 20.0, "600003.SH": 30.0}),
+        (date(2024, 6, 28), {"600001.SH": 11.0, "600002.SH": 18.0, "600003.SH": 30.0}),
     ):
         part = curated / "daily_bars" / f"trade_date={d.isoformat()}"
         part.mkdir(parents=True)
@@ -425,7 +425,7 @@ def breadth_lake(tmp_path):
     duplicate_part = curated / "daily_bars" / "trade_date=2024-06-28"
     pl.DataFrame(
         {
-            "symbol": ["A.SH"],
+            "symbol": ["600001.SH"],
             "trade_date": [date(2024, 6, 28)],
             "open": [11.0],
             "high": [11.0],
@@ -450,6 +450,21 @@ def test_market_breadth_computed_from_daily_bars(breadth_lake):
     assert metrics["decline_count"] == 1.0
     assert metrics["flat_count"] == 1.0
     assert metrics["total_count"] == 3.0
+
+
+def test_market_breadth_excludes_funds_indices_b_shares_and_cdrs(breadth_lake):
+    extras = ["510300.SH", "399001.SZ", "900901.SH", "689009.SH", "920001.BJ"]
+    for day in [27, 28]:
+        part = breadth_lake.curated_root / "daily_bars" / f"trade_date=2024-06-{day}"
+        base = pl.read_parquet(part / "part-0.parquet").row(0, named=True)
+        rows = [
+            {**base, "symbol": symbol, "close": 10.0 if day == 27 else 11.0} for symbol in extras
+        ]
+        pl.DataFrame(rows).write_parquet(part / "part-other-assets.parquet")
+    result = compute_market_breadth(breadth_lake, date(2024, 6, 28))
+    metrics = dict(zip(result["metric_id"], result["value"], strict=True))
+    assert metrics["total_count"] == 4  # Three SH stocks plus the BJ stock.
+    assert metrics["advance_count"] == 2
 
 
 def test_market_breadth_excludes_no_trade_placeholders(tmp_path):
