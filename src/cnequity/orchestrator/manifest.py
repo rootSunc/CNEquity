@@ -14,6 +14,13 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# How long an unlocked `running` row is given before it is treated as a corpse.
+# It only has to cover the gap between `start_run` and the run taking its lock,
+# which is one SQLite insert — a minute is generous. Liveness itself is the
+# lock, not this number.
+UNLOCKED_RUN_GRACE_SECONDS = 60.0
+
+
 # ``ingestion_batches`` is the retry ledger.  ``dataset_results`` is the
 # smaller, user-facing receipt ledger: one row per logical dataset and stage.
 # Keep these values here (rather than sprinkling string literals through the
@@ -747,23 +754,49 @@ class Manifest:
                 activity = batch_activity
         return activity
 
+    @staticmethod
+    def _orphan_deadlines(
+        stale_after_seconds: float, unlocked_grace_seconds: float
+    ) -> tuple[datetime, datetime]:
+        """(locked-unknown deadline, unlocked deadline) for orphan detection.
+
+        A run with activity newer than its deadline is alive. The unlocked one
+        takes whichever is stricter: a caller that configured a shorter stale
+        window meant it, and the grace period is a ceiling on how long an
+        unlocked corpse may linger, never a reason to wait longer than asked.
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=stale_after_seconds)
+        return cutoff, max(cutoff, now - timedelta(seconds=max(0.0, unlocked_grace_seconds)))
+
     def reconcile_orphaned_runs(
         self,
         *,
         stale_after_seconds: float = 300,
         error_message: str = "reconciled: worker exited without finish_run",
         locks_root: Path | None = None,
+        unlocked_grace_seconds: float = UNLOCKED_RUN_GRACE_SECONDS,
     ) -> dict[str, int]:
-        """Close runs/batches with no activity past *stale_after_seconds*.
+        """Close runs/batches whose owner is gone.
+
+        Two ways to be sure of that, and the cheap one comes first: a live run
+        holds ``meta/locks/{run_id}.lock``, which the kernel releases the
+        moment its process dies. An unlocked run therefore only has to outlive
+        a short grace window — enough to cover the gap between `start_run` and
+        the lock — rather than the full ``stale_after_seconds``. That timeout
+        remains the answer for a run whose owner never took a lock at all (a
+        older binary, or a caller that recorded a run without executing it),
+        where heartbeat age is the only evidence available.
 
         Activity is ``max(run.started_at, max batch heartbeat/started)`` so a
         long-lived job that still heartbeats is not mistaken for a crash.
-        Runs whose ``meta/locks/{run_id}.lock`` is held are skipped — another
-        process still owns them. Updates are idempotent (``WHERE status=…``).
+        Updates are idempotent (``WHERE status=…``).
         """
         from cnequity.orchestrator.run_lock import is_run_locked
 
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+        cutoff, unlocked_cutoff = self._orphan_deadlines(
+            stale_after_seconds, unlocked_grace_seconds
+        )
         runs_closed = 0
         batches_closed = 0
         skipped_locked = 0
@@ -775,11 +808,14 @@ class Manifest:
             orphan_run_ids: list[str] = []
             for row in candidates:
                 run_id = row["run_id"]
-                if locks_root is not None and is_run_locked(locks_root, run_id):
-                    skipped_locked += 1
-                    continue
+                deadline = cutoff
+                if locks_root is not None:
+                    if is_run_locked(locks_root, run_id):
+                        skipped_locked += 1
+                        continue
+                    deadline = unlocked_cutoff
                 activity = self._run_activity_at(conn, run_id, row["started_at"])
-                if activity > cutoff:
+                if activity > deadline:
                     continue
                 orphan_run_ids.append(run_id)
             now = _utcnow()
@@ -823,19 +859,30 @@ class Manifest:
         *,
         stale_after_seconds: float,
         locks_root: Path | None = None,
+        unlocked_grace_seconds: float = UNLOCKED_RUN_GRACE_SECONDS,
     ) -> int:
-        """How many ``running`` runs look orphaned (same rules as reconcile)."""
+        """How many ``running`` runs look orphaned (same rules as reconcile).
+
+        Same rules literally: `cne status` reporting a different orphan count
+        from the one the next run will act on is how an operator ends up
+        arguing with the tool about whether a crash happened.
+        """
         from cnequity.orchestrator.run_lock import is_run_locked
 
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+        cutoff, unlocked_cutoff = self._orphan_deadlines(
+            stale_after_seconds, unlocked_grace_seconds
+        )
         n = 0
         with self._connect() as conn:
             for row in conn.execute(
                 "SELECT run_id, started_at FROM ingestion_runs WHERE status = 'running'"
             ):
-                if locks_root is not None and is_run_locked(locks_root, row["run_id"]):
-                    continue
-                if self._run_activity_at(conn, row["run_id"], row["started_at"]) <= cutoff:
+                deadline = cutoff
+                if locks_root is not None:
+                    if is_run_locked(locks_root, row["run_id"]):
+                        continue
+                    deadline = unlocked_cutoff
+                if self._run_activity_at(conn, row["run_id"], row["started_at"]) <= deadline:
                     n += 1
         return n
 

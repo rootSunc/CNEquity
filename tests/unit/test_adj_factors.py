@@ -1027,6 +1027,20 @@ def test_uncovered_symbols_detects_a_middle_factor_gap(adj_config):
     assert _uncovered_symbols(adj_config) == {"600519.SH"}
 
 
+@pytest.mark.parametrize("terminal_lag", [False, True])
+def test_extra_suspension_factor_cannot_hide_missing_traded_date(adj_config, terminal_lag):
+    from cnequity.derive.adj_factors import _uncovered_symbols
+
+    # A suspended date has a carried factor; a later traded date lost its row.
+    # Counts and endpoints match, but the actual keys are different.
+    for day in [24, 26, 27, 28] + ([29] if terminal_lag else []):
+        _write_bar(adj_config, "600519.SH", date(2024, 6, day))
+    for day in [24, 25, 26, 28]:
+        _write_adj_partition(adj_config, "600519.SH", date(2024, 6, day))
+
+    assert _uncovered_symbols(adj_config) == {"600519.SH"}
+
+
 # --- Recomputed-factor cross-check ------------------------------------------
 
 
@@ -1410,3 +1424,147 @@ def test_action_terms_still_add_rows_from_one_vendor(adj_config):
     row = out.to_dicts()[0]
     assert row["_bonus"] == pytest.approx(0.3)
     assert row["_transfer"] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("ratio", [3.0, 0.1])
+def test_unit_split_and_consolidation_factor_steps(crosscheck_config, ratio):
+    from cnequity.derive.adj_factors import _corporate_action_crosscheck_findings
+
+    cfg = crosscheck_config
+    symbol = "159327.SZ"
+    _write_bars(cfg, symbol, _DAYS[:1], 10.0)
+    _write_bars(cfg, symbol, _DAYS[1:], 10.0 / ratio)
+    part = cfg.curated_root / "corporate_actions" / f"ex_date={_DAYS[1]}"
+    part.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": [symbol],
+            "ex_date": [_DAYS[1]],
+            "action_type": ["unit_split"],
+            "split_factor": [ratio],
+            "source": ["issuer"],
+        }
+    ).write_parquet(part / "split.parquet")
+    out = _factor_frame(symbol, _DAYS, [1.0, ratio, ratio])
+    assert _corporate_action_crosscheck_findings(cfg, out) == []
+    wrong = _factor_frame(symbol, _DAYS, [1.0, 1.0, 1.0])
+    findings = _corporate_action_crosscheck_findings(cfg, wrong)
+    assert findings and findings[0]["expected_ratio"] == pytest.approx(ratio)
+    assert "split=" in findings[0]["message"]
+
+
+def test_conflicting_unit_split_ratios_fail_closed():
+    from cnequity.derive.adj_factors import _unit_split_terms
+
+    frame = pl.DataFrame(
+        {"symbol": ["159327.SZ"] * 2, "ex_date": [_DAYS[1]] * 2, "split_factor": [3.0, 2.0]}
+    )
+    with pytest.raises(ValueError, match="conflicting"):
+        _unit_split_terms(frame)
+
+
+def test_sina_outage_falls_back_to_baostock_and_says_so(tmp_path, monkeypatch):
+    """Sina bans by account, so the one vendor behind every return in the lake
+    can be taken out by an unrelated sweep. Baostock's raw÷adjusted ratio is
+    the same factor, from a different failure domain."""
+    import polars as pl
+
+    from cnequity.adapters.sina.adj_factors import SinaAdjFactorUnavailableError
+    from cnequity.config import Config
+    from cnequity.derive import adj_factors as mod
+
+    cfg = Config(data_root=tmp_path / "data")
+    cfg.sources.update({"baostock": True})
+    bars = pl.DataFrame(
+        {"trade_date": [date(2026, 6, 25), date(2026, 6, 26)]},
+        schema={"trade_date": pl.Date},
+    )
+
+    def _sina_down(*args, **kwargs):
+        raise SinaAdjFactorUnavailableError("456")
+
+    monkeypatch.setattr(mod, "fetch_adj_factor_series", _sina_down)
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.adj_factors.fetch_adj_factor_series_baostock",
+        lambda symbol, start, end, **kwargs: pl.DataFrame(
+            {"trade_date": [date(2026, 6, 25), date(2026, 6, 26)], "factor": [0.976883, 1.0]},
+            schema={"trade_date": pl.Date, "factor": pl.Float64},
+        ),
+    )
+
+    factors, vendor = mod._resolve_factors(cfg, "600519.SH", "hfq", bars, force=True, client=None)
+
+    assert vendor == "baostock"
+    assert factors["factor"].to_list() == [0.976883, 1.0]
+
+
+def test_the_backup_stays_off_until_its_source_is_enabled(tmp_path, monkeypatch):
+    """A chain that reaches a vendor nobody enabled is a chain that reaches out
+    from a unit test."""
+    import polars as pl
+
+    from cnequity.adapters.sina.adj_factors import SinaAdjFactorUnavailableError
+    from cnequity.config import Config
+    from cnequity.derive import adj_factors as mod
+
+    cfg = Config(data_root=tmp_path / "data")
+    bars = pl.DataFrame({"trade_date": [date(2026, 6, 25)]}, schema={"trade_date": pl.Date})
+
+    monkeypatch.setattr(
+        mod,
+        "fetch_adj_factor_series",
+        lambda *a, **k: (_ for _ in ()).throw(SinaAdjFactorUnavailableError("456")),
+    )
+
+    def _never(*args, **kwargs):
+        raise AssertionError("baostock must not be reached when its source is off")
+
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.adj_factors.fetch_adj_factor_series_baostock", _never
+    )
+
+    with pytest.raises(mod.AdjFactorsSourceUnavailableError):
+        mod._resolve_factors(cfg, "600519.SH", "hfq", bars, force=True, client=None)
+
+
+def test_a_beijing_symbol_never_asks_baostock_for_factors(tmp_path):
+    """The vendor has no Beijing coverage at all."""
+    from datetime import date as _date
+
+    import pytest as _pytest
+
+    from cnequity.adapters.baostock.adj_factors import (
+        BaostockAdjFactorUnavailableError,
+        fetch_adj_factor_series_baostock,
+    )
+
+    with _pytest.raises(BaostockAdjFactorUnavailableError):
+        fetch_adj_factor_series_baostock(
+            "920002.BJ", _date(2026, 6, 1), _date(2026, 6, 30), bs=object()
+        )
+
+
+def test_rows_name_the_vendor_they_came_from(tmp_path):
+    """A frame can hold both vendors now; stamping one source over all of it is
+    exactly the provenance this lake refuses to write."""
+    import polars as pl
+
+    from cnequity.config import Config
+    from cnequity.derive import adj_factors as mod
+
+    cfg = Config(data_root=tmp_path / "data")
+    frame = pl.DataFrame(
+        {
+            "symbol": ["600519.SH", "000001.SZ"],
+            "trade_date": [date(2026, 6, 25), date(2026, 6, 25)],
+            "adjust_type": ["hfq", "hfq"],
+            "factor": [1.0, 1.0],
+            "_vendor": ["sina", "baostock"],
+        },
+        schema_overrides={"trade_date": pl.Date},
+    )
+    vendors = frame.get_column("_vendor")
+    out = mod.with_provenance(
+        frame.drop("_vendor"), source=cfg.adj_factors_source, data_version="v1"
+    ).with_columns(vendors.alias("source"))
+    assert out["source"].to_list() == ["sina", "baostock"]

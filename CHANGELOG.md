@@ -12,6 +12,13 @@ rows every day are fixed — with migrations for what they already left behind.
 
 ### Added
 
+- Explicit fund unit split/consolidation events (`unit_split`, `split_factor`)
+  and matching adjustment-factor checks. Corporate actions use schema v2;
+  legacy events retain neutral unit multipliers. The next development package
+  is `0.10.0.dev0`; the published v0.9.0 contract remains unchanged.
+- Trade-only intraday resampling, APFS copy-on-write revision copies, and
+  bounded Baostock login/logout with query deadlines that survive SDK handlers.
+
 - **The Beijing exchange's own board** now supplies BJ listings, halts and the
   ST designation, in one paginated read shared with the quote path. TDX serves
   SH/SZ only, so BJ had entered the catalogue solely by replaying the last
@@ -31,9 +38,111 @@ rows every day are fixed — with migrations for what they already left behind.
   rather than reported as unrouted.
 - `cne status --datasets --groups` gates only on the schedule groups a host
   actually runs; `cne config diff` reports drift against the shipped template.
+- **Proof that a long run is alive** (#37). Every step names itself when it
+  starts, not only when it ends; a heartbeat names whatever is still running
+  after 60s of silence; and a bar sweep states its scope — symbols, window,
+  batches, lanes — before the first batch can land. Measured against the gaps
+  this closes: `instruments` ran 183s behind one line, and a one-session
+  `backfill daily_bars` waited 68s for its first sign of life.
+- **A fourth vendor in the `daily_bars` failover chain.** baostock has been
+  declared supplementary since the spec was written, but nothing live ever
+  called it — the code path existed only for delisted recovery. That left two
+  per-symbol vendors, and when EastMoney's history host is unreachable (every
+  `push2his` host dropped the connection from the measured vantage while
+  `push2` kept serving clist) one remains, which can never certify a no-data
+  key: certification needs two independent empties. A full-market session whose
+  missing names had simply not traded failed with "expected key(s) remain
+  unknown". baostock answers from its own failure domain, serves live symbols
+  exactly (matching Sina to the cent on the session that failed) and reports a
+  suspended session as no row rather than as an error. Opt-in through
+  `[sources.baostock]`, like the THS link.
+- **A backup for `adj_factors`**, the one core dataset that had a single vendor
+  behind it. Sina bans by account rather than by endpoint, so the HTTP 456 that
+  stops an unrelated futures sweep also stops every return in the lake from
+  being computable. Baostock publishes the same series raw and back-adjusted,
+  and their ratio is this factor in the stored multiplier convention; rescaled
+  to 1.0 at the tip it is Sina's level convention too. Measured on 600519.SH
+  across its 2026-06-26 ex-date: implied step 0.976883 against Sina's 0.976880,
+  which is the rounding in Baostock's two-decimal adjusted closes. Rows now
+  carry the vendor they actually came from, because one run can mix both.
+- **A probe for Sina's futures host.** `commodity_bars` — the domestic
+  main-continuous board and the offshore one — is served by
+  `stock2.finance.sina.com.cn`, which no probe covered, while the only endpoint
+  still declaring the dataset was the EastMoney history host that Sina replaced
+  for being unreliable. Reachability is per host: that is the same lesson
+  `push2` and `push2his` taught.
+- **`cne sources substitutes`** answers the question a probe report does not:
+  this endpoint is down — what reachable one can carry its datasets, and is it
+  independent of what failed. Ranked independent-first, then fastest; exits
+  non-zero when a dataset has nothing left. Dataset→source comes from the
+  registry rather than from the probe table's hand-maintained `powers` lists,
+  which had drifted: reading those made `commodity_bars` look stranded and
+  `corporate_actions` too, while the latter's declared TDX backup sat there
+  healthy. The probes answer the other half — which *endpoint* of a source is
+  reachable — so a vendor that is up on one host and down on another reports as
+  exactly that.
+- **Rolling progress for the sweeps that had none.** The baostock valuation
+  backfill, the shareholder/top-holder window walks, the Sina adjustment-factor
+  fan-out and `compact` now report as they go, through one `sweep_progress`
+  helper factored out of the TDX xdxr sweep that already did this.
+- **A log file per long run.** `cne init`, `cne backfill` and `cne run` write
+  `cne-<command>-<timestamp>.log` under `CNE_LOG_DIR` (default
+  `{data.root}/logs`) and print the path on startup, so a run that failed after
+  three hours leaves something to read. `CNE_LOG_DIR` was read by the pipeline
+  scripts and by nothing in the CLI.
 
 ### Fixed
 
+- **The `daily_bars` tip-key failure says what to do about it.** It reported a
+  count and nothing else — not which keys, not which vendor was down, not which
+  command resumes the run. It now names the findings file, `cne sources probe`,
+  the exact `cne retry --run-id`, and a `--symbols` repair for just those keys.
+- **A blocking lock wait is bounded and says who it is waiting for.** `compact`
+  and every lake mutation queue behind a peer with `blocking=True`, and that
+  wait had no deadline and no output — indistinguishable from a hang, which is
+  what it becomes when the holder is alive but stuck. A crashed holder was
+  never the problem: the kernel releases its lock as the process dies. The wait
+  now announces itself ("waiting for compact.lock — another process holds it"),
+  gives up after `DEFAULT_LOCK_WAIT_SECONDS` (1h, generous so a legitimately
+  long compact still queues), and the error names the lock file, `lsof`, and
+  `cne status`. A nested acquire in the same process still fails immediately
+  rather than timing out against itself.
+- **A crashed run stops lying about being alive.** Liveness was inferred from
+  heartbeat age, so a run killed mid-flight kept `status=running` in the
+  manifest for `batch_stale_seconds` — an hour by default — and every command
+  that reads run status was wrong for that hour: `cne retry --failed-groups`
+  answered "No failed daily group run to retry" about the very crash the
+  operator was looking at, and `cne status` showed a ghost. Every run now holds
+  `meta/locks/{run_id}.lock` for its lifetime, which the kernel releases the
+  moment the process dies, so an unlocked `running` row only has to outlive a
+  short grace window (60s, covering the gap between recording the run and
+  taking the lock) instead of the full stale timeout. A shorter configured
+  timeout still wins — the grace period caps how long a corpse may linger, it
+  never makes anyone wait longer than they asked. `retry --failed-groups`
+  reconciles before it selects, so it sees the crash rather than the ghost.
+- **A killed `cne init` can be started again.** An init that looked hung, got
+  killed and was run again was refused — the one command the operator had left,
+  answering "no" to the one thing they were trying to do. The refusal is right
+  for a *live* peer and wrong for a dead one, and nothing distinguished them:
+  init took no lock, so a run left `running` by SIGKILL looked exactly like a
+  run in progress. It now holds `init_job` for its duration, so a second `cne
+  init` resumes the unfinished run when that lock is free and refuses only when
+  another process is really holding it. It still never starts a second full
+  init over an incomplete one.
+- **A one-session backfill says the window is free to widen.** TDX returns up
+  to 800 bars per request, so the sweep costs the same whether it asks for one
+  session or every year on record; filling a month a day at a time pays for
+  thirty sweeps and receives what one would have returned. Said only for a
+  backfill — the daily job's one-session window is its point.
+- **A batch progress line no longer overstates a failure.** One symbol TDX had
+  no rows for was reported as `(100 symbols FAILED)` — the batch size, not the
+  scope — on a sweep that then recovers most of them through failover. It now
+  reads `(1/100 symbols failed)`.
+- **The batch ETA stops swinging.** Estimating from wall clock over batches
+  done charges the sweep's one-off setup, and the first `lanes` batches land
+  together one batch-latency in: a measured 53-batch run printed ~34m, ~17m,
+  ~11m, ~8m for ten minutes of work. The estimate is now timed from the first
+  drained round of lanes, and no number is offered before there is one.
 - **`trading_status` no longer asserts facts its source never served.**
   EastMoney's ST board selects Shenzhen and Shanghai only and its suspension
   feed does not reach Beijing either, yet both were stored as findings:

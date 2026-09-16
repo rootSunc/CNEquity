@@ -13,7 +13,7 @@
 | 调度 | `scripts/daily_pipeline.sh` | 串行跑 6 个 schedule group + 健康检查 + 备份 |
 | 调度 | `scripts/install_scheduler.sh` | 安装 macOS launchd（每天 11:15 本机时间） |
 | 调度 | `scripts/uninstall_scheduler.sh` | 卸载 launchd |
-| 告警 | `scripts/health_notify.sh` | `audit --full` + `status --datasets` + macOS 通知 |
+| 告警 | `scripts/health_notify.sh` | 日常审计、每周全湖质量检查 + 分组 freshness + macOS 通知 |
 | 备份 | `scripts/backup_meta.sh` | manifest + state + quality 的 tar 轮换 |
 
 脚本使用仓库 `.venv/bin/cne`，路径相对仓库根目录自解析。
@@ -27,9 +27,37 @@ cd /path/to/cnequity
 scripts/install_scheduler.sh
 ```
 
+安装器将主机选择与模板分开：新安装默认六组；重装保留已安装 daily 的
+`CNE_GROUPS`、`CNE_SOURCE_VANTAGE`、自定义配置和各任务的执行时间。
+明确覆盖组别和出口时使用环境变量；海外主机首次安装例如：
+
+```bash
+CNE_GROUPS=core CNE_SOURCE_VANTAGE=overseas scripts/install_scheduler.sh
+scripts/install_scheduler.sh --check
+scripts/install_scheduler.sh --dry-run /tmp/cnequity-scheduler-review
+scripts/install_scheduler.sh --daily-only  # 只同步现有日任务，不新增晚间任务
+scripts/install_scheduler.sh --stale-only --stale-at 23:00  # 只设置当地晚间补抓时间
+```
+
+`--check` 比较已安装文件与按主机选择生成的模板，存在差异或缺少任务时退出 1；
+它不启动任务，也不检查 launchd 是否已加载。`--dry-run` 只写预览目录。
+常规安装包含 daily、stale、events 三个任务；stale 继承 daily 组别并通过
+`cne run daily --stale-only --groups ...` 限定补抓范围。现有事件任务的间隔和组别保留；
+额外手工安装的事件任务不由此安装器删除。
+
+`--stale-at HH:MM` 显式覆盖补抓时间，之后重装会保留；时间按主机当地时区解释。
+本机 core 使用赫尔辛基 23:00（北京时间次日 04:00/05:00），补抓以最近已收盘的
+中国交易日为锚点。日间快照仍需要日任务按时采集，夜间不能重建已经错过的历史快照。
+
+日任务的质量错误和实际调度的 `CNE_GATE_GROUPS`（默认 core）滞后会让任务退出 1。
+soft 组仍按失败次数升级，但同一日期重试不会重复计为多天。
+每周使用 `audit --full --quality-only` 检查质量，freshness 由分组 `status` 单独门禁，
+因此未调度的分钟线不会仅因滞后而触发「数据异常」。全湖健康报告仍显示这些滞后。
+
 - 生成 `~/Library/LaunchAgents/com.cnequity.daily.plist`
 - **每天 11:15 本机时间**触发；按本机时区选一个稳在 A 股 15:00 收盘之后的时间
-  （UTC+2/+3 机器约合 16:15/17:15 CST）。改时间编辑 plist 模板后重装。
+  （UTC+2/+3 机器约合 16:15/17:15 CST）。新安装时间来自模板；已有主机的时间保留，
+  修改已有任务时间需明确修改安装文件并重新加载。
 - 非交易日自动跳过（退出 0）
 - **漏跑 / 周末补数**：`uv run python scripts/run_catchup.py`（门禁 core + breadth；水位已齐则
   `skipped_already_fresh`），或 `scripts/daily_pipeline.sh YYYY-MM-DD` /
@@ -195,7 +223,7 @@ cne snapshot restore research-20260828 /new/empty/cnequity-restore
 | 变量 | 默认 | 作用 |
 |------|------|------|
 | `CNE_CONFIG` | `configs/cnequity.toml` | 脚本传给 `cne --config` 的路径 |
-| `CNE_LOG_DIR` | `{data.root}/logs` | 日志 |
+| `CNE_LOG_DIR` | `{data.root}/logs` | 日志；长跑的 `cne` 命令也会在这里留一份 |
 | `CNE_GROUPS` | 全部 6 组 | 覆盖 pipeline 组列表 |
 | `CNE_NOTIFY` | `1` | `0` 关闭通知 |
 | `CNE_BACKUP_DIR` | 湖内 backups | 备份目录 |
@@ -363,6 +391,18 @@ cne run daily --group intraday
 
 越过源端视野的 `--start` 会被直接拒绝并给出可用起点——见 [catalog.md 历史视野](../datasets/catalog.md)。
 
+分钟线验收不能只看最后日期。审计会在已启用的频率和配置证券范围内，用正成交量日线
+检查整日缺失，报 `minute_bars_missing_session`；无成交日不作为缺失证据。现有分钟记录
+的盘中完整性、时段和量额对照仍单独检查。默认回看 7 个自然日，长窗口恢复应另做全窗口验收。
+
+每次取数的完整失败名单和空返回名单保存在运行 manifest 的
+`metrics.stages.<dataset>.source_metrics.tdx_protocol`，字段为 `failed_symbols`、
+`empty_symbols`，并附带 `frequency/start/end`。失败会沿用引擎的 warning/degraded 门禁；
+空返回只能说明未取到记录，必须与日线或来源停牌证据核实，不能直接认定正常停牌。
+整批全空仍判失败，并清除进程缓存的 TDX 主机，使后续重试重新检查可访问性；不在失败点
+无限重试。量额对照除市场中位数外，也以原有 0.95..1.05 容差检查个别证券日，报
+`minute_bars_daily_outliers`。差异不直接证明分钟源错误，应保留日线与分钟原始证据后裁定。
+
 ---
 
 ## 回填完成验收
@@ -458,3 +498,19 @@ assert "adj_close" in tradable.columns
 - [故障排查](troubleshooting.md)
 - [Schema 契约](../datasets/schema.md)
 - [逐源限制](../datasets/sources.md)
+
+## 排查记录
+
+- [2026-09-16 调度、数据质量、主备源与取数/存储排查](audits/2026-09-16.md)
+
+### 逐证券日线覆盖
+
+```bash
+cne verify-bars --config configs/cnequity.toml --start 2026-09-07 --end 2026-09-15
+```
+
+该命令以配置的 ingest universe 检查证券×交易日，包括整个窗口没有任何行情的证券。
+上市前、退市后不要求行情；有明确非交易状态的日期可豁免。供应商返回空数据不构成停牌证明。
+JSON 中 `unresolved_keys` 是缺行情/非交易证据的键数，`unknown_listing_symbols` 是无法确定
+期望区间的代码；任一未解决时退出 1。它不会补抓或修改行情，也不能由普通水位检查替代。
+完整历史检查按 64 个交易日分块。

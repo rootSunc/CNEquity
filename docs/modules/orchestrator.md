@@ -89,13 +89,23 @@ SQLite WAL 模式。
 Batch 状态：`pending` → `running` → `success` | `failed` | `stale`
 
 - `advance_stale_batches()` / `advance_batch_timeouts()`：超时 running → stale → failed（retry 前调用）
-- `reconcile_orphaned_runs(stale_after_seconds=batch_stale_seconds)`：关闭无活动的
-  `running` run；活动时钟 = `max(run.started_at, batch heartbeat/started)`；
-  更新幂等（`WHERE status='running'`）
+- `reconcile_orphaned_runs(...)`：关闭已经没有主人的 `running` run。判活优先看**锁**
+  ——每个 run 全程持有 `meta/locks/{run_id}.lock`，进程一死内核立刻释放，所以没持锁的
+  `running` 行只需熬过一个短宽限期（`UNLOCKED_RUN_GRACE_SECONDS`，60s，覆盖"记下 run"
+  到"拿到锁"之间的空隙）即可判定为尸体，不必等满 `batch_stale_seconds`。两者取更严的
+  那个：配置了更短的窗口就按更短的来。没有锁信息时（旧二进制、只记录不执行的调用方）
+  退回心跳年龄。活动时钟 = `max(run.started_at, batch heartbeat/started)`；更新幂等
+  （`WHERE status='running'`）
 - `count_stale_running_runs()`：只读信号，供 `cne status` 报告孤儿数
 - `run_summary(run_id)`：供 `cne status` 输出
 
 运维也可显式：`cne clean --reconcile-runs`（默认窗口同 `batch_stale_seconds`）。
+
+**锁等待有上限。** `compact` 和所有湖内改写用 `blocking=True` 排队，等待上限
+`DEFAULT_LOCK_WAIT_SECONDS`（1 小时，留足一次全市场 compact 的时间），开始等的时候会打
+一行 `waiting for compact.lock — another process holds it`。**崩溃的持锁方从来不是问题**
+（内核立刻释放），能撑到上限的一定是活着但卡住的进程，报错会点名锁文件、`lsof` 和
+`cne status`。同进程重入仍然立即失败，不会自己跟自己耗到超时。
 
 ---
 

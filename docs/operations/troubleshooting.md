@@ -99,6 +99,7 @@ core 组每个交易日都失败，`daily_bars` 水位不前进，当天抓回�
 | `RuntimeError: daily_bars <start>..<end>: N interior symbol×session key(s) remain absent` | 窗口内有标的缺了中间某个交易日，且主源与所有备源都补不上 | 先看缺的是哪些标的（见下），再决定是收口范围还是修源 |
 | 缺的几乎都是 158/159/160/51x/52x/56x 开头的代码 | 这些是 ETF/LOF 行情代码，不在任何研究口径里，也没有哪个源稳定提供 | **已修**：`[universe].ingest` 默认 `all_a` 不再抓它们 |
 | 缺的是真 A 股，且只缺当天 | 备源额度被别的标的耗尽（日志里 `circuit opened … leaving N symbol(s) unresolved` / `sina bars HTTP 456`） | 等下一轮，或 `cne retry --run-id <id>` 复用已抓到的批次 |
+| `expected key(s) remain unknown after failover`，且日志里有 `EastMoney kline circuit opened` | 东财历史主机（`push2his`）对当前出口不可达。**它挂掉时链上只剩一个逐标的源，而认定"这天本来就没数据"需要两个独立源都返回空**，所以停牌股也会卡成 unknown | **已修**：链尾补了 baostock（同样逐标的、独立风控面，停牌返回空行而非报错）。跑 `cne sources substitutes` 确认还有哪些可达源能顶上；报错本身也会列出处置命令 |
 
 缺失明细写在 `meta/quality/findings/<run_id>.json`，带 `missing_symbols` 与 `sample_keys`：
 

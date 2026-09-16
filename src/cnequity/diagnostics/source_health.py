@@ -274,6 +274,39 @@ def _probe_sina(config: Config) -> str:
     return f"最新 bar {last.isoformat()}"
 
 
+def _probe_sina_futures(config: Config) -> str:
+    """Sina's futures host, which is not the host `_probe_sina` measures.
+
+    `commodity_bars` — domestic main-continuous and offshore alike — is served
+    by `stock2.finance.sina.com.cn`, while the daily-bar path uses
+    `money.finance.sina.com.cn`. Reachability is per host, not per vendor: this
+    project already learned that from EastMoney, where `push2his` was dropping
+    every connection while `push2` kept serving. Until this probe existed the
+    only endpoint declaring `commodity_bars` was EastMoney's history host —
+    the very one Sina replaced for being unreliable — so a substitution report
+    called the dataset stranded while its actual source answered in 2.9s.
+    """
+    from datetime import timedelta
+
+    from cnequity.adapters.sina.domestic_futures import (
+        DOMESTIC_CONTRACTS,
+        fetch_domestic_commodity_bars_range,
+    )
+
+    end = _recent_weekday()
+    # One contract, one request: the vendor bans by account, not by endpoint,
+    # so a health check must not spend the budget the sweep needs.
+    frame = fetch_domestic_commodity_bars_range(
+        end - timedelta(days=10),
+        end,
+        contracts=DOMESTIC_CONTRACTS[:1],
+        config=config,
+    )
+    if frame.is_empty():
+        raise ProbeEmpty("主连合约没有返回任何 bar")
+    return f"{DOMESTIC_CONTRACTS[0][1]} 最近 {frame.height} 根日线"
+
+
 def _probe_cninfo(config: Config) -> str:
     import httpx
 
@@ -483,6 +516,16 @@ PROBES: tuple[SourceProbe, ...] = (
         config_key="sina",
     ),
     SourceProbe(
+        key="sina_futures",
+        label="新浪期货（主连 / 外盘日线）",
+        host="stock2.finance.sina.com.cn",
+        powers=("commodity_bars",),
+        run=_probe_sina_futures,
+        note="与 sina 日线不是同一台主机，但共用同一个按账号计的 456 配额。",
+        blast_radius="sina",
+        config_key="sina",
+    ),
+    SourceProbe(
         key="cninfo",
         label="巨潮 cninfo（公告全文索引）",
         host="www.cninfo.com.cn",
@@ -526,7 +569,9 @@ PROBES: tuple[SourceProbe, ...] = (
         key="exchange_sse",
         label="上交所官方清单",
         host="query.sse.com.cn",
-        powers=("trading_status",),
+        # Also the first link of the daily_bars failover chain: one whole-board
+        # request answers for a session's worth of symbols at once.
+        powers=("trading_status", "daily_bars"),
         run=_probe_sse,
         note="交易所官方口径，与东财不同风控面，可作备源。",
         blast_radius="exchange",
@@ -536,7 +581,7 @@ PROBES: tuple[SourceProbe, ...] = (
         key="exchange_szse",
         label="深交所官方清单",
         host="www.szse.cn",
-        powers=("trading_status",),
+        powers=("trading_status", "daily_bars"),
         run=_probe_szse,
         note="同上。",
         blast_radius="exchange",

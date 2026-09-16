@@ -94,6 +94,27 @@ cne retry --run-id <run_id> --config configs/cnequity.toml
 
 init 耗时较长（全市场日线分页回填），建议在稳定网络下运行。阶段定义见 [数据流 — Init](../architecture/data-flow.md#init全量回填)。
 
+**它跑到哪了？** 运行中会打这几类行，正常情况下不会连续静默超过 60 秒：
+
+| 行 | 含义 |
+|------|------|
+| `Step <名字> starting` / `Step <名字> success in Ns` | 步骤进出 |
+| `daily_bars: 5,283 symbol(s) over … → 53 batch(es) … on 4 lane(s)` | 这一趟扫描的规模，开跑前就打出来 |
+| `daily_bars 8/53 batches · 12,400 rows · 1m24s elapsed · ~7m55s left` | 滚动进度；凑满一轮 lane 后才给剩余时间 |
+| `still working: daily_bars 4m12s (no output for 1m02s)` | 心跳，静默满 60 秒时点名当前步骤 |
+
+启动时打印的 `Logging to …/logs/cne-init-<时间戳>.log` 是本次运行的日志文件（目录可用 `CNE_LOG_DIR` 覆盖）。另开一个终端也可以查：
+
+```bash
+cne status --run latest --config configs/cnequity.toml
+```
+
+**成本按标的数算，不按天数算。** `daily_bars` 是逐标的抓取，所以 `--start D --end D` 只拉一天，付出的仍是全市场（约 5,300 个标的、50+ 个批次）的一整趟扫描，实测十分钟级别，和多年窗口的差别只在每个标的返回多少根 K 线。想快速验证请用 `--symbols` 缩小范围：
+
+```bash
+cne backfill daily_bars --symbols 600519.SH,000001.SZ --start 2026-09-15 --end 2026-09-15
+```
+
 ## 3. 回填验收（推荐，需仓库脚本）
 
 验收脚本在 GitHub 仓库的 `scripts/`，**不随 PyPI 包安装**。有 checkout 时：

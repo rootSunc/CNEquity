@@ -28,6 +28,15 @@ from cnequity.storage import StagingWriter
 from cnequity.storage.layout import init_data_layout
 
 
+def _no_suspension_evidence(monkeypatch) -> None:
+    """The chain now asks baostock which absences were suspensions. A test that
+    does not care about that answer must still not reach the vendor for it."""
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.st_history.fetch_st_history",
+        lambda symbols, start, end, **kwargs: (pl.DataFrame(), []),
+    )
+
+
 def _cfg(tmp_path) -> Config:
     cfg = Config(
         data_root=tmp_path / "data",
@@ -68,7 +77,7 @@ def _bar_frame(symbols: list[str], d: date, *, volume: int = 100) -> pl.DataFram
     )
 
 
-def test_exchange_gapfill_uses_bulk_dates_and_writes_only_missing_keys(tmp_path, monkeypatch):
+def test_szse_report_cannot_fill_auction_daily_bar_gaps(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     cfg.sources["exchange"] = True
     manifest = Manifest(cfg.manifest_path)
@@ -100,14 +109,12 @@ def test_exchange_gapfill_uses_bulk_dates_and_writes_only_missing_keys(tmp_path,
         end=second,
     )
 
-    assert calls == [first, second]
-    assert result["complete_symbols"] == ["000001.SZ"]
-    assert result["rows_written"] == 1
-    staged = pl.read_parquet(
+    assert calls == []
+    assert result["complete_symbols"] == []
+    assert result["rows_written"] == 0
+    assert not (
         cfg.staging_root / "daily_bars" / f"run_id={run_id}" / "part-exchange-gapfill.parquet"
-    )
-    assert staged.select("symbol", "trade_date").rows() == [("000001.SZ", second)]
-    assert staged["source"].unique().to_list() == ["exchange"]
+    ).exists()
 
 
 def test_exchange_gapfill_skips_long_windows_before_network_calls(tmp_path, monkeypatch):
@@ -1394,3 +1401,457 @@ def test_preopen_placeholder_still_rejects_clist_flat_zeros(tmp_path):
     StagingWriter(cfg.staging_root).write_batch("daily_bars", run_id, "em-clist-gapfill", flat)
     with pytest.raises(RuntimeError, match="pre-open placeholders"):
         _reject_preopen_placeholder(cfg, run_id, tip)
+
+
+def test_baostock_rescues_keys_when_eastmoney_history_is_unreachable(tmp_path, monkeypatch):
+    """The measured outage: every `push2his` host drops the connection while
+    the rest of the chain has nothing per-symbol left to try."""
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": False, "eastmoney": True, "baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    day = date(2026, 9, 15)
+    symbol = "600519.SH"
+
+    def disconnected(symbols, start, end, *, diagnostics, **kwargs):
+        diagnostics.update(
+            {
+                "failed_symbols": {symbol: "transport_error"},
+                "empty_symbols": [],
+                "route_outcomes": {},
+            }
+        )
+        return pl.DataFrame()
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", disconnected)
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars",
+        lambda symbols, start, end, **kwargs: (
+            [
+                {
+                    "symbol": symbol,
+                    "trade_date": day,
+                    "open": 1281.0,
+                    "high": 1284.5,
+                    "low": 1271.28,
+                    "close": 1272.75,
+                    "volume": 1376172,
+                    "amount": 1.0e9,
+                }
+            ],
+            [],
+        ),
+    )
+
+    result = _gapfill_multiday_via_kline(
+        cfg, run_id, symbols=[symbol], start=day, end=day, require_complete=False
+    )
+
+    assert result["complete"] is True
+    assert result["source_outcomes"]["baostock"]["status"] == "success"
+    staged = pl.read_parquet(
+        cfg.staging_root / "daily_bars" / f"run_id={run_id}" / "part-baostock-kline-gapfill.parquet"
+    )
+    assert staged["source"].unique().to_list() == ["baostock"]
+
+
+def test_baostock_empty_is_the_second_opinion_that_certifies_no_data(tmp_path, monkeypatch):
+    """A suspended name needs two independent empties. With EastMoney's history
+    host unreachable, THS was the only one left and could never get there."""
+    _no_suspension_evidence(monkeypatch)
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": True, "eastmoney": True, "baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    day = date(2026, 9, 15)
+    symbol = "000016.SZ"
+
+    def disconnected(symbols, start, end, *, diagnostics, **kwargs):
+        diagnostics.update(
+            {
+                "failed_symbols": {symbol: "transport_error"},
+                "empty_symbols": [],
+                "route_outcomes": {},
+            }
+        )
+        return pl.DataFrame()
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", disconnected)
+    monkeypatch.setattr("cnequity.adapters.ths.stock_bars.fetch_stock_bars", lambda *a, **k: [])
+    # Baostock reports a suspended session as no row, not as an error — which
+    # is what makes it usable as the second empty.
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars",
+        lambda symbols, start, end, **kwargs: ([], []),
+    )
+
+    result = _gapfill_multiday_via_kline(
+        cfg, run_id, symbols=[symbol], start=day, end=day, require_complete=False
+    )
+
+    assert result["expected_no_data_symbols"] == [symbol]
+    assert result["complete"] is True
+    assert result["source_outcomes"]["baostock"]["status"] == "empty"
+
+
+def test_a_failed_baostock_symbol_is_not_evidence_of_anything(tmp_path, monkeypatch):
+    """Answered-and-had-nothing certifies; never-got-an-answer does not."""
+    _no_suspension_evidence(monkeypatch)
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": True, "eastmoney": False, "baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    day = date(2026, 9, 15)
+    symbol = "000016.SZ"
+
+    monkeypatch.setattr("cnequity.adapters.ths.stock_bars.fetch_stock_bars", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars",
+        lambda symbols, start, end, **kwargs: ([], [symbol]),
+    )
+
+    result = _gapfill_multiday_via_kline(
+        cfg, run_id, symbols=[symbol], start=day, end=day, require_complete=False
+    )
+
+    assert result["expected_no_data_symbols"] == []
+    assert result["complete"] is False
+    assert result["source_outcomes"]["baostock"]["status"] == "failed"
+
+
+def test_the_slowest_link_refuses_a_residue_that_is_really_a_dead_primary(tmp_path, monkeypatch):
+    """Baostock paces at 1 req/s: 5,000 stragglers is not a gap-fill, it is an
+    hour spent proving the primary is down."""
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": False, "eastmoney": False, "baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    day = date(2026, 9, 15)
+    symbols = [f"60{i:04d}.SH" for i in range(bars_mod._BAOSTOCK_GAPFILL_MAX_SYMBOLS + 1)]
+
+    def _never(*args, **kwargs):
+        raise AssertionError("the bounded link must not reach the network")
+
+    monkeypatch.setattr("cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars", _never)
+
+    result = bars_mod._gapfill_missing_keys_via_baostock(
+        cfg, run_id, missing_keys={(s, day) for s in symbols}, start=day, end=day
+    )
+
+    assert result["source_outcomes"]["baostock"]["status"] == "skipped"
+    assert result["rows_written"] == 0
+    assert "residue bound" in result["audit_findings"][0]["message"]
+
+
+def test_beijing_keys_never_reach_baostock(tmp_path, monkeypatch):
+    """Baostock serves SH/SZ only: a BJ code comes back as a retried failure,
+    which costs the sweep and evidences nothing about the session."""
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    day = date(2026, 9, 15)
+    seen: dict = {}
+
+    def _record(symbols, start, end, **kwargs):
+        seen["symbols"] = list(symbols)
+        return ([], [])
+
+    monkeypatch.setattr("cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars", _record)
+
+    result = bars_mod._gapfill_missing_keys_via_baostock(
+        cfg,
+        run_id,
+        missing_keys={("920002.BJ", day), ("600519.SH", day)},
+        start=day,
+        end=day,
+    )
+
+    assert seen["symbols"] == ["600519.SH"]
+    # The Beijing name is not empty evidence either — it was never asked.
+    assert result["empty_symbols"] == ["600519.SH"]
+
+
+def test_an_all_beijing_residue_skips_the_link_entirely(tmp_path, monkeypatch):
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    day = date(2026, 9, 15)
+
+    def _never(*args, **kwargs):
+        raise AssertionError("no SH/SZ key to ask about")
+
+    monkeypatch.setattr("cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars", _never)
+
+    result = bars_mod._gapfill_missing_keys_via_baostock(
+        cfg, run_id, missing_keys={("920002.BJ", day)}, start=day, end=day
+    )
+    assert result["source_outcomes"]["baostock"]["status"] == "skipped"
+    assert result["empty_symbols"] == []
+
+
+def test_a_satisfied_chain_does_not_report_the_last_link_as_disabled(tmp_path, monkeypatch):
+    """`disabled` sends the operator to edit a setting. An earlier link having
+    resolved everything is the chain working."""
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+
+    def _never(*args, **kwargs):
+        raise AssertionError("nothing left to ask about")
+
+    monkeypatch.setattr("cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars", _never)
+
+    result = bars_mod._gapfill_missing_keys_via_baostock(
+        cfg, run_id, missing_keys=set(), start=date(2026, 9, 15), end=date(2026, 9, 15)
+    )
+    assert result["source_outcomes"]["baostock"]["status"] == "not_needed"
+
+    cfg.sources.update({"baostock": False})
+    off = bars_mod._gapfill_missing_keys_via_baostock(
+        cfg,
+        run_id,
+        missing_keys={("600519.SH", date(2026, 9, 15))},
+        start=date(2026, 9, 15),
+        end=date(2026, 9, 15),
+    )
+    assert off["source_outcomes"]["baostock"]["status"] == "disabled"
+
+
+def test_completeness_excuses_days_the_lake_knows_were_suspended(tmp_path, monkeypatch):
+    """Counting every trading day as expected is how a backfill of a name with
+    any suspension in its window could never report itself complete — which
+    left the failed primary batch unresolved and compact skipping the dataset,
+    so rows were fetched, staged and never published."""
+    import datetime as dt
+
+    import polars as pl
+
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    sessions = [dt.date(2026, 9, 14), dt.date(2026, 9, 15), dt.date(2026, 9, 16)]
+    monkeypatch.setattr(bars_mod, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(
+        bars_mod,
+        "_instrument_spans",
+        lambda config: {"600519.SH": (dt.date(2026, 9, 15), None, "stock")},
+    )
+    monkeypatch.setattr(
+        bars_mod,
+        "load_curated_trading_status",
+        lambda *a, **k: pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [dt.date(2026, 9, 16)],
+                "is_trading": [False],
+            },
+            schema_overrides={"trade_date": pl.Date},
+        ),
+    )
+
+    keys = bars_mod._expected_session_keys(cfg, ["600519.SH"], sessions, sessions[0], sessions[-1])
+
+    # 09-14 precedes the listing, 09-16 is a known suspension: one real key.
+    assert keys == {("600519.SH", dt.date(2026, 9, 15))}
+
+
+def test_completeness_still_expects_every_session_it_has_no_excuse_for(tmp_path, monkeypatch):
+    import datetime as dt
+
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    sessions = [dt.date(2026, 9, 14), dt.date(2026, 9, 15)]
+    monkeypatch.setattr(bars_mod, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod, "_instrument_spans", lambda config: {})
+    monkeypatch.setattr(bars_mod, "load_curated_trading_status", lambda *a, **k: None)
+
+    keys = bars_mod._expected_session_keys(cfg, ["600519.SH"], sessions, sessions[0], sessions[-1])
+    assert keys == {("600519.SH", sessions[0]), ("600519.SH", sessions[1])}
+
+
+def test_the_step_learns_suspensions_itself_instead_of_demanding_a_second_command(
+    tmp_path, monkeypatch
+):
+    """A pre-2016 window has no `trading_status` to excuse an interior gap with,
+    so the bars would not publish until the operator knew to backfill
+    trading_status first — for the same symbols and window, in an order nothing
+    announced."""
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": False, "eastmoney": False, "baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    day = date(2010, 3, 30)
+    symbol = "002118.SZ"
+    asked: dict = {}
+
+    def _st_history(symbols, start, end, **kwargs):
+        asked["symbols"] = list(symbols)
+        return (
+            pl.DataFrame(
+                {
+                    "symbol": [symbol],
+                    "trade_date": [day],
+                    "is_trading": [False],
+                    "status": ["suspended"],
+                    "risk_warning": [False],
+                },
+                schema_overrides={"trade_date": pl.Date},
+            ),
+            [],
+        )
+
+    monkeypatch.setattr("cnequity.adapters.baostock.st_history.fetch_st_history", _st_history)
+    staged: dict = {}
+
+    def _write_fetched(config, rid, dataset, frame, **kwargs):
+        staged[dataset] = frame.height
+        return {"rows_written": frame.height}
+
+    monkeypatch.setattr("cnequity.steps.http_common.write_fetched", _write_fetched)
+
+    suspended, outcome = bars_mod._learn_suspensions_from_baostock(
+        cfg, run_id, {(symbol, day)}, day, day
+    )
+
+    assert asked["symbols"] == [symbol]
+    assert suspended == {(symbol, day)}
+    assert outcome["status"] == "success"
+    # Staged, so the next run does not have to ask again.
+    assert staged["trading_status"] == 1
+    # And carried on the config, because the gate below reads curated rows that
+    # this run has not compacted yet.
+    assert (symbol, day) in cfg._learned_suspensions["keys"]
+
+
+def test_learning_is_skipped_when_there_is_nothing_unexplained(tmp_path, monkeypatch):
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"baostock": True})
+
+    def _never(*args, **kwargs):
+        raise AssertionError("no unexplained key to ask about")
+
+    monkeypatch.setattr("cnequity.adapters.baostock.st_history.fetch_st_history", _never)
+    suspended, outcome = bars_mod._learn_suspensions_from_baostock(
+        cfg, "run-x", set(), date(2010, 1, 1), date(2010, 12, 31)
+    )
+    assert suspended == set()
+    assert outcome["status"] == "not_needed"
+
+
+def test_beijing_keys_are_not_sent_to_a_vendor_without_beijing(tmp_path, monkeypatch):
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"baostock": True})
+
+    def _never(*args, **kwargs):
+        raise AssertionError("baostock has no Beijing coverage")
+
+    monkeypatch.setattr("cnequity.adapters.baostock.st_history.fetch_st_history", _never)
+    suspended, outcome = bars_mod._learn_suspensions_from_baostock(
+        cfg, "run-x", {("920002.BJ", date(2010, 3, 30))}, date(2010, 3, 30), date(2010, 3, 30)
+    )
+    assert suspended == set()
+    assert outcome["status"] == "skipped"
+
+
+def test_a_window_spent_entirely_halted_is_certified_from_positive_evidence(tmp_path, monkeypatch):
+    """Two vendors returning nothing only says nobody had it. "Suspended on
+    every session you asked about" is a statement about the market — and it is
+    the only one that reaches a name halted for a whole restructuring."""
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": False, "eastmoney": False, "baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    sessions = [date(2010, 3, 29), date(2010, 3, 30)]
+    symbol = "000156.SZ"
+
+    monkeypatch.setattr(bars_mod, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(
+        bars_mod,
+        "fetch_bars_via_sina",
+        lambda *a, **k: {"rows_read": 0, "rows_written": 0, "empty_symbol_names": []},
+    )
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.st_history.fetch_st_history",
+        lambda symbols, start, end, **kwargs: (
+            pl.DataFrame(
+                {
+                    "symbol": [symbol, symbol],
+                    "trade_date": sessions,
+                    "is_trading": [False, False],
+                    "status": ["suspended", "suspended"],
+                    "risk_warning": [False, False],
+                },
+                schema_overrides={"trade_date": pl.Date},
+            ),
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.http_common.write_fetched",
+        lambda config, rid, dataset, frame, **kw: {"rows_written": frame.height},
+    )
+
+    result = _gapfill_multiday_via_kline(
+        cfg, run_id, symbols=[symbol], start=sessions[0], end=sessions[-1]
+    )
+
+    assert result["expected_no_data_symbols"] == [symbol]
+    assert result["complete"] is True
+    checks = {f["check"] for f in result["audit_findings"]}
+    assert "daily_bars_window_fully_suspended" in checks
+
+
+def test_a_partly_halted_symbol_is_not_certified_as_having_no_data(tmp_path, monkeypatch):
+    """It traded on the other sessions; only those are excused."""
+    from cnequity.steps import bars as bars_mod
+
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": False, "eastmoney": False, "baostock": True})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    sessions = [date(2010, 3, 29), date(2010, 3, 30)]
+    symbol = "000156.SZ"
+
+    monkeypatch.setattr(bars_mod, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(
+        bars_mod,
+        "fetch_bars_via_sina",
+        lambda *a, **k: {"rows_read": 0, "rows_written": 0, "empty_symbol_names": []},
+    )
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.st_history.fetch_st_history",
+        lambda symbols, start, end, **kwargs: (
+            pl.DataFrame(
+                {
+                    "symbol": [symbol],
+                    "trade_date": [sessions[0]],
+                    "is_trading": [False],
+                    "status": ["suspended"],
+                    "risk_warning": [False],
+                },
+                schema_overrides={"trade_date": pl.Date},
+            ),
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.http_common.write_fetched",
+        lambda config, rid, dataset, frame, **kw: {"rows_written": frame.height},
+    )
+
+    result = _gapfill_multiday_via_kline(
+        cfg, run_id, symbols=[symbol], start=sessions[0], end=sessions[-1]
+    )
+
+    assert result["expected_no_data_symbols"] == []
+    assert result["complete"] is False

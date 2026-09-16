@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import threading
 import time
 from collections.abc import Iterable
 from datetime import date, datetime
@@ -32,6 +31,7 @@ from cnequity.domain.rate_limit import (
 from cnequity.domain.symbols import (
     filter_ingest_universe,
     in_ingest_universe,
+    is_tdx_servable,
     parse_symbol,
     split_by_quote_source,
 )
@@ -781,6 +781,33 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
     return _merge_ownership_result(out, config, ownership, start, end)
 
 
+def _unresolved_key_remedy(
+    config: Config,
+    run_id: str,
+    unknown: set[str] | list[str],
+    start: date,
+    end: date,
+) -> str:
+    """What to do about keys no source would resolve.
+
+    The terminal error is the only thing most operators read, and these three
+    gates gave a count and nothing to act on: not which keys, not which vendor
+    was down, not which command resumes the run. All of it is known here — the
+    findings file already holds the per-key reasons — so say it once, in the
+    message that actually reaches the terminal.
+    """
+    findings_path = config.meta_root / "quality" / "findings" / f"{run_id}.json"
+    keys = sorted(unknown)
+    sample = ",".join(keys[:3]) + (",..." if len(keys) > 3 else "")
+    return (
+        f"\n  Full list and per-key reasons: {findings_path}"
+        "\n  Which vendor is down: cne sources probe"
+        f"\n  Resume this run once it is back: cne retry --run-id {run_id}"
+        f"\n  Or repair just these keys: cne backfill daily_bars --symbols {sample} "
+        f"--start {start} --end {end}"
+    )
+
+
 def _certify_missing_daily_symbols(
     config: Config,
     symbols: set[str],
@@ -900,26 +927,12 @@ def _record_certified_daily_no_data(
 def _fetch_tip_via_exchange(
     config: Config, symbols: list[str], trade_date: date, run_id: str
 ) -> dict:
-    """Stage the SH/SZ tip from each exchange's own whole-board publication.
+    """Stage the SSE auction snapshot; leave SZSE report totals to audit.
 
-    TDX bills per symbol, not per session: one request returns up to 800 bars,
-    so a 5-session window costs the same ~5,559 requests as a 1-session one.
-    That is why the tip could not be made cheaper on its own — it arrived
-    bundled into a sweep that was really paying for the reconciliation tail.
-    Routing the tip here is what lets the two be priced separately, so the
-    per-symbol sweep can move to its own (weekly) cadence.
-
-    Measured on 2026-09-15: two requests, 5,219 rows, 5.9s, covering 100% of
-    what the lake held for that session (5,215/5,215) plus 4 symbols TDX had
-    missed. `close` agreed on every row; volume and amount agreed to a median
-    ratio of 1.0000, with the exchange the *more* precise of the two (TDX
-    truncates volume to whole lots).
-
-    Both endpoints publish a current snapshot and return empty for any other
-    session, so this can never stamp today's prices onto an older date. Either
-    exchange failing simply leaves its symbols to the per-symbol path — SZSE
-    resets the connection often enough from a non-mainland egress that this has
-    to be a supplement, never a swap.
+    SZSE's historical stock report includes turnover outside the intraday
+    auction series. Its OHLC can arbitrate prices, but its volume/amount must
+    not replace auction-based daily bars from TDX/Sina/THS. Keeping those SZ
+    symbols uncovered lets the regular quote path fetch compatible quantities.
     """
     from cnequity.adapters.exchange.daily_quotes import fetch_exchange_daily_quotes
     from cnequity.domain.schemas import data_version_for, with_provenance
@@ -954,7 +967,9 @@ def _fetch_tip_via_exchange(
             "exchange tip snapshot: %s did not answer; those symbols stay with TDX",
             ", ".join(sorted(result.failures)),
         )
-    frame = result.quotes.filter(pl.col("symbol").is_in(sorted(wanted)))
+    frame = result.quotes.filter(
+        pl.col("symbol").is_in(sorted(wanted)) & pl.col("symbol").str.ends_with(".SH")
+    )
     if frame.is_empty():
         return {**empty, "source_outcomes": {"exchange": {"status": "empty", "requests": 2}}}
 
@@ -1324,16 +1339,17 @@ def _finish_daily_bars(
                     }
                 )
                 persist_step_findings(config, run_id, end, findings)
+                remedy = _unresolved_key_remedy(config, run_id, unknown, end, end)
                 if not staged:
                     raise RuntimeError(
                         f"daily_bars {end}: primary/fallback and EastMoney clist/kline "
                         f"gap-fill produced no staged tip rows for {len(unknown)} "
-                        "unknown key(s)"
+                        f"unknown key(s) ({preview}{suffix})." + remedy
                     )
                 raise RuntimeError(
                     f"daily_bars {end}: {len(unknown)} expected tip key(s) remain "
-                    "unknown after failover; refusing to checkpoint a partial "
-                    "market snapshot"
+                    f"unknown after failover ({preview}{suffix}); refusing to checkpoint "
+                    "a partial market snapshot." + remedy
                 )
         if expected_symbols:
             _resolve_recovered_daily_batches(
@@ -1406,8 +1422,9 @@ def _finish_daily_bars(
                 persist_step_findings(config, run_id, end, findings)
                 raise RuntimeError(
                     f"daily_bars {start}..{end}: {len(unknown)} expected key(s) remain "
-                    "unknown after failover; refusing "
-                    "to checkpoint a partial market snapshot"
+                    f"unknown after failover ({preview}{suffix}); refusing to checkpoint a "
+                    "partial market snapshot."
+                    + _unresolved_key_remedy(config, run_id, unknown, start, end)
                 )
 
     # A source can return at least one row for every symbol while silently
@@ -1679,6 +1696,13 @@ def _staged_daily_bar_missing_keys(
                 status_by_symbol.setdefault(str(status_row["symbol"]), {})[
                     status_row["trade_date"]
                 ] = status_row["is_trading"]
+    # Suspensions this run learned from the vendor are staged but not yet
+    # curated, so they are not in `status_by_symbol` and would otherwise be
+    # condemned here as interior gaps.
+    learned = getattr(config, "_learned_suspensions", None)
+    learned_suspensions: set[tuple[str, date]] = (
+        learned["keys"] if isinstance(learned, dict) and learned.get("keys") else set()
+    )
     observed = staged.group_by("symbol").agg(pl.col("trade_date").unique().alias("dates"))
     for row in observed.iter_rows(named=True):
         span = metadata.get(row["symbol"], (None, None, None))
@@ -1690,6 +1714,7 @@ def _staged_daily_bar_missing_keys(
             (row["symbol"], day)
             for day in expected - set(row["dates"])
             if status_by_symbol.get(row["symbol"], {}).get(day) is not False
+            and (row["symbol"], day) not in learned_suspensions
         )
     # A symbol with no rows at all is handled by the explicit no-data/unknown
     # classifier.  This helper is specifically the interior partial-evidence
@@ -1923,21 +1948,16 @@ def _gapfill_complete_symbols_via_exchange(
     start: date,
     end: date,
 ) -> dict:
-    """Stage publisher quotes only when they complete a symbol's whole window.
+    """Stage compatible SSE quotes when they complete a whole window.
 
-    SZSE publishes historical daily files, so a handful of date requests can
-    recover every missing Shenzhen security at once. SSE only exposes the
-    current snapshot and is therefore used solely for a one-session window.
-    Absence from either file is not negative evidence: suspended securities
-    are absent too, and an unavailable publisher must remain distinguishable
-    from a successful empty response.
+    SZSE report turnover includes trades outside the auction series and is
+    reserved for authority checks. It cannot fill auction-based daily bars.
+    SSE offers only a current-session snapshot; absent quotes are not proof
+    of a halt, and remain owned by the vendor fallback paths.
     """
     import polars as pl
 
-    from cnequity.adapters.exchange.daily_quotes import (
-        fetch_sse_daily_quotes,
-        fetch_szse_daily_quotes,
-    )
+    from cnequity.adapters.exchange.daily_quotes import fetch_sse_daily_quotes
     from cnequity.storage import StagingWriter
 
     requested = set(dict.fromkeys(symbols))
@@ -1967,16 +1987,6 @@ def _gapfill_complete_symbols_via_exchange(
     frames: list[pl.DataFrame] = []
     requests = 0
     empty_responses = 0
-    sz_symbols = {symbol for symbol in requested if symbol.upper().endswith(".SZ")}
-    if sz_symbols:
-        for session in sessions:
-            requests += 1
-            frame = fetch_szse_daily_quotes(session, config=config)
-            if frame.is_empty():
-                empty_responses += 1
-                continue
-            frames.append(frame.filter(pl.col("symbol").is_in(sorted(sz_symbols))))
-
     sh_symbols = {symbol for symbol in requested if symbol.upper().endswith(".SH")}
     if sh_symbols and len(sessions) == 1:
         requests += 1
@@ -2097,13 +2107,21 @@ def _gapfill_missing_keys_via_ths(
     """Use THS only for exact keys still absent after cheaper batch routes."""
     from cnequity.adapters.ths.stock_bars import fetch_stock_bars
 
-    if not missing_keys or not config.sources.get("ths", False):
+    ths_enabled = config.sources.get("ths", False)
+    if not missing_keys or not ths_enabled:
+        # See the baostock link: "disabled" is a claim about configuration, and
+        # an earlier link having resolved everything is not one.
         return {
             "rows_read": 0,
             "rows_written": 0,
             "empty_symbols": [],
             "failed_symbols": {},
-            "source_outcomes": {"ths": {"status": "disabled", "requests": 0}},
+            "source_outcomes": {
+                "ths": {
+                    "status": "disabled" if not ths_enabled else "not_needed",
+                    "requests": 0,
+                }
+            },
         }
 
     by_symbol: dict[str, set[date]] = {}
@@ -2176,6 +2194,190 @@ def _gapfill_missing_keys_via_ths(
     }
 
 
+# Bounds the slowest link in the chain. Baostock paces at one request per
+# second, so an unbounded residue (a dead primary, not a few stragglers) would
+# add over an hour to a run that is already failing.
+_BAOSTOCK_GAPFILL_MAX_SYMBOLS = 300
+
+
+def _gapfill_missing_keys_via_baostock(
+    config: Config,
+    run_id: str,
+    *,
+    missing_keys: set[tuple[str, date]],
+    start: date,
+    end: date,
+) -> dict:
+    """The last independent per-symbol vendor, reached when the others cannot be.
+
+    `daily_bars` has declared baostock supplementary since the spec was
+    written, but nothing in the live chain ever called it: the code path
+    existed only for delisted recovery. That left the chain with exactly two
+    per-symbol vendors — EastMoney and THS — and EastMoney's history host is
+    the one that is unreachable from whole classes of egress (measured: every
+    `push2his` host dropped the connection from this vantage while `push2`
+    still served clist). When it is down, one vendor remains, and one vendor
+    can never certify a no-data key, because certification requires two
+    independent empties. That is how a run whose missing names had genuinely
+    not traded still failed with "expected key(s) remain unknown".
+
+    Baostock answers the same question from a different failure domain, and
+    answers it correctly for this purpose: a suspended session comes back as no
+    row rather than as an error, which is the explicit empty the arbitration
+    needs. Measured against the session that failed: it served both live
+    symbols exactly (matching Sina to the cent) and returned empty, not failed,
+    for all of the suspended ones.
+
+    Last on purpose — it logs in per call and walks one symbol at a time, so it
+    is the most expensive link and only ever sees the keys nothing else could
+    resolve.
+    """
+    # Named for the recovery path it was written for; it is an ordinary
+    # per-symbol bar fetch and carries the same fields the THS link stages.
+    from cnequity.adapters.baostock.delisted_bars import fetch_delisted_bars as fetch_baostock_bars
+
+    # Default off like the THS link: a chain that reaches a network vendor
+    # nobody enabled is a chain that reaches out from a unit test. Every
+    # shipped config sets `[sources.baostock] enabled = true`.
+    enabled = config.sources.get("baostock", False)
+    if not missing_keys or not enabled:
+        # "disabled" only when it really is. An earlier link resolving
+        # everything is the chain working, and reporting that as a config
+        # problem sends the operator to edit a setting that is already right.
+        return {
+            "rows_read": 0,
+            "rows_written": 0,
+            "empty_symbols": [],
+            "failed_symbols": {},
+            "source_outcomes": {
+                "baostock": {
+                    "status": "disabled" if not enabled else "not_needed",
+                    "requests": 0,
+                }
+            },
+        }
+
+    by_symbol: dict[str, set[date]] = {}
+    for symbol, session in missing_keys:
+        # Baostock covers Shanghai and Shenzhen only. A Beijing code comes back
+        # as a retried failure rather than an answer (measured: three live BJ
+        # names, three failures, one login cycle each), so sending them costs
+        # the sweep and evidences nothing.
+        if not is_tdx_servable(symbol):
+            continue
+        by_symbol.setdefault(symbol, set()).add(session)
+    if not by_symbol:
+        return {
+            "rows_read": 0,
+            "rows_written": 0,
+            "empty_symbols": [],
+            "failed_symbols": {},
+            "source_outcomes": {"baostock": {"status": "skipped", "requests": 0}},
+        }
+    requested = _research_first(by_symbol)
+
+    if len(requested) > _BAOSTOCK_GAPFILL_MAX_SYMBOLS:
+        # This link is for residue. A queue this long means the primary path
+        # is broken, and walking it at one request per second would spend more
+        # than an hour proving that slowly.
+        message = (
+            f"baostock final fallback skipped: {len(requested)} symbol(s) exceeds the "
+            f"{_BAOSTOCK_GAPFILL_MAX_SYMBOLS}-symbol residue bound for a 1 req/s link; "
+            "the primary route is what needs repairing"
+        )
+        logger.warning("%s", message)
+        return {
+            "rows_read": 0,
+            "rows_written": 0,
+            "empty_symbols": [],
+            "failed_symbols": {},
+            "audit_findings": [
+                {
+                    "dataset": "daily_bars",
+                    "severity": "warning",
+                    "check": "daily_bars_baostock_gapfill",
+                    "message": message,
+                    "requested_symbols": len(requested),
+                }
+            ],
+            "source_outcomes": {
+                "baostock": {"status": "skipped", "requests": 0, "pending": len(requested)}
+            },
+        }
+
+    try:
+        fetched, failed_symbols = fetch_baostock_bars(requested, start, end, config=config)
+    except Exception as exc:  # noqa: BLE001 — a dead final link must not raise
+        logger.warning("baostock final daily-bar fallback failed: %s", exc)
+        return {
+            "rows_read": 0,
+            "rows_written": 0,
+            "empty_symbols": [],
+            "failed_symbols": {symbol: type(exc).__name__ for symbol in requested},
+            "source_outcomes": {
+                "baostock": {
+                    "status": "failed",
+                    "requests": len(requested),
+                    "failed_symbols": len(requested),
+                }
+            },
+        }
+
+    rows = [row for row in fetched if (row.get("symbol"), row.get("trade_date")) in missing_keys]
+    returned = {row.get("symbol") for row in rows}
+    failed = {symbol: "fetch_failed" for symbol in failed_symbols}
+    # Empty means answered-and-had-nothing. A symbol the vendor never got to
+    # answer for is not evidence of anything.
+    empty = sorted(
+        symbol for symbol in requested if symbol not in returned and symbol not in failed
+    )
+
+    frame = pl.DataFrame(rows) if rows else pl.DataFrame()
+    written = _stage_daily_gap_batch(
+        config,
+        run_id,
+        batch_id="baostock-kline-gapfill",
+        source="baostock",
+        frame=frame,
+        symbols=requested,
+        start=start,
+        end=end,
+    )
+    status = "success" if written else ("failed" if failed else "empty")
+    findings: list[dict] = []
+    if written or failed or empty:
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "warning" if failed else "info",
+                "check": "daily_bars_baostock_gapfill",
+                "message": (
+                    f"baostock final fallback wrote {written} row(s) for {len(requested)} "
+                    f"remaining symbol(s); empty={len(empty)}, failed={len(failed)}"
+                ),
+                "rows_written": written,
+                "empty_symbols": empty,
+                "failed_symbols": sorted(failed),
+            }
+        )
+    return {
+        "rows_read": len(rows),
+        "rows_written": written,
+        "empty_symbols": empty,
+        "failed_symbols": failed,
+        "audit_findings": findings,
+        "source_outcomes": {
+            "baostock": {
+                "status": status,
+                "requests": len(requested),
+                "rows": len(rows),
+                "empty_symbols": len(empty),
+                "failed_symbols": len(failed),
+            }
+        },
+    }
+
+
 def _research_first(symbols: Iterable[str]) -> list[str]:
     """Order a fallback queue so research-universe symbols are attempted first.
 
@@ -2197,6 +2399,136 @@ def _is_research_symbol(symbol: str) -> bool:
     except ValueError:
         return False
     return in_ingest_universe(info.code, info.exchange, "all_a")
+
+
+def _expected_session_keys(
+    config: Config,
+    symbols: list[str],
+    sessions: list[date],
+    start: date,
+    end: date,
+) -> set[tuple[str, date]]:
+    """Keys a symbol is actually expected to have over *sessions*.
+
+    Every trading day in the window is the wrong answer, and it was the one
+    this chain used: it counted days before a symbol listed, days after it
+    delisted, and days the lake already knows it was suspended. A backfill of a
+    name with any suspension in its window could therefore never report itself
+    complete, which left the failed primary batch unresolved, which left
+    `compact` skipping the dataset — rows fetched, staged, and never published.
+
+    The interior-gap gate downstream has always judged by listing span and
+    `trading_status`. This is the same rule, applied where completeness is
+    first decided, so the two cannot disagree about what "missing" means.
+    """
+    spans = _instrument_spans(config)
+    status = load_curated_trading_status(config, start=start, end=end, symbols=sorted(symbols))
+    halted: dict[str, set[date]] = {}
+    if status is not None and not status.is_empty():
+        needed = {"symbol", "trade_date", "is_trading"}
+        if needed.issubset(status.columns):
+            for row in status.select(*sorted(needed)).iter_rows(named=True):
+                if row["is_trading"] is False:
+                    halted.setdefault(str(row["symbol"]), set()).add(row["trade_date"])
+
+    keys: set[tuple[str, date]] = set()
+    for symbol in symbols:
+        list_date, delist_date = spans.get(symbol, (None, None, None))[:2]
+        first = max(start, list_date) if list_date is not None else start
+        last = min(end, delist_date) if delist_date is not None else end
+        closed = halted.get(symbol, set())
+        keys.update(
+            (symbol, session)
+            for session in sessions
+            if first <= session <= last and session not in closed
+        )
+    return keys
+
+
+def _learn_suspensions_from_baostock(
+    config: Config,
+    run_id: str,
+    missing: set[tuple[str, date]],
+    start: date,
+    end: date,
+) -> tuple[set[tuple[str, date]], dict]:
+    """Ask the vendor which of these absences were suspensions, and keep the answer.
+
+    A pre-2016 window has no `trading_status` in the lake to excuse an interior
+    gap with, so a backfill of a name that was ever suspended could not report
+    itself complete however many bars it actually fetched — and the operator
+    had to know to run `cne backfill trading_status` first, for the same
+    symbols and window, before the bars would publish. Two commands, in an
+    order nothing announced.
+
+    Baostock publishes the fact per symbol-day (`tradestatus`), and is already
+    this dataset's declared backfill source, so the step asks for it itself.
+    The rows are staged as well as used, so the next run does not ask again.
+
+    Returns the (symbol, session) pairs it confirmed suspended, and an outcome
+    record for the receipt.
+    """
+    from cnequity.adapters.baostock.st_history import fetch_st_history
+    from cnequity.steps.http_common import write_fetched
+
+    if not missing or not config.sources.get("baostock", False):
+        return set(), {"status": "disabled" if missing else "not_needed", "requests": 0}
+    # Baostock serves Shanghai and Shenzhen only; a Beijing code costs a
+    # retried failure and answers nothing.
+    symbols = sorted({symbol for symbol, _day in missing if is_tdx_servable(symbol)})
+    if not symbols:
+        return set(), {"status": "skipped", "requests": 0, "reason": "no SH/SZ key"}
+    if len(symbols) > _BAOSTOCK_GAPFILL_MAX_SYMBOLS:
+        return set(), {
+            "status": "skipped",
+            "requests": 0,
+            "pending": len(symbols),
+            "reason": "residue exceeds the 1 req/s bound",
+        }
+
+    try:
+        frame, failed = fetch_st_history(symbols, start, end, config=config)
+    except Exception as exc:  # noqa: BLE001 — evidence we could not get is not a new failure
+        logger.warning("suspension evidence unavailable for %d symbol(s): %s", len(symbols), exc)
+        return set(), {"status": "failed", "requests": len(symbols), "error": type(exc).__name__}
+    if frame.is_empty():
+        return set(), {"status": "empty", "requests": len(symbols), "failed_symbols": len(failed)}
+
+    halted = frame.filter(~pl.col("is_trading"))
+    confirmed = {
+        (row["symbol"], row["trade_date"])
+        for row in halted.select("symbol", "trade_date").iter_rows(named=True)
+    } & missing
+    written = write_fetched(
+        config,
+        run_id,
+        "trading_status",
+        frame,
+        source="baostock",
+        batch_id=f"suspension-evidence-{start.isoformat()}-{end.isoformat()}",
+    )
+    logger.info(
+        "learned %d suspended session(s) for %d symbol(s) from baostock; "
+        "%s trading_status row(s) staged",
+        len(confirmed),
+        len(symbols),
+        written.get("rows_written", 0),
+    )
+    # The rows are staged, not curated, until this run's compact — and the
+    # interior-gap gate below reads curated. Carry the answer on the config for
+    # the rest of this run so the gate does not re-condemn what we just learned.
+    learned = getattr(config, "_learned_suspensions", None)
+    if not isinstance(learned, dict) or learned.get("run_id") != run_id:
+        learned = {"run_id": run_id, "keys": set()}
+        config._learned_suspensions = learned
+    learned["keys"].update(confirmed)
+    return confirmed, {
+        "status": "success",
+        "requests": len(symbols),
+        "suspended_keys": len(confirmed),
+        "rows_written": int(written.get("rows_written", 0)),
+        "failed_symbols": len(failed),
+    }
 
 
 def _gapfill_multiday_via_kline(
@@ -2221,7 +2553,7 @@ def _gapfill_multiday_via_kline(
 
     requested = list(dict.fromkeys(symbols))
     sessions = list_trading_dates(config, start, end)
-    expected_keys = {(symbol, session) for symbol in requested for session in sessions}
+    expected_keys = _expected_session_keys(config, requested, sessions, start, end)
     writer = StagingWriter(config.staging_root)
 
     def staged_keys() -> set[tuple[str, date]]:
@@ -2416,6 +2748,50 @@ def _gapfill_multiday_via_kline(
     for symbol in ths.get("empty_symbols") or []:
         empty_evidence.setdefault(symbol, set()).add("ths")
 
+    # Everything above can be unavailable at once — EastMoney's history host is
+    # unreachable from some egress, THS can be disabled, and the exchange
+    # publishes per session rather than per symbol. Reaching a fourth vendor in
+    # its own failure domain is what keeps the run from ending on "unknown"
+    # when the answer was obtainable; it costs nothing when the chain already
+    # resolved everything, because it is only handed what is still missing.
+    pending = missing_keys()
+    baostock = _gapfill_missing_keys_via_baostock(
+        config,
+        run_id,
+        missing_keys=pending,
+        start=start,
+        end=end,
+    )
+    rows_read += int(baostock.get("rows_read", 0))
+    rows_written += int(baostock.get("rows_written", 0))
+    findings.extend(baostock.get("audit_findings") or [])
+    source_outcomes.update(baostock.get("source_outcomes") or {})
+    for symbol in baostock.get("empty_symbols") or []:
+        empty_evidence.setdefault(symbol, set()).add("baostock")
+
+    remaining = missing_keys()
+    suspended: set[tuple[str, date]] = set()
+    if remaining:
+        # Nothing above could fill these. Before calling them unresolved, find
+        # out whether they are absences the market itself explains.
+        suspended, suspension_outcome = _learn_suspensions_from_baostock(
+            config, run_id, remaining, start, end
+        )
+        source_outcomes["baostock_suspensions"] = suspension_outcome
+        if suspended:
+            expected_keys -= suspended
+            findings.append(
+                {
+                    "dataset": "daily_bars",
+                    "severity": "info",
+                    "check": "daily_bars_suspension_evidence",
+                    "message": (
+                        f"{len(suspended)} absent key(s) confirmed as suspensions by baostock "
+                        "and recorded in trading_status"
+                    ),
+                    "suspended_keys": len(suspended),
+                }
+            )
     remaining = missing_keys()
     observed = staged_keys()
     expected_no_data = {
@@ -2425,6 +2801,35 @@ def _gapfill_multiday_via_kline(
         and not any(key[0] == symbol for key in observed)
         and all((symbol, session) in remaining for session in sessions)
     }
+    # A vendor saying "suspended on every session you asked about" is not the
+    # same claim as two vendors independently returning nothing: the first is a
+    # positive statement about the market, the second only says nobody had it.
+    # Names that spend a whole window halted for a restructuring are exactly
+    # the case the two-empty rule cannot reach — measured on the 2005-2015
+    # repair, 19 of them were suspended for every session of 2010 and the run
+    # still refused, because no vendor can return rows that never existed.
+    halted_symbols = {symbol for symbol, _day in suspended}
+    positively_halted = {
+        symbol
+        for symbol in halted_symbols
+        if not any(key[0] == symbol for key in observed)
+        and not any(key[0] == symbol for key in expected_keys)
+    }
+    if positively_halted:
+        expected_no_data |= positively_halted
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "info",
+                "check": "daily_bars_window_fully_suspended",
+                "message": (
+                    f"{len(positively_halted)} symbol(s) were suspended for every session in "
+                    f"{start}..{end} — certified from the vendor's own trading status, not "
+                    "from an absence of rows"
+                ),
+                "symbols": sorted(positively_halted),
+            }
+        )
     unresolved = {key for key in remaining if key[0] not in expected_no_data}
     if expected_no_data:
         findings.append(
@@ -2679,7 +3084,15 @@ def fetch_bars_via_sina(
     audit_findings: list[dict] = []
     failure_reasons: dict[str, int] = {}
     rows = 0
-    sina_circuit_open = threading.Event()
+    # A daily run can enter this helper for BJ, TDX failures and interior gaps.
+    # Share the circuit across those passes; resetting it per call repeatedly
+    # re-triggers the same vendor ban and its 30/120-second cooldowns.
+    circuit_state = getattr(config, "_sina_bar_circuit", None)
+    if circuit_state is None or circuit_state[0] != run_id:
+        # Config is passed to process workers elsewhere. Store only simple
+        # values here; a threading.Event would make that config unpicklable.
+        circuit_state = (run_id, False)
+        config._sina_bar_circuit = circuit_state
 
     # The BSE quotation API is an official current-session snapshot, not a
     # history source.  Use it first whenever this window contains exactly one
@@ -2743,10 +3156,10 @@ def fetch_bars_via_sina(
                     )
 
     def fetch_one(symbol: str, client: httpx.Client) -> tuple[str, pl.DataFrame | None, str | None]:
-        if sina_circuit_open.is_set():
-            return symbol, None, "circuit_open"
         rate_limit_failures = 0
         for attempt in range(_SINA_FETCH_ATTEMPTS):
+            if config._sina_bar_circuit == (run_id, True):
+                return symbol, None, "circuit_open"
             # Gapfill is a best-effort repair path. Keep one unresponsive
             # symbol from holding the whole daily run for the full timeout.
             try:
@@ -2783,7 +3196,7 @@ def fetch_bars_via_sina(
                     rate_limit_failures += 1
                     if rate_limit_failures >= 2:
                         config.defer_source("sina_bars", _SINA_RATE_LIMIT_CIRCUIT_SECONDS)
-                        sina_circuit_open.set()
+                        config._sina_bar_circuit = (run_id, True)
                         logger.warning(
                             "sina bars repeated HTTP %s; opening run-local circuit and "
                             "cooling all Sina lanes for %.0fs",

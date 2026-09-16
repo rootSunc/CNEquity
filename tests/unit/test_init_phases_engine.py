@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +21,23 @@ def _minimal_init_phases() -> list[str]:
         "phase3_index_and_status",
         "phase4_finalize",
     ]
+
+
+def _write_config(tmp_path) -> Path:
+    """A config file on disk: the CLI paths under test resolve one."""
+    path = tmp_path / "cnequity.toml"
+    path.write_text(
+        f"""
+[data]
+root = "{path_for_toml(tmp_path / "data")}"
+
+[tdx_protocol]
+allow_mock = true
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 @pytest.fixture
@@ -102,7 +120,8 @@ def test_retry_runs_missing_init_steps(cfg):
     assert phases_never_started(phases, batches) == ["phase3_index_and_status", "phase4_finalize"]
 
 
-def test_init_blocks_new_run_when_incomplete_exists(cfg, monkeypatch):
+def test_init_never_starts_a_second_run_over_an_incomplete_one(cfg, monkeypatch):
+    """It resumes that run instead — what it must never do is start over."""
     init_data_layout(cfg)
     manifest = Manifest(cfg.manifest_path)
     run_id = manifest.start_run(
@@ -111,11 +130,15 @@ def test_init_blocks_new_run_when_incomplete_exists(cfg, monkeypatch):
     )
     manifest.finish_run(run_id, "failed")
 
-    monkeypatch.setattr(
-        JobEngine,
-        "run_init_phases",
-        lambda self, **kwargs: pytest.fail("should not start new init"),
-    )
+    seen: dict = {}
+
+    def _capture(self, trade_date=None, *, resume=False, resume_run_id=None, keep_going=False):
+        if not resume:
+            pytest.fail("should not start a new init over an incomplete one")
+        seen["run_id"] = resume_run_id
+        return {"run_id": resume_run_id, "status": "success", "phases": []}
+
+    monkeypatch.setattr(JobEngine, "run_init_phases", _capture)
 
     from click.testing import CliRunner
 
@@ -128,8 +151,8 @@ def test_init_blocks_new_run_when_incomplete_exists(cfg, monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(cli, ["init", "--config", str(cfg_path)])
-    assert result.exit_code != 0
-    assert "--resume" in result.output or "resume" in result.output.lower()
+    assert result.exit_code == 0, result.output
+    assert seen["run_id"] == run_id
 
 
 def json_phases():
@@ -177,3 +200,90 @@ def test_reference_and_index_phases_backfill_history():
     assert step_backfill("index_bars", phases) is True
     # instruments/trading_status are date-insensitive but flagged consistently
     assert step_backfill("index_bars", ["phase1_reference"]) is False
+
+
+def test_a_killed_init_is_resumed_not_refused(tmp_path, monkeypatch):
+    """Looked hung, got killed, started again — the one command the operator
+    had left used to answer "no" to the one thing they were trying to do."""
+    from click.testing import CliRunner
+
+    from cnequity.cli import setup_cmds
+    from cnequity.cli._root import cli
+
+    cfg_path = _write_config(tmp_path)
+    cfg = Config(data_root=tmp_path / "data")
+    init_data_layout(cfg)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run(
+        "init", {"phases": ["phase1_reference"], "trade_date": "2026-09-16"}
+    )
+    # Left as `running`, exactly as a SIGKILLed process leaves it.
+
+    seen: dict = {}
+
+    def _capture(self, trade_date=None, *, resume=False, resume_run_id=None, keep_going=False):
+        seen.update(resume=resume, resume_run_id=resume_run_id)
+        return {"run_id": resume_run_id, "status": "success", "phases": []}
+
+    monkeypatch.setattr(setup_cmds.JobEngine, "run_init_phases", _capture)
+
+    result = CliRunner().invoke(cli, ["init", "--config", str(cfg_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "resuming it instead of starting over" in result.output
+    assert seen == {"resume": True, "resume_run_id": run_id}
+
+
+def test_a_live_init_is_still_refused(tmp_path, monkeypatch):
+    """The refusal is right for a peer that is actually running."""
+    import subprocess
+    import sys
+    import time
+
+    from click.testing import CliRunner
+
+    from cnequity.cli import setup_cmds
+    from cnequity.cli._root import cli
+    from cnequity.orchestrator.run_lock import INIT_JOB_LOCK, lock_path
+
+    cfg_path = _write_config(tmp_path)
+    cfg = Config(data_root=tmp_path / "data")
+    init_data_layout(cfg)
+    Manifest(cfg.manifest_path).start_run(
+        "init", {"phases": ["phase1_reference"], "trade_date": "2026-09-16"}
+    )
+
+    def _never(*args, **kwargs):
+        raise AssertionError("must not join a run another process owns")
+
+    monkeypatch.setattr(setup_cmds.JobEngine, "run_init_phases", _never)
+
+    # A real second process: the in-process guard raises a different error, and
+    # what matters is what another `cne init` sees.
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time\n"
+            "from pathlib import Path\n"
+            "from cnequity.orchestrator.run_lock import run_lock\n"
+            f"with run_lock(Path({str(cfg.meta_root)!r}), {INIT_JOB_LOCK!r}, blocking=False):\n"
+            "    print('held', flush=True)\n"
+            "    time.sleep(30)\n",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        deadline = time.monotonic() + 10
+        while not lock_path(cfg.meta_root, INIT_JOB_LOCK).exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        result = CliRunner().invoke(cli, ["init", "--config", str(cfg_path)])
+    finally:
+        holder.terminate()
+        holder.wait(30)
+
+    assert result.exit_code != 0
+    assert "Another init is running now" in result.output

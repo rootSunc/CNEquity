@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 import polars as pl
@@ -12,9 +13,12 @@ from cnequity.adapters.eastmoney.valuation import fetch_valuation_metrics
 from cnequity.config import Config
 from cnequity.domain.symbols import is_all_a_symbol, parse_symbol
 from cnequity.orchestrator.registry import register_step
+from cnequity.progress import sweep_progress
 from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.steps.common import instrument_metadata, load_bar_universe, load_symbols
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
+
+logger = logging.getLogger(__name__)
 
 # EastMoney's valuation clist is a live snapshot only; history comes from baostock.
 _VALUATION_BACKFILL_START = date(2016, 1, 1)
@@ -190,6 +194,7 @@ def _backfill_valuation_metrics_locked(config: Config, trade_date: date, run_id:
     rows_written = 0
     all_failed: list[str] = []
     aborted_reason: str | None = None
+    report = sweep_progress(logger, "valuation_metrics baostock backfill", len(todo))
     for offset in range(0, len(todo), _VALUATION_BACKFILL_CHUNK):
         batch = todo[offset : offset + _VALUATION_BACKFILL_CHUNK]
         try:
@@ -215,6 +220,7 @@ def _backfill_valuation_metrics_locked(config: Config, trade_date: date, run_id:
             )
             rows_read += int(chunk.get("rows_read", 0))
             rows_written += int(chunk.get("rows_written", 0))
+        report(offset + len(batch))
 
     result: dict = {
         "rows_read": rows_read,
@@ -545,13 +551,17 @@ def _run_shareholder_step(
     rows_read = 0
     rows_written = 0
     empty_windows: list[tuple[date, date]] = []
-    for win_start, win_end in windows:
+    # A backfill here is one window per year over ~25 years, each a paginated
+    # sweep of its own: silent, and long enough to look stopped.
+    report = sweep_progress(logger, f"{dataset} windows", len(windows), every=1, unit="windows")
+    for index, (win_start, win_end) in enumerate(windows, start=1):
         # Write per window rather than concatenating the walk: a full
         # top_holders backfill is ~110k rows a quarter across ~25 years, and
         # holding all of it costs both memory and everything fetched so far if
         # the run is killed. Unique batch id — write_simple's default batch-0
         # would overwrite the window before it.
         part = fetch_fn(win_start, win_end, by=by, config=config)
+        report(index)
         if part.is_empty():
             if getattr(config, "_backfill", False):
                 empty_windows.append((win_start, win_end))

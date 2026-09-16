@@ -12,6 +12,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.datasets import PARTITION_COLS, WATERMARK_SKIP
 from cnequity.orchestrator.registry import register_step
+from cnequity.progress import sweep_progress
 from cnequity.storage import StagingWriter, compact_dataset
 from cnequity.storage.instruments import compact_instruments
 from cnequity.storage.state import StateStore
@@ -343,7 +344,14 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
     revisions = RevisionStore(config.meta_root, config.curated_root)
     lineage = runtime_lineage(config)
 
-    for ds in staged:
+    # Compacting a full init's staging is a read-merge-write over every
+    # partition of every dataset, and it ran without a word: the last phase of
+    # a run that had already taken hours was also its quietest. Reported on the
+    # way into each dataset, so the count names the one currently being merged.
+    report = sweep_progress(logger, "compact", len(staged), every=1, unit="datasets")
+
+    for index, ds in enumerate(staged, start=1):
+        report(index)
         allowed, incomplete_count = compact_allowed(
             manifest,
             run_id,

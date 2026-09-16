@@ -42,11 +42,14 @@ def stale_datasets_by_group(cfg, datasets: list[str]) -> dict[str, list[str]]:
     Datasets owned by no group land under ``(unscheduled)``: nothing routine
     fetches them, which is a different problem from a group that failed.
     """
+    from cnequity.domain.datasets import DATASETS
+
     owner: dict[str, str] = {}
     for scope in ("schedule_groups", "events_groups"):
         for name, group in (getattr(cfg, scope, {}) or {}).items():
             for step in group.steps:
-                owner.setdefault(step, name)
+                dataset = step.removeprefix("derive_")
+                owner.setdefault(dataset if dataset in DATASETS else step, name)
     out: dict[str, list[str]] = {}
     for dataset in datasets:
         out.setdefault(owner.get(dataset, "(unscheduled)"), []).append(dataset)
@@ -68,6 +71,11 @@ def stale_datasets_by_group(cfg, datasets: list[str]) -> dict[str, list[str]]:
     help="Strictly validate a research window starting here (requires --full).",
 )
 @click.option(
+    "--quality-only",
+    is_flag=True,
+    help="With --full, gate on quality errors; check scheduled freshness separately with status.",
+)
+@click.option(
     "--research-end",
     default=None,
     help="Research window end (default: latest daily_bars; requires --research-start).",
@@ -86,9 +94,13 @@ def audit(
     research_start: str | None,
     research_end: str | None,
     research_universe: str,
+    quality_only: bool = False,
 ):
     """Run quality audit, or --full for a current whole-lake health snapshot."""
     cfg = _cfg(config_path)
+
+    if quality_only and not full:
+        raise click.ClickException("--quality-only requires --full")
 
     if research_start and not full:
         raise click.ClickException("--research-start requires --full")
@@ -153,7 +165,12 @@ def audit(
             click.echo("HEALTHY (operational; research BLOCKED)")
         else:
             click.echo("HEALTHY")
-        if not health["healthy"] or (research_start and not validity["universe_ready"]):
+        failed = bool(sev.get("error", 0)) if quality_only else not health["healthy"]
+        if quality_only:
+            click.echo(
+                "Quality gate: FAILED" if failed else "Quality gate: OK (freshness separate)"
+            )
+        if failed or (research_start and not validity["universe_ready"]):
             raise SystemExit(1)
         return
 
@@ -728,3 +745,78 @@ def sources_probe(config_path: str, vantage: str, only: str | None, out: str | N
         click.echo(f"Historical sample: {historical}")
     click.echo(f"\nWrote {path}")
     click.echo("View it with: cne serve  \u2192  http://127.0.0.1:8787/source-health")
+
+
+@sources_grp.command("substitutes")
+@config_option
+@click.option(
+    "--vantage", default="local", show_default=True, help="Which vantage's report to read."
+)
+@click.option(
+    "--probe/--no-probe",
+    default=False,
+    show_default=True,
+    help="Measure now instead of reading the stored report. Same requests as `sources probe`.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+def sources_substitutes(config_path: str, vantage: str, probe: bool, as_json: bool):
+    """For every source that is down, what can still answer for its datasets.
+
+    A probe report says what is up; this says what to do about what is not.
+    Substitutes are ranked independent-first, because an endpoint that shares a
+    blast radius with the one that failed is not a second opinion — EastMoney's
+    history host cannot stand in for EastMoney's snapshot host.
+
+    Exits non-zero when a dataset is stranded: something it needs is down and
+    nothing reachable is left.
+    """
+    import json as json_mod
+
+    from cnequity.diagnostics.source_health import HealthReport, run_probes
+    from cnequity.diagnostics.substitutes import (
+        render_substitutions,
+        substitution_report,
+        to_dict,
+    )
+
+    _progress_logging(quiet=True)
+    cfg = _cfg(config_path)
+    if probe:
+        report = run_probes(cfg, vantage=vantage)
+    else:
+        path = cfg.meta_root / "source_health" / f"{vantage}.json"
+        if not path.exists():
+            raise click.ClickException(
+                f"No probe report for vantage {vantage!r} at {path}. "
+                "Run `cne sources probe` first, or pass --probe to measure now."
+            )
+        report = HealthReport.from_dict(json_mod.loads(path.read_text(encoding="utf-8")))
+
+    entries = substitution_report(report)
+    if as_json:
+        click.echo(json.dumps(to_dict(entries), indent=2, ensure_ascii=False))
+    else:
+        click.echo(f"探测时间 {report.generated_at} · vantage {report.vantage}")
+        for line in render_substitutions(entries):
+            click.echo(line)
+    if any(entry.stranded for entry in entries):
+        raise SystemExit(1)
+
+
+@cli.command("verify-bars")
+@config_option
+@click.option("--start", required=True, help="Inclusive coverage window start.")
+@click.option("--end", default=None, help="Window end; defaults to the last completed trading day.")
+def verify_bars(config_path: str, start: str, end: str | None):
+    """Check securities × sessions, including securities with no rows in the window."""
+    from cnequity.quality.bar_coverage import daily_bar_coverage
+
+    cfg = _cfg(config_path)
+    start_date = parse_date_option(start, "--start")
+    end_date = parse_date_option(end, "--end") or _last_trading_day(cfg, shanghai_today())
+    if start_date > end_date:
+        raise click.ClickException("--start must be on or before --end")
+    result = daily_bar_coverage(cfg, start_date, end_date)
+    click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    if not result["complete"]:
+        raise SystemExit(1)

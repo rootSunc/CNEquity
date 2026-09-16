@@ -33,8 +33,10 @@ from cnequity.orchestrator.registry import get_step
 from cnequity.orchestrator.run_lock import (
     DAILY_INGESTION_LOCK,
     EVENTS_INGESTION_LOCK,
+    INIT_JOB_LOCK,
     run_lock,
 )
+from cnequity.progress import step_scope
 from cnequity.steps.common import is_trading_day
 
 logger = logging.getLogger(__name__)
@@ -194,7 +196,8 @@ class JobEngine:
                 "bse_tip_repair": bool(getattr(self.config, "_bse_tip_repair", False)),
             }
         lock_name = _JOB_LOCKS.get(family)
-        with self._optional_job_lock(lock_name):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(self._optional_job_lock(lock_name))
             if not run_id:
                 # Pin the plan to the run. A retry days later must know what
                 # this run set out to do even if the process died before
@@ -211,6 +214,17 @@ class JobEngine:
                     run_id,
                     lambda merged: merged.update(metadata),
                 )
+
+            # Proof of life for this run, held until it finishes. Without it a
+            # run killed mid-flight leaves `status=running` in the manifest and
+            # nothing can tell that row from a run still working: liveness had
+            # to be inferred from heartbeat age, so a crashed run stayed
+            # "running" for `batch_stale_seconds` — an hour by default — and
+            # every command that reads run status was wrong for that hour.
+            # `cne retry --failed-groups` reported nothing to retry; `cne
+            # status` showed a ghost. The kernel releases this the moment the
+            # process dies, which is exactly the signal that was missing.
+            stack.enter_context(run_lock(self.config.meta_root, run_id, blocking=False))
 
             context: dict[str, Any] = {"run_id": run_id, "trade_date": trade_date}
             results: list[dict[str, Any]] = []
@@ -548,7 +562,13 @@ class JobEngine:
             # without exposing the batch id as user-facing context.
             step_context = dict(context)
             step_context["_batch_id"] = batch_id
-            out = entry.fn(self.config, trade_date, run_id, step_context)
+            # The only line a step used to produce was the one announcing it
+            # done, so a twenty-minute fetch and a hang read identically until
+            # one of them ended. Name it on the way in as well, and register it
+            # so the heartbeat can say which step the silence belongs to.
+            logger.info("Step %s starting", name)
+            with step_scope(name):
+                out = entry.fn(self.config, trade_date, run_id, step_context)
             elapsed = time.perf_counter() - t0
             step_status = out.pop("status", "success")
             if step_status == "success" and _has_partial_failures(out):
@@ -1418,6 +1438,25 @@ class JobEngine:
         keep_going: bool = False,
     ) -> dict[str, Any]:
         trade_date = trade_date or shanghai_today()
+        # One init at a time, and visibly so. `_retry_run` locks by run id, so
+        # a resume nesting inside this takes a different lock and cannot
+        # deadlock against it.
+        with run_lock(self.config.meta_root, INIT_JOB_LOCK, blocking=False):
+            return self._run_init_phases_locked(
+                trade_date,
+                resume=resume,
+                resume_run_id=resume_run_id,
+                keep_going=keep_going,
+            )
+
+    def _run_init_phases_locked(
+        self,
+        trade_date: date,
+        *,
+        resume: bool,
+        resume_run_id: str | None,
+        keep_going: bool,
+    ) -> dict[str, Any]:
         if resume or resume_run_id:
             return self.resume_init(
                 trade_date,

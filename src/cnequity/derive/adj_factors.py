@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
@@ -18,6 +19,7 @@ from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import with_provenance
 from cnequity.domain.symbols import is_cdr_symbol, parse_symbol
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.progress import sweep_progress
 from cnequity.storage.atomic import write_parquet_atomic
 from cnequity.storage.parquet import CuratedWriter
 from cnequity.storage.state import StateStore
@@ -26,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 # Only hfq is persisted; qfq is derived at query time (ADR-0004).
 STORED_ADJUST_TYPE = "hfq"
+#: The declared backup vendor for this dataset. Rows it produced say so.
+BACKUP_SOURCE = "baostock"
 
 # Derive step fails when uncached fetch failures exceed this share of symbol×type tasks.
 FAIL_RATIO_THRESHOLD = 0.05
@@ -369,11 +373,11 @@ def _uncovered_symbols(config: Config) -> set[str]:
     bars temporarily unadjusted until a targeted re-derive visits their full
     history; the self-heal below schedules those symbols for refresh.
 
-    Compared per symbol rather than per row: a (symbol, trade_date) anti-join
-    against a 338M-row daily_bars on every run would cost more than the derive.
-    Min/max per symbol catches endpoint gaps; when the factor span reaches the
-    latest bar, distinct-day counts also catch a deleted middle partition.
-    A refreshed symbol realigns its whole history anyway.
+    Compare actual keys through each symbol's last factor date. Extra factors
+    on suspended sessions must not hide a missing traded date; equal row counts
+    do not imply equal coverage. Later bars belong to the normal incremental
+    path, so they do not trigger a full-history refresh. Only missing symbols
+    are collected into Python; the key comparison runs in Polars streaming.
     """
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
@@ -386,7 +390,6 @@ def _uncovered_symbols(config: Config) -> set[str]:
         .agg(
             pl.col("trade_date").min().alias("bar_first"),
             pl.col("trade_date").max().alias("bar_last"),
-            pl.col("trade_date").n_unique().alias("bar_days"),
         )
         .collect()
     )
@@ -410,25 +413,27 @@ def _uncovered_symbols(config: Config) -> set[str]:
         .agg(
             pl.col("trade_date").min().alias("fac_first"),
             pl.col("trade_date").max().alias("fac_last"),
-            pl.col("trade_date").n_unique().alias("fac_days"),
         )
         .collect()
     )
-    # Only the *backward* direction. `fac_last < bar_last` is true on every
-    # ordinary run — today's bar lands before its factor is derived — so
-    # including it would force a full-history realign of the entire market
-    # daily. New sessions are precisely what the incremental path is for.
     joined = bar_span.join(fac_span, on="symbol", how="left")
-    # A missing middle factor is another uncovered history, but do not count
-    # the expected terminal lag: today's bar can be written before Sina's
-    # factor is available. Only enforce exact day counts when the factor span
-    # already reaches the latest bar; endpoint gaps remain covered by the first
-    # condition above.
     uncovered = joined.filter(
-        pl.col("fac_first").is_null()
-        | (pl.col("fac_first") > pl.col("bar_first"))
-        | ((pl.col("fac_last") >= pl.col("bar_last")) & (pl.col("fac_days") < pl.col("bar_days")))
+        pl.col("fac_first").is_null() | (pl.col("fac_first") > pl.col("bar_first"))
     )
+    # Factors legitimately include suspended sessions. Counting those rows can
+    # mask holes in traded dates even when both endpoints match. Restrict the
+    # exact comparison to established factor history, excluding terminal lag.
+    internal = (
+        bars.select("symbol", "trade_date")
+        .join(fac_span.select("symbol", "fac_last").lazy(), on="symbol", how="inner")
+        .filter(pl.col("trade_date") <= pl.col("fac_last"))
+        .select("symbol", "trade_date")
+        .join(factor_rows.select("symbol", "trade_date"), on=["symbol", "trade_date"], how="anti")
+        .select("symbol")
+        .unique()
+        .collect(engine="streaming")
+    )
+    uncovered = pl.concat([uncovered.select("symbol"), internal]).unique()
     # Stocks and ETFs/LOFs. Sina serves fund factors in its ``s`` field (the
     # adapter converts them), so ETF hfq series are real and must be self-healed
     # like stocks. CDRs go for the same reason as before: the task loop already
@@ -477,16 +482,22 @@ def _resolve_factors(
     *,
     force: bool,
     client: httpx.Client,
-) -> pl.DataFrame | None:
+) -> tuple[pl.DataFrame | None, str]:
+    """Factors for one symbol, and the vendor they actually came from.
+
+    The vendor is returned rather than assumed because a run can now mix them:
+    rows stamped with the configured source when a row came from somewhere else
+    would be exactly the provenance this lake refuses to write.
+    """
     cached = _load_cache(config, symbol, adjust_type)
     if not _needs_refresh(cached, force):
-        return cached
+        return cached, config.adj_factors_source
 
     source = config.adj_factors_source
     try:
         if source != "sina":
             logger.warning("Unknown adj_factors source %s; skipping %s", source, symbol)
-            return cached
+            return cached, source
         # Keep the source lease across the actual HTTP call.  The derive pool
         # may run beside DAG waves and must share the same cap as every other
         # Sina request; source_request also preserves the cross-process QPS
@@ -494,21 +505,72 @@ def _resolve_factors(
         with source_request(config, source):
             factors = fetch_adj_factor_series(symbol, adjust_type, client=client)
         _save_cache(config, symbol, adjust_type, factors)
-        return factors
+        return factors, source
     except SinaAdjFactorUnavailableError as exc:
-        if cached is None or cached.is_empty():
-            raise AdjFactorsSourceUnavailableError(
-                f"No cached adj factors for {symbol} ({adjust_type}): {exc}"
-            ) from exc
-        logger.warning("External adj factors failed for %s (%s): %s", symbol, adjust_type, exc)
-        return cached
+        if cached is not None and not cached.is_empty():
+            logger.warning("External adj factors failed for %s (%s): %s", symbol, adjust_type, exc)
+            return cached, source
+        backup = _resolve_factors_via_backup(config, symbol, adjust_type, sym_bars)
+        if backup is not None:
+            return backup, BACKUP_SOURCE
+        raise AdjFactorsSourceUnavailableError(
+            f"No cached adj factors for {symbol} ({adjust_type}): {exc}"
+        ) from exc
     except Exception as exc:
-        if cached is None or cached.is_empty():
-            raise AdjFactorsFetchError(
-                f"No cached adj factors for {symbol} ({adjust_type}): {exc}"
-            ) from exc
-        logger.warning("External adj factors failed for %s (%s): %s", symbol, adjust_type, exc)
-        return cached
+        if cached is not None and not cached.is_empty():
+            logger.warning("External adj factors failed for %s (%s): %s", symbol, adjust_type, exc)
+            return cached, source
+        backup = _resolve_factors_via_backup(config, symbol, adjust_type, sym_bars)
+        if backup is not None:
+            return backup, BACKUP_SOURCE
+        raise AdjFactorsFetchError(
+            f"No cached adj factors for {symbol} ({adjust_type}): {exc}"
+        ) from exc
+
+
+def _resolve_factors_via_backup(
+    config: Config,
+    symbol: str,
+    adjust_type: str,
+    sym_bars: pl.DataFrame,
+) -> pl.DataFrame | None:
+    """Reconstruct factors from Baostock when Sina cannot be reached.
+
+    `adj_factors` was the one core dataset with a single vendor behind it, and
+    Sina bans by account rather than by endpoint: the same HTTP 456 that stops
+    a futures sweep stops every return in the lake from being computable.
+    Baostock publishes raw and back-adjusted closes, whose ratio is this exact
+    factor — see the adapter for the measured agreement with Sina.
+
+    Default off, like every other network link the chain reaches implicitly;
+    the shipped config enables `[sources.baostock]`.
+    """
+    if adjust_type != STORED_ADJUST_TYPE or not config.sources.get("baostock", False):
+        return None
+    if sym_bars.is_empty():
+        return None
+    from cnequity.adapters.baostock.adj_factors import (
+        BaostockAdjFactorUnavailableError,
+        fetch_adj_factor_series_baostock,
+    )
+
+    window = sym_bars.select("trade_date").drop_nulls()
+    if window.is_empty():
+        return None
+    start = window["trade_date"].min()
+    end = window["trade_date"].max()
+    try:
+        factors = fetch_adj_factor_series_baostock(symbol, start, end, config=config)
+    except BaostockAdjFactorUnavailableError as exc:
+        logger.warning("adj_factors backup unavailable for %s: %s", symbol, exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 — a failed backup is not a new failure mode
+        logger.warning("adj_factors backup failed for %s: %s", symbol, exc)
+        return None
+    if factors.is_empty():
+        return None
+    logger.info("adj_factors: %s resolved from baostock after sina was unavailable", symbol)
+    return factors
 
 
 def _factor_continuity_findings(out: pl.DataFrame) -> list[dict]:
@@ -598,7 +660,7 @@ _ACTION_FIELDS = (
     "allotment_ratio",
     "allotment_price",
 )
-_ACTION_TERMS = ("_dividend", "_bonus", "_transfer", "_allotment", "_allot_cash")
+_ACTION_TERMS = ("_dividend", "_bonus", "_transfer", "_allotment", "_allot_cash", "_split")
 _EMPTY_ACTION_TERMS = pl.DataFrame(
     schema={
         "symbol": pl.Utf8,
@@ -662,6 +724,31 @@ def _closes_for(config: Config, symbols: list[str], start: date, end: date) -> p
     )
 
 
+def _unit_split_terms(actions: pl.DataFrame) -> pl.DataFrame:
+    """One proven split ratio per ex-date; conflicting ratios fail closed."""
+    if "split_factor" not in actions.columns:
+        actions = actions.with_columns(pl.lit(1.0).alias("split_factor"))
+    splits = actions.select("symbol", "ex_date", pl.col("split_factor").fill_null(1.0))
+    if splits.filter((pl.col("split_factor") <= 0) | ~pl.col("split_factor").is_finite()).height:
+        raise ValueError("corporate_actions contains invalid unit split factors")
+    ratios = (
+        splits.filter(pl.col("split_factor") != 1.0)
+        .group_by("symbol", "ex_date")
+        .agg(
+            pl.col("split_factor").n_unique().alias("_count"),
+            pl.col("split_factor").first().alias("_split"),
+        )
+    )
+    if ratios.filter(pl.col("_count") > 1).height:
+        raise ValueError("corporate_actions contains conflicting unit split factors")
+    return (
+        splits.select("symbol", "ex_date")
+        .unique()
+        .join(ratios.drop("_count"), on=["symbol", "ex_date"], how="left")
+        .with_columns(pl.col("_split").fill_null(1.0))
+    )
+
+
 def _action_terms(config: Config, symbols: list[str], start: date, end: date) -> pl.DataFrame:
     """Per (symbol, ex_date) corporate-action terms over the compared window.
 
@@ -698,6 +785,7 @@ def _action_terms(config: Config, symbols: list[str], start: date, end: date) ->
     for column in _ACTION_FIELDS:
         if column not in actions.columns:
             actions = actions.with_columns(pl.lit(None, dtype=pl.Float64).alias(column))
+    split_terms = _unit_split_terms(actions)
     has_source = "source" in actions.columns
     terms = actions.select(
         "symbol",
@@ -708,12 +796,16 @@ def _action_terms(config: Config, symbols: list[str], start: date, end: date) ->
     if not has_source:
         # Older fragments and minimal fixtures carry no provenance column; the
         # cross-source correction below cannot apply, so keep the plain sum.
-        return terms.group_by(["symbol", "ex_date"]).agg(
-            pl.col("cash_dividend").sum().alias("_dividend"),
-            pl.col("bonus_ratio").sum().alias("_bonus"),
-            pl.col("transfer_ratio").sum().alias("_transfer"),
-            pl.col("allotment_ratio").sum().alias("_allotment"),
-            pl.col("_allot_cash").sum().alias("_allot_cash"),
+        return (
+            terms.group_by(["symbol", "ex_date"])
+            .agg(
+                pl.col("cash_dividend").sum().alias("_dividend"),
+                pl.col("bonus_ratio").sum().alias("_bonus"),
+                pl.col("transfer_ratio").sum().alias("_transfer"),
+                pl.col("allotment_ratio").sum().alias("_allotment"),
+                pl.col("_allot_cash").sum().alias("_allot_cash"),
+            )
+            .join(split_terms, on=["symbol", "ex_date"], how="left")
         )
     per_source = terms.group_by(["symbol", "ex_date", "source"]).agg(
         pl.col("cash_dividend").sum().alias("_dividend"),
@@ -739,7 +831,9 @@ def _action_terms(config: Config, symbols: list[str], start: date, end: date) ->
     cash = per_source.group_by(["symbol", "ex_date"]).agg(
         pl.col("_dividend").max().alias("_dividend")
     )
-    return dilution.join(cash, on=["symbol", "ex_date"], how="left")
+    return dilution.join(cash, on=["symbol", "ex_date"], how="left").join(
+        split_terms, on=["symbol", "ex_date"], how="left"
+    )
 
 
 def _corporate_action_crosscheck_findings(config: Config, out: pl.DataFrame) -> list[dict]:
@@ -800,14 +894,17 @@ def _corporate_action_crosscheck_findings(config: Config, out: pl.DataFrame) -> 
             right_on=["symbol", "ex_date"],
             how="left",
         )
-        .with_columns([pl.col(term).fill_null(0.0) for term in _ACTION_TERMS])
+        .with_columns(
+            [pl.col(term).fill_null(1.0 if term == "_split" else 0.0) for term in _ACTION_TERMS]
+        )
         .with_columns(
             (pl.col("_prev_close") - pl.col("_dividend") + pl.col("_allot_cash")).alias(
                 "_ref_price"
             ),
-            (1.0 + pl.col("_bonus") + pl.col("_transfer") + pl.col("_allotment")).alias(
-                "_share_mult"
-            ),
+            (
+                (1.0 + pl.col("_bonus") + pl.col("_transfer") + pl.col("_allotment"))
+                * pl.col("_split")
+            ).alias("_share_mult"),
             (pl.col("factor") / pl.col("_prev_factor")).alias("_actual"),
         )
     )
@@ -893,11 +990,12 @@ def _crosscheck_finding(config: Config, row: dict) -> dict:
     has_action = any(
         abs(row[term]) > 0 for term in ("_dividend", "_bonus", "_transfer", "_allotment")
     )
+    has_action = has_action or row.get("_split", 1.0) != 1.0
     if has_action:
         cause = (
             f"corporate_actions has dividend={row['_dividend']:.4g} "
             f"bonus={row['_bonus']:.4g} transfer={row['_transfer']:.4g} "
-            f"allotment={row['_allotment']:.4g} on a prior close of {row['_prev_close']:.4g}"
+            f"allotment={row['_allotment']:.4g} split={row.get('_split', 1.0):.4g} on a prior close of {row['_prev_close']:.4g}"
         )
     else:
         cause = "corporate_actions has no ex-date that day, so the factor should not have moved"
@@ -969,7 +1067,9 @@ def _process_symbol_adj(
         client = httpx.Client(timeout=20.0)
     try:
         try:
-            factors = _resolve_factors(config, sym, adj, sym_bars, force=force, client=client)
+            factors, vendor = _resolve_factors(
+                config, sym, adj, sym_bars, force=force, client=client
+            )
         except AdjFactorsSourceUnavailableError as exc:
             if formally_delisted:
                 return None, None, _source_unavailable_finding(sym, adj, exc)
@@ -981,7 +1081,9 @@ def _process_symbol_adj(
         aligned = _align_factors_to_bars(sym_bars, sym, factors, adj)
         if aligned.is_empty():
             return None, None, None
-        return aligned, None, None
+        # Carried per row: a run that fell back for some symbols and not others
+        # must not stamp all of them with the configured source.
+        return aligned.with_columns(pl.lit(vendor).alias("_vendor")), None, None
     finally:
         if own_client:
             client.close()
@@ -1174,6 +1276,11 @@ def _compute_adj_factors_locked(
         source_unavailable_symbols - explicit_refresh if not full else set()
     )
 
+    # One Sina round trip per symbol across the whole universe, and nothing
+    # said so between the opening "symbols=N" line and the end of the derive.
+    _report = sweep_progress(logger, "adj_factors", len(tasks))
+    _done = itertools.count(1)
+
     def _consume(
         sym: str,
         aligned: pl.DataFrame | None,
@@ -1181,6 +1288,7 @@ def _compute_adj_factors_locked(
         finding: dict | None,
     ) -> None:
         """Merge one symbol result into the derive outcome state."""
+        _report(next(_done))
         if fail_key:
             failed.append(fail_key)
         if finding:
@@ -1254,7 +1362,13 @@ def _compute_adj_factors_locked(
     out = pl.concat(frames, how="diagonal_relaxed").unique(subset=_ADJ_PK, keep="last")
     findings.extend(_factor_continuity_findings(out))
     findings.extend(_corporate_action_crosscheck_findings(config, out))
+    vendors = out.get_column("_vendor") if "_vendor" in out.columns else None
+    out = out.drop("_vendor") if vendors is not None else out
     out = with_provenance(out, source=config.adj_factors_source, data_version="v1")
+    if vendors is not None:
+        # `with_provenance` stamps one source for the frame; the fallback means
+        # a frame can hold two. Keep what each row actually came from.
+        out = out.with_columns(vendors.alias("source"))
 
     total = _write_adj_partitions(config, out, replace=replace)
     _update_retry_symbols(

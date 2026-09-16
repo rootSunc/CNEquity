@@ -20,6 +20,7 @@ from cnequity.cli._shared import (
     _cfg,
     _progress_logging,
     _run_status_exit_code,
+    attach_log_file,
     config_option,
     parse_date_option,
 )
@@ -71,7 +72,7 @@ def _stale_priority(spec, row: dict, anchor: date) -> tuple[int, int, int, str]:
     return (urgent, cost_class, -lag, spec.name)
 
 
-def stale_fetch_plan(cfg, anchor: date) -> list[dict]:
+def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> list[dict]:
     """Return stale fetch steps with deterministic deadline/cost metadata.
 
     Registered fetch steps whose dataset is still behind *anchor*.
@@ -114,10 +115,19 @@ def stale_fetch_plan(cfg, anchor: date) -> list[dict]:
     events_owned = {
         step for group in getattr(cfg, "events_groups", {}).values() for step in group.steps
     }
+    allowed = None
+    if groups is not None:
+        known = getattr(cfg, "schedule_groups", {})
+        unknown = groups - known.keys()
+        if unknown:
+            raise click.ClickException(f"Unknown stale groups: {', '.join(sorted(unknown))}")
+        allowed = {step for name in groups for step in known[name].steps}
 
     out: list[dict] = []
     for row in list_datasets(config=cfg).iter_rows(named=True):
         name = row["dataset"]
+        if allowed is not None and name not in allowed:
+            continue
         spec = DATASETS[name]
         if spec.layer == "derived" or name not in STEP_REGISTRY:
             continue
@@ -239,6 +249,7 @@ def _run_stale_only(
     *,
     backfill: bool,
     repair_gaps: bool = False,
+    groups: set[str] | None = None,
 ) -> None:
     """Second attempt, same day, for whatever the first attempt did not land.
 
@@ -249,8 +260,16 @@ def _run_stale_only(
     were exhausted; what was missing was a second window.
     """
     anchor = _last_trading_day(cfg, trade_date or shanghai_today())
+    if groups is not None and repair_gaps:
+        raise click.ClickException(
+            "Scoped --groups cannot be combined with whole-lake --repair-gaps"
+        )
     repairs = _auto_repair_gaps(cfg, anchor) if repair_gaps else []
-    plan = stale_fetch_plan(cfg, anchor)
+    plan = (
+        stale_fetch_plan(cfg, anchor)
+        if groups is None
+        else stale_fetch_plan(cfg, anchor, groups=groups)
+    )
     steps = [item["dataset"] for item in plan]
     if not plan:
         click.echo(f"nothing stale as of {anchor.isoformat()}")
@@ -273,6 +292,19 @@ def _run_stale_only(
     if deferred:
         waves.append(WaveConfig(name="stale:deferred", parallel=True, steps=deferred))
     waves.append(WaveConfig(name="stale:compact", parallel=True, steps=["compact"]))
+    # Repaired bars must reach the same derived outputs as the scheduled group.
+    # Otherwise a successful core retry leaves factors/industry indexes behind.
+    derived_steps = list(
+        dict.fromkeys(
+            step
+            for name, group in getattr(cfg, "schedule_groups", {}).items()
+            if (groups is None or name in groups) and set(steps).intersection(group.steps)
+            for step in group.steps
+            if step.startswith("derive_")
+        )
+    )
+    if derived_steps:
+        waves.append(WaveConfig(name="stale:derive", parallel=False, steps=derived_steps))
     # ``--backfill`` is a historical replay mode, but a stale-only retry must
     # still capture snapshot-only feeds on today's window. Never pass the
     # replay flag when that urgent class is present; otherwise the step would
@@ -339,6 +371,12 @@ def datasets_outside_the_daily_waves(cfg) -> list[str]:
 @run.command("daily")
 @config_option
 @click.option(
+    "--groups",
+    "stale_groups",
+    default=None,
+    help="Limit --stale-only to these daily groups (comma- or space-separated).",
+)
+@click.option(
     "--group",
     "group_name",
     default=None,
@@ -375,6 +413,7 @@ def run_daily(
     repair_gaps: bool,
     stale_only: bool,
     quiet: bool,
+    stale_groups: str | None = None,
 ):
     """Run daily ingestion job (Wave DAG or schedule group)."""
     _progress_logging(quiet)
@@ -387,12 +426,20 @@ def run_daily(
         cfg._validate_source_limits()
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+    attach_log_file(cfg, "run-daily", quiet=quiet)
     engine = JobEngine(cfg)
     td = parse_date_option(trade_date_str, "--trade-date")
+    if stale_groups is not None and not stale_only:
+        raise click.ClickException("--groups requires --stale-only; use --group for a normal run")
     if stale_only:
         if group_name:
             raise click.ClickException("--stale-only picks its own steps; drop --group.")
-        _run_stale_only(cfg, engine, td, backfill=backfill, repair_gaps=repair_gaps)
+        groups = None
+        if stale_groups is not None:
+            groups = set(stale_groups.replace(",", " ").split())
+            if not groups:
+                raise click.ClickException("--groups must not be empty")
+        _run_stale_only(cfg, engine, td, backfill=backfill, repair_gaps=repair_gaps, groups=groups)
         return
     repairs = []
     if repair_gaps:
@@ -477,6 +524,7 @@ def run_events(config_path: str, group_name: str | None, trade_date_str: str | N
         cfg._validate_source_limits()
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+    attach_log_file(cfg, "run-events", quiet=quiet)
     if not cfg.events_groups:
         raise click.ClickException(
             "No [job.events.groups] in this config — see configs/cnequity.example.toml"
@@ -530,7 +578,15 @@ def _retry_single_run(engine: JobEngine, run_id: str) -> dict:
 
 
 def _failed_daily_group_runs(engine: JobEngine) -> list[dict]:
-    """Return the latest failed run of each ``daily:*`` group."""
+    """Return the latest failed run of each ``daily:*`` group.
+
+    Reconcile first. A run killed mid-flight is still recorded as `running`
+    until somebody closes it, and this selection keeps only rows that say
+    `failed` — so the one command an operator reaches for after a crash used to
+    answer "No failed daily group run to retry" about the crash they were
+    looking at.
+    """
+    engine._reconcile_orphans()
     latest: dict[str, dict] = {}
     for row in engine.manifest.list_runs():
         run = dict(row)

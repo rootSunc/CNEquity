@@ -34,7 +34,7 @@ cne clean
 
 **收尾补抓**排在健康检查之前，所以补抓成功不会误报。`snapshot` 数据集只抓 run 当天，源端在那一个窗口中断就永久丢那天（重放会伪造行）——而立刻重试大概率撞上同一场中断，所以先等再抓，**但只在真有 STALE 时才等**，干净的日子零成本。详见 [runbook · 收尾补抓](runbook.md#收尾补抓)。
 
-**环境变量**（仅本脚本读取；`cne` CLI 不读）：`CNE_CONFIG`, `CNE_LOG_DIR`, `CNE_GROUPS`,
+**环境变量**（除 `CNE_LOG_DIR` 外仅本脚本读取）：`CNE_CONFIG`, `CNE_LOG_DIR`（长跑命令自己也往这里写一份日志）, `CNE_GROUPS`,
 `CNE_GATE_GROUPS`（默认 `core`，失败标为 gate；其余组标 soft）、
 `CNE_SOFT_FAIL_OK`（默认 `1`：gate OK 时 soft 失败 exit 0；`0`=仍 exit 1）、
 `CNE_STALE_RETRY`（默认 `1`；`0` 关闭收尾补抓）、

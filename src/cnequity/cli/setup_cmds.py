@@ -17,6 +17,7 @@ from cnequity.cli._shared import (
     _cfg,
     _progress_logging,
     _run_status_exit_code,
+    attach_log_file,
     config_option,
     parse_date_option,
     resolve_config_path,
@@ -24,6 +25,7 @@ from cnequity.cli._shared import (
 from cnequity.config import load_config, validate_config, write_user_config
 from cnequity.domain.market_time import shanghai_today
 from cnequity.orchestrator.engine import JobEngine
+from cnequity.orchestrator.run_lock import INIT_JOB_LOCK, is_run_locked
 from cnequity.steps.common import BACKFILL_START
 from cnequity.storage.layout import init_data_layout
 
@@ -217,6 +219,10 @@ def init(
         click.echo(f"Initialized layout at {cfg.data_root}")
         return
 
+    # After the layout-only exit: a command that finishes in a second has
+    # nothing to leave behind but an empty file.
+    attach_log_file(cfg, "init", quiet=quiet)
+
     td = parse_date_option(trade_date, "--trade-date") or shanghai_today()
 
     history_start = _init_history_start(profile, since_str, td)
@@ -233,12 +239,24 @@ def init(
     if not resume and not resume_run_id:
         incomplete = engine.manifest.latest_incomplete_init_run()
         if incomplete is not None:
-            raise click.ClickException(
-                f"Incomplete init run {incomplete['run_id']} exists "
-                f"(status={incomplete['status']}). "
-                "Use `cne init --resume` or `cne retry --run-id "
-                f"{incomplete['run_id']}` — do not start a new full init."
+            # An init that looked hung, got killed, and was started again used
+            # to be refused here — the one command the operator had left,
+            # answering "no" to the one thing they were trying to do. The
+            # refusal is right for a *live* peer and wrong for a dead one, and
+            # the init lock tells them apart: a killed process releases it as
+            # the kernel reaps it, while a running one holds it throughout.
+            if is_run_locked(cfg.meta_root, INIT_JOB_LOCK):
+                raise click.ClickException(
+                    f"Another init is running now (run {incomplete['run_id']}). "
+                    "Wait for it, or stop it before starting another."
+                )
+            click.echo(
+                f"Found an unfinished init run {incomplete['run_id']} whose process is gone "
+                "— resuming it instead of starting over (completed batches are kept).",
+                err=True,
             )
+            resume = True
+            resume_run_id = str(incomplete["run_id"])
 
     result = engine.run_init_phases(
         trade_date=td,

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import contextlib
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
-from cnequity.file_lock import LockUnavailable, exclusive_lock, is_locked
+from cnequity.file_lock import (
+    DEFAULT_LOCK_WAIT_SECONDS,
+    LockUnavailable,
+    exclusive_lock,
+    is_locked,
+)
 
 
 class RunLockError(RuntimeError):
@@ -23,6 +29,14 @@ DAILY_INGESTION_LOCK = "daily_ingestion"
 # costs nothing but bandwidth.
 EVENTS_INGESTION_LOCK = "events_ingestion"
 
+# Held for the whole of `cne init`, and the reason it is a fixed name rather
+# than the run id: the question it answers is "is an init running *now*", asked
+# by a different process that does not yet know which run it would be joining.
+# A killed init releases it the moment the kernel reaps the process, which is
+# what lets a retry tell "someone else is initialising" from "my last attempt
+# died" — the two cases that used to produce the same refusal.
+INIT_JOB_LOCK = "init_job"
+
 
 def lock_path(meta_root: Path, run_id: str) -> Path:
     return meta_root / "locks" / f"{run_id}.lock"
@@ -34,20 +48,46 @@ def is_run_locked(meta_root: Path, run_id: str) -> bool:
 
 
 @contextlib.contextmanager
-def run_lock(meta_root: Path, run_id: str, *, blocking: bool = False) -> Iterator[None]:
+def run_lock(
+    meta_root: Path,
+    run_id: str,
+    *,
+    blocking: bool = False,
+    timeout: float | None = DEFAULT_LOCK_WAIT_SECONDS,
+) -> Iterator[None]:
     """Exclusive lock scoped to *run_id* (or a global name like ``compact``).
 
     Non-blocking by default (retry contention should fail loud); pass
     ``blocking=True`` to queue instead — e.g. overlapping runs serializing
     their compact step.
+
+    A blocking wait is bounded. A holder that crashed releases its lock as the
+    kernel reaps it, so the only thing that can still be holding one an hour
+    later is a process that is alive and stuck — and waiting on that forever,
+    silently, parks every command behind it with nothing to look at.
     """
     path = lock_path(meta_root, run_id)
+    started = time.monotonic()
     with contextlib.ExitStack() as stack:
         try:
-            stack.enter_context(exclusive_lock(path, blocking=blocking))
+            stack.enter_context(exclusive_lock(path, blocking=blocking, timeout=timeout))
         except LockUnavailable as exc:
+            waited = time.monotonic() - started
+            if blocking and timeout is not None and waited >= timeout:
+                raise RunLockError(_lock_stalled_message(run_id, path, waited)) from exc
             raise RunLockError(_lock_busy_message(run_id)) from exc
         yield
+
+
+def _lock_stalled_message(run_id: str, path: Path, waited: float) -> str:
+    """A bounded wait that ran out says so, and names what to look at."""
+    return (
+        f"Gave up waiting for the {run_id} lock after {int(waited)}s. "
+        f"A crashed holder would have released it immediately, so {path} is held "
+        "by a process that is alive and stuck. Find it with "
+        f"`lsof {path}` (or `fuser {path}`), then stop it or wait for it; "
+        "`cne status` shows what that run was doing."
+    )
 
 
 def _lock_busy_message(run_id: str) -> str:

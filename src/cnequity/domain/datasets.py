@@ -94,6 +94,7 @@ _UNIT_CONTRACT_DEFAULTS: dict[str, UnitContract] = {
         "cash_dividend": "CNY/share",
         "bonus_ratio": "share/share",
         "transfer_ratio": "share/share",
+        "split_factor": "unit/unit",
         "allotment_ratio": "share/share",
         "allotment_price": "CNY/share",
     },
@@ -819,6 +820,7 @@ _SPECS = [
     # L2 corporate events
     DatasetSpec(
         "corporate_actions",
+        schema_version=2,
         # The daily step is EastMoney's date-filtered snapshot; TDX xdxr is
         # the per-symbol history/backfill path and the same-day comparison
         # source. Keep this aligned with the failover config because the
@@ -1189,6 +1191,13 @@ _SPECS = [
     DatasetSpec(
         "adj_factors",
         primary_source="sina",
+        # Sina bans by account, not by endpoint, so the one vendor behind every
+        # return in this lake could be taken out by an unrelated sweep. Baostock
+        # publishes raw and back-adjusted closes whose ratio is this factor —
+        # measured against Sina on 600519.SH across its 2026-06-26 ex-date, the
+        # implied step agreed to 3e-6, which is the rounding in Baostock's
+        # two-decimal adjusted closes.
+        backup_source="baostock",
         tier="L1",
         layer="derived",
         partition_col="trade_date",

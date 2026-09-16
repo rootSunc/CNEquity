@@ -15,6 +15,7 @@ from cnequity.config import Config, load_config
 from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.orchestrator.manifest import Manifest
+from cnequity.progress import hms as _hms
 from cnequity.steps.common import BACKFILL_START
 from cnequity.storage import StagingWriter
 
@@ -22,16 +23,6 @@ logger = logging.getLogger(__name__)
 
 # (batch_id, symbols, window_start, window_end)
 BatchSpec = tuple[str, list[str], date, date]
-
-
-def _hms(seconds: float) -> str:
-    """Compact duration. A backfill runs for hours; `7245.3s` is not readable."""
-    total = int(seconds)
-    if total >= 3600:
-        return f"{total // 3600}h{(total % 3600) // 60:02d}m"
-    if total >= 60:
-        return f"{total // 60}m{total % 60:02d}s"
-    return f"{total}s"
 
 
 def _symbol_batch_id(start: date, end: date, index: int) -> str:
@@ -503,30 +494,6 @@ def fetch_daily_bars_parallel(
             except (TypeError, ValueError):
                 continue
 
-    # A full-market bar sweep is ~54 batches and can run for an hour. Without a
-    # line per batch the whole thing is silent until it ends, which is
-    # indistinguishable from hung — and the first thing anyone does about a
-    # process that looks hung is kill it. Progress is logged from the parent so
-    # it is one ordered stream whether the batches ran serially or in a pool.
-    done = 0
-    started_at = time.monotonic()
-
-    def _progress(batch_symbols: list[str], failed: bool = False) -> None:
-        nonlocal done
-        done += 1
-        elapsed = time.monotonic() - started_at
-        remaining = (elapsed / done) * (len(batches) - done) if done else 0.0
-        logger.info(
-            "%s %d/%d batches%s · %s rows · %s elapsed · ~%s left",
-            dataset,
-            done,
-            len(batches),
-            f" ({len(batch_symbols)} symbols FAILED)" if failed else "",
-            f"{total_written:,}",
-            _hms(elapsed),
-            _hms(remaining),
-        )
-
     daily_workers = config.tdx_daily_worker_count()
     executor_kind = config.tdx_daily_executor()
     # A programmatic Config may contain proxy/timeout/source limits that have
@@ -536,6 +503,88 @@ def fetch_daily_bars_parallel(
     # exact Config object (including test/offline source doubles).
     if not config.config_path:
         executor_kind = "thread"
+    lanes = 1 if daily_workers <= 1 or len(batches) == 1 else min(daily_workers, len(batches))
+
+    # A full-market bar sweep is ~54 batches and can run for an hour. Without a
+    # line per batch the whole thing is silent until it ends, which is
+    # indistinguishable from hung — and the first thing anyone does about a
+    # process that looks hung is kill it. Progress is logged from the parent so
+    # it is one ordered stream whether the batches ran serially or in a pool.
+    done = 0
+    started_at = time.monotonic()
+    # Wall clock since the start over batches done is a bad estimator while the
+    # lanes are still filling: the first `lanes` batches land almost together,
+    # one batch-latency in, and the denominator also carries whatever one-off
+    # setup ran before the sweep. On the measured 53-batch sweep that printed
+    # ~34m, then ~17m, ~11m, ~8m for a run that took 10m. Time the lanes
+    # instead — from the moment the first full round drained — and offer no
+    # number until there is a round to measure.
+    first_round_at: float | None = None
+
+    def _progress(batch_symbols: list[str], failed_symbols: list[str] | None = None) -> None:
+        nonlocal done, first_round_at
+        done += 1
+        now = time.monotonic()
+        if done == lanes:
+            first_round_at = now
+        eta = ""
+        if first_round_at is not None and done > lanes:
+            per_batch = (now - first_round_at) / (done - lanes)
+            if per_batch > 0:
+                eta = f" · ~{_hms(per_batch * (len(batches) - done))} left"
+        if failed_symbols is None:
+            note = ""
+        elif batch_symbols:
+            # The whole batch used to be reported as FAILED whatever the actual
+            # scope was, so one symbol TDX had no rows for read as a hundred
+            # lost names — on a sweep that then recovers most of them.
+            note = f" ({len(failed_symbols)}/{len(batch_symbols)} symbols failed)"
+        else:
+            note = " (batch failed)"
+        logger.info(
+            "%s %d/%d batches%s · %s rows · %s elapsed%s",
+            dataset,
+            done,
+            len(batches),
+            note,
+            f"{total_written:,}",
+            _hms(now - started_at),
+            eta,
+        )
+
+    # What the sweep is about to cost, before it starts costing it. TDX bills
+    # per symbol and not per session, so `--start D --end D` is the same
+    # whole-universe sweep as a multi-year window — the surprise behind every
+    # "I only asked for one day and it ran for half an hour". Saying the batch
+    # count up front also makes the first progress line, which cannot arrive
+    # until a whole batch lands, stop being the first sign of life.
+    window_start = min(batch[2] for batch in batches)
+    window_end = max(batch[3] for batch in batches)
+    logger.info(
+        "%s: %s symbol(s) over %s..%s → %d batch(es) of up to %d on %d lane(s)",
+        dataset,
+        f"{sum(len(batch[1]) for batch in batches):,}",
+        window_start.isoformat(),
+        window_end.isoformat(),
+        len(batches),
+        max(len(batch[1]) for batch in batches),
+        lanes,
+    )
+    if window_start == window_end and getattr(config, "_backfill", False):
+        # One request returns up to 800 bars, so this sweep costs the same
+        # whether it asks for one session or several years. Someone filling a
+        # month a day at a time pays for thirty sweeps and receives what one
+        # would have returned. The daily job is excluded: its one-session
+        # window is the point, not an oversight.
+        logger.info(
+            "%s: this is a one-session window, and the sweep is priced per symbol — "
+            "the same %d request(s) would also return everything back to %s. "
+            "Backfill a range in one go rather than a day at a time.",
+            dataset,
+            sum(len(batch[1]) for batch in batches),
+            BACKFILL_START.isoformat(),
+        )
+
     if daily_workers <= 1 or len(batches) == 1:
         had_error = False
         for batch_id, batch_symbols, batch_start, batch_end in batches:
@@ -557,7 +606,7 @@ def fetch_daily_bars_parallel(
                 had_error = True
                 failed_scope = _failed_symbols_for_error(exc, batch_symbols)
                 failed_symbols.extend(failed_scope)
-                _progress(failed_scope, failed=True)
+                _progress(batch_symbols, failed_scope)
         return _outcome(had_error)
 
     def _task_for(batch: tuple) -> tuple:
@@ -620,9 +669,11 @@ def fetch_daily_bars_parallel(
                         _progress(batch[1] if batch else [])
                     except Exception as exc:
                         had_error = True
-                        if batch is not None:
-                            failed_symbols.extend(_failed_symbols_for_error(exc, batch[1]))
-                        _progress(batch[1] if batch else [], failed=True)
+                        failed_scope = (
+                            _failed_symbols_for_error(exc, batch[1]) if batch is not None else []
+                        )
+                        failed_symbols.extend(failed_scope)
+                        _progress(batch[1] if batch else [], failed_scope)
                         logger.warning("%s batch %s failed: %s", dataset, batch_id, exc)
         except Exception as exc:
             # A thread-pool construction failure is unusual (the normal batch
@@ -644,9 +695,10 @@ def fetch_daily_bars_parallel(
                     pending.pop(batch[0], None)
                     _progress(batch[1])
                 except Exception as retry_exc:
-                    failed_symbols.extend(_failed_symbols_for_error(retry_exc, batch[1]))
+                    failed_scope = _failed_symbols_for_error(retry_exc, batch[1])
+                    failed_symbols.extend(failed_scope)
                     pending.pop(batch[0], None)
-                    _progress(batch[1], failed=True)
+                    _progress(batch[1], failed_scope)
                     logger.warning(
                         "%s batch %s failed on serial retry: %s",
                         dataset,
@@ -691,9 +743,11 @@ def fetch_daily_bars_parallel(
                 except Exception as exc:
                     had_error = True
                     batch = pending.pop(batch_id, None)
-                    if batch is not None:
-                        failed_symbols.extend(_failed_symbols_for_error(exc, batch[1]))
-                    _progress(batch[1] if batch else [], failed=True)
+                    failed_scope = (
+                        _failed_symbols_for_error(exc, batch[1]) if batch is not None else []
+                    )
+                    failed_symbols.extend(failed_scope)
+                    _progress(batch[1] if batch else [], failed_scope)
                     logger.warning("%s batch %s failed: %s", dataset, batch_id, exc)
     except BrokenProcessPool:
         # The pool died mid-run. Whatever is still pending never got a parent

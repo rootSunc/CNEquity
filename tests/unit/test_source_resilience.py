@@ -34,8 +34,8 @@ def test_registry_report_is_deterministic_except_timestamp():
     second = build_dependency_report(generated_at="2026-08-30T00:00:00+00:00")
 
     assert dependency_fingerprint(first) == dependency_fingerprint(second)
-    adj = next(item for item in first.datasets if item["dataset"] == "adj_factors")
-    assert adj["impact"]["single_source_primary"] is True
+    single = next(item for item in first.datasets if item["dataset"] == "announcement_index")
+    assert single["impact"]["single_source_primary"] is True
 
 
 def test_trading_status_has_a_backup_in_a_different_failure_domain():

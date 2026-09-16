@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from collections.abc import Callable
 from datetime import date
 
@@ -12,6 +11,7 @@ import polars as pl
 
 from cnequity.adapters.tdx_protocol.session import close_quotes_client
 from cnequity.domain.rate_limit import RateLimitSpec, source_request_slot_spec, wait_spec
+from cnequity.progress import sweep_progress
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive, begin_capture
 
 logger = logging.getLogger(__name__)
@@ -253,7 +253,7 @@ def fetch_corporate_actions_tdx(
     frames: list[pl.DataFrame] = []
     on_date = None if backfill else trade_date
     total = len(symbols)
-    started_at = time.monotonic()
+    report = sweep_progress(logger, "corporate_actions TDX xdxr", total)
     try:
         # ``client_factory`` returns a client owned by this invocation.  The
         # socket is touched by one thread only, so no global session lock is
@@ -274,16 +274,7 @@ def fetch_corporate_actions_tdx(
                 frames.append(df)
             if on_progress is not None:
                 on_progress(index, total)
-            if index == 1 or index % 100 == 0 or index == total:
-                elapsed = time.monotonic() - started_at
-                remaining = (elapsed / index) * (total - index) if index else 0.0
-                logger.info(
-                    "corporate_actions TDX xdxr %d/%d symbols · %.1fs elapsed · ~%.1fs left",
-                    index,
-                    total,
-                    elapsed,
-                    remaining,
-                )
+            report(index)
     finally:
         close_quotes_client(client)
 

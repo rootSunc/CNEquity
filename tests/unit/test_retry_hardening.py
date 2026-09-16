@@ -1,7 +1,9 @@
 from datetime import date
 
+import pytest
+
 import cnequity.steps  # noqa: F401
-from cnequity.config import Config
+from cnequity.config import Config, WaveConfig
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.run_lock import RunLockError, run_lock
@@ -534,3 +536,174 @@ def test_retry_reconciles_peer_orphans_on_entry(tmp_path):
     )
     assert manifest.get_run(zombie)["status"] == "failed"
     assert manifest.get_run(target)["status"] == "success"
+
+
+def _backdate(cfg, run_id: str, when: str = "2020-01-01T00:00:00+00:00") -> None:
+    """Age a run past the unlocked grace window, i.e. "killed a while ago"."""
+    import sqlite3
+
+    with sqlite3.connect(cfg.manifest_path) as conn:
+        conn.execute("UPDATE ingestion_runs SET started_at=? WHERE run_id=?", (when, run_id))
+        conn.execute(
+            "UPDATE ingestion_batches SET started_at=?, heartbeat_at=? WHERE run_id=?",
+            (when, when, run_id),
+        )
+
+
+def test_a_dead_run_is_reaped_without_waiting_out_the_stale_window(tmp_path):
+    """Liveness is the lock, not the clock. A run killed two minutes ago used
+    to stay `running` for `batch_stale_seconds` — an hour by default — and
+    every command that reads run status was wrong for that hour."""
+    cfg = Config(data_root=tmp_path / "data", batch_stale_seconds=3600)
+    init_data_layout(cfg)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily:core", {"trade_date": "2026-09-16"})
+    manifest.start_batch(run_id, "b1", task_id="daily_bars", dataset="daily_bars")
+    _backdate(cfg, run_id)
+
+    out = manifest.reconcile_orphaned_runs(
+        stale_after_seconds=cfg.batch_stale_seconds, locks_root=cfg.meta_root
+    )
+
+    assert out["runs_closed"] == 1
+    assert manifest.get_run(run_id)["status"] == "failed"
+
+
+def test_a_run_inside_its_grace_window_is_left_alone(tmp_path):
+    """The window covers the gap between `start_run` and taking the lock."""
+    cfg = Config(data_root=tmp_path / "data", batch_stale_seconds=3600)
+    init_data_layout(cfg)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily:core", {"trade_date": "2026-09-16"})
+
+    out = manifest.reconcile_orphaned_runs(
+        stale_after_seconds=cfg.batch_stale_seconds, locks_root=cfg.meta_root
+    )
+
+    assert out["runs_closed"] == 0
+    assert manifest.get_run(run_id)["status"] == "running"
+
+
+def test_a_shorter_configured_window_is_still_honoured(tmp_path):
+    """The grace period caps how long a corpse may linger; it is never a reason
+    to wait longer than the caller asked for."""
+    cfg = Config(data_root=tmp_path / "data", batch_stale_seconds=0)
+    init_data_layout(cfg)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily:core", {"trade_date": "2026-09-16"})
+
+    out = manifest.reconcile_orphaned_runs(stale_after_seconds=0, locks_root=cfg.meta_root)
+
+    assert out["runs_closed"] == 1
+    assert manifest.get_run(run_id)["status"] == "failed"
+
+
+def test_a_running_job_holds_its_own_run_lock(tmp_path, monkeypatch):
+    """Which is what makes the lock usable as proof of life."""
+    from cnequity.orchestrator.run_lock import is_run_locked
+
+    cfg = Config(data_root=tmp_path / "data", tdx_allow_mock=True)
+    init_data_layout(cfg)
+    engine = JobEngine(cfg)
+    seen: dict = {}
+
+    def _wave(*args, **kwargs):
+        seen["locked"] = is_run_locked(cfg.meta_root, seen["run_id"])
+        return ([], 0, 0, False, False)
+
+    original = engine.manifest.start_run
+
+    def _remember(job_name, metadata=None):
+        seen["run_id"] = original(job_name, metadata)
+        return seen["run_id"]
+
+    monkeypatch.setattr(engine.manifest, "start_run", _remember)
+    monkeypatch.setattr(engine, "_run_wave", _wave)
+    engine.run_job(
+        "daily:core",
+        date(2026, 9, 16),
+        waves=[WaveConfig(name="w", parallel=False, steps=["instruments"])],
+    )
+
+    assert seen["locked"] is True
+    # And released when it ends, or the next run could never be reconciled.
+    assert is_run_locked(cfg.meta_root, seen["run_id"]) is False
+
+
+def test_retry_failed_groups_sees_a_crash_it_has_not_reconciled_yet(tmp_path, monkeypatch):
+    """The one command an operator reaches for after a crash used to answer
+    "No failed daily group run to retry" about the crash they were looking at."""
+    from cnequity.cli.run_cmds import _failed_daily_group_runs
+
+    cfg = Config(data_root=tmp_path / "data", batch_stale_seconds=3600)
+    init_data_layout(cfg)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily:core", {"trade_date": "2026-09-16"})
+    manifest.start_batch(run_id, "b1", task_id="daily_bars", dataset="daily_bars")
+    _backdate(cfg, run_id)
+
+    runs = _failed_daily_group_runs(JobEngine(cfg))
+
+    assert [r["run_id"] for r in runs] == [run_id]
+
+
+def test_status_counts_the_same_orphans_the_next_run_will_close(tmp_path):
+    """`cne status` reporting a different orphan count from the one the engine
+    acts on is how an operator ends up arguing with the tool about a crash."""
+    cfg = Config(data_root=tmp_path / "data", batch_stale_seconds=3600)
+    init_data_layout(cfg)
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily:core", {"trade_date": "2026-09-16"})
+    manifest.start_batch(run_id, "b1", task_id="daily_bars", dataset="daily_bars")
+    _backdate(cfg, run_id)
+
+    counted = manifest.count_stale_running_runs(
+        stale_after_seconds=cfg.batch_stale_seconds, locks_root=cfg.meta_root
+    )
+    closed = manifest.reconcile_orphaned_runs(
+        stale_after_seconds=cfg.batch_stale_seconds, locks_root=cfg.meta_root
+    )["runs_closed"]
+
+    assert counted == closed == 1
+
+
+def test_a_stalled_lock_holder_is_named_rather_than_waited_on_forever(tmp_path):
+    """A crashed holder releases its lock as the kernel reaps it, so anything
+    still holding one at the deadline is alive and stuck — and waiting on that
+    forever, silently, parks every command behind it."""
+    import subprocess
+    import sys
+    import time as _time
+
+    from cnequity.orchestrator.run_lock import RunLockError, lock_path, run_lock
+
+    cfg = Config(data_root=tmp_path / "data")
+    init_data_layout(cfg)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time\n"
+            "from pathlib import Path\n"
+            "from cnequity.orchestrator.run_lock import run_lock\n"
+            f"with run_lock(Path({str(cfg.meta_root)!r}), 'compact', blocking=False):\n"
+            "    print('held', flush=True)\n"
+            "    time.sleep(60)\n",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        started = _time.monotonic()
+        with pytest.raises(RunLockError) as caught:
+            with run_lock(cfg.meta_root, "compact", blocking=True, timeout=1):
+                pass
+    finally:
+        holder.terminate()
+        holder.wait(30)
+
+    assert _time.monotonic() - started < 30
+    message = str(caught.value)
+    assert "alive and stuck" in message
+    assert str(lock_path(cfg.meta_root, "compact")) in message

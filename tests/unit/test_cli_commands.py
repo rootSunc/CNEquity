@@ -546,6 +546,11 @@ def test_retry_failed_groups_retries_only_latest_failed_per_group(cfg_path, monk
         def __init__(self, cfg):
             self.manifest = FakeManifest()
 
+        def _reconcile_orphans(self):
+            # Selection reconciles first now: a run killed mid-flight is still
+            # recorded as `running`, and this command keeps only `failed` rows.
+            return {"runs_closed": 0, "batches_closed": 0, "skipped_locked": 0}
+
     class Proc:
         returncode = 0
 
@@ -1329,3 +1334,105 @@ def test_an_unscoped_gate_still_fails_on_everything(cfg_path, monkeypatch):
     result = CliRunner().invoke(cli, ["status", "--datasets", "--config", cfg_path])
 
     assert result.exit_code == 1, result.output
+
+
+@pytest.mark.parametrize("errors, expected", [(0, 0), (1, 1)])
+def test_full_quality_gate_does_not_conflate_optional_freshness(
+    cfg_path, monkeypatch, errors, expected
+):
+    monkeypatch.setattr(
+        "cnequity.quality.audit.lake_health",
+        lambda *args, **kwargs: {
+            "last_trading_day": "2026-09-15",
+            "findings_by_severity": {"error": errors},
+            "empty_datasets": [],
+            "stale_datasets": ["minute_bars"],
+            "error_findings": [],
+            "warning_findings": [],
+            "healthy": False,
+            "historical_universe_validity": {
+                "window": {"start": "2020-01-01", "end": "2026-09-15"},
+                "universe_ready": True,
+                "blockers": [],
+            },
+        },
+    )
+    result = CliRunner().invoke(cli, ["audit", "--full", "--quality-only", "--config", cfg_path])
+    assert result.exit_code == expected, result.output
+    assert "STALE datasets: minute_bars" in result.output
+    assert "Quality gate:" in result.output
+
+
+def test_quality_only_cannot_silently_change_a_per_run_audit(cfg_path):
+    result = CliRunner().invoke(cli, ["audit", "--quality-only", "--config", cfg_path])
+    assert result.exit_code != 0
+    assert "requires --full" in result.output
+
+
+def test_group_ownership_includes_derived_outputs(tmp_path):
+    from cnequity.cli.quality_cmds import stale_datasets_by_group
+    from cnequity.config import Config, ScheduleGroup
+
+    cfg = Config(
+        data_root=tmp_path,
+        schedule_groups={
+            "core": ScheduleGroup(
+                at="16:00", steps=["daily_bars", "derive_adj_factors", "derive_industry_index"]
+            )
+        },
+    )
+    assert stale_datasets_by_group(cfg, ["adj_factors", "industry_index"]) == {
+        "core": ["adj_factors", "industry_index"]
+    }
+
+
+def test_cli_derive_publishes_new_revision_and_preserves_old_reader(cfg_path, monkeypatch):
+    from cnequity.config import load_config
+    from cnequity.domain.schemas import ADJ_FACTORS_SCHEMA
+    from cnequity.query.parquet_scan import scan_parquet_root
+    from cnequity.storage.revisions import RevisionStore
+
+    cfg = load_config(cfg_path)
+    root = cfg.derived_root / "adj_factors"
+    path = root / "trade_date=2026-09-15" / "part-0.parquet"
+    path.parent.mkdir(parents=True)
+    frame = pl.DataFrame(
+        [
+            {
+                "symbol": "920001.BJ",
+                "trade_date": date(2026, 9, 15),
+                "adjust_type": "hfq",
+                "factor": 1.0,
+                "source": "sina",
+                "data_version": "v1",
+                "fetched_at": None,
+            }
+        ],
+        schema=ADJ_FACTORS_SCHEMA,
+    )
+    frame.write_parquet(path)
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
+    before = store.ensure_current("adj_factors")
+
+    def compute(config, full=False):
+        frame.with_columns(pl.lit(2.0).alias("factor")).write_parquet(path)
+        return AdjFactorsResult(1, 1, [], [])
+
+    monkeypatch.setattr("cnequity.cli.maintain_cmds.compute_adj_factors", compute)
+    result = CliRunner().invoke(cli, ["derive", "adj_factors", "--config", cfg_path])
+    assert result.exit_code == 0, result.output
+    assert store.current_root("adj_factors") != before
+    assert scan_parquet_root(root).collect()["factor"].to_list() == [2.0]
+    assert pl.read_parquet(before / "trade_date=2026-09-15" / "part-0.parquet")[
+        "factor"
+    ].to_list() == [1.0]
+
+
+def test_cli_derive_failures_are_not_success(cfg_path, monkeypatch):
+    monkeypatch.setattr(
+        "cnequity.cli.maintain_cmds.compute_adj_factors",
+        lambda cfg, full=False: AdjFactorsResult(0, 1, ["920001.BJ:hfq"], []),
+    )
+    result = CliRunner().invoke(cli, ["derive", "adj_factors", "--config", cfg_path])
+    assert result.exit_code == 1
+    assert "Warnings: 1" in result.output

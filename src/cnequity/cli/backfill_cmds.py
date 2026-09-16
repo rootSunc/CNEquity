@@ -18,6 +18,7 @@ from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
     _progress_logging,
+    attach_log_file,
     config_option,
     parse_date_option,
 )
@@ -105,7 +106,13 @@ def backfill(
     eastmoney_bj_repair: bool,
     bse_tip_repair: bool,
 ):
-    """Backfill a dataset."""
+    """Backfill a dataset.
+
+    Cost follows the source's billing unit, not the window. daily_bars fetches
+    per symbol, so `--start D --end D` sweeps the whole universe exactly like a
+    multi-year window does — one session is not one request. Narrow it with
+    `--symbols` when you want a quick check rather than a full market.
+    """
     _progress_logging()
     _require_known_dataset(dataset)
     if fetch_semantics(dataset) == "snapshot" and not get_dataset(dataset).backfill_source:
@@ -115,6 +122,7 @@ def backfill(
             "Run daily ingestion on trading days instead."
         )
     cfg = _cfg(config_path)
+    attach_log_file(cfg, f"backfill-{dataset}")
     if workers < 1:
         raise click.ClickException("--workers must be at least 1")
     if workers > 1 and dataset != "margin_trading":

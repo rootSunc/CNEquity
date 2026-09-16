@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import logging
 import os
 import sys
 import threading
@@ -27,6 +28,16 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import IO
+
+logger = logging.getLogger(__name__)
+
+#: How long a blocking acquire may wait before it reports a stall instead of
+#: waiting on. Generous on purpose: the point is to catch a holder that has
+#: hung, not to break the queue behind a legitimately long compact. A *crashed*
+#: holder never gets here — the kernel releases its lock as the process dies —
+#: so anything that reaches this deadline is alive and stuck, which is the case
+#: that used to park every later command forever with nothing on screen.
+DEFAULT_LOCK_WAIT_SECONDS = 3600.0
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -210,7 +221,21 @@ def exclusive_lock(
     # locks are mandatory: opening "w" against a file whose byte 0 another
     # process holds fails outright instead of politely queueing.
     with open(path, "a+", encoding="utf-8") as handle:
-        _acquire(handle, blocking=blocking, timeout=timeout)
+        if blocking:
+            # Try once without waiting, so queuing can be announced. A blocking
+            # acquire is otherwise indistinguishable from a hang: no output, no
+            # deadline, and the reason (someone else holds this) never said.
+            try:
+                _acquire(handle, blocking=False)
+            except LockUnavailable:
+                logger.info(
+                    "waiting for %s — another process holds it (up to %s)",
+                    path.name,
+                    _hms(timeout) if timeout is not None else "indefinitely",
+                )
+                _acquire(handle, blocking=True, timeout=timeout)
+        else:
+            _acquire(handle, blocking=blocking, timeout=timeout)
         _mark_held(path)
         try:
             yield handle
@@ -241,8 +266,22 @@ def is_locked(path: Path | str) -> bool:
         return True
 
 
+def _hms(seconds: float) -> str:
+    total = int(seconds)
+    if total >= 3600:
+        return f"{total // 3600}h{(total % 3600) // 60:02d}m"
+    if total >= 60:
+        return f"{total // 60}m{total % 60:02d}s"
+    return f"{total}s"
+
+
 @contextlib.contextmanager
-def lake_mutation_lock(meta_root: Path, *, blocking: bool = True) -> Iterator[IO]:
+def lake_mutation_lock(
+    meta_root: Path,
+    *,
+    blocking: bool = True,
+    timeout: float | None = DEFAULT_LOCK_WAIT_SECONDS,
+) -> Iterator[IO]:
     """Serialize every curated/derived read-modify-write operation.
 
     The orchestrator's ``compact`` step already uses this exact lock path via
@@ -257,5 +296,5 @@ def lake_mutation_lock(meta_root: Path, *, blocking: bool = True) -> Iterator[IO
         # kernel through ``exclusive_lock``.
         yield None
         return
-    with exclusive_lock(path, blocking=blocking) as handle:
+    with exclusive_lock(path, blocking=blocking, timeout=timeout) as handle:
         yield handle

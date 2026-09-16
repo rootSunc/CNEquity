@@ -329,3 +329,67 @@ def test_other_locks_keep_the_generic_message(tmp_path):
         with pytest.raises(RunLockError, match="locked by another process"):
             with run_lock(tmp_path, "some-run-id"):
                 pass
+
+
+def test_a_blocking_wait_announces_itself(tmp_path, caplog):
+    """A blocking acquire was indistinguishable from a hang: no output, no
+    deadline, and the reason — someone else holds this — never said."""
+    import logging
+
+    path = tmp_path / "compact.lock"
+    with exclusive_lock(path, blocking=False):
+        pass  # create the file so the second acquire has something to open
+
+    holder_done = threading.Event()
+    acquired = threading.Event()
+
+    def _hold():
+        with exclusive_lock(path, blocking=False):
+            acquired.set()
+            holder_done.wait(10)
+
+    thread = threading.Thread(target=_hold)
+    thread.start()
+    try:
+        assert acquired.wait(10)
+        with caplog.at_level(logging.INFO, logger="cnequity.file_lock"):
+            with pytest.raises(LockUnavailable):
+                with exclusive_lock(path, blocking=True, timeout=0.2):
+                    pass
+        assert any("waiting for compact.lock" in r.message for r in caplog.records)
+    finally:
+        holder_done.set()
+        thread.join(10)
+
+
+def test_an_uncontended_blocking_acquire_says_nothing(tmp_path, caplog):
+    """The announcement is for a queue, not for every lock in the lake."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="cnequity.file_lock"):
+        with exclusive_lock(tmp_path / "quiet.lock", blocking=True):
+            pass
+    assert not [r for r in caplog.records if "waiting for" in r.message]
+
+
+def test_a_nested_acquire_still_fails_fast_rather_than_queueing(tmp_path):
+    """The re-entrancy guard must not turn into a self-inflicted timeout."""
+    path = tmp_path / "nested.lock"
+    with exclusive_lock(path, blocking=False):
+        started = time.monotonic()
+        with pytest.raises(LockUnavailable):
+            with exclusive_lock(path, blocking=True, timeout=30):
+                pass
+        assert time.monotonic() - started < 5
+
+
+def test_the_lake_mutation_lock_wait_is_bounded_by_default():
+    """An unbounded wait is the thing being removed; the default must be a
+    number, not None."""
+    import inspect
+
+    from cnequity.file_lock import DEFAULT_LOCK_WAIT_SECONDS
+
+    signature = inspect.signature(lake_mutation_lock)
+    assert signature.parameters["timeout"].default == DEFAULT_LOCK_WAIT_SECONDS
+    assert DEFAULT_LOCK_WAIT_SECONDS > 0

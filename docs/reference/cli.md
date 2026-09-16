@@ -601,6 +601,37 @@ cne serve                    # → http://127.0.0.1:8787/source-health
 
 口径、加新源的方法见 [数据源健康度](../operations/source-health.md)。
 
+### cne sources substitutes
+
+**哪个源挂了、还有谁能顶上。** `probe` 回答"谁活着"，这条回答"活着的里面谁能替死掉的那个干活"。
+
+| 选项 | 说明 |
+|------|------|
+| `--config` | 配置文件路径 |
+| `--vantage` | 读哪个出口的报告（默认 `local`） |
+| `--probe` | 现测而不是读存档；请求量与 `cne sources probe` 相同 |
+| `--json` | 机器可读输出 |
+
+```bash
+cne sources substitutes                # 读 meta/source_health/local.json
+cne sources substitutes --probe        # 现测
+```
+
+替代源按**独立优先、其次快**排序：和故障源同属一个风控面的端点不算第二意见——东财的历史主机挂了，东财的快照主机顶不上它。某个数据集"失败的端点存在且没有任何可用端点"时退出码为 1。
+
+输出示例（本机实测，东财 `push2his` 全部主机不可达）：
+
+```
+daily_bars  —  有独立替代
+    失败：eastmoney_push2his
+    可用：sina                    1970ms  独立
+    可用：ths_kline               2347ms  独立
+    可用：baostock                5117ms  独立
+    可用：eastmoney_push2         2807ms  同域 eastmoney
+```
+
+这条命令只读报告，**采集链路不读它**：一小时前从某个出口测到的可达性不是对下一个请求的承诺，所以故障切换仍然由采集链自己逐个源试过去。
+
 ---
 
 ## cne snapshot

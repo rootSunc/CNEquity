@@ -33,8 +33,17 @@ def test_source_resilience_enforce_passes_on_real_independent_backups():
     payload = json.loads(result.output)
     assert payload["backup_gate"]["passed"] is True
     assert payload["backup_gate"]["issues"] == []
+    # adj_factors used to be the example of a single-source primary here. It
+    # is not one any more: Sina bans by account, so the one vendor behind every
+    # return in the lake needed a second, and Baostock's raw÷adjusted ratio is
+    # that factor.
     adj = next(item for item in payload["datasets"] if item["dataset"] == "adj_factors")
-    assert adj["impact"]["single_source_primary"] is True
+    assert adj["impact"]["single_source_primary"] is False
+    assert adj["backup"] == "baostock"
+    announcements = next(
+        item for item in payload["datasets"] if item["dataset"] == "announcement_index"
+    )
+    assert announcements["impact"]["single_source_primary"] is True
 
 
 def test_source_slo_without_history_fails_closed(tmp_path):

@@ -36,7 +36,7 @@ cne config validate --config configs/cnequity.toml
 | `batch_size` | 100 | 每 batch 股票数量 |
 | `max_retries` | 3 | batch 级重试次数 |
 | `retry_backoff_seconds` | 5 | 重试退避 |
-| `batch_stale_seconds` | 3600 | running batch 无心跳超时 → stale → failed；compact 门禁会跳过未完成数据集 |
+| `batch_stale_seconds` | 3600 | running batch 无心跳超时 → stale → failed；compact 门禁会跳过未完成数据集。**崩溃的 run 不受这个窗口约束**：run 全程持锁，进程一死 60 秒内即被回收 |
 
 ---
 
@@ -283,12 +283,12 @@ names = [
 
 ## 环境变量（仅 `scripts/*.sh`）
 
-下列变量由 [运维脚本](../operations/scripts.md) 读取；**`cne` CLI 不读**（配置路径仍用 `--config` 或默认 `configs/cnequity.toml`）。
+下列变量由 [运维脚本](../operations/scripts.md) 读取；除 `CNE_LOG_DIR` 外 **`cne` CLI 不读**（配置路径仍用 `--config` 或默认 `configs/cnequity.toml`）。
 
 | 变量 | 默认 | 作用 |
 |------|------|------|
 | `CNE_CONFIG` | `configs/cnequity.toml` | 脚本传入 `cne --config` 的路径 |
-| `CNE_LOG_DIR` | `{data.root}/logs` | 日志目录 |
+| `CNE_LOG_DIR` | `{data.root}/logs` | 日志目录。`cne init` / `cne backfill` / `cne run` 也读它，并把本次运行的日志写成 `cne-<命令>-<时间戳>.log`，启动时打印路径 |
 | `CNE_GROUPS` | 全部调度组（不含需显式开启的 `intraday`） | 覆盖 pipeline 要跑的组 |
 | `CNE_NOTIFY` | `1` | `0` 关闭 macOS 通知 |
 | `CNE_BACKUP_DIR` | 湖内 backups | 元数据备份目录 |
