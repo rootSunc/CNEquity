@@ -122,25 +122,29 @@ def _row_to_quote(row: dict[str, Any], expected_date: date) -> dict[str, Any] | 
     }
 
 
-def fetch_daily_quotes(
-    trade_date: date,
+def read_board(
     *,
-    symbols: list[str] | set[str] | None = None,
     client: httpx.Client | None = None,
     config=None,
-) -> pl.DataFrame:
-    """Fetch the BSE end-of-day quote snapshot for *trade_date*.
+) -> tuple[list[dict[str, Any]], int]:
+    """Walk the whole quotation board, returning its raw rows and its own total.
 
-    The endpoint is a current snapshot.  If its session date differs from
-    *trade_date*, an empty frame is returned; this makes accidental historical
-    backfill stamping impossible.  ``symbols`` limits the returned rows after
-    the board-wide pagination, while the response remains board-authoritative.
+    The board is a *current* snapshot with no date parameter, so this takes no
+    session: callers filter on ``hqjsrq`` themselves.
+
+    A walk that ends on an empty page before the advertised total is a
+    truncated board and raises here, for every caller. An *under-filled* page
+    does not: the loop paginates by page offset, so it cannot see one. That is
+    what the total is returned for — comparing it against ``len(rows)`` is a
+    stricter completeness test, and trading status needs it, because Beijing
+    encodes a halt as an absence and a short read would otherwise look like the
+    exchange suspending itself.
     """
-    wanted = set(symbols) if symbols is not None else None
     owns_client = client is None
     if client is None:
         client = httpx.Client(timeout=20.0, follow_redirects=False, headers=_HEADERS)
     rows: list[dict[str, Any]] = []
+    total = 0
     try:
         # The first request establishes the WAF cookie.  It may answer 302 to
         # the same URL; do not follow that redirect because it loops on some
@@ -148,7 +152,6 @@ def fetch_daily_quotes(
         with source_request(config, "bse"):
             client.get(_QUOTATION_PAGE)
         first_page = True
-        total = 0
         page = 0
         while first_page or page * _PAGE_SIZE < total:
             if page >= _MAX_PAGES:
@@ -172,11 +175,11 @@ def fetch_daily_quotes(
                 with source_request(config, "bse"):
                     response = client.post(_QUOTATION_API, data=request_data)
             response.raise_for_status()
-            page_rows, total = _parse_page(response.text)
-            for raw in page_rows:
-                quote = _row_to_quote(raw, trade_date)
-                if quote is not None and (wanted is None or quote["symbol"] in wanted):
-                    rows.append(quote)
+            page_rows, page_total = _parse_page(response.text)
+            # An empty tail page reports zero; keep the last real figure so it
+            # cannot erase the number the walk is being measured against.
+            total = page_total or total
+            rows.extend(page_rows)
             if not page_rows:
                 if page * _PAGE_SIZE < total:
                     raise BseMarketDataError(
@@ -189,6 +192,30 @@ def fetch_daily_quotes(
     finally:
         if owns_client:
             client.close()
+    return rows, total
+
+
+def fetch_daily_quotes(
+    trade_date: date,
+    *,
+    symbols: list[str] | set[str] | None = None,
+    client: httpx.Client | None = None,
+    config=None,
+) -> pl.DataFrame:
+    """Fetch the BSE end-of-day quote snapshot for *trade_date*.
+
+    The endpoint is a current snapshot.  If its session date differs from
+    *trade_date*, an empty frame is returned; this makes accidental historical
+    backfill stamping impossible.  ``symbols`` limits the returned rows after
+    the board-wide pagination, while the response remains board-authoritative.
+    """
+    wanted = set(symbols) if symbols is not None else None
+    raw_rows, _total = read_board(client=client, config=config)
+    rows: list[dict[str, Any]] = []
+    for raw in raw_rows:
+        quote = _row_to_quote(raw, trade_date)
+        if quote is not None and (wanted is None or quote["symbol"] in wanted):
+            rows.append(quote)
 
     if not rows:
         return pl.DataFrame(

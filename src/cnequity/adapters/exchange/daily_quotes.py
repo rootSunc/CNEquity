@@ -127,6 +127,23 @@ def _keep_symbol(code: str, exchange: str) -> bool:
     return is_all_a_symbol(code, exchange) or is_etf_symbol(code, exchange)
 
 
+def _is_untraded_quote(open_: float, high: float, low: float, close: float) -> bool:
+    """Whether a row describes a session the security did not trade.
+
+    A halted name is still listed in the board snapshot, and the exchange
+    reports its OHL as ``0.0`` while carrying a non-zero reference ``close``.
+    Nine SH rows looked like that on 2026-09-15 (``603400.SH`` at
+    ``open/high/low = 0.0, close = 54.67``). Written through, those zeros are
+    not a cheap price — they are a price the security never traded at, and they
+    reach the lake as a >99% single-day drawdown.
+
+    ``close`` alone is not enough to tell the two apart: a real session can
+    legitimately have open == high == low == close on a limit-locked day, but
+    never at zero.
+    """
+    return close > 0.0 and open_ <= 0.0 and high <= 0.0 and low <= 0.0
+
+
 def _finish(rows: list[dict]) -> pl.DataFrame:
     if not rows:
         return _EMPTY_QUOTES.clone()
@@ -179,6 +196,7 @@ def fetch_sse_daily_quotes(trade_date: date, *, config=None) -> pl.DataFrame:
         return _EMPTY_QUOTES.clone()
 
     rows: list[dict] = []
+    untraded = 0
     for item in payload.get("list") or []:
         if not isinstance(item, (list, tuple)) or len(item) < len(SSE_SELECT):
             continue
@@ -190,6 +208,9 @@ def fetch_sse_daily_quotes(trade_date: date, *, config=None) -> pl.DataFrame:
         except (TypeError, ValueError):
             continue
         open_, high, low, close, volume, amount = values
+        if _is_untraded_quote(open_, high, low, close):
+            untraded += 1
+            continue
         rows.append(
             {
                 "symbol": format_symbol(code, "SH"),
@@ -201,6 +222,11 @@ def fetch_sse_daily_quotes(trade_date: date, *, config=None) -> pl.DataFrame:
                 "volume": volume,
                 "amount": amount,
             }
+        )
+    if untraded:
+        logger.info(
+            "SSE snapshot: %d listed symbol(s) reported no traded session (OHL=0); skipped",
+            untraded,
         )
     if not rows:
         logger.warning("SSE daily quotes returned no usable rows; format may have changed")
@@ -238,6 +264,7 @@ def fetch_szse_daily_quotes(trade_date: date, *, config=None) -> pl.DataFrame:
         return _EMPTY_QUOTES.clone()
 
     rows: list[dict] = []
+    untraded = 0
     for record in pdf[list(_SZSE_COLUMNS)].to_dict("records"):
         code = str(record["证券代码"]).strip().zfill(6)
         if len(code) != 6 or not code.isdigit() or not _keep_symbol(code, "SZ"):
@@ -251,6 +278,11 @@ def fetch_szse_daily_quotes(trade_date: date, *, config=None) -> pl.DataFrame:
                 if field != "code"
             }
         except (TypeError, ValueError):
+            # The export writes "-" for a session the security did not trade.
+            untraded += 1
+            continue
+        if _is_untraded_quote(values["open"], values["high"], values["low"], values["close"]):
+            untraded += 1
             continue
         rows.append(
             {
@@ -263,6 +295,12 @@ def fetch_szse_daily_quotes(trade_date: date, *, config=None) -> pl.DataFrame:
                 "volume": values["volume"] * _SZSE_SCALE,
                 "amount": values["amount"] * _SZSE_SCALE,
             }
+        )
+    if untraded:
+        logger.info(
+            "SZSE report for %s: %d listed symbol(s) reported no traded session; skipped",
+            trade_date,
+            untraded,
         )
     if not rows:
         logger.warning("SZSE daily quotes returned no usable rows for %s", trade_date)

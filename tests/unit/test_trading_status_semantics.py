@@ -346,3 +346,127 @@ def test_migration_rewrites_legacy_st_and_is_idempotent():
     again, changed_again, _ = module.migrate_frame(migrated)
     assert changed_again is False
     assert again.equals(migrated)
+
+
+def test_eastmoney_does_not_claim_not_st_for_an_exchange_its_board_skips():
+    """`_ST_FS` selects m:0 (Shenzhen) and m:1 (Shanghai). Beijing has no market
+    code in it, so "absent from the returned set" means the board never looked.
+
+    Read as "not ST", that published `risk_warning=False` for all 343 live
+    Beijing names every day, while the exchange was listing *ST康乐, *ST田野 and
+    *ST同辉. Null is what the lake means by unknown, and `st_coverage` is what
+    tracks where the evidence is actually missing.
+    """
+    from cnequity.adapters.eastmoney import trading_status as em
+
+    captured: dict = {}
+
+    class _Client:
+        def close(self):
+            return None
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(em, "_fetch_st_symbols", lambda client: {"600519.SH"})
+        monkeypatch.setattr(em, "_fetch_suspended_symbols", lambda client, day: set())
+        out = em.fetch_trading_status_eastmoney(
+            ["600519.SH", "000001.SZ", "920023.BJ"],
+            date(2026, 9, 15),
+            client=_Client(),
+        )
+    finally:
+        monkeypatch.undo()
+
+    captured = {r["symbol"]: r["risk_warning"] for r in out.to_dicts()}
+    assert captured["600519.SH"] is True
+    assert captured["000001.SZ"] is False
+    assert captured["920023.BJ"] is None
+
+
+def test_a_delisted_name_with_no_simplified_name_has_unknown_risk_warning(tmp_path):
+    """The 简称 is the only ST evidence left once the boards drop a symbol, so
+    its absence is the absence of evidence — not a clean bill of health.
+
+    253 retired Beijing codes carry no name at all and were published as
+    not-under-risk-warning on every session since they delisted.
+    """
+    from cnequity.steps import reference
+
+    frame = pl.DataFrame(
+        {
+            "symbol": ["600001.SH", "600002.SH", "830001.BJ"],
+            "name": ["*ST元成", "贵州茅台", None],
+            "delist_date": [date(2020, 1, 1)] * 3,
+        }
+    )
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(reference, "load_curated_instruments", lambda config: frame)
+        out = reference._delisted_instruments(Config(data_root=tmp_path / "lake"))
+    finally:
+        monkeypatch.undo()
+
+    got = {r["symbol"]: r["risk_warning"] for r in out.to_dicts()}
+    assert got["600001.SH"] is True
+    assert got["600002.SH"] is False
+    assert got["830001.BJ"] is None
+
+
+def test_beijing_rows_come_from_the_beijing_exchange_not_eastmoney(tmp_path, monkeypatch):
+    """EastMoney serves neither column for this exchange, and both gaps were
+    stored as facts: 15,515 BJ rows in the lake's history, every one
+    `is_trading=True`, against 116 halts in 148,933 SH/SZ rows — and
+    `risk_warning=False` for every BJ name while the exchange listed *ST田野.
+
+    The replacement is row-for-row: same symbols, so the step's own
+    completeness check still sees the scope it asked for.
+    """
+    from cnequity.adapters.bse.trading_status import BseStatusResult
+    from cnequity.steps import reference
+
+    vendor = pl.DataFrame(
+        {
+            "symbol": ["600519.SH", "920023.BJ", "920999.BJ"],
+            "trade_date": [date(2026, 9, 15)] * 3,
+            "is_trading": [True, True, True],
+            "status": ["normal"] * 3,
+            "risk_warning": [False, None, None],
+            "source": ["eastmoney"] * 3,
+        },
+        schema_overrides={"risk_warning": pl.Boolean},
+    )
+    board = BseStatusResult(
+        rows=pl.DataFrame(
+            {
+                "symbol": ["920023.BJ", "920999.BJ"],
+                "trade_date": [date(2026, 9, 15)] * 2,
+                "is_trading": [True, False],
+                "status": ["normal", "suspended"],
+                "risk_warning": [True, None],
+            },
+            schema_overrides={"risk_warning": pl.Boolean},
+        ),
+        complete=True,
+        listed=frozenset({"920023.BJ"}),
+    )
+    monkeypatch.setattr(
+        "cnequity.adapters.bse.trading_status.fetch_trading_status_bse",
+        lambda *a, **k: board,
+    )
+
+    out = reference._beijing_status(
+        Config(data_root=tmp_path / "lake", sources={"bse": True}),
+        vendor,
+        date(2026, 9, 15),
+        vendor["symbol"].to_list(),
+    )
+
+    got = {r["symbol"]: r for r in out.to_dicts()}
+    assert sorted(got) == ["600519.SH", "920023.BJ", "920999.BJ"]
+    # Shanghai untouched.
+    assert got["600519.SH"]["source"] == "eastmoney"
+    # The exchange's own answer, on both columns, labelled as its own.
+    assert got["920023.BJ"]["risk_warning"] is True
+    assert got["920023.BJ"]["source"] == "bse"
+    assert got["920999.BJ"]["is_trading"] is False
+    assert got["920999.BJ"]["source"] == "bse"

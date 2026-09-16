@@ -14,6 +14,14 @@ from cnequity.domain.trading_status import STATUS_NORMAL, STATUS_SUSPENDED
 # Risk-warning board (ST / *ST), the fs behind quote.eastmoney.com st_board.
 # Do NOT use all-A market fs here.
 _ST_FS = "m:0+f:4,m:1+f:4"
+#: Markets `_ST_FS` actually selects: m:0 Shenzhen, m:1 Shanghai. Beijing has no
+#: market code in it, so the board never looks there — and "not in the returned
+#: set" then means "never examined", not "not ST". Read as the latter it
+#: published `risk_warning=False` for all 343 live BJ names while the exchange
+#: was listing *ST康乐, *ST田野 and *ST同辉, every single day. Outside these two
+#: exchanges the answer is null: unknown, never a claim of "clean". The Beijing
+#: board carries the designation in 证券简称 and the step reads it from there.
+_ST_BOARD_EXCHANGES = frozenset({"SH", "SZ"})
 # The old datacenter report now rejects otherwise valid requests with a
 # server-side 9501 contract requiring undocumented MARKET/DATETIME values.
 # This is the same feed used by EastMoney's public suspension page and keeps
@@ -27,6 +35,12 @@ _ST_PAGE_SIZE = 100
 
 def _exchange_from_code(code: str) -> str:
     return infer_exchange_from_code(code)
+
+
+def _st_board_covers(symbol: str) -> bool:
+    """Whether `_ST_FS` selects the market this symbol trades on."""
+    _, _, exchange = str(symbol).partition(".")
+    return exchange.strip().upper() in _ST_BOARD_EXCHANGES
 
 
 def _em_date(value: object) -> date | None:
@@ -143,7 +157,7 @@ def fetch_trading_status_eastmoney(
                 "trade_date": trade_date,
                 "is_trading": sym not in suspended,
                 "status": STATUS_SUSPENDED if sym in suspended else STATUS_NORMAL,
-                "risk_warning": sym in st_set,
+                "risk_warning": (sym in st_set if _st_board_covers(sym) else None),
             }
             for sym in symbols
         ]

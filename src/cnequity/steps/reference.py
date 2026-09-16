@@ -71,12 +71,62 @@ _TUSHARE_ST_BACKFILL_CHUNK = 500
 def step_instruments(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     rl = config.tdx_rate_limit_spec()
     df = fetch_instruments(rate_limit=rl, allow_mock=config.tdx_allow_mock, config=config)
-    df = normalize_with_source(df)
-    df = enrich_instrument_list_dates(config, df)
+    df = normalize_with_source(df, "tdx_protocol")
+    # Enrichment last, and deliberately: it fills null list_dates from
+    # EastMoney, and the two merges below are exactly where the undated rows
+    # come from. Enriching the TDX snapshot first left every Beijing name with
+    # a null list_date forever, which is also what marks a symbol as a
+    # not-yet-listed placeholder — so the names these merges recover would have
+    # been discovered and then never fetched.
+    df = _merge_bse_instruments(config, df, trade_date)
     df = _merge_untdxable_instruments(config, df)
+    df = enrich_instrument_list_dates(config, df)
     if getattr(config, "_backfill", False):
         df = _merge_delisted_instruments(config, df)
     return write_simple(config, run_id, "instruments", df)
+
+
+def _merge_bse_instruments(config: Config, df: pl.DataFrame, trade_date: date) -> pl.DataFrame:
+    """Add whatever the Beijing board is listing that the snapshot does not have.
+
+    `_merge_untdxable_instruments` below keeps the *known* BJ names alive, but
+    it can only replay the last code-space sweep, so it never discovers one.
+    Between sweeps that is a hole in the universe, not a stale field: on
+    2026-09-15 sixteen Beijing names were trading with no row in the lake at
+    all. The exchange publishes its own board daily, for free, in a read the
+    quote path already makes.
+
+    Additive only, and best effort. A board that fails to load leaves the
+    snapshot exactly as it was, which is what the sweep-replay underneath is
+    for — this must not be able to turn a bad Beijing day into a day that
+    inferred delistings.
+    """
+    if not config.sources.get("bse", True):
+        return df
+    from cnequity.adapters.bse.instruments import fetch_bse_instruments
+
+    try:
+        board = fetch_bse_instruments(trade_date, config=config)
+    except Exception as exc:  # noqa: BLE001 — the sweep replay is the floor
+        logger.warning("instruments: BSE board unavailable for %s: %s", trade_date, exc)
+        return df
+    if board.is_empty():
+        return df
+
+    known = set(df["symbol"].to_list()) if not df.is_empty() else set()
+    fresh = board.filter(~pl.col("symbol").is_in(list(known)))
+    if not fresh.is_empty():
+        logger.info(
+            "instruments: +%d Beijing listing(s) the snapshot had never seen (%s)",
+            fresh.height,
+            ", ".join(fresh["symbol"].to_list()[:3]),
+        )
+    # The names are worth carrying for the ones already known, too: these rows
+    # came in from a code-space sweep with `name` null, and Beijing's ST
+    # designation lives in 证券简称 and nowhere else this pipeline can reach.
+    return pl.concat(
+        [with_provenance(board, source="bse", data_version="v1"), df], how="diagonal_relaxed"
+    )
 
 
 def _merge_untdxable_instruments(config: Config, df: pl.DataFrame) -> pl.DataFrame:
@@ -267,6 +317,12 @@ def _delisted_instruments(config: Config) -> pl.DataFrame:
     such as ``*ST元成`` is the exchange's own designation at the point trading
     stopped, and it is the only evidence available once the boards drop the
     symbol.
+
+    Which is why a missing 简称 is null and not ``False``. Reading "no name" as
+    "not ST" turns the absence of the only available evidence into a clean bill
+    of health: 253 retired Beijing codes carry no name at all, and every one of
+    them was published as not-under-risk-warning on every session since it
+    delisted.
     """
     from cnequity.adapters.exchange.st_lists import is_st_name
 
@@ -286,10 +342,63 @@ def _delisted_instruments(config: Config) -> pl.DataFrame:
             "symbol",
             "delist_date",
             name_col.map_elements(
-                lambda value: is_st_name(value) if value else False, return_dtype=pl.Boolean
+                lambda value: is_st_name(value) if value else None, return_dtype=pl.Boolean
             ).alias("risk_warning"),
         )
         .unique(subset=["symbol"], keep="last")
+    )
+
+
+def _beijing_status(
+    config: Config, frame: pl.DataFrame, day: date, day_symbols: list[str]
+) -> pl.DataFrame:
+    """Replace EastMoney's Beijing rows with the Beijing exchange's own.
+
+    EastMoney does not serve this exchange on either column, and both gaps
+    were being stored as facts:
+
+    * The ST board's `fs` selects m:0 (Shenzhen) and m:1 (Shanghai) only, so
+      every BJ name was published `risk_warning=False` — while the exchange
+      listed *ST康乐, *ST田野 and *ST同辉. That column is null at the adapter
+      now, and this is what fills it.
+    * The suspension feed does not reach Beijing either. Measured over the
+      lake's whole history: 15,515 EastMoney-sourced BJ rows, every one of
+      them `is_trading=True`, against 116 halts in 148,933 SH/SZ rows. At
+      the SH/SZ rate roughly a dozen BJ halts were stored as normal
+      sessions.
+
+    Not a source switch under ADR-0003: there is no competing answer to
+    override, only two columns the primary leaves unserved by construction.
+    Best effort in both directions — a board that fails, or a walk too
+    incomplete to read an absence, leaves EastMoney's rows exactly as they
+    were, and `risk_warning` stays null, which is what unknown means here.
+    """
+    if not config.sources.get("bse", True):
+        return frame
+    bj = [s for s in day_symbols if s.endswith(".BJ")]
+    if not bj or frame.is_empty():
+        return frame
+    from cnequity.adapters.bse.trading_status import fetch_trading_status_bse
+
+    try:
+        result = fetch_trading_status_bse(bj, day, config=config)
+    except Exception as exc:  # noqa: BLE001 — EastMoney's row is the floor
+        logger.warning("trading_status: BSE board unavailable for %s: %s", day, exc)
+        return frame
+    if result.is_empty:
+        return frame
+
+    rows = result.rows.with_columns(pl.lit("bse").alias("source"))
+    judged = set(rows.get_column("symbol").to_list())
+    logger.info(
+        "trading_status: %d Beijing row(s) from the exchange's own board for %s (%d halted)",
+        len(judged),
+        day,
+        int((~rows.get_column("is_trading")).sum()),
+    )
+    return pl.concat(
+        [frame.filter(~pl.col("symbol").is_in(sorted(judged))), rows],
+        how="diagonal_relaxed",
     )
 
 
@@ -437,15 +546,67 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
         # `with_columns_unless_blank`: a session whose whole universe had
         # delisted returns the column-less empty frame, and stamping it would
         # add a row with no symbol and no date (see domain/frames.py).
-        vendor = with_columns_unless_blank(
-            vendor.drop("source", strict=False),
-            pl.lit(None, dtype=pl.Utf8).alias("source"),
-        )
+        #
+        # A null `source` means "the step names this row"; a set one means the
+        # row already knows its owner. Dropping the column unconditionally used
+        # to be right, because the vendor frame was always one vendor's. It is
+        # not any more: an EastMoney outage is served partly by the exchange
+        # boards and partly by the cached snapshot, and erasing the label would
+        # publish the exchange's reading under EastMoney's name.
+        if "source" not in vendor.columns:
+            vendor = with_columns_unless_blank(vendor, pl.lit(None, dtype=pl.Utf8).alias("source"))
         if gone.is_empty():
             return vendor
         if vendor.is_empty():
             return gone
         return pl.concat([vendor, gone], how="diagonal_relaxed")
+
+    def _exchange_status(day: date, day_symbols: list[str]):
+        """Halt/ST straight from the exchanges themselves, or None.
+
+        All three boards, because all three encode it differently: Shanghai and
+        Shenzhen list a halted security with its open/high/low at zero beside a
+        reference close, while Beijing simply omits it — so the BSE reading
+        needs its own completeness guard before an absence may be read as a
+        halt.
+
+        Best effort by construction: this is the fallback path, so a failure
+        here must leave the cached snapshot underneath rather than replace one
+        outage with two. Each board is attempted independently; one being down
+        does not cost the others their reading.
+        """
+        frames: list[pl.DataFrame] = []
+        sh_sz = [s for s in day_symbols if not s.endswith(".BJ")]
+        bj = [s for s in day_symbols if s.endswith(".BJ")]
+
+        if sh_sz and config.sources.get("exchange", True):
+            from cnequity.adapters.exchange.trading_status import fetch_trading_status_exchange
+
+            try:
+                result = fetch_trading_status_exchange(sh_sz, day, config=config)
+                if not result.is_empty:
+                    frames.append(result.rows.with_columns(pl.lit("exchange").alias("source")))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("trading_status: SH/SZ boards unavailable for %s: %s", day, exc)
+
+        if bj and config.sources.get("bse", True):
+            from cnequity.adapters.bse.trading_status import fetch_trading_status_bse
+
+            try:
+                result = fetch_trading_status_bse(bj, day, config=config)
+                # An incomplete walk still yields the names it did see; it just
+                # leaves the absent ones to the cached snapshot instead of
+                # calling the whole exchange suspended.
+                if not result.is_empty:
+                    frames.append(result.rows.with_columns(pl.lit("bse").alias("source")))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("trading_status: BSE board unavailable for %s: %s", day, exc)
+
+        if not frames:
+            return None
+        # Name the owner per row: the day mixes these with the cached snapshot,
+        # and `with_provenance` keeps a source a frame already carries.
+        return pl.concat(frames, how="diagonal_relaxed")
 
     def _fetch_vendor(day: date):
         nonlocal cached_snapshot
@@ -480,16 +641,56 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
                 raise RuntimeError(
                     "trading_status: incomplete daily snapshot; " + "; ".join(details)
                 )
+            frame = _beijing_status(config, frame, day, day_symbols)
             cached_snapshot = frame.select("symbol", "is_trading", "status")
             return frame
         except Exception as exc:  # noqa: BLE001 — EastMoney outage is advisory here
+            # A second opinion before a stale one. The exchanges publish every
+            # listed security with its OHLC and its 证券简称, which is both
+            # facts this dataset needs: a halted name is listed with its
+            # open/high/low at zero beside a reference close, and ST is carried
+            # in the name. Measured against EastMoney for 2026-09-15 over 5,219
+            # symbols, ST agreed on 100.000% and halts on 99.923% — and all
+            # four disagreements were EastMoney calling a name halted while the
+            # exchange published a full session for it.
+            #
+            # The cached snapshot stays underneath: it is the lake's own
+            # previous answer, which is not a second opinion but the same one
+            # a day older, and Beijing is on neither exchange board.
+            exchange_rows = _exchange_status(day, day_symbols)
+            covered = (
+                set(exchange_rows.get_column("symbol").to_list())
+                if exchange_rows is not None and not exchange_rows.is_empty()
+                else set()
+            )
             cached = _cached_status(day)
-            if cached is None:
+            if cached is None and not covered:
                 raise
             fallback_days.append(day)
             fallback_errors.append(f"{day.isoformat()}: {exc}")
+            if covered and cached is not None:
+                remainder = cached.filter(~pl.col("symbol").is_in(sorted(covered)))
+                logger.warning(
+                    "trading_status: EastMoney unavailable for %s; %d symbol(s) from the "
+                    "exchange boards, %d from the last curated snapshot",
+                    day,
+                    len(covered),
+                    remainder.height,
+                )
+                if remainder.is_empty():
+                    return exchange_rows
+                return pl.concat([exchange_rows, remainder], how="diagonal_relaxed")
+            if covered:
+                logger.warning(
+                    "trading_status: EastMoney unavailable for %s; %d symbol(s) from the "
+                    "exchange boards and no cached snapshot for the rest",
+                    day,
+                    len(covered),
+                )
+                return exchange_rows
             logger.warning(
-                "trading_status: EastMoney unavailable for %s; using last curated snapshot",
+                "trading_status: EastMoney and the exchange boards unavailable for %s; "
+                "using last curated snapshot",
                 day,
             )
             return cached

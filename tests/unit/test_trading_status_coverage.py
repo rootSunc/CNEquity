@@ -435,6 +435,29 @@ def test_st_coverage_rejects_receipt_when_curated_rows_are_removed(tmp_path):
     assert report["source_coverage"]["baostock"]["reason"] == "receipt_data_drift"
 
 
+def test_legacy_aggregate_receipt_verifies_whole_scope_for_subset(tmp_path):
+    from cnequity.quality.st_coverage import _receipt_rows_intact
+
+    cfg = Config(data_root=tmp_path / "data")
+    day = date(2024, 6, 27)
+    _write_status_partition(cfg, day, source="baostock")
+    path = cfg.curated_root / "trading_status" / f"trade_date={day}" / "part-0.parquet"
+    first = pl.read_parquet(path)
+    pl.concat([first, first.with_columns(pl.lit("000001.SZ").alias("symbol"))]).write_parquet(path)
+    symbols = ["000001.SZ", "600519.SH"]
+    scope = build_st_scope(symbols, day, day, universe="all_a")
+    receipt = {
+        "completed_symbols": symbols,
+        "completed_symbols_sha256": symbol_scope_hash(symbols),
+        "evidence_rows": 2,
+    }
+    assert _receipt_rows_intact(cfg, receipt, scope, {"600519.SH"}) is True
+    # Legacy aggregate metadata cannot localize a deletion. It must still
+    # reject damage even when the deleted name is outside the selected subset.
+    first.write_parquet(path)
+    assert _receipt_rows_intact(cfg, receipt, scope, {"600519.SH"}) is False
+
+
 def test_st_coverage_revalidation_cache_invalidates_on_file_change(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     day = date(2024, 6, 27)

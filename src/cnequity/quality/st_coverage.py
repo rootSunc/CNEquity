@@ -694,8 +694,14 @@ def _receipt_rows_intact(
     if cached is not None:
         return cached
     try:
-        persisted = _st_row_counts(config, scope, symbols)
         expected_by_symbol = receipt.get("evidence_rows_by_symbol")
+        # An old aggregate receipt describes every completed symbol. A
+        # requested subset cannot be compared against that whole-scope total;
+        # verify the entire legacy receipt, without inventing per-name counts.
+        verification_symbols = (
+            symbols if isinstance(expected_by_symbol, dict) else set(receipt["completed_symbols"])
+        )
+        persisted = _st_row_counts(config, scope, verification_symbols)
         if isinstance(expected_by_symbol, dict):
             intact = all(
                 persisted.get(symbol, 0) >= int(expected_by_symbol[symbol]) for symbol in symbols

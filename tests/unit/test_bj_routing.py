@@ -431,3 +431,106 @@ def test_a_missing_catalogue_is_not_fatal(tmp_path):
     live = _live_instruments(["600519.SH"])
 
     assert _merge_untdxable_instruments(cfg, live).equals(live)
+
+
+def _board(symbols_to_names: dict[str, str]):
+    symbols = sorted(symbols_to_names)
+    return pl.DataFrame(
+        {
+            "symbol": symbols,
+            "name": [symbols_to_names[s] for s in symbols],
+            "exchange": ["BJ"] * len(symbols),
+            "asset_type": ["stock"] * len(symbols),
+            "list_date": pl.Series([None] * len(symbols), dtype=pl.Date),
+            "delist_date": pl.Series([None] * len(symbols), dtype=pl.Date),
+            "prev_symbol": pl.Series([None] * len(symbols), dtype=pl.Utf8),
+        }
+    )
+
+
+def _patch_board(monkeypatch, result):
+    import cnequity.adapters.bse.instruments as bse_instruments
+
+    def _fetch(trade_date, *, client=None, config=None):
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(bse_instruments, "fetch_bse_instruments", _fetch)
+
+
+def test_the_beijing_board_discovers_listings_the_sweep_has_never_seen(tmp_path, monkeypatch):
+    """`_merge_untdxable_instruments` replays the last code-space sweep, so it
+    can keep a known BJ name alive but can never find a new one. Sixteen
+    Beijing stocks were trading on 2026-09-15 with no row in the lake at all."""
+    from cnequity.steps.reference import _merge_bse_instruments
+
+    cfg = Config(data_root=tmp_path / "data", sources={"bse": True})
+    _patch_board(monkeypatch, _board({"920038.BJ": "森合高科", "920023.BJ": "*ST田野"}))
+
+    out = _merge_bse_instruments(cfg, _live_instruments(["600519.SH"]), date(2026, 9, 15))
+
+    assert set(out["symbol"]) == {"600519.SH", "920038.BJ", "920023.BJ"}
+    bj = out.filter(pl.col("symbol") == "920023.BJ")
+    assert bj["source"].item() == "bse"
+    # Beijing's ST designation is in 证券简称 and nowhere else this reaches.
+    assert bj["name"].item() == "*ST田野"
+    assert bj["delist_date"].item() is None
+
+
+def test_a_beijing_board_outage_leaves_the_snapshot_exactly_as_it_was(tmp_path, monkeypatch):
+    """This path is additive. It must never be able to turn a bad Beijing day
+    into a day that inferred delistings."""
+    from cnequity.steps.reference import _merge_bse_instruments
+
+    cfg = Config(data_root=tmp_path / "data", sources={"bse": True})
+    live = _live_instruments(["600519.SH"])
+    _patch_board(monkeypatch, RuntimeError("bse down"))
+
+    assert _merge_bse_instruments(cfg, live, date(2026, 9, 15)).equals(live)
+
+
+def test_a_disabled_bse_source_is_not_consulted(tmp_path, monkeypatch):
+    from cnequity.steps.reference import _merge_bse_instruments
+
+    cfg = Config(data_root=tmp_path / "data", sources={"bse": False})
+    live = _live_instruments(["600519.SH"])
+    _patch_board(monkeypatch, AssertionError("must not be called"))
+
+    assert _merge_bse_instruments(cfg, live, date(2026, 9, 15)).equals(live)
+
+
+def test_recovered_beijing_names_are_enriched_not_stranded(tmp_path, monkeypatch):
+    """Discovery and enrichment have to run in that order.
+
+    A Beijing row arrives with no list_date — neither TDX nor the BSE board
+    carries one — and a symbol with no list_date and no traded bar is exactly
+    what `classify_daily_bar_ownership` holds back as a not-yet-listed
+    placeholder. Enriching before the merge therefore discovered sixteen names
+    and then guaranteed none of them would ever be fetched.
+    """
+    import cnequity.adapters.eastmoney.instruments as em_instruments
+    import cnequity.steps.reference as reference
+
+    cfg = Config(data_root=tmp_path / "data", sources={"bse": True, "eastmoney": True})
+    _patch_board(monkeypatch, _board({"920038.BJ": "森合高科"}))
+    monkeypatch.setattr(
+        em_instruments, "fetch_list_date_map", lambda **_: {"920038.BJ": date(2026, 8, 5)}
+    )
+    monkeypatch.setattr(
+        reference, "fetch_instruments", lambda **_: _live_instruments(["600519.SH"])
+    )
+    monkeypatch.setattr(reference, "normalize_with_source", lambda df, *_a, **_k: df)
+    written: dict = {}
+
+    def _capture(config, run_id, dataset, df):
+        written["df"] = df
+        return {}
+
+    monkeypatch.setattr(reference, "write_simple", _capture)
+
+    reference.step_instruments(cfg, date(2026, 9, 15), "run-1", {})
+
+    bj = written["df"].filter(pl.col("symbol") == "920038.BJ")
+    assert bj.height == 1
+    assert bj["list_date"].item() == date(2026, 8, 5)
