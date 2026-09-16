@@ -50,3 +50,6 @@ logs/
 
 # Frontend build inputs (the built bundle IS committed — see frontend/README.md)
 frontend/node_modules/
+
+# Local agent instructions, not part of the project.
+AGENTS.md

@@ -97,6 +97,53 @@ macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致�
 
 ---
 
+## cne config diff
+
+对比当前配置与包内示例模板，列出**模板有而你没有**的部分。
+
+用户配置由 `cne config init` 写一次，之后不再更新，而且是 gitignore 的。后续版本给调度组
+新增的 step 不会自己出现在里面 —— 功能装上了，但从来不会被调度，`cne config validate`
+依然回 `Configuration OK`。这条命令就是补这个信号。
+
+报告分三类，按后果排序：
+
+| 类别 | 后果 | 退出码影响 |
+|------|------|-----------|
+| 未被调度的 step | **会丢数据**：step 存在但不在任何 group / wave 里，永远不跑 | 有则退出 1 |
+| 缺少的配置段 | 使用内置默认值 | 不影响 |
+| 缺少的配置项 | 使用内置默认值 | 不影响 |
+
+`[data].root` 和 `orchestrator.workers` 等本机相关取值不算漂移；配置里多出来的自定义内容也不报。
+
+---
+
+## cne sources resilience
+
+按失败域展示来源集中度、爆炸半径与独立备源门禁。
+
+| 选项 | 说明 |
+|------|------|
+| `--with-availability` | 把这个湖已积累的探针历史按失败域 join 上去（读湖，需 `--config`） |
+| `--window-days` | 可用率统计窗口（默认 30 天） |
+| `--enforce` | 关键数据集缺独立备源时退出 1 |
+| `--out PATH` | 写文件而非打印 |
+
+集中度本身不能决定主备源的选择：一个域背着 29 个数据集，其危险程度与它**从本机有多经常够不着**成正比，而后者是测出来的、不是声明出来的。`--with-availability` 把两者放进同一张表：
+
+```
+failure domain     datasets critical   measured  worst probe
+eastmoney                29        4       0.0%  eastmoney_push2his
+tdx                       9        6     100.0%  tdx_protocol
+exchange                  2        1      88.2%  exchange_szse
+```
+
+一个域按它**最差**的探针计：需要两个端点的 feed，任一挂掉它就挂掉。没有观测的探针不贡献读数
+（"从未测过"和"测出来是 0"是两个不同的答案），对应的域保持未标注。
+
+`build_dependency_report` 本身仍是注册表的纯函数 —— 确定性、可测；join 只发生在 CLI 层。
+
+---
+
 ## cne contract
 
 查看和维护 42 个注册数据集的机器可读 JSON 契约。
@@ -347,6 +394,7 @@ cne verify --kind interior --repair         # 只补内部空洞
 |------|------|
 | `--datasets` | 逐数据集新鲜度表（dataset / layer / freshness / 覆盖区间 / watermark）；有 STALE 退出 1 |
 | `--all-columns` | 配合 `--datasets`：打印 `list_datasets` 的全部列（契约指纹、revision、PIT 存储列等），而非仅新鲜度 |
+| `--groups` | 配合 `--datasets`：只对这些调度组拥有的数据集判失败（空格或逗号分隔）。其它组的数据集照常列出、照常报为调度缺口，但不触发退出 1。只跑 `core` 的主机有二十多个数据集无人抓取，不加此项门禁天天失败（2026-09-12/13/14 为 21–25 个），告警就此失效。无人调度的数据集（`(unscheduled)`）仍然判失败——“不知道谁抓”不等于“别的主机在抓” |
 | `--run <id\|latest>` | 指定 run（默认 `latest`）；摘要含每个数据集 stage 的 `dataset_results` 与聚合 `dataset_status` |
 | `--run-id <id>` | `--run` 的显式 id 别名；两者不能同时给 |
 

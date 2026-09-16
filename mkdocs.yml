@@ -73,6 +73,14 @@ validation:
 markdown_extensions:
   - admonition
   - attr_list
+  # `docs/changelog.md` pulls in the repo-root CHANGELOG.md rather than
+  # copying it: the release notes are the first thing a reader wants after
+  # an upgrade, and a second copy would be the one that goes stale.
+  # `check_paths` makes a missing or moved source fail the build instead of
+  # publishing an empty page.
+  - pymdownx.snippets:
+      base_path: ['.']
+      check_paths: true
   - md_in_html
   - pymdownx.details
   - pymdownx.highlight
@@ -120,6 +128,7 @@ nav:
       - 数据湖布局: architecture/lake-layout.md
       - 模块索引: modules/README.md
       - ADR: adr/README.md
+  - 更新日志: changelog.md
   - 贡献与合规:
       - 项目对比: comparison.md
       - 开发约定: development/conventions.md

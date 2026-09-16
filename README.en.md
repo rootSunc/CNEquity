@@ -153,7 +153,7 @@ Details: [serve](docs/modules/serve.md) ·
 pip install cnequity
 cne config init            # writes configs/cnequity.toml
 cne init                   # every symbol × the last 3 years (~1 hour)
-cne run daily              # this one line, each trading day after
+cne run daily --group core # then the daily schedule groups (see "Keeping it current")
 ```
 
 `cne init` defaults to **shallow, never narrow**: the last 3 years, every symbol.
@@ -224,13 +224,28 @@ The boundary is deliberate: adapters fetch, the orchestrator schedules and retri
 
 ## Keeping it current
 
-`cne run daily` runs every group for the day. Put it in crontab and that is the
-whole daily job:
+The daily job runs as six **schedule groups**: `core`, `capital`, `signals`,
+`fundamentals`, `macro_risk`, `research`. `cne run daily` without `--group` runs
+only the `[[job.daily.waves]]` spine — bars, calendar, trading status, corporate
+actions, adjustment factors — and **not** valuation, financials, margin, dragon
+tiger, northbound, index constituents or the rest. Run only that one line and the
+lake settles at 15 of 42 datasets fresh.
+
+Stagger the groups in crontab rather than hitting the same upstreams at once:
 
 ```bash
 # after the close on weekdays; non-trading days skip themselves
-30 16 * * 1-5  cd /path/to/lake && cne run daily >> logs/daily.log 2>&1
+ 5 16 * * 1-5  cd /path/to/lake && cne run daily --group core         >> logs/daily.log 2>&1
+35 16 * * 1-5  cd /path/to/lake && cne run daily --group capital      >> logs/daily.log 2>&1
+ 5 17 * * 1-5  cd /path/to/lake && cne run daily --group signals      >> logs/daily.log 2>&1
+35 17 * * 1-5  cd /path/to/lake && cne run daily --group fundamentals >> logs/daily.log 2>&1
+ 5 18 * * 1-5  cd /path/to/lake && cne run daily --group macro_risk   >> logs/daily.log 2>&1
+35 18 * * 1-5  cd /path/to/lake && cne run daily --group research     >> logs/daily.log 2>&1
 ```
+
+From a repo checkout, `scripts/daily_pipeline.sh` walks every group in dependency
+order and then runs the health check, source probe and metadata backup, so one
+cron entry covers the day. It is not installed by the PyPI package.
 
 ```bash
 cne status          # per-dataset freshness: FRESH / STALE / EMPTY

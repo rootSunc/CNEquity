@@ -169,7 +169,7 @@ roe = load(
 pip install cnequity
 cne config init            # 生成 configs/cnequity.toml
 cne init                   # 全市场标的，默认回溯最近 3 年
-cne run daily              # 之后每个交易日执行这一条
+cne run daily --group core # 之后每个交易日执行日更分组（见下方「日常使用与运维」）
 ```
 
 默认策略是“浅而不窄”：历史先取最近 3 年，但全市场标的一个不缺。这样不会因为只保留今天仍上市的股票，提前把幸存者偏差写进数据湖。每个数据集的真实起点会记录在 `coverage_start`。
@@ -225,7 +225,7 @@ cne backfill daily_bars --start 2016-01-01 --end <coverage_start>
 | **L0 · 基础参考** | | | | | |
 | `instruments` | 证券主数据 | tdx_protocol | baostock | 可回补 | core |
 | `trading_calendar` | 交易日历 | tdx_protocol | exchange | 可回补 | core |
-| `trading_status` | 交易状态（停复牌/ST） | tdx_protocol | eastmoney | 可回补 | core |
+| `trading_status` | 交易状态（停复牌/ST） | eastmoney | exchange | 回填 `baostock` | core |
 | **L1 · 行情** | | | | | |
 | `adj_factors` | 复权因子 | sina | — | 可回补 | — |
 | `commodity_bars` ○ | 商品期货主连 | sina | eastmoney | 可回补 | macro_risk |
@@ -301,7 +301,7 @@ CNEquity 适合需要反复使用同一份历史数据的研究和数据工作�
 ## 日常使用与运维
 
 ```bash
-cne run daily                 # 执行当天全部日更分组
+cne run daily --group core    # 日更的一个调度组（全部 6 个组见下）
 cne status                    # 查看 FRESH / STALE / EMPTY
 cne serve                     # 打开 http://127.0.0.1:8787
 cne sources probe                   # 检查上游数据源健康度
@@ -309,14 +309,27 @@ cne retry --run-id <run_id>   # 只重试失败批次
 cne retry --failed-groups     # 重试各 daily 分组最新的失败 run
 ```
 
+日更按**调度组**执行，一天跑 6 个：`core`、`capital`、`signals`、`fundamentals`、
+`macro_risk`、`research`。不带 `--group` 的 `cne run daily` 只跑 `[[job.daily.waves]]`
+里的核心骨架（行情、日历、交易状态、公司行为、复权），**不包含**估值、财报、融资融券、
+龙虎榜、北向、指数成分等其余数据集 —— 只跑这一条，湖会停在 15/42 新鲜。
+
 单个 step 失败时，系统会记录 failed batch，其他步骤继续落盘；重试不会把整条任务重新跑一遍。覆盖和新鲜度也可以在上一节的数据运维页面里看。
 
-挂入 crontab 即可自动日更：
+挂入 crontab 即可自动日更。**按组错开**，不要挤在同一分钟打同一批上游：
 
 ```bash
-# 交易日收盘后执行；非交易日会自动跳过
-30 16 * * 1-5  cd /path/to/lake && cne run daily >> logs/daily.log 2>&1
+# 交易日收盘后依次执行；非交易日各组都会自动跳过
+ 5 16 * * 1-5  cd /path/to/lake && cne run daily --group core        >> logs/daily.log 2>&1
+35 16 * * 1-5  cd /path/to/lake && cne run daily --group capital     >> logs/daily.log 2>&1
+ 5 17 * * 1-5  cd /path/to/lake && cne run daily --group signals     >> logs/daily.log 2>&1
+35 17 * * 1-5  cd /path/to/lake && cne run daily --group fundamentals >> logs/daily.log 2>&1
+ 5 18 * * 1-5  cd /path/to/lake && cne run daily --group macro_risk  >> logs/daily.log 2>&1
+35 18 * * 1-5  cd /path/to/lake && cne run daily --group research    >> logs/daily.log 2>&1
 ```
+
+有仓库 checkout 时，`scripts/daily_pipeline.sh` 会按依赖顺序跑完全部分组，再做健康检查、
+源探测和元数据备份，一条 cron 即可（该脚本不随 PyPI 包安装）。
 
 更多运维方式见[运行手册](docs/operations/runbook.md)、[数据源健康检查](docs/operations/source-health.md)和[故障排查](docs/operations/troubleshooting.md)。
 

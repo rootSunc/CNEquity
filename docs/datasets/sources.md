@@ -18,10 +18,13 @@
 | 波次 | `instruments`（Wave 0） |
 | 主源 | tdx_protocol（内置 security_list） |
 | 备源 | baostock（仅 `--backfill`，补退市标的） |
+| 补充源 | bse（北交所行情板，唯一的在册 BJ 名单与证券简称）；sina（代码空间扫描的 live-but-missing 桶） |
 | 频率 | 每日；历史回填默认从 2001-01-01 起，支持 `--start` 缩小窗口 |
 | 主键 | symbol |
 | 股票池 | 研究股票池使用 SH/SZ/BJ 前缀白名单 60/68/00/30/92；ETF/LOF 使用独立前缀 51/52/56/58/15/16，保留在 instruments/daily_bars |
 | 已知限制 | 快照中消失时推断 `delist_date`；东财分别从 A 股与 ETF/LOF clist 补充 `list_date`；ETF/LOF 保留在 instruments/daily_bars，但不进入 `all_a` 研究池 |
+| 北交所 | TDX 只服务沪深，BJ 名单原先只能靠重放上一次人工代码空间扫描（`scripts/delisted_ops.py discover`），扫描之后上市的票永远进不来 —— 2026-09-15 实测有 16 只在放量成交却在湖中零行。现在每日读一次北交所行情板补齐，并顺带带回 TDX 侧一直缺的 `name` |
+| 顺序 | 两个补充源都在 `list_date` 富化**之前**合并。反过来的话它们带进来的行永远 `list_date` 为空，而「无 `list_date` 且从未有 bar」正是未上市占位符的判据 —— 发现了却永远不取数 |
 
 #### trading_calendar
 
@@ -38,13 +41,15 @@
 | 项 | 值 |
 |------|-------|
 | 波次 | `trading_status`（Wave 0） |
-| 主源 | tdx_protocol |
-| 备源 | eastmoney |
+| 主源 | eastmoney（ST 板 + 停牌名单） |
+| 备源 | exchange（沪深交易所行情板，独立故障域） |
+| 补充源 | derived（`derived_bar_gap` / `derived_delisted`）；bse（北交所行情板） |
 | 频率 | 每日 |
 | 主键 | (symbol, trade_date) |
 | 历史 ST 回补 | Baostock 覆盖 SH/SZ；可选 Tushare Pro `bak_basic`（2016）+ `stock_st`（2017-01-01 起）覆盖 BJ，需 token；缺少源端覆盖时审计保持 warning |
 | 列语义 | `status` 只表示交易状态（`normal`/`suspended`/`delisted`），ST/*ST 在独立列 `risk_warning`。两者正交：一只 ST 股停牌时两个字段同时成立 |
-| 退市标的 | 不向行情板询问（板答不了），由 `instruments.delist_date` 判定，写 `status=delisted`、`is_trading=false`、`source=derived_delisted`，`risk_warning` 取自最终简称 |
+| 退市标的 | 不向行情板询问（板答不了），由 `instruments.delist_date` 判定，写 `status=delisted`、`is_trading=false`、`source=derived_delisted`，`risk_warning` 取自最终简称；**没有简称时为 null 而不是 false** —— 简称是退市后仅存的 ST 证据，它缺席就是证据缺席 |
+| 北交所 | EastMoney 两个源都不覆盖 BJ：ST 板的 `fs` 只选 m:0/m:1，停牌名单同样够不到 —— 湖中历史 15,515 行 EastMoney 来源的 BJ 记录 `is_trading` 无一为 false，同期沪深是 148,933 行里 116 次。现在 BJ 两列都取自北交所自己的行情板（`source=bse`），EastMoney 对未覆盖交易所一律写 null |
 | 已知限制 | ST 与 *ST 不做区分（喂本数据集的源都没有这个区分：Baostock 只有 `isST` 布尔，Tushare adapter 早已把 `ST`/`*ST` 归一）。更细的标识在交易所简称，经 `instruments.name` 获取 |
 
 #### daily_bars

@@ -90,6 +90,41 @@ uv run cne status --datasets   # valuation 不应再停在稀疏 tip
 
 ---
 
+## 症状：daily_bars「interior symbol×session key(s) remain absent; refusing to checkpoint」
+
+core 组每个交易日都失败，`daily_bars` 水位不前进，当天抓回的行留在 staging 没有发布。
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| `RuntimeError: daily_bars <start>..<end>: N interior symbol×session key(s) remain absent` | 窗口内有标的缺了中间某个交易日，且主源与所有备源都补不上 | 先看缺的是哪些标的（见下），再决定是收口范围还是修源 |
+| 缺的几乎都是 158/159/160/51x/52x/56x 开头的代码 | 这些是 ETF/LOF 行情代码，不在任何研究口径里，也没有哪个源稳定提供 | **已修**：`[universe].ingest` 默认 `all_a` 不再抓它们 |
+| 缺的是真 A 股，且只缺当天 | 备源额度被别的标的耗尽（日志里 `circuit opened … leaving N symbol(s) unresolved` / `sina bars HTTP 456`） | 等下一轮，或 `cne retry --run-id <id>` 复用已抓到的批次 |
+
+缺失明细写在 `meta/quality/findings/<run_id>.json`，带 `missing_symbols` 与 `sample_keys`：
+
+```bash
+cne status                      # 取失败的 run_id
+python - <<'EOF'
+import json, sys
+run = "<run_id>"
+d = json.load(open(f"data/cnequity/meta/quality/findings/{run}.json"))
+for f in d["findings"]:
+    if f["check"] == "daily_bars_interior_gap":
+        print(f["missing_keys"], "keys /", len(f["missing_symbols"]), "symbols")
+        print(f["sample_keys"])
+EOF
+```
+
+`daily_bars` 的 `reconciliation_lookback_days = 5`，所以日更窗口**永远**是多日的（`start != end`）。
+这意味着 tip 专用的宽松路径不会在日更里生效，多日窗口的认证与门禁才是实际生效的那条。
+认证在门禁**之前**执行：被证实无数据的标的会写入负面证据（TTL 见 `[incremental]`），
+之后 TTL 内不再请求；门禁只对认证之后仍然缺失的键报错。
+
+> 不要为了绕过它去调 `min_interval_*` 或放宽熔断阈值 —— 这个报错说明缺口是真的，
+> 提速要靠缩小取数范围（`[universe].ingest`），不是靠加快请求。
+
+---
+
 ## 症状：cne run daily 失败
 
 1. `cne status` 查看 `run_summary` 与 failed batches

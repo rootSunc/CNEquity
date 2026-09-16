@@ -143,3 +143,27 @@ SourceProbe(
 ## 相关文档
 
 - [CLI](../reference/cli.md#cne-sources) · [serve 面板](../modules/serve.md) · [逐源限制](../datasets/sources.md) · [故障排查](troubleshooting.md)
+
+## 可用率目标按 vantage 分档
+
+可用率是 **(源, 网络出口)** 这一对的属性，不是源的属性。30 天实测：大陆出口下每个源都过 99%；
+海外出口下 EastMoney 是 0–58.8%（不是降级，是那里根本不提供服务），而 tdx、上交所行情主机、
+同花顺 kline 和 pboc 都是 100%。
+
+一个统一的 99% 目标会让海外出口的门禁**永远不可能通过**，而一个通不过的门禁没人会再看。
+所以目标跟着 vantage 走：
+
+| vantage 类 | critical 目标 | 其他 |
+|---|---|---|
+| `cn` | 99% | 95% |
+| `overseas` | 90% | 85% |
+| 未声明 | 按 `cn` 算 | |
+
+分类只看 `CNE_SOURCE_VANTAGE` 的**前缀**，不认地名：`cn`、`cn-sh`、`cn_aliyun` 是大陆；
+`overseas`、`overseas-eu`、`overseas_aws` 不是。地名从来不是判据。
+
+**未声明的 vantage 按严格档处理** —— 门禁不该给没人声明的出口发折扣，而声明它只需要一个环境变量。
+
+海外档的 90%/85% 不是拍的：实测里能用的源都在 ≥94%，不能用的都在 60% 以下，门槛落在这两簇之间。
+**降低门槛没有把"不可达"变成"可接受"** —— EastMoney 在海外档下依然失败，因为它确实不可达。
+

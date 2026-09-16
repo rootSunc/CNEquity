@@ -80,11 +80,34 @@ cne clean
 ### health_notify.sh
 
 ```bash
-cne audit --full
-cne status --datasets
+# 平日
+cne audit                 # 只看本次 run 的活跃分区
+cne status --datasets --groups "$CNE_GROUPS"
+# 每周一次（默认周六）
+cne audit --full          # 整湖结构扫描 + 刷新 health-latest.json
 ```
 
-失败时 macOS `osascript` 通知，退出码非零。
+失败时 macOS `osascript` 通知，退出码非零。通知标题按失败的那一项分：
+审计/健康那一支是「数据异常」，纯新鲜度落后是「数据滞后」。
+
+**为什么分开**：`cne audit --full` 会打开 curated 下**每一个** Parquet 文件。
+25GB 的湖上实测 17,077 个文件，跑 1 小时 39 分只用掉 7 分钟 CPU —— 纯 I/O 瓶颈，
+而它原本**每个交易日**都跑。日更真正的墙钟成本是这一步，不是采集。
+per-run 模式只看活跃分区，并且和 `--full` 一样按自身的 error finding 决定退出码。
+
+**环境变量**：`CNE_FULL_AUDIT_DOW`（默认 `6` = 周六，`1-7` 对应周一到周日；
+`0` 完全关闭整湖审计；`always` 恢复每天都跑的旧行为）。
+
+**为什么新鲜度门禁要按组收窄**：`CNE_GROUPS` 会原样传给 `cne status --datasets --groups`，
+也就是这台主机真正在跑的那些组。不收窄的话，只调度 `core` 的主机上有二十多个数据集
+**没有任何任务去抓**，按定义天天 STALE —— 2026-09-12/13/14 分别是 21、22、25 个，
+于是"数据异常"弹窗天天弹，弹到没人看；那三天里真正的 `UNHEALTHY` 就淹在里面没被发现。
+门禁与调度共用同一个变量，两者就不会各说各话。无人调度的数据集仍然判失败：
+"不知道谁抓"和"别的主机在抓"不是同一件事。
+
+> 整湖审计里的分区碎片化 / 粒度混用检查只在 repartition 之后才会变化，
+> 所以它们也一并移到了每周那次。手动 `scripts/repartition.py` 之后，
+> 请直接跑一次 `cne audit --full` 复核，不要等到周六。
 
 ---
 

@@ -44,7 +44,8 @@ adapters/
 | cninfo | [cninfo.md](cninfo.md) | announcement_index |
 | pboc | [pboc.md](pboc.md) | macro_indicators（社会融资规模增量） |
 | nbs | [../quality.md](../quality.md) | 制造业 PMI 发布稿，供 `macro_pmi_vs_nbs` 对照 |
-| exchange | [../quality.md](../quality.md) | 交易所上市列表，供 `st_labels_vs_exchange` 对照 |
+| exchange | （无独立页）见 [逐源限制](../../datasets/sources.md) | 沪深行情板：`trading_status` 备源（停牌在归零的开/高/低，ST 在简称）、`daily_bars` 整版 tip；上市列表仍供 `st_labels_vs_exchange` 对照 |
+| bse | （无独立页）见 [逐源限制](../../datasets/sources.md) | 北交所行情板：BJ 的 `instruments`、`trading_status`、`daily_bars` tip —— 本项目唯一能拿到 BJ 证券简称的源 |
 | macro | [macro.md](macro.md) | macro_indicators |
 | calendar | [calendar.md](calendar.md) | trading_calendar 种子 |
 | ths / sw / cni | （无独立页）见 [逐源限制](../../datasets/sources.md) | sector_bars / industry_members / index_constituents 回填 |

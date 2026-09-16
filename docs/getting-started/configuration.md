@@ -131,6 +131,22 @@ cne config validate --config configs/cnequity.toml
 | 键 | 默认 | 说明 |
 |----|------|------|
 | `default` | `"all_a"` | `load(..., universe=)` 默认 universe 类型 |
+| `ingest` | `"all_a"` | 日更抓取覆盖的标的类别 |
+
+`ingest` 只约束**取数范围**，与研究选股口径（`domain/universe_profiles.py`）无关：
+
+| 值 | 含义 |
+|----|------|
+| `all_a` | 沪/深/北 A 股（默认） |
+| `all_a_sh_sz` | 再排除北交所 |
+| `all_instruments` | `instruments` 列出的全部代码，含 ETF/LOF 行情代码 |
+
+ST、停牌、CDR 和已退市的名字在任何取值下都会保留 —— 丢掉它们正是这个湖要避免的幸存者偏差。
+
+`instruments` 会返回 TDX 列出的全部代码，其中约四分之一是 ETF/LOF/基金行情代码：
+没有任何研究口径会选中它们，也没有哪个已配置的源能稳定提供它们。把它们放进日更
+会占掉四分之一的抓取量，用没人需要的代码触发东财和新浪的熔断，并把填不上的
+`symbol×session` 键留给覆盖门禁 —— 门禁随后拒绝为当天落盘。
 
 ---
 

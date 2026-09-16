@@ -6,6 +6,86 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Coverage and provenance. The Beijing exchange becomes a first-class source, two
+gates stop passing for the wrong reason, and four defects that were writing bad
+rows every day are fixed — with migrations for what they already left behind.
+
+### Added
+
+- **The Beijing exchange's own board** now supplies BJ listings, halts and the
+  ST designation, in one paginated read shared with the quote path. TDX serves
+  SH/SZ only, so BJ had entered the catalogue solely by replaying the last
+  manual code-space sweep; on 2026-09-15 that left 16 names trading with real
+  volume and no row anywhere in the lake. Beijing encodes a halt as *absence*,
+  so it is only read as one after a complete walk, never from a board still
+  showing the previous session, and only for live names — 241 retired codes
+  would otherwise be permanent halts.
+- **The SSE and SZSE boards** as an independent `trading_status` backup: a halt
+  is a zeroed open/high/low beside a reference close, the designation is in
+  证券简称. Measured over 5,219 symbols for 2026-09-15, ST agreed 100.000% and
+  halts 99.923%, with all four disagreements being EastMoney calling a name
+  halted while the exchange published a full session.
+- `[universe].ingest` bounds every implicit fetch scope (`all_a`,
+  `all_a_sh_sz`, `all_instruments`).
+- `DatasetSpec.supplementary_sources`, so a source that writes rows is declared
+  rather than reported as unrouted.
+- `cne status --datasets --groups` gates only on the schedule groups a host
+  actually runs; `cne config diff` reports drift against the shipped template.
+
+### Fixed
+
+- **`trading_status` no longer asserts facts its source never served.**
+  EastMoney's ST board selects Shenzhen and Shanghai only and its suspension
+  feed does not reach Beijing either, yet both were stored as findings:
+  `risk_warning=False` for all 343 live BJ names while the exchange listed
+  \*ST康乐/\*ST田野/\*ST同辉, and 15,515 BJ rows every one `is_trading=True`
+  against 116 halts in 148,933 SH/SZ rows. Unserved exchanges get null, and
+  Beijing's rows come from Beijing. A delisted name with no 简称 is likewise
+  unknown rather than clean — 253 retired BJ codes were published as
+  not-under-risk-warning on every session since delisting.
+- **`valuation_metrics.ps_ttm` read EastMoney `f45`**, an amount in yuan rather
+  than a ratio: 96.8% of values above 1000, median 2.05e7 against baostock's
+  3.2. The field is `f130`. An audit shape check now fails any ratio column
+  holding amounts, per source.
+- **Provenance can no longer be defaulted.** `normalize_with_source` defaulted
+  to `"tdx_protocol"`, which is how 58,672 `trading_status` rows came to name a
+  vendor serving no status feed. The argument is mandatory and all eight call
+  sites name their vendor.
+- **A pre-IPO code no longer blocks the market snapshot.** A code with no
+  `list_date` and no traded bar anywhere has not started trading, so a missing
+  tip for it is a pending listing, not a coverage gap; two such codes were
+  failing `daily_bars` on every run.
+- **The freshness gate matched the scheduler.** A core-only host has twenty-odd
+  datasets no job fetches, so the unscoped gate failed daily — 21 to 25 stale on
+  2026-09-12/13/14 — and three genuinely UNHEALTHY days went unread inside the
+  noise. A pure freshness miss is also titled 数据滞后, not 数据异常.
+- The Sina futures sweep backs off on HTTP 456 instead of raising straight out
+  and failing the whole `commodity_bars` step.
+- An inverted `delist_date` is cleared on the merged frame, not just the
+  incoming snapshot, since the same codes are dropped from the live list again.
+- SLO targets come from a vantage class (`cn` / `overseas`), never a location,
+  so an overseas host is not held to mainland availability it cannot reach.
+
+### Changed
+
+- The daily audit inspects active partitions; the whole-lake sweep moves to
+  once a week (`CNE_FULL_AUDIT_DOW`). It reads every historical Parquet file —
+  1h39m wall for 7m of CPU on a 25 GB lake — and had been running every
+  trading day.
+- Steps persist their findings, so a failed run explains itself.
+
+### Migrations
+
+Each quarantines before it edits and republishes through the revision store, so
+curated and committed readers cannot disagree afterwards. All default to a dry
+run; `--apply` is required.
+
+- `migrate_null_bad_eastmoney_ps_ttm.py` — the `f45` values above
+- `migrate_relabel_trading_status_provenance.py` — 58,672 rows naming TDX
+- `migrate_drop_unsupported_suspensions.py` — 1,188 suspensions that rested on
+  nothing but "no source answered"
+- `migrate_drop_nav_series_bars.py` — fund NAV series stored as daily bars
+
 ## [0.9.0] — 2026-09-13
 
 One breaking data-contract change, and the storage/quality work that came with
