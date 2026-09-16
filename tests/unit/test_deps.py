@@ -9,7 +9,7 @@ from cnequity.orchestrator.deps import (
     step_execution_levels,
     validate_steps_registered,
 )
-from cnequity.orchestrator.registry import register_step
+from cnequity.orchestrator.registry import STEP_REGISTRY, register_step
 
 
 def test_reference_wave_steps_are_single_parallel_level():
@@ -34,16 +34,25 @@ def test_cyclic_dependency_raises():
     name_a = f"cycle_a_{suffix}"
     name_b = f"cycle_b_{suffix}"
 
-    @register_step(name_a, depends_on=[name_b])
-    def _cycle_a(config, trade_date, run_id, context):
-        return {}
+    # `register_step` writes to a process-global registry, so a throwaway step
+    # left behind is visible to every test that runs after this one — including
+    # any that counts the registry. The unique suffix keeps the names from
+    # colliding; it does nothing about the two extra entries.
+    try:
 
-    @register_step(name_b, depends_on=[name_a])
-    def _cycle_b(config, trade_date, run_id, context):
-        return {}
+        @register_step(name_a, depends_on=[name_b])
+        def _cycle_a(config, trade_date, run_id, context):
+            return {}
 
-    with pytest.raises(CyclicDependencyError):
-        step_execution_levels([name_a, name_b])
+        @register_step(name_b, depends_on=[name_a])
+        def _cycle_b(config, trade_date, run_id, context):
+            return {}
+
+        with pytest.raises(CyclicDependencyError):
+            step_execution_levels([name_a, name_b])
+    finally:
+        STEP_REGISTRY.pop(name_a, None)
+        STEP_REGISTRY.pop(name_b, None)
 
 
 def test_core_group_level1_has_concurrent_tdx_steps():
