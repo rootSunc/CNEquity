@@ -110,6 +110,15 @@ rows every day are fixed — with migrations for what they already left behind.
   the command exited 0. An explicitly passed `--config` is now resolved either
   way. Its `--help` also claimed a domain carries 29 datasets; the measured
   figure is 30.
+- **The progress heartbeat can be stopped, and no longer rides on `time.sleep`.**
+  Its thread looped on `time.sleep(5)` with no stop signal, so in a test process
+  it outlived the test that started it. A later test faking `time.sleep` to
+  capture its arguments — `module.time` is the shared `time` module, so the fake
+  applies process-wide — turned that loop into a full-speed spin: one run put
+  34,735,321 entries into an unrelated assertion. It only lined up under CPU
+  contention, so it flaked rather than failed. The thread now waits on its own
+  `threading.Event`, `stop_heartbeat()` ends it, and a test fixture clears it
+  between tests. Interval, poll and log output are unchanged.
 - **The `daily_bars` tip-key failure says what to do about it.** It reported a
   count and nothing else — not which keys, not which vendor was down, not which
   command resumes the run. It now names the findings file, `cne sources probe`,

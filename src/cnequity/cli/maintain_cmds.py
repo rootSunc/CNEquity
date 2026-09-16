@@ -16,7 +16,9 @@ import polars as pl
 from cnequity.cli._root import cli, run
 from cnequity.cli._shared import (
     _cfg,
+    _progress_logging,
     _run_status_exit_code,
+    attach_log_file,
     config_option,
     parse_date_option,
 )
@@ -38,6 +40,7 @@ from cnequity.storage.staging_cleanup import clean_staging
 @click.option("--run-id", default=None)
 def compact(config_path: str, run_id: str | None):
     """Compact staging into curated for all datasets staged in the run."""
+    _progress_logging()
     cfg = _cfg(config_path)
     manifest = Manifest(cfg.manifest_path)
     if not run_id:
@@ -46,6 +49,7 @@ def compact(config_path: str, run_id: str | None):
             raise click.ClickException("No runs found")
         run_id = latest["run_id"]
 
+    attach_log_file(cfg, "run-compact")
     out = JobEngine(cfg).run_step("compact", shanghai_today(), run_id)
     click.echo(
         json.dumps(
@@ -296,7 +300,9 @@ def clean(
     staging is kept for retry unless --force is given. Also prunes aged
     ``meta/source_snapshots`` run_id dirs.
     """
+    _progress_logging()
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "run-clean")
     reconciled: dict[str, int] | None = None
     if reconcile_runs:
         manifest = Manifest(cfg.manifest_path)

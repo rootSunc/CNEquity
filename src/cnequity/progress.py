@@ -100,6 +100,13 @@ _active: dict[int, tuple[str, float]] = {}
 _tokens = itertools.count(1)
 _last_record = time.monotonic()
 _heartbeat: threading.Thread | None = None
+# The thread waits on its own event instead of sleeping, which makes it both
+# stoppable and immune to a patched `time.sleep`: a test that fakes sleep to
+# capture its arguments would otherwise turn this loop into a full-speed spin,
+# and the millions of calls it makes land in that test's capture list. The
+# event is per-thread and passed in, so a stop can never signal a generation
+# other than the one it took.
+_stop: threading.Event | None = None
 
 
 @contextmanager
@@ -146,20 +153,38 @@ def start_heartbeat(interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS) -> Non
     filter attached to a logger never sees the records its children propagate —
     and every record this pipeline emits comes from a child.
     """
-    global _heartbeat
+    global _heartbeat, _stop
     for handler in logging.getLogger().handlers:
         handler.addFilter(_ACTIVITY)
     with _lock:
         if _heartbeat is not None:
             return
+        _stop = stop = threading.Event()
         _heartbeat = threading.Thread(
             target=_beat,
-            args=(interval_seconds,),
+            args=(interval_seconds, stop),
             name="cne-heartbeat",
             daemon=True,
         )
         thread = _heartbeat
     thread.start()
+
+
+def stop_heartbeat(timeout: float = 5.0) -> None:
+    """Stop the thread and allow a later `start_heartbeat` to start a new one.
+
+    A daemon thread dies with the process, so nothing in production needed
+    this. A test process is one process for thousands of tests, and a thread
+    one test started keeps running through every test after it.
+    """
+    global _heartbeat, _stop
+    with _lock:
+        thread, _heartbeat = _heartbeat, None
+        stop, _stop = _stop, None
+    if stop is not None:
+        stop.set()
+    if thread is not None:
+        thread.join(timeout)
 
 
 def _beat_once(interval_seconds: float) -> bool:
@@ -178,8 +203,7 @@ def _beat_once(interval_seconds: float) -> bool:
     return True
 
 
-def _beat(interval_seconds: float) -> None:
+def _beat(interval_seconds: float, stop: threading.Event) -> None:
     poll = min(_POLL_SECONDS, interval_seconds) or _POLL_SECONDS
-    while True:
-        time.sleep(poll)
+    while not stop.wait(poll):
         _beat_once(interval_seconds)

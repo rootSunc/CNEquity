@@ -48,6 +48,28 @@ def pytest_sessionfinish(session, exitstatus):
         os._exit(0)
 
 
+@pytest.fixture(autouse=True)
+def _no_leaked_heartbeat():
+    """Stop any heartbeat thread a test started before the next test runs.
+
+    `start_heartbeat` spawns a daemon thread, which in a CLI process dies with
+    the process and in a pytest process lives for thousands of tests after the
+    one that armed it. Any test that CliRunner-invokes `cne init`, `cne run
+    daily`, `cne run events` or `cne backfill` starts one.
+
+    That leaked thread broke an unrelated test: `test_retry_hardening` fakes
+    `time.sleep` to capture its arguments, and because `module.time` is the
+    shared `time` module, the fake applied process-wide. The heartbeat's
+    throttle became a no-op and the thread spun, appending tens of millions of
+    entries to that test's list. It only failed under CPU contention — the
+    window had to span the thread's wake-up — so it flaked rather than failed.
+    """
+    from cnequity.progress import stop_heartbeat
+
+    yield
+    stop_heartbeat()
+
+
 @pytest.fixture
 def config(tmp_path):
     """Minimal offline config wiring a daily Wave over mock adapters."""

@@ -11,6 +11,7 @@ import logging
 from datetime import date
 
 import polars as pl
+import pytest
 
 from cnequity.orchestrator.worker_pool import _hms
 
@@ -188,6 +189,57 @@ def test_heartbeat_waits_out_a_talkative_run(caplog):
         with progress.step_scope("daily_bars"):
             progress._beat_once(interval_seconds=3600.0)
     assert not [r for r in caplog.records if "still working" in r.message]
+
+
+def test_the_heartbeat_thread_never_calls_time_sleep():
+    """The thread must not be throttled by anything a test can replace.
+
+    It used to be `while True: time.sleep(5.0)`. `module.time` is the shared
+    `time` module, so a test faking `time.sleep` to capture its arguments —
+    `test_retry_hardening` does exactly that — replaced it process-wide. The
+    throttle became a no-op `list.append` and the thread spun, putting tens of
+    millions of entries into that test's list. It only broke when the window
+    happened to span the thread's wake-up, so it flaked instead of failing.
+    """
+    import threading
+    import time
+
+    from cnequity import progress
+
+    calls: list[float] = []
+    real_sleep = time.sleep
+    progress.start_heartbeat(interval_seconds=0.05)
+    try:
+        time.sleep = calls.append  # type: ignore[assignment]
+        # Several poll intervals: a sleep-throttled loop would be spinning by
+        # now, and even one honest call would show up here.
+        real_sleep(0.3)
+    finally:
+        time.sleep = real_sleep  # type: ignore[assignment]
+        progress.stop_heartbeat()
+
+    assert calls == []
+    assert not [t for t in threading.enumerate() if t.name == "cne-heartbeat"]
+
+
+def test_stop_heartbeat_lets_a_later_start_begin_again():
+    """`cne init` reconfigures logging and starts the heartbeat a second time."""
+    import threading
+
+    from cnequity import progress
+
+    def running() -> list[threading.Thread]:
+        return [t for t in threading.enumerate() if t.name == "cne-heartbeat"]
+
+    progress.stop_heartbeat()  # idempotent when nothing is running
+    progress.start_heartbeat(interval_seconds=0.05)
+    assert len(running()) == 1
+    progress.stop_heartbeat()
+    assert not running()
+    progress.start_heartbeat(interval_seconds=0.05)
+    assert len(running()) == 1
+    progress.stop_heartbeat()
+    assert not running()
 
 
 def test_a_partial_batch_failure_reports_the_scope_not_the_batch(caplog, config, monkeypatch):
@@ -389,3 +441,98 @@ def test_the_daily_job_is_not_nagged_about_its_one_session(caplog, config, monke
             config, ["600519.SH", "000001.SZ"], date(2026, 7, 31), date(2026, 7, 31), "run-9"
         )
     assert not any("Backfill a range in one go" in r.message for r in caplog.records)
+
+
+#: The groups whose commands reach a source or rewrite the lake — the ones
+#: where a user can be left staring at a silent terminal. Named per group, not
+#: per command, so a new subcommand is covered the day it lands.
+FETCHING_GROUPS: tuple[str, ...] = ("backfill", "run", "ths-official", "delisted")
+
+#: Within those groups, the commands that only read and print. `delisted
+#: status` summarises a catalogue already on disk; there is no interval during
+#: which anyone could wonder whether it died.
+READ_ONLY: frozenset[str] = frozenset({"delisted status"})
+
+
+def _subcommands(group_name: str):
+    import click
+
+    from cnequity.cli.main import cli
+
+    entry = cli.get_command(click.Context(cli), group_name)
+    assert entry is not None, f"`cne {group_name}` is not registered"
+    if not isinstance(entry, click.Group):
+        return {group_name: entry}
+    ctx = click.Context(entry)
+    return {
+        f"{group_name} {name}": entry.get_command(ctx, name) for name in entry.list_commands(ctx)
+    }
+
+
+def test_the_read_only_exemptions_still_name_real_commands():
+    """A stale exemption silently excuses whatever later takes that name."""
+    registered = {name for group in FETCHING_GROUPS for name in _subcommands(group)}
+    assert READ_ONLY <= registered, f"READ_ONLY names nothing registered: {READ_ONLY - registered}"
+
+
+@pytest.mark.parametrize("group", FETCHING_GROUPS)
+def test_every_fetching_command_wires_progress(group):
+    """A command that runs for an hour must say so, in every group.
+
+    The original fix reached `init`, `run daily`/`run events` and `backfill`
+    and stopped there. `cne ths-official backfill` then ran 75 minutes writing
+    nothing to the terminal and nothing to `logs/` — the same
+    "完全不知道程序的死活" the issue was about, in a group the sweep had not
+    looked at. `cne delisted backfill` had drifted further: an open-coded
+    `logging.basicConfig` that silenced only httpx and wrote no log file at all,
+    so neither the heartbeat nor the log tee reached it.
+    """
+    import inspect
+
+    missing = [
+        name
+        for name, command in _subcommands(group).items()
+        if name not in READ_ONLY
+        and (
+            "_progress_logging(" not in inspect.getsource(command.callback)
+            or "attach_log_file(" not in inspect.getsource(command.callback)
+        )
+    ]
+    assert not missing, (
+        f"`cne {group}` subcommands {missing} run without progress logging; call "
+        "_progress_logging() and attach_log_file() as the rest of the group does"
+    )
+
+
+def test_the_log_notice_never_contaminates_the_json_on_stdout(tmp_path, monkeypatch):
+    """`cne ... | jq` has to keep working after a command learns to log.
+
+    Wiring `attach_log_file` into a command that prints JSON broke two tests
+    that read `result.output` — stdout and stderr interleaved. The notice
+    belongs on stderr precisely so the machine-readable half stays clean, and
+    that is the property worth pinning, not the two call sites that noticed.
+    """
+    import json
+
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+    from cnequity.config.bootstrap import path_for_toml
+
+    monkeypatch.setenv("HITHINK_FINANCE_API_KEY", "sk-test")
+    monkeypatch.setattr(
+        "cnequity.steps.fundamentals.backfill_statement_gap_ths_official",
+        lambda config, run_id, **kwargs: {"rows_read": 0, "rows_written": 0},
+    )
+    config = tmp_path / "cnequity.toml"
+    config.write_text(
+        f'[data]\nroot = "{path_for_toml(tmp_path / "lake")}"\n\n'
+        "[sources.ths_official]\nenabled = true\nverify = true\nbackfill = true\n"
+    )
+
+    result = CliRunner().invoke(cli, ["ths-official", "backfill", "--config", str(config)])
+
+    assert result.exit_code == 0, result.output
+    assert "Logging to" in result.stderr
+    assert "Logging to" not in result.stdout
+    json.loads(result.stdout)  # the contract: stdout parses on its own

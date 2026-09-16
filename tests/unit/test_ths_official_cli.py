@@ -23,7 +23,10 @@ def lake_config(tmp_path):
 def _run(args):
     result = CliRunner().invoke(cli, args)
     assert result.exit_code == 0, result.output
-    return json.loads(result.output)
+    # `result.output` is stdout and stderr interleaved, and a command that gets
+    # past the key/switch gates announces its log file on stderr. The JSON
+    # contract is stdout alone — that is what `cne ... | jq` reads.
+    return json.loads(result.stdout)
 
 
 @pytest.mark.parametrize("command", ["capture", "backfill", "repair-bars"])

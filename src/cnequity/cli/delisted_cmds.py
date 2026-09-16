@@ -8,13 +8,14 @@ they stayed here.
 from __future__ import annotations
 
 import json
-import logging
 
 import click
 
 from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
+    _progress_logging,
+    attach_log_file,
     config_option,
     parse_date_option,
 )
@@ -90,9 +91,9 @@ def delisted_backfill(config_path: str, since: str):
 
     from cnequity.steps.delisted import backfill_delisted_bars
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", force=True)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    _progress_logging()
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "delisted-backfill")
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("delisted_backfill", {"since": since})
     result = backfill_delisted_bars(cfg, run_id, parse_date_option(since, "--since"))

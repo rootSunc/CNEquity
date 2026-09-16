@@ -22,7 +22,13 @@ from datetime import date
 import click
 
 from cnequity.cli._root import cli, moved_hints
-from cnequity.cli._shared import _cfg, config_option, parse_date_option
+from cnequity.cli._shared import (
+    _cfg,
+    _progress_logging,
+    attach_log_file,
+    config_option,
+    parse_date_option,
+)
 
 # The service floors its history around here; earlier requests come back empty.
 _DEEP_HISTORY_START = "2005-01-01"
@@ -93,12 +99,14 @@ def ths_snapshot(config_path: str, what: str, days: int, sample: int):
         snapshot_financials_ths_official,
     )
 
+    _progress_logging()
     cfg = _cfg(config_path)
     problem = _require_key(cfg)
     if problem:
         _skip(problem)
         return
 
+    attach_log_file(cfg, "ths-official-capture")
     run_id = f"ths-snapshot-{uuid.uuid4()}"
     out: dict = {}
     if what in ("corporate-actions", "all"):
@@ -150,6 +158,7 @@ def ths_backfill(config_path: str, start: str, end: str, chunk_size: int, worker
     """
     from cnequity.steps.fundamentals import backfill_statement_gap_ths_official
 
+    _progress_logging()
     cfg = _cfg(config_path)
     problem = _require_key(cfg)
     if problem:
@@ -159,6 +168,7 @@ def ths_backfill(config_path: str, start: str, end: str, chunk_size: int, worker
         _skip("backfill disabled: set [sources.ths_official] backfill = true")
         return
 
+    attach_log_file(cfg, "ths-official-backfill")
     run_id = f"ths-backfill-{uuid.uuid4()}"
     result = backfill_statement_gap_ths_official(
         cfg,
@@ -218,6 +228,7 @@ def ths_repair_bars(
 
     from cnequity.steps.bars import repair_deep_history_ths_official
 
+    _progress_logging()
     cfg = _cfg(config_path)
     problem = _require_key(cfg)
     if problem:
@@ -226,6 +237,8 @@ def ths_repair_bars(
     if apply and not getattr(cfg, "ths_official_backfill_enabled", False):
         _skip("--apply needs [sources.ths_official] backfill = true")
         return
+
+    attach_log_file(cfg, "ths-official-repair-bars")
 
     judge = pl.read_parquet(adjudicator) if adjudicator else None
     if apply and judge is None:
@@ -277,12 +290,14 @@ def ths_resource_sectors(config_path: str, start: str, end: str | None, apply: b
     """
     from cnequity.steps.rotation import resource_sector_bars_ths_official
 
+    _progress_logging()
     cfg = _cfg(config_path)
     problem = _require_key(cfg)
     if problem:
         _skip(problem)
         return
 
+    attach_log_file(cfg, "ths-official-resource-sectors")
     run_id = f"ths-sectors-{uuid.uuid4()}"
     result = resource_sector_bars_ths_official(
         cfg,

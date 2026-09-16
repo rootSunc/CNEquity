@@ -610,7 +610,8 @@ def test_clean_dry_run(cfg_path, monkeypatch):
     )
     result = CliRunner().invoke(cli, ["run", "clean", "--dry-run", "--config", cfg_path])
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    # stdout alone: the log-file notice shares `result.output` but not stdout.
+    payload = json.loads(result.stdout)
     assert payload["dry_run"] is True
     assert payload["removed_run_ids"] == ["r1"]
     assert payload["bytes_freed"] == 120

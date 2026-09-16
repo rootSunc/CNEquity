@@ -604,7 +604,9 @@ def _failed_daily_group_runs(engine: JobEngine) -> list[dict]:
 )
 def retry(config_path: str, run_id: str | None, failed_groups: bool):
     """Retry one run or every latest failed daily group."""
+    _progress_logging()
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "run-retry")
     engine = JobEngine(cfg)
     if failed_groups:
         if run_id:
