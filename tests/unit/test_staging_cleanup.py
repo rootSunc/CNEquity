@@ -289,7 +289,7 @@ def test_clean_stale_lock_files_dry_run_keeps_file(tmp_path):
 
 
 def test_engine_run_step_records_a_compact_batch(tmp_path):
-    """`cne backfill` / `cne compact` route through the engine so cleanup can fire.
+    """`cne backfill` / `cne run compact` route through the engine so cleanup can fire.
 
     Calling step_compact directly leaves no compact batch in the manifest, and
     run_ready_for_staging_cleanup then refuses that run's staging forever.
@@ -378,3 +378,46 @@ workers = 1
         "run_step:compact",
         "finish_run:success",
     ]
+
+
+def test_run_logs_are_pruned_by_age_and_only_ours(tmp_path):
+    """`attach_log_file` writes one file per invocation and nothing removed them.
+
+    A daily pipeline leaves a file per group per day, plus one per retry and
+    backfill, for as long as the lake exists.
+    """
+    import os
+    import time
+
+    from cnequity.storage.staging_cleanup import clean_run_logs
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    old = logs / "cne-run-daily-20260801-000000.log"
+    fresh = logs / "cne-run-daily-20260916-000000.log"
+    foreign = logs / "launchd.out.log"
+    for f in (old, fresh, foreign):
+        f.write_text("x" * 10, encoding="utf-8")
+    stale = time.time() - 40 * 86400
+    os.utime(old, (stale, stale))
+    os.utime(foreign, (stale, stale))
+
+    dry = clean_run_logs(tmp_path, retention_days=30, dry_run=True)
+    assert dry.removed == [old.name]
+    assert old.exists(), "a dry run must not delete"
+
+    result = clean_run_logs(tmp_path, retention_days=30)
+    assert result.removed == [old.name]
+    assert result.bytes_freed == 10
+    assert not old.exists()
+    assert fresh.exists(), "a log inside the window is kept"
+    assert foreign.exists(), "only files this CLI names are ours to delete"
+
+    off = clean_run_logs(tmp_path, retention_days=0)
+    assert off.removed == [] and off.kept == 0
+
+
+def test_pruning_logs_is_safe_without_a_logs_directory(tmp_path):
+    from cnequity.storage.staging_cleanup import clean_run_logs
+
+    assert clean_run_logs(tmp_path / "no-such-lake").removed == []

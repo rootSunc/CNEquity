@@ -93,6 +93,11 @@ rows every day are fixed — with migrations for what they already left behind.
 
 ### Fixed
 
+- **Run logs are pruned.** `attach_log_file` writes one timestamped file per
+  invocation into `{data.root}/logs/` and nothing ever removed them — a daily
+  pipeline leaves a file per group per day, plus one per retry and backfill,
+  for as long as the lake exists. `cne run clean --log-retention-days` (default
+  30) drops the aged ones, touching only files this CLI names.
 - **`cne backfill` refuses a reversed date range instead of sweeping on it.**
   `--start 2026-01-02 --end 2026-01-01` walked an empty window for 24 seconds
   of real requests, the step raised, the engine logged the traceback — and the

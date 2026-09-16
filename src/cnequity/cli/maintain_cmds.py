@@ -32,7 +32,11 @@ from cnequity.storage.source_snapshots import (
     DEFAULT_SNAPSHOT_RETENTION_DAYS,
     clean_source_snapshots,
 )
-from cnequity.storage.staging_cleanup import clean_staging
+from cnequity.storage.staging_cleanup import (
+    DEFAULT_LOG_RETENTION_DAYS,
+    clean_run_logs,
+    clean_staging,
+)
 
 
 @run.command("compact")
@@ -272,6 +276,16 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
     ),
 )
 @click.option(
+    "--log-retention-days",
+    default=DEFAULT_LOG_RETENTION_DAYS,
+    show_default=True,
+    type=int,
+    help=(
+        "Delete `logs/cne-*.log` older than this many days. One file is written "
+        "per invocation and nothing else removes them. 0 disables the prune."
+    ),
+)
+@click.option(
     "--reconcile-runs",
     is_flag=True,
     help="Mark runs stuck in 'running' (crashed workers) as failed before cleanup.",
@@ -289,6 +303,7 @@ def clean(
     orphan_retention_days: int,
     snapshot_retention_days: int,
     keep_revision_generations: int,
+    log_retention_days: int,
     force: bool,
     reconcile_runs: bool,
     reconcile_after_seconds: float | None,
@@ -333,6 +348,7 @@ def clean(
         if keep_revision_generations > 0
         else []
     )
+    logs = clean_run_logs(cfg.data_root, retention_days=log_retention_days, dry_run=dry_run)
     click.echo(
         json.dumps(
             {
@@ -345,12 +361,18 @@ def clean(
                 "bytes_freed": (
                     result.bytes_freed
                     + snaps.bytes_freed
+                    + logs.bytes_freed
                     + sum(item.freed_bytes for item in generations)
                 ),
                 "source_snapshots": {
                     "removed_run_dirs": snaps.removed_run_dirs,
                     "kept_run_dirs": snaps.kept_run_dirs,
                     "bytes_freed": snaps.bytes_freed,
+                },
+                "run_logs": {
+                    "removed": len(logs.removed),
+                    "kept": logs.kept,
+                    "bytes_freed": logs.bytes_freed,
                 },
                 "revision_generations": [
                     {

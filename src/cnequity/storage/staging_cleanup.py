@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -210,3 +211,55 @@ def clean_staging(
         skipped_run_ids=skipped,
         force_removed_run_ids=force_removed,
     )
+
+
+DEFAULT_LOG_RETENTION_DAYS = 30
+
+
+@dataclass(frozen=True)
+class LogCleanupResult:
+    removed: list[str]
+    kept: int
+    bytes_freed: int
+
+
+def clean_run_logs(
+    data_root: Path,
+    *,
+    retention_days: int = DEFAULT_LOG_RETENTION_DAYS,
+    dry_run: bool = False,
+    now: datetime | None = None,
+) -> LogCleanupResult:
+    """Delete ``logs/cne-*.log`` older than *retention_days*.
+
+    `attach_log_file` writes one timestamped file per invocation, and nothing
+    removed them: a daily pipeline leaves a file per group per day, plus one per
+    retry and backfill, for as long as the lake exists. They are pure
+    diagnostics, so age is the only thing worth keeping them by.
+
+    Only files this CLI names are considered — anything else under ``logs/``
+    belongs to whoever put it there (launchd redirects its own stdout here).
+    """
+    log_dir = Path(data_root) / "logs"
+    if retention_days <= 0 or not log_dir.is_dir():
+        return LogCleanupResult(removed=[], kept=0, bytes_freed=0)
+
+    moment = now or datetime.now()
+    cutoff = moment.timestamp() - retention_days * 86400
+    removed: list[str] = []
+    freed = 0
+    kept = 0
+    for path in sorted(log_dir.glob("cne-*.log")):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if stat.st_mtime >= cutoff:
+            kept += 1
+            continue
+        removed.append(path.name)
+        freed += stat.st_size
+        if not dry_run:
+            with contextlib.suppress(OSError):
+                path.unlink()
+    return LogCleanupResult(removed=removed, kept=kept, bytes_freed=freed)
