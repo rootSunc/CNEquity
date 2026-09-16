@@ -22,6 +22,7 @@ from typing import Any
 from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.file_copy import copy2_isolated
 from cnequity.storage.state import StateStore
 
 
@@ -430,7 +431,7 @@ class RevisionStore:
                     relative = source_file.relative_to(source)
                     stored = temporary / relative
                     stored.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source_file, stored)
+                    copy2_isolated(source_file, stored)
                     files.append(
                         RevisionFile(
                             path=(Path(dataset) / relative).as_posix(),
@@ -493,7 +494,7 @@ class RevisionStore:
         temporary = Path(tempfile.mkdtemp(prefix=f".{dataset}-materialize-", dir=target_parent))
         staged = temporary / dataset
         try:
-            shutil.copytree(current, staged)
+            shutil.copytree(current, staged, copy_function=copy2_isolated)
             existing = None
             try:
                 existing = target.lstat()
@@ -558,7 +559,7 @@ class RevisionStore:
             temporary = Path(tempfile.mkdtemp(prefix=f".{dataset}-rollback-", dir=target.parent))
             staged = temporary / dataset
             try:
-                shutil.copytree(current, staged)
+                shutil.copytree(current, staged, copy_function=copy2_isolated)
                 os.replace(staged, target)
             finally:
                 shutil.rmtree(temporary, ignore_errors=True)

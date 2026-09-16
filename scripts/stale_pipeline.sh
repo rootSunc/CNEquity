@@ -23,6 +23,10 @@ TRADE_DATE="${1:-${CNE_TRADE_DATE:-}}"
 # Bash 3.2 raises an unbound-variable error for an empty `${arr[@]}` under
 # `set -u`; use the guarded expansion used by daily_pipeline.sh.
 DATE_ARGS=()
+GROUP_ARGS=()
+if [[ -n "${CNE_GROUPS:-}" ]]; then
+  GROUP_ARGS=(--groups "$CNE_GROUPS")
+fi
 if [[ -n "$TRADE_DATE" ]]; then
   DATE_ARGS=(--trade-date "$TRADE_DATE")
 fi
@@ -48,6 +52,7 @@ scheduler_lock_install_traps
 log "==== stale pipeline start $(date '+%Y-%m-%d %H:%M:%S') trade_date=${TRADE_DATE:-latest} ===="
 log "--- stale-only repair ---"
 if "$CNE" run daily --stale-only --config "$CONFIG" \
+  ${GROUP_ARGS[@]+"${GROUP_ARGS[@]}"} \
   ${DATE_ARGS[@]+"${DATE_ARGS[@]}"} >>"$LOG" 2>&1; then
   log "stale-only repair OK"
   log "==== stale pipeline DONE ok ===="

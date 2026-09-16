@@ -85,5 +85,5 @@ if [[ "$RETENTION_COUNT" -gt 0 ]]; then
 fi
 
 SIZE="$(du -h "$ARCHIVE" | cut -f1)"
-KEPT="$(ls -1 "$BACKUP_DIR"/meta-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')"
+KEPT="$(find "$BACKUP_DIR" -type f -name 'meta-*.tar.gz' -print | wc -l | tr -d ' ')"
 echo "backup_meta: wrote $ARCHIVE ($SIZE); retention ${RETENTION_DAYS}d/${RETENTION_COUNT} archives; ${KEPT} kept"

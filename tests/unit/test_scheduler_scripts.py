@@ -58,7 +58,10 @@ def _stub_cne(tmp_path: Path) -> Path:
 printf 'argc=%s\\n' "$#" >> "$CNE_CALL_LOG"
 for arg in "$@"; do printf '<%s>\\n' "$arg" >> "$CNE_CALL_LOG"; done
 sleep "${CNE_STUB_SLEEP:-0}"
-exit "${CNE_STUB_STATUS:-0}"
+case "$1" in
+  run) exit "${CNE_STUB_STATUS:-0}" ;;
+  *) exit "${CNE_STUB_CHECK_STATUS:-0}" ;;
+esac
 """,
         encoding="utf-8",
     )
@@ -75,6 +78,10 @@ def _stale_env(tmp_path: Path, cne: Path, calls: Path) -> dict[str, str]:
             "CNE_CONFIG": str(tmp_path / "cnequity.toml"),
             "CNE_LOG_DIR": str(tmp_path / "logs"),
             "CNE_SCHEDULER_LOCK_DIR": str(tmp_path / "locks"),
+            "CNE_DATA_ROOT": str(tmp_path / "lake"),
+            "CNE_BACKUP_DIR": str(tmp_path / "backups"),
+            "CNE_NOTIFY": "0",
+            "CNE_SOURCE_HEALTH": "0",
         }
     )
     return env
@@ -88,9 +95,7 @@ def _call_args(calls: Path) -> list[str]:
 def test_daily_template_schedules_all_groups_and_disables_inline_wait():
     payload = plistlib.loads(DAILY_PLIST.read_bytes())
     assert payload["Label"] == "com.cnequity.daily"
-    assert payload["EnvironmentVariables"]["CNE_GROUPS"] == (
-        "core capital signals fundamentals macro_risk research"
-    )
+    assert payload["EnvironmentVariables"]["CNE_GROUPS"] == "__GROUPS__"
     assert payload["EnvironmentVariables"]["CNE_STALE_RETRY"] == "0"
 
     source = DAILY.read_text(encoding="utf-8")
@@ -104,7 +109,7 @@ def test_stale_template_is_a_late_independent_agent():
     payload = plistlib.loads(STALE_PLIST.read_bytes())
     assert payload["Label"] == "com.cnequity.stale"
     assert payload["ProgramArguments"][-1].endswith("scripts/stale_pipeline.sh")
-    assert payload["StartCalendarInterval"] == {"Hour": 20, "Minute": 5}
+    assert payload["StartCalendarInterval"] == {"Hour": 17, "Minute": 5}
 
 
 def test_events_template_runs_every_calendar_day_on_its_own_lock():
@@ -238,6 +243,7 @@ def test_installer_xml_escapes_checkout_path(tmp_path):
     (repo / "scripts" / "launchd").mkdir(parents=True)
     (repo / ".venv" / "bin").mkdir(parents=True)
     shutil.copy2(ROOT / "scripts" / "install_scheduler.sh", repo / "scripts")
+    shutil.copy2(ROOT / "scripts" / "scheduler_config.py", repo / "scripts")
     shutil.copy2(DAILY_PLIST, repo / "scripts" / "launchd")
     shutil.copy2(STALE_PLIST, repo / "scripts" / "launchd")
     shutil.copy2(EVENTS_PLIST, repo / "scripts" / "launchd")
@@ -260,6 +266,7 @@ def test_installer_xml_escapes_checkout_path(tmp_path):
             "HOME": str(home),
             "PATH": f"{fake_bin}:{env['PATH']}",
             "CNE_LAUNCHCTL": str(launchctl),
+            "CNE_PYTHON": sys.executable,
         }
     )
 
@@ -421,12 +428,14 @@ def test_a_soft_group_down_for_three_days_stops_being_warn_only(tmp_path):
     env = _soft_fail_env(tmp_path, cne, calls)
     env["CNE_SOFT_FAIL_MAX_DAYS"] = "3"
 
-    first = _run(DAILY, env=env)
-    second = _run(DAILY, env=env)
+    first = _run(DAILY, "2026-09-11", env=env)
+    repeated = _run(DAILY, "2026-09-11", env=env)
+    assert repeated.returncode == 0
+    second = _run(DAILY, "2026-09-14", env=env)
     assert first.returncode == 0, "one soft failure stays warn-only"
     assert second.returncode == 0, "two is still within tolerance"
 
-    third = _run(DAILY, env=env)
+    third = _run(DAILY, "2026-09-15", env=env)
     assert third.returncode == 1, "a soft group down three days is an outage"
 
     log = (tmp_path / "logs").glob("daily-*.log")
@@ -527,3 +536,42 @@ def test_health_notify_titles_a_freshness_miss_as_lag_not_an_anomaly(tmp_path):
     assert 'title="cnequity 数据异常"' in script
     # The anomaly title is reserved for the audit/health arm of the gate.
     assert "*health*|*error*) title=" in script
+
+
+def test_stale_wrapper_forwards_host_groups(tmp_path):
+    calls = tmp_path / "calls"
+    env = _stale_env(tmp_path, _stub_cne(tmp_path), calls)
+    env["CNE_GROUPS"] = "core capital"
+    assert _run(STALE, env=env).returncode == 0
+    args = _call_args(calls)
+    assert args[args.index("--groups") + 1] == "core capital"
+
+
+def test_daily_pipeline_fails_when_quality_gate_fails_after_successful_fetch(tmp_path):
+    calls = tmp_path / "calls"
+    env = _daily_env(tmp_path, _stub_cne(tmp_path), calls)
+    env["CNE_STUB_CHECK_STATUS"] = "1"
+    result = _run(DAILY, env=env)
+    assert result.returncode == 1
+    assert "HEALTH GATE FAILED" in result.stdout
+
+
+def test_daily_health_scopes_freshness_to_scheduled_hard_groups(tmp_path):
+    calls = tmp_path / "calls"
+    env = _daily_env(tmp_path, _stub_cne(tmp_path), calls)
+    assert _run(DAILY, env=env).returncode == 0
+    args = _call_args(calls)
+    assert args[args.index("--groups") + 1] == "core"
+
+
+def test_non_trading_skip_does_not_erase_a_soft_outage(tmp_path):
+    cne = _stub_cne(tmp_path)
+    calls = tmp_path / "calls"
+    env = _soft_fail_env(tmp_path, cne, calls)
+    env["CNE_SOFT_FAIL_MAX_DAYS"] = "2"
+    assert _run(DAILY, "2026-09-11", env=env).returncode == 0
+    cne.write_text('#!/bin/sh\nprintf \'{"status": "skipped_non_trading_day"}\\n\'\nexit 0\n')
+    assert _run(DAILY, "2026-09-12", env=env).returncode == 0
+    assert (tmp_path / "streak/capital").read_text().strip() == "2026-09-11 1"
+    _stub_cne(tmp_path)
+    assert _run(DAILY, "2026-09-14", env=env).returncode == 1

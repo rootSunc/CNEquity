@@ -14,12 +14,13 @@
     <string>__REPO_ROOT__/scripts/stale_pipeline.sh</string>
   </array>
 
-  <!-- A second window after the normal close-time run.  The stale wrapper is
-       cheap on a clean day because the stale-only command is a no-op. -->
+  <!-- Second window before CST midnight for the UTC+2/+3 host used by the
+       daily template (22:05/23:05 CST). Later snapshots cannot replay a lost
+       capture day. Other host timezones must choose an appropriate cadence. -->
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>20</integer>
+    <integer>17</integer>
     <key>Minute</key>
     <integer>5</integer>
   </dict>
@@ -29,6 +30,8 @@
 
   <key>EnvironmentVariables</key>
   <dict>
+    <key>CNE_GROUPS</key>
+    <string>__GROUPS__</string>
     <key>CNE_SOURCE_VANTAGE</key>
     <string>__SOURCE_VANTAGE__</string>
   </dict>

@@ -169,3 +169,68 @@ def test_compact_merge_style_dataset_preserves_prior_runs(tmp_path):
 
     assert pl.read_parquet(canonical)["event_id"].sort().to_list() == ["e-1", "e-2"]
     assert [path.name for path in canonical.parent.rglob("*.parquet")] == ["part-merged.parquet"]
+
+
+def test_unpartitioned_reconciliation_from_committed_root_is_physical_noop(tmp_path):
+    import shutil
+
+    cfg = Config(data_root=tmp_path)
+    writer = StagingWriter(cfg.staging_root)
+    frame = pl.DataFrame(
+        {
+            "exchange": ["SSE"],
+            "trade_date": [date(2026, 9, 15)],
+            "is_trading": [True],
+            "source": ["calendar"],
+            "data_version": ["v1"],
+            "fetched_at": ["2026-09-15T00:00:00+00:00"],
+        }
+    )
+    writer.write_batch("trading_calendar", "first", "one", frame)
+    compact_dataset(
+        cfg.staging_root, cfg.curated_root, "trading_calendar", "first", partition_col=None
+    )
+    canonical = cfg.curated_root / "trading_calendar/part-merged.parquet"
+    base = tmp_path / "committed"
+    shutil.copytree(canonical.parent, base)
+    original = canonical.stat()
+    writer.write_batch(
+        "trading_calendar",
+        "retry",
+        "one",
+        frame.with_columns(pl.lit("2026-09-16T00:00:00+00:00").alias("fetched_at")),
+    )
+    changed = []
+    compact_dataset(
+        cfg.staging_root,
+        cfg.curated_root,
+        "trading_calendar",
+        "retry",
+        partition_col=None,
+        base_root=base,
+        changed_files=changed,
+    )
+    assert changed == []
+    assert canonical.stat().st_ino == original.st_ino
+    assert canonical.stat().st_mtime_ns == original.st_mtime_ns
+
+
+def test_business_comparison_preserves_values_types_and_provenance():
+    from cnequity.storage.parquet import _business_equal
+
+    a = pl.DataFrame(
+        {
+            "key": [1, 2],
+            "value": [None, 2.0],
+            "source": ["a", "b"],
+            "available_at": ["2026-01-01"] * 2,
+            "fetched_at": ["old"] * 2,
+        }
+    )
+    b = a.reverse().with_columns(pl.lit("new").alias("fetched_at"))
+    assert _business_equal(a, b)
+    for column, value in [("source", "c"), ("value", 3.0), ("available_at", "2026-01-02")]:
+        assert not _business_equal(a, b.with_columns(pl.lit(value).alias(column)))
+    assert not _business_equal(a, b.with_columns(pl.col("key").cast(pl.Int32)))
+    assert not _business_equal(a, pl.concat([b, b]))
+    assert not _business_equal(a, b.drop("source"))

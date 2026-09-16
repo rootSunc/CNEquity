@@ -132,3 +132,33 @@ def test_stale_only_refuses_to_be_combined_with_group(config):
     )
     assert result.exit_code != 0
     assert "--group" in result.output
+
+
+def test_scoped_retry_derives_core_outputs_after_compaction(config, monkeypatch):
+    from cnequity.cli.run_cmds import _run_stale_only
+    from cnequity.config import ScheduleGroup
+
+    config.schedule_groups = {
+        "core": ScheduleGroup(
+            at="16:00",
+            steps=["daily_bars", "compact", "derive_adj_factors", "derive_industry_index"],
+        )
+    }
+    monkeypatch.setattr("cnequity.cli.run_cmds._last_trading_day", lambda *args: ANCHOR)
+    monkeypatch.setattr(
+        "cnequity.cli.run_cmds.stale_fetch_plan",
+        lambda *args, **kwargs: [{"dataset": "daily_bars", "priority": 1}],
+    )
+    captured = []
+
+    class Engine:
+        def run_job(self, *args, **kwargs):
+            captured.extend(kwargs["waves"])
+            return {"run_id": "isolated", "status": "success"}
+
+    _run_stale_only(config, Engine(), ANCHOR, backfill=False, groups={"core"})
+    assert [w.steps for w in captured] == [
+        ["daily_bars"],
+        ["compact"],
+        ["derive_adj_factors", "derive_industry_index"],
+    ]

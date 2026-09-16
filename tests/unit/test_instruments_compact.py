@@ -929,3 +929,35 @@ def test_a_relisted_symbol_drops_the_inferred_delist_date_that_predates_it(tmp_p
         & (pl.col("delist_date") < pl.col("list_date"))
     )
     assert inverted.is_empty()
+
+
+def test_tdx_fund_codes_distinguish_trade_codes_from_normal_named_subscription_codes():
+    from cnequity.adapters.tdx_protocol.client import _filter_instrument_frame
+
+    frame = pl.DataFrame(
+        {
+            "code": ["530060", "530063", "515473", "589493", "510301", "600519"],
+            "name": ["上证综E", "上证综E", "AI南方", "科创华夏", "沪深300", "贵州茅台"],
+            "pre_close": [1.0] * 6,
+        }
+    )
+    got = _filter_instrument_frame(frame, "SH")
+    assert set(got["symbol"]) == {"530060.SH", "600519.SH"}
+    assert got.filter(pl.col("symbol") == "530060.SH")["asset_type"].to_list() == ["etf"]
+
+
+def test_existing_normal_named_etf_auxiliary_codes_do_not_enter_capture_scope(tmp_path):
+    cfg = Config(data_root=tmp_path / "data")
+    root = cfg.curated_root / "instruments"
+    root.mkdir(parents=True)
+    rows = [_instrument(s) for s in ["530060.SH", "515473.SH", "510301.SH", "159915.SZ"]]
+    for row in rows:
+        row["name"] = "普通基金名称"
+    frame = pl.DataFrame(rows)
+    frame.write_parquet(root / "part-merged.parquet")
+    assert set(load_symbols(cfg)) == {"530060.SH", "159915.SZ"}
+    from cnequity.storage.instruments import _strip_subscription_placeholders
+
+    # Remove existing stubs before lifecycle comparison, so absence from the
+    # next vendor roster cannot manufacture a delisting event for them.
+    assert set(_strip_subscription_placeholders(frame)["symbol"]) == {"530060.SH", "159915.SZ"}

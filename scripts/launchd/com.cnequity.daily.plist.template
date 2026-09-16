@@ -35,7 +35,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>CNE_GROUPS</key>
-    <string>core capital signals fundamentals macro_risk research</string>
+    <string>__GROUPS__</string>
     <!-- The delayed stale pass has its own agent below.  Keep this explicit so
          an upgraded install cannot accidentally reintroduce a 30-minute wait. -->
     <key>CNE_STALE_RETRY</key>

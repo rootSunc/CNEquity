@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 
 import polars as pl
@@ -19,45 +17,24 @@ from cnequity.storage.atomic import write_parquet_atomic
 from cnequity.storage.revisions import sha256_file
 
 
-def _business_digest(frame: pl.DataFrame) -> str:
-    """Digest rows while ignoring fetch-time provenance churn.
+def _business_equal(left: pl.DataFrame, right: pl.DataFrame) -> bool:
+    """Compare business rows exactly, ignoring only observation-time churn.
 
-    Reconciliation deliberately re-fetches the tail of a dataset.  When the
-    source returns the same business row, the new ``fetched_at`` must not turn
-    a semantic no-op into a new curated file and revision.  Keep source and
-    data-version in the digest: switching source or changing the value
-    contract is evidence, even when the current row happens to compare equal.
-
-    ``observed_at`` is excluded for the same reason and not a second one: it
-    is ``fetched_at`` under its bitemporal name (domain/pit.py aliases it), so
-    counting it would re-mint a revision on every reconciliation pass and undo
-    the physical no-op this digest exists to detect.  ``available_at``,
-    ``source_published_at`` and ``revision_id`` stay in: the first two are
-    genuine source-side evidence, and the third is derived from the business
-    content with the observation timestamps deliberately excluded.
+    Reconciliation re-fetches the tail; fetched_at/observed_at alone must not
+    mint a revision. Source, types, multiplicity and source-side PIT timestamps
+    still matter. Sort inside Polars rather than serializing every row into
+    Python dictionaries and JSON strings. This comparison is local to one
+    compact operation, so no persisted digest or revision contract changes.
     """
     ignored = {"fetched_at", "observed_at"}
-    columns = sorted(column for column in frame.columns if column not in ignored)
-    rows = [
-        json.dumps(
-            {column: row.get(column) for column in columns},
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        )
-        for row in frame.iter_rows(named=True)
-    ]
-    payload = json.dumps(
-        {
-            "columns": [(column, str(frame.schema[column])) for column in columns],
-            "rows": sorted(rows),
-        },
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    columns = sorted(set(left.columns) - ignored)
+    if left.height != right.height or columns != sorted(set(right.columns) - ignored):
+        return False
+    if any(left.schema[column] != right.schema[column] for column in columns):
+        return False
+    if not columns:
+        return True
+    return left.select(columns).sort(columns).equals(right.select(columns).sort(columns))
 
 
 class StagingWriter:
@@ -210,7 +187,9 @@ def compact_dataset(
         existing_dir = read_root
         existing_files = sorted(existing_dir.rglob("*.parquet")) if existing_dir.exists() else []
         before_digest = sha256_file(out_path) if out_path.is_file() else None
-        had_fragments = any(path != out_path for path in existing_files)
+        had_fragments = any(
+            path.relative_to(existing_dir) != Path(out_path.name) for path in existing_files
+        )
         existing = pl.DataFrame(schema=combined.schema)
         if existing_files:
             existing = pl.concat(
@@ -227,7 +206,7 @@ def compact_dataset(
             if pk:
                 combined = dedupe_by_primary_key(combined, dataset)
         out_dir.mkdir(parents=True, exist_ok=True)
-        business_changed = _business_digest(existing) != _business_digest(combined)
+        business_changed = not _business_equal(existing, combined)
         # One-time migration: a file written before the bitemporal columns
         # existed keeps deriving them on every read until it is rewritten, and
         # the digest above cannot see that because both sides are normalized.
@@ -281,7 +260,7 @@ def compact_dataset(
         if pk:
             merged = dedupe_by_primary_key(merged, dataset)
         merged = _pit(merged)
-        business_changed = _business_digest(existing) != _business_digest(merged)
+        business_changed = not _business_equal(existing, merged)
         # See the unpartitioned branch: rewrite once so the columns stop being
         # recomputed on every read.
         pit_missing = _pit_columns_absent(out_path, dataset)

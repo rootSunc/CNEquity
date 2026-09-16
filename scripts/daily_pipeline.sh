@@ -102,11 +102,19 @@ summary_status=()
 
 for g in $GROUP_LIST; do
   log "--- group: $g ---"
-  if "$CNE" run daily --group "$g" --config "$CONFIG" ${DATE_ARGS[@]+"${DATE_ARGS[@]}"} >>"$LOG" 2>&1; then
-    log "group $g OK"
+  group_output="$(mktemp "$LOG_DIR/group-output.XXXXXX")" || exit 1
+  if "$CNE" run daily --group "$g" --config "$CONFIG" ${DATE_ARGS[@]+"${DATE_ARGS[@]}"} >"$group_output" 2>>"$LOG"; then
+    cat "$group_output" >>"$LOG"
     summary_names+=("$g")
-    summary_status+=("OK")
+    if grep -Eq '"status"[[:space:]]*:[[:space:]]*"skipped_non_trading_day"' "$group_output"; then
+      log "group $g SKIPPED (non-trading day)"
+      summary_status+=("SKIPPED")
+    else
+      log "group $g OK"
+      summary_status+=("OK")
+    fi
   else
+    cat "$group_output" >>"$LOG"
     log "group $g FAILED (see $LOG)"
     failed_groups+=("$g")
     summary_names+=("$g")
@@ -117,6 +125,7 @@ for g in $GROUP_LIST; do
       soft_failed+=("$g")
     fi
   fi
+  rm -f "$group_output"
 done
 
 # Second attempt at whatever is still behind, before the health check so a
@@ -126,14 +135,14 @@ done
 stale_retry_status="skipped"
 if [[ "$STALE_RETRY" == "1" ]]; then
   log "--- stale probe ---"
-  if "$CNE" status --datasets --config "$CONFIG" >>"$LOG" 2>&1; then
+  if "$CNE" status --datasets --groups "$GROUP_LIST" --config "$CONFIG" >>"$LOG" 2>&1; then
     log "nothing stale — no retry needed"
     stale_retry_status="not needed"
   else
     log "something is stale; waiting ${STALE_RETRY_DELAY_SEC}s before re-fetching"
     sleep "$STALE_RETRY_DELAY_SEC"
     log "--- stale retry ---"
-    if "$CNE" run daily --stale-only --config "$CONFIG" \
+    if "$CNE" run daily --stale-only --groups "$GROUP_LIST" --config "$CONFIG" \
       ${DATE_ARGS[@]+"${DATE_ARGS[@]}"} >>"$LOG" 2>&1; then
       log "stale retry OK"
       stale_retry_status="OK"
@@ -150,11 +159,19 @@ fi
 # Health check (fires desktop notification on problems) and backup run
 # regardless of group outcomes so we always get a status signal and a snapshot.
 log "--- health check ---"
-# Hand it the groups this run actually covered, not the raw override: with
-# CNE_GROUPS unset the list above defaults to all six, and the freshness gate
-# has to gate on the same set or it reports a gap the run did not leave.
-if ! CNE_GROUPS="$GROUP_LIST" "$REPO_ROOT/scripts/health_notify.sh" >>"$LOG" 2>&1; then
+# Quality errors always fail. Freshness gates only the hard-required groups
+# actually scheduled here; soft groups retain the escalation policy below.
+health_groups=""
+for g in $GROUP_LIST; do
+  if _is_gate_group "$g"; then health_groups="${health_groups:+$health_groups }$g"; fi
+done
+freshness_check=0
+[[ -n "$health_groups" ]] && freshness_check=1
+health_failed=0
+if ! CNE_GROUPS="$health_groups" CNE_FRESHNESS_CHECK="$freshness_check" \
+  "$REPO_ROOT/scripts/health_notify.sh" >>"$LOG" 2>&1; then
   log "health check reported problems"
+  health_failed=1
 fi
 
 # Availability evidence is non-blocking while it accumulates: a red public
@@ -217,7 +234,7 @@ if [[ "$SOFT_FAIL_MAX_DAYS" != "0" ]]; then
   while [[ $i -lt ${#summary_names[@]} ]]; do
     name="${summary_names[$i]}"
     streak_file="$SOFT_STREAK_DIR/$name"
-    if _is_gate_group "$name"; then
+    if _is_gate_group "$name" || [[ "${summary_status[$i]}" == "SKIPPED" ]]; then
       i=$((i + 1))
       continue
     fi
@@ -225,10 +242,20 @@ if [[ "$SOFT_FAIL_MAX_DAYS" != "0" ]]; then
       rm -f "$streak_file" 2>/dev/null || true
     else
       previous=0
-      [[ -f "$streak_file" ]] && previous="$(cat "$streak_file" 2>/dev/null || echo 0)"
+      previous_date=""
+      failure_date="${TRADE_DATE:-$(date +%F)}"
+      if [[ -f "$streak_file" ]]; then
+        read -r previous_date previous <"$streak_file" || true
+        # Migrate the legacy counter, which counted invocations as days.
+        if [[ "$previous_date" =~ ^[0-9]+$ ]]; then
+          previous="$previous_date"
+          previous_date=""
+        fi
+      fi
       [[ "$previous" =~ ^[0-9]+$ ]] || previous=0
-      current=$((previous + 1))
-      echo "$current" >"$streak_file" 2>/dev/null || true
+      current="$previous"
+      if [[ "$previous_date" != "$failure_date" ]]; then current=$((previous + 1)); fi
+      echo "$failure_date $current" >"$streak_file" 2>/dev/null || true
       log "  soft streak: $name failed ${current} day(s) in a row"
       if [[ $current -ge $SOFT_FAIL_MAX_DAYS ]]; then
         escalated+=("$name:${current}d")
@@ -240,6 +267,10 @@ fi
 
 if [[ ${#gate_failed[@]} -gt 0 ]]; then
   log "==== daily pipeline DONE — GATE FAILED: ${gate_failed[*]} (soft also: ${soft_failed[*]:-none}) ===="
+  exit 1
+fi
+if [[ "$health_failed" == "1" ]]; then
+  log "==== daily pipeline DONE — HEALTH GATE FAILED ===="
   exit 1
 fi
 if [[ ${#escalated[@]} -gt 0 ]]; then

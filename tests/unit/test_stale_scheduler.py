@@ -134,3 +134,33 @@ def test_scheduled_gap_repair_filters_snapshot_only(monkeypatch):
     selected = _repairable_gaps(object(), date(2024, 1, 5))
 
     assert [gap.dataset for gap in selected] == ["valuation_metrics"]
+
+
+def test_stale_plan_cannot_escape_explicit_host_groups(monkeypatch, tmp_path):
+    from cnequity.config import Config, ScheduleGroup
+
+    cfg = Config(
+        data_root=tmp_path,
+        schedule_groups={
+            "core": ScheduleGroup(at="16:00", steps=["daily_bars", "compact"]),
+            "capital": ScheduleGroup(at="16:30", steps=["fund_flow", "compact"]),
+        },
+    )
+    rows = pl.DataFrame(
+        {
+            "dataset": ["daily_bars", "fund_flow"],
+            "has_data": [True, True],
+            "watermarked": [True, True],
+            "watermark": [date(2024, 1, 1)] * 2,
+            "coverage_end": [date(2024, 1, 1)] * 2,
+        }
+    )
+    monkeypatch.setattr("cnequity.query.reader.list_datasets", lambda **kwargs: rows)
+    assert [p["dataset"] for p in stale_fetch_plan(cfg, date(2024, 1, 5), groups={"core"})] == [
+        "daily_bars"
+    ]
+    import click
+    import pytest
+
+    with pytest.raises(click.ClickException, match="Unknown stale groups"):
+        stale_fetch_plan(cfg, date(2024, 1, 5), groups={"typo"})

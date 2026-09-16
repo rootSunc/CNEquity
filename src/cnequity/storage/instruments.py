@@ -79,9 +79,14 @@ def _save_absence_state(path: Path, state: dict[str, dict[str, object]]) -> None
 
 
 def _strip_subscription_placeholders(df: pl.DataFrame) -> pl.DataFrame:
-    if df.is_empty() or "name" not in df.columns:
+    if df.is_empty():
         return df
-    keep = [not is_subscription_placeholder(name) for name in df["name"].to_list()]
+    names = df["name"].to_list() if "name" in df.columns else [None] * df.height
+    symbols = df["symbol"].to_list() if "symbol" in df.columns else [None] * df.height
+    keep = [
+        not is_subscription_placeholder(name, symbol)
+        for name, symbol in zip(names, symbols, strict=True)
+    ]
     return df.filter(pl.Series(keep))
 
 
