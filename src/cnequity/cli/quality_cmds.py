@@ -20,8 +20,9 @@ from cnequity.cli._shared import (
     _progress_logging,
     config_option,
     parse_date_option,
+    resolve_config_path,
 )
-from cnequity.cli.backfill_cmds import _run_backfill
+from cnequity.cli.backfill_cmds import _require_known_dataset, _run_backfill
 from cnequity.domain.market_time import is_session_final, shanghai_today
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.quality.audit import run_audit
@@ -96,7 +97,13 @@ def audit(
     research_universe: str,
     quality_only: bool = False,
 ):
-    """Run quality audit, or --full for a current whole-lake health snapshot."""
+    """Run quality audit, or --full for a current whole-lake health snapshot.
+
+    The per-run audit is already the last step of the daily `finalize` wave, so
+    running it here re-audits a run the job has audited. `--full` is the one
+    that is not scheduled: it judges the lake as it stands now rather than what
+    one run wrote, and it is what the health check and the dashboard read.
+    """
     cfg = _cfg(config_path)
 
     if quality_only and not full:
@@ -214,8 +221,99 @@ _GAP_LABELS = {
 }
 
 
+# `cne verify --runs` default. Four trading weeks: long enough that one bad
+# evening cannot pass the gate, short enough to recover within a month.
+DEFAULT_STABILITY_DAYS = 20
+
+
+def _verify_bars(cfg, start: str | None, end: str | None) -> None:
+    """Securities × sessions, including securities with no rows in the window."""
+    from cnequity.quality.bar_coverage import daily_bar_coverage
+
+    if not start:
+        raise click.UsageError("--bars needs --start")
+    start_date = parse_date_option(start, "--start")
+    end_date = parse_date_option(end, "--end") or _last_trading_day(cfg, shanghai_today())
+    if start_date > end_date:
+        raise click.ClickException("--start must be on or before --end")
+    result = daily_bar_coverage(cfg, start_date, end_date)
+    click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    if not result["complete"]:
+        raise SystemExit(1)
+
+
+def _verify_runs(cfg, days: int | None, as_of: str | None, enforce: bool) -> None:
+    """Consecutive trading-day run evidence, without filling any gap it finds."""
+    from cnequity.diagnostics.stability import evaluate_stability, store_stability_report
+    from cnequity.query.parquet_scan import collect_parquet_root
+
+    try:
+        calendar = collect_parquet_root(
+            cfg.curated_root / "trading_calendar", partition_col="trade_date"
+        )
+    except FileNotFoundError as exc:
+        raise click.ClickException("curated trading_calendar is required") from exc
+    trading_days = (
+        calendar.filter(pl.col("is_trading"))["trade_date"].drop_nulls().unique().to_list()
+    )
+    report = evaluate_stability(
+        Manifest(cfg.manifest_path),
+        trading_days,
+        required_days=days or DEFAULT_STABILITY_DAYS,
+        as_of=parse_date_option(as_of, "--as-of"),
+    )
+    latest, historical = store_stability_report(cfg.meta_root, report)
+    payload = report.to_dict()
+    payload["latest_path"] = str(latest)
+    payload["historical_path"] = str(historical)
+    click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+    if enforce and not report.passed:
+        raise SystemExit(1)
+
+
+# Which mode owns each option, so a flag from the wrong one is refused by name
+# instead of being silently ignored. `--bars` and `--runs` were `cne verify-bars`
+# and `cne stability`: three top-level commands, two of them a hyphen apart,
+# all three answering "did what should have landed, land?".
+_VERIFY_MODE_OPTIONS = {
+    "datasets": (("--dataset", "only"), ("--repair", "repair"), ("--kind", "kinds")),
+    "bars": (("--start", "start"), ("--end", "end")),
+    "runs": (("--days", "days"), ("--as-of", "as_of"), ("--enforce", "enforce")),
+}
+
+
+def _verify_mode(bars: bool, runs: bool, given: dict) -> str:
+    """Pick the mode, and refuse options belonging to the other two."""
+    if bars and runs:
+        raise click.UsageError("use either --bars or --runs, not both")
+    mode = "bars" if bars else "runs" if runs else "datasets"
+    for other, options in _VERIFY_MODE_OPTIONS.items():
+        if other == mode:
+            continue
+        for flag, key in options:
+            if given.get(key):
+                hint = {
+                    "datasets": "the default dataset-coverage mode",
+                    "bars": "--bars",
+                    "runs": "--runs",
+                }[other]
+                raise click.UsageError(f"{flag} belongs to {hint}")
+    return mode
+
+
 @cli.command()
 @config_option
+@click.option(
+    "--bars",
+    is_flag=True,
+    help="Instead check securities × sessions, including securities with no rows "
+    "in the window. Needs --start.",
+)
+@click.option(
+    "--runs",
+    is_flag=True,
+    help="Instead check consecutive trading-day run evidence, without filling gaps.",
+)
 @click.option(
     "--dataset",
     "only",
@@ -233,7 +331,37 @@ _GAP_LABELS = {
     default=None,
     help="Limit to these gap kinds: empty,stale,interior,shallow.",
 )
-def verify(config_path: str, only: str | None, repair: bool, kinds: str | None):
+@click.option("--start", default=None, help="With --bars: inclusive coverage window start.")
+@click.option(
+    "--end",
+    default=None,
+    help="With --bars: window end; defaults to the last completed trading day.",
+)
+@click.option(
+    "--days",
+    default=None,
+    type=click.IntRange(min=1),
+    help=f"With --runs: consecutive trading days required (default: {DEFAULT_STABILITY_DAYS}).",
+)
+@click.option("--as-of", default=None, help="With --runs: inclusive YYYY-MM-DD cutoff.")
+@click.option(
+    "--enforce",
+    is_flag=True,
+    help="With --runs: exit 1 until the consecutive-day gate passes.",
+)
+def verify(
+    config_path: str,
+    bars: bool,
+    runs: bool,
+    only: str | None,
+    repair: bool,
+    kinds: str | None,
+    start: str | None,
+    end: str | None,
+    days: int | None,
+    as_of: str | None,
+    enforce: bool,
+):
     """Check what the lake should hold against what it does.
 
     `cne audit` asks whether the data that landed is correct. This asks whether
@@ -245,12 +373,43 @@ def verify(config_path: str, only: str | None, repair: bool, kinds: str | None):
     dataset missing a session is a fault, a snapshot dataset missing one is its
     shape and no backfill can honestly fill it. `--repair` only ever runs the
     former.
+
+    `--bars` and `--runs` ask the same question at two other grains: one
+    security × session rather than dataset × session, and one run per trading
+    day rather than rows in the lake.
     """
     from cnequity.quality.verify import verify_lake
 
+    mode = _verify_mode(
+        bars,
+        runs,
+        {
+            "only": only,
+            "repair": repair,
+            "kinds": kinds,
+            "start": start,
+            "end": end,
+            "days": days,
+            "as_of": as_of,
+            "enforce": enforce,
+        },
+    )
     cfg = _cfg(config_path)
+    if mode == "bars":
+        _verify_bars(cfg, start, end)
+        return
+    if mode == "runs":
+        _verify_runs(cfg, days, as_of, enforce)
+        return
+
     anchor = _last_trading_day(cfg, shanghai_today())
     names = [s.strip() for s in only.split(",") if s.strip()] if only else None
+    if names:
+        # `verify_lake` warns and skips an unknown name, which is right for a
+        # library sweeping the whole registry and wrong for a name the caller
+        # typed: a misspelt `--dataset` printed "覆盖完整" and exited 0, so a
+        # typo read as proof the lake was fine.
+        names = [_require_known_dataset(name) for name in names]
     wanted = {s.strip() for s in kinds.split(",") if s.strip()} if kinds else None
 
     gaps = verify_lake(cfg, anchor=anchor, datasets=names)
@@ -326,7 +485,6 @@ def verify(config_path: str, only: str | None, repair: bool, kinds: str | None):
     default=None,
     help="Run id to inspect, or 'latest' (the default). Includes dataset stage results.",
 )
-@click.option("--run-id", "run_id", default=None, help="Alias for --run with an explicit id.")
 @click.option(
     "--datasets",
     "show_datasets",
@@ -352,7 +510,6 @@ def verify(config_path: str, only: str | None, repair: bool, kinds: str | None):
 def status(
     config_path: str,
     run_selector: str | None,
-    run_id: str | None,
     show_datasets: bool,
     all_columns: bool,
     gate_groups: str | None,
@@ -360,8 +517,6 @@ def status(
     """Show latest run status, or per-dataset freshness with --datasets."""
     cfg = _cfg(config_path)
 
-    if run_selector and run_id:
-        raise click.UsageError("use either --run or --run-id, not both")
     if all_columns and not show_datasets:
         raise click.UsageError("--all-columns only applies with --datasets")
     if gate_groups and not show_datasets:
@@ -422,7 +577,9 @@ def status(
         stale_rows = df.filter(pl_mod.col("freshness") == "STALE")
         stale = stale_rows.height
         if stale:
-            click.echo(f"\n{stale} dataset(s) STALE — check runs with `cne status` / `cne retry`.")
+            click.echo(
+                f"\n{stale} dataset(s) STALE — check runs with `cne status` / `cne run retry`."
+            )
             # Which schedule group each one belongs to. A lake where every
             # stale dataset sits in groups this host never runs is a schedule
             # gap, not a broken pipeline, and the flat count cannot tell those
@@ -469,7 +626,7 @@ def status(
         return
 
     manifest = Manifest(cfg.manifest_path)
-    selected = run_selector or run_id
+    selected = run_selector
     if selected and selected != "latest":
         latest = manifest.get_run(selected)
         if latest is None:
@@ -497,7 +654,7 @@ def status(
         summary["orphaned_note"] = (
             f"{orphaned} run(s) still status=running with no activity for "
             f">={int(cfg.batch_stale_seconds)}s — next cne run reconciles them; "
-            "or `cne clean --reconcile-runs`"
+            "or `cne run clean --reconcile-runs`"
         )
     click.echo(json.dumps(summary, indent=2, default=str))
     run_status = str(summary.get("dataset_status") or summary.get("status") or "success")
@@ -517,32 +674,6 @@ def sources_grp():
     These were `cne sources` and `cne source <sub>` — two top-level entries one
     letter apart, where the group's own help had to explain which was which.
     """
-
-
-@cli.command("servers", hidden=True)
-@click.argument("action", type=click.Choice(["test"]))
-@config_option
-def servers(action: str, config_path: str):
-    """Deprecated alias for the legacy TDX payload probe."""
-
-    import warnings
-
-    from cnequity.diagnostics.source_health import PROBES_BY_KEY, ProbeStatus, run_probe
-
-    message = (
-        "`cne servers test` is deprecated; use `cne sources probe --only "
-        "tdx_protocol` for a payload health check. The alias is planned for "
-        "removal in 0.9.0."
-    )
-    warnings.warn(message, DeprecationWarning, stacklevel=2)
-    click.echo(f"warning: {message}", err=True)
-
-    result = run_probe(PROBES_BY_KEY["tdx_protocol"], _cfg(config_path))
-    if result.status == ProbeStatus.OK.value:
-        click.echo(f"TDX connection OK ({result.detail}, {result.latency_ms}ms)")
-        return
-    click.echo(f"TDX {result.status}: {result.detail}", err=True)
-    raise SystemExit(1)
 
 
 @sources_grp.command("slo")
@@ -598,15 +729,29 @@ def source_resilience(
 ):
     """Show source concentration, blast radius and independent backup gate.
 
-    Concentration alone does not decide a routing question. A domain carrying
-    29 datasets is only a problem in proportion to how often it is unreachable,
-    and that is measured, not declared — so `--with-availability` joins the
-    probe history this lake has already accumulated onto each failure domain.
+    Concentration alone does not decide a routing question. The largest domain
+    carries most of the registry, and that is only a problem in proportion to
+    how often it is unreachable — which is measured, not declared. So
+    `--with-availability` joins the probe history this lake has already
+    accumulated onto each failure domain.
+
+    The report itself is computed from the registry, so it needs no lake and
+    answers the same way everywhere. `--config` is read only for
+    `--with-availability`; passing one explicitly still resolves it, so a typo
+    is an error here rather than a silently ignored flag.
     """
     from cnequity.diagnostics.source_resilience import (
         annotate_measured_availability,
         build_dependency_report,
     )
+
+    ctx = click.get_current_context(silent=True)
+    explicit_config = (
+        ctx is not None
+        and ctx.get_parameter_source("config_path") is click.core.ParameterSource.COMMANDLINE
+    )
+    if explicit_config and not with_availability:
+        resolve_config_path(config_path)
 
     report = build_dependency_report()
     payload = report.to_dict()
@@ -656,41 +801,6 @@ def source_policy(source: str | None, profile: str | None, redistribution: bool)
     )
     click.echo(json.dumps(assessment.as_dict(), indent=2, ensure_ascii=False))
     if not assessment.allowed:
-        raise SystemExit(1)
-
-
-@cli.command("stability")
-@config_option
-@click.option("--days", default=20, show_default=True, type=click.IntRange(min=1))
-@click.option("--as-of", default=None, help="Inclusive YYYY-MM-DD cutoff.")
-@click.option("--enforce", is_flag=True, help="Exit 1 until the consecutive-day gate passes.")
-def stability(config_path: str, days: int, as_of: str | None, enforce: bool):
-    """Verify consecutive trading-day run evidence without filling gaps."""
-    from cnequity.diagnostics.stability import evaluate_stability, store_stability_report
-    from cnequity.query.parquet_scan import collect_parquet_root
-
-    cfg = _cfg(config_path)
-    try:
-        calendar = collect_parquet_root(
-            cfg.curated_root / "trading_calendar", partition_col="trade_date"
-        )
-    except FileNotFoundError as exc:
-        raise click.ClickException("curated trading_calendar is required") from exc
-    trading_days = (
-        calendar.filter(pl.col("is_trading"))["trade_date"].drop_nulls().unique().to_list()
-    )
-    report = evaluate_stability(
-        Manifest(cfg.manifest_path),
-        trading_days,
-        required_days=days,
-        as_of=parse_date_option(as_of, "--as-of"),
-    )
-    latest, historical = store_stability_report(cfg.meta_root, report)
-    payload = report.to_dict()
-    payload["latest_path"] = str(latest)
-    payload["historical_path"] = str(historical)
-    click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
-    if enforce and not report.passed:
         raise SystemExit(1)
 
 
@@ -800,23 +910,4 @@ def sources_substitutes(config_path: str, vantage: str, probe: bool, as_json: bo
         for line in render_substitutions(entries):
             click.echo(line)
     if any(entry.stranded for entry in entries):
-        raise SystemExit(1)
-
-
-@cli.command("verify-bars")
-@config_option
-@click.option("--start", required=True, help="Inclusive coverage window start.")
-@click.option("--end", default=None, help="Window end; defaults to the last completed trading day.")
-def verify_bars(config_path: str, start: str, end: str | None):
-    """Check securities × sessions, including securities with no rows in the window."""
-    from cnequity.quality.bar_coverage import daily_bar_coverage
-
-    cfg = _cfg(config_path)
-    start_date = parse_date_option(start, "--start")
-    end_date = parse_date_option(end, "--end") or _last_trading_day(cfg, shanghai_today())
-    if start_date > end_date:
-        raise click.ClickException("--start must be on or before --end")
-    result = daily_bar_coverage(cfg, start_date, end_date)
-    click.echo(json.dumps(result, ensure_ascii=False, indent=2))
-    if not result["complete"]:
         raise SystemExit(1)

@@ -1,4 +1,4 @@
-"""Lake maintenance: `compact`, `derive`, `clean`, `stats`.
+"""Lake maintenance: `run compact`, `run clean`, `derive`, `stats`.
 
 What you run against a lake that already exists, to keep its shape rather than
 to change what it holds.
@@ -13,7 +13,7 @@ from datetime import date
 import click
 import polars as pl
 
-from cnequity.cli._root import cli
+from cnequity.cli._root import cli, run
 from cnequity.cli._shared import (
     _cfg,
     _run_status_exit_code,
@@ -33,7 +33,7 @@ from cnequity.storage.source_snapshots import (
 from cnequity.storage.staging_cleanup import clean_staging
 
 
-@cli.command()
+@run.command("compact")
 @config_option
 @click.option("--run-id", default=None)
 def compact(config_path: str, run_id: str | None):
@@ -165,7 +165,18 @@ def _published_derive(cfg, dataset: str):
     help="industry_index / trading_status: only derive on/before this date (YYYY-MM-DD).",
 )
 def derive(name: str, config_path: str, full: bool, start_str: str | None, end_str: str | None):
-    """Derive computed datasets."""
+    """Derive computed datasets.
+
+    `adj_factors`, `industry_index` and `trading_status` are already steps in
+    the daily job (`derive_adj_factors`, `derive_industry_index`,
+    `trading_status_derive`), so running them here is a repair or a backfill of
+    an older window, not part of a normal day. `sector_routing`,
+    `sector_code_map` and `valuation_orphans` are scheduled by nothing and are
+    only ever run by hand.
+    """
+    # Derive targets are lower case in the registry, and command names are
+    # already case-insensitive; a target typed in caps should resolve the same.
+    name = name.lower()
     cfg = _cfg(config_path)
     start = parse_date_option(start_str, "--start")
     end = parse_date_option(end_str, "--end")
@@ -217,7 +228,7 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
         raise click.ClickException(f"Unknown derive target: {name}")
 
 
-@cli.command()
+@run.command("clean")
 @config_option
 @click.option("--dry-run", is_flag=True, help="Report removable staging without deleting.")
 @click.option(
@@ -239,9 +250,9 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
     help=(
         "Also delete staging that is not yet cleanup-ready (incomplete batches "
         "and/or no compact). Success fetch batches are demoted to failed so "
-        "`cne retry` refetches them (data is refetched, not lost, but the retry "
+        "`cne run retry` refetches them (data is refetched, not lost, but the retry "
         "becomes a full re-run). Do not use on success-without-compact runs — "
-        "run `cne compact --run-id` first."
+        "run `cne run compact --run-id` first."
     ),
 )
 @click.option(
@@ -404,6 +415,8 @@ def stats_rebuild(config_path: str, dataset_names: tuple[str, ...], if_stale: bo
     Staleness is judged by run id, not by the clock. Only ingestion moves the
     lake, so stats built after the last run are current however old they look.
     """
+    # Registry names are lower case; `--dataset` should not care about case.
+    dataset_names = tuple(n.lower() for n in dataset_names)
     from cnequity.storage.stats import rebuild_stats
 
     cfg = _cfg(config_path)
@@ -469,6 +482,7 @@ def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: 
     "what is in this lake" on a clone that has never built anything. That
     fallback is the former `cne catalog`, and `--json` is its output.
     """
+    dataset = dataset.lower() if dataset else None
     from cnequity.storage.stats import (
         load_partition_stats,
         load_provenance_stats,

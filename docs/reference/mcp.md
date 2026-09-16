@@ -12,8 +12,8 @@ agent 都可以复用同一条命令和配置。
 # ① 已经有湖 —— 完整口径
 cne mcp --config /abs/path/to/cnequity.toml
 
-# ② 还没有湖，先试试 —— cne demo 给 30 秒真数据
-cne demo
+# ② 还没有湖，先试试 —— cne init --profile demo 给 30 秒真数据
+cne init --profile demo
 cne mcp --config /abs/path/to/configs/cnequity.demo.toml
 
 # ③ 不建湖 —— 现拉现给，不落盘
@@ -24,7 +24,7 @@ cne mcp --config /abs/path/to/cnequity.toml --live
 
 **`--config` 和配置里的 `[data].root` 都要用绝对路径。** MCP 客户端从哪个目录启动进程是不确定的，而相对的 `data.root` 是相对**工作目录**解析的——于是湖解析到一个不存在的路径，每个工具都回「no parquet data」，agent 如实报告「没有数据」。这句话对那个路径是真的，对你的湖是假的。
 
-`cne config init` 写出的配置本来就是绝对路径。启动时会检查 curated 下是否有 parquet，没有就直接退出并打印解析后的路径，而不是伺服一个空湖。
+`cne config create` 写出的配置本来就是绝对路径。启动时会检查 curated 下是否有 parquet，没有就直接退出并打印解析后的路径，而不是伺服一个空湖。
 
 在客户端的 MCP 配置中，把上面的命令填成 `command` / `args`。下面是常见
 的通用 JSON 形状；不同 agent 的文件位置和 UI 名称可能不同，但 server

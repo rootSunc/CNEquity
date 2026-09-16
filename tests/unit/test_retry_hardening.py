@@ -40,7 +40,7 @@ def test_retry_pending_when_batches_still_running(tmp_path):
 
 
 def test_retry_uses_the_original_runs_trade_date_not_today(tmp_path, monkeypatch):
-    """`cne retry` has no trade_date of its own; run_job() defaults the
+    """`cne run retry` has no trade_date of its own; run_job() defaults the
     parameter to today when the caller omits it, exactly as the CLI does. A
     run retried after its own trade_date has rolled over must still resume
     the session it was started for, or a backfill for a past date silently
@@ -75,7 +75,7 @@ def test_retry_uses_the_original_runs_trade_date_not_today(tmp_path, monkeypatch
     monkeypatch.setattr(engine, "_run_step", fake_run_step)
     monkeypatch.setattr(engine, "_run_finalize_steps", lambda *args, **kwargs: [])
 
-    # No trade_date passed — mirrors `cne retry --run-id <id>` exactly.
+    # No trade_date passed — mirrors `cne run retry --run-id <id>` exactly.
     engine.run_job("retry", run_id=run_id, retry_failed_only=True)
 
     assert seen_dates == [date.fromisoformat(stored_date)]
@@ -515,7 +515,7 @@ def test_run_job_reconciles_orphans_on_entry(tmp_path, monkeypatch):
 
 
 def test_retry_reconciles_peer_orphans_on_entry(tmp_path):
-    """cne retry used to skip reconcile; peer zombies sat until the next daily."""
+    """cne run retry used to skip reconcile; peer zombies sat until the next daily."""
     cfg = Config(data_root=tmp_path / "data", tdx_allow_mock=True, batch_stale_seconds=0)
     init_data_layout(cfg)
     manifest = Manifest(cfg.manifest_path)

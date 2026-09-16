@@ -264,7 +264,13 @@
 | baostock | TCP | 退市标的、历史 ST、估值回补 | — | 仅 `--backfill` |
 | pboc | HTTP | 社会融资规模增量（`macro_indicators`） | — | 主写入要求全量序列；单年失败会阻止本次写入，避免带断档推进水位 |
 | nbs | HTTP | **仅审计**：PMI 发布稿，对照 `macro_indicators` | — | 缺省关闭；不可达时静默跳过 |
-| exchange | HTTP | **仅审计**：上交所/深交所上市列表，对照 ST 标签 | — | 缺省关闭；不可达时静默跳过 |
+| exchange | HTTP | `margin_trading` **主源**；`trading_status` / `trading_calendar` 备源；`[exchange_audit]` 价格对照 | — | 融资融券由会员单位报送汇总，中间无转售方；审计类 finding 为建议性，不让 run 失败 |
+| sina_bars | HTTP | Sina 日线兜底（与复权因子端点分开限速） | — | 跳过 + quality finding |
+| ths | HTTP | 同花顺公开页：行业、估值 | — | 跳过 + quality finding |
+| ths_pages | HTTP | `d.10jqka.com.cn` kline，`sector_bars` 唯一来源 | — | 该数据集**无第二个源**；失败即缺口 |
+| ths_bonus | HTTP | 同花顺分红送配页 | — | 限速更保守（3.0s）；跳过 + quality finding |
+| ths_official | HTTPS（keyed） | **从不拥有任何一行**（ADR-0008）：仲裁快照、财报回填、深度历史换源 | — | 无 key 时全部 `skipped`，湖保持已有的源不变 |
+| tushare | HTTPS（keyed） | 可选：BJ 历史 ST 证据（`stock_st`，起 2017-01-01） | bak_basic 名称证据（2016） | 无 token 时更早的 BJ bar 保持 unresolved，**不认定为正常** |
 
 > **AkShare 已不再被任何适配器调用**（[issue #3](https://github.com/rootSunc/CNEquity/issues/3)）。
 > 它此前的两个调用点分别指向本项目已经直连的端点：ST 集合走的是同一个东财

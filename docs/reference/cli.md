@@ -4,11 +4,100 @@
 
 全局默认：`--config configs/cnequity.toml`
 
+**命令名不区分大小写**：`cne STATUS`、`cne run DAILY`、`cne config CREATE` 与小写等价（Click 的 `token_normalize_func`）。`-h` 是 `--help` 的短写法。**不做前缀匹配**——`cne stat` 会被拒绝并提示 `stats` / `status`，而不是猜一个执行。
+
+**六个命令不接受 `--config`**：`cne contract show|validate|diff`、`cne profile list|show`、`cne sources policy`。它们读的是随包发布的注册表而不是湖，所以指向哪个湖都给同一个答案。`cne doctor` 则相反——它接受 `--config`，但没有配置也能跑（这正是它存在的场景）。
+
 ---
 
-## cne demo
+## 命令一览
 
-一分钟试玩，提供两条路径：默认拉少量流动性股票的真源近期日线；`--sample` 在完全离线时生成明确标记为 `source=mock` 的合成小湖。两者都**不是**全市场 `cne init`。
+顶层 19 个入口，分五节——顺序就是一个湖被使用的顺序，和 `cne --help` 的分节一致。
+分节定义在 `cnequity/cli/_root.py` 的 `SECTIONS`，漏掉任何一个命令都会让测试失败。
+
+### 开始使用
+
+| 命令 | 作用 |
+|------|------|
+| [`cne config`](#cne-config-create) | 校验、生成或 diff 配置（`create` / `validate` / `diff`） |
+| [`cne doctor`](#cne-doctor) | 查环境、可选依赖与配置的静默故障；无配置无网络也能跑 |
+| [`cne init`](#cne-init) | 建湖并跑 init phases。`--profile demo\|sample\|quick\|full` |
+
+### 跑 pipeline
+
+| 命令 | 作用 |
+|------|------|
+| [`cne run daily`](#cne-run-daily) | 日更采集（Wave DAG 或指定 schedule group） |
+| [`cne run events`](#cne-run-events) | 7×24 事件流（公告、资讯），走自然日历而非交易日历 |
+| [`cne run retry`](#cne-run-retry) | 重试一个 run，或每个 daily 分组最新的失败 run |
+| [`cne run compact`](#cne-run-compact) | 把 staging 合进 curated |
+| [`cne run clean`](#cne-run-clean) | 清理已 compact 的终态 run 的 staging 与过期孤儿 |
+| [`cne backfill`](#cne-backfill-dataset) | 回填一个数据集 |
+| [`cne derive`](#cne-derive-name) | 派生计算数据集 |
+
+`compact` 已经是每个 schedule group 自带的 step，所以 `retry` / `compact` / `clean`
+是**故障后的手动出口**，不属于正常的一天。
+
+### 检查湖
+
+| 命令 | 作用 |
+|------|------|
+| [`cne status`](#cne-status) | 最近 run 状态；`--datasets` 看逐数据集新鲜度 |
+| [`cne verify`](#cne-verify) | **该落的有没有落**。默认按数据集×交易日，`--bars` 按证券×会话，[`--runs`](#cne-verify---runs) 按连续交易日运行证据 |
+| [`cne audit`](#cne-audit) | **落下来的对不对**；`--full` 给全湖健康快照 |
+
+`audit` 与 `verify` 问的不是同一件事——一个问正确性，一个问完整性。
+
+### 消费湖
+
+| 命令 | 作用 |
+|------|------|
+| [`cne query`](#cne-query) | 跑 DuckDB SQL，或按需拉取数据集 |
+| [`cne serve`](#cne-serve) | 只读湖面板（默认 `127.0.0.1:8787`） |
+| [`cne mcp`](#cne-mcp) | 以 MCP stdio 把湖提供给 AI agent |
+
+### 治理与检视
+
+| 命令 | 作用 | 子命令 |
+|------|------|--------|
+| [`cne snapshot`](#cne-snapshot) | 可移植快照的建立、校验与安全恢复 | `create` `verify` `restore` `export` `import` · `delta {create,verify,apply}` |
+| [`cne contract`](#cne-contract) | 检视与校验已注册的数据契约 | `show` `diff` `validate` |
+| [`cne profile`](#cne-profile) | 检视版本化的研究 universe 画像 | `list` `show` |
+| [`cne stats`](#cne-stats) | `meta/stats` 下的度量表（行数、字节、源分布） | `rebuild` `show` |
+| [`cne sources`](#cne-sources) | 探测依赖的数据源并检查证据 | `probe`（唯一联网）`slo` `resilience` `policy` `substitutes` |
+| [`cne delisted`](#cne-delisted) | 读退市目录并抓它点名的历史 | `status` `backfill` |
+| [`cne ths-official`](#cne-ths-official) | 对照/回填同花顺官方 API（需 key） | `capture` `backfill` `repair-bars` `resource-sectors` |
+
+---
+
+## 改名对照
+
+输入旧名时 CLI 会直接给出新写法，不是 Click 默认的 "No such command"：
+
+```
+$ cne retry
+Error: `cne retry` has moved. Use `cne run retry` instead.
+```
+
+| 旧 | 新 | 为什么 |
+|----|----|--------|
+| `cne demo` / `cne demo --sample` | `cne init --profile demo` / `--profile sample` | 建多大的湖是**一根轴**：demo / sample / quick / full。让第一次上手的人先在两个命令之间做选择，是多余的一次分叉 |
+| `cne config init` | `cne config create` | 和 `cne init` 只差一个词，而后者会建整个湖，误敲的代价大得多 |
+| `cne retry` / `cne compact` / `cne clean` | `cne run retry` / `run compact` / `run clean` | 它们只作用于 run，放在 `run` 下面才是会去找的地方 |
+| `cne verify-bars` | `cne verify --bars` | 和 `cne verify` 问的是同一件事，只是粒度不同；两个顶层命令差一个连字符 |
+| `cne stability` | `cne verify --runs` | 同上，第三种粒度：交易日 × run |
+| `cne ths-official snapshot` | `cne ths-official capture` | 原来和顶层 `cne snapshot`（湖快照）同名不同义 |
+| `cne servers test` | `cne sources probe --only tdx_protocol` | 早已标记废弃，声明 0.9.0 删除却一直留到 0.10 |
+
+对照表定义在 `cnequity/cli/_root.py` 的 `MOVED`。它比隐藏别名更诚实——别名会烂在代码里，一个 dict 不会。
+
+---
+
+## cne init --profile demo | sample
+
+一分钟试玩，是 `cne init` 的两档 profile（原 `cne demo`）：`demo` 拉少量流动性股票的真源近期日线，`sample` 在完全离线时生成明确标记为 `source=mock` 的合成小湖。两者都**不是**全市场——那是 `--profile quick|full`，见 [cne init](#cne-init)。
+
+下列选项只对这两档生效；`--config` / `--resume` / `--layout-only` / `--since` 只对 `quick|full` 生效。用错一侧会被按名字拒绝。
 
 | 选项 | 说明 |
 |------|------|
@@ -16,8 +105,8 @@
 | `--days` | 约多少个交易日的 `daily_bars`（默认 30） |
 | `--intraday` | 额外抓同一批标的的 1m 线（最多约 5 个交易日），打印一根完整会话 |
 | `--research` | 额外从 Sina 派生 hfq 因子，并打印 raw / hfq 收益对照；会把窗口扩展到约 3 年 |
-| `--sample` | 不访问网络，生成可用于验证安装、查询和 DuckDB 视图的合成样例；不可与 `--research` / `--intraday` 合用 |
 | `--data-root` | 独立湖根目录（默认 `data/cnequity-demo`） |
+| `--profile sample` | 不访问网络，生成可用于验证安装、查询和 DuckDB 视图的合成样例；不可与 `--research` / `--intraday` 合用 |
 | `--trade-date` | 截至日 YYYY-MM-DD（默认今天 / 最近交易日） |
 | `--config-out` | 写出供后续 `cne query` 使用的小配置（默认 `configs/cnequity.demo.toml`） |
 
@@ -26,7 +115,7 @@
 只想验证研究口径，不必初始化全市场：
 
 ```bash
-cne demo --research --symbols 600519.SH
+cne init --profile demo --research --symbols 600519.SH
 ```
 
 `--research` 需要额外访问 Sina；网络受限时先运行不带该选项的基础 demo。
@@ -34,7 +123,7 @@ cne demo --research --symbols 600519.SH
 完全无法访问 TDX 时，可先验证本地读写和查询链路：
 
 ```bash
-cne demo --sample
+cne init --profile sample
 ```
 
 合成行会醒目标记为 `source=mock`，质量审计不会把它们视为真实数据；请勿复用该 demo 的 `data_root` 做研究或生产。
@@ -53,7 +142,7 @@ cne demo --sample
 | `--resume` | 续跑最近未完成 init |
 | `--run-id` | 续跑指定 init run（隐含 resume） |
 | `--keep-going` | phase 失败后继续后续 phase |
-| `--profile full\|quick` | 回填多少历史。`quick`（默认）= 最近 3 年，`full` = 各 step 自己的起点（`daily_bars` 为 2016-01-01，实测约 3 倍耗时） |
+| `--profile demo\|sample\|quick\|full` | 建多大的湖。`quick`（默认）= 全市场标的、最近 3 年；`full` = 全市场、各 step 自己的起点（`daily_bars` 为 2016-01-01，实测约 3 倍耗时）；`demo` / `sample` 是几只票的小湖，见 [上一节](#cne-init---profile-demo--sample) |
 | `--since YYYY-MM-DD` | 显式指定历史起点，覆盖 `--profile` |
 | `--quiet` | 只留 warning 及以上，不打逐批进度 |
 
@@ -70,14 +159,16 @@ cne demo --sample
 之后加深不必重跑 init：
 
 ```bash
-cne backfill daily_bars --start 2016-01-01 --end <你的 coverage_start>
+cne backfill daily_bars --start 2016-01-01 --end COVERAGE_START
 ```
+
+上表中 `--config` / `--layout-only` / `--resume` / `--run-id` / `--keep-going` / `--since` 只对 `quick|full` 生效；`--symbols` / `--days` / `--data-root` / `--config-out` / `--intraday` / `--research` 只对 `demo|sample` 生效。传错一侧会被按名字拒绝，不会被忽略。
 
 退出：result `status != success` 时退出 1。
 
 ---
 
-## cne config init
+## cne config create
 
 从包内模板写出用户配置（PyPI 安装后无需 clone 仓库）。
 
@@ -101,7 +192,7 @@ macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致�
 
 对比当前配置与包内示例模板，列出**模板有而你没有**的部分。
 
-用户配置由 `cne config init` 写一次，之后不再更新，而且是 gitignore 的。后续版本给调度组
+用户配置由 `cne config create` 写一次，之后不再更新，而且是 gitignore 的。后续版本给调度组
 新增的 step 不会自己出现在里面 —— 功能装上了，但从来不会被调度，`cne config validate`
 依然回 `Configuration OK`。这条命令就是补这个信号。
 
@@ -128,13 +219,13 @@ macOS 上会把 `orchestrator.workers` 写成 `1`（与 `validate` 规则一致�
 | `--enforce` | 关键数据集缺独立备源时退出 1 |
 | `--out PATH` | 写文件而非打印 |
 
-集中度本身不能决定主备源的选择：一个域背着 29 个数据集，其危险程度与它**从本机有多经常够不着**成正比，而后者是测出来的、不是声明出来的。`--with-availability` 把两者放进同一张表：
+集中度本身不能决定主备源的选择：一个域背着 30 个数据集，其危险程度与它**从本机有多经常够不着**成正比，而后者是测出来的、不是声明出来的。`--with-availability` 把两者放进同一张表：
 
 ```
 failure domain     datasets critical   measured  worst probe
-eastmoney                29        4       0.0%  eastmoney_push2his
-tdx                       9        6     100.0%  tdx_protocol
-exchange                  2        1      88.2%  exchange_szse
+eastmoney                30        4       0.0%  eastmoney_push2his
+tdx                       8        5     100.0%  tdx_protocol
+exchange                  4        3      88.2%  exchange_szse
 ```
 
 一个域按它**最差**的探针计：需要两个端点的 feed，任一挂掉它就挂掉。没有观测的探针不贡献读数
@@ -247,7 +338,7 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 
 ---
 
-## cne backfill \<dataset\>
+## cne backfill DATASET
 
 单数据集 backfill。snapshot 且无 `backfill_source` 时拒绝。
 
@@ -293,7 +384,7 @@ cne backfill sector_bars --config configs/cnequity.toml --retry-failed
 
 ---
 
-## cne compact
+## cne run compact
 
 | 选项 | 说明 |
 |------|------|
@@ -316,12 +407,12 @@ cne backfill sector_bars --config configs/cnequity.toml --retry-failed
 推荐顺序（跨 CLI 和脚本）：
 
 ```bash
-cne delisted status                                   # 已知多少
-python scripts/delisted_ops.py discover --limit 500   # 扫码空间，可续跑
-cne delisted backfill --since 2016-01-01              # 拉扫到的行情
-python scripts/delisted_ops.py repair                 # bars 已在湖里时写 delist_date
-python scripts/delisted_ops.py reconcile              # 先 dry-run
-python scripts/delisted_ops.py reconcile --apply      # 仅在没有 active ingestion run 时
+cne delisted status                                 # 已知多少
+python scripts/delisted_ops.py discover --limit 500 # 扫码空间，可续跑
+cne delisted backfill --since 2016-01-01            # 拉扫到的行情
+python scripts/delisted_ops.py repair               # bars 已在湖里时写 delist_date
+python scripts/delisted_ops.py reconcile            # 先 dry-run
+python scripts/delisted_ops.py reconcile --apply    # 仅在没有 active ingestion run 时
 python scripts/delisted_ops.py coverage --start 2016-01-01 --universe all_a_sh_sz
 ```
 
@@ -366,11 +457,20 @@ cne derive trading_status --start 2001-01-01 --end 2001-12-31
 
 ## cne verify
 
-| 选项 | 说明 |
-|------|------|
-| `--dataset` | 只查这些数据集（逗号分隔）；默认全部已注册数据集 |
-| `--repair` | 对可修复的缺口跑回填，按数据集从新到旧 |
-| `--kind` | 只看这些缺口类型：`empty,stale,interior,shallow` |
+三种粒度问同一个问题「该落的有没有落」。默认按数据集 × 交易日；`--bars` 按证券 ×
+交易日；`--runs` 按交易日 × run。三者的选项互不通用，用错会被按名字拒绝而不是被忽略。
+
+| 选项 | 模式 | 说明 |
+|------|------|------|
+| `--dataset` | 默认 | 只查这些数据集（逗号分隔）；默认全部已注册数据集 |
+| `--repair` | 默认 | 对可修复的缺口跑回填，按数据集从新到旧 |
+| `--kind` | 默认 | 只看这些缺口类型：`empty,stale,interior,shallow` |
+| `--bars` | — | 改为逐证券检查覆盖，见下 |
+| `--start` / `--end` | `--bars` | 覆盖窗口；`--start` 必填，`--end` 默认上一个完整交易日 |
+| `--runs` | — | 改为检查连续交易日运行证据，见 [cne verify --runs](#cne-verify---runs) |
+| `--days` / `--as-of` / `--enforce` | `--runs` | 见下方小节 |
+
+（`--bars` 原为 `cne verify-bars`，`--runs` 原为 `cne stability`。）
 
 **和 `cne audit`问的不是同一件事。** `audit` 问「落下来的数据对不对」，`verify` 问
 「该落的有没有落」——后者是一个 step 一碰就抛异常时产生的故障。没有它，一个数据集可以
@@ -383,8 +483,13 @@ cne derive trading_status --start 2001-01-01 --end 2001-12-31
 ```bash
 cne verify                                  # 全表体检
 cne verify --dataset daily_bars,adj_factors
-cne verify --kind interior --repair         # 只补内部空洞
+cne verify --kind interior --repair   # 只补内部空洞
+cne verify --bars --start 2026-09-07  # 逐证券 × 会话，含窗口内零行的证券
+cne verify --runs --days 20 --enforce # 连续交易日运行证据
 ```
+
+`--bars` 检查的是「证券 × 会话」这一格，包括窗口内一行都没有的证券——默认模式按数据集
+聚合，看不见这种缺失。停牌等明确非交易状态不算缺口。不完整时退出 1。
 
 ---
 
@@ -395,15 +500,14 @@ cne verify --kind interior --repair         # 只补内部空洞
 | `--datasets` | 逐数据集新鲜度表（dataset / layer / freshness / 覆盖区间 / watermark）；有 STALE 退出 1 |
 | `--all-columns` | 配合 `--datasets`：打印 `list_datasets` 的全部列（契约指纹、revision、PIT 存储列等），而非仅新鲜度 |
 | `--groups` | 配合 `--datasets`：只对这些调度组拥有的数据集判失败（空格或逗号分隔）。其它组的数据集照常列出、照常报为调度缺口，但不触发退出 1。只跑 `core` 的主机有二十多个数据集无人抓取，不加此项门禁天天失败（2026-09-12/13/14 为 21–25 个），告警就此失效。无人调度的数据集（`(unscheduled)`）仍然判失败——“不知道谁抓”不等于“别的主机在抓” |
-| `--run <id\|latest>` | 指定 run（默认 `latest`）；摘要含每个数据集 stage 的 `dataset_results` 与聚合 `dataset_status` |
-| `--run-id <id>` | `--run` 的显式 id 别名；两者不能同时给 |
+| `--run <id\|latest>` | 指定 run（默认 `latest`）；摘要含每个数据集 stage 的 `dataset_results` 与聚合 `dataset_status`。别名 `--run-id` 已删除 |
 
 无选项：输出最近 run 的 JSON 摘要。run 为 `degraded`（核心正常、研究/建议层降级）退出 2，
 核心失败退出 1。
 
 ---
 
-## cne retry
+## cne run retry
 
 重试失败 batch / 补 init 缺失 step。init run 走 `resume_init`。
 
@@ -418,15 +522,19 @@ cne verify --kind interior --repair         # 只补内部空洞
 
 ---
 
-## cne clean
+## cne run clean
 
 删除已 compact 的终态 run staging，以及超龄 orphan。终态含 `success` / `warning` / `failed`（需 incomplete=0 且有成功 compact batch）。
 
 | 选项 | 说明 |
 |------|------|
-| `--dry-run` | 仅报告可删 staging |
-| `--orphan-retention-days` | 无 manifest 的 orphan 保留天数（默认 7） |
-| `--force` | 也删尚未 cleanup-ready 的 staging（incomplete / 未 compact）；成功 fetch batch 会被 demote，`cne retry` 全量重抓。**不要**对 success-without-compact 用 force——先 `cne compact --run-id` |
+| `--dry-run` | 只报告，不删任何东西 |
+| `--orphan-retention-days` | 无 manifest 的 orphan staging 保留天数（默认 7） |
+| `--snapshot-retention-days` | `meta/source_snapshots` 下 run_id 目录的保留天数（默认 14）。每个 dataset/source 的最新一份始终保留 |
+| `--keep-revision-generations` | 每个数据集在 `meta/revisions/data` 下保留的已提交代数（默认 5）。receipt 永远保留，`current.json` 指向的那一代永不丢弃；`0` 关闭 |
+| `--log-retention-days` | 删除 `logs/cne-*.log` 里超过这么多天的（默认 30）。每次调用写一个带时间戳的日志，此前没有任何东西清理它们；`0` 关闭。只处理本 CLI 命名的文件——`logs/` 下别人放的（如 launchd 的 stdout 重定向）不动 |
+| `--reconcile-runs` | 清理前先把卡在 `running` 的 run（worker 崩溃）标记为 failed。`--reconcile-after-seconds` 可覆盖判定窗口，默认取 `[orchestrator].batch_stale_seconds` |
+| `--force` | 也删尚未 cleanup-ready 的 staging（incomplete / 未 compact）；成功 fetch batch 会被 demote，`cne run retry` 全量重抓。**不要**对 success-without-compact 用 force——先 `cne run compact --run-id` |
 
 ---
 
@@ -546,7 +654,7 @@ cne stats rebuild --if-stale
 不用手敲：由 MCP 客户端拉起并在管道上讲 JSON-RPC。三条路按手上有什么选：
 
 ```bash
-cne demo                                   # 没湖想先试试：30 秒真数据
+cne init --profile demo                                   # 没湖想先试试：30 秒真数据
 cne mcp --config /abs/path/cnequity.toml
 cne mcp --config /abs/path/cnequity.toml --live
 ```
@@ -613,8 +721,8 @@ cne serve                    # → http://127.0.0.1:8787/source-health
 | `--json` | 机器可读输出 |
 
 ```bash
-cne sources substitutes                # 读 meta/source_health/local.json
-cne sources substitutes --probe        # 现测
+cne sources substitutes         # 读 meta/source_health/local.json
+cne sources substitutes --probe # 现测
 ```
 
 替代源按**独立优先、其次快**排序：和故障源同属一个风控面的端点不算第二意见——东财的历史主机挂了，东财的快照主机顶不上它。某个数据集"失败的端点存在且没有任何可用端点"时退出码为 1。
@@ -670,7 +778,34 @@ apply 的安全边界值得单独说：add/replace/delete 逐条对基线指纹�
 
 ---
 
-## cne stability
+## cne ths-official
+
+对照并回填 **同花顺官方 API**（需 key）。**没有 key 时这里每个命令都报 `skipped` 且什么都不改**——湖保持它已有的源不变。
+
+按 [ADR-0008](../adr/0008-optional-keyed-sources.md)，keyed 源永远不拥有任何一行：`ths_official` 可以做 `backup_source` / `backfill_source`、可以进 failover 和 audit 配置，但永远不是 `primary_source`。
+
+**验证与改写是两个开关。** `[sources.ths_official].verify` 默认开，只允许写 `meta/source_snapshots` 和 findings；`[sources.ths_official].backfill` 默认关，改动 curated 之前必须显式打开。持有凭证、启用源、允许它改数据，是三个决定而不是一个。
+
+| 子命令 | 说明 |
+|--------|------|
+| `capture` | 抓对手源快照，喂给 `cne audit` 里的仲裁检查。**从不写 curated 行**。`--what corporate-actions\|daily-bars\|financials\|valuations\|all`（默认 all）、`--days`（bar 窗口，默认 45 天）、`--sample`（bar 抽样标的数，默认 400） |
+| `backfill` | 补 2016–2024 的资产负债表与现金流缺口。需 `backfill = true`。`--start` / `--end`（默认 2016-01-01 ~ 2024-12-31）、`--chunk-size`（默认 200）、`--workers`（默认 4） |
+| `repair-bars` | 把深度历史从无凭证爬取换到授权 API。**默认只报告，`--apply` 才写**。`--adjudicator FILE` 传入独立源的 (symbol, trade_date, close) parquet、`--diff-out FILE` 落有争议行、`--start` / `--end`（默认 2005-01-01 ~ 2015-12-31） |
+| `resource-sectors` | 把 `sector_bars` 从爬取换到授权端点。同样 `--apply` 才写，且需 `backfill = true`。`--start`（服务底 2022-01-04）、`--end`、`--workers` |
+
+**`capture` 不是可选的。** `cne audit` 里的 `adj_factor_arbitration` 与 `daily_bars_arbitration` 都读快照库，没跑过它这两个检查就**永久沉默**——最需要第二意见的湖恰恰一个都得不到。日更的 `finalize` wave 里有 `ths_official_snapshot` step，无 key 时自行跳过。
+
+**`repair-bars` 和 `resource-sectors` 是"换源"而非"路由"**，所以按 ADR-0005 要求显式命令 + 默认 dry run。`repair-bars` 还应该配 `--adjudicator`：实测对照 baostock 的 1,418 条争议，对手源对 1,167 次、原有源对 251 次，没有三方分歧——盲目切换等于引入 251 个已知回归。仲裁源必须与两边都没有血缘关系（这里两个候选都是同花顺的，不能互相仲裁）。
+
+`backfill` 与 `resource-sectors` 只 stage 行，之后要跑 `cne run compact --run-id <id>`。
+
+集成背景与实测数据见 [同花顺官方 API 集成](../development/ths-official-integration.md)。
+
+---
+
+## cne verify --runs
+
+（`cne verify` 的第三种模式，选项见上；原 `cne stability`。）
 
 从权威 `trading_calendar` 取最近窗口，按 logical trade date 选最新 `daily:core` attempt，验证连续交易日运行证据。
 

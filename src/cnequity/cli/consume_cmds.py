@@ -176,6 +176,6 @@ def _guard_mcp_data_root(cfg, config_path: str) -> None:
         "the working directory the client started this process in. Make both "
         "`--config` and `[data].root` absolute paths.\n"
         "If it is your lake and it is genuinely empty: `cne init` builds one, "
-        "`cne demo` makes a 5-symbol sample in 30 seconds, and `--live` serves "
+        "`cne init --profile demo` makes a 5-symbol sample in 30 seconds, and `--live` serves "
         "symbol lookup and raw daily bars straight from the vendor without one."
     )

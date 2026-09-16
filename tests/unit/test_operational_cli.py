@@ -175,7 +175,8 @@ def _stability(path, days, *extra):
     return CliRunner().invoke(
         cli,
         [
-            "stability",
+            "verify",
+            "--runs",
             "--config",
             str(path),
             "--days",

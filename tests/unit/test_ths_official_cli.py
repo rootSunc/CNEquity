@@ -26,7 +26,7 @@ def _run(args):
     return json.loads(result.output)
 
 
-@pytest.mark.parametrize("command", ["snapshot", "backfill", "repair-bars"])
+@pytest.mark.parametrize("command", ["capture", "backfill", "repair-bars"])
 def test_every_command_is_inert_without_a_key(command, lake_config, monkeypatch):
     """A lake with no key keeps the sources it already has, and says so."""
     monkeypatch.delenv("HITHINK_FINANCE_API_KEY", raising=False)
@@ -38,7 +38,7 @@ def test_every_command_is_inert_without_a_key(command, lake_config, monkeypatch)
 def test_a_key_alone_does_not_enable_the_source(lake_config, monkeypatch):
     """Holding a credential is not the same as opting the lake into the source."""
     monkeypatch.setenv("HITHINK_FINANCE_API_KEY", "sk-test")
-    out = _run(["ths-official", "snapshot", "--config", lake_config])
+    out = _run(["ths-official", "capture", "--config", lake_config])
     assert out["status"] == "skipped"
     assert "enabled = true" in out["reason"]
 

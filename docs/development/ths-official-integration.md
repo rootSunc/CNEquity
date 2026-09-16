@@ -232,9 +232,9 @@ failover 机制。
 `meta/source_snapshots`，而没有任何命令能写进去，所以检查永远静默。
 
 ```
-cne ths-official snapshot      # 写对手源快照，喂给 cne audit 里的仲裁检查
-cne ths-official backfill      # 补 2016–2024 财报空洞（需 backfill = true）
-cne ths-official repair-bars   # 深度历史换源，默认只报告，--apply 才写
+cne ths-official capture     # 写对手源快照，喂给 cne audit 里的仲裁检查
+cne ths-official backfill    # 补 2016–2024 财报空洞（需 backfill = true）
+cne ths-official repair-bars # 深度历史换源，默认只报告，--apply 才写
 ```
 
 无 Key 时三个命令一律返回 `{"status": "skipped"}` 并且不改动任何东西。

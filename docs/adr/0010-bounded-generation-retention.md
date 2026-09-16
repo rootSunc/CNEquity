@@ -41,7 +41,7 @@ excludes `revisions/data`, but the underlying growth remained unbounded.
 
 Retain a bounded number of generations per dataset, and prune the rest:
 
-- `cne clean --keep-revision-generations N` (default 5) drops the stored bytes
+- `cne run clean --keep-revision-generations N` (default 5) drops the stored bytes
   of all but the newest N generations per dataset.
 - **Receipts are never pruned.** They are a few KB and carry the lineage — run
   id, code version, config fingerprint, and the per-file sha256 of the

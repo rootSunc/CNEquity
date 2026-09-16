@@ -52,7 +52,7 @@ cnequity 是 A 股数据的**采集编排层**：在多个外部数据源之上�
   → curated/derived 就绪，meta/state 水位前移
 ```
 
-失败路径：batch failed → 水位不动 → `cne retry --run-id` 只重跑失败 batch → 成功后自动 compact→derive→audit。
+失败路径：batch failed → 水位不动 → `cne run retry --run-id` 只重跑失败 batch → 成功后自动 compact→derive→audit。
 
 ---
 

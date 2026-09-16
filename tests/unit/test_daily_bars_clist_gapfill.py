@@ -1077,7 +1077,7 @@ def test_multiday_partial_miss_after_gapfill_stays_strict_for_unknown_symbol(tmp
 
 def test_multiday_single_symbol_scope_still_raises(tmp_path, monkeypatch):
     # The tolerance above must not apply to a narrow explicit scope — a
-    # scoped backfill or a `cne retry` batch of just one or two symbols,
+    # scoped backfill or a `cne run retry` batch of just one or two symbols,
     # where every symbol is the whole ask and "tolerate at least 1" would
     # make the run silently report success with nothing staged.
     cfg = _cfg(tmp_path)

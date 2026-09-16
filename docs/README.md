@@ -2,7 +2,7 @@
 
 从 A 股开始的本地可日更、可溯源金融数据底座：多源采集、编排、标准化，交付带溯源、列契约稳定的 Parquet 数据层。
 
-CLI 是 `cne`，Python 包是 `cnequity`。推荐：`pip install cnequity` → `cne demo` 试玩，或 `cne config init` 写出配置再跑全量。数据湖根目录默认 `./data/cnequity`。
+CLI 是 `cne`，Python 包是 `cnequity`。推荐：`pip install cnequity` → `cne init --profile demo` 试玩，或 `cne config create` 写出配置再跑全量。数据湖根目录默认 `./data/cnequity`。
 
 **建议顺序**： [安装](getting-started/installation.md) → [快速开始](getting-started/quickstart.md) → [配置](getting-started/configuration.md)。卡在网络 / TDX / workers 时看 [排障](operations/troubleshooting.md)。
 

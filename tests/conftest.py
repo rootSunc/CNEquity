@@ -3,8 +3,18 @@ import sys
 
 import pytest
 
+# Captured at import, before any test runs. `register_step` writes to a
+# process-global registry, and `test_deps` registers throwaway steps to build a
+# cycle. It does clean up, so the registry is not actually leaky — but an
+# assertion about the *shipped* step count should not depend on that staying
+# true, nor on a run being interrupted between the registration and its
+# `finally`. Compare against this snapshot rather than the live registry.
+import cnequity.steps  # noqa: E402, F401 — importing is what registers them
 from cnequity.config import load_config
 from cnequity.config.bootstrap import path_for_toml
+from cnequity.orchestrator.registry import STEP_REGISTRY as _LIVE_STEP_REGISTRY  # noqa: E402
+
+PRISTINE_STEP_NAMES = frozenset(_LIVE_STEP_REGISTRY)
 
 
 def pytest_configure(config):

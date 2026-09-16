@@ -802,7 +802,7 @@ def _unresolved_key_remedy(
     return (
         f"\n  Full list and per-key reasons: {findings_path}"
         "\n  Which vendor is down: cne sources probe"
-        f"\n  Resume this run once it is back: cne retry --run-id {run_id}"
+        f"\n  Resume this run once it is back: cne run retry --run-id {run_id}"
         f"\n  Or repair just these keys: cne backfill daily_bars --symbols {sample} "
         f"--start {start} --end {end}"
     )

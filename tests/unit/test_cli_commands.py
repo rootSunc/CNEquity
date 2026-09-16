@@ -76,36 +76,6 @@ workers = 0
     assert "ERROR:" in result.output
 
 
-def test_servers_test_keeps_legacy_payload_probe_semantics(cfg_path, monkeypatch):
-    from cnequity.diagnostics import source_health
-
-    seen: dict[str, object] = {}
-
-    def fake_probe(probe, cfg):
-        seen["probe"] = probe
-        seen["config"] = cfg
-        return source_health.ProbeResult(
-            key=probe.key,
-            label=probe.label,
-            host=probe.host,
-            powers=list(probe.powers),
-            status=source_health.ProbeStatus.OK.value,
-            latency_ms=7,
-            detail="9 根日线",
-        )
-
-    monkeypatch.setattr(source_health, "run_probe", fake_probe)
-
-    with pytest.warns(DeprecationWarning, match="0.9.0"):
-        result = CliRunner().invoke(cli, ["servers", "test", "--config", cfg_path])
-
-    assert result.exit_code == 0, result.output
-    assert seen["probe"] is source_health.PROBES_BY_KEY["tdx_protocol"]
-    assert "TDX connection OK (9 根日线, 7ms)" in result.output
-    assert "cne sources probe --only tdx_protocol" in result.output
-    assert "0.9.0" in result.output
-
-
 def test_backfill_recovers_terminal_staging_before_new_run(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     manifest = Manifest(cfg.manifest_path)
@@ -482,7 +452,7 @@ def test_retry_unknown_run(cfg_path, monkeypatch):
             self.manifest = FakeManifest()
 
     monkeypatch.setattr("cnequity.cli.run_cmds.JobEngine", FakeEngine)
-    result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--run-id", "missing"])
+    result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path, "--run-id", "missing"])
     assert result.exit_code != 0
     assert "Unknown run_id" in result.output
 
@@ -503,7 +473,7 @@ def test_retry_init_run(cfg_path, monkeypatch):
             raise AssertionError("non-init path should not run")
 
     monkeypatch.setattr("cnequity.cli.run_cmds.JobEngine", FakeEngine)
-    result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--run-id", "init-1"])
+    result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path, "--run-id", "init-1"])
     assert result.exit_code == 0, result.output
     assert "init-1" in result.output
 
@@ -523,7 +493,7 @@ def test_retry_failed_job(cfg_path, monkeypatch):
             return {"run_id": kwargs["run_id"], "status": "failed"}
 
     monkeypatch.setattr("cnequity.cli.run_cmds.JobEngine", FakeEngine)
-    result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--run-id", "d1"])
+    result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path, "--run-id", "d1"])
     assert result.exit_code == 1
 
 
@@ -561,7 +531,7 @@ def test_retry_failed_groups_retries_only_latest_failed_per_group(cfg_path, monk
         lambda argv, **kwargs: calls.append(argv) or Proc(),
     )
 
-    result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--failed-groups"])
+    result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path, "--failed-groups"])
 
     assert result.exit_code == 0, result.output
     assert result.output.count("Retrying failed daily group run") == 1
@@ -585,13 +555,13 @@ def test_retry_failed_groups_reports_child_failure(cfg_path, monkeypatch):
     monkeypatch.setattr("cnequity.cli.run_cmds.JobEngine", FakeEngine)
     monkeypatch.setattr("cnequity.cli.run_cmds.subprocess.run", lambda *args, **kwargs: Proc())
 
-    result = CliRunner().invoke(cli, ["retry", "--config", cfg_path, "--failed-groups"])
+    result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path, "--failed-groups"])
 
     assert result.exit_code == 1
 
 
 def test_retry_requires_exactly_one_scope(cfg_path):
-    result = CliRunner().invoke(cli, ["retry", "--config", cfg_path])
+    result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path])
     assert result.exit_code != 0
     assert "provide --run-id or --failed-groups" in result.output
 
@@ -638,7 +608,7 @@ def test_clean_dry_run(cfg_path, monkeypatch):
             removed_run_dirs=[], kept_run_dirs=["s1"], bytes_freed=20
         ),
     )
-    result = CliRunner().invoke(cli, ["clean", "--dry-run", "--config", cfg_path])
+    result = CliRunner().invoke(cli, ["run", "clean", "--dry-run", "--config", cfg_path])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["dry_run"] is True
@@ -801,7 +771,7 @@ def test_compact_uses_latest_run(cfg_path, monkeypatch):
 
     monkeypatch.setattr("cnequity.cli.maintain_cmds.Manifest", FakeManifest)
     monkeypatch.setattr("cnequity.cli.maintain_cmds.JobEngine", FakeEngine)
-    result = CliRunner().invoke(cli, ["compact", "--config", cfg_path])
+    result = CliRunner().invoke(cli, ["run", "compact", "--config", cfg_path])
     assert result.exit_code == 0, result.output
     assert "latest-1" in result.output
 
@@ -815,7 +785,7 @@ def test_compact_no_runs(cfg_path, monkeypatch):
             return None
 
     monkeypatch.setattr("cnequity.cli.maintain_cmds.Manifest", FakeManifest)
-    result = CliRunner().invoke(cli, ["compact", "--config", cfg_path])
+    result = CliRunner().invoke(cli, ["run", "compact", "--config", cfg_path])
     assert result.exit_code != 0
     assert "No runs found" in result.output
 

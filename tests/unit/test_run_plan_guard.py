@@ -2,7 +2,7 @@
 
 Batch receipts describe the steps that produced one. A daily job killed
 mid-DAG (OOM, `kill -9`) leaves nothing at all behind for the steps it never
-reached, so the ledger reads as a clean run: `cne retry` repaired whatever had
+reached, so the ledger reads as a clean run: `cne run retry` repaired whatever had
 failed and closed the day as `success` with the rest of it silently missing.
 These tests pin the plan to the run and make a truncated run say so.
 """

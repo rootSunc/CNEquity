@@ -475,7 +475,7 @@ class Config:
             # Fall back to the TDX lane width, not the global ``workers``
             # budget.  This cap is a socket-level semaphore; when it is
             # tighter than the pool feeding it, every TDX lane serializes
-            # behind it.  ``cne config init`` writes ``workers = 1`` on
+            # behind it.  ``cne config create`` writes ``workers = 1`` on
             # macOS/Windows, so the old fallback silently collapsed the whole
             # L0/L1 fan-out to one in-flight request on a default install.
             self.source_concurrency_for("tdx_protocol", self.tdx_daily_worker_count()),

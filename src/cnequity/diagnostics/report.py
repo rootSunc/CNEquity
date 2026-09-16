@@ -153,7 +153,7 @@ def build_report(config=None, config_path: Path | None = None) -> Report:
                 severity=Severity.WARN,
                 title="未加载配置——只做了环境体检",
                 detail="没有配置就无法检查 data.root 是否可用。",
-                fix="cne config init",
+                fix="cne config create",
             )
         )
     else:

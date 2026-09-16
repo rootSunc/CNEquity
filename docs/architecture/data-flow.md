@@ -84,7 +84,7 @@ finalize（波次末尾或分组内显式 steps）：
 3. failed / running / stale batch 涉及的数据集 → 整个数据集本 run 不 compact
 4. 原子写：先写临时文件再 rename（`storage/atomic.py`）
 
-手动触发：`cne compact --run-id <id>`
+手动触发：`cne run compact --run-id <id>`
 
 ---
 
@@ -104,7 +104,7 @@ finalize（波次末尾或分组内显式 steps）：
 
 ## 重试（Retry）
 
-触发：`cne retry --run-id <id>`
+触发：`cne run retry --run-id <id>`
 
 ```
 run_lock 获取
@@ -149,7 +149,7 @@ batch failed
   → 水位不动
   → staging 保留（可 retry）
   → audit findings 记录
-  → 人工：cne status → cne retry
+  → 人工：cne status → cne run retry
   → compact 成功后下游 load() 可见新数据
 ```
 

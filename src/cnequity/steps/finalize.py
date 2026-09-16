@@ -871,7 +871,7 @@ def step_ths_official_snapshot(
     actions are refreshed alongside because both feed arbitration and both move.
 
     Statements are **not** here. They change on disclosure days, so a daily
-    sweep of 300 securities buys nothing; `cne ths-official snapshot --what
+    sweep of 300 securities buys nothing; `cne ths-official capture --what
     financials` covers them when it matters.
 
     Never fails the run. No key, verification switched off, or an unreachable

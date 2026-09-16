@@ -349,7 +349,7 @@ def test_an_unresolved_key_failure_says_what_to_do(tmp_path):
     )
     assert str(cfg.meta_root / "quality" / "findings" / "run-7.json") in text
     assert "cne sources probe" in text
-    assert "cne retry --run-id run-7" in text
+    assert "cne run retry --run-id run-7" in text
     # A repair line has to stay pasteable: three keys and an ellipsis, not a
     # thousand symbols wrapped across the terminal.
     assert "--symbols 000001.SZ,300750.SZ,600519.SH,... " in text

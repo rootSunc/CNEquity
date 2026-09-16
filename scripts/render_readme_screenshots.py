@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render macOS-style terminal screenshots for README (docs/assets/*.png).
 
-Requires Pillow. Content is a cleaned transcript of a short live `cne demo`
+Requires Pillow. Content is a cleaned transcript of a short live `cne init --profile demo`
 run — edit the string constants below when CLI copy changes.
 """
 
@@ -23,12 +23,12 @@ _FONT_CANDIDATES = [
 ]
 
 DEMO = """\
-$ cne demo --symbols 600519.SH,000001.SZ --days 5
+$ cne init --profile demo --symbols 600519.SH,000001.SZ --days 5
 
 === [1/6] Prepare demo lake at data/cnequity-demo ===
 data_root = …/data/cnequity-demo
 config    = configs/cnequity.demo.toml
-Note: this is a SEPARATE lake from a full `cne init` — safe to wipe.
+Note: a SEPARATE lake from `cne init --profile quick|full` — safe to wipe.
 
 === [2/6] Probe TDX ===
 Probing TDX hosts (first successful server wins)…
@@ -170,7 +170,7 @@ def render_terminal(text: str, out: Path, *, title: str) -> None:
 
 
 def main() -> None:
-    render_terminal(DEMO, ASSETS / "cne-demo.png", title="cne demo")
+    render_terminal(DEMO, ASSETS / "cne-demo.png", title="cne init --profile demo")
     render_terminal(QUERY, ASSETS / "cne-query.png", title="cne query")
     render_terminal(LOAD, ASSETS / "cne-load.png", title="python — load()")
 

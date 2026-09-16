@@ -1,6 +1,7 @@
 """One-command mini demos: real TDX data or a deterministic offline sample.
 
-Designed for first-run / star-seeker UX — not a substitute for ``cne init``.
+Designed for first-run / star-seeker UX. Reached as ``cne init --profile
+demo|sample``; it is not a substitute for the market profiles.
 Writes into a separate data root so a later full-market init is not poisoned
 by a 5-symbol instruments file.
 """
@@ -50,7 +51,7 @@ def _write_demo_toml(path: Path, data_root: Path) -> None:
     # POSIX form + TOML escape: bare ``C:\Users\…`` is invalid TOML (``\U`` etc.).
     root = path_for_toml(data_root)
     path.write_text(
-        f"""# Auto-written by `cne demo`. Safe to delete with the demo data_root.
+        f"""# Auto-written by `cne init --profile demo`. Safe to delete with the demo data_root.
 [data]
 root = "{root}"
 
@@ -75,7 +76,7 @@ def _write_sample_toml(path: Path, data_root: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     root = path_for_toml(data_root)
     path.write_text(
-        f"""# Auto-written by `cne demo --sample`.
+        f"""# Auto-written by `cne init --profile sample`.
 # The rows are synthetic and carry source=mock. Never use this lake for research.
 [data]
 root = "{root}"
@@ -177,7 +178,7 @@ def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
             "  Check the environment first: `cne doctor` (no config or network needed).\n"
             "  Then the route: `cne sources probe --only tdx_protocol "
             "--config configs/cnequity.demo.toml`.\n"
-            "  No network at all? `cne demo --sample` builds an offline lake instead."
+            "  No network at all? `cne init --profile sample` builds an offline lake instead."
         )
     df = validate_dataframe(
         with_provenance(kept, source="tdx_protocol", data_version="v1"),
@@ -268,7 +269,7 @@ def _run_research_demo(
         failed = ", ".join(result.failed)
         raise click.ClickException(
             f"Sina returned no adjustment factor for: {failed}. "
-            "Run `cne demo` without --research to test TDX only."
+            "Run `cne init --profile demo` without --research to test TDX only."
         )
     errors = [finding for finding in result.findings if finding.get("severity") == "error"]
     if errors:
@@ -522,7 +523,7 @@ Next:
     LIMIT 10
   "
 
-When network access is available, run `cne demo` for real TDX data.
+When network access is available, run `cne init --profile demo` for real TDX data.
 """
     )
     return {
@@ -563,7 +564,7 @@ def run_demo(
     init_data_layout(cfg)
     click.echo(f"data_root = {cfg.data_root}")
     click.echo(f"config    = {config_out}")
-    click.echo("Note: this is a SEPARATE lake from a full `cne init` — safe to wipe.")
+    click.echo("Note: a SEPARATE lake from `cne init --profile quick|full` — safe to wipe.")
 
     _banner(f"2/{steps}", "Probe TDX")
     try:
@@ -617,7 +618,7 @@ def run_demo(
     )
     if bars.get("status") not in ("success", "warning"):
         raise click.ClickException(
-            f"daily_bars failed: {bars}\nRe-run `cne demo` after fixing TDX connectivity."
+            f"daily_bars failed: {bars}\nRe-run `cne init --profile demo` after fixing TDX connectivity."
         )
     click.echo(
         f"Bars run {bars.get('run_id')}: status={bars.get('status')} "
@@ -684,7 +685,8 @@ Python:
   from cnequity.query import load
   bars = load("daily_bars", symbols=["{sample_symbol}"], data_root="{cfg.data_root}")
 {_intraday_hint(intraday_summary, cfg, sample_symbol)}
-Full-market backfill (hours/days) is separate: `cne config init` then `cne init`.
+Full-market backfill (hours/days) is separate: `cne config create` then
+`cne init --profile quick`.
 Do not reuse this demo data_root for production.
 """
     )

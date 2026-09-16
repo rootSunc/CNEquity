@@ -35,8 +35,8 @@ scripts/install_scheduler.sh
 CNE_GROUPS=core CNE_SOURCE_VANTAGE=overseas scripts/install_scheduler.sh
 scripts/install_scheduler.sh --check
 scripts/install_scheduler.sh --dry-run /tmp/cnequity-scheduler-review
-scripts/install_scheduler.sh --daily-only  # 只同步现有日任务，不新增晚间任务
-scripts/install_scheduler.sh --stale-only --stale-at 23:00  # 只设置当地晚间补抓时间
+scripts/install_scheduler.sh --daily-only                  # 只同步现有日任务，不新增晚间任务
+scripts/install_scheduler.sh --stale-only --stale-at 23:00 # 只设置当地晚间补抓时间
 ```
 
 `--check` 比较已安装文件与按主机选择生成的模板，存在差异或缺少任务时退出 1；
@@ -140,12 +140,12 @@ core → capital → signals → fundamentals → macro_risk → research
 ## 日常巡检命令
 
 ```bash
-cne status --datasets          # 新鲜度；STALE 时退出 1
-cne audit --full               # 湖级健康；UNHEALTHY 退出 1
-cne stats show                 # 行数概览
-cne sources slo --enforce        # 30 日关键源可用性（缺历史也 fail-closed）
-cne sources resilience --enforce # 核心数据集独立备援门禁与单源爆炸半径
-cne stability --days 20 --enforce # 连续交易日运行证据
+cne status --datasets                 # 新鲜度；STALE 时退出 1
+cne audit --full                      # 湖级健康；UNHEALTHY 退出 1
+cne stats show                        # 行数概览
+cne sources slo --enforce             # 30 日关键源可用性（缺历史也 fail-closed）
+cne sources resilience --enforce      # 核心数据集独立备援门禁与单源爆炸半径
+cne verify --runs --days 20 --enforce # 连续交易日运行证据
 ```
 
 ---
@@ -154,7 +154,7 @@ cne stability --days 20 --enforce # 连续交易日运行证据
 
 1. 查看 `daily-*.log` 定位失败组
 2. 重跑单组：`cne run daily --group <name>`
-3. 批级失败：`cne status` → `cne retry --run-id <id>`
+3. 批级失败：`cne status` → `cne run retry --run-id <id>`
 4. 复核：`cne audit --full` + `cne status --datasets`
 
 详见 [故障排查](troubleshooting.md)。
@@ -188,8 +188,8 @@ scripts/backup_meta.sh "" /Volumes/ext/cne-bak 30
 ```bash
 cd data/cnequity/meta
 tar -xzf ../backups/meta-YYYYMMDD-HHMMSS.tar.gz
-cne status    # 确认水位恢复
-cne run daily --group core   # 增量续采
+cne status                 # 确认水位恢复
+cne run daily --group core # 增量续采
 ```
 
 默认备份在湖内，磁盘级容灾请将 `CNE_BACKUP_DIR` 指到湖外。
@@ -209,7 +209,7 @@ cne snapshot restore research-20260828 /new/empty/cnequity-restore
 
 ## 20 个交易日验收
 
-`cne stability` 从权威 `trading_calendar` 取最近窗口，并按 logical trade date 选择最新
+`cne verify --runs` 从权威 `trading_calendar` 取最近窗口，并按 logical trade date 选择最新
 `daily:core` attempt。缺 run、核心 stage 失败、或只有旧 `warning` 且没有 dataset receipt，
 都会失败；研究/建议层单独降级只有在 receipt 能证明核心无失败时才计为通过。报告写入
 `meta/stability/latest.json` 和不可变历史目录。不得手工补写或把日历日当交易日。
@@ -304,8 +304,8 @@ cne snapshot restore research-20260828 /new/empty/cnequity-restore
 配套的可见性：
 
 ```bash
-cne status --datasets     # 有 STALE 退出 1
-cne serve                 # 面板首屏就列出 STALE 数据集
+cne status --datasets # 有 STALE 退出 1
+cne serve             # 面板首屏就列出 STALE 数据集
 ```
 
 ---
@@ -319,7 +319,7 @@ cne init --config configs/cnequity.toml
 2016 起全量 init 大约 1.5–2.5 小时（TDX 分页 + Sina 复权；compact 内存尖峰约 2 GB）。
 macOS 上必须 `[orchestrator].workers = 1`（TDX 客户端与 `ProcessPoolExecutor` 不兼容；
 `cne config validate` 在 Darwin 上会拒绝 `workers>1`）。
-Windows 上 `cne config init` 同样默认 `workers = 1`（spawn 可用，但首次建议单进程）；
+Windows 上 `cne config create` 同样默认 `workers = 1`（spawn 可用，但首次建议单进程）；
 需要时可自行提高，validate 不会拦截。
 单实例、收盘后运行。
 
@@ -372,8 +372,8 @@ TDX 一次请求返回 800 根 bar，所以 1m 每股每天只要 1 次请求（
 ```toml
 [minute_bars]
 enabled = true
-scope = "index:000300.SH"   # 或 "watchlist" + symbols，或 "all"
-frequencies = ["5m"]        # 5m 是唯一有真历史的频率
+scope = "index:000300.SH" # 或 "watchlist" + symbols，或 "all"
+frequencies = ["5m"]      # 5m 是唯一有真历史的频率
 fetch_workers = 4
 ```
 
@@ -412,9 +412,9 @@ Init 或首次全量回填 compact + derive 成功且 `cne status` 为 success �
 ### 前置
 
 ```bash
-cne status --config configs/cnequity.toml          # success，failed batch = 0
-cne audit  --config configs/cnequity.toml          # 无 mock_source / pk_duplicate error
-ls data/cnequity/curated/daily_bars/       # 应有 trade_date=YYYY-MM-DD 分区
+cne status --config configs/cnequity.toml # success，failed batch = 0
+cne audit  --config configs/cnequity.toml # 无 mock_source / pk_duplicate error
+ls data/cnequity/curated/daily_bars/      # 应有 trade_date=YYYY-MM-DD 分区
 ```
 
 若配置里 `[adj_factors].adjust_types` 只有 `qfq` 而你要用后复权，先追加 `"hfq"` 并重跑
@@ -506,7 +506,7 @@ assert "adj_close" in tradable.columns
 ### 逐证券日线覆盖
 
 ```bash
-cne verify-bars --config configs/cnequity.toml --start 2026-09-07 --end 2026-09-15
+cne verify --bars --config configs/cnequity.toml --start 2026-09-07 --end 2026-09-15
 ```
 
 该命令以配置的 ingest universe 检查证券×交易日，包括整个窗口没有任何行情的证券。

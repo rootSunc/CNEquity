@@ -5,9 +5,9 @@ illustrative `cne-serve-hero-demo.png` (English hero; Chinese 数据运维页面
 section), and the
 `architecture-diagram-v3.png` architecture diagram. The factual dashboard
 capture remains available as `cne-serve-hero.png` for documentation and QA.
-The previous v2 source and compatibility export remain as
-`architecture-diagram.svg` and `architecture-diagram-v2.png`; the illustrative
-dashboard source is `serve-hero-demo.html`.
+The previous v2 source and export remain as `architecture-diagram.svg` and
+`architecture-diagram-v2.png`; the illustrative dashboard source is
+`serve-hero-demo.html`.
 Other PNGs below are for docs / social / re-exports.
 PyPI uses the short `README.pypi.md`, which points at absolute
 `raw.githubusercontent.com` URLs for the one demo screenshot it embeds.
@@ -24,7 +24,6 @@ would only push the actual content down.
 | `social-preview-en.png` | 1774×887 | English social preview to upload. |
 | `social-preview-bilingual.png` | 1774×887 | Combined Chinese/English preview for review or re-export. |
 | `og-image-brand.png` | 1280×640 | Compact branded fallback card. GitHub caps the social preview at 1MB. |
-| `og-image.png` | 1280×640 | Compact fallback export. |
 | `social-preview.png` | 1774×887 | Legacy generic export retained for compatibility. |
 | `og-image.html` | — | Source the PNGs are rendered from. |
 
@@ -45,8 +44,8 @@ python scripts/survivorship_gap.py --lang zh --svg docs/assets/survivorship-gap.
 
 ## Architecture
 
-`architecture-overview.png` is a compatibility export and is no longer
-embedded. The current diagram is `architecture-diagram-v3.png` in this
+`architecture-diagram-v2.png` is the previous export, kept as the last
+version before v3. The current diagram is `architecture-diagram-v3.png` in this
 directory and is embedded in both `README.md` and `README.en.md`; update both
 references when storage layers, orchestration, quality, query, operations,
 Serve, or MCP boundaries change.
@@ -55,7 +54,7 @@ Serve, or MCP boundaries change.
 
 | File | Shows |
 |------|--------|
-| `cne-demo.png` | `cne demo` phased progress + sample bars — embedded in both READMEs |
+| `cne-demo.png` | `cne init --profile demo` phased progress + sample bars — embedded in both READMEs |
 | `cne-query.png` | `cne query` SQL result with `source` (kept for re-exports) |
 | `cne-load.png` | Python `load()` REPL (kept for re-exports) |
 
@@ -63,7 +62,7 @@ Serve, or MCP boundaries change.
 .venv/bin/python scripts/render_readme_screenshots.py
 ```
 
-Banner copy should track `cne demo` (no mootdx). Sample bar numbers may be
+Banner copy should track `cne init --profile demo` (no mootdx). Sample bar numbers may be
 from an older live run; re-render after UX copy changes.
 
 ## Dashboard screenshots
@@ -74,10 +73,9 @@ lake with something in it.
 | File | Shows |
 |------|--------|
 | `cne-serve-datasets.png` | 1440×900 factual capture of the datasets console — embedded at the top of **both** READMEs. Real numbers, no disclaimer needed, and it carries more of the contract (tier, fetch semantics, granularity, watermark, rows, size) than the overview does |
-| `cne-serve-hero-demo.png` | Synthetic README illustration: a clearly labelled full-coverage heatmap. Used **further down** in both READMEs (Chinese 数据运维页面, English "Glance at the lake") so the two dashboard images never repeat on one page |
+| `cne-serve-hero-demo.png` | Synthetic README illustration: a clearly labelled full-coverage heatmap. Used **further down** in both READMEs (Chinese 数据运维页面, English "Glance at the lake") so the two dashboard images never repeat on one page. **Draws the retired top-bar navigation** — see the note below |
 | `cne-serve-hero.png` | 1440×820 factual current overview: health, 42 datasets, KPIs, coverage heatmap and action state. Kept for docs/QA — it shows real staleness and audit state, which is honest but not a first screen |
 | `cne-serve.png` | 1440px-wide full-page overview (source / docs) |
-| `cne-serve-dataset.png` | `trade_ticks` metadata tab (for docs; not in README) |
 
 ```bash
 cne stats rebuild
@@ -93,3 +91,30 @@ Capture `cne-serve.png` separately as a full-page screenshot at the same
 1440px viewport width. Before saving either image, confirm the page shows
 “运行正常”; “度量表过期” is a transient stats state and should be cleared with
 `cne stats rebuild` rather than advertised in the README.
+
+### The retired top-bar navigation
+
+The console moved from a top pill bar to a left sidebar (`.app-shell` is a
+two-column grid at every width; the 1120px breakpoint only narrows the rail).
+Captures taken before that change draw a layout the product no longer has:
+
+- `cne-serve-hero-demo.png` and its source `serve-hero-demo.html` — **kept
+  and still embedded in both READMEs**, a deliberate call: it is a labelled
+  illustration of full coverage, not a claim about the current chrome, and
+  the factual captures beside it are post-change. Re-draw the mock in the
+  sidebar layout when it is next touched for another reason.
+- `cne-serve.png` — full-page overview export, no longer embedded anywhere.
+
+`cne-serve-datasets.png` and `cne-serve-hero.png` are post-change and current.
+
+`cne-serve-dataset.png` was removed rather than re-captured: nothing embedded
+it, and it printed a command (`cne retry --run-id`) that no longer exists. To
+bring it back, capture the dataset page directly — the tab is part of the hash
+route, and the page is taller than one viewport, so it needs a full-page
+capture:
+
+```bash
+cne stats rebuild                      # or the badge reads EMPTY over real rows
+cne serve --config configs/cnequity.toml --port 8791
+# then screenshot http://127.0.0.1:8791/#/dataset/trade_ticks/meta full-page
+```

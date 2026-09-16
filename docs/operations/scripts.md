@@ -26,10 +26,10 @@ cne status --datasets            # 探针：有 STALE 才继续
      cne run daily --stale-only  # 只重抓仍落后的
 health_notify.sh
 cne sources probe --vantage $CNE_SOURCE_VANTAGE
-cne sources slo                    # 累积报告，日更不 enforce
-cne stability --days 20           # 累积报告，日更不 enforce
+cne sources slo             # 累积报告，日更不 enforce
+cne verify --runs --days 20 # 累积报告，日更不 enforce
 backup_meta.sh
-cne clean
+cne run clean
 ```
 
 **收尾补抓**排在健康检查之前，所以补抓成功不会误报。`snapshot` 数据集只抓 run 当天，源端在那一个窗口中断就永久丢那天（重放会伪造行）——而立刻重试大概率撞上同一场中断，所以先等再抓，**但只在真有 STALE 时才等**，干净的日子零成本。详见 [runbook · 收尾补抓](runbook.md#收尾补抓)。
@@ -65,6 +65,32 @@ cne clean
 `CNE_EVENTS_GROUP`（默认全部组）、`CNE_SCHEDULER_LOCK_DIR`。
 
 上一次还在跑时直接跳过并 exit 0：每组下次都会重读自己的窗口，跳过一次不丢数据。
+
+---
+
+### stale_pipeline.sh
+
+**用途**：晚一档的 stale-only 补抓，`cne run daily --stale-only`。
+
+**为什么是独立任务**：正常的六组日更即使某个源挂了也必须**及时跑完并上报**；把 30 分钟的等待塞进那个进程里，会让一次源故障看起来像调度器超时了几小时。晚一点的第二个窗口照样能补上 snapshot-only 数据集，又不拖住正常那次。
+
+**与日更互斥**：和 `daily_pipeline.sh` 共用 `scheduler_lock.sh` 的同一把锁。launchd 可能在主 pipeline 还没跑完时触发它——这时它**直接跳过**（退出 0）而不是排队，因为下一个窗口还能再试，而重复的 run 绝不该堆在采集后面。
+
+环境变量：`CNE_BIN` / `CNE_CONFIG` / `CNE_LOG_DIR`，可选 `CNE_STALE_GROUPS`、`CNE_TRADE_DATE`。
+
+---
+
+### scheduler_lock.sh
+
+日更、事件流、stale 三个 shell 任务共用的 launchd/cron 级互斥锁。
+
+macOS 不带 `flock`，而 Python 那把 run lock 的作用域只有一次 `cne` 调用——日更脚本要跑好几条命令，所以需要一把覆盖整个脚本的锁。被 `daily_pipeline.sh` 与 `stale_pipeline.sh` source 进去用。
+
+---
+
+### scheduler_config.py
+
+渲染并比对 launchd 任务，**保留本机已有的调度选择**。`install_scheduler.sh` 用它从一份配置生成三个 plist，而不是各自手写。
 
 ---
 
@@ -209,9 +235,9 @@ python scripts/delisted_ops.py coverage --start 2016-01-01 --universe all_a_sh_s
 所以列表形式随时可跑。
 
 ```bash
-python scripts/repartition.py                        # 待改写的数据集
-python scripts/repartition.py --all --dry-run        # 先看影响
-python scripts/repartition.py trading_calendar       # 单个数据集
+python scripts/repartition.py                  # 待改写的数据集
+python scripts/repartition.py --all --dry-run  # 先看影响
+python scripts/repartition.py trading_calendar # 单个数据集
 ```
 
 读路径按目录形状自解析，改粒度本身**不需要**迁移；这只是把碎文件收回来。写入是先建临时目录、
@@ -254,6 +280,12 @@ scripts/migrate_daily_bars_volume_v2.py --config configs/cnequity.toml --apply
 - `ProgramArguments` 指向 `daily_pipeline.sh`
 - `StartCalendarInterval`：Hour=11, Minute=15（本机时区；UTC+2/+3 机器约合 16:15/17:15 CST，均在收盘后）
 - 标准输出/错误重定向到 `{data.root}/logs/launchd.*.log`
+
+`scripts/launchd/com.cnequity.stale.plist.template`
+
+- `ProgramArguments` 指向 `stale_pipeline.sh`
+- `StartCalendarInterval`：Hour=17（本机时区），排在日更之后，做 stale-only 补抓
+- 与日更共用 `scheduler_lock.sh` 的锁；主 pipeline 还在跑时直接跳过
 
 `scripts/launchd/com.cnequity.events.plist.template`
 

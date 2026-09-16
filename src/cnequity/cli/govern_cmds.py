@@ -117,7 +117,9 @@ def contract_show(dataset: str | None, dataset_option: str | None, output_path: 
         export_contract,
     )
 
-    name = dataset_option or dataset
+    # Registry names are lower case, and command names are already
+    # case-insensitive; a dataset typed in caps should resolve the same way.
+    name = (dataset_option or dataset or "").lower() or None
     try:
         payload = dataset_contract(name) if name else build_contract()
     except KeyError as exc:
@@ -544,29 +546,3 @@ def snapshot_delta_apply(
             name, target, dry_run=dry_run
         )
     click.echo(str(applied))
-
-
-# Flat aliases keep scripts written against the initial command proposal
-# working while the nested ``snapshot delta ...`` form remains discoverable.
-@snapshot_grp.command("delta-create")
-@click.argument("name")
-@click.option("--from", "baseline", type=click.Path(path_type=Path), default=None)
-@click.option("--to", "target", type=click.Path(path_type=Path), default=None)
-@click.option("--from-revision", type=int, default=None)
-@click.option("--dataset", "datasets", multiple=True)
-@config_option
-@click.option("--snapshot-root", type=click.Path(path_type=Path), default=None)
-def snapshot_delta_create_alias(
-    name: str,
-    baseline: Path | None,
-    target: Path | None,
-    from_revision: int | None,
-    datasets: tuple[str, ...],
-    config_path: str,
-    snapshot_root: Path | None,
-):
-    """Compatibility alias for ``snapshot delta create``."""
-
-    _snapshot_delta_create(
-        name, baseline, target, from_revision, datasets, config_path, snapshot_root
-    )

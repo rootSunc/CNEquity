@@ -2,8 +2,8 @@
 
 本指南覆盖两条路径：
 
-1. **一分钟试玩**（推荐新手）：`cne demo`，小宇宙、独立目录，几分钟出真数  
-2. **全量数据湖**：`cne config init` → `cne init` → `cne run daily`（耗时长、占磁盘）
+1. **一分钟试玩**（推荐新手）：`cne init --profile demo`，小宇宙、独立目录，几分钟出真数  
+2. **全量数据湖**：`cne config create` → `cne init` → `cne run daily`（耗时长、占磁盘）
 
 详细选项见 [CLI 参考](../reference/cli.md)。安装见 [installation](installation.md)。
 
@@ -13,15 +13,15 @@
 
 ```bash
 pip install cnequity
-cne demo
+cne init --profile demo
 # 可选：再看一根完整 1m 会话
-# cne demo --intraday
+# cne init --profile demo --intraday
 ```
 
 如果当前网络无法连接 TDX，可先用确定性的离线样例验证安装、Parquet 落盘和查询链路：
 
 ```bash
-cne demo --sample
+cne init --profile sample
 ```
 
 该模式不访问网络，生成的合成行全部标记为 `source=mock`，只能用于上手验证，不能用于研究。
@@ -43,7 +43,7 @@ cne query --config configs/cnequity.demo.toml --sql "
 只想验证复权研究口径，不必初始化全市场：
 
 ```bash
-cne demo --research --symbols 600519.SH
+cne init --profile demo --research --symbols 600519.SH
 ```
 
 research demo 会把窗口扩展到约三年，读取 Sina 的 hfq 因子，并打印 raw return 与 hfq return 的对照。
@@ -54,15 +54,15 @@ research demo 会把窗口扩展到约三年，读取 Sina 的 hfq 因子，并�
 ## 1. 准备全量配置
 
 ```bash
-pip install cnequity   # 若尚未安装
-cne config init                 # → configs/cnequity.toml；macOS / Windows 自动 workers=1
-# 可选：cne config init --data-root /abs/path/to/lake
+pip install cnequity # 若尚未安装
+cne config create    # → configs/cnequity.toml；macOS / Windows 自动 workers=1
+# 可选：cne config create --data-root /abs/path/to/lake
 cne config validate
 ```
 
 按需编辑 `configs/cnequity.toml` 里的 `data.root`（生产建议绝对路径）。
 
-> 源码开发：也可 `cp configs/cnequity.example.toml configs/cnequity.toml`，与 `cne config init` 等价。
+> 源码开发：也可 `cp configs/cnequity.example.toml configs/cnequity.toml`，与 `cne config create` 等价。
 
 ## 2. 初始化数据湖
 
@@ -89,7 +89,7 @@ cne init --layout-only --config configs/cnequity.toml
 ```bash
 cne init --resume --config configs/cnequity.toml
 # 或指定 run_id
-cne retry --run-id <run_id> --config configs/cnequity.toml
+cne run retry --run-id RUN_ID --config configs/cnequity.toml
 ```
 
 init 耗时较长（全市场日线分页回填），建议在稳定网络下运行。阶段定义见 [数据流 — Init](../architecture/data-flow.md#init全量回填)。
@@ -160,9 +160,9 @@ cne run daily --group research --config configs/cnequity.toml
 ## 5. 查看状态
 
 ```bash
-cne status --config configs/cnequity.toml              # 最近一次 run 摘要
-cne status --datasets --config configs/cnequity.toml   # 各数据集新鲜度
-cne stats show --config configs/cnequity.toml          # 行数统计
+cne status --config configs/cnequity.toml            # 最近一次 run 摘要
+cne status --datasets --config configs/cnequity.toml # 各数据集新鲜度
+cne stats show --config configs/cnequity.toml        # 行数统计
 ```
 
 ## 6. 读取数据
@@ -213,7 +213,7 @@ df.filter(pl.col("symbol") == "600519.SH").collect()
 
 ```bash
 cne status --config configs/cnequity.toml    # 找到 failed run_id
-cne retry --run-id <run_id> --config configs/cnequity.toml
+cne run retry --run-id RUN_ID --config configs/cnequity.toml
 ```
 
 retry 只重跑失败 batch；全部成功后自动 compact → derive_adj_factors → audit。
@@ -235,7 +235,7 @@ scripts/install_scheduler.sh   # macOS launchd，每天 11:15 本机时间
 | `universe="all_a"` 未剔历史 ST | `trading_status` 仅覆盖日更起点之后；2016→上线日回测需注意 |
 | init 中途失败 | 勿重新 `init`，用 `--resume` 或 `retry` |
 | TDX 连接失败 | `cne sources probe --only tdx_protocol`；检查 `[tdx_protocol.hosts]` 与网络 |
-| 缺配置报错 | 先跑 `cne config init` |
+| 缺配置报错 | 先跑 `cne config create` |
 | demo 与全量混用 | demo 用独立 `data/cnequity-demo/`，全量另配 `data.root` |
 
 更多排障：[troubleshooting](../operations/troubleshooting.md) · [runbook](../operations/runbook.md)。

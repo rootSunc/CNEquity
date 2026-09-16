@@ -158,7 +158,7 @@ def _live_only(config: Config, tool: str, reason: str) -> None:
     raise ToolError(
         f"{tool} needs a lake — {reason} "
         f"Live mode serves only {' and '.join(live.SUPPORTED)}. "
-        "Build one with `cne init` (or `cne demo` for a 5-symbol sample)."
+        "Build one with `cne init` (or `cne init --profile demo` for a 5-symbol sample)."
     )
 
 

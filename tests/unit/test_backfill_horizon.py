@@ -648,4 +648,16 @@ def test_a_mistyped_dataset_is_an_error_with_near_misses(name, expected):
 
 
 def test_a_real_dataset_passes_the_name_check():
-    assert backfill_cmds._require_known_dataset("daily_bars") is None
+    assert backfill_cmds._require_known_dataset("daily_bars") == "daily_bars"
+
+
+def test_the_name_check_returns_the_canonical_spelling():
+    """It resolves the name rather than only validating it.
+
+    Command names are already case-insensitive, so a dataset typed in caps has
+    to resolve the same way — and the callers use what comes back, so returning
+    the input unchanged would push `DAILY_BARS` past the check and into a
+    registry lookup that does not know it.
+    """
+    assert backfill_cmds._require_known_dataset("DAILY_BARS") == "daily_bars"
+    assert backfill_cmds._require_known_dataset("Daily_Bars") == "daily_bars"

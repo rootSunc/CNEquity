@@ -1,4 +1,4 @@
-"""Offline coverage for `cne demo` (real network is mocked)."""
+"""Offline coverage for `cne init --profile demo` (real network is mocked)."""
 
 from __future__ import annotations
 
@@ -126,6 +126,8 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
         result = CliRunner().invoke(
             cli,
             [
+                "init",
+                "--profile",
                 "demo",
                 "--symbols",
                 ",".join(symbols),
@@ -150,12 +152,15 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
 
 
 def test_demo_help_lists_command():
-    result = CliRunner().invoke(cli, ["demo", "--help"])
+    """The tiny-lake path is a profile of `init`, and its options say so."""
+    result = CliRunner().invoke(cli, ["init", "--help"])
     assert result.exit_code == 0
     assert "--symbols" in result.output
     assert "--days" in result.output
     assert "--research" in result.output
-    assert "--sample" in result.output
+    # `--sample` used to be a flag on `cne demo`; it is now a profile value,
+    # which is what makes demo/sample/quick/full one axis instead of two forks.
+    assert "demo|sample|quick|full" in result.output
 
 
 def test_cne_demo_sample_needs_no_network(tmp_path, monkeypatch):
@@ -169,8 +174,9 @@ def test_cne_demo_sample_needs_no_network(tmp_path, monkeypatch):
     result = CliRunner().invoke(
         cli,
         [
-            "demo",
-            "--sample",
+            "init",
+            "--profile",
+            "sample",
             "--symbols",
             "600519.SH,000001.SZ",
             "--days",
@@ -194,7 +200,7 @@ def test_cne_demo_sample_needs_no_network(tmp_path, monkeypatch):
 def test_cne_demo_sample_rejects_live_only_modes(tmp_path):
     result = CliRunner().invoke(
         cli,
-        ["demo", "--sample", "--research", "--data-root", str(tmp_path / "lake")],
+        ["init", "--profile", "sample", "--research", "--data-root", str(tmp_path / "lake")],
     )
 
     assert result.exit_code != 0
@@ -346,7 +352,7 @@ def _minute_frame(symbols: list[str], day: date, bars: int = 240) -> pl.DataFram
 
 
 def test_cne_demo_intraday_offline(tmp_path, monkeypatch):
-    """`cne demo --intraday` adds a 7th step and prints a real session."""
+    """`cne init --profile demo --intraday` adds a 7th step and prints a real session."""
     symbols = ["600519.SH", "000001.SZ"]
     monkeypatch.setattr("cnequity.cli.demo._probe_tdx", lambda cfg: None)
     monkeypatch.setattr(
@@ -418,6 +424,8 @@ def test_cne_demo_intraday_offline(tmp_path, monkeypatch):
         result = CliRunner().invoke(
             cli,
             [
+                "init",
+                "--profile",
                 "demo",
                 "--intraday",
                 "--symbols",

@@ -151,7 +151,7 @@ def clean_staging(
     Staging of failed/incomplete runs is resumable state — its successful
     batches may exist *only* in staging (compact was gated off). It is never
     deleted unless ``force=True``, and then the run's success batches are
-    demoted to failed in the manifest so a later ``cne retry`` refetches them
+    demoted to failed in the manifest so a later ``cne run retry`` refetches them
     instead of silently losing their rows.
     """
     manifest = Manifest(config.manifest_path)
@@ -190,7 +190,7 @@ def clean_staging(
             if not dry_run:
                 manifest.demote_success_batches(
                     run_id,
-                    reason="staging evicted by cne clean --force; refetch on retry",
+                    reason="staging evicted by cne run clean --force; refetch on retry",
                 )
             force_removed.append(run_id)
             bytes_freed += _delete_paths(paths, dry_run=dry_run)

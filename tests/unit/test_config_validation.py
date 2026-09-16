@@ -237,7 +237,7 @@ def test_validate_config_allows_multiprocess_on_linux(tmp_path, monkeypatch):
 
 def test_validate_config_allows_multiprocess_on_windows(tmp_path, monkeypatch):
     # Windows uses spawn, not fork — so the macOS hard reject does not apply.
-    # `cne config init` still defaults workers=1; users may raise it later.
+    # `cne config create` still defaults workers=1; users may raise it later.
     monkeypatch.setattr(sys, "platform", "win32")
     cfg = Config(
         data_root=tmp_path / "data",

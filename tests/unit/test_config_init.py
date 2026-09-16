@@ -1,4 +1,4 @@
-"""Tests for cne config init / packaged example template."""
+"""Tests for cne config create / packaged example template."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def test_render_keeps_linux_workers():
 
 
 def test_write_user_config_defaults_to_absolute_data_root(tmp_path, monkeypatch):
-    """Bare ``cne config init`` must not leave ``./data/...`` for doctor to reject."""
+    """Bare ``cne config create`` must not leave ``./data/...`` for doctor to reject."""
     monkeypatch.chdir(tmp_path)
     out = tmp_path / "configs" / "cnequity.toml"
     write_user_config(out, platform="linux")
@@ -114,14 +114,14 @@ def test_write_user_config_refuses_overwrite(tmp_path):
     assert Path(payload["data"]["root"]).resolve() == (tmp_path / "data").resolve()
 
 
-def test_cli_config_init_and_validate(tmp_path):
+def test_cli_config_create_and_validate(tmp_path):
     out = tmp_path / "cnequity.toml"
     runner = CliRunner()
     result = runner.invoke(
         cli,
         [
             "config",
-            "init",
+            "create",
             "--config",
             str(out),
             "--data-root",
@@ -132,7 +132,7 @@ def test_cli_config_init_and_validate(tmp_path):
     assert out.is_file()
     assert "Wrote" in result.output
 
-    again = runner.invoke(cli, ["config", "init", "--config", str(out)])
+    again = runner.invoke(cli, ["config", "create", "--config", str(out)])
     assert again.exit_code != 0
     assert "already exists" in again.output
 
@@ -146,4 +146,4 @@ def test_resolve_config_missing_suggests_config_init(tmp_path, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(cli, ["config", "validate"])
     assert result.exit_code != 0
-    assert "cne config init" in result.output
+    assert "cne config create" in result.output

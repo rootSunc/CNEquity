@@ -1,16 +1,16 @@
 # Example / default cnequity config.
 # Repo copy: configs/cnequity.example.toml
 # Packaged copy: src/cnequity/config/templates/cnequity.example.toml
-# Keep both identical — `cne config init` ships the packaged file.
+# Keep both identical — `cne config create` ships the packaged file.
 
 [data]
 root = "./data/cnequity"
 
 [orchestrator]
 # `workers` remains the legacy/global process budget.  The TDX and HTTP pools
-# below are independent: `cne config init` reduces this value to 1 on macOS,
+# below are independent: `cne config create` reduces this value to 1 on macOS,
 # while the macOS-safe TDX thread pool still uses `tdx_daily_workers`.
-# Windows defaults to 1 via `cne config init`; Linux may use >1.
+# Windows defaults to 1 via `cne config create`; Linux may use >1.
 workers = 8
 tdx_daily_workers = 4
 tdx_daily_backend = "auto"  # macOS: thread; Linux: process; override if needed

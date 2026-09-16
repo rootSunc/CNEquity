@@ -33,7 +33,7 @@ hide:
     <div class="cne-console__body">
       <p class="cne-console__comment"># 安装并验证完整链路</p>
       <p><b>$</b> pip install cnequity</p>
-      <p><b>$</b> cne demo</p>
+      <p><b>$</b> cne init --profile demo</p>
       <div class="cne-console__result">
         <div><span>instruments</span><small>curated</small><strong>5 rows</strong></div>
         <div><span>daily_bars</span><small>curated</small><strong>150 rows</strong></div>
@@ -116,14 +116,14 @@ hide:
       <h3>验证链路</h3>
       <p>拉取小样本真数据；网络受限时可改用确定性离线样例验证链路。</p>
       <pre><code>pip install cnequity
-cne demo</code></pre>
+cne init --profile demo</code></pre>
       <a href="getting-started/quickstart/">打开快速开始 →</a>
     </li>
     <li>
       <span>02 · BUILD</span>
       <h3>建立数据湖</h3>
       <p>初始化全市场数据，随后按水位增量日更，中断后从失败批次续跑。</p>
-      <pre><code>cne config init
+      <pre><code>cne config create
 cne init
 cne run daily</code></pre>
       <a href="operations/runbook/">查看运行方式 →</a>

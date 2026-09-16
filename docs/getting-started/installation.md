@@ -20,7 +20,7 @@ Windows 说明：
 
 ```bash
 pip install cnequity
-cne demo    # 一分钟真数样例，不需要先 clone 仓库
+cne init --profile demo    # 一分钟真数样例，不需要先 clone 仓库
 ```
 
 **没有 extras**。一条命令装齐所有数据源——通达信协议（内置客户端）、东方财富、新浪、巨潮、中国人民银行、Baostock、SnowNLP，以及申万/国证成分表所需的 XLS 解析。
@@ -30,21 +30,21 @@ cne demo    # 一分钟真数样例，不需要先 clone 仓库
 全量 `cne init` 前先写出配置（不必 clone 仓库）：
 
 ```bash
-cne config init                   # → configs/cnequity.toml；data.root 写为绝对路径；macOS / Windows 自动 workers=1
-cne config init --data-root /path/to/lake   # 可选：直接指定 data.root（同样会 resolve 为绝对路径）
+cne config create                           # → configs/cnequity.toml；data.root 写为绝对路径；macOS / Windows 自动 workers=1
+cne config create --data-root /path/to/lake # 可选：直接指定 data.root（同样会 resolve 为绝对路径）
 cne config validate
 ```
 
 ### Windows（PowerShell / cmd）
 
-路径用正斜杠、反斜杠或盘符均可；`cne config init --data-root` 会把反斜杠正确转义进 TOML：
+路径用正斜杠、反斜杠或盘符均可；`cne config create --data-root` 会把反斜杠正确转义进 TOML：
 
 ```powershell
 pip install cnequity
 cne doctor
-cne config init --data-root D:/cnequity
-# 或：cne config init --data-root "D:\cnequity"
-cne demo
+cne config create --data-root D:/cnequity
+# 或：cne config create --data-root "D:\cnequity"
+cne init --profile demo
 cne query --config configs/cnequity.demo.toml --sql "SELECT count(*) FROM daily_bars"
 ```
 
@@ -101,7 +101,7 @@ cne doctor
 ## 配置初始化
 
 ```bash
-cne config init
+cne config create
 # 等价于从包内模板写出 configs/cnequity.toml
 # 仓库开发也可：cp configs/cnequity.example.toml configs/cnequity.toml
 # 编辑 data.root — 生产环境建议使用绝对路径
@@ -113,11 +113,11 @@ cne config init
 
 ```bash
 cne --help
-cne demo
+cne init --profile demo
 # 全量配置就绪后：
 cne config validate --config configs/cnequity.toml
-cne sources probe --only tdx_protocol --config configs/cnequity.toml   # 探测 TDX 行情主机
-pytest tests/unit -q                               # 需源码 + --group dev，离线可跑
+cne sources probe --only tdx_protocol --config configs/cnequity.toml # 探测 TDX 行情主机
+pytest tests/unit -q                                                 # 需源码 + --group dev，离线可跑
 ```
 
 ## 依赖版本注意事项
@@ -143,7 +143,7 @@ pytest tests/unit -q                               # 需源码 + --group dev，�
    scripts/migrate_daily_bars_volume_v2.py --config configs/cnequity.toml --apply
    ```
 
-2. **配置**：删掉手写配置里的 `[sources.akshare]`；加上 `[sources.pboc]`（社融）。可选 `[sources.nbs]` / `[sources.exchange]` 打开发布方交叉核验。或直接 `cne config init --force` 后把 `data.root` 改回原路径。
+2. **配置**：删掉手写配置里的 `[sources.akshare]`；加上 `[sources.pboc]`（社融）。可选 `[sources.nbs]` / `[sources.exchange]` 打开发布方交叉核验。或直接 `cne config create --force` 后把 `data.root` 改回原路径。
 
 3. **孤儿包**：AkShare 已移除（[issue #3](https://github.com/rootSunc/CNEquity/issues/3)），pip / uv 不会卸掉不再依赖的包：
 

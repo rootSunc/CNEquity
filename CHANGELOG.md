@@ -93,10 +93,27 @@ rows every day are fixed — with migrations for what they already left behind.
 
 ### Fixed
 
+- **`cne backfill` refuses a reversed date range instead of sweeping on it.**
+  `--start 2026-01-02 --end 2026-01-01` walked an empty window for 24 seconds
+  of real requests, the step raised, the engine logged the traceback — and the
+  command still printed `status: success` with `rows_written: 0`. `derive`,
+  `verify --bars` and `audit` all checked this already.
+- **`cne verify --dataset` refuses a name it does not know.** The library
+  warns and skips an unknown dataset, which is right when sweeping the whole
+  registry and wrong for a name the caller typed: a misspelt `--dataset`
+  printed "覆盖完整：没有可修复的缺口" and exited 0, so a typo read as proof
+  the lake was fine. It now fails with the same near-miss suggestion
+  `cne backfill` gives.
+- **`cne sources resilience` no longer ignores a `--config` it cannot find.**
+  The report is computed from the registry, so the option is only read for
+  `--with-availability` — which meant a typo'd path was silently accepted and
+  the command exited 0. An explicitly passed `--config` is now resolved either
+  way. Its `--help` also claimed a domain carries 29 datasets; the measured
+  figure is 30.
 - **The `daily_bars` tip-key failure says what to do about it.** It reported a
   count and nothing else — not which keys, not which vendor was down, not which
   command resumes the run. It now names the findings file, `cne sources probe`,
-  the exact `cne retry --run-id`, and a `--symbols` repair for just those keys.
+  the exact `cne run retry --run-id`, and a `--symbols` repair for just those keys.
 - **A blocking lock wait is bounded and says who it is waiting for.** `compact`
   and every lake mutation queue behind a peer with `blocking=True`, and that
   wait had no deadline and no output — indistinguishable from a hang, which is
@@ -110,7 +127,7 @@ rows every day are fixed — with migrations for what they already left behind.
 - **A crashed run stops lying about being alive.** Liveness was inferred from
   heartbeat age, so a run killed mid-flight kept `status=running` in the
   manifest for `batch_stale_seconds` — an hour by default — and every command
-  that reads run status was wrong for that hour: `cne retry --failed-groups`
+  that reads run status was wrong for that hour: `cne run retry --failed-groups`
   answered "No failed daily group run to retry" about the very crash the
   operator was looking at, and `cne status` showed a ghost. Every run now holds
   `meta/locks/{run_id}.lock` for its lifetime, which the kernel releases the
@@ -177,11 +194,67 @@ rows every day are fixed — with migrations for what they already left behind.
 
 ### Changed
 
+- **Command names are case-insensitive, and `-h` works.** `cne STATUS` used to
+  be a dead end: Click's suggestions run on edit distance, and an all-caps
+  spelling is too far from its own lowercase to be offered, so the error named
+  no way forward — while `cne Status` did get one. One `token_normalize_func`
+  makes commands, subcommands and options agree; `cne config CREATE` normalises
+  in the command body, since a free-form argument bypasses that hook. Prefix
+  matching is still off, so `cne stat` is refused rather than guessed at.
+- **Stale counts and a superseded contract claim, in the published docs.** The
+  steps module page said 40 registered steps against 47; the `cne sources
+  resilience` sample output and the prose beside it still showed the old blast
+  radii (eastmoney 29/4, tdx 9/6, exchange 2/1 against a measured 30/4, 8/5,
+  4/3); and the contract page described `pit_quality` falling back to the
+  literal `strict` for non-PIT tables, with the `not_applicable` convergence
+  written as a future breaking change — it had already shipped, and 29 datasets
+  carry it today. A test now checks these counts against the registries.
+- **Every `bash` block in the docs is valid shell.** Placeholders were written
+  `<run_id>`, `<id>`, `<coverage_start>`, which bash parses as a redirect, so
+  seven blocks failed `bash -n` and could not be copy-pasted. They now use
+  Click's own uppercase convention (`RUN_ID`, `COVERAGE_START`).
+- **The published docs cover what the code actually has.** `cne ths-official`
+  had no section in the CLI reference at all; six config sections (`[quality]`,
+  `[incremental]`, `[raw_archive]`, `[exchange_audit]`, `[margin_trading]`,
+  `[trade_ticks]`) were undocumented; the source list said 7 sources where the
+  template ships 14, and described `exchange` as audit-only after it became the
+  `margin_trading` primary; the module tree omitted `provenance`, `diagnostics`,
+  `compliance` and `mcp_server`; and `stale_pipeline.sh` — a third scheduled
+  job with its own launchd template — appeared nowhere in the ops scripts page.
+- **The top-level command surface is 19 entries, sectioned** (was 25, flat and
+  alphabetical). `cne --help` now groups them the way a lake is used — set up,
+  run, check, consume, govern — instead of listing `audit`, `verify`,
+  `verify-bars`, `stability` and `status` side by side as if choosing between
+  them were obvious. Typing a moved name prints where it went.
+  - `cne verify-bars` → `cne verify --bars`; `cne stability` → `cne verify
+    --runs`. All three ask "did what should have landed, land?", at three
+    grains. Options are refused by name across modes, not ignored.
+  - `cne retry` / `cne compact` / `cne clean` → `cne run retry` / `run compact`
+    / `run clean`. Every schedule group already ends in a `compact` step, so
+    these are the manual path back from a failure, not part of a healthy day.
+  - `cne demo` → `cne init --profile demo` (and `--sample` → `--profile
+    sample`). How much of the market to build is one axis: demo, sample, quick,
+    full.
+  - `cne config init` → `cne config create`, one word away from `cne init`,
+    which builds a lake and is far more expensive to run by mistake.
+  - `cne ths-official snapshot` → `cne ths-official capture`, which no longer
+    collides with the unrelated `cne snapshot`.
+
 - The daily audit inspects active partitions; the whole-lake sweep moves to
   once a week (`CNE_FULL_AUDIT_DOW`). It reads every historical Parquet file —
   1h39m wall for 7m of CPU on a 25 GB lake — and had been running every
   trading day.
 - Steps persist their findings, so a failed run explains itself.
+
+### Removed
+
+- Two byte-identical image duplicates: `docs/assets/architecture-overview.png`
+  (same bytes as `architecture-diagram-v2.png`) and `og-image.png` (same bytes
+  as `og-image-brand.png`), plus `cne-serve-dataset.png` — nothing embedded it
+  and it printed `cne retry --run-id`, a command that no longer exists.
+- `cne servers test`, deprecated in favour of `cne sources probe --only
+  tdx_protocol` and scheduled for removal in 0.9.0. `cne snapshot delta-create`
+  and `cne status --run-id`, both aliases of a spelling that already existed.
 
 ### Migrations
 
@@ -224,7 +297,7 @@ reports 29 breaking and 0 compatible differences, all of them the same field.
 
 ### Added
 
-- **`cne clean --keep-revision-generations N` (default 5), and
+- **`cne run clean --keep-revision-generations N` (default 5), and
   [ADR-0010](docs/adr/0010-bounded-generation-retention.md).** Every commit
   copies the whole dataset into a new immutable generation and nothing ever
   removed one: 307 generations and 16 GB against 14 GB of curated data, of
@@ -499,7 +572,7 @@ stay silent, per [ADR-0008](docs/adr/0008-optional-keyed-sources.md).
   stored probe history into per-source availability SLOs and de-duplicated
   incident payloads; `cne sources resilience` derives source concentration,
   failure domains and a fail-closed backup gate for the core datasets from the
-  registry with no network calls; `cne stability` checks consecutive clean
+  registry with no network calls; `cne verify --runs` checks consecutive clean
   trading days without filling gaps. Each supports `--enforce`.
 - **Run provenance on receipts.** Revision and snapshot receipts carry
   non-secret code and config identity (package version, git commit, config
@@ -564,7 +637,7 @@ stay silent, per [ADR-0008](docs/adr/0008-optional-keyed-sources.md).
   reachable from neither the README nor any automation — one-off tooling that a
   published CLI turns into a permanent compatibility obligation. Nothing lost a
   capability:
-    - `cne servers test` remains as a deprecated, hidden compatibility alias
+    - `cne sources probe --only tdx_protocol` remains as a deprecated, hidden compatibility alias
       through the 0.8.x line. It keeps the v0.7.3 payload-probe semantics and
       warns that removal is planned for 0.9.0; use `cne sources probe --only
       tdx_protocol` as the replacement.
@@ -614,7 +687,7 @@ stay silent, per [ADR-0008](docs/adr/0008-optional-keyed-sources.md).
 
 ### Deprecated
 
-- **`cne servers test`** remains for one minor release as a compatibility
+- **`cne sources probe --only tdx_protocol`** remains for one minor release as a compatibility
   spelling. It runs the same `tdx_protocol` payload probe as v0.7.3, emits both
   a `DeprecationWarning` and a CLI warning, and is planned for removal in
   0.9.0. Use `cne sources probe --only tdx_protocol` as the replacement.
@@ -638,7 +711,7 @@ stay silent, per [ADR-0008](docs/adr/0008-optional-keyed-sources.md).
 - **A run killed mid-DAG is no longer retried into a `success`.** The retry
   path only checked for never-started steps on `init` runs. A daily job killed
   by the OOM killer left no batch at all for the steps it never reached, so the
-  ledger looked clean: `cne retry` repaired what had failed and closed the run
+  ledger looked clean: `cne run retry` repaired what had failed and closed the run
   as `success` with the rest of the day silently missing. Every run now records
   the step list it was started with (`planned_steps`), the retry runs the
   planned steps that never started — skipping any whose input in that run is
@@ -830,7 +903,7 @@ stay silent, per [ADR-0008](docs/adr/0008-optional-keyed-sources.md).
 - **`cne snapshot`'s three subcommands had no help text at all.** `create`,
   `verify` and `restore` listed as bare names with no description and no option
   help — the only commands in the CLI with none.
-- **`cne stability` and `cne sources policy` had no CLI test.** Both are
+- **`cne verify --runs` and `cne sources policy` had no CLI test.** Both are
   fail-closed gates whose exit code is the entire point, and `stability` runs in
   `scripts/daily_pipeline.sh` every day. A wrapper that stopped raising would
   have reported the failure and still exited 0.
@@ -896,7 +969,7 @@ stay silent, per [ADR-0008](docs/adr/0008-optional-keyed-sources.md).
 
 ### Fixed
 
-- **`cne retry` resumes a run on its own trade_date, not today's.** The CLI
+- **`cne run retry` resumes a run on its own trade_date, not today's.** The CLI
   never passed a `trade_date`, so a retry fell through to today by default.
   Retrying a run after its session rolled over — the ordinary case — replayed
   every failed batch against today's date instead of the run's, so a backfill

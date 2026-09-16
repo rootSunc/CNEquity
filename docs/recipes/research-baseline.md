@@ -6,7 +6,7 @@
 
 ```bash
 pip install cnequity
-cne demo --research --symbols 600519.SH
+cne init --profile demo --research --symbols 600519.SH
 ```
 
 `--research` 会把窗口扩展到约三年，额外从 Sina 派生 hfq 因子。命令末尾会打印类似下面的摘要（收益会随 as-of 交易日变化）：
@@ -15,7 +15,7 @@ cne demo --research --symbols 600519.SH
 600519.SH: raw return -24.25% → hfq return -14.39% (756 exact rows, ...)
 ```
 
-如果只需要确认 TDX 连通性，可以先跑不带 `--research` 的 `cne demo`；网络受限时不要把失败的研究输出当成“没有复权变化”。
+如果只需要确认 TDX 连通性，可以先跑不带 `--research` 的 `cne init --profile demo`；网络受限时不要把失败的研究输出当成“没有复权变化”。
 
 ## 2. 在 Python 中复核合同
 

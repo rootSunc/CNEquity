@@ -135,7 +135,7 @@ def _candidate_servers(config: Config | None) -> list[tuple[str, int]]:
 
     Only the first ``_TDX_MAX_CANDIDATES`` entries are ever probed, and the
     bundled list is shuffled to spread load across it. A caller with no
-    configured pool — which is exactly what ``cne demo`` writes — therefore had
+    configured pool — which is exactly what ``cne init --profile demo`` writes — therefore had
     every probed slot filled by a random draw from the whole bundled list. On a
     network where only a handful of those hosts answer, that draw misses all of
     them often enough that the first command a new user runs simply fails,

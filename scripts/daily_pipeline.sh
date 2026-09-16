@@ -192,7 +192,7 @@ fi
 # is intentionally not enforced here: the first 19 clean days must not make a
 # healthy ingestion job exit non-zero.  Release governance enforces day 20.
 log "--- stability evidence ---"
-if ! "$CNE" stability --config "$CONFIG" --days 20 >>"$LOG" 2>&1; then
+if ! "$CNE" verify --runs --config "$CONFIG" --days 20 >>"$LOG" 2>&1; then
   log "stability reporting FAILED (non-fatal)"
 fi
 
@@ -203,11 +203,11 @@ fi
 
 # Staging is per-run scratch; once a run succeeded and compact merged it into
 # curated it is pure duplication. Nothing ran this automatically before, so it
-# grew to ~60% of the curated layer. `cne clean` only drops staging whose run
+# grew to ~60% of the curated layer. `cne run clean` only drops staging whose run
 # succeeded *and* compacted (or is an unknown orphan past retention) — the
 # staging of a failed run is resumable state and is always kept.
 log "--- clean staging ---"
-if ! "$CNE" clean --config "$CONFIG" >>"$LOG" 2>&1; then
+if ! "$CNE" run clean --config "$CONFIG" >>"$LOG" 2>&1; then
   log "staging cleanup FAILED (non-fatal)"
 fi
 

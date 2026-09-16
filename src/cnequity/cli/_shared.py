@@ -38,7 +38,7 @@ def config_option(func):
 def resolve_config_path(config_path: str):
     path = Path(config_path)
     if config_path == USER_CONFIG and not path.exists():
-        # `cne demo` writes the demo config, not the user one, so every
+        # `cne init --profile demo` writes the demo config, not the user one, so every
         # command it points at afterwards ("if this fails, run `cne sources
         # probe ...`") used to die here on a second, unrelated error — at
         # exactly the moment the user was already trying to recover. Name the
@@ -48,12 +48,13 @@ def resolve_config_path(config_path: str):
         hint = ""
         if Path(DEMO_CONFIG).exists():
             hint = (
-                f"\nFound {DEMO_CONFIG} from `cne demo` — to act on the demo lake, "
+                f"\nFound {DEMO_CONFIG} from `cne init --profile demo` — to act on "
+                "the demo lake, "
                 f"add `--config {DEMO_CONFIG}`."
             )
         raise click.ClickException(
             f"Config not found: {USER_CONFIG}. "
-            "Run `cne config init` to write one from the packaged example "
+            "Run `cne config create` to write one from the packaged example "
             f"(or copy {EXAMPLE_CONFIG} if you have the repo checkout)."
             f"{hint}"
         )

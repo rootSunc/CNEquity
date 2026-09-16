@@ -447,7 +447,7 @@ class LakeView:
         elif spec.fetch_semantics == "by_date":
             out.append({"cmd": f"cne backfill {name}", "why": "按日期回补缺口"})
         if freshness == "stale":
-            out.append({"cmd": "cne status", "why": "查看最近 run，再 cne retry --run-id"})
+            out.append({"cmd": "cne status", "why": "查看最近 run，再 cne run retry --run-id"})
         out.append({"cmd": f"cne stats show --dataset {name}", "why": "逐分区行数与体积"})
         return out
 

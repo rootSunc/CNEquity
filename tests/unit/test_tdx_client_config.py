@@ -163,7 +163,7 @@ def test_verified_hosts_are_always_within_the_probed_window():
 
     Only the first ``_TDX_MAX_CANDIDATES`` entries are probed. When the bundled
     list was shuffled whole, a config without its own host pool — what
-    ``cne demo`` writes — filled every probed slot by random draw, so the
+    ``cne init --profile demo`` writes — filled every probed slot by random draw, so the
     verified hosts were missed outright on a fifth of runs.
     """
     from cnequity.adapters.tdx_protocol.hosts import VERIFIED_HOSTS

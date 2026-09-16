@@ -114,7 +114,7 @@ def backfill(
     `--symbols` when you want a quick check rather than a full market.
     """
     _progress_logging()
-    _require_known_dataset(dataset)
+    dataset = _require_known_dataset(dataset)
     if fetch_semantics(dataset) == "snapshot" and not get_dataset(dataset).backfill_source:
         raise click.ClickException(
             f"{dataset}: backfill not supported — fetch semantics are snapshot "
@@ -150,6 +150,12 @@ def backfill(
         cfg._sector_bars_force = force
     start_d = parse_date_option(start_str, "--start")
     end_d = parse_date_option(end_str, "--end")
+    if start_d and end_d and start_d > end_d:
+        # Transposing the two used to cost a full network sweep: the walk had no
+        # days in it, the step raised, the engine logged the traceback, and the
+        # command still printed status=success with rows_written=0. `derive`,
+        # `verify --bars` and `audit` all refuse this up front; so does this now.
+        raise click.ClickException("--start must be on or before --end")
     if bse_tip_repair:
         if not symbols_str:
             raise click.ClickException("--bse-tip-repair requires --symbols")
@@ -270,7 +276,7 @@ def _finish_backfill_run(engine, result: dict) -> dict:
     # compacts to a no-op (`step_compact` only touches datasets with files
     # under this run_id), so there is no cost to always trying.
     # Through the engine, not step_compact directly: the recorded compact
-    # batch is what later lets `cne clean` release this run's staging.
+    # batch is what later lets `cne run clean` release this run's staging.
     result["compact"] = engine.run_step("compact", shanghai_today(), run_id)
     compact_status = result["compact"].get("status", "success")
     if compact_status == "failed" or result["status"] == "failed":
@@ -359,7 +365,7 @@ def _recover_compactable_backfill_staging(engine: JobEngine, dataset: str) -> li
     return recovered
 
 
-def _require_known_dataset(dataset: str) -> None:
+def _require_known_dataset(dataset: str) -> str:
     """Reject a mistyped name with the near misses, not a ``KeyError`` dump.
 
     `cne backfill` takes a dataset, and the registry lookup that rejects an
@@ -368,9 +374,13 @@ def _require_known_dataset(dataset: str) -> None:
     """
     from cnequity.domain.datasets import DATASETS
 
-    if dataset in DATASETS:
-        return
-    close = difflib.get_close_matches(dataset, sorted(DATASETS), n=3)
+    # Registry names are lower case, and command names are already
+    # case-insensitive, so a dataset typed in caps should resolve the same way.
+    # Returns the canonical spelling for the caller to use from here on.
+    canonical = dataset.lower()
+    if canonical in DATASETS:
+        return canonical
+    close = difflib.get_close_matches(canonical, sorted(DATASETS), n=3)
     hint = f" Did you mean: {', '.join(close)}?" if close else ""
     raise click.ClickException(
         f"unknown dataset {dataset!r}.{hint} `cne status --datasets` lists every dataset."
@@ -412,7 +422,7 @@ def _backfill_once(cfg, dataset: str) -> dict:
     engine = JobEngine(cfg)
     _recover_compactable_backfill_staging(engine, dataset)
     # Do not finish_run until after compact — otherwise a kill between the two
-    # leaves status=success with no compact batch, and `cne clean` cannot reclaim
+    # leaves status=success with no compact batch, and `cne run clean` cannot reclaim
     # staging that never reached curated (same ordering as delisted CLI).
     result = engine.run_job("backfill", steps=[dataset], backfill=True, finalize_run=False)
     return _finish_backfill_run(engine, result)

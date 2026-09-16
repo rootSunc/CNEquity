@@ -72,23 +72,23 @@ AkShare 和其它取数工具解决“怎样调用数据源”，Tushare 提供�
 
 ```bash
 pip install cnequity
-cne demo
+cne init --profile demo
 ```
 
-`cne demo` 默认拉取 5 只股票最近约 30 个交易日的真实数据，写入独立目录 `data/cnequity-demo/`，不会覆盖正式数据湖。需要能访问 TDX 行情主机；如果连接失败，可以先检查：
+`cne init --profile demo` 默认拉取 5 只股票最近约 30 个交易日的真实数据，写入独立目录 `data/cnequity-demo/`，不会覆盖正式数据湖。需要能访问 TDX 行情主机；如果连接失败，可以先检查：
 
 ```bash
 cne doctor                 # 环境体检：不需要配置，也不需要网络
 cne sources probe --only tdx_protocol --config configs/cnequity.demo.toml
 ```
 
-完全无法连接 TDX 时，运行 `cne demo --sample`，可离线验证安装、Parquet 落盘和查询链路。合成行全部标记为 `source=mock`，不可用于研究。
+完全无法连接 TDX 时，运行 `cne init --profile sample`，可离线验证安装、Parquet 落盘和查询链路。合成行全部标记为 `source=mock`，不可用于研究。
 
 ## 能力一览
 
 | | |
 |---|---|
-| **采集** | 42 个数据集 · 14 个上游源 · 主备路由 · 批次级重试、断点续跑与水位对账 |
+| **采集** | 42 个数据集 · 15 个上游源 · 主备路由 · 批次级重试、断点续跑与水位对账 |
 | **研究口径** | 复权（hfq / qfq 查询侧换算）· 历史指数与行业成分 · PIT 财报 · **保留退市股** |
 | **数据契约** | 写前 schema 校验 · 行级溯源（`source` / `data_version` / `fetched_at`）· 破坏性变更必须提版本 |
 | **质量** | 84 项审计检查 · 跨源比对 · 覆盖缺口与陈旧检测 · 可配置发布门禁 |
@@ -99,7 +99,7 @@ cne sources probe --only tdx_protocol --config configs/cnequity.demo.toml
 全部本地运行，**不需要注册、token 或积分**。
 
 <p align="center">
-  <img src="docs/assets/cne-demo.png" alt="cne demo 分阶段采集真实日线并打印结果" width="820" />
+  <img src="docs/assets/cne-demo.png" alt="cne init --profile demo 分阶段采集真实日线并打印结果" width="820" />
 </p>
 
 然后在 Python 中读取：
@@ -114,7 +114,7 @@ print(bars.tail())
 想直接比较原始价格与后复权口径：
 
 ```bash
-cne demo --research --symbols 600519.SH
+cne init --profile demo --research --symbols 600519.SH
 ```
 
 ## 数据运维页面
@@ -167,7 +167,7 @@ roe = load(
 
 ```bash
 pip install cnequity
-cne config init            # 生成 configs/cnequity.toml
+cne config create          # 生成 configs/cnequity.toml
 cne init                   # 全市场标的，默认回溯最近 3 年
 cne run daily --group core # 之后每个交易日执行日更分组（见下方「日常使用与运维」）
 ```
@@ -180,7 +180,7 @@ cne run daily --group core # 之后每个交易日执行日更分组（见下方
 cne init --profile full
 
 # 或对单个数据集补历史
-cne backfill daily_bars --start 2016-01-01 --end <coverage_start>
+cne backfill daily_bars --start 2016-01-01 --end COVERAGE_START
 ```
 
 默认初始化通常是小时级、GB 级，实际取决于网络、数据源状态和机器配置。详细安装说明见[快速开始](docs/getting-started/quickstart.md)和[安装指南](docs/getting-started/installation.md)。
@@ -304,9 +304,9 @@ CNEquity 适合需要反复使用同一份历史数据的研究和数据工作�
 cne run daily --group core    # 日更的一个调度组（全部 6 个组见下）
 cne status                    # 查看 FRESH / STALE / EMPTY
 cne serve                     # 打开 http://127.0.0.1:8787
-cne sources probe                   # 检查上游数据源健康度
-cne retry --run-id <run_id>   # 只重试失败批次
-cne retry --failed-groups     # 重试各 daily 分组最新的失败 run
+cne sources probe             # 检查上游数据源健康度
+cne run retry --run-id RUN_ID # 只重试失败批次
+cne run retry --failed-groups # 重试各 daily 分组最新的失败 run
 ```
 
 日更按**调度组**执行，一天跑 6 个：`core`、`capital`、`signals`、`fundamentals`、
@@ -361,7 +361,7 @@ cne mcp --config "$(pwd)/configs/cnequity.toml"
 - “计算 2018 年财报因子的 IC，不要使用未来数据。”
 - “过去三年退市的股票，退市前 60 天有什么共同形态？”
 
-还没有正式湖时，可以先运行 `cne demo`，再使用生成的 demo 配置。完整说明见[MCP 参考](docs/reference/mcp.md)。
+还没有正式湖时，可以先运行 `cne init --profile demo`，再使用生成的 demo 配置。完整说明见[MCP 参考](docs/reference/mcp.md)。
 
 ## 常见问题
 
@@ -410,7 +410,7 @@ cne backfill daily_bars --start 2001-01-01
 
 ## 文档与项目状态
 
-- [快速开始](docs/getting-started/quickstart.md) · [CLI 参考](docs/reference/cli.md) · [完整文档索引](docs/README.md)
+- [快速开始](docs/getting-started/quickstart.md) · [CLI 参考](docs/reference/cli.md)（[19 个命令一览](docs/reference/cli.md#命令一览)）· [完整文档索引](docs/README.md)
 - [数据集目录](docs/datasets/catalog.md) · [MCP 参考](docs/reference/mcp.md) · [运维手册](docs/operations/runbook.md)
 - [CHANGELOG](CHANGELOG.md) · [安全策略](SECURITY.md)
 

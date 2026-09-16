@@ -60,7 +60,7 @@ required to tag or publish the package. Generate them from the production lake
 into a directory of your own:
 
 ```bash
-cne stability --config /path/to/production.toml --days 20 --enforce \
+cne verify --runs --config /path/to/production.toml --days 20 --enforce \
   > evidence/vX.Y.Z/stability-20d.json
 cne sources slo --config /path/to/production.toml \
   --window-days 30 --minimum-observations 10 --enforce \

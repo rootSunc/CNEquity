@@ -3,8 +3,8 @@
 配置文件格式：TOML。模板随包装在 `cnequity.config.templates`；仓库内副本为 `configs/cnequity.example.toml`。
 
 ```bash
-cne config init                              # 推荐：写出 configs/cnequity.toml
-cne config init --data-root /data/cnequity
+cne config create                              # 推荐：写出 configs/cnequity.toml
+cne config create --data-root /data/cnequity
 cne config validate --config configs/cnequity.toml
 ```
 
@@ -61,7 +61,25 @@ cne config validate --config configs/cnequity.toml
 
 ## `[sources.<name>]`
 
-支持的 name：`eastmoney`、`cninfo`、`pboc`、`sina`、`baostock`、`nbs`、`exchange`。
+模板里的 `name`（14 个）：
+
+| name | 说明 |
+|------|------|
+| `eastmoney` | 日更主源：公告、财务、资金流 |
+| `cninfo` | 公告 / 监管分页 POST |
+| `pboc` | 社融月度序列 |
+| `sina` | 新闻、复权因子 |
+| `sina_bars` | Sina 日线兜底；**自带更慢的限速器**——因子端点和按标的 kline 端点的上游限速行为不同 |
+| `baostock` | 历史行情兜底；带全市场回填批次冷却 |
+| `nbs` | 仅 audit：PMI 发布稿对照 |
+| `exchange` | 上交所 / 深交所自有板块（融资融券明细、交易状态、`[exchange_audit]` 价格对照） |
+| `bse` | 北交所官方当前行情快照；**BJ 当日 tip bar 与成交额的主源**。它不是历史源，BJ 历史窗口仍走 Sina |
+| `ths` | 同花顺公开页（行业、估值） |
+| `ths_bonus` | 同花顺分红送配页，限速更保守（默认 3.0s） |
+| `ths_pages` | `d.10jqka.com.cn` 的 kline 页 |
+| `ths_official` | **同花顺官方 API（keyed）**，见 [`cne ths-official`](../reference/cli.md#cne-ths-official) |
+| `tushare` | 可选 Tushare Pro——BJ 历史 ST 证据（`stock_st`）。需 token，**优先用环境变量 `TUSHARE_TOKEN`**，别把凭证写进配置 |
+
 
 | 键 | 说明 |
 |----|------|
@@ -69,6 +87,9 @@ cne config validate --config configs/cnequity.toml
 | `min_interval_seconds` | 跨进程文件槽位限速（见 `domain/rate_limit.py`）；锁内只预订时隙，等待发生在释放锁后 |
 | `proxy`（eastmoney） | 可选 HTTP(S) 代理 URL，对所有东财主机生效；**大陆网络不需要**，海外出口才配。未设时仍可用环境变量 `HTTPS_PROXY` |
 | `batch_size` / `batch_rest_seconds`（baostock） | 全市场回填批次冷却，防 IP 黑名单 |
+| `verify`（ths_official） | 默认 **开**。只允许写 `meta/source_snapshots` 与 findings，从不碰 curated 行，所以有 key 就可以安全开着 |
+| `backfill`（ths_official） | 默认 **关**。它会改变湖里的内容，所以必须显式打开。持有凭证、启用源、允许它改数据是三个决定 |
+| `api_key`（ths_official） | 建议用环境变量 `HITHINK_FINANCE_API_KEY` 而非写进配置 |
 
 推荐默认（时间宁可慢，勿被封）：
 
@@ -234,6 +255,93 @@ Wave DAG：每个 wave 含 `name`、`parallel`（wave 内 step 是否并行）�
 | `fetch_workers` | `4` | 并发 TDX 连接数（不提高请求速率，只消网络空转；上限仍约 10 req/s） |
 
 **源端视野**（实测 2026-08-01）：1m ≈ 95 个交易日，5m ≈ 491 个交易日。更早窗口返回空；`cne backfill … --start` 早于视野会直接拒绝。磁盘与耗时见 [runbook — 日内数据](../operations/runbook.md#日内数据minute_bars--minute_bars_5m)。
+
+---
+
+## `[trade_ticks]`
+
+分笔成交记录。**自成一段**，不是 `[minute_bars]` 里的一个开关——两者的量级差一个数量级，开启分钟线不该悄悄把它一起带上。
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `enabled` | `false` | 总开关 |
+| `scope` | `"watchlist"` | `index:<symbol>` / `watchlist` / `all` |
+| `symbols` | `[]` | `scope = "watchlist"` 时的显式列表 |
+| `max_symbols` | `200` | 单次抓取的标的数上限 |
+| `fetch_workers` | `4` | 并发 TDX 连接数（实测 40 标的 × 5 会话：1 个 4.50 req/s，4 个 10.13 req/s，已到限速器天花板） |
+
+**这不是逐笔成交。** A 股 Level-1 是 3 秒快照，一行聚合的是那个时间片里落下的全部真实成交（实测平均 6–33 笔）。时间戳只到分钟——协议从来没带过秒——所以行用 `tick_seq`（会话内位置）标识。`direction` 是 TDX 自己按 tick rule 猜的主动方，不是交易所字段。
+
+**历史视野**：TDX 对每个标的都回溯到 2024-01-02，是**固定底**而非滚动窗口，与分钟线的每标的 bar 数上限无关。`cne backfill trade_ticks --start` 早于此会直接拒绝。
+
+用 `cne run daily --group ticks` 或 `cne backfill trade_ticks` 采集。
+
+---
+
+## `[quality]`
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `audit_gate` | `"shadow"` | 湖审计报 `error` 时这次 run 怎么办 |
+
+三档：
+
+- `off` — 什么都不记，永不失败（0.8.2 之前的行为）
+- `shadow` — 把"本该被拦下"的记下来，但让 run 成功
+- `block` — 让 run 失败，`cne status` 与 pipeline 退出码都能看见
+
+audit step 依赖 `compact`，所以它在**行已经进 curated 之后**才跑：`block` 是让 run 失败，不是阻止写入。shadow 模式每个受影响的 run 往 `meta/quality/audit_gate.jsonl` 追加一行——切到 `block` 之前应该先读它。一个不知道会多频繁触发就打开的门禁，很快会被关掉。
+
+只有 `error` 触发门禁；发 `warning` 的那 32 个检查从不触发。见 [ADR-0012](../adr/0012-the-audit-gates-in-shadow-first.md)。
+
+---
+
+## `[incremental]`
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `negative_evidence_ttl_days` | `7` | 「源端此处为空」这类否定证据的有效期；设 `0` 则每次都重试缺失键。标的目录发生 revision 时，仍然会让在有效期内的证据失效 |
+| `deep_reconciliation_dow` | `6` | 每周做一次深度对账的星期（0=周一）。目前只有 `announcement_index` 声明它 |
+
+为什么需要它：CNINFO 把分页固定在 30 行且忽略 `pageSize`，它的 30 天窗口每次扫描约 1,350 个请求——全 pipeline 单项开销最大的一处——而绝大多数是在重读湖里已有的记录。实测对照源端：3 天、7 天、14 天前的日期返回的内容与已存完全一致，而 21 天前的日期在 5,932 行里多出 21 行。深尾是真的存在，所以改成每周扫一次而不是直接砍掉：一条晚索引的公告现在会在一周内落地，而不是一天内。它自己的 `announce_date` 两种做法都不变，所以 PIT 正确性不依赖它何时到达——滞后的只是湖的完整度。
+
+---
+
+## `[raw_archive]`
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `enabled` | `true` | 是否把源端原始响应压缩存到 `meta/raw` |
+| `compression` | `"gzip"` | 压缩方式 |
+| `max_payload_bytes` | `33554432` | 单个响应的存档上限（32MB） |
+
+**请求凭证、代理设置、Cookie 和 authorization 头一律不存档。**
+
+---
+
+## `[exchange_audit]`
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `price_tolerance_bps` | `10` | 收盘价偏差容忍（基点） |
+| `turnover_tolerance_bps` | `100` | 成交额偏差容忍（基点） |
+| `turnover_max_fraction` | `0.15` | 触发 finding 所需的全域占比 |
+
+把 `daily_bars` 与上交所、深交所自己发布的收盘价对照——**全湖唯一一个能触达发布方而非第二个转售方的价格检查**。受 `[sources.exchange]` 控制；findings 是建议性的，永不让 run 失败。
+
+上交所只提供当前正在发布的那个会话，所以 SH 是当日仲裁；深交所可查任意历史日期。
+
+成交额的容忍度**故意放宽**：交易所的日总额包含了连续竞价 bar 不含的交易，curated 合理地会略低。实测 2026-08-28，5,212 个共有标的中 305 个（5.9%）存在偏差，全部是 SZ，且方向一致。finding 按**全域占比**触发，所以差距扩大会被抓到，而那个长期存在的定义性差异保持安静。
+
+---
+
+## `[margin_trading]`
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `source` | `"exchange"` | 融资融券明细的来源 |
+
+`"exchange"` 直接读上交所与深交所的融资融券明细，它们由会员单位报送汇总——中间没有转售方。
 
 ---
 

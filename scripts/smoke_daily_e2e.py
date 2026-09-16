@@ -140,7 +140,7 @@ def main() -> int:
         return 1
     _print("FAILURE CONTRACT CHECK", "passed")
 
-    _print("Phase 4", "cne retry — restore network")
+    _print("Phase 4", "cne run retry — restore network")
     retry = engine.run_job("retry", retry_failed_only=True, run_id=fail_id, trade_date=TRADE_DATE)
     final = Manifest(cfg.manifest_path).run_summary(fail_id)
     _print("retry result", retry)

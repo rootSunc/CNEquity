@@ -99,7 +99,7 @@ Batch 状态：`pending` → `running` → `success` | `failed` | `stale`
 - `count_stale_running_runs()`：只读信号，供 `cne status` 报告孤儿数
 - `run_summary(run_id)`：供 `cne status` 输出
 
-运维也可显式：`cne clean --reconcile-runs`（默认窗口同 `batch_stale_seconds`）。
+运维也可显式：`cne run clean --reconcile-runs`（默认窗口同 `batch_stale_seconds`）。
 
 **锁等待有上限。** `compact` 和所有湖内改写用 `blocking=True` 排队，等待上限
 `DEFAULT_LOCK_WAIT_SECONDS`（1 小时，留足一次全市场 compact 的时间），开始等的时候会打
@@ -116,11 +116,11 @@ Batch 状态：`pending` → `running` → `success` | `failed` | `stale`
 1. 从 instruments 取 symbol 列表，按 `batch_size` 切分
 2. 每 batch 在子进程执行 adapter 拉取 → staging
 3. 子进程独立 TDX 连接（主进程不可 fork 共享连接）
-4. manifest 记录每 batch 状态，支持 `cne retry` 粒度
+4. manifest 记录每 batch 状态，支持 `cne run retry` 粒度
 
 `corporate_actions` 回填同样按 `orchestrator.batch_size` 切成 symbol chunk，但在
 编排进程内串行执行（TDX xdxr 是逐 symbol 请求）。每个成功 chunk 先写入 staging
-并登记成功收据；父 batch 失败时，`cne retry` 只重拉没有成功收据的 symbol，避免
+并登记成功收据；父 batch 失败时，`cne run retry` 只重拉没有成功收据的 symbol，避免
 从头重复全市场扫描。chunk 收据不单独阻塞 compact，父 batch 仍是数据集的完整性门禁。
 
 分页：突破 TDX 单次 800 条限制，增量模式早停于水位之后。

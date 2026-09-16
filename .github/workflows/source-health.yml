@@ -47,7 +47,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$HEALTH_ROOT"
-          cne config init \
+          cne config create \
             --config "$HEALTH_ROOT/cnequity.toml" \
             --data-root "$HEALTH_ROOT/data"
           if [ "$SCHEDULE" = "17 3 * * 1" ]; then

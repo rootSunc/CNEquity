@@ -62,8 +62,8 @@ uv run cne status --datasets   # valuation 不应再停在稀疏 tip
 
 | 现象 | 原因 | 处理 |
 |------|------|------|
-| `cne status` 显示 `orphaned_running_runs > 0` | 进程被杀 / OOM，旧代码未在 `finally` 里 `finish_run`；status 从不自动 reconcile | **已修**：每次 `cne run daily` / `cne retry` 入口心跳感知 reconcile；retry 全绿也会 `finish_run` |
-| 需要立刻清理 | — | `cne clean --reconcile-runs`（跳过仍持锁的 live run） |
+| `cne status` 显示 `orphaned_running_runs > 0` | 进程被杀 / OOM，旧代码未在 `finally` 里 `finish_run`；status 从不自动 reconcile | **已修**：每次 `cne run daily` / `cne run retry` 入口心跳感知 reconcile；retry 全绿也会 `finish_run` |
+| 需要立刻清理 | — | `cne run clean --reconcile-runs`（跳过仍持锁的 live run） |
 
 长任务（baostock 回填）靠 **batch heartbeat** 保活，不会仅因 `started_at` 超过 1h 被误杀。
 
@@ -83,9 +83,9 @@ uv run cne status --datasets   # valuation 不应再停在稀疏 tip
 
 | 可能原因 | 检查 | 处理 |
 |----------|------|------|
-| 数据仍在 staging | `ls staging/*/run_id=*` | `cne compact --run-id <id>` 或 `cne retry`；success 但无 compact batch 时**先 compact 再** `cne clean`（勿 `--force`，否则 demote 后只能重抓） |
+| 数据仍在 staging | `ls staging/*/run_id=*` | `cne run compact --run-id <id>` 或 `cne run retry`；success 但无 compact batch 时**先 compact 再** `cne run clean`（勿 `--force`，否则 demote 后只能重抓） |
 | 分组 run 未 compact | 组 steps 是否含 `compact` | 配置修正后重跑组 |
-| compact 被 gate 跳过 | `cne status` 看 failed batch | `cne retry --run-id <id>` |
+| compact 被 gate 跳过 | `cne status` 看 failed batch | `cne run retry --run-id <id>` |
 | 路径错误 | `config.data_root` | 核对 `configs/cnequity.toml` |
 
 ---
@@ -98,7 +98,7 @@ core 组每个交易日都失败，`daily_bars` 水位不前进，当天抓回�
 |------|------|------|
 | `RuntimeError: daily_bars <start>..<end>: N interior symbol×session key(s) remain absent` | 窗口内有标的缺了中间某个交易日，且主源与所有备源都补不上 | 先看缺的是哪些标的（见下），再决定是收口范围还是修源 |
 | 缺的几乎都是 158/159/160/51x/52x/56x 开头的代码 | 这些是 ETF/LOF 行情代码，不在任何研究口径里，也没有哪个源稳定提供 | **已修**：`[universe].ingest` 默认 `all_a` 不再抓它们 |
-| 缺的是真 A 股，且只缺当天 | 备源额度被别的标的耗尽（日志里 `circuit opened … leaving N symbol(s) unresolved` / `sina bars HTTP 456`） | 等下一轮，或 `cne retry --run-id <id>` 复用已抓到的批次 |
+| 缺的是真 A 股，且只缺当天 | 备源额度被别的标的耗尽（日志里 `circuit opened … leaving N symbol(s) unresolved` / `sina bars HTTP 456`） | 等下一轮，或 `cne run retry --run-id <id>` 复用已抓到的批次 |
 | `expected key(s) remain unknown after failover`，且日志里有 `EastMoney kline circuit opened` | 东财历史主机（`push2his`）对当前出口不可达。**它挂掉时链上只剩一个逐标的源，而认定"这天本来就没数据"需要两个独立源都返回空**，所以停牌股也会卡成 unknown | **已修**：链尾补了 baostock（同样逐标的、独立风控面，停牌返回空行而非报错）。跑 `cne sources substitutes` 确认还有哪些可达源能顶上；报错本身也会列出处置命令 |
 
 缺失明细写在 `meta/quality/findings/<run_id>.json`，带 `missing_symbols` 与 `sample_keys`：
@@ -107,7 +107,7 @@ core 组每个交易日都失败，`daily_bars` 水位不前进，当天抓回�
 cne status                      # 取失败的 run_id
 python - <<'EOF'
 import json, sys
-run = "<run_id>"
+run = "RUN_ID"
 d = json.load(open(f"data/cnequity/meta/quality/findings/{run}.json"))
 for f in d["findings"]:
     if f["check"] == "daily_bars_interior_gap":
@@ -130,7 +130,7 @@ EOF
 
 1. `cne status` 查看 `run_summary` 与 failed batches
 2. 查看日志 `error_message`（TDX 断连、HTTP 429、schema 校验失败等）
-3. `cne retry --run-id <id>`
+3. `cne run retry --run-id <id>`
 4. 若 TDX 问题：`cne sources probe --only tdx_protocol`；换 `[tdx_protocol.hosts].standard`
 5. 若单数据集持续失败：`cne backfill <dataset>`（需支持 backfill）
 
@@ -251,7 +251,7 @@ Findings 文件：`meta/quality/findings/{run_id}.json`
 ```bash
 cne init --resume
 # 或
-cne retry --run-id <init_run_id>
+cne run retry --run-id INIT_RUN_ID
 ```
 
 `--keep-going`：单 phase 失败后继续后续 phase（用于尽量多回填）。
@@ -272,9 +272,9 @@ meta/locks/
 
 ## 症状：磁盘不足 / staging 膨胀
 
-1. 找出 stranded success（有 staging、incomplete=0、无 compact batch）→ 逐个 `cne compact --run-id <id>`
-2. `cne clean --dry-run` → `cne clean`（终态 + 已 compact 即可删，含 failed/warning）
-3. incomplete / 未 compact 的失败 run 默认保留供 `cne retry`；只有确认可丢弃时才 `--force`
+1. 找出 stranded success（有 staging、incomplete=0、无 compact batch）→ 逐个 `cne run compact --run-id <id>`
+2. `cne run clean --dry-run` → `cne run clean`（终态 + 已 compact 即可删，含 failed/warning）
+3. incomplete / 未 compact 的失败 run 默认保留供 `cne run retry`；只有确认可丢弃时才 `--force`
 4. 压缩或归档旧 `meta/source_snapshots/`（长期会膨胀）
 5. curated 勿删；用 backfill 重采而非部分删除
 
@@ -300,8 +300,8 @@ cne status
 cne status --datasets
 cne stats show --json
 cne audit --full
-cne retry --run-id <id>
-cne clean --dry-run
+cne run retry --run-id RUN_ID
+cne run clean --dry-run
 ```
 
 ---

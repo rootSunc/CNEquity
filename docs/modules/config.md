@@ -13,7 +13,7 @@
 | 文件 | 职责 |
 |------|------|
 | `loader.py` | `load_config()`, `validate_config()`, `Config` |
-| `bootstrap.py` | `cne config init`：从包内模板写出用户 toml |
+| `bootstrap.py` | `cne config create`：从包内模板写出用户 toml |
 | `templates/cnequity.example.toml` | 随包示例（与仓库 `configs/` 副本同步） |
 | `__init__.py` | 导出 `Config`, `load_config`, `validate_config`, `write_user_config` |
 

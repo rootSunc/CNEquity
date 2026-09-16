@@ -1,4 +1,5 @@
-"""The scheduled path: `run daily`, `run events` and `retry`.
+"""The scheduled path, and the way back from a failed run: `run daily`,
+`run events`, `run retry`.
 
 Composition of these into a day's worth of work lives in
 `scripts/daily_pipeline.sh`, not here — the CLI runs one job, the script decides
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import click
 
-from cnequity.cli._root import cli
+from cnequity.cli._root import run
 from cnequity.cli._shared import (
     _cfg,
     _progress_logging,
@@ -29,11 +30,6 @@ from cnequity.config import WaveConfig
 from cnequity.domain.market_time import shanghai_today
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.run_lock import RunLockError
-
-
-@cli.group()
-def run():
-    """Run scheduled jobs."""
 
 
 def _stale_priority(spec, row: dict, anchor: date) -> tuple[int, int, int, str]:
@@ -97,11 +93,11 @@ def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> li
         from cnequity.orchestrator.manifest import Manifest
 
         manifest = Manifest(manifest_path)
-        for run in manifest.list_runs():
-            for receipt in manifest.get_dataset_results(run["run_id"], dataset=dataset):
+        for past in manifest.list_runs():
+            for receipt in manifest.get_dataset_results(past["run_id"], dataset=dataset):
                 if receipt["status"] in {"failed", "warning", "degraded", "blocked"}:
                     return True
-            for batch in manifest.get_batches_for_run(run["run_id"]):
+            for batch in manifest.get_batches_for_run(past["run_id"]):
                 if batch["dataset"] == dataset and batch["status"] in {
                     "failed",
                     "warning",
@@ -563,11 +559,11 @@ def run_events(config_path: str, group_name: str | None, trade_date_str: str | N
 
 def _retry_single_run(engine: JobEngine, run_id: str) -> dict:
     """Retry one run, print its result, and return it to the CLI caller."""
-    run = engine.manifest.get_run(run_id)
-    if run is None:
+    record = engine.manifest.get_run(run_id)
+    if record is None:
         raise click.ClickException(f"Unknown run_id: {run_id}")
     try:
-        if run["job_name"] == "init":
+        if record["job_name"] == "init":
             result = engine.resume_init(run_id=run_id)
         else:
             result = engine.run_job("retry", retry_failed_only=True, run_id=run_id)
@@ -589,16 +585,16 @@ def _failed_daily_group_runs(engine: JobEngine) -> list[dict]:
     engine._reconcile_orphans()
     latest: dict[str, dict] = {}
     for row in engine.manifest.list_runs():
-        run = dict(row)
-        job_name = str(run["job_name"])
+        record = dict(row)
+        job_name = str(record["job_name"])
         if job_name.startswith("daily:"):
             # Manifest order is newest first; an older failure must not be
             # replayed once a newer run for that group has succeeded.
-            latest.setdefault(job_name, run)
+            latest.setdefault(job_name, record)
     return [latest[name] for name in sorted(latest) if latest[name]["status"] == "failed"]
 
 
-@cli.command()
+@run.command("retry")
 @config_option
 @click.option("--run-id", default=None, help="Retry a specific run.")
 @click.option(
@@ -618,8 +614,8 @@ def retry(config_path: str, run_id: str | None, failed_groups: bool):
             click.echo("No failed daily group run to retry.")
             return
         failed = False
-        for run in runs:
-            click.echo(f"Retrying failed daily group run {run['run_id']} ({run['job_name']})")
+        for record in runs:
+            click.echo(f"Retrying failed daily group run {record['run_id']} ({record['job_name']})")
             # Heavy groups retain sizeable Polars/Python arenas. A fresh child
             # process per group releases that memory before the next retry.
             proc = subprocess.run(
@@ -627,11 +623,12 @@ def retry(config_path: str, run_id: str | None, failed_groups: bool):
                     sys.executable,
                     "-c",
                     "from cnequity.cli.main import cli; cli.main()",
+                    "run",
                     "retry",
                     "--config",
                     config_path,
                     "--run-id",
-                    str(run["run_id"]),
+                    str(record["run_id"]),
                 ],
                 check=False,
             )

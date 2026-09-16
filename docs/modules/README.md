@@ -16,7 +16,11 @@ cnequity/
 ├── derive/              派生计算
 ├── quality/             审计与 failover
 ├── query/               消费层 API
+├── provenance/          运行期血缘（写入行的 source/data_version/fetched_at）
+├── diagnostics/         cne doctor、源健康探针、SLO、稳定性证据
+├── compliance/          来源使用策略（SOURCES.yml），未知权限 fail-closed
 ├── serve/               只读湖面板（cne serve）
+├── mcp_server/          MCP stdio 服务（cne mcp）
 └── cli/                 Click 命令
 ```
 

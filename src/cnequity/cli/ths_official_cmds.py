@@ -21,7 +21,7 @@ from datetime import date
 
 import click
 
-from cnequity.cli._root import cli
+from cnequity.cli._root import cli, moved_hints
 from cnequity.cli._shared import _cfg, config_option, parse_date_option
 
 # The service floors its history around here; earlier requests come back empty.
@@ -45,7 +45,11 @@ def _skip(reason: str) -> None:
     click.echo(json.dumps({"status": "skipped", "reason": reason}, indent=2))
 
 
-@cli.group("ths-official")
+# `capture` was `snapshot`, which collided head-on with the top-level `cne
+# snapshot` — one freezes the lake into a portable archive, the other fetches a
+# vendor's rows for the arbitration checks, and nothing but position in the
+# command line told them apart.
+@cli.group("ths-official", cls=moved_hints({"snapshot": "cne ths-official capture"}))
 def ths_official_grp():
     """Cross-check and backfill against the 同花顺 official API (needs a key).
 
@@ -54,7 +58,7 @@ def ths_official_grp():
     """
 
 
-@ths_official_grp.command("snapshot")
+@ths_official_grp.command("capture")
 @config_option
 @click.option(
     "--what",
@@ -142,7 +146,7 @@ def ths_backfill(config_path: str, start: str, end: str, chunk_size: int, worker
     skipped rather than given an invented one.
 
     Needs `[sources.ths_official] backfill = true`; it changes what the lake
-    holds. Stages rows — run `cne compact --run-id <id>` afterwards.
+    holds. Stages rows — run `cne run compact --run-id <id>` afterwards.
     """
     from cnequity.steps.fundamentals import backfill_statement_gap_ths_official
 
@@ -269,7 +273,7 @@ def ths_resource_sectors(config_path: str, start: str, end: str | None, apply: b
     leaves 12.3% of rows on the scraper; those years carry 2 boards in 2018 and
     39 in 2019, against 432 today.
 
-    Stages rows — run `cne compact --run-id <id>` afterwards.
+    Stages rows — run `cne run compact --run-id <id>` afterwards.
     """
     from cnequity.steps.rotation import resource_sector_bars_ths_official
 

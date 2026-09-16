@@ -16,7 +16,7 @@
 from cnequity.steps import reference, bars, events, ...  # noqa
 ```
 
-当前 **40 个**注册 step（37 采集 + 3 finalize）。
+当前 **47 个**注册 step（43 采集 + 4 finalize：`compact`、`derive_adj_factors`、`derive_industry_index`、`audit`）。
 
 ---
 

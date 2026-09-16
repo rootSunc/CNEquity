@@ -1,4 +1,9 @@
-"""`cne init --profile quick` — the shallow first backfill, and what keeps it honest."""
+"""`cne init --profile` — how much of the market to build, on one axis.
+
+demo and sample make a tiny lake (they were `cne demo`); quick and full make
+a market. The axis is the point: the option that used to pick between two
+commands now picks a depth, and each end refuses the other end's options.
+"""
 
 from __future__ import annotations
 
@@ -220,3 +225,67 @@ def test_every_profile_keeps_the_full_cross_section(profile, tmp_path, monkeypat
         cfg._backfill_start = start
     assert getattr(cfg, "_scope_symbols", None) is None
     assert getattr(cfg, "_backfill_symbols", None) is None
+
+
+# --- the tiny-lake end of the same axis ------------------------------------
+
+
+def _capture_demo(monkeypatch, args: list[str]):
+    """Run `cne init --profile demo|sample` with both runners stubbed."""
+    seen: dict = {}
+
+    def fake_demo(**kwargs):
+        seen["runner"] = "demo"
+        seen.update(kwargs)
+
+    def fake_sample(**kwargs):
+        seen["runner"] = "sample"
+        seen.update(kwargs)
+
+    monkeypatch.setattr("cnequity.cli.demo.run_demo", fake_demo)
+    monkeypatch.setattr("cnequity.cli.demo.run_sample_demo", fake_sample)
+
+    def never(*a, **k):  # the tiny lake must not enter the init phases
+        raise AssertionError("init phases ran for a demo profile")
+
+    monkeypatch.setattr(JobEngine, "run_init_phases", never)
+    result = CliRunner().invoke(cli, ["init", *args])
+    return seen, result
+
+
+@pytest.mark.parametrize(("profile", "runner"), [("demo", "demo"), ("sample", "sample")])
+def test_a_tiny_lake_profile_routes_to_its_own_runner(profile, runner, monkeypatch, tmp_path):
+    seen, result = _capture_demo(
+        monkeypatch,
+        ["--profile", profile, "--data-root", str(tmp_path / "lake"), "--days", "5"],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["runner"] == runner
+    assert seen["days"] == 5
+    assert seen["data_root"] == tmp_path / "lake"
+
+
+def test_a_tiny_lake_profile_needs_no_config(monkeypatch, tmp_path):
+    """`cne demo` never read a config, and folding it into init must not add one."""
+    monkeypatch.chdir(tmp_path)
+    seen, result = _capture_demo(monkeypatch, ["--profile", "sample"])
+    assert result.exit_code == 0, result.output
+    assert seen["runner"] == "sample"
+
+
+@pytest.mark.parametrize(
+    ("args", "rejected"),
+    [
+        (["--profile", "sample", "--resume"], "--resume"),
+        (["--profile", "demo", "--layout-only"], "--layout-only"),
+        (["--profile", "demo", "--since", "2020-01-01"], "--since"),
+        (["--profile", "quick", "--symbols", "600519.SH"], "--symbols"),
+        (["--profile", "full", "--intraday"], "--intraday"),
+        (["--profile", "quick", "--config-out", "x.toml"], "--config-out"),
+    ],
+)
+def test_each_end_of_the_axis_refuses_the_other_end_options(args, rejected, monkeypatch):
+    seen, result = _capture_demo(monkeypatch, args)
+    assert result.exit_code != 0
+    assert f"{rejected} does not apply" in result.output
+    assert not seen, "nothing should have run"

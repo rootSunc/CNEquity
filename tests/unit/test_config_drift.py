@@ -1,6 +1,6 @@
 """`cne config diff` — what a config written once has fallen behind.
 
-The user config is gitignored and written a single time by `cne config init`.
+The user config is gitignored and written a single time by `cne config create`.
 A release that adds a step to a schedule group is therefore invisible: the
 feature ships, the config never schedules it, and `cne config validate` still
 answers `Configuration OK`.

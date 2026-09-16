@@ -1,4 +1,4 @@
-"""First-run commands: `demo`, `init`, `config`, `doctor`.
+"""First-run commands: `init`, `config`, `doctor`.
 
 Everything a fresh clone touches before it has a lake, in the order the
 quickstart walks through them.
@@ -14,6 +14,7 @@ import click
 
 from cnequity.cli._root import cli
 from cnequity.cli._shared import (
+    DEMO_CONFIG,
     _cfg,
     _progress_logging,
     _run_status_exit_code,
@@ -51,93 +52,84 @@ def _init_history_start(profile: str, since_str: str | None, trade_date: date) -
     return None
 
 
-@cli.command("demo")
+# `cne init --profile demo|sample` used to be `cne demo`. It is the same
+# decision as `quick` vs `full` — how much of the market to build — and asking a
+# first-time user to choose between two commands before they have either was one
+# fork too many. The option sets stay disjoint, so each side refuses the other's
+# flags rather than accepting and ignoring them.
+DEMO_PROFILES = ("demo", "sample")
+_DEMO_ONLY = ("symbols", "days", "data_root", "config_out", "intraday", "research")
+_LAKE_ONLY = ("config_path", "layout_only", "resume", "resume_run_id", "keep_going", "since_str")
+_FLAG_NAMES = {
+    "config_path": "--config",
+    "data_root": "--data-root",
+    "config_out": "--config-out",
+    "resume_run_id": "--run-id",
+    "since_str": "--since",
+}
+
+
+def _reject_foreign_options(profile: str, names: tuple[str, ...]) -> None:
+    """Fail on an option the chosen --profile has no meaning for."""
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return
+    for name in names:
+        if ctx.get_parameter_source(name) is not click.core.ParameterSource.COMMANDLINE:
+            continue
+        flag = _FLAG_NAMES.get(name, "--" + name.replace("_", "-"))
+        raise click.UsageError(f"{flag} does not apply to --profile {profile}")
+
+
+@cli.command()
+@config_option
+@click.option(
+    "--profile",
+    type=click.Choice(["demo", "sample", "quick", "full"]),
+    default="quick",
+    show_default=True,
+    help="How much to build. demo = a handful of symbols against the real source, "
+    "sample = the same shape offline and deterministic — neither is a market. "
+    f"quick = every symbol, last {QUICK_PROFILE_YEARS} years; "
+    f"full = every symbol from {BACKFILL_START.isoformat()} (measured ~3x longer). "
+    "Deepen later with `cne backfill daily_bars`.",
+)
 @click.option(
     "--symbols",
-    default=",".join(
-        (
-            "600519.SH",
-            "000001.SZ",
-            "000858.SZ",
-            "300750.SZ",
-            "601318.SH",
-        )
-    ),
+    default=",".join(("600519.SH", "000001.SZ", "000858.SZ", "300750.SZ", "601318.SH")),
     show_default=True,
-    help="Comma-separated symbols to fetch (kept small on purpose).",
+    help="demo/sample: comma-separated symbols to fetch (kept small on purpose).",
 )
 @click.option(
     "--days",
     default=30,
     show_default=True,
-    help="Approx. number of recent trading days of daily_bars.",
+    help="demo/sample: approx. number of recent trading days of daily_bars.",
 )
 @click.option(
     "--data-root",
     default="data/cnequity-demo",
     show_default=True,
-    help="Separate demo lake root (do not reuse for full-market init).",
-)
-@click.option(
-    "--trade-date",
-    "trade_date_str",
-    default=None,
-    help="As-of date YYYY-MM-DD (default: today / last trading day).",
+    help="demo/sample: separate lake root (do not reuse for a full-market init).",
 )
 @click.option(
     "--config-out",
-    default="configs/cnequity.demo.toml",
+    default=DEMO_CONFIG,
     show_default=True,
-    help="Where to write the tiny demo config for follow-up `cne query`.",
+    help="demo/sample: where to write the tiny config for follow-up `cne query`.",
 )
 @click.option(
     "--intraday",
     is_flag=True,
-    help="Also capture 1-minute bars for the same symbols (up to 5 sessions) "
-    "and print a session, so the bar_time convention is visible.",
+    help="demo/sample: also capture 1-minute bars for the same symbols (up to 5 "
+    "sessions) and print a session, so the bar_time convention is visible.",
 )
 @click.option(
     "--research",
     is_flag=True,
-    help="Also derive Sina hfq factors and print a raw-vs-adjusted return (slower; needs Sina).",
+    help="demo/sample: also derive Sina hfq factors and print a raw-vs-adjusted "
+    "return (slower; needs Sina).",
 )
-@click.option(
-    "--sample",
-    is_flag=True,
-    help="Write a deterministic synthetic sample lake without network access.",
-)
-def demo_cmd(
-    symbols: str,
-    days: int,
-    data_root: str,
-    trade_date_str: str | None,
-    config_out: str,
-    intraday: bool,
-    research: bool,
-    sample: bool,
-):
-    """Create a tiny lake so you can see progress and results quickly.
-
-    The default fetches real TDX data; --sample is deterministic and offline.
-    Neither is a full-market backfill — use `cne init` for that.
-    """
-    from cnequity.cli.demo import run_demo, run_sample_demo
-
-    td = parse_date_option(trade_date_str, "--trade-date")
-    runner = run_sample_demo if sample else run_demo
-    runner(
-        symbols=[s.strip() for s in symbols.split(",") if s.strip()],
-        days=days,
-        data_root=Path(data_root),
-        trade_date=td,
-        config_out=Path(config_out),
-        intraday=intraday,
-        research=research,
-    )
-
-
-@cli.command()
-@config_option
 @click.option(
     "--layout-only",
     is_flag=True,
@@ -165,15 +157,6 @@ def demo_cmd(
     help="Continue init phases after a phase failure instead of stopping.",
 )
 @click.option(
-    "--profile",
-    type=click.Choice(["full", "quick"]),
-    default="quick",
-    show_default=True,
-    help=f"How much history to fetch. quick = the last {QUICK_PROFILE_YEARS} years; "
-    f"full = everything from {BACKFILL_START.isoformat()} (measured ~3x longer). "
-    "Both fetch every symbol — deepen later with `cne backfill daily_bars`.",
-)
-@click.option(
     "--since",
     "since_str",
     default=None,
@@ -182,12 +165,18 @@ def demo_cmd(
 @click.option("--quiet", is_flag=True, help="Only warnings and errors; no per-batch progress.")
 def init(
     config_path: str,
+    profile: str,
+    symbols: str,
+    days: int,
+    data_root: str,
+    config_out: str,
+    intraday: bool,
+    research: bool,
     layout_only: bool,
     trade_date: str | None,
     resume: bool,
     resume_run_id: str | None,
     keep_going: bool,
-    profile: str,
     since_str: str | None,
     quiet: bool,
 ):
@@ -211,7 +200,29 @@ def init(
       cne backfill daily_bars --start 2016-01-01 --end <your coverage_start>
 
     Or take everything up front with `--profile full`.
+
+    `--profile demo` builds a handful of symbols into a separate `--data-root`
+    so you can watch progress and query a result in a minute; `--profile sample`
+    does the same offline and deterministically. Neither is a market, and
+    neither touches `--config` — they write their own at `--config-out`.
     """
+    if profile in DEMO_PROFILES:
+        _reject_foreign_options(profile, _LAKE_ONLY)
+        from cnequity.cli.demo import run_demo, run_sample_demo
+
+        runner = run_sample_demo if profile == "sample" else run_demo
+        runner(
+            symbols=[s.strip() for s in symbols.split(",") if s.strip()],
+            days=days,
+            data_root=Path(data_root),
+            trade_date=parse_date_option(trade_date, "--trade-date"),
+            config_out=Path(config_out),
+            intraday=intraday,
+            research=research,
+        )
+        return
+
+    _reject_foreign_options(profile, _DEMO_ONLY)
     _progress_logging(quiet)
     cfg = _cfg(config_path)
     init_data_layout(cfg)
@@ -270,29 +281,55 @@ def init(
         raise SystemExit(exit_code)
 
 
+#: What `cne config` does, and the spellings that used to mean one of them.
+#: `cnequity.cli._root.MOVED` answers a moved *command*; an argument is not a
+#: command, so it needs its own map — and this is the one people hit first.
+CONFIG_ACTIONS: tuple[str, ...] = ("validate", "create", "diff")
+CONFIG_ACTIONS_MOVED: dict[str, str] = {"init": "cne config create"}
+
+
 @cli.command("config")
-@click.argument("action", type=click.Choice(["validate", "init", "diff"]))
+# Free-form rather than a Choice, so the body can answer a moved spelling.
+# Click's own rejection — "'init' is not one of 'validate', 'create', 'diff'" —
+# names everything except what the caller needs, and `cne config init` is the
+# first command a new lake ever runs: the people most likely to type it are the
+# ones with the least context to decode that.
+@click.argument("action")
 @config_option
 @click.option(
     "--force",
     is_flag=True,
-    help="Overwrite an existing config when action=init.",
+    help="Overwrite an existing config when action=create.",
 )
 @click.option(
     "--data-root",
     default=None,
-    help="Set [data].root when action=init (default: resolve ./data/cnequity to an absolute path).",
+    help="Set [data].root when action=create (default: resolve ./data/cnequity to an absolute path).",
 )
 def config_cmd(action: str, config_path: str, force: bool, data_root: str | None):
     """Validate, bootstrap, or diff configuration.
 
-    ``cne config init`` writes the packaged example TOML (no repo checkout needed).
+    ``cne config create`` writes the packaged example TOML (no repo checkout
+    needed) — it was ``cne config init``, one word away from ``cne init``, which
+    builds a lake and is the far more expensive of the two to run by mistake.
     On macOS it also forces ``orchestrator.workers = 1``.
     ``cne config validate`` checks an existing file.
     ``cne config diff`` reports what the packaged example has that this file does
     not — most importantly steps added to a schedule group by a later release,
     which a config written once and never updated will never run.
     """
+    # A free-form argument bypasses `token_normalize_func`, which is what makes
+    # every other name in this CLI case-insensitive; normalise it here so
+    # `cne config CREATE` behaves like `cne run DAILY`.
+    action = action.lower()
+    moved = CONFIG_ACTIONS_MOVED.get(action)
+    if moved:
+        raise click.ClickException(f"`cne config {action}` has moved. Use `{moved}` instead.")
+    if action not in CONFIG_ACTIONS:
+        raise click.BadParameter(
+            f"{action!r} is not one of {', '.join(repr(a) for a in CONFIG_ACTIONS)}",
+            param_hint="'{" + "|".join(CONFIG_ACTIONS) + "}'",
+        )
     if action == "diff":
         from cnequity.config.drift import config_drift, render_drift
 
@@ -306,7 +343,7 @@ def config_cmd(action: str, config_path: str, force: bool, data_root: str | None
             raise SystemExit(1)
         return
 
-    if action == "init":
+    if action == "create":
         out = Path(config_path)
         try:
             write_user_config(out, data_root=data_root, force=force)

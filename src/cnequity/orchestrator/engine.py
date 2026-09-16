@@ -221,7 +221,7 @@ class JobEngine:
             # to be inferred from heartbeat age, so a crashed run stayed
             # "running" for `batch_stale_seconds` — an hour by default — and
             # every command that reads run status was wrong for that hour.
-            # `cne retry --failed-groups` reported nothing to retry; `cne
+            # `cne run retry --failed-groups` reported nothing to retry; `cne
             # status` showed a ghost. The kernel releases this the moment the
             # process dies, which is exactly the signal that was missing.
             stack.enter_context(run_lock(self.config.meta_root, run_id, blocking=False))
@@ -300,7 +300,7 @@ class JobEngine:
         """Run one registered step against *run_id*, recording its batch.
 
         For CLI paths that execute a single step outside a job (``cne backfill``
-        finalizing with compact, ``cne compact``). Calling the step function
+        finalizing with compact, ``cne run compact``). Calling the step function
         directly skips the manifest bookkeeping, which silently breaks anything
         that reads the batch log — notably staging cleanup, whose readiness test
         is "this run recorded a successful compact".
@@ -758,7 +758,7 @@ class JobEngine:
         A process killed mid-DAG (OOM, SIGKILL) leaves nothing behind for the
         steps it never reached: no failed batch, no receipt, nothing to retry.
         The ledger alone therefore reads as a clean run, which is how a daily
-        job that died after its third step used to come back from ``cne retry``
+        job that died after its third step used to come back from ``cne run retry``
         marked ``success`` with the rest of the day silently missing.
 
         Init runs describe their plan as phases and keep that path. Every other
@@ -1042,7 +1042,7 @@ class JobEngine:
         retry_batch_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         run_meta = self.manifest.get_run_metadata(run_id)
-        # The caller (cne retry) has no session date of its own — it passes
+        # The caller (cne run retry) has no session date of its own — it passes
         # whatever run_job() defaulted to, which is today. A run retried after
         # its trade_date has rolled over must still fetch the session it was
         # started for, not today's, or a backfill for a past date silently

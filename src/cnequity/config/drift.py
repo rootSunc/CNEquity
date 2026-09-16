@@ -1,6 +1,6 @@
 """Report how a user config has fallen behind the packaged example.
 
-``cne config init`` writes the config once. Every release after that may add a
+``cne config create`` writes the config once. Every release after that may add a
 section, a key, or — the case that actually loses data — a step to a schedule
 group. Nothing tells the operator: the file is gitignored, missing sections
 silently take their defaults, and ``cne config validate`` answers

@@ -33,7 +33,7 @@ staging/{dataset}/run_id={run_id}/part-{batch_id}.parquet
 - 非 worker step 通常单 part
 - **不保证** PK 唯一；去重在 compact 阶段完成
 
-清理：`cne clean`（终态 + 已 compact 的 run；`--force` 可清 incomplete/未 compact，retry 将全量重抓）
+清理：`cne run clean`（终态 + 已 compact 的 run；`--force` 可清 incomplete/未 compact，retry 将全量重抓）
 
 ---
 

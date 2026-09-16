@@ -65,23 +65,23 @@ Point by point: [comparison](docs/comparison.md).
 ## Data in ~30 seconds
 
 ```bash
-pip install cnequity    # no token, credit, or signup
-cne demo                   # real data: 5 names × 30 sessions
-cne demo --sample            # deterministic synthetic lake; no network
+pip install cnequity      # no token, credit, or signup
+cne init --profile demo   # real data: 5 names × 30 sessions
+cne init --profile sample # deterministic synthetic lake; no network
 ```
 
 Measured at about 25 seconds. Needs **TDX quote hosts** reachable (mainland access is more reliable);
 if it fails, run `cne doctor` (no config or network needed), then
 `cne sources probe --only tdx_protocol --config configs/cnequity.demo.toml`.
-With no network at all, `cne demo --sample` builds an offline lake instead. The demo writes to its own
+With no network at all, `cne init --profile sample` builds an offline lake instead. The demo writes to its own
 `data/cnequity-demo/` directory and never touches a full lake.
 
-If TDX is unreachable, `cne demo --sample` still verifies installation, Parquet writes,
+If TDX is unreachable, `cne init --profile sample` still verifies installation, Parquet writes,
 DuckDB views, and the public query path. Every generated row is visibly marked
 `source=mock`; it is for onboarding only, never research.
 
 <p align="center">
-  <img src="docs/assets/cne-demo.png" alt="cne demo: phased fetch with sample daily bars" width="820" />
+  <img src="docs/assets/cne-demo.png" alt="cne init --profile demo: phased fetch with sample daily bars" width="820" />
 </p>
 
 ```python
@@ -96,7 +96,7 @@ survivorship-safe universes, or point-in-time research.
 To see why the adjustment contract matters (this also queries Sina and expands to about three years):
 
 ```bash
-cne demo --research --symbols 600519.SH
+cne init --profile demo --research --symbols 600519.SH
 # raw return -24.25% → hfq return -14.39% (example output; changes with the as-of date)
 ```
 
@@ -122,8 +122,8 @@ items; datasets, runs and quality are separate pages. It never writes the
 lake — ingestion, retry and cleanup stay on the CLI.
 
 ```bash
-cne serve     # http://127.0.0.1:8787
-cne sources probe   # health of 14 upstream hosts (probe on CLI, display on serve)
+cne serve         # http://127.0.0.1:8787
+cne sources probe # health of 15 upstream hosts (probe on CLI, display on serve)
 ```
 
 <p align="center">
@@ -151,7 +151,7 @@ Details: [serve](docs/modules/serve.md) ·
 
 ```bash
 pip install cnequity
-cne config init            # writes configs/cnequity.toml
+cne config create          # writes configs/cnequity.toml
 cne init                   # every symbol × the last 3 years (~1 hour)
 cne run daily --group core # then the daily schedule groups (see "Keeping it current")
 ```
@@ -162,7 +162,7 @@ avoid straight into it, whereas shallow is honest — `coverage_start` records i
 Want everything: `cne init --profile full` (~3x the time). Deepen any time:
 
 ```bash
-cne backfill daily_bars --start 2016-01-01 --end <your coverage_start>
+cne backfill daily_bars --start 2016-01-01 --end COVERAGE_START
 ```
 
 **Wire into an AI agent** (optional, once the lake exists):
@@ -248,14 +248,14 @@ order and then runs the health check, source probe and metadata backup, so one
 cron entry covers the day. It is not installed by the PyPI package.
 
 ```bash
-cne status          # per-dataset freshness: FRESH / STALE / EMPTY
-cne serve           # http://127.0.0.1:8787 — coverage, size, tiers
-cne sources probe         # health of the 14 upstream hosts
-cne retry <run_id>  # re-run only the failed batches
+cne status           # per-dataset freshness: FRESH / STALE / EMPTY
+cne serve            # http://127.0.0.1:8787 — coverage, size, tiers
+cne sources probe    # health of the 15 upstream hosts
+cne run retry RUN_ID # re-run only the failed batches
 ```
 
 A step that fails does not take the run with it: it is recorded as a failed
-batch, everything else still lands, and `cne retry` picks up just those.
+batch, everything else still lands, and `cne run retry` picks up just those.
 
 ```python
 from cnequity.query import load
@@ -277,7 +277,7 @@ other. Install and scheduling:
 # You have a lake — full contract
 claude mcp add cnequity -- cne mcp --config /abs/path/to/cnequity.toml
 
-# No lake yet — run cne demo first, then point at the demo config
+# No lake yet — run cne init --profile demo first, then point at the demo config
 # No lake at all — add --live (no adjust / universe / PIT; responses say so)
 ```
 
@@ -299,8 +299,8 @@ For daily bars back to 2001 — TDX does serve them, but no profile defaults
 there:
 
 ```bash
-cne init --since 2001-01-01                    # deep on the first run
-cne backfill daily_bars --start 2001-01-01     # or deepen afterwards
+cne init --since 2001-01-01                # deep on the first run
+cne backfill daily_bars --start 2001-01-01 # or deepen afterwards
 ```
 
 **Q: Why store only back-adjusted factors?**
@@ -333,7 +333,7 @@ Full index: [docs/README.md](docs/README.md). Common entry points:
 [MCP](docs/reference/mcp.md) ·
 [installation](docs/getting-started/installation.md) ·
 [catalog](docs/datasets/catalog.md) ·
-[CLI](docs/reference/cli.md).
+[CLI](docs/reference/cli.md) ([all 19 commands at a glance](docs/reference/cli.md#命令一览)).
 
 Code is [Apache-2.0](LICENSE). Landed market data remains under upstream terms; this
 repo ships no data lake and grants no redistribution rights.
