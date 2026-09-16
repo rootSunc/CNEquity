@@ -161,7 +161,7 @@ def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
         allow_mock=False,
         config=cfg,
     )
-    raw = normalize_with_source(raw)
+    raw = normalize_with_source(raw, "tdx_protocol")
     wanted = set(symbols)
     kept = raw.filter(pl.col("symbol").is_in(list(wanted)))
     found = set(kept["symbol"].to_list())

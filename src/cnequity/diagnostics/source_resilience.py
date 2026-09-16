@@ -443,6 +443,15 @@ def build_dependency_report(
             role: _source_role_record(source, domain_overrides=domain_overrides)
             for role, source in roles.items()
         }
+        # The rest of the recovery chain. These are dependencies like any other
+        # — a dataset whose tip is served by the exchange board files is down
+        # when those are — so they belong in the blast radius even though they
+        # hold none of the three roles the backup gate reasons about.
+        supplementary = tuple(getattr(spec, "supplementary_sources", ()) or ())
+        supplementary_records = [
+            _source_role_record(source, domain_overrides=domain_overrides)
+            for source in supplementary
+        ]
         p_domains = set(role_records["primary"]["failure_domains"])
         b_domains = set(role_records["backup"]["failure_domains"])
         if not critical:
@@ -467,6 +476,7 @@ def build_dependency_report(
             set(role_records["primary"]["failure_domains"])
             | set(role_records["backup"]["failure_domains"])
             | set(role_records["backfill"]["failure_domains"])
+            | {domain for rec in supplementary_records for domain in rec["failure_domains"]}
         )
         record = {
             "dataset": name,
@@ -479,6 +489,7 @@ def build_dependency_report(
             "backup": roles["backup"],
             "backfill": roles["backfill"],
             "sources": role_records,
+            "supplementary": supplementary_records,
             "failure_domains": all_domains,
             "backup_coverage": {
                 "required": critical and bool(getattr(spec, "required", True)),
@@ -633,3 +644,53 @@ __all__ = [
     "source_components",
     "source_failure_domains",
 ]
+
+
+def annotate_measured_availability(
+    payload: dict[str, Any], slo: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Join measured probe availability onto a declared-dependency report.
+
+    ``build_dependency_report`` is deliberately a pure function of the registry:
+    it says which datasets share a failure domain, and it must stay
+    deterministic and testable. What it cannot say is whether a domain is
+    actually *reachable from here* — and that is half of the routing decision.
+    Measured from this host over 30 days, the EastMoney domain carries 29
+    datasets (4 critical) at 58.8% availability while ``tdx``, ``exchange_sse``
+    and ``ths_kline`` all sat at 100%. A concentration report that cannot show
+    that leaves the expensive half of the choice to memory.
+
+    The join is by failure domain, taking each domain's *worst* measured probe:
+    a domain is only as reachable as its least reachable endpoint, and a feed
+    that needs two of them is down when either is.
+
+    Returns a new payload; the input is not modified. Probes with no
+    observations contribute nothing rather than a false zero.
+    """
+    by_domain: dict[str, dict[str, Any]] = {}
+    for result in slo.get("results", []) or []:
+        availability = result.get("availability")
+        if availability is None or not result.get("observations"):
+            continue
+        for domain in source_failure_domains(result.get("key")):
+            worst = by_domain.get(domain)
+            if worst is None or availability < worst["availability"]:
+                by_domain[domain] = {
+                    "availability": availability,
+                    "probe": result.get("key"),
+                    "vantage": result.get("vantage"),
+                    "observations": result.get("observations"),
+                    "target": result.get("target"),
+                    "meets_target": bool(result.get("passed")),
+                }
+
+    out = json.loads(json.dumps(payload))
+    out["measured_availability"] = {
+        "window_days": slo.get("window_days"),
+        "by_failure_domain": dict(sorted(by_domain.items())),
+    }
+    for radius in out.get("blast_radii", []) or []:
+        measured = by_domain.get(radius.get("failure_domain"))
+        if measured is not None:
+            radius["measured_availability"] = measured
+    return out

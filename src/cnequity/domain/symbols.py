@@ -191,3 +191,46 @@ def normalize_market_code(code: str, market: str) -> tuple[str, str]:
     else:
         exchange = market.upper()
     return code.zfill(6), exchange
+
+
+# Ingest scope policies for `[universe].ingest`.  These bound what the daily
+# fetch asks the vendors for; they are NOT the research selection universe
+# (see `domain/universe_profiles.py`), and they deliberately keep ST,
+# suspended, CDR and delisted names — dropping those is the survivorship bias
+# the lake exists to avoid.
+INGEST_UNIVERSES = frozenset({"all_a", "all_a_sh_sz", "all_instruments"})
+
+
+def in_ingest_universe(code: str, exchange: str, universe: str = "all_a") -> bool:
+    """Whether *code* belongs to the configured ingest scope.
+
+    ``all_instruments`` restores the historical behaviour of fetching every
+    code ``instruments`` lists, including the ETF/LOF quote codes.
+    """
+    if universe == "all_instruments":
+        return True
+    if not is_all_a_symbol(code, exchange):
+        return False
+    if universe == "all_a_sh_sz":
+        return exchange.upper() != "BJ"
+    return True
+
+
+def filter_ingest_universe(symbols, universe: str = "all_a") -> list[str]:
+    """Return *symbols* restricted to the ingest scope, order preserved.
+
+    An unparseable symbol is dropped by every scope except
+    ``all_instruments``: the fetch layer cannot route it either way, and
+    keeping it only feeds an unfillable key to the coverage gate.
+    """
+    if universe == "all_instruments":
+        return list(symbols)
+    kept: list[str] = []
+    for symbol in symbols:
+        try:
+            info = parse_symbol(symbol)
+        except ValueError:
+            continue
+        if in_ingest_universe(info.code, info.exchange, universe):
+            kept.append(symbol)
+    return kept

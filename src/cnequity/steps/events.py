@@ -33,6 +33,7 @@ from cnequity.adapters.ths.corporate_actions import fetch_corporate_actions_ths
 from cnequity.config import Config
 from cnequity.domain.datasets import get_dataset
 from cnequity.domain.schemas import with_provenance
+from cnequity.domain.symbols import filter_ingest_universe
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.registry import register_step
 from cnequity.quality.failover import (
@@ -1004,7 +1005,16 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
     if df.height and "symbol" in df.columns and "ex_date" in df.columns:
         today = df.filter(pl.col("ex_date") == trade_date)
         if today.height:
-            rebackfill = today["symbol"].unique().to_list()
+            # Scoped here rather than at the consumers, because `daily_bars`
+            # merges this list into its fetch scope *after* narrowing to the
+            # ingest universe — so an out-of-scope code arriving this way is
+            # fetched anyway. This dataset carries 348 ETF/LOF codes today, and
+            # a fund's bars are a NAV series with zero volume on every session:
+            # exactly the rows `migrate_drop_nav_series_bars.py` had to delete.
+            # An `all_instruments` lake drops nothing here.
+            rebackfill = filter_ingest_universe(
+                today["symbol"].unique().to_list(), config.ingest_universe
+            )
 
     context_updates["symbols_to_rebackfill"] = rebackfill
     if backfill and manifest is not None:

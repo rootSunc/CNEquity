@@ -156,3 +156,37 @@ def test_bundled_hosts_start_with_verified_live_set():
 
     assert HQ_HOSTS[: len(VERIFIED_HOSTS)] == VERIFIED_HOSTS
     assert len(HQ_HOSTS) > len(VERIFIED_HOSTS)
+
+
+def test_verified_hosts_are_always_within_the_probed_window():
+    """Discovery must not depend on a lucky shuffle.
+
+    Only the first ``_TDX_MAX_CANDIDATES`` entries are probed. When the bundled
+    list was shuffled whole, a config without its own host pool — what
+    ``cne demo`` writes — filled every probed slot by random draw, so the
+    verified hosts were missed outright on a fifth of runs.
+    """
+    from cnequity.adapters.tdx_protocol.hosts import VERIFIED_HOSTS
+
+    verified = {(host, int(port)) for host, port in VERIFIED_HOSTS}
+    for _ in range(50):
+        probed = set(tdx._candidate_servers(None)[: tdx._TDX_MAX_CANDIDATES])
+        assert verified <= probed
+
+
+def test_configured_pool_still_outranks_the_verified_hosts(monkeypatch):
+    """An operator who lists hosts for their own network is probed first."""
+
+    class _Cfg:
+        tdx_host_pool = ["10.0.0.1:7709", "10.0.0.2:7709"]
+
+    candidates = tdx._candidate_servers(_Cfg())
+
+    assert candidates[:2] == [("10.0.0.1", 7709), ("10.0.0.2", 7709)]
+    assert len(candidates) == len(set(candidates))
+
+
+def test_bundled_remainder_is_still_shuffled():
+    """Load spreading survives: the tail order varies between calls."""
+    tails = {tuple(tdx._candidate_servers(None)[8:]) for _ in range(20)}
+    assert len(tails) > 1

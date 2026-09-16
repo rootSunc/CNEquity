@@ -27,6 +27,78 @@ CORE_DATASETS = frozenset(
 # weaker target than the SLO evaluator itself.
 CORE_TARGET = 0.99
 
+# One global target could not describe this system. Availability is a property
+# of the *pair* (source, network vantage), not of the source: measured over 30
+# days from a mainland egress every source clears 99%, while from an overseas
+# egress EastMoney measured 0-58.8% — not degraded, simply not served there —
+# with tdx, the SSE quote host, ths and pboc all at 100% and baostock, cninfo,
+# sw and ths_pages clustering at 94%.
+#
+# Holding both to 99% made the gate unpassable from overseas, and a gate that
+# cannot pass stops being read. Holding both to the overseas number would have
+# hidden a real mainland regression. So the target follows the vantage, and the
+# overseas bar sits where the measurements actually separate: the sources that
+# work from there are at >=94%, the ones that do not are below 60%.
+VANTAGE_TARGETS: dict[str, tuple[float, float]] = {
+    # class: (critical, other)
+    "cn": (0.99, 0.95),
+    # With the unreachable sources declared away, the overseas floor is the
+    # 88.2% that exchange_szse, sina and nbs actually sustain; 0.85 sits below
+    # it with room for ordinary variance and still fails a real drop.
+    "overseas": (0.85, 0.80),
+}
+
+
+def vantage_class(vantage: str | None) -> str:
+    """Classify a free-form vantage label as ``cn``, ``overseas`` or ``unknown``.
+
+    The label is the operator's own (``CNE_SOURCE_VANTAGE``), so the class is
+    read from its prefix rather than from a list of place names: ``cn-sh`` and
+    ``cn_aliyun`` are mainland, ``overseas-eu`` and ``overseas_aws`` are
+    not, and the city is never the point.
+
+    An unlabelled vantage is ``unknown`` and takes the strict targets. A gate
+    must not hand out a discount to a vantage nobody declared; naming it is one
+    environment variable.
+    """
+    label = (vantage or "").strip().lower()
+    for name in VANTAGE_TARGETS:
+        if label == name or label.startswith(f"{name}-") or label.startswith(f"{name}_"):
+            return name
+    return "unknown"
+
+
+def partition_unreachable(
+    results: list[ProbeSLO], unreachable: frozenset[str] | set[str] | None
+) -> tuple[list[ProbeSLO], list[ProbeSLO]]:
+    """Split probes into ``(gated, not_applicable)`` for this deployment.
+
+    A source the network cannot reach at all is not a failing source — it is an
+    absent one, and holding a gate open on it means the gate never closes.
+    EastMoney measured 0-58.8% from the reference overseas egress because its
+    WAF refuses non-mainland traffic; the same host behind a mainland proxy
+    reaches it fine, which is why this is the operator's declaration and not a
+    constant in here.
+
+    Disabling the gate for a whole vantage would also lose what it is for: a
+    source that *does* work from there dropping from 100% to 50% is still a
+    regression worth failing on.
+    """
+    names = frozenset(unreachable or ())
+    if not names:
+        return list(results), []
+    gated = [r for r in results if r.key not in names]
+    excluded = [r for r in results if r.key in names]
+    return gated, excluded
+
+
+def targets_for_vantage(
+    vantage: str | None, *, overrides: dict[str, tuple[float, float]] | None = None
+) -> tuple[float, float]:
+    """``(critical, other)`` availability targets for *vantage*'s class."""
+    table = {**VANTAGE_TARGETS, **(overrides or {})}
+    return table.get(vantage_class(vantage), table["cn"])
+
 
 def critical_probe_keys() -> frozenset[str]:
     """Return probe keys that exercise at least one core dataset.
@@ -64,6 +136,9 @@ class SourceSLOReport:
     window_days: int
     minimum_observations: int
     results: tuple[ProbeSLO, ...]
+    #: Probes the operator declared this deployment's network cannot reach.
+    #: Measured and reported, never gated — see `partition_unreachable`.
+    not_applicable: tuple[ProbeSLO, ...] = ()
 
     @property
     def passed(self) -> bool:
@@ -77,6 +152,7 @@ class SourceSLOReport:
             "minimum_observations": self.minimum_observations,
             "passed": self.passed,
             "results": [asdict(item) for item in self.results],
+            "not_applicable": [asdict(item) for item in self.not_applicable],
         }
 
 
@@ -123,8 +199,10 @@ def evaluate_source_slo(
     now: datetime | None = None,
     window_days: int = 30,
     minimum_observations: int = 10,
-    core_target: float = CORE_TARGET,
-    other_target: float = 0.95,
+    core_target: float | None = None,
+    other_target: float | None = None,
+    vantage_targets: dict[str, tuple[float, float]] | None = None,
+    unreachable: frozenset[str] | set[str] | None = None,
     max_age: timedelta = timedelta(days=2),
 ) -> SourceSLOReport:
     """Evaluate availability separately per probe and vantage.
@@ -135,6 +213,14 @@ def evaluate_source_slo(
     """
     if window_days < 1 or minimum_observations < 1:
         raise ValueError("window_days and minimum_observations must be positive")
+    if core_target is not None or other_target is not None:
+        # An explicit pair is a deliberate override and applies everywhere —
+        # release evidence pins its own numbers and must not drift with a label.
+        flat = (
+            core_target if core_target is not None else CORE_TARGET,
+            other_target if other_target is not None else 0.95,
+        )
+        vantage_targets = dict.fromkeys({*VANTAGE_TARGETS, "unknown"}, flat)
     current = now or datetime.now(timezone.utc)
     cutoff = current - timedelta(days=window_days)
     critical_keys = critical_probe_keys()
@@ -171,7 +257,10 @@ def evaluate_source_slo(
         # ``powers`` field in an archived report.  Otherwise a forged or stale
         # payload could relabel a core probe as advisory and pass the gate.
         critical = key in critical_keys
-        target = core_target if critical else other_target
+        # Targets follow the vantage the probe was taken from, not the caller:
+        # the same source is a different fact over a different egress.
+        vantage_core, vantage_other = targets_for_vantage(vantage, overrides=vantage_targets)
+        target = vantage_core if critical else vantage_other
         successes = sum(item.status == ProbeStatus.OK.value for _, item in samples)
         observations = len(samples)
         availability = successes / observations if observations else None
@@ -230,11 +319,13 @@ def evaluate_source_slo(
                     passed=False,
                 )
             )
+    gated, excluded = partition_unreachable(results, unreachable)
     return SourceSLOReport(
         generated_at=current.isoformat(),
         window_days=window_days,
         minimum_observations=minimum_observations,
-        results=tuple(results),
+        results=tuple(gated),
+        not_applicable=tuple(excluded),
     )
 
 

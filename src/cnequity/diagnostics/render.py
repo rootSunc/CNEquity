@@ -52,7 +52,12 @@ def render_text(report: Report) -> list[str]:
     elif warnings:
         lines.append(_style(f"没有致命问题，{warnings} 个警告。", "yellow"))
     else:
-        lines.append(_style("一切正常。", "green"))
+        # Say what was checked, not just that it passed. `doctor` inspects the
+        # environment, dependencies and config — never the lake — so a bare
+        # "everything is fine" reads as a clean bill of health for a lake whose
+        # daily job may have been failing for a fortnight.
+        lines.append(_style("环境、依赖与配置正常。", "green"))
+    lines.append("doctor 只检查环境/依赖/配置；数据湖状态用 `cne status --datasets`。")
     return lines
 
 

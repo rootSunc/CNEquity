@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from cnequity.domain.rate_limit import RateLimitSpec
+from cnequity.domain.symbols import INGEST_UNIVERSES
 
 try:
     import tomllib
@@ -103,6 +104,24 @@ class Config:
     ths_official_verify_enabled: bool = True
     ths_official_backfill_enabled: bool = False
     universe_default: str = "all_a"
+    # Which instrument classes the *ingest* covers, independent of the
+    # query-side `universe_default`.  `instruments` lists every code TDX
+    # returns, a quarter of which are ETF/LOF/fund codes that no research
+    # profile selects and that no configured vendor reliably serves.  Fetching
+    # them costs a quarter of every sweep, trips the EastMoney and Sina circuit
+    # breakers on symbols nobody needs, and leaves their unfillable keys in the
+    # interior-gap gate — which then refuses to checkpoint the whole day.
+    # "all_a" keeps ST, suspended, CDR and delisted names: those are exactly
+    # what this lake exists to retain.
+    ingest_universe: str = "all_a"
+    # How many trailing sessions the per-symbol Sina leg reconciles on a daily
+    # run. TDX has no Beijing route, so all ~580 BJ symbols come through that
+    # one-request-per-symbol endpoint; running daily_bars' full 5-session
+    # lookback through it is ~2,900 requests a run, which is what earns HTTP
+    # 456 and a vendor-wide cooldown. The tip itself now comes from the BSE
+    # board snapshot (~30 paginated requests), so this only governs how deep
+    # the per-symbol backstop reaches behind it.
+    bj_history_lookback_days: int = 1
     daily_waves: list[WaveConfig] = field(default_factory=list)
     schedule_groups: dict[str, ScheduleGroup] = field(default_factory=dict)
     # Continuous event streams. Same shape as a daily schedule group, but the
@@ -220,6 +239,17 @@ class Config:
     # Keep the option at the end so historical positional Config(...) callers
     # retain their argument order.
     negative_evidence_ttl_days: int = 7
+    # ISO weekday (1=Mon..7=Sun) on which datasets that declare a shallow
+    # reconciliation window walk their full one instead. 0 disables tiering.
+    deep_reconciliation_dow: int = 6
+    # Probe keys this deployment's network cannot reach at all. They are still
+    # measured and reported, but under `not_applicable` rather than as SLO
+    # failures: a source that is absent is not a source that is degraded, and a
+    # gate held open on one never closes. EastMoney's WAF refuses non-mainland
+    # traffic, so an overseas egress without a proxy lists its probes here —
+    # the same host behind a mainland proxy does not, which is exactly why this
+    # is declared rather than inferred.
+    slo_unreachable_sources: tuple[str, ...] = ()
     # "off" | "shadow" | "block".  The audit runs after compact, so it has
     # never been able to stop bad data reaching curated; "shadow" records what
     # it would have blocked so the gate can be switched on with evidence
@@ -735,6 +765,10 @@ def load_config(path: str | Path) -> Config:
         ths_official_verify_enabled=ths_official_verify_enabled,
         ths_official_backfill_enabled=ths_official_backfill_enabled,
         universe_default=str(raw.get("universe", {}).get("default", "all_a")),
+        ingest_universe=str(raw.get("universe", {}).get("ingest", "all_a")).strip().lower(),
+        bj_history_lookback_days=int(
+            raw.get("sources", {}).get("sina_bars", {}).get("reconciliation_lookback_days", 1)
+        ),
         daily_waves=daily_waves,
         schedule_groups=schedule_groups,
         events_groups=events_groups,
@@ -775,6 +809,12 @@ def load_config(path: str | Path) -> Config:
             exchange_audit_raw.get("turnover_max_fraction", 0.15)
         ),
         negative_evidence_ttl_days=int(incremental_raw.get("negative_evidence_ttl_days", 7)),
+        deep_reconciliation_dow=int(incremental_raw.get("deep_reconciliation_dow", 6)),
+        slo_unreachable_sources=tuple(
+            str(value).strip()
+            for value in (raw.get("sources", {}).get("slo", {}).get("unreachable", []) or [])
+            if str(value).strip()
+        ),
         audit_gate=str(quality_raw.get("audit_gate", "shadow")).strip().lower(),
         config_path=config_path,
     )
@@ -838,8 +878,15 @@ def validate_config(cfg: Config) -> list[str]:
         )
     if cfg.batch_size < 1:
         errors.append("orchestrator.batch_size must be >= 1")
+    if not 0 <= cfg.deep_reconciliation_dow <= 7:
+        errors.append("[incremental].deep_reconciliation_dow must be 0-7 (0 disables tiering)")
     if cfg.negative_evidence_ttl_days < 0:
         errors.append("[incremental].negative_evidence_ttl_days must be >= 0")
+    if cfg.bj_history_lookback_days < 1:
+        errors.append("[sources.sina_bars].reconciliation_lookback_days must be >= 1")
+    if cfg.ingest_universe not in INGEST_UNIVERSES:
+        known = ", ".join(sorted(INGEST_UNIVERSES))
+        errors.append(f"[universe].ingest must be one of: {known}")
     if cfg.audit_gate not in {"off", "shadow", "block"}:
         errors.append("[quality].audit_gate must be one of: off, shadow, block")
     if cfg.raw_archive_compression not in {"gzip", "none"}:

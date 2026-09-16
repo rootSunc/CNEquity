@@ -332,7 +332,7 @@ def capture_intraday_bars(
             continue
         df = _validate_minute_batch(df, chunk, start, end, frequency)
         with_rows.update(df["symbol"].unique().to_list())
-        df = normalize_with_source(df, dataset=dataset)
+        df = normalize_with_source(df, "tdx_protocol", dataset=dataset)
         writer.write_batch(dataset, run_id, f"intraday-{index // _BATCH_SYMBOLS:04d}", df)
         written += df.height
         logger.info(

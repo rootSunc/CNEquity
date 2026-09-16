@@ -258,7 +258,7 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
             on_heartbeat=_heartbeat,
             metrics=batch_metrics,
         )
-        df = normalize_with_source(df, dataset=dataset)
+        df = normalize_with_source(df, "tdx_protocol", dataset=dataset)
         _require_daily_bar_date_coverage(df, start, end)
         try:
             _require_daily_bar_symbol_coverage(df, symbols)
@@ -418,7 +418,7 @@ def fetch_daily_bars_parallel(
                 on_heartbeat=_heartbeat,
                 metrics=batch_metrics,
             )
-            df = normalize_with_source(df, dataset=dataset)
+            df = normalize_with_source(df, "tdx_protocol", dataset=dataset)
             _require_daily_bar_date_coverage(df, batch_start, batch_end)
             try:
                 _require_daily_bar_symbol_coverage(df, batch_symbols)

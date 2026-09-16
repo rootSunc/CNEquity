@@ -34,9 +34,33 @@ def test_registry_report_is_deterministic_except_timestamp():
     second = build_dependency_report(generated_at="2026-08-30T00:00:00+00:00")
 
     assert dependency_fingerprint(first) == dependency_fingerprint(second)
-    assert first.backup_gate.passed is True
     adj = next(item for item in first.datasets if item["dataset"] == "adj_factors")
     assert adj["impact"]["single_source_primary"] is True
+
+
+def test_trading_status_has_a_backup_in_a_different_failure_domain():
+    """This gate was green once before, for the wrong reason.
+
+    `trading_status` declared `tdx_protocol` as primary and `eastmoney` as
+    backup, which looked like two domains and was one:
+    `tdx_protocol.client.fetch_trading_status` only forwards to
+    `fetch_trading_status_eastmoney`. Correcting the primary made the gate fail
+    honestly; it passes again now because the exchanges themselves turned out to
+    publish both facts this dataset needs — the halt in a zeroed open/high/low
+    beside a reference close, the ST designation in 证券简称.
+    """
+    report = build_dependency_report(generated_at="2026-08-29T00:00:00+00:00")
+
+    assert report.backup_gate.passed is True
+    record = next(r for r in report.datasets if r["dataset"] == "trading_status")
+    assert record["primary"] == "eastmoney"
+    assert record["backup"] == "exchange"
+    assert record["backup_coverage"]["independent"] is True
+    # Which is the whole point: EastMoney being unreachable must not take the
+    # backup with it.
+    assert not set(record["backup_coverage"]["primary_domains"]) & set(
+        record["backup_coverage"]["backup_domains"]
+    )
 
 
 def _report(at: datetime, status: str) -> HealthReport:

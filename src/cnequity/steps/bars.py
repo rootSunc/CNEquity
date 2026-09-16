@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Iterable
 from datetime import date, datetime
 from pathlib import Path
 
@@ -20,10 +21,23 @@ from cnequity.adapters.tdx_protocol.client import (
 from cnequity.config import Config
 from cnequity.domain.frames import with_columns_unless_blank
 from cnequity.domain.market_time import A_SHARE_FINAL_AT, shanghai_now
-from cnequity.domain.rate_limit import source_request
-from cnequity.domain.symbols import split_by_quote_source
+from cnequity.domain.rate_limit import (
+    SINA_FETCH_ATTEMPTS,
+    SINA_RATE_LIMIT_CIRCUIT_SECONDS,
+    SINA_RATE_LIMIT_COOLDOWN_SECONDS,
+    SINA_RATE_LIMIT_STATUS_CODES,
+    SINA_RETRY_STATUS_CODES,
+    source_request,
+)
+from cnequity.domain.symbols import (
+    filter_ingest_universe,
+    in_ingest_universe,
+    parse_symbol,
+    split_by_quote_source,
+)
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.worker_pool import fetch_daily_bars_parallel
+from cnequity.quality.audit import persist_step_findings
 from cnequity.query.canonical import dedupe_by_primary_key
 from cnequity.steps.common import (
     BACKFILL_START,
@@ -46,11 +60,13 @@ logger = logging.getLogger(__name__)
 # The closing auction ends at 15:00. Leave a small settlement buffer before
 # trusting TDX's current daily bar; the default core schedule starts at 16:00.
 _DAILY_BAR_FINAL_AT = A_SHARE_FINAL_AT
-_SINA_RETRY_STATUS_CODES = frozenset({429, 456, 500, 502, 503, 504})
-_SINA_RATE_LIMIT_STATUS_CODES = frozenset({429, 456})
-_SINA_FETCH_ATTEMPTS = 3
-_SINA_RATE_LIMIT_COOLDOWN_SECONDS = 30.0
-_SINA_RATE_LIMIT_CIRCUIT_SECONDS = 120.0
+# Sina's anti-abuse policy is shared with the other two sweeps that hit it;
+# see cnequity/domain/rate_limit.py.
+_SINA_RETRY_STATUS_CODES = SINA_RETRY_STATUS_CODES
+_SINA_RATE_LIMIT_STATUS_CODES = SINA_RATE_LIMIT_STATUS_CODES
+_SINA_FETCH_ATTEMPTS = SINA_FETCH_ATTEMPTS
+_SINA_RATE_LIMIT_COOLDOWN_SECONDS = SINA_RATE_LIMIT_COOLDOWN_SECONDS
+_SINA_RATE_LIMIT_CIRCUIT_SECONDS = SINA_RATE_LIMIT_CIRCUIT_SECONDS
 _EXCHANGE_BULK_GAPFILL_MAX_SESSIONS = 20
 
 
@@ -145,20 +161,17 @@ def _classify_daily_scope(
     )
 
 
-def _etf_placeholder_bar_universe(
+def _placeholder_bar_universe(
     config: Config,
     spans: dict[str, tuple[date | None, date | None, str | None]],
 ) -> set[str] | None:
-    """Return traded bars only when an undated ETF needs reconciliation.
+    """Return traded bars only when an undated symbol needs reconciliation.
 
     Scanning every daily_bars file is unnecessary for normal runs. An empty
-    traded universe is also not evidence that every undated ETF is a
+    traded universe is also not evidence that every undated symbol is a
     placeholder, so leave the classifier conservative in a brand-new lake.
     """
-    if not any(
-        asset_type == "etf" and list_date is None
-        for list_date, _delist_date, asset_type in spans.values()
-    ):
+    if not any(list_date is None for list_date, _delist_date, _asset in spans.values()):
         return None
     universe = load_bar_universe(config)
     return universe or None
@@ -198,11 +211,11 @@ def _ownership_context(
             {
                 "dataset": "daily_bars",
                 "severity": "warning",
-                "check": "daily_bars_etf_placeholder_skipped",
+                "check": "daily_bars_placeholder_skipped",
                 "message": (
-                    f"{len(ownership.placeholder)} undated ETF/LOF placeholder(s) "
-                    "skipped (no list_date and no traded bar; not verified "
-                    f"no-data): {preview}{suffix}"
+                    f"{len(ownership.placeholder)} undated placeholder(s) skipped "
+                    "(no list_date and no traded bar anywhere in the lake; not "
+                    f"verified no-data): {preview}{suffix}"
                 ),
                 "symbols": sorted(ownership.placeholder),
             }
@@ -498,13 +511,26 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         end = max(e for _, e in windows)
         _reject_unfinished_daily_bar_window(config, end)
         spans = _instrument_spans(config)
-        bar_universe = _etf_placeholder_bar_universe(config, spans)
+        bar_universe = _placeholder_bar_universe(config, spans)
         metadata = instrument_metadata(config)
         evidence = load_negative_evidence(config, "daily_bars", metadata=metadata)
         remaining: list[tuple[str, list[str], date, date]] = []
         fallback_specs: list[tuple[str, list[str], date, date]] = []
         ownership = DailyBarOwnership()
         for batch_id, symbols, spec_start, spec_end in batch_specs:
+            symbols = filter_ingest_universe(symbols, config.ingest_universe)
+            if not symbols:
+                # Every symbol in this batch has left the ingest scope. Retrying
+                # it would re-fetch codes this lake no longer ingests, and
+                # leaving it failed would block compaction forever.
+                from cnequity.orchestrator.manifest import Manifest
+
+                Manifest(config.manifest_path).supersede_batches(
+                    run_id,
+                    [batch_id],
+                    superseded_by="ingest-universe-excluded",
+                )
+                continue
             status = load_curated_trading_status(
                 config,
                 start=spec_start,
@@ -562,7 +588,7 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
                 Manifest(config.manifest_path).supersede_batches(
                     run_id,
                     [batch_id],
-                    superseded_by="ownership-etf-placeholder",
+                    superseded_by="ownership-placeholder",
                 )
         result = (
             fetch_daily_bars_parallel(
@@ -646,9 +672,11 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         getattr(config, "_backfill_symbols", None) if getattr(config, "_backfill", False) else None
     )
     symbols = (
+        # An explicit repair scope is the operator's own request and is never
+        # narrowed; the implicit full-market scope is.
         _resolve_daily_bar_scope(config, explicit_scope)
         if explicit_scope is not None
-        else load_symbols(config)
+        else filter_ingest_universe(load_symbols(config), config.ingest_universe)
     )
     rebackfill = context.get("symbols_to_rebackfill") or []
     if rebackfill:
@@ -661,7 +689,7 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         spans,
         start,
         end,
-        bar_universe=_etf_placeholder_bar_universe(config, spans),
+        bar_universe=_placeholder_bar_universe(config, spans),
         trading_status=load_curated_trading_status(
             config,
             start=start,
@@ -688,6 +716,13 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
     reused_symbols = _reuse_successful_daily_bars(config, run_id, fetch_scope, start, end)
     fetch_tdx_symbols = [symbol for symbol in tdx_symbols if symbol not in reused_symbols]
     fetch_fallback_symbols = [symbol for symbol in fallback_symbols if symbol not in reused_symbols]
+    # Each exchange publishes its whole board for the session it is currently
+    # serving. On a tip-only window that answers for almost every SH/SZ symbol
+    # in two requests, leaving the per-symbol sweep only the remainder; on the
+    # deep window it is a cheap head start that the sweep then reconciles.
+    exchange_tip = _fetch_tip_via_exchange(config, fetch_tdx_symbols, end, run_id)
+    if start >= end and exchange_tip["covered"]:
+        fetch_tdx_symbols = [s for s in fetch_tdx_symbols if s not in exchange_tip["covered"]]
     result = fetch_daily_bars_parallel(
         config,
         fetch_tdx_symbols,
@@ -696,16 +731,41 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         run_id,
         "daily_bars",
     )
+    if exchange_tip["rows_written"]:
+        result["rows_read"] = int(result.get("rows_read", 0)) + exchange_tip["rows_read"]
+        result["rows_written"] = int(result.get("rows_written", 0)) + exchange_tip["rows_written"]
     sina_result = None
+    fallback_start = start
     if fetch_fallback_symbols:
-        sina_result = fetch_bars_via_sina(
-            config, fetch_fallback_symbols, start, end, run_id, batch_prefix="sina"
-        )
+        # The Beijing board's tip comes from the exchange's own paginated
+        # snapshot; Sina stays the per-symbol backstop for whatever that misses
+        # and for the (short) history window behind it.
+        bse = _fetch_bj_tip_via_bse(config, fetch_fallback_symbols, end, run_id)
+        fallback_start = _bj_history_start(config, start, end)
+        sina_scope = fetch_fallback_symbols
+        if fallback_start >= end:
+            # Tip-only window: skip every symbol BSE already covered.
+            sina_scope = [s for s in fetch_fallback_symbols if s not in bse["covered"]]
+        if sina_scope:
+            sina_result = fetch_bars_via_sina(
+                config, sina_scope, fallback_start, end, run_id, batch_prefix="sina"
+            )
+        if bse["rows_written"]:
+            sina_result = sina_result or {
+                "rows_read": 0,
+                "rows_written": 0,
+                "failed_symbols": 0,
+                "failed_symbol_names": [],
+                "empty_symbol_names": [],
+            }
+            sina_result["rows_read"] += bse["rows_read"]
+            sina_result["rows_written"] += bse["rows_written"]
     out = _finish_daily_bars(
         config,
         trade_date,
         run_id,
         start=start,
+        fallback_start=fallback_start,
         end=end,
         expected_tdx_symbols=tdx_symbols,
         expected_fallback_symbols=fallback_symbols,
@@ -837,6 +897,153 @@ def _record_certified_daily_no_data(
         )
 
 
+def _fetch_tip_via_exchange(
+    config: Config, symbols: list[str], trade_date: date, run_id: str
+) -> dict:
+    """Stage the SH/SZ tip from each exchange's own whole-board publication.
+
+    TDX bills per symbol, not per session: one request returns up to 800 bars,
+    so a 5-session window costs the same ~5,559 requests as a 1-session one.
+    That is why the tip could not be made cheaper on its own — it arrived
+    bundled into a sweep that was really paying for the reconciliation tail.
+    Routing the tip here is what lets the two be priced separately, so the
+    per-symbol sweep can move to its own (weekly) cadence.
+
+    Measured on 2026-09-15: two requests, 5,219 rows, 5.9s, covering 100% of
+    what the lake held for that session (5,215/5,215) plus 4 symbols TDX had
+    missed. `close` agreed on every row; volume and amount agreed to a median
+    ratio of 1.0000, with the exchange the *more* precise of the two (TDX
+    truncates volume to whole lots).
+
+    Both endpoints publish a current snapshot and return empty for any other
+    session, so this can never stamp today's prices onto an older date. Either
+    exchange failing simply leaves its symbols to the per-symbol path — SZSE
+    resets the connection often enough from a non-mainland egress that this has
+    to be a supplement, never a swap.
+    """
+    from cnequity.adapters.exchange.daily_quotes import fetch_exchange_daily_quotes
+    from cnequity.domain.schemas import data_version_for, with_provenance
+    from cnequity.storage import StagingWriter
+
+    empty = {"rows_read": 0, "rows_written": 0, "covered": set(), "source_outcomes": {}}
+    if not config.sources.get("exchange", True) or not symbols:
+        return empty
+    wanted = set(symbols)
+    try:
+        result = fetch_exchange_daily_quotes(trade_date, config=config)
+    except Exception as exc:  # noqa: BLE001 — the per-symbol path still owns these
+        logger.warning(
+            "exchange tip snapshot unavailable (%s: %s); SH/SZ tip falls back to TDX",
+            type(exc).__name__,
+            exc,
+        )
+        return {**empty, "source_outcomes": {"exchange": {"status": "failed", "requests": 2}}}
+
+    # `covered` is the point of ExchangeQuotesResult: one exchange answering is
+    # not the market answering, and a caller that ignores it reports a
+    # SZSE-only snapshot as if it had covered SH too.
+    if result.is_empty:
+        if result.failures:
+            logger.warning(
+                "exchange tip snapshot returned nothing (%s); SH/SZ tip falls back to TDX",
+                "; ".join(f"{k}: {v}" for k, v in sorted(result.failures.items())),
+            )
+        return {**empty, "source_outcomes": {"exchange": {"status": "empty", "requests": 2}}}
+    if result.failures:
+        logger.info(
+            "exchange tip snapshot: %s did not answer; those symbols stay with TDX",
+            ", ".join(sorted(result.failures)),
+        )
+    frame = result.quotes.filter(pl.col("symbol").is_in(sorted(wanted)))
+    if frame.is_empty():
+        return {**empty, "source_outcomes": {"exchange": {"status": "empty", "requests": 2}}}
+
+    staged = with_provenance(frame, source="exchange", data_version=data_version_for("daily_bars"))
+    StagingWriter(config.staging_root).write_batch(
+        "daily_bars", run_id, "exchange-tip-0000", staged
+    )
+    covered = set(staged["symbol"].to_list())
+    logger.info(
+        "exchange tip snapshot staged %d SH/SZ bar(s) for %s from %s",
+        staged.height,
+        trade_date,
+        ", ".join(sorted(result.covered)),
+    )
+    return {
+        "rows_read": staged.height,
+        "rows_written": staged.height,
+        "covered": covered,
+        "source_outcomes": {"exchange": {"status": "success", "requests": 2}},
+    }
+
+
+def _bj_history_start(config: Config, start: date, end: date) -> date:
+    """Window start for the per-symbol Beijing backstop.
+
+    The dataset's 5-session reconciliation lookback exists for vendors that
+    revise settled rows. Running it through Sina costs one request per symbol
+    per session — ~2,900 a day for the Beijing board — and that is what earns
+    HTTP 456 and a vendor-wide cooldown that then strands unrelated symbols.
+    The tip comes from the BSE board snapshot instead, so this only decides how
+    far the per-symbol backstop reaches behind it.
+    """
+    lookback = max(int(getattr(config, "bj_history_lookback_days", 1) or 1), 1)
+    sessions = [day for day in list_trading_dates(config, start, end) if day <= end]
+    if not sessions:
+        return end
+    return sessions[max(0, len(sessions) - lookback)]
+
+
+def _fetch_bj_tip_via_bse(
+    config: Config, symbols: list[str], trade_date: date, run_id: str
+) -> dict:
+    """Stage the whole Beijing board's tip from the exchange's own snapshot.
+
+    One paginated sweep (~30 requests) replaces one request per symbol (~580),
+    and it comes from the exchange rather than a third party. BSE publishes a
+    *current* snapshot: `fetch_daily_quotes` returns nothing when its session
+    is not `trade_date`, so this can never stamp today's prices onto an older
+    session. Anything it does not return stays with the Sina backstop.
+    """
+    from cnequity.adapters.bse.daily_quotes import fetch_daily_quotes
+    from cnequity.domain.schemas import data_version_for, with_provenance
+    from cnequity.storage import StagingWriter
+
+    if not config.sources.get("bse", True) or not symbols:
+        return {"rows_read": 0, "rows_written": 0, "covered": set()}
+    try:
+        quotes = fetch_daily_quotes(trade_date, symbols=set(symbols), config=config)
+    except Exception as exc:  # noqa: BLE001 — Sina still backs this leg
+        logger.warning(
+            "BSE tip snapshot unavailable (%s: %s); Beijing tip falls back to Sina",
+            type(exc).__name__,
+            exc,
+        )
+        return {
+            "rows_read": 0,
+            "rows_written": 0,
+            "covered": set(),
+            "source_outcomes": {"bse": {"status": "failed", "requests": 1}},
+        }
+    if quotes is None or quotes.is_empty():
+        return {
+            "rows_read": 0,
+            "rows_written": 0,
+            "covered": set(),
+            "source_outcomes": {"bse": {"status": "empty", "requests": 1}},
+        }
+    staged = with_provenance(quotes, source="bse", data_version=data_version_for("daily_bars"))
+    StagingWriter(config.staging_root).write_batch("daily_bars", run_id, "bse-tip-0000", staged)
+    covered = set(staged["symbol"].to_list())
+    logger.info("BSE tip snapshot staged %d Beijing bar(s) for %s", staged.height, trade_date)
+    return {
+        "rows_read": staged.height,
+        "rows_written": staged.height,
+        "covered": covered,
+        "source_outcomes": {"bse": {"status": "success", "requests": 1}},
+    }
+
+
 def _finish_daily_bars(
     config: Config,
     trade_date: date,
@@ -846,6 +1053,11 @@ def _finish_daily_bars(
     end: date,
     expected_tdx_symbols: list[str],
     expected_fallback_symbols: list[str] | None = None,
+    # The Beijing leg reconciles a shorter window than the TDX leg (see
+    # `_bj_history_start`), so the coverage gate must judge it on the window it
+    # was actually asked to fetch. Defaults to `start`, which is the old
+    # single-window behaviour.
+    fallback_start: date | None = None,
     tdx_result: dict,
     sina_result: dict | None,
     expected_no_data_symbols: list[str] | None = None,
@@ -897,6 +1109,22 @@ def _finish_daily_bars(
 
     tip = start == end
     historical_tip = tip and end != trade_date
+    fallback_window_start = fallback_start or start
+    fallback_set = set(expected_fallback_symbols or [])
+
+    def _leg_window(symbols) -> tuple[date, date]:
+        """The window a gap-fill owes for *symbols*.
+
+        Narrowing the initial fetch for the Beijing leg without narrowing its
+        gap-fill only moves the cost: the leg is asked for one session, and
+        then the recovery chain chases five of them one symbol at a time
+        through THS at 1 req/s — 644 silent seconds of a 772-second step.
+        Sessions this run never requested are not this run's gap.
+        """
+        if fallback_window_start != start and symbols and set(symbols) <= fallback_set:
+            return fallback_window_start, end
+        return start, end
+
     if tip:
         expected_symbols = set(expected_tdx_symbols) | set(expected_fallback_symbols or [])
         if not historical_tip:
@@ -989,12 +1217,13 @@ def _finish_daily_bars(
         )
         failed_set = set(failed_symbols) | fallback_failed_symbols
         if failed_set:
+            gap_start, gap_end = _leg_window(failed_set)
             gap = _gapfill_multiday_via_kline(
                 config,
                 run_id,
                 symbols=sorted(failed_set),
-                start=start,
-                end=end,
+                start=gap_start,
+                end=gap_end,
             )
             rows_read += int(gap.get("rows_read", 0))
             rows_written += int(gap.get("rows_written", 0))
@@ -1016,12 +1245,13 @@ def _finish_daily_bars(
 
         partial_only = sorted(partial_symbols - failed_set)
         if partial_only:
+            gap_start, gap_end = _leg_window(partial_only)
             gap = _gapfill_multiday_via_kline(
                 config,
                 run_id,
                 symbols=partial_only,
-                start=start,
-                end=end,
+                start=gap_start,
+                end=gap_end,
                 require_complete=False,
             )
             rows_read += int(gap.get("rows_read", 0))
@@ -1031,46 +1261,11 @@ def _finish_daily_bars(
             explicit_no_data.update(gap.get("expected_no_data_symbols") or [])
             source_empty_symbols.update(gap.get("expected_no_data_symbols") or [])
 
-    # A source can return at least one row for every symbol while silently
-    # omitting an interior session.  The symbol-level missing check below
-    # cannot see that case, so validate the full ``symbol×session`` key set
-    # before allowing any batch to remain successful.  Mark the owning worker
-    # batches stale so the normal retry path will fetch the exact window again;
-    # otherwise a raised step would leave successful receipts that
-    # ``retry_failed_only`` is allowed to skip.
-    if not tip and (expected_tdx_symbols or expected_fallback_symbols):
-        all_expected_symbols = list(
-            dict.fromkeys((expected_tdx_symbols or []) + (expected_fallback_symbols or []))
-        )
-        missing_pairs = _staged_daily_bar_missing_keys(
-            config, run_id, all_expected_symbols, start, end
-        )
-        if missing_pairs:
-            missing_symbols = {symbol for symbol, _day in missing_pairs}
-            finding = {
-                "dataset": "daily_bars",
-                "severity": "error",
-                "check": "daily_bars_interior_gap",
-                "message": (
-                    f"daily_bars {start}..{end}: {len(missing_pairs)} interior "
-                    "symbol×session key(s) remain absent; refusing to checkpoint"
-                ),
-                "missing_keys": len(missing_pairs),
-                "missing_symbols": sorted(missing_symbols),
-                "sample_keys": [
-                    {"symbol": symbol, "trade_date": day.isoformat()}
-                    for symbol, day in sorted(missing_pairs)[:8]
-                ],
-            }
-            findings.append(finding)
-            _mark_unresolved_daily_bar_batches(
-                config,
-                run_id,
-                missing_pairs,
-            )
-            raise RuntimeError(finding["message"])
-
     _reject_preopen_placeholder(config, run_id, end)
+
+    # Symbols proven to have no data in this window, collected by the
+    # certification below so the interior-session gate does not re-report them.
+    certified_no_data: set[str] = set()
 
     if tip:
         staged = _staged_daily_bar_symbols(config, run_id, end)
@@ -1086,6 +1281,7 @@ def _finish_daily_bars(
                 source_empty=source_empty_symbols,
             )
             if certified:
+                certified_no_data.update(certified)
                 _record_certified_daily_no_data(
                     config,
                     certified,
@@ -1127,6 +1323,7 @@ def _finish_daily_bars(
                         "symbols": sorted(unknown),
                     }
                 )
+                persist_step_findings(config, run_id, end, findings)
                 if not staged:
                     raise RuntimeError(
                         f"daily_bars {end}: primary/fallback and EastMoney clist/kline "
@@ -1164,6 +1361,7 @@ def _finish_daily_bars(
                 source_empty=source_empty_symbols,
             )
             if certified:
+                certified_no_data.update(certified)
                 _record_certified_daily_no_data(
                     config,
                     certified,
@@ -1205,11 +1403,68 @@ def _finish_daily_bars(
                         "symbols": sorted(unknown),
                     }
                 )
+                persist_step_findings(config, run_id, end, findings)
                 raise RuntimeError(
                     f"daily_bars {start}..{end}: {len(unknown)} expected key(s) remain "
                     "unknown after failover; refusing "
                     "to checkpoint a partial market snapshot"
                 )
+
+    # A source can return at least one row for every symbol while silently
+    # omitting an interior session.  The symbol-level certification above
+    # cannot see that case, so validate the full ``symbol×session`` key set
+    # before allowing any batch to remain successful.  Mark the owning worker
+    # batches stale so the normal retry path will fetch the exact window again;
+    # otherwise a raised step would leave successful receipts that
+    # ``retry_failed_only`` is allowed to skip.
+    #
+    # This runs *after* certification on purpose.  It used to run before, which
+    # meant a window with any unfillable key raised here and the certification
+    # never executed — and since certification is the only writer of daily-bar
+    # negative evidence, that cache stayed permanently empty and every proven
+    # dead symbol was re-fetched from every vendor on every run.
+    if not tip and (expected_tdx_symbols or expected_fallback_symbols):
+        # Each leg is judged on the window it was asked for. Holding the
+        # Beijing symbols to the TDX window would report every session behind
+        # their own lookback as an interior gap.
+        legs = (
+            ([s for s in (expected_tdx_symbols or []) if s not in certified_no_data], start),
+            (
+                [s for s in (expected_fallback_symbols or []) if s not in certified_no_data],
+                fallback_start or start,
+            ),
+        )
+        missing_pairs: set[tuple[str, date]] = set()
+        for leg_symbols, leg_start in legs:
+            if leg_symbols and leg_start < end:
+                missing_pairs |= _staged_daily_bar_missing_keys(
+                    config, run_id, list(dict.fromkeys(leg_symbols)), leg_start, end
+                )
+        if missing_pairs:
+            missing_symbols = {symbol for symbol, _day in missing_pairs}
+            finding = {
+                "dataset": "daily_bars",
+                "severity": "error",
+                "check": "daily_bars_interior_gap",
+                "message": (
+                    f"daily_bars {start}..{end}: {len(missing_pairs)} interior "
+                    "symbol×session key(s) remain absent; refusing to checkpoint"
+                ),
+                "missing_keys": len(missing_pairs),
+                "missing_symbols": sorted(missing_symbols),
+                "sample_keys": [
+                    {"symbol": symbol, "trade_date": day.isoformat()}
+                    for symbol, day in sorted(missing_pairs)[:8]
+                ],
+            }
+            findings.append(finding)
+            _mark_unresolved_daily_bar_batches(
+                config,
+                run_id,
+                missing_pairs,
+            )
+            persist_step_findings(config, run_id, end, findings)
+            raise RuntimeError(finding["message"])
 
     result: dict = {"rows_read": rows_read, "rows_written": rows_written}
     metrics = dict(tdx_result.get("metrics") or {})
@@ -1921,6 +2176,29 @@ def _gapfill_missing_keys_via_ths(
     }
 
 
+def _research_first(symbols: Iterable[str]) -> list[str]:
+    """Order a fallback queue so research-universe symbols are attempted first.
+
+    The per-symbol vendors in the fallback chain open a circuit after a few
+    consecutive transport failures and abandon everything still queued behind
+    it. Under a scope that deliberately keeps ETF/LOF quote codes
+    (``[universe].ingest = "all_instruments"``) an alphabetical queue spends
+    that whole budget on 15xxxx/16xxxx codes before it ever reaches 6xxxxx —
+    which is how a few unservable fund codes left real A shares unresolved.
+
+    Still fully deterministic: sorted within each class, never shuffled.
+    """
+    return sorted(symbols, key=lambda symbol: (0 if _is_research_symbol(symbol) else 1, symbol))
+
+
+def _is_research_symbol(symbol: str) -> bool:
+    try:
+        info = parse_symbol(symbol)
+    except ValueError:
+        return False
+    return in_ingest_universe(info.code, info.exchange, "all_a")
+
+
 def _gapfill_multiday_via_kline(
     config: Config,
     run_id: str,
@@ -1986,7 +2264,9 @@ def _gapfill_multiday_via_kline(
     findings.extend(exchange.get("audit_findings") or [])
     source_outcomes.update(exchange.get("source_outcomes") or {})
     exchange_complete = set(exchange.get("complete_symbols") or [])
-    pending_symbols = sorted({symbol for symbol, _day in missing_keys()} - exchange_complete)
+    pending_symbols = _research_first(
+        {symbol for symbol, _day in missing_keys()} - exchange_complete
+    )
     if not pending_symbols:
         return {
             "rows_read": rows_read,
@@ -2031,7 +2311,7 @@ def _gapfill_multiday_via_kline(
             )
 
     pending = missing_keys()
-    pending_symbols = sorted({symbol for symbol, _day in pending})
+    pending_symbols = _research_first({symbol for symbol, _day in pending})
     spec = failover_spec(config, "daily_bars")
     if pending_symbols and spec is not None and config.sources.get(spec.backup, True):
         diagnostics: dict = {}
@@ -2686,7 +2966,7 @@ def step_index_bars(config: Config, trade_date: date, run_id: str, context: dict
         backfill=getattr(config, "_backfill", False),
         config=config,
     )
-    df = normalize_with_source(df)
+    df = normalize_with_source(df, "tdx_protocol")
     _validate_index_bar_coverage(config, df, start, end)
     from cnequity.steps.common import write_simple
 

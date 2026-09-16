@@ -67,7 +67,7 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cnequity.adapters.tdx_protocol.client.normalize_with_source",
-        lambda df: df,
+        lambda df, *_a, **_k: df,
     )
 
     def fake_calendar(config, trade_date, run_id, context):
@@ -355,7 +355,7 @@ def test_cne_demo_intraday_offline(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cnequity.adapters.tdx_protocol.client.normalize_with_source",
-        lambda df: df,
+        lambda df, *_a, **_k: df,
     )
 
     def fake_calendar(config, trade_date, run_id, context):

@@ -330,6 +330,22 @@ class DatasetSpec:
     primary_source: str = ""
     backup_source: str | None = None
     backfill_source: str | None = None
+    # The rest of the recovery chain: sources that legitimately write rows to
+    # this dataset without being any of the three roles above.
+    #
+    # Three slots described the design when a dataset had one vendor, one
+    # independent peer and one history source. `daily_bars` no longer does: a
+    # tip key that TDX misses is chased through the exchange board files, the
+    # BSE board, EastMoney's clist and kline, Sina and THS in turn, and each of
+    # them stamps its own `source` on the rows it lands. All eight are real
+    # dependencies, so the audit was right to report the undeclared ones
+    # (`unrouted_source`) and the failure-domain report was right to miss them.
+    #
+    # Deliberately a separate field rather than a flat ordered list: primary,
+    # backup and backfill carry distinct meaning that the gates read — the
+    # backup gate asks whether the *backup* is independent of the *primary*,
+    # and flattening the roles would make that question unanswerable.
+    supplementary_sources: tuple[str, ...] = ()
     # How many days the freshest data may lag the last trading day before it is
     # flagged STALE. 1 tolerates normal T+1 EOD publication; larger values mark
     # sources with a slower cadence (margin T+1, quarterly northbound holdings)
@@ -426,6 +442,16 @@ class DatasetSpec:
     # instead of assuming a source will never revise a settled row. The
     # default keeps legacy append-only behaviour for sparse/event datasets.
     reconciliation_lookback_days: int = 0
+    # A second, shorter window for feeds whose full reconciliation is expensive
+    # enough that paying it on every run is the dominant cost of their job.
+    # ``announcement_index`` re-reads 30 days of CNINFO every sweep — ~40,000
+    # records over ~1,350 pages at 30 rows a page, which the endpoint will not
+    # widen — to pick up the few indexed late. Measured against the source: a
+    # 3-, 7- and 14-day-old day each returned exactly what the lake already
+    # held, while a 21-day-old day returned 21 more rows out of 5,932. So the
+    # deep tail does real work and cannot be dropped; it just need not be
+    # walked every run. 0 disables tiering.
+    shallow_reconciliation_lookback_days: int = 0
     # ``trading_day`` counts exchange sessions through the watermark; the
     # calendar form is useful for feeds whose date axis is not a market
     # session. The name says ``days`` for API compatibility, but the unit is
@@ -461,6 +487,15 @@ class DatasetSpec:
             raise ValueError("schema_version must be >= 1")
         if self.reconciliation_lookback_days < 0:
             raise ValueError("reconciliation_lookback_days must be >= 0")
+        if self.shallow_reconciliation_lookback_days < 0:
+            raise ValueError("shallow_reconciliation_lookback_days must be >= 0")
+        if (
+            self.shallow_reconciliation_lookback_days
+            and self.shallow_reconciliation_lookback_days >= self.reconciliation_lookback_days
+        ):
+            raise ValueError(
+                "shallow_reconciliation_lookback_days must be shorter than the full window"
+            )
         if self.reconciliation_lookback_mode not in {"calendar", "trading_day"}:
             raise ValueError("reconciliation_lookback_mode must be 'calendar' or 'trading_day'")
         if not isinstance(self.append_only, bool):
@@ -572,6 +607,11 @@ _SPECS = [
         "instruments",
         primary_source="tdx_protocol",
         backup_source="baostock",
+        # TDX serves SH/SZ only, so the Beijing board is where BJ names enter
+        # the catalogue — it is the exchange's own listing and the only source
+        # here that carries 证券简称 for it. Sina's code-space sweep names what
+        # is left: recovered delistings, and any BJ code the board has dropped.
+        supplementary_sources=("bse", "sina"),
         tier="L0",
         partition_col=None,
         watermark=False,
@@ -587,8 +627,35 @@ _SPECS = [
     ),
     DatasetSpec(
         "trading_status",
-        primary_source="tdx_protocol",
-        backup_source="eastmoney",
+        # The daily feed is EastMoney's current-state board. It is reached
+        # through `tdx_protocol.client.fetch_trading_status`, but that function
+        # only forwards to `fetch_trading_status_eastmoney` — TDX has no ST or
+        # halt feed at all. Declaring TDX as the primary put this dataset in
+        # the wrong failure domain: `cne sources resilience` counted it against
+        # `tdx` (measured 100% from the reference host) when it belongs to
+        # `eastmoney` (worst probe 0%), and naming EastMoney as its own backup
+        # made a same-domain pair look like an independent one.
+        #
+        # There is no second daily vendor. baostock's per-day `isST` is the one
+        # genuinely independent reading, but it is a per-symbol sweep and stays
+        # the backfill source; the in-step fallback is this lake's own previous
+        # snapshot, which is not an independent source either. The backup gate
+        # should say so rather than pass on a mislabel.
+        primary_source="eastmoney",
+        # Suspensions reconstructed from `daily_bars` interior gaps land under
+        # `derived_bar_gap`/`derived_delisted`; the BSE board and its
+        # announcements are the Beijing route the vendor board does not cover.
+        supplementary_sources=("derived", "bse"),
+        # The independent daily second opinion, and the reason this dataset has
+        # a backup at all: both exchanges publish every listed security with its
+        # OHLC and its 证券简称, which carries the halt (open/high/low at zero
+        # beside a reference close) and the ST designation. Measured against the
+        # EastMoney rows for 2026-09-15 over 5,219 symbols: ST agreed on
+        # 100.000%, halts on 99.923%, and every one of the four disagreements
+        # was EastMoney calling a name halted that the exchange had published a
+        # full session for. Shanghai and Shenzhen only — Beijing keeps the BSE
+        # route above.
+        backup_source="exchange",
         tier="L0",
         partition_col="trade_date",
         partition_granularity="month",
@@ -604,9 +671,21 @@ _SPECS = [
         "daily_bars",
         primary_source="tdx_protocol",
         backup_source="eastmoney",
+        # Measured on the reference lake for 2026-09-15: exchange 5,181 rows,
+        # bse 327, tdx_protocol 33, eastmoney 1. Every one of these lands rows
+        # under its own label through `_finish_daily_bars`' recovery chain.
+        supplementary_sources=("exchange", "bse", "sina", "ths", "ths_official", "baostock"),
         tier="L1",
         partition_col="trade_date",
         reconciliation_lookback_days=5,
+        # TDX bills per symbol, not per session — one request returns up to 800
+        # bars — so the 5-session reconciliation window costs the same ~5,559
+        # requests as a single session would. The tip now comes from each
+        # exchange's own whole-board publication (2 requests, 5.9s, measured at
+        # 100% of the session's rows), which is what lets the per-symbol sweep
+        # be priced separately and run on its own cadence. The tail still
+        # catches vendor revisions, just weekly rather than daily.
+        shallow_reconciliation_lookback_days=1,
         reconciliation_lookback_mode="trading_day",
         coverage_mode="session_dense",
     ),
@@ -614,6 +693,9 @@ _SPECS = [
         "index_bars",
         primary_source="tdx_protocol",
         backup_source="eastmoney",
+        # THS serves the board indices whose base the other two disagree on;
+        # mixing them inside one series is what a dedicated route avoids.
+        supplementary_sources=("ths",),
         tier="L1",
         partition_col="trade_date",
         partition_granularity="year",
@@ -743,6 +825,9 @@ _SPECS = [
         # registry also controls canonical row precedence in query views.
         primary_source="eastmoney",
         backup_source="tdx_protocol",
+        # baostock supplies actions for delisted names the live boards cannot
+        # answer for; the THS dividend page is the explicit BJ repair route.
+        supplementary_sources=("baostock", "ths"),
         tier="L2",
         partition_col="ex_date",
         partition_granularity="year",
@@ -759,6 +844,7 @@ _SPECS = [
         # announcements under the calendar date they were published.
         session_scope="calendar",
         reconciliation_lookback_days=30,
+        shallow_reconciliation_lookback_days=7,
         # CNINFO's ``hisAnnouncement`` endpoint is page-limited and has been
         # observed to replay an earlier page once a broad request gets deep
         # enough.  Keep each historical request below one calendar month so a
@@ -781,6 +867,9 @@ _SPECS = [
     DatasetSpec(
         "financial_statement_items",
         primary_source="eastmoney",
+        # The keyed 同花顺 API is the arbitration peer and fills what the
+        # EastMoney datacenter reports omit.
+        supplementary_sources=("ths_official",),
         tier="L3",
         partition_col="report_period",
         partition_granularity="quarter",
@@ -884,6 +973,11 @@ _SPECS = [
     DatasetSpec(
         "margin_trading",
         primary_source="exchange",
+        # `[margin_trading].source` picks between the two at runtime: the
+        # exchange path is the better data, EastMoney the reachable one from a
+        # non-mainland egress. Both are declared because either can own these
+        # rows depending on that choice.
+        supplementary_sources=("eastmoney",),
         tier="L4",
         partition_col="trade_date",
         max_staleness_days=2,
@@ -1123,6 +1217,9 @@ _SPECS = [
     DatasetSpec(
         "delisting_events",
         primary_source="derived",
+        # Recovered delisted names carry Sina's label: the derivation reads
+        # bars that only Sina could serve for those codes.
+        supplementary_sources=("sina",),
         tier="L1",
         layer="derived",
         partition_col=None,

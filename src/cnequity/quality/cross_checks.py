@@ -2265,7 +2265,12 @@ def undeclared_source_findings(config: Config) -> list[dict]:
             continue
         declared = {
             value
-            for value in (spec.primary_source, spec.backup_source, spec.backfill_source)
+            for value in (
+                spec.primary_source,
+                spec.backup_source,
+                spec.backfill_source,
+                *getattr(spec, "supplementary_sources", ()),
+            )
             if value
         }
         for value in sorted(filter(None, present)):

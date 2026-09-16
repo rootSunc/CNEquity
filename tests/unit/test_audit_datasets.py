@@ -585,3 +585,120 @@ def test_full_health_anchors_observations_to_last_trading_day(tmp_path, monkeypa
     assert observed == {"findings": last_trading_day, "source_diff": last_trading_day}
     assert health["trade_date"] == calendar_day.isoformat()
     assert health["last_trading_day"] == last_trading_day.isoformat()
+
+
+def test_a_lagging_dataset_audits_its_newest_partition_not_the_whole_history(tmp_path):
+    """The bounded daily audit must stay bounded when a dataset falls behind.
+
+    With no partition covering the audited day the scan fell back to the whole
+    dataset — so the *cheap* per-run audit became the expensive one. On the
+    real lake `trade_ticks` had stopped in August, and every daily run counted
+    rows across all 6 GB of it: 18 minutes for a capture nobody was ingesting.
+    """
+    cfg = Config(data_root=tmp_path / "data")
+    for day in (date(2024, 6, 25), date(2024, 6, 26), date(2024, 6, 27)):
+        _write_daily_bars_partition(cfg, day, ["600519.SH"])
+    root = cfg.curated_root / "daily_bars"
+
+    scanned: list[list] = []
+    import cnequity.quality.dataset_checks as checks
+
+    real = checks.scan_parquet_files
+
+    def spy(files, *args, **kwargs):
+        scanned.append(list(files))
+        return real(files, *args, **kwargs)
+
+    checks.scan_parquet_files = spy
+    try:
+        # Audited day is long after the last partition.
+        audit_curated_dataset("daily_bars", "trade_date", root, date(2026, 9, 15), full=False)
+    finally:
+        checks.scan_parquet_files = real
+
+    assert scanned, "expected a bounded file scan"
+    widest = max(len(files) for files in scanned)
+    assert widest == 1, f"audited {widest} files; only one partition at a time should be read"
+    read = {str(files[0]) for files in scanned if files}
+    # The newest partition, plus the one before it for the row-mutation
+    # comparison. Never the 2024-06-25 file, and never the whole dataset.
+    assert any("2024-06-27" in path for path in read)
+    assert not any("2024-06-25" in path for path in read)
+
+
+def test_the_current_partition_still_wins_when_one_covers_the_day(tmp_path):
+    """The fallback must not displace a real current partition."""
+    cfg = Config(data_root=tmp_path / "data")
+    for day in (date(2024, 6, 26), date(2024, 6, 27)):
+        _write_daily_bars_partition(cfg, day, ["600519.SH"])
+    root = cfg.curated_root / "daily_bars"
+
+    scanned: list[list] = []
+    import cnequity.quality.dataset_checks as checks
+
+    real = checks.scan_parquet_files
+
+    def spy(files, *args, **kwargs):
+        scanned.append(list(files))
+        return real(files, *args, **kwargs)
+
+    checks.scan_parquet_files = spy
+    try:
+        audit_curated_dataset("daily_bars", "trade_date", root, date(2024, 6, 26), full=False)
+    finally:
+        checks.scan_parquet_files = real
+
+    assert all("2024-06-26" in str(files[0]) for files in scanned if files)
+
+
+def test_full_audit_still_reads_every_historical_file(tmp_path):
+    """The weekly sweep is what looks at everything; it must not be narrowed."""
+    cfg = Config(data_root=tmp_path / "data")
+    for day in (date(2024, 6, 25), date(2024, 6, 26), date(2024, 6, 27)):
+        _write_daily_bars_partition(cfg, day, ["600519.SH"])
+    root = cfg.curated_root / "daily_bars"
+
+    scanned: list[list] = []
+    import cnequity.quality.dataset_checks as checks
+
+    real = checks.scan_parquet_files
+
+    def spy(files, *args, **kwargs):
+        scanned.append(list(files))
+        return real(files, *args, **kwargs)
+
+    checks.scan_parquet_files = spy
+    try:
+        audit_curated_dataset("daily_bars", "trade_date", root, date(2026, 9, 15), full=True)
+    finally:
+        checks.scan_parquet_files = real
+
+    assert max(len(files) for files in scanned) == 3
+
+
+def test_a_stale_dataset_shrink_is_reported_without_accusing_the_data(tmp_path):
+    """Nine of sixteen audit warnings were restatements of staleness.
+
+    `row_count_mutation` exists to catch a partition that lost rows it used to
+    have. A dataset whose schedule group is not being run shrinks for a
+    different reason, and `cne status --datasets` already names that reason
+    along with the group that owns it. Keep the observation, drop the
+    accusation.
+    """
+    cfg = Config(data_root=tmp_path / "data")
+    _write_daily_bars_partition(cfg, date(2024, 6, 26), [f"60{i:04d}.SH" for i in range(400)])
+    _write_daily_bars_partition(cfg, date(2024, 6, 27), ["600519.SH"])
+    root = cfg.curated_root / "daily_bars"
+
+    fresh = audit_curated_dataset("daily_bars", "trade_date", root, date(2024, 6, 27))
+    behind = audit_curated_dataset("daily_bars", "trade_date", root, date(2024, 6, 27), stale=True)
+
+    hot = next(f for f in fresh if f["check"] == "row_count_mutation")
+    cold = next(f for f in behind if f["check"] == "row_count_mutation")
+
+    assert hot["severity"] == "warning"
+    assert "stale_dataset" not in hot
+    # Same finding, different claim about what it means.
+    assert cold["severity"] == "info"
+    assert cold["stale_dataset"] is True
+    assert "cne status --datasets" in cold["message"]

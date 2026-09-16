@@ -19,6 +19,7 @@ from cnequity.cli._shared import (
     _run_status_exit_code,
     config_option,
     parse_date_option,
+    resolve_config_path,
 )
 from cnequity.config import load_config, validate_config, write_user_config
 from cnequity.domain.market_time import shanghai_today
@@ -252,7 +253,7 @@ def init(
 
 
 @cli.command("config")
-@click.argument("action", type=click.Choice(["validate", "init"]))
+@click.argument("action", type=click.Choice(["validate", "init", "diff"]))
 @config_option
 @click.option(
     "--force",
@@ -265,12 +266,28 @@ def init(
     help="Set [data].root when action=init (default: resolve ./data/cnequity to an absolute path).",
 )
 def config_cmd(action: str, config_path: str, force: bool, data_root: str | None):
-    """Validate or bootstrap configuration.
+    """Validate, bootstrap, or diff configuration.
 
     ``cne config init`` writes the packaged example TOML (no repo checkout needed).
     On macOS it also forces ``orchestrator.workers = 1``.
     ``cne config validate`` checks an existing file.
+    ``cne config diff`` reports what the packaged example has that this file does
+    not — most importantly steps added to a schedule group by a later release,
+    which a config written once and never updated will never run.
     """
+    if action == "diff":
+        from cnequity.config.drift import config_drift, render_drift
+
+        path = resolve_config_path(config_path)
+        drift = config_drift(path)
+        for line in render_drift(drift, path):
+            click.echo(line)
+        # Unscheduled steps are the case that silently loses data, so they are
+        # the only drift that fails: missing keys merely take their defaults.
+        if drift.unscheduled_steps:
+            raise SystemExit(1)
+        return
+
     if action == "init":
         out = Path(config_path)
         try:

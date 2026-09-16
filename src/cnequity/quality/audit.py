@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from datetime import date, timedelta
 
 import polars as pl
@@ -59,6 +61,8 @@ from cnequity.query.universe import (
     trading_status_coverage_start,
 )
 from cnequity.storage.atomic import write_json_atomic
+
+logger = logging.getLogger(__name__)
 
 # Sample missing/orphan dates surfaced in a coverage finding.
 _INDEX_COVERAGE_SAMPLE = 8
@@ -207,6 +211,34 @@ def _unregistered_curated_dirs(config: Config) -> list[dict]:
     ]
 
 
+def _stale_dataset_names(config: Config, trade_date: date) -> set[str]:
+    """Datasets already behind, judged exactly as `cne status --datasets` judges.
+
+    Best effort: a lake too young or too damaged to answer must not stop the
+    audit, so an unreadable inventory means "nothing known to be stale" rather
+    than an exception.
+    """
+    from cnequity.domain.datasets import DATASETS, is_dataset_enabled, is_stale
+    from cnequity.query.reader import list_datasets
+
+    try:
+        rows = list_datasets(config=config).iter_rows(named=True)
+    except Exception:  # noqa: BLE001 — freshness is an input here, not the subject
+        return set()
+    anchor = _last_trading_day(config, trade_date)
+    out: set[str] = set()
+    for row in rows:
+        name = row["dataset"]
+        if name not in DATASETS or not row.get("has_data") or not row.get("watermarked"):
+            continue
+        if not is_dataset_enabled(name, config):
+            continue
+        mark = row.get("watermark") or row.get("coverage_end")
+        if mark is not None and is_stale(name, mark, anchor):
+            out.add(name)
+    return out
+
+
 def _collect_lake_findings(
     config: Config,
     trade_date: date,
@@ -250,16 +282,27 @@ def _collect_lake_findings(
     # dataset has an unreadable file, skip scans that could consume it and say
     # so explicitly in the report.
     invalid_datasets: set[str] = set()
+    stale_datasets = _stale_dataset_names(config, trade_date)
     for ds, pcol in PARTITION_COLS.items():
         root = config.curated_root / ds
-        dataset_findings = audit_curated_dataset(ds, pcol, root, trade_date, full=full)
+        dataset_findings = audit_curated_dataset(
+            ds, pcol, root, trade_date, full=full, stale=ds in stale_datasets
+        )
         findings.extend(dataset_findings)
         if any(
             f.get("check") == "schema_contract" and f.get("unreadable_files", 0) > 0
             for f in dataset_findings
         ):
             invalid_datasets.add(ds)
-        else:
+        elif full:
+            # Layout checks, not data checks: both walk the dataset's entire
+            # directory tree, and neither can change between two daily runs
+            # unless someone deliberately repartitions. Running them on every
+            # trading day made the daily health gate open all 17k curated
+            # Parquet files — the single largest cost in the pipeline — to
+            # re-confirm a layout nobody touched. They belong to the weekly
+            # whole-lake sweep, which is also when a repartition would be
+            # reviewed.
             mixed = check_mixed_partition_granularity(ds, pcol, root)
             if mixed is not None:
                 findings.append(mixed)
@@ -444,6 +487,45 @@ def _optional_intraday_findings(config: Config, trade_date: date) -> list[dict]:
     return findings
 
 
+def persist_step_findings(
+    config: Config, run_id: str, trade_date: date, findings: list[dict]
+) -> None:
+    """Write a failing step's own findings where the audit file would be.
+
+    A step that raises never reaches ``run_audit``, so everything it learned
+    died with the exception message. ``daily_bars`` was the expensive case: its
+    interior-gap finding carries the missing symbols and sample keys, but only
+    the one-line message survived the raise, leaving the operator to reverse
+    engineer the cause out of a log file.
+
+    Best effort by construction — losing the diagnostic must never replace the
+    real failure with an I/O error.
+    """
+    if not findings:
+        return
+    try:
+        out_dir = config.meta_root / "quality" / "findings"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{run_id}.json"
+        existing: list[dict] = []
+        if out_path.exists():
+            with open(out_path, encoding="utf-8") as handle:
+                existing = json.load(handle).get("findings", [])
+        write_json_atomic(
+            out_path,
+            {
+                "run_id": run_id,
+                "trade_date": trade_date.isoformat(),
+                "findings": existing + findings,
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    except Exception:  # noqa: BLE001 — diagnostics must not mask the failure
+        logger.warning("could not persist step findings for run %s", run_id, exc_info=True)
+
+
 def run_audit(config: Config, run_id: str, trade_date: date, context: dict | None = None) -> int:
     findings = _collect_lake_findings(config, trade_date, context)
     # Keep the dedicated source-diff artifact, but also include its findings in
@@ -472,6 +554,11 @@ def run_audit(config: Config, run_id: str, trade_date: date, context: dict | Non
         # run should have been allowed to publish. The caller already owns
         # this dict; returning a richer type would break every other caller.
         context["audit_by_severity"] = by_severity
+        # The CLI gates on this and has to be able to say *what* failed; a bare
+        # count sends the operator back to the findings file.
+        context["audit_error_findings"] = [
+            item for item in findings if str(item.get("severity")) == "error"
+        ]
 
     return len(findings)
 

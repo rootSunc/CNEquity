@@ -206,7 +206,7 @@ def capture_trade_ticks(config: Config, trade_date: date, run_id: str) -> dict:
             continue
         df = _validate_tick_batch(df, chunk, sessions)
         with_rows.update(df["symbol"].unique().to_list())
-        df = normalize_with_source(df, dataset=DATASET)
+        df = normalize_with_source(df, "tdx_protocol", dataset=DATASET)
         writer.write_batch(DATASET, run_id, f"ticks-{index // _BATCH_SYMBOLS:04d}", df)
         written += df.height
         logger.info(

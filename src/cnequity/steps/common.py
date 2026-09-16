@@ -54,6 +54,18 @@ def write_simple(
     return {"rows_read": df.height, "rows_written": df.height}
 
 
+def _is_deep_reconciliation_day(config: Config, trade_date: date) -> bool:
+    """Whether *trade_date* is the day a tiered feed walks its full window.
+
+    ``[incremental].deep_reconciliation_dow`` is an ISO weekday (1=Mon..7=Sun);
+    0 disables tiering entirely, so every run pays the full window as before.
+    """
+    dow = int(getattr(config, "deep_reconciliation_dow", 6) or 0)
+    if dow <= 0:
+        return True
+    return trade_date.isoweekday() == dow
+
+
 def incremental_window(config: Config, dataset: str, trade_date: date) -> date:
     """Return the start of a dataset's incremental reconciliation window.
 
@@ -71,6 +83,14 @@ def incremental_window(config: Config, dataset: str, trade_date: date) -> date:
     watermark = state.get_date(dataset)
     spec = DATASETS.get(dataset)
     lookback = max(int(getattr(spec, "reconciliation_lookback_days", 0) or 0), 0)
+    shallow = max(int(getattr(spec, "shallow_reconciliation_lookback_days", 0) or 0), 0)
+    if shallow and not _is_deep_reconciliation_day(config, trade_date):
+        # The deep tail is swept on its own day (see `_is_deep_reconciliation_day`);
+        # every other run walks the near tail only. Coverage over a week is
+        # unchanged — a late-indexed record is picked up by the next deep sweep
+        # instead of the next run — while the per-run page count drops with the
+        # window.
+        lookback = shallow
     mode = getattr(spec, "reconciliation_lookback_mode", "calendar")
 
     if lookback:
@@ -831,6 +851,11 @@ class DailyBarOwnership:
     no_data_reasons: dict[str, str] = field(default_factory=dict)
 
 
+def _never_started(symbol: str, list_date: date | None, bar_universe: set[str] | None) -> bool:
+    """No listing date, and no traded bar in the lake's entire history."""
+    return list_date is None and bar_universe is not None and symbol not in bar_universe
+
+
 def classify_daily_bar_ownership(
     symbols: list[str],
     spans: dict[
@@ -854,9 +879,10 @@ def classify_daily_bar_ownership(
     complete window. An absent status row, malformed instrument metadata, or
     an incomplete source response remains ``unknown`` and must be retried.
 
-    ``bar_universe`` is historical positive-volume evidence. It is used for
-    the narrow undated-ETF placeholder case, where a symbol with no observed
-    traded bar is not safe to send through the expensive per-symbol fallback.
+    ``bar_universe`` is historical positive-volume evidence. A symbol with no
+    list_date and no traded bar anywhere in it has not started trading, so it
+    is held as a ``placeholder``: kept out of the expensive per-symbol fallback
+    and out of the expected key set, without claiming its absence was proven.
     """
     from cnequity.domain.symbols import is_etf_symbol, parse_symbol
 
@@ -932,6 +958,22 @@ def classify_daily_bar_ownership(
                 # coverage obligation, even if an old negative cache exists.
                 if len(span) >= 3 and asset_type is None:
                     out.unknown.append(normalized)
+                elif _never_started(normalized, list_date, normalized_bar_universe):
+                    # Except when the security has not started trading. The
+                    # status board publishes `is_trading` for a whole universe
+                    # from a *suspension list*, so a code that is merely not
+                    # suspended reads as trading normally — including one that
+                    # has never had a session. Storage already refuses the
+                    # mirror image of this (`_symbols_without_bars`: a security
+                    # that has never printed a bar cannot have stopped
+                    # trading), and the same fact settles it here: an
+                    # undated code with no traded bar in the lake's whole
+                    # history is not a missing snapshot, it is a code waiting
+                    # for its listing. TDX publishes those days early, then
+                    # drops them, which leaves a row no enrichment can reach —
+                    # so without this a pre-IPO code blocks the market
+                    # snapshot every run, permanently.
+                    out.placeholder.append(normalized)
                 else:
                     out.generic.append(normalized)
                 continue
@@ -950,15 +992,10 @@ def classify_daily_bar_ownership(
             # routed safely: treating it as an equity would either miss a
             # dedicated fallback or certify the wrong no-data reason.
             out.unknown.append(normalized)
-        elif (
-            asset_type == "etf"
-            and list_date is None
-            and bar_universe is not None
-            and normalized not in normalized_bar_universe
-        ):
-            # This is likely an issued-but-not-yet-listed fund code, but a
-            # delayed list_date enrichment is indistinguishable here. Keep it
-            # out of the fetch batch without claiming the absence was proven.
+        elif _never_started(normalized, list_date, normalized_bar_universe):
+            # Likely an issued-but-not-yet-listed code, but a delayed list_date
+            # enrichment is indistinguishable here. Keep it out of the fetch
+            # batch without claiming the absence was proven.
             out.placeholder.append(normalized)
         else:
             out.generic.append(normalized)

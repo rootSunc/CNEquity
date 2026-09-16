@@ -90,8 +90,9 @@ def test_unlisted_etf_without_bar_universe_stays_generic():
     assert result.generic == ["589430.SH"]
 
 
-def test_retry_only_etf_placeholder_is_audited_and_unblocks_original_batch(tmp_path):
-    cfg = Config(data_root=tmp_path / "data", workers=1)
+def _etf_retry_lake(tmp_path, **config_kwargs) -> tuple[Config, str]:
+    """A lake whose only failed daily_bars batch holds one undated ETF code."""
+    cfg = Config(data_root=tmp_path / "data", workers=1, **config_kwargs)
     init_data_layout(cfg)
     instruments = cfg.curated_root / "instruments"
     instruments.mkdir(parents=True)
@@ -131,27 +132,45 @@ def test_retry_only_etf_placeholder_is_audited_and_unblocks_original_batch(tmp_p
         "failed",
         error_message="TDX returned no rows",
     )
+    return cfg, run_id
 
-    result = step_daily_bars(
-        cfg,
-        date(2024, 6, 28),
-        run_id,
-        {
-            "_retry_batch_specs": [
-                (
-                    "placeholder-retry",
-                    ["589430.SH"],
-                    date(2024, 6, 28),
-                    date(2024, 6, 28),
-                )
-            ]
-        },
+
+_ETF_RETRY_CONTEXT = {
+    "_retry_batch_specs": [
+        ("placeholder-retry", ["589430.SH"], date(2024, 6, 28), date(2024, 6, 28))
+    ]
+}
+
+
+def test_retry_only_etf_batch_is_superseded_when_outside_the_ingest_universe(tmp_path):
+    """The default ingest scope holds no ETF code, so there is nothing to retry.
+
+    Leaving the batch failed would block compaction forever over a code this
+    lake no longer fetches, so it is resolved without touching a vendor.
+    """
+    cfg, run_id = _etf_retry_lake(tmp_path)
+    assert cfg.ingest_universe == "all_a"
+
+    result = step_daily_bars(cfg, date(2024, 6, 28), run_id, dict(_ETF_RETRY_CONTEXT))
+
+    batch = Manifest(cfg.manifest_path).get_batch(run_id, "placeholder-retry")
+    assert batch["status"] == "superseded"
+    assert "ingest-universe-excluded" in (batch["error_message"] or "")
+    assert result["rows_written"] == 0
+
+
+def test_retry_only_etf_placeholder_is_audited_and_unblocks_original_batch(tmp_path):
+    """`all_instruments` keeps ETF quotes in scope, so the placeholder audit runs."""
+    cfg, run_id = _etf_retry_lake(tmp_path, ingest_universe="all_instruments")
+
+    result = step_daily_bars(cfg, date(2024, 6, 28), run_id, dict(_ETF_RETRY_CONTEXT))
+
+    assert Manifest(cfg.manifest_path).get_batch(run_id, "placeholder-retry")["status"] == (
+        "superseded"
     )
-
-    assert manifest.get_batch(run_id, "placeholder-retry")["status"] == "superseded"
     assert result["context_updates"]["daily_bars_ownership"]["placeholder"] == 1
     assert any(
-        finding["check"] == "daily_bars_etf_placeholder_skipped"
+        finding["check"] == "daily_bars_placeholder_skipped"
         for finding in result["context_updates"]["audit_findings"]
     )
 
@@ -191,3 +210,64 @@ def test_incomplete_delisted_ownership_blocks_compaction_and_retries(tmp_path, m
         is True
     )
     assert manifest.get_batch(run_id, batch_id)["status"] == "success"
+
+
+def test_a_never_traded_code_is_not_a_coverage_obligation_despite_positive_status():
+    """`trading_status` publishes `is_trading` for a whole universe off a
+    *suspension list*, so a code that is merely not suspended reads as trading
+    normally — including one that has never had a session at all.
+
+    Two such codes (301686.SZ, 688837.SH; TDX published them days early, then
+    dropped them, leaving rows no list_date enrichment can reach) held the
+    2026-09-15 market snapshot hostage: neither exchange board carried them,
+    EastMoney's kline had nothing, and the run refused to checkpoint. Storage
+    already declines the mirror image of this — a security that never printed a
+    bar cannot have stopped trading — and the same fact settles it here.
+    """
+    status = pl.DataFrame(
+        {
+            "symbol": ["301686.SZ", "600519.SH"],
+            "trade_date": [date(2026, 9, 15)] * 2,
+            "is_trading": [True, True],
+        }
+    )
+
+    result = classify_daily_bar_ownership(
+        ["301686.SZ", "600519.SH"],
+        {"301686.SZ": (None, None, "stock"), "600519.SH": (None, None, "stock")},
+        date(2026, 9, 15),
+        date(2026, 9, 15),
+        bar_universe={"600519.SH"},
+        trading_status=status,
+        trading_sessions=[date(2026, 9, 15)],
+    )
+
+    assert result.placeholder == ["301686.SZ"]
+    # Never claimed as proven no-data, and a name that has traded before keeps
+    # its obligation — a real fetch miss must still block the snapshot.
+    assert result.expected_no_data == []
+    assert result.generic == ["600519.SH"]
+
+
+def test_a_dated_code_that_has_never_traded_still_blocks():
+    """The escape hatch is only for codes with no listing date. Once a listing
+    date exists the span rules decide, so a genuine first-session miss is still
+    a coverage obligation rather than a silently skipped placeholder."""
+    result = classify_daily_bar_ownership(
+        ["301686.SZ"],
+        {"301686.SZ": (date(2026, 9, 15), None, "stock")},
+        date(2026, 9, 15),
+        date(2026, 9, 15),
+        bar_universe=set(),
+        trading_status=pl.DataFrame(
+            {
+                "symbol": ["301686.SZ"],
+                "trade_date": [date(2026, 9, 15)],
+                "is_trading": [True],
+            }
+        ),
+        trading_sessions=[date(2026, 9, 15)],
+    )
+
+    assert result.placeholder == []
+    assert result.generic == ["301686.SZ"]

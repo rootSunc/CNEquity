@@ -126,20 +126,33 @@ def test_negative_evidence_is_ttl_bounded_and_catalog_revision_invalidates(tmp_p
     )
 
 
-def test_daily_bars_incremental_window_reconciles_latest_trading_sessions(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
+def _calendar_lake(tmp_path, *, watermark: date, **config_kwargs) -> Config:
+    cfg = Config(data_root=tmp_path / "data", **config_kwargs)
     rows = []
     current = date(2024, 5, 20)
-    end = date(2024, 6, 28)
-    while current <= end:
+    while current <= date(2024, 6, 28):
         rows.append({"trade_date": current, "is_trading": current.weekday() < 5})
         current += timedelta(days=1)
     calendar = cfg.curated_root / "trading_calendar"
     calendar.mkdir(parents=True)
     pl.DataFrame(rows).write_parquet(calendar / "part-merged.parquet")
-    StateStore(cfg.meta_root).set_date("daily_bars", date(2024, 6, 25))
+    StateStore(cfg.meta_root).set_date("daily_bars", watermark)
+    return cfg
 
-    assert incremental_trade_dates(cfg, "daily_bars", end) == [
+
+def test_daily_bars_reconciles_five_sessions_on_its_deep_day(tmp_path):
+    """The reconciliation window that catches vendor revisions.
+
+    TDX bills per symbol, not per session — one request returns up to 800 bars
+    — so this window costs the same ~5,559 requests whether it spans one
+    session or five. It is therefore priced as its own job and runs on its own
+    day; `deep_reconciliation_dow` names it (default Saturday).
+    """
+    cfg = _calendar_lake(tmp_path, watermark=date(2024, 6, 25))
+    saturday = date(2024, 6, 29)
+    assert saturday.isoweekday() == cfg.deep_reconciliation_dow
+
+    assert incremental_trade_dates(cfg, "daily_bars", saturday) == [
         date(2024, 6, 19),
         date(2024, 6, 20),
         date(2024, 6, 21),
@@ -149,6 +162,37 @@ def test_daily_bars_incremental_window_reconciles_latest_trading_sessions(tmp_pa
         date(2024, 6, 27),
         date(2024, 6, 28),
     ]
+
+
+def test_an_ordinary_day_still_covers_everything_since_the_watermark(tmp_path):
+    """Tiering narrows the *reconciliation* tail, never the catch-up gap.
+
+    A missed session is missing data, not a revision, so it must be fetched on
+    the next run whatever day that is.
+    """
+    cfg = _calendar_lake(tmp_path, watermark=date(2024, 6, 25))
+    friday = date(2024, 6, 28)
+    assert friday.isoweekday() != cfg.deep_reconciliation_dow
+
+    assert incremental_trade_dates(cfg, "daily_bars", friday) == [
+        date(2024, 6, 25),
+        date(2024, 6, 26),
+        date(2024, 6, 27),
+        date(2024, 6, 28),
+    ]
+
+
+def test_a_caught_up_lake_fetches_only_the_tip(tmp_path):
+    """Which is what the whole-board exchange snapshot answers in two requests."""
+    cfg = _calendar_lake(tmp_path, watermark=date(2024, 6, 28))
+
+    assert incremental_trade_dates(cfg, "daily_bars", date(2024, 6, 28)) == [date(2024, 6, 28)]
+
+
+def test_disabling_tiering_restores_the_daily_five_session_window(tmp_path):
+    cfg = _calendar_lake(tmp_path, watermark=date(2024, 6, 25), deep_reconciliation_dow=0)
+
+    assert incremental_trade_dates(cfg, "daily_bars", date(2024, 6, 28))[0] == date(2024, 6, 19)
 
 
 def test_incremental_negative_evidence_ttl_is_configurable(tmp_path):

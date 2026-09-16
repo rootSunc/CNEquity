@@ -307,6 +307,35 @@ def _run_stale_only(
         raise SystemExit(exit_code)
 
 
+def datasets_outside_the_daily_waves(cfg) -> list[str]:
+    """Enabled, fetchable datasets that a bare ``cne run daily`` never touches.
+
+    ``cne run daily`` without ``--group`` runs ``[[job.daily.waves]]`` — the
+    core spine — while two thirds of the registered datasets live in
+    ``[job.daily.groups.*]``. Running only that one line builds a lake where
+    most datasets are silently never updated and nothing ever fails, which is
+    exactly what the README used to recommend.
+
+    Events-owned feeds are excluded: ``cne run events`` owns them on the
+    natural calendar, so they are not missing work for this job.
+    """
+    from cnequity.domain.datasets import DATASETS, is_dataset_enabled
+    from cnequity.orchestrator.registry import STEP_REGISTRY
+
+    covered = {step for wave in getattr(cfg, "daily_waves", []) or [] for step in wave.steps}
+    events_owned = {
+        step for group in getattr(cfg, "events_groups", {}).values() for step in group.steps
+    }
+    grouped = {
+        step for group in getattr(cfg, "schedule_groups", {}).values() for step in group.steps
+    }
+    return sorted(
+        step
+        for step in grouped - covered - events_owned
+        if step in STEP_REGISTRY and (step not in DATASETS or is_dataset_enabled(step, cfg))
+    )
+
+
 @run.command("daily")
 @config_option
 @click.option(
@@ -387,6 +416,23 @@ def run_daily(
             )
         else:
             result = engine.run_job("daily", trade_date=td, backfill=backfill)
+            # A skipped non-trading day ran nothing at all; listing what it did
+            # not cover would put this note in every weekend cron mail.
+            uncovered = (
+                datasets_outside_the_daily_waves(cfg)
+                if result["status"] != "skipped_non_trading_day"
+                else []
+            )
+            if uncovered:
+                preview = ", ".join(uncovered[:6])
+                suffix = f", … (+{len(uncovered) - 6})" if len(uncovered) > 6 else ""
+                click.echo(
+                    f"note: this run covered the core spine only; {len(uncovered)} enabled "
+                    f"dataset(s) belong to schedule groups and were not updated: "
+                    f"{preview}{suffix}. Run them with `cne run daily --group <name>` "
+                    f"({', '.join(sorted(cfg.schedule_groups))}).",
+                    err=True,
+                )
     except RunLockError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(

@@ -131,15 +131,38 @@ def test_a_provenance_sublabel_inherits_its_base_policy(tmp_path):
 
 
 def test_a_registered_source_off_its_route_is_reported_separately(tmp_path):
-    """policies_for_dataset omits terms that do apply, which is the whole risk."""
+    """policies_for_dataset omits terms that do apply, which is the whole risk.
+
+    `cninfo` is a registered vendor with its own terms, and it has no business
+    writing daily bars.
+    """
     from cnequity.config import Config
     from cnequity.quality.cross_checks import undeclared_source_findings
 
-    _lake_with_source(tmp_path, "daily_bars", "trade_date", "ths_official")
+    _lake_with_source(tmp_path, "daily_bars", "trade_date", "cninfo")
     findings = undeclared_source_findings(Config(data_root=tmp_path))
     unrouted = [f for f in findings if f["check"] == "unrouted_source"]
     assert unrouted and unrouted[0]["severity"] == "warning"
-    assert "ths_official" in unrouted[0]["sources"]
+    assert "cninfo" in unrouted[0]["sources"]
+
+
+def test_a_declared_recovery_chain_member_is_on_its_route(tmp_path):
+    """Three slots could not describe an eight-source chain.
+
+    A tip key TDX misses is chased through the exchange board files, BSE,
+    EastMoney, Sina and THS in turn, and each stamps its own `source`. They are
+    real dependencies with real terms, so they are declared
+    (`supplementary_sources`) rather than left to read as strays.
+    """
+    from cnequity.config import Config
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.quality.cross_checks import undeclared_source_findings
+
+    assert "exchange" in DATASETS["daily_bars"].supplementary_sources
+
+    for source in ("exchange", "bse", "ths_official"):
+        _lake_with_source(tmp_path / source, "daily_bars", "trade_date", source)
+        assert undeclared_source_findings(Config(data_root=tmp_path / source)) == [], source
 
 
 def test_a_dataset_read_only_from_its_declared_route_is_quiet(tmp_path):

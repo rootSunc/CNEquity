@@ -550,8 +550,15 @@ def audit_curated_dataset(
     trade_date: date,
     *,
     full: bool = False,
+    stale: bool = False,
 ) -> list[dict]:
     """Audit the current partition, or every historical file when ``full``.
+
+    ``stale`` says the dataset is already known to be behind. A partition that
+    shrank because nothing has been fetched into it is not the defect
+    ``row_count_mutation`` exists to catch, and reporting it as one made nine
+    of sixteen audit warnings restatements of a staleness the freshness report
+    had already named.
 
     Per-run audits stay bounded to the partition touched today. The explicit
     full-lake health path opts into a file-by-file historical schema scan and
@@ -609,7 +616,16 @@ def audit_curated_dataset(
         # The audited unit is the partition holding trade_date, which under
         # month/year granularity is a period rather than the single day.
         partitions = list_partitions(root, partition_col)
-        current = next((p for p in partitions if p.covers(trade_date)), None)
+        # No partition covers the audited day when a dataset is behind or its
+        # capture is switched off. Falling back to the whole dataset made the
+        # *bounded* daily audit the expensive one: `trade_ticks` stopped in
+        # August, so every daily run counted rows across all 6 GB of it — 18
+        # minutes for a dataset nobody is ingesting. Audit its newest
+        # partition instead; the weekly `--full` sweep is what reads
+        # everything.
+        current = next((p for p in partitions if p.covers(trade_date)), None) or (
+            partitions[-1] if partitions else None
+        )
         if current is not None:
             partition_value = current.value
             prior = [p for p in partitions if p.start < current.start]
@@ -807,6 +823,14 @@ def audit_curated_dataset(
                 elapsed_fraction=period_elapsed_fraction(partition_value, granularity, trade_date),
             )
             if mutation is not None:
+                if stale:
+                    # Keep the observation, drop the accusation: the rows are
+                    # missing because the feed is behind, which `cne status
+                    # --datasets` already reports with the schedule group that
+                    # owns it.
+                    mutation["severity"] = "info"
+                    mutation["stale_dataset"] = True
+                    mutation["message"] += " — dataset is stale; see `cne status --datasets`"
                 findings.append(mutation)
 
     return findings

@@ -19,12 +19,20 @@ def _config(tmp_path):
     return Config(data_root=data), path
 
 
-def test_source_resilience_enforce_passes_for_core_and_discloses_adj_single_source():
+def test_source_resilience_enforce_passes_on_real_independent_backups():
+    """`--enforce` is a gate: it has to pass for a reason, not for a label.
+
+    It once passed because `trading_status` named TDX as a primary it never
+    used, putting EastMoney on both sides of a pair that looked disjoint.
+    Correcting that made it fail; it passes now because every critical dataset
+    has a backup in a genuinely different failure domain.
+    """
     result = CliRunner().invoke(cli, ["sources", "resilience", "--enforce"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["backup_gate"]["passed"] is True
+    assert payload["backup_gate"]["issues"] == []
     adj = next(item for item in payload["datasets"] if item["dataset"] == "adj_factors")
     assert adj["impact"]["single_source_primary"] is True
 

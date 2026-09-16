@@ -29,6 +29,21 @@ batch_stale_seconds = 3600  # running batches without heartbeat for this long �
 # TTL for symbol/window-level source-empty evidence.  Set to 0 to retry every
 # missing key; instrument catalog revisions still invalidate live evidence.
 negative_evidence_ttl_days = 7
+# ISO weekday (1=Mon .. 7=Sun) on which datasets that declare a *shallow*
+# reconciliation window walk their full one instead; 0 disables tiering and
+# pays the full window on every run.
+#
+# Only `announcement_index` declares one today. CNINFO fixes its page at 30
+# rows and ignores `pageSize`, so its 30-day window is ~1,350 requests every
+# sweep — the single largest cost in the whole pipeline — spent re-reading
+# records the lake already has. Measured against the source: 3-, 7- and
+# 14-day-old days returned exactly what was already stored, while a 21-day-old
+# day returned 21 more rows out of 5,932. The deep tail is real, so it is swept
+# weekly rather than dropped: a late-indexed announcement now lands within a
+# week instead of within a day. Its own `announce_date` is unchanged either
+# way, so PIT correctness does not depend on when it arrives — only the lake's
+# completeness lags.
+deep_reconciliation_dow = 6
 
 [quality]
 # What a run does when the lake audit reports `error` findings.
@@ -154,6 +169,18 @@ min_interval_seconds = 1.0
 enabled = true
 min_interval_seconds = 1.0
 
+[sources.slo]
+# Probe keys this network cannot reach at all. They stay measured and reported,
+# but under `not_applicable` instead of failing the availability gate: an absent
+# source is not a degraded one, and a gate held open on it never closes.
+#
+# EastMoney's WAF refuses non-mainland traffic, so an overseas egress *without a
+# mainland proxy* belongs here. With a proxy configured it does not — which is
+# why this is declared, not inferred. Leave empty on a mainland host.
+#
+#   unreachable = ["eastmoney_push2", "eastmoney_push2his", "eastmoney_datacenter"]
+unreachable = []
+
 [sources.sina]
 enabled = true
 min_interval_seconds = 0.3
@@ -163,6 +190,15 @@ min_interval_seconds = 0.3
 [sources.sina_bars]
 enabled = true
 min_interval_seconds = 1.0
+# How many trailing sessions the per-symbol Sina leg reconciles on a daily run.
+# TDX has no Beijing route, so every BJ symbol (~580) comes through this
+# one-request-per-symbol endpoint. Running daily_bars' full 5-session lookback
+# through it is ~2,900 requests a run, which earns HTTP 456 and a vendor-wide
+# cooldown that then strands unrelated symbols mid-run. The Beijing tip comes
+# from the BSE board snapshot below (~30 paginated requests for the whole
+# board), so this only sets how far the per-symbol backstop reaches behind it.
+# Raise it only if you have evidence that Sina revises settled BJ bars.
+reconciliation_lookback_days = 1
 
 # BSE official current quote snapshot; primary source for current BJ tip bars
 # and turnover. It is not a history source; historical BJ windows still use Sina.
@@ -354,7 +390,19 @@ max_payload_bytes = 33554432
 # datasets = ["announcement_index", "regulatory_events", "financial_statement_items", "corporate_actions"]
 
 [universe]
+# Query-side default for `load(..., universe=)`.
 default = "all_a"
+# Which instrument classes the daily fetch covers.  `instruments` lists every
+# code TDX returns and about a quarter are ETF/LOF/fund quote codes that no
+# research profile selects and that no configured vendor reliably serves —
+# fetching them costs a quarter of every sweep, trips the EastMoney and Sina
+# circuit breakers on symbols nobody needs, and leaves unfillable keys in the
+# coverage gate.  ST, suspended, CDR and delisted names are always kept: those
+# are exactly what this lake exists to retain.
+#   all_a           — SH/SZ/BJ A shares (default)
+#   all_a_sh_sz     — drop the Beijing exchange as well
+#   all_instruments — everything `instruments` lists, including ETF/LOF quotes
+ingest = "all_a"
 
 # Wave DAG for daily job (see docs/datasets/catalog.md)
 [[job.daily.waves]]

@@ -30,7 +30,7 @@ def test_progress_is_logged_per_batch(caplog, config, monkeypatch):
             {"symbol": ["600519.SH"], "trade_date": [__import__("datetime").date(2026, 7, 31)]}
         ),
     )
-    monkeypatch.setattr(worker_pool, "normalize_with_source", lambda df, **k: df)
+    monkeypatch.setattr(worker_pool, "normalize_with_source", lambda df, *a, **k: df)
     monkeypatch.setattr(worker_pool.StagingWriter, "write_batch", lambda *a, **k: None)
 
     config.workers = 1

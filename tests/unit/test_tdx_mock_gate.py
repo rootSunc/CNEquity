@@ -107,7 +107,7 @@ def test_mock_rows_are_labeled_and_survive_normalization():
     assert df.height > 0
     assert set(df["source"].unique().to_list()) == {MOCK_SOURCE}
 
-    normalized = tdx.normalize_with_source(df)
+    normalized = tdx.normalize_with_source(df, "tdx_protocol")
     assert set(normalized["source"].unique().to_list()) == {MOCK_SOURCE}
 
 
@@ -184,3 +184,23 @@ def test_daily_bars_abandons_a_hung_symbol_request(monkeypatch):
     release.set()
 
     assert out["symbol"].to_list() == ["600519.SH"]
+
+
+def test_provenance_cannot_be_stamped_without_naming_the_vendor():
+    """The default was `"tdx_protocol"`, and it answered for callers that had
+    nothing to do with TDX.
+
+    That is how 58,672 `trading_status` rows came to name a vendor serving no
+    status feed: the step called this with no source, and the default filled
+    it in. The forwarder that produced those rows still lives in this very
+    module — `fetch_trading_status` goes straight to EastMoney — so the next
+    caller is one keyword away from repeating it. Requiring the argument is
+    what makes the mistake impossible rather than merely fixed once.
+    """
+    import inspect
+
+    signature = inspect.signature(tdx.normalize_with_source)
+
+    assert signature.parameters["source"].default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        tdx.normalize_with_source(pl.DataFrame({"symbol": ["600519.SH"]}))

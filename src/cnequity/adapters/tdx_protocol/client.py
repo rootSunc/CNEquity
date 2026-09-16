@@ -130,10 +130,23 @@ def _serves_data(host: str, port: int, timeout: int) -> bool:
 
 
 def _candidate_servers(config: Config | None) -> list[tuple[str, int]]:
-    """Configured host pool first (in order), then the bundled fallback hosts."""
+    """Configured pool, then the verified hosts, then the shuffled remainder.
+
+    Only the first ``_TDX_MAX_CANDIDATES`` entries are ever probed, and the
+    bundled list is shuffled to spread load across it. A caller with no
+    configured pool — which is exactly what ``cne demo`` writes — therefore had
+    every probed slot filled by a random draw from the whole bundled list. On a
+    network where only a handful of those hosts answer, that draw misses all of
+    them often enough that the first command a new user runs simply fails,
+    while the same machine reaches TDX fine through a configured pool.
+
+    ``VERIFIED_HOSTS`` are the hosts observed to serve real data. Placing them
+    ahead of the shuffle is what makes discovery reproducible; the shuffled
+    remainder still spreads load over everything else.
+    """
     import random
 
-    from cnequity.adapters.tdx_protocol.hosts import HQ_HOSTS
+    from cnequity.adapters.tdx_protocol.hosts import HQ_HOSTS, VERIFIED_HOSTS
 
     ordered: list[tuple[str, int]] = []
     if config is not None and config.tdx_host_pool:
@@ -142,9 +155,13 @@ def _candidate_servers(config: Config | None) -> list[tuple[str, int]]:
             if host and port.isdigit():
                 ordered.append((host, int(port)))
 
-    bundled = [(host, int(port)) for host, port in HQ_HOSTS]
-    random.shuffle(bundled)  # spread load across the fallback list
-    ordered.extend(bundled)
+    verified = [(host, int(port)) for host, port in VERIFIED_HOSTS]
+    ordered.extend(verified)
+    remainder = [
+        (host, int(port)) for host, port in HQ_HOSTS if (host, int(port)) not in set(verified)
+    ]
+    random.shuffle(remainder)  # spread load across the rest of the fallback list
+    ordered.extend(remainder)
 
     seen: set[tuple[str, int]] = set()
     out: list[tuple[str, int]] = []
@@ -410,7 +427,13 @@ def _fail_or_mock(
     dataset: str, reason: str, allow_mock: bool, mock_df: pl.DataFrame
 ) -> pl.DataFrame:
     if not allow_mock:
-        raise TdxSourceError(f"{dataset}: {reason} (set [tdx_protocol].allow_mock for tests)")
+        # No `allow_mock` hint here. This message reaches operators in a real
+        # daily run, where the answer to "TDX timed out" is to check the source
+        # — never to switch on fabricated rows and write them to a lake whose
+        # whole premise is that every row is traceable to a source.
+        raise TdxSourceError(
+            f"{dataset}: {reason} (check the source with `cne sources probe --only tdx_protocol`)"
+        )
     logger.warning("%s: %s; returning mock rows labeled source=%s", dataset, reason, MOCK_SOURCE)
     return mock_df
 
@@ -1208,10 +1231,18 @@ def fetch_trading_status(
 
 def normalize_with_source(
     df: pl.DataFrame,
-    source: str = "tdx_protocol",
+    source: str,
     *,
     dataset: str | None = None,
 ) -> pl.DataFrame:
     """Stamp provenance. *dataset* selects the version — daily_bars is on v2
-    (volume in 股); everything else defaults to v1."""
+    (volume in 股); everything else defaults to v1.
+
+    *source* is required on purpose. It used to default to ``"tdx_protocol"``,
+    which is how 58,672 `trading_status` rows came to name a vendor that serves
+    no status feed at all: the step called this without a source, and the
+    default answered for it. A caller that has to name the vendor cannot make
+    that mistake silently, and one sitting in this module is the likeliest to
+    make it — `fetch_trading_status` here forwards straight to EastMoney.
+    """
     return with_provenance(df, source=source, data_version=data_version_for(dataset or ""))

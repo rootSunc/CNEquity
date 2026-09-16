@@ -204,6 +204,19 @@ markers = [
   "integration: end-to-end tests that exercise the full pipeline (may be slower)",
   "network: tests that require outbound network access",
 ]
+# A warning in the run output should mean something went unexpectedly wrong.
+# Two kinds were drowning that signal: ~30 tests exercise the deprecated
+# `universe="all_a"` alias *on purpose* — that is what they are for, so the
+# warning they raise is the expected result, not a defect — and starlette's
+# TestClient announces an httpx2 preference on import. Silence both by name,
+# never broadly: anything else still surfaces, and an unexpected
+# DeprecationWarning is still visible.
+filterwarnings = [
+  "ignore:universe='all_a' is a deprecated compatibility alias:DeprecationWarning",
+  # Starlette raises its own warning class, not DeprecationWarning, and does so
+  # at import time — match on the message alone.
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
 
 [tool.coverage.run]
 source = ["cnequity"]

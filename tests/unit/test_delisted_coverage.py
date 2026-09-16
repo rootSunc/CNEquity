@@ -156,6 +156,23 @@ def test_recent_live_missing_after_window_does_not_block_history(tmp_path, monke
     assert report["counts"]["recent_quarantined"] == 0
 
 
+def test_later_catalogue_terminal_does_not_require_future_formal_date(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, {"600001.SH": "2026-07-21"})
+    _write_bars(cfg, "600001.SH", date(2023, 1, 3), date(2024, 12, 31), date(2026, 7, 21))
+    _write_bars(cfg, "600519.SH", date(2026, 12, 31))
+    _write_instruments(cfg, [("600001.SH", None)])
+    monkeypatch.setattr("cnequity.steps.delisted.pending_codes", lambda cfg: [])
+    historical = delisted_coverage_report(cfg, date(2023, 1, 1), date(2024, 12, 31))
+    assert historical["verified"] is True
+    assert historical["counts"]["invalid_delist_date"] == 0
+    current = delisted_coverage_report(cfg, date(2023, 1, 1), date(2026, 7, 21))
+    assert current["verified"] is False
+    assert current["counts"]["invalid_delist_date"] == 1
+    # A real contradiction cannot be excused by the earlier study window.
+    _write_instruments(cfg, [("600001.SH", date(2023, 6, 1))])
+    assert delisted_coverage_report(cfg, date(2023, 1, 1), date(2024, 12, 31))["verified"] is False
+
+
 def test_recent_live_name_with_current_instrument_and_bars_is_not_quarantined(
     tmp_path, monkeypatch
 ):

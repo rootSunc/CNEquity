@@ -413,6 +413,7 @@ def test_adj_failure_keeps_committed_daily_bars_revision(worker_config, monkeypa
     run_id = manifest.start_run("daily")
     frame = normalize_with_source(
         _mock_bars(["600519.SH"], date(2024, 6, 28), date(2024, 6, 28)),
+        "tdx_protocol",
         dataset="daily_bars",
     )
     StagingWriter(worker_config.staging_root).write_batch("daily_bars", run_id, "batch-0", frame)
@@ -749,7 +750,8 @@ def test_retry_requeues_stale_running_batch(worker_config, monkeypatch):
         run_id,
         "batch-0",
         tdx.normalize_with_source(
-            tdx._mock_bars(["000001.SZ"], date(2024, 6, 28), date(2024, 6, 28))
+            tdx._mock_bars(["000001.SZ"], date(2024, 6, 28), date(2024, 6, 28)),
+            "tdx_protocol",
         ),
     )
     manifest.start_batch(run_id, "batch-1", "daily_bars", "daily_bars", symbols=["600519.SH"])

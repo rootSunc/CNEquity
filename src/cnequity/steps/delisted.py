@@ -39,7 +39,11 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
-from cnequity.domain.rate_limit import source_request
+from cnequity.domain.rate_limit import (
+    SINA_FETCH_ATTEMPTS,
+    SINA_RETRY_STATUS_CODES,
+    source_request,
+)
 from cnequity.domain.symbols import is_all_a_symbol, is_cdr_symbol, issued_code_space, parse_symbol
 from cnequity.query.universe import coverage_end_date
 from cnequity.steps.common import (
@@ -56,8 +60,8 @@ _CATALOG_FILE = "delisted_catalog.json"
 # budget.  Delisted recovery is another daily-kline sweep, so it needs the
 # same bounded retry policy as the live BJ fallback instead of turning a
 # transient rate limit into a durable unresolved symbol.
-_SINA_RETRY_STATUS_CODES = frozenset({429, 456, 500, 502, 503, 504})
-_SINA_FETCH_ATTEMPTS = 3
+_SINA_RETRY_STATUS_CODES = SINA_RETRY_STATUS_CODES
+_SINA_FETCH_ATTEMPTS = SINA_FETCH_ATTEMPTS
 # Checkpoint cadence. Small enough that an interrupted sweep loses seconds of
 # work, large enough that the state file is not rewritten on every request.
 _CHECKPOINT_EVERY = 100
@@ -642,16 +646,79 @@ def publish_delisted_receipts_for_compacted_run(config: Config, run_id: str) -> 
     return published
 
 
+def _catalogued_delist_dates(config: Config, symbols: set[str]) -> dict[str, date]:
+    """``symbol -> delist_date`` for the requested names that have one."""
+    metadata = instrument_metadata(config)
+    if metadata.is_empty():
+        return {}
+    rows = metadata.filter(
+        pl.col("symbol").is_in(sorted(symbols)) & pl.col("delist_date").is_not_null()
+    )
+    return {row["symbol"]: row["delist_date"] for row in rows.iter_rows(named=True)}
+
+
+def _history_already_in_the_lake(config: Config, symbols: set[str], start: date) -> set[str]:
+    """Names whose delisted history the lake already holds, so nothing is pending.
+
+    The recovery sweep exists for names the live catalogue no longer lists and
+    the lake has therefore never seen — that is the survivorship hole it fills.
+    A name that has traded in this lake for years and has now been marked
+    delisted is the opposite case: its history is already here, and there is no
+    recovery to wait for.
+
+    Proof is by inspection, not by trust: the name must have bars, they must
+    start no later than the requested window, and they must stop at or before
+    the catalogued delisting. A span that runs *past* the delisting contradicts
+    the catalogue and is deliberately not accepted here.
+    """
+    if not symbols:
+        return set()
+    delist_dates = _catalogued_delist_dates(config, symbols)
+    spans = _bar_spans(config, sorted(symbols))
+    proven: set[str] = set()
+    for symbol in symbols:
+        span = spans.get(symbol)
+        delisted_on = delist_dates.get(symbol)
+        if span is None or delisted_on is None:
+            continue
+        if span[0] <= start and span[1] <= delisted_on:
+            proven.add(symbol)
+    return proven
+
+
 def delisted_recovery_covers(
     config: Config,
     start: date,
     end: date,
     symbols: list[str],
 ) -> bool:
-    """Whether a complete receipt proves dedicated recovery for *symbols*."""
+    """Whether *symbols*' delisted history is proven complete for this window.
+
+    Two independent proofs are accepted, and either is enough per symbol:
+
+    * the lake already holds the name's history up to its catalogued delisting
+      (``_history_already_in_the_lake``), or
+    * a published recovery receipt covers it.
+
+    The receipt path clamps its window to each name's catalogued life. Asking a
+    delisted name for bars through the *requested* ``end`` is unsatisfiable by
+    construction once ``end`` is today — a name that stopped trading in July
+    cannot have a September bar — and that is what turned one freshly delisted
+    symbol into a permanent block on the daily compaction.
+    """
     required = set(symbols)
     if not required:
         return True
+    required -= _history_already_in_the_lake(config, required, start)
+    if not required:
+        return True
+    # A delisted name owes bars only for the part of the window it could trade
+    # in. Beyond its delisting, absence is the evidence, not a gap.
+    delist_dates = _catalogued_delist_dates(config, required)
+    horizon = min(
+        (min(end, delist_dates[symbol]) for symbol in required if symbol in delist_dates),
+        default=end,
+    )
     root = config.meta_root / "quality" / "coverage" / _RECOVERY_CLAIM
     if not root.exists():
         return False
@@ -689,12 +756,14 @@ def delisted_recovery_covers(
                 receipt.get("status") == "complete"
                 and scope.get("evidence_version") == _RECOVERY_EVIDENCE_VERSION
                 and date.fromisoformat(scope["start"]) <= start
-                and date.fromisoformat(scope["end"]) >= end
+                and date.fromisoformat(scope["end"]) >= horizon
                 and required <= covered
             ):
                 spans = _bar_spans(config, sorted(required))
                 if all(
-                    symbol in spans and spans[symbol][0] <= start and spans[symbol][1] >= end
+                    symbol in spans
+                    and spans[symbol][0] <= start
+                    and spans[symbol][1] >= min(horizon, delist_dates.get(symbol, horizon))
                     for symbol in required
                 ):
                     return True
@@ -952,7 +1021,14 @@ def delisted_coverage_report(
         # instruments.delist_date is the formal delisting date, which may be
         # later than the last traded session after a suspension. Only null or a
         # date before the final trade contradicts the catalogue.
-        elif instrument_dates[symbol] is None or instrument_dates[symbol] < catalog_last:
+        elif (instrument_dates[symbol] is None and catalog_last <= end) or (
+            instrument_dates[symbol] is not None and instrument_dates[symbol] < catalog_last
+        ):
+            # A proven later trade establishes that this name had not yet
+            # delisted in the research window. Its still-unknown formal date
+            # must remain unknown, but is not an in-window survivorship gap.
+            # Contradictory dates still fail, as do missing dates once the
+            # requested window reaches the catalogue terminal.
             actual = instrument_dates[symbol]
             invalid_delist_dates.append(
                 {
