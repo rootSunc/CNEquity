@@ -126,6 +126,14 @@ rows every day are fixed — with migrations for what they already left behind.
   `[orchestrator] daily_bars_tip_unresolved_tolerance` defaults to 0.2%. A
   session that staged nothing at all still refuses — that is an outage, not a
   residue.
+- **`cne backfill financial_statement_items --symbols` exists, and a scoped
+  repair is judged by its own scope.** It used to be refused outright, so the
+  only way to reach four delisted names and one BSE listing owed 149 balance
+  rows was 36 whole-market period sweeps. Scoping also exposed a second bug:
+  the whole-market completeness check ran against the five-symbol result, so a
+  correct repair came back `warning` with `missing_statement_periods: 36`, and
+  that warning had compact skip the dataset and strand all 3,120 repaired rows.
+  Measured after: 149 gaps down to 4.
 - **A whole-market sweep no longer throws itself away over a rounding error.**
   `daily_bars` refuses to checkpoint a snapshot that is missing keys, which is
   right for a real hole and ruinous for a transient one: a measured `cne init`

@@ -459,11 +459,21 @@ def fetch_financial_statement_items(
         else:
             range_start = getattr(config, "_backfill_start", None) if config else None
             range_end = getattr(config, "_backfill_end", None) if config else None
+            # A scoped repair asks for a handful of securities, not the market.
+            # Four delisted names and one BSE listing owed 149 (symbol, period)
+            # balance rows that the licensed peer refuses by code; without this
+            # the only way to reach them was 36 whole-market period sweeps.
+            scope = list(getattr(config, "_backfill_symbols", None) or []) if config else []
+            scope_expr = (
+                "(SECUCODE in (" + ",".join(f'"{sym}"' for sym in sorted(scope)) + "))"
+                if scope
+                else ""
+            )
             for period in _report_period_dates(trade_date, start=range_start, end=range_end):
                 announce_raw = _fetch_report(
                     client,
                     _ANNOUNCE_SOURCE,
-                    f"({_ANNOUNCE_SOURCE.report_date_field}='{period}')",
+                    f"({_ANNOUNCE_SOURCE.report_date_field}='{period}'){scope_expr}",
                     config=config,
                     run_id=run_id,
                     request_scope=request_scope,
@@ -481,7 +491,7 @@ def fetch_financial_statement_items(
                     raw = _fetch_report(
                         client,
                         report,
-                        f"({report.report_date_field}='{period}')",
+                        f"({report.report_date_field}='{period}'){scope_expr}",
                         config=config,
                         run_id=run_id,
                         request_scope=request_scope,

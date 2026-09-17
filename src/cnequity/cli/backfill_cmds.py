@@ -67,7 +67,8 @@ from cnequity.orchestrator.engine import JobEngine
     "symbols_str",
     default=None,
     help="Comma-separated symbols for a scoped intraday, trading_status, or "
-    "corporate_actions backfill, or a scoped daily_bars repair. The "
+    "corporate_actions backfill, a scoped financial_statement_items repair, "
+    "or a scoped daily_bars repair. The "
     "trading_status checkpoint and coverage evidence retain the exact scope; "
     "daily_bars keeps the explicit scope in backfill metadata.",
 )
@@ -193,7 +194,12 @@ def backfill(
     _guard_history_horizon(dataset, start_d)
     if symbols_str:
         symbols = [s.strip().upper() for s in symbols_str.split(",") if s.strip()]
-        if dataset in ("daily_bars", "trading_status", "corporate_actions"):
+        if dataset in (
+            "daily_bars",
+            "trading_status",
+            "corporate_actions",
+            "financial_statement_items",
+        ):
             cfg._backfill_symbols = symbols
         else:
             _override_scope(cfg, dataset, symbols)

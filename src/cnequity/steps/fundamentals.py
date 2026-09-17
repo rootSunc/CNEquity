@@ -377,7 +377,13 @@ def step_financial_statement_items(
     )
     missing_periods: set[str] = set()
     missing_statement_types: dict[str, list[str]] = {}
-    if backfill:
+    # Completeness is a whole-market claim: "every period the market reported
+    # is present". Judging a scoped repair by it is a category error — five
+    # delisted names do not file in all 36 periods, so a correct repair came
+    # back `warning` with `missing_statement_periods: 36`, and that warning
+    # then had compact skip the dataset and strand all 3,120 repaired rows.
+    scoped = bool(getattr(config, "_backfill_symbols", None))
+    if backfill and not scoped:
         expected = _expected_financial_periods(config, trade_date)
         observed = (
             set(df.get_column("report_period").drop_nulls().to_list())
