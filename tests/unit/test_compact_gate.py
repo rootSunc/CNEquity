@@ -317,3 +317,54 @@ def test_mark_stale_running_batches_failed(tmp_path):
     batches = manifest.get_batches_for_run(run_id)
     assert batches[0]["status"] == "failed"
     assert "heartbeat" in (batches[0]["error_message"] or "").lower()
+
+
+def _run_with_batch(tmp_path, step_result):
+    """Run one fake step through the engine and return (manifest, run_id)."""
+    from cnequity.config import Config
+    from cnequity.orchestrator.engine import JobEngine
+    from cnequity.orchestrator.registry import STEP_REGISTRY, StepEntry
+    from cnequity.storage.layout import init_data_layout
+
+    cfg = Config(data_root=tmp_path / "lake")
+    init_data_layout(cfg)
+    engine = JobEngine(cfg)
+    original = STEP_REGISTRY.get("instruments")
+    STEP_REGISTRY["instruments"] = StepEntry(
+        fn=lambda *args: dict(step_result), group="core", requires_workers=False
+    )
+    try:
+        out = engine.run_job(
+            "backfill", date(2026, 7, 1), steps=["instruments"], finalize_run=False
+        )
+    finally:
+        if original is not None:
+            STEP_REGISTRY["instruments"] = original
+    return engine.manifest, out["run_id"]
+
+
+def test_a_step_may_warn_while_its_batch_settles(tmp_path):
+    """`daily_bars` carrying a tolerated gap: the rows are staged and the
+    shortfall is in the ledger, so nothing is waiting to be retried.
+
+    Leaving the batch `warning` had compact skip the whole dataset for that one
+    batch — a measured init staged 3,894,608 rows and published none of them.
+    """
+    manifest, run_id = _run_with_batch(
+        tmp_path,
+        {"rows_read": 1, "rows_written": 1, "status": "warning", "batch_settled": True},
+    )
+
+    assert manifest.incomplete_batch_counts_by_dataset(run_id) == {}
+
+
+def test_a_warning_without_that_signal_still_blocks(tmp_path):
+    """The opt-in half. `trading_status` with partial ST evidence must keep
+    blocking, or the lake publishes a coverage receipt for a universe it never
+    swept — which `test_partial_st_rows_do_not_compact_or_publish_coverage`
+    holds from the other side."""
+    manifest, run_id = _run_with_batch(
+        tmp_path, {"rows_read": 1, "rows_written": 1, "status": "warning"}
+    )
+
+    assert manifest.incomplete_batch_counts_by_dataset(run_id) == {"instruments": 1}

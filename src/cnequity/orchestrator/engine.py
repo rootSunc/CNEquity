@@ -588,15 +588,26 @@ class JobEngine:
                 physical_dataset = out.get("dataset")
                 if physical_dataset and physical_dataset != name:
                     self.manifest.set_batch_dataset(run_id, batch_id, physical_dataset)
+                # A step may warn about its *result* while its *work* is
+                # finished — `daily_bars` carrying a tolerated gap is the case
+                # this exists for: the rows are staged, the shortfall is in the
+                # outstanding ledger, and nothing is waiting to be retried. The
+                # batch status drives retry and compaction, so it has to be
+                # able to say "settled" while the step still reports a warning.
+                # It is opt-in because for most steps a warning does mean the
+                # batch needs another attempt — `trading_status` with partial
+                # ST evidence must keep blocking, or the lake would publish a
+                # coverage receipt claiming a universe it never swept.
+                batch_status = "success" if out.get("batch_settled") else step_status
                 self.manifest.finish_batch(
                     run_id,
                     batch_id,
-                    step_status,
+                    batch_status,
                     rows_read=out.get("rows_read", 0),
                     rows_written=out.get("rows_written", 0),
                     error_message=(
                         None
-                        if step_status == "success"
+                        if batch_status == "success"
                         else f"step completed with status={step_status}"
                     ),
                     # Worker retries reuse one batch and increment their

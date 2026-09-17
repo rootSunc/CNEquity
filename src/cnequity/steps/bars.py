@@ -1663,6 +1663,11 @@ def _finish_daily_bars(
         # clean success, and the keys travel with it.
         result["status"] = "warning"
         result["unresolved_symbols"] = sorted(unresolved_tolerated)
+        # The work itself is finished — the rows are staged and the shortfall is
+        # in the outstanding ledger — so the batch must settle. Leaving it
+        # `warning` had compact skip the whole dataset for one batch: a measured
+        # init staged 3,894,608 rows and published none of them.
+        result["batch_settled"] = True
     return result
 
 

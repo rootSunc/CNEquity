@@ -110,6 +110,15 @@ rows every day are fixed — with migrations for what they already left behind.
   name is asking to sit through it. A paused sweep is reported as "not yet
   swept" rather than "unresolved", so nobody goes hunting a vendor outage that
   is not happening.
+- **A tolerated gap reaches `curated`, instead of stopping at `staging`.** The
+  step-level tolerance was defeated one level down: the engine writes a step's
+  status onto its batch, and compact skips any dataset with a batch that is not
+  `success`. A measured `cne init` staged 3,894,608 daily bars, carried a 0.12%
+  gap as a warning, and then published none of them. A step can now settle its
+  batch while still reporting a warning — opt-in, because for most steps a
+  warning does mean another attempt is owed: `trading_status` with partial ST
+  evidence keeps blocking, or the lake would publish a coverage receipt for a
+  universe it never swept.
 - **A whole-market sweep no longer throws itself away over a rounding error.**
   `daily_bars` refuses to checkpoint a snapshot that is missing keys, which is
   right for a real hole and ruinous for a transient one: a measured `cne init`
