@@ -830,6 +830,84 @@ def _owed_keys_for_symbols(
     return owed
 
 
+def _in_bar_universe(symbol: str, universe: str) -> bool:
+    try:
+        info = parse_symbol(symbol)
+    except Exception:  # noqa: BLE001 — an unparseable symbol is simply not ours
+        return False
+    return in_ingest_universe(info.code, info.exchange, universe)
+
+
+_LATE_ADMISSION_LOOKBACK_DAYS = 365
+
+
+def _record_late_admissions(config: Config, run_id: str, symbols: Iterable[str], end: date) -> int:
+    """Sessions a security traded before the universe knew about it.
+
+    A security listed after the last instrument refresh is in no sweep until
+    that refresh picks it up, and the watermark then moves past the sessions it
+    missed, so no incremental run asks for them again. The interior-gap ledger
+    does not catch it either: those keys were never expected.
+
+    Measured on 2026-09-17: thirteen BSE securities listed between 07-22 and
+    09-04 all took their first bar on 09-07, short 366 sessions between them,
+    every one of which TDX still served. Recording them makes `cne backfill
+    daily_bars --outstanding` the one way to work this off too.
+
+    Bounded to a year of listings so the scan stays proportional to what can
+    plausibly still be owed.
+    """
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
+    root = config.curated_root / "daily_bars"
+    if not dataset_has_parquet(root):
+        return 0
+    horizon = end - timedelta(days=_LATE_ADMISSION_LOOKBACK_DAYS)
+    spans = _instrument_spans(config)
+    universe = getattr(config, "ingest_universe", "all_a")
+    recent = {
+        symbol: listed
+        for symbol in symbols
+        # `daily_bars` does not carry the ETF and LOF quote codes that
+        # `instruments` also lists. Owing their sessions would put debts on the
+        # ledger that no repair can ever pay off, at the same weight as the
+        # real ones — the caller's universe is not trusted to have filtered.
+        if _in_bar_universe(symbol, universe)
+        and (listed := spans.get(symbol, (None, None, None))[0]) is not None
+        and horizon <= listed < end
+    }
+    if not recent:
+        return 0
+    first_bar = (
+        scan_parquet_root(root, partition_col="trade_date", start=horizon, end=end)
+        .filter(pl.col("symbol").is_in(list(recent)))
+        .group_by("symbol")
+        .agg(pl.col("trade_date").min().alias("first_bar"))
+        .collect()
+    )
+    seen = dict(zip(first_bar["symbol"], first_bar["first_bar"], strict=True))
+    owed: set[tuple[str, date]] = set()
+    for symbol, listed in recent.items():
+        # No bar at all still owes from the listing: the security may have been
+        # admitted today and simply not swept yet.
+        cutoff = seen.get(symbol, end + timedelta(days=1))
+        if cutoff <= listed:
+            continue
+        owed |= _owed_keys_for_symbols(config, [symbol], listed, cutoff - timedelta(days=1))
+    if not owed:
+        return 0
+    recorded = StateStore(config.meta_root).record_outstanding_keys(
+        "daily_bars", owed, run_id=run_id, reason="late_admission"
+    )
+    logger.warning(
+        "%d securit(y/ies) listed before the universe carried them owe %d session(s) "
+        "(`cne backfill daily_bars --outstanding`)",
+        len({symbol for symbol, _ in owed}),
+        recorded,
+    )
+    return recorded
+
+
 def _unresolved_budget(config: Config, expected: int, *, tip: bool = False) -> int:
     """How many unresolved keys a sweep may carry without failing.
 
@@ -1650,6 +1728,15 @@ def _finish_daily_bars(
                 outstanding,
                 remedy,
             )
+
+    # Not `all_expected_symbols`: that name is bound only in the two elif
+    # branches above, and the tip path reaches here without it.
+    _record_late_admissions(
+        config,
+        run_id,
+        dict.fromkeys((expected_tdx_symbols or []) + (expected_fallback_symbols or [])),
+        end,
+    )
 
     result: dict = {"rows_read": rows_read, "rows_written": rows_written}
     metrics = dict(tdx_result.get("metrics") or {})
