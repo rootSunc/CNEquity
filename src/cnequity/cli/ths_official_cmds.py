@@ -15,6 +15,7 @@ commands act on.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from datetime import date
@@ -62,6 +63,54 @@ def ths_official_grp():
     Without a key every command here reports "skipped" and changes nothing —
     the lake keeps the sources it already has.
     """
+
+
+def _run_outcome(result: dict) -> tuple[str, int, int]:
+    """Map a step result onto the manifest's run vocabulary."""
+    status = str(result.get("status") or "success")
+    if status in {"applied", "dry_run"}:
+        status = "success"
+    failures = int(result.get("failed_symbols") or 0) + int(result.get("failed") or 0)
+    if status == "success" and failures:
+        status = "warning"
+    rows_written = int(result.get("rows_written") or 0)
+    rows_read = int(result.get("rows_read") or result.get("rows_fetched") or rows_written)
+    return status, rows_read, rows_written
+
+
+@contextlib.contextmanager
+def _staged_run(cfg, job_name: str, prefix: str, metadata: dict, *, record: bool = True):
+    """Open a manifest run around work that only stages rows.
+
+    These commands mint a run id, stage against it, and leave the publish to
+    `cne run compact --run-id <id>` — but they never opened a run, so the id
+    named nothing. The rows still reached curated; what was missing was the
+    parent row. `cne status` could not see the run at all, and `cne run clean`
+    files staging it cannot prove is finished under *skipped*, which is never
+    reclaimed rather than aged out the way a manifest-less orphan is: three
+    `ths-*` runs had 23MB stranded that way.
+
+    Closed as soon as the fetch is done, because the compact really is a
+    separate step. It is recorded against the same run, and staging still needs
+    that successful compact batch before anything will remove it.
+    """
+    from cnequity.orchestrator.manifest import Manifest
+
+    run_id = f"{prefix}-{uuid.uuid4()}"
+    outcome: dict = {}
+    if not record:
+        # A dry run stages nothing, so there is nothing for a run to account for.
+        yield run_id, outcome
+        return
+    manifest = Manifest(cfg.manifest_path)
+    manifest.start_run(job_name, metadata, run_id=run_id)
+    try:
+        yield run_id, outcome
+    except Exception as exc:
+        manifest.finish_run(run_id, "failed", error_message=str(exc))
+        raise
+    status, rows_read, rows_written = _run_outcome(outcome.get("result") or {})
+    manifest.finish_run(run_id, status, rows_read=rows_read, rows_written=rows_written)
 
 
 @ths_official_grp.command("capture")
@@ -189,16 +238,23 @@ def ths_backfill(
         return
 
     attach_log_file(cfg, "ths-official-backfill")
-    run_id = f"ths-backfill-{uuid.uuid4()}"
-    result = backfill_statement_gap_ths_official(
+    symbols = [s.strip() for s in symbols_str.split(",") if s.strip()] if symbols_str else None
+    with _staged_run(
         cfg,
-        run_id,
-        start=parse_date_option(start, "--start"),
-        end=parse_date_option(end, "--end"),
-        symbols=[s.strip() for s in symbols_str.split(",") if s.strip()] if symbols_str else None,
-        chunk_size=chunk_size,
-        workers=workers,
-    )
+        "ths_official_backfill",
+        "ths-backfill",
+        {"start": start, "end": end, "symbols": symbols},
+    ) as (run_id, outcome):
+        result = backfill_statement_gap_ths_official(
+            cfg,
+            run_id,
+            start=parse_date_option(start, "--start"),
+            end=parse_date_option(end, "--end"),
+            symbols=symbols,
+            chunk_size=chunk_size,
+            workers=workers,
+        )
+        outcome["result"] = result
     click.echo(json.dumps({"run_id": run_id, **result}, indent=2, default=str))
 
 
@@ -269,17 +325,24 @@ def ths_repair_bars(
             err=True,
         )
 
-    run_id = f"ths-repair-bars-{uuid.uuid4()}"
-    result = repair_deep_history_ths_official(
+    with _staged_run(
         cfg,
-        run_id,
-        start=parse_date_option(start, "--start") or date(2005, 1, 1),
-        end=parse_date_option(end, "--end") or date(2015, 12, 31),
-        dry_run=not apply,
-        adjudicator=judge,
-        diff_out=Path(diff_out) if diff_out else None,
-        workers=workers,
-    )
+        "ths_official_repair_bars",
+        "ths-repair-bars",
+        {"start": start, "end": end, "adjudicated": bool(judge)},
+        record=apply,
+    ) as (run_id, outcome):
+        result = repair_deep_history_ths_official(
+            cfg,
+            run_id,
+            start=parse_date_option(start, "--start") or date(2005, 1, 1),
+            end=parse_date_option(end, "--end") or date(2015, 12, 31),
+            dry_run=not apply,
+            adjudicator=judge,
+            diff_out=Path(diff_out) if diff_out else None,
+            workers=workers,
+        )
+        outcome["result"] = result
     click.echo(json.dumps({"run_id": run_id, **result}, indent=2, default=str))
 
 
@@ -319,13 +382,20 @@ def ths_resource_sectors(config_path: str, start: str, end: str | None, apply: b
         return
 
     attach_log_file(cfg, "ths-official-resource-sectors")
-    run_id = f"ths-sectors-{uuid.uuid4()}"
-    result = resource_sector_bars_ths_official(
+    with _staged_run(
         cfg,
-        run_id,
-        start=parse_date_option(start, "--start"),
-        end=parse_date_option(end, "--end") if end else None,
-        workers=workers,
-        dry_run=not apply,
-    )
+        "ths_official_resource_sectors",
+        "ths-sectors",
+        {"start": start, "end": end},
+        record=apply,
+    ) as (run_id, outcome):
+        result = resource_sector_bars_ths_official(
+            cfg,
+            run_id,
+            start=parse_date_option(start, "--start"),
+            end=parse_date_option(end, "--end") if end else None,
+            workers=workers,
+            dry_run=not apply,
+        )
+        outcome["result"] = result
     click.echo(json.dumps({"run_id": run_id, **result}, indent=2, default=str))

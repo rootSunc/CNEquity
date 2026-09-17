@@ -247,8 +247,19 @@ class Manifest:
                 return datetime.fromisoformat(raw)
         return None
 
-    def start_run(self, job_name: str, metadata: dict[str, Any] | None = None) -> str:
-        run_id = str(uuid.uuid4())
+    def start_run(
+        self,
+        job_name: str,
+        metadata: dict[str, Any] | None = None,
+        run_id: str | None = None,
+    ) -> str:
+        """Open a run. *run_id* lets a caller keep an id it has already minted.
+
+        `cne ths-official backfill` prints its run id for the operator to paste
+        into `cne run compact --run-id`, and a readable `ths-backfill-` prefix
+        is worth more there than a bare uuid.
+        """
+        run_id = run_id or str(uuid.uuid4())
         with self._connect() as conn:
             conn.execute(
                 """

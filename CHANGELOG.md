@@ -124,6 +124,13 @@ rows every day are fixed — with migrations for what they already left behind.
   contention, so it flaked rather than failed. The thread now waits on its own
   `threading.Event`, `stop_heartbeat()` ends it, and a test fixture clears it
   between tests. Interval, poll and log output are unchanged.
+- **`cne ths-official` runs are recorded in the manifest.** The three commands
+  that stage rows minted a run id, staged against it and told you to pass it to
+  `cne run compact` — but never opened a run, so the id named nothing. The rows
+  reached curated; what was missing was the parent row. `cne status` could not
+  see the run, and `cne run clean` files staging it cannot prove is finished
+  under *skipped*, which is never reclaimed rather than aged out the way a
+  manifest-less orphan is: three `ths-*` runs had stranded 23MB that way.
 - **The `daily_bars` tip-key failure says what to do about it.** It reported a
   count and nothing else — not which keys, not which vendor was down, not which
   command resumes the run. It now names the findings file, `cne sources probe`,
