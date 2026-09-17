@@ -98,6 +98,18 @@ rows every day are fixed — with migrations for what they already left behind.
   the one command every user types first as an unhandled error. `SystemExit`
   never reached it, which is why a non-zero exit from `status --datasets`
   stayed quiet and this did not.
+- **A first `cne init` no longer waits ten hours behind a free API.** The
+  historical ST sweep narrows itself from the ST signal the lake already
+  holds — which a fresh lake does not have, so it inherited all 5,557 symbols
+  at baostock's deliberate pacing: a measured first init spent 1.8h reaching
+  that step and would have spent 10.4h inside it. The pacing is unchanged,
+  because exceeding baostock's limits blacklists the IP; what changed is who
+  waits. `[orchestrator] st_history_symbols_per_run` (default 400) bounds one
+  run, the checkpoint resumes from exactly where it stopped, and
+  `cne backfill trading_status` runs unbounded because asking for that sweep by
+  name is asking to sit through it. A paused sweep is reported as "not yet
+  swept" rather than "unresolved", so nobody goes hunting a vendor outage that
+  is not happening.
 - **A whole-market sweep no longer throws itself away over a rounding error.**
   `daily_bars` refuses to checkpoint a snapshot that is missing keys, which is
   right for a real hole and ruinous for a transient one: a measured `cne init`

@@ -872,6 +872,15 @@ def _backfill_trading_status_st_source(
             "note": "all symbols already have ST evidence for this exact scope",
         }
 
+    # Bounded per run so a fresh `cne init` is not held for ten hours behind a
+    # free API's pacing. What is left is neither done nor failed — it simply has
+    # not had its turn — and the checkpoint already resumes from exactly here.
+    budget = int(getattr(config, "st_history_symbols_per_run", 0) or 0)
+    deferred: list[str] = []
+    if budget > 0 and len(todo) > budget:
+        deferred = todo[budget:]
+        todo = todo[:budget]
+
     rows_read = 0
     rows_written = 0
     manifest = Manifest(config.manifest_path) if batch_id else None
@@ -920,7 +929,7 @@ def _backfill_trading_status_st_source(
             }
         )
         write_st_checkpoint(config, checkpoint)
-    complete = completed == set(universe) and not unresolved
+    complete = completed == set(universe) and not unresolved and not deferred
     checkpoint["status"] = "complete" if complete else "incomplete"
     checkpoint["completed_symbols"] = sorted(completed)
     checkpoint["evidence_rows_by_symbol"] = dict(sorted(evidence_rows.items()))
@@ -945,13 +954,25 @@ def _backfill_trading_status_st_source(
     else:
         result["status"] = "warning"
         result["failed_symbols"] = len(unresolved)
+        # Deferred and unresolved mean different things and must not be summed:
+        # one is a symbol this run did not reach, the other one the source would
+        # not answer for. Reporting "N unresolved" for a paused sweep would send
+        # an operator hunting a vendor outage that is not happening.
+        parts = []
+        if deferred:
+            result["deferred_symbols"] = len(deferred)
+            parts.append(f"{len(deferred)} not yet swept (paused at {budget} symbols/run)")
+        if unresolved:
+            parts.append(f"{len(unresolved)} unresolved by {source}")
         finding = {
             "dataset": "trading_status",
             "severity": "warning",
             "code": f"{source}_st_backfill_incomplete",
             "message": (
-                f"{len(unresolved)}/{len(universe)} symbols remain unresolved in "
-                f"{source} ST evidence; re-run the same scoped backfill to resume."
+                f"{len(completed)}/{len(universe)} symbols have {source} ST evidence: "
+                + "; ".join(parts)
+                + ". Resume with `cne backfill trading_status` — the checkpoint "
+                "continues from here, and this run's rows are already staged."
             ),
         }
         result.setdefault("context_updates", {})["audit_findings"] = [finding]

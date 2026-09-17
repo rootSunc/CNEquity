@@ -203,6 +203,12 @@ def backfill(
     if end_d:
         cfg._backfill_end = end_d
     cfg._backfill_workers = workers
+    if dataset == "trading_status":
+        # The per-run bound exists so `cne init` is not held behind baostock's
+        # pacing for ten hours. Asking for this backfill by name *is* asking to
+        # sit through it, and silently stopping at 400 symbols would look like
+        # the command had finished the job.
+        cfg.st_history_symbols_per_run = 0
 
     spec = get_dataset(dataset)
     # Tip-paged sources (intraday) must chunk by symbol, not by date: the wire

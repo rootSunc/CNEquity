@@ -86,6 +86,16 @@ class Config:
     # baostock free-API pacing (full-market history sweeps).
     baostock_batch_size: int = 20
     baostock_batch_rest_seconds: float = 120.0
+    # How many symbols one run may sweep for historical ST evidence. The pacing
+    # above is deliberate — exceeding baostock's free limits blacklists the IP —
+    # but it makes the whole-market sweep a ~10.7h step, and on a fresh lake
+    # there is no ST signal to narrow the universe with, so `cne init` inherited
+    # all 5,557 of them: a measured first init spent 1.8h reaching it and would
+    # have spent 10.4h more inside it. The sweep already checkpoints per chunk
+    # and resumes, so a bound costs nothing but the wait. `0` removes it, which
+    # is what an operator running `cne backfill trading_status` on purpose
+    # wants.
+    st_history_symbols_per_run: int = 400
     # Optional Tushare Pro token for historical BJ ST evidence.  The token is
     # read from [sources.tushare].token or TUSHARE_TOKEN and is never written
     # to manifests, checkpoints, or provenance.
