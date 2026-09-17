@@ -191,6 +191,12 @@ class Config:
     # and the command that repairs them, and `cne verify` still reports the
     # hole until it is filled.
     daily_bars_unresolved_tolerance: float = 0.01
+    # The same fraction means something else on a single session. 1% of a
+    # three-year backfill is 41k keys scattered thin; 1% of one trading day is
+    # 55 symbols missing *today*, which reads as an upstream outage rather than
+    # a residue. The daily job also reruns cheaply, so it can afford to be
+    # stricter than a sweep that costs two hours to repeat.
+    daily_bars_tip_unresolved_tolerance: float = 0.002
     trade_ticks_enabled: bool = False
     # No 'all'. The guard is `trade_ticks_max_symbols` below, and a scope that
     # cannot be counted before it is resolved would slip past it.

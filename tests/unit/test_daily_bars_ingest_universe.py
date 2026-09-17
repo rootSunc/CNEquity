@@ -672,3 +672,29 @@ def test_an_ex_date_fund_code_cannot_re_enter_the_bar_fetch_scope(tmp_path, monk
     assert sorted(captured["all_a"]) == ["600519.SH", "920038.BJ"]
     # An `all_instruments` lake wants its fund quotes and must keep them.
     assert sorted(captured["all"]) == ["159118.SZ", "600519.SH", "920038.BJ"]
+
+
+def test_the_tip_tolerance_runs_on_the_real_tip_path(tmp_path, monkeypatch):
+    """Exercise the branch, not just the budget arithmetic.
+
+    The tip tolerance was added with a unit test for `_unresolved_budget` and
+    none for the call site, so it read `all_expected_symbols` — a name only the
+    *backfill* branch binds — and raised `UnboundLocalError` the moment a real
+    tip run reached it. Every pure-function test stayed green.
+    """
+    cfg = _instrument_lake(tmp_path)
+    _capture_fetch_scope(monkeypatch)
+    run_id = Manifest(cfg.manifest_path).start_run("daily:core")
+
+    # Nothing staged at all, which the tip gate treats as an outage rather than
+    # a residue however generous the budget — so this is the refusal, and
+    # reaching a *deliberate* refusal is the point: before the fix the branch
+    # died on a name it never bound.
+    cfg.daily_bars_tip_unresolved_tolerance = 1.0
+    with pytest.raises(RuntimeError) as excinfo:
+        step_daily_bars(cfg, D3, run_id, {})
+
+    message = str(excinfo.value)
+    assert "UnboundLocal" not in message
+    assert "no staged tip rows" in message
+    assert "cne backfill daily_bars --symbols" in message, "the remedy still travels with it"

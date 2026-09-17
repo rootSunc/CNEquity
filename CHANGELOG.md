@@ -119,6 +119,13 @@ rows every day are fixed — with migrations for what they already left behind.
   warning does mean another attempt is owed: `trading_status` with partial ST
   evidence keeps blocking, or the lake would publish a coverage receipt for a
   universe it never swept.
+- **The daily job carries a small tip gap instead of losing the session.** The
+  same tolerance, on its own tighter knob: 1% of a three-year backfill is
+  scatter, 1% of one session is 55 names absent from the freshest bar anyone
+  trades on, and the daily job reruns cheaply enough to be strict.
+  `[orchestrator] daily_bars_tip_unresolved_tolerance` defaults to 0.2%. A
+  session that staged nothing at all still refuses — that is an outage, not a
+  residue.
 - **A whole-market sweep no longer throws itself away over a rounding error.**
   `daily_bars` refuses to checkpoint a snapshot that is missing keys, which is
   right for a real hole and ruinous for a transient one: a measured `cne init`

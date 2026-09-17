@@ -830,14 +830,19 @@ def _owed_keys_for_symbols(
     return owed
 
 
-def _unresolved_budget(config: Config, expected: int) -> int:
+def _unresolved_budget(config: Config, expected: int, *, tip: bool = False) -> int:
     """How many unresolved keys a sweep may carry without failing.
 
     A fraction alone misbehaves on a small universe — one symbol out of five is
     20% — so this floors at zero and rounds down: a five-symbol demo tolerates
     nothing, and the whole market tolerates a few dozen.
+
+    ``tip`` reads the daily job's own, tighter knob. The same fraction means
+    something else over one session: 1% of a three-year backfill is scatter,
+    1% of today is 55 symbols absent from the freshest bar anyone trades on.
     """
-    fraction = float(getattr(config, "daily_bars_unresolved_tolerance", 0.0) or 0.0)
+    knob = "daily_bars_tip_unresolved_tolerance" if tip else "daily_bars_unresolved_tolerance"
+    fraction = float(getattr(config, knob, 0.0) or 0.0)
     if fraction <= 0 or expected <= 0:
         return 0
     return int(expected * fraction)
@@ -1387,32 +1392,59 @@ def _finish_daily_bars(
             if unknown:
                 preview = ", ".join(sorted(unknown)[:8])
                 suffix = "..." if len(unknown) > 8 else ""
+                budget = _unresolved_budget(config, len(expected_symbols), tip=True)
+                # Nothing staged is not a residue, it is an outage: the whole
+                # session failed and there is nothing to publish anyway.
+                tolerated = bool(staged) and len(unknown) <= budget
+                remedy = _unresolved_key_remedy(config, run_id, unknown, end, end)
+                headline = (
+                    f"daily_bars {end}: {len(unknown)} expected tip key(s) remain "
+                    f"unknown after failover ({preview}{suffix})"
+                )
                 findings.append(
                     {
                         "dataset": "daily_bars",
-                        "severity": "error",
+                        "severity": "warning" if tolerated else "error",
                         "check": "daily_bars_unknown_missing_symbols",
                         "message": (
-                            f"daily_bars {end}: {len(unknown)} expected tip key(s) "
-                            "remain unknown after primary/fallback and gap-fill; "
-                            f"refusing to checkpoint: {preview}{suffix}"
+                            f"{headline}; "
+                            + (
+                                f"within the {budget}-key tip tolerance, so the run continues"
+                                if tolerated
+                                else "refusing to checkpoint"
+                            )
                         ),
                         "missing_keys": len(unknown),
                         "symbols": sorted(unknown),
+                        "tolerated": tolerated,
+                        "tolerance_keys": budget,
                     }
                 )
-                persist_step_findings(config, run_id, end, findings)
-                remedy = _unresolved_key_remedy(config, run_id, unknown, end, end)
-                if not staged:
+                if not tolerated:
+                    persist_step_findings(config, run_id, end, findings)
+                    if not staged:
+                        raise RuntimeError(
+                            f"daily_bars {end}: primary/fallback and EastMoney clist/kline "
+                            f"gap-fill produced no staged tip rows for {len(unknown)} "
+                            f"unknown key(s) ({preview}{suffix})." + remedy
+                        )
                     raise RuntimeError(
-                        f"daily_bars {end}: primary/fallback and EastMoney clist/kline "
-                        f"gap-fill produced no staged tip rows for {len(unknown)} "
-                        f"unknown key(s) ({preview}{suffix})." + remedy
+                        f"{headline}; refusing to checkpoint a partial market snapshot." + remedy
                     )
-                raise RuntimeError(
-                    f"daily_bars {end}: {len(unknown)} expected tip key(s) remain "
-                    f"unknown after failover ({preview}{suffix}); refusing to checkpoint "
-                    "a partial market snapshot." + remedy
+                owed = StateStore(config.meta_root).record_outstanding_keys(
+                    "daily_bars",
+                    {(symbol, end) for symbol in unknown},
+                    run_id=run_id,
+                    reason="unresolved_tip",
+                )
+                unresolved_tolerated.update(unknown)
+                logger.warning(
+                    "%s; within the %d-key tip tolerance, so the run continues "
+                    "(%d key(s) now owed — `cne backfill daily_bars --outstanding`).%s",
+                    headline,
+                    budget,
+                    owed,
+                    remedy,
                 )
         if expected_symbols:
             _resolve_recovered_daily_batches(

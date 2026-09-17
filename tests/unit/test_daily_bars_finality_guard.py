@@ -201,3 +201,25 @@ def test_an_interior_gap_beyond_tolerance_still_refuses(config):
 
     config.daily_bars_unresolved_tolerance = 0.01
     assert 100_000 > _unresolved_budget(config, 750 * 5500)
+
+
+def test_the_tip_tolerance_is_tighter_than_the_backfill_one(config):
+    """1% of three years is scatter; 1% of today is 55 names absent from the
+    freshest bar anyone trades on. The daily job also reruns cheaply."""
+    from cnequity.steps.bars import _unresolved_budget
+
+    config.daily_bars_unresolved_tolerance = 0.01
+    config.daily_bars_tip_unresolved_tolerance = 0.002
+
+    assert _unresolved_budget(config, 5500, tip=True) == 11
+    assert _unresolved_budget(config, 5500) == 55
+    assert _unresolved_budget(config, 5500, tip=True) < _unresolved_budget(config, 5500)
+
+
+def test_a_tip_outage_is_not_a_residue(config):
+    """Beyond the tip budget the refusal stands — 50 names missing today is an
+    upstream failure, not a rounding error."""
+    from cnequity.steps.bars import _unresolved_budget
+
+    config.daily_bars_tip_unresolved_tolerance = 0.002
+    assert 50 > _unresolved_budget(config, 5500, tip=True)
