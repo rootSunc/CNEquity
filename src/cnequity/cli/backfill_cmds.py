@@ -263,8 +263,24 @@ def _settle_outstanding(cfg, dataset: str) -> dict:
         for row in owed
         if (row.get("symbol"), row.get("trade_date")) in present
     ]
+    missed = [
+        (row["symbol"], row["trade_date"])
+        for row in owed
+        if (row.get("symbol"), row.get("trade_date")) not in present
+    ]
     left = store.clear_outstanding_keys(dataset, filled) if filled else len(owed)
-    return {"before": len(owed), "filled": len(filled), "still_owed": left}
+    # A key this repair reached for and still did not get is worth counting:
+    # nothing here expires, so the attempt count is the only thing that will
+    # ever distinguish last night's blip from a vendor that has stopped
+    # serving the symbol at all.
+    store.note_repair_attempt(dataset, missed)
+    stubborn = sum(
+        1 for row in store.get_outstanding_keys(dataset) if int(row.get("attempts", 0) or 0) >= 3
+    )
+    out = {"before": len(owed), "filled": len(filled), "still_owed": left}
+    if stubborn:
+        out["unfilled_after_3_attempts"] = stubborn
+    return out
 
 
 # Datasets whose universe comes from a config block rather than from

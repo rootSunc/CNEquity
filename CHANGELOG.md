@@ -113,7 +113,12 @@ rows every day are fixed — with migrations for what they already left behind.
   The keys go to `outstanding_keys` in `meta/state/<dataset>.json`, merged by
   key so a nightly failure cannot grow the ledger, `cne status --datasets`
   names any dataset carrying a debt, and `cne backfill <dataset> --outstanding`
-  works it off, striking off only the keys that actually landed.
+  works it off, striking off only the keys that actually landed. A whole-symbol
+  gap is owed only the sessions that symbol was listed for — a debt nothing can
+  ever pay off would sit at the same weight as a real one and drown it. Nothing
+  expires: a repair that runs and still misses counts an attempt instead, so
+  "lost to last night's blip" and "no configured source serves this" stop
+  looking alike without the store retiring a key on the operator's behalf.
 - **`cne init` and `cne init --profile demo` work during market hours.** Both
   resolved their window to *today*, whose bar is still forming until 15:05, and
   died on the finality guard — `init` after 37 minutes of reference and

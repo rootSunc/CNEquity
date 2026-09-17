@@ -809,6 +809,27 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
     return _merge_ownership_result(out, config, ownership, start, end)
 
 
+def _owed_keys_for_symbols(
+    config: Config, symbols: Iterable[str], start: date, end: date
+) -> set[tuple[str, date]]:
+    """The (symbol, session) keys a whole-symbol gap actually owes.
+
+    Clipped to each symbol's own listing window. Owing the full sweep window
+    for a symbol listed halfway through it would record sessions that never
+    existed, and a debt nothing can ever pay off is worse than no ledger: it
+    would sit at the same weight as a real one and drown it.
+    """
+    spans = _instrument_spans(config)
+    sessions = list_trading_dates(config, start, end)
+    owed: set[tuple[str, date]] = set()
+    for symbol in symbols:
+        listed, delisted, _asset = spans.get(symbol, (None, None, None))
+        first = max(start, listed) if listed else start
+        last = min(end, delisted) if delisted else end
+        owed |= {(symbol, day) for day in sessions if first <= day <= last}
+    return owed
+
+
 def _unresolved_budget(config: Config, expected: int) -> int:
     """How many unresolved keys a sweep may carry without failing.
 
@@ -1484,8 +1505,22 @@ def _finish_daily_bars(
                     raise RuntimeError(
                         f"{headline}; refusing to checkpoint a partial market snapshot." + remedy
                     )
+                # Clipped to each symbol's own listing window. Recording the
+                # whole sweep window for a symbol listed halfway through it
+                # would owe sessions that never existed, and a debt nothing can
+                # ever pay off is worse than no ledger at all.
+                owed_pairs = _owed_keys_for_symbols(config, unknown, start, end)
+                owed = StateStore(config.meta_root).record_outstanding_keys(
+                    "daily_bars", owed_pairs, run_id=run_id, reason="unresolved_symbol"
+                )
                 unresolved_tolerated.update(unknown)
-                logger.warning("%s; continuing.%s", headline, remedy)
+                logger.warning(
+                    "%s; continuing (%d key(s) now owed — "
+                    "`cne backfill daily_bars --outstanding`).%s",
+                    headline,
+                    owed,
+                    remedy,
+                )
 
     # A source can return at least one row for every symbol while silently
     # omitting an interior session.  The symbol-level certification above

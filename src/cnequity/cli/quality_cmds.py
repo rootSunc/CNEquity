@@ -933,12 +933,24 @@ def _report_outstanding_keys(cfg, datasets: list[str]) -> None:
         except Exception:  # noqa: BLE001 — a missing/garbled state file is not a status failure
             continue
         if rows:
-            owed.append((dataset, len(rows)))
+            stubborn = sum(1 for row in rows if int(row.get("attempts", 0) or 0) >= 3)
+            owed.append((dataset, len(rows), stubborn))
     if not owed:
         return
-    summary = ", ".join(f"{dataset} {count}" for dataset, count in sorted(owed))
+    summary = ", ".join(f"{dataset} {count}" for dataset, count, _ in sorted(owed))
     click.echo(
         f"\noutstanding keys from tolerated gaps: {summary}"
         "\nthese sessions are past the watermark, so no incremental run will ask for them — "
         "fill them with `cne backfill <dataset> --outstanding`."
     )
+    # Separated because they need a different decision. A key three repairs
+    # could not fill is not backlog, it is a key no configured source serves,
+    # and re-running the repair will not change that.
+    stuck = [(dataset, n) for dataset, _count, n in sorted(owed) if n]
+    if stuck:
+        detail = ", ".join(f"{dataset} {n}" for dataset, n in stuck)
+        click.echo(
+            f"of those, unfilled after 3+ repair attempts: {detail}"
+            " — no configured source serves them; check `cne sources probe` "
+            "or accept the gap."
+        )

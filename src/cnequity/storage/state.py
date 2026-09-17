@@ -230,6 +230,43 @@ class StateStore:
             self._write_payload(path, payload)
             return len(payload["outstanding_keys"])
 
+    def note_repair_attempt(
+        self,
+        dataset: str,
+        pairs: Iterable[tuple[str, date]],
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Count a repair that ran and did not fill these keys.
+
+        A debt is never expired — silently forgetting one is the data loss the
+        ledger exists to prevent — but a key a vendor has stopped serving
+        would otherwise sit at the same weight as one lost to a blip last
+        night, and the real backlog drowns. The count is what tells those
+        apart, so an operator can retire a key deliberately rather than the
+        store retiring it for them.
+        """
+        stamp = _utc_now(now).isoformat()
+        tried = {
+            (symbol, day.isoformat() if hasattr(day, "isoformat") else str(day))
+            for symbol, day in pairs
+        }
+        if not tried:
+            return
+        path = self._path(dataset)
+        with self._dataset_lock(dataset):
+            payload = self._read_payload(path)
+            rows = payload.get("outstanding_keys")
+            if not isinstance(rows, list):
+                return
+            for row in rows:
+                if (row.get("symbol"), row.get("trade_date")) in tried:
+                    row["attempts"] = int(row.get("attempts", 0) or 0) + 1
+                    row["last_attempt_at"] = stamp
+            payload["outstanding_keys"] = rows
+            payload["updated_at"] = stamp
+            self._write_payload(path, payload)
+
     def clear_outstanding_keys(
         self, dataset: str, pairs: Iterable[tuple[str, date]] | None = None
     ) -> int:
