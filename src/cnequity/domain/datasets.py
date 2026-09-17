@@ -1026,7 +1026,7 @@ _SPECS = [
         # Beijing names rather than the whole day. Measured 2026-09-16: SZSE 35
         # and SSE 25 records against the lake's SH 29 / SZ 37 / BJ 7.
         backup_source="exchange",
-        backup_gaps=("BJ", "SH before 2017-01-01"),
+        backup_gaps=("BJ", "SH STAR board", "SH before 2017-01-01"),
         tier="L4",
         partition_col="trade_date",
         partition_granularity="month",

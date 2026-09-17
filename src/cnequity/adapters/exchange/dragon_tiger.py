@@ -6,9 +6,10 @@ a disclosure rule, and a per-security detail of the five largest buying and
 selling desks — which is where `buy_amount` / `sell_amount` come from, because
 the list itself carries only turnover.
 
-**Not equivalent cover.** Neither exchange publishes Beijing, and the SSE's
-series starts 2017-01-01 (its own page says so). `DatasetSpec.backup_gaps`
-records both.
+**Not equivalent cover.** Neither exchange publishes Beijing; the SSE's series
+starts 2017-01-01 (its own page says so); and `JYGKXX_ZL` carries no STAR
+board — across four sampled days it returned zero 688 securities while the lake
+held two to ten. `DatasetSpec.backup_gaps` records all three.
 
 **`reason` is written as the exchange words it**, which is not how EastMoney
 words it: for 000428.SZ on 2026-09-15 the vendor said "日跌幅偏离值达到7%的前5只
@@ -41,8 +42,9 @@ _SOURCE = "exchange"
 
 _SZSE_LIST = (
     "https://www.szse.cn/api/report/ShowReport/data"
-    "?SHOWTYPE=JSON&CATALOGID=1842_xxpl_after&txtStart={day}&txtEnd={day}"
+    "?SHOWTYPE=JSON&CATALOGID=1842_xxpl_after&txtStart={day}&txtEnd={day}&PAGENO={page}"
 )
+_SZSE_MAX_PAGES = 200
 _SZSE_DETAIL = (
     "https://www.szse.cn/api/report/ShowReport/data"
     "?SHOWTYPE=JSON&CATALOGID=1842_detal&TABKEY=tab1,tab2&DQRQ={day}&ZQDM={code}&ZBDM={zbdm}"
@@ -96,20 +98,69 @@ def _clean(text: object) -> str:
     return re.sub(r"<[^>]+>", "", str(text or "")).replace("&nbsp;", "").strip()
 
 
-def fetch_szse_dragon_tiger(trade_date: date, *, config=None) -> pl.DataFrame:
-    """SZ list plus the desk detail behind each listed (security, rule)."""
-    session = _client()
+def _desk_totals(desks: list[dict]) -> tuple[float, float]:
+    """The day's totals from the ten desk rows.
+
+    Each row carries *both* sides for that desk, and the vendor's totals are
+    every listed desk's buying and selling — not the buy top-five's buying.
+    Summing the ten rows outright double-counts a desk that made both lists
+    (深股通专用 for 000823.SZ on 2026-09-15, which put the buy side 54% over),
+    while restricting each side to its own five drops the rest of the desks'
+    trading and came in 8% under across that day's thirty securities.
+
+    So each *distinct* desk counts once. The name alone will not do it: 机构专用
+    is a placeholder that stood four times on one list for 000428.SZ, with
+    different figures each time. A repeat is the same name carrying the same
+    pair of amounts.
+    """
+    seen: set[tuple[str, float, float]] = set()
+    buy = sell = 0.0
+    for desk in desks:
+        mrje = _number(desk.get("mrje"))
+        mcje = _number(desk.get("mcje"))
+        key = (_clean(desk.get("zsmc")), mrje, mcje)
+        if key in seen:
+            continue
+        seen.add(key)
+        buy += mrje
+        sell += mcje
+    return buy, sell
+
+
+def _szse_listed(session, trade_date: date, config) -> list[dict]:
+    """Every page of the day's list.
+
+    The endpoint serves ten rows a page and announces the rest only in
+    `metadata.pagecount`; reading page one alone returned 7 of the day's 30
+    securities for 2026-09-15 and looked like a complete day. A page that
+    fails raises, so a short read is never mistaken for a quiet session.
+    """
     rows: list[dict] = []
-    try:
+    page = 1
+    pages = 1
+    while page <= pages:
         with source_request(config, _SOURCE):
             resp = session.get(
-                _SZSE_LIST.format(day=trade_date.isoformat()),
+                _SZSE_LIST.format(day=trade_date.isoformat(), page=page),
                 headers=_SZSE_HEADERS,
                 impersonate="chrome",
                 timeout=_TIMEOUT_SECONDS,
             )
         resp.raise_for_status()
-        listed = ((resp.json() or [{}])[0] or {}).get("data") or []
+        tab = (resp.json() or [{}])[0] or {}
+        rows.extend(tab.get("data") or [])
+        if page == 1:
+            pages = min(int((tab.get("metadata") or {}).get("pagecount") or 1), _SZSE_MAX_PAGES)
+        page += 1
+    return rows
+
+
+def fetch_szse_dragon_tiger(trade_date: date, *, config=None) -> pl.DataFrame:
+    """SZ list plus the desk detail behind each listed (security, rule)."""
+    session = _client()
+    rows: list[dict] = []
+    try:
+        listed = _szse_listed(session, trade_date, config)
     except Exception as exc:  # noqa: BLE001 — one exchange down is a covered case
         logger.warning("SZSE dragon_tiger list unavailable for %s: %s", trade_date, exc)
         session.close()
@@ -144,8 +195,7 @@ def fetch_szse_dragon_tiger(trade_date: date, *, config=None) -> pl.DataFrame:
             desks = (tabs[1] or {}).get("data") if len(tabs) > 1 else None
             if not desks:
                 continue
-            buy = sum(_number(d.get("mrje")) for d in desks)
-            sell = sum(_number(d.get("mcje")) for d in desks)
+            buy, sell = _desk_totals(desks)
             rows.append(
                 {
                     "symbol": format_symbol(code, "SZ"),
@@ -178,7 +228,12 @@ def fetch_sse_dragon_tiger(trade_date: date, *, config=None) -> pl.DataFrame:
                 timeout=_TIMEOUT_SECONDS,
             )
         resp.raise_for_status()
-        listed = (_sse_json(resp.text).get("pageHelp") or {}).get("data") or []
+        page_help = _sse_json(resp.text).get("pageHelp") or {}
+        listed = page_help.get("data") or []
+        # One page of 500 has held every day measured (26 on 2026-09-15), but a
+        # silent truncation would read as a quiet session, so say so instead.
+        if int(page_help.get("pageCount") or 1) > 1:
+            raise RuntimeError(f"SSE dragon_tiger list spans {page_help.get('pageCount')} pages")
     except Exception as exc:  # noqa: BLE001
         logger.warning("SSE dragon_tiger list unavailable for %s: %s", trade_date, exc)
         session.close()
