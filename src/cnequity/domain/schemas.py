@@ -1095,3 +1095,27 @@ def with_provenance(df: pl.DataFrame, source: str, data_version: str) -> pl.Data
     if "source" not in df.columns:
         cols.append(pl.lit(source).alias("source"))
     return df.with_columns(cols)
+
+
+def frame_from_rows(rows: list[dict], dataset: str) -> pl.DataFrame:
+    """Build a frame from row dicts using the dataset's declared dtypes.
+
+    `pl.DataFrame(rows)` reads the first hundred rows to pick a dtype. A column
+    that is null across all of them becomes `Null`, and the first real value
+    after that raises `could not append value ... to the builder`. Measured:
+    `news_headlines` and `flash_news_wire` failed 22 times between 2026-09-12
+    and 2026-09-16 on sessions whose first hundred flashes named no security,
+    so `related_symbols` was typed away before the hundred-and-first arrived.
+
+    Only the columns the rows actually carry are pinned, which leaves an
+    adapter free to build an intermediate frame the stored schema does not
+    describe.
+    """
+    if not rows:
+        return pl.DataFrame()
+    schema = DATASET_SCHEMAS.get(dataset)
+    if not schema:
+        return pl.DataFrame(rows, infer_schema_length=None)
+    present = {key for row in rows for key in row}
+    overrides = {col: dtype for col, dtype in schema.items() if col in present}
+    return pl.DataFrame(rows, schema_overrides=overrides, infer_schema_length=None)

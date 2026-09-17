@@ -13,6 +13,7 @@ from cnequity.adapters.eastmoney.clist import fetch_clist_pages
 from cnequity.adapters.eastmoney.common import _to_float, _to_int
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 from cnequity.adapters.eastmoney.raw import archive_response, configured_archive
+from cnequity.domain.schemas import frame_from_rows
 from cnequity.domain.symbols import format_symbol, infer_exchange_from_code, is_all_a_symbol
 
 logger = logging.getLogger(__name__)
@@ -384,4 +385,8 @@ def fetch_news_headlines(
             )
     if not rows:
         logger.info("news_headlines: no items for %s (market may be closed)", target)
-    return pl.DataFrame(rows).unique(subset=["news_id"], keep="last") if rows else pl.DataFrame()
+    return (
+        frame_from_rows(rows, "news_headlines").unique(subset=["news_id"], keep="last")
+        if rows
+        else pl.DataFrame()
+    )

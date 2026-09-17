@@ -9,6 +9,7 @@ from datetime import date
 import polars as pl
 
 from cnequity.adapters.eastmoney.rotation import fetch_news_headlines
+from cnequity.domain.schemas import frame_from_rows
 
 logger = logging.getLogger(__name__)
 
@@ -65,4 +66,6 @@ def fetch_flash_news_wire(
         )
     if not rows:
         return pl.DataFrame()
-    return pl.DataFrame(rows).unique(subset=["wire_id", "wire_source"], keep="last")
+    return frame_from_rows(rows, "flash_news_wire").unique(
+        subset=["wire_id", "wire_source"], keep="last"
+    )
