@@ -50,8 +50,13 @@ def _staged(cfg, run_id) -> pl.DataFrame:
 
 
 def test_only_sh_and_sz_are_tdx_servable():
+    """Not because the protocol cannot serve Beijing — it carries its daily
+    bars under market id 2, and `_fetch_bj_history_via_tdx` uses that. The rest
+    of the pipeline reads this predicate as "Baostock serves this symbol"
+    (suspension evidence, ST history), and Baostock is Shanghai and Shenzhen
+    only: a Beijing code there costs a retried failure and answers nothing."""
     assert is_tdx_servable("600519.SH") and is_tdx_servable("000001.SZ")
-    assert not is_tdx_servable("920000.BJ"), "TDX has no Beijing market id"
+    assert not is_tdx_servable("920000.BJ")
     assert not is_tdx_servable("garbage")
 
 
@@ -563,3 +568,98 @@ def test_sina_circuit_survives_multiple_gapfill_passes_and_resets_next_run(tmp_p
     # The normal limiter cache is intentionally process-local as well.
     cfg._rate_limiters = None
     pickle.dumps(cfg)
+
+
+# --- Beijing history via TDX ------------------------------------------------
+
+
+def test_the_tip_session_is_left_to_the_exchange_snapshot(tmp_path, monkeypatch):
+    """TDX reports volume in lots — 3,085 of 3,086 measured rows land within
+    100 shares of the exact figure — so the current session keeps coming from
+    BSE, which publishes shares. TDX only fills the history behind it."""
+    from cnequity.steps import bars
+
+    cfg = Config(data_root=tmp_path / "data")
+    windows: list[tuple[date, date]] = []
+    monkeypatch.setattr(
+        bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)]
+    )
+    monkeypatch.setattr(
+        bars,
+        "fetch_daily_bars_parallel",
+        lambda _c, _s, lo, hi, *a, **k: (
+            windows.append((lo, hi)) or {"rows_read": 0, "rows_written": 0, "failed_symbols": []}
+        ),
+    )
+    monkeypatch.setattr(bars, "_bj_history_covered", lambda *a, **k: set())
+
+    bars._fetch_bj_history_via_tdx(
+        cfg, ["920001.BJ"], date(2026, 9, 15), date(2026, 9, 17), "r1", reserve_tip=True
+    )
+
+    assert windows == [(date(2026, 9, 15), date(2026, 9, 16))]
+
+
+def test_a_chunked_backfill_has_no_tip_to_reserve(tmp_path, monkeypatch):
+    from cnequity.steps import bars
+
+    cfg = Config(data_root=tmp_path / "data")
+    windows: list[tuple[date, date]] = []
+    monkeypatch.setattr(
+        bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)]
+    )
+    monkeypatch.setattr(
+        bars,
+        "fetch_daily_bars_parallel",
+        lambda _c, _s, lo, hi, *a, **k: (
+            windows.append((lo, hi)) or {"rows_read": 0, "rows_written": 0, "failed_symbols": []}
+        ),
+    )
+    monkeypatch.setattr(bars, "_bj_history_covered", lambda *a, **k: set())
+
+    bars._fetch_bj_history_via_tdx(
+        cfg, ["920001.BJ"], date(2026, 9, 15), date(2026, 9, 17), "r1", reserve_tip=False
+    )
+
+    assert windows == [(date(2026, 9, 15), date(2026, 9, 17))]
+
+
+def test_a_tip_only_window_asks_tdx_for_nothing(tmp_path, monkeypatch):
+    from cnequity.steps import bars
+
+    cfg = Config(data_root=tmp_path / "data")
+    monkeypatch.setattr(bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)])
+    monkeypatch.setattr(bars, "fetch_daily_bars_parallel", pytest.fail)
+
+    out = bars._fetch_bj_history_via_tdx(
+        cfg, ["920001.BJ"], date(2026, 9, 17), date(2026, 9, 17), "r1", reserve_tip=True
+    )
+
+    assert out == {"rows_read": 0, "rows_written": 0, "covered": set(), "requested": False}
+
+
+def test_a_symbol_tdx_reported_failed_is_not_counted_as_covered(tmp_path, monkeypatch):
+    """Otherwise Sina is never asked for it and the gap survives the run."""
+    from cnequity.steps import bars
+
+    cfg = Config(data_root=tmp_path / "data")
+    monkeypatch.setattr(
+        bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)]
+    )
+    monkeypatch.setattr(
+        bars,
+        "fetch_daily_bars_parallel",
+        lambda *a, **k: {"rows_read": 0, "rows_written": 0, "failed_symbols": ["920001.BJ"]},
+    )
+    monkeypatch.setattr(bars, "_bj_history_covered", lambda *a, **k: {"920001.BJ", "920002.BJ"})
+
+    out = bars._fetch_bj_history_via_tdx(
+        cfg,
+        ["920001.BJ", "920002.BJ"],
+        date(2026, 9, 15),
+        date(2026, 9, 16),
+        "r1",
+        reserve_tip=False,
+    )
+
+    assert out["covered"] == {"920002.BJ"}

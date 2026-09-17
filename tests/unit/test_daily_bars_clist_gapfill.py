@@ -802,6 +802,12 @@ def test_retry_routes_non_tdx_symbols_to_fallback(tmp_path, monkeypatch):
         return {"rows_read": 0, "rows_written": 0}
 
     monkeypatch.setattr("cnequity.steps.bars.fetch_bars_via_sina", fake_fallback)
+    # Beijing history is asked of TDX first; here it answers nothing, so Sina
+    # must still be handed the symbol rather than the session being dropped.
+    monkeypatch.setattr(
+        "cnequity.steps.bars._fetch_bj_history_via_tdx",
+        lambda *a, **k: {"rows_read": 0, "rows_written": 0, "covered": set(), "requested": True},
+    )
     monkeypatch.setattr("cnequity.steps.bars.fetch_daily_bars_parallel", pytest.fail)
     monkeypatch.setattr("cnequity.steps.bars._finish_daily_bars", fake_finish)
     monkeypatch.setattr("cnequity.steps.bars._merge_ownership_result", lambda out, *args: out)
@@ -818,6 +824,45 @@ def test_retry_routes_non_tdx_symbols_to_fallback(tmp_path, monkeypatch):
     assert calls == [(["920001.BJ"], date(2024, 6, 27), date(2024, 6, 28), "retry-0-sina")]
     assert captured["expected_tdx_symbols"] == []
     assert captured["expected_fallback_symbols"] == ["920001.BJ"]
+
+
+def test_a_symbol_tdx_answered_is_not_asked_of_sina_again(tmp_path, monkeypatch):
+    """Sina costs one request per symbol per session; TDX answers a range in
+    one call. Asking both would keep the cost the routing exists to avoid."""
+    cfg = _cfg(tmp_path)
+    run_id = Manifest(cfg.manifest_path).start_run("daily:core")
+    calls: list = []
+
+    monkeypatch.setattr(
+        "cnequity.steps.bars.fetch_bars_via_sina",
+        lambda *a, **k: calls.append(a) or {"rows_read": 0, "rows_written": 0, "failed_symbols": 0},
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars._fetch_bj_history_via_tdx",
+        lambda *a, **k: {
+            "rows_read": 4,
+            "rows_written": 4,
+            "covered": {"920001.BJ"},
+            "requested": True,
+        },
+    )
+    monkeypatch.setattr("cnequity.steps.bars.fetch_daily_bars_parallel", pytest.fail)
+    monkeypatch.setattr(
+        "cnequity.steps.bars._finish_daily_bars",
+        lambda *a, **k: {"rows_read": 0, "rows_written": 0},
+    )
+    monkeypatch.setattr("cnequity.steps.bars._merge_ownership_result", lambda out, *args: out)
+
+    from cnequity.steps.bars import step_daily_bars
+
+    step_daily_bars(
+        cfg,
+        date(2024, 6, 28),
+        run_id,
+        {"_retry_batch_specs": [("retry-0", ["920001.BJ"], date(2024, 6, 27), date(2024, 6, 28))]},
+    )
+
+    assert calls == []
 
 
 def test_tip_total_loss_still_raises(tmp_path, monkeypatch):

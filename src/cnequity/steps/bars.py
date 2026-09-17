@@ -641,9 +641,26 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
                 "empty_symbol_names": [],
             }
             for batch_id, fallback_symbols, spec_start, spec_end in fallback_specs:
-                fallback = fetch_bars_via_sina(
+                # No BSE tip on a chunked backfill, so TDX takes the whole spec
+                # window and Sina only chases what it could not answer.
+                bj_history = _fetch_bj_history_via_tdx(
                     config,
                     fallback_symbols,
+                    spec_start,
+                    spec_end,
+                    run_id,
+                    reserve_tip=False,
+                )
+                sina_symbols = [
+                    symbol for symbol in fallback_symbols if symbol not in bj_history["covered"]
+                ]
+                sina_result["rows_read"] += bj_history["rows_read"]
+                sina_result["rows_written"] += bj_history["rows_written"]
+                if not sina_symbols:
+                    continue
+                fallback = fetch_bars_via_sina(
+                    config,
+                    sina_symbols,
                     spec_start,
                     spec_end,
                     run_id,
@@ -735,10 +752,12 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         end,
     )
 
-    # TDX has no Beijing exchange route at all — the protocol rejects the market id —
-    # so BJ symbols must come from the fallback vendor or they silently never
-    # arrive, which is exactly how the lake ended up with zero BJ coverage.
-    # Tip gaps after TDX are a second routing case (ADR-0005): EastMoney clist.
+    # `split_by_quote_source` keeps Beijing out of the main sweep because the
+    # rest of the pipeline reads `is_tdx_servable` as "Baostock serves this".
+    # The protocol itself does carry Beijing daily bars under market id 2, so
+    # the fallback leg below reaches for TDX before Sina — see
+    # `_fetch_bj_history_via_tdx`. Tip gaps after TDX are a second routing case
+    # (ADR-0005): EastMoney clist.
     fetch_scope = list(dict.fromkeys(ownership.generic + ownership.unknown))
     tdx_symbols, fallback_symbols = split_by_quote_source(fetch_scope)
     reused_symbols = _reuse_successful_daily_bars(config, run_id, fetch_scope, start, end)
@@ -770,15 +789,25 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         # and for the (short) history window behind it.
         bse = _fetch_bj_tip_via_bse(config, fetch_fallback_symbols, end, run_id)
         fallback_start = _bj_history_start(config, start, end)
-        sina_scope = fetch_fallback_symbols
+        # The history behind the tip comes from TDX in one call per symbol;
+        # Sina is left the tip BSE missed and the symbols TDX did not answer.
+        bj_history = _fetch_bj_history_via_tdx(
+            config, fetch_fallback_symbols, fallback_start, end, run_id, reserve_tip=True
+        )
         if fallback_start >= end:
             # Tip-only window: skip every symbol BSE already covered.
             sina_scope = [s for s in fetch_fallback_symbols if s not in bse["covered"]]
+        else:
+            sina_scope = [
+                symbol
+                for symbol in fetch_fallback_symbols
+                if symbol not in bse["covered"] or symbol not in bj_history["covered"]
+            ]
         if sina_scope:
             sina_result = fetch_bars_via_sina(
                 config, sina_scope, fallback_start, end, run_id, batch_prefix="sina"
             )
-        if bse["rows_written"]:
+        if bse["rows_written"] or bj_history["rows_written"]:
             sina_result = sina_result or {
                 "rows_read": 0,
                 "rows_written": 0,
@@ -786,8 +815,8 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
                 "failed_symbol_names": [],
                 "empty_symbol_names": [],
             }
-            sina_result["rows_read"] += bse["rows_read"]
-            sina_result["rows_written"] += bse["rows_written"]
+            sina_result["rows_read"] += bse["rows_read"] + bj_history["rows_read"]
+            sina_result["rows_written"] += bse["rows_written"] + bj_history["rows_written"]
     out = _finish_daily_bars(
         config,
         trade_date,
@@ -1134,6 +1163,91 @@ def _fetch_tip_via_exchange(
         "rows_written": staged.height,
         "covered": covered,
         "source_outcomes": {"exchange": {"status": "success", "requests": 2}},
+    }
+
+
+def _bj_history_covered(
+    config: Config, run_id: str, symbols: list[str], start: date, end: date
+) -> set[str]:
+    """Which of *symbols* this run has whole staged evidence for over the window."""
+    import polars as pl
+
+    from cnequity.storage import StagingWriter
+
+    files = StagingWriter(config.staging_root).list_run_files("daily_bars", run_id)
+    if not files:
+        return set()
+    staged = set(
+        pl.scan_parquet([str(f) for f in files])
+        .filter(
+            (pl.col("trade_date") >= start)
+            & (pl.col("trade_date") <= end)
+            & pl.col("symbol").is_in(symbols)
+        )
+        .select("symbol")
+        .unique()
+        .collect()["symbol"]
+        .to_list()
+    )
+    return staged - _staged_daily_bar_partial_symbols(config, run_id, list(symbols), start, end)
+
+
+def _fetch_bj_history_via_tdx(
+    config: Config,
+    symbols: list[str],
+    start: date,
+    end: date,
+    run_id: str,
+    *,
+    reserve_tip: bool,
+) -> dict:
+    """Beijing daily history from TDX, which serves it under market id 2.
+
+    Sina answers one symbol for one session per request — the whole board over
+    five sessions is ~2,900 of them, which is what earns HTTP 456 and a
+    vendor-wide cooldown. TDX answers a symbol's whole range in one call, so
+    the same work is one request per symbol.
+
+    Measured against what the lake already held: open/high/low/close agree to
+    the last digit — 3,086 rows over 344 securities against BSE/Sina/THS, and
+    2,048 rows over 120 securities against Sina alone, with no exception in
+    either. Two differences, both in TDX's favour on balance:
+
+    - ``amount``: Sina publishes none for Beijing, so all 505,518 Sina rows in
+      the lake carry a null turnover. TDX fills it, agreeing with BSE to
+      0.00003%.
+    - ``volume``: TDX reports it in lots. So did Sina for 2019 through 2025 —
+      every one of those rows is a multiple of 100 — so the history gains
+      nothing coarser than it already had. Only from 2026 is Sina finer (86%
+      lots), and there TDX lands a median 50 shares away, one row in 2,048
+      further than 100.
+
+    ``reserve_tip`` keeps the current session on the BSE snapshot regardless,
+    which publishes exact shares and its own turnover. TDX fills only the
+    history behind it, where the alternative was Sina's cost or nothing at all.
+    """
+    sessions = list_trading_dates(config, start, end)
+    if reserve_tip:
+        sessions = [day for day in sessions if day < end]
+    if not symbols or not sessions:
+        return {"rows_read": 0, "rows_written": 0, "covered": set(), "requested": False}
+    lo, hi = sessions[0], sessions[-1]
+    result = fetch_daily_bars_parallel(config, list(symbols), lo, hi, run_id, "daily_bars")
+    failed = set(result.get("failed_symbols") or [])
+    covered = _bj_history_covered(config, run_id, list(symbols), lo, hi) - failed
+    logger.info(
+        "Beijing history via TDX: %d/%d symbol(s) answered over %s..%s (%d rows)",
+        len(covered),
+        len(symbols),
+        lo,
+        hi,
+        int(result.get("rows_written", 0)),
+    )
+    return {
+        "rows_read": int(result.get("rows_read", 0)),
+        "rows_written": int(result.get("rows_written", 0)),
+        "covered": covered,
+        "requested": True,
     }
 
 
