@@ -7,6 +7,7 @@ killed, losing the hours it had already banked.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import date
 
@@ -536,3 +537,154 @@ def test_the_log_notice_never_contaminates_the_json_on_stdout(tmp_path, monkeypa
     assert "Logging to" in result.stderr
     assert "Logging to" not in result.stdout
     json.loads(result.stdout)  # the contract: stdout parses on its own
+
+
+def test_every_command_gets_process_logging(caplog):
+    """Wired once at the root, so no command can be added without it.
+
+    Before this, `cne init` and the fetching commands had progress output and
+    everything else ran silent: a slow `cne verify` or a `snapshot export`
+    hashing gigabytes looked hung, and a library warning during a `status` went
+    nowhere at all.
+    """
+    import logging
+
+    import click
+
+    from cnequity.cli._root import SectionedGroup
+    from cnequity.cli.main import cli
+
+    # The two that own their logging are declared, not incidental.
+    assert SectionedGroup.OWNS_ITS_LOGGING == {"mcp", "serve"}
+
+    ctx = click.Context(cli)
+    for name in SectionedGroup.OWNS_ITS_LOGGING:
+        assert cli.get_command(ctx, name) is not None, f"{name} is no longer a command"
+
+    # Root-level wiring leaves the pipeline's own INFO records reaching a handler.
+    logging.getLogger().handlers.clear()
+    cli.__class__._wire_process_logging(cli, click.Context(cli))
+    assert logging.getLogger().handlers, "no handler installed for the pipeline's records"
+    assert logging.getLogger().level <= logging.INFO
+
+
+@contextlib.contextmanager
+def _capture_cli_records():
+    """Collect `cnequity.cli` records directly.
+
+    `caplog` puts its handler on the root logger, and the CLI configures
+    logging with `basicConfig(force=True)` — which replaces root handlers, so
+    caplog's is gone before the command runs. A handler on this logger is not
+    touched by that.
+    """
+    import logging
+
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    logger = logging.getLogger("cnequity.cli")
+    handler = _Collect(level=logging.DEBUG)
+    logger.addHandler(handler)
+    previous = logger.level
+    logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+
+
+def _lake_config(tmp_path):
+    cfg = tmp_path / "cnequity.toml"
+    cfg.write_text(f'[data]\nroot = "{(tmp_path / "lake").as_posix()}"\n', encoding="utf-8")
+    return str(cfg)
+
+
+@pytest.mark.parametrize(
+    ("argv", "level", "needle"),
+    [
+        (["verify", "--dataset", "nope"], "ERROR", "unknown dataset"),
+        (
+            ["backfill", "daily_bars", "--start", "2026-01-02", "--end", "2026-01-01"],
+            "ERROR",
+            "--start must be on or before --end",
+        ),
+        (["run", "daily", "--group", "nosuch"], "ERROR", "Unknown group"),
+    ],
+)
+def test_a_failure_becomes_a_log_record(argv, level, needle, tmp_path):
+    """Click prints `Error:` and stops; a scheduled run reads the log, not stderr.
+
+    A failure that never became a record left a log file whose last line is
+    whatever the command happened to be doing when it died.
+    """
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    cfg = _lake_config(tmp_path)
+    with _capture_cli_records() as records:
+        CliRunner().invoke(cli, [*argv, "--config", cfg])
+    assert records, f"{argv} failed without a log record"
+    assert any(r.levelname == level and needle in r.getMessage() for r in records), [
+        (r.levelname, r.getMessage()) for r in records
+    ]
+
+
+def test_one_failure_makes_one_record(tmp_path):
+    """A nested command must not be recorded once per group it passed through."""
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    cfg = _lake_config(tmp_path)
+    with _capture_cli_records() as records:
+        CliRunner().invoke(cli, ["run", "daily", "--group", "nosuch", "--config", cfg])
+    assert len(records) == 1, [r.getMessage() for r in records]
+    assert records[0].getMessage().startswith("run daily:"), records[0].getMessage()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["status"],
+        ["verify"],
+        ["run", "clean", "--dry-run"],
+        ["contract", "show", "--dataset", "daily_bars"],
+        ["sources", "resilience"],
+    ],
+)
+def test_logging_never_lands_on_stdout(argv, tmp_path):
+    """stdout carries the command's answer; logging goes to stderr.
+
+    Wiring logging into every command would otherwise break every machine
+    caller at once — several of these print JSON that is piped straight into
+    `json.loads`, and one stray line is a parse error with no clue where it
+    came from.
+    """
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    cfg = _lake_config(tmp_path)
+    CliRunner().invoke(
+        cli,
+        [
+            "init",
+            "--profile",
+            "sample",
+            "--data-root",
+            str(tmp_path / "lake"),
+            "--config-out",
+            cfg,
+            "--days",
+            "3",
+        ],
+    )
+    result = CliRunner().invoke(cli, [*argv, "--config", cfg])
+    assert "Logging to " not in result.stdout, result.stdout[:200]
+    for marker in (" INFO ", " WARNING ", " ERROR ", "cnequity.cli:"):
+        assert marker not in result.stdout, f"{marker!r} on stdout: {result.stdout[:200]}"

@@ -6,6 +6,10 @@
 
 **命令名不区分大小写**：`cne STATUS`、`cne run DAILY`、`cne config CREATE` 与小写等价（Click 的 `token_normalize_func`）。`-h` 是 `--help` 的短写法。**不做前缀匹配**——`cne stat` 会被拒绝并提示 `stats` / `status`，而不是猜一个执行。
 
+**每个命令都有过程日志。** 管线自己的 INFO 记录统一在命令树根部接到 stderr，所以 stdout 上的 JSON 契约不受影响。真正耗时的 23 个命令另外把日志 tee 进 `{data.root}/logs/cne-<命令>-<时间戳>.log`（`cne run clean --log-retention-days` 负责清理）。`cne mcp` 与 `cne serve` 自管日志——前者 stdout 是 JSON-RPC 线路，stderr 必须压在 WARNING；后者交给 uvicorn。
+
+**任何失败都会留下一条日志记录。** Click 只往 stderr 打一行 `Error:` 就结束，定时任务读的是日志文件而不是终端——失败若没成为日志记录，留下的就是一个最后一行停在半路的文件。记录写在命令树的唯一入口，所以 42 个命令无一遗漏，且每次失败只有一条：用法错误（参数写错、名字不认识）记 `WARNING`，其余记 `ERROR`，未预期的异常还带 traceback。退出码与 Click 的渲染都不变。
+
 **六个命令不接受 `--config`**：`cne contract show|validate|diff`、`cne profile list|show`、`cne sources policy`。它们读的是随包发布的注册表而不是湖，所以指向哪个湖都给同一个答案。`cne doctor` 则相反——它接受 `--config`，但没有配置也能跑（这正是它存在的场景）。
 
 ---

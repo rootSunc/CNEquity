@@ -512,4 +512,4 @@ def test_cli_if_stale_reports_machine_readably(config, tmp_path):
     result = _run_cli(tmp_path / "test.toml", "--if-stale", "--json")
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["rebuilt"] is False
+    assert json.loads(result.stdout)["rebuilt"] is False

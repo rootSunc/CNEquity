@@ -197,7 +197,7 @@ def test_stability_enforce_exits_one_until_the_gate_passes(tmp_path):
     result = _stability(path, days, "--enforce")
 
     assert result.exit_code == 1
-    assert json.loads(result.output)["passed"] is False
+    assert json.loads(result.stdout)["passed"] is False
 
 
 def test_stability_without_enforce_reports_the_same_failure_and_exits_zero(tmp_path):
@@ -208,7 +208,7 @@ def test_stability_without_enforce_reports_the_same_failure_and_exits_zero(tmp_p
     result = _stability(path, days)
 
     assert result.exit_code == 0
-    assert json.loads(result.output)["passed"] is False
+    assert json.loads(result.stdout)["passed"] is False
 
 
 def test_stability_enforce_exits_zero_on_a_clean_window(tmp_path):
@@ -217,7 +217,7 @@ def test_stability_enforce_exits_zero_on_a_clean_window(tmp_path):
     result = _stability(path, days, "--enforce")
 
     assert result.exit_code == 0
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert payload["passed"] is True
     assert payload["consecutive_passed"] == 20
 

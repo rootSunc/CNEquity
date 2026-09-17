@@ -215,6 +215,16 @@ rows every day are fixed — with migrations for what they already left behind.
 
 ### Changed
 
+- **Every command has process logging, and every failure leaves a record.**
+  The pipeline's INFO records are wired once at the root of the command tree,
+  so nothing can be added without them — before, a slow `cne verify` or a
+  `snapshot export` hashing gigabytes ran silent, and a library warning during
+  a `status` went nowhere. Twenty-three commands that actually take time also
+  tee into `{data.root}/logs/`. Failures are recorded at the one place that
+  sees every command: a usage error is a `WARNING`, anything else an `ERROR`,
+  an unexpected exception carries its traceback, and one failure makes exactly
+  one record whatever depth it happened at. `cne mcp` and `cne serve` keep
+  their own logging — stdout there is a JSON-RPC wire and uvicorn's socket.
 - **Command names are case-insensitive, and `-h` works.** `cne STATUS` used to
   be a dead end: Click's suggestions run on edit distance, and an all-caps
   spelling is too far from its own lowercase to be offered, so the error named

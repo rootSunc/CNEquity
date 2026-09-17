@@ -18,6 +18,7 @@ import click
 from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
+    attach_log_file,
     config_option,
 )
 
@@ -265,10 +266,12 @@ def snapshot_create(
     reader to prove later that a published result used exactly these bytes.
     Prints the manifest path.
     """
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "snapshot-create")
     from cnequity.storage.snapshots import SnapshotStore
 
     with _snapshot_operator_errors():
-        manifest = SnapshotStore(_cfg(config_path), snapshot_root).create(name, list(datasets))
+        manifest = SnapshotStore(cfg, snapshot_root).create(name, list(datasets))
     click.echo(str(manifest))
 
 
@@ -288,12 +291,14 @@ def snapshot_verify(name: str, config_path: str, snapshot_root: Path | None):
     scheduled job. Run it before trusting a snapshot you did not just create —
     bit rot and a truncated copy look identical until the hashes disagree.
     """
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "snapshot-verify")
     from dataclasses import asdict
 
     from cnequity.storage.snapshots import SnapshotStore
 
     with _snapshot_operator_errors():
-        result = SnapshotStore(_cfg(config_path), snapshot_root).verify(name)
+        result = SnapshotStore(cfg, snapshot_root).verify(name)
     click.echo(json.dumps(asdict(result), indent=2, ensure_ascii=False))
     if not result.passed:
         raise SystemExit(1)
@@ -317,10 +322,12 @@ def snapshot_restore(name: str, target: Path, config_path: str, snapshot_root: P
     you roll the live lake back. Check the result with
     `cne status --datasets` against TARGET before pointing anything at it.
     """
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "snapshot-restore")
     from cnequity.storage.snapshots import SnapshotStore
 
     with _snapshot_operator_errors():
-        restored = SnapshotStore(_cfg(config_path), snapshot_root).restore(name, target)
+        restored = SnapshotStore(cfg, snapshot_root).restore(name, target)
     click.echo(str(restored))
 
 
@@ -349,10 +356,12 @@ def snapshot_export(
     snapshot_root: Path | None,
 ):
     """Stream snapshot NAME to one portable tar archive."""
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "snapshot-export")
     from cnequity.storage.snapshots import SnapshotStore
 
     try:
-        archive = SnapshotStore(_cfg(config_path), snapshot_root).export_archive(
+        archive = SnapshotStore(cfg, snapshot_root).export_archive(
             name,
             destination,
             compression=compression,
@@ -388,10 +397,12 @@ def snapshot_import(
     snapshot_root: Path | None,
 ):
     """Verify ARCHIVE and atomically import it into the snapshot store."""
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "snapshot-import")
     from cnequity.storage.snapshots import SnapshotStore
 
     try:
-        restored = SnapshotStore(_cfg(config_path), snapshot_root).import_archive(
+        restored = SnapshotStore(cfg, snapshot_root).import_archive(
             archive,
             name=name,
             overwrite=overwrite,
@@ -427,16 +438,18 @@ def _snapshot_delta_create(
             baseline = None
     if from_revision is None and baseline is None:
         raise click.UsageError("provide --from BASELINE or --from-revision REVISION")
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "snapshot-delta-create")
     with _snapshot_operator_errors():
         if from_revision is not None:
-            manifest = SnapshotStore(_cfg(config_path), snapshot_root).create_delta(
+            manifest = SnapshotStore(cfg, snapshot_root).create_delta(
                 name,
                 datasets=list(datasets),
                 target=target,
                 from_revision=from_revision,
             )
         else:
-            manifest = SnapshotStore(_cfg(config_path), snapshot_root).create_delta(
+            manifest = SnapshotStore(cfg, snapshot_root).create_delta(
                 name,
                 baseline=baseline,
                 target=target,
@@ -507,13 +520,15 @@ def snapshot_delta_create(
 )
 def snapshot_delta_verify(name: str, config_path: str, snapshot_root: Path | None):
     """Verify all add/replace payload hashes and change semantics."""
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "snapshot-delta-verify")
 
     from dataclasses import asdict
 
     from cnequity.storage.snapshots import SnapshotStore
 
     with _snapshot_operator_errors():
-        result = SnapshotStore(_cfg(config_path), snapshot_root).verify_delta(name)
+        result = SnapshotStore(cfg, snapshot_root).verify_delta(name)
     click.echo(json.dumps(asdict(result), indent=2, ensure_ascii=False))
     if not result.passed:
         raise SystemExit(1)
@@ -538,11 +553,11 @@ def snapshot_delta_apply(
     snapshot_root: Path | None,
 ):
     """Safely apply NAME to the non-empty TARGET lake root."""
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "snapshot-delta-apply")
 
     from cnequity.storage.snapshots import SnapshotStore
 
     with _snapshot_operator_errors():
-        applied = SnapshotStore(_cfg(config_path), snapshot_root).apply_delta(
-            name, target, dry_run=dry_run
-        )
+        applied = SnapshotStore(cfg, snapshot_root).apply_delta(name, target, dry_run=dry_run)
     click.echo(str(applied))

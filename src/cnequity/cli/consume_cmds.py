@@ -148,7 +148,10 @@ def mcp_cmd(config_path: str, live: bool):
     # on the client with no indication of where it came from, so every log
     # record — ours and every library's — goes to stderr, which MCP clients
     # capture as the server's log.
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    # `force=True` because the CLI root configures INFO logging for every
+    # command; without it this call would be a no-op and the wire's log
+    # would carry every INFO record the pipeline emits.
+    logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
     serve_stdio(cfg)
 
 

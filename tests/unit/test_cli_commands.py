@@ -941,7 +941,7 @@ def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
     assert seen["start"] == date(2020, 1, 1)
     assert seen["end"] == date(2020, 1, 31)
     assert seen["run_id"]
-    summary = json.loads(result.output)
+    summary = json.loads(result.stdout)
     assert summary["rows_staged"] == 7
     assert summary["run_id"] == seen["run_id"]
     assert "compact" in summary
@@ -968,7 +968,7 @@ def test_derive_trading_status_failure_is_persisted_and_exits_nonzero(cfg_path, 
     result = CliRunner().invoke(cli, ["derive", "trading_status", "--config", cfg_path])
 
     assert result.exit_code == 1, result.output
-    summary = json.loads(result.output)
+    summary = json.loads(result.stdout)
     assert summary["status"] == "failed"
     persisted = Manifest(load_config(cfg_path).manifest_path).get_run(summary["run_id"])
     assert persisted is not None

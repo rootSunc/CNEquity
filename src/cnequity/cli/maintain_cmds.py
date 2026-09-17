@@ -186,6 +186,7 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
     # already case-insensitive; a target typed in caps should resolve the same.
     name = name.lower()
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "derive")
     start = parse_date_option(start_str, "--start")
     end = parse_date_option(end_str, "--end")
     if start and end and start > end:
@@ -448,6 +449,7 @@ def stats_rebuild(config_path: str, dataset_names: tuple[str, ...], if_stale: bo
     from cnequity.storage.stats import rebuild_stats
 
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "stats-rebuild")
 
     if if_stale:
         if dataset_names:

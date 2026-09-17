@@ -18,6 +18,7 @@ from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
     _progress_logging,
+    attach_log_file,
     config_option,
     parse_date_option,
     resolve_config_path,
@@ -105,6 +106,7 @@ def audit(
     one run wrote, and it is what the health check and the dashboard read.
     """
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "audit")
 
     if quality_only and not full:
         raise click.ClickException("--quality-only requires --full")
@@ -395,6 +397,7 @@ def verify(
         },
     )
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "verify")
     if mode == "bars":
         _verify_bars(cfg, start, end)
         return
