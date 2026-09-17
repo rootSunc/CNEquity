@@ -135,7 +135,28 @@ class _LoggedFailures(click.Group):
             return  # the root group already did it for this invocation
         from cnequity.cli._shared import _progress_logging
 
-        _progress_logging()
+        # `take_over=False`: a root logger somebody else configured is theirs.
+        # Importing this CLI and calling `contract show` must not destroy the
+        # host application's logging, which `force=True` on every command did.
+        _progress_logging(take_over=False)
+
+    def make_context(self, info_name, args, parent=None, **extra):
+        """Also record a failure in this group's *own* parameters.
+
+        `invoke` never sees those: `cne --bogus-flag` fails while Click is
+        building the context, before any command is dispatched. The window is
+        small — the group has only `--version` and `--help` — but a failure
+        that leaves no record is exactly what this class exists to prevent.
+
+        Shell completion parses the same line with `resilient_parsing` and is
+        expected to fail on partial input; that is not an error to report.
+        """
+        try:
+            return super().make_context(info_name, args, parent=parent, **extra)
+        except click.UsageError as exc:
+            if not extra.get("resilient_parsing"):
+                logger.warning("%s: %s", info_name or "cne", exc.format_message())
+            raise
 
     def _already_logged(self, ctx: click.Context) -> bool:
         """One record per failure, written by the innermost group that saw it."""
@@ -160,6 +181,13 @@ class _LoggedFailures(click.Group):
         except click.Abort:
             if not self._already_logged(ctx):
                 logger.warning("%s: aborted", self._failed_command(ctx))
+            raise
+        except click.exceptions.Exit:
+            # `--help` and `--version` leave this way, and Click's `Exit`
+            # derives from RuntimeError — so the catch-all below logged every
+            # subcommand's `--help` as an unhandled error, traceback and all.
+            # `SystemExit` never reached it (it is a BaseException), which is
+            # why a non-zero exit from `status --datasets` stayed quiet.
             raise
         except Exception:
             if not self._already_logged(ctx):

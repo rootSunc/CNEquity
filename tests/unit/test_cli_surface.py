@@ -286,16 +286,78 @@ def test_every_command_path_resolves_in_any_case():
     ("argv", "needle"),
     [
         (["verify", "--dataset", "DAILY_BARS"], "unknown dataset"),
-        (["backfill", "Daily_Bars"], "unknown dataset"),
-        (["derive", "ADJ_FACTORS"], "Unknown derive target"),
         (["contract", "show", "--dataset", "DAILY_BARS"], "KeyError"),
         (["stats", "show", "--dataset", "DAILY_BARS"], "unknown"),
     ],
 )
 def test_registry_names_are_case_insensitive(argv, needle, tmp_path):
-    """Registry names are lower case, so a name typed in caps must still resolve."""
+    """Registry names are lower case, so a name typed in caps must still resolve.
+
+    Only commands that read. `cne backfill` and `cne derive` reach the worker
+    pool and the network — an earlier version of this ran them and hung the
+    suite instead of testing a name; their resolvers are checked directly
+    below.
+    """
     cfg = tmp_path / "cnequity.toml"
     cfg.write_text(f'[data]\nroot = "{(tmp_path / "lake").as_posix()}"\n', encoding="utf-8")
     result = CliRunner().invoke(cli, [*argv, "--config", str(cfg)])
     # Whatever else happens, it must not be rejected for the *name*.
     assert needle not in (result.output or ""), result.output
+
+
+@pytest.mark.parametrize("typed", ["DAILY_BARS", "Daily_Bars", "daily_bars"])
+def test_a_dataset_name_resolves_whatever_its_case(typed):
+    """Checked at the resolver, which is where the normalisation lives."""
+    from cnequity.cli.backfill_cmds import _require_known_dataset
+
+    assert _require_known_dataset(typed) == "daily_bars"
+
+
+def test_a_derive_target_resolves_whatever_its_case(tmp_path, monkeypatch):
+    """`cne derive` lower-cases its target before the registry lookup."""
+    from cnequity.cli import maintain_cmds
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        maintain_cmds,
+        "compute_adj_factors",
+        lambda cfg, full=False: (
+            seen.append("called") or type("R", (), {"rows": 0, "failed": [], "fail_ratio": 0.0})()
+        ),
+    )
+    cfg = tmp_path / "cnequity.toml"
+    cfg.write_text(f'[data]\nroot = "{(tmp_path / "lake").as_posix()}"\n', encoding="utf-8")
+    result = CliRunner().invoke(cli, ["derive", "ADJ_FACTORS", "--config", str(cfg)])
+    assert "Unknown derive target" not in result.output, result.output
+    assert seen, "the target was not resolved to adj_factors"
+
+
+def test_help_is_not_a_failure(caplog):
+    """`--help` on a subcommand logged an unhandled error, traceback and all.
+
+    Click's `Exit` derives from RuntimeError, so the catch-all that records
+    failures swallowed the one command every user types first. `SystemExit`
+    never reached it — it is a BaseException — which is why a non-zero exit
+    from `status --datasets` stayed quiet and this did not.
+    """
+    import logging
+
+    for args in (["--help"], ["query", "--help"], ["run", "daily", "--help"]):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="cnequity.cli"):
+            result = CliRunner().invoke(cli, args)
+        assert result.exit_code == 0, result.output
+        assert "Usage:" in result.output
+        assert not caplog.records, f"`cne {' '.join(args)}` logged {caplog.records}"
+
+
+def test_a_real_failure_is_still_recorded(caplog):
+    """The other half: quieting `--help` must not quiet actual failures."""
+    import logging
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="cnequity.cli"):
+        result = CliRunner().invoke(cli, ["query", "--nosuchoption"])
+
+    assert result.exit_code != 0
+    assert caplog.records, "a usage error must still leave a record"

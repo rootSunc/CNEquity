@@ -93,6 +93,11 @@ rows every day are fixed — with migrations for what they already left behind.
 
 ### Fixed
 
+- **`--help` on a subcommand stopped printing a traceback.** Click's `Exit`
+  derives from `RuntimeError`, so the catch-all that records failures logged
+  the one command every user types first as an unhandled error. `SystemExit`
+  never reached it, which is why a non-zero exit from `status --datasets`
+  stayed quiet and this did not.
 - **Run logs are pruned.** `attach_log_file` writes one timestamped file per
   invocation into `{data.root}/logs/` and nothing ever removed them — a daily
   pipeline leaves a file per group per day, plus one per retry and backfill,
