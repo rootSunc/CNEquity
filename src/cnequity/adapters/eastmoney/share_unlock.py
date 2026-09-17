@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 
 import polars as pl
 
 from cnequity.adapters.eastmoney.common import _to_float, exchange_from_datacenter, symbol_from_em
-from cnequity.adapters.eastmoney.datacenter import fetch_datacenter
+from cnequity.adapters.eastmoney.datacenter import (
+    EastMoneyDatacenterError,
+    fetch_datacenter,
+)
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
+
+logger = logging.getLogger(__name__)
 
 _UNLOCK_REPORT = "RPT_LIFT_STAGE"
 _UNLOCK_COLUMNS = (
@@ -39,16 +45,22 @@ def fetch_share_unlock_schedule(
     if client is None:
         client = EastMoneyClient(config=config)
 
-    # No FREE_DATE range predicate. EastMoney's datacenter rejects range
-    # comparisons on date columns outright — "参数预处理错误:
-    # org.antlr.v4.runtime.InputMismatchException (code=9501)" — which took this
-    # step from working to failing every run with no code change on our side.
-    # Equality still parses, but that is one request per day across the horizon.
+    # Ask for the window; fall back to walking the report if the upstream
+    # refuses. EastMoney rejected range comparisons on date columns outright at
+    # one point — "参数预处理错误: org.antlr.v4.runtime.InputMismatchException
+    # (code=9501)" — which took this step from working to failing with no code
+    # change on our side, and the descending walk below is what it was rewritten
+    # to. Re-measured 2026-09-17: the predicate is honoured exactly, 108 rows for
+    # 2016-03 and 1,361 for 2016, zero dates outside the window.
     #
-    # So: page the report newest-first and stop as soon as a page ends before
-    # the window does. The report spans 2010..2035 in 63 pages of 500; the
-    # 180-day window lives in the first ~7 of them descending, where reading it
-    # ascending would walk all 63 to reach the same rows.
+    # The difference is not cosmetic. The walk reads the whole 2010..2035 report
+    # — 63 pages of 500 — on *every* call, so a backfill's strides each restart
+    # it from page 1 and a transient timeout on any one page fails the run;
+    # chunking the backfill would multiply those walks rather than shrink them.
+    # Asking for the window reads one year in three pages.
+    #
+    # The walk stays as the fallback because this upstream has broken this way
+    # before, and a slow answer beats a failed one.
     start = trade_date
     end = trade_date + timedelta(days=horizon_days)
 
@@ -66,17 +78,37 @@ def fetch_share_unlock_schedule(
                 return parsed < start
         return False
 
+    windowed = f"(FREE_DATE>='{start.isoformat()}')(FREE_DATE<='{end.isoformat()}')"
     try:
-        raw = fetch_datacenter(
-            client,
-            _UNLOCK_REPORT,
-            _UNLOCK_COLUMNS,
-            sort_columns="FREE_DATE",
-            sort_types="-1",
-            stop_after=_page_is_past_window,
-            max_retries=max_retries,
-            retry_backoff_seconds=retry_backoff_seconds,
-        )
+        try:
+            raw = fetch_datacenter(
+                client,
+                _UNLOCK_REPORT,
+                _UNLOCK_COLUMNS,
+                filter_expr=windowed,
+                sort_columns="FREE_DATE",
+                sort_types="-1",
+                max_retries=max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+            )
+        except EastMoneyDatacenterError as exc:
+            if "9501" not in str(exc):
+                raise
+            logger.warning(
+                "share_unlock_schedule: EastMoney refused the FREE_DATE range "
+                "(%s); walking the report instead, which is slower but correct.",
+                exc,
+            )
+            raw = fetch_datacenter(
+                client,
+                _UNLOCK_REPORT,
+                _UNLOCK_COLUMNS,
+                sort_columns="FREE_DATE",
+                sort_types="-1",
+                stop_after=_page_is_past_window,
+                max_retries=max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+            )
     finally:
         if owns:
             client.close()

@@ -176,21 +176,11 @@ def backfill(
             raise click.ClickException(
                 "--outstanding takes its scope from the ledger; drop --symbols/--start/--end"
             )
-        from cnequity.storage.state import StateStore
-
-        owed = StateStore(cfg.meta_root).get_outstanding_keys(dataset)
-        if not owed:
-            click.echo(json.dumps({"dataset": dataset, "outstanding": 0, "status": "nothing owed"}))
-            return
-        days = sorted({row["trade_date"] for row in owed if row.get("trade_date")})
-        symbols_str = ",".join(sorted({row["symbol"] for row in owed if row.get("symbol")}))
-        start_d = date.fromisoformat(days[0])
-        end_d = date.fromisoformat(days[-1])
-        click.echo(
-            f"[{dataset}] {len(owed)} key(s) owed across "
-            f"{symbols_str.count(',') + 1} symbol(s), {start_d}..{end_d}",
-            err=True,
-        )
+        result = _repair_outstanding(cfg, dataset, workers)
+        click.echo(json.dumps(result, indent=2, default=str))
+        if result["status"] != "success":
+            raise SystemExit(1)
+        return
     _guard_history_horizon(dataset, start_d)
     if symbols_str:
         symbols = [s.strip().upper() for s in symbols_str.split(",") if s.strip()]
@@ -230,6 +220,65 @@ def backfill(
     click.echo(json.dumps(result, indent=2, default=str))
     if result["status"] != "success":
         raise SystemExit(1)
+
+
+def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
+    """Refetch exactly what the ledger says is owed, a month at a time.
+
+    Owed keys are scatter, not a range: measured on a real init, 5,037 keys sat
+    across 833 symbols and 692 sessions, a median of 5 keys and 11 days per
+    symbol. Asking for one window spanning all of them would fetch ~624,750
+    keys to repair 5,037 — the same disproportion the tolerance exists to
+    avoid, in the command meant to undo it. Bucketing by month costs ~32,476 in
+    37 calls; per-session would be exact but 692 engine runs to save 27k
+    fetches, which is the wrong trade.
+    """
+    from collections import defaultdict
+
+    from cnequity.storage.state import StateStore
+
+    owed = StateStore(cfg.meta_root).get_outstanding_keys(dataset)
+    if not owed:
+        return {"dataset": dataset, "status": "success", "outstanding": 0, "note": "nothing owed"}
+
+    buckets: dict[str, set[str]] = defaultdict(set)
+    days_in: dict[str, list[str]] = defaultdict(list)
+    for row in owed:
+        symbol, day = row.get("symbol"), row.get("trade_date")
+        if not symbol or not day:
+            continue
+        buckets[day[:7]].add(symbol)
+        days_in[day[:7]].append(day)
+
+    click.echo(
+        f"[{dataset}] {len(owed)} key(s) owed across "
+        f"{len({r['symbol'] for r in owed})} symbol(s); repairing in {len(buckets)} monthly pass(es)",
+        err=True,
+    )
+    failures: list[str] = []
+    for index, month in enumerate(sorted(buckets), start=1):
+        symbols = sorted(buckets[month])
+        lo, hi = min(days_in[month]), max(days_in[month])
+        click.echo(
+            f"[{dataset}] {index}/{len(buckets)} {month}: {len(symbols)} symbol(s) {lo}..{hi}",
+            err=True,
+        )
+        cfg._backfill_symbols = symbols
+        cfg._backfill_start = date.fromisoformat(lo)
+        cfg._backfill_end = date.fromisoformat(hi)
+        cfg._backfill_workers = workers
+        out = _backfill_once(cfg, dataset)
+        if out.get("status") not in ("success", "warning", "degraded"):
+            failures.append(f"{month}: {out.get('status')}")
+
+    settled = _settle_outstanding(cfg, dataset)
+    return {
+        "dataset": dataset,
+        "status": "success" if not failures else "failed",
+        "passes": len(buckets),
+        "failed_passes": failures,
+        "outstanding": settled,
+    }
 
 
 def _settle_outstanding(cfg, dataset: str) -> dict:

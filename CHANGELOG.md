@@ -134,6 +134,37 @@ rows every day are fixed — with migrations for what they already left behind.
   correct repair came back `warning` with `missing_statement_periods: 36`, and
   that warning had compact skip the dataset and strand all 3,120 repaired rows.
   Measured after: 149 gaps down to 4.
+- **`share_unlock_schedule` asks for its window instead of reading the whole
+  report.** EastMoney refused range predicates on `FREE_DATE` once (code=9501),
+  and the adapter was rewritten to page all of 2010..2035 — 63 pages of 500 —
+  on every call, so a backfill's strides each restarted that walk and any one
+  page timing out failed the run. Re-measured 2026-09-17 the predicate is
+  honoured exactly: a year now comes back in three pages, and 2016 backfills in
+  76s where it previously timed out. The walk stays as the fallback for exactly
+  that refusal, because this upstream has broken this way before.
+- **`--outstanding` repairs the scatter it was given, not its bounding box.**
+  Owed keys are not a range: 5,037 of them sat across 833 symbols and 692
+  sessions, a median of five keys per symbol, so one window spanning them all
+  would have fetched ~624,750 keys to repair 5,037. Bucketing by month costs
+  ~32,476 in 37 passes.
+- **`block_trades` and `dragon_tiger` survive an EastMoney outage.** Both read
+  one vendor and had no second route, so a bad day at EastMoney was a missing
+  day in the lake. Each exchange publishes its own record, and the step now
+  reads them when the vendor raises or returns nothing — measured against
+  2026-09-15, block-trade amounts agree with EastMoney to a median of 0.0000%
+  across all 32 SH/SZ names, and 000428.SZ's dragon-tiger desk totals match to
+  the rounding EastMoney applies. Neither exchange publishes Beijing and the
+  SSE's 龙虎榜 starts 2017-01-01, so `DatasetSpec.backup_gaps` records what a
+  degraded session is missing rather than letting it read as a whole one.
+  Failover sits at the fetch layer, so every row still carries its own
+  `source`, and the backup is never asked while the vendor is answering.
+- **`share_unlock_schedule` is left without a backup, deliberately.** SZSE's
+  unlock report looked like cover until it was asked for a future month: 28
+  rows for 2026-08, 3 for the rest of September, 0 for November. It registers
+  unlocks that have happened, while this dataset is a forward calendar — 835 of
+  its rows sit in the future. A source that answers a different question is
+  worse than none, because it would read as cover on exactly the day the
+  schedule is what someone needs.
 - **A whole-market sweep no longer throws itself away over a rounding error.**
   `daily_bars` refuses to checkpoint a snapshot that is missing keys, which is
   right for a real hole and ruinous for a transient one: a measured `cne init`
