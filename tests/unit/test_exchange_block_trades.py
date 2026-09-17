@@ -170,3 +170,39 @@ def test_a_healthy_vendor_is_not_second_guessed(monkeypatch):
 
     assert called == []
     assert frame.height == 1
+
+
+def test_a_security_gets_one_row_at_its_weighted_price(monkeypatch):
+    """The exchanges publish transactions; the lake holds securities.
+
+    Across 176,093 (day, security) pairs the lake has never held two rows, but
+    2026-09-15 came to 29 SZ rows for 17 securities and 56 SH rows for 15. A
+    degraded day would have carried several times the rows of its neighbours,
+    at prices meaning something else, under a key that includes `price`. The
+    weighted average is what the vendor's single row holds — it agreed to
+    0.003% over those 32 securities, the width of its four decimals.
+    """
+    trades = [
+        {"stockid": "600000", "tradeprice": "10.00", "tradeqty": "30", "tradeamount": "300"},
+        {"stockid": "600000", "tradeprice": "12.00", "tradeqty": "10", "tradeamount": "120"},
+    ]
+    monkeypatch.setattr(bt, "fetch_szse_block_trades", lambda day, config=None: bt.EMPTY.clone())
+    monkeypatch.setattr(
+        bt,
+        "_client",
+        lambda: type(
+            "S",
+            (),
+            {
+                "get": lambda self, url, **kw: _Resp(None, text=_sse_payload(trades)),
+                "close": lambda self: None,
+            },
+        )(),
+    )
+
+    frame = bt.fetch_block_trades_exchange(DAY)
+
+    assert frame.height == 1, "one row per security, as the primary writes it"
+    assert frame["volume"][0] == pytest.approx(40.0)
+    assert frame["amount"][0] == pytest.approx(420.0)
+    assert frame["price"][0] == pytest.approx(10.5), "weighted, not the first or the last"

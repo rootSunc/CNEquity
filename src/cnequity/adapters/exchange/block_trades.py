@@ -212,17 +212,29 @@ def fetch_block_trades_exchange(trade_date: date, *, config=None) -> pl.DataFram
     if not live:
         return EMPTY.clone()
     merged = pl.concat(live, how="vertical")
-    # Two transactions in one security at the same price and size are distinct
-    # trades that the dataset's primary key cannot tell apart, so they are
-    # summed rather than deduplicated. Measured 2026-09-15: 603382.SH traded
-    # twice that way, and dropping the second made the exchange row exactly
-    # half of EastMoney's — the primary aggregates, and a backup that silently
-    # discarded the repeat would read as a 50% price move.
+    # One row per security, as the primary writes it: across 176,093 (day,
+    # security) pairs the lake has never held two. The exchanges publish each
+    # transaction, so 2026-09-15 came to 29 SZ rows for 17 securities and 56 SH
+    # rows for 15 — a degraded day would have carried several times the rows of
+    # its neighbours, at prices meaning something else, under a primary key that
+    # includes `price`.
+    #
+    # `price` is then the volume-weighted average, which is what the vendor's
+    # single row holds: over those 32 securities it agreed to 0.003%, the width
+    # of its four decimals. Summing rather than deduplicating matters here —
+    # 603382.SH traded twice at one price and size, and dropping the repeat made
+    # the total exactly half of EastMoney's.
     return (
-        merged.group_by(["symbol", "trade_date", "price"])
+        merged.group_by(["symbol", "trade_date"])
         .agg(
             pl.col("volume").sum(),
             pl.col("amount").sum(),
+        )
+        .with_columns(
+            pl.when(pl.col("volume") > 0)
+            .then((pl.col("amount") / pl.col("volume")).round(4))
+            .otherwise(None)
+            .alias("price")
         )
         .select(EMPTY.columns)
     )
