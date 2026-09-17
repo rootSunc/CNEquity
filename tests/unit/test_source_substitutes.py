@@ -86,10 +86,17 @@ def test_a_declared_backup_counts_even_when_no_probe_names_the_dataset():
 
 
 def test_a_single_source_dataset_is_stranded_when_that_source_is_down():
+    """`hot_rank` reads EastMoney and nothing else, and a probe names it.
+
+    This used to sample `block_trades`, which stopped being single-source once
+    the exchanges were wired as its backup. The replacement has to satisfy both
+    halves: genuinely alone *and* named by a probe — a dataset no probe powers
+    is absent from the report entirely, which asserts nothing about stranding.
+    """
     report = _report(
-        *(_result(p.key, "down" if p.key == "eastmoney_datacenter" else "ok") for p in sub.PROBES)
+        *(_result(p.key, "down" if p.key == "eastmoney_push2" else "ok") for p in sub.PROBES)
     )
-    entry = _entry(sub.substitution_report(report), "block_trades")
+    entry = _entry(sub.substitution_report(report), "hot_rank")
     assert entry.stranded is True
     assert entry.healthy == []
     assert sub.to_dict([entry])["datasets"][0]["stranded"] is True
@@ -120,9 +127,9 @@ def test_a_source_turned_off_in_config_is_not_reported_as_down(monkeypatch):
 def test_any_non_ok_endpoint_counts_as_failing(status):
     """A blocked or empty endpoint cannot carry the dataset either."""
     report = _report(
-        *(_result(p.key, status if p.key == "eastmoney_datacenter" else "ok") for p in sub.PROBES)
+        *(_result(p.key, status if p.key == "eastmoney_push2" else "ok") for p in sub.PROBES)
     )
-    entry = _entry(sub.substitution_report(report), "block_trades")
+    entry = _entry(sub.substitution_report(report), "hot_rank")
     assert entry is not None and entry.stranded is True
 
 

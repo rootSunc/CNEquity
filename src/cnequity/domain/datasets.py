@@ -330,6 +330,13 @@ class DatasetSpec:
     # something the code does not do, and a test asserts the pairing.
     primary_source: str = ""
     backup_source: str | None = None
+    # What the backup cannot reach. A backup exists for availability — if the
+    # primary is down, 70% of the market beats nothing — but a reader deciding
+    # whether to trust a degraded day needs to know *which* 30%, and a gate
+    # asking "is this dataset covered" must not read a partial backup as a
+    # whole one. Prose in a comment drifts; this is read by the resilience
+    # report and asserted against the adapters.
+    backup_gaps: tuple[str, ...] = ()
     backfill_source: str | None = None
     # The rest of the recovery chain: sources that legitimately write rows to
     # this dataset without being any of the three roles above.
@@ -1014,6 +1021,12 @@ _SPECS = [
     DatasetSpec(
         "dragon_tiger",
         primary_source="eastmoney",
+        # Availability, not equivalence. Both exchanges publish their own
+        # 龙虎榜 and reach today's session, so a EastMoney outage costs the
+        # Beijing names rather than the whole day. Measured 2026-09-16: SZSE 35
+        # and SSE 25 records against the lake's SH 29 / SZ 37 / BJ 7.
+        backup_source="exchange",
+        backup_gaps=("BJ", "SH before 2017-01-01"),
         tier="L4",
         partition_col="trade_date",
         partition_granularity="month",
@@ -1021,6 +1034,12 @@ _SPECS = [
     DatasetSpec(
         "block_trades",
         primary_source="eastmoney",
+        # SSE `COMMON_SSE_XXPL_JYXXPL_DZJYXX_L_1` and SZSE `CATALOGID=1265`,
+        # both per-transaction and both current. Verified against 2026-09-15:
+        # every A-share EastMoney carried for SH/SZ was present, and the four
+        # it had beyond them were Beijing, which neither exchange publishes.
+        backup_source="exchange",
+        backup_gaps=("BJ",),
         tier="L4",
         partition_col="trade_date",
         partition_granularity="month",
@@ -1161,6 +1180,13 @@ _SPECS = [
     DatasetSpec(
         "share_unlock_schedule",
         primary_source="eastmoney",
+        # No backup, and the exchanges are not one. SZSE's `CATALOGID=1902`
+        # looked like cover until it was asked for a future month: 28 rows for
+        # 2026-08, 3 for the rest of September, 0 for November. It registers
+        # unlocks that have *happened*, while this dataset is a forward
+        # calendar — 835 of its rows sit in the future. A source that answers a
+        # different question is worse than none here, because it would read as
+        # cover on the day the schedule is what someone needs.
         tier="L8",
         partition_col="unlock_date",
         partition_granularity="year",

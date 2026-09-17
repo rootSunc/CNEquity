@@ -649,7 +649,55 @@ def step_dragon_tiger(config: Config, trade_date: date, run_id: str, context: di
         return _backfill_daily_report(
             config, trade_date, run_id, "dragon_tiger", fetch_dragon_tiger, date(2007, 1, 1)
         )
-    return _run_capital_step(config, trade_date, run_id, "dragon_tiger", fetch_dragon_tiger)
+    from cnequity.adapters.exchange.dragon_tiger import fetch_dragon_tiger_exchange
+
+    return _run_capital_step(
+        config,
+        trade_date,
+        run_id,
+        "dragon_tiger",
+        _with_exchange_fallback("dragon_tiger", fetch_dragon_tiger, fetch_dragon_tiger_exchange),
+    )
+
+
+def _with_exchange_fallback(dataset: str, primary_fn, exchange_fn):
+    """Read the vendor; if it cannot serve the session, read the exchanges.
+
+    The failover lives at the fetch layer on purpose: provenance, watermarking
+    and compaction all sit above it and need no knowledge of which route ran.
+    Each row still carries its own `source`, so a degraded day is visible in
+    the data rather than only in a log line.
+
+    An empty vendor result counts as a failure worth trying the exchanges for.
+    Block trades are genuinely sparse, so this can mean a second request on a
+    quiet day — cheap, and the alternative is treating an outage as a quiet
+    market, which is the mistake that makes a gap permanent.
+    """
+
+    def _fetch(day: date, **kwargs) -> pl.DataFrame:
+        try:
+            frame = primary_fn(day, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — that is what the backup is for
+            logger.warning(
+                "%s: eastmoney failed for %s (%s); trying the exchanges", dataset, day, exc
+            )
+            frame = None
+        if frame is not None and not frame.is_empty():
+            return frame
+        if frame is not None:
+            logger.info("%s: eastmoney returned nothing for %s; asking the exchanges", dataset, day)
+        fallback = exchange_fn(day, config=kwargs.get("config"))
+        if fallback.is_empty():
+            return frame if frame is not None else fallback
+        logger.warning(
+            "%s %s: served by the exchanges, so Beijing names are absent from this session "
+            "(see DatasetSpec.backup_gaps)",
+            dataset,
+            day,
+        )
+        return fallback
+
+    return _fetch
 
 
 @register_step("block_trades", group="signals", depends_on=["instruments"])
@@ -661,7 +709,15 @@ def step_block_trades(config: Config, trade_date: date, run_id: str, context: di
         return _backfill_daily_report(
             config, trade_date, run_id, "block_trades", fetch_block_trades, date(2010, 1, 1)
         )
-    return _run_capital_step(config, trade_date, run_id, "block_trades", fetch_block_trades)
+    from cnequity.adapters.exchange.block_trades import fetch_block_trades_exchange
+
+    return _run_capital_step(
+        config,
+        trade_date,
+        run_id,
+        "block_trades",
+        _with_exchange_fallback("block_trades", fetch_block_trades, fetch_block_trades_exchange),
+    )
 
 
 def snapshot_valuations_ths_official(

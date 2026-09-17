@@ -447,6 +447,7 @@ def build_dependency_report(
         # — a dataset whose tip is served by the exchange board files is down
         # when those are — so they belong in the blast radius even though they
         # hold none of the three roles the backup gate reasons about.
+        gaps = tuple(getattr(spec, "backup_gaps", ()) or ())
         supplementary = tuple(getattr(spec, "supplementary_sources", ()) or ())
         supplementary_records = [
             _source_role_record(source, domain_overrides=domain_overrides)
@@ -472,6 +473,12 @@ def build_dependency_report(
             independence_reason = (
                 "disjoint_failure_domains" if independent else "backup_shares_failure_domain"
             )
+            # Independent and complete are different questions. The exchanges
+            # are a genuinely separate failure domain from EastMoney and still
+            # publish nothing for Beijing, so a reader told only "covered"
+            # would plan for a degraded day that keeps every name.
+            if independent and gaps:
+                backup_status = "covered_with_gaps"
         all_domains = sorted(
             set(role_records["primary"]["failure_domains"])
             | set(role_records["backup"]["failure_domains"])
@@ -480,6 +487,7 @@ def build_dependency_report(
         )
         record = {
             "dataset": name,
+            "backup_gaps": list(gaps),
             "tier": getattr(spec, "tier", None),
             "contract_level": getattr(spec, "contract_level", None),
             "level": level,

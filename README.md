@@ -247,8 +247,8 @@ cne backfill daily_bars --start 2016-01-01 --end COVERAGE_START
 | `top_holders` | 前十大股东 / 流通股东 | eastmoney | — | 可回补 | 按需回填 |
 | `valuation_metrics` | 估值指标 | eastmoney | — | 回填 `baostock` | capital |
 | **L4 · 资金面** | | | | | |
-| `block_trades` | 大宗交易 | eastmoney | — | 可回补 | signals |
-| `dragon_tiger` | 龙虎榜 | eastmoney | — | 可回补 | signals |
+| `block_trades` | 大宗交易 | eastmoney | exchange | 可回补 | signals |
+| `dragon_tiger` | 龙虎榜 | eastmoney | exchange | 可回补 | signals |
 | `fund_flow` | 个股资金流 | eastmoney | — | 仅当日 | capital |
 | `institutional_holdings` | 机构持股 | eastmoney | — | 可回补 | research |
 | `margin_trading` | 融资融券 | exchange | — | 可回补 | capital |
