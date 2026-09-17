@@ -85,11 +85,11 @@ rows every day are fixed — with migrations for what they already left behind.
   backfill, the shareholder/top-holder window walks, the Sina adjustment-factor
   fan-out and `compact` now report as they go, through one `sweep_progress`
   helper factored out of the TDX xdxr sweep that already did this.
-- **A log file per long run.** `cne init`, `cne backfill` and `cne run` write
-  `cne-<command>-<timestamp>.log` under `CNE_LOG_DIR` (default
-  `{data.root}/logs`) and print the path on startup, so a run that failed after
-  three hours leaves something to read. `CNE_LOG_DIR` was read by the pipeline
-  scripts and by nothing in the CLI.
+- **A log file per long run**, `cne-<command>-<timestamp>.log` under
+  `CNE_LOG_DIR` (default `{data.root}/logs`), with the path printed on startup
+  — so a run that failed after three hours leaves something to read.
+  `CNE_LOG_DIR` was read by the pipeline scripts and by nothing in the CLI. The
+  entry under *Changed* below carries this to every command that takes time.
 
 ### Fixed
 
@@ -225,6 +225,10 @@ rows every day are fixed — with migrations for what they already left behind.
   an unexpected exception carries its traceback, and one failure makes exactly
   one record whatever depth it happened at. `cne mcp` and `cne serve` keep
   their own logging — stdout there is a JSON-RPC wire and uvicorn's socket.
+  The root declines a root logger somebody else configured, so importing this
+  CLI and calling a query no longer destroys the host application's logging,
+  and the group's own options (`cne --bogus-flag`, which fails before any
+  command is dispatched) are recorded too.
 - **Command names are case-insensitive, and `-h` works.** `cne STATUS` used to
   be a dead end: Click's suggestions run on edit distance, and an all-caps
   spelling is too far from its own lowercase to be offered, so the error named

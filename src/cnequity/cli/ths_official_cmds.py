@@ -25,7 +25,6 @@ import click
 from cnequity.cli._root import cli, moved_hints
 from cnequity.cli._shared import (
     _cfg,
-    _progress_logging,
     attach_log_file,
     config_option,
     parse_date_option,
@@ -148,7 +147,6 @@ def ths_snapshot(config_path: str, what: str, days: int, sample: int):
         snapshot_financials_ths_official,
     )
 
-    _progress_logging()
     cfg = _cfg(config_path)
     problem = _require_key(cfg)
     if problem:
@@ -227,7 +225,6 @@ def ths_backfill(
     """
     from cnequity.steps.fundamentals import backfill_statement_gap_ths_official
 
-    _progress_logging()
     cfg = _cfg(config_path)
     problem = _require_key(cfg)
     if problem:
@@ -305,7 +302,6 @@ def ths_repair_bars(
 
     from cnequity.steps.bars import repair_deep_history_ths_official
 
-    _progress_logging()
     cfg = _cfg(config_path)
     problem = _require_key(cfg)
     if problem:
@@ -374,7 +370,6 @@ def ths_resource_sectors(config_path: str, start: str, end: str | None, apply: b
     """
     from cnequity.steps.rotation import resource_sector_bars_ths_official
 
-    _progress_logging()
     cfg = _cfg(config_path)
     problem = _require_key(cfg)
     if problem:

@@ -14,7 +14,6 @@ import click
 from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
-    _progress_logging,
     attach_log_file,
     config_option,
     parse_date_option,
@@ -91,7 +90,6 @@ def delisted_backfill(config_path: str, since: str):
 
     from cnequity.steps.delisted import backfill_delisted_bars
 
-    _progress_logging()
     cfg = _cfg(config_path)
     attach_log_file(cfg, "delisted-backfill")
     engine = JobEngine(cfg)

@@ -67,7 +67,7 @@ def _cfg(config: str):
     return load_config(resolve_config_path(config))
 
 
-def _progress_logging(quiet: bool = False) -> None:
+def _progress_logging(quiet: bool = False, *, take_over: bool = True) -> bool:
     """Send the pipeline's own INFO records to the terminal.
 
     Long fetches were silent until they finished: `cne init` runs for hours and
@@ -81,9 +81,19 @@ def _progress_logging(quiet: bool = False) -> None:
 
     Per-step progress still leaves gaps — a step reports a batch only once the
     whole batch lands — so a heartbeat names whatever is running whenever the
-    log goes quiet. It is started here, after `force=True` has replaced the
-    root handlers the heartbeat needs to watch.
+    log goes quiet. It is started here, after the root handlers the heartbeat
+    needs to watch are in place.
+
+    `take_over=False` declines to touch a root logger somebody else already
+    configured, and returns False to say so. The CLI wires this for every
+    command now, and `force=True` on every one of them meant that importing
+    `cnequity.cli` and calling a command destroyed the host application's
+    logging — a query like `contract show` has no business doing that. The
+    commands that own the terminal for hours still take over.
     """
+    root = logging.getLogger()
+    if not take_over and root.handlers:
+        return False
     logging.basicConfig(
         level=logging.WARNING if quiet else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -95,6 +105,7 @@ def _progress_logging(quiet: bool = False) -> None:
         from cnequity.progress import start_heartbeat
 
         start_heartbeat()
+    return True
 
 
 def attach_log_file(cfg, command: str, *, quiet: bool = False) -> Path | None:
@@ -118,7 +129,11 @@ def attach_log_file(cfg, command: str, *, quiet: bool = False) -> Path | None:
     path = log_dir / f"cne-{command}-{datetime.now():%Y%m%d-%H%M%S}.log"
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(path, encoding="utf-8")
+        # `delay` so the file appears only once something is written to it.
+        # Commands that report through `click.echo` rather than `logging` — a
+        # bare `cne audit` is one — otherwise left a 0-byte file behind on
+        # every invocation, which the retention prune then had to clear.
+        handler = logging.FileHandler(path, encoding="utf-8", delay=True)
     except OSError as exc:
         logging.getLogger(__name__).warning("no log file at %s: %s", path, exc)
         return None
