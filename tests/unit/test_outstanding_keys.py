@@ -144,3 +144,46 @@ def test_an_unknown_symbol_is_owed_the_whole_window(monkeypatch):
     owed = bars._owed_keys_for_symbols(None, ["MYSTERY.SZ"], date(2026, 9, 15), date(2026, 9, 16))
 
     assert owed == {("MYSTERY.SZ", d) for d in sessions}
+
+
+def test_a_repair_settles_after_every_pass(tmp_path, monkeypatch):
+    """An interrupted repair must keep what it already filled.
+
+    The first version settled once, after all 37 monthly passes. Killed at pass
+    30 of a three-hour run, it had struck nothing off — every key it had
+    already fetched was still owed, and the next attempt would fetch them
+    again.
+    """
+    from cnequity.cli import backfill_cmds as bf
+
+    settled: list[int] = []
+    passes: list[str] = []
+
+    monkeypatch.setattr(
+        bf, "_backfill_once", lambda cfg, ds: passes.append(ds) or {"status": "success"}
+    )
+    monkeypatch.setattr(
+        bf, "_settle_outstanding", lambda cfg, ds: settled.append(len(passes)) or {"still_owed": 0}
+    )
+    monkeypatch.setattr(
+        bf,
+        "StateStore",
+        None,
+        raising=False,
+    )
+
+    class _Store:
+        def get_outstanding_keys(self, dataset):
+            return [
+                {"symbol": "000001.SZ", "trade_date": "2026-01-05"},
+                {"symbol": "600519.SH", "trade_date": "2026-02-09"},
+                {"symbol": "600519.SH", "trade_date": "2026-03-09"},
+            ]
+
+    monkeypatch.setattr("cnequity.storage.state.StateStore", lambda root: _Store())
+
+    cfg = type("C", (), {"meta_root": tmp_path, "_backfill_symbols": None})()
+    bf._repair_outstanding(cfg, "daily_bars", 1)
+
+    assert len(passes) == 3, "one pass per month present in the ledger"
+    assert settled == [1, 2, 3], "settled after each pass, not only at the end"

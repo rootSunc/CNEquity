@@ -270,8 +270,14 @@ def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
         out = _backfill_once(cfg, dataset)
         if out.get("status") not in ("success", "warning", "degraded"):
             failures.append(f"{month}: {out.get('status')}")
+        # Settle after each pass, not once at the end. A repair of a real
+        # backlog runs for hours — the first version reached pass 30 of 37 over
+        # three hours and, killed there, had struck nothing off: every row it
+        # had fetched was still owed. Interrupting this now costs the pass in
+        # flight, not the run.
+        settled = _settle_outstanding(cfg, dataset)
 
-    settled = _settle_outstanding(cfg, dataset)
+    settled = settled if buckets else _settle_outstanding(cfg, dataset)
     return {
         "dataset": dataset,
         "status": "success" if not failures else "failed",
