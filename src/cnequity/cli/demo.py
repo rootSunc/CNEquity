@@ -191,8 +191,17 @@ def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
 
 
 def _last_trading_day(cfg: Config, as_of: date) -> date:
+    """The newest session the demo may ask for.
+
+    Not merely the last *trading* day: during a session that is today, whose
+    bar is still forming until 15:05. `cne init --profile demo` is the first
+    command in the README, and run during market hours it died on the finality
+    guard while reporting a TDX connectivity problem that did not exist.
+    """
+    from cnequity.steps.bars import _last_final_session
     from cnequity.steps.common import list_trading_dates
 
+    as_of = min(as_of, _last_final_session())
     window = list_trading_dates(cfg, as_of - timedelta(days=21), as_of)
     return window[-1] if window else as_of
 
@@ -617,8 +626,15 @@ def run_demo(
         backfill=True,
     )
     if bars.get("status") not in ("success", "warning"):
+        # Name the step's own reason rather than guessing one. This blamed TDX
+        # connectivity for every failure, sending people to debug a network
+        # that was fine.
+        reasons = [
+            str(r.get("error")) for r in bars.get("results", []) if r.get("status") == "failed"
+        ]
+        detail = "\n".join(f"  {r}" for r in reasons) or f"  {bars}"
         raise click.ClickException(
-            f"daily_bars failed: {bars}\nRe-run `cne init --profile demo` after fixing TDX connectivity."
+            f"daily_bars failed:\n{detail}\nRe-run `cne init --profile demo` once that is resolved."
         )
     click.echo(
         f"Bars run {bars.get('run_id')}: status={bars.get('status')} "

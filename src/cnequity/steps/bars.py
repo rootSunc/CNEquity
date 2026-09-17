@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -54,6 +54,7 @@ from cnequity.steps.common import (
     load_symbols,
     record_negative_evidence,
 )
+from cnequity.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +102,41 @@ def _reject_unfinished_daily_bar_window(
     )
 
 
+def _last_final_session(now: datetime | None = None) -> date:
+    """The newest date whose daily bar has settled.
+
+    The mirror of :func:`_reject_unfinished_daily_bar_window`: what that refuses
+    to fetch, this is what a history sweep should ask for instead.
+
+    Deliberately clock-only. Asking the calendar whether today trades would
+    make a window depend on a `trading_calendar` the lake may not have yet —
+    `cne init` builds it one phase before the first backfill — and it buys
+    nothing: stepping back a day on a Sunday lands on Saturday, and a window
+    ending on a day with no session loses none of the sessions before it.
+    """
+    local_now = shanghai_now(now)
+    if local_now.time() >= _DAILY_BAR_FINAL_AT:
+        return local_now.date()
+    return local_now.date() - timedelta(days=1)
+
+
 def _backfill_window(config: Config, trade_date: date) -> tuple[date, date]:
     """``--start/--end`` window for a backfill, defaulting to the full history.
 
     Repairing a single bad session must not mean re-fetching a decade for every
     symbol. A capture that fires before the close writes a truncated bar — right
     open, wrong close, partial volume — and the repair is one day wide.
+
+    An unspecified end means "as much history as there is", which is the last
+    *settled* session — not today, whose bar is still forming until 15:05. It
+    defaulted to today, so `cne init` run during a session failed the whole
+    phase on a window nobody asked for: 37 minutes of reference and corporate
+    actions, then `phase2c_daily_bars_backfill` refused in 2.8ms and phases 3
+    and 4 never ran. An *explicit* `--end` is passed through untouched, because
+    repairing today's truncated bar is what the paragraph above is about, and
+    before the close that has to fail loudly rather than fetch another day.
     """
-    end = getattr(config, "_backfill_end", None) or trade_date
+    end = getattr(config, "_backfill_end", None) or _last_final_session()
     start = getattr(config, "_backfill_start", None) or BACKFILL_START
     return start, end
 
@@ -781,6 +809,19 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
     return _merge_ownership_result(out, config, ownership, start, end)
 
 
+def _unresolved_budget(config: Config, expected: int) -> int:
+    """How many unresolved keys a sweep may carry without failing.
+
+    A fraction alone misbehaves on a small universe — one symbol out of five is
+    20% — so this floors at zero and rounds down: a five-symbol demo tolerates
+    nothing, and the whole market tolerates a few dozen.
+    """
+    fraction = float(getattr(config, "daily_bars_unresolved_tolerance", 0.0) or 0.0)
+    if fraction <= 0 or expected <= 0:
+        return 0
+    return int(expected * fraction)
+
+
 def _unresolved_key_remedy(
     config: Config,
     run_id: str,
@@ -1281,6 +1322,7 @@ def _finish_daily_bars(
     # Symbols proven to have no data in this window, collected by the
     # certification below so the interior-session gate does not re-report them.
     certified_no_data: set[str] = set()
+    unresolved_tolerated: set[str] = set()
 
     if tip:
         staged = _staged_daily_bar_symbols(config, run_id, end)
@@ -1405,27 +1447,45 @@ def _finish_daily_bars(
             if unknown:
                 preview = ", ".join(sorted(unknown)[:8])
                 suffix = "..." if len(unknown) > 8 else ""
+                # A handful of symbols lost to a vendor's transient outage is
+                # not a partial market. Refusing the checkpoint over 14 of
+                # 5,500 discarded two hours of `cne init` and left phases 3 and
+                # 4 unrun; the hole is smaller than the cost of throwing the
+                # sweep away, and it stays visible in the finding, in the
+                # remedy, and in `cne verify` until it is filled.
+                budget = _unresolved_budget(config, len(all_expected_symbols))
+                tolerated = len(unknown) <= budget
+                remedy = _unresolved_key_remedy(config, run_id, unknown, start, end)
+                headline = (
+                    f"daily_bars {start}..{end}: {len(unknown)} expected key(s) remain "
+                    f"unknown after failover ({preview}{suffix})"
+                )
                 findings.append(
                     {
                         "dataset": "daily_bars",
-                        "severity": "error",
+                        "severity": "warning" if tolerated else "error",
                         "check": "daily_bars_unknown_missing_symbols",
                         "message": (
-                            f"daily_bars {start}..{end}: {len(unknown)} expected key(s) "
-                            "remain unknown after failover; refusing to checkpoint: "
-                            f"{preview}{suffix}"
+                            f"{headline}; "
+                            + (
+                                f"within the {budget}-key tolerance, so the run continues"
+                                if tolerated
+                                else "refusing to checkpoint"
+                            )
                         ),
                         "missing_keys": len(unknown),
                         "symbols": sorted(unknown),
+                        "tolerated": tolerated,
+                        "tolerance_keys": budget,
                     }
                 )
-                persist_step_findings(config, run_id, end, findings)
-                raise RuntimeError(
-                    f"daily_bars {start}..{end}: {len(unknown)} expected key(s) remain "
-                    f"unknown after failover ({preview}{suffix}); refusing to checkpoint a "
-                    "partial market snapshot."
-                    + _unresolved_key_remedy(config, run_id, unknown, start, end)
-                )
+                if not tolerated:
+                    persist_step_findings(config, run_id, end, findings)
+                    raise RuntimeError(
+                        f"{headline}; refusing to checkpoint a partial market snapshot." + remedy
+                    )
+                unresolved_tolerated.update(unknown)
+                logger.warning("%s; continuing.%s", headline, remedy)
 
     # A source can return at least one row for every symbol while silently
     # omitting an interior session.  The symbol-level certification above
@@ -1459,29 +1519,70 @@ def _finish_daily_bars(
                 )
         if missing_pairs:
             missing_symbols = {symbol for symbol, _day in missing_pairs}
+            # Judged against the keys this sweep actually asked for, not the
+            # symbol count: an interior gap is a symbol×session hole, and 5,037
+            # of them across a three-year window is 0.12% — the size that used
+            # to take the whole of `cne init` down with it.
+            expected_keys = 0
+            for leg_symbols, leg_start in legs:
+                if leg_symbols and leg_start < end:
+                    sessions = list_trading_dates(config, leg_start, end)
+                    expected_keys += len(set(leg_symbols)) * max(len(sessions), 1)
+            budget = _unresolved_budget(config, expected_keys)
+            tolerated = len(missing_pairs) <= budget
+            remedy = _unresolved_key_remedy(config, run_id, missing_symbols, start, end)
+            headline = (
+                f"daily_bars {start}..{end}: {len(missing_pairs)} interior "
+                f"symbol×session key(s) remain absent across {len(missing_symbols)} symbol(s)"
+            )
             finding = {
                 "dataset": "daily_bars",
-                "severity": "error",
+                "severity": "warning" if tolerated else "error",
                 "check": "daily_bars_interior_gap",
                 "message": (
-                    f"daily_bars {start}..{end}: {len(missing_pairs)} interior "
-                    "symbol×session key(s) remain absent; refusing to checkpoint"
+                    f"{headline}; "
+                    + (
+                        f"within the {budget}-key tolerance, so the run continues"
+                        if tolerated
+                        else "refusing to checkpoint"
+                    )
+                    + remedy
                 ),
                 "missing_keys": len(missing_pairs),
                 "missing_symbols": sorted(missing_symbols),
+                "tolerated": tolerated,
+                "tolerance_keys": budget,
+                "expected_keys": expected_keys,
                 "sample_keys": [
                     {"symbol": symbol, "trade_date": day.isoformat()}
                     for symbol, day in sorted(missing_pairs)[:8]
                 ],
             }
             findings.append(finding)
-            _mark_unresolved_daily_bar_batches(
-                config,
-                run_id,
-                missing_pairs,
+            if not tolerated:
+                _mark_unresolved_daily_bar_batches(
+                    config,
+                    run_id,
+                    missing_pairs,
+                )
+                persist_step_findings(config, run_id, end, findings)
+                raise RuntimeError(finding["message"])
+            # Checkpointing past a hole means no incremental run will ever ask
+            # for these sessions again — the watermark has moved over them. The
+            # ledger is the only thing that remembers, and `cne backfill
+            # daily_bars --outstanding` is what works it off.
+            outstanding = StateStore(config.meta_root).record_outstanding_keys(
+                "daily_bars", missing_pairs, run_id=run_id, reason="interior_gap"
             )
-            persist_step_findings(config, run_id, end, findings)
-            raise RuntimeError(finding["message"])
+            unresolved_tolerated.update(missing_symbols)
+            logger.warning(
+                "%s; within the %d-key tolerance, so the run continues "
+                "(%d key(s) now owed — `cne backfill daily_bars --outstanding`).%s",
+                headline,
+                budget,
+                outstanding,
+                remedy,
+            )
 
     result: dict = {"rows_read": rows_read, "rows_written": rows_written}
     metrics = dict(tdx_result.get("metrics") or {})
@@ -1522,6 +1623,11 @@ def _finish_daily_bars(
         result["source_outcomes"] = source_attempts
     if findings:
         result["context_updates"] = {"audit_findings": findings}
+    if unresolved_tolerated:
+        # Tolerated, not invisible: the caller reports a warning rather than a
+        # clean success, and the keys travel with it.
+        result["status"] = "warning"
+        result["unresolved_symbols"] = sorted(unresolved_tolerated)
     return result
 
 

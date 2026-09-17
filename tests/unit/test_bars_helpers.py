@@ -11,11 +11,33 @@ import pytest
 from cnequity.steps import bars
 
 
-def test_backfill_window_defaults_and_overrides(tmp_path):
+def test_backfill_window_defaults_and_overrides(tmp_path, monkeypatch):
+    """The default end is the last *settled* session, not the `trade_date`.
+
+    It used to be the trade_date, so `cne init` during a session asked for a bar
+    that was still forming and the finality guard failed the whole phase. The
+    stub config here also pins the other half: resolving the window must not
+    need a `trading_calendar`, which `cne init` only builds one phase earlier.
+    """
+    from cnequity.domain.market_time import shanghai_now
+
+    # 06:00 UTC is 14:00 in Shanghai — 2025-01-10's bar is still forming.
+    monkeypatch.setattr(
+        "cnequity.steps.bars.shanghai_now",
+        lambda now=None: shanghai_now(datetime(2025, 1, 10, 6, 0, tzinfo=timezone.utc)),
+    )
     cfg = SimpleNamespace(_backfill_start=None, _backfill_end=None)
     start, end = bars._backfill_window(cfg, date(2025, 1, 10))
-    assert end == date(2025, 1, 10)
+    assert end == date(2025, 1, 9)
     assert start.year <= 2016
+
+    # 08:00 UTC is 16:00 — settled, so the default reaches today.
+    monkeypatch.setattr(
+        "cnequity.steps.bars.shanghai_now",
+        lambda now=None: shanghai_now(datetime(2025, 1, 10, 8, 0, tzinfo=timezone.utc)),
+    )
+    _start, end = bars._backfill_window(cfg, date(2025, 1, 10))
+    assert end == date(2025, 1, 10)
 
     cfg2 = SimpleNamespace(_backfill_start=date(2024, 1, 1), _backfill_end=date(2024, 6, 1))
     assert bars._backfill_window(cfg2, date(2025, 1, 10)) == (date(2024, 1, 1), date(2024, 6, 1))

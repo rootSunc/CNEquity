@@ -492,3 +492,38 @@ def test_run_intraday_demo_raises_when_no_rows_come_back(tmp_path, monkeypatch):
     monkeypatch.setattr("cnequity.query.reader.load", lambda *a, **k: pl.DataFrame({"symbol": []}))
     with pytest.raises(click.ClickException, match="returned no rows"):
         _run_intraday_demo(cfg, SucceedingEngine(), ["600519.SH"], date(2024, 6, 28), days=5)
+
+
+def test_the_demo_window_stops_before_a_forming_bar(tmp_path, monkeypatch):
+    """`cne init --profile demo` is the first command in the README.
+
+    Run during a session it asked for today's bar, hit the finality guard, and
+    died reporting a TDX connectivity problem that did not exist.
+    """
+    from datetime import date, datetime, timezone
+
+    from cnequity.cli.demo import _last_trading_day
+    from cnequity.config import Config
+    from cnequity.domain.market_time import shanghai_now
+
+    cfg = Config(data_root=tmp_path / "lake")
+    sessions = [date(2026, 8, 10), date(2026, 8, 11), date(2026, 8, 12)]
+    monkeypatch.setattr(
+        "cnequity.steps.common.list_trading_dates",
+        lambda c, s, e: [d for d in sessions if s <= d <= e],
+    )
+    monkeypatch.setattr("cnequity.steps.bars.is_trading_day", lambda c, d: d in sessions)
+
+    # 06:59 UTC is 14:59 in Shanghai — the 2026-08-12 bar is still forming.
+    monkeypatch.setattr(
+        "cnequity.steps.bars.shanghai_now",
+        lambda now=None: shanghai_now(datetime(2026, 8, 12, 6, 59, tzinfo=timezone.utc)),
+    )
+    assert _last_trading_day(cfg, date(2026, 8, 12)) == date(2026, 8, 11)
+
+    # 07:05 UTC is 15:05 — settled, so the demo may have today.
+    monkeypatch.setattr(
+        "cnequity.steps.bars.shanghai_now",
+        lambda now=None: shanghai_now(datetime(2026, 8, 12, 7, 5, tzinfo=timezone.utc)),
+    )
+    assert _last_trading_day(cfg, date(2026, 8, 12)) == date(2026, 8, 12)

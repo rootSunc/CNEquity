@@ -166,6 +166,100 @@ class StateStore:
             payload["updated_at"] = datetime.now(timezone.utc).isoformat()
             self._write_payload(path, payload)
 
+    # ------------------------------------------------------------------
+    # Outstanding keys: what a tolerated gap still owes the lake.
+    #
+    # A sweep that loses a fraction of a percent no longer refuses the whole
+    # checkpoint, which means the hole is now *inside* a published revision
+    # rather than in front of a failed run. Nothing else would remember it: the
+    # watermark has moved past those sessions, so no incremental run will ask
+    # for them again. This is the ledger that does, and `cne backfill
+    # <dataset> --outstanding` is what works it off.
+    # ------------------------------------------------------------------
+
+    def get_outstanding_keys(self, dataset: str) -> list[dict]:
+        """Keys a tolerated gap left unfilled, oldest request first."""
+        with self._dataset_lock(dataset):
+            payload = self._read_payload(self._path(dataset))
+        rows = payload.get("outstanding_keys")
+        return list(rows) if isinstance(rows, list) else []
+
+    def record_outstanding_keys(
+        self,
+        dataset: str,
+        pairs: Iterable[tuple[str, date]],
+        *,
+        run_id: str,
+        reason: str,
+        now: datetime | None = None,
+    ) -> int:
+        """Merge (symbol, trade_date) pairs into the ledger. Returns the total.
+
+        Merged by key rather than appended, so re-running a sweep that fails
+        the same way twice does not grow the ledger without bound.
+        """
+        stamp = _utc_now(now).isoformat()
+        incoming = {
+            (symbol, day.isoformat() if hasattr(day, "isoformat") else str(day))
+            for symbol, day in pairs
+        }
+        if not incoming:
+            return len(self.get_outstanding_keys(dataset))
+        path = self._path(dataset)
+        with self._dataset_lock(dataset):
+            payload = self._read_payload(path)
+            existing = payload.get("outstanding_keys")
+            merged: dict[tuple[str, str], dict] = {}
+            if isinstance(existing, list):
+                for row in existing:
+                    if isinstance(row, dict) and row.get("symbol") and row.get("trade_date"):
+                        merged[(row["symbol"], row["trade_date"])] = row
+            for symbol, day in sorted(incoming):
+                merged.setdefault(
+                    (symbol, day),
+                    {
+                        "symbol": symbol,
+                        "trade_date": day,
+                        "reason": reason,
+                        "run_id": run_id,
+                        "recorded_at": stamp,
+                    },
+                )
+            payload["outstanding_keys"] = [merged[k] for k in sorted(merged)]
+            payload["updated_at"] = stamp
+            self._write_payload(path, payload)
+            return len(payload["outstanding_keys"])
+
+    def clear_outstanding_keys(
+        self, dataset: str, pairs: Iterable[tuple[str, date]] | None = None
+    ) -> int:
+        """Drop filled keys. ``pairs=None`` clears the ledger. Returns what is left."""
+        path = self._path(dataset)
+        with self._dataset_lock(dataset):
+            payload = self._read_payload(path)
+            if pairs is None:
+                payload.pop("outstanding_keys", None)
+                remaining = 0
+            else:
+                done = {
+                    (symbol, day.isoformat() if hasattr(day, "isoformat") else str(day))
+                    for symbol, day in pairs
+                }
+                rows = payload.get("outstanding_keys")
+                kept = [
+                    row
+                    for row in (rows if isinstance(rows, list) else [])
+                    if (row.get("symbol"), row.get("trade_date")) not in done
+                ]
+                if kept:
+                    payload["outstanding_keys"] = kept
+                else:
+                    payload.pop("outstanding_keys", None)
+                remaining = len(kept)
+            payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._write_payload(path, payload)
+            return remaining
+
     def get_negative_evidence(
         self,
         dataset: str,

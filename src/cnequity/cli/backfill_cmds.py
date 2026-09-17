@@ -17,7 +17,6 @@ import click
 from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
-    _progress_logging,
     attach_log_file,
     config_option,
     parse_date_option,
@@ -55,6 +54,13 @@ from cnequity.orchestrator.engine import JobEngine
     default=None,
     help="Range end (YYYY-MM-DD) for date-walking backfills (margin_trading, "
     "financial_statement_items period walk) and sector_bars (default: today).",
+)
+@click.option(
+    "--outstanding",
+    is_flag=True,
+    help="Repair exactly the keys a tolerated gap left owed, taking the scope and "
+    "window from the ledger instead of --symbols/--start/--end. Filled keys are "
+    "struck off; anything still missing stays owed.",
 )
 @click.option(
     "--symbols",
@@ -100,6 +106,7 @@ def backfill(
     start_str: str | None,
     end_str: str | None,
     symbols_str: str | None,
+    outstanding: bool,
     workers: int,
     baostock_repair: bool,
     ths_repair: bool,
@@ -113,7 +120,6 @@ def backfill(
     multi-year window does — one session is not one request. Narrow it with
     `--symbols` when you want a quick check rather than a full market.
     """
-    _progress_logging()
     dataset = _require_known_dataset(dataset)
     if fetch_semantics(dataset) == "snapshot" and not get_dataset(dataset).backfill_source:
         raise click.ClickException(
@@ -164,6 +170,26 @@ def backfill(
                 "--bse-tip-repair requires the same explicit --start and --end session"
             )
         cfg._bse_tip_repair = True
+    if outstanding:
+        if symbols_str or start_d or end_d:
+            raise click.ClickException(
+                "--outstanding takes its scope from the ledger; drop --symbols/--start/--end"
+            )
+        from cnequity.storage.state import StateStore
+
+        owed = StateStore(cfg.meta_root).get_outstanding_keys(dataset)
+        if not owed:
+            click.echo(json.dumps({"dataset": dataset, "outstanding": 0, "status": "nothing owed"}))
+            return
+        days = sorted({row["trade_date"] for row in owed if row.get("trade_date")})
+        symbols_str = ",".join(sorted({row["symbol"] for row in owed if row.get("symbol")}))
+        start_d = date.fromisoformat(days[0])
+        end_d = date.fromisoformat(days[-1])
+        click.echo(
+            f"[{dataset}] {len(owed)} key(s) owed across "
+            f"{symbols_str.count(',') + 1} symbol(s), {start_d}..{end_d}",
+            err=True,
+        )
     _guard_history_horizon(dataset, start_d)
     if symbols_str:
         symbols = [s.strip().upper() for s in symbols_str.split(",") if s.strip()]
@@ -187,9 +213,58 @@ def backfill(
         result = _backfill_chunked(cfg, dataset, start_d, end_d, spec.backfill_chunk_days)
     else:
         result = _backfill_once(cfg, dataset)
+    if outstanding:
+        result["outstanding"] = _settle_outstanding(cfg, dataset)
     click.echo(json.dumps(result, indent=2, default=str))
     if result["status"] != "success":
         raise SystemExit(1)
+
+
+def _settle_outstanding(cfg, dataset: str) -> dict:
+    """Strike off the owed keys that are now in the lake, and report the rest.
+
+    Checked against what actually landed rather than against the run's exit
+    status: a repair that reaches some of the keys should shrink the debt by
+    exactly those, and a key the vendor still does not serve must stay owed
+    rather than be quietly forgotten by a successful-looking run.
+    """
+    import polars as pl
+
+    from cnequity.domain.datasets import get_dataset as _spec
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+    from cnequity.storage.state import StateStore
+
+    store = StateStore(cfg.meta_root)
+    owed = store.get_outstanding_keys(dataset)
+    if not owed:
+        return {"before": 0, "filled": 0, "still_owed": 0}
+    root = cfg.curated_root / dataset
+    if not dataset_has_parquet(root):
+        return {"before": len(owed), "filled": 0, "still_owed": len(owed)}
+    date_col = _spec(dataset).partition_col
+    # Pushed down to the owed scope. Collecting the whole dataset to check a
+    # handful of keys reads 14GB to answer a question about 5,000 rows, and a
+    # settle that costs more than the repair will not get run.
+    wanted_symbols = sorted({row["symbol"] for row in owed if row.get("symbol")})
+    wanted_days = sorted({row["trade_date"] for row in owed if row.get("trade_date")})
+    present = set(
+        scan_parquet_root(root, partition_col=date_col)
+        .select("symbol", pl.col(date_col).cast(pl.Utf8).alias("_d"))
+        .filter(
+            pl.col("symbol").is_in(wanted_symbols)
+            & pl.col("_d").is_between(pl.lit(wanted_days[0]), pl.lit(wanted_days[-1]))
+        )
+        .unique()
+        .collect()
+        .iter_rows()
+    )
+    filled = [
+        (row["symbol"], row["trade_date"])
+        for row in owed
+        if (row.get("symbol"), row.get("trade_date")) in present
+    ]
+    left = store.clear_outstanding_keys(dataset, filled) if filled else len(owed)
+    return {"before": len(owed), "filled": len(filled), "still_owed": left}
 
 
 # Datasets whose universe comes from a config block rather than from

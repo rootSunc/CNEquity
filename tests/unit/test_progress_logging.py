@@ -487,21 +487,23 @@ def test_every_fetching_command_wires_progress(group):
     looked at. `cne delisted backfill` had drifted further: an open-coded
     `logging.basicConfig` that silenced only httpx and wrote no log file at all,
     so neither the heartbeat nor the log tee reached it.
+
+    Terminal progress is no longer each command's job — the root of the command
+    tree wires it for all of them, which is what
+    `test_every_command_gets_process_logging` holds. What a long command still
+    has to choose for itself is the file in the lake, because only it knows
+    which config to read. So that is what this asserts.
     """
     import inspect
 
     missing = [
         name
         for name, command in _subcommands(group).items()
-        if name not in READ_ONLY
-        and (
-            "_progress_logging(" not in inspect.getsource(command.callback)
-            or "attach_log_file(" not in inspect.getsource(command.callback)
-        )
+        if name not in READ_ONLY and "attach_log_file(" not in inspect.getsource(command.callback)
     ]
     assert not missing, (
-        f"`cne {group}` subcommands {missing} run without progress logging; call "
-        "_progress_logging() and attach_log_file() as the rest of the group does"
+        f"`cne {group}` subcommands {missing} leave no log file behind; call "
+        "attach_log_file() as the rest of the group does"
     )
 
 
@@ -688,3 +690,91 @@ def test_logging_never_lands_on_stdout(argv, tmp_path):
     assert "Logging to " not in result.stdout, result.stdout[:200]
     for marker in (" INFO ", " WARNING ", " ERROR ", "cnequity.cli:"):
         assert marker not in result.stdout, f"{marker!r} on stdout: {result.stdout[:200]}"
+
+
+def test_the_cli_does_not_hijack_a_host_applications_logging():
+    """Importing this CLI and running a query must leave the host's logging alone.
+
+    Wiring `_progress_logging` at the root gave every command `force=True`,
+    which replaces the root handlers — so a `contract show` called from inside
+    another program destroyed that program's logging. The commands that own the
+    terminal for hours still take over; a query has no business doing so.
+    """
+    import io
+    import logging
+    import threading
+
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    previous = root.level
+    root.setLevel(logging.DEBUG)
+    try:
+        result = CliRunner().invoke(cli, ["contract", "show", "--dataset", "daily_bars"])
+        assert result.exit_code == 0, result.output
+        assert handler in root.handlers, "the host's handler was replaced"
+        assert not [t for t in threading.enumerate() if t.name == "cne-heartbeat"], (
+            "a heartbeat thread was left in the host process"
+        )
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(previous)
+
+
+@pytest.mark.parametrize(
+    ("argv", "needle"),
+    [
+        (["--bogus-flag"], "No such option"),
+        (["nosuchcmd"], "No such command"),
+        (["status", "--bogus"], "No such option"),
+        (["run", "nosuch"], "No such command"),
+        (["verify", "--runs", "--days", "abc"], "not a valid integer"),
+        (["backfill"], "Missing argument"),
+    ],
+)
+def test_every_class_of_failure_leaves_exactly_one_record(argv, needle, tmp_path):
+    """Including the group's own options, which `invoke` never sees.
+
+    `cne --bogus-flag` fails while Click builds the context, before any command
+    is dispatched — so the record for it has to come from `make_context`.
+    """
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    with _capture_cli_records() as records:
+        CliRunner().invoke(cli, argv)
+    assert len(records) == 1, [r.getMessage() for r in records]
+    assert needle in records[0].getMessage(), records[0].getMessage()
+
+
+def test_the_interior_gap_message_says_what_to_do(tmp_path):
+    """The gate that ends `cne backfill daily_bars` on a small lake.
+
+    It said only "593 interior symbol×session key(s) remain absent" — a count
+    with nothing to act on. Asserted on the message the helper produces rather
+    than on the source that calls it: the first version matched
+    `_unresolved_key_remedy(` inside the finding literal and broke the moment
+    the call moved into a local, which says nothing about what a user reads.
+    """
+    from cnequity.config import Config
+    from cnequity.steps.bars import _unresolved_key_remedy
+
+    cfg = Config(data_root=tmp_path / "lake")
+    remedy = _unresolved_key_remedy(
+        cfg, "run-7", {"000001.SZ", "600519.SH"}, date(2026, 9, 1), date(2026, 9, 16)
+    )
+    message = (
+        "daily_bars 2026-09-01..2026-09-16: 593 interior symbol×session key(s) "
+        f"remain absent; refusing to checkpoint{remedy}"
+    )
+
+    assert "findings" in message, "the findings file is not named"
+    assert "cne sources probe" in message
+    assert "cne run retry --run-id run-7" in message
+    assert "cne backfill daily_bars --symbols" in message

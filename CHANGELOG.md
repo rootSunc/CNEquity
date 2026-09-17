@@ -98,6 +98,34 @@ rows every day are fixed — with migrations for what they already left behind.
   the one command every user types first as an unhandled error. `SystemExit`
   never reached it, which is why a non-zero exit from `status --datasets`
   stayed quiet and this did not.
+- **A whole-market sweep no longer throws itself away over a rounding error.**
+  `daily_bars` refuses to checkpoint a snapshot that is missing keys, which is
+  right for a real hole and ruinous for a transient one: a measured `cne init`
+  fetched 2.5M rows over 1h43m and then refused on 5,037 interior keys — 0.12%
+  of the window — so `compact` never ran, `curated` stayed empty and the whole
+  run was lost. Both refusing gates now carry a tolerance
+  (`[orchestrator] daily_bars_unresolved_tolerance`, default 1% of the keys the
+  sweep asked for, `0.0` restores the old fail-closed contract). Within it the
+  run continues with a warning; beyond it the refusal stands.
+- **What a tolerated gap owes is written down.** Checkpointing past a hole
+  moves the watermark over those sessions, so no incremental run would ever ask
+  for them again — the cost of not failing would have been silent data loss.
+  The keys go to `outstanding_keys` in `meta/state/<dataset>.json`, merged by
+  key so a nightly failure cannot grow the ledger, `cne status --datasets`
+  names any dataset carrying a debt, and `cne backfill <dataset> --outstanding`
+  works it off, striking off only the keys that actually landed.
+- **`cne init` and `cne init --profile demo` work during market hours.** Both
+  resolved their window to *today*, whose bar is still forming until 15:05, and
+  died on the finality guard — `init` after 37 minutes of reference and
+  corporate-action work with phases 3 and 4 never run, and demo, the first
+  command in the README, while reporting a TDX connectivity problem that did
+  not exist. An unspecified end now means the last settled session; an explicit
+  `--end` still fails loudly, because repairing today's truncated bar is a real
+  request that cannot be served before the close.
+- **The interior-gap refusal says what to do about it.** It reported a count
+  and nothing else; it now names the findings file, the source probe, the
+  resuming retry and a scoped repair, as the other gates of its kind do.
+
 - **Run logs are pruned.** `attach_log_file` writes one timestamped file per
   invocation into `{data.root}/logs/` and nothing ever removed them — a daily
   pipeline leaves a file per group per day, plus one per retry and backfill,

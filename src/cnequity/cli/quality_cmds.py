@@ -577,6 +577,11 @@ def status(
         view = df if all_columns else df.select([c for c in freshness_columns if c in df.columns])
         with pl_mod.Config(tbl_rows=-1, tbl_cols=-1, fmt_str_lengths=32):
             click.echo(view)
+        # A tolerated gap is invisible in freshness: the watermark moved over
+        # the hole, so the dataset reads FRESH while still owing keys. The
+        # ledger is the only place that knows, and nobody reads a json file
+        # they were not told about.
+        _report_outstanding_keys(cfg, df["dataset"].to_list())
         stale_rows = df.filter(pl_mod.col("freshness") == "STALE")
         stale = stale_rows.height
         if stale:
@@ -914,3 +919,26 @@ def sources_substitutes(config_path: str, vantage: str, probe: bool, as_json: bo
             click.echo(line)
     if any(entry.stranded for entry in entries):
         raise SystemExit(1)
+
+
+def _report_outstanding_keys(cfg, datasets: list[str]) -> None:
+    """Name the datasets carrying a debt a tolerated gap left behind."""
+    from cnequity.storage.state import StateStore
+
+    store = StateStore(cfg.meta_root)
+    owed = []
+    for dataset in datasets:
+        try:
+            rows = store.get_outstanding_keys(dataset)
+        except Exception:  # noqa: BLE001 — a missing/garbled state file is not a status failure
+            continue
+        if rows:
+            owed.append((dataset, len(rows)))
+    if not owed:
+        return
+    summary = ", ".join(f"{dataset} {count}" for dataset, count in sorted(owed))
+    click.echo(
+        f"\noutstanding keys from tolerated gaps: {summary}"
+        "\nthese sessions are past the watermark, so no incremental run will ask for them — "
+        "fill them with `cne backfill <dataset> --outstanding`."
+    )
