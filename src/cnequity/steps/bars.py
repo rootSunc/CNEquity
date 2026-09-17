@@ -1137,6 +1137,10 @@ def _fetch_tip_via_exchange(
     }
 
 
+# Above this the scope is no longer a repair and the board-wide guard applies.
+_BJ_SCOPED_WINDOW_MAX_SYMBOLS = 60
+
+
 def _bj_history_start(config: Config, start: date, end: date) -> date:
     """Window start for the per-symbol Beijing backstop.
 
@@ -1147,10 +1151,18 @@ def _bj_history_start(config: Config, start: date, end: date) -> date:
     The tip comes from the BSE board snapshot instead, so this only decides how
     far the per-symbol backstop reaches behind it.
     """
-    lookback = max(int(getattr(config, "bj_history_lookback_days", 1) or 1), 1)
     sessions = [day for day in list_trading_dates(config, start, end) if day <= end]
     if not sessions:
         return end
+    # A scoped repair is not the daily sweep. The lookback guards the whole
+    # board — 580 symbols over five sessions — but truncating an explicit
+    # `--symbols` window to its last session is what left fourteen securities
+    # owing 225 sessions that the repair kept declining to fetch. The scope
+    # itself bounds the cost, so honour the window the caller asked for.
+    scoped = list(getattr(config, "_backfill_symbols", None) or [])
+    if scoped and len(scoped) <= _BJ_SCOPED_WINDOW_MAX_SYMBOLS:
+        return sessions[0]
+    lookback = max(int(getattr(config, "bj_history_lookback_days", 1) or 1), 1)
     return sessions[max(0, len(sessions) - lookback)]
 
 

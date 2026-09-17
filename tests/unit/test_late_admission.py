@@ -96,3 +96,27 @@ def test_a_listing_older_than_the_lookback_is_left_alone(lake, monkeypatch):
 def test_an_empty_dataset_is_not_a_universe_wide_debt(lake, monkeypatch):
     _spans(monkeypatch, {"920138.BJ": (LISTED, None, "stock")})
     assert bars._record_late_admissions(lake, "r1", ["920138.BJ"], END) == 0
+
+
+def test_a_scoped_repair_reaches_the_whole_window_it_asked_for(lake, monkeypatch):
+    """The Beijing backstop truncates to the daily reconciliation lookback,
+    which guards a 580-symbol board. Applied to an explicit `--symbols` repair
+    it left fourteen securities owing 225 sessions the repair kept declining to
+    fetch."""
+    lake.bj_history_lookback_days = 1
+    lake._backfill_symbols = ["920138.BJ"]
+    assert bars._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[0]
+
+
+def test_a_board_wide_sweep_still_gets_the_lookback(lake, monkeypatch):
+    """The scope is what bounds the cost; past that the guard is the point."""
+    lake.bj_history_lookback_days = 1
+    lake._backfill_symbols = [
+        f"9200{i:02d}.BJ" for i in range(bars._BJ_SCOPED_WINDOW_MAX_SYMBOLS + 1)
+    ]
+    assert bars._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[-1]
+
+
+def test_an_unscoped_run_is_untouched(lake, monkeypatch):
+    lake.bj_history_lookback_days = 1
+    assert bars._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[-1]

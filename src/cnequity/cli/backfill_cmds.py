@@ -235,20 +235,43 @@ def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
     """
     from collections import defaultdict
 
+    from cnequity.steps.bars import _last_final_session
     from cnequity.storage.state import StateStore
 
     owed = StateStore(cfg.meta_root).get_outstanding_keys(dataset)
     if not owed:
         return {"dataset": dataset, "status": "success", "outstanding": 0, "note": "nothing owed"}
 
+    # A key for a session that has not closed yet would make its whole monthly
+    # pass fail the finality guard, and every other key in that month with it:
+    # one 2026-09-18 key held back 242 owed sessions at 03:36 Shanghai. It stays
+    # on the ledger for a later run rather than blocking today's repair.
+    final = _last_final_session().isoformat() if dataset == "daily_bars" else None
     buckets: dict[str, set[str]] = defaultdict(set)
     days_in: dict[str, list[str]] = defaultdict(list)
+    deferred = 0
     for row in owed:
         symbol, day = row.get("symbol"), row.get("trade_date")
         if not symbol or not day:
             continue
+        if final and day > final:
+            deferred += 1
+            continue
         buckets[day[:7]].add(symbol)
         days_in[day[:7]].append(day)
+    if deferred:
+        click.echo(
+            f"[{dataset}] {deferred} key(s) are for a session that is not final yet; "
+            "left owed for a later run",
+            err=True,
+        )
+    if not buckets:
+        return {
+            "dataset": dataset,
+            "status": "success",
+            "outstanding": len(owed),
+            "note": "every owed key is for a session that is not final yet",
+        }
 
     click.echo(
         f"[{dataset}] {len(owed)} key(s) owed across "
