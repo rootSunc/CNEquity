@@ -194,6 +194,7 @@ class JobEngine:
                     getattr(self.config, "_corporate_actions_eastmoney_bj_repair", False)
                 ),
                 "bse_tip_repair": bool(getattr(self.config, "_bse_tip_repair", False)),
+                "bj_amount_repair": bool(getattr(self.config, "_bj_amount_repair", False)),
             }
         lock_name = _JOB_LOCKS.get(family)
         with contextlib.ExitStack() as stack:
@@ -1078,6 +1079,7 @@ class JobEngine:
             scope.get("eastmoney_bj_repair", False)
         )
         self.config._bse_tip_repair = bool(scope.get("bse_tip_repair", False))
+        self.config._bj_amount_repair = bool(scope.get("bj_amount_repair", False))
         timeout = self.manifest.advance_batch_timeouts(
             run_id,
             stale_after_seconds=self.config.batch_stale_seconds,

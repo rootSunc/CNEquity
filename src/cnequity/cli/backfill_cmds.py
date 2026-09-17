@@ -99,6 +99,12 @@ from cnequity.orchestrator.engine import JobEngine
     is_flag=True,
     help="For daily_bars only: fill an existing session's BJ amount from BSE without re-fetching Sina.",
 )
+@click.option(
+    "--bj-amount-repair",
+    is_flag=True,
+    help="For daily_bars only: fill the BJ turnover Sina never published, from TDX, "
+    "leaving every stored price and volume as it is. Needs --start/--end.",
+)
 def backfill(
     dataset: str,
     config_path: str,
@@ -113,6 +119,7 @@ def backfill(
     ths_repair: bool,
     eastmoney_bj_repair: bool,
     bse_tip_repair: bool,
+    bj_amount_repair: bool,
 ):
     """Backfill a dataset.
 
@@ -145,6 +152,8 @@ def backfill(
         raise click.ClickException("--eastmoney-bj-repair only applies to corporate_actions")
     if bse_tip_repair and dataset != "daily_bars":
         raise click.ClickException("--bse-tip-repair only applies to daily_bars")
+    if bj_amount_repair and dataset != "daily_bars":
+        raise click.ClickException("--bj-amount-repair only applies to daily_bars")
     if baostock_repair:
         cfg._corporate_actions_baostock_repair = True
     if ths_repair:
@@ -163,6 +172,10 @@ def backfill(
         # command still printed status=success with rows_written=0. `derive`,
         # `verify --bars` and `audit` all refuse this up front; so does this now.
         raise click.ClickException("--start must be on or before --end")
+    if bj_amount_repair:
+        if start_d is None or end_d is None:
+            raise click.ClickException("--bj-amount-repair requires --start and --end")
+        cfg._bj_amount_repair = True
     if bse_tip_repair:
         if not symbols_str:
             raise click.ClickException("--bse-tip-repair requires --symbols")

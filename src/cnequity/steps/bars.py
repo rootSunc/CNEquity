@@ -441,6 +441,11 @@ def _resolve_daily_bar_scope(config: Config, symbols: list[str]) -> list[str]:
     return requested
 
 
+# TDX counts Beijing volume in lots; anything further apart is a different row.
+_BJ_AMOUNT_REPAIR_LOT = 100
+_BJ_AMOUNT_REPAIR_BATCH = 40
+
+
 def repair_bse_tip_amounts_from_curated(
     config: Config,
     trade_date: date,
@@ -521,6 +526,245 @@ def repair_bse_tip_amounts_from_curated(
         ):
             result["status"] = "warning"
     return result
+
+
+def _supplement_bj_amounts_from_tdx(
+    config: Config,
+    merged: pl.DataFrame,
+    *,
+    start: date,
+    end: date,
+) -> tuple[pl.DataFrame, list[dict]]:
+    """Fill Beijing turnover TDX serves and Sina never published.
+
+    Sina is the historical fallback for Beijing bars and exposes no turnover at
+    all: every one of the 505,518 Sina rows in the lake carries a null amount.
+    TDX serves the board under market id 2 and does publish it.
+
+    The gate is what makes this a supplement rather than a re-fetch. TDX must
+    agree on open/high/low/close to the last digit — measured across 2,048 rows
+    against Sina and 3,086 against BSE/Sina/THS, with no exception — and its
+    volume must sit within one lot of the stored figure, which is the only way
+    the two ever differ (TDX counts in lots; Sina did too through 2025 and has
+    been exact since 2026). Anything outside that is a different row, and the
+    stored one is left alone as an audit finding.
+
+    Only `amount` is written. Keeping the stored volume costs nothing and saves
+    the 7,270 rows where Sina is the finer of the two.
+    """
+    from cnequity.adapters.tdx_protocol.client import fetch_daily_bars
+
+    symbols = sorted(set(merged.get_column("symbol").to_list()))
+    if not symbols:
+        return merged, []
+    frames: list[pl.DataFrame] = []
+    failed: list[str] = []
+    for index in range(0, len(symbols), _BJ_AMOUNT_REPAIR_BATCH):
+        chunk = symbols[index : index + _BJ_AMOUNT_REPAIR_BATCH]
+        try:
+            frame = fetch_daily_bars(chunk, start, end, config=config)
+        except Exception as exc:  # noqa: BLE001 — the stored rows stay as they are
+            logger.warning(
+                "TDX Beijing amount supplement failed for %d symbol(s): %s", len(chunk), exc
+            )
+            failed.extend(chunk)
+            continue
+        if not frame.is_empty():
+            frames.append(
+                frame.select(
+                    "symbol", "trade_date", "open", "high", "low", "close", "volume", "amount"
+                )
+            )
+    findings: list[dict] = []
+    if failed:
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "info",
+                "check": "daily_bars_tdx_amount_unavailable",
+                "message": f"TDX served no Beijing history for {len(failed)} symbol(s) over {start}..{end}",
+                "source": "tdx_protocol",
+                "source_limited": True,
+            }
+        )
+    if not frames:
+        return merged, findings
+
+    tdx = pl.concat(frames, how="vertical").rename(
+        {
+            "open": "_tdx_open",
+            "high": "_tdx_high",
+            "low": "_tdx_low",
+            "close": "_tdx_close",
+            "volume": "_tdx_volume",
+            "amount": "_tdx_amount",
+        }
+    )
+    if "source" not in merged.columns:
+        merged = with_columns_unless_blank(merged, pl.lit("sina").alias("source"))
+    joined = merged.join(tdx, on=["symbol", "trade_date"], how="left")
+    prices_match = pl.all_horizontal(
+        pl.col(left) == pl.col(right)
+        for left, right in (
+            ("open", "_tdx_open"),
+            ("high", "_tdx_high"),
+            ("low", "_tdx_low"),
+            ("close", "_tdx_close"),
+        )
+    )
+    within_a_lot = (pl.col("volume") - pl.col("_tdx_volume")).abs() < _BJ_AMOUNT_REPAIR_LOT
+    supplement = (
+        pl.col("_tdx_amount").is_not_null()
+        & pl.col("amount").is_null()
+        & prices_match
+        & within_a_lot
+    )
+    rejected = joined.filter(pl.col("_tdx_amount").is_not_null() & ~(prices_match & within_a_lot))
+    # Every candidate has to land somewhere. A key TDX simply did not serve is
+    # neither supplied nor rejected, and counting it nowhere is how a repair
+    # reports success over rows it never touched — the Beijing board's retired
+    # 8xxxxx/430xxx codes are ~218,000 such rows.
+    unserved = joined.filter(pl.col("_tdx_amount").is_null())
+    supplemented = joined.filter(supplement)
+    updated = joined.with_columns(
+        pl.when(supplement).then(pl.col("_tdx_amount")).otherwise(pl.col("amount")).alias("amount"),
+        pl.when(supplement)
+        .then(pl.lit("tdx_protocol"))
+        .otherwise(pl.col("source"))
+        .alias("source"),
+    ).drop("_tdx_open", "_tdx_high", "_tdx_low", "_tdx_close", "_tdx_volume", "_tdx_amount")
+    if supplemented.height:
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "info",
+                "check": "daily_bars_tdx_amount_supplement",
+                "message": (
+                    f"TDX supplied amount for {supplemented.height} Beijing row(s) over "
+                    f"{start}..{end} after exact OHLC matching"
+                ),
+                "source": "tdx_protocol",
+                "rows_supplemented": supplemented.height,
+                "symbols_supplemented": supplemented.get_column("symbol").n_unique(),
+            }
+        )
+    if unserved.height:
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "info",
+                "check": "daily_bars_tdx_amount_unserved",
+                "message": (
+                    f"TDX served no row for {unserved.height} Beijing key(s) over {start}..{end} "
+                    f"across {unserved.get_column('symbol').n_unique()} symbol(s); "
+                    "those rows keep their null amount"
+                ),
+                "source": "tdx_protocol",
+                "source_limited": True,
+                "rows_unserved": unserved.height,
+            }
+        )
+    if rejected.height:
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "warning",
+                "check": "daily_bars_tdx_amount_mismatch",
+                "message": (
+                    f"TDX disagreed on price or volume for {rejected.height} Beijing row(s) over "
+                    f"{start}..{end}; those rows keep their null amount"
+                ),
+                "source": "tdx_protocol",
+                "rows_rejected": rejected.height,
+            }
+        )
+    return updated, findings
+
+
+def repair_bj_amounts_from_tdx(
+    config: Config,
+    start: date,
+    end: date,
+    run_id: str,
+    symbols: list[str] | None,
+) -> dict:
+    """Supplement stored Beijing rows with the turnover Sina never carried.
+
+    Walks the window a year at a time: the whole board is half a million rows,
+    and one staging write of that is neither necessary nor kind to memory.
+    """
+    from cnequity.query.parquet_scan import collect_parquet_root
+    from cnequity.steps.http_common import write_fetched
+
+    target = sorted(
+        s
+        for s in (
+            _resolve_daily_bar_scope(config, symbols)
+            if symbols
+            else filter_ingest_universe(load_symbols(config), config.ingest_universe)
+        )
+        if s.endswith(".BJ")
+    )
+    if not target:
+        raise RuntimeError("BJ amount repair needs at least one Beijing symbol in scope")
+
+    rows_read = rows_written = 0
+    findings: list[dict] = []
+    for index, (lo, hi) in enumerate(_yearly_slices(start, end)):
+        current = collect_parquet_root(
+            config.curated_root / "daily_bars",
+            partition_col="trade_date",
+            start=lo,
+            end=hi,
+            symbols=target,
+        )
+        if current.is_empty():
+            continue
+        candidate = dedupe_by_primary_key(current, "daily_bars").filter(pl.col("amount").is_null())
+        if candidate.is_empty():
+            continue
+        rows_read += candidate.height
+        updated, slice_findings = _supplement_bj_amounts_from_tdx(
+            config, candidate, start=lo, end=hi
+        )
+        findings.extend(slice_findings)
+        changed = updated.filter(
+            pl.col("amount").is_not_null() & (pl.col("source") == "tdx_protocol")
+        )
+        if changed.is_empty():
+            continue
+        out = write_fetched(
+            config,
+            run_id,
+            "daily_bars",
+            changed,
+            source="tdx_protocol",
+            batch_id=f"bj-amount-repair-{index:04d}",
+        )
+        rows_written += int(out.get("rows_written", 0))
+        logger.info(
+            "BJ amount repair %s..%s: %d/%d row(s) supplied",
+            lo,
+            hi,
+            changed.height,
+            candidate.height,
+        )
+
+    result: dict = {"rows_read": rows_read, "rows_written": rows_written}
+    if findings:
+        result["context_updates"] = {"audit_findings": findings}
+        if any(f.get("severity") == "warning" for f in findings):
+            result["status"] = "warning"
+    return result
+
+
+def _yearly_slices(start: date, end: date) -> list[tuple[date, date]]:
+    slices: list[tuple[date, date]] = []
+    year = start.year
+    while year <= end.year:
+        slices.append((max(start, date(year, 1, 1)), min(end, date(year, 12, 31))))
+        year += 1
+    return slices
 
 
 @register_step(
@@ -704,6 +948,11 @@ def step_daily_bars(config: Config, trade_date: date, run_id: str, context: dict
         start = incremental_window(config, "daily_bars", trade_date)
         end = trade_date
     _reject_unfinished_daily_bar_window(config, end)
+
+    if getattr(config, "_bj_amount_repair", False):
+        return repair_bj_amounts_from_tdx(
+            config, start, end, run_id, getattr(config, "_backfill_symbols", None)
+        )
 
     if getattr(config, "_bse_tip_repair", False):
         if start != end:

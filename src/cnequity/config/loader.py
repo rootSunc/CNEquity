@@ -229,6 +229,7 @@ class Config:
     _corporate_actions_ths_repair: bool = False
     _corporate_actions_eastmoney_bj_repair: bool = False
     _bse_tip_repair: bool = False
+    _bj_amount_repair: bool = False
     _sector_bars_force: bool = False
     _rate_limiters: object | None = field(default=None, repr=False)
     # ``workers`` is the legacy/global scheduler budget.  Source-specific
