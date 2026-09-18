@@ -135,8 +135,16 @@ def _backfill_window(config: Config, trade_date: date) -> tuple[date, date]:
     and 4 never ran. An *explicit* `--end` is passed through untouched, because
     repairing today's truncated bar is what the paragraph above is about, and
     before the close that has to fail loudly rather than fetch another day.
+
+    `trade_date` bounds it from the other side. Taking the settled session alone
+    ignored the date the caller named: replaying an old one — `cne run daily
+    --trade-date 2025-01-10` — asked for everything up to *today* instead, which
+    is not the window anybody requested and not a run anybody could reproduce.
+    The smaller of the two is the only answer that satisfies both: today's run
+    stops before the forming bar, and a replay stops where it was told.
     """
-    end = getattr(config, "_backfill_end", None) or _last_final_session()
+    settled = _last_final_session()
+    end = getattr(config, "_backfill_end", None) or min(trade_date, settled)
     start = getattr(config, "_backfill_start", None) or BACKFILL_START
     return start, end
 
@@ -3455,6 +3463,10 @@ def _gapfill_multiday_via_kline(
         if not any(key[0] == symbol for key in observed)
         and not any(key[0] == symbol for key in expected_keys)
     }
+    # Kept apart from `expected_no_data` for the report below: both mean "no
+    # rows are owed here", but only one of them was certified by two sources
+    # agreeing, and `empty_evidence` holds an entry for that one alone.
+    multi_source_no_data = set(expected_no_data)
     if positively_halted:
         expected_no_data |= positively_halted
         findings.append(
@@ -3471,19 +3483,25 @@ def _gapfill_multiday_via_kline(
             }
         )
     unresolved = {key for key in remaining if key[0] not in expected_no_data}
-    if expected_no_data:
+    if multi_source_no_data:
+        # Only the symbols this rule actually certified. A halted name reaches
+        # `expected_no_data` through the finding above, on the vendor's trading
+        # status rather than on two sources returning nothing — it has no entry
+        # in `empty_evidence`, so listing it here both raised `KeyError` and
+        # claimed evidence that was never collected.
         findings.append(
             {
                 "dataset": "daily_bars",
                 "severity": "info",
                 "check": "daily_bars_multi_source_no_data",
                 "message": (
-                    f"certified {len(expected_no_data)} symbol(s) as source-empty only after "
+                    f"certified {len(multi_source_no_data)} symbol(s) as source-empty only after "
                     "two independent per-symbol sources agreed"
                 ),
-                "symbols": sorted(expected_no_data),
+                "symbols": sorted(multi_source_no_data),
                 "evidence": {
-                    symbol: sorted(empty_evidence[symbol]) for symbol in sorted(expected_no_data)
+                    symbol: sorted(empty_evidence[symbol])
+                    for symbol in sorted(multi_source_no_data)
                 },
             }
         )

@@ -318,3 +318,28 @@ def test_daily_bars_skip_int64_overflow_volume():
         ]
     )
     assert _parse_bar_rows(pdf, "600519.SH", date(2024, 6, 1), date(2024, 6, 30)) == []
+
+
+def test_a_replayed_trade_date_bounds_the_backfill_window(monkeypatch):
+    """Replaying an old date must not fetch everything up to today.
+
+    The default end became the last *settled* session, which fixed `cne init`
+    during a session but stopped consulting `trade_date` at all — so
+    `--trade-date 2025-01-10` asked for a window ending today. Neither bound
+    alone is right; the smaller of the two is.
+    """
+    from cnequity.domain.market_time import shanghai_now
+
+    monkeypatch.setattr(
+        "cnequity.steps.bars.shanghai_now",
+        lambda now=None: shanghai_now(datetime(2026, 9, 17, 9, 0, tzinfo=timezone.utc)),
+    )
+    cfg = SimpleNamespace(_backfill_start=None, _backfill_end=None)
+
+    # A replay stops where it was told …
+    assert bars._backfill_window(cfg, date(2025, 1, 10))[1] == date(2025, 1, 10)
+    # … and a date past the settled session is still clamped to it.
+    assert bars._backfill_window(cfg, date(2030, 1, 1))[1] == date(2026, 9, 17)
+    # An explicit --end keeps overriding both.
+    explicit = SimpleNamespace(_backfill_start=None, _backfill_end=date(2026, 9, 18))
+    assert bars._backfill_window(explicit, date(2025, 1, 1))[1] == date(2026, 9, 18)
