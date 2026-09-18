@@ -1,4 +1,4 @@
-"""TDX xdxr (除权除息) → corporate_actions schema."""
+"""TDX xdxr (除权除息、基金份额折算) → corporate_actions schema."""
 
 from __future__ import annotations
 
@@ -53,7 +53,15 @@ _ACTION_TYPES = {
     "bonus": "bonus",
     "transfer": "transfer",
     "allotment": "allotment",
+    "unit_split": "unit_split",
 }
+
+# xdxr category ids. 1 is the dividend/ex-right event every stock row comes
+# from. 11 (扩缩股) is the fund unit split — the traded price is restated, so
+# it is a real ex-event. 12 (非流通股缩股) restates non-tradable shares only
+# and must not adjust a traded price, so it stays out.
+_CATEGORY_DIVIDEND = 1
+_CATEGORY_UNIT_SPLIT = 11
 
 
 def _num(value: object) -> float:
@@ -90,7 +98,35 @@ def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
             category = int(record.get("category") or 0)
         except (TypeError, ValueError, OverflowError):
             continue
-        if category != 1:
+        if category == _CATEGORY_UNIT_SPLIT:
+            # ETF/LOF 份额折算: `suogu` is units after per unit before, which
+            # is `split_factor` as the schema defines it. 1 (or absent) means
+            # the vendor sent no usable ratio, and inventing one would restate
+            # every price in the series.
+            factor = _num(record.get("suogu"))
+            if factor <= 0 or factor == 1.0:
+                logger.warning(
+                    "TDX xdxr: skipping %s unit split on %s with unusable ratio %r",
+                    symbol,
+                    ex_date,
+                    record.get("suogu"),
+                )
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "ex_date": ex_date,
+                    "action_type": _ACTION_TYPES["unit_split"],
+                    "cash_dividend": 0.0,
+                    "bonus_ratio": 0.0,
+                    "transfer_ratio": 0.0,
+                    "allotment_ratio": None,
+                    "allotment_price": None,
+                    "split_factor": factor,
+                }
+            )
+            continue
+        if category != _CATEGORY_DIVIDEND:
             continue
 
         try:
@@ -117,6 +153,7 @@ def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
                     "transfer_ratio": 0.0,
                     "allotment_ratio": None,
                     "allotment_price": None,
+                    "split_factor": None,
                 }
             )
         if songzhuangu > 0:
@@ -133,6 +170,7 @@ def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
                     "transfer_ratio": 0.0,
                     "allotment_ratio": None,
                     "allotment_price": None,
+                    "split_factor": None,
                 }
             )
         if peigu > 0:
@@ -148,6 +186,7 @@ def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
                     # peigujia is already a per-share price — leave as-is.
                     "allotment_ratio": peigu / 10.0,
                     "allotment_price": peigujia if peigujia > 0 else None,
+                    "split_factor": None,
                 }
             )
     return rows

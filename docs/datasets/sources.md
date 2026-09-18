@@ -117,7 +117,7 @@
 |------|-------|
 | 波次 | `corporate_actions`（Wave 1，先于 daily_bars） |
 | 主源 | eastmoney datacenter（日更） |
-| 备源 / 回填 | tdx_protocol 除权（按标的历史回补）；显式 repair：同花顺历史分红页（BJ）；旧码迁移补抓：EastMoney 920xxx 定向报告 |
+| 备源 / 回填 | tdx_protocol 除权（按标的历史回补；`xdxr` 的 category 11「扩缩股」落成 `unit_split`，比例取 `suogu`，category 12「非流通股缩股」不动交易价故排除）；显式 repair：同花顺历史分红页（BJ）；旧码迁移补抓：EastMoney 920xxx 定向报告 |
 | 频率 | 每日 |
 | 主键 | (symbol, ex_date, action_type) |
 | 输出 | manifest 元数据 `symbols_to_rebackfill` |

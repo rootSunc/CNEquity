@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pandas as pd
@@ -377,3 +377,111 @@ def test_fetch_corporate_actions_tdx_captureless_archive_fails_before_rows(tmp_p
             run_id="run-missing-wire",
         )
     assert not (config.meta_root / "raw").exists()
+
+
+def test_fund_unit_split_becomes_an_action_and_non_tradable_contraction_does_not():
+    """A 份额折算 restates every quoted price, so it is an ex-event.
+
+    159327.SZ went 3.348 → 1.052 on 2026-07-20 with nothing on record: the
+    adapter kept category 1 only, so the one source that serves the ratio
+    (xdxr category 11, ``suogu=3.0``) was dropped and the audit carried a
+    permanent unexplained-divergence warning. Category 12 restates
+    non-tradable shares only and must stay out — adjusting a traded price by
+    it would corrupt the series it does not touch.
+    """
+    pdf = pl.DataFrame(
+        [
+            {
+                "year": 2026,
+                "month": 7,
+                "day": 20,
+                "category": 11,
+                "fenhong": None,
+                "songzhuangu": None,
+                "peigu": None,
+                "peigujia": None,
+                "suogu": 3.0,
+            },
+            {
+                "year": 2026,
+                "month": 7,
+                "day": 21,
+                "category": 12,
+                "fenhong": None,
+                "songzhuangu": None,
+                "peigu": None,
+                "peigujia": None,
+                "suogu": 0.5,
+            },
+            # no usable ratio: inventing one would restate the whole series
+            {
+                "year": 2026,
+                "month": 7,
+                "day": 22,
+                "category": 11,
+                "fenhong": None,
+                "songzhuangu": None,
+                "peigu": None,
+                "peigujia": None,
+                "suogu": 1.0,
+            },
+        ]
+    )
+
+    rows = ca._rows_from_xdxr("159327.SZ", pdf)
+
+    assert rows == [
+        {
+            "symbol": "159327.SZ",
+            "ex_date": date(2026, 7, 20),
+            "action_type": "unit_split",
+            "cash_dividend": 0.0,
+            "bonus_ratio": 0.0,
+            "transfer_ratio": 0.0,
+            "allotment_ratio": None,
+            "allotment_price": None,
+            "split_factor": 3.0,
+        }
+    ]
+
+
+def test_a_unit_split_row_passes_the_corporate_action_contract():
+    """The schema rejects a split without a ratio, and a dividend with one."""
+    from cnequity.domain.schemas import validate_dataframe
+
+    pdf = pl.DataFrame(
+        [
+            {
+                "year": 2026,
+                "month": 7,
+                "day": 20,
+                "category": 11,
+                "fenhong": None,
+                "songzhuangu": None,
+                "peigu": None,
+                "peigujia": None,
+                "suogu": 3.0,
+            },
+            {
+                "year": 2024,
+                "month": 6,
+                "day": 28,
+                "category": 1,
+                "fenhong": 10.0,
+                "songzhuangu": 0,
+                "peigu": 0,
+                "peigujia": 0,
+                "suogu": None,
+            },
+        ]
+    )
+
+    frame = pl.DataFrame(ca._rows_from_xdxr("159327.SZ", pdf)).with_columns(
+        pl.lit("tdx_protocol").alias("source"),
+        pl.lit("v1").alias("data_version"),
+        pl.lit(datetime(2026, 7, 21, tzinfo=timezone.utc)).alias("fetched_at"),
+    )
+
+    validated = validate_dataframe(frame, "corporate_actions")
+
+    assert validated.sort("ex_date")["split_factor"].to_list() == [1.0, 3.0]
