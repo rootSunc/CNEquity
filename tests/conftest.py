@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,28 @@ from cnequity.config.bootstrap import path_for_toml
 from cnequity.orchestrator.registry import STEP_REGISTRY as _LIVE_STEP_REGISTRY  # noqa: E402
 
 PRISTINE_STEP_NAMES = frozenset(_LIVE_STEP_REGISTRY)
+
+
+def _arm_subprocess_network_guard() -> None:
+    """Put `tests/_subprocess_guard` on `PYTHONPATH` for every child process.
+
+    The in-process fixture below cannot reach a `ProcessPoolExecutor` worker:
+    the start method is `spawn`, so the child is a fresh interpreter that
+    re-imports everything and inherits no patching. `sitecustomize` runs before
+    any user code in that child, which is the one hook early enough to matter.
+
+    Set here rather than in the fixture because a child inherits the
+    environment as it was when it started, and pools outlive individual tests.
+    """
+    guard_dir = str(Path(__file__).parent / "_subprocess_guard")
+    existing = os.environ.get("PYTHONPATH", "")
+    parts = [p for p in existing.split(os.pathsep) if p]
+    if guard_dir not in parts:
+        os.environ["PYTHONPATH"] = os.pathsep.join([guard_dir, *parts])
+    os.environ["CNE_TEST_NO_NETWORK"] = "1"
+
+
+_arm_subprocess_network_guard()
 
 
 def pytest_configure(config):
@@ -46,6 +69,68 @@ def pytest_sessionfinish(session, exitstatus):
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(0)
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(request):
+    """Refuse an outbound connection from a test that never declared one.
+
+    `-m 'not network'` only skips the tests that *say* they need the network.
+    Nothing stopped one that reaches it by accident, and eight did: two asked
+    baostock, four asked EastMoney, two asked a sentiment endpoint. Seven of
+    them still passed — the adapter fell back when the connection failed — so
+    the only symptom was time. `test_exchange_trading_status.py` took 19.2s
+    against 0.09s with the socket closed, which is most of why a full run
+    drifted between 129s and 169s and twice timed out.
+
+    The eighth was worse: `test_a_window_spent_entirely_halted_...` passed only
+    *because* the query succeeded, so its conclusion came partly from a live
+    vendor. On a machine without that route it failed, and failed obscurely.
+
+    Marked tests are let through — in their subprocesses too, by clearing the
+    variable `sitecustomize` reads, or the marker would mean one thing in the
+    test and the opposite in a pool worker it starts. Everything else fails at
+    the connect, naming itself and the address, which turns "slow and
+    occasionally red" into one obvious line.
+    """
+    if request.node.get_closest_marker("network"):
+        previous = os.environ.pop("CNE_TEST_NO_NETWORK", None)
+        try:
+            yield
+        finally:
+            if previous is not None:
+                os.environ["CNE_TEST_NO_NETWORK"] = previous
+        return
+
+    import socket
+
+    connect = socket.socket.connect
+    connect_ex = socket.socket.connect_ex
+    local: set[int] = set()
+
+    def _is_loopback(address) -> bool:
+        # `cne serve` and `cne mcp` are exercised over a real loopback socket by
+        # their own tests. Those are not the network this guards — nothing
+        # outside the machine is reached — so they are let through by address.
+        host = address[0] if isinstance(address, tuple) else address
+        return isinstance(host, str) and (host in ("localhost", "::1") or host.startswith("127."))
+
+    def _refuse(self, address, *, _real):
+        if _is_loopback(address):
+            local.add(self.fileno())
+            return _real(self, address)
+        raise AssertionError(
+            f"{request.node.nodeid} opened an outbound connection to {address}. "
+            "Stub the adapter, or mark the test `@pytest.mark.network`."
+        )
+
+    socket.socket.connect = lambda self, address: _refuse(self, address, _real=connect)
+    socket.socket.connect_ex = lambda self, address: _refuse(self, address, _real=connect_ex)
+    try:
+        yield
+    finally:
+        socket.socket.connect = connect
+        socket.socket.connect_ex = connect_ex
 
 
 @pytest.fixture(autouse=True)

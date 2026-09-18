@@ -1812,6 +1812,13 @@ def test_a_window_spent_entirely_halted_is_certified_from_positive_evidence(tmp_
     """Two vendors returning nothing only says nobody had it. "Suspended on
     every session you asked about" is a statement about the market — and it is
     the only one that reaches a name halted for a whole restructuring."""
+    # The final baostock link is not what either test is about, and reaching it
+    # for real cost 37s of login deadline per test — and made the conclusion
+    # depend on a live vendor: without that route the assertion below failed.
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars",
+        lambda requested, start, end, config=None: ({}, list(requested)),
+    )
     from cnequity.steps import bars as bars_mod
 
     cfg = _cfg(tmp_path)
@@ -1855,10 +1862,23 @@ def test_a_window_spent_entirely_halted_is_certified_from_positive_evidence(tmp_
     assert result["complete"] is True
     checks = {f["check"] for f in result["audit_findings"]}
     assert "daily_bars_window_fully_suspended" in checks
+    # …and only that finding. A halted name is certified by the vendor's own
+    # trading status, not by two sources returning nothing, so it must not be
+    # reported under the rule that claims the latter — which also has no
+    # `empty_evidence` entry for it and used to raise `KeyError` building one.
+    multi = [f for f in result["audit_findings"] if f["check"] == "daily_bars_multi_source_no_data"]
+    assert all(symbol not in f["symbols"] for f in multi), multi
 
 
 def test_a_partly_halted_symbol_is_not_certified_as_having_no_data(tmp_path, monkeypatch):
     """It traded on the other sessions; only those are excused."""
+    # The final baostock link is not what either test is about, and reaching it
+    # for real cost 37s of login deadline per test — and made the conclusion
+    # depend on a live vendor: without that route the assertion below failed.
+    monkeypatch.setattr(
+        "cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars",
+        lambda requested, start, end, config=None: ({}, list(requested)),
+    )
     from cnequity.steps import bars as bars_mod
 
     cfg = _cfg(tmp_path)
