@@ -12,7 +12,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import date
 
 from cnequity.domain.rate_limit import source_request
@@ -243,6 +243,70 @@ def _force_close_baostock_socket() -> None:
         sock.close()
     except Exception:  # noqa: BLE001 — best-effort interrupt; never raise from the timer
         pass
+
+
+class _WireRecorder:
+    """Tee baostock's socket so a caller can archive the exact response bytes.
+
+    The SDK decodes every response to ``str`` inside ``send_msg`` and keeps
+    only parsed fields on the result object, so an adapter that must archive
+    exact wire bytes has nowhere to read them from.  Recording at the socket
+    is the only place the real bytes still exist.  Each request clears the
+    buffer, so what a query leaves behind is exactly the response the SDK
+    read for it.
+    """
+
+    def __init__(self, sock) -> None:
+        self._sock = sock
+        self.received = bytearray()
+
+    def send(self, data, *args, **kwargs):
+        self.received.clear()
+        return self._sock.send(data, *args, **kwargs)
+
+    def sendall(self, data, *args, **kwargs):
+        self.received.clear()
+        return self._sock.sendall(data, *args, **kwargs)
+
+    def recv(self, *args, **kwargs):
+        chunk = self._sock.recv(*args, **kwargs)
+        self.received += chunk
+        return chunk
+
+    def __getattr__(self, name):
+        # settimeout/shutdown/close and anything else the session pins on the
+        # live socket must reach the real one.
+        return getattr(self._sock, name)
+
+
+@contextmanager
+def capture_wire(enabled: bool = True):
+    """Yield a recorder of the bytes baostock reads for queries in this block.
+
+    Yields ``None`` when there is nothing to record from — no baostock import,
+    no live socket, or capture not asked for — which leaves the caller to
+    decide whether a captureless query is publishable.
+    """
+    if not enabled:
+        yield None
+        return
+    try:
+        import baostock.common.context as bctx  # noqa: PLC0415 - optional dep, lazy
+    except Exception:  # noqa: BLE001 - never break a sweep over a capture
+        yield None
+        return
+    sock = getattr(bctx, "default_socket", None)
+    if sock is None:
+        yield None
+        return
+    recorder = _WireRecorder(sock)
+    bctx.default_socket = recorder
+    try:
+        yield recorder
+    finally:
+        # A relogin inside the block installs a fresh socket; leave that one.
+        if getattr(bctx, "default_socket", None) is recorder:
+            bctx.default_socket = sock
 
 
 def _pace_before_symbol(config, *, sleep=time.sleep) -> None:

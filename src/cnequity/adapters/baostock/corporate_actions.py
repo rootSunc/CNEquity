@@ -17,7 +17,11 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.baostock._session import fetch_per_symbol, to_baostock_symbol
+from cnequity.adapters.baostock._session import (
+    capture_wire,
+    fetch_per_symbol,
+    to_baostock_symbol,
+)
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.symbols import parse_symbol
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive, begin_capture
@@ -58,7 +62,12 @@ def _configured_archive(
 
 
 def _result_wire(result) -> bytes | None:
-    """Read an adapter-provided protocol capture without manufacturing bytes."""
+    """Read a protocol capture off the result without manufacturing bytes.
+
+    The published SDK never sets any of these: it decodes the response to
+    ``str`` before the result is built.  Real captures come from the socket
+    recorder; this stays for fakes and for any SDK that starts exposing them.
+    """
     for name in ("raw_bytes", "wire_bytes", "response_bytes", "raw_response"):
         value = getattr(result, name, None)
         if isinstance(value, bytearray):
@@ -238,8 +247,9 @@ def _fetch_one_corporate_actions(
         # ten annual queries bypasses the free API's cumulative request guard.
         if pace is not None:
             pace()
+        capturing = archive is not None and archive.enabled
         try:
-            with source_request(config, "baostock"):
+            with capture_wire(capturing) as recorder, source_request(config, "baostock"):
                 result = bs.query_dividend_data(
                     to_baostock_symbol(symbol),
                     year,
@@ -250,8 +260,10 @@ def _fetch_one_corporate_actions(
                 "baostock corporate_actions query failed for %s/%s: %s", symbol, year, exc
             )
             return None
-        if archive is not None and archive.enabled:
+        if capturing:
             wire = _result_wire(result)
+            if wire is None and recorder is not None and recorder.received:
+                wire = bytes(recorder.received)
             if not isinstance(wire, bytes):
                 raise RawArchiveError(
                     f"Baostock corporate_actions {symbol}/{year}: response has no exact wire bytes"

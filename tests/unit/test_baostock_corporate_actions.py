@@ -199,3 +199,80 @@ def test_fetch_corporate_actions_rejects_invalid_numeric_row():
 
     assert df.is_empty()
     assert failed == []
+
+
+class _FakeSocket:
+    """A socket that answers one request with fixed bytes, like baostock's."""
+
+    def __init__(self, response: bytes):
+        self._response = response
+        self._pending = b""
+
+    def send(self, data):
+        self._pending = self._response
+        return len(data)
+
+    def recv(self, _size=8192):
+        chunk, self._pending = self._pending, b""
+        return chunk
+
+    def settimeout(self, _timeout):
+        return None
+
+
+class _SocketBaostock(_Baostock):
+    """A session whose query goes over the socket, as the real SDK's does."""
+
+    def __init__(self, rows, response: bytes):
+        super().__init__(rows)
+        self.response = response
+
+    def query_dividend_data(self, code, year, **kwargs):
+        import baostock.common.context as bctx
+
+        sock = bctx.default_socket
+        sock.send(b"query_dividend_data")
+        sock.recv(8192)
+        return super().query_dividend_data(code, year, **kwargs)
+
+
+def test_the_archive_captures_the_bytes_the_sdk_read(tmp_path, monkeypatch):
+    """The repair must be archivable, and the SDK hands out no bytes.
+
+    ``query_dividend_data`` decodes the response inside the socket helper and
+    keeps only parsed fields, so a lake with raw archiving on — the default —
+    had no wire to archive and every repair died on the first answered year.
+    The bytes still exist at the socket; record them there.
+    """
+    import json
+
+    import baostock.common.context as bctx
+
+    from cnequity.config import Config
+    from cnequity.storage.layout import init_data_layout
+
+    wire = b"response-header<![CDATA[]]>\n"
+    monkeypatch.setattr(bctx, "default_socket", _FakeSocket(wire), raising=False)
+    config = Config(data_root=tmp_path / "data")
+    init_data_layout(config)
+    bs = _SocketBaostock({("sz.300114", 2020): [_row()]}, wire)
+
+    df, failed = fetch_corporate_actions_baostock(
+        ["300114.SZ"],
+        date(2020, 1, 1),
+        date(2020, 12, 31),
+        bs=bs,
+        sleep=lambda _: None,
+        config=config,
+        run_id="repair-test",
+    )
+
+    assert failed == []
+    assert not df.is_empty()
+    sidecars = list((config.meta_root / "raw").rglob("*.json"))
+    archived = [json.loads(path.read_text(encoding="utf-8")) for path in sidecars]
+    payloads = [p for p in (config.meta_root / "raw").rglob("*.gz")]
+    assert payloads, "the response bytes must reach the archive"
+    assert any(record.get("request_params", {}).get("year") == 2020 for record in archived), (
+        archived
+    )
