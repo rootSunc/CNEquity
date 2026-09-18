@@ -147,7 +147,9 @@ jobs:
           "$SMOKE_ROOT/bin/python" -m pip install --upgrade pip
           "$SMOKE_ROOT/bin/pip" install "$wheel"
           "$SMOKE_ROOT/bin/cne" --version
-          "$SMOKE_ROOT/bin/cne" demo --help
+          # The demo is a profile of `init` since 0.10.0; `cne demo` now only
+          # answers with the rename hint, and exits non-zero doing it.
+          "$SMOKE_ROOT/bin/cne" init --profile demo --help
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:

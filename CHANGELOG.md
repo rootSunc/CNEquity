@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.10.0] — 2026-09-18
 
 Coverage and provenance. The Beijing exchange becomes a first-class source, two
 gates stop passing for the wrong reason, and four defects that were writing bad
@@ -12,6 +12,17 @@ rows every day are fixed — with migrations for what they already left behind.
 The first-run path was walked end to end from a clean install: the research
 demo, the demo's own calendar, a named backfill, an empty daily plan and the
 health checks on a small lake each told a new user something that was not true.
+
+### Changed — BREAKING (data contract)
+
+- **`corporate_actions` gains `split_factor` (schema v2).** A fund unit split
+  or consolidation is not a bonus issue and not a dividend, and with no field
+  of its own it had nowhere to go: the factor series stepped and nothing in the
+  lake explained why. `cne contract diff contracts/v0.9.0.json
+  contracts/v0.10.0.json` reports 1 breaking, 1 compatible — the breaking half
+  is the unit contract gaining `split_factor: unit/unit`. No re-fetch: legacy
+  rows carry a neutral multiplier, and a consumer that enumerates the unit map
+  must accept the new key.
 
 ### Added
 

@@ -7,7 +7,7 @@
       "backfill_chunk_days": null,
       "backfill_chunk_symbols": null,
       "backfill_source": null,
-      "backup_source": null,
+      "backup_source": "baostock",
       "columns": {
         "adjust_type": "string",
         "data_version": "string",
@@ -35,7 +35,7 @@
         "backfill_chunk_days": null,
         "backfill_chunk_symbols": null,
         "backfill_source": null,
-        "backup_source": null,
+        "backup_source": "baostock",
         "compatibility": "additive",
         "contract_level": "stable",
         "coverage_mode": "session_dense",
@@ -388,7 +388,7 @@
       "backfill_chunk_days": null,
       "backfill_chunk_symbols": null,
       "backfill_source": null,
-      "backup_source": null,
+      "backup_source": "exchange",
       "columns": {
         "amount": "float64",
         "data_version": "string",
@@ -418,7 +418,7 @@
         "backfill_chunk_days": null,
         "backfill_chunk_symbols": null,
         "backfill_source": null,
-        "backup_source": null,
+        "backup_source": "exchange",
         "compatibility": "additive",
         "contract_level": "stable",
         "coverage_mode": "sparse",
@@ -1053,7 +1053,7 @@
       "backfill_chunk_days": null,
       "backfill_chunk_symbols": null,
       "backfill_source": null,
-      "backup_source": null,
+      "backup_source": "exchange",
       "columns": {
         "buy_amount": "float64",
         "data_version": "string",
@@ -1083,7 +1083,7 @@
         "backfill_chunk_days": null,
         "backfill_chunk_symbols": null,
         "backfill_source": null,
-        "backup_source": null,
+        "backup_source": "exchange",
         "compatibility": "additive",
         "contract_level": "stable",
         "coverage_mode": "sparse",
@@ -5348,7 +5348,7 @@
       "watermark": true
     }
   },
-  "fingerprint": "7bb623f37f3b50a27a40be989bed9bbaae08aabd63624ff112569e24a6e80aaa",
+  "fingerprint": "f77ea572c82ad3e50884da281b9fa881840965484d7a7b9fd29350014159fb8b",
   "format": "cnequity.dataset-contract",
   "pit_contract": {
     "modes": [

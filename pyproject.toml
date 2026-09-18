@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cnequity"
-version = "0.10.0.dev0"
+version = "0.10.0"
 description = "Open, self-hosted financial data infrastructure for China markets, starting with A-shares"
 # Short PyPI page (absolute links only). GitHub keeps README.md / README.en.md.
 readme = "README.pypi.md"
@@ -120,7 +120,7 @@ where = ["src"]
 # Versioned dataset contracts are release governance artifacts, not runtime
 # Python modules.  Ship the contract alongside the installed policy so an
 # offline consumer can retain the exact contract used by a release.
-"share/cnequity/contracts" = ["contracts/v0.9.0.json", "contracts/v0.10.0.dev0.json"]
+"share/cnequity/contracts" = ["contracts/v0.9.0.json", "contracts/v0.10.0.json"]
 
 [tool.setuptools.package-data]
 cnequity = [
