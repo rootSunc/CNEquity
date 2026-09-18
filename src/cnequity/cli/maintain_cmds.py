@@ -170,7 +170,20 @@ def _published_derive(cfg, dataset: str):
     default=None,
     help="industry_index / trading_status: only derive on/before this date (YYYY-MM-DD).",
 )
-def derive(name: str, config_path: str, full: bool, start_str: str | None, end_str: str | None):
+@click.option(
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    help="bse_code_migration: actually rewrite the partitions (default reports only).",
+)
+def derive(
+    name: str,
+    config_path: str,
+    full: bool,
+    start_str: str | None,
+    end_str: str | None,
+    apply_changes: bool,
+):
     """Derive computed datasets.
 
     `adj_factors`, `industry_index` and `trading_status` are already steps in
@@ -230,6 +243,13 @@ def derive(name: str, config_path: str, full: bool, start_str: str | None, end_s
         from cnequity.storage.valuation_orphans import purge_valuation_orphan_symbols
 
         summary = purge_valuation_orphan_symbols(cfg)
+        click.echo(json.dumps(summary, indent=2, default=str))
+    elif name == "bse_code_migration":
+        from cnequity.storage.bse_code_migration import migrate_bse_legacy_codes
+
+        summary = migrate_bse_legacy_codes(cfg, apply=apply_changes)
+        if not apply_changes:
+            summary["note"] = "report only; re-run with --apply to rewrite the partitions"
         click.echo(json.dumps(summary, indent=2, default=str))
     else:
         raise click.ClickException(f"Unknown derive target: {name}")
