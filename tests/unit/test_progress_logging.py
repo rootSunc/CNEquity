@@ -308,7 +308,7 @@ def test_a_run_leaves_a_log_file_behind(tmp_path, capsys):
     try:
         assert path is not None
         assert path.parent == tmp_path / "lake" / "logs"
-        assert "Logging to" in capsys.readouterr().err
+        assert "日志写到" in capsys.readouterr().err
         logging_mod.getLogger("cnequity.test").info("a line worth keeping")
         assert "a line worth keeping" in path.read_text(encoding="utf-8")
     finally:
@@ -536,8 +536,8 @@ def test_the_log_notice_never_contaminates_the_json_on_stdout(tmp_path, monkeypa
     result = CliRunner().invoke(cli, ["ths-official", "backfill", "--config", str(config)])
 
     assert result.exit_code == 0, result.output
-    assert "Logging to" in result.stderr
-    assert "Logging to" not in result.stdout
+    assert "日志写到" in result.stderr
+    assert "日志写到" not in result.stdout
     json.loads(result.stdout)  # the contract: stdout parses on its own
 
 
@@ -608,13 +608,13 @@ def _lake_config(tmp_path):
 @pytest.mark.parametrize(
     ("argv", "level", "needle"),
     [
-        (["verify", "--dataset", "nope"], "ERROR", "unknown dataset"),
+        (["verify", "--dataset", "nope"], "ERROR", "未知数据集"),
         (
             ["backfill", "daily_bars", "--start", "2026-01-02", "--end", "2026-01-01"],
             "ERROR",
-            "--start must be on or before --end",
+            "--start 必须早于或等于 --end",
         ),
-        (["run", "daily", "--group", "nosuch"], "ERROR", "Unknown group"),
+        (["run", "daily", "--group", "nosuch"], "ERROR", "未知调度组"),
     ],
 )
 def test_a_failure_becomes_a_log_record(argv, level, needle, tmp_path):

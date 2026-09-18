@@ -3,7 +3,7 @@
 本指南覆盖两条路径：
 
 1. **一分钟试玩**（推荐新手）：`cne init --profile demo`，小宇宙、独立目录，几分钟出真数  
-2. **全量数据湖**：`cne config create` → `cne init` → `cne run daily`（耗时长、占磁盘）
+2. **全量数据湖**：`cne config create` → `cne init` → `cne run daily --all-groups`（耗时长、占磁盘）
 
 详细选项见 [CLI 参考](../reference/cli.md)。安装见 [installation](installation.md)。
 
@@ -136,6 +136,13 @@ python scripts/accept_backfill.py check --compare /tmp/curated-counts.json
 日更按**调度组**执行，一天 6 个组。生产就是这么跑的：
 
 ```bash
+cne run daily --all-groups --config configs/cnequity.toml
+```
+
+`--all-groups` 按配置顺序串行跑完全部组：某个组失败不会中断后面的组，退出码取最差的一个，
+数据集全部关闭的组（默认的 `intraday` / `ticks`）自动跳过。也可以一个一个跑：
+
+```bash
 cne run daily --group core --config configs/cnequity.toml
 cne run daily --group capital --config configs/cnequity.toml
 cne run daily --group signals --config configs/cnequity.toml
@@ -145,9 +152,9 @@ cne run daily --group research --config configs/cnequity.toml
 ```
 
 每组末尾含 `compact`，数据会写入 curated。组定义见 [配置 — 调度组](configuration.md#调度组)。
-挂 cron 时请**按组错开**（见 [运行手册](../operations/runbook.md)），不要让六个组同时打同一批上游。
+按组挂 cron 时请**错开**（见 [运行手册](../operations/runbook.md)），不要让六个组同时打同一批上游。
 
-> **不带 `--group` 的 `cne run daily` 不等于「全部组」。**
+> **不带 `--group` / `--all-groups` 的 `cne run daily` 不等于「全部组」。**
 > 它只跑 `[[job.daily.waves]]` 里的核心骨架 —— 行情、日历、交易状态、公司行为、复权 ——
 > 不包含估值、财报、融资融券、龙虎榜、北向、指数成分等其余数据集。只跑这一条，
 > 湖会安静地停在 15/42 新鲜，且不会报错。跑完会打印一行提示，列出本次没有覆盖的数据集。

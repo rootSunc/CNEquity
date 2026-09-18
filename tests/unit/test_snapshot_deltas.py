@@ -196,7 +196,7 @@ def test_snapshot_restores_adjustment_cache_and_rebuilds_old_cache_shape(tmp_pat
         if not item["path"].startswith("meta/adj_factors_cache/")
     ]
     (store.path("warm") / "manifest.json").write_text(json.dumps(old_manifest), encoding="utf-8")
-    rebuilt = store.restore("warm", tmp_path / "rebuilt")
+    rebuilt = store.restore("warm", tmp_path / "已重算")
     rebuilt_cache = rebuilt / "meta/adj_factors_cache/600000_SH_hfq.parquet"
     assert rebuilt_cache.is_file()
     assert pl.read_parquet(rebuilt_cache)["factor"].to_list() == [0.5]

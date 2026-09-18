@@ -24,7 +24,7 @@ def test_horizon_guard_refuses_a_window_the_source_cannot_serve():
     message = str(excinfo.value)
     # The error has to say the data does not exist, not that the run failed —
     # otherwise it reads as a lake bug rather than a vendor limit.
-    assert "older than the source horizon" in message
+    assert "早于源能提供的历史深度" in message
     assert str(spec.history_horizon_days) in message
     assert str(spec.earliest_available(today)) in message
 
@@ -386,7 +386,7 @@ def test_bse_tip_repair_requires_one_session_and_symbols(tmp_path, monkeypatch):
         ),
     )
     assert missing_symbols.exit_code != 0
-    assert "requires --symbols" in missing_symbols.output
+    assert "需要 --symbols" in missing_symbols.output
 
     different_days = runner.invoke(
         cli,
@@ -402,7 +402,7 @@ def test_bse_tip_repair_requires_one_session_and_symbols(tmp_path, monkeypatch):
         ),
     )
     assert different_days.exit_code != 0
-    assert "same explicit --start and --end" in different_days.output
+    assert "显式给出同一天的 --start 和 --end" in different_days.output
 
 
 def test_symbols_flag_points_each_dataset_at_its_own_config_block():
@@ -448,7 +448,7 @@ def test_tick_horizon_guard_does_not_suggest_narrowing_the_scope():
     with pytest.raises(click.ClickException) as excinfo:
         backfill_cmds._guard_history_horizon("trade_ticks", date(2023, 1, 1))
     message = str(excinfo.value)
-    assert "history floor" in message
+    assert "历史下限" in message
     assert "narrow" not in message
     assert "2024-01-02" in message
 
@@ -469,7 +469,7 @@ def test_top_holders_floor_is_the_pit_boundary_not_the_data_boundary():
     with pytest.raises(click.ClickException) as excinfo:
         backfill_cmds._guard_history_horizon("top_holders", date(2001, 1, 1))
     message = str(excinfo.value)
-    assert "history floor" in message
+    assert "历史下限" in message
     assert "2003-01-01" in message
     assert "narrow" not in message, "a fixed floor has no narrower scope that helps"
 
@@ -480,7 +480,7 @@ def test_northbound_flows_declares_the_exchange_opening_floor():
     with pytest.raises(click.ClickException) as excinfo:
         backfill_cmds._guard_history_horizon("northbound_flows", date(2014, 11, 16))
     message = str(excinfo.value)
-    assert "history floor" in message
+    assert "历史下限" in message
     assert "2014-11-17" in message
     assert "narrow" not in message
 
@@ -632,10 +632,10 @@ def test_a_degraded_slice_keeps_the_sweep_going_but_not_its_success_claim(monkey
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        ("daily_bar", "Did you mean: daily_bars"),
+        ("daily_bar", "是不是想找：daily_bars"),
         # A step name is not a backfill target; the docs say `cne backfill <dataset>`.
-        ("daily_bars_history", "Did you mean: daily_bars"),
-        ("zzzz", "unknown dataset 'zzzz'"),
+        ("daily_bars_history", "是不是想找：daily_bars"),
+        ("zzzz", "未知数据集 'zzzz'"),
     ],
 )
 def test_a_mistyped_dataset_is_an_error_with_near_misses(name, expected):

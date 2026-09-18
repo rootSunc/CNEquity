@@ -109,14 +109,14 @@ def test_default_init_is_the_shallow_window(tmp_path, monkeypatch):
 
     start, output = _capture_backfill_start(tmp_path, monkeypatch, [])
     assert start == expected
-    assert "History window" in output
+    assert "历史窗口" in output
     assert "cne backfill daily_bars" in output, "must say how to deepen"
 
 
 def test_full_profile_still_takes_everything(tmp_path, monkeypatch):
     start, output = _capture_backfill_start(tmp_path, monkeypatch, ["--profile", "full"])
     assert start is None
-    assert "History window" not in output
+    assert "历史窗口" not in output
 
 
 def test_quick_profile_prints_how_to_deepen(tmp_path, monkeypatch):
@@ -287,5 +287,5 @@ def test_a_tiny_lake_profile_needs_no_config(monkeypatch, tmp_path):
 def test_each_end_of_the_axis_refuses_the_other_end_options(args, rejected, monkeypatch):
     seen, result = _capture_demo(monkeypatch, args)
     assert result.exit_code != 0
-    assert f"{rejected} does not apply" in result.output
+    assert f"{rejected} 对" in result.output
     assert not seen, "nothing should have run"

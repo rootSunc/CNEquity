@@ -57,7 +57,7 @@ def cfg_path(tmp_path):
 def test_config_validate_ok(cfg_path):
     result = CliRunner().invoke(cli, ["config", "validate", "--config", cfg_path])
     assert result.exit_code == 0, result.output
-    assert "Configuration OK" in result.output
+    assert "配置检查通过" in result.output
 
 
 def test_config_validate_reports_errors(tmp_path):
@@ -250,13 +250,42 @@ def test_run_daily_run_lock_error(cfg_path, monkeypatch):
 def test_run_daily_unknown_group(cfg_path):
     result = CliRunner().invoke(cli, ["run", "daily", "--config", cfg_path, "--group", "nope"])
     assert result.exit_code != 0
-    assert "Unknown group" in result.output
+    assert "未知调度组" in result.output
+
+
+def test_run_daily_unknown_group_names_the_configured_ones(tmp_path):
+    """`Unknown group: core` alone leaves the reader guessing what is valid."""
+    cfg = _write_config(
+        tmp_path,
+        extra='\n[job.daily.groups.capital]\nat = "17:00"\nsteps = ["compact"]\n',
+    )
+    result = CliRunner().invoke(cli, ["run", "daily", "--config", cfg, "--group", "core"])
+    assert result.exit_code != 0
+    assert "配置里有：capital" in result.output
+
+
+def test_run_daily_refuses_a_config_with_no_waves(tmp_path):
+    """An empty plan is not a successful day.
+
+    A config without `[[job.daily.waves]]` — the one `cne init --profile demo`
+    writes — reported `planned_steps: []`, `status: success` and exit 0 while
+    fetching nothing, which is exactly what a scheduler cannot act on.
+    """
+    cfg = tmp_path / "no-waves.toml"
+    cfg.write_text(
+        f'[data]\nroot = "{path_for_toml(tmp_path / "data")}"\n\n[orchestrator]\nworkers = 1\n',
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(cli, ["run", "daily", "--config", str(cfg)])
+    assert result.exit_code != 0
+    assert "没有 [[job.daily.waves]]" in result.output
+    assert "cne config create" in result.output
 
 
 def test_status_no_runs(cfg_path):
     result = CliRunner().invoke(cli, ["status", "--config", cfg_path])
     assert result.exit_code == 0, result.output
-    assert "No runs yet." in result.output
+    assert "还没有任何 run。" in result.output
 
 
 def test_status_latest_run(cfg_path, monkeypatch):
@@ -352,7 +381,7 @@ def test_status_datasets_all_fresh(cfg_path, monkeypatch):
     monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
     result = CliRunner().invoke(cli, ["status", "--datasets", "--config", cfg_path])
     assert result.exit_code == 0, result.output
-    assert "last trading day: 2024-06-28" in result.output
+    assert "最后交易日：2024-06-28" in result.output
 
 
 def test_status_datasets_ignores_disabled_optional_capture(cfg_path, monkeypatch):
@@ -439,7 +468,7 @@ def test_status_all_columns_without_datasets_is_a_usage_error(cfg_path):
     result = CliRunner().invoke(cli, ["status", "--all-columns", "--config", cfg_path])
 
     assert result.exit_code != 0
-    assert "--all-columns only applies with --datasets" in result.output
+    assert "--all-columns 只能配合 --datasets 使用" in result.output
 
 
 def test_retry_unknown_run(cfg_path, monkeypatch):
@@ -454,7 +483,7 @@ def test_retry_unknown_run(cfg_path, monkeypatch):
     monkeypatch.setattr("cnequity.cli.run_cmds.JobEngine", FakeEngine)
     result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path, "--run-id", "missing"])
     assert result.exit_code != 0
-    assert "Unknown run_id" in result.output
+    assert "未知 run_id" in result.output
 
 
 def test_retry_init_run(cfg_path, monkeypatch):
@@ -534,7 +563,7 @@ def test_retry_failed_groups_retries_only_latest_failed_per_group(cfg_path, monk
     result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path, "--failed-groups"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.count("Retrying failed daily group run") == 1
+    assert result.output.count("重试失败的 daily 调度组 run") == 1
     assert "research-new" in result.output
     assert len(calls) == 1
     assert calls[0][-1] == "research-new"
@@ -563,7 +592,7 @@ def test_retry_failed_groups_reports_child_failure(cfg_path, monkeypatch):
 def test_retry_requires_exactly_one_scope(cfg_path):
     result = CliRunner().invoke(cli, ["run", "retry", "--config", cfg_path])
     assert result.exit_code != 0
-    assert "provide --run-id or --failed-groups" in result.output
+    assert "请给出 --run-id 或 --failed-groups" in result.output
 
 
 def test_derive_adj_factors(cfg_path, monkeypatch):
@@ -573,7 +602,7 @@ def test_derive_adj_factors(cfg_path, monkeypatch):
     )
     result = CliRunner().invoke(cli, ["derive", "adj_factors", "--config", cfg_path])
     assert result.exit_code == 0, result.output
-    assert "Derived adj_factors: 12 rows" in result.output
+    assert "已派生 adj_factors：12 行" in result.output
 
 
 def test_derive_industry_index(cfg_path, monkeypatch):
@@ -589,7 +618,7 @@ def test_derive_industry_index(cfg_path, monkeypatch):
 def test_derive_unknown_target(cfg_path):
     result = CliRunner().invoke(cli, ["derive", "not_a_thing", "--config", cfg_path])
     assert result.exit_code != 0
-    assert "Unknown derive target" in result.output
+    assert "未知的 derive 目标" in result.output
 
 
 def test_clean_dry_run(cfg_path, monkeypatch):
@@ -696,7 +725,7 @@ def test_query_rejects_partial_on_demand_options(cfg_path, args):
     result = CliRunner().invoke(cli, ["query", "--config", cfg_path, *args])
 
     assert result.exit_code != 0
-    assert "requires" in result.output or "together" in result.output
+    assert "必须一起给" in result.output or "需要同时给" in result.output
 
 
 def test_query_sql(cfg_path, monkeypatch, tmp_path):
@@ -733,7 +762,7 @@ def test_audit_with_run_id(cfg_path, monkeypatch):
     _stub_audit(monkeypatch)
     result = CliRunner().invoke(cli, ["audit", "--config", cfg_path, "--run-id", "r1"])
     assert result.exit_code == 0, result.output
-    assert "2 findings" in result.output
+    assert "2 条 findings" in result.output
 
 
 def test_per_run_audit_exits_non_zero_on_error_findings(cfg_path, monkeypatch):
@@ -742,7 +771,7 @@ def test_per_run_audit_exits_non_zero_on_error_findings(cfg_path, monkeypatch):
     _stub_audit(monkeypatch, errors=1, warnings=3)
     result = CliRunner().invoke(cli, ["audit", "--config", cfg_path, "--run-id", "r1"])
     assert result.exit_code == 1, result.output
-    assert "1 error, 3 warning" in result.output
+    assert "1 error，3 warning" in result.output
     # Name what failed; a bare count sends the operator back to the JSON.
     assert "boom" in result.output
 
@@ -788,7 +817,7 @@ def test_compact_no_runs(cfg_path, monkeypatch):
     monkeypatch.setattr("cnequity.cli.maintain_cmds.Manifest", FakeManifest)
     result = CliRunner().invoke(cli, ["run", "compact", "--config", cfg_path])
     assert result.exit_code != 0
-    assert "No runs found" in result.output
+    assert "没有找到任何 run" in result.output
 
 
 def test_audit_full_healthy(cfg_path, monkeypatch):
@@ -867,10 +896,10 @@ def test_audit_full_research_window_is_a_strict_independent_gate(cfg_path, monke
     )
 
     assert result.exit_code == 1
-    assert "historical all-A" in result.output
+    assert "历史 all-A" in result.output
     assert "BLOCKED" in result.output
-    assert "remediation: run cne delisted coverage" in result.output
-    assert "HEALTHY (operational; research BLOCKED)" in result.output
+    assert "修复建议：run cne delisted coverage" in result.output
+    assert "HEALTHY（运维层面；研究层面 BLOCKED）" in result.output
 
 
 def test_audit_full_can_select_scoped_research_universe(cfg_path, monkeypatch):
@@ -909,7 +938,7 @@ def test_audit_full_can_select_scoped_research_universe(cfg_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert observed["research_universe"] == "all_a_sh_sz"
-    assert "historical all_a_sh_sz" in result.output
+    assert "历史 all_a_sh_sz" in result.output
 
 
 def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):
@@ -1066,7 +1095,7 @@ def test_backfill_sector_bars_force_and_retry_mutex(cfg_path):
         ["backfill", "sector_bars", "--config", cfg_path, "--retry-failed", "--force"],
     )
     assert result.exit_code != 0
-    assert "either" in result.output.lower() or "not both" in result.output.lower()
+    assert "只能用一个" in result.output
 
 
 def test_backfill_success_compacts(cfg_path, monkeypatch):
@@ -1122,14 +1151,14 @@ def test_backfill_workers_rejects_unsupported_date_walk(cfg_path):
     )
 
     assert result.exit_code != 0
-    assert "supported only for margin_trading" in result.output
+    assert "只支持 margin_trading" in result.output
 
 
 def test_backfill_workers_help_describes_shared_limiter(cfg_path):
     result = CliRunner().invoke(cli, ["backfill", "--help"])
 
     assert result.exit_code == 0
-    assert "shared source" in result.output
+    assert "共享的源限流器" in result.output
     assert "bypassing" not in result.output
 
 
@@ -1204,7 +1233,7 @@ def test_a_mistyped_date_is_a_usage_error_not_a_traceback(cfg_path, argv):
 
     assert result.exit_code != 0
     assert "Traceback" not in result.output
-    assert "is not an ISO date (YYYY-MM-DD)" in result.output
+    assert "不是 ISO 日期（YYYY-MM-DD）" in result.output
 
 
 def test_status_datasets_exits_1_when_something_is_stale(cfg_path, monkeypatch):
@@ -1284,7 +1313,7 @@ def test_freshness_gate_can_be_scoped_to_the_groups_this_host_runs(tmp_path, mon
     assert result.exit_code == 0, result.output
     # Still reported — scoping the gate must not hide the gap.
     assert "STALE" in result.output
-    assert "1 in groups this host does not run" in result.output
+    assert "1 个属于这台机器不跑的组" in result.output
 
 
 def test_a_scoped_gate_still_fails_on_its_own_group(cfg_path, monkeypatch):
@@ -1330,14 +1359,14 @@ def test_full_quality_gate_does_not_conflate_optional_freshness(
     )
     result = CliRunner().invoke(cli, ["audit", "--full", "--quality-only", "--config", cfg_path])
     assert result.exit_code == expected, result.output
-    assert "STALE datasets: minute_bars" in result.output
+    assert "STALE 数据集：minute_bars" in result.output
     assert "Quality gate:" in result.output
 
 
 def test_quality_only_cannot_silently_change_a_per_run_audit(cfg_path):
     result = CliRunner().invoke(cli, ["audit", "--quality-only", "--config", cfg_path])
     assert result.exit_code != 0
-    assert "requires --full" in result.output
+    assert "需要配合 --full" in result.output
 
 
 def test_group_ownership_includes_derived_outputs(tmp_path):
@@ -1406,4 +1435,61 @@ def test_cli_derive_failures_are_not_success(cfg_path, monkeypatch):
     )
     result = CliRunner().invoke(cli, ["derive", "adj_factors", "--config", cfg_path])
     assert result.exit_code == 1
-    assert "Warnings: 1" in result.output
+    assert "警告：1" in result.output
+
+
+def test_run_daily_all_groups_runs_each_group_and_survives_one_failure(tmp_path, monkeypatch):
+    """The whole day in one command, for a lake installed from PyPI.
+
+    `scripts/daily_pipeline.sh` is the only thing that ran all six groups and
+    it is not installed by the package, so the single command people reached
+    for covered a third of the lake in silence.
+    """
+    cfg = _write_config(
+        tmp_path,
+        extra=(
+            '\n[job.daily.groups.core]\nat = "16:00"\nsteps = ["compact"]\n'
+            '\n[job.daily.groups.capital]\nat = "17:00"\nsteps = ["compact"]\n'
+            '\n[job.daily.groups.research]\nat = "18:00"\nsteps = ["compact"]\n'
+        ),
+    )
+    seen: list[str] = []
+
+    def fake_run_job(self, job_name, *a, **k):
+        seen.append(job_name)
+        if job_name == "daily:capital":
+            raise RuntimeError("eastmoney refused the window")
+        return {"run_id": f"r-{job_name}", "status": "success", "results": []}
+
+    monkeypatch.setattr(JobEngine, "run_job", fake_run_job)
+    result = CliRunner().invoke(cli, ["run", "daily", "--all-groups", "--config", cfg])
+
+    assert seen == ["daily:core", "daily:capital", "daily:research"], "config order, all of them"
+    assert result.exit_code == 1, "a failed group must reach the scheduler"
+    assert "eastmoney refused the window" in result.output
+    payload = json.loads(result.output[result.output.index("{") :])
+    assert [g["status"] for g in payload["groups"]] == ["success", "failed", "success"]
+
+
+def test_run_daily_all_groups_skips_groups_whose_datasets_are_off(tmp_path, monkeypatch):
+    """`intraday` and `ticks` are configured but opt-in, and off by default."""
+    cfg = _write_config(
+        tmp_path,
+        extra=(
+            '\n[job.daily.groups.core]\nat = "16:00"\nsteps = ["compact"]\n'
+            '\n[job.daily.groups.intraday]\nat = "18:45"\n'
+            'steps = ["minute_bars", "compact"]\n'
+        ),
+    )
+    seen: list[str] = []
+
+    def fake_run_job(self, job_name, *a, **k):
+        seen.append(job_name)
+        return {"run_id": f"r-{job_name}", "status": "success", "results": []}
+
+    monkeypatch.setattr(JobEngine, "run_job", fake_run_job)
+    result = CliRunner().invoke(cli, ["run", "daily", "--all-groups", "--config", cfg])
+
+    assert result.exit_code == 0, result.output
+    assert seen == ["daily:core"]
+    assert "skipped" in result.output

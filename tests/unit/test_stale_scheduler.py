@@ -162,5 +162,5 @@ def test_stale_plan_cannot_escape_explicit_host_groups(monkeypatch, tmp_path):
     import click
     import pytest
 
-    with pytest.raises(click.ClickException, match="Unknown stale groups"):
+    with pytest.raises(click.ClickException, match="未知的 stale 调度组"):
         stale_fetch_plan(cfg, date(2024, 1, 5), groups={"typo"})

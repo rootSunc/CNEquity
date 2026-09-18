@@ -125,7 +125,7 @@ def test_a_moved_config_action_is_answered_like_a_moved_command():
     result = CliRunner().invoke(cli, ["config", "init"])
 
     assert result.exit_code != 0
-    assert "has moved" in result.output
+    assert "已改名" in result.output
     assert "cne config create" in result.output
     # The moved spellings and the live ones must not overlap, or one shadows
     # the other depending on which check runs first.
@@ -221,7 +221,7 @@ def test_resilience_refuses_a_config_path_that_does_not_exist():
     """It reads the registry, not the lake — but a typo must not pass silently."""
     result = CliRunner().invoke(cli, ["sources", "resilience", "--config", "/nope/missing.toml"])
     assert result.exit_code != 0
-    assert "Config not found" in result.output
+    assert "找不到配置" in result.output
     # Without an explicit --config it still answers, because it needs no lake.
     bare = CliRunner().invoke(cli, ["sources", "resilience"])
     assert bare.exit_code == 0, bare.output
@@ -249,7 +249,7 @@ def test_backfill_refuses_a_reversed_date_range(tmp_path):
         ],
     )
     assert result.exit_code != 0
-    assert "--start must be on or before --end" in result.output
+    assert "--start 必须早于或等于 --end" in result.output
 
 
 def test_verify_refuses_a_dataset_name_it_does_not_know(tmp_path):
@@ -258,7 +258,7 @@ def test_verify_refuses_a_dataset_name_it_does_not_know(tmp_path):
     cfg.write_text(f'[data]\nroot = "{(tmp_path / "lake").as_posix()}"\n', encoding="utf-8")
     result = CliRunner().invoke(cli, ["verify", "--dataset", "daily_bar", "--config", str(cfg)])
     assert result.exit_code != 0
-    assert "unknown dataset 'daily_bar'" in result.output
+    assert "未知数据集 'daily_bar'" in result.output
     assert "daily_bars" in result.output, "a near miss should be offered"
 
 
@@ -285,7 +285,7 @@ def test_every_command_path_resolves_in_any_case():
 @pytest.mark.parametrize(
     ("argv", "needle"),
     [
-        (["verify", "--dataset", "DAILY_BARS"], "unknown dataset"),
+        (["verify", "--dataset", "DAILY_BARS"], "未知数据集"),
         (["contract", "show", "--dataset", "DAILY_BARS"], "KeyError"),
         (["stats", "show", "--dataset", "DAILY_BARS"], "unknown"),
     ],
@@ -328,7 +328,7 @@ def test_a_derive_target_resolves_whatever_its_case(tmp_path, monkeypatch):
     cfg = tmp_path / "cnequity.toml"
     cfg.write_text(f'[data]\nroot = "{(tmp_path / "lake").as_posix()}"\n', encoding="utf-8")
     result = CliRunner().invoke(cli, ["derive", "ADJ_FACTORS", "--config", str(cfg)])
-    assert "Unknown derive target" not in result.output, result.output
+    assert "未知的 derive 目标" not in result.output, result.output
     assert seen, "the target was not resolved to adj_factors"
 
 

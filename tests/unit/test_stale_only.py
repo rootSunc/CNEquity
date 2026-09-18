@@ -122,7 +122,7 @@ def test_nothing_stale_is_a_clean_no_op(config, monkeypatch):
         cli, ["run", "daily", "--stale-only", "--config", str(config.config_path)]
     )
     assert result.exit_code == 0
-    assert "nothing stale" in result.output
+    assert "没有落后的数据集" in result.output
 
 
 def test_stale_only_refuses_to_be_combined_with_group(config):

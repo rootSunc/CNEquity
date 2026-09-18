@@ -27,20 +27,20 @@ from cnequity.orchestrator.engine import JobEngine
 
 @cli.group("delisted")
 def delisted_grp():
-    """Read the delisted catalogue and fetch the history it names.
+    """读退市名录，并抓取它列出的历史。
 
-    Rebuilding the catalogue — the code-space sweep, terminal reconciliation,
-    instruments repair and the coverage gate — is a one-off project rather than
-    an operation, and lives in `scripts/delisted_ops.py`.
+    \b
+    重建名录本身 —— 代码空间扫描、终态对账、instruments 修复和覆盖门禁 ——
+    是一次性的工程而不是日常运维，放在 `scripts/delisted_ops.py` 里。
     """
 
 
 @delisted_grp.command("status")
 @config_option
-@click.option("--since", default="2016-01-01", show_default=True, help="Lake window start.")
-@click.option("--sample", default=15, show_default=True, help="Rows of detail to print.")
+@click.option("--since", default="2016-01-01", show_default=True, help="湖窗口起点。")
+@click.option("--sample", default=15, show_default=True, help="打印多少行明细。")
 def delisted_status(config_path: str, since: str, sample: int):
-    """Summarise the catalogue: how many, from when, and what is left to probe."""
+    """汇总名录：有多少、从什么时候起、还有多少待探测。"""
     from collections import Counter
 
     from cnequity.steps.delisted import (
@@ -84,9 +84,9 @@ def delisted_status(config_path: str, since: str, sample: int):
 
 @delisted_grp.command("backfill")
 @config_option
-@click.option("--since", default="2016-01-01", show_default=True, help="Lake window start.")
+@click.option("--since", default="2016-01-01", show_default=True, help="湖窗口起点。")
 def delisted_backfill(config_path: str, since: str):
-    """Fetch price history for catalogued delistings and compact it into the lake."""
+    """抓取名录里退市标的的价格历史，并 compact 进湖。"""
 
     from cnequity.steps.delisted import backfill_delisted_bars
 

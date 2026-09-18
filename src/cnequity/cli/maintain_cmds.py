@@ -42,13 +42,13 @@ from cnequity.storage.staging_cleanup import (
 @config_option
 @click.option("--run-id", default=None)
 def compact(config_path: str, run_id: str | None):
-    """Compact staging into curated for all datasets staged in the run."""
+    """把这次 run 里 staging 的所有数据集 compact 进 curated。"""
     cfg = _cfg(config_path)
     manifest = Manifest(cfg.manifest_path)
     if not run_id:
         latest = manifest.latest_run()
         if not latest:
-            raise click.ClickException("No runs found")
+            raise click.ClickException("没有找到任何 run")
         run_id = latest["run_id"]
 
     attach_log_file(cfg, "run-compact")
@@ -156,25 +156,25 @@ def _published_derive(cfg, dataset: str):
     "--full",
     is_flag=True,
     default=False,
-    help="Rewrite all adj_factors partitions (default: append-only since watermark).",
+    help="重写 adj_factors 的全部分区（默认只从水位往后追加）。",
 )
 @click.option(
     "--start",
     "start_str",
     default=None,
-    help="industry_index / trading_status: only derive on/after this date (YYYY-MM-DD).",
+    help="industry_index / trading_status：只派生这个日期（YYYY-MM-DD）及之后的。",
 )
 @click.option(
     "--end",
     "end_str",
     default=None,
-    help="industry_index / trading_status: only derive on/before this date (YYYY-MM-DD).",
+    help="industry_index / trading_status：只派生这个日期（YYYY-MM-DD）及之前的。",
 )
 @click.option(
     "--apply",
     "apply_changes",
     is_flag=True,
-    help="bse_code_migration: actually rewrite the partitions (default reports only).",
+    help="bse_code_migration：真正重写分区（默认只报告）。",
 )
 def derive(
     name: str,
@@ -184,14 +184,13 @@ def derive(
     end_str: str | None,
     apply_changes: bool,
 ):
-    """Derive computed datasets.
+    """派生计算类数据集。
 
-    `adj_factors`, `industry_index` and `trading_status` are already steps in
-    the daily job (`derive_adj_factors`, `derive_industry_index`,
-    `trading_status_derive`), so running them here is a repair or a backfill of
-    an older window, not part of a normal day. `sector_routing`,
-    `sector_code_map` and `valuation_orphans` are scheduled by nothing and are
-    only ever run by hand.
+    \b
+    `adj_factors`、`industry_index` 和 `trading_status` 本来就是日更里的 step
+    （`derive_adj_factors`、`derive_industry_index`、`trading_status_derive`），
+    所以在这里跑它们属于修复或补更早的窗口，不是正常一天的一部分。
+    `sector_routing`、`sector_code_map` 和 `valuation_orphans` 没有任何调度会跑，只能手动执行。
     """
     # Derive targets are lower case in the registry, and command names are
     # already case-insensitive; a target typed in caps should resolve the same.
@@ -201,18 +200,17 @@ def derive(
     start = parse_date_option(start_str, "--start")
     end = parse_date_option(end_str, "--end")
     if start and end and start > end:
-        raise click.ClickException("--start must be on or before --end")
+        raise click.ClickException("--start 必须早于或等于 --end")
     if name == "adj_factors":
         with _published_derive(cfg, name) as outcome:
             result = compute_adj_factors(cfg, full=full)
             outcome["rows_written"] = result.rows
             if result.failed:
                 outcome["status"] = "degraded"
-        click.echo(f"Derived {name}: {result.rows} rows")
+        click.echo(f"已派生 {name}：{result.rows} 行")
         if result.failed:
             click.echo(
-                f"Warnings: {len(result.failed)} symbol×type fetch failures "
-                f"({result.fail_ratio:.1%})",
+                f"警告：{len(result.failed)} 个 标的×类型 抓取失败（{result.fail_ratio:.1%}）",
                 err=True,
             )
             raise SystemExit(1)
@@ -252,34 +250,34 @@ def derive(
             summary["note"] = "report only; re-run with --apply to rewrite the partitions"
         click.echo(json.dumps(summary, indent=2, default=str))
     else:
-        raise click.ClickException(f"Unknown derive target: {name}")
+        raise click.ClickException(f"未知的 derive 目标：{name}")
 
 
 @run.command("clean")
 @config_option
-@click.option("--dry-run", is_flag=True, help="Report removable staging without deleting.")
+@click.option("--dry-run", is_flag=True, help="只报告可以删的 staging，不真删。")
 @click.option(
     "--orphan-retention-days",
     default=7,
     show_default=True,
-    help="Delete manifest-less orphan staging older than this many days.",
+    help="删掉超过这么多天、且 manifest 里没有记录的孤儿 staging。",
 )
 @click.option(
     "--snapshot-retention-days",
     default=DEFAULT_SNAPSHOT_RETENTION_DAYS,
     show_default=True,
-    help="Delete meta/source_snapshots run_id dirs older than this many days "
-    "(always keeps the newest per dataset/source).",
+    help=(
+        "删掉超过这么多天的 meta/source_snapshots run_id 目录（每个数据集 / 源的最新一份始终保留）"
+        "。"
+    ),
 )
 @click.option(
     "--force",
     is_flag=True,
     help=(
-        "Also delete staging that is not yet cleanup-ready (incomplete batches "
-        "and/or no compact). Success fetch batches are demoted to failed so "
-        "`cne run retry` refetches them (data is refetched, not lost, but the retry "
-        "becomes a full re-run). Do not use on success-without-compact runs — "
-        "run `cne run compact --run-id` first."
+        "连还不满足清理条件的 staging 也删（批次没跑完、和/或没 compact 过）。成功的抓取批次会被降级为 failed，"
+        "好让 `cne run retry` 重抓（数据是重抓不是丢失，但重试会变成整段重跑）。成功但没 compact 的 run "
+        "不要用它 —— 先跑 `cne run compact --run-id`。"
     ),
 )
 @click.option(
@@ -288,10 +286,8 @@ def derive(
     show_default=True,
     type=int,
     help=(
-        "Keep this many committed generations per dataset under "
-        "meta/revisions/data; drop the stored bytes of older ones. Receipts are "
-        "always kept, and the generation current.json points at is never "
-        "dropped. 0 disables the prune."
+        "meta/revisions/data 下每个数据集保留这么多代已提交版本，更老的代只删存储字节。receipt 始终保留，"
+        "current.json 指向的那一代永远不删。0 表示不清理。"
     ),
 )
 @click.option(
@@ -300,21 +296,19 @@ def derive(
     show_default=True,
     type=int,
     help=(
-        "Delete `logs/cne-*.log` older than this many days. One file is written "
-        "per invocation and nothing else removes them. 0 disables the prune."
+        "删掉超过这么多天的 `logs/cne-*.log`。每次调用都会写一份，没有别的东西会清理它们。0 表示不清理。"
     ),
 )
 @click.option(
     "--reconcile-runs",
     is_flag=True,
-    help="Mark runs stuck in 'running' (crashed workers) as failed before cleanup.",
+    help="清理前，把卡在 'running'（worker 崩溃）的 run 标成 failed。",
 )
 @click.option(
     "--reconcile-after-seconds",
     default=None,
     type=float,
-    help="Only reconcile runs idle longer than this many seconds "
-    "(default: [orchestrator].batch_stale_seconds).",
+    help=("只对静默超过这么多秒的 run 做上面的对账（默认取 [orchestrator].batch_stale_seconds）。"),
 )
 def clean(
     config_path: str,
@@ -327,12 +321,12 @@ def clean(
     reconcile_runs: bool,
     reconcile_after_seconds: float | None,
 ):
-    """Remove staging for compacted terminal runs and aged orphans.
+    """清掉已 compact 的终态 run 的 staging，以及过期的孤儿目录。
 
-    Ready means: run is terminal (success/warning/failed), all batches settled,
-    and a successful compact batch was recorded. Incomplete or never-compacted
-    staging is kept for retry unless --force is given. Also prunes aged
-    ``meta/source_snapshots`` run_id dirs.
+    \b
+    「可清理」是指：run 处于终态（success/warning/failed）、所有批次都已落定，
+    并且记录过一次成功的 compact。没跑完或从没 compact 过的 staging 会留着等重试，
+    除非加了 --force。同时清理过期的 `meta/source_snapshots` run_id 目录。
     """
     cfg = _cfg(config_path)
     attach_log_file(cfg, "run-clean")
@@ -409,7 +403,7 @@ def clean(
 
 @cli.group()
 def stats():
-    """Lake measurement tables under meta/stats (rows, bytes, source mix)."""
+    """meta/stats 下的湖度量表（行数、字节数、来源构成）。"""
 
 
 def _stats_rebuild_if_stale(cfg, *, as_json: bool) -> None:
@@ -430,9 +424,9 @@ def _stats_rebuild_if_stale(cfg, *, as_json: bool) -> None:
         click.echo(json.dumps({"rebuilt": True, **result.as_dict()}, indent=2, default=str))
         return
     click.echo(
-        f"rebuilt ({freshness.reason or 'stale'}): "
-        f"{len(result.datasets)} dataset(s), {result.rows:,} row(s) "
-        f"in {result.elapsed_seconds:.1f}s"
+        f"已重算（{freshness.reason or 'stale'}）："
+        f"{len(result.datasets)} 个数据集、{result.rows:,} 行，"
+        f"耗时 {result.elapsed_seconds:.1f}s"
     )
 
 
@@ -442,24 +436,25 @@ def _stats_rebuild_if_stale(cfg, *, as_json: bool) -> None:
     "--dataset",
     "dataset_names",
     multiple=True,
-    help="Rebuild only these datasets (repeatable). Other datasets keep their rows.",
+    help="只重算这些数据集（可重复）。其它数据集的行保持不变。",
 )
 @click.option(
     "--if-stale",
     is_flag=True,
-    help="No-op unless ingestion has run since the stats were built. Safe on a timer.",
+    help="除非统计建好之后又跑过采集，否则什么都不做。可以安全地挂定时器。",
 )
-@click.option("--json", "as_json", is_flag=True, help="Print the result as JSON.")
+@click.option("--json", "as_json", is_flag=True, help="以 JSON 打印结果。")
 def stats_rebuild(config_path: str, dataset_names: tuple[str, ...], if_stale: bool, as_json: bool):
-    """Recompute partition_stats / provenance_stats from curated and derived.
+    """从 curated 和 derived 重算 partition_stats / provenance_stats。
 
-    Unconditional by default. `--if-stale` is the form to put on a timer: it
-    returns without work when nothing has changed, and stands down rather than
-    queueing when a concurrent rebuild already holds the lock — a dashboard
-    request blocked behind a full scan is worse than numbers one run old.
+    \b
+    默认无条件重算。要挂定时器请用 `--if-stale`：没有任何变化时它直接返回，
+    并且在已有并发重算持锁时选择让路而不是排队 ——
+    一个卡在全量扫描后面的面板请求，比落后一次 run 的数字更糟。
 
-    Staleness is judged by run id, not by the clock. Only ingestion moves the
-    lake, so stats built after the last run are current however old they look.
+    \b
+    是否过期按 run id 判断，不看时钟。只有采集会改变这个湖，
+    所以在最后一次 run 之后建的统计就是新的，无论看上去多旧。
     """
     # Registry names are lower case; `--dataset` should not care about case.
     dataset_names = tuple(n.lower() for n in dataset_names)
@@ -470,9 +465,7 @@ def stats_rebuild(config_path: str, dataset_names: tuple[str, ...], if_stale: bo
 
     if if_stale:
         if dataset_names:
-            raise click.UsageError(
-                "--if-stale rebuilds the whole lake; drop --dataset or drop --if-stale"
-            )
+            raise click.UsageError("--if-stale 会重算整个湖；请去掉 --dataset，或者去掉 --if-stale")
         _stats_rebuild_if_stale(cfg, as_json=as_json)
         return
 
@@ -485,12 +478,12 @@ def stats_rebuild(config_path: str, dataset_names: tuple[str, ...], if_stale: bo
         click.echo(json.dumps(result.as_dict(), indent=2, default=str))
         return
     click.echo(
-        f"{len(result.datasets)} dataset(s), {result.partitions} partition(s), "
-        f"{result.rows:,} row(s), {result.files} file(s), "
-        f"{result.bytes / 1e6:.1f}MB in {result.elapsed_seconds:.1f}s"
+        f"{len(result.datasets)} 个数据集、{result.partitions} 个分区、"
+        f"{result.rows:,} 行、{result.files} 个文件、"
+        f"{result.bytes / 1e6:.1f}MB，耗时 {result.elapsed_seconds:.1f}s"
     )
     if result.empty:
-        click.echo(f"no parquet yet: {', '.join(sorted(result.empty))}")
+        click.echo(f"还没有 parquet：{', '.join(sorted(result.empty))}")
 
 
 def _scan_curated_datasets(cfg) -> list[dict]:
@@ -517,17 +510,17 @@ def _scan_curated_datasets(cfg) -> list[dict]:
 
 @stats.command("show")
 @config_option
-@click.option("--dataset", default=None, help="Per-partition detail for one dataset.")
-@click.option("--by-source", is_flag=True, help="Group by source / data_version instead.")
-@click.option("--json", "as_json", is_flag=True, help="Machine-readable JSON.")
+@click.option("--dataset", default=None, help="某一个数据集的逐分区明细。")
+@click.option("--by-source", is_flag=True, help="改为按 source / data_version 分组。")
+@click.option("--json", "as_json", is_flag=True, help="输出机器可读的 JSON。")
 def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: bool):
-    """Summarise the stats tables, scanning curated directly when there are none.
+    """汇总统计表；如果还没有统计表，就直接扫 curated。
 
-    `cne stats rebuild` builds the tables this reads. Without them the command
-    falls back to counting curated Parquet on the spot: slower, and thinner —
-    no byte totals, no source mix, no per-partition detail — but it answers
-    "what is in this lake" on a clone that has never built anything. That
-    fallback is the former `cne catalog`, and `--json` is its output.
+    \b
+    这条读的表由 `cne stats rebuild` 生成。没有它们时，命令退回到现场数 curated 的 Parquet：
+    更慢，也更薄 —— 没有字节总量、没有来源构成、没有逐分区明细 ——
+    但它能在一个从没建过任何东西的克隆上回答「这个湖里有什么」。
+    这个退路就是从前的 `cne catalog`，`--json` 是它的输出。
     """
     dataset = dataset.lower() if dataset else None
     from cnequity.storage.stats import (
@@ -542,13 +535,13 @@ def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: 
     if summary is None:
         if dataset or by_source:
             raise click.ClickException(
-                "no stats yet — `--dataset` / `--by-source` need `cne stats rebuild`"
+                "还没有统计表 —— `--dataset` / `--by-source` 需要先跑 `cne stats rebuild`"
             )
         entries = _scan_curated_datasets(cfg)
         if as_json:
             click.echo(json.dumps(entries, indent=2))
             return
-        click.echo("no stats tables — scanned curated directly; `cne stats rebuild` for the rest")
+        click.echo("没有统计表 —— 已直接扫 curated；其余内容请先跑 `cne stats rebuild`")
         click.echo(
             pl.DataFrame(
                 entries, schema={"dataset": pl.String, "files": pl.Int64, "rows": pl.Int64}
@@ -561,7 +554,7 @@ def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: 
     if dataset:
         df = df.filter(pl.col("dataset") == dataset)
         if df.is_empty():
-            raise click.ClickException(f"no stats rows for dataset {dataset!r}")
+            raise click.ClickException(f"数据集 {dataset!r} 没有统计行")
     elif by_source:
         df = df.group_by(["dataset", "source", "data_version"]).agg(
             pl.col("row_count").sum(),
@@ -584,8 +577,7 @@ def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: 
         else ""
     )
     click.echo(
-        f"generated_at: {summary.get('generated_at')}  "
-        f"run: {summary.get('latest_run_id')}{stale_note}"
+        f"生成于：{summary.get('generated_at')}  run：{summary.get('latest_run_id')}{stale_note}"
     )
     if as_json:
         click.echo(json.dumps(df.sort(df.columns[:2]).to_dicts(), indent=2, default=str))

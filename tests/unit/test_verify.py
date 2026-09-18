@@ -509,3 +509,61 @@ def test_cli_repair_says_so_when_the_window_is_genuinely_empty(tmp_path, monkeyp
     )
     assert res.exit_code == 0
     assert "源在该区间没有数据" in res.output
+
+
+# --- demo lakes ---------------------------------------------------------------
+# `cne init --profile demo|sample` builds a handful of symbols and two or three
+# datasets on purpose. Measured against the whole registry, the first health
+# check a new user runs reported 35 gaps and exited 1.
+
+
+def test_verify_on_a_demo_lake_checks_only_what_the_lake_holds(tmp_path):
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    lake = tmp_path / "lake"
+    part = lake / "curated" / "daily_bars" / "trade_date=2026-09-18"
+    part.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {"symbol": ["600519.SH"], "trade_date": [date(2026, 9, 18)], "close": [1.0]}
+    ).write_parquet(part / "part-0.parquet")
+    cfg = tmp_path / "cnequity.demo.toml"
+    cfg.write_text(
+        f'[data]\nroot = "{lake.as_posix()}"\nprofile = "demo"\n',
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["verify", "--config", str(cfg)])
+    assert "demo 湖（demo）" in result.output
+    assert "daily_bars" in result.output
+    # The forty datasets it never ingested are the profile, not a gap.
+    assert "financial_statement_items" not in result.output
+
+
+def test_verify_on_a_sample_lake_does_not_offer_to_repair_synthetic_rows(tmp_path):
+    """Its rows are dated by the generator, so it is stale the moment it exists.
+
+    The offered repair would fetch real bars into a lake whose every row says
+    `source=mock` — the one thing this profile exists to prevent.
+    """
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    lake = tmp_path / "lake"
+    part = lake / "curated" / "daily_bars" / "trade_date=2024-06-28"
+    part.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {"symbol": ["600519.SH"], "trade_date": [date(2024, 6, 28)], "close": [1.0]}
+    ).write_parquet(part / "part-0.parquet")
+    cfg = tmp_path / "cnequity.demo.toml"
+    cfg.write_text(
+        f'[data]\nroot = "{lake.as_posix()}"\nprofile = "sample"\n',
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["verify", "--config", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "不对 1 个数据集判新鲜度" in result.output
+    assert "cne backfill daily_bars" not in result.output

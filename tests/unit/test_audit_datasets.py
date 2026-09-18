@@ -66,6 +66,29 @@ def test_audit_checks_all_partition_col_datasets(tmp_path):
     assert required_exists and required_exists[0]["severity"] == "error"
 
 
+def test_audit_on_a_demo_lake_judges_only_the_datasets_it_holds(tmp_path):
+    """A five-symbol lake is not a market, and 32 errors said otherwise.
+
+    `cne init --profile demo` builds two or three datasets on purpose, so the
+    first `cne audit` a new user runs reported every other dataset missing and
+    exited 1.
+    """
+    import json
+
+    cfg = Config(data_root=tmp_path / "data", lake_profile="demo")
+    part = cfg.curated_root / "daily_bars" / "trade_date=2024-06-28"
+    part.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame([_bar_row("600519.SH", date(2024, 6, 28))]).write_parquet(part / "part-0.parquet")
+
+    run_audit(cfg, "run-demo-lake", date(2024, 6, 28), {})
+
+    payload = json.loads(
+        (cfg.meta_root / "quality" / "findings" / "run-demo-lake.json").read_text(encoding="utf-8")
+    )
+    exists_checks = {f["dataset"] for f in payload["findings"] if f.get("check") == "exists"}
+    assert exists_checks == set(), "a dataset this profile never ingests is not a finding"
+
+
 def test_row_count_mutation_warns_on_partial_market_drop():
     finding = check_partition_row_mutation(
         "daily_bars",

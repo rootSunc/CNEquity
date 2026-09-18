@@ -32,78 +32,79 @@ from cnequity.orchestrator.engine import JobEngine
 @click.option(
     "--retry-failed",
     is_flag=True,
-    help="Resume sector_bars backfill (skip boards already written to checkpoint).",
+    help="续跑 sector_bars 回填（跳过 checkpoint 里已写过的板块）。",
 )
 @click.option(
     "--force",
     is_flag=True,
-    help="Clear sector_bars backfill checkpoint and re-fetch all boards.",
+    help="清掉 sector_bars 回填 checkpoint，重抓全部板块。",
 )
 @click.option(
     "--start",
     "start_str",
     default=None,
-    help="Range start (YYYY-MM-DD) for date-walking backfills (margin_trading, "
-    "financial_statement_items period walk, minute_bars) and to narrow the "
-    "sector_bars kline window (default: 400 days back). Horizon-limited "
-    "datasets refuse a start older than what their source still serves.",
+    help=(
+        "按日期推进的回填（margin_trading、financial_statement_items 报告期推进、minute_bars）"
+        "的区间起点（YYYY-MM-DD），也用来收窄 sector_bars 的 K 线窗口（默认往前 400 天）。有历史深度限制的数据集会拒绝比源仍能提供的范围更早的起点。"
+    ),
 )
 @click.option(
     "--end",
     "end_str",
     default=None,
-    help="Range end (YYYY-MM-DD) for date-walking backfills (margin_trading, "
-    "financial_statement_items period walk) and sector_bars (default: today).",
+    help=(
+        "按日期推进的回填（margin_trading、financial_statement_items 报告期推进）与 sector_bars "
+        "的区间终点（YYYY-MM-DD，默认今天）。"
+    ),
 )
 @click.option(
     "--outstanding",
     is_flag=True,
-    help="Repair exactly the keys a tolerated gap left owed, taking the scope and "
-    "window from the ledger instead of --symbols/--start/--end. Filled keys are "
-    "struck off; anything still missing stays owed.",
+    help=(
+        "只修复被容忍缺口欠下的那些 key，范围和窗口都取自欠账台账，不看 --symbols/--start/--end。补上的 "
+        "key 会销账，仍然缺的继续欠着。"
+    ),
 )
 @click.option(
     "--symbols",
     "symbols_str",
     default=None,
-    help="Comma-separated symbols for a scoped intraday, trading_status, or "
-    "corporate_actions backfill, a scoped financial_statement_items repair, "
-    "or a scoped daily_bars repair. The "
-    "trading_status checkpoint and coverage evidence retain the exact scope; "
-    "daily_bars keeps the explicit scope in backfill metadata.",
+    help=(
+        "限定范围的标的列表，逗号分隔：用于 intraday、trading_status、corporate_actions "
+        "的限定回填，以及 financial_statement_items、daily_bars 的限定修复。trading_status "
+        "的 checkpoint 与覆盖证据会记下确切范围；daily_bars 会把这个显式范围写进 backfill 元数据。"
+    ),
 )
 @click.option(
     "--workers",
     default=1,
     show_default=True,
-    help="Concurrent date-walk workers for margin_trading only. Every request "
-    "still uses the configured shared source limiter; other datasets require 1.",
+    help="仅 margin_trading 的日期推进并发数。每个请求仍然走配置里共享的源限流器；其它数据集必须为 1。",
 )
 @click.option(
     "--baostock-repair",
     is_flag=True,
-    help="For corporate_actions only: explicitly repair delisted SH/SZ symbols via Baostock.",
+    help="仅 corporate_actions：用 Baostock 显式修复已退市的沪深标的。",
 )
 @click.option(
     "--ths-repair",
     is_flag=True,
-    help="For corporate_actions only: explicitly repair delisted BJ symbols via Tonghuashun.",
+    help="仅 corporate_actions：用同花顺显式修复已退市的北交所标的。",
 )
 @click.option(
     "--eastmoney-bj-repair",
     is_flag=True,
-    help="For corporate_actions only: repair legacy BJ symbols through current 920xxx EastMoney codes.",
+    help="仅 corporate_actions：通过现行的 920xxx 东财代码修复北交所老代码。",
 )
 @click.option(
     "--bse-tip-repair",
     is_flag=True,
-    help="For daily_bars only: fill an existing session's BJ amount from BSE without re-fetching Sina.",
+    help="仅 daily_bars：用北交所官网补已有交易日的 BJ 成交额，不重抓 Sina。",
 )
 @click.option(
     "--bj-amount-repair",
     is_flag=True,
-    help="For daily_bars only: fill the BJ turnover Sina never published, from TDX, "
-    "leaving every stored price and volume as it is. Needs --start/--end.",
+    help="仅 daily_bars：从 TDX 补 Sina 从未发布过的北交所成交额，已存的价格和成交量一律不动。需要 --start/--end。",
 )
 def backfill(
     dataset: str,
@@ -121,39 +122,38 @@ def backfill(
     bse_tip_repair: bool,
     bj_amount_repair: bool,
 ):
-    """Backfill a dataset.
+    """回填一个数据集。
 
-    Cost follows the source's billing unit, not the window. daily_bars fetches
-    per symbol, so `--start D --end D` sweeps the whole universe exactly like a
-    multi-year window does — one session is not one request. Narrow it with
-    `--symbols` when you want a quick check rather than a full market.
+    \b
+    成本按源的计费单位算，不按窗口算。daily_bars 是逐标的抓取，所以 `--start D --end D`
+    和多年窗口一样要扫一遍全市场 —— 一个交易日不等于一个请求。
+    只想快速验证而不是跑全市场时，用 `--symbols` 缩小范围。
     """
     dataset = _require_known_dataset(dataset)
     if fetch_semantics(dataset) == "snapshot" and not get_dataset(dataset).backfill_source:
         raise click.ClickException(
-            f"{dataset}: backfill not supported — fetch semantics are snapshot "
-            "(live page stamped with trade_date; historical values unavailable). "
-            "Run daily ingestion on trading days instead."
+            f"{dataset}：不支持回填 —— 它的采集语义是 snapshot"
+            "（实时页面盖上 trade_date；历史值拿不到）。"
+            "请改为在交易日跑日更采集。"
         )
     cfg = _cfg(config_path)
     attach_log_file(cfg, f"backfill-{dataset}")
     if workers < 1:
-        raise click.ClickException("--workers must be at least 1")
+        raise click.ClickException("--workers 至少为 1")
     if workers > 1 and dataset != "margin_trading":
         raise click.ClickException(
-            "--workers > 1 is currently supported only for margin_trading; "
-            "other backfills use one date-walk lane"
+            "--workers > 1 目前只支持 margin_trading；其它回填只用一条日期推进通道"
         )
     if baostock_repair and dataset != "corporate_actions":
-        raise click.ClickException("--baostock-repair only applies to corporate_actions")
+        raise click.ClickException("--baostock-repair 只适用于 corporate_actions")
     if ths_repair and dataset != "corporate_actions":
-        raise click.ClickException("--ths-repair only applies to corporate_actions")
+        raise click.ClickException("--ths-repair 只适用于 corporate_actions")
     if eastmoney_bj_repair and dataset != "corporate_actions":
-        raise click.ClickException("--eastmoney-bj-repair only applies to corporate_actions")
+        raise click.ClickException("--eastmoney-bj-repair 只适用于 corporate_actions")
     if bse_tip_repair and dataset != "daily_bars":
-        raise click.ClickException("--bse-tip-repair only applies to daily_bars")
+        raise click.ClickException("--bse-tip-repair 只适用于 daily_bars")
     if bj_amount_repair and dataset != "daily_bars":
-        raise click.ClickException("--bj-amount-repair only applies to daily_bars")
+        raise click.ClickException("--bj-amount-repair 只适用于 daily_bars")
     if baostock_repair:
         cfg._corporate_actions_baostock_repair = True
     if ths_repair:
@@ -162,7 +162,7 @@ def backfill(
         cfg._corporate_actions_eastmoney_bj_repair = True
     if dataset == "sector_bars":
         if retry_failed and force:
-            raise click.ClickException("Use either --retry-failed or --force, not both.")
+            raise click.ClickException("--retry-failed 和 --force 只能用一个。")
         cfg._sector_bars_force = force
     start_d = parse_date_option(start_str, "--start")
     end_d = parse_date_option(end_str, "--end")
@@ -171,23 +171,21 @@ def backfill(
         # days in it, the step raised, the engine logged the traceback, and the
         # command still printed status=success with rows_written=0. `derive`,
         # `verify --bars` and `audit` all refuse this up front; so does this now.
-        raise click.ClickException("--start must be on or before --end")
+        raise click.ClickException("--start 必须早于或等于 --end")
     if bj_amount_repair:
         if start_d is None or end_d is None:
-            raise click.ClickException("--bj-amount-repair requires --start and --end")
+            raise click.ClickException("--bj-amount-repair 需要同时给 --start 和 --end")
         cfg._bj_amount_repair = True
     if bse_tip_repair:
         if not symbols_str:
-            raise click.ClickException("--bse-tip-repair requires --symbols")
+            raise click.ClickException("--bse-tip-repair 需要 --symbols")
         if start_d is None or end_d is None or start_d != end_d:
-            raise click.ClickException(
-                "--bse-tip-repair requires the same explicit --start and --end session"
-            )
+            raise click.ClickException("--bse-tip-repair 需要显式给出同一天的 --start 和 --end")
         cfg._bse_tip_repair = True
     if outstanding:
         if symbols_str or start_d or end_d:
             raise click.ClickException(
-                "--outstanding takes its scope from the ledger; drop --symbols/--start/--end"
+                "--outstanding 的范围取自欠账台账；请去掉 --symbols/--start/--end"
             )
         result = _repair_outstanding(cfg, dataset, workers)
         click.echo(json.dumps(result, indent=2, default=str))
@@ -206,7 +204,7 @@ def backfill(
             cfg._backfill_symbols = symbols
         else:
             _override_scope(cfg, dataset, symbols)
-        click.echo(f"[{dataset}] scope overridden for this run: {len(symbols)} symbol(s)", err=True)
+        click.echo(f"[{dataset}] 本次 run 的范围被覆盖为 {len(symbols)} 只标的", err=True)
     if start_d:
         cfg._backfill_start = start_d
     if end_d:
@@ -274,8 +272,7 @@ def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
         days_in[day[:7]].append(day)
     if deferred:
         click.echo(
-            f"[{dataset}] {deferred} key(s) are for a session that is not final yet; "
-            "left owed for a later run",
+            f"[{dataset}] 有 {deferred} 个 key 属于尚未收定的交易日；继续欠着，留给后面的 run",
             err=True,
         )
     if not buckets:
@@ -287,8 +284,8 @@ def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
         }
 
     click.echo(
-        f"[{dataset}] {len(owed)} key(s) owed across "
-        f"{len({r['symbol'] for r in owed})} symbol(s); repairing in {len(buckets)} monthly pass(es)",
+        f"[{dataset}] 欠着 {len(owed)} 个 key，涉及 "
+        f"{len({r['symbol'] for r in owed})} 只标的；分 {len(buckets)} 个月度批次修复",
         err=True,
     )
     failures: list[str] = []
@@ -296,7 +293,7 @@ def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
         symbols = sorted(buckets[month])
         lo, hi = min(days_in[month]), max(days_in[month])
         click.echo(
-            f"[{dataset}] {index}/{len(buckets)} {month}: {len(symbols)} symbol(s) {lo}..{hi}",
+            f"[{dataset}] {index}/{len(buckets)} {month}：{len(symbols)} 只标的 {lo}..{hi}",
             err=True,
         )
         cfg._backfill_symbols = symbols
@@ -407,9 +404,8 @@ def _override_scope(cfg, dataset: str, symbols: list[str]) -> None:
     block = SCOPED_DATASETS.get(dataset)
     if block is None:
         raise click.ClickException(
-            f"--symbols only applies to datasets with a configured scope "
-            f"({', '.join(sorted(SCOPED_DATASETS))}); {dataset} takes its "
-            "universe from instruments."
+            f"--symbols 只适用于配置里有 scope 的数据集"
+            f"（{', '.join(sorted(SCOPED_DATASETS))}）；{dataset} 的标的范围来自 instruments。"
         )
     setattr(cfg, f"{block}_enabled", True)
     setattr(cfg, f"{block}_scope", "watchlist")
@@ -439,22 +435,19 @@ def _guard_history_horizon(dataset: str, start: date | None) -> None:
         # A fixed floor, not a per-symbol budget: no symbol reaches further
         # back, so there is no narrower scope that would help.
         raise click.ClickException(
-            f"{dataset}: --start {start} is before the source's history floor. "
-            f"The vendor serves nothing earlier than {earliest} for any symbol, "
-            f"and no backfill source extends it. Re-run with --start {earliest} "
-            "or later."
+            f"{dataset}：--start {start} 早于源的历史下限。"
+            f"对任何标的，上游都不提供早于 {earliest} 的数据，"
+            f"也没有任何回填源能延长它。请改用 --start {earliest} 或更晚的日期。"
         )
     block = SCOPED_DATASETS.get(dataset, "minute_bars")
     raise click.ClickException(
-        f"{dataset}: --start {start} is older than the source horizon. "
-        f"The vendor caps history per symbol at about {spec.history_horizon_days} "
-        f"trading days for an instrument quoted every session (back to about "
-        f"{earliest}), and no backfill source extends it. Re-run with "
-        f"--start {earliest} or later. "
-        "(A barely-traded instrument holds bars on fewer days and so reaches "
-        f"further back. To pull those, narrow [{block}].scope to a watchlist "
-        "first — a full sweep at that start would spend hours on symbols that "
-        "have nothing there.)"
+        f"{dataset}：--start {start} 早于源能提供的历史深度。"
+        f"对每个交易日都有报价的标的，上游每个标的大约只保留 {spec.history_horizon_days} "
+        f"个交易日（大致回到 {earliest}），并且没有任何回填源能延长它。"
+        f"请改用 --start {earliest} 或更晚的日期。"
+        "（成交稀疏的标的有 K 线的天数更少，因此能回溯得更远。"
+        f"要取那些，请先把 [{block}].scope 收窄成一个观察列表 —— "
+        "用那个起点扫全市场，会在根本没有数据的标的上耗掉好几个小时。）"
     )
 
 
@@ -575,9 +568,9 @@ def _require_known_dataset(dataset: str) -> str:
     if canonical in DATASETS:
         return canonical
     close = difflib.get_close_matches(canonical, sorted(DATASETS), n=3)
-    hint = f" Did you mean: {', '.join(close)}?" if close else ""
+    hint = f"是不是想找：{', '.join(close)}？" if close else ""
     raise click.ClickException(
-        f"unknown dataset {dataset!r}.{hint} `cne status --datasets` lists every dataset."
+        f"未知数据集 {dataset!r}。{hint}`cne status --datasets` 会列出全部数据集。"
     )
 
 
@@ -641,7 +634,7 @@ def _backfill_symbol_chunked(cfg, dataset: str, start: date, end: date, chunk_sy
         symbols = _filter_all_scope_to_listed_symbols(cfg, symbols, start, end)
     if not symbols:
         raise click.ClickException(
-            f"{dataset}: scope resolved to zero symbols — check [minute_bars].scope"
+            f"{dataset}：范围解析出来是 0 只标的 —— 检查 [minute_bars].scope"
         )
 
     engine = JobEngine(cfg)
@@ -658,8 +651,8 @@ def _backfill_symbol_chunked(cfg, dataset: str, start: date, end: date, chunk_sy
             cfg.minute_bars_scope = "watchlist"
             cfg.minute_bars_symbols = chunk
             click.echo(
-                f"[{dataset}] symbols {index + 1}..{index + len(chunk)}/"
-                f"{len(symbols)} ({chunk[0]}..{chunk[-1]}) window {start}..{end}",
+                f"[{dataset}] 标的 {index + 1}..{index + len(chunk)}/"
+                f"{len(symbols)}（{chunk[0]}..{chunk[-1]}）窗口 {start}..{end}",
                 err=True,
             )
             result = engine.run_job("backfill", steps=[dataset], backfill=True, finalize_run=False)
@@ -721,7 +714,7 @@ def _backfill_chunked(cfg, dataset: str, start: date, end: date, chunk_days: int
     while cursor <= end:
         slice_end = min(cursor + timedelta(days=chunk_days - 1), end)
         cfg._backfill_start, cfg._backfill_end = cursor, slice_end
-        click.echo(f"[{dataset}] slice {cursor}..{slice_end}", err=True)
+        click.echo(f"[{dataset}] 分片 {cursor}..{slice_end}", err=True)
         result = engine.run_job("backfill", steps=[dataset], backfill=True, finalize_run=False)
         if _run_had_step_failure(engine, result["run_id"]):
             result["status"] = "failed"

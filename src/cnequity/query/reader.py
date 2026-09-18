@@ -258,6 +258,25 @@ def resolve_config(
     )
 
 
+def _missing_dataset_message(dataset: str, root, data_root) -> str:
+    """Say what is absent and what fills it.
+
+    The path alone answers "is it there" and nothing else, which is the wrong
+    half for the most common way to meet this error: `load(..., adjust="hfq")`
+    on a lake that has bars but no factors yet, where the missing dataset is
+    one the reader asked for rather than one the caller named.
+    """
+    remedy = (
+        f"cne derive {dataset}"
+        if dataset in {"adj_factors", "industry_index"}
+        else f"cne backfill {dataset}"
+    )
+    return (
+        f"no parquet data for dataset {dataset!r} under {root} (data_root={data_root}); "
+        f"build it with `{remedy}`"
+    )
+
+
 def _dataset_root(config: Config, dataset: str) -> Path:
     if dataset in DERIVED_DATASETS:
         return config.derived_root / dataset
@@ -358,9 +377,7 @@ def _read_dataset(
         meta_root=config.meta_root,
         revision=revision,
     ):
-        raise ReaderError(
-            f"no parquet data for dataset {dataset!r} under {root} (data_root={config.data_root})"
-        )
+        raise ReaderError(_missing_dataset_message(dataset, root, config.data_root))
 
     partition_col = DATE_COLUMNS.get(dataset) or partition_col_for_dataset(dataset)
     try:
@@ -375,9 +392,7 @@ def _read_dataset(
             revision=revision,
         )
     except FileNotFoundError as exc:
-        raise ReaderError(
-            f"no parquet data for dataset {dataset!r} under {root} (data_root={config.data_root})"
-        ) from exc
+        raise ReaderError(_missing_dataset_message(dataset, root, config.data_root)) from exc
     # Apply semantic scope before strict schema validation.  Live snapshots
     # legitimately contain retired, future-listed, and unavailable quote
     # rows; those rows are outside an ``all_a`` query and must not make a
@@ -843,9 +858,7 @@ def scan(
         meta_root=cfg.meta_root,
         revision=_revision_for_dataset(revision_selection, dataset),
     ):
-        raise ReaderError(
-            f"no parquet data for dataset {dataset!r} under {root} (data_root={cfg.data_root})"
-        )
+        raise ReaderError(_missing_dataset_message(dataset, root, cfg.data_root))
     return scan_parquet_root(
         root,
         partition_col=DATE_COLUMNS.get(dataset) or partition_col_for_dataset(dataset),

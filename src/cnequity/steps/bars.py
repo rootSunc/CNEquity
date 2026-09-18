@@ -206,7 +206,17 @@ def _placeholder_bar_universe(
     Scanning every daily_bars file is unnecessary for normal runs. An empty
     traded universe is also not evidence that every undated symbol is a
     placeholder, so leave the classifier conservative in a brand-new lake.
+
+    A run that names its symbols gets no placeholder universe at all. The
+    classification is a cost control for the full-market sweep — it keeps
+    pre-listing codes out of the per-symbol fallback — and it reads an absent
+    list_date as "not listed yet". An operator asking for a symbol by name has
+    already made that call, so honouring the guess instead fetched nothing,
+    wrote nothing and still reported success: `cne backfill daily_bars
+    --symbols 000001.SZ` returned 0 rows against a source that had them.
     """
+    if getattr(config, "_backfill_symbols", None):
+        return None
     if not any(list_date is None for list_date, _delist_date, _asset in spans.values()):
         return None
     universe = load_bar_universe(config)

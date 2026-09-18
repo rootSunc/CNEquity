@@ -198,7 +198,7 @@ def test_run_events_names_the_groups_it_knows(events_config):
     )
 
     assert result.exit_code != 0
-    assert "Unknown events group: nope" in result.output
+    assert "未知 events 调度组：nope" in result.output
     assert "disclosures" in result.output
 
 

@@ -65,6 +65,12 @@ Serve, or MCP boundaries change.
 Banner copy should track `cne init --profile demo` (no mootdx). Sample bar numbers may be
 from an older live run; re-render after UX copy changes.
 
+The CLI speaks Chinese as of 0.10.0, and no monospace face on macOS carries
+both scripts — the renderer therefore draws ASCII and box-drawing with Menlo
+and the Chinese with a CJK face, advancing by terminal cells so the tables
+still line up. If the Chinese comes out as blank boxes, the CJK face in
+`_CJK_FONT_CANDIDATES` was not found.
+
 ## Dashboard screenshots
 
 These are real captures, not rendered text, so they need a running server and a
@@ -98,11 +104,14 @@ The console moved from a top pill bar to a left sidebar (`.app-shell` is a
 two-column grid at every width; the 1120px breakpoint only narrows the rail).
 Captures taken before that change draw a layout the product no longer has:
 
-- `cne-serve-hero-demo.png` and its source `serve-hero-demo.html` — **kept
-  and still embedded in both READMEs**, a deliberate call: it is a labelled
-  illustration of full coverage, not a claim about the current chrome, and
-  the factual captures beside it are post-change. Re-draw the mock in the
-  sidebar layout when it is next touched for another reason.
+- `cne-serve-hero-demo.png` and its source `serve-hero-demo.html` — **redrawn
+  in the sidebar layout for 0.10.0** and still embedded in both READMEs. It
+  stays a labelled illustration of full coverage (the `ILLUSTRATIVE DEMO`
+  chip is in the image), but the chrome around it is now the chrome the
+  product actually ships. Re-render with:
+  `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless
+  --window-size=1661,947 --screenshot=docs/assets/cne-serve-hero-demo.png
+  file://$PWD/docs/assets/serve-hero-demo.html`
 - `cne-serve.png` — full-page overview export, no longer embedded anywhere.
 
 `cne-serve-datasets.png` and `cne-serve-hero.png` are post-change and current.

@@ -1374,6 +1374,23 @@ def is_stale(dataset: str, mark, anchor) -> bool:
     return (anchor - mark).days > tolerance
 
 
+def empty_freshness_label(dataset: str) -> str:
+    """Why a dataset holds nothing: absent by design, or simply not ingested.
+
+    A registry entry whose source has been retired with no replacement wired
+    reads exactly like one the operator forgot to run — both print `empty`,
+    and only one is worth acting on. `economic_calendar` is the standing case:
+    EastMoney retired RPT_ECONOMICCALENDAR, the schema is kept for a
+    replacement, and its permanent emptiness was indistinguishable from a
+    schedule gap. The registry already says so through `empty_severity`, which
+    is `info` precisely for the datasets whose absence is not a finding.
+    """
+    spec = DATASETS.get(dataset)
+    if spec is not None and spec.empty_severity == "info":
+        return "no source"
+    return "empty"
+
+
 def is_dataset_enabled(dataset: str, config) -> bool:
     """Whether an optional capture is enabled in *config*.
 

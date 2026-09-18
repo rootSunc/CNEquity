@@ -125,7 +125,7 @@ cne init --profile demo</code></pre>
       <p>初始化全市场数据，随后按水位增量日更，中断后从失败批次续跑。</p>
       <pre><code>cne config create
 cne init
-cne run daily</code></pre>
+cne run daily --all-groups</code></pre>
       <a href="operations/runbook/">查看运行方式 →</a>
     </li>
     <li>

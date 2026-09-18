@@ -130,7 +130,7 @@ def test_cli_config_create_and_validate(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert out.is_file()
-    assert "Wrote" in result.output
+    assert "已写入" in result.output
 
     again = runner.invoke(cli, ["config", "create", "--config", str(out)])
     assert again.exit_code != 0
@@ -138,7 +138,7 @@ def test_cli_config_create_and_validate(tmp_path):
 
     ok = runner.invoke(cli, ["config", "validate", "--config", str(out)])
     assert ok.exit_code == 0, ok.output
-    assert "Configuration OK" in ok.output
+    assert "配置检查通过" in ok.output
 
 
 def test_resolve_config_missing_suggests_config_init(tmp_path, monkeypatch):

@@ -44,8 +44,14 @@ cne config create                              # → configs/cnequity.toml（dat
 # cne config create --data-root /data/cnequity --force
 cne config validate --config configs/cnequity.toml
 cne init --config configs/cnequity.toml
-cne run daily --config configs/cnequity.toml
+cne run daily --all-groups --config configs/cnequity.toml   # 之后每个交易日
 ```
+
+日更按**调度组**执行，一天 6 个：`core`、`capital`、`signals`、`fundamentals`、`macro_risk`、`research`。
+`--all-groups` 按配置顺序串行跑完全部组（某组失败不影响后面的组）。
+不带 `--group` / `--all-groups` 的 `cne run daily` 只跑 `[[job.daily.waves]]` 里的核心骨架（行情、日历、
+交易状态、公司行为、复权），**不含**估值、财报、融资融券、龙虎榜、北向、指数成分等 —— 只跑那一条，
+湖会停在 15/42 新鲜。想按组错开挂 cron 见[运行手册](https://github.com/rootSunc/CNEquity/blob/main/docs/operations/runbook.md)。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/rootSunc/CNEquity/main/docs/assets/cne-demo.png" alt="cne init --profile demo" width="820" />

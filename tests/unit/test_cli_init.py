@@ -42,7 +42,7 @@ def test_init_layout_only_skips_phases(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert called["phases"] is False
-    assert "Initialized layout" in result.output
+    assert "建好目录结构" in result.output
     cfg = load_config(cfg_path)
     init_data_layout(cfg)
     assert cfg.curated_root.exists()

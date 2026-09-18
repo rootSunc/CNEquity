@@ -284,8 +284,15 @@ def _collect_lake_findings(
     # so explicitly in the report.
     invalid_datasets: set[str] = set()
     stale_datasets = _stale_dataset_names(config, trade_date)
+    # A demo lake is a handful of symbols and two or three datasets by
+    # construction. Auditing it against the whole registry produced 32 errors
+    # for a lake that had done exactly what it promised, so a new user's first
+    # health check read as a broken install. Judge what this lake holds.
+    demo_lake = getattr(config, "lake_profile", None) in {"demo", "sample"}
     for ds, pcol in PARTITION_COLS.items():
         root = config.curated_root / ds
+        if demo_lake and not root.exists():
+            continue
         dataset_findings = audit_curated_dataset(
             ds, pcol, root, trade_date, full=full, stale=ds in stale_datasets
         )

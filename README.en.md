@@ -104,10 +104,10 @@ cne init --profile demo --research --symbols 600519.SH
 
 | | |
 |---|---|
-| **Ingestion** | 42 datasets · 14 upstream sources · primary/backup routing · per-batch retry, resume and watermark reconciliation |
+| **Ingestion** | 42 datasets · 15 upstream endpoints (each one probed by `cne sources probe`) · primary/backup routing · per-batch retry, resume and watermark reconciliation |
 | **Research semantics** | Adjustment (hfq / qfq derived at query time) · historical index and industry membership · point-in-time fundamentals · **delisted names kept** |
 | **Data contract** | Schema validated before write · row-level provenance (`source` / `data_version` / `fetched_at`) · breaking changes require a version bump |
-| **Quality** | 84 audit checks · cross-source comparison · coverage-gap and staleness detection · configurable publication gate |
+| **Quality** | 88 audit checks · cross-source comparison · coverage-gap and staleness detection · configurable publication gate |
 | **Storage** | Local Parquet + DuckDB · per-dataset partition granularity · atomic writes · immutable generations and time travel |
 | **Consumption** | `load()` · DuckDB views · Polars · 6 MCP tools · read-only operations console |
 | **Operations** | Daily orchestration · launchd / cron templates · source health probes · portable snapshots and delta packages |
@@ -153,7 +153,7 @@ Details: [serve](docs/modules/serve.md) ·
 pip install cnequity
 cne config create          # writes configs/cnequity.toml
 cne init                   # every symbol × the last 3 years (~1 hour)
-cne run daily --group core # then the daily schedule groups (see "Keeping it current")
+cne run daily --all-groups # then once per trading day (see "Keeping it current")
 ```
 
 `cne init` defaults to **shallow, never narrow**: the last 3 years, every symbol.
@@ -164,6 +164,11 @@ Want everything: `cne init --profile full` (~3x the time). Deepen any time:
 ```bash
 cne backfill daily_bars --start 2016-01-01 --end COVERAGE_START
 ```
+
+"Every symbol" includes the Beijing exchange: listings, halts and the ST
+designation come from BSE's own board, daily history from TDX, and the turnover
+Sina never published is filled from TDX too. The default `all_a` universe spans
+Shanghai, Shenzhen and Beijing A-shares.
 
 **Wire into an AI agent** (optional, once the lake exists):
 
@@ -231,7 +236,16 @@ actions, adjustment factors — and **not** valuation, financials, margin, drago
 tiger, northbound, index constituents or the rest. Run only that one line and the
 lake settles at 15 of 42 datasets fresh.
 
-Stagger the groups in crontab rather than hitting the same upstreams at once:
+`--all-groups` runs every one of them in config order, one at a time, and
+carries on past a group that fails — the whole day in one cron line, with the
+worst group's exit code:
+
+```bash
+ 5 16 * * 1-5  cd /path/to/lake && cne run daily --all-groups >> logs/daily.log 2>&1
+```
+
+To give each group a wider window instead, stagger them rather than hitting the
+same upstreams at once:
 
 ```bash
 # after the close on weekdays; non-trading days skip themselves
@@ -248,7 +262,7 @@ order and then runs the health check, source probe and metadata backup, so one
 cron entry covers the day. It is not installed by the PyPI package.
 
 ```bash
-cne status           # per-dataset freshness: FRESH / STALE / EMPTY
+cne status           # per-dataset freshness: fresh / STALE / empty / no source
 cne serve            # http://127.0.0.1:8787 — coverage, size, tiers
 cne sources probe    # health of the 15 upstream hosts
 cne run retry RUN_ID # re-run only the failed batches

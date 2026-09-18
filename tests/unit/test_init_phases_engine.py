@@ -230,7 +230,7 @@ def test_a_killed_init_is_resumed_not_refused(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli, ["init", "--config", str(cfg_path)])
 
     assert result.exit_code == 0, result.output
-    assert "resuming it instead of starting over" in result.output
+    assert "直接续跑而不是从头再来" in result.output
     assert seen == {"resume": True, "resume_run_id": run_id}
 
 
@@ -286,4 +286,4 @@ def test_a_live_init_is_still_refused(tmp_path, monkeypatch):
         holder.wait(30)
 
     assert result.exit_code != 0
-    assert "Another init is running now" in result.output
+    assert "已经有一个 init 在跑" in result.output

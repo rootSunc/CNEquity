@@ -489,8 +489,8 @@ def test_mcp_refuses_a_lake_with_nothing_in_it(tmp_path):
 
     result = CliRunner().invoke(cli, ["mcp", "--config", str(cfg_path)])
     assert result.exit_code != 0
-    assert "No curated data" in result.output
-    assert "resolved against the working directory" in result.output
+    assert "没有任何 curated 数据" in result.output
+    assert "相对客户端拉起这个进程时的工作目录解析" in result.output
 
 
 def test_mcp_serves_a_populated_lake(lake, tmp_path):

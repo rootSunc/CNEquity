@@ -1142,13 +1142,36 @@ def test_crosscheck_flags_a_step_on_a_day_with_no_action(crosscheck_config):
     from cnequity.derive.adj_factors import _corporate_action_crosscheck_findings
 
     _write_bars(crosscheck_config, "600519.SH", _DAYS, 10.0)
+    # An action feed that covers this lake, just not this symbol's step: the
+    # absence of an ex-date on 06-28 is then a fact, not a missing dataset.
+    _write_action(crosscheck_config, "000001.SZ", _DAYS[1], cash_dividend=0.1)
     out = _factor_frame("600519.SH", _DAYS, [1.0, 1.0, 1.2])
 
     findings = _corporate_action_crosscheck_findings(crosscheck_config, out)
     assert len(findings) == 1
     assert findings[0]["trade_date"] == "2024-06-28"
     assert findings[0]["expected_ratio"] == pytest.approx(1.0)
+    assert findings[0]["severity"] == "error"
     assert "no ex-date" in findings[0]["message"]
+
+
+def test_crosscheck_will_not_call_a_step_an_error_without_an_action_feed(crosscheck_config):
+    """A lake with no corporate_actions cannot arbitrate a factor step.
+
+    `cne init --profile demo --research` builds exactly that lake — bars and
+    Sina factors, no actions — and every real dividend in the window looked
+    like a factor break, which aborted the demo it was meant to illustrate.
+    """
+    from cnequity.derive.adj_factors import _corporate_action_crosscheck_findings
+
+    _write_bars(crosscheck_config, "600519.SH", _DAYS, 10.0)
+    out = _factor_frame("600519.SH", _DAYS, [1.0, 1.0, 1.2])
+
+    findings = _corporate_action_crosscheck_findings(crosscheck_config, out)
+    assert len(findings) == 1
+    assert findings[0]["trade_date"] == "2024-06-28"
+    assert findings[0]["severity"] == "warning"
+    assert "no corporate_actions rows" in findings[0]["message"]
 
 
 def test_crosscheck_handles_bonus_transfer_and_allotment_together(crosscheck_config):

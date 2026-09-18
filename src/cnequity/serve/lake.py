@@ -36,6 +36,7 @@ from cnequity.domain.datasets import (
     DATASETS,
     TIER_LABELS,
     TIERS,
+    empty_freshness_label,
     history_mode_for,
     is_dataset_enabled,
     is_stale,
@@ -239,7 +240,7 @@ class LakeView:
     def _freshness_of(self, row: dict, anchor: date) -> str:
         """fresh / STALE / empty / n/a, on the same rules as ``cne status``."""
         if not row["has_data"]:
-            return "empty"
+            return empty_freshness_label(row["dataset"])
         if not is_dataset_enabled(row["dataset"], self.config):
             return "n/a"
         if not row["watermarked"]:
@@ -292,6 +293,10 @@ class LakeView:
             "fresh": counts.get("fresh", 0),
             "stale": counts.get("stale", 0),
             "empty": counts.get("empty", 0),
+            # Registered, permanently sourceless (see `empty_freshness_label`).
+            # Counted apart from `empty` so the four buckets still add up to
+            # `datasets` and nothing reads it as work someone forgot to do.
+            "no_source": counts.get("no source", 0),
             "not_applicable": counts.get("n/a", 0),
             "stale_datasets": sorted(r["dataset"] for r in rows if r["freshness"] == "stale"),
             # Empty is not automatically a problem: an opt-in dataset nobody

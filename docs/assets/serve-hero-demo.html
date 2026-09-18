@@ -6,16 +6,24 @@
   * { box-sizing:border-box; }
   html, body { margin:0; width:1661px; height:947px; overflow:hidden; }
   body { background:#f5f7fa; color:var(--ink); font:14px -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif; }
-  .topbar { height:78px; background:#fff; border-bottom:1px solid #e4e8ef; display:flex; align-items:center; padding:0 46px; }
-  .brand { display:flex; align-items:center; gap:13px; min-width:510px; }
+  /* Left rail, matching the shipped console: the top pill bar this mock used
+     to draw was retired, and a hero that shows chrome the product no longer
+     has is the one part of an illustration that cannot be labelled away. */
+  .app-shell { display:grid; grid-template-columns:224px 1fr; height:947px; }
+  .rail { background:#0f172a; color:#cbd5e1; padding:22px 16px; display:flex; flex-direction:column; }
+  .rail .brand { color:#fff; margin-bottom:30px; }
+  .rail .brand small { color:#93a2bb; }
+  .railhead { color:#64748b; font-size:11px; letter-spacing:.14em; text-transform:uppercase; margin:0 8px 10px; }
+  .rail nav { display:flex; flex-direction:column; gap:2px; }
+  .rail nav span { padding:10px 12px; border-radius:8px; font-weight:600; color:#cbd5e1; }
+  .rail nav .active { background:#1e293b; color:#fff; box-shadow:inset 3px 0 0 var(--blue); }
+  .railfoot { margin-top:auto; color:#8ea0bd; font-size:12px; }
+  .railfoot button { width:100%; margin-top:10px; padding:9px 0; border-radius:9px; border:1px solid #334155; background:#1e293b; color:#e2e8f0; font:inherit; }
+  .brand { display:flex; align-items:center; gap:13px; }
   .mark { width:40px; height:40px; border-radius:11px; display:grid; place-items:center; background:#14213a; color:white; font-size:14px; font-weight:800; letter-spacing:.05em; }
   .brand strong { display:block; font-size:19px; line-height:22px; }
   .brand small { display:block; color:#7c8aa1; letter-spacing:.11em; font-size:11px; text-transform:uppercase; }
-  .nav { display:flex; gap:3px; padding:4px; border:1px solid #e0e6ef; border-radius:13px; box-shadow:0 4px 14px #172b4d12; }
-  .nav span { padding:10px 21px; border-radius:9px; font-weight:650; color:#617089; }
-  .nav .active { color:var(--blue); background:#edf3ff; }
-  .topnote { margin-left:auto; color:#6d7a91; }
-  main { padding:42px 116px 70px; }
+  main { padding:42px 60px 70px; overflow:hidden; }
   .eyebrow { color:#53627a; font-size:12px; font-weight:750; letter-spacing:.14em; text-transform:uppercase; }
   h1 { margin:10px 0 7px; font-size:42px; letter-spacing:-.03em; }
   .sub { color:#64738e; font-size:16px; margin:0; }
@@ -51,17 +59,20 @@
   .empty strong { display:block; color:#263651; font-size:16px; }
 </style>
 <body>
-  <header class="topbar">
+ <div class="app-shell">
+  <aside class="rail">
     <div class="brand"><div class="mark">CNE</div><div><strong>CNEquity</strong><small>research lake</small></div></div>
-    <nav class="nav"><span class="active">概览</span><span>数据集</span><span>跑批</span><span>质量</span></nav>
-    <div class="topnote">只读控制台　<button>刷新</button></div>
-  </header>
+    <div class="railhead">Workspace</div>
+    <nav><span class="active">概览</span><span>数据集</span><span>跑批</span><span>质量</span></nav>
+    <div class="railfoot">只读控制台<button>刷新</button></div>
+  </aside>
   <main>
     <div class="heading"><div><div class="eyebrow">CNEquity / 数据湖控制台</div><h1>湖状态</h1><p class="sub">最新交易日 2026-08-14 · 42 个注册数据集 · 审计快照 2026-08-14</p></div><div class="buttons"><button>查看跑批</button><button class="primary">查看质量</button></div></div>
     <section class="status"><div class="check">✓</div><div><strong>运行正常</strong><span>核心数据集已覆盖最新交易日。</span></div><div class="anchor">anchor 2026-08-14</div></section>
     <section class="metrics"><div class="metric"><label>数据集</label><b>42</b><small>已注册</small></div><div class="metric"><label>Fresh</label><b>42</b><small>最新水位</small></div><div class="metric"><label>Stale</label><b>0</b><small>超过容忍窗口</small></div><div class="metric"><label>行数</label><b>10.6亿</b><small>curated</small></div><div class="metric"><label>存储</label><b>14.4 GB</b><small>curated</small></div><div class="metric"><label>审计</label><b>0 / 0</b><small>error / warning</small></div></section>
     <section class="content"><article class="panel"><div class="panelhead"><div><div class="eyebrow">Coverage</div><h2>覆盖热力</h2></div><div class="panelmeta">42/42 个数据集 · 示意覆盖 <span style="color:#2563eb;background:#edf3ff;border-radius:5px;padding:4px 7px;font-size:11px">ILLUSTRATIVE DEMO</span></div></div><div class="heat" id="heat"></div><div class="legend"><span><i></i>有分区覆盖</span><span><i class="blue"></i>区间外 / 非日更节奏</span></div></article><aside class="panel attention"><div class="panelhead"><div><div class="eyebrow">Attention</div><h2>行动项</h2></div><div class="panelmeta">0 项</div></div><div class="empty"><div class="check">✓</div><div><strong>没有待处理事项</strong><span>数据、质量与审计快照均在预期状态。</span></div></div></aside></section>
   </main>
+ </div>
   <script>
     const names = ['adj_factors','analyst_consensus','announcement_index','block_trades','commodity_bars','corporate_actions','daily_bars','dragon_tiger','earnings_disclosure_schedule','financial_statement_items','flash_news_wire','fund_flow','hot_rank','index_bars','index_constituents','industry_index','industry_members','institutional_holdings','macro_indicators','margin_trading'];
     const heat = document.querySelector('#heat');

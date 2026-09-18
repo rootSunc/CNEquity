@@ -78,7 +78,7 @@ def _reject_foreign_options(profile: str, names: tuple[str, ...]) -> None:
         if ctx.get_parameter_source(name) is not click.core.ParameterSource.COMMANDLINE:
             continue
         flag = _FLAG_NAMES.get(name, "--" + name.replace("_", "-"))
-        raise click.UsageError(f"{flag} does not apply to --profile {profile}")
+        raise click.UsageError(f"{flag} 对 --profile {profile} 不适用")
 
 
 @cli.command()
@@ -88,81 +88,81 @@ def _reject_foreign_options(profile: str, names: tuple[str, ...]) -> None:
     type=click.Choice(["demo", "sample", "quick", "full"]),
     default="quick",
     show_default=True,
-    help="How much to build. demo = a handful of symbols against the real source, "
-    "sample = the same shape offline and deterministic — neither is a market. "
-    f"quick = every symbol, last {QUICK_PROFILE_YEARS} years; "
-    f"full = every symbol from {BACKFILL_START.isoformat()} (measured ~3x longer). "
-    "Deepen later with `cne backfill daily_bars`.",
+    help="建多大。demo = 用真实数据源抓几只票，sample = 同样的形状但离线且确定 —— "
+    "两者都不是一个市场。"
+    f"quick = 全市场标的、最近 {QUICK_PROFILE_YEARS} 年；"
+    f"full = 全市场标的、从 {BACKFILL_START.isoformat()} 起（实测约 3 倍时间）。"
+    "以后可以用 `cne backfill daily_bars` 补深。",
 )
 @click.option(
     "--symbols",
     default=",".join(("600519.SH", "000001.SZ", "000858.SZ", "300750.SZ", "601318.SH")),
     show_default=True,
-    help="demo/sample: comma-separated symbols to fetch (kept small on purpose).",
+    help="demo/sample：要抓的标的，逗号分隔（有意保持很少）。",
 )
 @click.option(
     "--days",
     default=30,
     show_default=True,
-    help="demo/sample: approx. number of recent trading days of daily_bars.",
+    help="demo/sample：daily_bars 大致抓最近多少个交易日。",
 )
 @click.option(
     "--data-root",
     default="data/cnequity-demo",
     show_default=True,
-    help="demo/sample: separate lake root (do not reuse for a full-market init).",
+    help="demo/sample：独立的湖根目录（不要拿去跑全市场 init）。",
 )
 @click.option(
     "--config-out",
     default=DEMO_CONFIG,
     show_default=True,
-    help="demo/sample: where to write the tiny config for follow-up `cne query`.",
+    help="demo/sample：把那份小配置写到哪，供后续 `cne query` 使用。",
 )
 @click.option(
     "--intraday",
     is_flag=True,
-    help="demo/sample: also capture 1-minute bars for the same symbols (up to 5 "
-    "sessions) and print a session, so the bar_time convention is visible.",
+    help="demo/sample：同一批标的额外抓 1 分钟线（最多 5 个交易日）并打印一个交易日，"
+    "让 bar_time 的口径看得见。",
 )
 @click.option(
     "--research",
     is_flag=True,
-    help="demo/sample: also derive Sina hfq factors and print a raw-vs-adjusted "
-    "return (slower; needs Sina).",
+    help="demo/sample：额外用 Sina 派生 hfq 复权因子，并打印未复权 / 复权收益对照"
+    "（较慢；需要访问 Sina）。",
 )
 @click.option(
     "--layout-only",
     is_flag=True,
-    help="Only create directories, manifest, and DuckDB views (skip init phases).",
+    help="只建目录、manifest 和 DuckDB 视图，跳过 init 各阶段。",
 )
 @click.option(
     "--trade-date",
     default=None,
-    help="As-of trade date for init phases (YYYY-MM-DD); default today.",
+    help="init 各阶段的 as-of 交易日（YYYY-MM-DD）；默认今天。",
 )
 @click.option(
     "--resume",
     is_flag=True,
-    help="Resume the latest incomplete init run (retry failed batches + missing phases).",
+    help="续跑最近一次没跑完的 init run（重试失败批次 + 补缺失阶段）。",
 )
 @click.option(
     "--run-id",
     "resume_run_id",
     default=None,
-    help="Resume a specific init run_id (implies --resume).",
+    help="续跑指定的 init run_id（隐含 --resume）。",
 )
 @click.option(
     "--keep-going",
     is_flag=True,
-    help="Continue init phases after a phase failure instead of stopping.",
+    help="某个阶段失败后继续往下跑，而不是停下来。",
 )
 @click.option(
     "--since",
     "since_str",
     default=None,
-    help="Explicit history start (YYYY-MM-DD); overrides --profile.",
+    help="显式指定历史起点（YYYY-MM-DD）；覆盖 --profile。",
 )
-@click.option("--quiet", is_flag=True, help="Only warnings and errors; no per-batch progress.")
+@click.option("--quiet", is_flag=True, help="只留 warning 及以上，不打逐批进度。")
 def init(
     config_path: str,
     profile: str,
@@ -180,31 +180,30 @@ def init(
     since_str: str | None,
     quiet: bool,
 ):
-    """Initialize the data lake and run the configured init phases.
+    """初始化数据湖，并按配置跑完 init 各阶段。
 
-    Defaults to `--profile quick`: the last few years, every symbol. That is
-    SHALLOWER, never NARROWER. Dropping symbols instead would build the
-    survivorship bias this lake exists to avoid straight into it, and
-    `coverage_start` records a shallow lake honestly where a missing name would
-    look like a name that never traded.
+    \b
+    默认 `--profile quick`：最近几年、全市场标的。也就是说**浅**，但绝不**窄**。
+    砍标的会把这个湖存在的意义 —— 避免幸存者偏差 —— 直接砍掉，而浅是诚实的：
+    `coverage_start` 会如实记下湖有多深，少一个标的却会看起来像这只票从未交易过。
 
-    Why quick is the default: measured per 10 symbols on one connection,
-    3 years costs ~4.8s against ~15.1s for everything from 2001 — roughly an
-    hour versus several for a full market. Going shallower still buys very
-    little (1 year measured ~3.9s, because the per-symbol round trip dominates
-    once the window is short) while costing the multi-year windows that most
-    factor work needs. So: a usable lake on the first run, deepened on demand.
+    \b
+    为什么 quick 是默认：单连接每 10 只标的实测，3 年约 4.8 秒，而 2001 年至今约 15.1 秒 ——
+    全市场就是一小时和几小时的差别。再浅几乎买不到什么（1 年实测约 3.9 秒，窗口一短，
+    每个标的的往返开销就占主导），却会丢掉多数因子研究要用的多年窗口。
+    所以：第一次就跑出一个能用的湖，需要多深再补多深。
 
-    Deepen later without re-running init:
+    \b
+    不用重跑 init 也能补深：
 
-      cne backfill daily_bars --start 2016-01-01 --end <your coverage_start>
+      cne backfill daily_bars --start 2016-01-01 --end <你的 coverage_start>
 
-    Or take everything up front with `--profile full`.
+    或者一开始就全量：`--profile full`。
 
-    `--profile demo` builds a handful of symbols into a separate `--data-root`
-    so you can watch progress and query a result in a minute; `--profile sample`
-    does the same offline and deterministically. Neither is a market, and
-    neither touches `--config` — they write their own at `--config-out`.
+    \b
+    `--profile demo` 把几只标的建到独立的 `--data-root` 里，一分钟内就能看到进度和查询结果；
+    `--profile sample` 做同样的事，但离线且确定。两者都不是一个市场，也都不碰 `--config` ——
+    它们把自己的配置写到 `--config-out`。
     """
     if profile in DEMO_PROFILES:
         _reject_foreign_options(profile, _LAKE_ONLY)
@@ -227,7 +226,7 @@ def init(
     cfg = _cfg(config_path)
     init_data_layout(cfg)
     if layout_only:
-        click.echo(f"Initialized layout at {cfg.data_root}")
+        click.echo(f"已在 {cfg.data_root} 建好目录结构")
         return
 
     # After the layout-only exit: a command that finishes in a second has
@@ -240,9 +239,9 @@ def init(
     if history_start is not None:
         cfg._backfill_start = history_start
         click.echo(
-            f"History window: {history_start.isoformat()} .. {td.isoformat()} "
-            f"(full universe, {profile if not since_str else 'custom'} depth). "
-            "Deepen later with `cne backfill daily_bars --start <earlier>`."
+            f"历史窗口：{history_start.isoformat()} .. {td.isoformat()}"
+            f"（全市场标的，{profile if not since_str else 'custom'} 深度）。"
+            "以后可以用 `cne backfill daily_bars --start <更早的日期>` 补深。"
         )
 
     engine = JobEngine(cfg)
@@ -258,12 +257,12 @@ def init(
             # the kernel reaps it, while a running one holds it throughout.
             if is_run_locked(cfg.meta_root, INIT_JOB_LOCK):
                 raise click.ClickException(
-                    f"Another init is running now (run {incomplete['run_id']}). "
-                    "Wait for it, or stop it before starting another."
+                    f"已经有一个 init 在跑（run {incomplete['run_id']}）。"
+                    "等它跑完，或者先停掉它再开新的。"
                 )
             click.echo(
-                f"Found an unfinished init run {incomplete['run_id']} whose process is gone "
-                "— resuming it instead of starting over (completed batches are kept).",
+                f"发现一个没跑完的 init run {incomplete['run_id']}，它的进程已经不在了 "
+                "—— 直接续跑而不是从头再来（已完成的批次会保留）。",
                 err=True,
             )
             resume = True
@@ -299,24 +298,23 @@ CONFIG_ACTIONS_MOVED: dict[str, str] = {"init": "cne config create"}
 @click.option(
     "--force",
     is_flag=True,
-    help="Overwrite an existing config when action=create.",
+    help="action=create 时覆盖已存在的配置文件。",
 )
 @click.option(
     "--data-root",
     default=None,
-    help="Set [data].root when action=create (default: resolve ./data/cnequity to an absolute path).",
+    help="action=create 时设置 [data].root（默认把 ./data/cnequity 解析成绝对路径）。",
 )
 def config_cmd(action: str, config_path: str, force: bool, data_root: str | None):
-    """Validate, bootstrap, or diff configuration.
+    """校验、生成或对比配置。
 
-    ``cne config create`` writes the packaged example TOML (no repo checkout
-    needed) — it was ``cne config init``, one word away from ``cne init``, which
-    builds a lake and is the far more expensive of the two to run by mistake.
-    On macOS it also forces ``orchestrator.workers = 1``.
-    ``cne config validate`` checks an existing file.
-    ``cne config diff`` reports what the packaged example has that this file does
-    not — most importantly steps added to a schedule group by a later release,
-    which a config written once and never updated will never run.
+    \b
+    `cne config create` 写出随包携带的示例 TOML（不需要 clone 仓库）—— 它以前叫
+    `cne config init`，和会建整个湖的 `cne init` 只差一个词，而后者误跑的代价大得多。
+    在 macOS 上它还会强制 `orchestrator.workers = 1`。
+    `cne config validate` 校验一份已有的配置。
+    `cne config diff` 报告示例配置里有、而这份配置没有的东西 —— 最要紧的是新版本往调度组里
+    加的 step：一份写完就再没更新过的配置永远不会跑到它们。
     """
     # A free-form argument bypasses `token_normalize_func`, which is what makes
     # every other name in this CLI case-insensitive; normalise it here so
@@ -324,10 +322,10 @@ def config_cmd(action: str, config_path: str, force: bool, data_root: str | None
     action = action.lower()
     moved = CONFIG_ACTIONS_MOVED.get(action)
     if moved:
-        raise click.ClickException(f"`cne config {action}` has moved. Use `{moved}` instead.")
+        raise click.ClickException(f"`cne config {action}` 已改名，请改用 `{moved}`。")
     if action not in CONFIG_ACTIONS:
         raise click.BadParameter(
-            f"{action!r} is not one of {', '.join(repr(a) for a in CONFIG_ACTIONS)}",
+            f"{action!r} 不是 {', '.join(repr(a) for a in CONFIG_ACTIONS)} 之一",
             param_hint="'{" + "|".join(CONFIG_ACTIONS) + "}'",
         )
     if action == "diff":
@@ -349,8 +347,8 @@ def config_cmd(action: str, config_path: str, force: bool, data_root: str | None
             write_user_config(out, data_root=data_root, force=force)
         except FileExistsError as exc:
             raise click.ClickException(str(exc)) from exc
-        click.echo(f"Wrote {out}")
-        click.echo("data.root is absolute; edit if needed, then: cne config validate && cne init")
+        click.echo(f"已写入 {out}")
+        click.echo("data.root 是绝对路径，按需修改后执行：cne config validate && cne init")
         return
 
     cfg = _cfg(config_path)
@@ -359,18 +357,18 @@ def config_cmd(action: str, config_path: str, force: bool, data_root: str | None
         for e in errors:
             click.echo(f"ERROR: {e}", err=True)
         raise SystemExit(1)
-    click.echo("Configuration OK")
+    click.echo("配置检查通过")
 
 
 @cli.command()
 @config_option
-@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@click.option("--json", "as_json", is_flag=True, help="输出机器可读的 JSON。")
 def doctor(config_path: str, as_json: bool):
-    """Check environment, optional dependencies, and config for silent breakage.
+    """体检环境、可选依赖和配置，找出会悄悄坏掉的地方。
 
-    Runs without a config (fresh install) and without network. Exits non-zero
-    when something will actually lose data — notably a source that is enabled in
-    config but has no package behind it, which no other command surfaces.
+    \b
+    不需要配置（刚装完就能跑），也不需要网络。只有确实会丢数据时才非零退出 ——
+    最典型的是配置里启用了某个源、但它背后的包没装，这件事别的命令都不会说。
     """
     from cnequity.diagnostics.render import render_text, to_dict
     from cnequity.diagnostics.report import build_report

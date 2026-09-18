@@ -887,6 +887,19 @@ def _corporate_action_crosscheck_findings(config: Config, out: pl.DataFrame) -> 
     if steps.is_empty():
         return []
 
+    from cnequity.query.parquet_scan import dataset_has_parquet
+
+    # Whether this lake has an action feed at all decides what an unexplained
+    # step *means*. The join below is a left join whose missing terms fill to
+    # zero, so a lake that never ingested `corporate_actions` reads as "no
+    # ex-date anywhere" and every real dividend becomes a step nothing
+    # explains. That is the absence of evidence, not evidence of a bad factor,
+    # and it is not an error: `cne init --profile demo --research` fetches bars
+    # and factors but no actions, so it reported every dividend in the window
+    # as an error and refused to print the comparison it exists to show. The
+    # divergence is still recorded — as a warning that names the missing feed.
+    has_action_feed = dataset_has_parquet(config.curated_root / "corporate_actions")
+
     steps = (
         steps.join(
             _action_terms(config, symbols, start, end),
@@ -941,7 +954,10 @@ def _corporate_action_crosscheck_findings(config: Config, out: pl.DataFrame) -> 
         .join(counts, on=["symbol", "adjust_type"], how="left")
         .sort("_bps", descending=True)
     )
-    findings.extend(_crosscheck_finding(config, row) for row in worst.iter_rows(named=True))
+    findings.extend(
+        _crosscheck_finding(config, row, has_action_feed=has_action_feed)
+        for row in worst.iter_rows(named=True)
+    )
     return findings
 
 
@@ -984,14 +1000,20 @@ def _degenerate_action_findings(degenerate: pl.DataFrame) -> list[dict]:
     return findings
 
 
-def _crosscheck_finding(config: Config, row: dict) -> dict:
+def _crosscheck_finding(config: Config, row: dict, *, has_action_feed: bool = True) -> dict:
     td = row["trade_date"]
     td_str = td.isoformat() if isinstance(td, date) else str(td)
     has_action = any(
         abs(row[term]) > 0 for term in ("_dividend", "_bonus", "_transfer", "_allotment")
     )
     has_action = has_action or row.get("_split", 1.0) != 1.0
-    if has_action:
+    if not has_action_feed:
+        cause = (
+            "this lake holds no corporate_actions rows, so nothing here can confirm or deny "
+            "an ex-date that day — ingest them (`cne run daily --group core`) before "
+            "reading this as a factor break"
+        )
+    elif has_action:
         cause = (
             f"corporate_actions has dividend={row['_dividend']:.4g} "
             f"bonus={row['_bonus']:.4g} transfer={row['_transfer']:.4g} "
@@ -1001,8 +1023,12 @@ def _crosscheck_finding(config: Config, row: dict) -> dict:
         cause = "corporate_actions has no ex-date that day, so the factor should not have moved"
     return {
         "dataset": "adj_factors",
+        # Never an error without a feed to arbitrate against: the size of the
+        # divergence says nothing when one side of the comparison is absent.
         "severity": (
-            "error" if row["_bps"] >= config.adj_factors_crosscheck_error_bps else "warning"
+            "error"
+            if has_action_feed and row["_bps"] >= config.adj_factors_crosscheck_error_bps
+            else "warning"
         ),
         "check": "adj_factor_corporate_action_divergence",
         "message": (

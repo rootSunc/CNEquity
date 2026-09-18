@@ -20,13 +20,17 @@ import click
 # Section title -> commands, in the order a lake is used rather than in the
 # order the commands were written. `SECTIONS` is the whole contract: a command
 # missing from it shows up under "Other" in `--help`, and a test fails.
+# Where a command that no sections list would land. Named so the test that
+# forbids leftovers and the formatter cannot drift apart.
+LEFTOVER_SECTION = "其它"
+
 SECTIONS: list[tuple[str, tuple[str, ...]]] = [
-    ("Start here", ("config", "doctor", "init")),
-    ("Run the pipeline", ("run", "backfill", "derive")),
-    ("Check the lake", ("status", "verify", "audit")),
-    ("Use the lake", ("query", "serve", "mcp")),
+    ("从这里开始", ("config", "doctor", "init")),
+    ("跑 pipeline", ("run", "backfill", "derive")),
+    ("检查数据湖", ("status", "verify", "audit")),
+    ("使用数据湖", ("query", "serve", "mcp")),
     (
-        "Govern and inspect",
+        "治理与检视",
         ("snapshot", "contract", "profile", "stats", "sources", "delisted", "ths-official"),
     ),
 ]
@@ -54,7 +58,7 @@ def moved_hints(mapping: dict[str, str], base: type[click.Group] = click.Group) 
         def resolve_command(self, ctx: click.Context, args: list[str]):
             name = args[0] if args else ""
             if name in mapping and self.get_command(ctx, name) is None:
-                ctx.fail(f"`{ctx.command_path} {name}` has moved. Use `{mapping[name]}` instead.")
+                ctx.fail(f"`{ctx.command_path} {name}` 已改名，请改用 `{mapping[name]}`。")
             return super().resolve_command(ctx, args)
 
     return _Moved
@@ -195,8 +199,34 @@ class _LoggedFailures(click.Group):
             raise
 
 
-class SectionedGroup(moved_hints(MOVED, base=_LoggedFailures)):  # type: ignore[misc]
+class ZhHelpOption:
+    """Give `-h/--help` a Chinese description, on every command and group.
+
+    Click builds that option itself, with its own English text, so the one
+    English line left in an otherwise Chinese `--help` was the line describing
+    `--help`. Overriding the factory is the only place it can be said once
+    rather than on fifty-one commands. Click's own chrome — `Usage:`,
+    `Options:`, `Error:` — is gettext-driven inside Click and is left alone.
+    """
+
+    def get_help_option(self, ctx: click.Context):
+        option = super().get_help_option(ctx)  # type: ignore[misc]
+        if option is not None:
+            option.help = "显示帮助并退出。"
+        return option
+
+
+class ZhCommand(ZhHelpOption, click.Command):
+    """The class every leaf command is built with (see `SectionedGroup`)."""
+
+
+class SectionedGroup(ZhHelpOption, moved_hints(MOVED, base=_LoggedFailures)):  # type: ignore[misc]
     """A `click.Group` that prints its commands in sections, and names moves."""
+
+    # Both are inherited by every group and command hung off this one, so a
+    # command declared with a plain `@cli.command()` still gets the Chinese
+    # help option and the failure logging above.
+    command_class = ZhCommand
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         listed = self.list_commands(ctx)
@@ -228,7 +258,7 @@ class SectionedGroup(moved_hints(MOVED, base=_LoggedFailures)):  # type: ignore[
                 continue
             leftovers.append((name, command.get_short_help_str(limit=68)))
         if leftovers:
-            sections.append(("Other", leftovers))
+            sections.append((LEFTOVER_SECTION, leftovers))
 
         for title, rows in sections:
             with formatter.section(title):
@@ -244,18 +274,18 @@ CONTEXT_SETTINGS = {"token_normalize_func": str.lower, "help_option_names": ["-h
 
 
 @click.group(cls=SectionedGroup, context_settings=CONTEXT_SETTINGS)
-@click.version_option(package_name="cnequity")
+@click.version_option(package_name="cnequity", help="显示版本并退出。")
 def cli():
-    """cnequity — A-share data ingestion CLI."""
+    """cnequity —— A 股数据采集 CLI。"""
 
 
 @cli.group()
 def run():
-    """Run the pipeline, and repair a run that did not finish.
+    """跑 pipeline，以及修复没跑完的 run。
 
-    `daily` and `events` are what a scheduler fires. The other three are the
-    manual path back from a failure: `retry` re-runs it, `compact` publishes
-    staging a crashed run left behind, and `clean` removes what compacted.
-    Every schedule group already runs a `compact` step of its own, so none of
-    these three is part of a healthy day.
+    \b
+    调度器要跑的是 `daily` 和 `events`。另外三条是失败之后手动回到正轨的路：
+    `retry` 重跑，`compact` 把崩溃的 run 留在 staging 的数据发布出去，
+    `clean` 清掉已经 compact 过的 staging。每个调度组自带 `compact` 步骤，
+    所以正常的一天不会用到这三条。
     """

@@ -32,6 +32,14 @@ def config_option(func):
         "config_path",
         default=DEFAULT_CONFIG,
         show_default=True,
+        help="配置文件路径。",
+        # The default is relative, so every command had to be run from the
+        # directory holding `configs/`. The shell pipelines already read
+        # `CNE_CONFIG` and passed it through as `--config`; the CLI itself did
+        # not, so a cron line that forgot its `cd` failed with "Config not
+        # found" instead of using the config the environment already named.
+        envvar="CNE_CONFIG",
+        show_envvar=True,
     )(func)
 
 
@@ -48,18 +56,17 @@ def resolve_config_path(config_path: str):
         hint = ""
         if Path(DEMO_CONFIG).exists():
             hint = (
-                f"\nFound {DEMO_CONFIG} from `cne init --profile demo` — to act on "
-                "the demo lake, "
-                f"add `--config {DEMO_CONFIG}`."
+                f"\n找到 `cne init --profile demo` 写的 {DEMO_CONFIG} —— "
+                f"要对 demo 湖操作，请加上 `--config {DEMO_CONFIG}`。"
             )
         raise click.ClickException(
-            f"Config not found: {USER_CONFIG}. "
-            "Run `cne config create` to write one from the packaged example "
-            f"(or copy {EXAMPLE_CONFIG} if you have the repo checkout)."
+            f"找不到配置：{USER_CONFIG}。"
+            "跑 `cne config create` 从随包示例生成一份"
+            f"（有仓库 checkout 也可以直接复制 {EXAMPLE_CONFIG}）。"
             f"{hint}"
         )
     if not path.exists():
-        raise click.ClickException(f"Config not found: {path}")
+        raise click.ClickException(f"找不到配置：{path}")
     return path
 
 
@@ -145,7 +152,7 @@ def attach_log_file(cfg, command: str, *, quiet: bool = False) -> Path | None:
         from cnequity.progress import start_heartbeat
 
         start_heartbeat()
-    click.echo(f"Logging to {path}", err=True)
+    click.echo(f"日志写到 {path}", err=True)
     return path
 
 
@@ -162,7 +169,7 @@ def parse_date_option(value: str | None, flag: str) -> date | None:
         return date.fromisoformat(value)
     except ValueError:
         raise click.BadParameter(
-            f"{value!r} is not an ISO date (YYYY-MM-DD)", param_hint=flag
+            f"{value!r} 不是 ISO 日期（YYYY-MM-DD）", param_hint=flag
         ) from None
 
 

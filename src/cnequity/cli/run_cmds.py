@@ -1,9 +1,10 @@
 """The scheduled path, and the way back from a failed run: `run daily`,
 `run events`, `run retry`.
 
-Composition of these into a day's worth of work lives in
-`scripts/daily_pipeline.sh`, not here — the CLI runs one job, the script decides
-which jobs a day needs.
+`run daily --all-groups` composes one day's schedule groups, because the shell
+pipeline that used to be the only way to run them all is not installed by the
+package. Everything around a day — health check, source probe, metadata backup,
+the late stale-only pass — still lives in `scripts/daily_pipeline.sh`.
 """
 
 from __future__ import annotations
@@ -116,7 +117,7 @@ def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> li
         known = getattr(cfg, "schedule_groups", {})
         unknown = groups - known.keys()
         if unknown:
-            raise click.ClickException(f"Unknown stale groups: {', '.join(sorted(unknown))}")
+            raise click.ClickException(f"未知的 stale 调度组：{', '.join(sorted(unknown))}")
         allowed = {step for name in groups for step in known[name].steps}
 
     out: list[dict] = []
@@ -238,6 +239,77 @@ def _auto_repair_gaps(cfg, anchor: date) -> list[dict]:
     return results
 
 
+def _group_is_runnable(cfg, group) -> bool:
+    """False when every dataset the group would fetch is disabled.
+
+    `intraday` and `ticks` are configured but unscheduled: their datasets are
+    opt-in and off by default. Running them from `--all-groups` would report a
+    failure for work nobody asked for.
+    """
+    from cnequity.domain.datasets import DATASETS, is_dataset_enabled
+
+    datasets = [step for step in group.steps if step in DATASETS]
+    if not datasets:
+        return True
+    return any(is_dataset_enabled(name, cfg) for name in datasets)
+
+
+def _run_all_groups(cfg, engine: JobEngine, td: date | None, *, backfill: bool, repairs: list):
+    """Run every schedule group in config order, one at a time.
+
+    A day's ingestion is six groups, and until now the only thing that ran all
+    six was `scripts/daily_pipeline.sh` — which is not installed by the PyPI
+    package. So the documented answer for anyone who had only `pip install`
+    was six cron lines, and the single command they reached for instead
+    (`cne run daily`) silently covered a third of the lake.
+
+    One group failing does not stop the rest, exactly as the script does it:
+    the point is to get as much of the day as the sources will give. The exit
+    code is the worst of them.
+    """
+    if not cfg.schedule_groups:
+        raise click.ClickException(
+            f"{getattr(cfg, 'config_path', None) or '这份配置'} 里没有 [job.daily.groups] —— "
+            "`cne config create` 生成的配置带有这些调度组。"
+        )
+    results: list[dict] = []
+    worst = 0
+    for name, group in cfg.schedule_groups.items():
+        if not _group_is_runnable(cfg, group):
+            click.echo(f"调度组 {name}：跳过（它要抓的数据集全部处于关闭状态）", err=True)
+            results.append({"group": name, "status": "skipped_disabled"})
+            continue
+        try:
+            result = engine.run_job(
+                f"daily:{name}",
+                trade_date=td,
+                waves=[
+                    WaveConfig(
+                        name=f"group:{name}",
+                        parallel=getattr(group, "parallel", True),
+                        steps=group.steps,
+                    )
+                ],
+                backfill=backfill,
+            )
+        except RunLockError as exc:
+            # Another daily job holds the ingestion lock. That is a reason to
+            # stop, not to walk the remaining groups into the same wall.
+            raise click.ClickException(str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 — one group must not sink the day
+            click.echo(f"调度组 {name}：{type(exc).__name__}: {exc}", err=True)
+            results.append({"group": name, "status": "failed", "error": str(exc)})
+            worst = max(worst, 1)
+            continue
+        status = result["status"]
+        results.append({"group": name, "run_id": result["run_id"], "status": status})
+        click.echo(f"调度组 {name}：{status}", err=True)
+        worst = max(worst, _run_status_exit_code(status))
+    click.echo(json.dumps({"groups": results, "repairs": repairs}, indent=2))
+    if worst:
+        raise SystemExit(worst)
+
+
 def _run_stale_only(
     cfg,
     engine,
@@ -257,9 +329,7 @@ def _run_stale_only(
     """
     anchor = _last_trading_day(cfg, trade_date or shanghai_today())
     if groups is not None and repair_gaps:
-        raise click.ClickException(
-            "Scoped --groups cannot be combined with whole-lake --repair-gaps"
-        )
+        raise click.ClickException("限定了 --groups 就不能再用全湖范围的 --repair-gaps")
     repairs = _auto_repair_gaps(cfg, anchor) if repair_gaps else []
     plan = (
         stale_fetch_plan(cfg, anchor)
@@ -268,7 +338,7 @@ def _run_stale_only(
     )
     steps = [item["dataset"] for item in plan]
     if not plan:
-        click.echo(f"nothing stale as of {anchor.isoformat()}")
+        click.echo(f"截至 {anchor.isoformat()} 没有落后的数据集")
         click.echo(
             json.dumps(
                 {"anchor": anchor.isoformat(), "repairs": repairs, "status": "nothing_stale"},
@@ -276,7 +346,7 @@ def _run_stale_only(
             )
         )
         return
-    click.echo(f"stale as of {anchor.isoformat()}: {', '.join(steps)}", err=True)
+    click.echo(f"截至 {anchor.isoformat()} 落后的数据集：{', '.join(steps)}", err=True)
     # Run same-day snapshot-only feeds in an earlier wave. A large intraday or
     # historical sweep can still run in parallel with peers of its own class,
     # but it cannot delay the finite snapshot capture window.
@@ -370,40 +440,54 @@ def datasets_outside_the_daily_waves(cfg) -> list[str]:
     "--groups",
     "stale_groups",
     default=None,
-    help="Limit --stale-only to these daily groups (comma- or space-separated).",
+    help="把 --stale-only 限定在这些 daily 调度组内（逗号或空格分隔）。",
 )
 @click.option(
     "--group",
     "group_name",
     default=None,
+    help=("调度组：core、capital、signals、fundamentals、macro_risk、research、intraday、ticks"),
+)
+@click.option(
+    "--all-groups",
+    "all_groups",
+    is_flag=True,
     help=(
-        "Schedule group: core, capital, signals, fundamentals, macro_risk, research, "
-        "intraday, ticks"
+        "按配置顺序串行跑完全部调度组，某个组失败也继续往下跑。一条命令跑完一天，"
+        "给没有仓库里 scripts/daily_pipeline.sh 的人用。数据集全部关闭的组会跳过。"
     ),
 )
 @click.option(
     "--trade-date",
     "trade_date_str",
     default=None,
-    help="As-of trade date YYYY-MM-DD (default: today). Use to catch up on weekends/holidays.",
+    help="as-of 交易日 YYYY-MM-DD（默认今天）。周末 / 节假日补跑时用。",
 )
-@click.option("--backfill", is_flag=True)
+@click.option(
+    "--backfill",
+    is_flag=True,
+    help=(
+        "用 backfill 语义跑：跳过交易日门禁和每个 step 自己的增量窗口，"
+        "改为抓配置里 backfill scope 指定的窗口。用于补跑调度漏掉的某一天；"
+        "日常调度从不带这个参数。"
+    ),
+)
 @click.option(
     "--repair-gaps",
     is_flag=True,
-    help="Before the daily/stale run, repair verified historical gaps that have an honest source.",
+    help="在 daily / stale 跑之前，先修复已验证、且有诚实来源的历史缺口。",
 )
-@click.option("--quiet", is_flag=True, help="Only warnings and errors; no per-step progress.")
+@click.option("--quiet", is_flag=True, help="只留 warning 及以上，不打逐步进度。")
 @click.option(
     "--stale-only",
     is_flag=True,
-    help="Re-fetch only the datasets still behind the last trading day. "
-    "Schedule a few hours after the main pipeline: a snapshot dataset that lost "
-    "its window to a source outage cannot be replayed tomorrow.",
+    help="只重抓仍然落后于最后交易日的数据集。挂在主 pipeline 几小时之后跑："
+    "snapshot 类数据集一旦因源端中断丢掉当天窗口，第二天就补不回来了。",
 )
 def run_daily(
     config_path: str,
     group_name: str | None,
+    all_groups: bool,
     trade_date_str: str | None,
     backfill: bool,
     repair_gaps: bool,
@@ -411,7 +495,7 @@ def run_daily(
     quiet: bool,
     stale_groups: str | None = None,
 ):
-    """Run daily ingestion job (Wave DAG or schedule group)."""
+    """跑日更采集（Wave DAG 或指定调度组）。"""
     _progress_logging(quiet)
     try:
         cfg = _cfg(config_path)
@@ -426,25 +510,40 @@ def run_daily(
     engine = JobEngine(cfg)
     td = parse_date_option(trade_date_str, "--trade-date")
     if stale_groups is not None and not stale_only:
-        raise click.ClickException("--groups requires --stale-only; use --group for a normal run")
+        raise click.ClickException("--groups 只能配合 --stale-only；普通的一次 run 请用 --group")
+    if all_groups and group_name:
+        raise click.ClickException("--all-groups 会跑全部调度组，请去掉 --group。")
+    if all_groups and stale_only:
+        raise click.ClickException("--stale-only 自己挑要跑的 step，请去掉 --all-groups。")
     if stale_only:
         if group_name:
-            raise click.ClickException("--stale-only picks its own steps; drop --group.")
+            raise click.ClickException("--stale-only 自己挑要跑的 step，请去掉 --group。")
         groups = None
         if stale_groups is not None:
             groups = set(stale_groups.replace(",", " ").split())
             if not groups:
-                raise click.ClickException("--groups must not be empty")
+                raise click.ClickException("--groups 不能为空")
         _run_stale_only(cfg, engine, td, backfill=backfill, repair_gaps=repair_gaps, groups=groups)
         return
     repairs = []
     if repair_gaps:
         repairs = _auto_repair_gaps(cfg, _last_trading_day(cfg, td or shanghai_today()))
+    if all_groups:
+        _run_all_groups(cfg, engine, td, backfill=backfill, repairs=repairs)
+        return
     try:
         if group_name:
             group = cfg.schedule_groups.get(group_name)
             if not group:
-                raise click.ClickException(f"Unknown group: {group_name}")
+                known = ", ".join(sorted(cfg.schedule_groups))
+                raise click.ClickException(
+                    f"未知调度组：{group_name}（配置里有：{known}）"
+                    if known
+                    else f"未知调度组：{group_name} —— 这份配置里根本没有 [job.daily.groups]。"
+                    f"`cne config create` 生成的配置带有它们；"
+                    f"`cne init --profile demo|sample` 写的配置故意不带，"
+                    f"因为 demo 湖不是一个市场。"
+                )
             result = engine.run_job(
                 f"daily:{group_name}",
                 trade_date=td,
@@ -458,6 +557,22 @@ def run_daily(
                 backfill=backfill,
             )
         else:
+            if not (getattr(cfg, "daily_waves", None) or []):
+                # An empty plan used to be a success: `planned_steps: []`,
+                # `status: success`, exit 0, nothing fetched. That is the
+                # answer a scheduler is least able to act on, and the one a
+                # new user got by pointing `cne run daily` at the demo config.
+                groups = ", ".join(sorted(cfg.schedule_groups))
+                remedy = (
+                    f"改跑调度组：`cne run daily --group <名字>`（有 {groups}）。"
+                    if groups
+                    else "`cne config create` 生成的配置两者都有。"
+                )
+                raise click.ClickException(
+                    f"{config_path} 里没有 [[job.daily.waves]]：不带参数的 `cne run daily` "
+                    f"跑的就是这张 wave DAG，而这份配置一条都没定义，"
+                    f"跑起来会一行数据都没抓却报成功。{remedy}"
+                )
             result = engine.run_job("daily", trade_date=td, backfill=backfill)
             # A skipped non-trading day ran nothing at all; listing what it did
             # not cover would put this note in every weekend cron mail.
@@ -470,10 +585,10 @@ def run_daily(
                 preview = ", ".join(uncovered[:6])
                 suffix = f", … (+{len(uncovered) - 6})" if len(uncovered) > 6 else ""
                 click.echo(
-                    f"note: this run covered the core spine only; {len(uncovered)} enabled "
-                    f"dataset(s) belong to schedule groups and were not updated: "
-                    f"{preview}{suffix}. Run them with `cne run daily --group <name>` "
-                    f"({', '.join(sorted(cfg.schedule_groups))}).",
+                    f"提示：这一趟只跑了核心骨架；还有 {len(uncovered)} 个已启用的数据集属于"
+                    f"调度组，这次没有更新：{preview}{suffix}。"
+                    f"用 `cne run daily --group <名字>` 跑它们"
+                    f"（有 {', '.join(sorted(cfg.schedule_groups))}）。",
                     err=True,
                 )
     except RunLockError as exc:
@@ -497,22 +612,21 @@ def run_daily(
     "--group",
     "group_name",
     default=None,
-    help="One events group from [job.events.groups] (default: every group, in order).",
+    help="[job.events.groups] 里的某一个组（默认按顺序跑全部）。",
 )
 @click.option(
     "--trade-date",
     "trade_date_str",
     default=None,
-    help="As-of calendar date YYYY-MM-DD (default: today). Weekends and holidays included.",
+    help="as-of 自然日 YYYY-MM-DD（默认今天），含周末与节假日。",
 )
-@click.option("--quiet", is_flag=True, help="Only warnings and errors; no per-step progress.")
+@click.option("--quiet", is_flag=True, help="只留 warning 及以上，不打逐步进度。")
 def run_events(config_path: str, group_name: str | None, trade_date_str: str | None, quiet: bool):
-    """Run the continuous event streams (disclosures, news) on the natural calendar.
+    """按自然日跑持续事件流（公告、新闻）。
 
-    These feeds publish through weekends and holidays, so this job is not gated
-    on the trading calendar and takes its own ingestion lock: it neither waits
-    for the evening batch nor is skipped when the market was closed. Each group
-    publishes what it staged through its own `compact`.
+    \b
+    这些源在周末和节假日照常发布，所以这个 job 不受交易日门禁约束，并且拿自己的采集锁：
+    它既不等晚间批次，也不会因为休市而被跳过。每个组通过自带的 `compact` 发布它 staging 的数据。
     """
     _progress_logging(quiet)
     try:
@@ -523,11 +637,11 @@ def run_events(config_path: str, group_name: str | None, trade_date_str: str | N
     attach_log_file(cfg, "run-events", quiet=quiet)
     if not cfg.events_groups:
         raise click.ClickException(
-            "No [job.events.groups] in this config — see configs/cnequity.example.toml"
+            "这份配置里没有 [job.events.groups] —— 参考 configs/cnequity.example.toml"
         )
     if group_name and group_name not in cfg.events_groups:
         known = ", ".join(sorted(cfg.events_groups))
-        raise click.ClickException(f"Unknown events group: {group_name} (configured: {known})")
+        raise click.ClickException(f"未知 events 调度组：{group_name}（配置里有：{known}）")
 
     selected = (
         [(group_name, cfg.events_groups[group_name])]
@@ -561,7 +675,7 @@ def _retry_single_run(engine: JobEngine, run_id: str) -> dict:
     """Retry one run, print its result, and return it to the CLI caller."""
     record = engine.manifest.get_run(run_id)
     if record is None:
-        raise click.ClickException(f"Unknown run_id: {run_id}")
+        raise click.ClickException(f"未知 run_id：{run_id}")
     try:
         if record["job_name"] == "init":
             result = engine.resume_init(run_id=run_id)
@@ -596,28 +710,28 @@ def _failed_daily_group_runs(engine: JobEngine) -> list[dict]:
 
 @run.command("retry")
 @config_option
-@click.option("--run-id", default=None, help="Retry a specific run.")
+@click.option("--run-id", default=None, help="重试指定的一次 run。")
 @click.option(
     "--failed-groups",
     is_flag=True,
-    help="Retry the latest failed run of each daily group.",
+    help="重试每个 daily 调度组最近一次失败的 run。",
 )
 def retry(config_path: str, run_id: str | None, failed_groups: bool):
-    """Retry one run or every latest failed daily group."""
+    """重试某一次 run，或每个 daily 调度组最近一次失败的 run。"""
     _progress_logging()
     cfg = _cfg(config_path)
     attach_log_file(cfg, "run-retry")
     engine = JobEngine(cfg)
     if failed_groups:
         if run_id:
-            raise click.ClickException("use either --run-id or --failed-groups, not both")
+            raise click.ClickException("--run-id 和 --failed-groups 只能用一个")
         runs = _failed_daily_group_runs(engine)
         if not runs:
-            click.echo("No failed daily group run to retry.")
+            click.echo("没有需要重试的失败 daily 调度组 run。")
             return
         failed = False
         for record in runs:
-            click.echo(f"Retrying failed daily group run {record['run_id']} ({record['job_name']})")
+            click.echo(f"重试失败的 daily 调度组 run {record['run_id']}（{record['job_name']}）")
             # Heavy groups retain sizeable Polars/Python arenas. A fresh child
             # process per group releases that memory before the next retry.
             proc = subprocess.run(
@@ -640,7 +754,7 @@ def retry(config_path: str, run_id: str | None, failed_groups: bool):
             raise SystemExit(1)
         return
     if not run_id:
-        raise click.ClickException("provide --run-id or --failed-groups")
+        raise click.ClickException("请给出 --run-id 或 --failed-groups")
     result = _retry_single_run(engine, run_id)
     exit_code = _run_status_exit_code(str(result.get("status", "failed")))
     if exit_code:

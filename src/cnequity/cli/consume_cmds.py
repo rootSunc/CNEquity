@@ -31,13 +31,14 @@ _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 @click.option(
     "--token",
     default=None,
-    help="Require this bearer token (or ?token=). Mandatory for a non-loopback --host.",
+    help="要求这个 bearer token（或 ?token=）。--host 不是回环地址时必须设置。",
 )
 def serve(config_path: str, host: str, port: int, token: str | None):
-    """Serve the read-only lake dashboard.
+    """启动只读的数据湖面板。
 
-    Shows coverage, freshness and source mix. Nothing here writes to the lake —
-    running, retrying and cleaning stay with the CLI.
+    \b
+    展示覆盖区间、新鲜度和来源构成。这里没有任何东西会写湖 ——
+    跑批、重试和清理仍然只在 CLI 上。
     """
     import uvicorn
 
@@ -49,16 +50,16 @@ def serve(config_path: str, host: str, port: int, token: str | None):
     # sources that built it.
     if host not in _LOOPBACK and not token:
         raise click.ClickException(
-            f"--host {host} would expose the dashboard beyond this machine; "
-            "pass --token to require one, or leave --host at 127.0.0.1."
+            f"--host {host} 会把面板暴露到本机之外；"
+            "请用 --token 要求令牌，或者把 --host 留在 127.0.0.1。"
         )
 
     cfg = _cfg(config_path)
-    click.echo(f"lake:      {cfg.data_root}")
-    click.echo(f"dashboard: http://{host}:{port}/" + (f"?token={token}" if token else ""))
-    click.echo(f"api docs:  http://{host}:{port}/api/docs")
+    click.echo(f"数据湖：  {cfg.data_root}")
+    click.echo(f"面板：    http://{host}:{port}/" + (f"?token={token}" if token else ""))
+    click.echo(f"API 文档：http://{host}:{port}/api/docs")
     click.echo(
-        f"sources:   http://{host}:{port}/source-health" + (f"?token={token}" if token else "")
+        f"源健康：  http://{host}:{port}/source-health" + (f"?token={token}" if token else "")
     )
     uvicorn.run(create_app(cfg, token=token), host=host, port=port, log_level="info")
 
@@ -66,12 +67,12 @@ def serve(config_path: str, host: str, port: int, token: str | None):
 @cli.command()
 @config_option
 @click.option("--sql", default="SELECT COUNT(*) AS n FROM daily_bars")
-@click.option("--dataset", default=None, help="On-demand dataset name")
-@click.option("--symbol", default=None, help="Symbol for on-demand fetch")
+@click.option("--dataset", default=None, help="按需抓取的数据集名")
+@click.option("--symbol", default=None, help="按需抓取的标的代码")
 @click.option(
     "--refresh",
     is_flag=True,
-    help="Refresh the on-demand cache before fetching (requires --dataset and --symbol).",
+    help="抓取前先刷新按需缓存（需要同时给 --dataset 和 --symbol）。",
 )
 def query(
     config_path: str,
@@ -80,12 +81,12 @@ def query(
     symbol: str | None,
     refresh: bool,
 ):
-    """Run DuckDB SQL or on-demand dataset fetch."""
+    """跑 DuckDB SQL，或按需抓取单个数据集。"""
     cfg = _cfg(config_path)
     if (dataset is None) != (symbol is None):
-        raise click.UsageError("--dataset and --symbol must be provided together")
+        raise click.UsageError("--dataset 和 --symbol 必须一起给")
     if refresh and dataset is None:
-        raise click.UsageError("--refresh requires --dataset and --symbol")
+        raise click.UsageError("--refresh 需要同时给 --dataset 和 --symbol")
     if dataset and symbol:
         svc = OnDemandService(cfg)
         fetch_kwargs = {"refresh": True} if refresh else {}
@@ -114,25 +115,27 @@ def query(
 @click.option(
     "--live",
     is_flag=True,
-    help="Where the lake holds nothing, fetch from the vendor on demand and do "
-    "not store it. Serves symbol lookup and unadjusted daily bars only; every "
-    "other tool refuses rather than answer without adjustment, universe or PIT.",
+    help=(
+        "湖里没有的数据就按需向源头取，并且不落盘。只支持标的查找和未复权日线；其它工具宁可拒绝，也不会在没有复权、universe "
+        "和 PIT 的情况下作答。"
+    ),
 )
 def mcp_cmd(config_path: str, live: bool):
-    """Serve this lake to an AI agent over MCP (stdio).
+    """通过 MCP（stdio）把这个湖开放给 AI agent。
 
-    Not meant to be typed interactively: any MCP-compatible client spawns it
-    and talks JSON-RPC on the pipe. The client-specific registration UI varies;
-    the portable command and arguments are simply::
+    \b
+    它不是拿来手敲的：任何兼容 MCP 的客户端会拉起这个进程，并在管道上讲 JSON-RPC。
+    各家客户端的注册界面不一样，但可移植的命令和参数就是：
 
+    \b
       cne mcp --config /path/to/cnequity.toml
 
-    Use that command as the ``command``/``args`` entry in the client's MCP
-    configuration. This implementation uses the standard stdio transport, not
-    a vendor-specific Claude integration.
+    \b
+    把它填进客户端 MCP 配置里的 `command` / `args`。这里用的是标准 stdio 传输，
+    不是某一家厂商专有的 Claude 集成。
 
-    Read-only, like `cne serve`. The tools query the lake; ingestion stays on
-    the CLI, where a person runs it.
+    \b
+    和 `cne serve` 一样只读。这些工具只查询湖；采集仍然留在 CLI 上，由人来跑。
     """
 
     from cnequity.mcp_server import serve_stdio
@@ -172,13 +175,12 @@ def _guard_mcp_data_root(cfg, config_path: str) -> None:
     if curated.exists() and next(curated.rglob("*.parquet"), None) is not None:
         return
     raise click.ClickException(
-        f"No curated data under {curated}.\n"
-        f"  config:    {resolve_config_path(config_path).resolve()}\n"
-        f"  data.root: {cfg.data_root}\n"
-        "If that is not your lake, `data.root` is relative and resolved against "
-        "the working directory the client started this process in. Make both "
-        "`--config` and `[data].root` absolute paths.\n"
-        "If it is your lake and it is genuinely empty: `cne init` builds one, "
-        "`cne init --profile demo` makes a 5-symbol sample in 30 seconds, and `--live` serves "
-        "symbol lookup and raw daily bars straight from the vendor without one."
+        f"{curated} 下没有任何 curated 数据。\n"
+        f"  配置：     {resolve_config_path(config_path).resolve()}\n"
+        f"  data.root：{cfg.data_root}\n"
+        "如果这不是你的湖：`data.root` 是相对路径，会相对客户端拉起这个进程时的工作目录解析。"
+        "请把 `--config` 和 `[data].root` 都写成绝对路径。\n"
+        "如果这确实是你的湖、而且它真的是空的：`cne init` 会建一个，"
+        "`cne init --profile demo` 三十秒内做出一个 5 只票的样例，"
+        "而 `--live` 不需要湖也能直接从源头提供标的查找和未复权日线。"
     )

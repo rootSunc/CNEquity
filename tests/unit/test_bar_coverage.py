@@ -134,12 +134,12 @@ def test_verify_bars_exits_nonzero_for_unresolved_coverage(monkeypatch):
         cli, ["verify", "--bars", "--start", "2026-09-16", "--end", "2026-09-15"]
     )
     assert result.exit_code != 0
-    assert "--start must be" in result.output
+    assert "--start 必须" in result.output
     # The mode flags are the whole point of the merge: an option from another
     # mode has to be refused, not quietly ignored.
     result = CliRunner().invoke(cli, ["verify", "--bars", "--repair"])
     assert result.exit_code != 0
-    assert "--repair belongs to" in result.output
+    assert "--repair 属于" in result.output
     result = CliRunner().invoke(cli, ["verify", "--bars"])
     assert result.exit_code != 0
-    assert "--bars needs --start" in result.output
+    assert "--bars 需要配合 --start" in result.output

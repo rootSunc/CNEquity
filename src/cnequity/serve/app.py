@@ -58,6 +58,10 @@ class Health(BaseModel):
     fresh: int
     stale: int
     empty: int
+    no_source: int = Field(
+        default=0,
+        description="Registered but permanently sourceless — counted apart from empty.",
+    )
     not_applicable: int
     stale_datasets: list[str]
     empty_optional: list[str] = Field(description="Empty and required=False — expected, not a gap.")

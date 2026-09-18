@@ -143,7 +143,11 @@ def test_health_counts_every_registered_dataset(client):
     from cnequity.domain.datasets import DATASETS
 
     assert body["datasets"] == len(DATASETS)
-    assert body["fresh"] + body["stale"] + body["empty"] + body["not_applicable"] == len(DATASETS)
+    # `no_source` is its own bucket: a dataset whose feed was retired with no
+    # replacement is not work someone forgot to do. It still has to be counted.
+    assert body["fresh"] + body["stale"] + body["empty"] + body["no_source"] + body[
+        "not_applicable"
+    ] == len(DATASETS)
     # 3 daily_bars + 1 instruments + 2 trading_calendar + 1 fsi
     assert body["rows"] == 7
 

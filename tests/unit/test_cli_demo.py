@@ -71,7 +71,11 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
     )
 
     def fake_calendar(config, trade_date, run_id, context):
-        from cnequity.storage.atomic import write_parquet_atomic
+        # Staging, like the real step: the demo has to publish it, and for a
+        # while it did not — the step logged 2,818 rows while `cne status
+        # --datasets` reported trading_calendar empty and `SELECT * FROM
+        # trading_calendar` returned nothing.
+        from cnequity.storage import StagingWriter
 
         rows = []
         d = date(2024, 5, 1)
@@ -87,14 +91,7 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
             )
             d = date.fromordinal(d.toordinal() + 1)
         df = validate_dataframe(pl.DataFrame(rows), "trading_calendar")
-        for (year,), group in (
-            df.with_columns(pl.col("trade_date").dt.year().alias("_y"))
-            .partition_by("_y", as_dict=True)
-            .items()
-        ):
-            out = config.curated_root / "trading_calendar" / f"trade_date={year}"
-            out.mkdir(parents=True, exist_ok=True)
-            write_parquet_atomic(out / "part-000.parquet", group.drop("_y"))
+        StagingWriter(config.staging_root).write_batch("trading_calendar", run_id, "batch-0", df)
         return {"rows_read": df.height, "rows_written": df.height}
 
     def fake_daily_bars(config, trade_date, run_id, context):
@@ -110,9 +107,13 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
         from cnequity.storage.parquet import compact_dataset
         from cnequity.storage.state import StateStore
 
-        n = compact_dataset(config.staging_root, config.curated_root, "daily_bars", run_id)
-        StateStore(config.meta_root).set_date("daily_bars", trade_date)
-        return {"rows_read": n, "rows_written": n}
+        total = 0
+        for dataset in ("trading_calendar", "daily_bars"):
+            if not (config.staging_root / dataset / f"run_id={run_id}").exists():
+                continue
+            total += compact_dataset(config.staging_root, config.curated_root, dataset, run_id)
+            StateStore(config.meta_root).set_date(dataset, trade_date)
+        return {"rows_read": total, "rows_written": total}
 
     originals = {
         name: STEP_REGISTRY[name] for name in ("trading_calendar", "daily_bars", "compact")
@@ -142,11 +143,13 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
             ],
         )
         assert result.exit_code == 0, result.output
-        assert "Probe TDX" in result.output
+        assert "探测 TDX" in result.output
         assert "600519.SH" in result.output
         assert config_out.exists()
         assert (data_root / "curated" / "instruments" / "part-merged.parquet").exists()
         assert list((data_root / "curated" / "daily_bars").glob("**/*.parquet"))
+        # Fetched is not published: the calendar must reach curated too.
+        assert list((data_root / "curated" / "trading_calendar").glob("**/*.parquet"))
     finally:
         STEP_REGISTRY.update(originals)
 
@@ -189,7 +192,7 @@ def test_cne_demo_sample_needs_no_network(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert "OFFLINE SAMPLE" in result.output
+    assert "离线样例" in result.output
     assert "source=mock" in result.output
     assert config_out.exists()
     bars = pl.read_parquet(list((data_root / "curated" / "daily_bars").glob("**/*.parquet")))
@@ -204,7 +207,7 @@ def test_cne_demo_sample_rejects_live_only_modes(tmp_path):
     )
 
     assert result.exit_code != 0
-    assert "cannot be combined" in result.output
+    assert "不能和" in result.output
 
 
 def test_return_summary_compares_raw_and_adjusted_series():
@@ -294,6 +297,9 @@ def test_write_demo_toml_escapes_windows_paths(tmp_path):
     payload = tomllib.loads(out.read_text(encoding="utf-8"))
     assert "\\" not in payload["data"]["root"]
     assert Path(payload["data"]["root"]).name == "lake"
+    # `cne verify` / `cne audit` read this to know the lake is five symbols and
+    # not a market; without it they judge it against all 42 datasets.
+    assert payload["data"]["profile"] == "demo"
 
 
 def test_probe_tdx_closes_its_client():
@@ -442,9 +448,9 @@ def test_cne_demo_intraday_offline(tmp_path, monkeypatch):
         )
         assert result.exit_code == 0, result.output
         # Seven steps rather than six, and the session shape is reported.
-        assert "[7/7] minute_bars" in result.output
-        assert "hold a full 240-bar session" in result.output
-        assert "bar_time is the CLOSING minute" in result.output
+        assert "minute_bars 1 分钟线" in result.output
+        assert "是完整的 240 根/日" in result.output
+        assert "bar_time 是这一分钟的**收盘**时刻" in result.output
         assert 'load("minute_bars"' in result.output
         assert list((data_root / "curated" / "minute_bars").glob("**/*.parquet"))
     finally:
@@ -473,7 +479,7 @@ def test_run_intraday_demo_raises_when_the_step_fails(tmp_path):
         def run_job(self, *a, **k):
             return {"status": "failed"}
 
-    with pytest.raises(click.ClickException, match="minute_bars failed"):
+    with pytest.raises(click.ClickException, match="minute_bars 失败"):
         _run_intraday_demo(cfg, FailingEngine(), ["600519.SH"], date(2024, 6, 28), days=5)
 
 
@@ -490,7 +496,7 @@ def test_run_intraday_demo_raises_when_no_rows_come_back(tmp_path, monkeypatch):
             return {"status": "success"}
 
     monkeypatch.setattr("cnequity.query.reader.load", lambda *a, **k: pl.DataFrame({"symbol": []}))
-    with pytest.raises(click.ClickException, match="returned no rows"):
+    with pytest.raises(click.ClickException, match="没有返回任何行"):
         _run_intraday_demo(cfg, SucceedingEngine(), ["600519.SH"], date(2024, 6, 28), days=5)
 
 

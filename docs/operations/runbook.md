@@ -216,13 +216,13 @@ cne snapshot restore research-20260828 /new/empty/cnequity-restore
 
 ---
 
-## 环境变量（仅 `scripts/*.sh`）
+## 环境变量
 
-下列变量由 [scripts.md](scripts.md) 中的 shell 脚本读取；**`cne` CLI 本身不读**（请用 `--config`）。
+`CNE_CONFIG` 与 `CNE_LOG_DIR` 由 `cne` 本身读取，其余由 [scripts.md](scripts.md) 中的 shell 脚本读取。
 
 | 变量 | 默认 | 作用 |
 |------|------|------|
-| `CNE_CONFIG` | `configs/cnequity.toml` | 脚本传给 `cne --config` 的路径 |
+| `CNE_CONFIG` | `configs/cnequity.toml` | 所有命令 `--config` 的默认值（显式 `--config` 优先）。默认值是相对路径，挂 cron 时设这个变量就不必再 `cd` |
 | `CNE_LOG_DIR` | `{data.root}/logs` | 日志；长跑的 `cne` 命令也会在这里留一份 |
 | `CNE_GROUPS` | 全部 6 组 | 覆盖 pipeline 组列表 |
 | `CNE_NOTIFY` | `1` | `0` 关闭通知 |
@@ -426,7 +426,7 @@ ls data/cnequity/curated/daily_bars/      # 应有 trade_date=YYYY-MM-DD 分区
 .venv/bin/python scripts/accept_backfill.py snapshot \
   --config configs/cnequity.toml --out /tmp/curated-counts.json
 
-cne run daily --config configs/cnequity.toml
+cne run daily --config configs/cnequity.toml   # 骨架一趟即可，验收看的是幂等性
 
 .venv/bin/python scripts/accept_backfill.py check \
   --config configs/cnequity.toml --compare /tmp/curated-counts.json

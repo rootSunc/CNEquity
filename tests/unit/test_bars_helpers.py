@@ -343,3 +343,25 @@ def test_a_replayed_trade_date_bounds_the_backfill_window(monkeypatch):
     # An explicit --end keeps overriding both.
     explicit = SimpleNamespace(_backfill_start=None, _backfill_end=date(2026, 9, 18))
     assert bars._backfill_window(explicit, date(2025, 1, 1))[1] == date(2026, 9, 18)
+
+
+def test_named_symbols_are_never_classified_as_pre_listing_placeholders(monkeypatch):
+    """An operator asking for a symbol by name has already settled the question.
+
+    The placeholder rule is a cost control for the full-market sweep: an
+    undated code with no bar anywhere in the lake is read as one that has not
+    listed yet, and is skipped. Applied to a named scope it silently returned
+    nothing — `cne backfill daily_bars --symbols 000001.SZ` fetched 0 rows,
+    wrote 0 rows and still reported success, and the demo blamed TDX for it.
+    """
+    spans = {"000001.SZ": (None, None, "stock")}
+    monkeypatch.setattr(
+        "cnequity.steps.bars.load_bar_universe",
+        lambda config: {"600519.SH"},
+    )
+
+    swept = SimpleNamespace(_backfill_symbols=None)
+    assert bars._placeholder_bar_universe(swept, spans) == {"600519.SH"}
+
+    named = SimpleNamespace(_backfill_symbols=["000001.SZ"])
+    assert bars._placeholder_bar_universe(named, spans) is None

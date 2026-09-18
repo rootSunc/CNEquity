@@ -247,5 +247,5 @@ def test_source_policy_rejects_an_unknown_source_distinguishably():
     result = CliRunner().invoke(cli, ["sources", "policy", "no-such-source"])
 
     assert result.exit_code != 0
-    assert "unknown source policy" in result.output
+    assert "未知的源政策" in result.output
     assert "{" not in result.output

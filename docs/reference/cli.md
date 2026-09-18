@@ -289,6 +289,7 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 | 选项 | 说明 |
 |------|------|
 | `--group` | `core` \| `capital` \| `signals` \| `fundamentals` \| `macro_risk` \| `research` \| `intraday` |
+| `--all-groups` | 串行跑完全部调度组（与 `--group` 互斥）；一条命令跑完一天 |
 | `--backfill` | 强制 backfill 语义（慎用） |
 | `--repair-gaps` | 在 daily/stale 跑之前，先修复已验证、且有诚实来源的历史缺口 |
 | `--stale-only` | 只重抓仍落后于最后交易日的数据集（与 `--group` 互斥） |
@@ -312,7 +313,7 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 
 派生数据集不在其中：它们由 curated 重算，该跑的是 `cne derive`，不是重抓。
 
-无 `--group` 时跑完整 `[job.daily.waves]` DAG。`intraday` 组不在默认调度里：需先开 `[minute_bars].enabled`，再 `cne run daily --group intraday`。
+`--all-groups` 按配置顺序串行跑完 `[job.daily.groups]` 的每个组：一个组失败不中断后面的组，退出码取最差的一个，数据集全部关闭的组自动跳过（这是 PyPI 安装下「跑完一天」的那条命令；仓库 checkout 另有 `scripts/daily_pipeline.sh`，它还会做健康检查与元数据备份）。无 `--group` / `--all-groups` 时跑完整 `[job.daily.waves]` DAG —— 只有核心骨架，不是全部组；配置里没有 waves 时直接报错，不会假装成功。`intraday` 组不在默认调度里：需先开 `[minute_bars].enabled`，再 `cne run daily --group intraday`。
 
 成功或 `skipped_non_trading_day` 退出 0。
 
@@ -505,7 +506,7 @@ cne verify --runs --days 20 --enforce # 连续交易日运行证据
 
 | 选项 | 说明 |
 |------|------|
-| `--datasets` | 逐数据集新鲜度表（dataset / layer / freshness / 覆盖区间 / watermark）；有 STALE 退出 1 |
+| `--datasets` | 逐数据集新鲜度表（dataset / layer / freshness / 覆盖区间 / watermark）；有 STALE 退出 1。freshness 取值：`fresh` / `STALE` / `empty`（还没抓过）/ `no source`（源已下线且无替代，如 `economic_calendar`）/ `retired`（源已下线但湖已抓到最后一天，如 `northbound_flows`）/ `n/a`（配置里关闭，或不按日判新鲜度） |
 | `--all-columns` | 配合 `--datasets`：打印 `list_datasets` 的全部列（契约指纹、revision、PIT 存储列等），而非仅新鲜度 |
 | `--groups` | 配合 `--datasets`：只对这些调度组拥有的数据集判失败（空格或逗号分隔）。其它组的数据集照常列出、照常报为调度缺口，但不触发退出 1。只跑 `core` 的主机有二十多个数据集无人抓取，不加此项门禁天天失败（2026-09-12/13/14 为 21–25 个），告警就此失效。无人调度的数据集（`(unscheduled)`）仍然判失败——“不知道谁抓”不等于“别的主机在抓” |
 | `--run <id\|latest>` | 指定 run（默认 `latest`）；摘要含每个数据集 stage 的 `dataset_results` 与聚合 `dataset_status`。别名 `--run-id` 已删除 |

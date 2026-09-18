@@ -54,6 +54,9 @@ def _write_demo_toml(path: Path, data_root: Path) -> None:
         f"""# Auto-written by `cne init --profile demo`. Safe to delete with the demo data_root.
 [data]
 root = "{root}"
+# Says what this lake is, so whole-lake checks do not judge five symbols
+# against the full 42-dataset registry.
+profile = "demo"
 
 [orchestrator]
 workers = 1
@@ -80,6 +83,7 @@ def _write_sample_toml(path: Path, data_root: Path) -> None:
 # The rows are synthetic and carry source=mock. Never use this lake for research.
 [data]
 root = "{root}"
+profile = "sample"
 
 [orchestrator]
 workers = 1
@@ -97,6 +101,7 @@ def _demo_config(data_root: Path, config_path: Path | None = None) -> Config:
     """Minimal real-source config (workers=1, no mock, TDX only)."""
     return Config(
         data_root=data_root.resolve(),
+        lake_profile="demo",
         workers=1,
         batch_size=50,
         tdx_enabled=True,
@@ -140,11 +145,11 @@ def _probe_tdx(cfg: Config) -> None:
     from cnequity.adapters.tdx_protocol.session import close_quotes_client
 
     t0 = time.perf_counter()
-    click.echo("Probing TDX hosts (first successful server wins)…")
+    click.echo("正在探测 TDX 主机（第一个连通的服务器胜出）…")
     sys.stdout.flush()
     client = _quotes_client(cfg)
     try:
-        click.echo(f"TDX connection OK ({time.perf_counter() - t0:.1f}s)")
+        click.echo(f"TDX 连接正常（{time.perf_counter() - t0:.1f}s）")
     finally:
         # The heartbeat thread is not a daemon, so an unclosed client keeps the
         # interpreter alive after the demo has printed everything — the run looks
@@ -155,7 +160,7 @@ def _probe_tdx(cfg: Config) -> None:
 def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
     from cnequity.adapters.tdx_protocol.client import fetch_instruments, normalize_with_source
 
-    click.echo(f"Fetching full instrument list, then keeping {len(symbols)} demo symbols…")
+    click.echo(f"拉取完整标的清单，然后只保留 {len(symbols)} 只 demo 标的…")
     sys.stdout.flush()
     raw = fetch_instruments(
         rate_limit=cfg.tdx_rate_limit_spec(),
@@ -169,16 +174,16 @@ def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
     missing = [s for s in symbols if s not in found]
     if missing:
         click.echo(
-            f"Warning: not in TDX list (skipped): {', '.join(missing)}",
+            f"警告：不在 TDX 清单里（已跳过）：{', '.join(missing)}",
             err=True,
         )
     if kept.is_empty():
         raise click.ClickException(
-            "None of the demo symbols were returned by TDX.\n"
-            "  Check the environment first: `cne doctor` (no config or network needed).\n"
-            "  Then the route: `cne sources probe --only tdx_protocol "
-            "--config configs/cnequity.demo.toml`.\n"
-            "  No network at all? `cne init --profile sample` builds an offline lake instead."
+            "TDX 一只 demo 标的都没有返回。\n"
+            "  先查环境：`cne doctor`（不需要配置也不需要网络）。\n"
+            "  再查链路：`cne sources probe --only tdx_protocol "
+            "--config configs/cnequity.demo.toml`。\n"
+            "  完全没有网络？用 `cne init --profile sample` 建一个离线湖。"
         )
     df = validate_dataframe(
         with_provenance(kept, source="tdx_protocol", data_version="v1"),
@@ -186,7 +191,7 @@ def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
     )
     out = cfg.curated_root / "instruments" / "part-merged.parquet"
     write_parquet_atomic(out, df, compression="zstd")
-    click.echo(f"Wrote {df.height} instruments → {out}")
+    click.echo(f"已写入 {df.height} 条 instruments → {out}")
     return df["symbol"].to_list()
 
 
@@ -238,7 +243,7 @@ def _sample_query(cfg: Config, symbol: str) -> pl.DataFrame:
 def _return_summary(raw: pl.DataFrame, adjusted: pl.DataFrame) -> dict[str, object]:
     """Compare a raw and adjusted close series without hiding missing factors."""
     if raw.is_empty() or adjusted.is_empty():
-        raise click.ClickException("research demo returned no daily bars")
+        raise click.ClickException("research demo 没有取到任何日线")
     raw = raw.sort("trade_date")
     adjusted = adjusted.sort("trade_date")
     first_raw = float(raw["close"][0])
@@ -246,7 +251,7 @@ def _return_summary(raw: pl.DataFrame, adjusted: pl.DataFrame) -> dict[str, obje
     first_adj = float(adjusted["adj_close"][0])
     last_adj = float(adjusted["adj_close"][-1])
     if min(first_raw, first_adj) <= 0:
-        raise click.ClickException("research demo returned a non-positive starting close")
+        raise click.ClickException("research demo 的起始收盘价不是正数")
     return {
         "start": raw["trade_date"][0].isoformat(),
         "end": raw["trade_date"][-1].isoformat(),
@@ -267,27 +272,45 @@ def _run_research_demo(
     from cnequity.derive.adj_factors import compute_adj_factors
     from cnequity.query.reader import load
 
-    click.echo("Deriving hfq factors from Sina for the demo symbols…")
+    click.echo("正在用 Sina 为 demo 标的派生 hfq 复权因子…")
     result = compute_adj_factors(
         cfg,
         adjust_type="hfq",
         refresh_symbols=symbols,
         full=True,
     )
+    # A vendor gap on one of five symbols is not a reason to abandon the whole
+    # demonstration: Sina serves the factor series per symbol, and the point
+    # here is to show one raw-vs-adjusted comparison. Name what was missed and
+    # carry on with the symbols that answered.
+    failed_symbols = {str(item).split(":", 1)[0].strip().upper() for item in result.failed}
+    usable = [symbol for symbol in symbols if symbol.strip().upper() not in failed_symbols]
     if result.failed:
-        failed = ", ".join(result.failed)
+        click.echo(
+            f"警告：Sina 没有返回这些的复权因子：{', '.join(sorted(result.failed))}",
+            err=True,
+        )
+    if not usable:
         raise click.ClickException(
-            f"Sina returned no adjustment factor for: {failed}. "
-            "Run `cne init --profile demo` without --research to test TDX only."
+            f"Sina 没有为任何一只 demo 标的返回复权因子：{', '.join(result.failed)}。"
+            "去掉 --research 跑 `cne init --profile demo`，可以只验证 TDX。"
         )
     errors = [finding for finding in result.findings if finding.get("severity") == "error"]
     if errors:
         raise click.ClickException(
-            "Sina adjustment validation failed: "
-            + "; ".join(str(finding.get("message", "unknown finding")) for finding in errors)
+            "Sina 复权因子校验失败："
+            + "；".join(str(finding.get("message", "unknown finding")) for finding in errors)
         )
+    # This lake holds bars and factors but no corporate_actions, so the ex-date
+    # cross-check has nothing to arbitrate against. Say so rather than letting
+    # the printed return look like a verified one.
+    click.echo(
+        "提示：demo 湖里没有 corporate_actions，所以这些因子没有和除权日交叉校验过。"
+        "完整的湖会校验每一次跳变。",
+        err=True,
+    )
 
-    sample_symbol = symbols[0]
+    sample_symbol = usable[0]
     raw = load(
         "daily_bars",
         start=start,
@@ -306,9 +329,9 @@ def _run_research_demo(
     )
     summary = _return_summary(raw, adjusted)
     click.echo(
-        f"{sample_symbol}: raw return {summary['raw_return']:+.2%} → "
-        f"hfq return {summary['adjusted_return']:+.2%} "
-        f"({summary['rows']} exact rows, {summary['start']}..{summary['end']})"
+        f"{sample_symbol}：未复权收益 {summary['raw_return']:+.2%} → "
+        f"hfq 复权收益 {summary['adjusted_return']:+.2%}"
+        f"（{summary['rows']} 行精确因子，{summary['start']}..{summary['end']}）"
     )
     return {"symbol": sample_symbol, **summary}
 
@@ -352,13 +375,13 @@ def _run_intraday_demo(cfg: Config, engine, symbols: list[str], end: date, days:
         backfill=True,
     )
     if result.get("status") not in ("success", "warning"):
-        raise click.ClickException(f"minute_bars failed: {result}")
+        raise click.ClickException(f"minute_bars 失败：{result}")
 
     from cnequity.query.reader import load
 
     bars = load("minute_bars", symbols=symbols, config=cfg)
     if bars.is_empty():
-        raise click.ClickException("minute_bars returned no rows for the demo window")
+        raise click.ClickException("minute_bars 在 demo 窗口内没有返回任何行")
 
     expected = bars_per_session("1m")
     per_day = (
@@ -368,15 +391,15 @@ def _run_intraday_demo(cfg: Config, engine, symbols: list[str], end: date, days:
     )
     full = per_day.filter(pl.col("bars") == expected).height
     click.echo(
-        f"{bars.height} 1m bars over {per_day.height} symbol-day(s); "
-        f"{full}/{per_day.height} hold a full {expected}-bar session"
+        f"{bars.height} 根 1 分钟线，覆盖 {per_day.height} 个 标的×交易日；"
+        f"其中 {full}/{per_day.height} 是完整的 {expected} 根/日"
     )
     one = bars.filter(pl.col("symbol") == symbols[0]).sort("bar_time")
     session = one.filter(pl.col("trade_date") == one["trade_date"].max())
     with pl.Config(tbl_rows=6, tbl_cols=-1, fmt_str_lengths=24):
         click.echo(
-            f"\n{symbols[0]} — first and last bars of {session['trade_date'][0]} "
-            "(bar_time is the CLOSING minute):\n"
+            f"\n{symbols[0]} —— {session['trade_date'][0]} 的头尾几根 K 线"
+            "（bar_time 是这一分钟的**收盘**时刻）：\n"
         )
         cols = ["symbol", "bar_time", "open", "high", "low", "close", "volume"]
         click.echo(pl.concat([session.head(3), session.tail(3)]).select(cols))
@@ -478,30 +501,30 @@ def run_sample_demo(
     from cnequity.query.views import ensure_duckdb_views
 
     if intraday or research:
-        raise click.ClickException("--sample cannot be combined with --intraday or --research")
+        raise click.ClickException("--sample 不能和 --intraday 或 --research 一起用")
     symbols = [s.strip().upper() for s in symbols if s.strip()]
     if not symbols:
-        raise click.ClickException("--symbols must list at least one symbol")
+        raise click.ClickException("--symbols 至少要给一只标的")
     if days < 1 or days > 366:
-        raise click.ClickException("--days must be between 1 and 366 in sample mode")
+        raise click.ClickException("sample 模式下 --days 必须在 1 到 366 之间")
     if any(data_root.rglob("*.parquet")):
         raise click.ClickException(
-            f"Sample target already contains Parquet files: {data_root}. "
-            "Choose an empty --data-root to avoid mixing synthetic and real rows."
+            f"样例目标目录里已经有 Parquet 文件：{data_root}。"
+            "请换一个空的 --data-root，避免把合成数据和真实数据混在一起。"
         )
 
     config_out = config_out or Path("configs/cnequity.demo.toml")
     end = trade_date or date(2024, 6, 28)
     sessions = _sample_sessions(end, days)
 
-    _banner("1/3", f"Prepare offline sample lake at {data_root}")
-    click.echo("OFFLINE SAMPLE: generated synthetic prices, not market data.")
+    _banner("1/3", f"在 {data_root} 准备离线样例湖")
+    click.echo("离线样例：生成的是合成价格，不是市场数据。")
     _write_sample_toml(config_out, data_root)
     cfg = _demo_config(data_root, config_path=config_out.resolve())
     cfg.tdx_enabled = False
     init_data_layout(cfg)
 
-    _banner("2/3", f"Write {len(symbols)} symbols × {len(sessions)} sessions")
+    _banner("2/3", f"写入 {len(symbols)} 只标的 × {len(sessions)} 个交易日")
     instruments, bars = _sample_frames(symbols, sessions)
     write_parquet_atomic(
         cfg.curated_root / "instruments" / "part-sample.parquet",
@@ -513,18 +536,18 @@ def run_sample_demo(
         write_parquet_atomic(out / "part-sample.parquet", frame, compression="zstd")
     ensure_duckdb_views(cfg)
 
-    _banner("3/3", "Query the sample through the public API")
+    _banner("3/3", "通过公开 API 查询样例")
     sample_symbol = symbols[0]
     sample = _sample_query(cfg, sample_symbol)
     with pl.Config(tbl_rows=10, tbl_cols=-1, fmt_str_lengths=24):
         click.echo(sample.select("symbol", "trade_date", "close", "volume", "source"))
     click.echo(
         f"""
-Offline sample ready: {cfg.data_root}
-Config written to:    {config_out}
-All rows use source={MOCK_SOURCE}; never use them for research or production.
+离线样例已就绪：{cfg.data_root}
+配置写到：    {config_out}
+所有行的 source={MOCK_SOURCE}；绝不可用于研究或生产。
 
-Next:
+下一步：
   cne query --config {config_out} --sql "
     SELECT symbol, trade_date, close, volume, source
     FROM daily_bars
@@ -532,7 +555,7 @@ Next:
     LIMIT 10
   "
 
-When network access is available, run `cne init --profile demo` for real TDX data.
+网络可用时，跑 `cne init --profile demo` 取真实的 TDX 数据。
 """
     )
     return {
@@ -561,34 +584,34 @@ def run_demo(
     _configure_logging()
     symbols = [s.strip().upper() for s in symbols if s.strip()]
     if not symbols:
-        raise click.ClickException("--symbols must list at least one symbol")
+        raise click.ClickException("--symbols 至少要给一只标的")
     if days < 1:
-        raise click.ClickException("--days must be >= 1")
+        raise click.ClickException("--days 必须 >= 1")
 
     config_out = config_out or Path("configs/cnequity.demo.toml")
     steps = 8 if research and intraday else 7 if (research or intraday) else 6
-    _banner(f"1/{steps}", f"Prepare demo lake at {data_root}")
+    _banner(f"1/{steps}", f"在 {data_root} 准备 demo 湖")
     _write_demo_toml(config_out, data_root)
     cfg = _demo_config(data_root, config_path=config_out.resolve())
     init_data_layout(cfg)
     click.echo(f"data_root = {cfg.data_root}")
     click.echo(f"config    = {config_out}")
-    click.echo("Note: a SEPARATE lake from `cne init --profile quick|full` — safe to wipe.")
+    click.echo("提示：这是和 `cne init --profile quick|full` 完全分开的湖 —— 可以随时删掉。")
 
-    _banner(f"2/{steps}", "Probe TDX")
+    _banner(f"2/{steps}", "探测 TDX")
     try:
         _probe_tdx(cfg)
     except Exception as exc:
         raise click.ClickException(
-            f"TDX unreachable: {exc}\n"
-            "Tips: try from a mainland network / VPN egress, or check "
-            "`[tdx_protocol.hosts]` in the example config."
+            f"连不上 TDX：{exc}\n"
+            "建议：换大陆网络 / VPN 出口再试，或者检查示例配置里的 "
+            "`[tdx_protocol.hosts]`。"
         ) from exc
 
-    _banner(f"3/{steps}", "Instruments (demo universe)")
+    _banner(f"3/{steps}", "Instruments（demo 标的范围）")
     kept = _write_demo_instruments(cfg, symbols)
 
-    _banner(f"4/{steps}", "Trading calendar")
+    _banner(f"4/{steps}", "交易日历")
     engine = JobEngine(cfg)
     as_of = trade_date or shanghai_today()
     # Seed calendar covers a wide range; backfill window is cheap (CSV/seed).
@@ -598,27 +621,35 @@ def run_demo(
     cal = engine.run_job(
         "demo:calendar",
         trade_date=as_of,
-        steps=["trading_calendar"],
+        # With `compact`, and sequential so it runs after the fetch. Without it
+        # the calendar stayed in staging: the step logged 2,818 rows and
+        # `cne status --datasets` still reported trading_calendar empty, which
+        # is the demo telling a new user it succeeded at nothing.
+        waves=[WaveConfig(name="calendar", parallel=False, steps=["trading_calendar", "compact"])],
         backfill=True,
     )
     if cal.get("status") not in ("success", "warning"):
-        raise click.ClickException(f"trading_calendar failed: {cal}")
+        raise click.ClickException(f"trading_calendar 失败：{cal}")
     end = _last_trading_day(cfg, as_of)
     window_days = max(days, RESEARCH_MIN_DAYS) if research else days
     start = _start_for_days(cfg, end, window_days)
-    click.echo(
-        f"Demo window: {start.isoformat()} → {end.isoformat()} ({window_days} trading days target)"
-    )
+    click.echo(f"demo 窗口：{start.isoformat()} → {end.isoformat()}（目标 {window_days} 个交易日）")
     if research and window_days != days:
         click.echo(
-            f"Research mode expanded the window from {days} to {window_days} sessions "
-            "so corporate-action adjustments can be observed."
+            f"research 模式把窗口从 {days} 个交易日扩到 {window_days} 个，"
+            "这样才看得到除权除息带来的复权差异。"
         )
 
-    _banner(f"5/{steps}", f"daily_bars for {len(kept)} symbols")
+    _banner(f"5/{steps}", f"daily_bars（{len(kept)} 只标的）")
     cfg._backfill = True
     cfg._backfill_start = start
     cfg._backfill_end = end
+    # Name the symbols rather than leaving the step to infer them from
+    # `instruments`. TDX publishes no list_date, so an undated demo symbol with
+    # no bar yet in the lake is classified as a pre-listing placeholder and
+    # skipped — which made a second `--profile demo` run on an existing demo
+    # lake fetch nothing and then blame TDX for the empty result.
+    cfg._backfill_symbols = list(kept)
     bars = engine.run_job(
         "demo:bars",
         trade_date=end,
@@ -634,25 +665,28 @@ def run_demo(
         ]
         detail = "\n".join(f"  {r}" for r in reasons) or f"  {bars}"
         raise click.ClickException(
-            f"daily_bars failed:\n{detail}\nRe-run `cne init --profile demo` once that is resolved."
+            f"daily_bars 失败：\n{detail}\n解决之后重跑 `cne init --profile demo`。"
         )
     click.echo(
-        f"Bars run {bars.get('run_id')}: status={bars.get('status')} "
+        f"日线 run {bars.get('run_id')}：status={bars.get('status')} "
         f"rows_written≈{bars.get('rows_written', '?')}"
     )
 
-    _banner(f"6/{steps}", "Sample result")
+    _banner(f"6/{steps}", "结果样例")
     sample_symbol = kept[0]
     try:
         sample = _sample_query(cfg, sample_symbol)
     except Exception as exc:
-        raise click.ClickException(f"query failed after demo write: {exc}") from exc
+        raise click.ClickException(f"demo 写完之后查询失败：{exc}") from exc
     if sample.is_empty():
         raise click.ClickException(
-            f"No daily_bars rows for {sample_symbol}. TDX may have returned an empty window."
+            f"{sample_symbol} 在 {start.isoformat()}..{end.isoformat()} 内没有任何 daily_bars 行。"
+            "这个 step 报的是成功，所以这是源端窗口为空、而不是失败："
+            f"用 `cne status --run {bars.get('run_id')} --config {config_out}` "
+            "看这次 run 自己的 findings。"
         )
     with pl.Config(tbl_rows=10, tbl_cols=-1, fmt_str_lengths=24):
-        click.echo(f"\n{sample_symbol} — latest rows:\n")
+        click.echo(f"\n{sample_symbol} —— 最近几行：\n")
         click.echo(
             sample.select(
                 [
@@ -674,21 +708,21 @@ def run_demo(
 
     research_summary = None
     if research:
-        _banner(f"7/{steps}", "Research: raw vs hfq return")
+        _banner(f"7/{steps}", "研究口径：未复权 vs hfq 收益")
         research_summary = _run_research_demo(cfg, kept, start, end)
 
     intraday_summary = None
     if intraday:
         step = 8 if research else 7
-        _banner(f"{step}/{steps}", f"minute_bars (1m) for {len(kept)} symbols")
+        _banner(f"{step}/{steps}", f"minute_bars 1 分钟线（{len(kept)} 只标的）")
         intraday_summary = _run_intraday_demo(cfg, engine, kept, end, days)
 
     click.echo(
         f"""
-Demo lake ready under: {cfg.data_root}
-Config written to:     {config_out}
+demo 湖已就绪：{cfg.data_root}
+配置写到：     {config_out}
 
-Next:
+下一步：
   cne query --config {config_out} --sql "
     SELECT symbol, trade_date, close, volume, source
     FROM daily_bars
@@ -697,13 +731,13 @@ Next:
     LIMIT 10
   "
 
-Python:
+Python：
   from cnequity.query import load
   bars = load("daily_bars", symbols=["{sample_symbol}"], data_root="{cfg.data_root}")
 {_intraday_hint(intraday_summary, cfg, sample_symbol)}
-Full-market backfill (hours/days) is separate: `cne config create` then
-`cne init --profile quick`.
-Do not reuse this demo data_root for production.
+全市场回填（数小时到数天）是另一回事：先 `cne config create`，再
+`cne init --profile quick`。
+不要把这个 demo 的 data_root 拿去跑生产。
 """
     )
     return {

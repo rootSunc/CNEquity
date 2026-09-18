@@ -490,7 +490,7 @@ def test_cli_if_stale_rebuilds_once_a_run_has_landed(config, tmp_path):
     result = _run_cli(tmp_path / "test.toml", "--if-stale")
 
     assert result.exit_code == 0, result.output
-    assert "rebuilt" in result.output
+    assert "已重算" in result.output
     assert load_summary(config)["generated_at"] != before
 
 

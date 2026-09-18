@@ -9,8 +9,36 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 Coverage and provenance. The Beijing exchange becomes a first-class source, two
 gates stop passing for the wrong reason, and four defects that were writing bad
 rows every day are fixed — with migrations for what they already left behind.
+The first-run path was walked end to end from a clean install: the research
+demo, the demo's own calendar, a named backfill, an empty daily plan and the
+health checks on a small lake each told a new user something that was not true.
 
 ### Added
+
+- **The CLI speaks Chinese.** Command output, error messages and `--help` —
+  including the text Click generates for `--help` and `--version` — were a mix:
+  `cne doctor` and `cne verify` answered in Chinese while `status`, `run` and
+  `audit` answered in English, in a tool whose datasets, docs and dashboard are
+  Chinese throughout. Machine-read tokens are deliberately untouched, because
+  things parse them: `HEALTHY` / `UNHEALTHY`, the `fresh` / `STALE` / `empty` /
+  `no source` freshness vocabulary, `[error]` / `[warning]`, every JSON field
+  and value, and the status words a run reports. The pipeline's own INFO log
+  lines stay English too — they are read next to the code that emits them.
+  Click's own chrome (`Usage:`, `Options:`, `Error:`) is gettext-driven inside
+  Click and is left alone.
+- **`cne run daily --all-groups`** runs every schedule group in config order,
+  one at a time, carrying on past a group that fails and exiting with the worst
+  group's code. A day of ingestion is six groups, and the only thing that ran
+  all six was `scripts/daily_pipeline.sh`, which the PyPI package does not
+  install — so the documented answer for a `pip install` user was six cron
+  lines, and the one command they reached for instead covered the core spine
+  and left the lake at 15 of 42 datasets fresh. Groups whose datasets are all
+  disabled (`intraday`, `ticks` by default) skip themselves.
+- **`CNE_CONFIG` is now read by the CLI**, not only by the shell pipelines that
+  forwarded it as `--config`. The default config path is relative, so a cron
+  line that forgot its `cd` failed with "Config not found" while the
+  environment already named the config it wanted. An explicit `--config` still
+  wins.
 
 - **A second route for `block_trades` and `dragon_tiger`.** Both had one vendor
   and no fallback. The exchanges publish the same disclosures — SZSE
@@ -106,7 +134,64 @@ rows every day are fixed — with migrations for what they already left behind.
   `CNE_LOG_DIR` was read by the pipeline scripts and by nothing in the CLI. The
   entry under *Changed* below carries this to every command that takes time.
 
+### Changed
+
+- **The README screenshots show what 0.10.0 actually prints.** `cne-demo.png`
+  was a transcript of the English CLI under its old command name, and the
+  console hero still drew the top pill bar the dashboard replaced with a left
+  rail. Both are re-rendered; the terminal renderer now draws ASCII and
+  box-drawing with Menlo and the Chinese with a CJK face, advancing by terminal
+  cells, because Pillow does no font fallback and Menlo has no Chinese glyphs.
+  The dataset-table capture was checked against the running console and is
+  unchanged. Counted claims were recounted against the code: 88 audit checks,
+  and "15 upstream sources" is now "15 upstream endpoints", which is what
+  `cne sources probe` enumerates.
+
 ### Fixed
+
+- **`cne init --profile demo --research` never printed the comparison it
+  exists to show.** The demo lake holds bars and Sina factors but no
+  `corporate_actions`, and the ex-date cross-check left-joins that dataset and
+  fills the missing terms with zero — so an empty feed read as "no ex-date
+  anywhere" and every real dividend became a factor step nothing explained. It
+  failed on 600519.SH (237 bps) and 000001.SZ (713 bps), which is to say on
+  every symbol that paid a dividend in the window. A divergence with no feed to
+  arbitrate against is now a warning that names the missing dataset, never an
+  error: absence of evidence is not evidence of a bad factor. The demo also
+  survives a vendor gap on one of five symbols instead of abandoning all five,
+  and says which ones Sina did not answer for.
+- **The demo published the trading calendar it fetched.** The calendar ran in
+  its own wave with no `compact`, so the step logged 2,818 rows while `cne
+  status --datasets` reported `trading_calendar` empty and `SELECT * FROM
+  trading_calendar` returned nothing — the demo telling a first-time user it
+  had succeeded at nothing.
+- **A symbol asked for by name is no longer skipped as a pre-listing
+  placeholder.** The rule is a cost control for the full-market sweep: an
+  undated code with no bar anywhere in the lake has not listed yet, so it stays
+  out of the per-symbol fallback. Applied to a named scope it fetched nothing,
+  wrote nothing and still reported success — `cne backfill daily_bars --symbols
+  000001.SZ` returned 0 rows against a source that had them, and the demo
+  blamed TDX for the empty result. A named scope now gets no placeholder
+  universe at all.
+- **`cne run daily` against a config with no waves is an error, not a
+  success.** It reported `planned_steps: []`, `status: success` and exit 0
+  while fetching nothing, which is the answer a scheduler is least able to act
+  on. `Unknown group: core` now also names the groups the config does define.
+- **A demo lake is no longer judged as a market.** `cne verify` reported 35
+  gaps and `cne audit` 32 errors, both exiting 1, for a five-symbol lake that
+  had done exactly what it promised — a new user's first health check read as a
+  broken install. `cne init --profile demo|sample` marks its config
+  (`data.profile`), and both commands then judge the datasets the lake holds. A
+  sample lake's synthetic dates are no longer reported as staleness with a
+  repair that would fetch real bars into a lake of `source=mock` rows.
+- **`economic_calendar` reads `no source` rather than `empty`.** EastMoney
+  retired the report and no replacement is wired, so its permanent emptiness
+  was indistinguishable from a dataset someone forgot to run. `cne serve`
+  counts it in its own bucket.
+- **A missing dataset says what builds it.** `load(..., adjust="hfq")` on a
+  lake with no factors raised a path and nothing else, which is the wrong half
+  of the answer when the absent dataset is one the reader asked for rather than
+  one the caller named.
 
 - **A window spent entirely halted no longer crashes the sweep.** Certifying
   those symbols put them in `expected_no_data`, and the report then looked each

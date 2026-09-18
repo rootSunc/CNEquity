@@ -59,6 +59,13 @@ class FailoverDatasetSpec:
 @dataclass
 class Config:
     data_root: Path
+    # "demo" / "sample" for the tiny lakes `cne init --profile demo|sample`
+    # writes. Whole-lake judgements read it: a five-symbol lake measured
+    # against the 42-dataset registry reports forty absences and exits 1,
+    # which tells a new user their first run failed when it did exactly what
+    # it promised. Nothing else branches on it, and a production config has
+    # no reason to set it.
+    lake_profile: str | None = None
     workers: int = 8
     batch_size: int = 100
     max_retries: int = 3
@@ -566,6 +573,7 @@ def load_config(path: str | Path) -> Config:
         raw = tomllib.load(f)
 
     data_root = _absolute(Path(raw.get("data", {}).get("root", "./data/cnequity")).expanduser())
+    lake_profile = raw.get("data", {}).get("profile") or None
     orch = raw.get("orchestrator", {})
     tdx = raw.get("tdx_protocol", {})
     sources_raw = raw.get("sources", {})
@@ -745,6 +753,7 @@ def load_config(path: str | Path) -> Config:
 
     cfg = Config(
         data_root=data_root,
+        lake_profile=str(lake_profile) if lake_profile else None,
         workers=int(orch.get("workers", 8)),
         tdx_daily_workers=(
             int(orch["tdx_daily_workers"]) if orch.get("tdx_daily_workers") is not None else None

@@ -88,10 +88,10 @@ cne sources probe --only tdx_protocol --config configs/cnequity.demo.toml
 
 | | |
 |---|---|
-| **采集** | 42 个数据集 · 15 个上游源 · 主备路由 · 批次级重试、断点续跑与水位对账 |
+| **采集** | 42 个数据集 · 15 个上游端点（`cne sources probe` 逐一探测）· 主备路由 · 批次级重试、断点续跑与水位对账 |
 | **研究口径** | 复权（hfq / qfq 查询侧换算）· 历史指数与行业成分 · PIT 财报 · **保留退市股** |
 | **数据契约** | 写前 schema 校验 · 行级溯源（`source` / `data_version` / `fetched_at`）· 破坏性变更必须提版本 |
-| **质量** | 84 项审计检查 · 跨源比对 · 覆盖缺口与陈旧检测 · 可配置发布门禁 |
+| **质量** | 88 项审计检查 · 跨源比对 · 覆盖缺口与陈旧检测 · 可配置发布门禁 |
 | **存储** | 本地 Parquet + DuckDB · 按数据集选择分区粒度 · 原子写 · 不可变代与时间旅行 |
 | **消费** | `load()` · DuckDB 视图 · Polars · MCP 6 个工具 · 只读运维控制台 |
 | **运维** | 日更编排 · launchd / cron 模板 · 源健康探针 · 可移植快照与增量包 |
@@ -169,10 +169,12 @@ roe = load(
 pip install cnequity
 cne config create          # 生成 configs/cnequity.toml
 cne init                   # 全市场标的，默认回溯最近 3 年
-cne run daily --group core # 之后每个交易日执行日更分组（见下方「日常使用与运维」）
+cne run daily --all-groups # 之后每个交易日执行（见下方「日常使用与运维」）
 ```
 
 默认策略是“浅而不窄”：历史先取最近 3 年，但全市场标的一个不缺。这样不会因为只保留今天仍上市的股票，提前把幸存者偏差写进数据湖。每个数据集的真实起点会记录在 `coverage_start`。
+
+“全市场”含北交所：上市状态、停复牌与 ST 取自北交所自己的板块页，日线历史走 TDX，成交额由 TDX 补齐（Sina 从未发布过这一列）。默认 universe `all_a` 覆盖沪、深、京三市的 A 股。
 
 需要更长历史时可以一次拉满，也可以以后补深：
 
@@ -301,8 +303,9 @@ CNEquity 适合需要反复使用同一份历史数据的研究和数据工作�
 ## 日常使用与运维
 
 ```bash
-cne run daily --group core    # 日更的一个调度组（全部 6 个组见下）
-cne status                    # 查看 FRESH / STALE / EMPTY
+cne run daily --all-groups    # 一条命令跑完当天全部调度组
+cne run daily --group core    # 或只跑其中一个组（全部 6 个见下）
+cne status                    # 查看 fresh / STALE / empty / no source
 cne serve                     # 打开 http://127.0.0.1:8787
 cne sources probe             # 检查上游数据源健康度
 cne run retry --run-id RUN_ID # 只重试失败批次
@@ -316,7 +319,14 @@ cne run retry --failed-groups # 重试各 daily 分组最新的失败 run
 
 单个 step 失败时，系统会记录 failed batch，其他步骤继续落盘；重试不会把整条任务重新跑一遍。覆盖和新鲜度也可以在上一节的数据运维页面里看。
 
-挂入 crontab 即可自动日更。**按组错开**，不要挤在同一分钟打同一批上游：
+挂入 crontab 即可自动日更。最省事的一条是 `--all-groups`（按配置顺序串行跑完全部组，
+某个组失败不影响后面的组，退出码取最差的一个）：
+
+```bash
+ 5 16 * * 1-5  cd /path/to/lake && cne run daily --all-groups >> logs/daily.log 2>&1
+```
+
+想给每个组留出更宽的窗口、错开打同一批上游时，也可以一组一条：
 
 ```bash
 # 交易日收盘后依次执行；非交易日各组都会自动跳过

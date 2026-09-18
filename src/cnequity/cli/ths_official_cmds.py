@@ -119,10 +119,10 @@ def _staged_run(cfg, job_name: str, prefix: str, metadata: dict, *, record: bool
     type=click.Choice(["corporate-actions", "daily-bars", "financials", "valuations", "all"]),
     default="all",
     show_default=True,
-    help="Which peer snapshot to capture.",
+    help="抓取哪一种对端快照。",
 )
-@click.option("--days", default=45, show_default=True, help="Bar window, in calendar days.")
-@click.option("--sample", default=400, show_default=True, help="Securities to sample for bars.")
+@click.option("--days", default=45, show_default=True, help="K 线窗口，按自然日算。")
+@click.option("--sample", default=400, show_default=True, help="K 线抽样多少只证券。")
 def ths_snapshot(config_path: str, what: str, days: int, sample: int):
     """Capture peer data for the arbitration checks. Never writes curated rows.
 
@@ -183,17 +183,20 @@ def ths_snapshot(config_path: str, what: str, days: int, sample: int):
 
 @ths_official_grp.command("backfill")
 @config_option
-@click.option("--start", default="2016-01-01", show_default=True, help="First report period.")
-@click.option("--end", default="2024-12-31", show_default=True, help="Last report period.")
-@click.option("--chunk-size", default=200, show_default=True, help="Securities per staged batch.")
-@click.option("--workers", default=4, show_default=True, help="Concurrent requests.")
+@click.option("--start", default="2016-01-01", show_default=True, help="起始报告期。")
+@click.option("--end", default="2024-12-31", show_default=True, help="结束报告期。")
+@click.option(
+    "--chunk-size", default=200, show_default=True, help="每个 staging 批次放多少只证券。"
+)
+@click.option("--workers", default=4, show_default=True, help="并发请求数。")
 @click.option(
     "--symbols",
     "symbols_str",
     default=None,
-    help="Comma-separated symbols instead of the whole market. A full sweep is "
-    "78 minutes, so a handful lost to a transient transport error is not worth "
-    "re-running one for — the closing JSON names them under `failed_symbols`.",
+    help=(
+        "用逗号分隔的标的列表代替整个市场。跑一遍全市场要 78 分钟，为几只因偶发传输错误丢掉的票再跑一遍不值 —— 收尾 JSON "
+        "会在 `failed_symbols` 里点名它们。"
+    ),
 )
 def ths_backfill(
     config_path: str,
@@ -203,25 +206,25 @@ def ths_backfill(
     workers: int,
     symbols_str: str | None,
 ):
-    """Fill the balance-sheet and cash-flow gap the lake carries for 2016-2024.
+    """补上这个湖在 2016-2024 年缺的资产负债表与现金流量表。
 
-    Those two statements cover 0 to 37 securities a year over that window while
-    income covers 4,623 to 5,558 — a hole `backfill_missing_statement_types` has
-    been reporting all along. Routing rather than switching: the primary keys
-    are empty, so nothing canonical is overwritten.
+    \b
+    在那段窗口里，这两张表每年只覆盖 0 到 37 只证券，而利润表覆盖 4,623 到 5,558 只 ——
+    这个洞 `backfill_missing_statement_types` 一直在报。这是路由而不是切换：
+    主键位置本来就是空的，不会覆盖任何权威数据。
 
-    Disclosure dates are borrowed from the income rows the lake already holds,
-    because the upstream's own date is the *next* year's filing and would push
-    every PIT date forward by a year. A period with no borrowable date is
-    skipped rather than given an invented one.
+    \b
+    披露日期借用湖里已有的利润表行，因为上游自己的日期是**下一年**的申报日，
+    照用会把每个 PIT 日期整整往后推一年。借不到日期的报告期直接跳过，而不是编一个。
 
-    Needs `[sources.ths_official] backfill = true`; it changes what the lake
-    holds. Stages rows — run `cne run compact --run-id <id>` afterwards.
+    \b
+    需要 `[sources.ths_official] backfill = true`，因为它会改变湖里的内容。
+    它只写 staging —— 跑完之后执行 `cne run compact --run-id <id>`。
 
-    `failed_symbols` in the closing JSON separates a vendor gap from a local
-    one: `Unknown thscode` means the peer does not carry that security, while a
-    transport error means the request never arrived. Feed the second kind back
-    through `--symbols` rather than re-running the market.
+    \b
+    收尾 JSON 里的 `failed_symbols` 区分上游缺数据和本地出问题：
+    `Unknown thscode` 表示对端没有这只证券，而传输错误表示请求根本没送到。
+    第二类请用 `--symbols` 单独重跑，不要整个市场再来一遍。
     """
     from cnequity.steps.fundamentals import backfill_statement_gap_ths_official
 
@@ -262,14 +265,14 @@ def ths_backfill(
 @click.option(
     "--apply",
     is_flag=True,
-    help="Actually write. Without it this reports the diff and changes nothing.",
+    help="真正写入。不加它只报告差异，不改任何东西。",
 )
 @click.option(
     "--adjudicator",
     type=click.Path(exists=True, dir_okay=False),
-    help="Parquet of (symbol, trade_date, close) from an independent source.",
+    help="来自独立源的 (symbol, trade_date, close) parquet。",
 )
-@click.option("--diff-out", type=click.Path(dir_okay=False), help="Write the disputed rows here.")
+@click.option("--diff-out", type=click.Path(dir_okay=False), help="把有争议的行写到这里。")
 @click.option("--workers", default=4, show_default=True)
 def ths_repair_bars(
     config_path: str,
@@ -316,8 +319,8 @@ def ths_repair_bars(
     judge = pl.read_parquet(adjudicator) if adjudicator else None
     if apply and judge is None:
         click.echo(
-            "warning: applying without --adjudicator switches every disputed row, "
-            "including the ones an independent source would rule against",
+            "警告：不带 --adjudicator 直接 apply，会把每一条有争议的行都切过去，"
+            "包括那些独立源会判它错的行",
             err=True,
         )
 
@@ -344,29 +347,29 @@ def ths_repair_bars(
 
 @ths_official_grp.command("resource-sectors")
 @config_option
-@click.option("--start", default="2022-01-04", show_default=True, help="Service floor.")
-@click.option("--end", default=None, help="Defaults to today.")
+@click.option("--start", default="2022-01-04", show_default=True, help="服务起点。")
+@click.option("--end", default=None, help="默认今天。")
 @click.option(
     "--apply",
     is_flag=True,
-    help="Actually write. Without it this fetches and reports, changing nothing.",
+    help="真正写入。不加它只抓取并报告，不改任何东西。",
 )
 @click.option("--workers", default=4, show_default=True)
 def ths_resource_sectors(config_path: str, start: str, end: str | None, apply: bool, workers: int):
-    """Move sector_bars from the scraper to the licensed endpoint.
+    """把 sector_bars 从爬取切到有授权的接口。
 
-    sector_bars is the lake's only dataset with no second source at all: 303,559
-    rows from an unauthenticated scrape of 10jqka's public pages. Unusually,
-    there is no accuracy question to settle first — measured over 2,547
-    comparable sessions, close, volume and turnover agreed within 10bps with a
-    median difference of zero. Same numbers, licensed channel.
+    \b
+    sector_bars 是这个湖里唯一完全没有第二来源的数据集：303,559 行全部来自对同花顺公开页面的
+    无认证爬取。少见的是，这里不需要先解决准确性问题 —— 在 2,547 个可比交易日上实测，
+    收盘、成交量和成交额都在 10bps 以内一致，差异中位数为零。同样的数字，有授权的通道。
 
-    Switching rather than routing, so `--apply` is required and also needs
-    `[sources.ths_official] backfill = true`. The service floor at 2022-01-04
-    leaves 12.3% of rows on the scraper; those years carry 2 boards in 2018 and
-    39 in 2019, against 432 today.
+    \b
+    这是切换而不是路由，所以必须加 `--apply`，并且需要 `[sources.ths_official] backfill = true`。
+    服务起点在 2022-01-04，意味着 12.3% 的行仍留在爬取来源上；那几年 2018 年只有 2 个板块、
+    2019 年 39 个，而今天是 432 个。
 
-    Stages rows — run `cne run compact --run-id <id>` afterwards.
+    \b
+    它只写 staging —— 跑完之后执行 `cne run compact --run-id <id>`。
     """
     from cnequity.steps.rotation import resource_sector_bars_ths_official
 
