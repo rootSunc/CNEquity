@@ -263,7 +263,7 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 
 | 子命令 | 说明 |
 |--------|------|
-| `list` | 输出注册表记录；`--official-only` 排除 legacy 兼容画像 |
+| `list` | 输出注册表记录。默认 `--include-compatibility`，含 legacy 兼容画像；`--official-only` 把它们排除 |
 | `show NAME` | 输出单个画像及其 `scope_hash`；`--symbol` 可重复，绑定具体标的并附 `concrete_scope_hash` |
 
 画像绑定交易所/板块、CDR/ETF、ST/停牌、退市与 PIT 证据规则。研究读取用
@@ -290,6 +290,7 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 |------|------|
 | `--group` | `core` \| `capital` \| `signals` \| `fundamentals` \| `macro_risk` \| `research` \| `intraday` |
 | `--backfill` | 强制 backfill 语义（慎用） |
+| `--repair-gaps` | 在 daily/stale 跑之前，先修复已验证、且有诚实来源的历史缺口 |
 | `--stale-only` | 只重抓仍落后于最后交易日的数据集（与 `--group` 互斥） |
 | `--quiet` | 只留 warning 及以上，不打逐步进度 |
 
@@ -355,6 +356,8 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 | `--baostock-repair` | 仅 `corporate_actions`：显式补抓已退市 SH/SZ 标的的 Baostock 分红除权数据；建议与 `--symbols` 配合 |
 | `--ths-repair` | 仅 `corporate_actions`：显式补抓已退市 BJ 标的的同花顺历史分红除权数据；建议与 `--symbols` 配合 |
 | `--eastmoney-bj-repair` | 仅 `corporate_actions`：按北交所旧码→920 新码映射向 EastMoney 定向补抓历史分红除权数据；建议与 `--symbols` 配合 |
+| `--outstanding` | 精确修复被容忍缺口记下的欠账键：作用域与窗口取自 ledger，而不是 `--symbols`/`--start`/`--end`。补上的键即刻销账，仍缺的继续欠着 |
+| `--bj-amount-repair` | 仅 `daily_bars`：从 TDX 补 Sina 从未发布的 BJ 成交额，已存的价格与成交量一律不动。需要 `--start`/`--end` |
 | `--bse-tip-repair` | 仅 `daily_bars`：读取已有 session 的 OHLCV，仅向 BSE 请求成交额并严格核对；必须同时指定相同的 `--start/--end` 与 `--symbols` |
 
 ```bash
@@ -451,6 +454,7 @@ cne derive trading_status --start 2001-01-01 --end 2001-12-31
 |------|------|
 | `--run-id` | 指定 run 的 findings（默认最近 run） |
 | `--full` | 湖级健康快照（非 per-run 文件） |
+| `--quality-only` | 配合 `--full`：只对质量 error 设门禁；调度新鲜度另用 `cne status` 单独查 |
 | `--research-start YYYY-MM-DD` | 与 `--full` 合用；严格验证所选历史宇宙，未通过时退出 1 |
 | `--research-end YYYY-MM-DD` | 研究窗口末日；默认取 `daily_bars` 最新分区 |
 | `--research-universe all_a\|all_a_sh_sz` | 历史研究口径；默认 `all_a`，`all_a_sh_sz` 排除 BJ 的来源能力缺口 |
@@ -682,7 +686,7 @@ cne mcp --config /abs/path/cnequity.toml --live
 | `probe` | 探测公开数据源，报告写进湖里 |
 | `slo` | 把 `meta/source_health` 历史样本按 probe/vantage 聚成可用性 SLO，并写去重事故载荷。`--window-days`（默认 30）、`--minimum-observations`（默认 10）、`--enforce`（关键源不达标退出 1） |
 | `resilience` | 从注册表算源集中度、failure-domain 爆炸半径和核心数据集独立备源门禁。`--out PATH` 落 JSON，`--enforce`（有核心表缺独立备源则退出 1） |
-| `policy [SOURCE]` | 查 `sources/SOURCES.yml` 的来源使用策略。省略 SOURCE 输出全部；给 SOURCE 加 `--profile personal\|commercial\|cache\|redistribution` 做保守判断，未知权限一律 fail-closed（退出 1） |
+| `policy [SOURCE]` | 查 `sources/SOURCES.yml` 的来源使用策略。省略 SOURCE 输出全部；给 SOURCE 加 `--profile personal\|commercial\|cache\|redistribution` 做保守判断，未知权限一律 fail-closed（退出 1）。`--redistribution` 是 `--profile redistribution` 的简写 |
 
 > 原为 `cne sources`（探测）+ `cne source <sub>`（派生结论）——两个顶层条目差一个字母，
 > 且 `cne source --help` 不得不用一句话把自己和邻居区分开。现在收敛成一个名词。
@@ -721,7 +725,7 @@ cne serve                    # → http://127.0.0.1:8787/source-health
 |------|------|
 | `--config` | 配置文件路径 |
 | `--vantage` | 读哪个出口的报告（默认 `local`） |
-| `--probe` | 现测而不是读存档；请求量与 `cne sources probe` 相同 |
+| `--probe` / `--no-probe` | 现测而不是读存档；请求量与 `cne sources probe` 相同。**默认 `--no-probe`**：这个命令的本职是解读已有证据，不是再打一轮请求 |
 | `--json` | 机器可读输出 |
 
 ```bash

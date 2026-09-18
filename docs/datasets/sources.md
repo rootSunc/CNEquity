@@ -264,7 +264,7 @@
 | baostock | TCP | 退市标的、历史 ST、估值回补 | — | 仅 `--backfill` |
 | pboc | HTTP | 社会融资规模增量（`macro_indicators`） | — | 主写入要求全量序列；单年失败会阻止本次写入，避免带断档推进水位 |
 | nbs | HTTP | **仅审计**：PMI 发布稿，对照 `macro_indicators` | — | 缺省关闭；不可达时静默跳过 |
-| exchange | HTTP | `margin_trading` **主源**；`trading_status` / `trading_calendar` 备源；`[exchange_audit]` 价格对照 | — | 融资融券由会员单位报送汇总，中间无转售方；审计类 finding 为建议性，不让 run 失败 |
+| exchange | HTTP | `margin_trading` **主源**；`trading_status` / `trading_calendar` / `dragon_tiger` / `block_trades` 备源；`[exchange_audit]` 价格对照 | — | 融资融券由会员单位报送汇总，中间无转售方；龙虎榜与大宗交易只在东财答不上时才问，且两所都不发布北交所（记在 `backup_gaps`）；审计类 finding 为建议性，不让 run 失败 |
 | sina_bars | HTTP | Sina 日线兜底（与复权因子端点分开限速） | — | 跳过 + quality finding |
 | ths | HTTP | 同花顺公开页：行业、估值 | — | 跳过 + quality finding |
 | ths_pages | HTTP | `d.10jqka.com.cn` kline，`sector_bars` 唯一来源 | — | 该数据集**无第二个源**；失败即缺口 |

@@ -245,15 +245,20 @@ bars_15m = (
 | margin_trading | trade_date | symbol, trade_date | by_date | ✓ | exchange | 沪深交易所自行编制的融资融券明细；SH 无融券余额（`short_balance` 为 null），深交所晚一个交易日发布、两边齐了才写；`[margin_trading] source` 可切回 eastmoney |
 | northbound_holdings | trade_date | symbol, trade_date, channel | by_date | ✓ | eastmoney | 100d（季频） |
 | northbound_flows | trade_date | trade_date, channel | by_date | ✓ | eastmoney | 2d |
-| dragon_tiger | trade_date | symbol, trade_date, reason | by_date | ✓ | eastmoney | 1d；见下「为什么这两个还在东财」 |
-| block_trades | trade_date | symbol, trade_date, price, volume | by_date | ✓ | eastmoney | 1d；同上 |
+| dragon_tiger | trade_date | symbol, trade_date, reason | by_date | ✓ | eastmoney | 1d；备源见下 |
+| block_trades | trade_date | symbol, trade_date, price, volume | by_date | ✓ | eastmoney | 1d；备源见下 |
 
-**为什么这两个还在东财。** `margin_trading` 已按 [ADR-0006](../adr/0006-publishers-over-vendors.md)
-换成交易所自行发布的数据，龙虎榜与大宗交易本应同样处理——两者也都由交易所公开披露。但在这次改动中没有找到
-稳定的官方接口：深交所 `ShowReport` 的 `CATALOGID`（已确认 `1110` 股票列表、`1815_stock_snapshot`
-个股日行情、`1837_xxpl` 融资融券）没有对应这两项的条目，数字段 1800–1845 与 `main_*` 前缀的枚举也没有命中；
-上交所 `commonQuery.do` 的若干 `sqlId` 猜测全部返回 `total=0`。**没有换**，因为拿一个猜出来的解析器去替换
-一个能用的源，是把可用变成不可用。补上官方接口后再迁移。
+**这两个现在有交易所备源。** `margin_trading` 早已按
+[ADR-0006](../adr/0006-publishers-over-vendors.md) 换成交易所自行发布的数据，龙虎榜与大宗交易本应同样处理
+——两者也都由交易所公开披露。此前一版找不到稳定的官方接口，所以没有换；现已找到并接上：深交所
+`ShowReport` 的 `CATALOGID=1265`（龙虎榜）与 `1842_xxpl_after`（大宗交易），上交所对应 `1902`。
+
+**是备源，不是换源。** 按 [ADR-0005](../adr/0005-source-routing-vs-switching.md)，东财仍是 `primary_source`，
+交易所是 `backup_source`；**东财能答的时候备源根本不会被问**。failover 落在 fetch 层，所以 provenance、
+水位和 compact 都不需要知道这次走的是哪条路。
+
+**两个交易所都不发布北交所**，这一点记在 `backup_gaps` 里，而不是让它看起来像是被覆盖了。
+`share_unlock_schedule` 没有给备源：深交所登记的是**已发生**的解禁，而这个数据集是前瞻日历，两者不是同一件事。
 | institutional_holdings | report_period | symbol, holder_type, report_period | by_date | — | eastmoney | |
 
 ---

@@ -12,6 +12,21 @@ rows every day are fixed — with migrations for what they already left behind.
 
 ### Added
 
+- **A second route for `block_trades` and `dragon_tiger`.** Both had one vendor
+  and no fallback. The exchanges publish the same disclosures — SZSE
+  `CATALOGID=1265` and `1842_xxpl_after`, SSE `1902` — and failover sits at the
+  fetch layer, so provenance, watermarking and compaction need no knowledge of
+  which route ran. EastMoney stays primary and the backup is never asked while
+  it answers. Neither exchange publishes Beijing, which `backup_gaps` records
+  rather than leaving it to look covered. `share_unlock_schedule` gets no
+  backup on purpose: SZSE registers unlocks that have *happened*, and that
+  dataset is a forward calendar.
+- **Beijing daily history from TDX** (market id 2) instead of one Sina request
+  per session. OHLC matched the lake exactly across 3,086 rows, and it carries
+  the turnover Sina leaves null on all 505,518 of its rows; three symbols over
+  eleven sessions went from 33 Sina requests to one TDX batch. The tip stays on
+  the BSE snapshot, which publishes exact shares.
+
 - Explicit fund unit split/consolidation events (`unit_split`, `split_factor`)
   and matching adjustment-factor checks. Corporate actions use schema v2;
   legacy events retain neutral unit multipliers. The next development package
@@ -92,6 +107,56 @@ rows every day are fixed — with migrations for what they already left behind.
   entry under *Changed* below carries this to every command that takes time.
 
 ### Fixed
+
+- **A window spent entirely halted no longer crashes the sweep.** Certifying
+  those symbols put them in `expected_no_data`, and the report then looked each
+  one up in `empty_evidence` — where a halted name has no entry, because it was
+  certified by the vendor's trading status rather than by two sources returning
+  nothing. It raised `KeyError` on any machine that could not reach baostock,
+  and on the ones that could it only passed because a live query happened to
+  fill the gap. The two kinds of evidence are now reported separately, so the
+  finding that claims two sources agreed lists only the symbols that had them.
+- **A replayed `--trade-date` bounds the backfill window again.** The default
+  end became the last *settled* session, which fixed `cne init` during a
+  session but stopped consulting `trade_date` at all — so `--trade-date
+  2025-01-10` asked for everything up to today, a window nobody requested and a
+  run nobody could reproduce. It is now the smaller of the two.
+- **Tests cannot reach the network without saying so.** `-m 'not network'` only
+  skips the tests that declare it; eight reached it by accident — two asked
+  baostock, four EastMoney, two a sentiment endpoint. Seven still passed
+  because the adapter fell back, so the only symptom was time:
+  `test_exchange_trading_status.py` took 19.2s against 0.09s with the socket
+  closed, and a full run drifted between 129s and 169s and twice timed out. The
+  eighth passed *because* the query succeeded, so its conclusion came partly
+  from a live vendor. An autouse fixture now refuses the connection — and the
+  send, since baostock connects once at import and never dials again — naming
+  the test and the address.
+- **A scoped repair reaches the window it was given.** The Beijing backstop
+  truncated an explicit `--symbols` window to the daily lookback, so
+  `--outstanding` kept declining the 225 sessions it was asked for. A key for a
+  session still trading no longer fails its whole monthly pass — it stays owed.
+  Production: 403 missing symbol-days down to 32, no Beijing gaps left.
+- **Sessions a security traded before the universe knew it are owed, not
+  lost.** Thirteen BSE securities listed 07-22..09-04 first took a bar on 09-07
+  and were short 366 sessions the watermark had already moved past; they now
+  land on the outstanding ledger where `--outstanding` can repair them.
+- **`cne backfill` strikes keys off after each pass, not after all of them.** A
+  run killed at pass 30 of 37 had settled nothing, so keys it had already
+  repaired stayed on the ledger.
+- **The declared schema picks news dtypes, not the first hundred rows.** A
+  session whose first hundred flashes named no security typed
+  `related_symbols` as Null and raised on the hundred-and-first;
+  `news_headlines` and `flash_news_wire` failed 22 times that way between
+  2026-09-12 and 09-16.
+- **`block_trades` gives a security one row, at its weighted price.** The
+  exchanges publish transactions, so a degraded day wrote 29 rows where the
+  vendor writes 17 — at prices meaning something else under a key that includes
+  price.
+- **`dragon_tiger` reads the whole list, and counts each desk once.** The SZ
+  list paginates, and page one alone gave 7 of the day's 30 securities; a desk
+  on both top-fives was double-counted while each side's own five dropped the
+  rest. Both sides now match EastMoney exactly across all 37 rows of
+  2026-09-15. The SSE's missing STAR board is recorded in `backup_gaps`.
 
 - **`--help` on a subcommand stopped printing a traceback.** Click's `Exit`
   derives from `RuntimeError`, so the catch-all that records failures logged
