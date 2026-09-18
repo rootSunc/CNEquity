@@ -166,3 +166,46 @@ def test_a_partition_emptied_of_everything_is_removed(cfg):
     mig.migrate_bse_legacy_codes(cfg, apply=True)
 
     assert _read(cfg, "daily_bars")["symbol"].to_list() == ["920090.BJ"]
+
+
+def test_a_rename_recorded_as_a_delisting_is_removed(cfg, monkeypatch):
+    """248 of `delisting_events`' 343 rows were renames: the old code stops
+    answering on the switch date, which is what a delisting looks like to a
+    probe. Anything studying how listings end was reading mostly renames."""
+    out = cfg.derived_root / "delisting_events"
+    out.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        [
+            {"symbol": "430090.BJ", "last_trade_date": date(2025, 9, 30)},
+            {"symbol": "600000.SH", "last_trade_date": date(2024, 5, 1)},
+        ]
+    ).write_parquet(out / "part-merged.parquet")
+
+    report = mig.migrate_bse_legacy_codes(cfg, apply=True)
+
+    assert report["datasets"]["delisting_events"]["rows_dropped"] == 1
+    kept = pl.read_parquet(out / "part-merged.parquet")
+    assert kept["symbol"].to_list() == ["600000.SH"], "a real delisting stays"
+
+
+def test_the_catalogue_and_the_ingest_ledger_forget_the_rename(cfg):
+    """Otherwise the dedicated delisted fetch keeps chasing history for codes
+    that no longer exist, and the rows go straight back next time."""
+    import json
+
+    state = cfg.meta_root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "delisted_catalog.json").write_text(
+        json.dumps({"delisted": {"430090.BJ": "2025-09-30", "600000.SH": "2024-05-01"}})
+    )
+    (state / "delisted_ingested.json").write_text(
+        json.dumps({"completed": ["430090.BJ", "600000.SH"]})
+    )
+
+    report = mig.migrate_bse_legacy_codes(cfg, apply=True)
+
+    assert report["state"] == {"delisted_catalog.json": 1, "delisted_ingested.json": 1}
+    catalog = json.loads((state / "delisted_catalog.json").read_text())
+    assert list(catalog["delisted"]) == ["600000.SH"]
+    ledger = json.loads((state / "delisted_ingested.json").read_text())
+    assert ledger["completed"] == ["600000.SH"]

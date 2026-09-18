@@ -273,6 +273,24 @@ def load_live_missing(config: Config) -> dict[str, date]:
     return classify_catalog(config)[1]
 
 
+def renamed_symbols() -> frozenset[str]:
+    """Codes the exchange retired by renaming, not by delisting.
+
+    The BSE renumbered 248 securities to 920xxx in 2025. Each one's old code
+    stops returning bars on 2025-09-30, which is exactly what a probe sees when
+    a security delists — so all 248 were catalogued as delistings on one day
+    and went on to become 248 of the 343 rows in `delisting_events`. Anything
+    studying how listings end was reading mostly renames.
+
+    A probe cannot tell the two apart. The exchange publishes the mapping and
+    the repo already carries it, so the answer is looked up rather than
+    inferred.
+    """
+    from cnequity.adapters.eastmoney.corporate_actions_migration import _code_mapping
+
+    return frozenset(f"{old}.BJ" for old in _code_mapping())
+
+
 def pending_codes(config: Config) -> list[str]:
     """Issued codes neither listed today nor already classified by a prior sweep."""
     metadata = instrument_metadata(config)
@@ -286,7 +304,7 @@ def pending_codes(config: Config) -> list[str]:
             ].to_list()
         )
     catalog = _read_catalog(config)
-    done = set(catalog["delisted"]) | set(catalog["never_issued"])
+    done = set(catalog["delisted"]) | set(catalog["never_issued"]) | renamed_symbols()
     return [s for s in issued_code_space() if s not in live and s not in done]
 
 
@@ -333,6 +351,12 @@ def discover_delisted(
             if last_seen is None:
                 catalog["never_issued"].append(symbol)
                 result.never_issued += 1
+            elif symbol in renamed_symbols():
+                # Unreachable through `pending_codes`, which already excludes
+                # these. Kept because an injected probe or a hand-built todo
+                # would otherwise re-file the rename as a delisting, which is
+                # the whole thing this is meant to stop.
+                logger.info("delisted discovery: %s was renamed, not delisted", symbol)
             else:
                 catalog["delisted"][symbol] = last_seen.isoformat()
                 result.delisted += 1
@@ -510,6 +534,13 @@ def delisted_recovery_targets(
     """
     formal = known_delisted_instruments(config, end)
     catalog = load_delisted_catalog(config)
+    # The chokepoint for both writers below: this set feeds the dedicated
+    # fetch, the terminal probe that writes back to the catalogue, and
+    # `write_delisting_events`. A renamed code excluded here cannot be
+    # re-filed as a delisting by any of the three.
+    renamed = renamed_symbols()
+    formal = {s: d for s, d in formal.items() if s not in renamed}
+    catalog = {s: d for s, d in catalog.items() if s not in renamed}
     targets: dict[str, dict[str, str]] = {}
     for symbol, formal_date in formal.items():
         terminal = catalog.get(symbol)

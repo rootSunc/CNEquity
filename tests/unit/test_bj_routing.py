@@ -663,3 +663,57 @@ def test_a_symbol_tdx_reported_failed_is_not_counted_as_covered(tmp_path, monkey
     )
 
     assert out["covered"] == {"920002.BJ"}
+
+
+# --- a rename is not a delisting -------------------------------------------
+
+
+def test_a_renamed_code_is_never_a_discovery_candidate(tmp_path, monkeypatch):
+    """The probe sees the old code stop answering on the switch date and files
+    it as a delisting; 248 were filed that way on one day. The exchange
+    publishes the mapping, so this is looked up rather than inferred."""
+    from cnequity.steps import delisted as mod
+
+    monkeypatch.setattr(mod, "renamed_symbols", lambda: frozenset({"430090.BJ"}))
+    monkeypatch.setattr(mod, "instrument_metadata", lambda _c: pl.DataFrame())
+    monkeypatch.setattr(mod, "load_symbols", lambda _c: ["600000.SH"])
+    monkeypatch.setattr(mod, "_read_catalog", lambda _c: {"delisted": {}, "never_issued": []})
+    monkeypatch.setattr(mod, "issued_code_space", lambda: ["430090.BJ", "830001.BJ"])
+
+    cfg = Config(data_root=tmp_path / "lake")
+
+    assert mod.pending_codes(cfg) == ["830001.BJ"]
+
+
+def test_the_mapping_is_what_names_the_renames():
+    from cnequity.steps.delisted import renamed_symbols
+
+    names = renamed_symbols()
+    assert len(names) == 248
+    assert all(n.endswith(".BJ") and not n.startswith("920") for n in names)
+
+
+def test_a_renamed_code_reaches_neither_the_fetch_nor_the_events(tmp_path, monkeypatch):
+    """`_dedicated_fetch_targets` feeds the dedicated fetch, the terminal probe
+    that writes back to the catalogue, and `write_delisting_events`. Excluding
+    the rename here is what keeps all three from re-filing it."""
+    from cnequity.steps import delisted as mod
+
+    monkeypatch.setattr(mod, "renamed_symbols", lambda: frozenset({"430090.BJ"}))
+    monkeypatch.setattr(
+        mod,
+        "known_delisted_instruments",
+        lambda _c, _e: {"430090.BJ": date(2025, 9, 30), "600001.SH": date(2024, 5, 1)},
+    )
+    monkeypatch.setattr(
+        mod,
+        "load_delisted_catalog",
+        lambda _c: {"430090.BJ": date(2025, 9, 30), "830002.BJ": date(2024, 1, 5)},
+    )
+
+    targets = mod.delisted_recovery_targets(
+        Config(data_root=tmp_path / "lake"), start=date(2020, 1, 1), end=date(2026, 1, 1)
+    )
+
+    assert "430090.BJ" not in targets
+    assert set(targets) == {"600001.SH", "830002.BJ"}

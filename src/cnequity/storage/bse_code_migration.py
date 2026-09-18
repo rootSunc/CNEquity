@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 # Every dataset that carries a symbol and held a legacy Beijing code when this
 # was written. A dataset absent here is simply not rewritten.
 _SERIES_DATASETS = ("daily_bars", "trading_status", "corporate_actions", "adj_factors")
+# A rename is not a delisting, so nothing about it belongs in these. `probe`
+# cannot tell the two apart — the old code simply stops answering — so all 248
+# were filed as delistings on 2025-09-30 and became 248 of the 343 rows in
+# `delisting_events`. `steps.delisted.renamed_symbols` stops new ones; this
+# removes the ones already recorded.
+_DELISTING_DATASET = "delisting_events"
+_DELISTED_STATE = ("delisted_catalog.json", "delisted_ingested.json")
 # `adj_factors` is derived, and carried 207,463 legacy rows — every one with a
 # current-code twin — because it was derived from the duplicated bars.
 _DERIVED = frozenset({"adj_factors"})
@@ -191,6 +198,12 @@ def _plan(config: Config, mapping: dict[str, str]) -> dict:
         "entries_dropped": legacy_entries,
         "prev_symbol_recorded": legacy_entries,
     }
+    phantom = 0
+    for path in _partition_files(config.derived_root / _DELISTING_DATASET):
+        df = pl.read_parquet(path)
+        if "symbol" in df.columns:
+            phantom += df.filter(pl.col("symbol").is_in(list(mapping))).height
+    report["datasets"][_DELISTING_DATASET] = {"rows_dropped": phantom}
     return report
 
 
@@ -238,7 +251,70 @@ def _apply(config: Config, mapping: dict[str, str]) -> tuple[dict, dict[str, lis
     ins_report, ins_changed = _apply_instruments(config, mapping)
     report["datasets"]["instruments"] = ins_report
     touched["instruments"] = ins_changed
+
+    de_report, de_changed = _drop_phantom_delistings(config, mapping)
+    report["datasets"][_DELISTING_DATASET] = de_report
+    touched[_DELISTING_DATASET] = de_changed
+    report["state"] = _clear_delisted_state(config, mapping)
     return report, touched
+
+
+def _drop_phantom_delistings(config: Config, mapping: dict[str, str]) -> tuple[dict, list[Path]]:
+    """Remove the renames that were recorded as the end of a listing."""
+    root = config.derived_root / _DELISTING_DATASET
+    changed: list[Path] = []
+    dropped = 0
+    for path in _partition_files(root):
+        df = pl.read_parquet(path)
+        if "symbol" not in df.columns:
+            continue
+        hit = df.filter(pl.col("symbol").is_in(list(mapping)))
+        if hit.is_empty():
+            continue
+        keep = df.filter(~pl.col("symbol").is_in(list(mapping)))
+        dropped += hit.height
+        if keep.is_empty():
+            path.unlink(missing_ok=True)
+            _maybe_rmdir(path.parent)
+        else:
+            write_parquet_atomic(path, keep, compression="zstd")
+            changed.append(path)
+    logger.info("%s: dropped %d rename(s) recorded as delistings", _DELISTING_DATASET, dropped)
+    return {"rows_dropped": dropped}, changed
+
+
+def _clear_delisted_state(config: Config, mapping: dict[str, str]) -> dict:
+    """Take the renamed codes out of the catalogue and the ingest ledger.
+
+    Leaving them there would keep the dedicated delisted fetch chasing history
+    for codes that no longer exist, and would put the rows straight back the
+    next time `delisting_events` is written.
+    """
+    import json
+
+    removed: dict[str, int] = {}
+    for name in _DELISTED_STATE:
+        path = config.meta_root / "state" / name
+        if not path.is_file():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        count = 0
+        delisted = payload.get("delisted")
+        if isinstance(delisted, dict):
+            for symbol in list(delisted):
+                if symbol in mapping:
+                    del delisted[symbol]
+                    count += 1
+        done = payload.get("completed")
+        if isinstance(done, list):
+            kept = [s for s in done if s not in mapping]
+            count += len(done) - len(kept)
+            payload["completed"] = kept
+        if count:
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        removed[name] = count
+    logger.info("delisted state: removed %s renamed entry(ies)", removed)
+    return removed
 
 
 def _apply_instruments(config: Config, mapping: dict[str, str]) -> tuple[dict, list[Path]]:
