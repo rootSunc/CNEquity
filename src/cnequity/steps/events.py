@@ -36,6 +36,10 @@ from cnequity.domain.schemas import with_provenance
 from cnequity.domain.symbols import filter_ingest_universe
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.registry import register_step
+from cnequity.quality.ex_events import (
+    EX_EVENT_LOOKBACK_SESSIONS,
+    unexplained_factor_steps,
+)
 from cnequity.quality.failover import (
     failover_spec,
     snapshot_corporate_actions_backup,
@@ -490,12 +494,103 @@ def _validate_earnings_schedule_snapshot(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
+def _heal_unrecorded_ex_events(config: Config, trade_date: date, run_id: str, rate_limit) -> int:
+    """Ask TDX for a recent ex-event the factor series shows and nobody recorded.
+
+    The daily source is EastMoney's dividend report, which has no concept of a
+    fund unit split — `_map_action_type` knows 配/转/送/派 and nothing else — so
+    a 份额折算 only ever reached the lake through a symbol backfill somebody
+    remembered to run. xdxr carries it (category 11), and the factor series
+    names the day, so the two together make the repair automatic instead of
+    remembered.
+
+    Best effort by construction: the daily fetch has already succeeded by the
+    time this runs, and an unreachable peer must not turn a good day into a
+    failed step.
+    """
+    if not config.sources.get("tdx_protocol", True):
+        return 0
+    try:
+        suspects = unexplained_factor_steps(config, upto=trade_date)
+        if suspects.is_empty():
+            return 0
+        symbols = sorted(suspects.get_column("symbol").unique().to_list())
+        scope = f"heal:xdxr:{trade_date.isoformat()}"
+        logger.info(
+            "corporate_actions: %d unrecorded factor step(s) over the last %d session(s); "
+            "asking TDX about %d symbol(s)",
+            suspects.height,
+            EX_EVENT_LOOKBACK_SESSIONS,
+            len(symbols),
+        )
+        frame = fetch_corporate_actions(
+            trade_date,
+            symbols=symbols,
+            backfill=True,
+            rate_limit=rate_limit,
+            allow_mock=config.tdx_allow_mock,
+            primary_only=True,
+            config=config,
+            run_id=run_id,
+            fail_loud=False,
+            allow_empty=True,
+            request_scope=scope,
+        )
+        if frame.is_empty():
+            return 0
+        # Only the days in question: a symbol's whole xdxr history is not what
+        # a daily run was asked for, and the rest of it is already in the lake.
+        healed = frame.join(
+            suspects.select("symbol", "ex_date"), on=["symbol", "ex_date"], how="inner"
+        )
+        if healed.is_empty():
+            logger.info(
+                "corporate_actions: TDX has nothing for %d unrecorded step(s); "
+                "they fall out of the window on their own",
+                suspects.height,
+            )
+            return 0
+        healed = with_provenance(healed, source=_CANONICAL_BACKFILL, data_version="v1")
+        result = write_fetched(
+            config,
+            run_id,
+            "corporate_actions",
+            healed,
+            source=_CANONICAL_BACKFILL,
+            batch_id="batch-0-ex-event-heal",
+            raw_archive_evidence=(
+                verify_raw_archive(
+                    config,
+                    "corporate_actions",
+                    run_id,
+                    source=_CANONICAL_BACKFILL,
+                    request_scope=scope,
+                )
+                if config.should_archive_raw("corporate_actions")
+                else None
+            ),
+        )
+        logger.info(
+            "corporate_actions: recorded %d previously unexplained ex-event(s)", healed.height
+        )
+        return int(result.get("rows_written", healed.height))
+    except Exception as exc:  # noqa: BLE001 — opportunistic repair, never the day's verdict
+        logger.warning(
+            "corporate_actions: ex-event self-heal unavailable (%s: %s); "
+            "the audit still reports the gap",
+            type(exc).__name__,
+            exc,
+        )
+        return 0
+
+
 @register_step("corporate_actions", group="core", depends_on=["instruments"])
 def step_corporate_actions(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     rl = config.tdx_rate_limit_spec()
     backfill = getattr(config, "_backfill", False)
     findings: list[dict] = []
     failed_symbols: list[str] = []
+    heal_written = 0
 
     if backfill:
         symbols = list(
@@ -1051,6 +1146,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                             "retryable": True,
                         }
                     )
+        heal_written = _heal_unrecorded_ex_events(config, trade_date, run_id, rl)
 
     if backfill and not df.is_empty():
         start = getattr(config, "_backfill_start", None) or CORPORATE_ACTIONS_BACKFILL_START
@@ -1134,6 +1230,10 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 else None
             ),
         )
+        if heal_written:
+            # Staged under their own batch, but still rows this step wrote.
+            result["rows_read"] = int(result.get("rows_read", 0)) + heal_written
+            result["rows_written"] = int(result.get("rows_written", 0)) + heal_written
     if backfill and failed_symbols:
         result["failed_symbols"] = failed_symbols
         result["status"] = "failed"

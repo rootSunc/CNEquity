@@ -33,6 +33,7 @@ from cnequity.quality.cross_checks import (
     trading_calendar_horizon_findings,
     undeclared_source_findings,
     universe_survivorship_findings,
+    unrecorded_ex_event_findings,
     untraded_instrument_findings,
     valuation_bars_coverage_findings,
 )
@@ -462,6 +463,19 @@ def _collect_lake_findings(
     findings.extend(valuation_ratio_unit_findings(config, trade_date))
     findings.extend(balance_sheet_identity_findings(config))
     findings.extend(adj_factor_arbitration_findings(config))
+    # After the price-based check, so the loud days it already named are not
+    # reported a second time by the factor-based one.
+    findings.extend(
+        unrecorded_ex_event_findings(
+            config,
+            trade_date,
+            exclude={
+                (finding.get("symbol"), finding.get("trade_date"))
+                for finding in findings
+                if finding.get("check") == "missing_corporate_action"
+            },
+        )
+    )
     findings.extend(daily_bars_arbitration_findings(config))
     findings.extend(financial_statement_peer_findings(config))
     findings.extend(

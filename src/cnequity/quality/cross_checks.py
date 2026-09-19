@@ -24,6 +24,7 @@ from cnequity.adapters.exchange.st_lists import is_st_name
 from cnequity.config import Config
 from cnequity.domain.symbols import parse_symbol
 from cnequity.domain.trading_status import risk_warning_expr
+from cnequity.quality.ex_events import EX_EVENT_LOOKBACK_SESSIONS, unexplained_factor_steps
 from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import (
     dataset_has_parquet,
@@ -1943,6 +1944,61 @@ def adj_factor_arbitration_findings(config: Config) -> list[dict]:
             "remediation": remediation,
         }
     ]
+
+
+def unrecorded_ex_event_findings(
+    config: Config,
+    trade_date: date,
+    *,
+    exclude: set[tuple[str, str]] | None = None,
+) -> list[dict]:
+    """A recent factor step with no corporate action behind it.
+
+    `missing_corporate_action` reads this from the price, and needs an 11%
+    raw/adjusted divergence before it speaks — the right bar for a dividend,
+    the wrong one for a fund unit split, which restates the reference price by
+    exactly its ratio and can be far smaller than that. The factor series
+    states the ratio outright, so ask it instead, and only over the window a
+    run can still act on (`EX_EVENT_LOOKBACK_SESSIONS`); deep history stays
+    with the price-based check, which is what keeps this quiet.
+
+    Pairs already reported by the price-based check are excluded: two lines
+    about one day is not twice the information.
+    """
+    steps = unexplained_factor_steps(config, upto=trade_date)
+    if steps.is_empty():
+        return []
+    skip = exclude or set()
+    rows = [
+        row
+        for row in steps.iter_rows(named=True)
+        if (row["symbol"], _iso(row["ex_date"])) not in skip
+    ]
+    if not rows:
+        return []
+    return _capped_findings(
+        pl.DataFrame(rows),
+        lambda row: {
+            "dataset": "corporate_actions",
+            "symbol": row["symbol"],
+            "severity": "warning",
+            "check": "unrecorded_ex_event",
+            "message": (
+                f"{row['symbol']}: the hfq factor stepped x{row['factor_ratio']:.4f} on "
+                f"{_iso(row['ex_date'])} with no corporate action on record; the daily "
+                "dividend report carries no unit splits, so a 份额折算 arrives only from "
+                "`cne backfill corporate_actions --symbols "
+                f"{row['symbol']}`"
+            ),
+            "trade_date": _iso(row["ex_date"]),
+            "factor_ratio": round(float(row["factor_ratio"]), 6),
+            "lookback_sessions": EX_EVENT_LOOKBACK_SESSIONS,
+        },
+        dataset="corporate_actions",
+        check="unrecorded_ex_event",
+        severity="warning",
+        noun="a factor step with no recorded action",
+    )
 
 
 def _open_sessions(config: Config) -> list[date] | None:
