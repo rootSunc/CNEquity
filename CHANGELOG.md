@@ -101,6 +101,15 @@
   两条都在 11% 之下，此前只有配了付费对端 key 的湖才看得见。价格检查已报过的
   日期会被排除，同一天不出两条。
 
+- **合规矩阵开始为「只靠修复命令进来的源」说话。** `policies_for_dataset` 只读
+  primary / backup / backfill 三个路由字段，于是 `cne ths-official resource-sectors`
+  写进 `sector_bars` 的同花顺官方行没有任何条款覆盖 —— `unrouted_source` 报的正是
+  这个盲区。把它声明成路由会是假话（没有任何调度会跑那条命令），所以新增
+  `DatasetSpec.repair_sources`：矩阵认它（`DatasetPolicy.repair`，并计入 `.all`），
+  韧性报告不认它，不会把一条手动命令当成可用的备源。顺带把
+  `supplementary_sources` 也接进 `DatasetPolicy.supplementary` —— 那八条恢复链路
+  此前同样不在矩阵里。
+
 ## [0.10.0] — 2026-09-18
 
 覆盖与溯源。北交所成为一等公民；两处门禁不再因为错误的理由放行；四处每天都在

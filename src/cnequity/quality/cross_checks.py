@@ -2319,11 +2319,13 @@ def undeclared_source_findings(config: Config) -> list[dict]:
     two sub-labels in ``trading_status``, and ``sources/SOURCES.yml`` has never
     carried it.
 
-    *Registered but unrouted.* A policy exists and the dataset does not route to
-    the source, so ``policies_for_dataset`` omits terms that do apply. The
-    ``ths_official`` rows in ``daily_bars`` and ``financial_statement_items``
-    arrived through dedicated repair commands rather than a configured route —
-    and theirs is the policy whose redistribution field reads ``unknown``.
+    *Registered but unrouted.* A policy exists and the dataset declares no
+    route to the source at all, so ``policies_for_dataset`` omits terms that do
+    apply — and ``ths_official``, the label this catches most often, is the
+    policy whose redistribution field reads ``unknown``. A source reached only
+    by an explicit repair command is declared as such (``repair_sources``) and
+    carried in ``DatasetPolicy.repair``: the matrix speaks for it without the
+    resilience report mistaking a manual command for a fallback.
 
     Reads what is stored rather than what the config intends, so it catches the
     next out-of-band writer whatever route it takes.
@@ -2360,6 +2362,10 @@ def undeclared_source_findings(config: Config) -> list[dict]:
                 spec.backup_source,
                 spec.backfill_source,
                 *getattr(spec, "supplementary_sources", ()),
+                # An operator-invoked repair is a declared writer too: its
+                # terms are in the matrix (`DatasetPolicy.repair`), it is just
+                # not part of any automatic route.
+                *getattr(spec, "repair_sources", ()),
             )
             if value
         }

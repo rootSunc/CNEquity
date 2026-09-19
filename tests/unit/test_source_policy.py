@@ -105,3 +105,57 @@ def test_load_rejects_incomplete_policy_document(tmp_path):
 
     with pytest.raises(SourcePolicyValidationError):
         load_source_policies(path)
+
+
+def test_an_operator_invoked_repair_is_declared_without_becoming_a_fallback():
+    """`cne ths-official resource-sectors` writes licensed rows into sector_bars.
+
+    Its terms apply to those rows, so the compliance matrix has to speak for
+    them — that is what `unrouted_source` was reporting. But nothing schedules
+    the command, so declaring it as a route would tell the resilience report
+    that `sector_bars` has a live fallback it does not have.
+    """
+    from cnequity.compliance.source_policy import policies_for_dataset
+    from cnequity.diagnostics.substitutes import _declared_sources
+    from cnequity.domain.datasets import DATASETS
+
+    assert DATASETS["sector_bars"].repair_sources == ("ths_official",)
+
+    policy = policies_for_dataset("sector_bars")
+    assert "ths_official" in {item.name for item in policy.all}
+    assert [item.name for item in policy.repair] == ["ths_official"]
+
+    assert "ths_official" not in {source for source, _role in _declared_sources("sector_bars")}
+
+
+def test_the_audit_no_longer_calls_a_declared_repair_source_unrouted(tmp_path):
+    from datetime import date
+
+    import polars as pl
+
+    from cnequity.config import Config
+    from cnequity.domain.schemas import data_version_for, with_provenance
+    from cnequity.quality.cross_checks import undeclared_source_findings
+
+    part = tmp_path / "curated" / "sector_bars" / "trade_date=2026-09-04"
+    part.mkdir(parents=True, exist_ok=True)
+    with_provenance(
+        pl.DataFrame(
+            {
+                "symbol": ["881101.TI"],
+                "trade_date": [date(2026, 9, 4)],
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [1],
+                "amount": [1.0],
+            }
+        ),
+        source="ths_official",
+        data_version=data_version_for("sector_bars"),
+    ).write_parquet(part / "part-merged.parquet")
+
+    findings = undeclared_source_findings(Config(data_root=tmp_path))
+
+    assert [f for f in findings if f["check"] == "unrouted_source"] == []

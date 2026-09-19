@@ -382,12 +382,22 @@ def policy_for_source(
 
 @dataclass(frozen=True)
 class DatasetPolicy(Mapping[str, SourcePolicy | None]):
-    """Policies grouped by a dataset's primary/backup/backfill roles."""
+    """Policies grouped by a dataset's routing roles.
+
+    The three named roles are single-valued and stay that way: the gates read
+    them, and the backup gate's question — is the backup independent of the
+    primary — stops being answerable if the roles are flattened. The two
+    tuples carry the rest of what actually wrote rows: an automatic recovery
+    chain (`supplementary`) and the operator-invoked repairs (`repair`). Terms
+    apply to a row whatever route landed it, so both belong in ``all``.
+    """
 
     dataset: str
     primary: SourcePolicy
     backup: SourcePolicy | None = None
     backfill: SourcePolicy | None = None
+    supplementary: tuple[SourcePolicy, ...] = ()
+    repair: tuple[SourcePolicy, ...] = ()
 
     def __getitem__(self, key: str) -> SourcePolicy | None:
         aliases = {
@@ -408,11 +418,17 @@ class DatasetPolicy(Mapping[str, SourcePolicy | None]):
 
     @property
     def all(self) -> tuple[SourcePolicy, ...]:
-        """Distinct policies in role order (primary, backup, backfill)."""
+        """Distinct policies: the three roles, then supplementary, then repair."""
 
         result: list[SourcePolicy] = []
         seen: set[str] = set()
-        for policy in (self.primary, self.backup, self.backfill):
+        for policy in (
+            self.primary,
+            self.backup,
+            self.backfill,
+            *self.supplementary,
+            *self.repair,
+        ):
             if policy is not None and policy.name not in seen:
                 result.append(policy)
                 seen.add(policy.name)
@@ -424,6 +440,8 @@ class DatasetPolicy(Mapping[str, SourcePolicy | None]):
             "primary": self.primary.as_dict(),
             "backup": self.backup.as_dict() if self.backup else None,
             "backfill": self.backfill.as_dict() if self.backfill else None,
+            "supplementary": [policy.as_dict() for policy in self.supplementary],
+            "repair": [policy.as_dict() for policy in self.repair],
         }
 
 
@@ -447,9 +465,24 @@ def policies_for_dataset(
         backfill = (
             policy_for_source(spec.backfill_source, policy_map) if spec.backfill_source else None
         )
+        supplementary = tuple(
+            policy_for_source(name, policy_map)
+            for name in (getattr(spec, "supplementary_sources", ()) or ())
+        )
+        repair = tuple(
+            policy_for_source(name, policy_map)
+            for name in (getattr(spec, "repair_sources", ()) or ())
+        )
     except KeyError as exc:
         raise SourcePolicyError(f"dataset {dataset!r}: {exc}") from exc
-    return DatasetPolicy(dataset=dataset, primary=primary, backup=backup, backfill=backfill)
+    return DatasetPolicy(
+        dataset=dataset,
+        primary=primary,
+        backup=backup,
+        backfill=backfill,
+        supplementary=supplementary,
+        repair=repair,
+    )
 
 
 def aggregate_dataset_policies(

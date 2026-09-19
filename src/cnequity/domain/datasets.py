@@ -354,6 +354,13 @@ class DatasetSpec:
     # backup gate asks whether the *backup* is independent of the *primary*,
     # and flattening the roles would make that question unanswerable.
     supplementary_sources: tuple[str, ...] = ()
+    # Sources that reach curated only through an explicit, operator-invoked
+    # repair (`cne backfill … --*-repair`, `cne ths-official …`). Their terms
+    # apply to the rows they land, so the compliance matrix must speak for
+    # them; they are not part of any automatic route, so the resilience report
+    # must not count them as a fallback. That distinction is why this is its
+    # own field rather than another `supplementary_sources` entry.
+    repair_sources: tuple[str, ...] = ()
     # How many days the freshest data may lag the last trading day before it is
     # flagged STALE. 1 tolerates normal T+1 EOD publication; larger values mark
     # sources with a slower cadence (margin T+1, quarterly northbound holdings)
@@ -1128,6 +1135,9 @@ _SPECS = [
         # not EastMoney: the source was migrated to a single 同花顺 base to end the
         # mixed-source basis breaks, and this label had not followed.
         backfill_source="ths",
+        # `cne ths-official resource-sectors` writes the licensed board series
+        # by hand; nothing schedules it.
+        repair_sources=("ths_official",),
     ),
     DatasetSpec(
         "sector_fund_flow",
