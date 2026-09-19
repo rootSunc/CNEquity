@@ -1712,6 +1712,15 @@ def corporate_action_classification_findings(config: Config, start: date, end: d
 BALANCE_IDENTITY_TOLERANCE = 1e-4
 
 
+# Where the identity breaks actually are. Measured 2026-09-19 over 286,689
+# periods: 245 breaks, of which 181 are 2005 or earlier, 28 in 2006-2010, 18 in
+# 2011-2015, 9 in 2016-2020 and 9 from 2021. An old annual report that does not
+# foot is the published record and will never be restated; a recent one is
+# worth a look, and there are few enough of them to actually look. The line
+# sits where the concentration ends rather than at a round number.
+MODERN_STATEMENT_YEAR = 2011
+
+
 def balance_sheet_identity_findings(config: Config) -> list[dict]:
     """Assets = liabilities + equity, per (symbol, report_period).
 
@@ -1765,30 +1774,72 @@ def balance_sheet_identity_findings(config: Config) -> list[dict]:
     if breached.is_empty():
         return []
 
-    sample = breached.sort("_rel", descending=True).head(5)
-    return [
-        {
-            "dataset": "financial_statement_items",
-            "severity": "warning",
-            "check": "balance_sheet_identity",
-            "message": (
-                f"{breached.height} of {checked.height} balance-sheet periods break "
-                "assets = liabilities + equity by more than a basis point"
-            ),
-            "rows": breached.height,
-            "checked": checked.height,
-            "sample": [
-                {
-                    "symbol": row["symbol"],
-                    "report_period": row["report_period"],
-                    "total_assets": row["total_assets"],
-                    "total_liabilities": row["total_liabilities"],
-                    "total_equity": row["total_equity"],
-                }
-                for row in sample.to_dicts()
-            ],
-        }
-    ]
+    def _sample(frame: pl.DataFrame) -> list[dict]:
+        return [
+            {
+                "symbol": row["symbol"],
+                "report_period": row["report_period"],
+                "total_assets": row["total_assets"],
+                "total_liabilities": row["total_liabilities"],
+                "total_equity": row["total_equity"],
+            }
+            for row in frame.sort("_rel", descending=True).head(5).to_dicts()
+        ]
+
+    breached = breached.with_columns(
+        pl.col("report_period").str.slice(0, 4).cast(pl.Int32, strict=False).alias("_year")
+    )
+    modern = breached.filter(pl.col("_year") >= MODERN_STATEMENT_YEAR)
+    historical = breached.filter(
+        pl.col("_year").is_null() | (pl.col("_year") < MODERN_STATEMENT_YEAR)
+    )
+    by_era = {
+        str(year): count
+        for year, count in sorted(
+            breached.group_by("_year").len().iter_rows(),
+            key=lambda item: (item[0] is None, item[0]),
+        )
+    }
+
+    findings: list[dict] = []
+    if not modern.is_empty():
+        findings.append(
+            {
+                "dataset": "financial_statement_items",
+                "severity": "warning",
+                "check": "balance_sheet_identity",
+                "message": (
+                    f"{modern.height} of {checked.height} balance-sheet periods from "
+                    f"{MODERN_STATEMENT_YEAR} on break assets = liabilities + equity by more "
+                    "than a basis point"
+                ),
+                "rows": modern.height,
+                "checked": checked.height,
+                "since_year": MODERN_STATEMENT_YEAR,
+                "sample": _sample(modern),
+            }
+        )
+    if not historical.is_empty():
+        findings.append(
+            {
+                "dataset": "financial_statement_items",
+                "severity": "info",
+                "check": "balance_sheet_identity_historical",
+                "message": (
+                    f"{historical.height} balance-sheet period(s) before "
+                    f"{MODERN_STATEMENT_YEAR} break assets = liabilities + equity; these are "
+                    "filings as published and will not be restated, so they are counted rather "
+                    "than chased"
+                ),
+                "rows": historical.height,
+                "checked": checked.height,
+                "before_year": MODERN_STATEMENT_YEAR,
+                "source_limited": True,
+                "by_report_year": by_era,
+                "sample": _sample(historical),
+            }
+        )
+    return findings
 
 
 def adj_factor_arbitration_findings(config: Config) -> list[dict]:
