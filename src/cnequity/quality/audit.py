@@ -46,6 +46,7 @@ from cnequity.quality.derived_checks import industry_index_findings, market_brea
 from cnequity.quality.intraday_checks import minute_bars_findings
 from cnequity.quality.macro_checks import macro_staleness_findings
 from cnequity.quality.pit_checks import pit_announce_date_findings
+from cnequity.quality.run_health import degraded_job_findings
 from cnequity.quality.source_diff import run_source_diffs
 from cnequity.quality.st_coverage import st_evidence_coverage_report
 from cnequity.quality.tick_checks import trade_ticks_findings
@@ -462,6 +463,7 @@ def _collect_lake_findings(
     findings.extend(undeclared_source_findings(config))
     findings.extend(valuation_ratio_unit_findings(config, trade_date))
     findings.extend(balance_sheet_identity_findings(config))
+    findings.extend(degraded_job_findings(config))
     findings.extend(adj_factor_arbitration_findings(config))
     # After the price-based check, so the loud days it already named are not
     # reported a second time by the factor-based one.
