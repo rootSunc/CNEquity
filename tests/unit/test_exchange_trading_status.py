@@ -225,3 +225,58 @@ def test_a_mixed_fallback_day_keeps_each_row_its_own_owner(tmp_path, monkeypatch
     assert owners["600519.SH"] == "exchange"
     # The Beijing name is on neither board; it keeps the step's own label.
     assert owners["920184.BJ"] != "exchange"
+
+
+def test_the_board_reading_is_snapshotted_every_session(tmp_path, monkeypatch):
+    """Not only when EastMoney fails.
+
+    The exchange reader sits on the failover path, so a normal day leaves the
+    lake with no exchange-grade record of SH/SZ status — and the ST evidence
+    receipt admits `bse` precisely because a board is not an aggregator. Two
+    requests and 2.6s per session buys the record; authority over
+    `trading_status` is untouched, because this writes to the snapshot store.
+    """
+    from datetime import date as _date
+
+    import polars as pl
+
+    from cnequity.config import Config
+    from cnequity.quality import failover
+    from cnequity.storage.layout import init_data_layout
+    from cnequity.storage.source_snapshots import SnapshotStore
+
+    day = _date(2026, 9, 18)
+    cfg = Config(data_root=tmp_path / "data", sources={"exchange": True})
+    init_data_layout(cfg)
+    asked: dict = {}
+
+    class _Result:
+        is_empty = False
+        rows = pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [day],
+                "is_trading": [True],
+                "status": ["normal"],
+                "risk_warning": [False],
+            }
+        )
+
+    def fake_fetch(symbols, trade_date, *, config=None):
+        asked["symbols"] = list(symbols)
+        return _Result()
+
+    monkeypatch.setattr(
+        "cnequity.adapters.exchange.trading_status.fetch_trading_status_exchange", fake_fetch
+    )
+
+    written = failover.snapshot_trading_status_exchange(
+        cfg, trade_date=day, symbols=["600519.SH", "920001.BJ"], run_id="run-1"
+    )
+
+    assert asked["symbols"] == ["600519.SH"], "Beijing is not on these boards"
+    assert written == 1
+    snapshot = SnapshotStore(cfg.meta_root).read_latest("trading_status", source="exchange")
+    assert snapshot.get_column("source").to_list() == ["exchange"]
+    curated = cfg.curated_root / "trading_status"
+    assert not curated.exists() or not any(curated.rglob("*.parquet")), "authority is unchanged"

@@ -31,6 +31,7 @@ from cnequity.domain.trading_status import (
 )
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.registry import register_step
+from cnequity.quality.failover import snapshot_trading_status_exchange
 from cnequity.quality.st_coverage import (
     ST_EVIDENCE_VERSION,
     build_st_scope,
@@ -751,6 +752,22 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
         _fetch,
         allow_empty=False,
     )
+    # Two requests and about three seconds, once per session, whatever the
+    # vendor path did. The exchange reading is only reachable today when
+    # EastMoney fails, so a normal day leaves no exchange-grade record of SH/SZ
+    # status — and the ST evidence receipt admits a board precisely because a
+    # board is not an aggregator. Snapshot only: authority is unchanged.
+    try:
+        captured = snapshot_trading_status_exchange(
+            config,
+            trade_date=trade_date,
+            symbols=_live_symbols(trade_date),
+            run_id=run_id,
+        )
+        if captured:
+            logger.info("trading_status: snapshotted %d exchange board row(s)", captured)
+    except Exception as exc:  # noqa: BLE001 — a record for later, never this run's verdict
+        logger.warning("trading_status: exchange board snapshot unavailable: %s", exc)
     if df.is_empty():
         result = {"rows_read": 0, "rows_written": 0}
         if _findings:

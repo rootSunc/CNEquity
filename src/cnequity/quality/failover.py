@@ -151,6 +151,50 @@ def snapshot_corporate_actions_backup(
     )
 
 
+def snapshot_trading_status_exchange(
+    config: Config,
+    *,
+    trade_date: date,
+    symbols: list[str],
+    run_id: str,
+) -> int:
+    """Record what the SH/SZ boards said about halts and ST this session.
+
+    The exchange reader already exists and is already trusted enough to serve
+    as the failover path — measured against EastMoney for 2026-09-15 over 5,219
+    symbols, ST agreed on 100.000% and halts on 99.923%, with the exchange
+    right in all four disagreements, for two requests and 2.6 seconds. But it
+    only runs when EastMoney fails, so on a normal day the lake holds no
+    exchange-grade reading of SH/SZ status at all, and the ST evidence receipt
+    — which admits `bse` precisely because a board is not an aggregator —
+    has nothing to admit for Shanghai and Shenzhen.
+
+    This writes it to the snapshot store, never to curated: authority over
+    `trading_status` is unchanged, and the point of the daily capture is to
+    build the availability record that a decision about authority needs.
+    Returns the row count so a caller can report it.
+    """
+    sh_sz = [symbol for symbol in symbols if not symbol.endswith(".BJ")]
+    if not sh_sz or not config.sources.get("exchange", True):
+        return 0
+    from cnequity.adapters.exchange.trading_status import fetch_trading_status_exchange
+
+    result = fetch_trading_status_exchange(sh_sz, trade_date, config=config)
+    if result.is_empty:
+        return 0
+    frame = with_provenance(result.rows, source="exchange", data_version="v1")
+    write_backup_snapshot(
+        config,
+        "trading_status",
+        frame,
+        run_id=run_id,
+        batch_id="exchange",
+        source="exchange",
+        trade_date=trade_date,
+    )
+    return frame.height
+
+
 def snapshot_corporate_actions_tdx_backup(
     config: Config,
     *,
