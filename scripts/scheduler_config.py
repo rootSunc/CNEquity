@@ -52,7 +52,10 @@ def render_jobs(root: Path, dest: Path, *, groups: str | None, vantage: str | No
     if not re.fullmatch(r"[A-Za-z0-9._-]+", vantage):
         raise ValueError("CNE_SOURCE_VANTAGE must match [A-Za-z0-9._-]+")
     jobs = {}
-    for name in ("daily", "stale", "events"):
+    # `events-news` is the high-frequency half of the events job. It was a
+    # hand-written agent for a while, which is how it ended up as the only one
+    # without a descriptor limit — the one job whose compact actually ran out.
+    for name in ("daily", "stale", "events", "events-news"):
         label = f"com.cnequity.{name}"
         template = root / "scripts/launchd" / f"{label}.plist.template"
         # Decode before substitution: a checkout path containing & or < is XML text.
@@ -95,6 +98,10 @@ def render_jobs(root: Path, dest: Path, *, groups: str | None, vantage: str | No
         env["CNE_SOURCE_VANTAGE"] = vantage
         if name in {"daily", "stale"}:
             env["CNE_GROUPS"] = groups
+        if name == "events-news":
+            # The host copy may carry CNE_CONFIG and a retuned interval; both
+            # survive above. The group is what makes this agent this agent.
+            env.setdefault("CNE_EVENTS_GROUP", "news_wire")
         if name == "daily":
             env["CNE_STALE_RETRY"] = "0"
         jobs[label] = job

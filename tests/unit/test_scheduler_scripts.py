@@ -24,6 +24,7 @@ EVENTS = ROOT / "scripts" / "events_pipeline.sh"
 DAILY_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.daily.plist.template"
 STALE_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.stale.plist.template"
 EVENTS_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.events.plist.template"
+NEWS_PLIST = ROOT / "scripts" / "launchd" / "com.cnequity.events-news.plist.template"
 
 
 def _ensure_unix_shell() -> None:
@@ -247,6 +248,7 @@ def test_installer_xml_escapes_checkout_path(tmp_path):
     shutil.copy2(DAILY_PLIST, repo / "scripts" / "launchd")
     shutil.copy2(STALE_PLIST, repo / "scripts" / "launchd")
     shutil.copy2(EVENTS_PLIST, repo / "scripts" / "launchd")
+    shutil.copy2(NEWS_PLIST, repo / "scripts" / "launchd")
     cne = repo / ".venv" / "bin" / "cne"
     cne.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     cne.chmod(0o755)

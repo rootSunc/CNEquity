@@ -116,6 +116,10 @@
   （那边是 1,048,576），所以它只在调度上炸。三个 plist 模板都加上
   `SoftResourceLimits.NumberOfFiles = 8192`；重新生成用
   `python scripts/scheduler_config.py`。
+- **`events-news` 这个 agent 现在也归仓库管。** 它是手写安装的，于是成了唯一没有
+  描述符限额的那个 —— 偏偏就是它的 compact 用光了 256 个。补上模板并接进
+  `scheduler_config.py`：已安装副本自己的间隔（900 秒）和 `CNE_CONFIG` 仍然保留，
+  重装调度不会再把它漏掉。
 
 ## [0.10.0] — 2026-09-18
 
