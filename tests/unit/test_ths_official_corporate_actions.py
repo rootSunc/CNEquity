@@ -100,3 +100,102 @@ def test_arbitration_is_silent_without_a_peer_snapshot(tmp_path):
     from cnequity.quality.cross_checks import adj_factor_arbitration_findings
 
     assert adj_factor_arbitration_findings(Config(data_root=tmp_path)) == []
+
+
+def _lake_with_one_confirmed_gap(tmp_path, ex_date: date):
+    """A lake whose factor stepped on *ex_date* with no action, and a peer that has it."""
+    from cnequity.config import Config
+    from cnequity.storage.layout import init_data_layout
+    from cnequity.storage.source_snapshots import SnapshotStore
+
+    cfg = Config(data_root=tmp_path / "data")
+    init_data_layout(cfg)
+    fetched = datetime(2026, 9, 19, tzinfo=timezone.utc)
+    before = ex_date - timedelta(days=1)
+    factors = cfg.derived_root / "adj_factors"
+    for day, factor in ((before, 1.0), (ex_date, 1.2)):
+        part = factors / f"trade_date={day.isoformat()}"
+        part.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            {
+                "symbol": ["600110.SH"],
+                "trade_date": [day],
+                "adjust_type": ["hfq"],
+                "factor": [factor],
+                "source": ["sina"],
+                "data_version": ["v1"],
+                "fetched_at": [fetched],
+            }
+        ).write_parquet(part / "part-0.parquet")
+    # corporate_actions exists but says nothing about that date.
+    actions = cfg.curated_root / "corporate_actions" / f"ex_date={before.year}"
+    actions.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600110.SH"],
+            "ex_date": [date(before.year, 1, 5)],
+            "action_type": ["cash_dividend"],
+            "cash_dividend": [0.2],
+            "bonus_ratio": [0.0],
+            "transfer_ratio": [0.0],
+            "allotment_ratio": [None],
+            "allotment_price": [None],
+            "split_factor": [1.0],
+            "source": ["tdx_protocol"],
+            "data_version": ["v1"],
+            "fetched_at": [fetched],
+        },
+        schema_overrides={"allotment_ratio": pl.Float64, "allotment_price": pl.Float64},
+    ).write_parquet(actions / "part-0.parquet")
+    SnapshotStore(cfg.meta_root).write(
+        "corporate_actions",
+        pl.DataFrame(
+            {
+                "symbol": ["600110.SH"],
+                "ex_date": [ex_date],
+                "action_type": ["cash_dividend"],
+                "cash_dividend": [0.1],
+                "bonus_ratio": [0.0],
+                "transfer_ratio": [0.0],
+                "allotment_ratio": [None],
+                "allotment_price": [None],
+                "source": ["ths_official"],
+                "data_version": ["v1"],
+                "fetched_at": [fetched],
+            },
+            schema_overrides={"allotment_ratio": pl.Float64, "allotment_price": pl.Float64},
+        ),
+        source="ths_official",
+        data_version="v1",
+        run_id="peer-1",
+    )
+    return cfg
+
+
+def test_arbitration_names_the_repair_for_a_pre_floor_gap(tmp_path):
+    from cnequity.quality.cross_checks import adj_factor_arbitration_findings
+
+    cfg = _lake_with_one_confirmed_gap(tmp_path, date(2004, 6, 10))
+
+    (finding,) = adj_factor_arbitration_findings(cfg)
+
+    assert finding["missing_recorded_action"] == 1
+    assert finding["missing_recorded_action_reachable_dates"] == ["2004-06-10"]
+    assert "--eastmoney-date-repair --ex-dates 2004-06-10" in finding["remediation"]
+    assert finding["remediation"] in finding["message"], (
+        "a hint nobody prints is a hint nobody runs"
+    )
+
+
+def test_a_gap_after_the_floor_gets_no_command_because_the_sweep_already_walked_it(tmp_path):
+    """Pointing the repair at a date the normal sources already read would
+    spend requests to confirm the source has nothing."""
+    from cnequity.quality.cross_checks import adj_factor_arbitration_findings
+
+    cfg = _lake_with_one_confirmed_gap(tmp_path, date(2025, 12, 29))
+
+    (finding,) = adj_factor_arbitration_findings(cfg)
+
+    assert finding["missing_recorded_action"] == 1
+    assert finding["missing_recorded_action_reachable_dates"] == []
+    assert finding["remediation"] == ""

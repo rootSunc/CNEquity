@@ -19,6 +19,7 @@ from datetime import date, timedelta
 import polars as pl
 
 from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
+from cnequity.adapters.eastmoney.corporate_actions import EASTMONEY_BACKFILL_FLOOR
 from cnequity.adapters.exchange.st_lists import is_st_name
 from cnequity.config import Config
 from cnequity.domain.symbols import parse_symbol
@@ -1874,17 +1875,45 @@ def adj_factor_arbitration_findings(config: Config) -> list[dict]:
         actions, on=["symbol", "ex_date"], how="anti"
     )
 
-    def _split(frame: pl.DataFrame) -> tuple[int, int, int]:
+    def _split(frame: pl.DataFrame) -> tuple[pl.DataFrame, int, int]:
         in_scope = frame.filter(pl.col("symbol").is_in(peer_symbols))
-        confirmed = in_scope.join(peer_dates, on=["symbol", "ex_date"], how="inner").height
-        return confirmed, in_scope.height - confirmed, frame.height - in_scope.height
+        confirmed = in_scope.join(peer_dates, on=["symbol", "ex_date"], how="inner")
+        return confirmed, in_scope.height - confirmed.height, frame.height - in_scope.height
 
-    silent_yes, silent_no, silent_out = _split(silent)
-    baseless_yes, baseless_no, baseless_out = _split(baseless)
+    silent_confirmed, silent_no, silent_out = _split(silent)
+    baseless_confirmed, baseless_no, baseless_out = _split(baseless)
+    silent_yes = silent_confirmed.height
+    baseless_yes = baseless_confirmed.height
     total = silent.height + baseless.height
     if not total:
         return []
 
+    # Counts alone name no next step. The one bucket with a command behind it
+    # is "the peer has the event and we do not": for an ex-date older than the
+    # EastMoney backfill floor, the report still serves it by exact date, which
+    # is the only route that reaches it. Later dates are ones the normal
+    # sources already walked, so a gap there means no configured source
+    # carries the event, not that a sweep was skipped.
+    reachable = sorted(
+        {
+            value.isoformat()
+            for value in baseless_confirmed.filter(pl.col("ex_date") < EASTMONEY_BACKFILL_FLOOR)
+            .get_column("ex_date")
+            .to_list()
+        }
+    )
+    remediation = ""
+    if reachable:
+        shown = ",".join(reachable[:_SAMPLE])
+        more = f" (+{len(reachable) - _SAMPLE} more)" if len(reachable) > _SAMPLE else ""
+        remediation = (
+            f" {len(reachable)} of the missing actions fall before the EastMoney backfill "
+            f"floor {EASTMONEY_BACKFILL_FLOOR.isoformat()}, which the sweep cannot reach; ask "
+            "the report for them by exact date with `cne backfill corporate_actions "
+            f"--eastmoney-date-repair --ex-dates {shown}`{more}. It answers one date at a time "
+            "and does not carry every older event, so a date it has nothing for stays open. "
+            "The later dates were already walked by the configured sources."
+        )
     against_factors = silent_yes + baseless_no
     against_actions = silent_no + baseless_yes
     unarbitrated = silent_out + baseless_out
@@ -1898,6 +1927,9 @@ def adj_factor_arbitration_findings(config: Config) -> list[dict]:
                 f"{total - unarbitrated}: {against_factors} point at the factor series, "
                 f"{against_actions} at the recorded actions, {unarbitrated} unarbitrated "
                 "because the peer does not carry those securities"
+                # Findings print their message and nothing else, so a
+                # remediation nobody reads is a remediation nobody runs.
+                f"{remediation}"
             ),
             "contradictions": total,
             "against_factor_series": against_factors,
@@ -1907,6 +1939,8 @@ def adj_factor_arbitration_findings(config: Config) -> list[dict]:
             "recorded_action_doubtful": silent_no,
             "missing_recorded_action": baseless_yes,
             "factor_step_without_basis": baseless_no,
+            "missing_recorded_action_reachable_dates": reachable,
+            "remediation": remediation,
         }
     ]
 

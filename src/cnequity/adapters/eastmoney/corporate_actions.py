@@ -30,7 +30,11 @@ _EX_DATE_COL = "EX_DIVIDEND_DATE"
 # start.  EastMoney's corporate-action report is documented in this project
 # as covering 2015-09-29 onward; keeping the implicit floor at 2016 silently
 # dropped the first available quarter from the optional audit artifact.
-_BACKFILL_FLOOR = date(2015, 9, 29)
+# The report itself reaches back to 1991, but only through the daily equality
+# filter. Paging the backfill that far costs a full-history walk, so the sweep
+# stops here; `--eastmoney-date-repair` is how a named older date is reached.
+EASTMONEY_BACKFILL_FLOOR = date(2015, 9, 29)
+_BACKFILL_FLOOR = EASTMONEY_BACKFILL_FLOOR
 _COLUMNS = (
     "SECURITY_CODE,SECUCODE,EX_DIVIDEND_DATE,EQUITY_RECORD_DATE,PRETAX_BONUS_RMB,"
     "BONUS_RATIO,IT_RATIO,BONUS_IT_RATIO,IMPL_PLAN_PROFILE,ASSIGN_PROGRESS"
