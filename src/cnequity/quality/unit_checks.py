@@ -134,6 +134,123 @@ def daily_bars_volume_unit_findings(
     return findings
 
 
+# A traded day's turnover divided by its share count is an average execution
+# price, so it has to sit inside that day's own range. One percent of slack
+# covers rounding in the published figures without admitting a real break.
+IMPLIED_PRICE_SLACK = 0.01
+
+# Per finding, not per row: 255 fund rows must not bury 8 stock ones.
+IMPLIED_PRICE_SAMPLE = 6
+
+
+def daily_bars_implied_price_findings(
+    config: Config,
+    trade_date: date,
+    *,
+    lookback_days: int = UNIT_CHECK_LOOKBACK_DAYS,
+) -> list[dict]:
+    """Rows whose own turnover, share count and range disagree.
+
+    `daily_bars_volume_unit_findings` takes a median per source, which is the
+    right shape for a source that rescaled every row and the wrong one for a
+    source that got a few rows wrong: the median stays at 1.0 and the broken
+    rows are invisible. This asks the question of each row on its own, and
+    needs no second source to answer it.
+
+    Measured over 2026-09-01..09-18: 255 of 16,949 ETF/LOF days and 8 of 77,324
+    stock days. 160806.SZ on 2026-09-11 is the shape of it — amount 2,825.6
+    agreeing to the cent with the minute stream, range 2.016..2.032, and volume
+    154,400, an implied 0.0183 per share. The cross-source check that did see
+    this read it as the *minute* data being wrong.
+    """
+    findings: list[dict] = []
+    root = config.curated_root / "daily_bars"
+    if not dataset_has_parquet(root):
+        return findings
+
+    start = trade_date - timedelta(days=lookback_days)
+    lf = dedupe_lazy_by_primary_key(
+        scan_parquet_root(root, partition_col="trade_date", start=start, end=trade_date),
+        "daily_bars",
+    )
+    cols = lf.collect_schema().names()
+    if not {"symbol", "trade_date", "volume", "amount", "low", "high", "source"}.issubset(cols):
+        return findings
+
+    broken = (
+        lf.filter(
+            (pl.col("volume") > 0)
+            & (pl.col("amount") > 0)
+            & (pl.col("low") > 0)
+            & (pl.col("high") >= pl.col("low"))
+        )
+        .with_columns((pl.col("amount") / pl.col("volume")).alias("_px"))
+        .filter(
+            (pl.col("_px") < pl.col("low") * (1 - IMPLIED_PRICE_SLACK))
+            | (pl.col("_px") > pl.col("high") * (1 + IMPLIED_PRICE_SLACK))
+        )
+        .select("symbol", "trade_date", "low", "high", "volume", "amount", "_px", "source")
+        .collect(engine="streaming")
+    )
+    if broken.is_empty():
+        return findings
+
+    instruments = _instrument_classes(config)
+    if instruments is not None:
+        broken = broken.join(instruments, on="symbol", how="left")
+    else:
+        broken = broken.with_columns(pl.lit(None, dtype=pl.Utf8).alias("asset_type"))
+    broken = broken.with_columns(pl.col("asset_type").fill_null("unknown"))
+
+    for asset_type in sorted(broken.get_column("asset_type").unique().to_list()):
+        rows = broken.filter(pl.col("asset_type") == asset_type).sort(
+            ["trade_date", "symbol"], descending=[True, False]
+        )
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "warning",
+                "check": "daily_bars_implied_price",
+                "message": (
+                    f"{rows.height} {asset_type} day(s) in "
+                    f"{start.isoformat()}..{trade_date.isoformat()} where amount/volume falls "
+                    "outside that day's own low..high, so the row disagrees with itself; "
+                    "turnover and price are corroborated by the minute stream where one "
+                    "exists, which leaves volume as the column to doubt"
+                ),
+                "asset_type": asset_type,
+                "rows": rows.height,
+                "sources": sorted(rows.get_column("source").unique().to_list()),
+                "window_start": start.isoformat(),
+                "window_end": trade_date.isoformat(),
+                "sample": [
+                    {
+                        "symbol": item["symbol"],
+                        "trade_date": item["trade_date"].isoformat(),
+                        "low": float(item["low"]),
+                        "high": float(item["high"]),
+                        "implied_price": round(float(item["_px"]), 4),
+                        "volume": int(item["volume"]),
+                        "source": item["source"],
+                    }
+                    for item in rows.head(IMPLIED_PRICE_SAMPLE).iter_rows(named=True)
+                ],
+            }
+        )
+    return findings
+
+
+def _instrument_classes(config: Config) -> pl.DataFrame | None:
+    """symbol -> asset_type, so one class's breakage cannot hide another's."""
+    root = config.curated_root / "instruments"
+    if not dataset_has_parquet(root):
+        return None
+    frame = scan_parquet_root(root).collect()
+    if not {"symbol", "asset_type"}.issubset(frame.columns):
+        return None
+    return frame.select("symbol", "asset_type").unique(subset=["symbol"], keep="last")
+
+
 def daily_bars_amount_completeness_findings(
     config: Config,
     trade_date: date,

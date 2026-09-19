@@ -52,6 +52,7 @@ from cnequity.quality.st_coverage import st_evidence_coverage_report
 from cnequity.quality.tick_checks import trade_ticks_findings
 from cnequity.quality.unit_checks import (
     daily_bars_amount_completeness_findings,
+    daily_bars_implied_price_findings,
     daily_bars_volume_unit_findings,
     valuation_ratio_unit_findings,
 )
@@ -461,6 +462,7 @@ def _collect_lake_findings(
     findings.extend(instrument_listing_order_findings(config))
     findings.extend(untraded_instrument_findings(config, trade_date))
     findings.extend(undeclared_source_findings(config))
+    findings.extend(daily_bars_implied_price_findings(config, trade_date))
     findings.extend(valuation_ratio_unit_findings(config, trade_date))
     findings.extend(balance_sheet_identity_findings(config))
     findings.extend(degraded_job_findings(config))

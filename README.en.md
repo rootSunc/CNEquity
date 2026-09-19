@@ -183,7 +183,7 @@ cne run daily --all-groups --config configs/cnequity.toml
 
 Run the first two commands consecutively on the same day. If resuming on another day, pass the same cutoff to `init --trade-date` and `backfill --end`, while retaining the 2016-01-01 start, so both commands address the same checkpoint.
 
-“Complete” does not mean unlimited history for all 42 datasets. `init` builds the reference/calendar, corporate actions, stock and index daily bars, trading status and derived-factor spine. Minute bars, 5-minute bars and ticks are off by default, while snapshot datasets cannot recreate history their sources do not expose. Use `cne backfill <dataset> --start ... --end ...` for an individually supported history; see the [dataset catalog](docs/datasets/catalog.md) for limits.
+“Complete” does not mean unlimited history for all 42 datasets: there is no single command that can fetch every dataset's entire history. `init` builds the reference/calendar, corporate actions, stock and index daily bars, trading status and derived-factor spine. Minute bars, 5-minute bars and ticks are off by default, while snapshot datasets cannot recreate history their sources do not expose. Use `cne backfill <dataset> --start ... --end ...` for an individually supported history; see the [dataset catalog](docs/datasets/catalog.md) for limits.
 
 `cne init` defaults to **shallow, never narrow**: the last 3 years, every symbol.
 Trimming symbols instead would build the survivorship bias this lake exists to
