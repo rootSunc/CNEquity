@@ -97,6 +97,20 @@ from cnequity.orchestrator.engine import JobEngine
     help="仅 corporate_actions：通过现行的 920xxx 东财代码修复北交所老代码。",
 )
 @click.option(
+    "--eastmoney-date-repair",
+    is_flag=True,
+    help=(
+        "仅 corporate_actions：按 --ex-dates 指定的除权日向东财逐日要历史除权行。"
+        "回补路径的主源是 TDX，东财只有日更的等值过滤能取到 2015-09-29 以前的行。"
+    ),
+)
+@click.option(
+    "--ex-dates",
+    "ex_dates_str",
+    default=None,
+    help="配合 --eastmoney-date-repair：逗号分隔的除权日 YYYY-MM-DD。",
+)
+@click.option(
     "--bse-tip-repair",
     is_flag=True,
     help="仅 daily_bars：用北交所官网补已有交易日的 BJ 成交额，不重抓 Sina。",
@@ -119,6 +133,8 @@ def backfill(
     baostock_repair: bool,
     ths_repair: bool,
     eastmoney_bj_repair: bool,
+    eastmoney_date_repair: bool,
+    ex_dates_str: str | None,
     bse_tip_repair: bool,
     bj_amount_repair: bool,
 ):
@@ -150,6 +166,10 @@ def backfill(
         raise click.ClickException("--ths-repair 只适用于 corporate_actions")
     if eastmoney_bj_repair and dataset != "corporate_actions":
         raise click.ClickException("--eastmoney-bj-repair 只适用于 corporate_actions")
+    if eastmoney_date_repair and dataset != "corporate_actions":
+        raise click.ClickException("--eastmoney-date-repair 只适用于 corporate_actions")
+    if ex_dates_str and not eastmoney_date_repair:
+        raise click.ClickException("--ex-dates 需要配合 --eastmoney-date-repair")
     if bse_tip_repair and dataset != "daily_bars":
         raise click.ClickException("--bse-tip-repair 只适用于 daily_bars")
     if bj_amount_repair and dataset != "daily_bars":
@@ -160,6 +180,12 @@ def backfill(
         cfg._corporate_actions_ths_repair = True
     if eastmoney_bj_repair:
         cfg._corporate_actions_eastmoney_bj_repair = True
+    if eastmoney_date_repair:
+        raw_dates = [d.strip() for d in (ex_dates_str or "").split(",") if d.strip()]
+        if not raw_dates:
+            raise click.ClickException("--eastmoney-date-repair 需要 --ex-dates")
+        seen = {parse_date_option(value, "--ex-dates") for value in raw_dates}
+        cfg._corporate_actions_eastmoney_date_repair = sorted(seen)
     if dataset == "sector_bars":
         if retry_failed and force:
             raise click.ClickException("--retry-failed 和 --force 只能用一个。")

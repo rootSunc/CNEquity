@@ -503,6 +503,17 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             or getattr(config, "_backfill_symbols", None)
             or load_symbols(config)
         )
+        if getattr(config, "_corporate_actions_eastmoney_date_repair", None) and not getattr(
+            config, "_backfill_symbols", None
+        ):
+            # The repair asks EastMoney for named ex-dates. Sweeping every
+            # symbol through TDX on the way would cost hours and answer a
+            # different question, so an unscoped date repair runs alone.
+            logger.info(
+                "corporate_actions: EastMoney date repair runs alone; "
+                "pass --symbols to also sweep TDX"
+            )
+            symbols = []
         batch_id = context.get("_batch_id")
         manifest = Manifest(config.manifest_path) if batch_id else None
 
@@ -856,6 +867,88 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                         symbols=repair_symbols,
                         window_start=repair_start.isoformat(),
                         window_end=repair_end.isoformat(),
+                        blocks_compaction=False,
+                    )
+                    manifest.finish_batch(
+                        run_id,
+                        repair_batch_id,
+                        "success",
+                        rows_read=repair_df.height,
+                        rows_written=repair_df.height,
+                    )
+                df = (
+                    repair_df
+                    if df.is_empty()
+                    else pl.concat([df, repair_df], how="diagonal_relaxed")
+                )
+        repair_dates = list(getattr(config, "_corporate_actions_eastmoney_date_repair", None) or [])
+        if repair_dates:
+            if not config.sources.get("eastmoney", False):
+                raise RuntimeError(
+                    "corporate_actions: --eastmoney-date-repair requires the eastmoney source"
+                )
+            repair_start = (
+                getattr(config, "_backfill_start", None) or CORPORATE_ACTIONS_BACKFILL_START
+            )
+            repair_end = getattr(config, "_backfill_end", None) or trade_date
+            outside = [d for d in repair_dates if d < repair_start or d > repair_end]
+            if outside:
+                raise RuntimeError(
+                    "corporate_actions: --ex-dates outside the backfill window "
+                    f"{repair_start.isoformat()}..{repair_end.isoformat()}: "
+                    + ", ".join(d.isoformat() for d in outside)
+                )
+            logger.info(
+                "corporate_actions: EastMoney date repair over %d ex-date(s)",
+                len(repair_dates),
+            )
+            for repair_date in repair_dates:
+                # One capture scope per date: `begin_capture` resets the bucket
+                # it is given, so a shared scope would leave the last date's
+                # receipt standing for all of them.
+                repair_scope = f"repair:eastmoney-date:{repair_date.isoformat()}"
+                repair_df = fetch_corporate_actions_eastmoney(
+                    repair_date,
+                    backfill=False,
+                    config=config,
+                    run_id=run_id,
+                    request_scope=repair_scope,
+                )
+                if repair_df.is_empty():
+                    continue
+                repair_df = with_provenance(repair_df, source="eastmoney", data_version="v1")
+                if manifest is not None:
+                    repair_batch_id = (
+                        f"{batch_id or 'batch-0'}-eastmoney-date-"
+                        f"{repair_date.isoformat().replace('-', '')}"
+                    )
+                    write_fetched(
+                        config,
+                        run_id,
+                        "corporate_actions",
+                        repair_df,
+                        source="eastmoney",
+                        batch_id=repair_batch_id,
+                        raw_archive_evidence=(
+                            verify_raw_archive(
+                                config,
+                                "corporate_actions",
+                                run_id,
+                                source="eastmoney",
+                                request_scope=repair_scope,
+                            )
+                            if config.should_archive_raw("corporate_actions")
+                            else None
+                        ),
+                    )
+                    manifest.start_batch(
+                        run_id,
+                        repair_batch_id,
+                        task_id="corporate_actions_eastmoney_date_repair",
+                        dataset="corporate_actions",
+                        symbols=sorted(repair_df.get_column("symbol").unique().to_list()),
+                        window_start=repair_date.isoformat(),
+                        window_end=repair_date.isoformat(),
                         blocks_compaction=False,
                     )
                     manifest.finish_batch(

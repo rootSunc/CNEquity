@@ -69,6 +69,15 @@
   一致。category 12「非流通股缩股」不动交易价，仍然排除；比例缺失或等于 1 的
   记录一律跳过，不替源头编比例。
 
+- **东财 2015 年以前的除权行终于够得着了。** 回补路径的主源是 TDX 逐标的 xdxr，
+  东财只当对端快照；而东财自己的报表其实回到 1991 年，只是回补下限
+  `2015-09-29` 把更早的挡在外面 —— 日更那条等值过滤 `EX_DIVIDEND_DATE='D'`
+  一直取得到。新增 `cne backfill corporate_actions --eastmoney-date-repair
+  --ex-dates D1,D2,...`：按指定除权日逐日取，每个日期一个 capture scope
+  （`begin_capture` 会重置所给的 scope，共用会让最后一天的回执替所有天背书）、
+  一个 batch、一份 provenance；不带 `--symbols` 时不跑 TDX 全市场扫描。实测补回
+  2001-2006 的 20 条现金分红，仲裁里的 `missing_recorded_action` 87 → 67。
+
 ## [0.10.0] — 2026-09-18
 
 覆盖与溯源。北交所成为一等公民；两处门禁不再因为错误的理由放行；四处每天都在
