@@ -105,31 +105,44 @@ def _unpublished_files(config: Config, dataset: str, store) -> list[Path]:
 
 
 def _publish(config: Config, touched: dict[str, list[Path]]) -> dict:
+    """Publish what the rewrite changed, and close the run either way.
+
+    The run was started here and never finished, so every apply sat open until
+    the reconciler swept it — three of them in a row read as
+    ``failed: worker exited without finish_run`` on a migration that had in
+    fact completed, and the dashboard had no way to tell that from a crash.
+    """
     from cnequity.domain.contracts import contract_fingerprint, dataset_contract
     from cnequity.orchestrator.manifest import Manifest
     from cnequity.storage.revisions import RevisionStore
 
-    run_id = Manifest(config.manifest_path).start_run("maintenance:bse_code_migration")
+    manifest = Manifest(config.manifest_path)
+    run_id = manifest.start_run("maintenance:bse_code_migration")
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
     published: dict = {}
-    for dataset in list(touched) or list(_SERIES_DATASETS) + ["instruments"]:
-        files = touched.get(dataset) or _unpublished_files(config, dataset, store)
-        if not files:
-            continue
-        contract = dataset_contract(dataset)
-        revision = store.commit(
-            dataset,
-            run_id=run_id,
-            changed_files=files,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
-            metadata={
-                "layer": "derived" if dataset in _DERIVED else "curated",
-                "reason": "bse_code_migration",
-            },
-        )
-        published[dataset] = None if revision is None else revision.revision
-        logger.info("%s: published revision %s", dataset, published[dataset])
+    try:
+        for dataset in list(touched) or list(_SERIES_DATASETS) + ["instruments"]:
+            files = touched.get(dataset) or _unpublished_files(config, dataset, store)
+            if not files:
+                continue
+            contract = dataset_contract(dataset)
+            revision = store.commit(
+                dataset,
+                run_id=run_id,
+                changed_files=files,
+                schema_version=int(contract["schema_version"]),
+                contract_fingerprint=contract_fingerprint(contract),
+                metadata={
+                    "layer": "derived" if dataset in _DERIVED else "curated",
+                    "reason": "bse_code_migration",
+                },
+            )
+            published[dataset] = None if revision is None else revision.revision
+            logger.info("%s: published revision %s", dataset, published[dataset])
+    except Exception as exc:
+        manifest.finish_run(run_id, "failed", error_message=str(exc))
+        raise
+    manifest.finish_run(run_id, "success")
     return published
 
 

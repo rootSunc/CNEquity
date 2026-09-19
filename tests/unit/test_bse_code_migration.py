@@ -209,3 +209,28 @@ def test_the_catalogue_and_the_ingest_ledger_forget_the_rename(cfg):
     assert list(catalog["delisted"]) == ["600000.SH"]
     ledger = json.loads((state / "delisted_ingested.json").read_text())
     assert ledger["completed"] == ["600000.SH"]
+
+
+def test_the_apply_closes_its_own_run(tmp_path, monkeypatch):
+    """An apply that finished must not read as a crash.
+
+    `_publish` started a run and never finished it, so the reconciler swept
+    every apply into `failed: worker exited without finish_run` — three in a
+    row on 2026-09-18, on a migration that had completed and published.
+    """
+    import sqlite3
+
+    from cnequity.config import Config
+    from cnequity.storage.bse_code_migration import migrate_bse_legacy_codes
+    from cnequity.storage.layout import init_data_layout
+
+    cfg = Config(data_root=tmp_path / "data")
+    init_data_layout(cfg)
+
+    migrate_bse_legacy_codes(cfg, apply=True)
+
+    con = sqlite3.connect(cfg.manifest_path)
+    rows = con.execute(
+        "select status from ingestion_runs where job_name = 'maintenance:bse_code_migration'"
+    ).fetchall()
+    assert rows == [("success",)]
