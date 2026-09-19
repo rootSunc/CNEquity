@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -9,6 +10,8 @@ from typing import Literal
 
 from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.domain.symbols import INGEST_UNIVERSES
+
+logger = logging.getLogger(__name__)
 
 try:
     import tomllib
@@ -120,9 +123,7 @@ class Config:
     # off until asked for explicitly. One flag for each, never one for both.
     ths_official_verify_enabled: bool = True
     ths_official_backfill_enabled: bool = False
-    universe_default: str = "all_a"
-    # Which instrument classes the *ingest* covers, independent of the
-    # query-side `universe_default`.  `instruments` lists every code TDX
+    # Which instrument classes the *ingest* covers.  `instruments` lists every code TDX
     # returns, a quarter of which are ETF/LOF/fund codes that no research
     # profile selects and that no configured vendor reliably serves.  Fetching
     # them costs a quarter of every sweep, trips the EastMoney and Sina circuit
@@ -751,6 +752,16 @@ def load_config(path: str | Path) -> Config:
     )
     derive_workers_raw = orch.get("derive_workers", derive_raw.get("workers"))
 
+    if "default" in raw.get("universe", {}):
+        # Parsed into `universe_default` for a long time and read by nothing:
+        # `load()` resolves its universe from the call and the profile, never
+        # from config. Keep loading the file — an operator who wrote this down
+        # is not wrong about wanting it, only about it working.
+        logger.warning(
+            "[universe].default is not read by anything and has no effect; "
+            "pass universe= (or universe_profile=) to load() instead"
+        )
+
     cfg = Config(
         data_root=data_root,
         lake_profile=str(lake_profile) if lake_profile else None,
@@ -800,7 +811,6 @@ def load_config(path: str | Path) -> Config:
         ths_official_timeout_sec=ths_official_timeout_sec,
         ths_official_verify_enabled=ths_official_verify_enabled,
         ths_official_backfill_enabled=ths_official_backfill_enabled,
-        universe_default=str(raw.get("universe", {}).get("default", "all_a")),
         ingest_universe=str(raw.get("universe", {}).get("ingest", "all_a")).strip().lower(),
         bj_history_lookback_days=int(
             raw.get("sources", {}).get("sina_bars", {}).get("reconciliation_lookback_days", 1)

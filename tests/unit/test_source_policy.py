@@ -159,3 +159,29 @@ def test_the_audit_no_longer_calls_a_declared_repair_source_unrouted(tmp_path):
     findings = undeclared_source_findings(Config(data_root=tmp_path))
 
     assert [f for f in findings if f["check"] == "unrouted_source"] == []
+
+
+def test_a_config_that_still_sets_the_dead_universe_default_keeps_loading(tmp_path, caplog):
+    """It was parsed for a long time and read by nothing.
+
+    `load()` resolves its universe from the call and the profile. Silently
+    accepting the key let an operator write down an intention the lake never
+    honoured, so it is dropped from the template and announced when present —
+    but an existing config must not stop loading over it.
+    """
+    import logging
+
+    from cnequity.config import load_config
+
+    path = tmp_path / "cnequity.toml"
+    path.write_text(
+        f'[data]\nroot = "{tmp_path / "lake"}"\n\n[universe]\ndefault = "all_a"\ningest = "all_a"\n',
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="cnequity.config.loader"):
+        cfg = load_config(str(path))
+
+    assert cfg.ingest_universe == "all_a"
+    assert not hasattr(cfg, "universe_default")
+    assert any("[universe].default" in record.message for record in caplog.records)

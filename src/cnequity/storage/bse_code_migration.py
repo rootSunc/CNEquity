@@ -360,6 +360,13 @@ def _apply_instruments(config: Config, mapping: dict[str, str]) -> tuple[dict, l
         if out.is_empty():
             path.unlink(missing_ok=True)
             _maybe_rmdir(path.parent)
+        elif out.equals(df):
+            # Reaching here only means the file holds current BJ codes, which
+            # it does on every run after the first. Rewriting it anyway gave
+            # the partition a new mtime, which `_publish` reads as work, so
+            # each no-op apply minted another revision (40 then 41, both with
+            # nothing to drop and nothing to record).
+            continue
         else:
             write_parquet_atomic(path, out, compression="zstd")
             changed.append(path)

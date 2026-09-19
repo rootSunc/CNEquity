@@ -83,7 +83,56 @@ def step_instruments(config: Config, trade_date: date, run_id: str, context: dic
     df = enrich_instrument_list_dates(config, df)
     if getattr(config, "_backfill", False):
         df = _merge_delisted_instruments(config, df)
+    df = _carry_lake_facts(config, df)
     return write_simple(config, run_id, "instruments", df)
+
+
+def _carry_lake_facts(config: Config, df: pl.DataFrame) -> pl.DataFrame:
+    """Keep the facts this lake knows and no vendor reports.
+
+    The catalogue is rebuilt from live sources every run, and none of them has
+    ever heard of `prev_symbol` — it is written by the BJ code migration, from
+    the lake's own old-code map. Compaction dedupes on `symbol` keeping the
+    newest row, so the fresh null won, and 246 of the 248 recorded renames were
+    erased on the next daily run: measured across the published revisions of
+    2026-09-18, 248 -> 2 -> 248, the last step being a manual re-run of the
+    migration. The rename lineage a survivorship-free universe depends on was
+    therefore true only on the days somebody re-ran it by hand.
+
+    Only fills nulls: a row that arrives carrying a rename is the authority on
+    it.
+    """
+    if "symbol" not in df.columns:
+        return df
+    existing = load_curated_instruments(config)
+    if existing is None or "prev_symbol" not in existing.columns:
+        return df
+    known = (
+        existing.select("symbol", pl.col("prev_symbol").alias("_prev_known"))
+        .filter(pl.col("_prev_known").is_not_null())
+        .unique(subset=["symbol"], keep="last")
+    )
+    if known.is_empty():
+        return df
+    if "prev_symbol" not in df.columns:
+        df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("prev_symbol"))
+    carried = (
+        df.join(known, on="symbol", how="left")
+        .with_columns(
+            pl.when(pl.col("prev_symbol").is_null())
+            .then(pl.col("_prev_known"))
+            .otherwise(pl.col("prev_symbol"))
+            .alias("prev_symbol")
+        )
+        .drop("_prev_known")
+    )
+    filled = (
+        carried.filter(pl.col("prev_symbol").is_not_null()).height
+        - df.filter(pl.col("prev_symbol").is_not_null()).height
+    )
+    if filled:
+        logger.info("instruments: carried %d recorded rename(s) forward", filled)
+    return carried
 
 
 def _merge_bse_instruments(config: Config, df: pl.DataFrame, trade_date: date) -> pl.DataFrame:

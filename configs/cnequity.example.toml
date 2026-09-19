@@ -390,8 +390,6 @@ max_payload_bytes = 33554432
 # datasets = ["announcement_index", "regulatory_events", "financial_statement_items", "corporate_actions"]
 
 [universe]
-# Query-side default for `load(..., universe=)`.
-default = "all_a"
 # Which instrument classes the daily fetch covers.  `instruments` lists every
 # code TDX returns and about a quarter are ETF/LOF/fund quote codes that no
 # research profile selects and that no configured vendor reliably serves —
