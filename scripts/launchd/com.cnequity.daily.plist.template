@@ -8,6 +8,17 @@
   <key>Label</key>
   <string>com.cnequity.daily</string>
 
+  <!-- launchd hands an agent the system default of 256 descriptors, and
+       compacting a dataset with thousands of day partitions exhausts that:
+       `trading_status` failed twice on 2026-09-18 with "Too many open files
+       (os error 24)". An interactive shell never sees it, which is why this
+       only ever fails on a schedule. -->
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+  </dict>
+
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>

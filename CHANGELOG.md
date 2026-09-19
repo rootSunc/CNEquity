@@ -110,6 +110,13 @@
   `supplementary_sources` 也接进 `DatasetPolicy.supplementary` —— 那八条恢复链路
   此前同样不在矩阵里。
 
+- **调度任务只有 256 个文件描述符。** launchd 给 agent 的是系统默认值，而
+  compact 一个上千个日分区的数据集会把它用光 —— `trading_status` 在 2026-09-18
+  两次因 `Too many open files (os error 24)` 失败。交互式 shell 里看不到这个问题
+  （那边是 1,048,576），所以它只在调度上炸。三个 plist 模板都加上
+  `SoftResourceLimits.NumberOfFiles = 8192`；重新生成用
+  `python scripts/scheduler_config.py`。
+
 ## [0.10.0] — 2026-09-18
 
 覆盖与溯源。北交所成为一等公民；两处门禁不再因为错误的理由放行；四处每天都在
