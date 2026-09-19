@@ -175,7 +175,8 @@ def test_a_config_that_still_sets_the_dead_universe_default_keeps_loading(tmp_pa
 
     path = tmp_path / "cnequity.toml"
     path.write_text(
-        f'[data]\nroot = "{tmp_path / "lake"}"\n\n[universe]\ndefault = "all_a"\ningest = "all_a"\n',
+        f'[data]\nroot = "{(tmp_path / "lake").as_posix()}"\n\n'
+        '[universe]\ndefault = "all_a"\ningest = "all_a"\n',
         encoding="utf-8",
     )
 
