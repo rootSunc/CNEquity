@@ -1061,6 +1061,14 @@ def st_evidence_supported_window(
     symbols = current_st_universe(config, universe=universe)
     by_source: dict[str, dict[str, str]] = {}
     intervals: list[tuple[date, date]] = []
+    # Finish the loop even after a source comes up empty. Returning at the
+    # first gap threw away the intervals already in hand, and `bse` sorts
+    # last: a lake holding a complete 349/349 BJ receipt was told
+    # "可背书窗口：无" with nothing said about BJ at all. The verdict is the
+    # same either way — every source has to back its own symbols — but
+    # "bse covers 09-17..09-18, baostock is ten names short" is a sentence an
+    # operator can act on.
+    missing: dict | None = None
     for source in ST_EVIDENCE_SOURCES:
         if source == BSE_ST_SOURCE:
             group = [] if _tushare_st_enabled(config) else _bj_symbols(symbols)
@@ -1068,7 +1076,8 @@ def st_evidence_supported_window(
                 continue
             window = bse_st_observed_window(config, group)
             if window is None:
-                return {"window": None, "by_source": by_source, "missing_source": source}
+                missing = missing or {"missing_source": source}
+                continue
             best = window
         else:
             group = st_evidence_source_symbols(symbols, source, config=config)
@@ -1106,15 +1115,16 @@ def st_evidence_supported_window(
                 if _receipt_rows_intact(config, receipt, scope, set(group)):
                     best = (scope_start, scope_end)
             if best is None:
-                return {
-                    "window": None,
-                    "by_source": by_source,
+                missing = missing or {
                     "missing_source": source,
                     "missing_symbols": nearest_short,
                     "current_symbols": len(group),
                 }
+                continue
         by_source[source] = {"start": best[0].isoformat(), "end": best[1].isoformat()}
         intervals.append(best)
+    if missing is not None:
+        return {"window": None, "by_source": by_source, **missing}
     if not intervals:
         return {"window": None, "by_source": by_source, "missing_source": None}
     window_start = max(item[0] for item in intervals)

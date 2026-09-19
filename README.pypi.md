@@ -47,6 +47,16 @@ cne init --config configs/cnequity.toml
 cne run daily --all-groups --config configs/cnequity.toml   # 之后每个交易日
 ```
 
+首次建湖的规模和耗时：
+
+| 命令 | 范围 | 参考耗时 |
+|---|---|---:|
+| `cne init` | 沪深京全市场（5,000+ 只）最近 3 年，不是 400 只 | 通常约 1 小时 |
+| `cne init --profile full` | 全市场初始化主干；日线从 2016-01-01 起 | 通常约 3 小时 |
+| `cne backfill trading_status` | 补完约 5,500 只证券的历史 ST 证据 | 整轮约 10–11 小时；同范围 init 后通常还需 9–10 小时 |
+
+`init` 中出现的 **400** 只限最慢的 Baostock 历史 ST 扫描，而且是 400 **只证券**、不是 400 条数据；日线等主干数据仍扫描全市场。该步骤会保存 checkpoint，`cne backfill trading_status` 自动取消上限；历史起止日和 universe 相同时才会接着同一 checkpoint 跑。要完成初始化主干和历史 ST，最好同一天依次运行 `cne init --profile full`、`cne backfill trading_status`；再用 `cne run daily --all-groups` 抓其余日更组。耗时受网络、上游限流和机器配置影响；分钟线/分笔默认关闭，快照型数据也没有可回补的完整历史。
+
 日更按**调度组**执行，一天 6 个：`core`、`capital`、`signals`、`fundamentals`、`macro_risk`、`research`。
 `--all-groups` 按配置顺序串行跑完全部组（某组失败不影响后面的组）。
 不带 `--group` / `--all-groups` 的 `cne run daily` 只跑 `[[job.daily.waves]]` 里的核心骨架（行情、日历、

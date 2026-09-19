@@ -205,3 +205,66 @@ def test_a_source_with_no_receipt_means_no_window_and_says_which(tmp_path):
 
     assert supported["window"] is None
     assert supported["missing_source"] == BSE_ST_SOURCE
+
+
+def test_every_source_interval_is_reported_even_when_one_cannot_back_its_symbols(tmp_path):
+    """A gap in one source must not hide the evidence the others hold.
+
+    The loop returned at the first source with no covering receipt, and `bse`
+    sorts last: a lake holding a complete 349/349 BJ receipt was told
+    "可背书窗口：无" with nothing said about BJ at all. The verdict is
+    unchanged — every source backs its own symbols or there is no window — but
+    naming what each one does cover is what makes it actionable.
+    """
+    from cnequity.quality.st_coverage import st_evidence_supported_window
+
+    cfg = _lake(tmp_path, answered={s: BJ for s in SESSIONS})
+    publish_bse_st_observation_receipt(cfg)
+    # A SH name with no baostock receipt anywhere: that source cannot answer.
+    # Appended beside the BJ rows rather than replacing them, and given a bar,
+    # because the universe is instruments seen trading.
+    pl.DataFrame(
+        [
+            {
+                "symbol": "600519.SH",
+                "name": "SH-600519",
+                "exchange": "SH",
+                "asset_type": "stock",
+                "list_date": date(2001, 8, 27),
+                "delist_date": None,
+                "prev_symbol": None,
+                "source": "tdx_protocol",
+                "data_version": "v1",
+                "fetched_at": FETCHED,
+            }
+        ]
+    ).write_parquet(cfg.curated_root / "instruments" / "part-1.parquet")
+    for session in SESSIONS:
+        pl.DataFrame(
+            [
+                {
+                    "symbol": "600519.SH",
+                    "trade_date": session,
+                    "open": 10.0,
+                    "high": 11.0,
+                    "low": 9.0,
+                    "close": 10.5,
+                    "volume": 1000,
+                    "amount": 10_500.0,
+                    "source": "tdx_protocol",
+                    "data_version": "v1",
+                    "fetched_at": FETCHED,
+                }
+            ]
+        ).write_parquet(
+            cfg.curated_root / "daily_bars" / f"trade_date={session.isoformat()}" / "part-1.parquet"
+        )
+
+    supported = st_evidence_supported_window(cfg, universe="all_a")
+
+    assert supported["window"] is None
+    assert supported["missing_source"] == "baostock"
+    assert supported["by_source"][BSE_ST_SOURCE] == {
+        "start": SESSIONS[0].isoformat(),
+        "end": SESSIONS[-1].isoformat(),
+    }

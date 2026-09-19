@@ -172,6 +172,35 @@ cne init                   # 全市场标的，默认回溯最近 3 年
 cne run daily --all-groups # 之后每个交易日执行（见下方「日常使用与运维」）
 ```
 
+### `init` 到底拉多少、要多久？
+
+先分清两个维度：**标的宽度**和**历史深度**。默认 `cne init` 是“全市场、近 3 年”，不是只拉 400 只；`--profile full` 仍是全市场，只是把初始化主干加深到各数据集自己的历史起点。
+
+| 命令 | 实际范围 | 参考耗时 |
+|---|---|---:|
+| `cne init --profile demo` | 5 只股票 × 最近约 30 个交易日，独立 demo 湖 | 几分钟 |
+| `cne init`（即 `--profile quick`） | 沪深京全市场（5,000+ 只）× 最近 3 年；初始化主干数据 | 通常约 1 小时 |
+| `cne init --profile full` | 沪深京全市场；初始化主干按各数据集默认起点拉取，日线从 2016-01-01 起 | 通常约 3 小时，约为 quick 的 3 倍 |
+| `cne backfill trading_status` | 补齐全市场历史 ST 证据；约 5,500 只 | 整轮约 10–11 小时；同范围 init 已扫 400 只后通常还需约 9–10 小时 |
+
+这些是实测量级，不是时限承诺。TDX/Baostock 可达性、出口位置、上游限流、重试次数和机器配置都会改变耗时；以命令打印的批次进度和 ETA 为准。默认/`full` 都是 GB 级。
+
+> **`init` 是不是只拉 400 只？不是。** 日线、证券列表等初始化主干仍扫描全市场。`400` 指的只是最慢的 **Baostock 历史 ST 状态**：首次 `init` 每次先扫 400 **只证券**（不是 400 条数据）就暂停，避免新用户在免费 API 的限速后面额外等待十小时。进度写入 checkpoint；显式运行 `cne backfill trading_status` 会自动取消 400 只上限。同一历史起止日和 universe 会从 checkpoint 继续；改变范围会开始一轮新的对应范围扫描。
+
+新湖要把“初始化主干 + 历史 ST”都拉到项目定义的完整范围，运行：
+
+```bash
+cne init --profile full --config configs/cnequity.toml
+cne backfill trading_status --config configs/cnequity.toml
+
+# 再抓其余日更组，并从此每个交易日执行
+cne run daily --all-groups --config configs/cnequity.toml
+```
+
+前两条最好同一天连续执行。若要跨天续跑，请给 `init --trade-date` 和 `backfill --end` 传同一个截止日，并保持 2016-01-01 起点不变，才能复用同一 checkpoint。
+
+这里的“完整”不是“42 个数据集都有无限历史”：`init` 负责证券、日历、公司行为、个股/指数日线、交易状态和派生因子等初始化主干；分钟线、5 分钟线和分笔默认关闭，快照型数据也无法回补源端没有提供的历史。需要某个可回补数据集的更早历史时，使用 `cne backfill <dataset> --start ... --end ...`；各数据集限制见[数据集目录](docs/datasets/catalog.md)。
+
 默认策略是“浅而不窄”：历史先取最近 3 年，但全市场标的一个不缺。这样不会因为只保留今天仍上市的股票，提前把幸存者偏差写进数据湖。每个数据集的真实起点会记录在 `coverage_start`。
 
 “全市场”含北交所：上市状态、停复牌与 ST 取自北交所自己的板块页，日线历史走 TDX，成交额由 TDX 补齐（Sina 从未发布过这一列）。默认 universe `all_a` 覆盖沪、深、京三市的 A 股。
@@ -185,7 +214,7 @@ cne init --profile full
 cne backfill daily_bars --start 2016-01-01 --end COVERAGE_START
 ```
 
-默认初始化通常是小时级、GB 级，实际取决于网络、数据源状态和机器配置。详细安装说明见[快速开始](docs/getting-started/quickstart.md)和[安装指南](docs/getting-started/installation.md)。
+默认初始化通常是小时级、GB 级；具体范围、耗时和 400 只历史 ST 上限见上表。详细安装说明见[快速开始](docs/getting-started/quickstart.md)和[安装指南](docs/getting-started/installation.md)。
 
 ## 数据范围
 
@@ -378,7 +407,7 @@ cne mcp --config "$(pwd)/configs/cnequity.toml"
 <details>
 <summary><b>初始化要多久、占多少磁盘？</b></summary>
 
-默认配置拉取全市场最近 3 年，通常约 1 小时、GB 级；`--profile full` 从 2016 年开始，实测约 3 倍时间。网络环境与数据源状态会影响结果。
+默认配置拉取全市场最近 3 年，通常约 1 小时、GB 级；`--profile full` 的日线从 2016 年开始，通常约 3 小时。两者都拉全市场，并非 400 只。400 只上限只属于初始化中的历史 ST 证据；要补完这部分，运行 `cne backfill trading_status`，全市场整轮约 10–11 小时。网络环境与数据源状态会影响结果，详见上方“`init` 到底拉多少、要多久？”表格。
 
 需要从 2001 年开始的日线：
 

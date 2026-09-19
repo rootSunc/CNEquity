@@ -156,6 +156,35 @@ cne init                   # every symbol × the last 3 years (~1 hour)
 cne run daily --all-groups # then once per trading day (see "Keeping it current")
 ```
 
+### How much does `init` fetch, and how long does it take?
+
+There are two separate dimensions: **market width** and **history depth**. The default is the whole market for three years, not 400 symbols. `--profile full` keeps the same market width and deepens the initialization spine to each dataset's own starting point.
+
+| Command | Actual scope | Typical time |
+|---|---|---:|
+| `cne init --profile demo` | 5 stocks × roughly 30 sessions, in a separate demo lake | A few minutes |
+| `cne init` (`--profile quick`) | Every Shanghai, Shenzhen and Beijing A-share (5,000+) × the last 3 years; initialization spine | About 1 hour |
+| `cne init --profile full` | The same whole market; the initialization spine from each dataset's default floor, with daily bars from 2016-01-01 | About 3 hours, roughly 3× quick |
+| `cne backfill trading_status` | Complete historical ST evidence across roughly 5,500 symbols | About 10–11 hours for the entire sweep; usually 9–10 hours remain after an init of the same scope |
+
+These are measured orders of magnitude, not deadlines. Network location, TDX/Baostock availability, upstream throttling, retries and machine configuration all matter; prefer the command's live batch progress and ETA. Both quick and full lakes are measured in GBs.
+
+> **Does `init` fetch only 400 symbols? No.** Daily bars, instruments and the rest of the initialization spine still scan the whole market. `400` applies only to the slowest **Baostock historical ST-status** sweep: one init run processes 400 **securities** (not 400 rows) and checkpoints the rest, instead of adding another ten hours behind the free API's deliberate pacing. `cne backfill trading_status` removes that cap automatically. It resumes a checkpoint with the same history dates and universe; changing the scope starts a new sweep for that scope.
+
+For a new lake, complete both the initialization spine and historical ST evidence with:
+
+```bash
+cne init --profile full --config configs/cnequity.toml
+cne backfill trading_status --config configs/cnequity.toml
+
+# Populate the other daily groups, then run this after every trading day
+cne run daily --all-groups --config configs/cnequity.toml
+```
+
+Run the first two commands consecutively on the same day. If resuming on another day, pass the same cutoff to `init --trade-date` and `backfill --end`, while retaining the 2016-01-01 start, so both commands address the same checkpoint.
+
+“Complete” does not mean unlimited history for all 42 datasets. `init` builds the reference/calendar, corporate actions, stock and index daily bars, trading status and derived-factor spine. Minute bars, 5-minute bars and ticks are off by default, while snapshot datasets cannot recreate history their sources do not expose. Use `cne backfill <dataset> --start ... --end ...` for an individually supported history; see the [dataset catalog](docs/datasets/catalog.md) for limits.
+
 `cne init` defaults to **shallow, never narrow**: the last 3 years, every symbol.
 Trimming symbols instead would build the survivorship bias this lake exists to
 avoid straight into it, whereas shallow is honest — `coverage_start` records it.
@@ -303,9 +332,11 @@ per dataset); the contract travels in the responses. Details:
 
 **Q: How long does `cne init` take, and how much disk?**
 The default (last 3 years, whole market) is about an hour and GBs.
-`--profile full` starts at **2016** and measured roughly 3x that. Both fetch the
-*full* cross-section — filtering symbols instead builds survivorship bias into
-the lake. Going shallower than 3 years buys little: once the window is short the
+`--profile full` starts daily bars at **2016** and usually takes about three
+hours. Both fetch the *full* cross-section — the 400-symbol cap applies only to
+historical ST evidence during init. Finish that checkpoint with
+`cne backfill trading_status`; the complete sweep takes about 10–11 hours.
+Going shallower than 3 years buys little: once the window is short the
 per-symbol round trip dominates, so 1 year and 3 years cost about the same
 while only one of them supports a multi-year factor window.
 
