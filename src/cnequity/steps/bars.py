@@ -4523,11 +4523,11 @@ def _certify_missing_segments(
     source-empty certification, yet part of its history may be genuinely
     unobtainable — a fund whose source retention starts mid-window is the
     common case. For each run of missing sessions bounded by the symbol's
-    real staged rows, ask the same two independent per-symbol sources
-    (EastMoney kline and Sina) to serve the span. Rows either source returns
-    for missing keys are staged first; only when both sources agree the
-    segment is empty are its keys certified and persisted as bounded negative
-    evidence, so the interior-gap gate and future runs can skip them.
+    real staged rows, ask the enabled per-symbol sources (EastMoney kline,
+    Sina, THS) to serve the span. Rows any source returns for missing keys
+    are staged first; only when two independent sources agree the segment is
+    empty are its keys certified and persisted as bounded negative evidence,
+    so the interior-gap gate and future runs can skip them.
     """
     import polars as pl
 
@@ -4540,8 +4540,9 @@ def _certify_missing_segments(
         return set(), 0, 0
     em_enabled = spec is not None and config.sources.get(spec.backup, True)
     sina_enabled = config.sources.get("sina", True)
-    if not (em_enabled and sina_enabled):
-        # Two-source agreement needs both voters; with one enabled source a
+    ths_enabled = config.sources.get("ths", True)
+    if sum((em_enabled, sina_enabled, ths_enabled)) < 2:
+        # Two-source agreement needs two voters; with fewer enabled sources a
         # probe could never certify, so it would only burn requests.
         return set(), 0, 0
 
@@ -4575,70 +4576,85 @@ def _certify_missing_segments(
             } & missing
             if not wanted:
                 continue
-            east_empty = False
+            empty_votes: set[str] = set()
             diagnostics: dict = {}
-            df = fetch_em_kline(
-                [symbol],
-                seg_start,
-                seg_end,
-                config=config,
-                timeout_sec=8.0,
-                diagnostics=diagnostics,
-            )
-            rows_read += df.height
-            east_empty = symbol in (diagnostics.get("empty_symbols") or [])
-            if not df.is_empty():
-                gap_df = df.join(
-                    pl.DataFrame(
-                        {
-                            "symbol": [s for s, _day in sorted(wanted)],
-                            "trade_date": [day for _s, day in sorted(wanted)],
-                        },
-                        schema={"symbol": pl.Utf8, "trade_date": pl.Date},
-                    ),
-                    on=["symbol", "trade_date"],
-                    how="inner",
+            if em_enabled:
+                df = fetch_em_kline(
+                    [symbol],
+                    seg_start,
+                    seg_end,
+                    config=config,
+                    timeout_sec=8.0,
+                    diagnostics=diagnostics,
                 )
-                snapshot = with_provenance(
-                    df,
-                    source=spec.backup,
-                    data_version=data_version_for("daily_bars"),
-                )
-                write_backup_snapshot(
+                rows_read += df.height
+                if symbol in (diagnostics.get("empty_symbols") or []):
+                    empty_votes.add("eastmoney")
+                if not df.is_empty():
+                    gap_df = df.join(
+                        pl.DataFrame(
+                            {
+                                "symbol": [s for s, _day in sorted(wanted)],
+                                "trade_date": [day for _s, day in sorted(wanted)],
+                            },
+                            schema={"symbol": pl.Utf8, "trade_date": pl.Date},
+                        ),
+                        on=["symbol", "trade_date"],
+                        how="inner",
+                    )
+                    snapshot = with_provenance(
+                        df,
+                        source=spec.backup,
+                        data_version=data_version_for("daily_bars"),
+                    )
+                    write_backup_snapshot(
+                        config,
+                        "daily_bars",
+                        snapshot,
+                        run_id=run_id,
+                        batch_id="em-kline-segment-gapfill",
+                        source=spec.backup,
+                        trade_date=seg_end,
+                    )
+                    rows_written += _stage_daily_gap_batch(
+                        config,
+                        run_id,
+                        batch_id="em-kline-segment-gapfill",
+                        source=spec.backup,
+                        frame=gap_df,
+                        symbols=[symbol],
+                        start=seg_start,
+                        end=seg_end,
+                    )
+            if sina_enabled:
+                sina_res = fetch_bars_via_sina(
                     config,
-                    "daily_bars",
-                    snapshot,
-                    run_id=run_id,
-                    batch_id="em-kline-segment-gapfill",
-                    source=spec.backup,
-                    trade_date=seg_end,
+                    [symbol],
+                    seg_start,
+                    seg_end,
+                    run_id,
+                    batch_prefix="sina-kline-segment-gapfill",
                 )
-                rows_written += _stage_daily_gap_batch(
+                rows_read += int(sina_res.get("rows_read", 0))
+                rows_written += int(sina_res.get("rows_written", 0))
+                findings.extend((sina_res.get("context_updates") or {}).get("audit_findings") or [])
+                if symbol in (sina_res.get("empty_symbol_names") or []):
+                    empty_votes.add("sina")
+            if len(empty_votes) < 2 and ths_enabled:
+                ths_res = _gapfill_missing_keys_via_ths(
                     config,
                     run_id,
-                    batch_id="em-kline-segment-gapfill",
-                    source=spec.backup,
-                    frame=gap_df,
-                    symbols=[symbol],
+                    missing_keys=wanted,
                     start=seg_start,
                     end=seg_end,
                 )
-            if not east_empty:
-                continue  # EastMoney served (or failed) — no certification vote
-            sina_res = fetch_bars_via_sina(
-                config,
-                [symbol],
-                seg_start,
-                seg_end,
-                run_id,
-                batch_prefix="sina-kline-segment-gapfill",
-            )
-            rows_read += int(sina_res.get("rows_read", 0))
-            rows_written += int(sina_res.get("rows_written", 0))
-            findings.extend((sina_res.get("context_updates") or {}).get("audit_findings") or [])
-            sina_empty = symbol in (sina_res.get("empty_symbol_names") or [])
+                rows_read += int(ths_res.get("rows_read", 0))
+                rows_written += int(ths_res.get("rows_written", 0))
+                findings.extend(ths_res.get("audit_findings") or [])
+                if symbol in (ths_res.get("empty_symbols") or []):
+                    empty_votes.add("ths")
             still_missing = wanted & missing_keys_fn()
-            if sina_empty and still_missing:
+            if len(empty_votes) >= 2 and still_missing:
                 certified |= still_missing
                 record_negative_evidence(
                     config,
@@ -4654,6 +4670,7 @@ def _certify_missing_segments(
                         "symbol": symbol,
                         "segment": [seg_start.isoformat(), seg_end.isoformat()],
                         "keys": len(still_missing),
+                        "sources": sorted(empty_votes),
                     }
                 )
 
@@ -4665,8 +4682,8 @@ def _certify_missing_segments(
                 "check": "daily_bars_segment_no_data",
                 "message": (
                     f"certified {len(certified)} missing key(s) across "
-                    f"{len(segments_log)} segment(s) after EastMoney and Sina "
-                    "both returned empty for each segment"
+                    f"{len(segments_log)} segment(s) after two independent "
+                    "sources returned empty for each segment"
                 ),
                 "segments": segments_log[:20],
             }

@@ -2162,3 +2162,59 @@ def test_missing_key_gate_skips_negative_evidence_keys(tmp_path):
     keys = _staged_daily_bar_missing_keys(cfg, run_id, ["600519.SH"], start, missing_day)
 
     assert keys == set()
+
+
+def test_segment_certification_survives_em_transport_failure(tmp_path, monkeypatch):
+    """EastMoney transport failure must not block certification when Sina and
+    THS both vote empty — the vote needs two independent sources, not two
+    specific sources (em push2his outage is the common real-world case)."""
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    start = date(2026, 7, 20)
+    tail = date(2026, 7, 22)
+    StagingWriter(cfg.staging_root).write_batch(
+        "daily_bars", run_id, "tdx-0000", _bar_frame(["161022.SZ"], tail)
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.fetch_bars_via_sina",
+        lambda *args, **kwargs: {
+            "rows_read": 0,
+            "rows_written": 0,
+            "failed_symbol_names": [],
+            "empty_symbol_names": ["161022.SZ"],
+        },
+    )
+
+    def em_down(symbols, start, end, *, diagnostics, **kwargs):
+        diagnostics.update(
+            {
+                "failed_symbols": {s: "transport_error" for s in symbols},
+                "empty_symbols": [],
+                "route_outcomes": {},
+            }
+        )
+        return pl.DataFrame()
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", em_down)
+    monkeypatch.setattr(
+        "cnequity.steps.bars._gapfill_missing_keys_via_ths",
+        lambda config, run_id, *, missing_keys, start, end: {
+            "rows_read": 0,
+            "rows_written": 0,
+            "audit_findings": [],
+            "empty_symbols": [s for s, _day in missing_keys],
+        },
+    )
+
+    result = _gapfill_multiday_via_kline(
+        cfg,
+        run_id,
+        symbols=["161022.SZ"],
+        start=start,
+        end=tail,
+    )
+
+    assert result["complete"] is True
+    keys = {tuple(k) for k in result["expected_no_data_keys"]}
+    assert keys == {("161022.SZ", start), ("161022.SZ", date(2026, 7, 21))}
