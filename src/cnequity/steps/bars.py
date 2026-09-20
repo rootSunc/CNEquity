@@ -4541,7 +4541,11 @@ def _certify_missing_segments(
     em_enabled = spec is not None and config.sources.get(spec.backup, True)
     sina_enabled = config.sources.get("sina", True)
     ths_enabled = config.sources.get("ths", True)
-    if sum((em_enabled, sina_enabled, ths_enabled)) < 2:
+    # A config that never declared per-symbol sources has no certain voters
+    # (unconfigured keys default to enabled at read time, but nothing was
+    # actually set up to serve them) — and tests build exactly such configs.
+    # Probing would only make live network calls that the run never asked for.
+    if not config.sources or sum((em_enabled, sina_enabled, ths_enabled)) < 2:
         # Two-source agreement needs two voters; with fewer enabled sources a
         # probe could never certify, so it would only burn requests.
         return set(), 0, 0
