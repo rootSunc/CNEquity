@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -195,6 +196,41 @@ def _write_json(path: Path, payload: Mapping[str, object]) -> None:
         raise
 
 
+def _windows_pid_alive(pid: int) -> bool:
+    """Liveness probe for a foreign pid on Windows.
+
+    ``os.kill(pid, 0)`` is a POSIX idiom that does not translate: on Windows
+    any signal other than the CTRL events is handled by ``TerminateProcess``,
+    so it is not a probe at all, and a dead pid surfaces as a plain ``OSError``
+    (WinError 87) that the caller cannot tell apart from "not allowed to
+    inspect". Open the process for querying instead and read its exit code.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    ERROR_INVALID_PARAMETER = 87
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # WinError 87: no process with this pid exists. Anything else
+        # (access denied on a protected process) — assume alive.
+        return ctypes.get_last_error() != ERROR_INVALID_PARAMETER
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _owner_is_alive(lease: Mapping[str, object]) -> bool:
     """Best-effort stale lease detection for crashed processes/threads."""
     try:
@@ -208,6 +244,8 @@ def _owner_is_alive(lease: Mapping[str, object]) -> bool:
         # A failed request must release in ``finally``; this check is only a
         # recovery path for a thread that was killed without unwinding.
         return any(item.ident == thread_id and item.is_alive() for item in threading.enumerate())
+    if sys.platform == "win32":
+        return _windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

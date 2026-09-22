@@ -353,3 +353,43 @@ def test_source_concurrency_is_cross_process_for_slow_requests(tmp_path):
     # delay * 0.8 = 0.064, which is still several times a no-op acquire.
     assert elapsed >= delay * 1.6
     assert max(entered - started for started, entered in entries) >= delay * 0.3
+
+
+def test_dead_process_lease_is_reclaimed(tmp_path):
+    """A lease held by a terminated process must not wedge the source forever.
+
+    Regression: on Windows ``os.kill(pid, 0)`` raises plain ``OSError``
+    (WinError 87) for a dead pid — not ``ProcessLookupError`` — so the
+    liveness check read that as "cannot inspect, assume alive" and every
+    stale lease stayed alive forever, permanently exhausting the
+    tdx_protocol cap and wedging every later run's first TDX request.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait(timeout=30)
+    dead = proc.pid
+
+    state_dir = tmp_path / "rate_limits"
+    ledger = {
+        "version": 1,
+        "limit": 1,
+        "leases": [
+            {
+                "token": "abandoned-lease",
+                "pid": dead,
+                "thread_id": 1,
+                "created_at": time.time() - 60,
+            }
+        ],
+    }
+    state_dir.mkdir(parents=True)
+    (state_dir / "concurrency-tdx_protocol.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    limiter = SourceConcurrencyLimiter("tdx_protocol", 1, state_dir)
+    started = time.perf_counter()
+    with limiter.slot(timeout=10.0):
+        # Reclaiming is a metadata edit; if it did not happen instantly the
+        # slot was blocked behind the dead owner.
+        assert time.perf_counter() - started < 5.0

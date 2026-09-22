@@ -53,6 +53,7 @@ from cnequity.steps.common import (
     load_curated_trading_status,
     load_negative_evidence,
     load_symbols,
+    negative_evidence_covers,
     record_negative_evidence,
 )
 from cnequity.storage.state import StateStore
@@ -2366,6 +2367,17 @@ def _staged_daily_bar_missing_keys(
         learned["keys"] if isinstance(learned, dict) and learned.get("keys") else set()
     )
     observed = staged.group_by("symbol").agg(pl.col("trade_date").unique().alias("dates"))
+    # Live negative evidence is the same class of independently inspectable
+    # fact as an explicit non-trading status row: a key covered by a bounded,
+    # identity-matched source-empty proof is certified absent, not missing.
+    # Without this, bootstrap init can never pass the gate — the records are
+    # written after the gate's split, so an uncertified deadlock would repeat
+    # on every resume.
+    evidence_by_symbol: dict[str, list[dict]] = {}
+    for item in load_negative_evidence(config, "daily_bars"):
+        evidence_by_symbol.setdefault(
+            str(item.get("symbol", "")).strip().upper(), []
+        ).append(item)
     for row in observed.iter_rows(named=True):
         span = metadata.get(row["symbol"], (None, None, None))
         list_date, delist_date = span[:2]
@@ -2377,6 +2389,10 @@ def _staged_daily_bar_missing_keys(
             for day in expected - set(row["dates"])
             if status_by_symbol.get(row["symbol"], {}).get(day) is not False
             and (row["symbol"], day) not in learned_suspensions
+            and not any(
+                negative_evidence_covers(item, row["symbol"], day, day)
+                for item in evidence_by_symbol.get(row["symbol"], ())
+            )
         )
     # A symbol with no rows at all is handled by the explicit no-data/unknown
     # classifier.  This helper is specifically the interior partial-evidence
@@ -3219,9 +3235,18 @@ def _gapfill_multiday_via_kline(
     writer = StagingWriter(config.staging_root)
 
     def staged_keys() -> set[tuple[str, date]]:
+        return staged_key_volume_sets()[0]
+
+    def staged_key_volume_sets() -> tuple[set[tuple[str, date]], set[tuple[str, date]]]:
+        """(all staged keys, keys with positive volume).
+
+        A zero-volume pre-open placeholder is explicitly *not* evidence that a
+        symbol ever traded (see ``load_bar_universe``); certification must not
+        treat a dead fund's own tip placeholder as proof of life.
+        """
         files = writer.list_run_files("daily_bars", run_id)
         if not files:
-            return set()
+            return set(), set()
         keys = (
             pl.scan_parquet([str(path) for path in files])
             .filter(
@@ -3229,11 +3254,18 @@ def _gapfill_multiday_via_kline(
                 & (pl.col("trade_date") <= end)
                 & pl.col("symbol").is_in(requested)
             )
-            .select("symbol", "trade_date")
+            .select("symbol", "trade_date", "volume")
             .unique()
             .collect()
         )
-        return set(zip(keys["symbol"].to_list(), keys["trade_date"].to_list(), strict=True))
+        all_keys = set(
+            zip(keys["symbol"].to_list(), keys["trade_date"].to_list(), strict=True)
+        )
+        positive = keys.filter(pl.col("volume") > 0)
+        real_keys = set(
+            zip(positive["symbol"].to_list(), positive["trade_date"].to_list(), strict=True)
+        )
+        return all_keys, real_keys
 
     def missing_keys() -> set[tuple[str, date]]:
         return expected_keys - staged_keys()
@@ -3455,13 +3487,16 @@ def _gapfill_multiday_via_kline(
                 }
             )
     remaining = missing_keys()
-    observed = staged_keys()
+    observed, real_keys = staged_key_volume_sets()
+    # Two independent per-symbol sources agreed the window is empty, and the
+    # symbol carries no positive-volume staged row in it (placeholders are not
+    # trade evidence). That certifies the whole symbol as source-empty; a
+    # staged placeholder on some days no longer disqualifies the claim.
     expected_no_data = {
         symbol
         for symbol, sources in empty_evidence.items()
         if len(sources) >= 2
-        and not any(key[0] == symbol for key in observed)
-        and all((symbol, session) in remaining for session in sessions)
+        and not any((symbol, session) in real_keys for session in sessions)
     }
     # A vendor saying "suspended on every session you asked about" is not the
     # same claim as two vendors independently returning nothing: the first is a
@@ -3496,6 +3531,27 @@ def _gapfill_multiday_via_kline(
                 "symbols": sorted(positively_halted),
             }
         )
+    # Symbols with real staged rows (partial histories — e.g. funds whose
+    # source retention starts mid-window) can never satisfy the symbol-level
+    # rule above. Certify their missing keys per segment through the same
+    # two-source agreement instead of leaving them unresolved forever.
+    real_symbols = {symbol for symbol, _day in real_keys}
+    segment_missing = {
+        key for key in remaining if key[0] in real_symbols and key[0] not in expected_no_data
+    }
+    segment_certified, seg_rows_read, seg_rows_written = _certify_missing_segments(
+        config,
+        run_id,
+        segment_missing,
+        real_keys=real_keys,
+        sessions=sessions,
+        spec=spec,
+        findings=findings,
+        missing_keys_fn=missing_keys,
+    )
+    rows_read += seg_rows_read
+    rows_written += seg_rows_written
+    remaining = missing_keys() - segment_certified
     unresolved = {key for key in remaining if key[0] not in expected_no_data}
     if multi_source_no_data:
         # Only the symbols this rule actually certified. A halted name reaches
@@ -3539,9 +3595,10 @@ def _gapfill_multiday_via_kline(
     return {
         "rows_read": rows_read,
         "rows_written": rows_written,
-        "filled": bool(rows_written) or bool(expected_no_data),
+        "filled": bool(rows_written) or bool(expected_no_data) or bool(segment_certified),
         "complete": not unresolved,
         "expected_no_data_symbols": sorted(expected_no_data),
+        "expected_no_data_keys": sorted(segment_certified),
         "audit_findings": findings,
         "source_outcomes": source_outcomes,
         "missing_keys": len(unresolved),
@@ -3554,6 +3611,195 @@ def _gapfill_multiday_via_kline(
 # early — 2026-07-22 arrived that way from a pre-open run. Below this share it is
 # suspensions; at or above it, it is a mis-timed capture.
 _PLACEHOLDER_SHARE_LIMIT = 0.5
+
+
+def _certify_missing_segments(
+    config: Config,
+    run_id: str,
+    missing: set[tuple[str, date]],
+    *,
+    real_keys: set[tuple[str, date]],
+    sessions: list[date],
+    spec,
+    findings: list[dict],
+    missing_keys_fn,
+) -> tuple[set[tuple[str, date]], int, int]:
+    """Certify missing keys of partially-staged symbols per missing segment.
+
+    A symbol with real staged rows can never qualify for symbol-level
+    source-empty certification, yet part of its history may be genuinely
+    unobtainable — a fund whose source retention starts mid-window is the
+    common case. For each run of missing sessions bounded by the symbol's
+    real staged rows, ask the enabled per-symbol sources (EastMoney kline,
+    Sina, THS) to serve the span. Rows any source returns for missing keys
+    are staged first; only when two independent sources agree the segment is
+    empty are its keys certified and persisted as bounded negative evidence,
+    so the interior-gap gate and future runs can skip them.
+    """
+    import polars as pl
+
+    from cnequity.adapters.eastmoney.bars import fetch_daily_bars as fetch_em_kline
+    from cnequity.domain.schemas import data_version_for, with_provenance
+    from cnequity.quality.failover import write_backup_snapshot
+    from cnequity.storage import StagingWriter
+
+    if not missing or not sessions:
+        return set(), 0, 0
+    em_enabled = spec is not None and config.sources.get(spec.backup, True)
+    sina_enabled = config.sources.get("sina", True)
+    ths_enabled = config.sources.get("ths", True)
+    # A config that never declared per-symbol sources has no certain voters
+    # (unconfigured keys default to enabled at read time, but nothing was
+    # actually set up to serve them) — and tests build exactly such configs.
+    # Probing would only make live network calls that the run never asked for.
+    if not config.sources or sum((em_enabled, sina_enabled, ths_enabled)) < 2:
+        # Two-source agreement needs two voters; with fewer enabled sources a
+        # probe could never certify, so it would only burn requests.
+        return set(), 0, 0
+
+    real_dates: dict[str, set[date]] = {}
+    for symbol, day in real_keys:
+        real_dates.setdefault(symbol, set()).add(day)
+    missing_by_symbol: dict[str, list[date]] = {}
+    for symbol, day in missing:
+        missing_by_symbol.setdefault(symbol, []).append(day)
+
+    rows_read = 0
+    rows_written = 0
+    certified: set[tuple[str, date]] = set()
+    segments_log: list[dict] = []
+
+    for symbol in sorted(missing_by_symbol):
+        sym_days = sorted(missing_by_symbol[symbol])
+        sym_real = real_dates.get(symbol, set())
+        # Contiguous missing runs: a run breaks where a real staged row sits.
+        groups: list[list[date]] = [[sym_days[0]]]
+        for prev, day in zip(sym_days, sym_days[1:], strict=False):
+            if any(prev < gap_day < day for gap_day in sym_real):
+                groups.append([day])
+            else:
+                groups[-1].append(day)
+
+        for seg_days in groups:
+            seg_start, seg_end = seg_days[0], seg_days[-1]
+            wanted = {
+                (symbol, day) for day in sessions if seg_start <= day <= seg_end
+            } & missing
+            if not wanted:
+                continue
+            empty_votes: set[str] = set()
+            diagnostics: dict = {}
+            if em_enabled:
+                df = fetch_em_kline(
+                    [symbol],
+                    seg_start,
+                    seg_end,
+                    config=config,
+                    timeout_sec=8.0,
+                    diagnostics=diagnostics,
+                )
+                rows_read += df.height
+                if symbol in (diagnostics.get("empty_symbols") or []):
+                    empty_votes.add("eastmoney")
+                if not df.is_empty():
+                    gap_df = df.join(
+                        pl.DataFrame(
+                            {
+                                "symbol": [s for s, _day in sorted(wanted)],
+                                "trade_date": [day for _s, day in sorted(wanted)],
+                            },
+                            schema={"symbol": pl.Utf8, "trade_date": pl.Date},
+                        ),
+                        on=["symbol", "trade_date"],
+                        how="inner",
+                    )
+                    snapshot = with_provenance(
+                        df,
+                        source=spec.backup,
+                        data_version=data_version_for("daily_bars"),
+                    )
+                    write_backup_snapshot(
+                        config,
+                        "daily_bars",
+                        snapshot,
+                        run_id=run_id,
+                        batch_id="em-kline-segment-gapfill",
+                        source=spec.backup,
+                        trade_date=seg_end,
+                    )
+                    rows_written += _stage_daily_gap_batch(
+                        config,
+                        run_id,
+                        batch_id="em-kline-segment-gapfill",
+                        source=spec.backup,
+                        frame=gap_df,
+                        symbols=[symbol],
+                        start=seg_start,
+                        end=seg_end,
+                    )
+            if sina_enabled:
+                sina_res = fetch_bars_via_sina(
+                    config,
+                    [symbol],
+                    seg_start,
+                    seg_end,
+                    run_id,
+                    batch_prefix="sina-kline-segment-gapfill",
+                )
+                rows_read += int(sina_res.get("rows_read", 0))
+                rows_written += int(sina_res.get("rows_written", 0))
+                findings.extend((sina_res.get("context_updates") or {}).get("audit_findings") or [])
+                if symbol in (sina_res.get("empty_symbol_names") or []):
+                    empty_votes.add("sina")
+            if len(empty_votes) < 2 and ths_enabled:
+                ths_res = _gapfill_missing_keys_via_ths(
+                    config,
+                    run_id,
+                    missing_keys=wanted,
+                    start=seg_start,
+                    end=seg_end,
+                )
+                rows_read += int(ths_res.get("rows_read", 0))
+                rows_written += int(ths_res.get("rows_written", 0))
+                findings.extend(ths_res.get("audit_findings") or [])
+                if symbol in (ths_res.get("empty_symbols") or []):
+                    empty_votes.add("ths")
+            still_missing = wanted & missing_keys_fn()
+            if len(empty_votes) >= 2 and still_missing:
+                certified |= still_missing
+                record_negative_evidence(
+                    config,
+                    "daily_bars",
+                    {symbol},
+                    seg_start,
+                    seg_end,
+                    reason="source_empty",
+                    source="multi_source_gapfill",
+                )
+                segments_log.append(
+                    {
+                        "symbol": symbol,
+                        "segment": [seg_start.isoformat(), seg_end.isoformat()],
+                        "keys": len(still_missing),
+                        "sources": sorted(empty_votes),
+                    }
+                )
+
+    if certified:
+        findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "info",
+                "check": "daily_bars_segment_no_data",
+                "message": (
+                    f"certified {len(certified)} missing key(s) across "
+                    f"{len(segments_log)} segment(s) after two independent "
+                    "sources returned empty for each segment"
+                ),
+                "segments": segments_log[:20],
+            }
+        )
+    return certified, rows_read, rows_written
 
 
 def _reject_preopen_placeholder(config: Config, run_id: str, trade_date: date) -> None:
