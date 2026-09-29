@@ -146,6 +146,32 @@ def test_an_unknown_symbol_is_owed_the_whole_window(monkeypatch):
     assert owed == {("MYSTERY.SZ", d) for d in sessions}
 
 
+class _Store:
+    def get_outstanding_keys(self, dataset):
+        return [
+            {
+                "symbol": "000001.SZ",
+                "trade_date": "2026-01-05",
+                "attempts": 10,
+                "last_attempt_at": "2026-01-06T00:00:00+00:00",
+            },
+            {
+                "symbol": "600519.SH",
+                "trade_date": "2026-02-09",
+                "attempts": 1,
+            },
+        ]
+
+
+class _ExistingStore:
+    def get_outstanding_keys(self, dataset):
+        return [
+            {"symbol": "000001.SZ", "trade_date": "2026-01-05"},
+            {"symbol": "600519.SH", "trade_date": "2026-02-09"},
+            {"symbol": "600519.SH", "trade_date": "2026-03-09"},
+        ]
+
+
 def test_a_repair_settles_after_every_pass(tmp_path, monkeypatch):
     """An interrupted repair must keep what it already filled.
 
@@ -167,23 +193,7 @@ def test_a_repair_settles_after_every_pass(tmp_path, monkeypatch):
         "_settle_outstanding",
         lambda cfg, ds, **kwargs: settled.append(len(passes)) or {"filled": 1, "still_owed": 0},
     )
-    monkeypatch.setattr(
-        bf,
-        "StateStore",
-        None,
-        raising=False,
-    )
-
-    class _Store:
-        def get_outstanding_keys(self, dataset):
-            return [
-                {"symbol": "000001.SZ", "trade_date": "2026-01-05"},
-                {"symbol": "600519.SH", "trade_date": "2026-02-09"},
-                {"symbol": "600519.SH", "trade_date": "2026-03-09"},
-            ]
-
-    monkeypatch.setattr("cnequity.storage.state.StateStore", lambda root: _Store())
-
+    monkeypatch.setattr("cnequity.storage.state.StateStore", lambda root: _ExistingStore())
     cfg = type("C", (), {"meta_root": tmp_path, "_backfill_symbols": None})()
     bf._repair_outstanding(cfg, "daily_bars", 1)
 
@@ -237,3 +247,69 @@ def test_reconcile_does_not_count_a_missing_key_as_a_repair_attempt(tmp_path):
 
     assert _settle_outstanding(cfg, "daily_bars", note_missing_attempt=False)["still_owed"] == 1
     assert "attempts" not in store.get_outstanding_keys("daily_bars")[0]
+
+
+
+
+def test_a_repair_parks_keys_after_the_attempt_limit(tmp_path, monkeypatch):
+    """A key no vendor has served for many runs must stop consuming passes.
+
+    Parking is not forgetting: the row stays in the ledger and the result
+    names it, but a nightly repair stops paying EastMoney/Baostock to answer
+    the same empty response forever.
+    """
+    from cnequity.cli import backfill_cmds as bf
+
+    passes: list[str] = []
+    monkeypatch.setattr(
+        bf, "_backfill_once", lambda cfg, ds: passes.append(ds) or {"status": "success"}
+    )
+    monkeypatch.setattr(
+        bf, "_settle_outstanding", lambda cfg, ds, **kwargs: {"filled": 0, "still_owed": 1}
+    )
+    monkeypatch.setattr("cnequity.storage.state.StateStore", lambda root: _Store())
+    cfg = type("C", (), {"meta_root": tmp_path, "_backfill_symbols": None})()
+    result = bf._repair_outstanding(cfg, "daily_bars", 1)
+
+    assert passes == ["daily_bars"]
+    assert result["parked"] == 1
+    assert result["parked_after_attempts"] == 10
+    assert result["status"] == "success"
+
+
+def test_parked_keys_can_be_retried_explicitly(tmp_path, monkeypatch):
+    from cnequity.cli import backfill_cmds as bf
+
+    passes: list[str] = []
+    monkeypatch.setattr(
+        bf, "_backfill_once", lambda cfg, ds: passes.append(ds) or {"status": "success"}
+    )
+    monkeypatch.setattr(
+        bf, "_settle_outstanding", lambda cfg, ds, **kwargs: {"filled": 0, "still_owed": 1}
+    )
+    monkeypatch.setattr("cnequity.storage.state.StateStore", lambda root: _Store())
+
+    cfg = type("C", (), {"meta_root": tmp_path, "_backfill_symbols": None})()
+    result = bf._repair_outstanding(cfg, "daily_bars", 1, retry_parked=True)
+
+    assert passes == ["daily_bars", "daily_bars"]
+    assert result["parked"] == 0
+
+
+def test_the_parking_limit_is_configurable(tmp_path, monkeypatch):
+    from cnequity.cli import backfill_cmds as bf
+
+    passes: list[str] = []
+    monkeypatch.setattr(
+        bf, "_backfill_once", lambda cfg, ds: passes.append(ds) or {"status": "success"}
+    )
+    monkeypatch.setattr(
+        bf, "_settle_outstanding", lambda cfg, ds, **kwargs: {"filled": 0, "still_owed": 1}
+    )
+    monkeypatch.setattr("cnequity.storage.state.StateStore", lambda root: _Store())
+
+    cfg = type("C", (), {"meta_root": tmp_path, "_backfill_symbols": None})()
+    result = bf._repair_outstanding(cfg, "daily_bars", 1, max_attempts=1)
+
+    assert passes == []
+    assert result["parked"] == 2
