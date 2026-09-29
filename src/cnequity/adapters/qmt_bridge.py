@@ -718,6 +718,138 @@ def fetch_minute_bars_qmt(
     )
 
 
+def _close_map_by_date(
+    symbol: str,
+    frame: Any,
+    start: date,
+    end: date,
+) -> dict[date, float]:
+    if frame is None:
+        return {}
+    indexes = _frame_index(frame)
+    closes = _values(frame, "close")
+    if closes is None:
+        return {}
+    output: dict[date, float] = {}
+    for position, index_value in enumerate(indexes):
+        trade_date = _coerce_date(index_value)
+        close = _float(_values(frame, "close")[position]) if position < len(closes) else None
+        if trade_date is None or close is None or close <= 0:
+            continue
+        if start <= trade_date <= end:
+            output[trade_date] = close
+    return output
+
+
+def fetch_adj_factors_qmt(
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    config: Any = None,
+    xtdata: Any | None = None,
+    metrics: dict[str, Any] | None = None,
+) -> pl.DataFrame:
+    """Derive stored hfq factors from QMT raw and back-adjusted closes.
+
+    QMT's adjusted bar is ``raw_bar * factor``, so the per-session factor is
+    the back-adjusted close divided by the raw close. This keeps the lake's
+    adjustment convention (ADR-0004) while moving the vendor from Sina to the
+    local terminal.
+    """
+    if not symbols:
+        return pl.DataFrame()
+    client = xtdata if xtdata is not None else _qmt_bridge_client(config, xtdata)
+    logger.info(
+        "QMT adj factors: fetching raw/back daily closes for %d symbol(s) over %s..%s",
+        len(symbols),
+        start.isoformat(),
+        end.isoformat(),
+    )
+
+    chunk_size = int(getattr(config, "qmt_bridge_chunk_size", 0) or 0)
+    download_timeout = getattr(config, "qmt_bridge_download_timeout_seconds", 180.0)
+    data_wait = getattr(config, "qmt_bridge_data_wait_seconds", 10.0)
+    chunks = (
+        [symbols]
+        if chunk_size <= 0
+        else [symbols[offset : offset + chunk_size] for offset in range(0, len(symbols), chunk_size)]
+    )
+
+    raw_frames: dict[str, Any] = {}
+    back_frames: dict[str, Any] = {}
+    failed_chunks = 0
+    for chunk in chunks:
+        chunk_frames: dict[str, dict[str, Any]] = {"none": {}, "back": {}}
+        try:
+            for dividend_type in ("none", "back"):
+                client.download_history_data2(
+                    chunk,
+                    "1d",
+                    start_time=_date_string(start),
+                    end_time=_date_string(end),
+                    dividend_type=dividend_type,
+                    download_timeout_seconds=download_timeout,
+                    data_wait_seconds=data_wait,
+                )
+                local_data = client.get_local_data(
+                    field_list=["close"],
+                    stock_list=chunk,
+                    period="1d",
+                    start_time=_date_string(start),
+                    end_time=_date_string(end),
+                    count=-1,
+                    dividend_type=dividend_type,
+                    fill_data=False,
+                )
+                chunk_frames[dividend_type] = local_data or {}
+            if metrics is not None:
+                metrics["requests"] = int(metrics.get("requests", 0)) + 2
+        except Exception:
+            failed_chunks += 1
+            if metrics is not None:
+                metrics["failed_requests"] = int(metrics.get("failed_requests", 0)) + 2
+            logger.warning("QMT bridge adj-factor chunk failed", exc_info=True)
+            continue
+        for symbol, frame in chunk_frames["none"].items():
+            raw_frames[str(symbol)] = frame
+        for symbol, frame in chunk_frames["back"].items():
+            back_frames[str(symbol)] = frame
+
+    if failed_chunks == len(chunks):
+        raise QmtBridgeSourceError("QMT bridge returned no adj-factor responses")
+
+    rows: list[dict[str, Any]] = []
+    for symbol in symbols:
+        raw = _close_map_by_date(symbol, raw_frames.get(symbol), start, end)
+        back = _close_map_by_date(symbol, back_frames.get(symbol), start, end)
+        for trade_date in sorted(set(raw) & set(back)):
+            factor = back[trade_date] / raw[trade_date]
+            if math.isfinite(factor) and factor > 0:
+                rows.append({"symbol": symbol, "trade_date": trade_date, "factor": factor})
+
+    if not rows:
+        logger.warning(
+            "QMT adj factors returned no usable rows for %d symbol(s) over %s..%s",
+            len(symbols), start.isoformat(), end.isoformat()
+        )
+        return pl.DataFrame(schema={"symbol": pl.Utf8, "trade_date": pl.Date, "factor": pl.Float64})
+    frame = pl.DataFrame(rows).unique(subset=["symbol", "trade_date"], keep="last")
+    logger.info(
+        "QMT adj factors returned %d row(s) covering %d/%d symbol(s)",
+        frame.height,
+        frame.get_column("symbol").n_unique(),
+        len(symbols),
+    )
+    if metrics is not None:
+        metrics["rows_read"] = int(metrics.get("rows_read", 0)) + frame.height
+    return with_provenance(
+        frame.sort(["trade_date", "symbol"]),
+        source=SOURCE,
+        data_version=data_version_for("adj_factors"),
+    )
+
+
 def _corporate_action_rows(symbol: str, frame: Any, start: date, end: date) -> list[dict[str, Any]]:
     if frame is None:
         return []

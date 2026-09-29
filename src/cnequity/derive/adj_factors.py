@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import polars as pl
 
+from cnequity.adapters.qmt_bridge import fetch_adj_factors_qmt
 from cnequity.adapters.sina.adj_factors import (
     SinaAdjFactorUnavailableError,
     fetch_adj_factor_series,
@@ -555,6 +556,7 @@ def _resolve_factors(
     *,
     force: bool,
     client: httpx.Client,
+    qmt_factors: dict[str, pl.DataFrame] | None = None,
 ) -> tuple[pl.DataFrame | None, str]:
     """Factors for one symbol, and the vendor they actually came from.
 
@@ -577,11 +579,41 @@ def _resolve_factors(
             return cached, BACKUP_SOURCE
         logger.warning("adj_factors: %s is switched to baostock but it did not answer", symbol)
 
+    configured_source = config.adj_factors_source
+    source = configured_source
     cached = _load_cache(config, symbol, adjust_type)
     if not _needs_refresh(cached, force):
-        return cached, config.adj_factors_source
+        return cached, source
 
-    source = config.adj_factors_source
+    if configured_source == "qmt_bridge":
+        if qmt_factors is not None:
+            factors = qmt_factors.get(symbol)
+            if factors is not None and not factors.is_empty():
+                return factors, "qmt_bridge"
+        elif config.qmt_bridge_enabled:
+            window = sym_bars.select("trade_date").drop_nulls()
+            if not window.is_empty():
+                try:
+                    factors = fetch_adj_factors_qmt(
+                        [symbol],
+                        window["trade_date"].min(),
+                        window["trade_date"].max(),
+                        config=config,
+                    )
+                except Exception as exc:  # noqa: BLE001 — the Sina fallback keeps the run alive
+                    logger.warning(
+                        "adj_factors: QMT bridge failed for %s; trying Sina: %s",
+                        symbol,
+                        exc,
+                    )
+                else:
+                    if not factors.is_empty():
+                        return factors, "qmt_bridge"
+        if not config.sources.get("sina", True):
+            raise AdjFactorsSourceUnavailableError(
+                f"QMT bridge returned no adj factors for {symbol} and Sina is disabled"
+            )
+        source = "sina"
     try:
         if source != "sina":
             logger.warning("Unknown adj_factors source %s; skipping %s", source, symbol)
@@ -1364,6 +1396,7 @@ def _process_symbol_adj(
     force: bool,
     formally_delisted: bool = False,
     client: httpx.Client | None = None,
+    qmt_factors: dict[str, pl.DataFrame] | None = None,
 ) -> tuple[pl.DataFrame | None, str | None, dict | None]:
     own_client = client is None
     if own_client:
@@ -1371,7 +1404,8 @@ def _process_symbol_adj(
     try:
         try:
             factors, vendor = _resolve_factors(
-                config, sym, adj, sym_bars, force=force, client=client
+                config, sym, adj, sym_bars, force=force, client=client,
+                qmt_factors=qmt_factors,
             )
         except AdjFactorsSourceUnavailableError as exc:
             if formally_delisted:
@@ -1796,10 +1830,40 @@ def _compute_adj_factors_locked(
     if skipped_cdr:
         logger.info(
             "adj_factors: skipping %d CDR symbol(s) %s — sina has no CDR factor "
+            "adj_factors: skipping %d CDR symbol(s) %s — the configured source has no CDR factor "
             "coverage and all_a excludes CDRs; loads report adj_is_exact=False",
             len(skipped_cdr),
             skipped_cdr,
         )
+
+    qmt_factors: dict[str, pl.DataFrame] | None = None
+    if config.adj_factors_source == "qmt_bridge" and config.qmt_bridge_enabled:
+        logger.info(
+            "adj_factors: QMT bridge enabled; fetching raw/back closes for %d symbol(s)",
+            len(tasks),
+        )
+        try:
+            qmt_frame = fetch_adj_factors_qmt(
+                [sym for sym, _adj, _bars, _force in tasks],
+                bars["trade_date"].min(),
+                bars["trade_date"].max(),
+                config=config,
+            )
+            qmt_factors = {
+                (key[0] if isinstance(key, tuple) else key): group.sort("trade_date")
+                for key, group in qmt_frame.partition_by("symbol", as_dict=True).items()
+            }
+            logger.info(
+                "adj_factors: QMT bridge returned %d row(s) covering %d/%d symbol(s)",
+                qmt_frame.height,
+                qmt_frame.get_column("symbol").n_unique() if not qmt_frame.is_empty() else 0,
+                len(tasks),
+            )
+        except Exception as exc:  # noqa: BLE001 — per-symbol Sina fallback keeps the run alive
+            qmt_factors = {}
+            logger.warning(
+                "adj_factors: batched QMT bridge failed; falling back to Sina: %s", exc
+            )
 
     frames: list[pl.DataFrame] = []
     failed: list[str] = []
@@ -1849,6 +1913,7 @@ def _compute_adj_factors_locked(
                         force=force,
                         formally_delisted=sym in formally_delisted,
                         client=client,
+                        qmt_factors=qmt_factors,
                     )
                     _consume(sym, aligned, fail_key, finding)
                 except Exception as exc:  # noqa: BLE001 — keep symbol retryable
@@ -1874,6 +1939,7 @@ def _compute_adj_factors_locked(
                     sym_bars,
                     force=force,
                     formally_delisted=sym in formally_delisted,
+                    qmt_factors=qmt_factors,
                 ): sym
                 for sym, adj, sym_bars, force in tasks
                 if sym not in skipped_source_unavailable

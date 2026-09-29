@@ -8,6 +8,7 @@ import pytest
 
 from cnequity.adapters.qmt_bridge import (
     QmtBridgeSourceError,
+    fetch_adj_factors_qmt,
     fetch_corporate_actions_qmt,
     fetch_daily_bars_qmt,
     fetch_financial_statement_items_qmt,
@@ -257,6 +258,52 @@ class _PeriodFakeXtData:
         }
 
 
+class _AdjFactorsFakeXtData:
+    def __init__(self):
+        self.downloads: list[str] = []
+
+    def download_history_data2(self, stock_list, period, **kwargs):
+        assert period == "1d"
+        self.downloads.append(str(kwargs["dividend_type"]))
+        return {"finished": len(stock_list), "total": len(stock_list)}
+
+    def get_local_data(self, *, dividend_type, **kwargs):
+        assert kwargs["stock_list"] == ["600000.SH"]
+        assert kwargs["period"] == "1d"
+        closes = [10.0, 20.0] if dividend_type == "none" else [10.0, 21.0]
+        return {
+            "600000.SH": pd.DataFrame(
+                {
+                    "close": closes,
+                    "volume": [1_000, 1_100],
+                    "amount": [10_000.0, 22_000.0],
+                },
+                index=pd.Index(["20240627", "20240628"], name="date"),
+            )
+        }
+
+
+def test_fetch_adj_factors_qmt_divides_back_adjusted_by_raw_closes():
+    xt = _AdjFactorsFakeXtData()
+    metrics: dict = {}
+    frame = fetch_adj_factors_qmt(
+        ["600000.SH"],
+        date(2024, 6, 27),
+        date(2024, 6, 28),
+        config=None,
+        xtdata=xt,
+        metrics=metrics,
+    ).sort("trade_date")
+
+    assert set(xt.downloads) == {"none", "back"}
+    assert frame["symbol"].to_list() == ["600000.SH", "600000.SH"]
+    assert frame["trade_date"].to_list() == [date(2024, 6, 27), date(2024, 6, 28)]
+    assert frame["factor"].to_list() == [1.0, 1.05]
+    assert frame["source"].unique().to_list() == ["qmt_bridge"]
+    assert frame["data_version"].unique().to_list() == [data_version_for("adj_factors")]
+    assert metrics["rows_read"] == 2
+
+
 def test_fetch_index_bars_qmt_parses_daily_index_rows():
     xt = _PeriodFakeXtData("1d")
     frame = fetch_index_bars_qmt(
@@ -287,10 +334,14 @@ def test_fetch_minute_bars_qmt_parses_timestamps():
     assert frame["trade_date"][0] == date(2024, 6, 28)
 
 
-def test_fetch_daily_bars_qmt_requires_a_bridge_client():
+def test_fetch_daily_bars_qmt_requires_a_bridge_client(monkeypatch):
     config = Config(data_root=".")
     config.qmt_bridge_enabled = True
     config.qmt_bridge_src_path = "does-not-exist"
+    monkeypatch.setattr(
+        "cnequity.adapters.qmt_bridge._xtdata",
+        lambda config: (_ for _ in ()).throw(QmtBridgeSourceError("bridge unavailable")),
+    )
     with pytest.raises(QmtBridgeSourceError):
         fetch_daily_bars_qmt(["600000.SH"], date(2024, 6, 28), date(2024, 6, 28), config=config)
 
