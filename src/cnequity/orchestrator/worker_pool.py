@@ -228,6 +228,24 @@ def _fetch_daily_bars_with_priority(
             "tdx_protocol",
         )
 
+    observed_symbols = set(qmt_df.get_column("symbol").unique().to_list()) if not qmt_df.is_empty() else set()
+    if qmt_df.is_empty():
+        logger.warning(
+            "QMT daily bars returned no rows for %d symbol(s) over %s..%s",
+            len(symbols), start.isoformat(), end.isoformat(),
+        )
+    else:
+        logger.info(
+            "QMT daily bars returned %d row(s) for %d/%d symbol(s) over %s..%s "
+            "(gap_fill=%s)",
+            qmt_df.height,
+            len(observed_symbols),
+            len(symbols),
+            start.isoformat(),
+            end.isoformat(),
+            config.qmt_bridge_tdx_gap_fill,
+        )
+
     if qmt_df.is_empty():
         return (
             fetch_daily_bars(
