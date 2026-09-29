@@ -12,6 +12,7 @@ from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError
 from cnequity.adapters.eastmoney.fundamentals import fetch_financial_statement_items
 from cnequity.adapters.eastmoney.shareholders import CHANGE_DATE, NOTICE_DATE
 from cnequity.adapters.eastmoney.valuation import fetch_valuation_metrics
+from cnequity.adapters.qmt_bridge import fetch_financial_statement_items_qmt
 from cnequity.config import Config
 from cnequity.domain.http_policy import SourceCoolingDown
 from cnequity.domain.symbols import is_all_a_symbol, parse_symbol
@@ -626,7 +627,9 @@ def _expected_financial_periods(config: Config, trade_date: date) -> set[str]:
 def step_financial_statement_items(
     config: Config, trade_date: date, run_id: str, context: dict
 ) -> dict:
-    if not config.sources.get("eastmoney", True):
+    qmt_enabled = bool(getattr(config, "qmt_bridge_enabled", False))
+    eastmoney_enabled = config.sources.get("eastmoney", True)
+    if not qmt_enabled and not eastmoney_enabled:
         raise SourceUnavailableError(
             "financial_statement_items: eastmoney source disabled in config"
         )
@@ -636,6 +639,34 @@ def step_financial_statement_items(
     backfill = getattr(config, "_backfill", False)
     archive_source = "eastmoney_backfill" if backfill else "eastmoney"
     archive_scope = f"{'backfill' if backfill else 'daily'}:{trade_date.isoformat()}"
+    qmt_metrics: dict = {}
+    if qmt_enabled and not config.tdx_allow_mock:
+        symbols = getattr(config, "_backfill_symbols", None) or load_symbols(config)
+        qmt_start = HISTORY_START if backfill else trade_date - timedelta(days=DAILY_LOOKBACK_DAYS)
+        qmt_end = getattr(config, "_backfill_end", None) or trade_date
+        try:
+            df = fetch_financial_statement_items_qmt(
+                symbols,
+                qmt_start,
+                qmt_end,
+                config=config,
+                metrics=qmt_metrics,
+            )
+            # An empty QMT answer can mean "no filings today" or "the terminal
+            # has not downloaded financial data". Let EastMoney distinguish the
+            # two so a local data gap cannot masquerade as a complete empty day.
+            if int(qmt_metrics.get("failed_requests", 0)) == 0 and not df.is_empty():
+                archive_source = "qmt_bridge"
+                return write_fetched(
+                    config,
+                    run_id,
+                    "financial_statement_items",
+                    df,
+                    source=archive_source,
+                )
+        except Exception as exc:
+            logger.warning("QMT financial-statement fetch failed: %s", exc)
+
     state = StateStore(config.meta_root)
     unit_prefix = "fsi-"
     staged_files = StagingWriter(config.staging_root).list_run_files(
@@ -721,8 +752,15 @@ def step_financial_statement_items(
             ]
             df = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
     else:
+        if not eastmoney_enabled:
+            raise SourceUnavailableError(
+                "financial_statement_items: QMT failed and eastmoney is disabled"
+            )
         df = fetch_financial_statement_items(
-            trade_date, backfill=False, config=config, run_id=run_id
+            trade_date,
+            backfill=False,
+            config=config,
+            run_id=run_id,
         )
     missing_periods: set[str] = set()
     missing_statement_types: dict[str, list[str]] = {}
@@ -809,7 +847,7 @@ def step_financial_statement_items(
                         source=archive_source,
                         request_scope=archive_scope,
                     )
-                    if config.should_archive_raw("financial_statement_items")
+                    if not qmt_used and config.should_archive_raw("financial_statement_items")
                     else None
                 ),
             )
@@ -844,7 +882,7 @@ def step_financial_statement_items(
                 source=archive_source,
                 request_scope=archive_scope,
             )
-            if config.should_archive_raw("financial_statement_items")
+            if not qmt_used and config.should_archive_raw("financial_statement_items")
             else None
         ),
     )
@@ -906,11 +944,12 @@ def _run_shareholder_step(
     *,
     daily_by: str,
     daily_lookback_days: int,
+    source: str = "eastmoney",
 ) -> dict:
     """Persist complete date windows as they arrive and keep later failures scoped."""
     from datetime import timedelta
 
-    if not config.sources.get("eastmoney", True):
+    if source != "qmt_bridge" and not config.sources.get("eastmoney", True):
         raise SourceUnavailableError(f"{dataset}: eastmoney source disabled in config")
 
     symbols = getattr(config, "_backfill_symbols", None) if dataset == "share_structure" else None
@@ -981,38 +1020,43 @@ def _run_shareholder_step(
                     continue
             except (OSError, pl.exceptions.PolarsError):
                 pass
-        source = "eastmoney_backfill" if getattr(config, "_backfill", False) else "eastmoney"
-        capture = None
-        if config.should_archive_raw(dataset):
-            from cnequity.adapters.eastmoney.shareholders import ShareholderCapture
-            from cnequity.storage.raw_archive import begin_capture
-
-            capture = ShareholderCapture(
-                dataset=dataset,
-                run_id=run_id,
-                source=source,
-                request_scope=unit,
-                nonce=begin_capture(config, dataset, run_id, source=source, request_scope=unit),
-            )
-        from cnequity.adapters.eastmoney.shareholders import ShareholderProgress
-
-        progress = ShareholderProgress()
-        kwargs = {"archive_context": capture} if capture is not None else {}
-        kwargs["progress"] = progress
-        if symbols:
-            kwargs["symbols"] = symbols
-        try:
-            part = fetch_fn(win_start, win_end, by=by, config=config, **kwargs)
-        except (EastMoneyDatacenterError, SourceCoolingDown) as exc:
-            failures.append((unit, str(exc)))
-            stopped = True
-            logger.warning(
-                "%s window %s failed; completed windows remain staged: %s", dataset, unit, exc
-            )
+        if source == "qmt_bridge":
+            part = fetch_fn(win_start, win_end, by=by, config=config)
+            incomplete = False
             report(index)
-            continue
-        report(index)
-        incomplete = progress.failed_report is not None
+        else:
+            source = "eastmoney_backfill" if getattr(config, "_backfill", False) else "eastmoney"
+            capture = None
+            if config.should_archive_raw(dataset):
+                from cnequity.adapters.eastmoney.shareholders import ShareholderCapture
+                from cnequity.storage.raw_archive import begin_capture
+
+                capture = ShareholderCapture(
+                    dataset=dataset,
+                    run_id=run_id,
+                    source=source,
+                    request_scope=unit,
+                    nonce=begin_capture(config, dataset, run_id, source=source, request_scope=unit),
+                )
+            from cnequity.adapters.eastmoney.shareholders import ShareholderProgress
+
+            progress = ShareholderProgress()
+            kwargs = {"archive_context": capture} if capture is not None else {}
+            kwargs["progress"] = progress
+            if symbols:
+                kwargs["symbols"] = symbols
+            try:
+                part = fetch_fn(win_start, win_end, by=by, config=config, **kwargs)
+            except (EastMoneyDatacenterError, SourceCoolingDown) as exc:
+                failures.append((unit, str(exc)))
+                stopped = True
+                logger.warning(
+                    "%s window %s failed; completed windows remain staged: %s", dataset, unit, exc
+                )
+                report(index)
+                continue
+            report(index)
+            incomplete = progress.failed_report is not None
         if incomplete:
             failures.append((unit, progress.failure or f"{progress.failed_report} incomplete"))
             stopped = True
@@ -1114,6 +1158,27 @@ def step_share_structure(config: Config, trade_date: date, run_id: str, context:
 
 @register_step("shareholder_counts", group="fundamentals", depends_on=["instruments"])
 def step_shareholder_counts(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    eastmoney_enabled = config.sources.get("eastmoney", True)
+    if not eastmoney_enabled and getattr(config, "qmt_bridge_enabled", False):
+        from cnequity.adapters.qmt_bridge import fetch_shareholder_counts_qmt
+        from cnequity.steps.common import load_symbols
+
+        symbols = getattr(config, "_backfill_symbols", None) or load_symbols(config)
+
+        def fetch_qmt(start: date, end: date, *, by: str, config: Config):
+            return fetch_shareholder_counts_qmt(symbols, start, end, by=by, config=config)
+
+        return _run_shareholder_step(
+            config,
+            trade_date,
+            run_id,
+            "shareholder_counts",
+            fetch_qmt,
+            daily_by=NOTICE_DATE,
+            daily_lookback_days=DAILY_LOOKBACK_DAYS,
+            source="qmt_bridge",
+        )
+
     from cnequity.adapters.eastmoney.shareholders import fetch_shareholder_counts
 
     return _run_shareholder_step(

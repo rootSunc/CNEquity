@@ -13,11 +13,13 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from cnequity.adapters.qmt_bridge import fetch_index_bars_qmt
 from cnequity.adapters.tdx_protocol.client import (
     INDEX_SYMBOLS,
     fetch_index_bars,
     normalize_with_source,
 )
+from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.config import Config
 from cnequity.domain.frames import with_columns_unless_blank
 from cnequity.domain.market_time import A_SHARE_FINAL_AT, shanghai_now
@@ -5172,6 +5174,94 @@ def _index_bar_missing_keys(config: Config, df, start: date, end: date) -> list[
         for session in sessions
         if (symbol, session) not in observed
     ]
+def _fetch_index_bars_with_priority(
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    rate_limit,
+    backfill: bool,
+    config: Config,
+    allow_partial: bool = False,
+) -> tuple[pl.DataFrame, str]:
+    """Prefer the local QMT bridge; TDX covers only missing index symbol/date gaps."""
+    if not getattr(config, "qmt_bridge_enabled", False) or config.tdx_allow_mock:
+        df = fetch_index_bars(
+            start,
+            end,
+            rate_limit=rate_limit,
+            allow_mock=config.tdx_allow_mock,
+            backfill=backfill,
+            allow_partial=allow_partial,
+            config=config,
+        )
+        return normalize_with_source(df, "tdx_protocol", dataset="index_bars"), "tdx_protocol"
+
+    try:
+        qmt_df = fetch_index_bars_qmt(symbols, start, end, config=config)
+    except Exception as exc:
+        logger.warning("QMT index bars failed; falling back to TDX: %s", exc)
+        qmt_df = pl.DataFrame()
+
+    if qmt_df.is_empty():
+        df = fetch_index_bars(
+            start,
+            end,
+            rate_limit=rate_limit,
+            allow_mock=False,
+            backfill=backfill,
+            allow_partial=allow_partial,
+            config=config,
+        )
+        return normalize_with_source(df, "tdx_protocol", dataset="index_bars"), "tdx_protocol"
+
+    try:
+        sessions = list_trading_dates(config, start, end)
+    except Exception as exc:
+        logger.warning("Trading calendar unavailable for QMT index-bars diff: %s", exc)
+        sessions = []
+
+    if not sessions:
+        observed = set(qmt_df["symbol"].unique().to_list())
+        missing = [symbol for symbol in symbols if symbol not in observed]
+        gap_specs = [(start, end, missing)] if missing else []
+    else:
+        gap_specs = []
+        for session in sessions:
+            observed = set(
+                qmt_df.filter(pl.col("trade_date") == session)
+                .get_column("symbol")
+                .unique()
+                .to_list()
+            )
+            missing = [symbol for symbol in symbols if symbol not in observed]
+            if missing:
+                gap_specs.append((session, session, missing))
+
+    fallback_frames: list[pl.DataFrame] = []
+    for gap_start, gap_end, missing in gap_specs:
+        try:
+            fallback_df = fetch_index_bars(
+                gap_start,
+                gap_end,
+                rate_limit=rate_limit,
+                allow_mock=False,
+                backfill=backfill,
+                config=config,
+            )
+        except Exception as exc:
+            logger.warning("TDX index-bars gap fill failed: %s", exc)
+            continue
+        fallback_df = fallback_df.filter(pl.col("symbol").is_in(missing))
+        if not fallback_df.is_empty():
+            fallback_frames.append(
+                normalize_with_source(fallback_df, "tdx_protocol", dataset="index_bars")
+            )
+
+    if not fallback_frames:
+        return qmt_df, "qmt_bridge"
+    combined = pl.concat([qmt_df, *fallback_frames], how="diagonal_relaxed")
+    return dedupe_by_primary_key(combined, "index_bars"), "mixed"
 
 
 @register_step("index_bars", group="core", depends_on=["instruments"])
@@ -5186,16 +5276,16 @@ def step_index_bars(config: Config, trade_date: date, run_id: str, context: dict
     # incomplete index bar and advance the index coverage watermark.
     _reject_unfinished_daily_bar_window(config, end)
     rl = config.tdx_rate_limit_spec()
-    df = fetch_index_bars(
+    df, _ = _fetch_index_bars_with_priority(
+        config,
+        [f"{code}.{exchange}" for code, exchange in INDEX_SYMBOLS],
         start,
         end,
         rate_limit=rl,
-        allow_mock=config.tdx_allow_mock,
         backfill=getattr(config, "_backfill", False),
         config=config,
         allow_partial=True,
     )
-    df = normalize_with_source(df, "tdx_protocol")
     missing = _index_bar_missing_keys(config, df, start, end)
     from cnequity.steps.common import write_simple
 

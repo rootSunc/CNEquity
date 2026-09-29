@@ -13,11 +13,13 @@ from datetime import date, timedelta
 
 import polars as pl
 
+from cnequity.adapters.qmt_bridge import fetch_minute_bars_qmt
 from cnequity.adapters.tdx_protocol.client import (
     fetch_minute_bars,
     normalize_with_source,
     reset_tdx_server_cache,
 )
+from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.adapters.tdx_protocol.minute_bars import pages_for_window
 from cnequity.config import Config
 from cnequity.domain.datasets import get_dataset, intraday_datasets
@@ -84,6 +86,93 @@ def _validate_minute_batch(
             f"{sorted(returned_frequencies)}"
         )
     return normalized
+
+
+def _fetch_minute_bars_with_priority(
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    dataset: str,
+    frequency: str,
+    rate_limit,
+    backfill: bool,
+    config: Config,
+    max_pages: int | None,
+    workers: int,
+) -> tuple[pl.DataFrame, list[str], str]:
+    """Prefer QMT; TDX fills only symbols the local bridge does not cover."""
+    if not getattr(config, "qmt_bridge_enabled", False):
+        df, failed = fetch_minute_bars(
+            symbols,
+            start,
+            end,
+            frequency=frequency,
+            rate_limit=rate_limit,
+            backfill=backfill,
+            config=config,
+            max_pages=max_pages,
+            require_complete=True,
+            workers=workers,
+        )
+        return normalize_with_source(df, "tdx_protocol", dataset=dataset), failed, "tdx_protocol"
+
+    try:
+        qmt_df = fetch_minute_bars_qmt(
+            symbols,
+            start,
+            end,
+            frequency=frequency,
+            config=config,
+        )
+    except Exception as exc:
+        logger.warning("QMT %s bars failed; falling back to TDX: %s", frequency, exc)
+        qmt_df = pl.DataFrame()
+
+    if qmt_df.is_empty():
+        df, failed = fetch_minute_bars(
+            symbols,
+            start,
+            end,
+            frequency=frequency,
+            rate_limit=rate_limit,
+            backfill=backfill,
+            config=config,
+            max_pages=max_pages,
+            require_complete=True,
+            workers=workers,
+        )
+        return normalize_with_source(df, "tdx_protocol", dataset=dataset), failed, "tdx_protocol"
+
+    observed = set(qmt_df["symbol"].unique().to_list())
+    missing = [symbol for symbol in symbols if symbol not in observed]
+    if not missing:
+        return qmt_df, [], "qmt_bridge"
+
+    try:
+        fallback_df, failed = fetch_minute_bars(
+            missing,
+            start,
+            end,
+            frequency=frequency,
+            rate_limit=rate_limit,
+            backfill=backfill,
+            config=config,
+            max_pages=max_pages,
+            require_complete=True,
+            workers=workers,
+        )
+    except Exception as exc:
+        logger.warning("TDX %s bars gap fill failed: %s", frequency, exc)
+        return qmt_df, missing, "qmt_bridge"
+
+    fallback_df = normalize_with_source(
+        fallback_df, "tdx_protocol", dataset=dataset
+    )
+    combined = pl.concat([qmt_df, fallback_df], how="diagonal_relaxed")
+    combined = dedupe_by_primary_key(combined, dataset)
+    failed = sorted(set(failed) | (set(missing) - set(combined["symbol"].unique().to_list())))
+    return combined, failed, "mixed"
 
 
 def _filter_all_scope_to_listed_symbols(
@@ -248,16 +337,16 @@ def capture_intraday_bars(
     for index in range(0, len(symbols), _BATCH_SYMBOLS):
         chunk = symbols[index : index + _BATCH_SYMBOLS]
         try:
-            df, chunk_failed = fetch_minute_bars(
+            df, chunk_failed, _ = _fetch_minute_bars_with_priority(
                 chunk,
                 start,
                 end,
+                dataset=dataset,
                 frequency=frequency,
                 rate_limit=rate_limit,
                 backfill=getattr(config, "_backfill", False),
                 config=config,
                 max_pages=max_pages,
-                require_complete=True,
                 workers=config.minute_bars_fetch_workers,
             )
         except Exception as exc:  # noqa: BLE001 — recorded, sweep continues
@@ -282,7 +371,6 @@ def capture_intraday_bars(
             continue
         df = _validate_minute_batch(df, chunk, start, end, frequency)
         with_rows.update(df["symbol"].unique().to_list())
-        df = normalize_with_source(df, "tdx_protocol", dataset=dataset)
         writer.write_batch(dataset, run_id, f"intraday-{index // _BATCH_SYMBOLS:04d}", df)
         written += df.height
         logger.info(

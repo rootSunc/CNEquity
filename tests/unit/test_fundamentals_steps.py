@@ -10,6 +10,7 @@ import pytest
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
+from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.steps import fundamentals as fund
 from cnequity.steps.common import load_bar_universe
 
@@ -121,6 +122,111 @@ def test_financial_report_failure_keeps_valid_unit_for_same_run_retry(cfg, monke
     assert calls == [set(), {unit}]
     assert second["rows_written"] == 1
     assert len(list(cfg.staging_root.glob("financial_statement_items/**/*.parquet"))) == 1
+
+
+def test_financial_statement_items_prefers_qmt_and_falls_back_on_empty(cfg, monkeypatch):
+    cfg.qmt_bridge_enabled = True
+    monkeypatch.setattr(fund, "load_symbols", lambda _config: ["600519.SH"])
+    eastmoney_called = False
+
+    def fake_qmt(symbols, start, end, **kwargs):
+        assert symbols == ["600519.SH"]
+        assert start == date(2024, 5, 29)
+        assert end == date(2024, 6, 28)
+        return with_provenance(
+            pl.DataFrame(
+                {
+                    "symbol": ["600519.SH"],
+                    "report_period": ["2024Q1"],
+                    "statement_type": ["income"],
+                    "item_code": ["revenue"],
+                    "item_value": [1_000_000.0],
+                    "announce_date": [date(2024, 4, 20)],
+                }
+            ),
+            source="qmt_bridge",
+            data_version=data_version_for("financial_statement_items"),
+        )
+
+    def fake_eastmoney(*args, **kwargs):
+        nonlocal eastmoney_called
+        eastmoney_called = True
+        return pl.DataFrame()
+
+    monkeypatch.setattr(fund, "fetch_financial_statement_items_qmt", fake_qmt)
+    monkeypatch.setattr(fund, "fetch_financial_statement_items", fake_eastmoney)
+    result = fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-qmt", {})
+    assert result["rows_written"] == 1
+    assert eastmoney_called is False
+    files = list(cfg.staging_root.glob("financial_statement_items/**/*.parquet"))
+    assert files
+    assert pl.read_parquet(files[0])["source"].unique().to_list() == ["qmt_bridge"]
+
+
+def test_shareholder_counts_uses_qmt_when_eastmoney_disabled(cfg, monkeypatch):
+    from cnequity.adapters import qmt_bridge
+
+    cfg.sources["eastmoney"] = False
+    cfg.qmt_bridge_enabled = True
+    cfg._backfill = True
+    cfg._backfill_start = date(2024, 1, 1)
+    cfg._backfill_end = date(2024, 6, 30)
+    cfg._backfill_symbols = ["600519.SH"]
+
+    def fake_qmt(symbols, start, end, *, by, config):
+        assert symbols == ["600519.SH"]
+        assert start == date(2024, 1, 1)
+        assert end == date(2024, 6, 30)
+        assert by == "change_date"
+        return pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "count_date": [date(2024, 3, 31)],
+                "holder_count": [100000.0],
+                "holder_count_change_pct": [None],
+                "avg_float_shares": [None],
+                "avg_holding_value": [None],
+                "announce_date": [date(2024, 4, 20)],
+            }
+        )
+
+    monkeypatch.setattr(qmt_bridge, "fetch_shareholder_counts_qmt", fake_qmt)
+
+    result = fund.step_shareholder_counts(cfg, date(2024, 6, 28), "run-qmt", {})
+    assert result["rows_written"] == 1
+    files = list(cfg.staging_root.glob("shareholder_counts/**/*.parquet"))
+    assert files
+    assert pl.read_parquet(files[0])["source"].unique().to_list() == ["qmt_bridge"]
+
+
+def test_financial_statement_items_falls_back_to_eastmoney_when_qmt_empty(cfg, monkeypatch):
+    cfg.qmt_bridge_enabled = True
+    monkeypatch.setattr(fund, "load_symbols", lambda _config: ["600519.SH"])
+    monkeypatch.setattr(
+        fund,
+        "fetch_financial_statement_items_qmt",
+        lambda *args, **kwargs: pl.DataFrame(),
+    )
+
+    def fake_eastmoney(trade_date, backfill=False, config=None, run_id=None):
+        assert trade_date == date(2024, 6, 28)
+        assert backfill is False
+        return pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "report_period": ["2024Q1"],
+                "statement_type": ["income"],
+                "item_code": ["revenue"],
+                "item_value": [1_000_000.0],
+                "announce_date": [date(2024, 4, 20)],
+            }
+        )
+
+    monkeypatch.setattr(fund, "fetch_financial_statement_items", fake_eastmoney)
+    result = fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-fallback", {})
+    assert result["rows_written"] == 1
+    files = list(cfg.staging_root.glob("financial_statement_items/**/*.parquet"))
+    assert pl.read_parquet(files[0])["source"].unique().to_list() == ["eastmoney"]
 
 
 def test_financial_statement_items_backfill_surfaces_partial_report_families(cfg, monkeypatch):

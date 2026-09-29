@@ -26,6 +26,7 @@ from cnequity.adapters.eastmoney.earnings_disclosure import (
     _backfill_report_dates,
     fetch_earnings_disclosure_schedule,
 )
+from cnequity.adapters.qmt_bridge import fetch_corporate_actions_qmt
 from cnequity.adapters.tdx_protocol.client import (
     CORPORATE_ACTIONS_BACKFILL_START,
     fetch_corporate_actions,
@@ -728,8 +729,42 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                     type(exc).__name__,
                     exc,
                 )
+        backfill_start = getattr(config, "_backfill_start", None)
+        backfill_end = getattr(config, "_backfill_end", None)
+        chunk_window_start = backfill_start.isoformat() if backfill_start else None
+        chunk_window_end = backfill_end.isoformat() if backfill_end else trade_date.isoformat()
+
+        qmt_metrics: dict[str, int] = {}
+        qmt_backfill_used = False
+        qmt_df = pl.DataFrame()
+        if (
+            getattr(config, "qmt_bridge_enabled", False)
+            and not config.tdx_allow_mock
+            and not config.should_archive_raw("corporate_actions")
+            and remaining_symbols
+        ):
+            try:
+                qmt_df = fetch_corporate_actions_qmt(
+                    remaining_symbols,
+                    backfill_start or CORPORATE_ACTIONS_BACKFILL_START,
+                    backfill_end or trade_date,
+                    config=config,
+                    metrics=qmt_metrics,
+                )
+                # A partially failed QMT sweep is not useful as primary data:
+                # missing events look exactly like no events. Retry the whole
+                # scope through TDX instead of inventing a failed-symbol list.
+                qmt_backfill_used = int(qmt_metrics.get("failed_requests", 0)) == 0
+            except Exception as exc:
+                logger.warning("QMT corporate-actions backfill failed: %s", exc)
+
         frames: list[pl.DataFrame] = []
         failed_symbols: list[str] = []
+        if qmt_backfill_used:
+            if not qmt_df.is_empty():
+                frames.append(qmt_df)
+            remaining_symbols = []
+
         batch_size = max(1, config.batch_size)
         # One reporter for the whole sweep, owned here because this is the only
         # scope that knows how many symbols the sweep has. Built per chunk
@@ -742,10 +777,6 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             remaining_symbols[index : index + batch_size]
             for index in range(0, len(remaining_symbols), batch_size)
         ]
-        backfill_start = getattr(config, "_backfill_start", None)
-        backfill_end = getattr(config, "_backfill_end", None)
-        chunk_window_start = backfill_start.isoformat() if backfill_start else None
-        chunk_window_end = backfill_end.isoformat() if backfill_end else trade_date.isoformat()
         # How big the sweep was, recorded on the parent batch before the first
         # request. A chunk nobody reached leaves no receipt, so the ledger alone
         # could not tell an interrupted sweep from a short one: two successful
@@ -1168,7 +1199,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 len(failed_symbols),
                 len(symbols),
             )
-        canonical_source = _CANONICAL_BACKFILL
+        canonical_source = "qmt_bridge" if qmt_backfill_used else _CANONICAL_BACKFILL
     else:
         if not config.sources.get("eastmoney", True):
             raise SourceUnavailableError(

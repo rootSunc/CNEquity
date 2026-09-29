@@ -26,7 +26,7 @@ def test_matrix_covers_every_registered_source():
 
     assert required_sources() <= policies.keys()
     assert policies["derived"].derived is True
-    assert policies_for_dataset("daily_bars", policies).primary.name == "tdx_protocol"
+    assert policies_for_dataset("daily_bars", policies).primary.name == "qmt_bridge"
 
 
 def test_every_policy_has_nonempty_required_fields():

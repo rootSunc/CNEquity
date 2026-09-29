@@ -10,6 +10,22 @@ version: 1
 generated_from: src/cnequity/domain/datasets.py
 last_reviewed_at: unknown
 sources:
+  qmt_bridge:
+    owner: 本地 QMT 终端（经由 xtquant_big_convert 本地桥）
+    access_type: local_terminal_bridge
+    tos_url: unknown
+    tos_reviewed_at: unknown
+    authentication: local_terminal_session
+    personal_use: unknown
+    commercial_use: unknown
+    cache_allowed: unknown
+    redistribution: unknown
+    rate_limit: unknown
+    retained_payloads: unknown
+    legal_status: unknown
+    notes: 只在本机通过 QMT 终端桥读取/下载行情；上游数据权属与再分发边界仍需核实。
+    derived: false
+
   tdx_protocol:
     owner: 通达信（TongDaXin；协议来源归属待核实）
     access_type: proprietary_protocol_endpoint

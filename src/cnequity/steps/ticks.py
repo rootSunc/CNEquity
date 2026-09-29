@@ -22,6 +22,7 @@ from datetime import date, timedelta
 import polars as pl
 
 from cnequity.adapters.tdx_protocol.client import fetch_trade_ticks_batch, normalize_with_source
+from cnequity.adapters.qmt_bridge import fetch_trade_ticks_qmt
 from cnequity.config import Config
 from cnequity.domain.datasets import get_dataset
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
@@ -184,6 +185,7 @@ def capture_trade_ticks(config: Config, trade_date: date, run_id: str) -> dict:
 
     for index in range(0, len(symbols), _BATCH_SYMBOLS):
         chunk = symbols[index : index + _BATCH_SYMBOLS]
+        qmt_fallback_used = False
         try:
             df, chunk_failed = fetch_trade_ticks_batch(
                 chunk,
@@ -193,25 +195,39 @@ def capture_trade_ticks(config: Config, trade_date: date, run_id: str) -> dict:
                 workers=config.trade_ticks_fetch_workers,
             )
         except Exception as exc:  # noqa: BLE001 — recorded, sweep continues
-            # A batch failing outright (a connect timeout after many
-            # reconnects) costs this batch, not the step. None of these symbols
-            # got a chance to fail individually, so all of them count.
-            logger.warning(
-                "%s: batch of %d symbol(s) failed outright (%s..%s): %s",
-                DATASET,
-                len(chunk),
-                chunk[0],
-                chunk[-1],
-                exc,
-            )
-            failed.extend(f"{sym}@batch" for sym in chunk)
-            continue
+            qmt_df = pl.DataFrame()
+            if getattr(config, "qmt_bridge_enabled", False):
+                try:
+                    logger.warning(
+                        "%s: TDX batch failed (%s); trying QMT bridge fallback for %s..%s",
+                        DATASET, exc, sessions[0], sessions[-1],
+                    )
+                    qmt_df = fetch_trade_ticks_qmt(
+                        chunk, sessions[0], sessions[-1], config=config,
+                    )
+                except Exception as qmt_exc:
+                    logger.warning("%s: QMT fallback also failed: %s", DATASET, qmt_exc)
+            if qmt_df.is_empty():
+                logger.warning(
+                    "%s: batch of %d symbol(s) failed outright (%s..%s): %s",
+                    DATASET,
+                    len(chunk),
+                    chunk[0],
+                    chunk[-1],
+                    exc,
+                )
+                failed.extend(f"{sym}@batch" for sym in chunk)
+                continue
+            df = qmt_df
+            chunk_failed = []
+            qmt_fallback_used = True
         failed.extend(chunk_failed)
         if df.is_empty():
             continue
         df = _validate_tick_batch(df, chunk, sessions)
         with_rows.update(df["symbol"].unique().to_list())
-        df = normalize_with_source(df, "tdx_protocol", dataset=DATASET)
+        if not qmt_fallback_used:
+            df = normalize_with_source(df, "tdx_protocol", dataset=DATASET)
         writer.write_batch(DATASET, run_id, f"ticks-{index // _BATCH_SYMBOLS:04d}", df)
         written += df.height
         logger.info(

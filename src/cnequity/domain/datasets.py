@@ -741,7 +741,7 @@ _SPECS = [
         # the catalogue — it is the exchange's own listing and the only source
         # here that carries 证券简称 for it. Sina's code-space sweep names what
         # is left: recovered delistings, and any BJ code the board has dropped.
-        supplementary_sources=("bse", "sina"),
+        supplementary_sources=("bse", "sina", "qmt_bridge"),
         tier="L0",
         partition_col=None,
         watermark=False,
@@ -762,8 +762,9 @@ _SPECS = [
     ),
     DatasetSpec(
         "trading_calendar",
-        primary_source="tdx_protocol",
+        primary_source="qmt_bridge",
         backup_source="exchange",
+        supplementary_sources=("tdx_protocol",),
         tier="L0",
         partition_col="trade_date",
         partition_granularity="year",
@@ -813,11 +814,20 @@ _SPECS = [
     DatasetSpec(
         "daily_bars",
         partial_rows=True,
-        primary_source="tdx_protocol",
+        primary_source="qmt_bridge",
         backup_source="eastmoney",
-        # Each of these lands rows under its own label through
-        # `_finish_daily_bars`' recovery chain.
-        supplementary_sources=("exchange", "bse", "sina", "ths", "ths_official", "baostock"),
+        # QMT's local bridge is preferred when available because it can
+        # download and serve the terminal's own bar store.  TDX remains the
+        # recovery source for any symbol that bridge does not cover.
+        supplementary_sources=(
+            "tdx_protocol",
+            "exchange",
+            "bse",
+            "sina",
+            "ths",
+            "ths_official",
+            "baostock",
+        ),
         tier="L1",
         partition_col="trade_date",
         reconciliation_lookback_days=5,
@@ -833,11 +843,12 @@ _SPECS = [
     DatasetSpec(
         "index_bars",
         partial_rows=True,
-        primary_source="tdx_protocol",
+        primary_source="qmt_bridge",
         backup_source="eastmoney",
-        # THS serves the board indices whose base the other two disagree on;
-        # mixing them inside one series is what a dedicated route avoids.
-        supplementary_sources=("ths",),
+        # QMT serves the terminal's own index bar store; TDX is the local
+        # protocol fallback when the bridge is unavailable. THS serves the
+        # board indices whose base the other two disagree on.
+        supplementary_sources=("tdx_protocol", "ths"),
         tier="L1",
         partition_col="trade_date",
         partition_granularity="year",
@@ -856,7 +867,8 @@ _SPECS = [
     DatasetSpec(
         "minute_bars",
         partial_rows=True,
-        primary_source="tdx_protocol",
+        primary_source="qmt_bridge",
+        supplementary_sources=("tdx_protocol",),
         tier="L1",
         partition_col="trade_date",
         partition_granularity="day",
@@ -889,7 +901,8 @@ _SPECS = [
     DatasetSpec(
         "minute_bars_5m",
         partial_rows=True,
-        primary_source="tdx_protocol",
+        primary_source="qmt_bridge",
+        supplementary_sources=("tdx_protocol",),
         tier="L1",
         partition_col="trade_date",
         partition_granularity="day",
@@ -1039,21 +1052,21 @@ _SPECS = [
         "corporate_actions",
         schema_version=2,
         # The daily step is EastMoney's date-filtered snapshot; TDX xdxr is
-        # the per-symbol history/backfill path and the same-day comparison
-        # source. Keep this aligned with the failover config because the
-        # registry also controls canonical row precedence in query views.
-        primary_source="eastmoney",
-        backup_source="tdx_protocol",
-        # baostock supplies actions for delisted names the live boards cannot
-        # answer for; the THS dividend page is the explicit BJ repair route.
-        supplementary_sources=("baostock", "ths"),
+        # QMT's local bridge has full per-symbol dividend/allotment history.
+        # Its API has no date-bulk sweep, so EastMoney remains the efficient
+        # daily same-date snapshot; TDX remains the historical peer/repair.
+        primary_source="qmt_bridge",
+        backup_source="eastmoney",
+        # TDX is the historical peer; baostock supplies delisted repair and
+        # THS is the explicit BJ dividend repair route.
+        supplementary_sources=("tdx_protocol", "baostock", "ths"),
         # Issuer payment-date repair can publish CNINFO and exchange notice
         # evidence, but neither is an automatic failover for daily actions.
         repair_sources=("cninfo", "exchange"),
         tier="L2",
         partition_col="ex_date",
         partition_granularity="year",
-        backfill_source="tdx_protocol",
+        backfill_source="qmt_bridge",
         reconciliation_lookback_days=30,
     ),
     DatasetSpec(
@@ -1088,7 +1101,11 @@ _SPECS = [
     # L3 fundamentals
     DatasetSpec(
         "financial_statement_items",
-        primary_source="eastmoney",
+        primary_source="qmt_bridge",
+        # QMT carries terminal-local report metadata keyed by the first
+        # disclosure date. EastMoney remains the independent repair source when
+        # local QMT data is absent or a bridge request fails.
+        backup_source="eastmoney",
         # The keyed 同花顺 API is the arbitration peer and fills what the
         # EastMoney datacenter reports omit.
         supplementary_sources=("ths_official",),
@@ -1135,6 +1152,7 @@ _SPECS = [
     DatasetSpec(
         "shareholder_counts",
         primary_source="eastmoney",
+        supplementary_sources=("qmt_bridge",),
         tier="L3",
         partition_col="count_date",
         partition_granularity="year",
@@ -1150,6 +1168,7 @@ _SPECS = [
     DatasetSpec(
         "top_holders",
         primary_source="eastmoney",
+        supplementary_sources=("qmt_bridge",),
         tier="L3",
         partition_col="record_date",
         partition_granularity="year",
@@ -1237,6 +1256,7 @@ _SPECS = [
     DatasetSpec(
         "dragon_tiger",
         primary_source="eastmoney",
+        supplementary_sources=("qmt_bridge",),
         # Availability, not equivalence. Both exchanges publish their own
         # 龙虎榜 and reach today's session, so a EastMoney outage costs the
         # Beijing names rather than the whole day. Measured 2026-09-16: SZSE 35
@@ -1287,6 +1307,7 @@ _SPECS = [
         fetch_semantics="snapshot",
         # CNI adjustment history reconstructs 399001/399006 from ~2021-12;
         # CSI indices still accumulate via daily EM snapshots only.
+        supplementary_sources=("qmt_bridge",),
         backfill_source="cni",
     ),
     DatasetSpec(

@@ -10,6 +10,7 @@ import polars as pl
 
 from cnequity.adapters.calendar.exchange_calendar import curated_bar_dates
 from cnequity.adapters.eastmoney.instruments import enrich_instrument_list_dates
+from cnequity.adapters.qmt_bridge import fetch_instruments_qmt, fetch_trading_calendar_qmt
 from cnequity.adapters.tdx_protocol.client import (
     fetch_instruments,
     fetch_trading_calendar,
@@ -82,8 +83,19 @@ _TUSHARE_ST_BACKFILL_CHUNK = 500
 @register_step("instruments", group="core", requires_workers=False)
 def step_instruments(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     rl = config.tdx_rate_limit_spec()
-    df = fetch_instruments(rate_limit=rl, allow_mock=config.tdx_allow_mock, config=config)
-    df = normalize_with_source(df, "tdx_protocol")
+    qmt_fallback_used = False
+    try:
+        df = fetch_instruments(rate_limit=rl, allow_mock=config.tdx_allow_mock, config=config)
+        df = normalize_with_source(df, "tdx_protocol")
+    except Exception as tdx_exc:
+        if not getattr(config, "qmt_bridge_enabled", False) or config.tdx_allow_mock:
+            raise
+        logger.warning(
+            "instruments: TDX fetch failed (%s); trying QMT bridge fallback",
+            tdx_exc,
+        )
+        df = fetch_instruments_qmt(config=config)
+        qmt_fallback_used = True
     # Enrichment last, and deliberately: it fills null list_dates from
     # EastMoney, and the two merges below are exactly where the undated rows
     # come from. Enriching the TDX snapshot first left every Beijing name with
@@ -115,6 +127,8 @@ def step_instruments(config: Config, trade_date: date, run_id: str, context: dic
             )
     df = _carry_lake_facts(config, df)
     result = write_simple(config, run_id, "instruments", df)
+    if qmt_fallback_used:
+        result["source"] = "qmt_bridge"
     new = new_instrument_rows(config, df)
     if new:
         result["context_updates"] = {"new_instruments": new}
@@ -497,15 +511,22 @@ def step_trading_calendar(config: Config, trade_date: date, run_id: str, context
     end = trade_date + timedelta(days=365)
     rl = config.tdx_rate_limit_spec()
     seed_path = config.meta_root / "seeds" / "trading_calendar.csv"
-    df = fetch_trading_calendar(
-        start,
-        end,
-        rate_limit=rl,
-        allow_mock=config.tdx_allow_mock,
-        curated_root=config.curated_root,
-        seed_path=seed_path if seed_path.exists() else None,
-    )
-    df = normalize_with_source(df, source="exchange_calendar")
+    df = pl.DataFrame()
+    if getattr(config, "qmt_bridge_enabled", False) and not config.tdx_allow_mock:
+        try:
+            df = fetch_trading_calendar_qmt(start, end, config=config)
+        except Exception as exc:
+            logger.warning("QMT trading calendar failed; falling back to calendar seed: %s", exc)
+    if df.is_empty():
+        df = fetch_trading_calendar(
+            start,
+            end,
+            rate_limit=rl,
+            allow_mock=config.tdx_allow_mock,
+            curated_root=config.curated_root,
+            seed_path=seed_path if seed_path.exists() else None,
+        )
+        df = normalize_with_source(df, source="exchange_calendar")
     return write_simple(config, run_id, "trading_calendar", df)
 
 
