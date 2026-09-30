@@ -242,6 +242,36 @@ def test_manifest_accepts_str_db_path(tmp_path):
     assert run_id
 
 
+def test_run_metadata_serializes_temporal_values(tmp_path):
+    db = tmp_path / "meta" / "manifest.db"
+    manifest = Manifest(db)
+    run_id = manifest.start_run(
+        "init",
+        {"started_on": date(2024, 1, 1), "observed_at": datetime(2024, 1, 1, 9, 30)},
+    )
+    assert manifest.get_run_metadata(run_id)["started_on"] == "2024-01-01"
+    assert manifest.get_run_metadata(run_id)["observed_at"] == "2024-01-01T09:30:00"
+
+    manifest.update_run_metadata(
+        run_id,
+        {"new_instruments": [{"symbol": "000001.SZ", "list_date": date(2024, 1, 2)}]},
+    )
+    assert manifest.get_run_metadata(run_id)["new_instruments"][0]["list_date"] == "2024-01-02"
+
+    manifest.mutate_run_metadata(
+        run_id,
+        lambda metadata: metadata.update({"as_of": date(2024, 1, 3)}),
+    )
+
+    saved = manifest.get_run_metadata(run_id)
+    assert saved["new_instruments"][0]["list_date"] == "2024-01-02"
+    assert saved["as_of"] == "2024-01-03"
+
+    with pytest.raises(TypeError, match="Object of type object is not JSON serializable"):
+        manifest.update_run_metadata(run_id, {"unexpected": object()})
+    assert manifest.get_run_metadata(run_id) == saved
+
+
 def test_request_retries_are_separate_from_batch_retry_budget(tmp_path):
     db = tmp_path / "meta" / "manifest.db"
     manifest = Manifest(db)
