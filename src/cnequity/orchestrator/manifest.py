@@ -5,13 +5,19 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _json_default(value: object) -> str:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 # How long an unlocked `running` row is given before it is treated as a corpse.
@@ -302,7 +308,7 @@ class Manifest:
                 INSERT INTO ingestion_runs (run_id, job_name, status, started_at, metadata_json)
                 VALUES (?, ?, 'running', ?, ?)
                 """,
-                (run_id, job_name, _utcnow(), json.dumps(metadata or {})),
+                (run_id, job_name, _utcnow(), json.dumps(metadata or {}, default=_json_default)),
             )
         return run_id
 
@@ -1393,7 +1399,7 @@ class Manifest:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE ingestion_runs SET metadata_json = ? WHERE run_id = ?",
-                (json.dumps(metadata), run_id),
+                (json.dumps(metadata, default=_json_default), run_id),
             )
 
     def _mutate_run_metadata(
@@ -1429,7 +1435,7 @@ class Manifest:
             if row:
                 conn.execute(
                     "UPDATE ingestion_runs SET metadata_json = ? WHERE run_id = ?",
-                    (json.dumps(metadata), run_id),
+                    (json.dumps(metadata, default=_json_default), run_id),
                 )
             return metadata
 
