@@ -11,13 +11,14 @@ from typing import Any
 import polars as pl
 
 from cnequity.adapters.tdx_protocol.client import fetch_daily_bars, normalize_with_source
+from cnequity.adapters.qmt_bridge import fetch_daily_bars_qmt
 from cnequity.config import Config, load_config
 from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.outcomes import SourcePayloadError, error_kind, step_outcome
 from cnequity.progress import hms as _hms
-from cnequity.steps.common import BACKFILL_START
+from cnequity.steps.common import BACKFILL_START, list_trading_dates
 from cnequity.storage import StagingWriter
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,150 @@ def _stage_daily_bar_rows(
     writer.write_batch("daily_bars", run_id, batch_id, df)
 
 
+def _fetch_daily_bars_with_priority(
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    config: Config,
+    rate_limit: RateLimitSpec | None,
+    allow_mock: bool,
+    backfill: bool,
+    on_heartbeat: Any,
+    metrics: dict[str, Any],
+) -> tuple[pl.DataFrame, str]:
+    """Try QMT first; use TDX only for symbol/date gaps it cannot cover."""
+    if allow_mock or not getattr(config, "qmt_bridge_enabled", False):
+        return (
+            fetch_daily_bars(
+                symbols,
+                start,
+                end,
+                rate_limit=rate_limit,
+                allow_mock=allow_mock,
+                backfill=backfill,
+                config=config,
+                on_heartbeat=on_heartbeat,
+                metrics=metrics,
+            ),
+            "tdx_protocol",
+        )
+
+    try:
+        qmt_df = fetch_daily_bars_qmt(
+            symbols,
+            start,
+            end,
+            config=config,
+            metrics=metrics,
+        )
+    except Exception as exc:
+        logger.warning("QMT daily bars failed; falling back to TDX: %s", exc)
+        if metrics is not None:
+            metrics["fallback_requests"] = int(metrics.get("fallback_requests", 0)) + 1
+        return (
+            fetch_daily_bars(
+                symbols,
+                start,
+                end,
+                rate_limit=rate_limit,
+                allow_mock=allow_mock,
+                backfill=backfill,
+                config=config,
+                on_heartbeat=on_heartbeat,
+                metrics=metrics,
+            ),
+            "tdx_protocol",
+        )
+
+    observed_symbols = set(qmt_df.get_column("symbol").unique().to_list()) if not qmt_df.is_empty() else set()
+    if qmt_df.is_empty():
+        logger.warning(
+            "QMT daily bars returned no rows for %d symbol(s) over %s..%s",
+            len(symbols), start.isoformat(), end.isoformat(),
+        )
+    else:
+        logger.info(
+            "QMT daily bars returned %d row(s) for %d/%d symbol(s) over %s..%s "
+            "(gap_fill=%s)",
+            qmt_df.height,
+            len(observed_symbols),
+            len(symbols),
+            start.isoformat(),
+            end.isoformat(),
+            config.qmt_bridge_tdx_gap_fill,
+        )
+
+    if qmt_df.is_empty():
+        return (
+            fetch_daily_bars(
+                symbols,
+                start,
+                end,
+                rate_limit=rate_limit,
+                allow_mock=allow_mock,
+                backfill=backfill,
+                config=config,
+                on_heartbeat=on_heartbeat,
+                metrics=metrics,
+            ),
+            "tdx_protocol",
+        )
+
+    if not getattr(config, "qmt_bridge_tdx_gap_fill", True):
+        return qmt_df, "qmt_bridge"
+
+    try:
+        sessions = list_trading_dates(config, start, end)
+    except Exception as exc:
+        logger.warning("Trading calendar unavailable for QMT daily-bars diff: %s", exc)
+        sessions = []
+
+    if not sessions:
+        observed = set(qmt_df.get_column("symbol").unique().to_list())
+        missing = [symbol for symbol in symbols if symbol not in observed]
+        gap_specs = [(start, end, missing)] if missing else []
+    else:
+        gap_specs = []
+        for session in sessions:
+            observed = set(
+                qmt_df.filter(pl.col("trade_date") == session)
+                .get_column("symbol")
+                .unique()
+                .to_list()
+            )
+            missing = [symbol for symbol in symbols if symbol not in observed]
+            if missing:
+                gap_specs.append((session, session, missing))
+
+    fallback_frames: list[pl.DataFrame] = []
+    for gap_start, gap_end, missing in gap_specs:
+        try:
+            fallback_df = fetch_daily_bars(
+                missing,
+                gap_start,
+                gap_end,
+                rate_limit=rate_limit,
+                allow_mock=allow_mock,
+                backfill=backfill,
+                config=config,
+                on_heartbeat=on_heartbeat,
+                metrics=metrics,
+            )
+        except Exception as exc:
+            logger.warning("TDX daily-bars gap fill failed: %s", exc)
+            continue
+        if not fallback_df.is_empty():
+            fallback_frames.append(
+                normalize_with_source(fallback_df, "tdx_protocol", dataset="daily_bars")
+            )
+
+    if not fallback_frames:
+        return qmt_df, "qmt_bridge"
+    combined = pl.concat([qmt_df, *fallback_frames], how="diagonal_relaxed")
+    return dedupe_by_primary_key(combined, "daily_bars"), "mixed"
+
+
 def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
     (
         symbols,
@@ -241,18 +386,19 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
 
     try:
         _heartbeat()
-        df = fetch_daily_bars(
+        df, source = _fetch_daily_bars_with_priority(
             symbols,
             start,
             end,
+            config=tdx_cfg,
             rate_limit=rl,
             allow_mock=allow_mock,
             backfill=backfill,
-            config=tdx_cfg,
             on_heartbeat=_heartbeat,
             metrics=batch_metrics,
         )
-        df = normalize_with_source(df, "tdx_protocol", dataset=dataset)
+        if source != "mixed":
+            df = normalize_with_source(df, source, dataset=dataset)
         _require_daily_bar_date_coverage(df, start, end)
         try:
             _require_daily_bar_symbol_coverage(df, symbols)
@@ -403,18 +549,19 @@ def fetch_daily_bars_parallel(
                 manifest.touch_batch_heartbeat(run_id, batch_id)
 
             _heartbeat()
-            df = fetch_daily_bars(
+            df, source = _fetch_daily_bars_with_priority(
                 batch_symbols,
                 batch_start,
                 batch_end,
+                config=config,
                 rate_limit=rl,
                 allow_mock=config.tdx_allow_mock,
                 backfill=backfill,
-                config=config,
                 on_heartbeat=_heartbeat,
                 metrics=batch_metrics,
             )
-            df = normalize_with_source(df, "tdx_protocol", dataset=dataset)
+            if source != "mixed":
+                df = normalize_with_source(df, source, dataset=dataset)
             _require_daily_bar_date_coverage(df, batch_start, batch_end)
             try:
                 _require_daily_bar_symbol_coverage(df, batch_symbols)

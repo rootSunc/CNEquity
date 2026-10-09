@@ -282,7 +282,7 @@ def test_compact_merges_into_an_existing_period_partition(tmp_path):
 def test_compact_prefers_primary_source_on_same_timestamp(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     frame = _bar_frame([date(2024, 6, 3), date(2024, 6, 3)]).with_columns(
-        pl.Series("source", ["eastmoney", "tdx_protocol"]),
+        pl.Series("source", ["eastmoney", "qmt_bridge"]),
         pl.Series("open", [10.0, 20.0]),
         pl.Series("high", [10.0, 20.0]),
         pl.Series("low", [10.0, 20.0]),
@@ -300,7 +300,7 @@ def test_compact_prefers_primary_source_on_same_timestamp(tmp_path):
         .select("source", "close")
         .to_dicts()
     )
-    assert rows == [{"source": "tdx_protocol", "close": 20.0}]
+    assert rows == [{"source": "qmt_bridge", "close": 20.0}]
 
 
 def test_compact_removes_legacy_index_weekend_rows(tmp_path):

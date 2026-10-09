@@ -70,7 +70,7 @@
 | 项 | 值 |
 |------|-------|
 | 波次 | `daily_bars`（Wave 1，依赖 corporate_actions） |
-| 主源 | tdx_protocol（未复权；沪深主路径，BJ 历史通过 market id 2 专用路径） |
+| 主源 | qmt_bridge（未复权；启用本地 BigQMT 桥时生效，未启用时走 TDX） |
 | 备源 / 路由 | 当期可用交易所板快照与 TDX 批量行情；缺口走 eastmoney clist/kline。BJ 当期优先 BSE、历史优先 TDX，Sina 补剩余范围；显式小范围请求跳过无关全板扫描 |
 | 频率 | 每日增量；init 时全量回填；深历史由同花顺按上市年份回补（股票与 ETF/LOF 均支持） |
 | 主键 | (symbol, trade_date) |
@@ -325,6 +325,7 @@
 
 | 来源 | 协议 | MVP 用途 | 备源 | 降级策略 |
 |--------|----------|-----------|--------|---------|
+| qmt_bridge | 本地终端桥 | daily_bars, index_bars, minute_bars, minute_bars_5m；trading_calendar；corporate_actions 回填；financial_statement_items；shareholder_counts（仅 eastmoney 关闭时） | tdx_protocol 按缺口补齐；FSI 退 eastmoney | 桥不可用或无行时按批/缺口退 TDX；财务空响应不冒充 PIT；tick 历史仅最近 1 个交易日 |
 | tdx_protocol | TCP | bars、instruments、calendar | eastmoney clist（tip 路由）/ kline（多日） | tip 缺口进 curated；snapshot 供 diff |
 | sina | HTTP | hfq 因子（qfq 查询时推导） | — | 跳过该标的 + quality finding |
 | bse | HTTP | BJ 当期日线、证券名单与交易状态 | — | 当期快照不能当作历史；已有行补 amount 需逐行一致性核对 |

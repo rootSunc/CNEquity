@@ -16,6 +16,7 @@ from cnequity.derive.adj_factors import (
     _align_factors_to_bars,
     _cache_path,
     _load_daily_bar_dates,
+    _resolve_factors,
     _write_adj_partitions,
     compute_adj_factors,
 )
@@ -381,6 +382,72 @@ def test_compute_adj_factors_writes_derived(adj_config):
     assert df["factor"][0] == 0.5
     assert df["adjust_type"][0] == "hfq"
     assert df["source"][0] == "sina"
+
+
+def test_resolve_factors_uses_qmt_bridge_before_sina(monkeypatch, tmp_path):
+    cfg = Config(data_root=tmp_path / "data")
+    cfg.adj_factors_source = "qmt_bridge"
+    cfg.qmt_bridge_enabled = True
+    sym_bars = pl.DataFrame({"trade_date": [date(2024, 6, 28)]})
+    requested: list[tuple[list[str], date, date]] = []
+
+    def fake_qmt(symbols, start, end, **kwargs):
+        requested.append((list(symbols), start, end))
+        return pl.DataFrame({"trade_date": [date(2024, 6, 28)], "factor": [1.25]})
+
+    def must_not_call_sina(*args, **kwargs):
+        raise AssertionError("Sina should not be called after a successful QMT fetch")
+
+    monkeypatch.setattr("cnequity.derive.adj_factors.fetch_adj_factors_qmt", fake_qmt)
+    monkeypatch.setattr(
+        "cnequity.derive.adj_factors.fetch_adj_factor_series", must_not_call_sina
+    )
+    factors, source = _resolve_factors(
+        cfg,
+        "600000.SH",
+        "hfq",
+        sym_bars,
+        force=True,
+        client=None,
+    )
+
+    assert requested == [(["600000.SH"], date(2024, 6, 28), date(2024, 6, 28))]
+    assert factors["factor"].to_list() == [1.25]
+    assert source == "qmt_bridge"
+
+
+def test_compute_adj_factors_prefers_batched_qmt_bridge(adj_config, monkeypatch):
+    adj_config.adj_factors_source = "qmt_bridge"
+    adj_config.qmt_bridge_enabled = True
+    requested: list[list[str]] = []
+
+    def fake_qmt(symbols, start, end, **kwargs):
+        requested.append(list(symbols))
+        assert (start, end) == (date(2024, 6, 28), date(2024, 6, 28))
+        return pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [date(2024, 6, 28)],
+                "factor": [1.25],
+            }
+        )
+
+    def must_not_call_sina(*args, **kwargs):
+        raise AssertionError("Sina should not be used when the QMT bridge answers")
+
+    monkeypatch.setattr("cnequity.derive.adj_factors.fetch_adj_factors_qmt", fake_qmt)
+    monkeypatch.setattr(
+        "cnequity.derive.adj_factors.fetch_adj_factor_series", must_not_call_sina
+    )
+
+    result = compute_adj_factors(adj_config)
+
+    assert result.failed == []
+    assert requested == [["600519.SH"]]
+    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
+    df = pl.read_parquet(out)
+    assert df["factor"][0] == 1.25
+    assert df["source"][0] == "qmt_bridge"
 
 
 def test_compute_adj_factors_includes_etf_bars(adj_config, monkeypatch):

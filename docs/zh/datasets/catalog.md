@@ -178,17 +178,17 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 |--------|--------|------|------|------|------|------|
 | instruments | —（单文件 merge） | symbol | by_date | — | tdx_protocol | EM 分别从 A 股与 ETF/LOF clist 补 list_date；已发布交易所 ETF 目录补基金缺失上市日；baostock 回填退市股（`cne backfill instruments`）；merge 保留退市 |
 | etf_profiles | as_of_date（按年） | symbol, as_of_date | snapshot | — | exchange | 上交所 ETF 细分类、深交所 ETF/基金目录及逐代码核验的官方指数方案；仅有充分境内股票指数证据的记录进入研究池。未知类别保留 unverified，不能回填未观测的历史快照 |
-| trading_calendar | trade_date | trade_date | by_date | ✓ | tdx_protocol | 备源交易所 CSV；种子 2016–2027 |
+| trading_calendar | trade_date | trade_date | by_date | ✓ | qmt_bridge | 启用本地 BigQMT 桥时优先；备源交易所 CSV；种子 2016–2027 |
 | trading_status | trade_date（按月） | symbol, trade_date | by_date | ✓ | eastmoney | baostock ST 回填；派生停牌写月分区。`status`（normal/suspended/**delisted**）与 `risk_warning`（ST/*ST）是两列——旧版单列会让停牌冲掉 ST 标记；退市行由 `instruments` 判定并标 `derived_delisted`。旧湖读取自动兼容，物理迁移见 [schema](schema.md#trading_status) |
 
 ## L1 行情
 
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | 备注 |
 |--------|--------|------|------|------|------|------|
-| daily_bars | trade_date | symbol, trade_date | by_date | ✓ | tdx_protocol | tip 缺口东财 clist 路由进 curated；多日 kline；BJ→sina；显式开启后只追加正式目录已核验 ETF，其他基金不进入默认日更；snapshot 仍留 audit |
-| index_bars | trade_date | symbol, trade_date, frequency | by_date | ✓ | tdx_protocol | |
-| minute_bars | trade_date | symbol, trade_date, bar_time, frequency | by_date | ✓ | tdx_protocol | 1m。**可选**，默认关；`[minute_bars]` 配置范围；**源端只有 95 个交易日**（见下「历史视野」）；落盘量随标的数与窗口增长；required=false |
-| minute_bars_5m | trade_date | symbol, trade_date, bar_time, frequency | by_date | ✓ | tdx_protocol | 5m。同上可选；**491 个交易日（约 2 年），是唯一有真历史的日内频率**；落盘量随标的数与窗口增长；required=false |
+| daily_bars | trade_date | symbol, trade_date | by_date | ✓ | qmt_bridge | 启用本地 BigQMT 桥时优先；TDX 按缺口补齐；tip 缺口东财 clist 路由进 curated；多日 kline；BJ→sina；显式开启后只追加正式目录已核验 ETF，其他基金不进入默认日更；snapshot 仍留 audit |
+| index_bars | trade_date | symbol, trade_date, frequency | by_date | ✓ | qmt_bridge | 启用本地 BigQMT 桥时优先；TDX 按缺口补齐 |
+| minute_bars | trade_date | symbol, trade_date, bar_time, frequency | by_date | ✓ | qmt_bridge | 1m。**可选**，默认关；`[minute_bars]` 配置范围；**源端只有 95 个交易日**（见下「历史视野」）；落盘量随标的数与窗口增长；QMT 缺口交给 TDX；required=false |
+| minute_bars_5m | trade_date | symbol, trade_date, bar_time, frequency | by_date | ✓ | qmt_bridge | 5m。同上可选；**491 个交易日（约 2 年），是唯一有真历史的日内频率**；落盘量随标的数与窗口增长；QMT 缺口交给 TDX；required=false |
 | minute_bars_15m | trade_date | symbol, trade_date, bar_time, frequency | derived | ✓ | derived | 15m。**默认不计算**，`cne derive minute_bars_15m` 手动入湖；某只股票某天有 1m 用 1m，否则用 5m，`resampled_from` 标明来源；required=false |
 | minute_bars_30m | trade_date | symbol, trade_date, bar_time, frequency | derived | ✓ | derived | 30m。同上 |
 | minute_bars_60m | trade_date | symbol, trade_date, bar_time, frequency | derived | ✓ | derived | 60m。同上 |
@@ -202,7 +202,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | 备注 |
 |--------|--------|------|------|------|------|------|
-| corporate_actions | ex_date（按年） | symbol, ex_date, action_type | by_date | ✓ | eastmoney（日更） | 回填：tdx_protocol；混粒度用 `scripts/migrations/repartition.py` |
+| corporate_actions | ex_date（按年） | symbol, ex_date, action_type | by_date | ✓ | qmt_bridge（回填） | 日更仍用 eastmoney 日期快照；TDX/修理源补缺口；混粒度用 `scripts/migrations/repartition.py` |
 | announcement_index | announce_date | announcement_id | by_date PIT | ✓ | cninfo | `as_of` 过滤 |
 | earnings_disclosure_schedule | report_period | symbol, report_period | by_date | — | eastmoney | 预约披露时间表（RPT_PUBLIC_BS_APPOIN）；现值语义非 PIT：变更覆盖 scheduled_date（first_scheduled_date 保留首约，actual_date 披露后回填）；`cne backfill` 走 2016 起全报告期 |
 
@@ -214,7 +214,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 | valuation_metrics | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 回填：baostock |
 | analyst_consensus | forecast_date | symbol, forecast_date | snapshot | ✓ | eastmoney | |
 | share_structure | change_date | symbol, change_date, announce_date | by_date PIT | — | eastmoney | 总股本/流通/限售/自由流通。**按变动日期扫，不是按报告期**：END_DATE 是股本变动日，不能只请求季末日期 |
-| shareholder_counts | count_date | symbol, count_date, announce_date | by_date PIT | — | eastmoney | 股东户数与户均持股，筹码集中度输入。**旬末/月末也披露**：不能只按季末日期筛选 |
+| shareholder_counts | count_date | symbol, count_date, announce_date | by_date PIT | — | eastmoney | 股东户数与户均持股，筹码集中度输入。**旬末/月末也披露**：不能只按季末日期筛选；EastMoney 关闭时可用 `qmt_bridge`（户均列为空） |
 | top_holders | record_date | symbol, record_date, holder_scope, holder_rank, holder_name, announce_date | by_date PIT | — | eastmoney | 一张表两个口径：`holder_scope=total`（前十大股东）/ `float`（前十大流通股东）。披露日期不一定落在季末 |
 
 ## L4 资金面
@@ -304,8 +304,8 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 
 | 数据集 | 主源 | 备源 |
 |--------|------|------|
-| daily_bars | tdx_protocol | eastmoney |
-| corporate_actions | eastmoney | tdx_protocol |
+| daily_bars | qmt_bridge | tdx_protocol / eastmoney |
+| corporate_actions | eastmoney（日更）/ qmt_bridge（回填） | tdx_protocol |
 
 ## 对发布方的核对（authority checks）
 

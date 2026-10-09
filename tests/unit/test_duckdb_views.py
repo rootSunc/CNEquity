@@ -179,7 +179,7 @@ def test_canonical_dedupe_prefers_primary_source_on_same_timestamp():
             "symbol": ["600519.SH", "600519.SH"],
             "trade_date": [date(2024, 6, 28)] * 2,
             "close": [1800.0, 1900.0],
-            "source": ["eastmoney", "tdx_protocol"],
+            "source": ["eastmoney", "qmt_bridge"],
             "data_version": ["v9", "v1"],
             "fetched_at": [datetime(2024, 6, 28, tzinfo=timezone.utc)] * 2,
         }
@@ -189,10 +189,10 @@ def test_canonical_dedupe_prefers_primary_source_on_same_timestamp():
     lazy = dedupe_lazy_by_primary_key(frame.lazy(), "daily_bars").collect()
 
     assert eager.select("source", "close").to_dicts() == [
-        {"source": "tdx_protocol", "close": 1900.0}
+        {"source": "qmt_bridge", "close": 1900.0}
     ]
     assert lazy.select("source", "close").to_dicts() == [
-        {"source": "tdx_protocol", "close": 1900.0}
+        {"source": "qmt_bridge", "close": 1900.0}
     ]
 
 
@@ -202,7 +202,7 @@ def test_canonical_dedupe_prefers_primary_source_without_fetch_time():
             "symbol": ["600519.SH", "600519.SH"],
             "trade_date": [date(2024, 6, 28)] * 2,
             "close": [1800.0, 1900.0],
-            "source": ["tdx_protocol", "eastmoney"],
+            "source": ["qmt_bridge", "eastmoney"],
             "data_version": ["v1", "v9"],
         }
     )
@@ -211,10 +211,10 @@ def test_canonical_dedupe_prefers_primary_source_without_fetch_time():
     lazy = dedupe_lazy_by_primary_key(frame.lazy(), "daily_bars").collect()
 
     assert eager.select("source", "close").to_dicts() == [
-        {"source": "tdx_protocol", "close": 1800.0}
+        {"source": "qmt_bridge", "close": 1800.0}
     ]
     assert lazy.select("source", "close").to_dicts() == [
-        {"source": "tdx_protocol", "close": 1800.0}
+        {"source": "qmt_bridge", "close": 1800.0}
     ]
 
 
@@ -255,14 +255,14 @@ def test_duckdb_views_dedupe_prefers_primary_source_on_same_timestamp(tmp_path):
         {**common, "close": [1800.0], "source": ["eastmoney"], "data_version": ["v9"]}
     ).write_parquet(partition / "part-backup.parquet")
     pl.DataFrame(
-        {**common, "close": [1900.0], "source": ["tdx_protocol"], "data_version": ["v1"]}
+        {**common, "close": [1900.0], "source": ["qmt_bridge"], "data_version": ["v1"]}
     ).write_parquet(partition / "part-primary.parquet")
 
     db = ensure_duckdb_views(Config(data_root=data_root))
     with duckdb.connect(str(db), read_only=True) as con:
         rows = con.execute("SELECT source, close FROM daily_bars").fetchall()
 
-    assert rows == [("tdx_protocol", 1900.0)]
+    assert rows == [("qmt_bridge", 1900.0)]
 
 
 def test_duckdb_views_dedupe_legacy_rows_by_source_without_fetch_time(tmp_path):
@@ -282,7 +282,7 @@ def test_duckdb_views_dedupe_legacy_rows_by_source_without_fetch_time(tmp_path):
     pl.DataFrame({**common, "close": [1800.0], "source": ["eastmoney"]}).write_parquet(
         partition / "part-backup.parquet"
     )
-    pl.DataFrame({**common, "close": [1900.0], "source": ["tdx_protocol"]}).write_parquet(
+    pl.DataFrame({**common, "close": [1900.0], "source": ["qmt_bridge"]}).write_parquet(
         partition / "part-primary.parquet"
     )
 
@@ -290,7 +290,7 @@ def test_duckdb_views_dedupe_legacy_rows_by_source_without_fetch_time(tmp_path):
     with duckdb.connect(str(db), read_only=True) as con:
         rows = con.execute("SELECT source, close FROM daily_bars").fetchall()
 
-    assert rows == [("tdx_protocol", 1900.0)]
+    assert rows == [("qmt_bridge", 1900.0)]
 
 
 def test_duckdb_trading_status_view_accepts_legacy_text_fetch_time(tmp_path):

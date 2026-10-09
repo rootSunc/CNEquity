@@ -21,8 +21,13 @@ from cnequity.steps.bars import (
     _mark_unresolved_daily_bar_batches,
     _reject_preopen_placeholder,
     _resolve_recovered_daily_batches,
+    _staged_daily_bar_missing_keys,
     _staged_daily_bar_partial_symbols,
     _staged_daily_bar_symbols,
+)
+from cnequity.steps.common import (
+    load_negative_evidence,
+    record_negative_evidence,
 )
 from cnequity.storage import StagingWriter
 from cnequity.storage.layout import init_data_layout
@@ -2028,3 +2033,188 @@ def test_a_probe_the_source_never_answered_settles_nothing(tmp_path, monkeypatch
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
     assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+
+
+def test_placeholder_only_symbol_certified_after_two_source_agreement(tmp_path, monkeypatch):
+    """A volume=0 placeholder bar must not disqualify no-data certification.
+
+    First-init dead funds (delisted/liquidated ETFs/LOFs absent from TDX and
+    EastMoney history) stage exactly one pre-open placeholder on the tip day.
+    The old "no staged rows at all" condition made the designed two-source
+    escape hatch unreachable, which deadlocked bootstrap ``cne init``: the
+    interior-gap gate raised before negative evidence could ever be recorded.
+    """
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": False})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    start = date(2026, 7, 20)
+    tip = date(2026, 7, 22)
+    StagingWriter(cfg.staging_root).write_batch(
+        "daily_bars", run_id, "tdx-0000", _bar_frame(["158030.SZ"], tip, volume=0)
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.fetch_bars_via_sina",
+        lambda *args, **kwargs: {
+            "rows_read": 0,
+            "rows_written": 0,
+            "failed_symbol_names": [],
+            "empty_symbol_names": ["158030.SZ"],
+        },
+    )
+
+    def empty(symbols, start, end, *, diagnostics, **kwargs):
+        diagnostics.update(
+            {"failed_symbols": {}, "empty_symbols": list(symbols), "route_outcomes": {}}
+        )
+        return pl.DataFrame()
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", empty)
+
+    result = _gapfill_multiday_via_kline(
+        cfg,
+        run_id,
+        symbols=["158030.SZ"],
+        start=start,
+        end=tip,
+    )
+
+    assert result["complete"] is True
+    assert result["expected_no_data_symbols"] == ["158030.SZ"]
+
+
+def test_truncated_symbol_missing_prefix_certified_segment_level(tmp_path, monkeypatch):
+    """A symbol whose source history starts mid-window certifies its missing
+    prefix per segment instead of being permanently unresolved.
+
+    The old rule only certified symbols with NO staged rows at all; a fund
+    with a real recent tail (source retention cut) kept its unreachable
+    prefix in the missing-key set forever, so the interior-gap gate refused
+    to checkpoint on every resume.
+    """
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False, "ths": False})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    start = date(2026, 7, 20)
+    tail = date(2026, 7, 22)
+    StagingWriter(cfg.staging_root).write_batch(
+        "daily_bars", run_id, "tdx-0000", _bar_frame(["161022.SZ"], tail)
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.fetch_bars_via_sina",
+        lambda *args, **kwargs: {
+            "rows_read": 0,
+            "rows_written": 0,
+            "failed_symbol_names": [],
+            "empty_symbol_names": ["161022.SZ"],
+        },
+    )
+
+    def empty(symbols, start, end, *, diagnostics, **kwargs):
+        diagnostics.update(
+            {"failed_symbols": {}, "empty_symbols": list(symbols), "route_outcomes": {}}
+        )
+        return pl.DataFrame()
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", empty)
+
+    result = _gapfill_multiday_via_kline(
+        cfg,
+        run_id,
+        symbols=["161022.SZ"],
+        start=start,
+        end=tail,
+    )
+
+    assert result["complete"] is True
+    keys = {tuple(k) for k in result["expected_no_data_keys"]}
+    assert keys == {("161022.SZ", start), ("161022.SZ", date(2026, 7, 21))}
+    # 负证据只覆盖缺失段，不覆盖有真实数据的尾日
+    evidence = load_negative_evidence(cfg, "daily_bars")
+    covered = [
+        e
+        for e in evidence
+        if e["symbol"] == "161022.SZ" and e["reason"] == "source_empty"
+    ]
+    assert covered, "segment certification must persist negative evidence"
+    assert all(str(e["window_end"]) <= "2026-07-21" for e in covered)
+
+
+def test_missing_key_gate_skips_negative_evidence_keys(tmp_path):
+    """The interior-gap gate must exclude keys already covered by live
+    negative evidence — symmetric with its trading_status exclusion."""
+    cfg = _cfg(tmp_path)
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    start = date(2026, 7, 20)
+    missing_day = date(2026, 7, 21)
+    StagingWriter(cfg.staging_root).write_batch(
+        "daily_bars", run_id, "tdx-0000", _bar_frame(["600519.SH"], start)
+    )
+    record_negative_evidence(
+        cfg,
+        "daily_bars",
+        {"600519.SH"},
+        missing_day,
+        missing_day,
+        reason="source_empty",
+        source="tdx_protocol",
+    )
+
+    keys = _staged_daily_bar_missing_keys(cfg, run_id, ["600519.SH"], start, missing_day)
+
+    assert keys == set()
+
+
+def test_segment_certification_survives_em_transport_failure(tmp_path, monkeypatch):
+    """EastMoney transport failure must not block certification when Sina and
+    THS both vote empty — the vote needs two independent sources, not two
+    specific sources (em push2his outage is the common real-world case)."""
+    cfg = _cfg(tmp_path)
+    cfg.sources.update({"exchange": False})
+    run_id = Manifest(cfg.manifest_path).start_run("backfill")
+    start = date(2026, 7, 20)
+    tail = date(2026, 7, 22)
+    StagingWriter(cfg.staging_root).write_batch(
+        "daily_bars", run_id, "tdx-0000", _bar_frame(["161022.SZ"], tail)
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.fetch_bars_via_sina",
+        lambda *args, **kwargs: {
+            "rows_read": 0,
+            "rows_written": 0,
+            "failed_symbol_names": [],
+            "empty_symbol_names": ["161022.SZ"],
+        },
+    )
+
+    def em_down(symbols, start, end, *, diagnostics, **kwargs):
+        diagnostics.update(
+            {
+                "failed_symbols": {s: "transport_error" for s in symbols},
+                "empty_symbols": [],
+                "route_outcomes": {},
+            }
+        )
+        return pl.DataFrame()
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", em_down)
+    monkeypatch.setattr(
+        "cnequity.steps.bars._gapfill_missing_keys_via_ths",
+        lambda config, run_id, *, missing_keys, start, end: {
+            "rows_read": 0,
+            "rows_written": 0,
+            "audit_findings": [],
+            "empty_symbols": [s for s, _day in missing_keys],
+        },
+    )
+
+    result = _gapfill_multiday_via_kline(
+        cfg,
+        run_id,
+        symbols=["161022.SZ"],
+        start=start,
+        end=tail,
+    )
+
+    assert result["complete"] is True
+    keys = {tuple(k) for k in result["expected_no_data_keys"]}
+    assert keys == {("161022.SZ", start), ("161022.SZ", date(2026, 7, 21))}

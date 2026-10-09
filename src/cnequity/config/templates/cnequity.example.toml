@@ -90,6 +90,24 @@ standard = [
     "117.133.128.226:7709",
 ]
 
+[qmt_bridge]
+# Preferred local terminal source for daily, index and 1m/5m bars.  Missing
+# symbols still fall back to the TDX lane below.  Point bridge_src_path at the
+# repository's src/
+# directory if xtquant_big_convert is not installed.
+enabled = false
+# bridge_src_path = "../xtquant_big_convert/src"
+# client_config_path = "../xtquant_big_convert/bigqmt_signal_trader_client_config.py"
+# account_id = "YOUR_ACCOUNT_ID"
+timeout_seconds = 30.0
+download_timeout_seconds = 180.0
+data_wait_seconds = 10.0
+# 0 keeps the bridge's default batching.  50-100 is a safer choice for wide
+# full-market sweeps.
+chunk_size = 100
+# "auto" infers 股/手 from amount / close / volume; "share" and "lot" pin it.
+volume_unit = "auto"
+
 [sources.eastmoney]
 enabled = true
 # General EastMoney HTTP lane; push2 and datacenter have stricter lanes below.
@@ -416,7 +434,7 @@ backfill_snapshots = false
 
 [[failover.datasets]]
 name = "daily_bars"
-primary = "tdx_protocol"
+primary = "qmt_bridge"
 backup = "eastmoney"
 compare_fields = ["close", "volume"]
 price_tolerance_bps = 10
@@ -431,8 +449,8 @@ max_drift_fraction = 0.0
 
 [[failover.datasets]]
 name = "corporate_actions"
-primary = "eastmoney"
-backup = "tdx_protocol"
+primary = "qmt_bridge"
+backup = "eastmoney"
 compare_fields = ["cash_dividend", "bonus_ratio", "transfer_ratio"]
 price_tolerance_bps = 10
 snapshot_cadence = "daily"

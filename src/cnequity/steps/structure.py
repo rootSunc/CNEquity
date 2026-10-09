@@ -15,6 +15,7 @@ from cnequity.adapters.cni.index_constituents_history import (
 from cnequity.adapters.eastmoney.index_constituents import fetch_index_constituents
 from cnequity.adapters.eastmoney.industry import fetch_industry_members
 from cnequity.adapters.eastmoney.sectors import fetch_sector_members
+from cnequity.adapters.qmt_bridge import fetch_index_constituents_qmt
 from cnequity.adapters.sw.industry_history import (
     expand_sw_industry_as_of,
     fetch_sw_industry_intervals,
@@ -180,7 +181,16 @@ def step_index_constituents(config: Config, trade_date: date, run_id: str, conte
         raise SourceUnavailableError("index_constituents: eastmoney source disabled in config")
 
     def _fetch(d: date) -> pl.DataFrame:
-        frame = fetch_index_constituents(d, config=config)
+        try:
+            frame = fetch_index_constituents(d, config=config)
+        except Exception as em_exc:
+            if not getattr(config, "qmt_bridge_enabled", False):
+                raise
+            logger.warning(
+                "index_constituents: EastMoney fetch failed (%s); trying QMT bridge fallback",
+                em_exc,
+            )
+            frame = fetch_index_constituents_qmt(config=config)
         if frame.is_empty():
             return frame
         counts = (
