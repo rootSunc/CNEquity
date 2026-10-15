@@ -439,31 +439,15 @@ def activate_lake(app: FastAPI, config: Config) -> None:
     if config.config_path is not None:
         app.state.config_path = Path(config.config_path).resolve()
     app.state.ops.bind(config)
+    runtime = getattr(app.state, "config_runtime", None)
+    if runtime is not None:
+        runtime.remember()
 
 
 def reload_lake_config(app: FastAPI) -> Config:
     """Point the running server at the config file after a settings write."""
-    from cnequity.config import load_config
-    from cnequity.serve.ops.catalog import OpsError
-
-    path = app.state.config_path
-    if path is None:
-        raise OpsError("没有可写入的配置文件。")
-    try:
-        config = load_config(path)
-    except (OSError, ValueError) as exc:
-        raise OpsError("配置已写入，但服务没能重新加载，请重启 serve。") from exc
-    app.state.config = config
-    if app.state.view is not None:
-        app.state.view.config = config
-    if app.state.storage_maintenance is not None:
-        app.state.storage_maintenance.config = config
-    if config.config_path is not None:
-        app.state.config_path = Path(config.config_path).resolve()
-    app.state.ops.bind(config)
-    app.state.schedule_service = None
-    app.state.settings_service = None
-    return config
+    with app.state.config_runtime.lock:
+        return app.state.config_runtime.reload()
 
 
 # Annotated rather than a `= Depends(...)` default: the same wiring, but the call
@@ -539,6 +523,34 @@ def create_app(
         ),
     )
     install_ops_routes(app, mutations=not read_only)
+    from cnequity.serve.config_runtime import ConfigRuntime
+
+    app.state.config_runtime = ConfigRuntime(app)
+
+    async def _synchronize_config(request: Request, call_next):
+        from fastapi.responses import JSONResponse
+
+        from cnequity.serve.ops.catalog import OpsError
+
+        if not request.url.path.startswith("/api/"):
+            return await call_next(request)
+        runtime = app.state.config_runtime
+        try:
+            runtime.synchronize()
+        except OpsError as exc:
+            # 配置切换等待期间仍允许查看、停止已有任务。
+            control = request.url.path.startswith(
+                ("/api/ops/jobs", "/api/stream/ops", "/api/storage/jobs")
+            )
+            if not control:
+                return JSONResponse(
+                    {"detail": str(exc)}, status_code=409, headers={"Cache-Control": "no-store"}
+                )
+        runtime.active_requests += 1
+        try:
+            return await call_next(request)
+        finally:
+            runtime.active_requests -= 1
 
     @app.middleware("http")
     async def _authenticate(request: Request, call_next):
@@ -551,6 +563,9 @@ def create_app(
                 from fastapi.responses import JSONResponse
 
                 return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        return await _synchronize_config(request, lambda req: _guard_reads(req, call_next))
+
+    async def _guard_reads(request: Request, call_next):
         path = request.url.path
         # Operations and storage answer while a purge has closed the read gate,
         # and they must not count as readers the purge is waiting on.

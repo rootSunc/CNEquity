@@ -168,8 +168,16 @@ def serve_stdio(
     stdout: TextIO | None = None,
 ) -> None:
     """Read requests from stdin and write responses to stdout until EOF."""
-    stdin = stdin or sys.stdin
-    stdout = stdout or sys.stdout
+    # MCP 管道固定使用 UTF-8；Windows 的默认 GBK 会把中文参数误解码，
+    # 甚至产生语法正确却查不到标的的 JSON。自定义文本流仍由调用者负责。
+    if stdin is None:
+        stdin = sys.stdin
+        if hasattr(stdin, "reconfigure"):
+            stdin.reconfigure(encoding="utf-8", errors="strict")
+    if stdout is None:
+        stdout = sys.stdout
+        if hasattr(stdout, "reconfigure"):
+            stdout.reconfigure(encoding="utf-8", errors="strict", newline="\n")
 
     for line in stdin:
         line = line.strip()

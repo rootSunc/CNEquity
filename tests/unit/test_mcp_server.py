@@ -493,6 +493,35 @@ def test_malformed_frame_gets_a_parse_error_and_the_loop_continues(lake):
     assert replies[1]["id"] == 7
 
 
+def test_real_standard_streams_override_gbk_and_preserve_chinese_queries(lake, monkeypatch):
+    import io
+
+    messages = [
+        {
+            "jsonrpc": "2.0",
+            "id": index,
+            "method": "tools/call",
+            "params": {"name": "resolve_symbol", "arguments": {"query": query}},
+        }
+        for index, query in enumerate(("茅台", "600519"), 1)
+    ]
+    wire = ("\n".join(json.dumps(item, ensure_ascii=False) for item in messages) + "\n").encode(
+        "utf-8"
+    )
+    stdin = io.TextIOWrapper(io.BytesIO(wire), encoding="gbk")
+    output = io.BytesIO()
+    stdout = io.TextIOWrapper(output, encoding="gbk")
+    monkeypatch.setattr(protocol.sys, "stdin", stdin)
+    monkeypatch.setattr(protocol.sys, "stdout", stdout)
+    protocol.serve_stdio(lake)
+    replies = [json.loads(line) for line in output.getvalue().decode("utf-8").splitlines()]
+    assert [reply["id"] for reply in replies] == [1, 2]
+    for reply in replies:
+        body = json.loads(reply["result"]["content"][0]["text"])
+        assert body["total"] == 1
+        assert body["rows"][0][:2] == ["600519.SH", "贵州茅台"]
+
+
 # --- the CLI entry point ---------------------------------------------------
 
 

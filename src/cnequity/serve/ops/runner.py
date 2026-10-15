@@ -77,7 +77,10 @@ class OpsService:
         self._guard = threading.Lock()
 
     def bind(self, config) -> None:
-        self.config = config
+        with self._guard:
+            # 配置变更会改变预览的目标和来源开关，旧确认令牌必须失效。
+            self._previews.clear()
+            self.config = config
 
     def _identity(self) -> str | None:
         path = config_file(self.config)
