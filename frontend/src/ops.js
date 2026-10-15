@@ -464,6 +464,9 @@ export async function renderOps(ctx) {
     `<section class="page-heading"><div class="eyebrow">${tr("数据湖控制台 / 操作", "Lake console / Operations")}</div>
       <div class="heading-row"><div><h1>${tr("操作", "Operations")}</h1><p class="sub">${tr("先预览，再启动。同一时间只跑一个。", "Preview, then start. Only one job runs at a time.")}</p></div>
       <span class="status-pill">${esc(modeLabel(home.mode.label))}</span></div></section>
+    <section class="surface-panel report-panel"><p class="panel-note">${tr("当前数据目录", "Active data directory")}: <code id="active-data-root">${esc(home.mode.data_root || "—")}</code></p>
+      <p class="panel-note">${tr("配置文件", "Config file")}: <code>${esc(home.mode.config_path || "—")}</code></p>
+      <p class="panel-note">${tr("修改配置文件后，刷新页面即可安全同步；取数或存储维护期间会等待任务结束。", "After editing the config file, refresh to safely reload it. Active fetching or storage maintenance must finish first.")}</p></section>
     ${attention}
     <div id="ops-recent" hidden></div>
     <div class="ops-work" id="ops-work">${initBlock(home, esc)}

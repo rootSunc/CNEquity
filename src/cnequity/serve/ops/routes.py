@@ -90,6 +90,8 @@ def mode_payload(request: Request) -> dict:
         "label": label,
         "suggested_data_root": (str(Path("./data/cnequity").resolve()) if app.setup else None),
         "config_path": str(app.config_path) if app.config_path else None,
+        "data_root": str(app.config.data_root) if app.config is not None else None,
+        "config_notice": getattr(getattr(app, "config_runtime", None), "notice", None),
     }
 
 
