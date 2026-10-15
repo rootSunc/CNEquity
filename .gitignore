@@ -19,6 +19,9 @@ coverage.xml
 blank_frame_broadcasts.txt
 htmlcov/
 
+# 本地临时文件
+.tmp/
+
 # Virtual environments
 .venv/
 .venv-*/
