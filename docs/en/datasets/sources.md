@@ -355,6 +355,7 @@ Not in the daily waves. Cached in `meta/on_demand/`, optionally written to DuckD
 | ths | HTTP | THS public pages: industry, valuation | — | Skip + quality finding |
 | ths_pages | HTTP | `d.10jqka.com.cn` kline, the sole source of `sector_bars` | — | This dataset has **no second source**; a failure is a gap |
 | ths_bonus | HTTP | THS dividend and rights issue pages | — | More conservative rate limit (3.0s); skip + quality finding |
+| tdx_fin | HTTP | `financial_statement_items` backup: whole-market quarterly packages (gpcw, MD5-checked) | — | When EastMoney fails, the daily run writes only disclosures from the last 14 days (`tdx_fin`); `cne backfill --source tdx_fin` fills only items the lake lacks, and older periods may carry restated values, so they are labelled `tdx_fin_backfill` and excluded by strict PIT; no `revenue` (the package holds 营业收入) and no indicator ratios |
 | ths_official | HTTPS (keyed) | Optional credentialed source: arbitration snapshots, financial statement supplements, explicit historical repairs; versioned corrections follow the versioned publishing rules | — | Without a key everything is `skipped`, and the lake keeps its existing sources unchanged |
 | tushare | HTTPS (keyed) | Optional: BJ historical ST evidence (`stock_st`, from 2017-01-01) | bak_basic name evidence (2016) | Without a token, earlier BJ bars stay unresolved and **are not assumed normal** |
 

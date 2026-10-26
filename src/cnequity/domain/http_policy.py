@@ -31,6 +31,8 @@ def source_family(source: str) -> str:
     text = str(source).strip().lower()
     if text == "ths_official":
         return text  # independent keyed service, not the public THS website
+    if text.startswith("tdx_fin"):
+        return "tdx_fin"  # HTTP package server, not the TDX quote protocol
     for prefix in ("ths", "cninfo", "eastmoney_push2", "eastmoney_dc", "sina"):
         if text.startswith(prefix):
             return prefix

@@ -355,6 +355,7 @@
 | ths | HTTP | 同花顺公开页：行业、估值 | — | 跳过 + quality finding |
 | ths_pages | HTTP | `d.10jqka.com.cn` kline，`sector_bars` 唯一来源 | — | 该数据集**无第二个源**；失败即缺口 |
 | ths_bonus | HTTP | 同花顺分红送配页 | — | 限速更保守（3.0s）；跳过 + quality finding |
+| tdx_fin | HTTP | `financial_statement_items` 备源：全市场季度财务包（gpcw，MD5 校验） | — | 东财失败时日更只写近 14 天披露（`tdx_fin`）；`cne backfill --source tdx_fin` 只补湖中缺失的科目，旧季度值可能已被更正，标 `tdx_fin_backfill`，严格 PIT 排除；不含 `revenue`（包内为营业收入）和 indicator 比率 |
 | ths_official | HTTPS（keyed） | 可选有凭证来源：仲裁快照、财报补入、显式历史修复；版本化纠错遵循版本化发布规则 | — | 无 key 时全部 `skipped`，湖保持已有的源不变 |
 | tushare | HTTPS（keyed） | 可选：BJ 历史 ST 证据（`stock_st`，起 2017-01-01） | bak_basic 名称证据（2016） | 无 token 时更早的 BJ bar 保持 unresolved，**不认定为正常** |
 

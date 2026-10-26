@@ -1094,6 +1094,9 @@ _SPECS = [
     DatasetSpec(
         "financial_statement_items",
         primary_source="eastmoney",
+        # 通达信's quarterly packages: the daily route when EastMoney fails, and
+        # the source `cne backfill --source tdx_fin` fills missing keys from.
+        backup_source="tdx_fin",
         # The keyed 同花顺 API is the arbitration peer and fills what the
         # EastMoney datacenter reports omit.
         supplementary_sources=("ths_official",),
@@ -1111,7 +1114,12 @@ _SPECS = [
         pit_quality="reconstructed",
         pit_grade="partial",
         # Original-date rows rebuilt from a daily capture keep this label.
-        reconstructed_sources=(("eastmoney", "daily:", "eastmoney_backfill"),),
+        reconstructed_sources=(
+            ("eastmoney", "daily:", "eastmoney_backfill"),
+            # A package's older periods may hold restated values (see
+            # adapters/tdx_fin/packages.py); one capture yields both labels.
+            ("tdx_fin", "tdx_fin:", "tdx_fin_backfill"),
+        ),
         # Daily ingestion is keyed by NOTICE_DATE while storage is keyed by
         # report period.  Re-read the recent disclosure window so late
         # filings/restatements are captured; the adapter's period backfill

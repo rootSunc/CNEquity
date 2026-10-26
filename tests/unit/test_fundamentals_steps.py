@@ -25,6 +25,7 @@ def cfg(tmp_path):
 
 def test_financial_statement_items_disabled(cfg):
     cfg.sources["eastmoney"] = False
+    cfg.sources["tdx_fin"] = False
     with pytest.raises(RuntimeError, match="eastmoney source disabled"):
         fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-1", {})
 

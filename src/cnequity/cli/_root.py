@@ -445,6 +445,9 @@ CONTEXT_SETTINGS = {"token_normalize_func": str.lower, "help_option_names": ["-h
 @click.version_option(package_name="cnequity", help=N_("Show the version and exit."))
 def cli():
     """cnequity: a CLI for collecting China A-share data."""
+    from cnequity.fd_limit import raise_open_file_limit
+
+    raise_open_file_limit()
 
 
 @cli.group()

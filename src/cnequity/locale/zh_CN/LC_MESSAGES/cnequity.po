@@ -1193,8 +1193,8 @@ msgid "--snapshots-only only works with --stale-only"
 msgstr "--snapshots-only 只能配合 --stale-only"
 
 #: cnequity/cli/backfill_cmds.py
-msgid "--source is only supported for margin_trading for now"
-msgstr "--source 目前只支持 margin_trading"
+msgid "--source is supported for margin_trading and financial_statement_items (tdx_fin)"
+msgstr "--source 仅支持 margin_trading 和 financial_statement_items（tdx_fin）"
 
 #: cnequity/cli/run_cmds.py
 msgid "--stale-only picks its own steps; drop --all-groups."
@@ -1203,6 +1203,10 @@ msgstr "--stale-only 自己挑要跑的 step，请去掉 --all-groups。"
 #: cnequity/cli/run_cmds.py
 msgid "--stale-only picks its own steps; drop --group."
 msgstr "--stale-only 自己挑要跑的 step，请去掉 --group。"
+
+#: cnequity/cli/backfill_cmds.py
+msgid "--start is after --end"
+msgstr "--start 晚于 --end"
 
 #: cnequity/cli/backfill_cmds.py cnequity/cli/maintain_cmds.py
 #: cnequity/cli/quality_cmds.py
@@ -5252,8 +5256,8 @@ msgid "Source probes"
 msgstr "源探针"
 
 #: cnequity/cli/backfill_cmds.py
-msgid "Source to use for this backfill instead of the configured one, without editing the config. Supported for margin_trading (exchange or eastmoney)."
-msgstr "本次回填改用的来源，不修改配置。支持 margin_trading（exchange 或 eastmoney）。"
+msgid "Source to use for this backfill instead of the configured one, without editing the config. Supported for margin_trading (exchange or eastmoney) and financial_statement_items (tdx_fin: fill only the items the lake lacks)."
+msgstr "本次回填改用的来源，不修改配置。支持 margin_trading（exchange 或 eastmoney）和 financial_statement_items（tdx_fin：只补湖中缺少的科目）。"
 
 #: cnequity/serve/ops/catalog.py
 msgid "Start"

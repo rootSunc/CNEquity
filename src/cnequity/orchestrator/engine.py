@@ -193,6 +193,12 @@ class JobEngine:
     ) -> dict[str, Any]:
         trade_date = trade_date or shanghai_today()
         self.config._backfill = backfill
+        # Here as well as at `cne` start-up: callers such as
+        # scripts/run_catchup.py, run by another project's launchd agent at a
+        # 256-descriptor limit, drive the engine without either entry point.
+        from cnequity.fd_limit import raise_open_file_limit
+
+        raise_open_file_limit()
 
         if run_id and retry_failed_only:
             return self._retry_run(run_id, trade_date)

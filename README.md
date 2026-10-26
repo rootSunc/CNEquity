@@ -141,7 +141,7 @@ print(bars.tail())
 | `corporate_actions` | L2 | eastmoney | tdx_protocol |
 | `earnings_disclosure_schedule` | L2 | eastmoney | — |
 | `analyst_consensus` | L3 | eastmoney | — |
-| `financial_statement_items` | L3 | eastmoney | — |
+| `financial_statement_items` | L3 | eastmoney | tdx_fin |
 | `share_structure` | L3 | eastmoney | — |
 | `shareholder_counts` | L3 | eastmoney | — |
 | `top_holders` | L3 | eastmoney | — |

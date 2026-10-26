@@ -222,7 +222,7 @@ The two intraday datasets share one set of quality checks: duplicate primary key
 
 | Dataset | Partition key | Primary key | Semantics | Watermark | Primary source | Notes |
 |--------|--------|------|------|------|------|------|
-| financial_statement_items | report_period | symbol, report_period, statement_type, item_code | by_date PIT | — | eastmoney | Partitioned by report period; `cne backfill` starts from 2001 by default (chunked with `--start`/`--end`); daily ingestion retains observed announcements and adds explicitly marked original-disclosure reconstructions; baostock is not used for FSI |
+| financial_statement_items | report_period | symbol, report_period, statement_type, item_code | by_date PIT | — | eastmoney | Partitioned by report period; `cne backfill` starts from 2001 by default (chunked with `--start`/`--end`); daily ingestion retains observed announcements and adds explicitly marked original-disclosure reconstructions; baostock is not used for FSI; backup tdx_fin (daily route when EastMoney fails, and gap backfill) |
 | valuation_metrics | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | Backfill: baostock |
 | analyst_consensus | forecast_date | symbol, forecast_date | snapshot | ✓ | eastmoney | |
 | share_structure | change_date | symbol, change_date, announce_date | by_date PIT | — | eastmoney | Total shares / float / restricted / free float. **Scanned by change date, not by report period**: END_DATE is the share-change date, so requesting only quarter-end dates is not enough |

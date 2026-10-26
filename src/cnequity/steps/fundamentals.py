@@ -6,6 +6,7 @@ import logging
 import uuid
 from datetime import date, timedelta
 
+import httpx
 import polars as pl
 
 from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError
@@ -626,14 +627,17 @@ def _expected_financial_periods(config: Config, trade_date: date) -> set[str]:
 def step_financial_statement_items(
     config: Config, trade_date: date, run_id: str, context: dict
 ) -> dict:
-    if not config.sources.get("eastmoney", True):
-        raise SourceUnavailableError(
-            "financial_statement_items: eastmoney source disabled in config"
-        )
     # Quarterly data: daily runs pick up same-day announcements; backfill walks
     # every report period from 2001 (CLI --start/--end clips the walk;
     # NOTICE_DATE incremental cannot reach history).
     backfill = getattr(config, "_backfill", False)
+    if not config.sources.get("eastmoney", True):
+        disabled = SourceUnavailableError(
+            "financial_statement_items: eastmoney source disabled in config"
+        )
+        if backfill:
+            raise disabled
+        return _financials_from_tdx_fin(config, run_id, trade_date, disabled)
     archive_source = "eastmoney_backfill" if backfill else "eastmoney"
     archive_scope = f"{'backfill' if backfill else 'daily'}:{trade_date.isoformat()}"
     state = StateStore(config.meta_root)
@@ -721,9 +725,12 @@ def step_financial_statement_items(
             ]
             df = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
     else:
-        df = fetch_financial_statement_items(
-            trade_date, backfill=False, config=config, run_id=run_id
-        )
+        try:
+            df = fetch_financial_statement_items(
+                trade_date, backfill=False, config=config, run_id=run_id
+            )
+        except (EastMoneyDatacenterError, SourceCoolingDown, httpx.HTTPError) as exc:
+            return _financials_from_tdx_fin(config, run_id, trade_date, exc)
     missing_periods: set[str] = set()
     missing_statement_types: dict[str, list[str]] = {}
     # Completeness is a whole-market claim: "every period the market reported
@@ -1322,6 +1329,143 @@ def backfill_statement_gap_ths_official(
     totals.update(counters)
     totals["symbols"] = len(symbols)
     return totals
+
+
+def _tdx_fin_archive(config: Config, run_id: str, scope: str):
+    """A raw archive bound to one package capture, or None when not archived."""
+    from cnequity.adapters.tdx_fin import SOURCE as TDX_FIN
+    from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
+
+    dataset = "financial_statement_items"
+    if not config.should_archive_raw(dataset):
+        return None
+    nonce = begin_capture(config, dataset, run_id, source=TDX_FIN, request_scope=scope)
+    return RawPayloadArchive(
+        config.meta_root,
+        enabled=True,
+        datasets=[dataset],
+        compression=getattr(config, "raw_archive_compression", "gzip"),
+        max_payload_bytes=getattr(config, "raw_archive_max_payload_bytes", None),
+        capture_owner=config,
+        capture_run_id=run_id,
+        capture_source=TDX_FIN,
+        capture_scope=scope,
+        capture_nonce=nonce,
+    )
+
+
+def _without_held_keys(config: Config, frame: pl.DataFrame, period: str) -> pl.DataFrame:
+    """Drop rows whose item the lake already holds for *period*, in any vintage."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
+    root = config.curated_root / "financial_statement_items"
+    if frame.is_empty() or not dataset_has_parquet(root):
+        return frame
+    keys = ["symbol", "report_period", "statement_type", "item_code"]
+    held = (
+        scan_parquet_root(root, partition_col="report_period")
+        .filter(pl.col("report_period") == period)
+        .select(keys)
+        .unique()
+        .collect()
+    )
+    return frame.join(held, on=keys, how="anti")
+
+
+def stage_financials_tdx_fin(
+    config: Config,
+    run_id: str,
+    observed_on: date,
+    *,
+    periods: list[str],
+    gap_only: bool,
+    client=None,
+) -> dict:
+    """Stage statements from 通达信's quarterly packages, one batch per period.
+
+    ``gap_only=False`` is the daily route when EastMoney fails: only disclosures
+    recent enough to be labelled ``tdx_fin`` are kept. ``gap_only=True`` fills
+    every item the lake holds no row for, under whichever label the package
+    age gives it. Neither overwrites a key the lake already has from
+    EastMoney: the backup routes around a failure, it does not switch sources.
+    """
+    from cnequity.adapters.tdx_fin import SOURCE as TDX_FIN
+    from cnequity.adapters.tdx_fin import fetch_index, fetch_package, package_rows
+
+    dataset = "financial_statement_items"
+    index = fetch_index(client=client, config=config)
+    totals: dict = {"rows_read": 0, "rows_written": 0, "periods": [], "not_served": []}
+    for period in periods:
+        scope = f"tdx_fin:{'gap' if gap_only else 'daily'}:{period}"
+        archive = _tdx_fin_archive(config, run_id, scope)
+        content = fetch_package(
+            period,
+            index=index,
+            client=client,
+            config=config,
+            archive=archive,
+            run_id=run_id,
+            request_scope=scope,
+        )
+        if content is None:
+            totals["not_served"].append(period)
+            continue
+        frame = package_rows(period, content, observed_on=observed_on)
+        frame = (
+            _without_held_keys(config, frame, period)
+            if gap_only
+            else frame.filter(pl.col("source") == TDX_FIN)
+        )
+        if frame.is_empty():
+            continue
+        written = write_fetched(
+            config,
+            run_id,
+            dataset,
+            frame,
+            source=TDX_FIN,
+            batch_id=f"tdx-fin-{period}-{uuid.uuid4().hex}",
+            raw_archive_evidence=(
+                verify_raw_archive(config, dataset, run_id, source=TDX_FIN, request_scope=scope)
+                if archive is not None
+                else None
+            ),
+        )
+        totals["rows_read"] += written.get("rows_read", frame.height)
+        totals["rows_written"] += written.get("rows_written", frame.height)
+        totals["periods"].append(period)
+    return totals
+
+
+def _financials_from_tdx_fin(
+    config: Config, run_id: str, trade_date: date, primary_error: Exception
+) -> dict:
+    """EastMoney's daily route failed; stage recent disclosures from 通达信."""
+    from cnequity.adapters.tdx_fin import SOURCE as TDX_FIN
+    from cnequity.adapters.tdx_fin import TdxFinPayloadError
+    from cnequity.adapters.tdx_fin.packages import latest_periods
+
+    if not config.sources.get(TDX_FIN, True):
+        raise primary_error
+    logger.warning(
+        "financial_statement_items: eastmoney failed (%s); using %s", primary_error, TDX_FIN
+    )
+    try:
+        result = stage_financials_tdx_fin(
+            config, run_id, trade_date, periods=latest_periods(trade_date), gap_only=False
+        )
+    except (TdxFinPayloadError, httpx.HTTPError, OSError) as exc:
+        raise SourceUnavailableError(
+            f"financial_statement_items: eastmoney failed ({primary_error}); "
+            f"{TDX_FIN} failed ({exc})"
+        ) from exc
+    result.update(
+        status="degraded",
+        batch_settled=True,
+        fallback_source=TDX_FIN,
+        primary_error=str(primary_error)[:300],
+    )
+    return result
 
 
 def snapshot_corporate_actions_ths_official(config: Config, run_id: str) -> dict:

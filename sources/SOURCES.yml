@@ -145,6 +145,22 @@ sources:
     notes: 用于公告索引和监管事件；索引与公告正文的使用、缓存及再分发条件尚未核实。
     derived: false
 
+  tdx_fin:
+    owner: 通达信（TongDaXin；down.tdx.com.cn 财务数据包，发布方归属待核实）
+    access_type: public_file
+    tos_url: unknown
+    tos_reviewed_at: unknown
+    authentication: none_observed
+    personal_use: unknown
+    commercial_use: unknown
+    cache_allowed: unknown
+    redistribution: unknown
+    rate_limit: unknown
+    retained_payloads: unknown
+    legal_status: unknown
+    notes: 按季度发布的全市场财务数据包（gpcw*.zip，附 MD5 索引），用作 financial_statement_items 备源；旧季度包会被更正后的数值改写。条款、限速与载荷留存权限尚未核实。
+    derived: false
+
   cni:
     owner: 中证指数有限公司（CNI；具体发布方待核实）
     access_type: public_file

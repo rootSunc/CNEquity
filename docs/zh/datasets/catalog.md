@@ -222,7 +222,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | 备注 |
 |--------|--------|------|------|------|------|------|
-| financial_statement_items | report_period | symbol, report_period, statement_type, item_code | by_date PIT | — | eastmoney | 按报告期分区；`cne backfill` 默认自 2001 起（`--start`/`--end` 分块）；日更保留实际公告版本并补明确标记的原始披露日重建版本；baostock 不用于 FSI |
+| financial_statement_items | report_period | symbol, report_period, statement_type, item_code | by_date PIT | — | eastmoney | 按报告期分区；`cne backfill` 默认自 2001 起（`--start`/`--end` 分块）；日更保留实际公告版本并补明确标记的原始披露日重建版本；baostock 不用于 FSI；备源 tdx_fin（东财失败时的日更路由与缺口回填） |
 | valuation_metrics | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 回填：baostock |
 | analyst_consensus | forecast_date | symbol, forecast_date | snapshot | ✓ | eastmoney | |
 | share_structure | change_date | symbol, change_date, announce_date | by_date PIT | — | eastmoney | 总股本/流通/限售/自由流通。**按变动日期扫，不是按报告期**：END_DATE 是股本变动日，不能只请求季末日期 |

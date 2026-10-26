@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cnequity.config import load_config
+from cnequity.fd_limit import raise_open_file_limit
 from cnequity.file_lock import LockUnavailable, exclusive_lock
 from cnequity.i18n import _, use_language
 from cnequity.orchestrator.run_window import CST, is_done, mark_done, parse_run_at, pending_session
@@ -265,6 +266,9 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--scheduler-lock-dir", type=Path)
     args = parser.parse_args()
+    # launchd starts this at a 256-descriptor soft limit; the jobs it spawns
+    # inherit whatever this process holds.
+    raise_open_file_limit()
     if args.scheduler_lock_dir is not None:
         if not args.scheduler_lock_dir.is_absolute():
             parser.error("--scheduler-lock-dir must be absolute")

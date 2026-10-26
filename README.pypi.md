@@ -12,7 +12,6 @@ CNEquity 是开源的中国 A股本地数据湖：将股票行情、财务数据
 [![PyPI](https://img.shields.io/pypi/v/cnequity?logo=pypi&logoColor=white)](https://pypi.org/project/cnequity/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://rootsunc.github.io/CNEquity/getting-started/installation/)
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/rootSunc/CNEquity/blob/main/LICENSE)
-[![PyPI downloads](https://img.shields.io/pypi/dm/cnequity?label=downloads)](https://pypistats.org/packages/cnequity)
 [![GitHub stars](https://img.shields.io/github/stars/rootSunc/CNEquity?style=flat)](https://github.com/rootSunc/CNEquity/stargazers)
 [![Glama MCP score](https://glama.ai/mcp/servers/rootSunc/CNEquity/badges/score.svg)](https://glama.ai/mcp/servers/rootSunc/CNEquity)
 
@@ -72,13 +71,12 @@ claude mcp add cnequity -- cne mcp --config /abs/path/to/configs/cnequity.demo.t
 
 ![在 Claude Code 里通过 cne mcp 查询 A股：宁德时代最近 30 个交易日的最高收盘价](https://raw.githubusercontent.com/rootSunc/CNEquity/main/docs/assets/mcp-chat-demo.zh.svg)
 
-*demo 湖上的真实 MCP 工具调用与返回（2026-10-26）；收盘价为未复权价。*
+*真实 MCP 工具调用与返回（2026-10-26）；收盘价为未复权价。*
 
 **③ 建正式湖。** 沪深京全市场、最近 3 年：
 
 ```bash
-cne init     # 第一次可能需要几个小时；中途断了再运行一次即可续跑，已下载的部分不会重来
-             # 开跑前几秒内做网络预检；公司行为等非关键步骤出错不会中断建湖，结束时列出未完成的步骤
+cne init     # 开始建正式湖，支持中断续传
 cne check    # 检查数据是否完整、可用
 ```
 
@@ -145,7 +143,7 @@ print(bars.tail())
 | `corporate_actions` | L2 | eastmoney | tdx_protocol |
 | `earnings_disclosure_schedule` | L2 | eastmoney | — |
 | `analyst_consensus` | L3 | eastmoney | — |
-| `financial_statement_items` | L3 | eastmoney | — |
+| `financial_statement_items` | L3 | eastmoney | tdx_fin |
 | `share_structure` | L3 | eastmoney | — |
 | `shareholder_counts` | L3 | eastmoney | — |
 | `top_holders` | L3 | eastmoney | — |
