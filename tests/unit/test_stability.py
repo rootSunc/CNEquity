@@ -101,3 +101,58 @@ def test_latest_attempt_wins_and_report_is_persisted(tmp_path):
     assert latest.is_file()
     assert historical.is_file()
     assert latest.read_bytes() == historical.read_bytes()
+
+
+def _group_run(manifest: Manifest, day: date, job: str, status: str, receipts) -> str:
+    run_id = manifest.start_run(job, {"trade_date": day.isoformat()})
+    for dataset, stage, outcome in receipts:
+        manifest.record_dataset_result(run_id, dataset, stage, outcome)
+    manifest.finish_run(run_id, status)
+    return run_id
+
+
+def test_a_core_dataset_fails_the_day_from_any_group(tmp_path):
+    manifest = Manifest(tmp_path / "manifest.db")
+    day = _days(1)[0]
+    _group_run(manifest, day, "daily:core", "success", [("daily_bars", "fetch", "success")])
+    _group_run(
+        manifest,
+        day,
+        "daily:fundamentals",
+        "failed",
+        [("financial_statement_items", "fetch", "failed")],
+    )
+
+    report = evaluate_stability(manifest, [day], required_days=1, as_of=day)
+
+    assert report.job_name == "core_datasets"
+    assert report.days[0].passed is False
+    assert "financial_statement_items" in report.days[0].reason
+
+
+def test_a_non_core_failure_in_the_core_group_does_not(tmp_path):
+    manifest = Manifest(tmp_path / "manifest.db")
+    day = _days(1)[0]
+    _group_run(
+        manifest,
+        day,
+        "daily:core",
+        "failed",
+        [("daily_bars", "fetch", "success"), ("industry_index", "derive", "failed")],
+    )
+
+    report = evaluate_stability(manifest, [day], required_days=1, as_of=day)
+
+    assert report.days[0].passed is True
+    assert report.days[0].status == "degraded"
+
+
+def test_a_later_run_repairs_a_core_failure(tmp_path):
+    manifest = Manifest(tmp_path / "manifest.db")
+    day = _days(1)[0]
+    _group_run(manifest, day, "daily:core", "failed", [("adj_factors", "derive", "failed")])
+    _group_run(manifest, day, "daily:stale", "success", [("adj_factors", "derive", "success")])
+
+    report = evaluate_stability(manifest, [day], required_days=1, as_of=day)
+
+    assert report.days[0].passed is True

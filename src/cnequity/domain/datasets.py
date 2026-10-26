@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Literal
 
@@ -286,6 +286,24 @@ Tier = Literal["L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"]
 
 TIERS: tuple[Tier, ...] = ("L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9")
 
+# How much the project stands behind a dataset, orthogonal to ``Tier`` (what it
+# is for). ``core`` is the promise: rebuildable history, a daily path that has
+# held up, an independent check. ``extended`` is rebuildable and steady but not
+# essential, or single-sourced. ``best_effort`` is either not rebuildable (a
+# live snapshot whose history starts the day a lake turns it on) or unsteady,
+# and is off unless a config opts in. ``optional`` has its own enable switch.
+Support = Literal["core", "extended", "best_effort", "optional"]
+
+SUPPORT_LEVELS: tuple[Support, ...] = ("core", "extended", "best_effort", "optional")
+
+#: Catalog messages: translate where shown, English in JSON.
+SUPPORT_LABELS: dict[Support, str] = {
+    "core": N_("Core"),
+    "extended": N_("Extended"),
+    "best_effort": N_("Best effort"),
+    "optional": N_("Optional"),
+}
+
 #: Catalog messages: translate where shown, English in JSON.
 TIER_LABELS: dict[Tier, str] = {
     "L0": N_("Reference"),
@@ -304,6 +322,11 @@ TIER_LABELS: dict[Tier, str] = {
 @dataclass(frozen=True)
 class DatasetSpec:
     """Orchestration/query metadata for one dataset.
+
+    support:
+        How much the project stands behind it (see ``Support``). Left None on
+        construction and set for every registered dataset from ``_SUPPORT``,
+        which must name each one exactly once.
 
     tier:
         L0–L9 research classification (see ``Tier``). Mandatory and without a
@@ -405,6 +428,7 @@ class DatasetSpec:
     name: str
     tier: Tier
     layer: Layer = "curated"
+    support: Support | None = None
     partition_col: str | None = None
     partition_granularity: Granularity = "day"
     date_col: str | None = None
@@ -1588,6 +1612,94 @@ _SPECS = [
     ),
 ]
 
+# Measured 2026-10-26 over 60 days of scheduled runs: core datasets failed on
+# at most two days in 30, with a backup source or an authority cross-check.
+_SUPPORT: dict[str, Support] = {
+    **dict.fromkeys(
+        (
+            "trading_calendar",
+            "instruments",
+            "trading_status",
+            "delisting_events",
+            "daily_bars",
+            "adj_factors",
+            "index_bars",
+            "corporate_actions",
+            "financial_statement_items",
+            "valuation_metrics",
+            "share_structure",
+            "index_constituents",
+        ),
+        "core",
+    ),
+    **dict.fromkeys(
+        (
+            "industry_members",
+            "industry_index",
+            "announcement_index",
+            "earnings_disclosure_schedule",
+            "shareholder_counts",
+            "top_holders",
+            "institutional_holdings",
+            "block_trades",
+            "dragon_tiger",
+            "margin_trading",
+            "market_breadth",
+            "macro_indicators",
+            "regulatory_events",
+            "share_unlock_schedule",
+            "etf_profiles",
+            "commodity_bars",
+        ),
+        "extended",
+    ),
+    # Not rebuildable (live snapshots, or a source retired in 2024) or unsteady:
+    # fund_flow and sector_fund_flow ride EastMoney push2, which bans an
+    # address after heavy use; the news feeds failed on up to half their days.
+    **dict.fromkeys(
+        (
+            "fund_flow",
+            "sector_fund_flow",
+            "fund_flow_ths",
+            "sector_fund_flow_ths",
+            "analyst_consensus",
+            "sector_members",
+            "northbound_holdings",
+            "northbound_flows",
+            "hot_rank",
+            "news_headlines",
+            "flash_news_wire",
+            "sentiment_scores",
+            "economic_calendar",
+            "sector_bars",
+        ),
+        "best_effort",
+    ),
+    **dict.fromkeys(
+        (
+            "minute_bars",
+            "minute_bars_5m",
+            *RESAMPLED_MINUTE_DATASETS,
+            "trade_ticks",
+            "futures_bars",
+            "futures_continuous",
+            "futures_contracts",
+            "futures_minute_bars",
+            "option_bars",
+            "option_contracts",
+            "option_greeks",
+        ),
+        "optional",
+    ),
+}
+if set(_SUPPORT) != {spec.name for spec in _SPECS}:  # pragma: no cover - registry edit
+    raise RuntimeError(
+        "_SUPPORT must classify every registered dataset exactly once: "
+        f"missing {sorted({spec.name for spec in _SPECS} - set(_SUPPORT))}, "
+        f"unknown {sorted(set(_SUPPORT) - {spec.name for spec in _SPECS})}"
+    )
+_SPECS = [replace(spec, support=_SUPPORT[spec.name]) for spec in _SPECS]
+
 DATASETS: dict[str, DatasetSpec] = {spec.name: spec for spec in _SPECS}
 
 
@@ -1616,6 +1728,40 @@ def datasets_by_tier() -> dict[Tier, list[str]]:
     for spec in _SPECS:
         grouped[spec.tier].append(spec.name)
     return grouped
+
+
+def datasets_by_support() -> dict[Support, list[str]]:
+    """``{support level: [dataset, ...]}`` for every level, in registry order."""
+    grouped: dict[Support, list[str]] = {level: [] for level in SUPPORT_LEVELS}
+    for spec in _SPECS:
+        grouped[spec.support].append(spec.name)
+    return grouped
+
+
+#: Run-level criticality (orchestrator/manifest.py) by support level. Only a
+#: core dataset's failure fails a run and the stability gate; the rest degrade.
+_CRITICALITY: dict[Support, str] = {
+    "core": "core",
+    "extended": "research",
+    "best_effort": "advisory",
+    "optional": "advisory",
+}
+
+
+def dataset_criticality(dataset: str) -> str | None:
+    """``core`` / ``research`` / ``advisory`` for a registered dataset, else None."""
+    spec = DATASETS.get(dataset)
+    if spec is None or spec.support is None:
+        return None
+    return _CRITICALITY[spec.support]
+
+
+def core_dataset_names() -> frozenset[str]:
+    return frozenset(s.name for s in DATASETS.values() if s.support == "core")
+
+
+def best_effort_dataset_names() -> frozenset[str]:
+    return frozenset(s.name for s in DATASETS.values() if s.support == "best_effort")
 
 
 def pit_dataset_names() -> frozenset[str]:
@@ -1838,7 +1984,16 @@ def is_dataset_enabled(dataset: str, config) -> bool:
     Parquet on disk, but its old tip is not an ingestion failure and must not
     be reported as stale. Keep this mapping next to the registry so status,
     verify, and the dashboard share the same opt-in semantics.
+
+    A ``best_effort`` dataset is enabled only when the config opts in (see
+    ``config/layers.py``). A stand-in config without the field keeps every
+    dataset on, as before.
     """
+    spec = DATASETS.get(dataset)
+    if spec is not None and spec.support == "best_effort":
+        enabled = getattr(config, "best_effort_enabled", None)
+        if enabled is not None and dataset not in enabled:
+            return False
     if dataset in FUTURES_DATASETS:
         if not getattr(config, "futures_enabled", False):
             return False

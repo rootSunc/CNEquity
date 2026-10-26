@@ -239,6 +239,17 @@ ST、停牌、CDR 和已退市的名字在任何取值下都会保留 —— 丢
 
 没开基金采集时，全量公司行为扫描跳过 ETF/LOF。之后开启任一开关，日更的公司行为步骤会补扫从没扫过除权历史的基金，每次最多 500 只（全市场约 2200 只，分几天扫完）；新上市基金同样补扫一次。扫完前每次运行告警 `fund_history_unswept` 并列出部分代码，这期间这些基金的复权因子缺少较早的份额拆分。
 
+## `[datasets]` {#datasets}
+
+尽力而为档（`best_effort`，见[支持档位](../datasets/catalog.md#支持档位)）默认不调度：只在启用后才开始积累的实时快照、已停更的来源，以及经常失败的接口。要启用，列在这里：
+
+```toml
+[datasets]
+best_effort = ["news_headlines", "flash_news_wire", "hot_rank"]   # 或 ["all"]
+```
+
+配置文件自己的调度组 `steps` / `steps_add` 里写到的尽力而为数据集也视为启用；只算这份文件本身写的，不算继承的内置默认值。所以完整展开的旧配置照旧运行它列出的步骤，`extends = "builtin"` 的新配置默认全部关闭。未启用的数据集从各调度组移除，新鲜度显示为 `removed` 而不是 `stale`；`cne backfill` 仍可显式运行。`cne config minimize` 会把完整配置启用的集合写进 `best_effort`，行为不变。
+
 ## `[job.daily.waves]`
 
 Wave DAG：每个 wave 含 `name`、`parallel`（wave 内 step 是否并行）、`steps`（step 名列表）。

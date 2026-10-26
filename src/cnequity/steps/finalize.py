@@ -55,11 +55,18 @@ def _record_dataset_result(
 
 
 def _dataset_criticality(dataset: str) -> str:
-    """Classify a physical dataset for the run-level degraded policy."""
-    if dataset in {"adj_factors", "industry_index"}:
-        return "research"
+    """Classify a physical dataset for the run-level degraded policy.
+
+    A registered dataset takes its support level's criticality, whichever
+    schedule group runs it; anything else falls back to its step's group.
+    """
     if dataset in {"compact", "audit"}:
         return "core"
+    from cnequity.domain.datasets import dataset_criticality
+
+    by_support = dataset_criticality(dataset)
+    if by_support is not None:
+        return by_support
     try:
         from cnequity.orchestrator.registry import get_step
 

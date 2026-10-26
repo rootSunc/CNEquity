@@ -490,6 +490,17 @@ ingest_eligible_etfs = false
 # Takes precedence over ingest_eligible_etfs. Existing A-share installs stay opt-in.
 ingest_listed_funds = false
 
+[datasets]
+# Best-effort datasets are off unless named here: live snapshots whose history
+# starts the day a lake turns them on, a source retired in 2024, or feeds that
+# fail often (EastMoney push2 money flow, news, popularity ranks). The schedule
+# groups below skip them, and freshness reports them as removed, not stale.
+# `cnequity.query.list_datasets()` shows each dataset's support level.
+#   best_effort = ["all"]
+#   best_effort = ["news_headlines", "flash_news_wire", "hot_rank"]
+# A group's own steps_add naming one also turns it on.
+best_effort = []
+
 # Wave DAG for daily job (see docs/zh/datasets/catalog.md)
 [[job.daily.waves]]
 name = "reference"

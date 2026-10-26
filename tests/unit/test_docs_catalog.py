@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from cnequity.domain.datasets import DATASETS, datasets_by_tier
+from cnequity.domain.datasets import DATASETS, datasets_by_support, datasets_by_tier
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 CATALOG = DOCS / "zh" / "datasets" / "catalog.md"
@@ -190,3 +190,19 @@ def test_failover_sources_match_the_registry():
 def test_every_dataset_declares_a_primary_source():
     """An empty primary_source would render as a blank cell in the README."""
     assert [n for n, s in DATASETS.items() if not s.primary_source] == []
+
+
+_SUPPORT_ROW = re.compile(
+    r"^\|\s*`(core|extended|best_effort|optional)`[^|]*\|(?:[^|]*\|){2}([^|]*)\|"
+)
+
+
+@pytest.mark.parametrize("catalog", CATALOGS, ids=["zh", "en"])
+def test_catalog_support_table_matches_the_registry(catalog):
+    documented = {}
+    for line in catalog.read_text(encoding="utf-8").splitlines():
+        row = _SUPPORT_ROW.match(line)
+        if row:
+            documented[row.group(1)] = sorted(re.findall(r"`([a-z0-9_]+)`", row.group(2)))
+    registered = {level: sorted(names) for level, names in datasets_by_support().items()}
+    assert documented == registered

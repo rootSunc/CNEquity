@@ -284,6 +284,14 @@ msgstr ""
 #, python-brace-format
 msgid ""
 "\n"
+"Stale but not core, so not gating: {value}"
+msgstr ""
+"\n已过期但不属于核心档，不计入验收：{value}"
+
+#: cnequity/cli/quality_cmds.py
+#, python-brace-format
+msgid ""
+"\n"
 "Written to {path}"
 msgstr ""
 "\n"
@@ -1194,7 +1202,7 @@ msgstr "--snapshots-only 只能配合 --stale-only"
 
 #: cnequity/cli/backfill_cmds.py
 msgid "--source is supported for margin_trading and financial_statement_items (tdx_fin)"
-msgstr "--source 仅支持 margin_trading 和 financial_statement_items（tdx_fin）"
+msgstr "--source 只支持 margin_trading 和 financial_statement_items（tdx_fin）"
 
 #: cnequity/cli/run_cmds.py
 msgid "--stale-only picks its own steps; drop --all-groups."
@@ -1415,19 +1423,21 @@ msgid ""
 "\n"
 "\n"
 "In order:\n"
-"  1. Freshness and coverage: the same as `cne status --datasets --gate` (including the cross-section check and unfinished init);\n"
+"  1. Freshness and coverage: the same as `cne status --datasets --gate --core-only` (including the cross-section check and unfinished init);\n"
 "  2. Data quality: the latest run's audit and the latest whole-lake audit snapshot; `--full` re-runs the whole-lake audit on the spot;\n"
 "  3. Size: datasets, rows and volume (stats are recomputed first when stale).\n"
+"Only the core datasets (see the catalog's support levels) can fail it; problems elsewhere are listed, not counted.\n"
 "The exit code is the worst of them: 0 usable; 1 gaps or quality errors; 2 cannot be proven (missing evidence or a config problem).\n"
 "`--pack` also gives the window, gaps and next step per research pack."
 msgstr ""
 "验收这个湖：新鲜度与覆盖、数据质量、规模，一条命令给出结论。\n"
 "\n"
-"\n"
+"\n"
 "依次给出：\n"
-"  1. 新鲜度与覆盖 —— 与 `cne status --datasets --gate` 相同（含截面核对、未完成的 init）；\n"
+"  1. 新鲜度与覆盖 —— 与 `cne status --datasets --gate --core-only` 相同（含截面核对、未完成的 init）；\n"
 "  2. 数据质量 —— 最近一次 run 的审计和最近的全湖审计快照；`--full` 当场重跑全湖审计；\n"
 "  3. 规模 —— 数据集、行数和体积（统计表过期时先自动重算）。\n"
+"只有核心档数据集（见数据集目录的支持档位）会让验收失败；其余问题照常列出，不计入结论。\n"
 "退出码取最差的一项：0 可用；1 有缺口或质量 error；2 证明不了（缺证据或配置问题）。\n"
 "`--pack` 另按研究包给出窗口、缺口和下一步。"
 
@@ -1729,6 +1739,10 @@ msgstr "在 daily / stale 跑之前，先修复已验证、且有诚实来源的
 #: cnequity/steps/reference.py
 msgid "Beijing board"
 msgstr "北交所"
+
+#: cnequity/domain/datasets.py
+msgid "Best effort"
+msgstr "尽力而为"
 
 #: cnequity/diagnostics/source_health.py
 msgid "Binary TCP protocol; shares no risk-control surface with any HTTP source. Direct connections from abroad usually time out."
@@ -2096,6 +2110,10 @@ msgstr "契约检查通过"
 #: cnequity/serve/ops/catalog.py
 msgid "Copy the selected datasets into a verifiable lake snapshot. Does not contact data sources."
 msgstr "把明确选择的数据集复制成可校验的湖快照，不请求数据源。"
+
+#: cnequity/domain/datasets.py
+msgid "Core"
+msgstr "核心"
 
 #: cnequity/domain/datasets.py
 msgid "Corporate events"
@@ -2640,6 +2658,10 @@ msgstr "显式指定历史起点（YYYY-MM-DD）；覆盖 --profile。"
 #: cnequity/cli/decision_data_cmds.py
 msgid "Export reviewed holder-specific rights tied to the current action revision."
 msgstr "导出已审核的、与当前公司行为修订版本绑定的持有人专属权益。"
+
+#: cnequity/domain/datasets.py
+msgid "Extended"
+msgstr "扩展"
 
 #: cnequity/serve/ops/records.py
 msgid "Failed"
@@ -3930,6 +3952,10 @@ msgstr ""
 "  cne mcp --config /path/to/cnequity.toml --http --token <随机串>\n"
 "\n"
 "MCP 工具只读，不提供 serve 的操作页和网页确认清理。这些工具只查询湖；采集从 CLI 或 serve 的操作页发起。"
+
+#: cnequity/domain/datasets.py
+msgid "Optional"
+msgstr "可选"
 
 #: cnequity/serve/ops/settings.py
 msgid "Optional collection"
@@ -6432,6 +6458,10 @@ msgstr "Windows 任务计划程序"
 #: cnequity/cli/quality_cmds.py
 msgid "With --bars/--derivatives: coverage window start (inclusive)."
 msgstr "配合 --bars/--derivatives：覆盖窗口起点（含）。"
+
+#: cnequity/cli/quality_cmds.py
+msgid "With --datasets --gate: only core datasets can fail the gate; the rest are still listed. `cne check` uses this."
+msgstr "配合 --datasets --gate：只有核心档数据集会让门槛失败，其余照常列出。`cne check` 使用此项。"
 
 #: cnequity/cli/quality_cmds.py
 msgid "With --datasets: fail only on datasets owned by these schedule groups (space- or comma-separated). Datasets of other groups are still listed and reported as schedule gaps but do not fail the gate. The cross-section check follows it too: daily_bars coverage is judged by whichever group owns it. An unfinished init belongs to no schedule group and always fails."

@@ -166,6 +166,11 @@ def plan_minimize(config_path: Path | str) -> MinimizePlan:
                 groups.setdefault("groups", {})[name] = {"enabled": False}
                 plan.disabled_groups.append(f"job.{scope}.groups.{name}")
     overrides.setdefault("data", {})["root"] = before.data_root.as_posix()
+    # A full config's group lists turn its best-effort datasets on; the layered
+    # file drops those lists, so it has to say so explicitly.
+    enabled = sorted(before.best_effort_enabled or ())
+    if enabled:
+        overrides.setdefault("datasets", {})["best_effort"] = enabled
 
     body = {EXTENDS_KEY: BUILTIN, "data": overrides.pop("data"), **overrides}
     plan.text = HEADER + dumps(body)

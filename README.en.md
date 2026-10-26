@@ -118,7 +118,7 @@ The current development tree registers **55 datasets: 47 curated + 8 derived**, 
 | L8 | Risk and regulation | Share unlocks and regulatory events |
 | L9 | Derivatives | Futures and options contracts, contract bars, continuous futures, Greeks and minutes |
 
-Minutes, trade snapshots and futures/options are disabled by default. Check each source's historical horizon and actual coverage after opting in.
+Minutes, trade snapshots and futures/options are disabled by default. Check each source's historical horizon and actual coverage after opting in. [Best-effort](docs/en/datasets/catalog.md#support-levels) datasets such as money flow, news and popularity ranks are off by default too; list them in `[datasets] best_effort` to collect them.
 
 <summary>Registered primary and backup sources (actual routing and history limits are in the catalog)</summary>
 

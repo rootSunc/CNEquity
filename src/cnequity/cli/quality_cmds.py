@@ -75,8 +75,12 @@ def stale_datasets_by_group(cfg, datasets: list[str]) -> dict[str, list[str]]:
 INSTRUMENT_SCOPED_DATASETS = ("daily_bars", "trading_status")
 
 
-def _gates_on_dataset(cfg, dataset: str, wanted_groups: set[str] | None) -> bool:
+def _gates_on_dataset(
+    cfg, dataset: str, wanted_groups: set[str] | None, *, core_only: bool = False
+) -> bool:
     """Whether a failure in *dataset* should fail this host's gate.
+
+    With *core_only*, only a core dataset (``DatasetSpec.support``) can.
 
     ``--groups`` names the schedule groups this machine actually runs. A
     dataset nothing schedules still gates: "I cannot tell who fetches this" is
@@ -84,6 +88,8 @@ def _gates_on_dataset(cfg, dataset: str, wanted_groups: set[str] | None) -> bool
     out of its groups on purpose (``steps_remove``, ``enabled = false``) is the
     one exception: the operator has said this host does not fetch it.
     """
+    if core_only and not _is_core(dataset):
+        return False
     if wanted_groups is None:
         return True
     by_group = stale_datasets_by_group(cfg, [dataset])
@@ -95,6 +101,13 @@ def _gates_on_dataset(cfg, dataset: str, wanted_groups: set[str] | None) -> bool
     if not owners:
         return True
     return any(group in wanted_groups or group == "(unscheduled)" for group in owners)
+
+
+def _is_core(dataset: str) -> bool:
+    """A core dataset, or a name the registry does not know (judged as before)."""
+    from cnequity.domain.datasets import DATASETS, core_dataset_names
+
+    return dataset not in DATASETS or dataset in core_dataset_names()
 
 
 def _scope_exit_code(
@@ -1085,6 +1098,14 @@ def _echo_resample_backlog(cfg, df) -> None:
     is_flag=True,
     help=N_("Enforce the gate for the selected scope and freshness; by default only reports."),
 )
+@click.option(
+    "--core-only",
+    "core_only",
+    is_flag=True,
+    help=N_(
+        "With --datasets --gate: only core datasets can fail the gate; the rest are still listed. `cne check` uses this."
+    ),
+)
 def status(
     config_path: str,
     run_selector: str | None,
@@ -1094,6 +1115,7 @@ def status(
     gate_groups: str | None,
     scope: bool,
     gate: bool,
+    core_only: bool = False,
 ):
     """Show the latest run's status; add --datasets for per-dataset freshness.
 
@@ -1225,7 +1247,9 @@ def status(
                 if (report := derivative_tip_scope(cfg, dataset)) is not None
             )
         gating_scopes = [
-            report for report in scopes if _gates_on_dataset(cfg, report["dataset"], wanted_groups)
+            report
+            for report in scopes
+            if _gates_on_dataset(cfg, report["dataset"], wanted_groups, core_only=core_only)
         ]
         scope_incomplete = any(r["state"] == "incomplete" for r in gating_scopes)
         scope_unverified = any(r["state"] == "unverified" for r in gating_scopes)
@@ -1253,7 +1277,7 @@ def status(
                     ),
                     err=True,
                 )
-                if _gates_on_dataset(cfg, dataset, wanted_groups):
+                if _gates_on_dataset(cfg, dataset, wanted_groups, core_only=core_only):
                     scope_incomplete = True
             if all_columns and report.get("coverage"):
                 click.echo(pl_mod.DataFrame(report["coverage"]))
@@ -1325,7 +1349,7 @@ def status(
                     ).format(value=len(stale_greeks)),
                     err=True,
                 )
-                if _gates_on_dataset(cfg, "option_greeks", wanted_groups):
+                if _gates_on_dataset(cfg, "option_greeks", wanted_groups, core_only=core_only):
                     scope_incomplete = True
         incomplete_init = Manifest(cfg.manifest_path).latest_incomplete_init_run(
             discharged_by_later_runs=True
@@ -1343,6 +1367,17 @@ def status(
         # they were not told about.
         _report_outstanding_keys(cfg, df["dataset"].to_list())
         stale_rows = df.filter(pl_mod.col("freshness") == "STALE")
+        if core_only:
+            reported = sorted(
+                name for name in stale_rows["dataset"].to_list() if not _is_core(name)
+            )
+            if reported:
+                click.echo(
+                    _("\nStale but not core, so not gating: {value}").format(
+                        value=", ".join(reported)
+                    )
+                )
+            stale_rows = stale_rows.filter(~pl_mod.col("dataset").is_in(reported))
         stale = stale_rows.height
         if stale:
             click.echo(
@@ -1848,9 +1883,10 @@ def check(ctx: click.Context, config_path: str, full: bool, pack_names: tuple[st
 
     \b
     In order:
-      1. Freshness and coverage: the same as `cne status --datasets --gate` (including the cross-section check and unfinished init);
+      1. Freshness and coverage: the same as `cne status --datasets --gate --core-only` (including the cross-section check and unfinished init);
       2. Data quality: the latest run's audit and the latest whole-lake audit snapshot; `--full` re-runs the whole-lake audit on the spot;
       3. Size: datasets, rows and volume (stats are recomputed first when stale).
+    Only the core datasets (see the catalog's support levels) can fail it; problems elsewhere are listed, not counted.
     The exit code is the worst of them: 0 usable; 1 gaps or quality errors; 2 cannot be proven (missing evidence or a config problem).
     `--pack` also gives the window, gaps and next step per research pack.
 
@@ -1871,6 +1907,7 @@ def check(ctx: click.Context, config_path: str, full: bool, pack_names: tuple[st
             gate_groups=None,
             scope=True,
             gate=True,
+            core_only=True,
         )
         codes.append(0)
     except SystemExit as exc:
@@ -1938,7 +1975,11 @@ def _check_quality(cfg, *, full: bool) -> tuple[int, str | None]:
         from cnequity.quality.factor_policy import advisory_factor_findings
 
         findings = advisory_factor_findings(payload.get("findings", []))
-        errors = [f for f in findings if f.get("severity") == "error" and not coverage_only(f)]
+        errors = [
+            f
+            for f in findings
+            if f.get("severity") == "error" and not coverage_only(f) and _gating_finding(f)
+        ]
         warnings = sum(f.get("severity") == "warning" for f in findings)
         click.echo(
             _("  Latest run audit ({value}, {value2}): {value3} error, {warnings} warning").format(
@@ -1980,6 +2021,7 @@ def _check_quality(cfg, *, full: bool) -> tuple[int, str | None]:
         else:
             click.echo(_("  No whole-lake audit snapshot yet; add --full to generate one now"))
         label = _("whole-lake audit snapshot")
+    health_errors = [f for f in health_errors if not f or _gating_finding(f)]
     for finding in [f for f in health_errors if f][:10]:
         click.echo(f"    [error] {finding.get('dataset', ''):22} {finding.get('message', '')}")
     if health_errors:
@@ -1994,6 +2036,11 @@ def _check_quality(cfg, *, full: bool) -> tuple[int, str | None]:
             return code, note
         return 2, _("no audit records, quality cannot be proven (add --full to audit now)")
     return code, note
+
+
+def _gating_finding(finding: dict) -> bool:
+    """An error `cne check` counts: a core dataset's, or one about no dataset."""
+    return _is_core(str(finding.get("dataset") or ""))
 
 
 def _health_errors(health: dict, coverage_only) -> list[dict]:

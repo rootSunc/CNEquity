@@ -1102,7 +1102,7 @@ apply 的安全边界值得单独说：add/replace/delete 逐条对基线指纹�
 
 （`cne verify` 的第三种模式，选项见上；原 `cne stability`。）
 
-从权威 `trading_calendar` 取最近窗口，按 logical trade date 选最新 `daily:core` attempt，验证连续交易日运行证据。
+从权威 `trading_calendar` 取最近窗口，每个交易日汇总所有 `daily:*` 运行、按数据集取最新 receipt，只判核心档数据集，验证连续交易日运行证据。
 
 | 选项 | 说明 |
 |------|------|

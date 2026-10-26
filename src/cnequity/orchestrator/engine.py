@@ -436,24 +436,26 @@ class JobEngine:
 
         Init is a core bootstrap contract even when a test or a legacy config
         supplied a custom scheduler group.  Compact and audit are core
-        infrastructure; adjustment and industry derives are research outputs,
-        so their source failures degrade a run without invalidating raw core
-        data.
+        infrastructure. Otherwise a registered dataset takes its support
+        level's criticality (``DatasetSpec.support``) in whichever group runs
+        it, so a failed ``financial_statement_items`` fails the fundamentals
+        run and a failed ``industry_index`` derive only degrades the core one.
+        A source-limited attempt still degrades rather than fails at any
+        level (``Manifest.aggregate_run_status``).
         """
         try:
             run = self.manifest.get_run(run_id)
         except Exception:  # pragma: no cover - defensive for custom manifests
             run = None
-        if name in {"derive_adj_factors", "derive_industry_index"}:
-            # The raw core spine (notably daily_bars) remains usable when an
-            # external adjustment/industry source is unavailable.  These
-            # receipts therefore degrade a run rather than invalidate the
-            # committed raw revision.
-            return "research"
         if run is not None and run["job_name"] == "init":
             return "core"
         if name in {"compact", "audit"}:
             return "core"
+        from cnequity.domain.datasets import dataset_criticality
+
+        by_support = dataset_criticality(self._step_dataset(name, {}))
+        if by_support is not None:
+            return by_support
         return _criticality_for_group(getattr(entry, "group", "advisory"))
 
     @staticmethod

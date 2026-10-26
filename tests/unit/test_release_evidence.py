@@ -142,7 +142,7 @@ def test_release_evidence_recomputes_native_stability_and_critical_coverage(tmp_
     slo_path.write_text(json.dumps(slo))
 
     errors = validate_release_evidence(root, now=NOW)
-    assert any("job_name must be 'daily:core'" in error for error in errors)
+    assert any("job_name must be 'core_datasets'" in error for error in errors)
     assert any("does not match tail count" in error for error in errors)
     assert any("missing critical probes" in error for error in errors)
 

@@ -26,6 +26,17 @@ in any config:
 
 so swapping one step for another does not freeze the rest of the group: a
 step a later release adds to it still runs.
+
+``best_effort`` datasets (``DatasetSpec.support``) are off unless the config
+opts in, so the defaults schedule nothing the project cannot stand behind:
+
+* ``[datasets] best_effort = ["hot_rank", ...]`` or ``["all"]``;
+* the config's own group ``steps`` or ``steps_add`` naming one, which is already
+  an explicit choice. Only the config's own text counts, never the defaults
+  under it, so a full legacy config keeps running what it lists.
+
+A best-effort step neither names is dropped from every group and counted as
+opted out, which is how freshness reads it: ``removed``, not ``stale``.
 """
 
 from __future__ import annotations
@@ -52,6 +63,9 @@ GROUP_SCOPES = ("daily", "events")
 GROUP_EDIT_KEYS = ("steps_add", "steps_remove", "enabled")
 #: Where `effective_raw` leaves the steps a config removed on purpose, for the loader.
 OPTED_OUT_KEY = "__opted_out_steps__"
+#: Where `effective_raw` leaves the best-effort datasets this config turned on.
+BEST_EFFORT_KEY = "__best_effort_enabled__"
+ALL = "all"
 
 
 class ConfigLayerError(ConfigError):
@@ -103,10 +117,70 @@ def effective_raw(raw: dict, *, apply_opt_outs: bool = True) -> dict:
     else:
         raise ConfigLayerError(f'extends must be "{BUILTIN}"')
     out.pop(EXTENDS_KEY, None)
+    best_effort = _best_effort_opt_ins(out, own=raw)
     opted_out = _apply_group_edits(out, apply_opt_outs=apply_opt_outs)
+    if apply_opt_outs:
+        opted_out |= _drop_best_effort(out, best_effort)
+        out[BEST_EFFORT_KEY] = sorted(best_effort)
     if apply_opt_outs and opted_out:
         out[OPTED_OUT_KEY] = sorted(opted_out)
     return out
+
+
+def _groups(raw: dict):
+    job = raw.get("job")
+    if not isinstance(job, dict):
+        return
+    for scope in GROUP_SCOPES:
+        groups = (job.get(scope) or {}).get("groups")
+        if isinstance(groups, dict):
+            for name, group in groups.items():
+                if isinstance(group, dict):
+                    yield f"job.{scope}.groups.{name}", group
+
+
+def _best_effort_opt_ins(raw: dict, *, own: dict) -> set[str]:
+    """Best-effort datasets the config turns on.
+
+    *raw* is the merged config, read for ``[datasets]``; *own* is the file as
+    written, whose group step lists count as choices.
+    """
+    from cnequity.domain.datasets import best_effort_dataset_names
+
+    names = best_effort_dataset_names()
+    section = raw.get("datasets") or {}
+    if not isinstance(section, dict):
+        raise ConfigLayerError("datasets must be a table")
+    listed = _step_list(section.get("best_effort", []), "datasets.best_effort")
+    if ALL in listed:
+        return set(names)
+    unknown = sorted(set(listed) - names)
+    if unknown:
+        raise ConfigLayerError(
+            "datasets.best_effort names datasets that are not best-effort: " + ", ".join(unknown)
+        )
+    opted_in = set(listed)
+    for _location, group in _groups(own):
+        for key in ("steps", "steps_add"):
+            value = group.get(key, [])
+            if isinstance(value, list):
+                opted_in.update(step for step in value if step in names)
+    return opted_in
+
+
+def _drop_best_effort(raw: dict, enabled: set[str]) -> set[str]:
+    """Remove best-effort steps the config did not turn on; return them."""
+    from cnequity.domain.datasets import best_effort_dataset_names
+
+    off = best_effort_dataset_names() - enabled
+    dropped: set[str] = set()
+    for _location, group in _groups(raw):
+        steps = list(group.get("steps", []) or [])
+        kept = [step for step in steps if step not in off]
+        if len(kept) != len(steps):
+            dropped.update(set(steps) - set(kept))
+            group["steps"] = kept
+    return dropped
 
 
 def _apply_group_edits(raw: dict, *, apply_opt_outs: bool) -> set[str]:

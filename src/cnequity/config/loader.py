@@ -202,6 +202,9 @@ class Config:
     event_schedules: list[EventSchedule] = field(default_factory=list)
     #: Steps the config removed on purpose (``steps_remove``, ``enabled = false``).
     opted_out_steps: frozenset[str] = frozenset()
+    #: ``best_effort`` datasets this config turned on (see config/layers.py).
+    #: None on a hand-built Config: every dataset stays on, as before.
+    best_effort_enabled: frozenset[str] | None = None
     init_phases: list[str] = field(default_factory=list)
     on_demand_enabled: bool = True
     on_demand_datasets: list[str] = field(default_factory=list)
@@ -792,12 +795,14 @@ def configured_data_root(path: str | Path) -> Path:
 
 
 def load_config(path: str | Path) -> Config:
-    from cnequity.config.layers import OPTED_OUT_KEY, effective_raw
+    from cnequity.config.layers import BEST_EFFORT_KEY, OPTED_OUT_KEY, effective_raw
 
     config_path = Path(path).expanduser().resolve()
     with open(config_path, "rb") as f:
         raw = effective_raw(tomllib.load(f))
     opted_out_steps = frozenset(raw.pop(OPTED_OUT_KEY, ()))
+    best_effort_enabled = frozenset(raw.pop(BEST_EFFORT_KEY, ()))
+    raw.pop("datasets", None)
 
     data_root = _data_root(raw, config_path.parent)
     lake_profile = raw.get("data", {}).get("profile") or None
@@ -1178,6 +1183,7 @@ def load_config(path: str | Path) -> Config:
         events_groups=events_groups,
         event_schedules=event_schedules,
         opted_out_steps=opted_out_steps,
+        best_effort_enabled=best_effort_enabled,
         init_phases=init_phases,
         on_demand_enabled=bool(on_demand.get("enabled", True)),
         on_demand_datasets=list(on_demand.get("datasets", [])),

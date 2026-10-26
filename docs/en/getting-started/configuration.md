@@ -239,6 +239,17 @@ Explicitly enabling `[universe].ingest_listed_funds = true` adds listed ETF/LOF 
 
 With fund ingestion off, the full corporate-actions sweep skips ETF/LOF. If either switch is turned on later, the daily corporate-actions step sweeps the xdxr history of funds never swept before, at most 500 per run (about 2,200 market-wide, so it takes a few days); newly listed funds are swept once as well. Until the sweep finishes, each run warns `fund_history_unswept` and lists some of the codes; meanwhile those funds' adjustment factors lack their older unit splits.
 
+## `[datasets]` {#datasets}
+
+Best-effort datasets (`best_effort`, see [support levels](../datasets/catalog.md#support-levels)) are not scheduled by default: live snapshots whose history starts the day a lake turns them on, a retired source, and feeds that fail often. List the ones to run:
+
+```toml
+[datasets]
+best_effort = ["news_headlines", "flash_news_wire", "hot_rank"]   # or ["all"]
+```
+
+A best-effort dataset named in the config file's own schedule-group `steps` or `steps_add` is also on; only what the file itself says counts, never the built-in defaults under it. So a full legacy config keeps running what it lists, and a new `extends = "builtin"` config starts with all of them off. A dataset left off is dropped from every schedule group and its freshness reads `removed`, not `stale`; `cne backfill` can still run it explicitly. `cne config minimize` writes the set a full config enabled into `best_effort`, so its behaviour does not change.
+
 ## `[job.daily.waves]`
 
 Wave DAG: each wave has `name`, `parallel` (whether steps within the wave run in parallel) and `steps` (a list of step names).

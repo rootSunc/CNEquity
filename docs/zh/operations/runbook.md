@@ -268,9 +268,10 @@ cne status --datasets --gate --config configs/cnequity.restore.toml
 
 ## 20 个交易日验收
 
-`cne verify --runs` 从权威 `trading_calendar` 取最近窗口，并按 logical trade date 选择最新
-`daily:core` attempt。缺 run、核心 stage 失败、或只有旧 `warning` 且没有 dataset receipt，
-都会失败；研究/建议层单独降级只有在 receipt 能证明核心无失败时才计为通过。报告写入
+`cne verify --runs` 从权威 `trading_calendar` 取最近窗口，每个交易日汇总所有 `daily:*` 运行，
+按数据集和 stage 取最新的 receipt，只判 12 个核心档数据集（见[支持档位](../datasets/catalog.md#支持档位)），
+不管它们由哪个调度组采集。缺 run、核心数据集失败或被阻塞、或只有旧 `warning` 且没有 dataset receipt，
+都会失败；非核心数据集降级或失败不影响通过。档位按当前注册表判定，历史日期也按同一标准重算。报告写入
 `meta/stability/latest.json` 和不可变历史目录。不得手工补写或把日历日当交易日。
 
 ## 环境变量

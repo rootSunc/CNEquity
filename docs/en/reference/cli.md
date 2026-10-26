@@ -1105,7 +1105,7 @@ For configuration, usage and failure handling, see [THS integration](../getting-
 
 (The third mode of `cne verify`, options above; formerly `cne stability`.)
 
-Takes the most recent window from the authoritative `trading_calendar`, selects the latest `daily:core` attempt by logical trade date, and verifies run evidence over consecutive trading days.
+Takes the most recent window from the authoritative `trading_calendar`, gathers every `daily:*` run per trading day, takes the newest receipt per dataset, judges only the core datasets, and verifies run evidence over consecutive trading days.
 
 | Option | Description |
 |------|------|

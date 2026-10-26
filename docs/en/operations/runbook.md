@@ -268,9 +268,10 @@ use a separate configuration **pointing at the restore target**; then run the re
 
 ## 20-trading-day acceptance
 
-`cne verify --runs` takes the most recent window from the authoritative `trading_calendar` and selects the latest
-`daily:core` attempt by logical trade date. A missing run, a failed core stage, or only an old `warning` without a dataset receipt
-all fail; an isolated degradation of the research/advisory layer counts as a pass only if the receipt proves the core had no failures. The report is written to
+`cne verify --runs` takes the most recent window from the authoritative `trading_calendar`, gathers every `daily:*` run per trading day,
+takes the newest receipt per dataset and stage, and judges only the 12 core datasets (see [support levels](../datasets/catalog.md#support-levels)),
+whichever schedule group fetched them. A missing run, a failed or blocked core dataset, or only an old `warning` without a dataset receipt
+all fail; a non-core dataset that degrades or fails does not. Levels come from the current registry, so past days are judged by the same rule. The report is written to
 `meta/stability/latest.json` and an immutable history directory. Never backfill it by hand or treat calendar days as trading days.
 
 ## Environment variables

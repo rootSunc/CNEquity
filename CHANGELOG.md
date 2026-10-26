@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- **验收只看核心档：** `cne check` 和稳定性门槛（`cne verify --runs`）只按 12 个核心档数据集判定，不论它们由哪个调度组采集；其余数据集的过期、缺口和审计 error 照常列出，不计入结论。稳定性门槛改为每个交易日汇总所有 `daily:*` 运行、按数据集取最新结果，报告的 `job_name` 改为 `core_datasets`（旧的 `daily:core` 报告仍可通过发布校验）。运行状态也按档位判定：核心档数据集失败会让它所在的调度组运行失败（如财报失败使 fundamentals 组失败），`industry_index` 等非核心数据集失败只算降级。`cne status --datasets --gate` 新增 `--core-only`。
+- **升级注意：** 数据集新增支持档位（`DatasetSpec.support`：核心、扩展、尽力而为、可选），`list_datasets()` 多了 `support` 和 `enabled` 两列。尽力而为档（东财 push2 资金流、新闻快讯、人气榜、一致预期、板块成员等 14 个）**默认不再调度**：`extends = "builtin"` 的配置要继续采集，在 `[datasets] best_effort` 中列出需要的数据集，或写 `["all"]`。配置文件自己的调度组 `steps` / `steps_add` 写到的照旧启用，所以完整展开的旧配置行为不变；`cne config minimize` 会把这部分写成 `best_effort` 列表。未启用的数据集新鲜度显示为 `removed`，已有数据保留，`cne backfill` 仍可单独运行。
+- 复权因子推导等流水线在被其他程序（如 EquityLab 的定时任务调用 `scripts/run_catchup.py`）直接驱动时，同样会提高打开文件数上限，不再因 launchd 的 256 上限失败。
+
 - `financial_statement_items` 新增备源 `tdx_fin`（通达信全市场季度财务包，按索引 MD5 校验，免注册）。东财日更失败时，改从通达信写入近 14 天内的新披露，运行记为降级而不是失败。`cne backfill financial_statement_items --source tdx_fin [--start --end]` 只补湖中缺少的科目，不覆盖已有值；通达信会用更正后的数值改写旧季度包，所以较早的披露标为 `tdx_fin_backfill`，严格 PIT 不读取。不含 `revenue`（包内是营业收入，不是营业总收入）和 indicator 比率。
 - 定时任务与 `cne` 命令启动时提高进程的打开文件数软上限：launchd 默认只有 256，扫描 `daily_bars` 六千多个日分区时会报 `Too many open files`，复权因子推导自 10-26 起因此失败。
 - 度量表（`meta/stats`）只在有运行真正写入数据后才判为过期，并且只重算被写入的数据集：此前任何一次新运行（包括 0 行的失败回填）都会让整张表过期并全量重算，每隔十几分钟一次的快讯事件流让控制台几乎一直显示「度量表过期」。`cne serve` 概览页最多等 3 秒让这类小范围重算完成，再显示结果；度量表汇总（`cne check` 显示的行数和容量）仍按全湖统计。

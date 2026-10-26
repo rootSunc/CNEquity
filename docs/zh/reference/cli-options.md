@@ -657,6 +657,7 @@
 | `--groups` | `—` | 配合 --datasets：只对这些调度组拥有的数据集判失败（空格或逗号分隔）。其它组的数据集照常列出、照常报为调度缺口，但不会让门禁失败。截面检查同样受它约束——daily_bars 归哪个组，它的覆盖率就归谁判。未跑完的 init 不属于任何调度组，始终判失败。 |
 | `--scope, --no-scope` | `True` | 配合 --datasets：是否做最新交易日的标的截面校验。它要读 daily_bars 的 tip 分区、instruments 和 trading_status，比单纯看水位贵；--no-scope 让这条命令回到纯元数据。 |
 | `--gate` | `False` | 按所选范围和新鲜度执行门禁；默认只报告。 |
+| `--core-only` | `False` | 配合 --datasets --gate：只有核心档数据集会让门槛失败，其余照常列出。`cne check` 使用此项。 |
 
 ## `cne storage apply`
 

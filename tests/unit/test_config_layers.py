@@ -21,6 +21,11 @@ from cnequity.config.drift import config_drift
 from cnequity.config.layers import ConfigLayerError, builtin_defaults, effective_raw, merge
 from cnequity.config.minimize import plan_minimize
 from cnequity.config.toml_out import dumps
+from cnequity.domain.datasets import (
+    best_effort_dataset_names,
+    is_dataset_enabled,
+    removed_from_schedule,
+)
 
 
 def _layered(tmp_path: Path, body: str = "") -> Path:
@@ -65,7 +70,35 @@ def test_group_edits_swap_a_step_and_keep_the_rest(tmp_path):
     steps = load_config(path).schedule_groups["capital"].steps
 
     default = _example_groups()["capital"]["steps"]
-    assert set(steps) == (set(default) - {"fund_flow"}) | {"fund_flow_ths"}
+    # Best-effort steps the config did not name stay off by default.
+    off = best_effort_dataset_names() - {"fund_flow_ths"}
+    assert set(steps) == (set(default) - {"fund_flow"} - off) | {"fund_flow_ths"}
+
+
+def test_best_effort_datasets_are_off_unless_named(tmp_path):
+    cfg = load_config(_layered(tmp_path, ""))
+    scheduled = {step for group in cfg.schedule_groups.values() for step in group.steps}
+    scheduled |= {step for group in cfg.events_groups.values() for step in group.steps}
+    assert not scheduled & best_effort_dataset_names()
+    assert cfg.best_effort_enabled == frozenset()
+    assert not is_dataset_enabled("hot_rank", cfg)
+    assert removed_from_schedule(cfg, "hot_rank")
+
+    named = load_config(
+        _layered(tmp_path, '[datasets]\nbest_effort = ["hot_rank", "news_headlines"]\n')
+    )
+    assert named.best_effort_enabled == {"hot_rank", "news_headlines"}
+    assert "hot_rank" in named.schedule_groups["research"].steps
+    assert "news_headlines" in named.events_groups["news_wire"].steps
+    assert "sector_bars" not in named.schedule_groups["research"].steps
+
+    everything = load_config(_layered(tmp_path, '[datasets]\nbest_effort = ["all"]\n'))
+    assert everything.best_effort_enabled == best_effort_dataset_names()
+
+
+def test_best_effort_rejects_a_dataset_it_does_not_cover(tmp_path):
+    with pytest.raises(ConfigLayerError, match="not best-effort"):
+        load_config(_layered(tmp_path, '[datasets]\nbest_effort = ["daily_bars"]\n'))
 
 
 def test_a_group_can_be_disabled(tmp_path):

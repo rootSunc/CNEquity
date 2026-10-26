@@ -1354,7 +1354,7 @@ def list_datasets(
     ``history_horizon_days`` is the ceiling on how far back that contract can
     ever reach (None = no source-imposed limit).
     """
-    from cnequity.domain.datasets import history_mode_for
+    from cnequity.domain.datasets import history_mode_for, is_dataset_enabled
     from cnequity.storage.state import StateStore
 
     cfg = resolve_config(config=config, data_root=data_root)
@@ -1382,6 +1382,10 @@ def list_datasets(
             {
                 "dataset": name,
                 "layer": spec.layer,
+                # How much the project stands behind it; a best_effort dataset
+                # is enabled only when the config opts in.
+                "support": spec.support,
+                "enabled": is_dataset_enabled(name, cfg),
                 "date_col": spec.query_date_col,
                 "fetch_semantics": spec.fetch_semantics,
                 "history_mode": history_mode_for(spec),

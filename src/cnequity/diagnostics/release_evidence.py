@@ -180,8 +180,9 @@ def _validate_stability_at(
     generated_date = generated.astimezone(dt.timezone.utc).date() if generated is not None else None
     now_date = now.astimezone(dt.timezone.utc).date()
 
-    if payload.get("job_name") != "daily:core":
-        errors.append(f"{path}: job_name must be 'daily:core'")
+    # `daily:core` receipts predate the core-dataset gate and stay valid.
+    if payload.get("job_name") not in {"core_datasets", "daily:core"}:
+        errors.append(f"{path}: job_name must be 'core_datasets' (or legacy 'daily:core')")
 
     required = payload.get("required_days")
     if not _is_int(required) or required < 20:

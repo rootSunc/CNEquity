@@ -39,6 +39,17 @@ This page answers two questions: which datasets the lake registers, and where ea
 
 Tiers describe **research use** and are orthogonal to the storage `layer`: `adj_factors` / `delisting_events` (L1) and `industry_index` (L5) live in `derived/` rather than `curated/`, but are filed under their tiers by use, so there is no separate "derived" tier. Per [Product boundaries](../architecture/overview.md), futures/options sit alongside the equity system; contracts, market data and derived series all belong to L9 and are viewed as one group in the dashboard and the catalog. The authoritative source is `DatasetSpec.tier`; `test_docs_catalog.py` asserts that this document matches the registry tier by tier.
 
+## Support levels
+
+A support level says how far the project stands behind a dataset, independent of the research tiers above. The source of truth is `DatasetSpec.support`; the `support` and `enabled` columns of `list_datasets()` give each dataset's level and whether this lake runs it, and `test_docs_catalog.py` asserts this table matches the registry.
+
+| Level | Default | Meaning | Datasets |
+|-------|---------|---------|----------|
+| `core` | on | Rebuildable history, a steady daily path, and a backup source or authority check; `cne check` and the stability gate (`cne verify --runs`) judge only this level, in whichever schedule group runs it | `instruments`, `trading_calendar`, `trading_status`, `daily_bars`, `index_bars`, `corporate_actions`, `financial_statement_items`, `share_structure`, `valuation_metrics`, `index_constituents`, `adj_factors`, `delisting_events` |
+| `extended` | on | Rebuildable and mostly steady, but not essential or single-sourced | `etf_profiles`, `commodity_bars`, `announcement_index`, `earnings_disclosure_schedule`, `shareholder_counts`, `top_holders`, `margin_trading`, `dragon_tiger`, `block_trades`, `institutional_holdings`, `industry_members`, `macro_indicators`, `market_breadth`, `share_unlock_schedule`, `regulatory_events`, `industry_index` |
+| `best_effort` | **off** | Live snapshots whose history starts the day a lake turns them on, a retired source, or feeds that fail often (EastMoney push2 money flow, news, popularity ranks); enabled only when listed in `[datasets] best_effort` | `analyst_consensus`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar` |
+| `optional` | off | Enabled by their own switches (`[minute_bars]`, `[trade_ticks]`, `[futures]`) | `minute_bars`, `minute_bars_5m`, `trade_ticks`, `futures_contracts`, `option_contracts`, `futures_bars`, `futures_minute_bars`, `option_bars`, `futures_continuous`, `option_greeks`, `minute_bars_15m`, `minute_bars_30m`, `minute_bars_60m` |
+
 ## Collection modes
 
 | Mode | Meaning | Examples |
