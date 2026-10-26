@@ -587,9 +587,11 @@ soft_fail_max_days = 3
 [job.daily.groups.core]
 at = "16:00"
 parallel = true
+# financial_statement_items is a core dataset and runs here, daily: a weekly
+# group would leave newly filed quarterly reports out of the lake for days.
 steps = [
   "instruments", "trading_calendar", "trading_status",
-  "corporate_actions", "daily_bars", "index_bars",
+  "corporate_actions", "daily_bars", "index_bars", "financial_statement_items",
   "compact", "derive_adj_factors", "derive_industry_index",
   "ths_official_snapshot",
 ]
@@ -619,7 +621,7 @@ parallel = true
 # two and can overrun the gap to the next group. Run it on its own cadence:
 # `cne backfill top_holders --start ... --end ...`.
 steps = [
-  "financial_statement_items", "earnings_disclosure_schedule",
+  "earnings_disclosure_schedule",
   "index_constituents", "industry_members",
   "share_structure", "shareholder_counts", "compact",
 ]
