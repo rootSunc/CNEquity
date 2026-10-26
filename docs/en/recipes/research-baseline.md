@@ -1,3 +1,7 @@
+---
+description: China A-share price adjustment baseline: compare unadjusted and back-adjusted returns on one stock and confirm adjustment-factor coverage before backtesting.
+---
+
 # Price adjustment research baseline
 
 This recipe does a minimal check with a single stock: over the same window, returns from the unadjusted `close` and the hfq `adj_close` can differ; research code must choose its price basis explicitly and confirm that factor coverage is exact.

@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.rootSunc/cnequity",
   "title": "CNEquity",
-  "description": "China A-share data lake for AI agents: prices, fundamentals, flows and events, point-in-time.",
+  "description": "Open-source China A-share data lake for AI agents: prices, fundamentals, flows, events, PIT.",
   "websiteUrl": "https://rootsunc.github.io/CNEquity/reference/mcp/",
   "repository": {
     "url": "https://github.com/rootSunc/CNEquity",

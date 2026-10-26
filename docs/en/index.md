@@ -1,6 +1,6 @@
 ---
 title: CNEquity documentation
-description: From your first query to daily updates, research and troubleshooting, enter the CNEquity docs by what you want to do.
+description: Documentation for CNEquity, an open-source China A-share data lake - install, first query, daily updates, quant backtesting research, MCP and troubleshooting.
 hide:
   - navigation
   - toc
@@ -177,5 +177,5 @@ cne check</code></pre>
       <a class="cne-button cne-button--ghost" href="changelog/">Changelog</a>
     </div>
   </section>
-  <p class="cne-fine">These docs follow the main branch; changes not yet on PyPI sit at the top of the <a href="changelog/">changelog</a> under a version marked unreleased (未发布). Run <code>cne --version</code> to check your installed version. Code is Apache-2.0; data is subject to each upstream source's terms, see <a href="legal-and-data-sources/">License and sources</a>. For direction and boundaries, see <a href="architecture/overview/">Product design</a>. Report problems in <a href="https://github.com/rootSunc/CNEquity/issues">Issues</a>.</p>
+  <p class="cne-fine">These docs follow the main branch; changes not yet on PyPI sit at the top of the <a href="changelog/">changelog</a> under a version marked unreleased (未发布). Run <code>cne --version</code> to check your installed version. Code is Apache-2.0; data is subject to each upstream source's terms, see <a href="legal-and-data-sources/">License and sources</a>. For direction and boundaries, see <a href="architecture/overview/">Product design</a>. FAQ: <a href="guides/free-a-share-data/">free A-share historical data</a>, <a href="guides/avoid-look-ahead-bias/">avoiding look-ahead bias</a>, <a href="guides/ai-query-a-shares/">asking AI about A-shares</a>, <a href="architecture/comparison/">AKShare, Tushare or Baostock</a>. Report problems in <a href="https://github.com/rootSunc/CNEquity/issues">Issues</a>.</p>
 </div>

@@ -1,6 +1,6 @@
 ---
 title: CNEquity 文档
-description: 从第一条查询到日更、研究和排障，按要做的事进入 CNEquity 文档。
+description: 开源 A 股数据湖 CNEquity 文档：从安装、第一条查询到日更、量化回测研究、MCP 接入和排障。
 hide:
   - navigation
   - toc
@@ -177,5 +177,5 @@ cne check</code></pre>
       <a class="cne-button cne-button--ghost" href="changelog/">更新日志</a>
     </div>
   </section>
-  <p class="cne-fine">文档随 main 分支更新；还没发布到 PyPI 的改动列在<a href="changelog/">更新日志</a>顶部标为「未发布」的版本下。用 <code>cne --version</code> 核对本机版本。代码 Apache-2.0，数据受各上游条款约束，见<a href="legal-and-data-sources/">许可与来源</a>。方向和边界见<a href="architecture/overview/">产品设计</a>。问题请到 <a href="https://github.com/rootSunc/CNEquity/issues">Issues</a> 反馈。</p>
+  <p class="cne-fine">文档随 main 分支更新；还没发布到 PyPI 的改动列在<a href="changelog/">更新日志</a>顶部标为「未发布」的版本下。用 <code>cne --version</code> 核对本机版本。代码 Apache-2.0，数据受各上游条款约束，见<a href="legal-and-data-sources/">许可与来源</a>。方向和边界见<a href="architecture/overview/">产品设计</a>。常见问题：<a href="guides/free-a-share-data/">免费获取 A 股历史数据</a>、<a href="guides/avoid-look-ahead-bias/">回测避免未来函数</a>、<a href="guides/ai-query-a-shares/">用 AI 查 A 股</a>、<a href="architecture/comparison/">与 AKShare、Tushare、Baostock 对比</a>。问题请到 <a href="https://github.com/rootSunc/CNEquity/issues">Issues</a> 反馈。</p>
 </div>

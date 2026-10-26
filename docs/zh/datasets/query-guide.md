@@ -1,3 +1,7 @@
+---
+description: load() 查询指南：A 股复权、股票池、PIT 财报与常见陷阱。
+---
+
 # 查询指南
 
 下游读数的推荐路径是 `cnequity.query.load()`。本文说明复权、Universe、PIT 与常见陷阱。

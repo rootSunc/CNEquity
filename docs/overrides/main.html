@@ -21,4 +21,21 @@
   <meta name="twitter:title" content="{{ social_title | e }} · CNEquity">
   <meta name="twitter:description" content="{{ social_description | e }}">
   <meta name="twitter:image" content="https://raw.githubusercontent.com/rootSunc/CNEquity/main/docs/assets/cnequity-github-cover.png">
+  {% if page and page.is_homepage %}
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "CNEquity",
+      "description": {{ config.site_description | tojson }},
+      "url": {{ config.site_url | tojson }},
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "macOS, Linux, Windows",
+      "license": "https://www.apache.org/licenses/LICENSE-2.0",
+      "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+      "codeRepository": "https://github.com/rootSunc/CNEquity",
+      "downloadUrl": "https://pypi.org/project/cnequity/"
+    }
+  </script>
+  {% endif %}
 {% endblock %}

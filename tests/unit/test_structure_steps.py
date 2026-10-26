@@ -239,7 +239,7 @@ def test_index_constituents_backfill_writes_cni(cfg, monkeypatch):
     assert result["status"] == "warning"
     assert result["as_of_dates"] == 1
     findings = result["context_updates"]["audit_findings"]
-    assert findings[0]["code"] == "cni_index_backfill_incomplete"
+    assert findings[0]["check"] == "cni_index_backfill_incomplete"
 
 
 def test_index_constituents_backfill_empty_cni_is_retryable_warning(cfg, monkeypatch):
@@ -254,7 +254,7 @@ def test_index_constituents_backfill_empty_cni_is_retryable_warning(cfg, monkeyp
 
     assert result["status"] == "warning"
     assert result["rows_written"] == 0
-    assert result["context_updates"]["audit_findings"][0]["code"] == (
+    assert result["context_updates"]["audit_findings"][0]["check"] == (
         "cni_index_backfill_incomplete"
     )
 
@@ -425,7 +425,7 @@ def test_industry_members_backfill_keeps_both_thin_and_healthy_months(cfg, monke
     assert result["as_of_dates"] == 2
     assert result["status"] == "warning"
     finding = result["context_updates"]["audit_findings"][0]
-    assert finding["code"] == "sw_industry_thin_months"
+    assert finding["check"] == "sw_industry_thin_months"
     assert finding["thin_as_of_dates"] == [thin_date.isoformat()]
     assert finding["missing_as_of_dates"] == [missing_date.isoformat()]
 

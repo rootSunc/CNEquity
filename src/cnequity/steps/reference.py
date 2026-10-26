@@ -1586,7 +1586,7 @@ def _backfill_trading_status_st_source(
         finding = {
             "dataset": "trading_status",
             "severity": "warning",
-            "code": f"{source}_st_backfill_incomplete",
+            "check": f"{source}_st_backfill_incomplete",
             "message": (
                 f"{len(completed)}/{len(universe)} symbols have {source} ST evidence: "
                 + "; ".join(parts)

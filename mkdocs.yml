@@ -1,5 +1,5 @@
 site_name: CNEquity
-site_description: 可日更、可溯源的 A 股研究数据湖
+site_description: 开源 A 股本地数据湖：面向量化研究与回测的股票行情、财务、期货与资金流数据，可日更、可溯源，支持 MCP
 site_url: https://rootsunc.github.io/CNEquity/
 repo_name: rootSunc/CNEquity
 repo_url: https://github.com/rootSunc/CNEquity
@@ -104,6 +104,11 @@ nav:
       - 安装与升级: getting-started/installation.md
       - 初始化、范围与续跑: getting-started/initialization.md
       - 配置参考: getting-started/configuration.md
+  - 常见问题:
+      - A股历史数据免费获取: guides/free-a-share-data.md
+      - AKShare、Tushare、Baostock 怎么选: architecture/comparison.md
+      - 回测怎么避免未来函数: guides/avoid-look-ahead-bias.md
+      - 用 Claude、ChatGPT 查 A 股: guides/ai-query-a-shares.md
   - 研究与数据:
       - 研究示例:
           - 示例索引: recipes/README.md
@@ -133,7 +138,6 @@ nav:
       - 仓库脚本: operations/scripts.md
   - 产品设计:
       - 产品方向与边界: architecture/overview.md
-      - 与 AKShare、Tushare 对比: architecture/comparison.md
       - 设计原则: architecture/design-principles.md
       - 从采集到查询: architecture/data-flow.md
       - 数据湖目录: architecture/lake-layout.md

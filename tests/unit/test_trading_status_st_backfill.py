@@ -223,7 +223,7 @@ def test_failed_symbols_are_not_marked_and_surface_a_finding(tmp_path, monkeypat
     assert result["status"] == "warning"
     assert result["failed_symbols"] == 1
     finding = result["context_updates"]["audit_findings"][0]
-    assert finding["code"] == "baostock_st_backfill_incomplete"
+    assert finding["check"] == "baostock_st_backfill_incomplete"
     assert finding["severity"] == "warning"
 
 

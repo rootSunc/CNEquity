@@ -1,30 +1,35 @@
-# Comparison with AKShare and Tushare
+---
+description: AKShare, Tushare or Baostock? How three ways of fetching China A-share data differ from the CNEquity local data lake, when to use each, and how to combine them.
+---
 
-The three are often compared, but they solve problems at different stages:
+# AKShare, Tushare or Baostock: how they differ from a local data lake
+
+These tools are often compared, but they solve problems at different stages:
 
 - **AKShare**: an open-source Python data-fetching library. Call it once and you get a DataFrame back.
 - **Tushare Pro**: a data API service you call with a token after registering.
+- **Baostock**: a free Python data-fetching library; no registration, it logs in anonymously and pulls Shanghai and Shenzhen history from its own servers.
 - **CNEquity**: a local data lake. It collects the data and keeps maintaining it, and research reads from local storage.
 
-So the question is not which replaces which, but which stage your work is missing. The sections below compare only ways of working and do not give static ratings of the other two projects' coverage, pricing, or licensing. Those change with versions and terms; rely on their current documentation.
+So the question is not which replaces which, but which stage your work is missing. The sections below compare only ways of working and do not give static ratings of the other tools' coverage, pricing, or licensing. Those change with versions and terms; rely on their current documentation.
 
 ## Ways of working at a glance
 
-| | AKShare | Tushare Pro | CNEquity |
-|---|---|---|---|
-| Form | Python library; functions return DataFrames directly | Remote API service, called through a Python SDK | Local Parquet data lake, with CLI, Python / SQL queries, a dashboard, and MCP |
-| Account and credentials | Not needed | Registration and a token are required; interface permissions and rate limits are tied to points | Not needed for basic collection; a few supplementary sources need your own credentials |
-| Where the data lives | Not stored; the caller stores it | Not stored; the caller stores it | Stored locally, managed by dataset, partition, and immutable version |
-| Incremental updates and resume | Implemented by the caller | Implemented by the caller | Built-in watermarks, batch-based resume, retry of failed ranges |
-| Quality checks | Done by the caller | Cleaned by the service provider | Audits both before and after publishing; results are visible in the dashboard and `cne check` |
-| Research semantics | Depends on the specific interface | Depends on the specific interface | Raw prices and adjustment factors stored separately; delisted stocks kept; financial statements distinguish strict PIT from reconstructed after the fact |
-| Provenance | No row-level record | No row-level record | Every row carries `source`, `data_version`, `fetched_at` |
-| Use by AI agents | You wrap it yourself | You wrap it yourself | `cne mcp` provides read-only tools, over both stdio and HTTP |
-| Coverage | Very broad: beyond A-shares, also Hong Kong and US stocks, funds, macro, global markets, etc. | Broad, unlocked by points | Focused on China markets: A-shares and their fundamentals, fund flows, and events, plus domestic futures and options, 55 datasets in total |
+| | AKShare | Tushare Pro | Baostock | CNEquity |
+|---|---|---|---|---|
+| Form | Python library; functions return DataFrames directly | Remote API service, called through a Python SDK | Python library that queries the Baostock servers | Local Parquet data lake, with CLI, Python / SQL queries, a dashboard, and MCP |
+| Account and credentials | Not needed | Registration and a token are required; interface permissions and rate limits are tied to points | No registration, anonymous login; daily request cap | Not needed for basic collection; a few supplementary sources need your own credentials |
+| Where the data lives | Not stored; the caller stores it | Not stored; the caller stores it | Not stored; the caller stores it | Stored locally, managed by dataset, partition, and immutable version |
+| Incremental updates and resume | Implemented by the caller | Implemented by the caller | Implemented by the caller | Built-in watermarks, batch-based resume, retry of failed ranges |
+| Quality checks | Done by the caller | Cleaned by the service provider | Provided by the service; the caller verifies | Audits both before and after publishing; results are visible in the dashboard and `cne check` |
+| Research semantics | Depends on the specific interface | Depends on the specific interface | Adjusted prices and factors provided; ST is a yes/no flag only | Raw prices and adjustment factors stored separately; delisted stocks kept; financial statements distinguish strict PIT from reconstructed after the fact |
+| Provenance | No row-level record | No row-level record | No row-level record | Every row carries `source`, `data_version`, `fetched_at` |
+| Use by AI agents | You wrap it yourself | You wrap it yourself | You wrap it yourself | `cne mcp` provides read-only tools, over both stdio and HTTP |
+| Coverage | Very broad: beyond A-shares, also Hong Kong and US stocks, funds, macro, global markets, etc. | Broad, unlocked by points | Shanghai and Shenzhen A-share history: prices, valuation and financials; no Beijing exchange | Focused on China markets: A-shares and their fundamentals, fund flows, and events, plus domestic futures and options, 55 datasets in total |
 
 ## When to use which
 
-**If you only occasionally fetch a table**, such as today's dragon-tiger list or the latest value of a macro indicator, using AKShare or Tushare directly is lighter. Building a lake for that is not worth it.
+**If you only occasionally fetch a table**, such as today's dragon-tiger list or the latest value of a macro indicator, using AKShare, Tushare or Baostock directly is lighter. Building a lake for that is not worth it.
 
 **When the same history is reused across many studies**, the cost of a data-fetching library shifts onto you: pulling again every time, storing the files yourself, handling interruptions and gaps yourself, and remembering which day and which interface each dataset came from. CNEquity makes these the data layer's responsibility.
 
@@ -40,6 +45,7 @@ So the question is not which replaces which, but which stage your work is missin
 
 - **For instruments CNEquity does not cover**, such as Hong Kong and US stocks, mutual fund NAVs, or overseas macro data, keep pulling them with AKShare or Tushare, then join them with the lake's Parquet in DuckDB.
 - **Data you already have through Tushare points** can serve as a reference source for spot-checking whether the same field in the lake matches.
+- **Baostock is already a backup source inside the lake**: historical ST, valuation and delisted-stock backfills query it, so there is nothing extra to wire up; see [Sources and history limits](../datasets/sources.md).
 - **When migrating from AKShare**, note that CNEquity's code format is `600519.SH`, dates are of type `date`, and volume units are described in [Fields and units](../datasets/schema.md).
 
 ## What CNEquity costs

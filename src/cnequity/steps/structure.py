@@ -272,7 +272,7 @@ def _backfill_index_constituents(config: Config, trade_date: date, run_id: str) 
                     {
                         "dataset": "index_constituents",
                         "severity": "warning",
-                        "code": "cni_index_backfill_incomplete",
+                        "check": "cni_index_backfill_incomplete",
                         "message": (
                             "CNI returned empty adjustment history for: "
                             + ", ".join(failed_indices)
@@ -319,7 +319,7 @@ def _backfill_index_constituents(config: Config, trade_date: date, run_id: str) 
             {
                 "dataset": "index_constituents",
                 "severity": "warning",
-                "code": "cni_index_backfill_incomplete",
+                "check": "cni_index_backfill_incomplete",
                 "message": (
                     (
                         "CNI returned empty adjustment history for: "
@@ -440,7 +440,7 @@ def _backfill_industry_members(config: Config, trade_date: date, run_id: str) ->
             {
                 "dataset": "industry_members",
                 "severity": "warning",
-                "code": "sw_industry_thin_months",
+                "check": "sw_industry_thin_months",
                 "message": (
                     (
                         f"{len(missing_dates)} requested month(s) returned no Shenwan members "

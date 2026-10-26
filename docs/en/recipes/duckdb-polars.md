@@ -1,3 +1,7 @@
+---
+description: Query a local China A-share Parquet data lake with DuckDB SQL and Polars LazyFrames without copying adjusted data.
+---
+
 # DuckDB and Polars
 
 The same Parquet lake can be consumed in three ways: `load()` handles research queries with semantics, DuckDB handles cross-dataset SQL, and Polars `scan()` handles LazyFrame pipelines. Pick an entry point; do not make a copy as an "adjusted data lake".

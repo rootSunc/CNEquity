@@ -36,6 +36,11 @@ Rebuilds are whole-dataset. Row totals come from Parquet footers, while
 provenance columns are scanned in bounded batches and aggregated immediately.
 That keeps the simple full-rebuild contract without making memory consumption
 grow with the size of the lake.
+
+A refresh rebuilds only the datasets that runs finished since the last build
+actually wrote to. The news wire alone lands every quarter hour; keying
+staleness on "any newer run" kept the tables stale nearly all the time and
+rescanned the whole lake for a few thousand headline rows.
 """
 
 from __future__ import annotations
@@ -373,6 +378,9 @@ def rebuild_stats(config: Config, *, datasets: list[str] | None = None) -> Stats
     already had.
     """
     started = time.monotonic()
+    # Taken before any file is read: a run finishing mid-scan is newer than
+    # this build and must still count as a change on the next check.
+    built_at = datetime.now(timezone.utc)
     names = sorted(datasets) if datasets else sorted(DATASETS)
     unknown = [name for name in names if name not in DATASETS]
     if unknown:
@@ -410,12 +418,10 @@ def rebuild_stats(config: Config, *, datasets: list[str] | None = None) -> Stats
 
     rebuilt = set(names)
     stats_root(config).mkdir(parents=True, exist_ok=True)
-    write_parquet_atomic(
-        partition_stats_path(config),
-        _merge(
-            _read(partition_stats_path(config), PARTITION_STATS_SCHEMA), fresh_partitions, rebuilt
-        ),
+    merged_partitions = _merge(
+        _read(partition_stats_path(config), PARTITION_STATS_SCHEMA), fresh_partitions, rebuilt
     )
+    write_parquet_atomic(partition_stats_path(config), merged_partitions)
     write_parquet_atomic(
         provenance_stats_path(config),
         _merge(
@@ -424,21 +430,39 @@ def rebuild_stats(config: Config, *, datasets: list[str] | None = None) -> Stats
     )
 
     result.elapsed_seconds = time.monotonic() - started
-    _write_summary(config, result, rebuilt)
+    _write_summary(config, result, rebuilt, merged_partitions, built_at)
     return result
 
 
-def _write_summary(config: Config, result: StatsResult, rebuilt: set[str]) -> None:
+def _write_summary(
+    config: Config,
+    result: StatsResult,
+    rebuilt: set[str],
+    partitions: pl.DataFrame,
+    built_at: datetime,
+) -> None:
     """Sidecar recording when the tables were built and against which run.
 
-    A reader comparing ``latest_run_id`` against the manifest can tell whether
+    A reader comparing ``generated_at`` against the manifest can tell whether
     the tables predate the last ingestion without reading the parquet at all.
+    The totals describe the whole table, not just this pass: `cne check` and
+    init report them as the lake's size, and a partial refresh is still a
+    whole lake.
     """
+    totals = StatsResult(
+        datasets=sorted(set(partitions["dataset"].to_list())),
+        empty=result.empty,
+        partitions=partitions.height,
+        rows=int(partitions["row_count"].sum() or 0),
+        files=int(partitions["file_count"].sum() or 0),
+        bytes=int(partitions["bytes"].sum() or 0),
+        elapsed_seconds=result.elapsed_seconds,
+    )
     summary = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": built_at.isoformat(),
         "latest_run_id": _latest_run_id(config),
         "rebuilt_datasets": sorted(rebuilt),
-        **result.as_dict(),
+        **totals.as_dict(),
     }
     write_json_atomic(
         summary_path(config),
@@ -472,18 +496,101 @@ class StatsFreshness:
     generated_at: datetime | None
     stats_run_id: str | None
     latest_run_id: str | None
+    # What a refresh has to rebuild; None means every dataset.
+    changed_datasets: tuple[str, ...] | None = None
+
+
+# Step names that write to curated under a name other than the dataset's. The
+# audit writes meta only; compaction rewrites the files of the datasets its run
+# wrote, which carry their own rows.
+_STEP_DATASETS = {"audit": None, "compact": None}
+
+
+def _result_dataset(name: str) -> str | None | bool:
+    """Map a dataset_results name to a dataset; None if it changes no
+    curated data, False if unknown (the caller then rebuilds everything)."""
+    if name in DATASETS:
+        return name
+    if name in _STEP_DATASETS:
+        return _STEP_DATASETS[name]
+    for candidate in (name.removeprefix("derive_"), name.removesuffix("_derive")):
+        if candidate in DATASETS:
+            return candidate
+    return False
+
+
+def _changes_since(config: Config, since: datetime) -> tuple[set[str] | None, str | None]:
+    """Datasets written by runs that finished after *since*, and the newest
+    such run. None for the set means "cannot tell which": rebuild all.
+
+    A run that wrote nothing — a failed backfill, a quiet derivatives day —
+    changes nothing and does not count. A run still going counts once it
+    finishes.
+    """
+    import sqlite3
+
+    path = Path(config.manifest_path)
+    if not path.exists():
+        return set(), None
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return None, None
+    try:
+        runs = conn.execute(
+            "SELECT run_id, finished_at, rows_written FROM ingestion_runs "
+            "WHERE finished_at IS NOT NULL ORDER BY finished_at"
+        ).fetchall()
+        changed: set[str] | None = set()
+        newest: str | None = None
+        for run_id, finished_at, run_rows in runs:
+            try:
+                finished = datetime.fromisoformat(finished_at)
+            except (TypeError, ValueError):
+                continue
+            if finished.tzinfo is None:
+                finished = finished.replace(tzinfo=timezone.utc)
+            if finished <= since:
+                continue
+            results = conn.execute(
+                "SELECT dataset, MAX(rows_written) FROM dataset_results "
+                "WHERE run_id = ? GROUP BY dataset",
+                (run_id,),
+            ).fetchall()
+            written = [name for name, rows in results if (rows or 0) > 0]
+            if not results and (run_rows or 0) > 0:
+                # A run from before per-dataset results: no way to say what
+                # it touched.
+                changed, newest = None, run_id
+                continue
+            mapped = [_result_dataset(name) for name in written]
+            if False in mapped:
+                changed, newest = None, run_id
+                continue
+            touched = {name for name in mapped if name}
+            if "compact" in written and not touched:
+                changed, newest = None, run_id
+                continue
+            if touched:
+                if changed is not None:
+                    changed |= touched
+                newest = run_id
+        return changed, newest
+    except sqlite3.Error:
+        return None, None
+    finally:
+        conn.close()
 
 
 def stats_freshness(config: Config) -> StatsFreshness:
-    """Compare the stats sidecar against the manifest's newest run.
+    """Compare the stats sidecar against the runs finished since it was built.
 
-    Reads one small JSON and one SQLite row — cheap enough for a dashboard to
-    call on every request, which is the point: the tables do not refresh
+    Reads one small JSON and a few SQLite rows — cheap enough for a dashboard
+    to call on every request, which is the point: the tables do not refresh
     themselves, so somebody has to notice.
 
-    The run id is the signal rather than a wall-clock age. Ingestion is what
-    changes the lake, so tables built after the last run are current however
-    old they are, and tables built before it are stale however recent.
+    Ingestion is what changes the lake, so tables are current until a run that
+    wrote rows finishes after them, however old they are.
     """
     latest_run_id = _latest_run_id(config)
     summary = load_summary(config)
@@ -497,17 +604,23 @@ def stats_freshness(config: Config) -> StatsFreshness:
             generated_at = datetime.fromisoformat(raw)
         except ValueError:
             generated_at = None
-
     stats_run_id = summary.get("latest_run_id")
-    if latest_run_id is not None and stats_run_id != latest_run_id:
+    if generated_at is None:
+        return StatsFreshness(True, "no stats yet", None, stats_run_id, latest_run_id)
+    if generated_at.tzinfo is None:
+        generated_at = generated_at.replace(tzinfo=timezone.utc)
+
+    changed, newest = _changes_since(config, generated_at)
+    if changed is None or changed:
         return StatsFreshness(
             True,
-            f"ingestion run {latest_run_id} landed after the stats were built",
+            f"ingestion run {newest} landed after the stats were built",
             generated_at,
             stats_run_id,
             latest_run_id,
+            None if changed is None else tuple(sorted(changed)),
         )
-    return StatsFreshness(False, None, generated_at, stats_run_id, latest_run_id)
+    return StatsFreshness(False, None, generated_at, stats_run_id, latest_run_id, ())
 
 
 def refresh_stats_if_stale(config: Config, *, force: bool = False) -> StatsResult | None:
@@ -528,9 +641,13 @@ def refresh_stats_if_stale(config: Config, *, force: bool = False) -> StatsResul
         with exclusive_lock(stats_root(config) / _REBUILD_LOCK, blocking=False):
             # Re-check under the lock: whoever held it may have just finished
             # the very rebuild this call was about to repeat.
-            if not force and not stats_freshness(config).stale:
+            if force:
+                return rebuild_stats(config)
+            freshness = stats_freshness(config)
+            if not freshness.stale:
                 return None
-            return rebuild_stats(config)
+            changed = freshness.changed_datasets
+            return rebuild_stats(config, datasets=list(changed) if changed else None)
     except LockUnavailable:
         return None
 

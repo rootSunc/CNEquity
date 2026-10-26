@@ -644,8 +644,13 @@ def test_stats_are_refreshed_in_the_background_when_the_lake_moves(lake):
     view = LakeView(lake)
     assert view.refresh_stats_in_background() is False  # already current
 
-    Manifest(lake.manifest_path).start_run("daily")
-    assert view.refresh_stats_in_background() is True
+    manifest = Manifest(lake.manifest_path)
+    run_id = manifest.start_run("daily")
+    manifest.record_dataset_result(run_id, "daily_bars", "fetch", "success", rows_written=1)
+    manifest.finish_run(run_id, "success", rows_written=1)
+    # Waiting lets a quick partial rebuild land before the page reads health.
+    assert view.refresh_stats_in_background(wait=10) is True
+    assert view.health()["stats_stale"] is False
 
 
 def test_an_unmeasured_lake_still_answers(config):
@@ -775,6 +780,28 @@ def test_quality_summarises_findings_by_severity(lake):
     assert run["total"] == 3
     assert run["by_severity"] == {"error": 2, "info": 1}
     assert run["top_checks"][0] == ["exists", 2]
+
+
+def test_quality_names_step_findings_written_with_the_legacy_code_key(lake):
+    """Older reports on disk carry `code`; the page showed "?"."""
+    _quality(
+        lake,
+        "findings",
+        RUN_A,
+        {
+            "run_id": RUN_A,
+            "trade_date": "2026-10-26",
+            "findings": [
+                {
+                    "severity": "warning",
+                    "dataset": "sector_bars",
+                    "code": "sector_bars_sweep_incomplete",
+                },
+            ],
+        },
+    )
+    run = TestClient(create_app(lake)).get("/api/quality").json()["findings_runs"][0]
+    assert run["top_checks"] == [["sector_bars_sweep_incomplete", 1]]
 
 
 def test_quality_skips_artefacts_that_are_not_per_run(lake):

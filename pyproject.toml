@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cnequity"
 version = "0.20.0"
-description = "Open, self-hosted financial data infrastructure for China markets, starting with A-shares"
+description = "开源 A 股本地数据湖，用于量化研究、回测与 AI Agent | Open-source, self-hosted China A-share data lake for quant research, backtesting and AI agents"
 # Short PyPI page (absolute links only). GitHub keeps README.md / README.en.md.
 readme = "README.pypi.md"
 requires-python = ">=3.10"
@@ -32,6 +32,11 @@ keywords = [
   "akshare",
   "tushare",
   "baostock",
+  "A股",
+  "股票数据",
+  "量化",
+  "回测",
+  "数据湖",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",

@@ -223,8 +223,13 @@ class LakeView:
 
     # --- background stats refresh -----------------------------------------
 
-    def refresh_stats_in_background(self) -> bool:
-        """Kick off a rebuild if ingestion has moved the lake. Never blocks.
+    def refresh_stats_in_background(self, wait: float = 0.0) -> bool:
+        """Kick off a rebuild if ingestion has moved the lake.
+
+        Blocks for at most *wait* seconds. A refresh rebuilds only the datasets
+        a run wrote, which after the quarter-hourly news wire is a fraction of
+        a second; waiting that long lets the page show current numbers instead
+        of a "stats are stale" note that is already out of date.
 
         Threading lives here rather than in ``storage.stats`` so the module
         stays synchronous and testable. One thread at a time: the stats lock
@@ -259,7 +264,10 @@ class LakeView:
                     self.maintenance_gate.leave()
 
         try:
-            threading.Thread(target=_run, name="stats-refresh", daemon=True).start()
+            thread = threading.Thread(target=_run, name="stats-refresh", daemon=True)
+            thread.start()
+            if wait > 0:
+                thread.join(wait)
         except BaseException:
             with self._refresh_lock:
                 self._refreshing = False
@@ -688,7 +696,8 @@ class LakeView:
             for finding in payload.get("findings", []):
                 sev = finding.get("severity", "info")
                 by_severity[sev] = by_severity.get(sev, 0) + 1
-                key = finding.get("check", "?")
+                # Older step findings named the check `code`.
+                key = finding.get("check") or finding.get("code") or "?"
                 by_check[key] = by_check.get(key, 0) + 1
             findings_runs.append(
                 {

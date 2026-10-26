@@ -289,6 +289,19 @@ def _start_run(config) -> str:
     return Manifest(config.manifest_path).start_run("daily")
 
 
+def _land(config, dataset: str = "daily_bars", rows: int = 1, step: str | None = None) -> str:
+    """A finished run that wrote *rows* to *dataset* (or under a step name)."""
+    from cnequity.orchestrator.manifest import Manifest
+
+    manifest = Manifest(config.manifest_path)
+    run_id = manifest.start_run("daily")
+    manifest.record_dataset_result(
+        run_id, step or dataset, "fetch", "success", rows_written=rows, usable_result=rows > 0
+    )
+    manifest.finish_run(run_id, "success", rows_written=rows)
+    return run_id
+
+
 def _seed(config) -> None:
     _write(config.curated_root / "daily_bars", "trade_date=2026-07-31", [_bar("600519.SH")])
 
@@ -312,16 +325,42 @@ def test_stats_without_any_ingestion_run_are_current(config):
 
 def test_a_run_landing_after_the_rebuild_makes_them_stale(config):
     _seed(config)
-    _start_run(config)
+    _land(config)
     rebuild_stats(config, datasets=["daily_bars"])
     assert not stats_freshness(config).stale
 
-    run_id = _start_run(config)
+    run_id = _land(config, "news_headlines")
     freshness = stats_freshness(config)
     assert freshness.stale
     assert run_id in freshness.reason
     assert freshness.latest_run_id == run_id
     assert freshness.stats_run_id != run_id
+    assert freshness.changed_datasets == ("news_headlines",)
+
+
+def test_a_run_that_wrote_nothing_leaves_them_current(config):
+    """A failed backfill or a quiet derivatives day changes no file."""
+    _seed(config)
+    rebuild_stats(config, datasets=["daily_bars"])
+
+    _land(config, "daily_bars", rows=0)
+    _start_run(config)  # still running: counts once it finishes
+
+    assert not stats_freshness(config).stale
+
+
+def test_step_names_map_to_their_dataset_or_force_a_full_rebuild(config):
+    _seed(config)
+    rebuild_stats(config, datasets=["daily_bars"])
+
+    _land(config, step="derive_option_greeks")
+    _land(config, step="audit")  # meta only
+    assert stats_freshness(config).changed_datasets == ("option_greeks",)
+
+    _land(config, step="ths_official_snapshot")  # unknown: cannot tell what it touched
+    freshness = stats_freshness(config)
+    assert freshness.stale
+    assert freshness.changed_datasets is None
 
 
 def test_refresh_is_a_no_op_while_current(config):
@@ -333,17 +372,22 @@ def test_refresh_is_a_no_op_while_current(config):
     assert load_summary(config)["generated_at"] == before
 
 
-def test_refresh_rebuilds_after_a_run(config):
+def test_refresh_rebuilds_only_what_the_runs_wrote(config):
     _seed(config)
-    rebuild_stats(config, datasets=["daily_bars"])
+    _write(config.curated_root / "news_headlines", None, [_bar("x")])
+    rebuild_stats(config, datasets=["daily_bars", "news_headlines"])
     _write(config.curated_root / "daily_bars", "trade_date=2026-07-30", [_bar("000001.SZ")])
-    _start_run(config)
+    _land(config, "daily_bars")
 
     result = refresh_stats_if_stale(config)
     assert result is not None
-    # A refresh covers the whole lake, not just what a caller happened to name.
+    assert result.datasets == ["daily_bars"]
     assert result.rows == 2
     assert not stats_freshness(config).stale
+    # The summary still describes the whole lake, which `cne check` reports.
+    summary = load_summary(config)
+    assert summary["rows"] == 3
+    assert summary["datasets"] == 2
 
 
 def test_force_rebuilds_a_current_table(config):
@@ -486,7 +530,7 @@ def test_cli_if_stale_rebuilds_once_a_run_has_landed(config, tmp_path):
     rebuild_stats(config, datasets=["daily_bars"])
     before = load_summary(config)["generated_at"]
     _write(config.curated_root / "daily_bars", "trade_date=2026-07-30", [_bar("000001.SZ")])
-    _start_run(config)
+    _land(config)
 
     result = _run_cli(tmp_path / "test.toml", "--if-stale")
 

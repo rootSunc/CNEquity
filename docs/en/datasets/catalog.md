@@ -1,3 +1,7 @@
+---
+description: CNEquity dataset catalog: sources, history start and collection semantics for China A-share prices, financials, futures, fund flow, events, indices and macro data.
+---
+
 # Dataset catalog
 
 This page answers two questions: which datasets the lake registers, and where each one comes from and how far back it goes. Find a dataset by the L0–L9 tiers below, then check its collection semantics and history limits; for query code to copy, go to the [Query guide](query-guide.md).

@@ -947,3 +947,25 @@ def test_trading_status_coverage_warning_names_the_keys_it_left_out(tmp_path):
 
     assert finding["severity"] == "warning"
     assert "unknown_listing_date: 1" in finding["message"]
+
+
+def test_recorded_step_findings_carry_a_legacy_code_as_check(tmp_path):
+    """Steps used to name the check `code`; a rewrite must keep the name."""
+    import json
+
+    from cnequity.quality.audit import recorded_step_findings
+
+    cfg = Config(data_root=tmp_path / "lake")
+    root = cfg.meta_root / "quality" / "findings"
+    root.mkdir(parents=True)
+    legacy = {
+        "dataset": "sector_bars",
+        "severity": "warning",
+        "code": "sector_bars_sweep_incomplete",
+    }
+    current = {"dataset": "daily_bars", "severity": "info", "check": "row_count"}
+    (root / "run-1.json").write_text(json.dumps({"step_findings": [legacy, current]}))
+
+    findings = recorded_step_findings(cfg, "run-1")
+
+    assert [f["check"] for f in findings] == ["sector_bars_sweep_incomplete", "row_count"]

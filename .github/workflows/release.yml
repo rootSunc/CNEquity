@@ -239,9 +239,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/dev/release_notes.py "$TAG" > release-notes.md
+          title=$(python3 scripts/dev/release_notes.py --title "$TAG")
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release edit "$TAG" --title "${TAG#v}" --notes-file release-notes.md
+            gh release edit "$TAG" --title "$title" --notes-file release-notes.md
           else
-            gh release create "$TAG" --verify-tag --title "${TAG#v}" \
+            gh release create "$TAG" --verify-tag --title "$title" \
               --notes-file release-notes.md
           fi

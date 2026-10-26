@@ -1,3 +1,7 @@
+---
+description: 用 DuckDB SQL 与 Polars LazyFrame 直接读取本地 A 股 Parquet 数据湖，不复制调整后数据。
+---
+
 # DuckDB 与 Polars
 
 同一份 Parquet 湖可以按三种方式消费：`load()` 负责带语义的研究查询，DuckDB 负责跨数据集 SQL，Polars `scan()` 负责 LazyFrame 管道。选择入口，不要复制一份“调整后数据湖”。

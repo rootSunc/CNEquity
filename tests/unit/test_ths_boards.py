@@ -351,7 +351,7 @@ def test_sweep_board_bars_skip_and_abort(monkeypatch):
 
     monkeypatch.setattr(ths, "fetch_board_bars", fake_fetch)
     batches: list = []
-    rows, failed, done = ths.sweep_board_bars(
+    rows, failed, done, _retired = ths.sweep_board_bars(
         date(2025, 1, 2),
         date(2025, 1, 3),
         boards=boards,
@@ -371,7 +371,7 @@ def test_sweep_board_bars_does_not_checkpoint_empty_result(monkeypatch):
     monkeypatch.setattr(ths, "fetch_board_bars", lambda *a, **k: [])
     batches: list = []
 
-    rows, failed, done = ths.sweep_board_bars(
+    rows, failed, done, _retired = ths.sweep_board_bars(
         date(2025, 1, 2),
         date(2025, 1, 3),
         boards=[board],
@@ -496,7 +496,7 @@ def test_sweep_aborts_on_dead_source_streak(monkeypatch):
         lambda *a, **k: (_ for _ in ()).throw(ths.ThsError("dead")),
     )
     monkeypatch.setattr(ths, "_DEAD_SOURCE_STREAK", 3)
-    rows, failed, done = ths.sweep_board_bars(
+    rows, failed, done, _retired = ths.sweep_board_bars(
         date(2025, 1, 2),
         date(2025, 1, 3),
         boards=boards,
@@ -504,3 +504,41 @@ def test_sweep_aborts_on_dead_source_streak(monkeypatch):
     assert done == []
     assert len(failed) == 3
     assert rows == []
+
+
+def test_fetch_board_bars_reports_a_board_the_source_has_emptied(monkeypatch):
+    """`last.js` answering total=0 with no data is a retired board, not a
+    transport failure."""
+    board = {"sector_code": "886109", "sector_name": "2026一季报预增", "board_type": "concept"}
+
+    def fake_get(url, *, config=None, timeout=20.0):
+        return 'cb({"num":1,"total":0,"start":"","year":[],"data":"","today":"20261026"});'
+
+    monkeypatch.setattr(ths, "_get", fake_get)
+    monkeypatch.setattr(ths, "shanghai_today", lambda: date(2026, 10, 26))
+    with pytest.raises(ths.ThsBoardRetiredError):
+        ths.fetch_board_bars(board, date(2026, 10, 23), date(2026, 10, 26))
+
+
+def test_sweep_board_bars_checkpoints_retired_boards_without_failing(monkeypatch):
+    live = {"sector_code": "A", "sector_name": "a", "board_type": "industry"}
+    gone = {"sector_code": "B", "sector_name": "b", "board_type": "concept"}
+
+    def fake_fetch(board, *a, **k):
+        if board["sector_code"] == "B":
+            raise ths.ThsBoardRetiredError("THS B holds no bars (total=0)")
+        return [{"sector_code": "A", "trade_date": date(2025, 1, 3)}]
+
+    monkeypatch.setattr(ths, "fetch_board_bars", fake_fetch)
+    batches: list = []
+    rows, failed, done, retired = ths.sweep_board_bars(
+        date(2025, 1, 2),
+        date(2025, 1, 3),
+        boards=[live, gone],
+        on_batch=lambda batch_rows, codes: batches.append(codes),
+    )
+
+    assert failed == []
+    assert done == ["A"]
+    assert retired == ["B"]
+    assert batches == [["A", "B"]]

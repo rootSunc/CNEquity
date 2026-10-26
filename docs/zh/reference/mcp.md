@@ -1,3 +1,7 @@
+---
+description: 把 A 股本地数据湖通过只读 MCP 接给 Claude、ChatGPT、Cursor 等 AI agent，直接用自然语言查询股票数据。
+---
+
 # MCP 接入：把湖接给 AI agent
 
 `cne serve` 把湖给人看，也可以从操作页发起白名单里的取数和日更。`cne mcp` 把湖给模型用，并且**只读**：这里没有任何触发采集、重试、清理的入口。

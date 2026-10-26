@@ -7,7 +7,7 @@
 # page tree: its pages link only to each other.
 INHERIT: mkdocs.yml
 
-site_description: A daily-updated, traceable A-share research data lake
+site_description: Open-source local China A-share data lake for quant research and backtesting - stock prices, financials, futures and fund flow, daily-updated, traceable, MCP-ready
 site_url: https://rootsunc.github.io/CNEquity/en/
 edit_uri: edit/main/docs/en/
 docs_dir: docs/en
@@ -35,6 +35,11 @@ nav:
       - Installation and upgrades: getting-started/installation.md
       - Initialization, scope and resume: getting-started/initialization.md
       - Configuration reference: getting-started/configuration.md
+  - FAQ:
+      - Free China A-share historical data: guides/free-a-share-data.md
+      - AKShare, Tushare or Baostock: architecture/comparison.md
+      - Avoiding look-ahead bias in backtests: guides/avoid-look-ahead-bias.md
+      - Ask Claude or ChatGPT about A-shares: guides/ai-query-a-shares.md
   - Research and data:
       - Recipes:
           - Recipe index: recipes/README.md
@@ -64,7 +69,6 @@ nav:
       - Repository scripts: operations/scripts.md
   - Product design:
       - Product direction and scope: architecture/overview.md
-      - Comparison with AKShare and Tushare: architecture/comparison.md
       - Design principles: architecture/design-principles.md
       - From collection to query: architecture/data-flow.md
       - Lake layout: architecture/lake-layout.md

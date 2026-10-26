@@ -3,9 +3,10 @@ message: "If CNEquity supports your research or data work, please cite this repo
 type: software
 title: "CNEquity"
 abstract: >-
-  A free, self-hosted financial data infrastructure for China markets, starting
-  with A-shares and providing multi-source ingestion, provenance, adjustment
-  semantics, point-in-time fundamentals, and reproducible Parquet storage.
+  An open-source, self-hosted China A-share stock data lake for quantitative
+  research, backtesting and AI agents, providing multi-source ingestion,
+  provenance, adjustment semantics, point-in-time fundamentals, and
+  reproducible Parquet storage.
 version: 0.20.0
 authors:
   - name: "CNEquity Contributors"
@@ -19,3 +20,6 @@ keywords:
   - quantitative finance
   - Parquet
   - point-in-time data
+  - China stock market
+  - backtesting
+  - MCP

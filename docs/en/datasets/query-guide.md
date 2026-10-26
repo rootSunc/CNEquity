@@ -1,3 +1,7 @@
+---
+description: load() query guide: China A-share price adjustment, universes, point-in-time financials and common pitfalls.
+---
+
 # Query guide
 
 The recommended path for downstream reads is `cnequity.query.load()`. This page covers price adjustment, universes, PIT and common pitfalls.

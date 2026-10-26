@@ -502,7 +502,7 @@ def _backfill_valuation_metrics_locked(config: Config, trade_date: date, run_id:
         finding = {
             "dataset": "valuation_metrics",
             "severity": "warning",
-            "code": "baostock_backfill_incomplete",
+            "check": "baostock_backfill_incomplete",
             "message": (
                 f"baostock backfill incomplete"
                 f"{f' ({aborted_reason})' if aborted_reason else ''}; "

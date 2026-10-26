@@ -30,8 +30,8 @@ def _patch_history(monkeypatch, *, returns):
         if on_batch is not None:
             if succeeded:
                 on_batch(rows, succeeded)
-            return [], failed, succeeded
-        return rows, failed, succeeded
+            return [], failed, succeeded, []
+        return rows, failed, succeeded, []
 
     written: list[pl.DataFrame] = []
 
@@ -73,7 +73,7 @@ def test_marks_succeeded_boards_and_resumes(tmp_path, monkeypatch):
 
     def fake_sweep(start, end, *, config=None, boards=None, skip_sectors=None, on_batch=None):
         captured["skip"] = skip_sectors
-        return [], [], []
+        return [], [], [], []
 
     monkeypatch.setattr("cnequity.adapters.ths.boards.sweep_board_bars", fake_sweep)
     again = _backfill_sector_bars(cfg, date(2026, 7, 14), "run2")
@@ -107,7 +107,7 @@ def test_failed_boards_not_marked_and_emit_warning(tmp_path, monkeypatch):
     assert result["failed_sectors"] == 2
     assert result["status"] == "warning"
     finding = result["context_updates"]["audit_findings"][0]
-    assert finding["code"] == "sector_bars_sweep_incomplete"
+    assert finding["check"] == "sector_bars_sweep_incomplete"
 
 
 def test_force_clears_checkpoint(tmp_path, monkeypatch):
@@ -174,7 +174,7 @@ def test_narrow_gap_fill_does_not_satisfy_the_full_window(tmp_path, monkeypatch)
 
     def fake_sweep(start, end, *, config=None, boards=None, skip_sectors=None, on_batch=None):
         captured["skip"] = skip_sectors
-        return [], [], []
+        return [], [], [], []
 
     monkeypatch.setattr("cnequity.adapters.ths.boards.sweep_board_bars", fake_sweep)
     cfg._backfill_start = None
@@ -203,3 +203,25 @@ def test_step_sector_bars_applies_finality_guard_before_sweep(config, monkeypatc
         step_sector_bars(config, date(2026, 8, 10), "run-sector-guard", {})
 
     assert events == ["guard"]
+
+
+def test_a_retired_board_is_checkpointed_and_reported_as_info(tmp_path, monkeypatch):
+    """同花顺 keeps retired seasonal boards in its catalog with no bars; that
+    must not file a sweep-incomplete warning every day."""
+    cfg = Config(data_root=tmp_path / "data")
+
+    def fake_sweep(start, end, *, config=None, boards=None, skip_sectors=None, on_batch=None):
+        if on_batch is not None:
+            on_batch([], ["886109"])
+        return [], [], [], ["886109"]
+
+    monkeypatch.setattr("cnequity.adapters.ths.boards.sweep_board_bars", fake_sweep)
+    result = _backfill_sector_bars(cfg, date(2026, 10, 26), "run1")
+
+    assert _sector_bars_completed(cfg) == {"886109"}
+    assert "failed_sectors" not in result
+    assert result.get("status") != "warning"
+    [finding] = result["context_updates"]["audit_findings"]
+    assert finding["check"] == "sector_bars_board_retired"
+    assert finding["severity"] == "info"
+    assert "886109" in finding["message"]

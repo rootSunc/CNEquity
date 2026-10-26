@@ -288,7 +288,7 @@ def _sweep_sector_bars(
         if mark_completed:
             _mark_sector_bars_completed(config, sector_codes, window)
 
-    _, failed, succeeded = sweep_board_bars(
+    _, failed, succeeded, retired = sweep_board_bars(
         start,
         end,
         config=config,
@@ -296,26 +296,42 @@ def _sweep_sector_bars(
         on_batch=on_batch,
     )
     attempted = len(succeeded) + len(failed)
-    if attempted == 0:
+    if attempted == 0 and not retired:
         return {"rows_read": 0, "rows_written": 0, "note": "all boards already swept"}
 
     result: dict = dict(written)
+    findings: list[dict] = []
+    if retired:
+        result["retired_sectors"] = len(retired)
+        findings.append(
+            {
+                "dataset": "sector_bars",
+                "severity": "info",
+                "check": "sector_bars_board_retired",
+                "message": (
+                    f"同花顺 lists {len(retired)} board(s) with no bars at all "
+                    f"({', '.join(sorted(retired))}); bars already in the lake are kept."
+                ),
+            }
+        )
     if failed:
         result["failed_sectors"] = len(failed)
         result["attempted_sectors"] = attempted
-        result.setdefault("context_updates", {})["audit_findings"] = [
+        findings.append(
             {
                 "dataset": "sector_bars",
                 "severity": "warning",
-                "code": "sector_bars_sweep_incomplete",
+                "check": "sector_bars_sweep_incomplete",
                 "message": (
                     f"{len(failed)}/{attempted} board(s) failed the 同花顺 sweep; "
                     "re-run `cne backfill sector_bars` to resume."
                 ),
             }
-        ]
+        )
         if len(failed) / attempted > _SECTOR_BARS_FAILURE_THRESHOLD:
             result["status"] = "warning"
+    if findings:
+        result.setdefault("context_updates", {})["audit_findings"] = findings
     return result
 
 

@@ -1206,7 +1206,9 @@ def test_stats_show_refreshes_tables_a_later_run_made_stale(cfg_path):
     cfg = load_config(cfg_path)
     rebuild_stats(cfg)
     manifest = Manifest(cfg.manifest_path)
-    manifest.finish_run(manifest.start_run("daily:core", {}), "success")
+    run_id = manifest.start_run("daily:core", {})
+    manifest.record_dataset_result(run_id, "daily_bars", "fetch", "success", rows_written=1)
+    manifest.finish_run(run_id, "success", rows_written=1)
     assert stats_freshness(cfg).stale
 
     result = CliRunner().invoke(cli, ["stats", "show", "--config", cfg_path])

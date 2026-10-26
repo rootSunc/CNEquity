@@ -98,6 +98,16 @@ class ThsNotFoundError(ThsError):
     """A historical period file does not exist for this board/security."""
 
 
+class ThsBoardRetiredError(ThsError):
+    """The source answers for this board but holds no bars at all.
+
+    同花顺 keeps seasonal theme boards (``2026一季报预增``) in its catalog after
+    retiring them, while ``last.js`` answers ``total: 0`` and every year file
+    is gone. That is an answer, not a failed fetch: retrying it every day only
+    files the same warning again.
+    """
+
+
 def _throttle(url: str, config: Config | None) -> None:
     """Pace requests, per host — see the note on the two limiters above."""
     is_page = _PAGE_HOST in url
@@ -433,18 +443,23 @@ def fetch_board_bars(
     rows_by_date: dict[date, dict] = {}
     for part in parts:
         try:
-            part_rows = (
-                _parse_kline(
-                    _unwrap_jsonp(_get(_KLINE_URL.format(code=code, part=part), config=config)),
-                    board,
+            if part == "last":
+                payload = _unwrap_jsonp(
+                    _get(_KLINE_URL.format(code=code, part=part), config=config)
                 )
-                if part == "last"
-                else _year_rows(board, part, config=config)
-            )
+                if str(payload.get("total")) == "0" and not payload.get("data"):
+                    raise ThsBoardRetiredError(f"THS {code} holds no bars (total=0)")
+                part_rows = _parse_kline(payload, board)
+            else:
+                part_rows = _year_rows(board, part, config=config)
         except ThsError as exc:
             # A missing year file is normal for a board younger than the window;
             # `last` failing is not, and neither is a transport error.
-            if part == "last" or not isinstance(exc, ThsNotFoundError):
+            if (
+                part == "last"
+                or isinstance(exc, ThsBoardRetiredError)
+                or not isinstance(exc, ThsNotFoundError)
+            ):
                 raise
             logger.debug("THS %s %s unavailable: %s", code, part, exc)
             continue
@@ -479,10 +494,12 @@ def sweep_board_bars(
     boards: list[dict] | None = None,
     skip_sectors: set[str] | None = None,
     on_batch: Callable[[list[dict], list[str]], None] | None = None,
-) -> tuple[list[dict], list[str], list[str]]:
+) -> tuple[list[dict], list[str], list[str], list[str]]:
     """Bars for every board over ``[start, end]``.
 
-    Returns ``(rows, failed_codes, succeeded_codes)``. ``on_batch(rows, codes)``
+    Returns ``(rows, failed_codes, succeeded_codes, retired_codes)``. A retired
+    board is neither: the source said it has nothing, so it is checkpointed
+    like a success but reported separately. ``on_batch(rows, codes)``
     makes progress durable mid-sweep — a several-hundred-board pass that dies at
     board 400 must not discard the first 399 — and clears the accumulator, so the
     returned rows are empty for a batched caller.
@@ -499,6 +516,7 @@ def sweep_board_bars(
     pending: list[str] = []
     failed: list[str] = []
     succeeded: list[str] = []
+    retired: list[str] = []
 
     def flush() -> None:
         nonlocal rows, pending
@@ -530,6 +548,11 @@ def sweep_board_bars(
             succeeded.append(code)
             pending.append(code)
             dead_streak = 0
+        except ThsBoardRetiredError:
+            logger.info("THS sweep: %s (%s) is retired; no bars", code, board["sector_name"])
+            retired.append(code)
+            pending.append(code)
+            dead_streak = 0
         except Exception as exc:  # noqa: BLE001 — recorded, sweep continues
             logger.warning("THS sweep: %s (%s) failed: %s", code, board["sector_name"], exc)
             failed.append(code)
@@ -544,4 +567,4 @@ def sweep_board_bars(
                 )
                 break
     flush()
-    return rows, failed, succeeded
+    return rows, failed, succeeded, retired

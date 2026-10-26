@@ -42,3 +42,11 @@ def test_current_release_has_a_changelog_section():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     version = tomllib.loads(pyproject)["project"]["version"]
     assert NOTES["changelog_section"]((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"), version)
+
+
+def test_heading_headline_becomes_title_and_lead():
+    changelog = CHANGELOG.replace("## [0.2.0] — 2026-01-02", "## [0.2.0] — 2026-01-02 · 新功能")
+    assert NOTES["title"](changelog, "0.2.0") == "0.2.0 · 新功能"
+    assert NOTES["render"](changelog, "0.2.0").startswith("**新功能**\n\n")
+    assert NOTES["title"](CHANGELOG, "0.1.0") == "0.1.0"
+    assert not NOTES["render"](CHANGELOG, "0.1.0").startswith("**")

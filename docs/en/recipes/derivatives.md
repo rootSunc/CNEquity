@@ -1,3 +1,7 @@
+---
+description: Commodity futures and options daily data: collection, configuration and research verification, including source coverage and caveats.
+---
+
 # Commodity futures and options: from collection to research verification
 
 This pipeline suits end-of-day, daily-frequency research. The [source capability table](../datasets/sources.md) is generated from the reader registry and checked by CI. Exchange daily files are the primary source; Sina supplements DCE futures and futures minute bars for a small scope. Daily settlement prices do not represent synchronously tradable prices; there is currently no options order book, so this data cannot verify whether multi-leg arbitrage is executable. Real-time market data integration is separate work.

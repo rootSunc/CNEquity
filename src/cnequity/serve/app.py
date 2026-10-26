@@ -688,8 +688,9 @@ def create_app(
     @app.get("/api/health", response_model=Health)
     def health(view: View) -> Health:
         # The overview page loads this first, so it is where the cache gets its
-        # chance to notice the lake moved. Returns immediately either way.
-        view.refresh_stats_in_background()
+        # chance to notice the lake moved. A partial refresh usually finishes
+        # within the wait; a long one carries on and the page says so.
+        view.refresh_stats_in_background(wait=3.0)
         return Health(**view.health())
 
     @app.get("/api/tiers", response_model=list[Tier])

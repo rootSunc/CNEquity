@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="444" viewBox="0 0 880 444" role="img" aria-label="Claude · cne mcp（只读）">
+<rect width="880" height="444" rx="12" fill="#1e1f24"/>
+<rect width="880" height="36" rx="12" fill="#2a2c33"/><rect y="24" width="880" height="12" fill="#2a2c33"/>
+<circle cx="22" cy="18" r="6" fill="#ff5f57"/><circle cx="42" cy="18" r="6" fill="#febc2e"/><circle cx="62" cy="18" r="6" fill="#28c840"/>
+<text x="440.0" y="23" text-anchor="middle" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="13" fill="#9aa0aa">Claude · cne mcp（只读）</text>
+<text x="24" y="64" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#e8e8ea" font-weight="700" xml:space="preserve">&gt; 宁德时代最近 30 个交易日的最高收盘价是哪天？</text>
+<text x="24" y="112" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#d97757" xml:space="preserve">● cnequity · resolve_symbol(query: &quot;宁德时代&quot;)</text>
+<text x="40" y="136" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#8b919c" xml:space="preserve">⎿  300750.SZ  宁德时代  SZ  stock</text>
+<text x="24" y="160" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#d97757" xml:space="preserve">● cnequity · run_sql</text>
+<text x="40" y="184" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#c4a7f5" xml:space="preserve">SELECT trade_date, close FROM daily_bars</text>
+<text x="40" y="208" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#c4a7f5" xml:space="preserve">WHERE symbol = &#x27;300750.SZ&#x27; ORDER BY close DESC LIMIT 3</text>
+<text x="40" y="232" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#8b919c" xml:space="preserve">⎿  2026-09-07  348.20  ·  2026-09-10  338.06  ·  2026-09-14  337.11</text>
+<text x="24" y="256" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#d97757" xml:space="preserve">● cnequity · run_sql</text>
+<text x="40" y="280" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#c4a7f5" xml:space="preserve">SELECT count(*), min(trade_date), max(trade_date) FROM daily_bars WHERE symbol = &#x27;300750.SZ&#x27;</text>
+<text x="40" y="304" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#8b919c" xml:space="preserve">⎿  30  ·  2026-09-07  ·  2026-10-26</text>
+<text x="24" y="352" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#e8e8ea" xml:space="preserve">● 宁德时代（300750.SZ）最近 30 个交易日（2026-09-07 至 2026-10-26）里，</text>
+<text x="40" y="376" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#e8e8ea" font-weight="700" xml:space="preserve">最高收盘价出现在 2026-09-07，为 348.20 元（未复权）。</text>
+<text x="40" y="400" font-family="'SF Mono', Menlo, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace" font-size="14" fill="#e8e8ea" xml:space="preserve">其次是 09-10 的 338.06 元和 09-14 的 337.11 元。</text>
+</svg>

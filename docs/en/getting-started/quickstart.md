@@ -1,3 +1,7 @@
+---
+description: Install CNEquity with pip, build a local China A-share data lake with one command, and run your first stock price query.
+---
+
 # Quickstart: from install to your first query
 
 One command builds a full-market data lake; then you read your first result. The commands below do not require cloning the repository; for Python and system requirements, see [Installation](installation.md).

@@ -618,7 +618,15 @@ def recorded_step_findings(config: Config, run_id: str) -> list[dict]:
         return []
     with path.open(encoding="utf-8") as handle:
         payload = json.load(handle)
-    return payload.get("step_findings", payload.get("findings", []))
+    findings = payload.get("step_findings", payload.get("findings", []))
+    # Some steps used to name the check `code`; carry it under `check` so
+    # a rewrite of an old report does not keep the unnamed finding.
+    return [
+        {**finding, "check": finding["code"]}
+        if "check" not in finding and "code" in finding
+        else finding
+        for finding in findings
+    ]
 
 
 def _unique_findings(findings: list[dict]) -> list[dict]:
