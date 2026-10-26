@@ -154,3 +154,28 @@ def parse_sse_dayk(payload: bytes, symbol: str, *, trade_dates=None) -> pl.DataF
             "volume": pl.Int64,
         },
     )
+
+
+def fetch_fund_dayk(symbol: str, *, trade_dates=None, client=None, config=None) -> pl.DataFrame:
+    """One exchange fund's auction day bars, quantities in shares.
+
+    TDX reports fund volume in 100-share lots, so a 1-99 share session reads
+    as zero lots with positive turnover and is left unpublished; this is the
+    publisher's own count. Amounts are rounded to whole yuan.
+    """
+    import httpx
+
+    from cnequity.domain.http_policy import record_http_response
+    from cnequity.domain.rate_limit import source_request
+
+    url = fund_dayk_url(symbol)
+    session = client if client is not None else httpx.Client(timeout=30.0)
+    try:
+        with source_request(config, "exchange"):
+            response = session.get(url, params=PARAMS)
+            record_http_response(config, "exchange", response)
+        response.raise_for_status()
+        return parse_sse_dayk(response.content, symbol, trade_dates=trade_dates)
+    finally:
+        if client is None:
+            session.close()

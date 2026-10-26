@@ -6,13 +6,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
+import polars as pl
+
 from cnequity.config import Config
 from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.financial_statements import (
     DATASET,
     original_disclosures,
+    reconstruct_comparatives,
     reconstruct_disclosures,
 )
+from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.publication import check_repair_publication
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
@@ -34,8 +38,18 @@ def repair_financial_announcements(config: Config, *, apply: bool = False) -> di
         if not dataset_has_parquet(root, committed=False):
             return report
         before = scan_parquet_root(root, committed=False).collect()
-        rows = reconstruct_disclosures(before, original_disclosures(before))
-        report.update(rows=rows.height, symbols=rows["symbol"].n_unique())
+        dates = original_disclosures(before)
+        originals = reconstruct_disclosures(before, dates)
+        comparatives = reconstruct_comparatives(before, dates).join(
+            originals.select(PRIMARY_KEYS[DATASET]), on=PRIMARY_KEYS[DATASET], how="anti"
+        )
+        rows = pl.concat([originals, comparatives], how="diagonal_relaxed")
+        report.update(
+            rows=rows.height,
+            symbols=rows["symbol"].n_unique(),
+            from_results_table=originals.height,
+            from_comparatives=comparatives.height,
+        )
         if not apply or rows.is_empty():
             return report
         run_id = (

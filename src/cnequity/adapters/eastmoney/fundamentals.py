@@ -46,7 +46,12 @@ from cnequity.adapters.eastmoney.common import (
 from cnequity.adapters.eastmoney.datacenter import fetch_datacenter
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient, rate_limit_if_unconfigured
 from cnequity.config import Config
-from cnequity.domain.financial_statements import original_disclosures, reconstruct_disclosures
+from cnequity.domain.financial_statements import (
+    original_disclosures,
+    reconstruct_comparatives,
+    reconstruct_disclosures,
+    unchanged_republications,
+)
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
 from cnequity.storage.read_context import ReadContext
@@ -449,6 +454,7 @@ def fetch_financial_statement_items(
             if rows:
                 dates = {}
                 existing = None
+                held = None
                 if config is not None:
                     context = ReadContext.capture(config, ("financial_statement_items",), {})
                     root = context.roots["financial_statement_items"]
@@ -460,6 +466,14 @@ def fetch_financial_statement_items(
                             scan_parquet_root(root, committed=False)
                         ).collect()
                         dates.update({(sym, period): day for sym, period, day in known.iter_rows()})
+                        # The lake's rows for the periods this window touched:
+                        # what a republished comparative is compared against.
+                        touched = pl.DataFrame(rows).select("symbol", "report_period").unique()
+                        held = (
+                            scan_parquet_root(root, committed=False)
+                            .join(touched.lazy(), on=["symbol", "report_period"])
+                            .collect()
+                        )
                 for report, raw in daily_raw:
                     if report is _ANNOUNCE_SOURCE:
                         for key, day in _announce_date_map(raw).items():
@@ -503,7 +517,25 @@ def fetch_financial_statement_items(
                     },
                     orient="row",
                 )
-                reconstruction = reconstruct_disclosures(pl.DataFrame(rows), date_frame)
+                observed = pl.DataFrame(rows)
+                reconstruction = reconstruct_disclosures(observed, date_frame)
+                if held is not None and not held.is_empty():
+                    # An item first seen as a later filing's comparative, in a
+                    # period the results table does not date.
+                    with_held = pl.concat([held, observed], how="diagonal_relaxed")
+                    comparatives = reconstruct_comparatives(with_held, date_frame).join(
+                        reconstruction.select(_PK), on=_PK, how="anti"
+                    )
+                    reconstruction = pl.concat(
+                        [reconstruction, comparatives], how="diagonal_relaxed"
+                    ).select(reconstruction.columns or comparatives.columns)
+                    # A comparative that repeats the figure the lake holds adds
+                    # a vintage with nothing new and a date a year late; a
+                    # changed one is a restatement and is kept.
+                    repeats = unchanged_republications(observed, held)
+                    if not repeats.is_empty():
+                        observed = observed.join(repeats.select(_PK), on=_PK, how="anti")
+                        rows[:] = observed.to_dicts()
                 if existing is not None:
                     reconstruction = reconstruction.join(existing, on=_PK, how="anti")
                 rows.extend(reconstruction.to_dicts())

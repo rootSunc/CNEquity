@@ -169,6 +169,12 @@ MIGRATIONS: tuple[Migration, ...] = (
         "0.20.0",
         _repair("sw_never_listed", "repair_sw_never_listed"),
     ),
+    Migration(
+        "financial-comparatives",
+        N_("Add statement items first seen only as a later filing's comparative on their own date"),
+        "0.21.0",
+        _repair("financial_announcements", "repair_financial_announcements"),
+    ),
 )
 
 

@@ -320,8 +320,23 @@ def test_daily_reconstruction_does_not_replace_a_committed_original(tmp_path, mo
     frame = fetch_financial_statement_items(
         date(2018, 3, 27), config=cfg, client=FakeDatacenterClient({})
     )
-    assert frame["source"].unique().to_list() == ["eastmoney"]
-    assert frame["announce_date"].unique().to_list() == [date(2018, 3, 27)]
+    # The 2018 filing repeats the committed 2016Q4 figures as comparatives: no
+    # new vintage, and the committed original stays the only one.
+    assert frame.is_empty()
+
+    restated = _balance_row(TOTAL_ASSETS=830674213925.0 * 1.01)
+    monkeypatch.setattr(
+        fundamentals_module,
+        "_fetch_report",
+        lambda client, report, expr, **kwargs: [restated] if report is _BALANCE else [],
+    )
+    frame = fetch_financial_statement_items(
+        date(2018, 3, 27), config=cfg, client=FakeDatacenterClient({})
+    )
+    # A changed figure is a restatement, kept on the date it was republished.
+    assert frame.select("item_code", "source", "announce_date").rows() == [
+        ("total_assets", "eastmoney", date(2018, 3, 27))
+    ]
 
 
 def test_backfill_retains_an_earlier_committed_lico_date(tmp_path, monkeypatch):

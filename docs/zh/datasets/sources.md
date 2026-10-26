@@ -350,7 +350,7 @@
 | baostock | TCP | 沪深历史 ST、估值、退市补数与证券身份补充 | — | 复用会话；上海自然日最多 5 万次请求，同时只一条连接；黑名单按本年次数 × 6 小时冻结。BJ 历史 ST 需独立来源 |
 | pboc | HTTP | 社会融资规模增量（`macro_indicators`） | — | 主写入要求全量序列；单年失败会阻止本次写入，避免带断档推进水位 |
 | nbs | HTTP | **仅审计**：PMI 发布稿，对照 `macro_indicators` | — | 按源开关执行；公共模板启用，失败或禁用状态进入核验报告 |
-| exchange | HTTP | `margin_trading` **主源**；`trading_status` / `trading_calendar` / `dragon_tiger` / `block_trades` 备源；`[exchange_audit]` 价格对照 | — | 融资融券由会员单位报送汇总，中间无转售方；龙虎榜与大宗交易只在东财答不上时才问，且两所都不发布北交所（记在 `backup_gaps`）；审计类 finding 为建议性，不让 run 失败 |
+| exchange | HTTP | `margin_trading` **主源**；`trading_status` / `trading_calendar` / `dragon_tiger` / `block_trades` 备源；`daily_bars` 场内基金不足一手成交的补数（交易所日 K，按份计量，金额取整到元）；`[exchange_audit]` 价格对照 | — | 融资融券由会员单位报送汇总，中间无转售方；龙虎榜与大宗交易只在东财答不上时才问，且两所都不发布北交所（记在 `backup_gaps`）；审计类 finding 为建议性，不让 run 失败 |
 | sina_bars | HTTP | Sina 日线兜底（与复权因子端点分开限速） | — | 跳过 + quality finding |
 | ths | HTTP | 同花顺公开页：行业、估值 | — | 跳过 + quality finding |
 | ths_pages | HTTP | `d.10jqka.com.cn` kline，`sector_bars` 唯一来源 | — | 该数据集**无第二个源**；失败即缺口 |

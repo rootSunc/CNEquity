@@ -3694,6 +3694,101 @@ def _gapfill_complete_symbols_via_exchange(
     }
 
 
+#: Per-fund requests a single gap-fill may spend on exchange day k-lines.
+_EXCHANGE_DAYK_MAX_SYMBOLS = 20
+
+
+def _gapfill_fund_keys_via_exchange_dayk(
+    config: Config,
+    run_id: str,
+    *,
+    missing: set[tuple[str, date]],
+    start: date,
+    end: date,
+) -> dict:
+    """Stage exact missing exchange-fund keys from the exchange's own day k-line.
+
+    For the sub-lot sessions TDX leaves unpublished (zero lots, positive
+    turnover; ``adapters/tdx_protocol/bars.py``). The vendor fallbacks behind
+    this one are EastMoney, which bans an address after heavy use, and THS,
+    which may not have the day yet: 501217.SH traded 15 shares on 2026-10-26
+    and stayed unresolved through both while the SSE published the bar.
+    """
+    import httpx
+
+    from cnequity.adapters.exchange.fund_volume import fetch_fund_dayk
+    from cnequity.domain.symbols import is_etf_symbol, parse_symbol
+
+    def is_fund(symbol: str) -> bool:
+        try:
+            info = parse_symbol(symbol)
+        except ValueError:
+            return False
+        return info.exchange in {"SH", "SZ"} and is_etf_symbol(info.code, info.exchange)
+
+    wanted: dict[str, set[date]] = {}
+    for symbol, day in missing:
+        if is_fund(symbol):
+            wanted.setdefault(symbol, set()).add(day)
+    if not wanted or not config.sources.get("exchange", False):
+        return {"rows_read": 0, "rows_written": 0, "source_outcomes": {}}
+    symbols = sorted(wanted)[:_EXCHANGE_DAYK_MAX_SYMBOLS]
+    frames, failed = [], []
+    with httpx.Client(timeout=30.0) as client:
+        for symbol in symbols:
+            try:
+                frame = fetch_fund_dayk(
+                    symbol, trade_dates=wanted[symbol], client=client, config=config
+                )
+            except (httpx.HTTPError, OSError, ValueError) as exc:
+                logger.warning("exchange dayk %s failed: %s", symbol, exc)
+                failed.append(symbol)
+                continue
+            if not frame.is_empty():
+                frames.append(frame)
+    fetched = pl.concat(frames, how="vertical_relaxed") if frames else pl.DataFrame()
+    rows_written = 0
+    if not fetched.is_empty():
+        rows_written = _stage_daily_gap_batch(
+            config,
+            run_id,
+            batch_id="exchange-dayk-gapfill",
+            source="exchange",
+            frame=fetched,
+            symbols=sorted(set(fetched["symbol"].to_list())),
+            start=start,
+            end=end,
+        )
+    outcome = {
+        "status": "success"
+        if rows_written and not failed
+        else "partial"
+        if rows_written
+        else "empty",
+        "requests": len(symbols),
+        "rows": fetched.height,
+        "failed_symbols": failed,
+    }
+    return {
+        "rows_read": fetched.height,
+        "rows_written": rows_written,
+        "audit_findings": [
+            {
+                "dataset": "daily_bars",
+                "severity": "info",
+                "check": "daily_bars_exchange_dayk_gapfill",
+                "message": (
+                    f"exchange day k-lines staged {fetched.height} fund session(s) "
+                    f"for {len(symbols)} symbol(s)"
+                ),
+                "symbols": symbols,
+                "rows_written": rows_written,
+            }
+        ],
+        "source_outcomes": {"exchange_dayk": outcome},
+    }
+
+
 def _gapfill_missing_keys_via_ths(
     config: Config,
     run_id: str,
@@ -4202,6 +4297,15 @@ def _gapfill_multiday_via_kline(
     findings.extend(exchange.get("audit_findings") or [])
     source_outcomes.update(exchange.get("source_outcomes") or {})
     exchange_complete = set(exchange.get("complete_symbols") or [])
+    # Then the exchange's own per-fund day k-line, for the sub-lot fund
+    # sessions TDX cannot express and no bulk snapshot carries.
+    dayk = _gapfill_fund_keys_via_exchange_dayk(
+        config, run_id, missing=missing_keys(), start=start, end=end
+    )
+    rows_read += int(dayk.get("rows_read", 0))
+    rows_written += int(dayk.get("rows_written", 0))
+    findings.extend(dayk.get("audit_findings") or [])
+    source_outcomes.update(dayk.get("source_outcomes") or {})
     pending_symbols = _research_first(
         {symbol for symbol, _day in missing_keys()} - exchange_complete
     )

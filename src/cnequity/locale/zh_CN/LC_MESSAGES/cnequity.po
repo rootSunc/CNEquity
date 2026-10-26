@@ -286,7 +286,8 @@ msgid ""
 "\n"
 "Stale but not core, so not gating: {value}"
 msgstr ""
-"\n已过期但不属于核心档，不计入验收：{value}"
+"\n"
+"已过期但不属于核心档，不计入验收：{value}"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
@@ -1457,6 +1458,10 @@ msgstr "补入按原始披露日重建的财报"
 #, python-brace-format
 msgid "Add schedule group: [{table}]"
 msgstr "补调度组：[{table}]"
+
+#: cnequity/storage/migrations.py
+msgid "Add statement items first seen only as a later filing's comparative on their own date"
+msgstr "为只在后续报告的往期对比数中出现过的财报科目，补一行按原披露日期重建的记录"
 
 #: cnequity/cli/setup_cmds.py
 #, python-brace-format

@@ -141,7 +141,9 @@ def _owed_symbols_on(cfg, dataset: str, day: date) -> set[str]:
     }
 
 
-def _proven_absent_on(cfg, dataset: str, day: date) -> set[str]:
+def _proven_absent_on(
+    cfg, dataset: str, day: date, *, undated: set[str] | frozenset[str] = frozenset()
+) -> set[str]:
     """Symbols with live no-data evidence covering *day*.
 
     The ingest side already routes these out of the expected key set
@@ -149,20 +151,41 @@ def _proven_absent_on(cfg, dataset: str, day: date) -> set[str]:
     evidence or the two contradict each other. A code the daily_bars probe
     found not yet listed has no trading status to publish either, so that
     claim also answers for ``trading_status``.
+
+    So does any other no-data record for a code in *undated* (no listing
+    date) that has never printed a traded bar: such a code cannot be
+    suspended, only not yet listed. The probe writes ``not_yet_listed`` for
+    the one day it asks; the next runs reuse that cached absence under a
+    generic ``source_empty`` instead of asking again, and 001381.SZ read as a
+    missing active stock on 2026-10-26, three days after its IPO allotment.
     """
-    from cnequity.steps.common import load_negative_evidence, negative_evidence_covers
+    from cnequity.steps.common import (
+        load_bar_universe,
+        load_negative_evidence,
+        negative_evidence_covers,
+    )
 
     try:
         evidence = list(load_negative_evidence(cfg, "daily_bars"))
     except Exception:  # noqa: BLE001 — missing/garbled evidence proves nothing
         return set()
-    if dataset != "daily_bars":
-        evidence = [item for item in evidence if item.get("reason") == "not_yet_listed"]
-    return {
-        str(item["symbol"]).strip().upper()
+    covering = {
+        str(item["symbol"]).strip().upper(): item
         for item in evidence
         if item.get("symbol") and negative_evidence_covers(item, str(item["symbol"]), day, day)
     }
+    if dataset == "daily_bars":
+        return set(covering)
+    proven = {symbol for symbol, item in covering.items() if item.get("reason") == "not_yet_listed"}
+    candidates = (set(covering) & set(undated)) - proven
+    if candidates:
+        try:
+            traded = load_bar_universe(cfg)
+        except Exception:  # noqa: BLE001 — without the universe nothing is proven
+            traded = None
+        if traded is not None:
+            proven |= candidates - traded
+    return proven
 
 
 def _tip_scope(cfg, catalog: pl.DataFrame, dataset: str = "daily_bars") -> dict | None:
@@ -277,7 +300,14 @@ def _tip_scope(cfg, catalog: pl.DataFrame, dataset: str = "daily_bars") -> dict 
         excused: set[str] = set()
         if status is not None and not status.is_empty():
             excused = set(status.filter(~pl.col("is_trading"))["symbol"].drop_nulls().to_list())
-        excused |= _proven_absent_on(cfg, dataset, tip)
+        undated = (
+            set(
+                expected_rows.filter(pl.col("list_date").is_null())["symbol"].drop_nulls().to_list()
+            )
+            if "list_date" in expected_rows.columns
+            else set()
+        )
+        excused |= _proven_absent_on(cfg, dataset, tip, undated=undated)
         covered = expected & (observed | excused)
         ratio = len(covered) / len(expected)
         # Keys the ingest side already judged, tolerated and wrote down are
