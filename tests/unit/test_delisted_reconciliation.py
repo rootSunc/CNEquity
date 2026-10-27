@@ -80,6 +80,37 @@ def test_reconciliation_separates_safe_unresolved_and_missing(tmp_path):
     assert correction["catalog_not_trading_day"] is True
 
 
+def test_fresh_probe_proves_a_non_printing_terminal(tmp_path):
+    cfg = _cfg(tmp_path)
+    asked: list[str] = []
+
+    def probe(symbol):
+        asked.append(symbol)
+        return date(2020, 1, 3)
+
+    report = delisted_catalog_reconciliation_report(cfg, probe=probe)
+
+    assert asked == ["600001.SH"]
+    assert report["counts"]["safe_correction"] == 2
+    assert report["counts"]["unresolved_mismatch"] == 0
+    correction = next(c for c in report["safe_corrections"] if c["symbol"] == "600001.SH")
+    assert correction["proposed_last_traded"] == "2020-01-03"
+    assert correction["evidence"] == [
+        "current_probe_positive_volume_terminal",
+        "curated_positive_volume_terminal",
+    ]
+
+
+def test_fresh_probe_that_disagrees_stays_unresolved(tmp_path):
+    cfg = _cfg(tmp_path)
+
+    report = delisted_catalog_reconciliation_report(cfg, probe=lambda symbol: date(2020, 1, 6))
+
+    assert report["counts"]["safe_correction"] == 1
+    finding = report["samples"]["unresolved_mismatch"][0]
+    assert finding["current_probe_last_traded"] == "2020-01-06"
+
+
 def test_apply_backs_up_catalog_and_writes_receipt(tmp_path):
     cfg = _cfg(tmp_path)
 

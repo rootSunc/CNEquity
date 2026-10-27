@@ -80,22 +80,28 @@ def discover(cfg, *, limit: int | None) -> int:
     return 0
 
 
-def reconcile(cfg, *, apply: bool, sample: int) -> int:
+def reconcile(cfg, *, apply: bool, sample: int, reprobe: bool = False) -> int:
     """Audit catalogue terminals; with --apply, correct the proven ones.
 
     Dry-run by default. ``--apply`` refuses to run during any active ingestion,
-    backs up the catalogue, and writes a quality receipt.
+    backs up the catalogue, and writes a quality receipt. ``--reprobe`` asks Sina
+    again for each otherwise-unproven mismatch.
     """
     from cnequity.steps.delisted import (
         delisted_catalog_reconciliation_report,
         reconcile_delisted_catalog,
     )
 
+    kwargs = {"sample": sample}
+    if reprobe:
+        from cnequity.adapters.sina.bars import symbol_exists
+
+        kwargs["probe"] = lambda symbol: symbol_exists(symbol, config=cfg)
     try:
         report = (
-            reconcile_delisted_catalog(cfg, sample=sample)
+            reconcile_delisted_catalog(cfg, **kwargs)
             if apply
-            else delisted_catalog_reconciliation_report(cfg, sample=sample)
+            else delisted_catalog_reconciliation_report(cfg, **kwargs)
         )
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -191,6 +197,11 @@ def main(argv: list[str] | None = None) -> int:
     p = subs.add_parser("reconcile", help=reconcile.__doc__.splitlines()[0])
     p.add_argument("--apply", action="store_true", help="Apply high-confidence corrections.")
     p.add_argument("--sample", type=int, default=15)
+    p.add_argument(
+        "--reprobe",
+        action="store_true",
+        help="Re-probe Sina for mismatches the lake alone cannot disprove.",
+    )
 
     p = subs.add_parser("repair", help=repair.__doc__.splitlines()[0])
     p.add_argument(
@@ -216,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "discover":
         return discover(cfg, limit=args.limit)
     if args.command == "reconcile":
-        return reconcile(cfg, apply=args.apply, sample=args.sample)
+        return reconcile(cfg, apply=args.apply, sample=args.sample, reprobe=args.reprobe)
     if args.command == "repair":
         return repair(cfg, since=args.since)
     return coverage(cfg, start=args.start, end=args.end, sample=args.sample, universe=args.universe)

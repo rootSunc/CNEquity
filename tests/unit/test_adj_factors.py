@@ -1821,6 +1821,59 @@ def test_pre_close_check_flags_a_step_the_factor_missed(crosscheck_config):
     assert sample["expected"] == pytest.approx(10.0 / 9.5)
 
 
+def _write_fund(cfg, symbol):
+    instruments = cfg.curated_root / "instruments"
+    instruments.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "symbol": [symbol],
+            "asset_type": ["etf"],
+            "fetched_at": [datetime(2024, 6, 28, tzinfo=timezone.utc)],
+        }
+    ).write_parquet(instruments / f"{symbol}.parquet")
+
+
+def test_fund_cash_dividend_is_not_a_missed_step(crosscheck_config):
+    """Fund hfq is split-only: a cash distribution leaves the factor at 1."""
+    from cnequity.derive.adj_factors import (
+        _corporate_action_crosscheck_findings,
+        _pre_close_step_findings,
+    )
+
+    _write_fund(crosscheck_config, "510180.SH")
+    _write_bars_with_pre_close(
+        crosscheck_config,
+        "510180.SH",
+        [(_DAYS[0], 4.0, None), (_DAYS[1], 4.0, 3.85), (_DAYS[2], 4.0, 4.0)],
+    )
+    _write_action(crosscheck_config, "510180.SH", _DAYS[1], cash_dividend=0.15)
+    out = _factor_frame("510180.SH", _DAYS, [1.0, 1.0, 1.0])
+
+    assert _corporate_action_crosscheck_findings(crosscheck_config, out) == []
+    assert _pre_close_step_findings(crosscheck_config, out) == []
+
+
+def test_fund_split_the_factor_missed_is_still_flagged(crosscheck_config):
+    from cnequity.derive.adj_factors import (
+        _corporate_action_crosscheck_findings,
+        _pre_close_step_findings,
+    )
+
+    _write_fund(crosscheck_config, "510180.SH")
+    _write_bars_with_pre_close(
+        crosscheck_config,
+        "510180.SH",
+        [(_DAYS[0], 4.0, None), (_DAYS[1], 2.0, 2.0), (_DAYS[2], 2.0, 2.0)],
+    )
+    _write_action(crosscheck_config, "510180.SH", _DAYS[1], action_type="split", transfer_ratio=1.0)
+    out = _factor_frame("510180.SH", _DAYS, [1.0, 1.0, 1.0])
+
+    findings = _corporate_action_crosscheck_findings(crosscheck_config, out)
+    assert [f["check"] for f in findings] == ["adj_factor_corporate_action_divergence"]
+    assert findings[0]["expected_ratio"] == pytest.approx(2.0)
+    assert _pre_close_step_findings(crosscheck_config, out)[0]["steps"] == 1
+
+
 def test_pre_close_check_is_silent_on_a_lake_without_the_column(crosscheck_config):
     from cnequity.derive.adj_factors import _pre_close_step_findings
 

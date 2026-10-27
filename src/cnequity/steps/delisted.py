@@ -857,7 +857,7 @@ def _instruments_rows(config: Config, spans: dict[str, tuple[date | None, date]]
     )
 
 
-def delisted_catalog_reconciliation_report(config: Config, *, sample: int = 15) -> dict:
+def delisted_catalog_reconciliation_report(config: Config, *, sample: int = 15, probe=None) -> dict:
     """Compare swept catalogue terminals with curated independent evidence.
 
     A correction is considered safe only when curated positive-volume bars
@@ -865,6 +865,11 @@ def delisted_catalog_reconciliation_report(config: Config, *, sample: int = 15) 
     instrument delisting date, and the catalogue terminal is independently
     impossible (after formal delisting or not an exchange trading day). Other
     mismatches remain visible but are never changed automatically.
+
+    ``probe(symbol) -> date | None`` optionally re-asks the vendor for its last
+    positive-volume bar. Terminals swept before the probe rejected zero-volume
+    quotes can name a non-printing session; a fresh probe that agrees with the
+    curated terminal is the independent evidence for those.
     """
     if sample < 0:
         raise ValueError("sample must be non-negative")
@@ -904,6 +909,14 @@ def delisted_catalog_reconciliation_report(config: Config, *, sample: int = 15) 
         catalog_after_formal = formal is not None and catalog_last > formal
         catalog_not_trading = not is_trading_day(config, catalog_last)
         observed_within_identity = formal is not None and observed <= formal
+        reprobed = (
+            probe(symbol)
+            if probe is not None
+            and observed_within_identity
+            and not (catalog_after_formal or catalog_not_trading)
+            else None
+        )
+        probe_confirms = reprobed == observed
         finding = {
             "symbol": symbol,
             "catalog_last_traded": catalog_last.isoformat(),
@@ -912,13 +925,18 @@ def delisted_catalog_reconciliation_report(config: Config, *, sample: int = 15) 
             "catalog_after_formal_delist": catalog_after_formal,
             "catalog_not_trading_day": catalog_not_trading,
         }
-        if observed_within_identity and (catalog_after_formal or catalog_not_trading):
+        if reprobed is not None:
+            finding["current_probe_last_traded"] = reprobed.isoformat()
+        if observed_within_identity and (
+            catalog_after_formal or catalog_not_trading or probe_confirms
+        ):
             finding["proposed_last_traded"] = observed.isoformat()
             finding["evidence"] = [
                 reason
                 for reason, present in (
                     ("catalog_after_formal_delist", catalog_after_formal),
                     ("catalog_not_trading_day", catalog_not_trading),
+                    ("current_probe_positive_volume_terminal", probe_confirms),
                     ("curated_positive_volume_terminal", True),
                 )
                 if present
@@ -953,7 +971,7 @@ def delisted_catalog_reconciliation_report(config: Config, *, sample: int = 15) 
     }
 
 
-def reconcile_delisted_catalog(config: Config, *, sample: int = 15) -> dict:
+def reconcile_delisted_catalog(config: Config, *, sample: int = 15, probe=None) -> dict:
     """Apply only high-confidence terminal corrections with backup and receipt."""
     from cnequity.orchestrator.manifest import Manifest
     from cnequity.orchestrator.run_lock import run_lock
@@ -971,7 +989,7 @@ def reconcile_delisted_catalog(config: Config, *, sample: int = 15) -> dict:
                 + names
             )
 
-        report = delisted_catalog_reconciliation_report(config, sample=sample)
+        report = delisted_catalog_reconciliation_report(config, sample=sample, probe=probe)
         corrections = report["safe_corrections"]
         now = datetime.now(timezone.utc)
         stamp = now.strftime("%Y%m%dT%H%M%SZ")
