@@ -7,6 +7,7 @@ from cnequity.steps import (  # noqa: F401
     etf_profiles,
     events,
     finalize,
+    fsi_peer,
     fundamentals,
     intraday,
     macro_risk,

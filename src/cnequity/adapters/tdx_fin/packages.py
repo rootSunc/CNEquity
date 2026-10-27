@@ -80,6 +80,11 @@ FIELD_MAP: dict[str, tuple[str, int]] = {
     "net_cash_finance": ("cashflow", 128),
 }
 
+#: 营业收入. Not mapped to ``revenue``, which is 营业总收入: the two are equal
+#: for 1,699 of 1,711 companies in 2026Q3, and the rest — finance subsidiaries
+#: whose interest and fee income only the total counts — have no field for it.
+OPERATING_INCOME_FIELD = 74
+
 ROW_SCHEMA = {
     "symbol": pl.Utf8,
     "report_period": pl.Utf8,
@@ -269,3 +274,24 @@ def package_rows(
                 }
             )
     return pl.DataFrame(rows, schema=ROW_SCHEMA)
+
+
+def operating_income(period: str, content: bytes) -> dict[str, float]:
+    """``{symbol: 营业收入}`` for every A-share the package reports it for."""
+    reported, records = parse_package(content)
+    if reported != period_end(period):
+        raise TdxFinPayloadError(f"package for {period} reports {reported}")
+    out: dict[str, float] = {}
+    for code, fields in records.items():
+        exchange = infer_exchange_from_code(code)
+        if not is_all_a_symbol(code, exchange):
+            continue
+        value = float(fields[OPERATING_INCOME_FIELD - 1])
+        if value != 0.0 and value == value:
+            out[format_symbol(code, exchange)] = value
+    return out
+
+
+def previous_period(period: str) -> str:
+    year, quarter = int(period[:4]), int(period[-1])
+    return f"{year - 1}Q4" if quarter == 1 else f"{year}Q{quarter - 1}"

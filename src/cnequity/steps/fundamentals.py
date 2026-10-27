@@ -1411,6 +1411,10 @@ def stage_financials_tdx_fin(
             totals["not_served"].append(period)
             continue
         frame = package_rows(period, content, observed_on=observed_on)
+        frame = pl.concat(
+            [frame, _tdx_fin_revenue_rows(config, period, content, frame, index)],
+            how="vertical_relaxed",
+        )
         frame = (
             _without_held_keys(config, frame, period)
             if gap_only
@@ -1435,6 +1439,63 @@ def stage_financials_tdx_fin(
         totals["rows_written"] += written.get("rows_written", frame.height)
         totals["periods"].append(period)
     return totals
+
+
+def _tdx_fin_revenue_rows(
+    config: Config, period: str, content: bytes, frame: pl.DataFrame, index: dict[str, str]
+) -> pl.DataFrame:
+    """``revenue`` from 通达信's 营业收入, for companies where that is the total.
+
+    The package has no 营业总收入. 营业收入 equals it unless a finance subsidiary
+    adds interest and fee income (12 of 1,711 companies in 2026Q3), so a company
+    gets a row only when its previous period's 营业收入 matched the lake's
+    revenue; everyone else is left without one rather than understated.
+    """
+    from cnequity.adapters.tdx_fin.packages import operating_income, previous_period
+    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+    from cnequity.steps.fsi_peer import _cached_package
+
+    empty = frame.clear()
+    root = config.curated_root / "financial_statement_items"
+    prior = previous_period(period)
+    if frame.is_empty() or not dataset_has_parquet(root):
+        return empty
+    prior_content = _cached_package(config, prior, index)
+    if prior_content is None:
+        return empty
+    prior_income = operating_income(prior, prior_content)
+    stored = (
+        dedupe_lazy_by_primary_key(
+            scan_parquet_root(root, partition_col="report_period"),
+            "financial_statement_items",
+        )
+        .filter(
+            (pl.col("report_period") == prior)
+            & (pl.col("item_code") == "revenue")
+            & ~pl.col("source").str.starts_with("tdx_fin")
+        )
+        .sort("announce_date", nulls_last=False)
+        .group_by("symbol")
+        .agg(pl.col("item_value").last())
+        .collect()
+    )
+    total_only = {
+        symbol
+        for symbol, value in stored.iter_rows()
+        if value
+        and symbol in prior_income
+        and abs(prior_income[symbol] - value) <= 1e-4 * abs(value)
+    }
+    income = operating_income(period, content)
+    filed = frame.unique(subset=["symbol"], keep="first").filter(
+        pl.col("symbol").is_in(sorted(total_only & set(income)))
+    )
+    return filed.with_columns(
+        pl.lit("income").alias("statement_type"),
+        pl.lit("revenue").alias("item_code"),
+        pl.col("symbol").replace_strict(income, return_dtype=pl.Float64).alias("item_value"),
+    ).select(frame.columns)
 
 
 def _financials_from_tdx_fin(

@@ -593,7 +593,7 @@ parallel = true
 steps = [
   "instruments", "trading_calendar", "trading_status",
   "corporate_actions", "daily_bars", "index_bars", "financial_statement_items",
-  "share_structure",
+  "share_structure", "financial_statement_tdx_peer",
   "compact", "derive_adj_factors", "derive_industry_index",
   "ths_official_snapshot",
 ]
