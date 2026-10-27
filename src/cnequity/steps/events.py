@@ -1852,6 +1852,9 @@ def step_corporate_actions_sweep(
     # TDX files 送 and 转 as one bonus ratio; where the lake already holds the
     # split from another source, writing TDX's row would count the shares twice.
     stored_shares = _stored_vendor_shares(config, since, trade_date)
+    # The same xdxr responses carry every share-count change; they feed
+    # share_structure's peer check and backup at no extra request.
+    share_events: list[dict] = []
     written = 0
     failed: list[str] = []
     for start in range(0, len(symbols), _SWEEP_CHUNK):
@@ -1870,6 +1873,7 @@ def step_corporate_actions_sweep(
                 fail_loud=True,
                 allow_empty=True,
                 request_scope=scope,
+                share_events=share_events,
             )
         except Exception as exc:  # noqa: BLE001 — the next chunk is independent
             logger.warning("corporate_actions sweep: chunk %d failed: %s", start, exc)
@@ -1905,6 +1909,22 @@ def step_corporate_actions_sweep(
     if failed:
         out["status"] = "degraded"
         out["failed_symbols"] = len(failed)
+    try:
+        from cnequity.steps.share_peer import share_structure_from_sweep
+
+        share_findings = share_structure_from_sweep(config, run_id, trade_date, share_events)
+    except Exception as exc:  # noqa: BLE001 — a peer check never fails the sweep
+        logger.warning("corporate_actions sweep: share_structure peer failed: %s", exc)
+        share_findings = [
+            {
+                "dataset": "share_structure",
+                "severity": "warning",
+                "check": "share_structure_peer",
+                "message": f"share_structure peer check failed: {exc}",
+            }
+        ]
+    if share_findings:
+        out["context_updates"] = {"audit_findings": share_findings}
     return out
 
 

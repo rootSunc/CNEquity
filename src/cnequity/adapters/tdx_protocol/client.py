@@ -1124,6 +1124,7 @@ def fetch_corporate_actions(
     progress_report=None,
     progress_offset: int = 0,
     should_stop=None,
+    share_events: list[dict] | None = None,
 ) -> pl.DataFrame:
     if rate_limit is None and config is not None:
         rate_limit = config.tdx_rate_limit_spec()
@@ -1162,6 +1163,7 @@ def fetch_corporate_actions(
                 progress_report=progress_report,
                 progress_offset=progress_offset,
                 should_stop=should_stop,
+                share_events=share_events,
             )
             if tdx_df.height:
                 frames.append(tdx_df.with_columns(pl.lit("tdx_protocol").alias("source")))

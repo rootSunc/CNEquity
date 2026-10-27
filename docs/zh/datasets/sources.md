@@ -298,7 +298,9 @@
 | 项 | 值 |
 |------|-------|
 | 主源 | eastmoney（`RPT_F10_EH_EQUITY` / `RPT_F10_EH_HOLDERNUM`） |
-| 分组 | fundamentals@17:35 |
+| 备源 | `share_structure`：tdx_protocol（除权除息记录里的股本变动，由每周 `actions_sweep` 顺带读取，不另发请求）。每周对照总股本和流通A股（审计 `share_structure_peer`）；东财数据超过 4 天未更新时，补写近 90 天只有通达信有的变动，`announce_date` 取复扫当天，`float_shares` 只在确认等于流通A股时填写（`share_structure_backup`） |
+| 分组 | core@16:00 |
+| `shareholder_counts` 分组 | fundamentals@17:35 |
 | 主键 | (symbol, change_date, announce_date) / (symbol, count_date, announce_date) |
 | 采集方式 | **按日期区间整市场扫**，不是按标的循环，也不是按报告期。`RPT_F10_EH_EQUITY.END_DATE` 是股本变动日；股东户数在旬末/月末也披露。只扫季末会静默漏掉其他披露日 |
 | 日更范围 | 按 `NOTICE_DATE` 回看 30 天。窗口开在公告日而不是变动日：几周前生效的变动今天才公告，按变动日开窗永远看不到它 |

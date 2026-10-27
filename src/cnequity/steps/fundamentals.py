@@ -1104,7 +1104,7 @@ def _run_shareholder_step(
     return result
 
 
-@register_step("share_structure", group="fundamentals", depends_on=["instruments"])
+@register_step("share_structure", group="core", depends_on=["instruments"])
 def step_share_structure(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     from cnequity.adapters.eastmoney.shareholders import fetch_share_structure
 

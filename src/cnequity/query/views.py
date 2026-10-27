@@ -16,7 +16,7 @@ from cnequity.domain.canonical import OFFICIAL_INDEX_SOURCES
 from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.domain.market_profile import OTC_SCOPED_DATASETS, otc_quote_sql
 from cnequity.domain.partitions import uses_hive
-from cnequity.domain.schemas import DATASET_SCHEMAS, PRIMARY_KEYS
+from cnequity.domain.schemas import DATASET_SCHEMAS, OPTIONAL_COLUMNS, PRIMARY_KEYS
 from cnequity.domain.trading_status import evidence_rank_sql
 from cnequity.storage.atomic import replace_with_retry
 from cnequity.storage.revisions import resolve_committed_root
@@ -155,6 +155,14 @@ def _view_select_sql(
     """
     primary_key = PRIMARY_KEYS.get(name, [])
     source = f"read_parquet({_sql_literal(glob_path)}, hive_partitioning={str(hive).lower()}, union_by_name=true)"
+    if columns is not None:
+        # An optional column no fragment carries yet reads as null, as it does
+        # through the Python reader, rather than failing the query that names it.
+        schema = DATASET_SCHEMAS.get(name, {})
+        absent = [c for c in sorted(OPTIONAL_COLUMNS) if c in schema and c not in columns]
+        if absent:
+            extra = ", ".join(f"CAST(NULL AS {_duckdb_type(schema[c])}) AS {c}" for c in absent)
+            source = f"(SELECT *, {extra} FROM {source})"
     # A few pre-schema-migration fragments in the wild (and lightweight
     # bootstrap fixtures) do not carry provenance. If no provenance field is
     # available, keep the raw view readable and let the schema/quality checks

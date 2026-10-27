@@ -298,7 +298,9 @@ Historical event contradictions never block `audit_gate`, `publication_gate` or 
 | Item | Value |
 |------|-------|
 | Primary | eastmoney (`RPT_F10_EH_EQUITY` / `RPT_F10_EH_HOLDERNUM`) |
-| Group | fundamentals@17:35 |
+| Backup | `share_structure`: tdx_protocol (the share changes in the xdxr record, read by the weekly `actions_sweep` at no extra request). Total shares and the A-share float are compared weekly (audit `share_structure_peer`); when EastMoney has not updated for more than 4 days, changes from the last 90 days that only TDX holds are written with the sweep's date as `announce_date`, and `float_shares` only where it is known to equal the A-share float (`share_structure_backup`) |
+| Group | core@16:00 |
+| `shareholder_counts` group | fundamentals@17:35 |
 | Primary key | (symbol, change_date, announce_date) / (symbol, count_date, announce_date) |
 | Collection method | **Whole-market scan by date range**, not a loop per security and not by reporting period. `RPT_F10_EH_EQUITY.END_DATE` is the share change date; shareholder counts are also disclosed at the end of ten-day periods and months. Scanning only quarter ends silently misses the other disclosure dates |
 | Daily range | Looks back 30 days by `NOTICE_DATE`. The window opens on the announcement date rather than the change date: a change that took effect weeks ago is only announced today, and a window keyed on the change date would never see it |

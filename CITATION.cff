@@ -7,7 +7,7 @@ abstract: >-
   research, backtesting and AI agents, providing multi-source ingestion,
   provenance, adjustment semantics, point-in-time fundamentals, and
   reproducible Parquet storage.
-version: 0.20.0
+version: 0.21.0
 authors:
   - name: "CNEquity Contributors"
 license: Apache-2.0

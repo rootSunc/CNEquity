@@ -1015,6 +1015,7 @@ Cached JSON: ``meta/on_demand/stock_news/{symbol}.json``; fetched via ``cne quer
 | total_shares | float64 |  |
 | float_shares | float64 |  |
 | restricted_shares | float64 |  |
+| float_a_shares | float64 |  |
 | free_float_shares | float64 |  |
 | change_reason | string |  |
 | announce_date | date |  |

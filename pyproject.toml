@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cnequity"
-version = "0.20.0"
+version = "0.21.0"
 description = "开源 A 股本地数据湖，用于量化研究、回测与 AI Agent | Open-source, self-hosted China A-share data lake for quant research, backtesting and AI agents"
 # Short PyPI page (absolute links only). GitHub keeps README.md / README.en.md.
 readme = "README.pypi.md"
@@ -149,7 +149,7 @@ where = ["src"]
 # Versioned dataset contracts are release governance artifacts, not runtime
 # Python modules.  Ship the contract alongside the installed policy so an
 # offline consumer can retain the exact contract used by a release.
-"share/cnequity/contracts" = ["contracts/v0.10.0.json", "contracts/v0.11.0.json", "contracts/v0.11.1.json", "contracts/v0.12.0.json", "contracts/v0.13.0.json", "contracts/v0.14.0.json", "contracts/v0.14.1.json", "contracts/v0.15.0.json", "contracts/v0.16.0.json", "contracts/v0.17.0.json", "contracts/v0.17.1.json", "contracts/v0.18.0.json", "contracts/v0.19.0.json", "contracts/v0.20.0.json"]
+"share/cnequity/contracts" = ["contracts/v0.10.0.json", "contracts/v0.11.0.json", "contracts/v0.11.1.json", "contracts/v0.12.0.json", "contracts/v0.13.0.json", "contracts/v0.14.0.json", "contracts/v0.14.1.json", "contracts/v0.15.0.json", "contracts/v0.16.0.json", "contracts/v0.17.0.json", "contracts/v0.17.1.json", "contracts/v0.18.0.json", "contracts/v0.19.0.json", "contracts/v0.20.0.json", "contracts/v0.21.0.json"]
 
 [tool.setuptools.package-data]
 cnequity = [

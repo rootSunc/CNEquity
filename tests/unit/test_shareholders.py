@@ -72,6 +72,7 @@ def test_share_structure_maps_the_four_share_counts(monkeypatch):
                     "TOTAL_SHARES": 19405918198,
                     "UNLIMITED_SHARES": 19405600653,
                     "LIMITED_SHARES": 317545,
+                    "LISTED_A_SHARES": 19405600653,
                     "FREELIQCI_SHARES": 8160481215,
                     "CHANGE_REASON": "高管股份变动",
                     "NOTICE_DATE": NOTICE,
@@ -86,6 +87,7 @@ def test_share_structure_maps_the_four_share_counts(monkeypatch):
     assert row["total_shares"] == 19405918198
     assert row["float_shares"] == 19405600653
     assert row["restricted_shares"] == 317545
+    assert row["float_a_shares"] == 19405600653
     # free float is not the same number as float — an index weights on this one.
     assert row["free_float_shares"] == 8160481215
     assert row["change_reason"] == "高管股份变动"

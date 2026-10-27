@@ -143,7 +143,7 @@ Minutes, trade snapshots and futures/options are disabled by default. Check each
 | `earnings_disclosure_schedule` | L2 | eastmoney | — |
 | `analyst_consensus` | L3 | eastmoney | — |
 | `financial_statement_items` | L3 | eastmoney | tdx_fin |
-| `share_structure` | L3 | eastmoney | — |
+| `share_structure` | L3 | eastmoney | tdx_protocol |
 | `shareholder_counts` | L3 | eastmoney | — |
 | `top_holders` | L3 | eastmoney | — |
 | `valuation_metrics` | L3 | eastmoney | — |

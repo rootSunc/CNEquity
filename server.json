@@ -8,13 +8,13 @@
     "url": "https://github.com/rootSunc/CNEquity",
     "source": "github"
   },
-  "version": "0.20.0",
+  "version": "0.21.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "cnequity",
-      "version": "0.20.0",
+      "version": "0.21.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

@@ -32,6 +32,8 @@ DATASET_DATA_VERSION = {
     "daily_bars": "v2",
     # v2: industry_code is the level-3 leaf and the level columns are filled.
     "industry_members": "v2",
+    # v2: `float_a_shares` is filled.
+    "share_structure": "v2",
 }
 
 
@@ -42,7 +44,16 @@ def data_version_for(dataset: str) -> str:
 # Columns a writer may leave out; validation adds them as null. Older rows and
 # sources that do not publish the value read the same way.
 OPTIONAL_COLUMNS = frozenset(
-    {"pre_close", "l1_code", "l1_name", "l2_code", "l2_name", "l3_code", "l3_name"}
+    {
+        "pre_close",
+        "l1_code",
+        "l1_name",
+        "l2_code",
+        "l2_name",
+        "l3_code",
+        "l3_name",
+        "float_a_shares",
+    }
 )
 
 DAILY_BARS_SCHEMA = {
@@ -452,6 +463,10 @@ SHARE_STRUCTURE_SCHEMA = {
     "total_shares": pl.Float64,
     "float_shares": pl.Float64,
     "restricted_shares": pl.Float64,
+    # 流通A股 — listed tradable A shares only. `float_shares` also counts an
+    # A+H company's H shares (600188.SH: 7.66 bn against 5.96 bn A), so this is
+    # the count an A-share float market cap or turnover needs. Null before v2.
+    "float_a_shares": pl.Float64,
     # 自由流通股 — float minus strategic/locked holdings. The denominator an
     # index uses for free-float weighting; not the same as `float_shares`.
     "free_float_shares": pl.Float64,

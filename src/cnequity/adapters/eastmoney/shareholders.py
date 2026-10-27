@@ -65,7 +65,7 @@ class ShareholderProgress:
 _EQUITY_REPORT = "RPT_F10_EH_EQUITY"
 _EQUITY_COLUMNS = (
     "SECUCODE,END_DATE,TOTAL_SHARES,LIMITED_SHARES,UNLIMITED_SHARES,"
-    "FREELIQCI_SHARES,CHANGE_REASON,NOTICE_DATE"
+    "LISTED_A_SHARES,FREELIQCI_SHARES,CHANGE_REASON,NOTICE_DATE"
 )
 
 _HOLDERNUM_REPORT = "RPT_F10_EH_HOLDERNUM"
@@ -311,6 +311,7 @@ def fetch_share_structure(
                 "total_shares": _num(item.get("TOTAL_SHARES")),
                 "float_shares": _num(item.get("UNLIMITED_SHARES")),
                 "restricted_shares": _num(item.get("LIMITED_SHARES")),
+                "float_a_shares": _num(item.get("LISTED_A_SHARES")),
                 "free_float_shares": _num(item.get("FREELIQCI_SHARES")),
                 "change_reason": str(item.get("CHANGE_REASON") or "") or None,
                 "announce_date": _em_date(item.get("NOTICE_DATE")),

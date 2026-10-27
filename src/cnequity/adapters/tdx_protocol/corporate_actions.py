@@ -196,6 +196,37 @@ def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
     return rows
 
 
+def share_events_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
+    """Share-count changes in an xdxr response: the counts after each event.
+
+    Every category but the dividend row carries the before/after 流通A and
+    total share counts, in 万股 as single-precision floats, so a count is good
+    to a few hundred shares — enough for the totals, too coarse to subtract
+    into a small restricted figure. ``float_a_shares`` is listed A shares only.
+    """
+    if pdf.is_empty() or not {"houzongguben", "panhouliutong"} <= set(pdf.columns):
+        return []
+    events: dict[date, dict] = {}
+    for record in pdf.iter_rows(named=True):
+        if int(record.get("category") or 0) == _CATEGORY_DIVIDEND:
+            continue
+        total, float_a = record.get("houzongguben"), record.get("panhouliutong")
+        if not total or float_a is None or total <= 0 or float_a < 0:
+            continue
+        try:
+            day = date(int(record["year"]), int(record["month"]), int(record["day"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        # Several events on one day leave the last one's counts standing.
+        events[day] = {
+            "symbol": symbol,
+            "change_date": day,
+            "total_shares": float(round(total * 10_000)),
+            "float_a_shares": float(round(float_a * 10_000)),
+        }
+    return list(events.values())
+
+
 def fetch_xdxr_for_symbol(
     client,
     symbol: str,
@@ -207,7 +238,9 @@ def fetch_xdxr_for_symbol(
     archive_dataset: str = "corporate_actions",
     archive_run_id: str | None = None,
     request_scope: str | None = None,
+    share_events: list[dict] | None = None,
 ) -> pl.DataFrame:
+    """One symbol's ex-events; with *share_events*, also collect its share changes."""
     code, _, exch = symbol.partition(".")
     # ``quotes.xdxr()`` falls back to ``market_for_stock()`` when market is
     # omitted, and that heuristic only distinguishes SH/SZ — it has no notion
@@ -261,6 +294,8 @@ def fetch_xdxr_for_symbol(
         return pl.DataFrame()
 
     pdf = pl.from_pandas(raw) if hasattr(raw, "columns") else pl.DataFrame(raw)
+    if share_events is not None:
+        share_events.extend(share_events_from_xdxr(symbol, pdf))
     rows = _rows_from_xdxr(symbol, pdf)
     if on_date is not None:
         rows = [r for r in rows if r["ex_date"] == on_date]
@@ -285,6 +320,7 @@ def fetch_corporate_actions_tdx(
     progress_report: Callable[[int], None] | None = None,
     progress_offset: int = 0,
     should_stop: Callable[[], bool] | None = None,
+    share_events: list[dict] | None = None,
 ) -> pl.DataFrame:
     if archive is None:
         archive = _configured_archive(
@@ -325,6 +361,7 @@ def fetch_corporate_actions_tdx(
                 archive=archive,
                 archive_run_id=run_id,
                 request_scope=request_scope,
+                share_events=share_events,
             )
             if df.height:
                 frames.append(df)
@@ -350,3 +387,44 @@ def fetch_corporate_actions_tdx(
 
     out = pl.concat(frames, how="diagonal_relaxed")
     return out.unique(subset=["symbol", "ex_date", "action_type"], keep="last")
+
+
+def fetch_share_events_tdx(
+    symbols: list[str],
+    *,
+    client_factory,
+    config=None,
+    run_id: str | None = None,
+    request_scope: str | None = None,
+    rate_limit: RateLimitSpec | None = None,
+) -> pl.DataFrame:
+    """TDX share-change events for *symbols*, archived as ``share_structure`` evidence."""
+    archive = _configured_archive(
+        config, "share_structure", run_id=run_id, request_scope=request_scope
+    )
+    events: list[dict] = []
+    client = client_factory()
+    try:
+        for symbol in symbols:
+            fetch_xdxr_for_symbol(
+                client,
+                symbol,
+                rate_limit=rate_limit,
+                strict=True,
+                archive=archive,
+                archive_dataset="share_structure",
+                archive_run_id=run_id,
+                request_scope=request_scope,
+                share_events=events,
+            )
+    finally:
+        close_quotes_client(client)
+    return pl.DataFrame(
+        events,
+        schema={
+            "symbol": pl.Utf8,
+            "change_date": pl.Date,
+            "total_shares": pl.Float64,
+            "float_a_shares": pl.Float64,
+        },
+    )

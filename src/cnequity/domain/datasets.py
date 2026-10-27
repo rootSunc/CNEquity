@@ -169,6 +169,7 @@ _UNIT_CONTRACT_DEFAULTS: dict[str, UnitContract] = {
         "total_shares": "share",
         "float_shares": "share",
         "restricted_shares": "share",
+        "float_a_shares": "share",
         "free_float_shares": "share",
     },
     "shareholder_counts": {
@@ -1153,7 +1154,14 @@ _SPECS = [
     # would let a July backtest read August's filing.
     DatasetSpec(
         "share_structure",
+        # v2: `float_a_shares` (流通A股).
+        schema_version=2,
         primary_source="eastmoney",
+        # TDX xdxr share-change events, read by the weekly corporate-actions
+        # sweep: the peer for total and A-share float, and the rows written
+        # when EastMoney has gone stale. They carry no disclosure date, so a
+        # backup row is dated by the sweep that observed it.
+        backup_source="tdx_protocol",
         tier="L3",
         partition_col="change_date",
         partition_granularity="year",
