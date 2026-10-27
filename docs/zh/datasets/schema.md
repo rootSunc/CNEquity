@@ -603,6 +603,7 @@
 > 「10 转 4 股」→ 0.4，「10 配 3 股」→ 0.3）。下游按真实持股统一核算，无需再除 10：
 > `shares_after = shares × (1 + bonus_ratio + transfer_ratio) × split_factor`，
 > `cash = shares × cash_dividend`。`allotment_price` 是每股价格而非比率，不做除 10。
+> `cash_dividend` 是方案公告的每股派现。公司持有回购专户股份时，交易所按总股本折算的「虚拟分派」计算除权参考价，比公告金额小，复权因子的跳变会相应略小（实测最多约 0.5%）。
 > 注意：TDX `xdxr` 不拆分送/转，会把送转合计写入 `bonus_ratio`（`transfer_ratio=0`）；
 > 总乘数正确，但送/转拆分仅在东财日更路径可区分。东财一条同时包含派息、送股、
 > 转增的方案会拆成多条 `(symbol, ex_date, action_type)` 记录，避免单一 `action_type`

@@ -37,7 +37,7 @@ EASTMONEY_BACKFILL_FLOOR = date(2015, 9, 29)
 _BACKFILL_FLOOR = EASTMONEY_BACKFILL_FLOOR
 _COLUMNS = (
     "SECURITY_CODE,SECUCODE,EX_DIVIDEND_DATE,EQUITY_RECORD_DATE,PRETAX_BONUS_RMB,"
-    "BONUS_RATIO,IT_RATIO,BONUS_IT_RATIO,IMPL_PLAN_PROFILE,ASSIGN_PROGRESS"
+    "BONUS_RATIO,IT_RATIO,BONUS_IT_RATIO,IMPL_PLAN_PROFILE,ASSIGN_PROGRESS,REPORT_DATE"
 )
 
 
@@ -322,7 +322,7 @@ def fetch_corporate_actions_eastmoney(
                     continue
                 if backfill and not (floor <= parsed["ex_date"] <= ceiling):
                     continue
-                rows.append(parsed)
+                rows.append({**parsed, "_plan": item.get("REPORT_DATE")})
 
         if not backfill and outside_daily and not rows:
             raise EastMoneyDatacenterError(
@@ -335,4 +335,16 @@ def fetch_corporate_actions_eastmoney(
 
     if not rows:
         return pl.DataFrame()
-    return pl.DataFrame(rows).unique(subset=["symbol", "ex_date", "action_type"], keep="last")
+    # One row per plan (a page repeat keeps the last), then plans add up: an
+    # annual and a quarterly dividend can share one ex-date (301039.SZ on
+    # 2026-07-06 paid 0.21 + 0.14), and keeping only one under-reports it.
+    keys = ["symbol", "ex_date", "action_type"]
+    plans = pl.DataFrame(rows, infer_schema_length=None).unique(
+        subset=[*keys, "_plan"], keep="last", maintain_order=True
+    )
+    additive = {"cash_dividend", "bonus_ratio", "transfer_ratio"}
+    return plans.group_by(keys, maintain_order=True).agg(
+        pl.col(c).sum() if c in additive else pl.col(c).first()
+        for c in plans.columns
+        if c not in keys and c != "_plan"
+    )

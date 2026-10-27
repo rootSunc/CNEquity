@@ -610,6 +610,7 @@ Daily update: `macro_risk` group. History: `cne backfill commodity_bars [--start
 > "4 capitalization shares per 10" → 0.4, "3 rights shares per 10" → 0.3). Downstream accounting works on actual holdings with no further division by 10:
 > `shares_after = shares × (1 + bonus_ratio + transfer_ratio) × split_factor`,
 > `cash = shares × cash_dividend`. `allotment_price` is a per-share price, not a ratio, and is not divided by 10.
+> `cash_dividend` is the declared per-share amount. When a company holds repurchased shares, the exchange computes the ex-rights reference price from a virtual per-share amount spread over total shares, which is smaller, so the adjustment factor steps slightly less (up to about 0.5% observed).
 > Note: TDX `xdxr` does not split bonus and capitalization shares; it writes their sum to `bonus_ratio` (`transfer_ratio=0`);
 > the total multiplier is correct, but the bonus/capitalization split is distinguishable only on the EastMoney daily path. An EastMoney plan that
 > includes a cash dividend, bonus shares and capitalization shares together is split into several `(symbol, ex_date, action_type)` records, so that a single `action_type`

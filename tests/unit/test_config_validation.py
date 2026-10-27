@@ -171,6 +171,8 @@ def test_example_config_validates(monkeypatch):
         "ticks",
         # Futures and options; every step is a no-op until [futures].enabled.
         "derivatives",
+        # Weekly TDX catch-net for corporate actions the daily detection misses.
+        "actions_sweep",
     }
     assert cfg.minute_bars_enabled is False
 

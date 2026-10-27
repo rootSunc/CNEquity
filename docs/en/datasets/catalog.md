@@ -225,7 +225,7 @@ The two intraday datasets share one set of quality checks: duplicate primary key
 
 | Dataset | Partition key | Primary key | Semantics | Watermark | Primary source | Notes |
 |--------|--------|------|------|------|------|------|
-| corporate_actions | ex_date (yearly) | symbol, ex_date, action_type | by_date | ✓ | eastmoney (daily updates) | Backfill: tdx_protocol; for mixed granularity use `cne repair repartition` |
+| corporate_actions | ex_date (yearly) | symbol, ex_date, action_type | by_date | ✓ | tdx_protocol (daily: the exchange's adjusted previous close names the session's ex-events, then TDX ex-rights records; EastMoney is the backup, the same-day peer and the source of the bonus/transfer split; the `actions_sweep` group re-reads every symbol's last 30 days weekly) | Backfill: tdx_protocol; for mixed granularity use `cne repair repartition` |
 | announcement_index | announce_date | announcement_id | by_date PIT | ✓ | cninfo | `as_of` filtering |
 | earnings_disclosure_schedule | report_period | symbol, report_period | by_date | — | eastmoney | Scheduled disclosure calendar (RPT_PUBLIC_BS_APPOIN); current-value semantics, not PIT: changes overwrite scheduled_date (first_scheduled_date keeps the first scheduled date, actual_date is filled in after disclosure); `cne backfill` covers all report periods from 2016 |
 
@@ -348,7 +348,7 @@ Futures and options contracts, per-contract market data and derived series, plus
 | Dataset | Primary source | Fallback source |
 |--------|------|------|
 | daily_bars | tdx_protocol | eastmoney |
-| corporate_actions | eastmoney | tdx_protocol |
+| corporate_actions | tdx_protocol | eastmoney |
 
 ## Checks against the publisher (authority checks)
 

@@ -258,6 +258,37 @@ def test_fetch_corporate_actions_eastmoney_backfill_filter_and_dedupe(monkeypatc
     assert df.row(0, named=True)["bonus_ratio"] == 0.5
 
 
+def test_fetch_corporate_actions_eastmoney_sums_plans_sharing_an_ex_date(monkeypatch):
+    # 301039.SZ: the 2025 annual and 2026 Q1 dividends both went ex on
+    # 2026-07-06; the exchange's previous close fell by their 0.35 total.
+    plans = [
+        ("2025-12-31 00:00:00", 2.1, "10派2.10元(含税,扣税后1.89元)"),
+        ("2026-03-31 00:00:00", 1.4, "10派1.40元(含税,扣税后1.26元)"),
+    ]
+
+    def _fake_fetch_datacenter(client, report, columns, *, filter_expr, **kwargs):
+        rows = [
+            {
+                "SECURITY_CODE": "301039",
+                "SECUCODE": "301039.SZ",
+                "EX_DIVIDEND_DATE": "2026-07-06 00:00:00",
+                "REPORT_DATE": report_date,
+                "PRETAX_BONUS_RMB": cash,
+                "IMPL_PLAN_PROFILE": profile,
+            }
+            for report_date, cash, profile in plans
+        ]
+        return rows + rows[:1]  # a page repeat is not a third plan
+
+    monkeypatch.setattr(
+        "cnequity.adapters.eastmoney.corporate_actions.fetch_datacenter",
+        _fake_fetch_datacenter,
+    )
+    df = fetch_corporate_actions_eastmoney(date(2026, 7, 6), client=_Client())
+    assert df.height == 1
+    assert df.row(0, named=True)["cash_dividend"] == pytest.approx(0.35)
+
+
 def test_fetch_corporate_actions_eastmoney_honors_bounded_backfill_end(monkeypatch):
     def _fake_fetch_datacenter(client, report, columns, *, filter_expr, **kwargs):
         return [

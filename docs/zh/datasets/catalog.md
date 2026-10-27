@@ -225,7 +225,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | 备注 |
 |--------|--------|------|------|------|------|------|
-| corporate_actions | ex_date（按年） | symbol, ex_date, action_type | by_date | ✓ | eastmoney（日更） | 回填：tdx_protocol；混粒度用 `cne repair repartition` |
+| corporate_actions | ex_date（按年） | symbol, ex_date, action_type | by_date | ✓ | tdx_protocol（日更：按交易所调整后的前收盘找出当日除权，再取 TDX 除权记录；东财为备源、同日对照，并提供送股/转增拆分；`actions_sweep` 组每周全市场复扫近 30 天） | 回填：tdx_protocol；混粒度用 `cne repair repartition` |
 | announcement_index | announce_date | announcement_id | by_date PIT | ✓ | cninfo | `as_of` 过滤 |
 | earnings_disclosure_schedule | report_period | symbol, report_period | by_date | — | eastmoney | 预约披露时间表（RPT_PUBLIC_BS_APPOIN）；现值语义非 PIT：变更覆盖 scheduled_date（first_scheduled_date 保留首约，actual_date 披露后回填）；`cne backfill` 走 2016 起全报告期 |
 
@@ -348,7 +348,7 @@ EM 响应若已包含尚未生效的调样行，会拒绝整份快照：删除�
 | 数据集 | 主源 | 备源 |
 |--------|------|------|
 | daily_bars | tdx_protocol | eastmoney |
-| corporate_actions | eastmoney | tdx_protocol |
+| corporate_actions | tdx_protocol | eastmoney |
 
 ## 对发布方的核对（authority checks）
 

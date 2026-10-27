@@ -138,7 +138,7 @@ print(bars.tail())
 | `minute_bars_60m` | L1 | derived | — |
 | `trade_ticks` | L1 | tdx_protocol | — |
 | `announcement_index` | L2 | cninfo | — |
-| `corporate_actions` | L2 | eastmoney | tdx_protocol |
+| `corporate_actions` | L2 | tdx_protocol | eastmoney |
 | `earnings_disclosure_schedule` | L2 | eastmoney | — |
 | `analyst_consensus` | L3 | eastmoney | — |
 | `financial_statement_items` | L3 | eastmoney | tdx_fin |

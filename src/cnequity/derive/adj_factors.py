@@ -1006,8 +1006,8 @@ _EMPTY_ACTION_TERMS = pl.DataFrame(
 )
 
 
-def _prior_factor_rows(config: Config, symbols: list[str], before: date) -> pl.DataFrame:
-    """Last stored factor row per symbol strictly before ``before``.
+def _prior_factor_rows(config: Config, out: pl.DataFrame) -> pl.DataFrame:
+    """Last stored factor row per symbol strictly before that symbol's first row in *out*.
 
     An append-only derive produces one new date per symbol, which has no
     predecessor inside its own output and therefore no measurable step — the
@@ -1016,21 +1016,31 @@ def _prior_factor_rows(config: Config, symbols: list[str], before: date) -> pl.D
     lookback is read: the previous *bar* date is one partition back for a
     symbol that trades, and the window still covers a month of suspension
     without scanning the whole history.
+
+    The edge is per symbol: one derive can append today's row for most symbols
+    and rewrite years of history for a few, and a single run-wide edge would
+    pair today's row with one from that distant start, piling every action in
+    between onto one step.
     """
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
     root = config.derived_root / "adj_factors"
     if not dataset_has_parquet(root):
         return pl.DataFrame()
-    lookback_start = before - timedelta(days=CROSSCHECK_PRIOR_LOOKBACK_DAYS)
+    firsts = out.group_by("symbol").agg(pl.col("trade_date").min().alias("_first"))
+    lookback = timedelta(days=CROSSCHECK_PRIOR_LOOKBACK_DAYS)
     prior = (
         scan_parquet_root(
             root,
             partition_col="trade_date",
-            start=lookback_start,
-            symbols=symbols,
+            start=firsts.get_column("_first").min() - lookback,
+            symbols=sorted(firsts.get_column("symbol").to_list()),
         )
-        .filter(pl.col("trade_date") < before)
+        .join(firsts.lazy(), on="symbol")
+        .filter(
+            (pl.col("trade_date") < pl.col("_first"))
+            & (pl.col("trade_date") >= pl.col("_first") - lookback)
+        )
         .select("symbol", "trade_date", "adjust_type", "factor")
         .collect()
     )
@@ -1241,7 +1251,7 @@ def _corporate_action_crosscheck_findings(config: Config, out: pl.DataFrame) -> 
         return []
 
     series = out.select("symbol", "trade_date", "adjust_type", "factor")
-    prior = _prior_factor_rows(config, symbols, start)
+    prior = _prior_factor_rows(config, out)
     if not prior.is_empty():
         series = pl.concat([prior.select(series.columns), series], how="vertical_relaxed")
         start = min(start, prior.get_column("trade_date").min())
@@ -1398,7 +1408,7 @@ def _pre_close_step_findings(config: Config, out: pl.DataFrame) -> list[dict]:
     from cnequity.query.parquet_scan import collect_parquet_root
 
     series = out.select("symbol", "trade_date", "adjust_type", "factor")
-    prior = _prior_factor_rows(config, symbols, start)
+    prior = _prior_factor_rows(config, out)
     if not prior.is_empty():
         series = pl.concat([prior.select(series.columns), series], how="vertical_relaxed")
     try:

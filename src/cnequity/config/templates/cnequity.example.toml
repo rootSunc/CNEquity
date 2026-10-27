@@ -441,8 +441,8 @@ max_drift_fraction = 0.0
 
 [[failover.datasets]]
 name = "corporate_actions"
-primary = "eastmoney"
-backup = "tdx_protocol"
+primary = "tdx_protocol"
+backup = "eastmoney"
 compare_fields = ["cash_dividend", "bonus_ratio", "transfer_ratio"]
 price_tolerance_bps = 10
 snapshot_cadence = "daily"
@@ -669,6 +669,16 @@ steps = ["minute_bars", "minute_bars_5m", "compact"]
 at = "19:00"
 parallel = true
 steps = ["trade_ticks", "compact"]
+
+# Weekly catch-net for corporate actions: every symbol's TDX ex-rights records
+# for the last month (about 24 minutes on one connection). The daily path finds
+# events from the exchange's adjusted previous close and misses a cash dividend
+# under half a tick, or a day it did not run.
+[job.daily.groups.actions_sweep]
+at = "19:30"
+cadence = "weekly"
+parallel = false
+steps = ["corporate_actions_sweep", "compact"]
 
 # 7x24 event streams. Disclosures and news are published on weekends and
 # holidays too, so these groups belong to their own job: `cne run events`

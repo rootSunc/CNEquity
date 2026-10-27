@@ -1246,6 +1246,32 @@ def test_crosscheck_reads_back_the_prior_partition_for_an_append_run(crosscheck_
     assert findings[0]["trade_date"] == "2024-06-27"
 
 
+def test_crosscheck_reads_each_symbols_own_prior_row_in_a_mixed_run(crosscheck_config):
+    from cnequity.derive.adj_factors import _corporate_action_crosscheck_findings
+
+    # One run appends today's row for one symbol and rewrites years of history
+    # for another. The appended symbol's predecessor is yesterday's row, not one
+    # from the rewrite's distant start with every dividend since piled onto it.
+    old_days = (date(2020, 6, 3), date(2020, 6, 4))
+    stored = (date(2020, 6, 2), _DAYS[0])
+    _write_bars(crosscheck_config, "600519.SH", stored + _DAYS[1:2], 10.0)
+    for year in (2021, 2022, 2023):
+        _write_action(crosscheck_config, "600519.SH", date(year, 6, 1), cash_dividend=5.0)
+    for day in stored:
+        part = crosscheck_config.derived_root / "adj_factors" / f"trade_date={day.isoformat()}"
+        part.mkdir(parents=True)
+        _factor_frame("600519.SH", [day], [1.0]).write_parquet(part / "part-0.parquet")
+    _write_bars(crosscheck_config, "000001.SZ", old_days, 10.0)
+
+    out = pl.concat(
+        [
+            _factor_frame("600519.SH", _DAYS[1:2], [1.0]),
+            _factor_frame("000001.SZ", old_days, [1.0, 1.0]),
+        ]
+    )
+    assert _corporate_action_crosscheck_findings(crosscheck_config, out) == []
+
+
 def test_crosscheck_flags_an_action_row_implying_a_nonpositive_price(crosscheck_config):
     from cnequity.derive.adj_factors import _corporate_action_crosscheck_findings
 
@@ -1298,7 +1324,7 @@ def test_compute_adj_factors_surfaces_crosscheck_findings(adj_config, monkeypatc
     _write_action(adj_config, "600519.SH", date(2024, 6, 28), cash_dividend=0.5)
     monkeypatch.setattr(
         "cnequity.derive.adj_factors._prior_factor_rows",
-        lambda config, symbols, before: _factor_frame("600519.SH", [date(2024, 6, 27)], [1.0]),
+        lambda config, out: _factor_frame("600519.SH", [date(2024, 6, 27)], [1.0]),
     )
     _write_bars(adj_config, "600519.SH", [date(2024, 6, 27)], 1.0)
 

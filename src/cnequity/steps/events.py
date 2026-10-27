@@ -610,6 +610,226 @@ def _heal_unrecorded_ex_events(config: Config, trade_date: date, run_id: str, ra
         return 0
 
 
+#: Quotes per TDX request (the protocol's batch limit).
+_QUOTE_BATCH = 80
+
+
+def _previous_closes(config: Config, trade_date: date, symbols: list[str]) -> dict[str, float]:
+    """Each symbol's last stored close before *trade_date*."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
+    root = config.curated_root / "daily_bars"
+    if not symbols or not dataset_has_parquet(root):
+        return {}
+    start = trade_date - timedelta(days=21)
+    frame = (
+        scan_parquet_root(root, partition_col="trade_date", start=start, end=trade_date)
+        .filter(
+            (pl.col("trade_date") < trade_date)
+            & pl.col("symbol").is_in(symbols)
+            & pl.col("close").is_not_null()
+        )
+        .sort("trade_date")
+        .group_by("symbol")
+        .agg(pl.col("close").last())
+        .collect()
+    )
+    return dict(frame.iter_rows())
+
+
+def _stored_vendor_shares(config: Config, since: date, until: date) -> pl.DataFrame:
+    """Stored 送/转 rows from sources other than TDX, ex-dated in the window."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
+    root = config.curated_root / "corporate_actions"
+    if not dataset_has_parquet(root):
+        return pl.DataFrame()
+    return (
+        scan_parquet_root(root, partition_col="ex_date", start=since, end=until)
+        .filter(
+            pl.col("ex_date").is_between(since, until)
+            & pl.col("action_type").is_in(["bonus", "transfer"])
+            & (pl.col("source") != _CANONICAL_BACKFILL)
+        )
+        .select("symbol", "ex_date", "action_type", "bonus_ratio", "transfer_ratio")
+        .collect()
+    )
+
+
+def detect_ex_symbols(
+    config: Config, trade_date: date, symbols: list[str], *, client=None
+) -> set[str]:
+    """Symbols whose exchange previous close for *trade_date* is not their last close.
+
+    On an ex-date the exchange publishes an adjusted previous close (前收盘),
+    and TDX's quote carries it, so one request per 80 codes finds the whole
+    market's ex-events without asking each symbol for its history. Measured
+    2026-10-27 before the session: exactly EastMoney's six announced ex-dates,
+    each gap equal to the cash dividend rounded to the tick. Blind to a cash
+    dividend under half a tick; the EastMoney window and the weekly sweep
+    catch those. Only meaningful while *trade_date* is the current session.
+    """
+    from cnequity.adapters.tdx_protocol._wire.helper import get_security_coefficient
+    from cnequity.adapters.tdx_protocol.client import _quotes_client
+    from cnequity.domain.symbols import parse_symbol
+
+    previous = _previous_closes(config, trade_date, symbols)
+    pairs = []
+    for symbol in symbols:
+        if symbol not in previous:
+            continue
+        try:
+            info = parse_symbol(symbol)
+        except ValueError:
+            continue
+        if info.exchange in ("SH", "SZ"):
+            pairs.append((1 if info.exchange == "SH" else 0, info.code, symbol))
+    owns = client is None
+    client = client or _quotes_client(config)
+    found: set[str] = set()
+    try:
+        for start in range(0, len(pairs), _QUOTE_BATCH):
+            batch = pairs[start : start + _QUOTE_BATCH]
+            by_code = {(market, code): symbol for market, code, symbol in batch}
+            for quote in client.security_quotes([(m, c) for m, c, _ in batch]):
+                symbol = by_code.get((quote.get("market"), quote.get("code")))
+                raw = quote.get("last_close_raw")
+                if symbol is None or not raw:
+                    continue
+                try:
+                    tick = get_security_coefficient(quote["market"], quote["code"])
+                except NotImplementedError:
+                    # A code range the wire helper cannot price; the weekly
+                    # sweep still reaches it.
+                    continue
+                if abs(raw * tick - previous[symbol]) >= tick / 2:
+                    found.add(symbol)
+    finally:
+        if owns:
+            client.close()
+    return found
+
+
+def _tdx_primary_events(
+    config: Config, trade_date: date, run_id: str, rate_limit
+) -> tuple[pl.DataFrame, str]:
+    """TDX's ex-rights records for the session's detected ex-events."""
+    symbols = detect_ex_symbols(config, trade_date, _sweep_universe(config))
+    scope = f"primary:xdxr:{trade_date.isoformat()}"
+    if not symbols:
+        return pl.DataFrame(), scope
+    frame = fetch_corporate_actions(
+        trade_date,
+        symbols=sorted(symbols),
+        backfill=True,
+        rate_limit=rate_limit,
+        allow_mock=config.tdx_allow_mock,
+        primary_only=True,
+        config=config,
+        run_id=run_id,
+        fail_loud=True,
+        allow_empty=True,
+        request_scope=scope,
+    )
+    if frame.is_empty():
+        return frame, scope
+    return frame.filter(pl.col("ex_date") == trade_date), scope
+
+
+def _split_with_vendor(
+    tdx: pl.DataFrame, vendor: pl.DataFrame
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Hand a share distribution to the vendor row when it splits 送 from 转.
+
+    TDX records 送股 and 转增 as one ``bonus`` ratio; EastMoney keeps them
+    apart. Where EastMoney's two add up to TDX's total for the same symbol and
+    ex-date, TDX's combined row is dropped and EastMoney's are kept; elsewhere
+    TDX's row stands. Returns (tdx rows to write, vendor rows taking over).
+    """
+    if tdx.is_empty() or vendor.is_empty() or "bonus_ratio" not in tdx.columns:
+        return tdx, vendor.clear()
+    keys = ["symbol", "ex_date"]
+    combined = tdx.filter((pl.col("action_type") == "bonus") & (pl.col("bonus_ratio") > 0))
+    shares = (
+        vendor.filter(pl.col("action_type").is_in(["bonus", "transfer"]))
+        .group_by(keys)
+        .agg(
+            (pl.col("bonus_ratio").fill_null(0) + pl.col("transfer_ratio").fill_null(0))
+            .sum()
+            .alias("_vendor_total")
+        )
+    )
+    agreed = (
+        combined.join(shares, on=keys)
+        # TDX ratios carry five decimals (0.51471 against 0.5147058).
+        .filter((pl.col("bonus_ratio") - pl.col("_vendor_total")).abs() <= 1e-4)
+        .select(keys)
+    )
+    if agreed.is_empty():
+        return tdx, vendor.clear()
+    kept = tdx.join(
+        agreed.with_columns(pl.lit("bonus").alias("action_type")),
+        on=[*keys, "action_type"],
+        how="anti",
+    )
+    taking_over = vendor.filter(pl.col("action_type").is_in(["bonus", "transfer"])).join(
+        agreed, on=keys, how="semi"
+    )
+    return kept, taking_over
+
+
+def _peer_finding(tdx: pl.DataFrame, vendor: pl.DataFrame, trade_date: date) -> dict | None:
+    """Compare the session's events on both sources: missing on either, or different."""
+    keys = ["symbol", "ex_date"]
+
+    def totals(frame: pl.DataFrame, prefix: str) -> pl.DataFrame:
+        if frame.is_empty():
+            return pl.DataFrame(
+                schema={
+                    "symbol": pl.Utf8,
+                    "ex_date": pl.Date,
+                    f"{prefix}cash": pl.Float64,
+                    f"{prefix}shares": pl.Float64,
+                }
+            )
+        return (
+            frame.filter(pl.col("ex_date") == trade_date)
+            .filter(pl.col("action_type") != "unit_split")
+            .group_by(keys)
+            .agg(
+                pl.col("cash_dividend").fill_null(0).sum().alias(f"{prefix}cash"),
+                (pl.col("bonus_ratio").fill_null(0) + pl.col("transfer_ratio").fill_null(0))
+                .sum()
+                .alias(f"{prefix}shares"),
+            )
+        )
+
+    joined = totals(tdx, "t_").join(totals(vendor, "v_"), on=keys, how="full", coalesce=True)
+    if joined.is_empty():
+        return None
+    vendor_only = joined.filter(pl.col("t_cash").is_null())["symbol"].to_list()
+    tdx_only = joined.filter(pl.col("v_cash").is_null())["symbol"].to_list()
+    both = joined.filter(pl.col("t_cash").is_not_null() & pl.col("v_cash").is_not_null())
+    differ = both.filter(
+        ((pl.col("t_cash") - pl.col("v_cash")).abs() > 1e-4)
+        | ((pl.col("t_shares") - pl.col("v_shares")).abs() > 1e-4)
+    )["symbol"].to_list()
+    return {
+        "dataset": "corporate_actions",
+        "severity": "info" if not (vendor_only or differ) else "warning",
+        "check": "corporate_actions_peer",
+        "trade_date": trade_date.isoformat(),
+        "message": (
+            f"corporate_actions {trade_date}: TDX and EastMoney agree on "
+            f"{both.height - len(differ)} event(s); {len(differ)} differ, "
+            f"{len(vendor_only)} only on EastMoney, {len(tdx_only)} only on TDX"
+        ),
+        "differ": sorted(differ),
+        "eastmoney_only": sorted(vendor_only),
+        "tdx_only": sorted(tdx_only),
+    }
+
+
 def _funds_ingested(config: Config) -> bool:
     return bool(config.ingest_listed_funds or config.ingest_eligible_etfs)
 
@@ -844,6 +1064,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
     findings: list[dict] = []
     failed_symbols: list[str] = []
     heal_written = 0
+    em_ok = False
     # The [start, through] window this run asked of the whole lake and got a
     # clean answer for; None when it did not (see storage/observation.py).
     observed: tuple[date | None, date] | None = None
@@ -1324,29 +1545,108 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             )
         canonical_source = _CANONICAL_BACKFILL
     else:
-        if not config.sources.get("eastmoney", True):
+        # TDX first: the exchange's adjusted previous close names the session's
+        # ex-events (`detect_ex_symbols`), and xdxr answers for those symbols.
+        # Quotes describe the current session only, so a catch-up run for an
+        # earlier date goes to EastMoney alone.
+        from cnequity.domain.market_time import shanghai_today
+
+        tdx_rows = pl.DataFrame()
+        tdx_scope = ""
+        tdx_ok = False
+        tdx_error: str | None = None
+        if config.sources.get("tdx_protocol", True) and trade_date == shanghai_today():
+            try:
+                tdx_rows, tdx_scope = _tdx_primary_events(config, trade_date, run_id, rl)
+                tdx_ok = True
+            except Exception as exc:  # noqa: BLE001 — EastMoney still answers for the day
+                tdx_error = f"{type(exc).__name__}: {exc}"[:200]
+                logger.warning("corporate_actions: TDX primary unavailable (%s)", tdx_error)
+        window: list[date] = []
+        df, findings = pl.DataFrame(), []
+        if config.sources.get("eastmoney", True):
+            window = incremental_trade_dates(config, "corporate_actions", trade_date)
+            try:
+                df, findings = fetch_incremental_daily(
+                    config,
+                    "corporate_actions",
+                    trade_date,
+                    _window_fetcher(config, trade_date, run_id),
+                    allow_empty=True,
+                    date_col="ex_date",
+                )
+                em_ok = True
+            except Exception as exc:
+                if not tdx_ok:
+                    raise
+                logger.warning(
+                    "corporate_actions: EastMoney window unavailable (%s); TDX answers alone", exc
+                )
+                findings.append(
+                    {
+                        "dataset": "corporate_actions",
+                        "severity": "warning",
+                        "check": "corporate_actions_vendor_unavailable",
+                        "message": f"EastMoney window unavailable ({exc}); TDX events only",
+                    }
+                )
+        elif not tdx_ok:
             raise SourceUnavailableError(
-                "corporate_actions daily: eastmoney source disabled in config"
+                "corporate_actions daily: eastmoney disabled and TDX unavailable"
             )
-        window = incremental_trade_dates(config, "corporate_actions", trade_date)
-        df, findings = fetch_incremental_daily(
-            config,
-            "corporate_actions",
-            trade_date,
-            _window_fetcher(config, trade_date, run_id),
-            allow_empty=True,
-            date_col="ex_date",
-        )
+        if tdx_error is not None:
+            findings.append(
+                {
+                    "dataset": "corporate_actions",
+                    "severity": "warning",
+                    "check": "corporate_actions_primary_unavailable",
+                    "message": f"TDX primary unavailable ({tdx_error}); EastMoney used",
+                }
+            )
+        if tdx_ok:
+            peer = _peer_finding(tdx_rows, df, trade_date)
+            if peer is not None:
+                findings.append(peer)
+            tdx_rows, _vendor_split = _split_with_vendor(tdx_rows, df)
+            if not tdx_rows.is_empty():
+                if not df.is_empty():
+                    df = df.join(
+                        tdx_rows.select("symbol", "ex_date", "action_type"),
+                        on=["symbol", "ex_date", "action_type"],
+                        how="anti",
+                    )
+                primary = with_provenance(tdx_rows, source=_CANONICAL_BACKFILL, data_version="v1")
+                written = write_fetched(
+                    config,
+                    run_id,
+                    "corporate_actions",
+                    primary,
+                    source=_CANONICAL_BACKFILL,
+                    batch_id="batch-0-tdx-primary",
+                    raw_archive_evidence=(
+                        verify_raw_archive(
+                            config,
+                            "corporate_actions",
+                            run_id,
+                            source=_CANONICAL_BACKFILL,
+                            request_scope=tdx_scope,
+                        )
+                        if config.should_archive_raw("corporate_actions")
+                        else None
+                    ),
+                )
+                heal_written += int(written.get("rows_written", primary.height))
         canonical_source = _CANONICAL_DAILY
         # The EastMoney ex-date query is market-wide, so a window with no
         # failed or source-gapped day is a clean look at the whole lake.
         if (
-            window
+            em_ok
+            and window
             and not any(f.get("check") == "fetch_failed_days" for f in findings)
             and not set(window) & source_gap_dates("corporate_actions")
         ):
             observed = (min(window), max(window))
-        if config.failover_enabled:
+        if config.failover_enabled and not tdx_ok:
             failover = failover_spec(config, "corporate_actions")
             if failover is not None and failover.snapshot_cadence == "daily":
                 ex_today = (
@@ -1406,7 +1706,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                             "retryable": True,
                         }
                     )
-        heal_written = _heal_unrecorded_ex_events(config, trade_date, run_id, rl)
+        heal_written += _heal_unrecorded_ex_events(config, trade_date, run_id, rl)
         fund_written, fund_finding = _sweep_unswept_fund_history(config, trade_date, run_id, rl)
         heal_written += fund_written
         if fund_finding:
@@ -1450,7 +1750,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
         # is not staged, but rejecting a captureless adapter here keeps an
         # enabled archive policy from silently treating "no rows" as proof of
         # a complete source response.
-        if not backfill and config.should_archive_raw("corporate_actions"):
+        if not backfill and em_ok and config.should_archive_raw("corporate_actions"):
             verify_raw_archive(
                 config,
                 "corporate_actions",
@@ -1458,7 +1758,11 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 source=_CANONICAL_DAILY,
                 request_scope=f"daily:{trade_date.isoformat()}",
             )
-        result = {"rows_read": 0, "rows_written": 0, "context_updates": context_updates}
+        result = {
+            "rows_read": heal_written,
+            "rows_written": heal_written,
+            "context_updates": context_updates,
+        }
         if backfill and failed_symbols:
             result["failed_symbols"] = failed_symbols
             result["status"] = "failed"
@@ -1515,6 +1819,93 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
         result["status"] = "failed"
     result["context_updates"] = context_updates
     return result
+
+
+#: Ex-dates the weekly sweep re-reads: enough to cover a missed week and its edges.
+_SWEEP_WINDOW_DAYS = 30
+_SWEEP_CHUNK = 200
+
+
+@register_step(
+    "corporate_actions_sweep",
+    group="actions_sweep",
+    depends_on=["instruments"],
+    description="Re-read every symbol's TDX ex-rights records for the last month",
+)
+def step_corporate_actions_sweep(
+    config: Config, trade_date: date, run_id: str, context: dict
+) -> dict:
+    """Catch the ex-events the daily detection cannot see.
+
+    The daily path finds events from the exchange's adjusted previous close,
+    which misses a cash dividend under half a tick and any day the run did
+    not reach. This asks TDX about every symbol (about 24 minutes on one
+    connection for 5,600 stocks, measured 2026-10-27) and keeps only events
+    dated in the last month; scheduled weekly in its own group. Rows already
+    in the lake are rewritten unchanged.
+    """
+    if not config.sources.get("tdx_protocol", True):
+        return {"rows_written": 0, "status": "skipped", "reason": "tdx_protocol disabled"}
+    rl = config.tdx_rate_limit_spec()
+    since = trade_date - timedelta(days=_SWEEP_WINDOW_DAYS)
+    symbols = _sweep_universe(config)
+    # TDX files 送 and 转 as one bonus ratio; where the lake already holds the
+    # split from another source, writing TDX's row would count the shares twice.
+    stored_shares = _stored_vendor_shares(config, since, trade_date)
+    written = 0
+    failed: list[str] = []
+    for start in range(0, len(symbols), _SWEEP_CHUNK):
+        chunk = symbols[start : start + _SWEEP_CHUNK]
+        scope = f"sweep:{trade_date.isoformat()}:{start:05d}"
+        try:
+            frame = fetch_corporate_actions(
+                trade_date,
+                symbols=chunk,
+                backfill=True,
+                rate_limit=rl,
+                allow_mock=config.tdx_allow_mock,
+                primary_only=True,
+                config=config,
+                run_id=run_id,
+                fail_loud=True,
+                allow_empty=True,
+                request_scope=scope,
+            )
+        except Exception as exc:  # noqa: BLE001 — the next chunk is independent
+            logger.warning("corporate_actions sweep: chunk %d failed: %s", start, exc)
+            failed.extend(chunk)
+            continue
+        if frame.is_empty():
+            continue
+        recent = frame.filter((pl.col("ex_date") >= since) & (pl.col("ex_date") <= trade_date))
+        recent, _stored = _split_with_vendor(recent, stored_shares)
+        if recent.is_empty():
+            continue
+        result = write_fetched(
+            config,
+            run_id,
+            "corporate_actions",
+            with_provenance(recent, source=_CANONICAL_BACKFILL, data_version="v1"),
+            source=_CANONICAL_BACKFILL,
+            batch_id=f"sweep-{start:05d}",
+            raw_archive_evidence=(
+                verify_raw_archive(
+                    config,
+                    "corporate_actions",
+                    run_id,
+                    source=_CANONICAL_BACKFILL,
+                    request_scope=scope,
+                )
+                if config.should_archive_raw("corporate_actions")
+                else None
+            ),
+        )
+        written += int(result.get("rows_written", recent.height))
+    out: dict = {"rows_read": written, "rows_written": written, "symbols": len(symbols)}
+    if failed:
+        out["status"] = "degraded"
+        out["failed_symbols"] = len(failed)
+    return out
 
 
 @register_step("earnings_disclosure_schedule", group="fundamentals", depends_on=["instruments"])

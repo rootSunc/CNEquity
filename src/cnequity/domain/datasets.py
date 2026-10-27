@@ -1067,12 +1067,14 @@ _SPECS = [
     DatasetSpec(
         "corporate_actions",
         schema_version=2,
-        # The daily step is EastMoney's date-filtered snapshot; TDX xdxr is
-        # the per-symbol history/backfill path and the same-day comparison
-        # source. Keep this aligned with the failover config because the
-        # registry also controls canonical row precedence in query views.
-        primary_source="eastmoney",
-        backup_source="tdx_protocol",
+        # Daily: the exchange's adjusted previous close (TDX quotes) names the
+        # session's ex-events and TDX xdxr records them; EastMoney's one
+        # market-wide query is the backup, the same-day peer, and the source
+        # of the 送/转 split TDX lacks. A weekly TDX sweep catches the rest.
+        # Keep this aligned with the failover config because the registry
+        # also controls canonical row precedence in query views.
+        primary_source="tdx_protocol",
+        backup_source="eastmoney",
         # baostock supplies actions for delisted names the live boards cannot
         # answer for; the THS dividend page is the explicit BJ repair route.
         supplementary_sources=("baostock", "ths"),

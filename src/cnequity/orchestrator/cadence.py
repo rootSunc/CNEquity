@@ -29,7 +29,15 @@ if TYPE_CHECKING:
     from cnequity.config.loader import ScheduleGroup
 
 CADENCES = ("daily", "weekly")
-DEFAULT_SCHEDULE_GROUPS = ("core", "capital", "signals", "fundamentals", "macro_risk", "research")
+DEFAULT_SCHEDULE_GROUPS = (
+    "core",
+    "capital",
+    "signals",
+    "fundamentals",
+    "macro_risk",
+    "research",
+    "actions_sweep",
+)
 
 
 def group_is_runnable(config: Any, group: ScheduleGroup) -> bool:
