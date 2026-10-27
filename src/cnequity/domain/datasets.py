@@ -1323,13 +1323,19 @@ _SPECS = [
     ),
     DatasetSpec(
         "index_constituents",
-        primary_source="eastmoney",
+        # The publishers' own books: CSI files (labelled `exchange`) daily, and
+        # CNI (`cni` membership, `cni_weights` books) for the Shenzhen indices.
+        # EastMoney fills an index only when its publisher cannot be read.
+        primary_source="exchange",
+        backup_source="eastmoney",
+        supplementary_sources=("cni_weights",),
         tier="L5",
         partition_col="as_of_date",
         partition_granularity="month",
         fetch_semantics="snapshot",
         # CNI adjustment history reconstructs 399001/399006 from ~2021-12;
-        # CSI indices still accumulate via daily EM snapshots only.
+        # CSI publishes only the current book, so CSI history is the retained
+        # daily snapshots.
         backfill_source="cni",
         # `cne repair index-snapshots` replays dated exchange index books.
         repair_sources=("exchange",),

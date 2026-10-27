@@ -2746,6 +2746,78 @@ def daily_bars_arbitration_findings(config: Config) -> list[dict]:
 STATEMENT_PEER_TOLERANCE = 1e-3
 
 
+#: Below this share of shared members an index's two books disagree structurally.
+INDEX_PEER_MIN_OVERLAP = 0.95
+
+
+def index_constituents_peer_findings(config: Config) -> list[dict]:
+    """Compare EastMoney's latest index membership with the publishers' books.
+
+    The daily step writes the publisher's book to curated and EastMoney's to
+    ``meta/source_snapshots`` (``steps/structure.step_index_constituents``).
+    One finding per run lists, per index, the members each side alone holds.
+    Known methodology gaps stay visible rather than filtered: EastMoney carries
+    no B shares and lagged the SSE Composite's ST exclusions on 2026-10-26.
+    Info unless an index's overlap falls below ``INDEX_PEER_MIN_OVERLAP``.
+    """
+    from cnequity.domain.canonical import OFFICIAL_INDEX_SOURCES
+    from cnequity.storage.source_snapshots import SnapshotStore
+
+    peer = SnapshotStore(config.meta_root).read_latest("index_constituents", source="eastmoney")
+    if peer.is_empty() or "as_of_date" not in peer.columns:
+        return []
+    day = peer.get_column("as_of_date").max()
+    root = config.curated_root / "index_constituents"
+    if not dataset_has_parquet(root):
+        return []
+    official = (
+        scan_parquet_root(root, partition_col="as_of_date")
+        .filter((pl.col("as_of_date") == day) & pl.col("source").is_in(OFFICIAL_INDEX_SOURCES))
+        .select("index_symbol", "symbol")
+        .unique()
+        .collect()
+    )
+    if official.is_empty():
+        return []
+    vendor = peer.filter(pl.col("as_of_date") == day).select("index_symbol", "symbol").unique()
+    indices: dict[str, dict] = {}
+    worst = 1.0
+    for index_symbol in sorted(set(official["index_symbol"]) & set(vendor["index_symbol"])):
+        ours = set(official.filter(pl.col("index_symbol") == index_symbol)["symbol"])
+        theirs = set(vendor.filter(pl.col("index_symbol") == index_symbol)["symbol"])
+        overlap = len(ours & theirs) / max(len(ours), 1)
+        worst = min(worst, overlap)
+        indices[index_symbol] = {
+            "official": len(ours),
+            "eastmoney": len(theirs),
+            "overlap": round(overlap, 4),
+            "official_only": sorted(ours - theirs)[:50],
+            "eastmoney_only": sorted(theirs - ours)[:50],
+        }
+    if not indices:
+        return []
+    differing = [
+        name for name, item in indices.items() if item["official_only"] or item["eastmoney_only"]
+    ]
+    return [
+        {
+            "dataset": "index_constituents",
+            "severity": "warning" if worst < INDEX_PEER_MIN_OVERLAP else "info",
+            "check": "index_constituents_peer",
+            "as_of_date": day.isoformat() if hasattr(day, "isoformat") else str(day),
+            "message": (
+                f"publisher books vs EastMoney on {day}: "
+                + (
+                    "identical for every index"
+                    if not differing
+                    else "differ for " + ", ".join(differing)
+                )
+            ),
+            "indices": indices,
+        }
+    ]
+
+
 def financial_statement_peer_findings(config: Config) -> list[dict]:
     """Compare the statements the lake holds from one source against a peer.
 

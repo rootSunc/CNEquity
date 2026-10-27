@@ -155,7 +155,7 @@ Minutes, trade snapshots and futures/options are disabled by default. Check each
 | `margin_trading` | L4 | exchange | — |
 | `northbound_flows` | L4 | eastmoney | — |
 | `northbound_holdings` | L4 | eastmoney | — |
-| `index_constituents` | L5 | eastmoney | — |
+| `index_constituents` | L5 | exchange | eastmoney |
 | `industry_index` | L5 | derived | — |
 | `industry_members` | L5 | eastmoney | — |
 | `sector_members` | L5 | eastmoney | — |

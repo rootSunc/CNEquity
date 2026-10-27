@@ -171,6 +171,28 @@ def _retain_pre_close(frame, dataset):
     )
 
 
+#: Index publishers' own books: CSI files (stored as ``exchange``) and CNI.
+OFFICIAL_INDEX_SOURCES = ("exchange", "cni", "cni_weights")
+
+
+def one_book_per_index_date(frame, dataset: str):
+    """Keep only the official book on an index-date that has one.
+
+    ``index_constituents`` is keyed per member, so two sources for the same
+    index and day would otherwise read back as the union of both books: on
+    2026-10-26 EastMoney still listed three ST stocks the SSE Composite had
+    dropped, and none of its 40 B shares. A vendor row stays only where no
+    official row exists for that index and day.
+    """
+    if dataset != "index_constituents":
+        return frame
+    columns = frame.collect_schema().names() if isinstance(frame, pl.LazyFrame) else frame.columns
+    if not {"source", "index_symbol", "as_of_date"} <= set(columns):
+        return frame
+    official = pl.col("source").is_in(OFFICIAL_INDEX_SOURCES)
+    return frame.filter(official | ~official.any().over(["index_symbol", "as_of_date"]))
+
+
 def dedupe_by_primary_key(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
     """Keep one row per registered PK, preferring the freshest provenance.
 
@@ -187,7 +209,7 @@ def dedupe_by_primary_key(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
         df = _sort_for_canonical(df, dataset)
     df = _retain_pre_close(_retain_payment_evidence(df, dataset), dataset)
     out = df.unique(subset=primary_key, keep="last", maintain_order=True)
-    return out.drop(*_HELPER_COLUMNS, strict=False)
+    return one_book_per_index_date(out.drop(*_HELPER_COLUMNS, strict=False), dataset)
 
 
 def dedupe_lazy_by_primary_key(lf: pl.LazyFrame, dataset: str) -> pl.LazyFrame:
@@ -199,6 +221,9 @@ def dedupe_lazy_by_primary_key(lf: pl.LazyFrame, dataset: str) -> pl.LazyFrame:
     if any(column in columns for column in ("fetched_at", "source", "data_version")):
         lf = _sort_for_canonical(lf, dataset)
     lf = _retain_pre_close(_retain_payment_evidence(lf, dataset), dataset)
-    return lf.unique(subset=primary_key, keep="last", maintain_order=True).drop(
-        *_HELPER_COLUMNS, strict=False
+    return one_book_per_index_date(
+        lf.unique(subset=primary_key, keep="last", maintain_order=True).drop(
+            *_HELPER_COLUMNS, strict=False
+        ),
+        dataset,
     )

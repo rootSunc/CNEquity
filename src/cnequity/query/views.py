@@ -12,6 +12,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.action_evidence import evidence_level_sql
+from cnequity.domain.canonical import OFFICIAL_INDEX_SOURCES
 from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.domain.market_profile import OTC_SCOPED_DATASETS, otc_quote_sql
 from cnequity.domain.partitions import uses_hive
@@ -199,13 +200,25 @@ def _view_select_sql(
                 ) = 1
             )
         """
-    return (
+    canonical = (
         "SELECT * FROM "
         f"{source} "
         "QUALIFY ROW_NUMBER() OVER ("
         f"PARTITION BY {partition_by} ORDER BY {order_by}"
         ") = 1"
     )
+    if name == "index_constituents" and {"source", "index_symbol", "as_of_date"} <= set(
+        columns or ()
+    ):
+        # Mirrors domain/canonical.one_book_per_index_date: an official book
+        # replaces, rather than merges with, a vendor's on the same index-date.
+        official = ", ".join(_sql_literal(item) for item in OFFICIAL_INDEX_SOURCES)
+        return (
+            f"SELECT * FROM ({canonical}) "
+            f"QUALIFY source IN ({official}) OR NOT bool_or(source IN ({official})) "
+            "OVER (PARTITION BY index_symbol, as_of_date)"
+        )
+    return canonical
 
 
 def views_connection(config: Config, *, require_data: bool = False) -> duckdb.DuckDBPyConnection:

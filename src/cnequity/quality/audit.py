@@ -29,6 +29,7 @@ from cnequity.quality.cross_checks import (
     daily_bars_calendar_findings,
     daily_bars_close_crosscheck_findings,
     financial_statement_peer_findings,
+    index_constituents_peer_findings,
     instrument_listing_order_findings,
     share_structure_vendor_findings,
     st_label_crosscheck_findings,
@@ -558,6 +559,7 @@ def _collect_lake_findings(
     if feeds("daily_bars"):
         findings.extend(daily_bars_arbitration_findings(config))
     findings.extend(financial_statement_peer_findings(config))
+    findings.extend(index_constituents_peer_findings(config))
     findings.extend(
         corporate_action_classification_findings(
             config, trade_date - timedelta(days=ADJ_RECON_LOOKBACK_DAYS), trade_date

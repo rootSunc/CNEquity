@@ -185,43 +185,160 @@ def step_sector_members(config: Config, trade_date: date, run_id: str, context: 
 
 @register_step("index_constituents", group="fundamentals", depends_on=["instruments"])
 def step_index_constituents(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """Each tracked index's membership for the session, from its publisher.
+
+    CSI's constituent and close-weight files for the CSI indices, CNI's
+    adjustment spells and weight book for the CNI ones
+    (``adapters/exchange/index_snapshots.fetch_official_books``). Measured
+    2026-10-27: the official books matched EastMoney exactly for four of the
+    five indices; for the SSE Composite, EastMoney omitted the 40 B shares and
+    two year-old listings and still carried three ST stocks the index had
+    dropped. EastMoney is fetched once: as the backup for an index whose
+    publisher cannot be read, and as a peer snapshot the audit compares against
+    the official book (``index_constituents_peer``). One index-date is written
+    from one source only.
+    """
     if getattr(config, "_backfill", False):
         return _backfill_index_constituents(config, trade_date, run_id)
-    if not config.sources.get("eastmoney", True):
-        raise SourceUnavailableError("index_constituents: eastmoney source disabled in config")
+
+    import httpx
+
+    from cnequity.adapters.exchange.index_snapshots import INDEX_COUNTS, fetch_official_books
+    from cnequity.domain.schemas import data_version_for, with_provenance
+    from cnequity.storage.source_snapshots import SnapshotStore
+
+    weight_books: list[pl.DataFrame] = []
+    findings: list[dict] = []
 
     def _fetch(d: date) -> pl.DataFrame:
-        frame = fetch_index_constituents(d, config=config)
-        if frame.is_empty():
-            return frame
-        counts = (
+        earlier = list_trading_dates(config, date.fromordinal(d.toordinal() - 20), d)
+        previous = next((day for day in reversed(earlier) if day < d), None)
+        official: list[pl.DataFrame] = []
+        failed: dict[str, str] = {}
+        with httpx.Client(timeout=60, follow_redirects=True) as client:
+            for index_symbol in INDEX_COUNTS:
+                lane = "cni" if index_symbol.endswith(".SZ") else "exchange"
+                if not config.sources.get(lane, True):
+                    failed[index_symbol] = f"{lane} source disabled"
+                    continue
+                try:
+                    members, weights = fetch_official_books(
+                        index_symbol, d, previous, client=client, config=config
+                    )
+                except (httpx.HTTPError, OSError, ValueError, RuntimeError) as exc:
+                    failed[index_symbol] = str(exc)[:200]
+                    continue
+                official.append(members)
+                weight_books.extend(weights)
+
+        vendor = pl.DataFrame()
+        if config.sources.get("eastmoney", True):
+            try:
+                vendor = fetch_index_constituents(d, config=config)
+            except (httpx.HTTPError, OSError, RuntimeError) as exc:
+                logger.warning("index_constituents: EastMoney peer unavailable: %s", exc)
+        if not vendor.is_empty():
+            vendor = vendor.with_columns(pl.lit("eastmoney").alias("source"))
+            SnapshotStore(config.meta_root).write(
+                "index_constituents",
+                with_provenance(
+                    vendor, source="eastmoney", data_version=data_version_for("index_constituents")
+                ),
+                source="eastmoney",
+                data_version=data_version_for("index_constituents"),
+                run_id=run_id,
+                batch_id="peer",
+                trade_date=d,
+            )
+        backup = (
+            vendor.filter(pl.col("index_symbol").is_in(list(failed)))
+            if failed and not vendor.is_empty()
+            else pl.DataFrame()
+        )
+        for index_symbol, reason in sorted(failed.items()):
+            covered = not backup.is_empty() and index_symbol in set(backup["index_symbol"])
+            findings.append(
+                {
+                    "dataset": "index_constituents",
+                    "severity": "warning",
+                    "check": "index_constituents_official_unavailable",
+                    "index_symbol": index_symbol,
+                    "message": (
+                        f"{index_symbol}: publisher book unavailable ({reason}); "
+                        + ("EastMoney used for this session" if covered else "no backup either")
+                    ),
+                }
+            )
+        frames = [*official, *([backup] if not backup.is_empty() else [])]
+        if not frames:
+            raise SourceUnavailableError(
+                "index_constituents: no publisher book and no EastMoney backup for any index"
+            )
+        frame = pl.concat(frames, how="diagonal_relaxed")
+        short = (
             frame.group_by("index_symbol")
             .agg(pl.col("symbol").n_unique().alias("_member_count"))
             .filter(pl.col("_member_count") < _MIN_DAILY_INDEX_MEMBERS_PER_INDEX)
         )
-        if not counts.is_empty():
-            details = ", ".join(
-                f"{row['index_symbol']}={row['_member_count']}"
-                for row in counts.iter_rows(named=True)
-            )
+        if not short.is_empty():
             record_source_gap(
                 "index_constituents",
-                "index_constituents: incomplete daily snapshot; "
-                f"each index needs at least {_MIN_DAILY_INDEX_MEMBERS_PER_INDEX} "
-                f"unique members ({details})",
+                "index_constituents: incomplete daily snapshot ("
+                + ", ".join(
+                    f"{r['index_symbol']}={r['_member_count']}" for r in short.iter_rows(named=True)
+                )
+                + ")",
                 frame=frame,
             )
         return frame
 
-    return run_incremental_fetched(
+    result = run_incremental_fetched(
         config,
         trade_date,
         run_id,
         "index_constituents",
         _fetch,
-        source="eastmoney",
+        source="exchange",
         date_col="as_of_date",
     )
+    # Weight books carry their own month-end date and are re-served every day
+    # until the next one; stage a book only when the lake does not hold it.
+    held = _held_weight_books(config)
+    for book in weight_books:
+        day = book["as_of_date"][0]
+        if (book["index_symbol"][0], day) in held:
+            continue
+        write_fetched(
+            config,
+            run_id,
+            "index_constituents",
+            book,
+            source=str(book["source"][0]),
+            batch_id=f"weights-{book['index_symbol'][0]}-{day.isoformat()}",
+        )
+    if findings:
+        context_updates = result.setdefault("context_updates", {})
+        context_updates.setdefault("audit_findings", []).extend(findings)
+        if result.get("status") in (None, "success"):
+            result["status"] = "degraded"
+    return result
+
+
+def _held_weight_books(config: Config) -> set[tuple[str, date]]:
+    """(index, date) pairs for which the lake already holds a weighted book."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
+    root = config.curated_root / "index_constituents"
+    if not dataset_has_parquet(root):
+        return set()
+    held = (
+        scan_parquet_root(root, partition_col="as_of_date")
+        .filter(pl.col("weight").is_not_null())
+        .select("index_symbol", "as_of_date")
+        .unique()
+        .collect()
+    )
+    return set(held.iter_rows())
 
 
 def _backfill_index_constituents(config: Config, trade_date: date, run_id: str) -> dict:

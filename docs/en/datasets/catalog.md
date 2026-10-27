@@ -276,7 +276,7 @@ watermarks and compact never need to know which path was taken.
 | Dataset | Partition key | Primary key | Semantics | Watermark | Primary source |
 |--------|--------|------|------|------|------|
 | sector_members | as_of_date | symbol, sector_code, as_of_date | snapshot | ✓ | eastmoney |
-| index_constituents | as_of_date | index_symbol, symbol, as_of_date | snapshot | ✓ | eastmoney |
+| index_constituents | as_of_date | index_symbol, symbol, as_of_date | snapshot | ✓ | exchange (CSI files) / cni; backup eastmoney |
 | industry_members | as_of_date | symbol, classification_system, as_of_date | snapshot | ✓ | eastmoney |
 | industry_index | trade_date (yearly) | trade_date, industry_code, level, weighting | derived | ✓ | derived (industry_members × hfq daily_bars) |
 
@@ -286,6 +286,8 @@ Snapshot datasets accumulate only "one membership record per day"; historical pe
 
 Historical backfill (C2): `cne backfill industry_members` = Shenwan SwClass2021 monthly (`classification_system=sw`, from 2020);
 `cne backfill index_constituents` = CNI sample-adjustment history (399001/399006, from about 2021-12). Other indices, including CSI 300 and STAR 50, rely on accumulated EM snapshots and the dated official files described below; earlier history can remain missing. Current membership cannot be backdated without survivorship bias; the EM adapter accepts only the current closed session. Historical reads use retained snapshots, and membership before the earliest snapshot is unknown.
+
+Daily (from this release): the SSE Composite, CSI 300 and STAR 50 come from CSI's daily constituent files (source `exchange`), and Shenzhen Component and ChiNext from CNI's adjustment spells expanded to the session (`cni`); CSI month-end weight files and CNI weight books are kept on their own dates. When an index's publisher cannot be read, EastMoney fills that index alone for the session and the audit reports `index_constituents_official_unavailable`. EastMoney's membership is also kept as a peer snapshot, and the audit's `index_constituents_peer` lists the members each side alone holds (EastMoney carries no B shares). One index-date reads from one source: an official book hides EastMoney's rows for that index and day; EastMoney snapshots stored since July stay as they are and are read only on days without an official book.
 
 Neither EM nor CNI adjustment history supplies weights: `weight=null` means unavailable and must not be treated as a real zero or inferred equal weight. Query each index/source's snapshot range and count directly: `cne query --sql "SELECT index_symbol, source, min(as_of_date), max(as_of_date), count(DISTINCT as_of_date) FROM index_constituents GROUP BY ALL ORDER BY ALL"`. Zero weight placeholders left by 0.17 or earlier are turned into nulls by `cne migrate`, without inventing historical membership or weights.
 

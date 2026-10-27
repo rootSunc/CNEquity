@@ -276,7 +276,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 |
 |--------|--------|------|------|------|------|
 | sector_members | as_of_date | symbol, sector_code, as_of_date | snapshot | ✓ | eastmoney |
-| index_constituents | as_of_date | index_symbol, symbol, as_of_date | snapshot | ✓ | eastmoney |
+| index_constituents | as_of_date | index_symbol, symbol, as_of_date | snapshot | ✓ | exchange（中证文件）/ cni；备源 eastmoney |
 | industry_members | as_of_date | symbol, classification_system, as_of_date | snapshot | ✓ | eastmoney |
 | industry_index | trade_date（按年） | trade_date, industry_code, level, weighting | derived | ✓ | derived (industry_members × hfq daily_bars) |
 
@@ -286,6 +286,8 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 
 历史回填（C2）：`cne backfill industry_members` = 申万 SwClass2021 月度（`classification_system=sw`，2020 起）；
 `cne backfill index_constituents` = 国证调样史（399001/399006，约 2021-12 起）。沪深 300、科创 50 等其他指数依赖采集后积累的 EM 快照及下面的官方带日期文件；更早历史仍可能缺失。当前名单不能回填到更早日期，否则会产生幸存者偏差；EM 适配器只接受当前已收盘交易日。历史读取只使用当时已存的快照，早于最早快照的成员关系未知。
+
+日更（自本版起）：上证指数、沪深 300、科创 50 取中证每日成分文件（来源记为 `exchange`），深证成指、创业板指按国证调样区间推出当日成分（`cni`）；中证月末权重文件与国证权重文件按其自身日期另存。某指数的官方文件当日取不到时，只为该指数用东财补当天快照，并在审计里报 `index_constituents_official_unavailable`。东财成分每天另存为对照快照，审计 `index_constituents_peer` 列出两边各自独有的成员（东财不含 B 股）。同一指数、同一天只读一个来源：有官方成分时忽略东财的行；7 月以来已存的东财快照原样保留，只在当天没有官方成分时被读取。
 
 EM 和国证调样史都不提供成分权重，`weight=null`，不能把它当成真实零权重或自动推断为等权。每个指数、来源的快照起止与数量可直接查询：`cne query --sql "SELECT index_symbol, source, min(as_of_date), max(as_of_date), count(DISTINCT as_of_date) FROM index_constituents GROUP BY ALL ORDER BY ALL"`。0.17 及更早版本留下的权重占位零由 `cne migrate` 改为空值，不制造缺失的历史成分或权重。
 

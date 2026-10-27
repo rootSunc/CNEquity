@@ -163,6 +163,16 @@ def test_sector_members_rejects_a_single_board_with_enough_rows(cfg, monkeypatch
         st.step_sector_members(cfg, date(2024, 6, 28), "run-one-board", {})
 
 
+def _publishers_unreachable(monkeypatch):
+    """The publisher books fail, so EastMoney serves as the per-index backup."""
+    from cnequity.adapters.exchange import index_snapshots
+
+    def unreachable(*args, **kwargs):
+        raise ValueError("publisher unreachable in tests")
+
+    monkeypatch.setattr(index_snapshots, "fetch_official_books", unreachable)
+
+
 def test_index_constituents_daily_writes(cfg, monkeypatch):
     StateStore(cfg.meta_root).set_date("index_constituents", date(2024, 6, 27))
 
@@ -177,6 +187,7 @@ def test_index_constituents_daily_writes(cfg, monkeypatch):
         )
 
     monkeypatch.setattr(st, "fetch_index_constituents", fake_fetch)
+    _publishers_unreachable(monkeypatch)
     result = st.step_index_constituents(cfg, date(2024, 6, 28), "run-1", {})
     assert result["rows_written"] == 50
 
@@ -193,6 +204,7 @@ def test_index_constituents_daily_rejects_partial_snapshot(cfg, monkeypatch):
         )
 
     monkeypatch.setattr(st, "fetch_index_constituents", fake_fetch)
+    _publishers_unreachable(monkeypatch)
 
     with pytest.raises(RuntimeError, match="incomplete daily snapshot"):
         st.step_index_constituents(cfg, date(2024, 6, 28), "run-partial", {})
