@@ -53,11 +53,11 @@ def test_trading_status_has_a_backup_in_a_different_failure_domain():
 
     assert report.backup_gate.passed is True
     record = next(r for r in report.datasets if r["dataset"] == "trading_status")
-    assert record["primary"] == "eastmoney"
-    assert record["backup"] == "exchange"
+    assert record["primary"] == "exchange"
+    assert record["backup"] == "eastmoney"
     assert record["backup_coverage"]["independent"] is True
-    # Which is the whole point: EastMoney being unreachable must not take the
-    # backup with it.
+    # Which is the whole point: one of the two being unreachable must not take
+    # the other with it.
     assert not set(record["backup_coverage"]["primary_domains"]) & set(
         record["backup_coverage"]["backup_domains"]
     )

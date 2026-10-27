@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import logging
+import time
 import warnings
 from datetime import date, datetime, timezone
 
@@ -12,7 +14,15 @@ from cnequity.domain.rate_limit import source_request
 from cnequity.file_lock import exclusive_lock
 from cnequity.storage.atomic import write_json_atomic
 
+logger = logging.getLogger(__name__)
+
 _TTL_SECONDS = 300
+# Seconds before each retry of a board request. A transport failure is retried;
+# a ValueError is the board's own answer (wrong session, mid-session, missing
+# columns) and is not. One reset from SZSE on 2026-10-27 cost every Shenzhen
+# stock its status, and the same request succeeded five seconds later.
+_RETRY_DELAYS = (2.0, 5.0)
+_sleep = time.sleep
 _SOURCE = "exchange"
 _TIMEOUT_SECONDS = 60.0
 _SSE_HEADERS = {"Referer": "https://www.sse.com.cn/"}
@@ -51,12 +61,26 @@ def _cached(config, exchange: str, day: date, fetch):
                     return item["payload"]
             except (OSError, ValueError, KeyError, TypeError):
                 pass
-        payload = fetch()
+        payload = _with_retry(fetch, exchange)
         write_json_atomic(
             path,
             {"captured_at": datetime.now(timezone.utc).isoformat(), "payload": payload},
         )
         return payload
+
+
+def _with_retry(fetch, exchange: str):
+    for delay in (*_RETRY_DELAYS, None):
+        try:
+            return fetch()
+        except (ValueError, AssertionError):
+            raise
+        except Exception as exc:  # noqa: BLE001 — transport errors are retried
+            if delay is None:
+                raise
+            logger.info("%s board request failed (%s); retrying in %.0fs", exchange, exc, delay)
+            _sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def sse_snapshot(

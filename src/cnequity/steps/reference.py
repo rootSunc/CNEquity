@@ -30,10 +30,10 @@ from cnequity.domain.symbols import (
     parse_symbol,
 )
 from cnequity.domain.trading_status import (
-    CACHED_SOURCE,
     CARRY_SESSIONS,
     DELISTED_SOURCE,
     STATUS_DELISTED,
+    cached_source,
     impossible_delistings,
     last_first_hand_status,
     split_before_listing,
@@ -42,7 +42,6 @@ from cnequity.i18n import N_
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.outcomes import (
     SOURCE_LIMIT_REASONS,
-    SourcePayloadError,
     SourceUnavailableError,
     error_kind,
     result_is_usable,
@@ -80,11 +79,6 @@ logger = logging.getLogger(__name__)
 _CACHED_TRADING_STATUS_MAX_SESSIONS = CARRY_SESSIONS
 # Calendar span searched for those sessions; longer than any exchange closure.
 _CACHED_TRADING_STATUS_SEARCH_SPAN = timedelta(days=30)
-_CACHED_SOURCE = CACHED_SOURCE
-
-
-def _first_hand_status(history: pl.DataFrame) -> pl.DataFrame:
-    return last_first_hand_status(history.drop("fetched_at", strict=False))
 
 
 # Flush + checkpoint on the same boundary as Baostock's anti-blacklist batch.
@@ -1002,11 +996,13 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
     # here. The one genuinely independent ST reading, baostock's per-day `isST`,
     # is a per-symbol sweep and stays where it is affordable: the `--backfill`
     # path below. See issue #3.
-    fallback_days: list[date] = []
-    fallback_errors: list[str] = []
-    # (day, from the exchange boards, carried forward, left without a row)
-    fallback_coverage: list[tuple[date, int, int, int]] = []
+    # Per session: (day, exchange boards, EastMoney, carried forward, dated
+    # symbols left without a row, undated codes left without a row).
+    coverage: list[tuple[date, int, int, int, int, int]] = []
+    source_errors: list[str] = []
+    board_failures: list[str] = []
     cached_snapshot: pl.DataFrame | None = None
+    list_dates: dict[str, date | None] | None = None
 
     def _cached_status(day: date) -> pl.DataFrame | None:
         """Carry each symbol's last first-hand status forward, or None.
@@ -1044,7 +1040,9 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
             except Exception as exc:  # noqa: BLE001 — fallback is best effort
                 logger.warning("cached trading_status unavailable: %s", exc)
                 return None
-            cached_snapshot = _first_hand_status(history)
+            cached_snapshot = last_first_hand_status(
+                history.drop("fetched_at", strict=False), with_source=True
+            )
 
         evidence = cached_snapshot.filter(
             (pl.col("evidence_date") >= oldest) & pl.col("symbol").is_in(_live_symbols(day))
@@ -1056,6 +1054,11 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
                 day,
             )
             return None
+        origin = (
+            pl.col("source").map_elements(cached_source, return_dtype=pl.Utf8)
+            if "source" in evidence.columns
+            else pl.lit(cached_source(None))
+        )
         return evidence.select(
             "symbol",
             pl.lit(day).alias("trade_date"),
@@ -1064,6 +1067,9 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
             # An outage must not clear a risk-warning label. Unknown stays
             # unknown rather than becoming a claim of "clean".
             "risk_warning",
+            # Named by the reading it repeats, so a carried exchange row is
+            # not filed under EastMoney.
+            origin.alias("source"),
         )
 
     def _fetch(day: date):
@@ -1116,10 +1122,14 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
 
             try:
                 result = fetch_trading_status_exchange(sh_sz, day, config=config)
+                board_failures.extend(
+                    f"{day.isoformat()}: {name}: {why}" for name, why in result.failures.items()
+                )
                 if not result.is_empty:
                     frames.append(result.rows.with_columns(pl.lit("exchange").alias("source")))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("trading_status: SH/SZ boards unavailable for %s: %s", day, exc)
+                board_failures.append(f"{day.isoformat()}: SH/SZ boards: {exc}")
 
         # The equity boards above carry no ETF or LOF; EastMoney was the only
         # feed that did, so without this every fund goes unanswered on an outage.
@@ -1133,10 +1143,14 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
 
             try:
                 result = fetch_fund_trading_status_exchange(funds, day, config=config)
+                board_failures.extend(
+                    f"{day.isoformat()}: {name}: {why}" for name, why in result.failures.items()
+                )
                 if not result.is_empty:
                     frames.append(result.rows.with_columns(pl.lit("exchange").alias("source")))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("trading_status: fund boards unavailable for %s: %s", day, exc)
+                board_failures.append(f"{day.isoformat()}: fund boards: {exc}")
 
         if bj and config.sources.get("bse", True):
             from cnequity.adapters.bse.trading_status import fetch_trading_status_bse
@@ -1150,6 +1164,7 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
                     frames.append(result.rows.with_columns(pl.lit("bse").alias("source")))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("trading_status: BSE board unavailable for %s: %s", day, exc)
+                board_failures.append(f"{day.isoformat()}: BSE board: {exc}")
 
         if not frames:
             return None
@@ -1158,86 +1173,113 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
         return pl.concat(frames, how="diagonal_relaxed")
 
     def _fetch_vendor(day: date):
-        nonlocal cached_snapshot
+        """The exchanges' own boards first, EastMoney for what they leave, then the cache.
+
+        The boards publish every listed SH/SZ/BJ security, so they answer
+        nearly the whole market; EastMoney is asked only for the remainder and
+        is skipped outright while push2 is paused. Each row names its owner.
+        """
+        nonlocal cached_snapshot, list_dates
         day_symbols = _live_symbols(day)
         if not day_symbols:
             # Every name in the universe had already delisted by this session.
             # Asking the boards about nothing is a wasted request, not a state
             # the adapters are expected to handle.
             return pl.DataFrame()
-        expected_symbols = set(day_symbols)
-        try:
-            frame = fetch_trading_status(
-                day_symbols,
-                day,
-                rate_limit=rl,
-                allow_mock=config.tdx_allow_mock,
-                config=config,
-            )
-            if frame.is_empty():
-                raise SourceUnavailableError("trading_status: no rows returned")
-            if "symbol" not in frame.columns:
-                raise SourcePayloadError("trading_status: response is missing the symbol column")
-            observed_symbols = set(frame.get_column("symbol").drop_nulls().to_list())
-            missing = sorted(expected_symbols - observed_symbols)
-            unexpected = sorted(observed_symbols - expected_symbols)
-            if missing or unexpected:
-                details: list[str] = []
-                if missing:
-                    details.append(f"missing {len(missing)} requested symbol(s)")
-                if unexpected:
-                    details.append(f"returned {len(unexpected)} unexpected symbol(s)")
-                raise RuntimeError(
-                    "trading_status: incomplete daily snapshot; " + "; ".join(details)
+        expected = set(day_symbols)
+        parts: list[pl.DataFrame] = []
+        exchange_rows = _exchange_status(day, day_symbols)
+        if exchange_rows is not None and not exchange_rows.is_empty():
+            parts.append(exchange_rows)
+        covered = set(exchange_rows.get_column("symbol").to_list()) if parts else set()
+        boards = len(covered)
+
+        vendor = 0
+        remaining = sorted(expected - covered)
+        if remaining:
+            try:
+                frame = fetch_trading_status(
+                    remaining,
+                    day,
+                    rate_limit=rl,
+                    allow_mock=config.tdx_allow_mock,
+                    config=config,
                 )
-            frame = _beijing_status(config, frame, day, day_symbols)
-            cached_snapshot = _first_hand_status(
-                frame.with_columns(pl.lit(day).alias("trade_date"))
-            )
-            return frame
-        except Exception as exc:  # noqa: BLE001 — EastMoney outage is advisory here
-            # A second opinion before a stale one. The exchanges publish every
-            # listed security with its OHLC and its 证券简称, which is both
-            # facts this dataset needs: a halted name is listed with its
-            # open/high/low at zero beside a reference close, and ST is carried
-            # in the name. Measured against EastMoney for 2026-09-15 over 5,219
-            # symbols, ST agreed on 100.000% and halts on 99.923% — and all
-            # four disagreements were EastMoney calling a name halted while the
-            # exchange published a full session for it.
-            #
-            # The cached snapshot stays underneath: it is the lake's own
-            # previous answer, which is not a second opinion but the same one
-            # a day older, and Beijing is on neither exchange board.
-            exchange_rows = _exchange_status(day, day_symbols)
-            covered = (
-                set(exchange_rows.get_column("symbol").to_list())
-                if exchange_rows is not None and not exchange_rows.is_empty()
-                else set()
-            )
+                if frame.is_empty() or "symbol" not in frame.columns:
+                    raise SourceUnavailableError("trading_status: no rows returned")
+                missing = set(remaining) - set(frame.get_column("symbol").drop_nulls().to_list())
+                if missing:
+                    # EastMoney answers every code it is asked about; a short
+                    # reply is a broken payload, not a set of readings to keep.
+                    raise RuntimeError(
+                        "trading_status: incomplete daily snapshot; "
+                        f"missing {len(missing)} requested symbol(s)"
+                    )
+                frame = _beijing_status(config, frame, day, remaining).filter(
+                    pl.col("symbol").is_in(remaining)
+                )
+                if "source" not in frame.columns:
+                    frame = frame.with_columns(pl.lit("eastmoney").alias("source"))
+                parts.append(frame)
+                vendor = frame.height
+                covered |= set(frame.get_column("symbol").to_list())
+            except Exception as exc:  # noqa: BLE001 — EastMoney is the backup here
+                source_errors.append(f"{day.isoformat()}: {exc}")
+
+        first_hand = (
+            pl.concat(parts, how="diagonal_relaxed").with_columns(pl.lit(day).alias("trade_date"))
+            if parts
+            else None
+        )
+        carried = 0
+        remaining = sorted(expected - covered)
+        if remaining:
             cached = _cached_status(day)
-            if cached is None and not covered:
-                raise
-            fallback_days.append(day)
-            fallback_errors.append(f"{day.isoformat()}: {exc}")
-            parts = [exchange_rows] if covered else []
-            carried = 0
             if cached is not None:
-                remainder = cached.filter(~pl.col("symbol").is_in(sorted(covered)))
+                remainder = cached.filter(pl.col("symbol").is_in(remaining))
                 carried = remainder.height
                 if carried:
                     parts.append(remainder)
-            out = parts[0] if len(parts) == 1 else pl.concat(parts, how="diagonal_relaxed")
-            unanswered = len(expected_symbols - set(out.get_column("symbol").to_list()))
-            fallback_coverage.append((day, len(covered), carried, unanswered))
-            logger.warning(
-                "trading_status: EastMoney unavailable for %s; %d symbol(s) from the "
-                "exchange boards, %d carried from first-hand status, %d left without a row",
-                day,
-                len(covered),
-                carried,
-                unanswered,
+        if first_hand is not None:
+            today = last_first_hand_status(first_hand, with_source=True)
+            cached_snapshot = (
+                today
+                if cached_snapshot is None
+                else pl.concat(
+                    [
+                        cached_snapshot.filter(~pl.col("symbol").is_in(today["symbol"].to_list())),
+                        today.select(cached_snapshot.columns),
+                    ],
+                    how="vertical_relaxed",
+                )
             )
-            return out
+        if not parts:
+            raise SourceUnavailableError(
+                f"trading_status: no source answered for {day}; " + "; ".join(source_errors[-1:])
+            )
+        out = parts[0] if len(parts) == 1 else pl.concat(parts, how="diagonal_relaxed")
+        unanswered = expected - set(out.get_column("symbol").to_list())
+        if unanswered and list_dates is None:
+            from cnequity.steps.common import instrument_metadata
+
+            meta = instrument_metadata(config)
+            list_dates = dict(zip(meta["symbol"], meta["list_date"], strict=True))
+        # An undated code that no board lists is a placeholder or not listed
+        # yet (89 of the 97 on 2026-10-27), not a security missing its status.
+        # A code instruments does not know at all is counted as listed.
+        undated = sum(1 for sym in unanswered if sym in list_dates and list_dates[sym] is None)
+        coverage.append((day, boards, vendor, carried, len(unanswered) - undated, undated))
+        if carried or len(unanswered) > undated:
+            logger.warning(
+                "trading_status %s: %d from the exchange boards, %d from EastMoney, %d carried "
+                "forward, %d listed symbol(s) without a row",
+                day,
+                boards,
+                vendor,
+                carried,
+                len(unanswered) - undated,
+            )
+        return out
 
     df, _findings = fetch_incremental_daily(
         config,
@@ -1273,42 +1315,47 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
             result["context_updates"] = {"audit_findings": _findings}
         return result
     findings = [*_findings, *unlisted_findings]
-    unanswered = sum(missing for *_, missing in fallback_coverage)
-    if fallback_days:
+    unanswered = sum(row[4] for row in coverage)
+    carried_total = sum(row[3] for row in coverage)
+    degraded = bool(board_failures) or unanswered > 0
+    undated_total = sum(row[5] for row in coverage)
+    if coverage and (carried_total or unanswered or undated_total or board_failures):
         findings.append(
             {
                 "dataset": "trading_status",
-                "severity": "warning",
+                "severity": "warning" if degraded else "info",
                 "check": "trading_status_cached_fallback",
                 "message": (
-                    f"EastMoney unavailable for {len(fallback_days)} day(s); used the exchange "
-                    "boards and each symbol's last first-hand status; "
-                    f"{unanswered} live symbol-day(s) have no status row"
+                    f"{carried_total} symbol-day(s) carried forward from an earlier reading; "
+                    f"{unanswered} listed symbol-day(s) have no status row; "
+                    f"{undated_total} undated code-day(s) no board lists"
+                    + (
+                        f"; {len(board_failures)} exchange board(s) failed"
+                        if board_failures
+                        else ""
+                    )
                 ),
-                "days": [day.isoformat() for day in fallback_days],
                 "coverage": [
                     {
                         "trade_date": day.isoformat(),
                         "exchange_boards": boards,
+                        "eastmoney": vendor,
                         "carried_forward": carried,
                         "without_row": missing,
+                        "undated_without_row": undated,
                     }
-                    for day, boards, carried, missing in fallback_coverage
+                    for day, boards, vendor, carried, missing, undated in coverage
                 ],
-                "errors": fallback_errors[:3],
+                "errors": (board_failures + source_errors)[:3],
             }
         )
-    # This adapter is an EastMoney current-state snapshot even though it is
-    # exposed through the TDX facade. Preserve the actual evidence owner so
-    # downstream PIT precedence never mistakes it for exchange history.
-    source = _CACHED_SOURCE if fallback_days else "eastmoney"
-    # Rows that named their own owner keep it — a delisting is a fact from
-    # `instruments`, not the vendor's answer. Everything else is the snapshot.
+    # Every part above names its owner; a row that does not is EastMoney's,
+    # and a delisting keeps the label `instruments` gave it.
     if "source" in df.columns:
-        df = df.with_columns(pl.col("source").fill_null(source))
-    df = with_provenance(df, source=source, data_version="v1")
+        df = df.with_columns(pl.col("source").fill_null("eastmoney"))
+    df = with_provenance(df, source="eastmoney", data_version="v1")
     result = write_simple(config, run_id, "trading_status", df)
-    if fallback_days:
+    if degraded:
         result["status"] = "warning"
         if unanswered:
             result["coverage_status"] = "partial"

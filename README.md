@@ -126,7 +126,7 @@ print(bars.tail())
 | `instruments` | L0 | tdx_protocol | baostock |
 | `etf_profiles` | L0 | exchange | — |
 | `trading_calendar` | L0 | tdx_protocol | exchange |
-| `trading_status` | L0 | eastmoney | exchange |
+| `trading_status` | L0 | exchange | eastmoney |
 | `adj_factors` | L1 | sina | baostock |
 | `daily_bars` | L1 | tdx_protocol | eastmoney |
 | `delisting_events` | L1 | derived | — |

@@ -654,3 +654,40 @@ def test_the_daily_exchange_snapshot_records_traded_funds_too(tmp_path, monkeypa
     assert written == len(expected)
     snapshot = SnapshotStore(cfg.meta_root).read_latest("trading_status", source="exchange")
     assert sorted(snapshot.get_column("symbol").to_list()) == expected
+
+
+def test_a_board_request_is_retried_after_a_transport_error(tmp_path, monkeypatch):
+    from cnequity.adapters.exchange import board_snapshot
+    from cnequity.config import Config
+
+    monkeypatch.setattr(board_snapshot, "_sleep", lambda _s: None)
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        if len(calls) == 1:
+            raise ConnectionError("Recv failure: Connection reset by peer")
+        return {"rows": 1}
+
+    cfg = Config(data_root=tmp_path / "data")
+    assert board_snapshot._cached(cfg, "szse", date(2026, 10, 27), fetch) == {"rows": 1}
+    assert len(calls) == 2
+
+
+def test_a_board_answer_that_fails_validation_is_not_retried(tmp_path, monkeypatch):
+    import pytest
+
+    from cnequity.adapters.exchange import board_snapshot
+    from cnequity.config import Config
+
+    monkeypatch.setattr(board_snapshot, "_sleep", lambda _s: None)
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        raise ValueError("SSE snapshot is mid-session")
+
+    cfg = Config(data_root=tmp_path / "data")
+    with pytest.raises(ValueError):
+        board_snapshot._cached(cfg, "sse", date(2026, 10, 27), fetch)
+    assert len(calls) == 1

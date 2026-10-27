@@ -54,9 +54,10 @@
 | 项 | 值 |
 |------|-------|
 | 波次 | `trading_status`（core；依赖 `instruments`，排在它之后） |
-| 主源 | eastmoney（ST 板 + 停牌名单） |
-| 备源 | exchange（沪深交易所行情板，独立故障域） |
-| 补充源 | derived（`derived_bar_gap` / `derived_delisted` / `derived_traded`）；bse（北交所行情板） |
+| 主源 | exchange（沪深交易所股票与基金行情板，北交所行情板；板块请求失败退避重试） |
+| 备源 | eastmoney（ST 板 + 停牌名单，只问行情板没答到的代码；push2 暂停时跳过） |
+| 补充源 | derived（`derived_bar_gap` / `derived_delisted` / `derived_traded`）；bse（北交所公告） |
+| 沿用 | 都答不到的代码沿用 5 个交易日内最近一次一手读数，来源标为 `<原来源>_cached`（如 `exchange_cached`）；2026-10-28 前写入的沿用行一律标 `eastmoney_cached` |
 | 频率 | 每日 |
 | 主键 | (symbol, trade_date) |
 | 历史 ST 回补 | Baostock 覆盖 SH/SZ；可选 Tushare Pro `bak_basic`（2016）+ `stock_st`（2017-01-01 起）覆盖 BJ，需 token；缺少源端覆盖时审计保持 warning |

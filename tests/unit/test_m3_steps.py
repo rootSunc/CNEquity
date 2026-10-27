@@ -379,8 +379,10 @@ def test_trading_status_outage_writes_no_row_for_symbols_without_evidence(cfg, m
         {
             "trade_date": "2024-06-28",
             "exchange_boards": 0,
+            "eastmoney": 0,
             "carried_forward": 1,
             "without_row": 1,
+            "undated_without_row": 0,
         }
     ]
     assert result["status"] == "warning"
@@ -670,3 +672,29 @@ def test_ca_backfill_skips_optional_backup_snapshot_by_default(tmp_path, monkeyp
     out = events.step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
 
     assert out["rows_written"] == 0
+
+
+def test_a_carried_row_is_labelled_by_the_reading_it_repeats(cfg, monkeypatch):
+    """A day carried from the exchange's reading is not filed under EastMoney."""
+    from cnequity.domain.schemas import with_provenance
+    from cnequity.steps import reference
+
+    status_part = cfg.curated_root / "trading_status" / "trade_date=2024-06"
+    status_part.mkdir(parents=True)
+    with_provenance(
+        pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [date(2024, 6, 27)],
+                "is_trading": [True],
+                "status": ["normal"],
+            }
+        ),
+        source="exchange",
+        data_version="v1",
+    ).write_parquet(status_part / "part-merged.parquet")
+    _eastmoney_down(reference, monkeypatch, ["600519.SH"])
+
+    reference.step_trading_status(cfg, date(2024, 6, 28), "run-carried", {})
+
+    assert _staged_status(cfg)["source"].to_list() == ["exchange_cached"]

@@ -84,6 +84,9 @@ def _frame(rows: list[dict]) -> pl.DataFrame:
         # Written after the close of the day it is stamped on, but carried
         # from an earlier session: still not an observation of this one.
         (_status_row("eastmoney_cached", SAME_SESSION), EVIDENCE_RESTATED),
+        # A carried exchange reading is no more an observation than EastMoney's.
+        (_status_row("exchange_cached", SAME_SESSION), EVIDENCE_RESTATED),
+        (_status_row("bse_cached", RESTATED), EVIDENCE_RESTATED),
         (_status_row("tdx_protocol", RESTATED), EVIDENCE_RESTATED),
         (_status_row(DERIVED_BAR_GAP_SOURCE, RESTATED), EVIDENCE_DERIVED),
         (_status_row("derived_delisted", None), EVIDENCE_POINT_IN_TIME),
@@ -104,6 +107,7 @@ def test_the_three_implementations_agree():
         _status_row("eastmoney", RESTATED),
         _status_row("eastmoney_cached", RESTATED),
         _status_row("eastmoney_cached", SAME_SESSION),
+        _status_row("exchange_cached", SAME_SESSION),
         _status_row(DERIVED_BAR_GAP_SOURCE, RESTATED),
         _status_row("derived_delisted", None),
         _status_row("tdx_protocol", None),

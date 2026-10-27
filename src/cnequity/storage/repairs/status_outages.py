@@ -24,11 +24,11 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import data_version_for
 from cnequity.domain.trading_status import (
-    CACHED_SOURCE,
+    CACHED_SOURCES,
     CARRY_SESSIONS,
+    cached_source,
     last_first_hand_status,
     split_before_listing,
 )
@@ -39,7 +39,9 @@ from cnequity.storage.repairs.status_listing_window import listing_spans
 from cnequity.storage.revisions import RevisionStore
 
 _SEARCH_SPAN = timedelta(days=30)
-PRIMARY_SOURCE = DATASETS["trading_status"].primary_source
+# The feed whose outages this replays. EastMoney was the daily primary when
+# those days were written; the exchange boards have been since 2026-10-28.
+PRIMARY_SOURCE = "eastmoney"
 #: An exchange counts as down for a session when the primary feed answered
 #: fewer than this share of the symbols it answered there in the sessions
 #: before. A board that drops a few names on a healthy day is no outage, and
@@ -84,7 +86,7 @@ def plan_status_outages(
     """
     delisted = delisted or {}
     dropped = history.filter(
-        (pl.col("source") == CACHED_SOURCE) & pl.col("trade_date").is_between(start, end)
+        pl.col("source").is_in(list(CACHED_SOURCES)) & pl.col("trade_date").is_between(start, end)
     ).select("symbol", "trade_date")
     exchange = pl.col("symbol").str.split(".").list.last()
     answered_by_feed = {
@@ -111,13 +113,16 @@ def plan_status_outages(
         if not down:
             continue
         answered = (
-            history.filter((pl.col("trade_date") == day) & (pl.col("source") != CACHED_SOURCE))
+            history.filter(
+                (pl.col("trade_date") == day) & ~pl.col("source").is_in(list(CACHED_SOURCES))
+            )
             .get_column("symbol")
             .unique()
             .to_list()
         )
         evidence = last_first_hand_status(
-            history.filter(pl.col("trade_date").is_between(prior[0], prior[-1]))
+            history.filter(pl.col("trade_date").is_between(prior[0], prior[-1])),
+            with_source=True,
         ).filter(~pl.col("symbol").is_in(answered) & exchange.is_in(down))
         gone = [symbol for symbol, when in delisted.items() if when <= day]
         if gone:
@@ -126,7 +131,8 @@ def plan_status_outages(
             continue
         carried.append(
             evidence.drop("evidence_date").with_columns(
-                pl.lit(day).alias("trade_date"), pl.lit(CACHED_SOURCE).alias("source")
+                pl.lit(day).alias("trade_date"),
+                pl.col("source").map_elements(cached_source, return_dtype=pl.Utf8),
             )
         )
     rows = pl.concat(carried, how="vertical") if carried else pl.DataFrame()
@@ -178,7 +184,9 @@ def _repair_locked(config: Config, *, start: date, end: date, apply: bool) -> di
 
     def rebuild(frame: pl.DataFrame) -> pl.DataFrame:
         days = frame.get_column("trade_date").unique().to_list()
-        stale = (pl.col("source") == CACHED_SOURCE) & pl.col("trade_date").is_between(start, end)
+        stale = pl.col("source").is_in(list(CACHED_SOURCES)) & pl.col("trade_date").is_between(
+            start, end
+        )
         added = carried.filter(pl.col("trade_date").is_in(days)) if carried.height else carried
         if added.is_empty() and frame.filter(stale).is_empty():
             return frame

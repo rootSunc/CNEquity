@@ -198,7 +198,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 | instruments | —（单文件 merge） | symbol | by_date | — | tdx_protocol | EM 分别从 A 股与 ETF/LOF clist 补 list_date；已发布交易所 ETF 目录补基金缺失上市日；baostock 回填退市股（`cne backfill instruments`）；merge 保留退市 |
 | etf_profiles | as_of_date（按年） | symbol, as_of_date | snapshot | — | exchange | 上交所 ETF 细分类、深交所 ETF/基金目录及逐代码核验的官方指数方案；仅有充分境内股票指数证据的记录进入研究池。未知类别保留 unverified，不能回填未观测的历史快照 |
 | trading_calendar | trade_date | trade_date | by_date | ✓ | tdx_protocol | 备源交易所 CSV；种子 2016–2027 |
-| trading_status | trade_date（按月） | symbol, trade_date | by_date | ✓ | eastmoney | baostock ST 回填；派生停牌写月分区。`status`（normal/suspended/**delisted**）与 `risk_warning`（ST/*ST）是两列——旧版单列会让停牌冲掉 ST 标记；退市行由 `instruments` 判定并标 `derived_delisted`。旧湖读取自动兼容，物理迁移见 [schema](schema.md#trading_status) |
+| trading_status | trade_date（按月） | symbol, trade_date | by_date | ✓ | exchange | baostock ST 回填；派生停牌写月分区。`status`（normal/suspended/**delisted**）与 `risk_warning`（ST/*ST）是两列——旧版单列会让停牌冲掉 ST 标记；退市行由 `instruments` 判定并标 `derived_delisted`。旧湖读取自动兼容，物理迁移见 [schema](schema.md#trading_status) |
 
 北交所日常证券目录会尝试用巨潮当日 IPO 日历的明确上市事件补上市日期；申购、招股或预告日期不能代替上市日期。来源不可用时保留目录和未知日期，并记录警告；已有上市日期在合并时保留。
 

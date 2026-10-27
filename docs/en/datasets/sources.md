@@ -54,9 +54,10 @@ Old staging status merges also recheck listing windows: normal status after the 
 | Item | Value |
 |------|-------|
 | Wave | `trading_status` (core; depends on `instruments` and runs after it) |
-| Primary | eastmoney (ST board + suspension list) |
-| Fallback | exchange (SSE and SZSE quote boards, an independent failure domain) |
-| Supplementary | derived (`derived_bar_gap` / `derived_delisted` / `derived_traded`); bse (BSE quote board) |
+| Primary | exchange (SSE and SZSE stock and fund boards, the BSE board; a failed board request is retried with backoff) |
+| Fallback | eastmoney (ST board + suspension list, asked only for codes the boards did not answer; skipped while push2 is paused) |
+| Supplementary | derived (`derived_bar_gap` / `derived_delisted` / `derived_traded`); bse (BSE announcements) |
+| Carried | A code nothing answers repeats its latest first-hand reading from the last 5 sessions, labelled `<origin>_cached` (for example `exchange_cached`); carried rows written before 2026-10-28 are all labelled `eastmoney_cached` |
 | Frequency | Daily |
 | Primary key | (symbol, trade_date) |
 | Historical ST backfill | Baostock covers SH/SZ; optional Tushare Pro `bak_basic` (2016) + `stock_st` (from 2017-01-01) covers BJ and needs a token; without source coverage the audit stays at warning |

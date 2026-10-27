@@ -584,7 +584,8 @@ def test_a_security_listing_today_is_asked_about_the_same_day(lake, monkeypatch)
 
     reference.step_trading_status(lake, TD, "run-new", context)
 
-    assert requested == [["600519.SH", "920201.BJ"]]
+    # The exchange board answers 600519.SH; EastMoney is asked for the rest.
+    assert requested == [["920201.BJ"]]
     assert "920201.BJ" in set(_staged(lake)["symbol"].to_list())
     assert "instruments" in STEP_REGISTRY["trading_status"].depends_on
 
@@ -606,3 +607,57 @@ def test_instruments_hands_on_only_rows_curated_does_not_hold(lake):
     assert new_instrument_rows(lake, today) == [
         {"symbol": "920201.BJ", "asset_type": "stock", "list_date": None, "delist_date": None}
     ]
+
+
+def test_the_exchange_boards_answer_before_eastmoney_is_asked(lake, monkeypatch):
+    from cnequity.steps import reference
+
+    _write_listing(
+        lake,
+        [
+            {"symbol": "600519.SH", "list_date": date(2001, 8, 27)},
+            {"symbol": "000001.SZ", "list_date": date(1991, 4, 3)},
+        ],
+    )
+    requested: list[list[str]] = []
+
+    def _fetch(symbols, day, **_kw):
+        requested.append(list(symbols))
+        return _all_normal(symbols, day)
+
+    monkeypatch.setattr(reference, "fetch_trading_status", _fetch)
+    _boards(monkeypatch, sh_sz=["600519.SH"])
+
+    reference.step_trading_status(lake, TD, "run-order", {})
+
+    # EastMoney is asked only for what the boards left.
+    assert requested == [["000001.SZ"]]
+    sources = dict(_staged(lake).select("symbol", "source").iter_rows())
+    assert sources == {"600519.SH": "exchange", "000001.SZ": "eastmoney"}
+
+
+def test_an_undated_code_no_board_lists_is_not_counted_as_missing(lake, monkeypatch):
+    from cnequity.steps import reference
+
+    _write_listing(
+        lake,
+        [{"symbol": "600519.SH", "list_date": date(2001, 8, 27)}, {"symbol": "001246.SZ"}],
+    )
+    monkeypatch.setattr(
+        reference,
+        "fetch_trading_status",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("push2 paused")),
+    )
+    _boards(monkeypatch, sh_sz=["600519.SH"])
+
+    result = reference.step_trading_status(lake, TD, "run-undated", {})
+
+    finding = next(
+        f
+        for f in result["context_updates"]["audit_findings"]
+        if f["check"] == "trading_status_cached_fallback"
+    )
+    assert finding["severity"] == "info"
+    assert finding["coverage"][0]["without_row"] == 0
+    assert finding["coverage"][0]["undated_without_row"] == 1
+    assert result.get("status") != "warning"

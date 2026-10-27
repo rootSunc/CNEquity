@@ -802,32 +802,23 @@ _SPECS = [
     ),
     DatasetSpec(
         "trading_status",
-        # The daily feed is EastMoney's current-state board. It is reached
-        # through `tdx_protocol.client.fetch_trading_status`, but that function
-        # only forwards to `fetch_trading_status_eastmoney` — TDX has no ST or
-        # halt feed at all. Declaring TDX as the primary put this dataset in
-        # the wrong failure domain: `cne sources resilience` counted it against
-        # `tdx` (measured 100% from the reference host) when it belongs to
-        # `eastmoney` (worst probe 0%), and naming EastMoney as its own backup
-        # made a same-domain pair look like an independent one.
-        #
-        # There is no second daily vendor. baostock's per-day `isST` is the one
-        # genuinely independent reading, but it is a per-symbol sweep and stays
-        # the backfill source; the in-step fallback is this lake's own previous
-        # snapshot, which is not an independent source either. The backup gate
-        # should say so rather than pass on a mislabel.
-        primary_source="eastmoney",
+        # The exchanges' own boards come first: both publish every listed
+        # security with its OHLC and its 证券简称, which carries the halt
+        # (Shanghai zeroes open/high/low beside a reference close; Shenzhen
+        # repeats the close with zero volume) and the ST designation, and the
+        # BSE board answers Beijing. Against EastMoney on 2026-09-15 ST agreed
+        # on 100.000% and halts on 99.923%, every disagreement a halt the
+        # exchange rule then missed. Since the 2026-09-22 push2 ban they have
+        # supplied the whole market.
+        primary_source="exchange",
         # Suspensions reconstructed from `daily_bars` interior gaps land under
         # `derived_bar_gap`/`derived_delisted`; the BSE board and its
-        # announcements are the Beijing route the vendor board does not cover.
+        # announcements are the Beijing route.
         supplementary_sources=("derived", "bse"),
-        # The independent daily second opinion, and the reason this dataset has
-        # a backup at all: both exchanges publish every listed security with its
-        # OHLC and its 证券简称, which carries the halt (Shanghai zeroes
-        # open/high/low beside a reference close; Shenzhen repeats the close
-        # with zero volume) and the ST designation. Shanghai and Shenzhen only —
-        # Beijing keeps the BSE route above.
-        backup_source="exchange",
+        # EastMoney's current-state board, reached through
+        # `tdx_protocol.client.fetch_trading_status` (which only forwards to it;
+        # TDX has no ST or halt feed). Asked only for what the boards leave.
+        backup_source="eastmoney",
         tier="L0",
         partition_col="trade_date",
         partition_granularity="month",

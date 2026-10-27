@@ -156,25 +156,41 @@ DERIVED_BAR_GAP_SOURCE = "derived_bar_gap"
 #: Provenance for missing status keys filled from positive-volume daily bars.
 DERIVED_TRADED_SOURCE = "derived_traded"
 
-#: Provenance for rows an EastMoney outage carried forward from earlier sessions.
+#: Provenance for rows carried forward from an earlier EastMoney reading. Rows
+#: written before 2026-10-28 carry this label whatever their origin.
 CACHED_SOURCE = "eastmoney_cached"
+#: First-hand feeds a carried row can come from; it is labelled ``<origin>_cached``.
+CARRIED_ORIGINS = ("eastmoney", "exchange", "bse", "baostock")
+#: Label for a carried row whose origin is none of the above.
+CARRIED_UNKNOWN_SOURCE = "status_cached"
+#: Every label a carried-forward row can bear.
+CACHED_SOURCES = frozenset(
+    {f"{origin}_cached" for origin in CARRIED_ORIGINS} | {CARRIED_UNKNOWN_SOURCE}
+)
+
+
+def cached_source(origin: str | None) -> str:
+    """Label for a status carried forward from a first-hand *origin* reading."""
+    return f"{origin}_cached" if origin in CARRIED_ORIGINS else CARRIED_UNKNOWN_SOURCE
+
 
 #: Rows that are not a reading of the session they are stamped on: the outage
 #: fallback's carried rows and the lake's derived rows.
-NOT_FIRST_HAND_SOURCES = frozenset(
-    {CACHED_SOURCE, DERIVED_BAR_GAP_SOURCE, DERIVED_TRADED_SOURCE, DELISTED_SOURCE}
+NOT_FIRST_HAND_SOURCES = CACHED_SOURCES | frozenset(
+    {DERIVED_BAR_GAP_SOURCE, DERIVED_TRADED_SOURCE, DELISTED_SOURCE}
 )
 
 #: How many sessions back an outage may carry a first-hand status.
 CARRY_SESSIONS = 5
 
 
-def last_first_hand_status(history: pl.DataFrame) -> pl.DataFrame:
+def last_first_hand_status(history: pl.DataFrame, *, with_source: bool = False) -> pl.DataFrame:
     """Each symbol's latest first-hand status, dated by the session it describes.
 
     Returns ``symbol / is_trading / status / risk_warning / evidence_date``,
     plus ``fetched_at`` when the input has it, so a carried row can keep the
-    instant it was observed.
+    instant it was observed, and ``source`` when *with_source* asks for the
+    reading's origin.
     """
     schema = {
         "symbol": pl.Utf8,
@@ -186,6 +202,9 @@ def last_first_hand_status(history: pl.DataFrame) -> pl.DataFrame:
     keep_fetched = "fetched_at" in history.columns
     if keep_fetched:
         schema["fetched_at"] = history.schema["fetched_at"]
+    keep_source = with_source and "source" in history.columns
+    if keep_source:
+        schema["source"] = pl.Utf8
     if history.is_empty():
         return pl.DataFrame(schema=schema)
     frame = history
@@ -207,6 +226,7 @@ def last_first_hand_status(history: pl.DataFrame) -> pl.DataFrame:
             "risk_warning",
             pl.col("trade_date").alias("evidence_date"),
             *(["fetched_at"] if keep_fetched else []),
+            *(["source"] if keep_source else []),
         )
         .cast(schema)
     )
@@ -256,7 +276,7 @@ def impossible_delistings(listings: pl.DataFrame) -> set[str]:
 
 
 #: Feeds that report current state rather than a session's record.
-CURRENT_SNAPSHOT_SOURCES = frozenset({"eastmoney", "eastmoney_cached", "tdx_protocol"})
+CURRENT_SNAPSHOT_SOURCES = frozenset({"eastmoney", "tdx_protocol"}) | CACHED_SOURCES
 
 
 def trusted_evidence_expr(schema: Mapping[str, pl.DataType]) -> pl.Expr:
@@ -336,7 +356,7 @@ def _shanghai(value: object) -> datetime | None:
 def evidence_rank(row: Mapping[str, object]) -> int:
     """Evidence class of one status row. Higher wins a primary-key collision."""
     source = str(row.get("source") or "")
-    if source == CACHED_SOURCE:
+    if source in CACHED_SOURCES:
         return EVIDENCE_RESTATED
     if source in CURRENT_SNAPSHOT_SOURCES:
         fetched = _shanghai(row.get("fetched_at"))
@@ -390,7 +410,7 @@ def evidence_rank_expr(schema: Iterable[str] | Mapping[str, pl.DataType]) -> pl.
     )
     snapshot = pl.col("source").is_in(list(CURRENT_SNAPSHOT_SOURCES))
     return (
-        pl.when(pl.col("source") == CACHED_SOURCE)
+        pl.when(pl.col("source").is_in(list(CACHED_SOURCES)))
         .then(EVIDENCE_RESTATED)
         .when(snapshot & same_session)
         .then(EVIDENCE_POINT_IN_TIME)
@@ -425,11 +445,12 @@ def evidence_rank_sql(columns: Iterable[str] | Mapping[str, str]) -> str | None:
         if not fetched_type.startswith("TIMESTAMP"):
             return None
     boards = ", ".join(f"'{name}'" for name in sorted(CURRENT_SNAPSHOT_SOURCES))
+    cached = ", ".join(f"'{name}'" for name in sorted(CACHED_SOURCES))
     local = f"make_timestamp(epoch_us(fetched_at) + {_SHANGHAI_OFFSET_US})"
     final_at = SESSION_FINAL_AT.strftime("%H:%M:%S")
     return (
         "CASE "
-        f"WHEN source = '{CACHED_SOURCE}' THEN {EVIDENCE_RESTATED} "
+        f"WHEN source IN ({cached}) THEN {EVIDENCE_RESTATED} "
         f"WHEN source IN ({boards}) THEN "
         f"CASE WHEN fetched_at IS NOT NULL AND CAST({local} AS DATE) = trade_date "
         f"AND CAST({local} AS TIME) >= TIME '{final_at}' "
