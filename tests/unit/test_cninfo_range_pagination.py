@@ -700,11 +700,34 @@ def test_flipping_views_keep_the_one_with_cancelled_announcements():
     assert metrics["wider_views"] == 1
 
 
-def test_flipping_views_that_differ_otherwise_still_fail():
-    target = date(2020, 4, 28)
+def test_flipping_views_keep_a_wider_view_of_ordinary_reports():
+    """Measured 2020-04-30: one server lacked seven ordinary annual reports."""
+    target = date(2020, 4, 30)
 
-    with pytest.raises(RuntimeError, match="differ beyond cancelled announcements"):
-        fetch_announcement_index_range(target, client=_FlippingViewClient(target, "2019年年度报告"))
+    frame = fetch_announcement_index_range(
+        target, client=_FlippingViewClient(target, "2019年年度报告")
+    )
+
+    assert "x" in frame["announcement_id"].to_list()
+
+
+def test_flipping_views_that_are_not_nested_still_fail():
+    target = date(2020, 4, 30)
+    client = _FlippingViewClient(target, "2019年年度报告")
+    original = client.post
+
+    def post(url, data):
+        response = original(url, data)
+        if client.calls % 2 == 0 and response.payload["announcements"]:
+            # The wider view also drops a row the narrower one lists.
+            response.payload["announcements"] = [
+                row for row in response.payload["announcements"] if row["announcementId"] != "r0"
+            ]
+        return response
+
+    client.post = post
+    with pytest.raises(RuntimeError, match="not nested"):
+        fetch_announcement_index_range(target, client=client)
 
 
 def test_cninfo_step_uses_registry_date_chunks_for_default_backfill(tmp_path, monkeypatch):

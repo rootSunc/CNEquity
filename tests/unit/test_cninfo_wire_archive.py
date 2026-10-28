@@ -261,6 +261,46 @@ def test_wider_cancelled_view_replays_like_live(tmp_path):
 
     assert live.height == 32
     assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
+    # A retried page is a new observation: identical bytes must not collide.
+    observations = [
+        (record.pagination["column"], record.pagination["page"], record.pagination["attempt"])
+        for record in RawPayloadArchive(config.meta_root).records("announcement_index")
+    ]
+    assert len(observations) == len(set(observations))
+    assert any(attempt >= 100 for _, _, attempt in observations)
+
+
+def test_unreachable_wider_view_keeps_the_narrower_one_live_and_replay(tmp_path):
+    """Measured 2020-04-29: the wider server answered too rarely to walk every page."""
+    target = date(2020, 4, 29)
+    day = target.isoformat()
+
+    class Client:
+        calls = 0
+
+        def post(self, _url, data):
+            Client.calls += 1
+            rows = [_row(f"r{index}", day=day) for index in range(31)]
+            if Client.calls == 2:
+                rows.insert(0, _row("x", "2019年年度报告", day=day))
+            page = int(data["pageNum"])
+            return _Response(
+                {
+                    "announcements": rows[(page - 1) * 30 : page * 30],
+                    "totalRecordNum": len(rows),
+                    "totalpages": 1,
+                    "hasMore": page * 30 < len(rows),
+                }
+            )
+
+    config = _config(tmp_path)
+    metrics: dict = {}
+    live = fetch_announcement_index_range(target, client=Client(), config=config, metrics=metrics)
+    replayed = replay_announcement_index_range(RawPayloadArchive(config.meta_root), target)
+
+    assert live.height == 31
+    assert metrics["wider_views_unavailable"] == 1
+    assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
 
 
 def test_conflicting_record_total_aliases_fail_live_and_replay(tmp_path):

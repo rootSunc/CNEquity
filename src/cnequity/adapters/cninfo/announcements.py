@@ -142,13 +142,31 @@ _ORDER_KEY = "order"
 _RESIDUAL_ORDERS: tuple[str, ...] = ("code:asc", "code:desc", "time:asc", "time:desc")
 #: Bucket-identity key for a walk pinned to one reported total.
 _VIEW_KEY = "view"
-# CNINFO answers from servers that disagree on cancelled announcements: on
+# CNINFO answers from servers whose views of the same query differ: on
 # 2020-04-28 the ChiNext x construction cell came back with 126 or 128 rows at
-# random, the two extra being 300008's "（已取消）" annual and Q1 reports. A
-# page whose total differs from the walk's is retried until it matches, so
-# every page of a walk comes from one view.
+# random (two "（已取消）" reports), and on 2020-04-30 a main-board annual-report
+# cell with 247 or 255 (seven ordinary annual reports and summaries). A page
+# whose total differs from the walk's is retried until it matches, so every
+# page of a walk comes from one view.
 _VIEW_RETRIES = 8
-_CANCELLED_MARKER = "已取消"
+# Each view retry is a new observation of the same page; number its attempts
+# past any transport retries so archive identities never collide and replay
+# picks the last (matching) answer.
+_VIEW_ATTEMPT_STRIDE = 100
+
+
+def _view_attempt_kwargs(kwargs: dict[str, Any], view_try: int) -> dict[str, Any]:
+    on_response = kwargs.get("on_response")
+    if on_response is None or view_try == 0:
+        return kwargs
+    offset = view_try * _VIEW_ATTEMPT_STRIDE
+    return {
+        **kwargs,
+        "on_response": lambda response, parsed, attempt: on_response(
+            response, parsed, attempt + offset
+        ),
+    }
+
 
 # The checkpoint must be tied to the request/normalization contract.  Bumping
 # this value forces a clean walk instead of mixing rows fetched under an older
@@ -521,6 +539,10 @@ def _pagination_total_record_num(data: dict, *, column: str, page: int) -> int |
 
 def _checkpoint_key(column: str, start: date, end: date) -> str:
     return f"{column}:{start.isoformat()}:{end.isoformat()}"
+
+
+class ViewUnavailable(RuntimeError):
+    """A pinned server view never answered one of its pages."""
 
 
 class PartitionCoverageError(RuntimeError):
@@ -1079,21 +1101,15 @@ def _with_residual(bucket_rows: list[dict], residual_rows: list[dict]) -> list[d
     return bucket_rows + [row for row in residual_rows if str(_announcement_id(row)) not in covered]
 
 
-def _cancelled_superset(
+def _wider_superset(
     rows: list[dict], wider: list[dict], *, expected_total: int, context: str
 ) -> list[dict]:
-    """Accept a wider view only if it adds cancelled announcements and nothing else."""
+    """Accept a wider view only if it is complete and contains the narrower one."""
     own = _residual_identities(rows)
-    wide = {str(_announcement_id(row)): row for row in wider if _announcement_id(row) is not None}
-    extra = [wide[key] for key in set(wide) - own]
-    if (
-        len(wide) != expected_total
-        or not own <= set(wide)
-        or not all(_CANCELLED_MARKER in str(row.get("announcementTitle", "")) for row in extra)
-    ):
+    wide = _residual_identities(wider)
+    if len(wide) != expected_total or not own <= wide:
         raise RuntimeError(
-            f"CNINFO views of {context} differ beyond cancelled announcements "
-            f"({len(own)} vs {len(wide)} rows)"
+            f"CNINFO views of {context} are not nested ({len(own)} vs {len(wide)} rows)"
         )
     return wider
 
@@ -1166,13 +1182,13 @@ def _fetch_ordered_walk(
                     request_scope=request_scope,
                 )
             )
-        for _ in range(_VIEW_RETRIES if view_total is not None else 1):
-            data = post_with_retry(client, _CNINFO_URL, **kwargs)
+        for view_try in range(_VIEW_RETRIES if view_total is not None else 1):
+            data = post_with_retry(client, _CNINFO_URL, **_view_attempt_kwargs(kwargs, view_try))
             page_total = _pagination_total_record_num(data, column=column, page=page)
             if view_total is None or page_total == view_total:
                 break
         else:
-            raise RuntimeError(
+            raise ViewUnavailable(
                 f"CNINFO {label} never answered {bucket_column} page {page} with total {view_total}"
             )
         batch = _announcement_batch(data, column=column, page=page)
@@ -1734,8 +1750,10 @@ def _fetch_page_slice(
                         )
                     )
                 )
-            for _ in range(_VIEW_RETRIES):
-                data = post_with_retry(client, _CNINFO_URL, **kwargs)
+            for view_try in range(_VIEW_RETRIES):
+                data = post_with_retry(
+                    client, _CNINFO_URL, **_view_attempt_kwargs(kwargs, view_try)
+                )
                 page_total = _pagination_total_records(data, column=column, page=page)
                 page_authoritative_total = _pagination_total_record_num(
                     data, column=column, page=page
@@ -1915,32 +1933,42 @@ def _fetch_page_slice(
         )
     wider_views = sorted(view for view in other_views if expected_total and view > expected_total)
     if wider_views and start == end:
-        # Keep the view that lists cancelled announcements too: they were
-        # published, and dropping them would hide what the source once showed.
-        wider = _fetch_ordered_walk(
-            client,
-            day=start,
-            column=column,
-            label=label,
-            filters=filters,
-            view_total=wider_views[-1],
-            config=config,
-            metrics=metrics,
-            max_pages_per_slice=max_pages_per_slice,
-            raw_archive=raw_archive,
-            run_id=run_id,
-            request_scope=request_scope,
-        )
-        raw_rows = _cancelled_superset(
-            raw_rows,
-            wider,
-            expected_total=wider_views[-1],
-            context=f"{bucket_column} {start}",
-        )
-        seen_keys = _residual_identities(raw_rows)
-        expected_total = authoritative_total = wider_views[-1]
-        if metrics is not None:
-            metrics["wider_views"] = int(metrics.get("wider_views", 0)) + 1
+        # Keep the wider view: some servers lack rows others list, including
+        # cancelled and ordinary reports, so the narrower one is incomplete.
+        try:
+            wider = _fetch_ordered_walk(
+                client,
+                day=start,
+                column=column,
+                label=label,
+                filters=filters,
+                view_total=wider_views[-1],
+                config=config,
+                metrics=metrics,
+                max_pages_per_slice=max_pages_per_slice,
+                raw_archive=raw_archive,
+                run_id=run_id,
+                request_scope=request_scope,
+            )
+        except ViewUnavailable as exc:
+            # The narrower view is complete by itself; keep it when the wider
+            # server is too rarely reached to walk every page.
+            logger.warning("CNINFO keeping the narrower view: %s", exc)
+            if metrics is not None:
+                metrics["wider_views_unavailable"] = (
+                    int(metrics.get("wider_views_unavailable", 0)) + 1
+                )
+        else:
+            raw_rows = _wider_superset(
+                raw_rows,
+                wider,
+                expected_total=wider_views[-1],
+                context=f"{bucket_column} {start}",
+            )
+            seen_keys = _residual_identities(raw_rows)
+            expected_total = authoritative_total = wider_views[-1]
+            if metrics is not None:
+                metrics["wider_views"] = int(metrics.get("wider_views", 0)) + 1
     record["status"] = "complete"
     record["rows"] = raw_rows
     record["next_page"] = page + 1
@@ -2278,6 +2306,9 @@ def _replay_wider_view(
             previous.get("captured_at", "")
         ):
             by_page[page] = item
+    if any(page not in by_page for page in range(1, -(-view_total // _PAGE_SIZE) + 1)):
+        # The live walk gave up on this view and kept the narrower one.
+        return rows
     wider: list[dict] = []
     for page in sorted(by_page):
         response = _replay_response(store=by_page[page]["store"], record=by_page[page]["record"])
@@ -2285,9 +2316,7 @@ def _replay_wider_view(
             raise RawArchiveError(f"CNINFO archived view walk is not an object: {view_key!r}")
         wider.extend(_announcement_batch(response, column=column, page=page))
     try:
-        return _cancelled_superset(
-            rows, wider, expected_total=view_total, context=f"{key[0]} {key[1]}"
-        )
+        return _wider_superset(rows, wider, expected_total=view_total, context=f"{key[0]} {key[1]}")
     except RuntimeError as exc:
         raise RawArchiveError(str(exc)) from exc
 
