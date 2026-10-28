@@ -592,7 +592,6 @@ cne migrate --apply     # 按顺序运行并记录结果
 | `valuation-outage` | 东财快照中断时，用东财数据中心估值报表补 `--start`/`--end` 窗口；只在取到全市场时写入 |
 | `corporate-action-gaps` | 补上新浪与 Baostock 因子都有台阶、湖里却没有记录的除权事件，依据最近一次 `cne derive adj_factor_source` 的证据。附近 10 天内日期错开的记录，若条款能解释台阶就移到台阶日；其余按证券和年份向 Baostock 取分红，按生效交易日匹配，只收条款能解释台阶的行；Baostock 也解释不了的，再到巨潮查发行人的重整转增公告，公告写明的除权参考价能解释台阶才记为 `reorg_transfer`。此命令的计划仍离线，`--apply` 才请求 Baostock 和巨潮 |
 | `status-traded --start --end` | 默认只读预览：用已提交日线的正成交量补已知上市期间、缺状态行的股票/ETF 键，来源 `derived_traded`，ST 保持 null。已有状态不覆盖；`--apply` 重新核对当前版本后发布并保留旧版本。建议按年或月分段 |
-| `delist-dates` | `instruments.delist_date` 等于 baostock 摘牌日的行改为摘牌日前一个交易日（文档约定的最后一个上市交易日）；不会早于最后一根有成交的日线，交易日历覆盖不到的保持不变。离线运行，`--apply` 发布并保留旧版本 |
 | `stock-listing-dates` | 用有成交但上市日期未知的股票首日定位巨潮 IPO 日历请求，也可用可重复的 `--event-date YYYY-MM-DD` 核验尚无日线的股票；只接受代码、日期匹配的明确上市事件，不能与更早成交矛盾。默认回放归档，`--refresh-sources` 联网采证，`--max-sessions` 分批；`--apply` 发布并保留已有日期和旧版本；若补入的官方上市日期晚于残留退市日期，同一修订清除该矛盾退市日期 |
 | `index-snapshots` | 回放官方带日期的完整成分、权重文件；`--refresh-sources` 更新归档，`--indices` 选择指数。`--apply` 替换整个指数快照，百分数转比例，成分与权重按各自日期保存，不倒推历史 |
 | `financial-originals` | `--symbols` 或 `--all-stocks` 选择股票，`--start-year/--end-year` 选择年份，`--quarter` 选择 Q1/Q2/Q3/Q4（默认年报），`--max-reports` 分批，`--after` 接续输出的 `next_cursor`。默认离线预览，`--refresh-sources` 归档巨潮完整查询和原始 PDF，`--apply` 追加可明确识别的合并报表当期数和累计数；`--reparse` 重放旧报告并保留未变行的首次观测时间；未识别布局或科目保留缺口，不回填采集时间 |

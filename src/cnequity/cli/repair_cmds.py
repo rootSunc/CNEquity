@@ -438,20 +438,6 @@ def stock_listing_dates(
     )
 
 
-@repair.command("delist-dates")
-@config_option
-@click.option(
-    "--apply",
-    is_flag=True,
-    help=N_("Publish the corrected delist dates; retain old revisions."),
-)
-def delist_dates(config_path: str, apply: bool):
-    """Set delist_date to the last listed session where it holds the formal removal date."""
-    from cnequity.storage.repairs.delist_dates import repair_delist_dates
-
-    _emit(repair_delist_dates(_cfg(config_path), apply=apply))
-
-
 @repair.command("layout")
 @click.argument("dataset")
 @config_option

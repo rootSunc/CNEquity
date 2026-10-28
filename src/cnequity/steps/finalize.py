@@ -302,11 +302,13 @@ def _watermark_date_for(config: Config, dataset: str, partition_col: str) -> dat
 
     spec = DATASETS.get(dataset)
     if spec is not None and spec.coverage_mode == "session_dense":
-        if dataset == "index_bars":
+        if dataset in ("index_bars", "daily_bars"):
             # THS supplies legacy index history before the reliable TDX daily
             # source begins. The old history contains source/calendar holes
             # (for example 1991 Saturdays), which must remain audit findings
-            # but must not pin the live incremental watermark in 2000.
+            # but must not pin the live incremental watermark in 2000. Delisted
+            # recovery likewise lands lone 1990s stock histories (000508.SZ
+            # pinned daily_bars at 1993-09-16).
             from cnequity.steps.common import BACKFILL_START
 
             return last_contiguous_dense_date(config, spec, start=BACKFILL_START)

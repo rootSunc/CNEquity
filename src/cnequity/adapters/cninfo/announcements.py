@@ -140,6 +140,15 @@ _ORDER_KEY = "order"
 # the result; no single order is exact on its own, because ties on a busy
 # code reshuffle between pages, but their residual completes the cover.
 _RESIDUAL_ORDERS: tuple[str, ...] = ("code:asc", "code:desc", "time:asc", "time:desc")
+#: Bucket-identity key for a walk pinned to one reported total.
+_VIEW_KEY = "view"
+# CNINFO answers from servers that disagree on cancelled announcements: on
+# 2020-04-28 the ChiNext x construction cell came back with 126 or 128 rows at
+# random, the two extra being 300008's "（已取消）" annual and Q1 reports. A
+# page whose total differs from the walk's is retried until it matches, so
+# every page of a walk comes from one view.
+_VIEW_RETRIES = 8
+_CANCELLED_MARKER = "已取消"
 
 # The checkpoint must be tied to the request/normalization contract.  Bumping
 # this value forces a clean walk instead of mixing rows fetched under an older
@@ -527,7 +536,7 @@ def _bucket_column(column: str, filters: Mapping[str, str] | None) -> str:
     """Encode the applied filters into the checkpoint / archive identity."""
     suffix = "".join(
         f"{_BUCKET_SEPARATOR}{axis}={filters[axis]}"
-        for axis in (*_PARTITION_AXES, _ORDER_KEY)
+        for axis in (*_PARTITION_AXES, _ORDER_KEY, _VIEW_KEY)
         if filters and filters.get(axis)
     )
     return f"{column}{suffix}"
@@ -1070,6 +1079,25 @@ def _with_residual(bucket_rows: list[dict], residual_rows: list[dict]) -> list[d
     return bucket_rows + [row for row in residual_rows if str(_announcement_id(row)) not in covered]
 
 
+def _cancelled_superset(
+    rows: list[dict], wider: list[dict], *, expected_total: int, context: str
+) -> list[dict]:
+    """Accept a wider view only if it adds cancelled announcements and nothing else."""
+    own = _residual_identities(rows)
+    wide = {str(_announcement_id(row)): row for row in wider if _announcement_id(row) is not None}
+    extra = [wide[key] for key in set(wide) - own]
+    if (
+        len(wide) != expected_total
+        or not own <= set(wide)
+        or not all(_CANCELLED_MARKER in str(row.get("announcementTitle", "")) for row in extra)
+    ):
+        raise RuntimeError(
+            f"CNINFO views of {context} differ beyond cancelled announcements "
+            f"({len(own)} vs {len(wide)} rows)"
+        )
+    return wider
+
+
 def _fetch_ordered_walk(
     client: httpx.Client,
     *,
@@ -1077,7 +1105,8 @@ def _fetch_ordered_walk(
     column: str,
     label: str,
     filters: Mapping[str, str],
-    order: str,
+    order: str | None = None,
+    view_total: int | None = None,
     config=None,
     metrics: dict[str, Any] | None = None,
     max_pages_per_slice: int,
@@ -1085,13 +1114,14 @@ def _fetch_ordered_walk(
     run_id: str | None = None,
     request_scope: str | None = None,
 ) -> list[dict]:
-    """Walk one day's query in a fixed order, up to the page cap.
+    """Walk one day's query in a fixed order, or pinned to one reported total.
 
-    The result is evidence for a residual, never a complete slice: the caller
-    only accepts it inside a union whose unique count equals the source total.
+    The result is evidence, never a complete slice: the caller only accepts it
+    after reconciling it against the source total itself.
     """
-    sort_name, _, sort_type = order.partition(":")
-    bucket_column = _bucket_column(column, {**filters, _ORDER_KEY: order})
+    sort_name, _, sort_type = (order or "").partition(":")
+    side = {_ORDER_KEY: order} if order else {_VIEW_KEY: str(view_total)}
+    bucket_column = _bucket_column(column, {**filters, **side})
     record: dict[str, Any] = {"capture_id": uuid.uuid4().hex}
     rows: list[dict] = []
     signatures: set[str] = set()
@@ -1109,9 +1139,10 @@ def _fetch_ordered_walk(
             "category": filters.get("category", ""),
             "trade": filters.get("trade", ""),
             "seDate": f"{day.isoformat()}~{day.isoformat()}",
-            "sortName": sort_name,
-            "sortType": sort_type,
         }
+        if order:
+            payload["sortName"] = sort_name
+            payload["sortType"] = sort_type
         kwargs: dict[str, Any] = {"data": payload}
         if metrics is not None:
             kwargs["metrics"] = metrics
@@ -1135,10 +1166,18 @@ def _fetch_ordered_walk(
                     request_scope=request_scope,
                 )
             )
-        data = post_with_retry(client, _CNINFO_URL, **kwargs)
+        for _ in range(_VIEW_RETRIES if view_total is not None else 1):
+            data = post_with_retry(client, _CNINFO_URL, **kwargs)
+            page_total = _pagination_total_record_num(data, column=column, page=page)
+            if view_total is None or page_total == view_total:
+                break
+        else:
+            raise RuntimeError(
+                f"CNINFO {label} never answered {bucket_column} page {page} with total {view_total}"
+            )
         batch = _announcement_batch(data, column=column, page=page)
         if total is None:
-            total = _pagination_total_record_num(data, column=column, page=page)
+            total = page_total
         signature = _pagination_page_signature(batch)
         if not batch or signature in signatures:
             break
@@ -1654,6 +1693,7 @@ def _fetch_page_slice(
         mid = _midpoint(start, end)
         return _child(start, mid, filters) + _child(mid + timedelta(days=1), end, filters)
 
+    other_views: set[int] = set()
     while True:
         payload = {
             "pageNum": page,
@@ -1694,13 +1734,25 @@ def _fetch_page_slice(
                         )
                     )
                 )
-            data = post_with_retry(client, _CNINFO_URL, **kwargs)
+            for _ in range(_VIEW_RETRIES):
+                data = post_with_retry(client, _CNINFO_URL, **kwargs)
+                page_total = _pagination_total_records(data, column=column, page=page)
+                page_authoritative_total = _pagination_total_record_num(
+                    data, column=column, page=page
+                )
+                observed = (
+                    page_authoritative_total if page_authoritative_total is not None else page_total
+                )
+                pinned = authoritative_total if authoritative_total is not None else expected_total
+                if pinned is None or observed is None or observed == pinned:
+                    break
+                # Another server's view of the same query; ask again so the
+                # walk stays on one view, and remember the other total.
+                other_views.add(observed)
             batch = _announcement_batch(data, column=column, page=page)
             total_pages = _pagination_total_pages(data, column=column, page=page)
             has_more = _pagination_has_more(data, column=column, page=page)
             has_more_present = data.get("hasMore") is not None
-            page_total = _pagination_total_records(data, column=column, page=page)
-            page_authoritative_total = _pagination_total_record_num(data, column=column, page=page)
             if expected_total is None:
                 expected_total = page_total
             elif page_total is not None and page_total != expected_total:
@@ -1861,6 +1913,34 @@ def _fetch_page_slice(
             f"raw row count {len(raw_rows)} does not match reported total {expected_total} "
             f"(unique keys={len(seen_keys)})"
         )
+    wider_views = sorted(view for view in other_views if expected_total and view > expected_total)
+    if wider_views and start == end:
+        # Keep the view that lists cancelled announcements too: they were
+        # published, and dropping them would hide what the source once showed.
+        wider = _fetch_ordered_walk(
+            client,
+            day=start,
+            column=column,
+            label=label,
+            filters=filters,
+            view_total=wider_views[-1],
+            config=config,
+            metrics=metrics,
+            max_pages_per_slice=max_pages_per_slice,
+            raw_archive=raw_archive,
+            run_id=run_id,
+            request_scope=request_scope,
+        )
+        raw_rows = _cancelled_superset(
+            raw_rows,
+            wider,
+            expected_total=wider_views[-1],
+            context=f"{bucket_column} {start}",
+        )
+        seen_keys = _residual_identities(raw_rows)
+        expected_total = authoritative_total = wider_views[-1]
+        if metrics is not None:
+            metrics["wider_views"] = int(metrics.get("wider_views", 0)) + 1
     record["status"] = "complete"
     record["rows"] = raw_rows
     record["next_page"] = page + 1
@@ -2055,6 +2135,10 @@ def _replay_request_context(
     sort_name = str(request.get("sortName") or "").strip()
     if sort_name:
         request_filters[_ORDER_KEY] = f"{sort_name}:{str(request.get('sortType') or '').strip()}"
+    # A pinned view is not a request field; only the walk's identity names it.
+    archived_view = _bucket_parts(archived_column)[1].get(_VIEW_KEY)
+    if archived_view:
+        request_filters[_VIEW_KEY] = archived_view
     request_bucket = _bucket_column(request_column, request_filters) if request_column else ""
     if request_bucket and archived_column and request_bucket != archived_column:
         raise RawArchiveError(
@@ -2152,7 +2236,60 @@ def _replay_group_contains(
 
 
 def _is_residual_group(key: tuple[str, date, date]) -> bool:
-    return _ORDER_KEY in _bucket_parts(key[0])[1]
+    filters = _bucket_parts(key[0])[1]
+    return _ORDER_KEY in filters or _VIEW_KEY in filters
+
+
+def _replay_wider_view(
+    key: tuple[str, date, date],
+    rows: list[dict],
+    groups: dict[tuple[str, date, date], list[dict[str, Any]]],
+    *,
+    lineage: tuple[str, str],
+    captured_after: str,
+) -> list[dict]:
+    """Swap in the pinned wider view the live walk kept, if it fetched one."""
+    column, filters = _bucket_parts(key[0])
+    prefix = _bucket_column(column, filters) + _BUCKET_SEPARATOR + _VIEW_KEY + "="
+    views = [
+        candidate
+        for candidate in groups
+        if candidate[1:] == key[1:]
+        and candidate[0].startswith(prefix)
+        and any(
+            (str(item.get("run_id", "")), str(item.get("request_scope", ""))) == lineage
+            and str(item.get("captured_at", "")) >= captured_after
+            for item in groups[candidate]
+        )
+    ]
+    if not views:
+        return rows
+    view_key = max(views, key=lambda candidate: int(_bucket_parts(candidate[0])[1][_VIEW_KEY]))
+    view_total = int(_bucket_parts(view_key[0])[1][_VIEW_KEY])
+    by_page: dict[int, dict[str, Any]] = {}
+    for item in groups[view_key]:
+        if (str(item.get("run_id", "")), str(item.get("request_scope", ""))) != lineage:
+            continue
+        if item["pagination"].get("reported_total_records") != view_total:
+            continue
+        page = int(item["page"])
+        previous = by_page.get(page)
+        if previous is None or str(item.get("captured_at", "")) >= str(
+            previous.get("captured_at", "")
+        ):
+            by_page[page] = item
+    wider: list[dict] = []
+    for page in sorted(by_page):
+        response = _replay_response(store=by_page[page]["store"], record=by_page[page]["record"])
+        if response is None:
+            raise RawArchiveError(f"CNINFO archived view walk is not an object: {view_key!r}")
+        wider.extend(_announcement_batch(response, column=column, page=page))
+    try:
+        return _cancelled_superset(
+            rows, wider, expected_total=view_total, context=f"{key[0]} {key[1]}"
+        )
+    except RuntimeError as exc:
+        raise RawArchiveError(str(exc)) from exc
 
 
 def _replay_residual_rows(
@@ -2580,7 +2717,13 @@ def _replay_group_rows(
                 f"CNINFO archived slice raw row count {len(rows)} does not match "
                 f"its total {expected_total}: {key!r}"
             )
-        return rows
+        return _replay_wider_view(
+            key,
+            rows,
+            groups,
+            lineage=selected_lineage,
+            captured_after=selected_capture_end,
+        )
     finally:
         active.remove(key)
 

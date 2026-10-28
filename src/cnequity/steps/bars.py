@@ -622,8 +622,10 @@ def _settle_official_etf_delisted_debts(config: Config, on: date, run_id: str) -
     A fund being wound up stops quoting, so its post-delisting tip keys can
     never be filled. A key is retired only when curated instruments carry a
     delist date before the session and the latest official exchange directory
-    no longer lists a fund an earlier snapshot did. Either signal alone stays
-    owed; the pinned directory receipt and exact keys are saved first.
+    no longer lists a fund an earlier snapshot did. A fund the directory has
+    never covered (LOFs) has only the instruments delisting, which already
+    takes repeated snapshot absences and leaves the fetch scope on its own.
+    The pinned directory receipt and exact keys are saved first.
     """
     if not (config.ingest_eligible_etfs or config.ingest_listed_funds):
         return None
@@ -670,17 +672,19 @@ def _settle_official_etf_delisted_debts(config: Config, on: date, run_id: str) -
     latest = frame["as_of_date"].max()
     listed_now = set(frame.filter(pl.col("as_of_date") == latest)["symbol"].to_list())
     listed_before = set(frame.filter(pl.col("as_of_date") < latest)["symbol"].to_list())
+    listed_ever = listed_before | listed_now
     resolved = sorted(
         (row["symbol"], date.fromisoformat(row["trade_date"]))
         for row in candidates
-        if row["symbol"] in listed_before and row["symbol"] not in listed_now
+        if row["symbol"] not in listed_now
+        and (row["symbol"] in listed_before or row["symbol"] not in listed_ever)
     )
     if not resolved:
         return None
     receipt = {
         "run_id": run_id,
         "dataset": "daily_bars",
-        "reason": "official_etf_directory_and_instruments_prove_delisting",
+        "reason": "instruments_delisting_confirmed_by_directory_where_covered",
         "profile_receipt_id": read.receipt["receipt_id"],
         "profile_revision": read.receipt["dependencies"]["etf_profiles"]["revision_id"],
         "directory_as_of": latest.isoformat(),

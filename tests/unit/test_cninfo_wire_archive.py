@@ -233,6 +233,36 @@ def test_residual_sorted_walks_replay_with_their_partition(monkeypatch, tmp_path
         replay_announcement_index_range(archive, target, records=without_walks)
 
 
+def test_wider_cancelled_view_replays_like_live(tmp_path):
+    target = date(2020, 4, 28)
+    day = target.isoformat()
+
+    class Client:
+        calls = 0
+
+        def post(self, _url, data):
+            Client.calls += 1
+            rows = [_row(f"r{index}", day=day) for index in range(31)]
+            if Client.calls % 2 == 0:
+                rows.insert(0, _row("x", "2019年年度报告（已取消）", day=day))
+            page = int(data["pageNum"])
+            return _Response(
+                {
+                    "announcements": rows[(page - 1) * 30 : page * 30],
+                    "totalRecordNum": len(rows),
+                    "totalpages": 1,
+                    "hasMore": page * 30 < len(rows),
+                }
+            )
+
+    config = _config(tmp_path)
+    live = fetch_announcement_index_range(target, client=Client(), config=config)
+    replayed = replay_announcement_index_range(RawPayloadArchive(config.meta_root), target)
+
+    assert live.height == 32
+    assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
+
+
 def test_conflicting_record_total_aliases_fail_live_and_replay(tmp_path):
     target = date(2024, 1, 2)
     payload = {

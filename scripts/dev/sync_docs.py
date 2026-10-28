@@ -375,10 +375,6 @@ EFFECTS: dict[str, tuple[str, str]] = {
         "仅 --refresh-sources 联网",
         "默认离线预览并保存计划；--apply 发布有证据支持的修正、保留旧版本和未解决提示，分批保存历史进度",
     ),
-    "repair delist-dates": (
-        "无",
-        "默认只读预览；--apply 把等于摘牌日的退市日期改为前一个交易日，经修复门禁发布并保留旧版本",
-    ),
     "repair stock-listing-dates": (
         "仅 --refresh-sources 联网",
         "默认离线回放 IPO 日历；--apply 补官方上市事件证实的股票上市日期，经修复门禁发布并保留旧版本",

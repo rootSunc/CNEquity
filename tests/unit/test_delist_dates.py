@@ -71,3 +71,23 @@ def test_baostock_merge_writes_the_last_listed_session(tmp_path, monkeypatch):
 
     row = merged.filter(pl.col("symbol") == "688287.SH")
     assert row["delist_date"].to_list() == [date(2026, 6, 9)]
+
+
+def test_only_rows_after_delisting_are_planned():
+    from cnequity.storage.repairs.bar_listing_window import plan_bar_listing_window
+
+    rows = pl.DataFrame(
+        {
+            "symbol": ["688287.SH", "688287.SH", "600519.SH"],
+            "trade_date": [date(2026, 6, 9), date(2026, 6, 10), date(2026, 6, 10)],
+            "volume": [0, 0, 100],
+        }
+    )
+    spans = pl.DataFrame(
+        {"symbol": ["688287.SH", "600519.SH"], "delist_date": [date(2026, 6, 9), None]},
+        schema_overrides={"delist_date": pl.Date},
+    )
+
+    plan = plan_bar_listing_window(rows, spans)
+
+    assert plan.select("symbol", "trade_date").rows() == [("688287.SH", date(2026, 6, 10))]

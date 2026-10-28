@@ -2510,6 +2510,10 @@ msgstr "删除被后来证据否定的推断停牌"
 msgid "Drop trading_status rows outside a security's listing window"
 msgstr "删除落在证券上市窗口之外的 trading_status 行"
 
+#: cnequity/storage/migrations.py
+msgid "Drop zero-volume daily bars dated after a security's delisting"
+msgstr "删除退市日之后的零成交量日线"
+
 #: cnequity/serve/ops/settings.py
 msgid "EastMoney"
 msgstr "东财"
@@ -3606,6 +3610,10 @@ msgstr "缺少的配置段（{count}）—— 当前使用内置默认值："
 msgid "Mode:      {mode}"
 msgstr "模式：    {mode}"
 
+#: cnequity/storage/migrations.py
+msgid "Move delist dates stored as the removal date back to the last listed session"
+msgstr "把存成摘牌日的退市日期改回最后一个上市交易日"
+
 #: cnequity/diagnostics/report.py
 #, python-format
 msgid "Move it to a file and set [%s].%s = <path> (chmod 600), or export %s"
@@ -4286,10 +4294,6 @@ msgstr "发布官方 IPO 日历证实的股票上市日期；保留旧版本。"
 #: cnequity/cli/repair_cmds.py
 msgid "Publish supported factor corrections and retain old revisions; unresolved events remain advisory."
 msgstr "应用可确定的因子修正并保留旧版本；未解决项只作提示。"
-
-#: cnequity/cli/repair_cmds.py
-msgid "Publish the corrected delist dates; retain old revisions."
-msgstr "发布修正后的退市日期；保留旧版本。"
 
 #: cnequity/serve/ops/catalog.py
 msgid "Publish the finished data this run left in staging to the lake."
@@ -5102,10 +5106,6 @@ msgstr "舆情 / 轮动"
 #: cnequity/cli/ths_official_cmds.py
 msgid "Service start date."
 msgstr "服务起点。"
-
-#: cnequity/cli/repair_cmds.py
-msgid "Set delist_date to the last listed session where it holds the formal removal date."
-msgstr "delist_date 填的是摘牌日时，改为最后一个上市交易日。"
 
 #: cnequity/storage/migrations.py
 msgid "Settle Beijing whole-day and pre-listing daily-bar debts already proven"

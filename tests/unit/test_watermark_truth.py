@@ -223,3 +223,21 @@ def test_max_partition_date_keeps_root_legacy_files_in_mixed_layout(tmp_path):
     pl.DataFrame({"trade_date": [date(2026, 7, 21)]}).write_parquet(root / "part-legacy.parquet")
 
     assert _max_partition_date(cfg, "valuation_metrics", "trade_date") == date(2026, 7, 21)
+
+
+def test_daily_bars_dense_prefix_starts_at_the_backfill_floor(tmp_path, monkeypatch):
+    """A lone recovered 1990s delisting must not pin the live watermark."""
+    from cnequity.steps.common import BACKFILL_START
+    from cnequity.steps.finalize import _watermark_date_for
+
+    seen = {}
+
+    def fake(config, spec, *, start=None):
+        seen[spec.name] = start
+        return date(2026, 10, 28)
+
+    monkeypatch.setattr("cnequity.quality.verify.last_contiguous_dense_date", fake)
+    cfg = Config(data_root=tmp_path / "data")
+
+    assert _watermark_date_for(cfg, "daily_bars", "trade_date") == date(2026, 10, 28)
+    assert seen == {"daily_bars": BACKFILL_START}

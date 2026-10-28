@@ -29,7 +29,6 @@
 | `cne repair bar-turnover` | 仅 --apply 时 | 默认只读预览；--apply 请求 Baostock（--peer-review 另请求交易所历史、通达信与东财）整行替换成交额异常的沪深股票日线 |
 | `cne repair bse-tip-turnover` | 仅 --apply 时 | 默认只读预览；--apply 请求北交所行情板，只补最近一个交易日的成交额 |
 | `cne repair corporate-action-gaps` | --apply 时 | 默认离线预览；--apply 按缺口查询 Baostock 与巨潮资讯，核验后发布新版本并保留旧版本 |
-| `cne repair delist-dates` | 无 | 默认只读预览；--apply 把等于摘牌日的退市日期改为前一个交易日，经修复门禁发布并保留旧版本 |
 | `cne repair delisted-actions` | 仅 --apply 时 | 默认只读预览；--apply 从 Baostock（沪深）或同花顺（北交所）补已退市证券的历史分红除权并写湖 |
 | `cne repair ex-dates` | 仅 --apply 时 | 默认只读预览；--apply 按给定除权日逐日向东财请求历史除权行并写湖 |
 | `cne repair financial-originals` | 仅 --refresh-sources 联网 | 默认离线回放原始定期报告；--apply 追加能明确识别的合并报表当期数，经修复门禁发布并保留已有版本和真实采集时间 |

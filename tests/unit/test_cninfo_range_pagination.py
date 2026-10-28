@@ -660,6 +660,53 @@ def test_dense_single_day_still_fails_when_sorted_walks_leave_a_gap(monkeypatch)
         )
 
 
+class _FlippingViewClient:
+    """Two servers: one also lists a withdrawn report, answering in turn."""
+
+    def __init__(self, target: date, extra_title: str):
+        self.day = target.isoformat()
+        self.extra_title = extra_title
+        self.calls = 0
+
+    def post(self, _url, data):
+        self.calls += 1
+        rows = [_row(f"r{index}", self.day) for index in range(31)]
+        if self.calls % 2 == 0:
+            extra = _row("x", self.day)
+            extra["announcementTitle"] = self.extra_title
+            rows.insert(0, extra)
+        page = int(data["pageNum"])
+        return _Response(
+            {
+                "announcements": rows[(page - 1) * 30 : page * 30],
+                "totalRecordNum": len(rows),
+                "totalpages": 1,
+                "hasMore": page * 30 < len(rows),
+            }
+        )
+
+
+def test_flipping_views_keep_the_one_with_cancelled_announcements():
+    """Measured 2020-04-28: one cell answered 126 or 128 rows at random."""
+    target = date(2020, 4, 28)
+    metrics: dict = {}
+
+    frame = fetch_announcement_index_range(
+        target, client=_FlippingViewClient(target, "2019年年度报告（已取消）"), metrics=metrics
+    )
+
+    assert frame.height == 32
+    assert "x" in frame["announcement_id"].to_list()
+    assert metrics["wider_views"] == 1
+
+
+def test_flipping_views_that_differ_otherwise_still_fail():
+    target = date(2020, 4, 28)
+
+    with pytest.raises(RuntimeError, match="differ beyond cancelled announcements"):
+        fetch_announcement_index_range(target, client=_FlippingViewClient(target, "2019年年度报告"))
+
+
 def test_cninfo_step_uses_registry_date_chunks_for_default_backfill(tmp_path, monkeypatch):
     """The step must bound a direct/default backfill, not just CLI ranges."""
     config = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
