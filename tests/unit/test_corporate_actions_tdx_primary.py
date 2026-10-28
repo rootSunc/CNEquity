@@ -190,3 +190,25 @@ def test_sweep_does_not_double_a_split_the_lake_already_holds(tmp_path, monkeypa
     # 688809's 0.4 is already EastMoney's 转增; only its cash and 600000's
     # unsplit TDX bonus are written.
     assert rows.rows() == [("600000.SH", "bonus"), ("688809.SH", "cash_dividend")]
+
+
+def test_backfill_writes_do_not_double_a_split_the_lake_already_holds(tmp_path):
+    # Measured 2026-10-29: a targeted backfill wrote 920021.BJ's TDX 0.51471
+    # back beside THS's 0.5147058 and moved the derived factor's level.
+    cfg = Config(data_root=tmp_path / "lake")
+    stored = _actions(
+        [("920021.BJ", date(2021, 11, 5), "transfer", 0.0, 0.0, 0.5147058)]
+    ).with_columns(pl.lit("ths").alias("source"))
+    part = cfg.curated_root / "corporate_actions" / "ex_date=2021"
+    part.mkdir(parents=True)
+    stored.write_parquet(part / "part-merged.parquet")
+    tdx = _actions(
+        [
+            ("920021.BJ", date(2021, 11, 5), "bonus", 0.0, 0.51471, 0.0),
+            ("920021.BJ", date(2022, 5, 30), "cash_dividend", 0.1, 0.0, 0.0),
+        ]
+    )
+
+    kept = events._drop_stored_splits(cfg, tdx)
+
+    assert kept.select("ex_date", "action_type").rows() == [(date(2022, 5, 30), "cash_dividend")]

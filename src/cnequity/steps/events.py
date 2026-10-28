@@ -576,6 +576,9 @@ def _heal_unrecorded_ex_events(config: Config, trade_date: date, run_id: str, ra
                 suspects.height,
             )
             return 0
+        healed = _drop_stored_splits(config, healed)
+        if healed.is_empty():
+            return 0
         healed = with_provenance(healed, source=_CANONICAL_BACKFILL, data_version="v1")
         result = write_fetched(
             config,
@@ -654,6 +657,25 @@ def _stored_vendor_shares(config: Config, since: date, until: date) -> pl.DataFr
         .select("symbol", "ex_date", "action_type", "bonus_ratio", "transfer_ratio")
         .collect()
     )
+
+
+def _drop_stored_splits(config: Config, tdx: pl.DataFrame) -> pl.DataFrame:
+    """TDX rows to write, without a combined 送转 the lake already holds split.
+
+    Every TDX write path needs this, not just the daily one: a targeted
+    backfill wrote 920021.BJ's 0.51471 back beside THS's 0.5147058 and moved
+    the derived factor's level.
+    """
+    if tdx.is_empty() or "ex_date" not in tdx.columns:
+        return tdx
+    dates = tdx.get_column("ex_date").cast(pl.Date, strict=False).drop_nulls()
+    if dates.is_empty():
+        return tdx
+    stored = _stored_vendor_shares(config, dates.min(), dates.max())
+    kept, _vendor = _split_with_vendor(
+        tdx.with_columns(pl.col("ex_date").cast(pl.Date, strict=False)), stored
+    )
+    return kept
 
 
 def detect_ex_symbols(
@@ -933,6 +955,7 @@ def _sweep_unswept_fund_history(
                 frame = frame.with_columns(pl.col("ex_date").cast(pl.Date, strict=False)).filter(
                     pl.col("ex_date").is_between(CORPORATE_ACTIONS_BACKFILL_START, trade_date)
                 )
+            frame = _drop_stored_splits(config, frame)
             if not frame.is_empty():
                 frame = with_provenance(frame, source=_CANONICAL_BACKFILL, data_version="v1")
                 result = write_fetched(
@@ -1193,6 +1216,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             )
 
         def record_chunk(chunk: list[str], chunk_batch_id: str, df_chunk: pl.DataFrame) -> None:
+            df_chunk = _drop_stored_splits(config, df_chunk)
             if not df_chunk.is_empty():
                 frames.append(df_chunk)
             if manifest is None:

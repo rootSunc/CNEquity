@@ -94,14 +94,47 @@ def test_item_set_covers_the_factor_building_blocks():
 def test_exactly_one_report_owns_the_announcement_date():
     owners = [r for r in _REPORTS if r.authoritative_announce_date]
     assert owners == [_ANNOUNCE_SOURCE]
-    # Stored LICO summary items are the date repair's evidence. Another
-    # report must not reuse these names without adding explicit report lineage.
+    # Stored LICO summary items are the date repair's evidence. Only the
+    # income statement may repeat revenue and net_profit: its NOTICE_DATE is a
+    # republication, never earlier than the first disclosure, and the evidence
+    # takes the minimum date, so a restated vintage cannot move a period early.
     for report in _REPORTS:
-        if report is not _ANNOUNCE_SOURCE:
-            assert not any(
-                statement == "indicator" or code in {"revenue", "net_profit"}
-                for statement, code in report.items
-            )
+        if report is _ANNOUNCE_SOURCE:
+            continue
+        assert not any(statement == "indicator" for statement, _code in report.items)
+        if report.name != "RPT_DMSK_FN_INCOME":
+            assert not any(code in {"revenue", "net_profit"} for _s, code in report.items)
+
+
+def test_backfill_keeps_the_first_announced_figure_on_a_shared_key(monkeypatch):
+    # A backfill dates the income statement's rows from LICO, so a restated
+    # TOTAL_OPERATE_INCOME lands on LICO's key and must not replace its figure.
+    import polars as pl
+
+    monkeypatch.setattr(fundamentals_module, "_report_period_dates", lambda *a, **k: ["2016-12-31"])
+    income = {
+        "SECURITY_CODE": "000002",
+        "SECUCODE": "000002.SZ",
+        "REPORT_DATE": "2016-12-31",
+        "NOTICE_DATE": "2018-03-27",
+        "TOTAL_OPERATE_INCOME": 250000000000.0,
+    }
+    monkeypatch.setattr(
+        fundamentals_module,
+        "_fetch_report",
+        lambda client, report, expr, **kwargs: (
+            [_lico_row()]
+            if report is _ANNOUNCE_SOURCE
+            else ([income] if report.name == "RPT_DMSK_FN_INCOME" else [])
+        ),
+    )
+    frame = fetch_financial_statement_items(
+        date(2026, 10, 9), backfill=True, client=FakeDatacenterClient({})
+    )
+    revenue = frame.filter(pl.col("item_code") == "revenue")
+    assert revenue.select("announce_date", "item_value").rows() == [
+        (date(2017, 3, 27), 240477236923.34)
+    ]
 
 
 # --- announce-date resolution ----------------------------------------------

@@ -131,6 +131,12 @@ _REPORTS: tuple[_Report, ...] = (
         "RPT_DMSK_FN_INCOME",
         "REPORT_DATE",
         {
+            # LICO keeps the first-announced figure forever; a correction or a
+            # retrospective restatement reaches the lake only through this
+            # report, as a later NOTICE_DATE vintage (300152.SZ, 688121.SH
+            # FY2024). On a shared key LICO's row wins, see the final unique.
+            ("income", "revenue"): "TOTAL_OPERATE_INCOME",
+            ("income", "net_profit"): "PARENT_NETPROFIT",
             ("income", "operating_cost"): "OPERATE_COST",
             ("income", "operating_profit"): "OPERATE_PROFIT",
             ("income", "total_profit"): "TOTAL_PROFIT",
@@ -667,4 +673,7 @@ def fetch_financial_statement_items(
 
     if not rows:
         return pl.DataFrame()
-    return pl.DataFrame(rows).unique(subset=_PK, keep="last")
+    # LICO rows come first: where a statement report repeats one of its items
+    # under the same key (a backfill dates both from LICO), the first-announced
+    # figure must not be replaced by a restated one.
+    return pl.DataFrame(rows).unique(subset=_PK, keep="first", maintain_order=True)
