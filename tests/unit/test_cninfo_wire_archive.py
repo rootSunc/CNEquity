@@ -186,6 +186,53 @@ def test_dense_day_partition_archive_replays_only_with_complete_reconciliation(
         replay_announcement_index_range(archive, target, records=records)
 
 
+def test_residual_sorted_walks_replay_with_their_partition(monkeypatch, tmp_path):
+    monkeypatch.setattr(announcements, "_CNINFO_MARKET_PLATES", ("sz", "sh"))
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {})
+    monkeypatch.setattr(announcements, "_CNINFO_TRADES", ())
+    monkeypatch.setattr(announcements, "_CNINFO_CATEGORIES", ())
+    target = date(2020, 4, 28)
+    day = target.isoformat()
+
+    class Client:
+        def post(self, _url, data):
+            if data.get("sortName"):
+                rows = [_row("c", day=day), _row("a", day=day)]
+                return _Response({"announcements": rows, "totalRecordNum": 3, "totalpages": 101})
+            if not data["plate"]:
+                return _Response(
+                    {
+                        "announcements": [_row("a", day=day)],
+                        "totalRecordNum": 3,
+                        "totalpages": 101,
+                        "hasMore": True,
+                    }
+                )
+            identifier = {"sz": "a", "sh": "b"}[data["plate"]]
+            return _Response(
+                {
+                    "announcements": [_row(identifier, day=day)],
+                    "totalRecordNum": 1,
+                    "totalpages": 1,
+                    "hasMore": False,
+                }
+            )
+
+    config = _config(tmp_path)
+    live = fetch_announcement_index_range(target, client=Client(), config=config)
+    archive = RawPayloadArchive(config.meta_root)
+    records = archive.records("announcement_index")
+    replayed = replay_announcement_index_range(archive, target)
+
+    assert set(live["announcement_id"].to_list()) == {"a", "b", "c"}
+    assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
+    assert "szse|order=code:asc" in {record.pagination["column"] for record in records}
+
+    without_walks = [record for record in records if not record.request_params.get("sortName")]
+    with pytest.raises(RawArchiveError, match="plate coverage"):
+        replay_announcement_index_range(archive, target, records=without_walks)
+
+
 def test_conflicting_record_total_aliases_fail_live_and_replay(tmp_path):
     target = date(2024, 1, 2)
     payload = {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
 import time
 import warnings
@@ -26,11 +27,16 @@ from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import frame_from_rows
 
+logger = logging.getLogger(__name__)
+
 SSE_URL = "https://query.sse.com.cn/commonSoaQuery.do"
 SZSE_URL = "https://www.szse.cn/api/report/ShowReport"
 SSE_REFERER = "https://www.sse.com.cn/assortment/fund/etf/list/"
 SZSE_REFERER = "https://fund.szse.cn/marketdata/etf/"
 SZSE_FUNDS_REFERER = "https://fund.szse.cn/marketdata/fundslist/"
+# A fund being wound up can briefly appear with blank fields; more than this
+# many such rows means the directory format changed, not a single delisting.
+SSE_MAX_BLANK_ROWS = 3
 SSE_DOMESTIC_EQUITY_SUBCLASSES = frozenset({"01", "03", "09", "31"})
 SSE_EXCLUDED_SUBCLASSES = frozenset({"02", "06", "08", "32", "33", "37"})
 SZSE_NON_STOCK_CATEGORIES = frozenset({"债券基金", "货币市场基金", "其它基金", "混合基金", "ABS"})
@@ -159,12 +165,14 @@ def parse_sse_profiles(payload: bytes, observed: date) -> list[dict[str, Any]]:
     if not isinstance(rows, list) or not rows or int(page.get("total") or 0) != len(rows):
         raise ValueError("SSE ETF directory is empty or incomplete")
     out = []
+    blank = []
     for item in rows:
         code = _code(item.get("fundCode"))
         subclass = str(item.get("subClass") or "").strip()
         name = _text(item.get("secNameFull"))
         if not name or str(item.get("fundType") or "") != "00":
-            raise ValueError(f"SSE ETF {code} has no name or ETF fund type")
+            blank.append(code)
+            continue
         listed = _text(item.get("listingDate"))
         list_date = (
             date.fromisoformat(f"{listed[:4]}-{listed[4:6]}-{listed[6:8]}") if listed else None
@@ -204,6 +212,10 @@ def parse_sse_profiles(payload: bytes, observed: date) -> list[dict[str, Any]]:
                 "source": "exchange",
             }
         )
+    if len(blank) > SSE_MAX_BLANK_ROWS:
+        raise ValueError(f"SSE ETF directory has {len(blank)} rows without name or ETF fund type")
+    if blank:
+        logger.warning("SSE ETF directory: skipped row(s) without name or ETF fund type: %s", blank)
     return out
 
 

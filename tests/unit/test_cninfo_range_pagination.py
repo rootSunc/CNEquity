@@ -600,6 +600,66 @@ def test_dense_single_day_rejects_same_count_identity_replacement(monkeypatch):
         fetch_announcement_index_range(target, client=Client())
 
 
+class _UncategorisedRowClient:
+    """A dense day whose plate buckets miss one row only a sorted walk returns."""
+
+    def __init__(self, target: date, sorted_rows: tuple[str, ...]):
+        self.target = target
+        self.sorted_rows = sorted_rows
+        self.calls: list[dict] = []
+
+    def post(self, _url, data):
+        self.calls.append(dict(data))
+        day = self.target.isoformat()
+        if data.get("sortName"):
+            rows = [_row(key, day) for key in self.sorted_rows]
+            return _Response({"announcements": rows, "totalRecordNum": 3, "totalpages": 101})
+        if not data["plate"]:
+            return _Response(
+                {
+                    "announcements": [_row("a", day)],
+                    "totalRecordNum": 3,
+                    "totalpages": 101,
+                    "hasMore": True,
+                }
+            )
+        identifier = {"sz": "a", "sh": "b"}[data["plate"]]
+        return _Response(
+            {
+                "announcements": [_row(identifier, day)],
+                "totalRecordNum": 1,
+                "totalpages": 1,
+                "hasMore": False,
+            }
+        )
+
+
+def test_dense_single_day_fills_rows_outside_every_bucket_from_sorted_walks(monkeypatch):
+    """Measured 2020-04-28: a category cover missed rows that had no category."""
+    _only_plate_partitions(monkeypatch)
+    target = date(2020, 4, 28)
+    client = _UncategorisedRowClient(target, sorted_rows=("c", "a"))
+    metrics: dict = {}
+
+    frame = fetch_announcement_index_range(target, client=client, metrics=metrics)
+
+    assert set(frame["announcement_id"].to_list()) == {"a", "b", "c"}
+    assert metrics["residual_splits"] == 1
+    assert {
+        (call["sortName"], call["sortType"]) for call in client.calls if call.get("sortName")
+    } == {("code", "asc"), ("code", "desc"), ("time", "asc"), ("time", "desc")}
+
+
+def test_dense_single_day_still_fails_when_sorted_walks_leave_a_gap(monkeypatch):
+    _only_plate_partitions(monkeypatch)
+    target = date(2020, 4, 28)
+
+    with pytest.raises(RuntimeError, match="plate coverage.*2.*unfiltered total is 3"):
+        fetch_announcement_index_range(
+            target, client=_UncategorisedRowClient(target, sorted_rows=("a",))
+        )
+
+
 def test_cninfo_step_uses_registry_date_chunks_for_default_backfill(tmp_path, monkeypatch):
     """The step must bound a direct/default backfill, not just CLI ranges."""
     config = Config(data_root=tmp_path / "data", raw_archive_enabled=False)

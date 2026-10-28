@@ -130,6 +130,16 @@ _CNINFO_CATEGORIES: tuple[str, ...] = (
 #: appear in a bucket identity.
 _PARTITION_AXES: tuple[str, ...] = ("plate", "trade", "category")
 _BUCKET_SEPARATOR = "|"
+#: Bucket-identity key for a sorted residual walk (``sortName:sortType``).
+#: Not a partition axis: it reorders the parent query instead of narrowing it.
+_ORDER_KEY = "order"
+# A cover can miss rows that carry none of its filter values: measured on
+# 2020-04-28, sse main board x manufacturing held 4,273 rows but its 30
+# categories only 4,270 (a pre-IPO prospectus and an audit note had no
+# category). Capped walks of the parent in these orders reach both ends of
+# the result; no single order is exact on its own, because ties on a busy
+# code reshuffle between pages, but their residual completes the cover.
+_RESIDUAL_ORDERS: tuple[str, ...] = ("code:asc", "code:desc", "time:asc", "time:desc")
 
 # The checkpoint must be tied to the request/normalization contract.  Bumping
 # this value forces a clean walk instead of mixing rows fetched under an older
@@ -517,7 +527,7 @@ def _bucket_column(column: str, filters: Mapping[str, str] | None) -> str:
     """Encode the applied filters into the checkpoint / archive identity."""
     suffix = "".join(
         f"{_BUCKET_SEPARATOR}{axis}={filters[axis]}"
-        for axis in _PARTITION_AXES
+        for axis in (*_PARTITION_AXES, _ORDER_KEY)
         if filters and filters.get(axis)
     )
     return f"{column}{suffix}"
@@ -1050,6 +1060,99 @@ def _checkpoint_archive_reusable(
     return True
 
 
+def _residual_identities(rows: list[dict]) -> set[str]:
+    return {str(identity) for row in rows if (identity := _announcement_id(row)) is not None}
+
+
+def _with_residual(bucket_rows: list[dict], residual_rows: list[dict]) -> list[dict]:
+    """Add the sorted walks' rows that no bucket returned."""
+    covered = _residual_identities(bucket_rows)
+    return bucket_rows + [row for row in residual_rows if str(_announcement_id(row)) not in covered]
+
+
+def _fetch_ordered_walk(
+    client: httpx.Client,
+    *,
+    day: date,
+    column: str,
+    label: str,
+    filters: Mapping[str, str],
+    order: str,
+    config=None,
+    metrics: dict[str, Any] | None = None,
+    max_pages_per_slice: int,
+    raw_archive: RawPayloadArchive | None = None,
+    run_id: str | None = None,
+    request_scope: str | None = None,
+) -> list[dict]:
+    """Walk one day's query in a fixed order, up to the page cap.
+
+    The result is evidence for a residual, never a complete slice: the caller
+    only accepts it inside a union whose unique count equals the source total.
+    """
+    sort_name, _, sort_type = order.partition(":")
+    bucket_column = _bucket_column(column, {**filters, _ORDER_KEY: order})
+    record: dict[str, Any] = {"capture_id": uuid.uuid4().hex}
+    rows: list[dict] = []
+    signatures: set[str] = set()
+    total: int | None = None
+    for page in range(1, max_pages_per_slice + 1):
+        payload = {
+            "pageNum": page,
+            "pageSize": _PAGE_SIZE,
+            "column": column,
+            "tabName": "fulltext",
+            "plate": filters.get("plate", ""),
+            "stock": "",
+            "searchkey": "",
+            "secid": "",
+            "category": filters.get("category", ""),
+            "trade": filters.get("trade", ""),
+            "seDate": f"{day.isoformat()}~{day.isoformat()}",
+            "sortName": sort_name,
+            "sortType": sort_type,
+        }
+        kwargs: dict[str, Any] = {"data": payload}
+        if metrics is not None:
+            kwargs["metrics"] = metrics
+        if config is not None:
+            kwargs["config"] = config
+        if raw_archive is not None:
+            kwargs["on_response"] = lambda response, parsed, attempt, _payload=payload, _page=page: (
+                _archive_cninfo_response(
+                    raw_archive,
+                    record=record,
+                    label=label,
+                    payload=_payload,
+                    column=bucket_column,
+                    page=_page,
+                    start=day,
+                    end=day,
+                    response=response,
+                    parsed=parsed,
+                    attempt=attempt,
+                    run_id=run_id,
+                    request_scope=request_scope,
+                )
+            )
+        data = post_with_retry(client, _CNINFO_URL, **kwargs)
+        batch = _announcement_batch(data, column=column, page=page)
+        if total is None:
+            total = _pagination_total_record_num(data, column=column, page=page)
+        signature = _pagination_page_signature(batch)
+        if not batch or signature in signatures:
+            break
+        signatures.add(signature)
+        for item in batch:
+            _validate_source_date(item, day, column=column)
+        rows.extend(batch)
+        if metrics is not None:
+            metrics["residual_pages"] = int(metrics.get("residual_pages", 0)) + 1
+        if total is not None and len(rows) >= total:
+            break
+    return rows
+
+
 def _fetch_page_slice(
     client: httpx.Client,
     *,
@@ -1389,6 +1492,19 @@ def _fetch_page_slice(
                         )
                     control_identities.add(str(control_identity))
                 coverage_failure: PartitionCoverageError | None = None
+                residual_rows: list[dict] | None = None
+
+                def reconcile(rows: list[dict], axis: str) -> list[dict]:
+                    return _reconcile_partition_rows(
+                        rows,
+                        expected_total=authoritative_total,
+                        label=label,
+                        column=bucket_column,
+                        day=start,
+                        axis=axis,
+                        required_identities=control_identities,
+                    )
+
                 for axis, values in _partition_candidates(filters):
                     record["status"] = f"{axis}_split"
                     record["rows"] = []
@@ -1405,15 +1521,38 @@ def _fetch_page_slice(
                     try:
                         for value in values:
                             bucket_rows.extend(_child(start, end, {**filters, axis: value}))
-                        reconciled = _reconcile_partition_rows(
-                            bucket_rows,
-                            expected_total=authoritative_total,
-                            label=label,
-                            column=bucket_column,
-                            day=start,
-                            axis=axis,
-                            required_identities=control_identities,
-                        )
+                        try:
+                            reconciled = reconcile(bucket_rows, axis)
+                        except PartitionCoverageError:
+                            # Rows outside every bucket value: fetch the sorted
+                            # walks once per cell and retry with their residual.
+                            # Only a shortfall can be such a gap.
+                            if len(_residual_identities(bucket_rows)) >= authoritative_total:
+                                raise
+                            if residual_rows is None:
+                                residual_rows = []
+                                for order in _RESIDUAL_ORDERS:
+                                    residual_rows.extend(
+                                        _fetch_ordered_walk(
+                                            client,
+                                            day=start,
+                                            column=column,
+                                            label=label,
+                                            filters=filters,
+                                            order=order,
+                                            config=config,
+                                            metrics=metrics,
+                                            max_pages_per_slice=max_pages_per_slice,
+                                            raw_archive=raw_archive,
+                                            run_id=run_id,
+                                            request_scope=request_scope,
+                                        )
+                                    )
+                            reconciled = reconcile(_with_residual(bucket_rows, residual_rows), axis)
+                            if metrics is not None:
+                                metrics["residual_splits"] = (
+                                    int(metrics.get("residual_splits", 0)) + 1
+                                )
                     except PartitionCoverageError as exc:
                         # This cover cannot prove it read the whole day — but a
                         # different filter may still partition it, so try the
@@ -1913,6 +2052,9 @@ def _replay_request_context(
     request_filters = {
         axis: value for axis in _PARTITION_AXES if (value := str(request.get(axis) or "").strip())
     }
+    sort_name = str(request.get("sortName") or "").strip()
+    if sort_name:
+        request_filters[_ORDER_KEY] = f"{sort_name}:{str(request.get('sortType') or '').strip()}"
     request_bucket = _bucket_column(request_column, request_filters) if request_column else ""
     if request_bucket and archived_column and request_bucket != archived_column:
         raise RawArchiveError(
@@ -2007,6 +2149,61 @@ def _replay_group_contains(
         and child[2] <= parent[2]
         and (parent[1] < child[1] or child[2] < parent[2])
     )
+
+
+def _is_residual_group(key: tuple[str, date, date]) -> bool:
+    return _ORDER_KEY in _bucket_parts(key[0])[1]
+
+
+def _replay_residual_rows(
+    key: tuple[str, date, date],
+    groups: dict[tuple[str, date, date], list[dict[str, Any]]],
+    *,
+    lineage: tuple[str, str],
+    captured_after: str,
+) -> list[dict]:
+    """Rows of the sorted walks the live split fetched for this cell."""
+    column, filters = _bucket_parts(key[0])
+    rows: list[dict] = []
+    for order in _RESIDUAL_ORDERS:
+        walk_key = (_bucket_column(column, {**filters, _ORDER_KEY: order}), key[1], key[2])
+        pages = [
+            item
+            for item in groups.get(walk_key, [])
+            if (str(item.get("run_id", "")), str(item.get("request_scope", ""))) == lineage
+            and str(item.get("captured_at", "")) >= captured_after
+        ]
+        if not pages:
+            continue
+        captures: dict[str, list[dict[str, Any]]] = {}
+        for item in pages:
+            captures.setdefault(str(item.get("capture_id", "")), []).append(item)
+        latest = max(
+            captures.values(),
+            key=lambda items: max(str(item.get("captured_at", "")) for item in items),
+        )
+        by_page: dict[int, dict[str, Any]] = {}
+        for item in latest:
+            page = int(item["page"])
+            previous = by_page.get(page)
+            if previous is None or int(item.get("attempt", 0)) >= int(previous.get("attempt", 0)):
+                by_page[page] = item
+        for page in sorted(by_page):
+            response = _replay_response(
+                store=by_page[page]["store"], record=by_page[page]["record"]
+            )
+            if response is None:
+                raise RawArchiveError(
+                    f"CNINFO archived residual walk is not an object: {walk_key!r}"
+                )
+            batch = _announcement_batch(response, column=column, page=page)
+            for row in batch:
+                try:
+                    _validate_source_date(row, key[1], column=column)
+                except RuntimeError as exc:
+                    raise RawArchiveError(str(exc)) from exc
+            rows.extend(batch)
+    return rows
 
 
 def _replay_group_rows(
@@ -2264,18 +2461,35 @@ def _replay_group_rows(
                             captured_after=selected_capture_end,
                         )
                     )
+
+                def reconcile(rows: list[dict]) -> list[dict]:
+                    try:
+                        return _reconcile_partition_rows(
+                            rows,
+                            expected_total=preflight_authoritative_total,
+                            label="archived announcement",
+                            column=key[0],
+                            day=key[1],
+                            axis=str(axis),
+                            required_identities=control_identities,
+                        )
+                    except RuntimeError as exc:
+                        raise RawArchiveError(str(exc)) from exc
+
                 try:
-                    return _reconcile_partition_rows(
-                        bucket_rows,
-                        expected_total=preflight_authoritative_total,
-                        label="archived announcement",
-                        column=key[0],
-                        day=key[1],
-                        axis=str(axis),
-                        required_identities=control_identities,
+                    return reconcile(bucket_rows)
+                except RawArchiveError:
+                    if len(_residual_identities(bucket_rows)) >= preflight_authoritative_total:
+                        raise
+                    residual_rows = _replay_residual_rows(
+                        key,
+                        groups,
+                        lineage=selected_lineage,
+                        captured_after=selected_capture_end,
                     )
-                except RuntimeError as exc:
-                    raise RawArchiveError(str(exc)) from exc
+                    if not residual_rows:
+                        raise
+                    return reconcile(_with_residual(bucket_rows, residual_rows))
             coverage_cursor = key[1]
             for child in children:
                 if child[1] != coverage_cursor:
@@ -2494,7 +2708,8 @@ def replay_cninfo_rows(
         (
             key
             for key in groups
-            if not any(_replay_group_contains(parent, key) for parent in groups)
+            if not _is_residual_group(key)
+            and not any(_replay_group_contains(parent, key) for parent in groups)
         ),
         key=lambda value: (
             value[1],

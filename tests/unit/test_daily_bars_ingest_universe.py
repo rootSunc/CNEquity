@@ -27,6 +27,7 @@ from cnequity.steps.bars import (
     _daily_fund_bar_symbols,
     _eligible_etf_bar_symbols,
     _finish_daily_bars,
+    _settle_official_etf_delisted_debts,
     _settle_official_etf_prelisting_debts,
     step_daily_bars,
 )
@@ -386,6 +387,59 @@ def test_official_listing_proof_retires_only_prelisting_debts_with_receipt(tmp_p
             "symbol": "512470.SH",
             "trade_date": D1.isoformat(),
             "official_list_date": D2.isoformat(),
+        }
+    ]
+
+
+def test_delisted_etf_debts_retire_only_when_directory_and_instruments_agree(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, ingest_eligible_etfs=True)
+    store = StateStore(cfg.meta_root)
+    store.record_outstanding_keys(
+        "daily_bars",
+        [("512390.SH", D3), ("512470.SH", D3), ("515470.SH", D3)],
+        run_id="old-run",
+        reason="unresolved_tip",
+    )
+    instruments = pl.DataFrame(
+        {
+            "symbol": ["512390.SH", "512470.SH", "515470.SH"],
+            "asset_type": ["etf"] * 3,
+            "delist_date": [D2, D2, None],
+        },
+        schema_overrides={"delist_date": pl.Date},
+    )
+    monkeypatch.setattr(
+        "cnequity.storage.instrument_catalog.load_curated_instruments", lambda *_: instruments
+    )
+    # 512470 is still in the latest directory, 515470 has no delist date.
+    monkeypatch.setattr(
+        "cnequity.query.load_with_receipt",
+        lambda *a, **k: SimpleNamespace(
+            frame=pl.DataFrame(
+                {
+                    "symbol": ["512390.SH", "512470.SH", "515470.SH", "512470.SH"],
+                    "as_of_date": [D1, D1, D1, D3],
+                }
+            ),
+            receipt={
+                "receipt_id": "evidence-id",
+                "dependencies": {"etf_profiles": {"revision_id": "revision-id"}},
+            },
+        ),
+    )
+
+    finding = _settle_official_etf_delisted_debts(cfg, D3, "repair-run")
+
+    assert finding["keys_settled"] == 1
+    remaining = {row["symbol"] for row in store.get_outstanding_keys("daily_bars")}
+    assert remaining == {"512470.SH", "515470.SH"}
+    receipts = list((cfg.meta_root / "repairs" / "etf_delisted_debts").glob("repair-run-*.json"))
+    receipt = json.loads(receipts[0].read_text())
+    assert receipt["resolved_keys"] == [
+        {
+            "symbol": "512390.SH",
+            "trade_date": D3.isoformat(),
+            "instrument_delist_date": D2.isoformat(),
         }
     ]
 

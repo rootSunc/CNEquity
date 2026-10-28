@@ -149,6 +149,22 @@ def test_incomplete_sse_directory_is_rejected():
         parse_sse_profiles(_sse_payload([{"fundCode": "510050"}], total=100), date(2026, 9, 27))
 
 
+def test_sse_blank_row_of_a_fund_being_wound_up_is_skipped(caplog):
+    good = {"fundCode": "510050", "fundType": "00", "subClass": "01", "secNameFull": "上证50ETF"}
+    rows = parse_sse_profiles(
+        _sse_payload([good, {"fundCode": "512390", "fundType": "00", "secNameFull": ""}]),
+        date(2026, 10, 27),
+    )
+    assert [item["symbol"] for item in rows] == ["510050.SH"]
+    assert "512390" in caplog.text
+
+
+def test_sse_directory_with_many_blank_rows_is_rejected():
+    blank = [{"fundCode": f"51{i:04d}", "fundType": "00"} for i in range(4)]
+    with pytest.raises(ValueError, match="4 rows without name"):
+        parse_sse_profiles(_sse_payload(blank), date(2026, 10, 27))
+
+
 def test_szse_classification_excludes_nonstock_but_does_not_guess_geography():
     directory = _szse_workbook(
         [
