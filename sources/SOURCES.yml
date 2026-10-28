@@ -177,6 +177,22 @@ sources:
     notes: 用于指数成分历史文件回填；文件许可、归属和历史文件保存权限尚未核实。
     derived: false
 
+  cni_weights:
+    owner: 国证指数有限公司（CNI；具体发布方待核实）
+    access_type: public_file
+    tos_url: unknown
+    tos_reviewed_at: unknown
+    authentication: none_observed
+    personal_use: unknown
+    commercial_use: unknown
+    cache_allowed: unknown
+    redistribution: unknown
+    rate_limit: unknown
+    retained_payloads: unknown
+    legal_status: unknown
+    notes: 国证指数每日成分权重文件，用作 index_constituents 的补充源（成分与权重）；文件许可、归属和保存权限尚未核实。
+    derived: false
+
   sw:
     owner: 申万宏源研究（Shenwan Hongyuan Research）
     access_type: public_file

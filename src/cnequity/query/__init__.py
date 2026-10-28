@@ -22,12 +22,20 @@ from cnequity.query.reader import (
 )
 from cnequity.query.receipt import ReadReceiptError, ReadResult, load_with_receipt
 from cnequity.query.resample import resample_minute_history, resample_trade_bars
-from cnequity.query.state import DatasetState, dataset_attempt, dataset_state
+from cnequity.query.state import (
+    DatasetState,
+    RevisionChange,
+    dataset_attempt,
+    dataset_revisions,
+    dataset_state,
+)
 
 __all__ = [
     "DatasetState",
     "dataset_schema",
     "dataset_state",
+    "dataset_revisions",
+    "RevisionChange",
     "dataset_attempt",
     "list_datasets",
     "load",

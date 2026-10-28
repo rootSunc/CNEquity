@@ -619,6 +619,18 @@ def _merge_delisted_instruments(
     )
     if delisted.is_empty():
         return df
+    # outDate is the removal date; delist_date is the last listed session.
+    from cnequity.storage.repairs.delist_dates import last_listed_sessions
+
+    sessions = last_listed_sessions(
+        config, dict(delisted.select("symbol", "delist_date").iter_rows())
+    )
+    delisted = delisted.with_columns(
+        pl.col("symbol")
+        .replace_strict(sessions, default=None, return_dtype=pl.Date)
+        .fill_null(pl.col("delist_date"))
+        .alias("delist_date")
+    )
     return pl.concat(
         [df, with_provenance(delisted, source="baostock", data_version="v1")],
         how="diagonal_relaxed",

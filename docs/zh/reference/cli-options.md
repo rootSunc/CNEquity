@@ -268,6 +268,13 @@
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
 | `--apply` | `False` | 向 Baostock 补取并发布新版本；默认只离线输出计划。 |
 
+## `cne repair delist-dates`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `--apply` | `False` | 发布修正后的退市日期；保留旧版本。 |
+
 ## `cne repair delisted-actions`
 
 | 参数 | 默认值 | 说明 |

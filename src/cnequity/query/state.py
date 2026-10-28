@@ -96,6 +96,51 @@ def dataset_state(
     )
 
 
+@dataclass(frozen=True)
+class RevisionChange:
+    revision: int
+    revision_id: str
+    committed_at: str
+    contract_fingerprint: str
+    changed_partitions: tuple[str, ...]
+
+
+def dataset_revisions(
+    dataset: str,
+    *,
+    after: str,
+    config: Config | None = None,
+    data_root: str | Path | None = None,
+) -> tuple[RevisionChange, ...]:
+    """Return the committed revisions after revision id *after*, oldest first.
+
+    Raises ``ValueError`` when *after* is unknown or the history after it is
+    incomplete; callers deciding whether evidence is still valid must then
+    treat the dataset as changed.
+    """
+    if dataset not in DATASETS:
+        raise ValueError(f"unknown dataset {dataset!r}")
+    from cnequity.query.reader import resolve_config
+    from cnequity.storage.revisions import RevisionConsistencyError, RevisionStore
+
+    cfg = resolve_config(config=config, data_root=data_root)
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root, create=False)
+    try:
+        receipts = store.history_after(dataset, after)
+    except RevisionConsistencyError as exc:
+        raise ValueError(str(exc)) from exc
+    return tuple(
+        RevisionChange(
+            revision=r.revision,
+            revision_id=r.revision_id,
+            committed_at=r.committed_at,
+            contract_fingerprint=r.contract_fingerprint,
+            changed_partitions=r.changed_partitions,
+        )
+        for r in receipts
+    )
+
+
 def dataset_attempt(
     dataset: str,
     *,

@@ -437,7 +437,7 @@ def delisted_coverage_report(
         else:
             proven_overlap += 1
             if overlap_is_definite and span[1] != catalog_last:
-                formal_delist = instrument_dates.get(symbol)
+                formal_delist = formal.get(symbol)  # removal date, not delist_date
                 # Baostock's formal delist date is the day after the catalogue
                 # terminal for two recent names whose final catalogue quote
                 # carried no positive-volume print. Both independent raw-bar

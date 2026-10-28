@@ -104,7 +104,7 @@ Multi-source snapshot path: `meta/source_snapshots/{dataset}/source={source}/dat
 | exchange | string | SH/SZ/BJ |
 | asset_type | string | stock/etf/index; the legacy `etf` value also covers some LOFs, so it cannot be used to decide ETF research eligibility |
 | list_date | date | Nullable |
-| delist_date | date | Nullable |
+| delist_date | date | Nullable; the last listed session (inclusive, halt placeholders count), i.e. the session before the removal date |
 | prev_symbol | string | Nullable |
 | source | string |  |
 | data_version | string |  |

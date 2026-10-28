@@ -324,6 +324,48 @@ def contract_fingerprint(value: Any = None) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+# Fields that say where rows come from or how the writer schedules and grades
+# fetches. Swapping a primary for a backup source changes none of the rows a
+# reader gets back, so downstream evidence keyed on the data contract must not
+# be invalidated by it; a source switch that does rewrite history shows up in
+# the revision's changed partitions instead.
+OPERATIONAL_CONTRACT_FIELDS = frozenset(
+    {
+        "primary_source",
+        "backup_source",
+        "backfill_source",
+        "source_retired_date",
+        "backfill_chunk_days",
+        "backfill_chunk_symbols",
+        "max_staleness_days",
+        "empty_severity",
+        "negative_evidence_ttl_days",
+        "reconciliation_lookback_days",
+        "reconciliation_lookback_mode",
+        "tier",
+        "required",
+    }
+)
+
+
+def data_contract_fingerprint(name: str) -> str:
+    """Fingerprint one dataset's contract without its operational fields.
+
+    Unlike :func:`contract_fingerprint`, this moves only when the shape or
+    meaning of the stored rows changes (columns, types, keys, partitioning,
+    PIT semantics), not when the sources or fetch schedule are re-ordered.
+    """
+
+    if name not in DATASETS:
+        raise ValueError(f"unknown dataset {name!r}")
+    record = {
+        key: value
+        for key, value in dataset_contract(name).items()
+        if key not in OPERATIONAL_CONTRACT_FIELDS
+    }
+    return contract_fingerprint(record)
+
+
 def contract_json(value: Any = None, *, indent: int | None = 2) -> str:
     """Serialize a contract or dataset record with stable key ordering."""
 

@@ -7,7 +7,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
-from cnequity.query import dataset_state
+from cnequity.query import dataset_revisions, dataset_state
 from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.revisions import RevisionStore
 
@@ -249,3 +249,49 @@ def test_revision_queries_do_not_initialize_an_empty_lake(tmp_path):
     assert resolve_committed_root(logical) == logical
     assert committed_revision(logical) is None
     assert not lake.exists()
+
+
+def test_public_dataset_revisions_lists_changes_after_a_revision(tmp_path):
+    cfg = Config(data_root=tmp_path / "data")
+    path = _curated_file(cfg.curated_root)
+    store = RevisionStore(cfg.meta_root, cfg.curated_root)
+    first = store.commit(
+        "daily_bars",
+        run_id="run-1",
+        changed_files=[path],
+        schema_version=1,
+        contract_fingerprint="contract-a",
+    )
+    later = cfg.curated_root / "daily_bars" / "trade_date=2026-10-28" / "part-merged.parquet"
+    later.parent.mkdir(parents=True)
+    later.write_bytes(b"later")
+    second = store.commit(
+        "daily_bars",
+        run_id="run-2",
+        changed_files=[later],
+        schema_version=1,
+        contract_fingerprint="contract-b",
+    )
+    assert first is not None and second is not None
+
+    changes = dataset_revisions("daily_bars", after=first.revision_id, config=cfg)
+    assert [c.revision_id for c in changes] == [second.revision_id]
+    assert changes[0].changed_partitions == ("daily_bars/trade_date=2026-10-28",)
+    assert changes[0].contract_fingerprint == "contract-b"
+    assert dataset_revisions("daily_bars", after=second.revision_id, config=cfg) == ()
+
+    with pytest.raises(ValueError, match="not in the receipt history"):
+        dataset_revisions("daily_bars", after="unknown", config=cfg)
+
+    later.write_bytes(b"later again")
+    third = store.commit(
+        "daily_bars",
+        run_id="run-3",
+        changed_files=[later],
+        schema_version=1,
+        contract_fingerprint="contract-b",
+    )
+    assert third is not None
+    (cfg.meta_root / "revisions" / "daily_bars" / f"{2:08d}-{second.revision_id}.json").unlink()
+    with pytest.raises(ValueError, match="revision 2 of daily_bars is missing"):
+        dataset_revisions("daily_bars", after=first.revision_id, config=cfg)

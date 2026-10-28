@@ -104,7 +104,7 @@
 | exchange | string | SH/SZ/BJ |
 | asset_type | string | stock/etf/index；旧 `etf` 值也包含部分 LOF，不可据此判定 ETF 研究资格 |
 | list_date | date | 可空 |
-| delist_date | date | 可空 |
+| delist_date | date | 可空；最后一个上市交易日（含当天，停牌占位也算），即摘牌日的前一个交易日 |
 | prev_symbol | string | 可空 |
 | source | string |  |
 | data_version | string |  |

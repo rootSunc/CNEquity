@@ -130,7 +130,8 @@ def test_merge_appends_delisted_and_fills_list_dates(tmp_path, monkeypatch):
 
     assert set(merged["symbol"]) == {"600519.SH", "000001.SZ", "600001.SH", "000003.SZ"}
     dead = merged.filter(pl.col("symbol") == "600001.SH")
-    assert dead["delist_date"].item() == date(2009, 12, 25)
+    # outDate 2009-12-25 is the removal date; delist_date is the session before.
+    assert dead["delist_date"].item() == date(2009, 12, 24)
     assert dead["source"].item() == "baostock"
     # list_date backfilled onto the still-listed name from baostock's ipoDate.
     assert merged.filter(pl.col("symbol") == "600519.SH")["list_date"].item() == date(2001, 8, 27)

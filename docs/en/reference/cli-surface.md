@@ -29,6 +29,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne repair bar-turnover` | only with --apply | Read-only preview by default; --apply requests Baostock (with --peer-review also exchange history, TDX and EastMoney) and replaces whole Shanghai/Shenzhen stock bars with bad turnover |
 | `cne repair bse-tip-turnover` | only with --apply | Read-only preview by default; --apply requests the BSE quote board and fills turnover for the latest session only |
 | `cne repair corporate-action-gaps` | with --apply | Offline preview by default; --apply queries Baostock and CNINFO per gap, publishes a new version after verification and keeps the old one |
+| `cne repair delist-dates` | none | Read-only preview by default; --apply moves delist dates that equal the removal date back one session, publishes through the repair gate and retains old revisions |
 | `cne repair delisted-actions` | only with --apply | Read-only preview by default; --apply fills delisted securities' historical dividends and ex-rights from Baostock (Shanghai/Shenzhen) or THS (Beijing) and writes the lake |
 | `cne repair ex-dates` | only with --apply | Read-only preview by default; --apply requests historical ex-rights rows from EastMoney day by day for the given ex-dates and writes the lake |
 | `cne repair financial-originals` | --refresh-sources only | Replays original periodic reports offline by default; --apply appends identifiable current-period consolidated figures, publishes through the repair gate and retains existing vintages and honest observation times |

@@ -875,6 +875,47 @@ class RevisionStore:
         )
         return DatasetRevision(**payload)
 
+    def history_after(self, dataset: str, revision_id: str) -> tuple[DatasetRevision, ...]:
+        """Return every committed receipt after *revision_id*, oldest first.
+
+        Raises :class:`RevisionConsistencyError` when *revision_id* is not in
+        the receipt directory or the sequence after it has a gap, so a caller
+        can never mistake a partial history for "nothing changed".
+        """
+        directory = self.root / dataset
+        _reject_symlink_path(directory, label="revision directory")
+        receipts: dict[int, Path] = {}
+        start: int | None = None
+        for path in directory.glob("*-*.json") if directory.is_dir() else ():
+            number, _, rid = path.stem.partition("-")
+            if not number.isdigit():
+                continue
+            receipts[int(number)] = path
+            if rid == revision_id:
+                start = int(number)
+        if start is None:
+            raise RevisionConsistencyError(
+                f"revision {revision_id} of {dataset} is not in the receipt history"
+            )
+        latest = self.latest(dataset)
+        end = latest.revision if latest is not None else start
+        out: list[DatasetRevision] = []
+        for number in range(start + 1, end + 1):
+            path = receipts.get(number)
+            if path is None:
+                raise RevisionConsistencyError(f"revision {number} of {dataset} is missing")
+            self._assert_regular(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["files"] = tuple(RevisionFile(**item) for item in payload.get("files", []))
+            payload["changed_partitions"] = tuple(payload.get("changed_partitions", []))
+            payload["generation_files"] = tuple(
+                RevisionFile(**item) for item in payload.get("generation_files", [])
+            )
+            payload.setdefault("generation_path", "")
+            payload.setdefault("pointer_path", "")
+            out.append(DatasetRevision(**payload))
+        return tuple(out)
+
     def sync_state(self, dataset: str) -> None:
         """Repair the denormalised state file from the committed pointer."""
         pointer = self._read_pointer(dataset)

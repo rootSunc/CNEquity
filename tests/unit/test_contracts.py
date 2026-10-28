@@ -167,3 +167,22 @@ def test_current_release_contract_is_versioned_and_packaged():
 
     data_files = project["tool"]["setuptools"]["data-files"]
     assert f"contracts/v{version}.json" in data_files["share/cnequity/contracts"]
+
+
+def test_data_contract_fingerprint_ignores_source_order_but_not_columns():
+    from cnequity.domain.contracts import (
+        OPERATIONAL_CONTRACT_FIELDS,
+        contract_fingerprint,
+        data_contract_fingerprint,
+        dataset_contract,
+    )
+
+    record = dataset_contract("trading_status")
+    swapped = dict(
+        record, primary_source=record["backup_source"], backup_source=record["primary_source"]
+    )
+    strip = lambda r: {k: v for k, v in r.items() if k not in OPERATIONAL_CONTRACT_FIELDS}  # noqa: E731
+    assert contract_fingerprint(swapped) != contract_fingerprint(record)
+    assert contract_fingerprint(strip(swapped)) == data_contract_fingerprint("trading_status")
+    renamed = dict(strip(record), columns=[*record["columns"], "extra"])
+    assert contract_fingerprint(renamed) != data_contract_fingerprint("trading_status")

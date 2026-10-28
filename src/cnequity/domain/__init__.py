@@ -1,6 +1,7 @@
 from cnequity.domain.contracts import (
     build_contract,
     contract_fingerprint,
+    data_contract_fingerprint,
     dataset_contract,
     diff_contracts,
     export_contract,
@@ -53,6 +54,7 @@ __all__ = [
     "PitQuality",
     "build_contract",
     "contract_fingerprint",
+    "data_contract_fingerprint",
     "dataset_contract",
     "diff_contracts",
     "export_contract",

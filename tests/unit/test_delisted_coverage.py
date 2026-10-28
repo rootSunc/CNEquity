@@ -119,10 +119,20 @@ def test_coverage_separates_definite_unknown_terminal_and_identity_gaps(tmp_path
 
 
 def test_final_nonprinting_quote_is_not_a_missing_terminal_bar(tmp_path, monkeypatch):
+    from cnequity.steps.delisted import write_delisted_identity_evidence
+
     cfg = _cfg(tmp_path, {"600003.SH": "2021-06-07"})
     _write_bars(cfg, "600003.SH", date(2019, 2, 1), date(2021, 6, 4))
     _write_bars(cfg, "600519.SH", date(2026, 7, 24))
-    _write_instruments(cfg, [("600003.SH", date(2021, 6, 8))])
+    # delist_date is the last listed session; the removal date is identity evidence.
+    _write_instruments(cfg, [("600003.SH", date(2021, 6, 7))])
+    write_delisted_identity_evidence(
+        cfg,
+        pl.DataFrame(
+            {"symbol": ["600003.SH"], "list_date": [None], "delist_date": [date(2021, 6, 8)]},
+            schema_overrides={"list_date": pl.Date},
+        ),
+    )
     monkeypatch.setattr(
         "cnequity.quality.delisted_coverage.pending_codes", lambda cfg, read_context=None: []
     )
