@@ -64,6 +64,17 @@ def test_daily_bars_flags_market_wide_missing_day(tmp_path):
     assert findings[0]["missing_sample"] == ["2024-06-04"]
 
 
+def test_daily_bars_lone_history_before_floor_does_not_widen_coverage(tmp_path):
+    # Measured 2026-10-29: 000508.SZ bars from 1993 flagged 952 pre-2001 sessions.
+    cfg = Config(data_root=tmp_path / "data")
+    old = [date(1997, 2, 27), date(1997, 2, 28), date(1997, 3, 3)]
+    days = [date(2024, 6, 3), date(2024, 6, 4)]
+    _write_calendar(cfg.data_root, [(d, True) for d in old + days])
+    _write_daily(cfg.data_root, "daily_bars", [("OLD", old[0])] + [("A", d) for d in days])
+
+    assert daily_bars_calendar_findings(cfg, date(2024, 6, 4)) == []
+
+
 def test_daily_bars_flags_orphan_bar_on_non_trading_day(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     _write_calendar(

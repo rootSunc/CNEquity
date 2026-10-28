@@ -73,3 +73,13 @@ def test_peer_revenue_below_the_lakes_total_is_not_a_disagreement(tmp_path):
 def test_peer_revenue_above_the_lakes_total_still_disagrees(tmp_path):
     (finding,) = _findings(tmp_path, [_revenue(100)], [_revenue(110)])
     assert finding["disagreed"] == 1
+
+
+def test_restated_comparatives_are_reported_apart(tmp_path):
+    # A later annual report restates 2024Q4; the peer shows the restated figure
+    # under the first disclosure date, the lake the figure first disclosed.
+    peer = [_row(150), {**_row(0), "report_period": "2025Q4"}]
+    findings = _findings(tmp_path, [_row(100)], peer)
+    assert [f["check"] for f in findings] == ["financial_statement_peer_restated"]
+    assert findings[0]["severity"] == "info"
+    assert findings[0]["disagreed"] == 1

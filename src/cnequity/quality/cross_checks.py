@@ -184,6 +184,12 @@ def daily_bars_calendar_findings(config: Config, trade_date: date) -> list[dict]
     # symbol. A terminal partition containing only suspension placeholders is
     # still checked above for calendar anomalies, but must not extend the
     # market-wide coverage interval and create a false missing-day finding.
+    # Market-wide history starts at the deep-history floor; delisted recovery
+    # lands lone 1990s stock histories (000508.SZ from 1993) that would turn
+    # every pre-floor session into a false missing day.
+    from cnequity.steps.bars import HISTORY_BACKFILL_START
+
+    traded_dates = {d for d in traded_dates if d >= HISTORY_BACKFILL_START}
     if not traded_dates:
         return findings
     first, last = min(traded_dates), max(traded_dates)
@@ -2899,20 +2905,49 @@ def financial_statement_peer_findings(config: Config) -> list[dict]:
         .otherwise(pl.col("_rel"))
         .alias("_rel")
     )
+    # The peer overwrites a period with the restated comparative of a later
+    # annual report but keeps the first disclosure date; the lake keeps what
+    # was first disclosed. Measured 2026-10-29: 1,246 of 1,250 disagreements
+    # sat in periods older than the symbol's latest annual report (研发费用
+    # split out of 管理费用 for 2017, 解释16号 deferred tax for 2022, ...).
+    latest_annual = (
+        peer.filter(pl.col("report_period").str.ends_with("Q4"))
+        .group_by("symbol")
+        .agg(pl.col("report_period").max().alias("_latest_annual"))
+    )
+    scored = scored.join(latest_annual, on="symbol", how="left").with_columns(
+        (pl.col("report_period") < pl.col("_latest_annual")).fill_null(False).alias("_restatable")
+    )
+    breach = pl.col("_rel") > STATEMENT_PEER_TOLERANCE
+    restated = int(scored.select((breach & pl.col("_restatable")).sum()).item())
     by_code = (
         scored.group_by("item_code")
         .agg(
             pl.len().alias("compared"),
-            (pl.col("_rel") > STATEMENT_PEER_TOLERANCE).sum().alias("disagreed"),
+            (breach & ~pl.col("_restatable")).sum().alias("disagreed"),
         )
         .filter(pl.col("disagreed") > 0)
         .sort("disagreed", descending=True)
     )
+    findings: list[dict] = []
+    if restated:
+        findings.append(
+            {
+                "dataset": "financial_statement_items",
+                "severity": "info",
+                "check": "financial_statement_peer_restated",
+                "message": (
+                    f"{restated} value(s) differ from the peer in periods a later annual "
+                    "report may have restated; the lake keeps the first disclosure"
+                ),
+                "disagreed": restated,
+            }
+        )
     if by_code.is_empty():
-        return []
+        return findings
 
     total = int(by_code.get_column("disagreed").sum())
-    return [
+    return findings + [
         {
             "dataset": "financial_statement_items",
             "severity": "warning",
