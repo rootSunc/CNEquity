@@ -528,3 +528,42 @@ def test_apostrophe_in_lake_path_preserves_real_data(tmp_path):
     db = ensure_duckdb_views(Config(data_root=root))
     with duckdb.connect(str(db), read_only=True) as con:
         assert con.execute("SELECT close FROM daily_bars").fetchall() == [(10.0,)]
+
+
+def test_central_bank_rates_joins_calendar_rows_by_series_code(tmp_path):
+    data_root = tmp_path / "data"
+    partition = data_root / "curated" / "economic_calendar" / "event_date=2026"
+    partition.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "event_id": ["jin10:1", "jin10:2"],
+            "indicator_code": ["jin10:77", "jin10:117"],
+            "event_date": [date(2026, 9, 17), date(2026, 9, 17)],
+            "event_time": ["02:00", "19:00"],
+            "country": ["美国", "美国"],
+            "indicator": ["美联储利率决定(上限)（至9月17日）", "当周MBA30年期固定抵押贷款利率"],
+            "importance": [5, 2],
+            "forecast": [4.0, None],
+            "previous": [3.75, 7.3],
+            "actual": [4.25, 7.4],
+            "unit": ["%", "%"],
+            "source": ["jin10", "jin10"],
+            "data_version": ["v1", "v1"],
+            "fetched_at": [datetime(2026, 9, 17, tzinfo=timezone.utc)] * 2,
+        }
+    ).write_parquet(partition / "part.parquet")
+
+    db = ensure_duckdb_views(Config(data_root=data_root))
+    with duckdb.connect(str(db)) as con:
+        rows = con.execute(
+            "SELECT bank, policy, actual, change, surprise FROM central_bank_rates"
+        ).fetchall()
+    # A mortgage rate is not a policy decision; only the Fed row joins.
+    assert rows == [("Fed", True, 4.25, 0.5, 0.25)]
+
+
+def test_central_bank_series_codes_are_unique():
+    from cnequity.domain.central_banks import CENTRAL_BANK_RATES
+
+    codes = [s.indicator_code for s in CENTRAL_BANK_RATES]
+    assert len(codes) == len(set(codes))

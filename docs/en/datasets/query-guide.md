@@ -230,6 +230,7 @@ Common views:
 | `daily_bars_qfq` | qfq price columns |
 | `daily_bars_adj` | Includes adj_* and adj_is_exact |
 | `daily_bars_total_return(start, end)` | Table macro: total-return-adjusted prices `tr_*` (fund cash distributions reinvested; stocks same as hfq) |
+| `central_bank_rates` | Central bank rate decisions, taken from `economic_calendar` by Jin10 series id: `bank`, `rate`, `policy` (the bank's main policy rate), forecast / previous / actual, `change` (actual − previous) and `surprise` (actual − forecast) |
 | `{dataset}` | Each curated/derived dataset |
 
 Database: `{data.root}/duckdb/cnequity.duckdb` (read-only connection).

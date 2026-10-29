@@ -229,6 +229,7 @@ cne query --sql "SELECT * FROM instruments LIMIT 5"
 | `daily_bars_qfq` | 前复权价列 |
 | `daily_bars_adj` | 含 adj_* 与 adj_is_exact |
 | `daily_bars_total_return(start, end)` | 表宏：总收益复权价 `tr_*`（基金现金分配再投资，股票同后复权） |
+| `central_bank_rates` | 各国央行利率决议：按金十指标编号从 `economic_calendar` 取出，含 `bank`、`rate`、`policy`（是否为主要政策利率）、预期 / 前值 / 公布值，以及 `change`（公布值 − 前值）和 `surprise`（公布值 − 预期） |
 | `{dataset}` | 各 curated/derived 数据集 |
 
 数据库：`{data.root}/duckdb/cnequity.duckdb`（只读连接）。

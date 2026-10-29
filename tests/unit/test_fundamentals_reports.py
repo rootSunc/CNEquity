@@ -320,7 +320,8 @@ def test_daily_reconstruction_publishes_with_exact_wire_archive(tmp_path, monkey
         source="eastmoney",
         request_scope="daily:2018-03-27",
     )
-    assert len(records) == 5
+    # One daily request per report, plus the LICO date lookup.
+    assert len(records) == len(_REPORTS) + 1
     assert all(record.http_metadata["wire_exact"] for record in records)
 
 
@@ -458,3 +459,9 @@ def test_backfill_keeps_other_report_units_when_one_request_fails(monkeypatch):
 
 def _REPORTS_in(urls: list[str]) -> set[str]:
     return {report.name for report in _REPORTS for url in urls if report.name in url}
+
+
+def test_closing_cash_comes_from_every_f10_cashflow_family():
+    """DMSK's END_CCE is empty; the F10 reports carry it for all four families."""
+    owners = {r.name for r in _REPORTS if ("cashflow", "end_cash") in r.items}
+    assert owners == {f"RPT_F10_FINANCE_{family}CASHFLOW" for family in "GBIS"}

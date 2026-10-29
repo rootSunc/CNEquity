@@ -372,6 +372,8 @@ def _define_views(con: duckdb.DuckDBPyConnection, config: Config, *, require_dat
         """
     )
 
+    _define_central_bank_rates(con)
+
     # Adjusted bars per ADR-0004: only hfq factors are stored.
     #   hfq price = raw * factor
     #   qfq price = raw * factor / anchor   (anchor = latest factor on a bar date)
@@ -542,5 +544,36 @@ def _define_views(con: duckdb.DuckDBPyConnection, config: Config, *, require_dat
                 close * COALESCE(_hfq, 1.0) * _mult AS adj_close
             FROM multiplied
         )
+        """
+    )
+
+
+def _define_central_bank_rates(con: duckdb.DuckDBPyConnection) -> None:
+    """One row per rate decision, joined from the calendar by Jin10 series id."""
+    from cnequity.domain.central_banks import CENTRAL_BANK_RATES
+
+    series = ", ".join(
+        f"({_sql_literal(s.indicator_code)}, {_sql_literal(s.bank)}, "
+        f"{_sql_literal(s.rate)}, {str(s.policy).upper()})"
+        for s in CENTRAL_BANK_RATES
+    )
+    columns = {row[0] for row in con.execute("DESCRIBE economic_calendar").fetchall()}
+    # A lake written before indicator_code existed has no series to join.
+    calendar = (
+        "economic_calendar"
+        if "indicator_code" in columns
+        else "(SELECT *, NULL::VARCHAR AS indicator_code FROM economic_calendar)"
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE VIEW central_bank_rates AS
+        SELECT s.bank, s.rate, s.policy, c.country, c.event_date, c.event_time,
+               c.forecast, c.previous, c.actual,
+               c.actual - c.previous AS change,
+               c.actual - c.forecast AS surprise,
+               c.indicator, c.indicator_code, c.event_id
+        FROM {calendar} c
+        JOIN (VALUES {series}) AS s(indicator_code, bank, rate, policy)
+          ON c.indicator_code = s.indicator_code
         """
     )

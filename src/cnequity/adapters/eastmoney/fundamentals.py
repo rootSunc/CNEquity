@@ -1,12 +1,14 @@
 """EastMoney financial statement items (batch, PIT via announce_date).
 
-Four EastMoney datacenter reports feed one long-format dataset:
+EastMoney datacenter reports feed one long-format dataset:
 
 * ``RPT_LICO_FN_CPD`` (业绩报表) — headline per-share and ratio items, and the
   only report carrying the **original** announcement date.
 * ``RPT_DMSK_FN_BALANCE`` / ``_INCOME`` / ``_CASHFLOW`` (财务报表) — the
   statement levels a factor library actually needs: book equity, total assets,
   operating cost, operating cash flow, capex.
+* ``RPT_F10_FINANCE_{G,B,I,S}CASHFLOW`` (F10 现金流量表) — the closing cash
+  balance, which DMSK leaves empty.
 
 **Why announce_date comes from LICO.** The DMSK reports' ``NOTICE_DATE`` is not
 the original announcement — it is the date the figure was last *republished*,
@@ -156,8 +158,20 @@ _REPORTS: tuple[_Report, ...] = (
             ("cashflow", "net_cash_finance"): "NETCASH_FINANCE",
             # 购建固定资产/无形资产等支付的现金 — the standard capex proxy.
             ("cashflow", "capex"): "CONSTRUCT_LONG_ASSET",
-            ("cashflow", "end_cash"): "END_CCE",
         },
+    ),
+    # DMSK's END_CCE is null for nearly every row (600519.SH: all periods), so
+    # the closing cash balance comes from the F10 cash-flow reports, one per
+    # statement family: general (G), bank (B), insurer (I), broker (S). Their
+    # NOTICE_DATE is the first disclosure, like LICO's (2,887 of 2,888 FY2018
+    # rows agree with the CNINFO originals); the value is EastMoney's latest.
+    *(
+        _Report(
+            f"RPT_F10_FINANCE_{family}CASHFLOW",
+            "REPORT_DATE",
+            {("cashflow", "end_cash"): "END_CCE"},
+        )
+        for family in "GBIS"
     ),
 )
 
