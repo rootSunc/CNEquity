@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import polars as pl
@@ -655,3 +655,59 @@ def test_fund_flow_same_wire_gets_distinct_run_sidecars(tmp_path):
     assert all(
         record.observation_id and "anonymous" not in record.observation_id for record in records
     )
+
+
+def _dc_row(secucode, trade_date="2025-01-02 00:00:00"):
+    return {
+        "SECUCODE": secucode,
+        "TRADE_DATE": trade_date,
+        "PRIME_INFLOW": 7.0,
+        "SUPERDEAL_INFLOW": 30.0,
+        "SUPERDEAL_OUTFLOW": 10.0,
+        "BIGDEAL_INFLOW": 5.0,
+        "BIGDEAL_OUTFLOW": 18.0,
+    }
+
+
+def test_fund_flow_uses_datacenter_when_push2_paused(monkeypatch):
+    calls = []
+
+    def _fetch(client, report, columns, **kwargs):
+        calls.append(report)
+        return [_dc_row("600000.SH"), _dc_row("000001.SZ")]
+
+    monkeypatch.setattr(cap, "fetch_datacenter", _fetch)
+    monkeypatch.setattr(
+        cap, "fetch_clist_pages", lambda *a, **k: pytest.fail("push2 must not be called")
+    )
+    config = SimpleNamespace(eastmoney_push2_paused=True)
+    client = SimpleNamespace(close=lambda: None)
+    df = cap.fetch_fund_flow(date(2025, 1, 2), client=client, config=config)
+    assert calls == ["RPT_DMSK_TS_STOCKNEW"]
+    row = df.filter(pl.col("symbol") == "600000.SH").row(0, named=True)
+    assert row["main_net_inflow"] == 7.0
+    assert row["super_large_net_inflow"] == 20.0
+    assert row["large_net_inflow"] == -13.0
+    assert row["medium_net_inflow"] is None and row["small_net_inflow"] is None
+    assert df.schema["medium_net_inflow"] == pl.Float64
+
+
+def test_fund_flow_datacenter_rejects_other_session(monkeypatch):
+    monkeypatch.setattr(
+        cap, "fetch_datacenter", lambda *a, **k: [_dc_row("600000.SH", "2025-01-03 00:00:00")]
+    )
+    client = SimpleNamespace(close=lambda: None)
+    with pytest.raises(RuntimeError, match="no TRADE_DATE row"):
+        cap.fetch_fund_flow_datacenter(date(2025, 1, 2), client=client)
+
+
+def test_fund_flow_datacenter_refuses_open_session(monkeypatch):
+    monkeypatch.setattr(
+        cap, "fetch_datacenter", lambda *a, **k: pytest.fail("must not fetch intraday")
+    )
+    # 2025-01-02 (Thursday) 14:00 Beijing: the session is still open.
+    now = datetime(2025, 1, 2, 6, 0, tzinfo=timezone.utc)
+    with pytest.raises(RuntimeError, match="not final"):
+        cap.fetch_fund_flow_datacenter(
+            date(2025, 1, 2), client=SimpleNamespace(close=lambda: None), now=now
+        )

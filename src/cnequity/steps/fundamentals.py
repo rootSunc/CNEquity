@@ -623,6 +623,40 @@ def _expected_financial_periods(config: Config, trade_date: date) -> set[str]:
     }
 
 
+# On a peak disclosure day a report's rows can change while it is paged:
+# 2026-10-30 LICO declared 5,577 rows and served 5,568, so the whole EastMoney
+# route fell to the TDX backup, which lacks end_cash and the per-share items.
+# Three later reads of the same window were complete; a short-count read is
+# transient, so it is retried before the backup takes over.
+_SHORT_READ_RETRIES = 2
+_SHORT_READ_BACKOFF_SECONDS = 30.0
+
+
+def _is_short_read(exc: EastMoneyDatacenterError) -> bool:
+    return "refusing truncated result" in str(exc) or "more than declared" in str(exc)
+
+
+def _fetch_daily_financials(config: Config, trade_date: date, run_id: str) -> pl.DataFrame:
+    import time
+
+    for attempt in range(_SHORT_READ_RETRIES + 1):
+        try:
+            return fetch_financial_statement_items(
+                trade_date, backfill=False, config=config, run_id=run_id
+            )
+        except EastMoneyDatacenterError as exc:
+            if attempt == _SHORT_READ_RETRIES or not _is_short_read(exc):
+                raise
+            logger.warning(
+                "financial_statement_items: %s; retrying (%d/%d)",
+                exc,
+                attempt + 1,
+                _SHORT_READ_RETRIES,
+            )
+            time.sleep(_SHORT_READ_BACKOFF_SECONDS * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 @register_step("financial_statement_items", group="fundamentals", depends_on=["instruments"])
 def step_financial_statement_items(
     config: Config, trade_date: date, run_id: str, context: dict
@@ -726,9 +760,7 @@ def step_financial_statement_items(
             df = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
     else:
         try:
-            df = fetch_financial_statement_items(
-                trade_date, backfill=False, config=config, run_id=run_id
-            )
+            df = _fetch_daily_financials(config, trade_date, run_id)
         except (EastMoneyDatacenterError, SourceCoolingDown, httpx.HTTPError) as exc:
             return _financials_from_tdx_fin(config, run_id, trade_date, exc)
     missing_periods: set[str] = set()

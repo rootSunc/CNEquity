@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 import math
-from datetime import date
+from datetime import date, datetime
 
 import polars as pl
 
@@ -20,12 +20,23 @@ from cnequity.adapters.eastmoney.datacenter import fetch_datacenter
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient, rate_limit_if_unconfigured
 from cnequity.adapters.eastmoney.raw import configured_archive
 from cnequity.config import Config
+from cnequity.domain.market_time import last_closed_session, shanghai_today
 from cnequity.domain.symbols import infer_exchange_from_code
 from cnequity.storage.raw_archive import RawArchiveError, captured_records
 
 logger = logging.getLogger(__name__)
 
 _FUND_FLOW_FIELDS = "f12,f13,f62,f66,f72,f78,f84"
+# 千股千评 (data.eastmoney.com/stockcomment), served by datacenter-web rather
+# than push2. It carries EastMoney's own super-large and large in/outflow, and
+# PRIME_INFLOW equals their net sum exactly, which is push2's f62. It has no
+# medium / small split and holds only the latest session (a past TRADE_DATE
+# filter answers 9201 "返回数据为空"), refreshed during trading hours.
+_FUND_FLOW_REPORT = "RPT_DMSK_TS_STOCKNEW"
+_FUND_FLOW_REPORT_COLUMNS = (
+    "SECUCODE,TRADE_DATE,PRIME_INFLOW,SUPERDEAL_INFLOW,SUPERDEAL_OUTFLOW,"
+    "BIGDEAL_INFLOW,BIGDEAL_OUTFLOW"
+)
 _MARGIN_REPORT = "RPTA_WEB_RZRQ_GGMX"
 _MARGIN_COLUMNS = "DATE,SCODE,SECUCODE,RZYE,RZMRE,RQYE,RQMCL"
 _NORTH_HOLD_REPORT = "RPT_MUTUAL_HOLDSTOCKNORTH_STA"
@@ -143,6 +154,8 @@ def fetch_fund_flow(
     config: Config | None = None,
     run_id: str | None = None,
 ) -> pl.DataFrame:
+    if getattr(config, "eastmoney_push2_paused", False):
+        return fetch_fund_flow_datacenter(trade_date, client=client, config=config, run_id=run_id)
     owns = client is None
     if client is None:
         client = EastMoneyClient(config=config)
@@ -215,6 +228,79 @@ def fetch_fund_flow(
     if not rows:
         return pl.DataFrame()
     return pl.DataFrame(rows).unique(subset=["symbol", "trade_date"], keep="last")
+
+
+def _net(item: dict, inflow: str, outflow: str) -> float | None:
+    inflow_value, outflow_value = _to_float(item.get(inflow)), _to_float(item.get(outflow))
+    if inflow_value is None or outflow_value is None:
+        return None
+    return inflow_value - outflow_value
+
+
+def fetch_fund_flow_datacenter(
+    trade_date: date,
+    *,
+    client: EastMoneyClient | None = None,
+    config: Config | None = None,
+    run_id: str | None = None,
+    now: datetime | None = None,
+) -> pl.DataFrame:
+    """``fund_flow`` from 千股千评 when push2 is out of reach.
+
+    Main, super-large and large match push2; medium and small stay null, since
+    the report gives only their sum (the four nets sum to zero).
+    """
+    if trade_date >= shanghai_today(now) and last_closed_session(now) != trade_date:
+        # The report is refreshed intraday under today's TRADE_DATE.
+        raise RuntimeError(
+            f"fund_flow: {_FUND_FLOW_REPORT} for {trade_date.isoformat()} is not final "
+            "before the 15:30 close"
+        )
+    owns = client is None
+    if client is None:
+        client = EastMoneyClient(config=config)
+    try:
+        archive = configured_archive(
+            config,
+            "fund_flow",
+            run_id=run_id,
+            request_scope=f"daily:{trade_date.isoformat()}",
+        )
+        raw = fetch_datacenter(
+            client,
+            _FUND_FLOW_REPORT,
+            _FUND_FLOW_REPORT_COLUMNS,
+            sort_columns="SECUCODE",
+            sort_types="1",
+            archive=archive,
+            archive_dataset="fund_flow",
+            archive_run_id=run_id,
+            archive_request_scope=f"daily:{trade_date.isoformat()}",
+        )
+        rows = []
+        for item in _rows_for_report_date(raw, "TRADE_DATE", trade_date):
+            sym = symbol_from_secucode(item.get("SECUCODE"))
+            if not sym:
+                continue
+            rows.append(
+                {
+                    "symbol": sym,
+                    "trade_date": trade_date,
+                    "main_net_inflow": _to_float(item.get("PRIME_INFLOW")),
+                    "super_large_net_inflow": _net(item, "SUPERDEAL_INFLOW", "SUPERDEAL_OUTFLOW"),
+                    "large_net_inflow": _net(item, "BIGDEAL_INFLOW", "BIGDEAL_OUTFLOW"),
+                    "medium_net_inflow": None,
+                    "small_net_inflow": None,
+                }
+            )
+    finally:
+        if owns:
+            client.close()
+    if not rows:
+        return pl.DataFrame()
+    return pl.DataFrame(
+        rows, schema_overrides={"medium_net_inflow": pl.Float64, "small_net_inflow": pl.Float64}
+    ).unique(subset=["symbol", "trade_date"], keep="last")
 
 
 def fetch_margin_trading(

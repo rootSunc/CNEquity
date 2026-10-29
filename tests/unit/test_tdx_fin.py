@@ -171,3 +171,51 @@ def test_gap_fill_only_writes_items_the_lake_lacks(cfg, monkeypatch):
     assert result["rows_written"] == 1
     staged = pl.read_parquet(next(cfg.staging_root.rglob("*.parquet")))
     assert staged.select("item_code", "source").rows() == [("total_assets", "tdx_fin_backfill")]
+
+
+def test_a_short_read_is_retried_before_the_backup(cfg, monkeypatch):
+    calls = []
+
+    def flaky(*_a, **_k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise EastMoneyDatacenterError(
+                "EastMoney datacenter RPT_LICO_FN_CPD returned 5568 rows but page 1 "
+                "declared count=5577; refusing truncated result"
+            )
+        return pl.DataFrame()
+
+    def backup(*_a, **_k):
+        raise AssertionError("the backup must not run after a successful retry")
+
+    monkeypatch.setattr(fund, "_SHORT_READ_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(fund, "fetch_financial_statement_items", flaky)
+    monkeypatch.setattr(fund, "_financials_from_tdx_fin", backup)
+
+    fund.step_financial_statement_items(cfg, date(2025, 8, 20), "run-retry", {})
+    assert len(calls) == 2
+
+
+def test_only_short_reads_are_retried(cfg, monkeypatch):
+    calls = {"short": 0, "breaker": 0}
+
+    def short(*_a, **_k):
+        calls["short"] += 1
+        raise EastMoneyDatacenterError(
+            "returned 1 rows but page 1 declared count=2; refusing truncated result"
+        )
+
+    def breaker(*_a, **_k):
+        calls["breaker"] += 1
+        raise EastMoneyDatacenterError("datacenter breaker open")
+
+    monkeypatch.setattr(fund, "_SHORT_READ_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(fund, "_financials_from_tdx_fin", lambda *a, **k: {"status": "degraded"})
+    monkeypatch.setattr(fund, "fetch_financial_statement_items", short)
+    assert (
+        fund.step_financial_statement_items(cfg, date(2025, 8, 20), "r1", {})["status"]
+        == "degraded"
+    )
+    monkeypatch.setattr(fund, "fetch_financial_statement_items", breaker)
+    fund.step_financial_statement_items(cfg, date(2025, 8, 20), "r2", {})
+    assert calls == {"short": fund._SHORT_READ_RETRIES + 1, "breaker": 1}

@@ -103,8 +103,8 @@ def step_fund_flow(config: Config, trade_date: date, run_id: str, context: dict)
             config, trade_date, run_id, "fund_flow", fetch_fund_flow, allow_empty=False
         )
     except Exception:
-        # push2 is the only EastMoney source of money flow; when it cannot
-        # answer, keep 同花顺's (different) measure of the day in its own table.
+        # Neither push2 nor (when paused) 千股千评 answered; keep 同花顺's
+        # (different) measure of the day in its own table.
         from cnequity.steps.ths_fallback import stage_ths_fallback
 
         stage_ths_fallback(config, trade_date, run_id, "fund_flow_ths")
