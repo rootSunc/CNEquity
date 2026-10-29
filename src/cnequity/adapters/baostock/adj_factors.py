@@ -80,6 +80,15 @@ def _closes(bs, symbol: str, start: date, end: date, flag: str, *, config) -> di
     return out
 
 
+#: Precision kept for a rescaled factor; enough for any price, and coarse
+#: enough that a one-bit move in the anchor rounds away.
+FACTOR_SIGNIFICANT_DIGITS = 12
+
+
+def _significant(value: float) -> float:
+    return float(f"{value:.{FACTOR_SIGNIFICANT_DIGITS}g}")
+
+
 def fetch_adj_factor_series_baostock(
     symbol: str,
     start: date,
@@ -144,7 +153,11 @@ def fetch_adj_factor_series_baostock(
             # Sina's level convention: 1.0 at the newest session, below it going
             # back. Without this the two vendors would disagree by a constant
             # and no cross-check could tell that from a real discrepancy.
-            "factor": [implied[day] / anchor for day in shared],
+            # Rounded to FACTOR_SIGNIFICANT_DIGITS: the anchor is the newest
+            # session's hfq/raw ratio, so it moves by a float bit whenever the
+            # tip moves, and dividing by it rewrote every historical value by
+            # ~1e-16 each day (2026-10-30, seven symbols, 4,810 partitions).
+            "factor": [_significant(implied[day] / anchor) for day in shared],
         },
         schema={"trade_date": pl.Date, "factor": pl.Float64},
     )
