@@ -187,7 +187,7 @@ def daily_bars_calendar_findings(config: Config, trade_date: date) -> list[dict]
     # Market-wide history starts at the deep-history floor; delisted recovery
     # lands lone 1990s stock histories (000508.SZ from 1993) that would turn
     # every pre-floor session into a false missing day.
-    from cnequity.steps.bars import HISTORY_BACKFILL_START
+    from cnequity.domain.market_profile import HISTORY_BACKFILL_START
 
     traded_dates = {d for d in traded_dates if d >= HISTORY_BACKFILL_START}
     if not traded_dates:

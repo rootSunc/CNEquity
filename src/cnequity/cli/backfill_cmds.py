@@ -1504,7 +1504,13 @@ def _recover_compactable_backfill_staging(engine: JobEngine, dataset: str) -> li
         if run["status"] in ("running", "stale"):
             continue
         batches = engine.manifest.get_batches_for_run(run_id)
-        if any(batch["dataset"] == "compact" and batch["status"] == "success" for batch in batches):
+        # A compact that published with warnings is as done as a clean one.
+        # Reading only ``success`` replayed such runs' staging on every later
+        # backfill and republished rows a repair had since removed (920021.BJ).
+        if any(
+            batch["dataset"] == "compact" and batch["status"] in ("success", "warning")
+            for batch in batches
+        ):
             continue
         if not writer.list_run_files(dataset, run_id):
             continue

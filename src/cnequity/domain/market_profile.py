@@ -169,6 +169,10 @@ COMPUTED_FACTOR_EXCHANGES = frozenset({"BJ"})
 # over-the-counter quotes: kept in the lake, left out of default reads.
 OTC_SCOPED_DATASETS = frozenset({"daily_bars", "adj_factors"})
 
+#: Market-wide daily history starts here: the primary vendor serves 2016 on,
+#: and the deep-history step (同花顺 per-year files) reaches back to 2001.
+HISTORY_BACKFILL_START = date(2001, 1, 1)
+
 
 def exchange_start(list_date: pl.Expr) -> pl.Expr:
     """First day a Beijing security traded on an exchange rather than NEEQ OTC.

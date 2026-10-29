@@ -5289,7 +5289,7 @@ def step_index_bars(config: Config, trade_date: date, run_id: str, context: dict
 # The primary vendor serves 2016 onward; 同花顺 keeps per-year files back to each
 # listing. Deep history is a separate step, not a wider window on the daily one:
 # it uses a different source, runs for hours, and must never be on the daily path.
-HISTORY_BACKFILL_START = date(2001, 1, 1)
+from cnequity.domain.market_profile import HISTORY_BACKFILL_START  # noqa: E402
 
 
 def _validate_planned_stock_bars(
