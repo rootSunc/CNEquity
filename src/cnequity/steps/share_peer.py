@@ -6,6 +6,12 @@ and 流通A counts after it. Reading those costs no request. Measured on 300
 symbols since 2024: on the 1,435 dates both sources record, total shares agree
 to 0.01% on 1,430; `float_shares` agrees on 92%, the rest being A+H companies,
 whose EastMoney figure counts the H shares TDX leaves out.
+
+Two kinds of TDX row are not changes EastMoney missed. TDX files a 股本变化
+row at each period end (and at other refreshes) whose counts move only by
+float32 rounding, so it restates the counts already in effect. And TDX often
+dates a change a few days from EastMoney (listing vs registration day). Both
+are counted on their own and never backed up.
 """
 
 from __future__ import annotations
@@ -27,27 +33,33 @@ WINDOW_DAYS = 90
 STALE_DAYS = 4
 _TOTAL_TOLERANCE = 1e-4
 _FLOAT_TOLERANCE = 1e-3
+#: A TDX change whose counts EastMoney records this many days away is the same change.
+SHIFT_DAYS = 10
 
 
-def _stored(config: Config, since: date) -> pl.DataFrame:
-    """The lake's latest-disclosed row per (symbol, change_date) since *since*."""
+def _stored(config: Config, symbols: list[str]) -> pl.DataFrame:
+    """The lake's latest-disclosed row per (symbol, change_date) for *symbols*.
+
+    The whole history is read, so a change can be checked against the counts
+    in effect before the comparison window.
+    """
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
     root = config.curated_root / "share_structure"
     if not dataset_has_parquet(root):
         return pl.DataFrame()
     frame = (
-        scan_parquet_root(root, partition_col="change_date", start=since)
-        .filter(pl.col("change_date") >= since)
+        scan_parquet_root(root, partition_col="change_date")
+        .filter(pl.col("symbol").is_in(symbols))
         .collect()
     )
     if frame.is_empty():
         return frame
     if "float_a_shares" not in frame.columns:
         frame = frame.with_columns(pl.lit(None, dtype=pl.Float64).alias("float_a_shares"))
-    return frame.sort("announce_date", nulls_last=False).unique(
-        subset=["symbol", "change_date"], keep="last"
-    )
+    # A restatement keeps its announce_date, so the later fetch must win the tie.
+    order = [c for c in ("announce_date", "fetched_at") if c in frame.columns]
+    return frame.sort(order, nulls_last=False).unique(subset=["symbol", "change_date"], keep="last")
 
 
 def _eastmoney_fresh(config: Config, now: datetime) -> bool:
@@ -74,34 +86,88 @@ def _rel(a: str, b: str) -> pl.Expr:
     return (pl.col(a) - pl.col(b)).abs() / pl.col(b).abs().clip(lower_bound=1.0)
 
 
+def _same_counts(total: str, float_a: str) -> pl.Expr:
+    """TDX's counts equal the lake's; a lake row without an A-share float checks total only."""
+    return (_rel("total_shares", total) <= _TOTAL_TOLERANCE) & (
+        pl.col(float_a).is_null() | (_rel("float_a_shares", float_a) <= _FLOAT_TOLERANCE)
+    )
+
+
+def _restated(events: pl.DataFrame, lake: pl.DataFrame) -> pl.DataFrame:
+    """*events* whose counts equal the lake's counts in effect on their date."""
+    if events.is_empty() or lake.is_empty():
+        return events.clear()
+    asof = events.sort("change_date").join_asof(
+        lake.sort("change_date"),
+        on="change_date",
+        by="symbol",
+        strategy="backward",
+        check_sortedness=False,
+    )
+    return asof.filter(
+        pl.col("total_shares_lake").is_not_null() & _same_counts("total_shares_lake", "fa_lake")
+    ).select(events.columns)
+
+
+def _shifted(events: pl.DataFrame, lake: pl.DataFrame) -> pl.DataFrame:
+    """*events* whose counts the lake records within SHIFT_DAYS of their date."""
+    if events.is_empty() or lake.is_empty():
+        return events.clear()
+    near = events.join(lake.rename({"change_date": "lake_date"}), on="symbol").filter(
+        ((pl.col("lake_date") - pl.col("change_date")).dt.total_days().abs() <= SHIFT_DAYS)
+        & _same_counts("total_shares_lake", "fa_lake")
+    )
+    return near.select(events.columns).unique(subset=["symbol", "change_date"])
+
+
+def _keys(frame: pl.DataFrame) -> list[str]:
+    return sorted(f"{r['symbol']}@{r['change_date']}" for r in frame.iter_rows(named=True))
+
+
 def compare(events: pl.DataFrame, stored: pl.DataFrame) -> tuple[dict, pl.DataFrame, set[str]]:
-    """``(finding, TDX-only events, A-share-only symbols)`` for one sweep."""
+    """``(finding, TDX-only events, A-share-only symbols)`` for one sweep.
+
+    *stored* may reach back before the events' window: only same-dated rows
+    are compared directly, earlier ones supply the counts already in effect.
+    """
     keys = ["symbol", "change_date"]
     if stored.is_empty():
-        joined = events.with_columns(
-            *(
-                pl.lit(None, dtype=pl.Float64).alias(c)
-                for c in ("total_shares_lake", "float_shares", "float_a_shares_lake")
-            )
+        lake = pl.DataFrame(
+            schema={
+                "symbol": pl.Utf8,
+                "change_date": pl.Date,
+                "total_shares_lake": pl.Float64,
+                "float_shares": pl.Float64,
+                "fa_lake": pl.Float64,
+            }
         )
     else:
-        joined = events.join(
-            stored.select(
-                *keys,
-                pl.col("total_shares").alias("total_shares_lake"),
-                "float_shares",
-                pl.col("float_a_shares").alias("float_a_shares_lake"),
-            ),
-            on=keys,
-            how="left",
+        lake = stored.select(
+            *keys,
+            pl.col("total_shares").alias("total_shares_lake"),
+            "float_shares",
+            pl.col("float_a_shares").alias("fa_lake"),
         )
+    joined = events.join(lake, on=keys, how="left")
     both = joined.filter(pl.col("total_shares_lake").is_not_null())
-    tdx_only = joined.filter(pl.col("total_shares_lake").is_null()).select(events.columns)
+    unmatched = joined.filter(pl.col("total_shares_lake").is_null()).select(events.columns)
+    lake = lake.drop("float_shares")
+    restated = _restated(unmatched, lake)
+    unmatched = unmatched.join(restated, on=keys, how="anti")
+    shifted = _shifted(unmatched, lake)
+    tdx_only = unmatched.join(shifted, on=keys, how="anti")
+
     total_differ = both.filter(_rel("total_shares", "total_shares_lake") > _TOTAL_TOLERANCE)
     float_a_differ = both.filter(
-        pl.col("float_a_shares_lake").is_not_null()
-        & (_rel("float_a_shares", "float_a_shares_lake") > _FLOAT_TOLERANCE)
+        pl.col("fa_lake").is_not_null() & (_rel("float_a_shares", "fa_lake") > _FLOAT_TOLERANCE)
     )
+    # A same-dated row that disagrees may still be the neighbouring change.
+    differ = pl.concat([total_differ, float_a_differ]).select(events.columns).unique(subset=keys)
+    differ_shifted = _shifted(differ, lake.join(differ.select(keys), on=keys, how="anti"))
+    total_differ = total_differ.join(differ_shifted, on=keys, how="anti")
+    float_a_differ = float_a_differ.join(differ_shifted, on=keys, how="anti")
+    date_shifted = pl.concat([shifted, differ_shifted])
+
     # Where EastMoney's float equals TDX's A-share float, the company has no
     # other listed class, and TDX's figure can stand in for `float_shares`.
     a_only = set(both.filter(_rel("float_a_shares", "float_shares") <= _FLOAT_TOLERANCE)["symbol"])
@@ -113,17 +179,17 @@ def compare(events: pl.DataFrame, stored: pl.DataFrame) -> tuple[dict, pl.DataFr
             f"share_structure vs TDX: {both.height} change(s) on both, "
             f"{total_differ.height} with a different total, "
             f"{float_a_differ.height} with a different A-share float, "
-            f"{tdx_only.height} only on TDX"
+            f"{date_shifted.height} dated apart, "
+            f"{tdx_only.height} only on TDX, "
+            f"{restated.height} TDX restatement(s) of unchanged counts"
         ),
         "compared": both.height,
-        "total_differ": sorted(
-            f"{r['symbol']}@{r['change_date']}" for r in total_differ.head(20).iter_rows(named=True)
-        ),
-        "float_a_differ": sorted(
-            f"{r['symbol']}@{r['change_date']}"
-            for r in float_a_differ.head(20).iter_rows(named=True)
-        ),
+        "total_differ": _keys(total_differ.head(20)),
+        "float_a_differ": _keys(float_a_differ.head(20)),
+        "date_shifted": _keys(date_shifted.head(20)),
         "tdx_only": tdx_only.height,
+        "tdx_only_sample": _keys(tdx_only.head(20)),
+        "restated": restated.height,
     }
     return finding, tdx_only, a_only
 
@@ -185,7 +251,7 @@ def share_structure_from_sweep(
         run_id=run_id,
         trade_date=trade_date,
     )
-    finding, tdx_only, a_only = compare(frame, _stored(config, since))
+    finding, tdx_only, a_only = compare(frame, _stored(config, sorted(set(frame["symbol"]))))
     findings = [finding]
     if tdx_only.is_empty() or _eastmoney_fresh(config, datetime.now(timezone.utc)):
         return findings

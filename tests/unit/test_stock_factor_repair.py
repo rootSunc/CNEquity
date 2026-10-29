@@ -64,6 +64,59 @@ def test_peer_disagreement_does_not_force_a_correction():
     assert "reason" in events[0]
 
 
+def test_share_reform_guard_only_flags_disagreeing_steps():
+    reform = [date(2006, 3, 1) + timedelta(days=i) for i in range(10)]
+    bars = pl.DataFrame({"trade_date": reform, "close": [10.0] * 10, "pre_close": [9.0] * 10})
+    # Vendor already steps 10/9 on day 3; day 7 has no step at all.
+    vendor = pl.DataFrame({"trade_date": reform, "factor": [1.0] * 3 + [10 / 9] * 7})
+    terms = _terms().with_columns(pl.Series("ex_date", [reform[3], reform[7]]))
+    result, events = stock_event_series(bars, vendor, terms, pl.DataFrame())
+    assert result.equals(vendor)
+    assert [(e["trade_date"], e["reason"]) for e in events] == [
+        (str(reform[7]), "share reform requires exceptional event evidence")
+    ]
+
+
+def _reform_case(vendor_step):
+    reform = [date(2006, 3, 1) + timedelta(days=i) for i in range(10)]
+    bars = pl.DataFrame({"trade_date": reform, "close": [10.0] * 10, "pre_close": [None] * 10})
+    vendor = pl.DataFrame({"trade_date": reform, "factor": [1.0] * 5 + [vendor_step] * 5})
+    # 10送3.75 on top of 10转增15: a tradable holder ends with 2.875 shares.
+    terms = _terms((5,)).with_columns(
+        pl.Series("ex_date", [reform[5]]), _dividend=0.0, _bonus=1.875
+    )
+    counts = pl.DataFrame(
+        {
+            "change_date": [date(2003, 7, 21), reform[4]],
+            "float_a_shares": [267172500.0, 768113750.0],
+        }
+    )
+    return bars, vendor, terms, counts
+
+
+def test_float_share_count_confirms_reform_terms():
+    bars, vendor, terms, counts = _reform_case(3.4375)
+    result, events = stock_event_series(bars, vendor, terms, pl.DataFrame(), share_counts=counts)
+    assert result["factor"].to_list() == pytest.approx([1.0] * 5 + [2.875] * 5)
+    assert events[0]["evidence"] == {"share_count_ratio": pytest.approx(2.875)}
+    assert events[0]["correction"] == pytest.approx(2.875 / 3.4375)
+
+
+def test_float_share_count_confirms_reform_vendor_step():
+    bars, vendor, terms, counts = _reform_case(2.875)
+    terms = terms.with_columns(_bonus=1.5)
+    result, events = stock_event_series(bars, vendor, terms, pl.DataFrame(), share_counts=counts)
+    assert result.equals(vendor)
+    assert "reason" not in events[0] and "confirmed" in events[0]
+
+
+def test_reform_without_share_counts_stays_a_warning():
+    bars, vendor, terms, _ = _reform_case(3.4375)
+    result, events = stock_event_series(bars, vendor, terms, pl.DataFrame())
+    assert result.equals(vendor)
+    assert events[0]["reason"] == "share reform requires exceptional event evidence"
+
+
 def test_no_leading_factor_one_is_invented():
     bars, vendor = _series()
     result, _ = stock_event_series(bars, vendor.tail(3), _terms(), pl.DataFrame())

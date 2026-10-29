@@ -36,7 +36,13 @@ from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.revisions import RevisionStore, sha256_file
 
-DEPENDENCIES = ("daily_bars", "instruments", "corporate_actions", "adj_factors")
+DEPENDENCIES = (
+    "daily_bars",
+    "instruments",
+    "corporate_actions",
+    "adj_factors",
+    "share_structure",
+)
 KEYS = ["symbol", "trade_date", "adjust_type"]
 ALGORITHM = "factor-repair-v1"
 

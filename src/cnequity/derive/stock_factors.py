@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 
@@ -11,6 +11,11 @@ from cnequity.domain.action_sessions import effective_session
 
 SOURCE = "derived_stock_actions"
 _SHARE_REFORM = (date(2005, 4, 29), date(2007, 12, 31))
+# Share counts are exact, but per-holder rounding of consideration shares and
+# terms quoted to a few decimals leave a small gap (000048.SZ: 1.332 vs 1.33).
+_SHARE_RATIO_TOLERANCE = 0.005
+_SHARE_CHANGE_BEFORE = timedelta(days=7)
+_SHARE_CHANGE_AFTER = timedelta(days=3)
 
 
 def preserve_pending_steps(series, published, events, source):
@@ -52,6 +57,25 @@ def preserve_pending_steps(series, published, events, source):
     return series
 
 
+def _float_share_ratio(counts: dict[date, float], prior: date, day: date) -> float | None:
+    """Float A-share growth across the share changes dated around *day*.
+
+    A share-reform holder ends with exactly this many shares per share held,
+    so it settles consideration terms that the two vendors read differently.
+    The change is dated the registration day, usually the session before the
+    shares list, but sometimes the day after the vendor's ex session
+    (600213.SH: 2007-07-06 against 07-05). A long reform halt must not reach
+    back to an unrelated change (its 2006-12-07 share transfer).
+    """
+    start = max(prior, day - _SHARE_CHANGE_BEFORE)
+    end = day + _SHARE_CHANGE_AFTER
+    before = [d for d in counts if d < start]
+    inside = [d for d in counts if start <= d <= end]
+    if not before or not inside:
+        return None
+    return counts[max(inside)] / counts[max(before)]
+
+
 def _zero(value):
     return 0 if value is None else value
 
@@ -91,6 +115,7 @@ def stock_event_series(
     *,
     tolerance_bps: float = 20.0,
     proofs: dict | None = None,
+    share_counts: pl.DataFrame | None = None,
 ) -> tuple[pl.DataFrame, list[dict]]:
     """Correct an event only when terms and independent reference evidence fit.
 
@@ -147,6 +172,11 @@ def stock_event_series(
         aligned = series.select("trade_date").join_asof(peer, on="trade_date", strategy="backward")
         peer_levels = dict(aligned.iter_rows())
     event_days = set(events["effective_session"].drop_nulls().to_list())
+    counts = (
+        dict(share_counts.select("change_date", "float_a_shares").iter_rows())
+        if share_counts is not None
+        else {}
+    )
     adjustments: dict[date, float] = {}
     findings = []
     for group in _event_groups(events):
@@ -157,11 +187,6 @@ def stock_event_series(
         before = prices[prior]["close"]
         ex_dates = group["ex_date"]
         detail = {"trade_date": str(day), "ex_dates": [str(d) for d in ex_dates]}
-        if any(_SHARE_REFORM[0] <= d <= _SHARE_REFORM[1] for d in [day, *ex_dates]):
-            findings.append(
-                {**detail, "reason": "share reform requires exceptional event evidence"}
-            )
-            continue
         refs = group["refs"]
         if refs and (len(refs) != 1 or group["height"] != 1):
             findings.append({**detail, "reason": "ambiguous event reference"})
@@ -192,12 +217,36 @@ def stock_event_series(
         if abs(actual / expected - 1.0) <= tolerance:
             continue
         evidence = []
-        quote = prices[day].get("pre_close")
+        # Only a disagreeing step needs the guard: most 2005-2007 actions are
+        # ordinary dividends the vendor already steps on correctly. Prices
+        # cannot settle the rest (exchanges often skipped the ex-right for
+        # consideration paid by non-tradable holders); the float share count can.
+        if any(_SHARE_REFORM[0] <= d <= _SHARE_REFORM[1] for d in [day, *ex_dates]):
+            ratio = _float_share_ratio(counts, prior, day) if denominator > 0 else None
+            cash_part = expected / denominator
+            detail.update(vendor_step=actual, expected_step=expected, share_ratio=ratio)
+            if ratio and abs(denominator / ratio - 1.0) <= _SHARE_RATIO_TOLERANCE:
+                evidence.append(("share_count_ratio", expected))
+            elif ratio and abs(actual / (ratio * cash_part) - 1.0) <= _SHARE_RATIO_TOLERANCE:
+                findings.append({**detail, "confirmed": "vendor step matches float share count"})
+                continue
+            else:
+                findings.append(
+                    {**detail, "reason": "share reform requires exceptional event evidence"}
+                )
+                continue
+        by_shares = bool(evidence)
+        quote = None if by_shares else prices[day].get("pre_close")
         quote_source = prices[day].get("source") or ""
         if quote is not None and quote > 0 and not quote_source.startswith("derived"):
             evidence.append(("native_pre_close", before / quote))
         action_sources = group["sources"]
-        if "baostock" not in action_sources and peer_levels.get(prior) and peer_levels.get(day):
+        if (
+            not by_shares
+            and "baostock" not in action_sources
+            and peer_levels.get(prior)
+            and peer_levels.get(day)
+        ):
             # Across a long halt, the peer can contain several intervening
             # events. Use the exchange reference instead of that aggregate.
             if (day - prior).days <= 10:
@@ -253,6 +302,34 @@ def _by_symbol(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
     }
 
 
+def _reform_share_counts(config, symbols, read_context=None) -> pl.DataFrame:
+    """Float A-share counts by change date, through the share-reform window."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+    from cnequity.storage.read_context import read_root
+
+    empty = pl.DataFrame(
+        schema={"symbol": pl.String, "change_date": pl.Date, "float_a_shares": pl.Float64}
+    )
+    root = read_root(config, "share_structure", read_context)
+    if not dataset_has_parquet(root, committed=False):
+        return empty
+    scan = scan_parquet_root(
+        root, partition_col="change_date", symbols=symbols, end=_SHARE_REFORM[1], committed=False
+    )
+    # Each change appears once per announcement revision, some without the
+    # float A count; the last positive count on a date is that date's level.
+    order = [c for c in ("announce_date", "observed_at") if c in scan.collect_schema().names()]
+    return (
+        scan.filter(pl.col("float_a_shares") > 0)
+        .select("symbol", pl.col("change_date").cast(pl.Date), "float_a_shares", *order)
+        .collect()
+        .sort(["symbol", "change_date", *order])
+        .group_by("symbol", "change_date", maintain_order=True)
+        .last()
+        .select(empty.columns)
+    )
+
+
 def apply_stock_event_factors(
     config,
     out: pl.DataFrame,
@@ -302,6 +379,7 @@ def apply_stock_event_factors(
     bars = bars_scan.select(bar_columns).collect()
     if bars.is_empty():
         return out, []
+    share_counts = _reform_share_counts(config, symbols, read_context)
     if peer is None:
         batches, _ = _cached_batches(config, bars["trade_date"].max())
         peer = pl.concat(batches) if batches else pl.DataFrame()
@@ -330,6 +408,7 @@ def apply_stock_event_factors(
     stored_by = _by_symbol(stored)
     bars_by = _by_symbol(bars)
     terms_by = _by_symbol(terms)
+    counts_by = _by_symbol(share_counts)
     peer_by = (
         _by_symbol(peer.select("symbol", "trade_date", "factor")) if not peer.is_empty() else {}
     )
@@ -371,6 +450,7 @@ def apply_stock_event_factors(
                 for key, value in proofs.items()
                 if key.startswith(f"{symbol}|")
             },
+            share_counts=counts_by.get(symbol),
         )
         findings.extend({"symbol": symbol, **event} for event in events)
         rebuilt = preserve_pending_steps(rebuilt, published, events, SOURCE)

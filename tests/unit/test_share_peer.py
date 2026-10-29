@@ -88,6 +88,67 @@ def test_compare_names_differences_tdx_only_events_and_a_only_companies():
     assert a_only == {"600519.SH", "000001.SZ"}
 
 
+def test_compare_sets_aside_restatements_and_changes_dated_apart():
+    events = _events(
+        [
+            # Period-end refresh: the counts in effect since August, off by float32 rounding.
+            ("300891.SZ", date(2026, 9, 30), 400008438.0, 333474375.0),
+            # The same buyback EastMoney dates a day later.
+            ("002935.SZ", date(2026, 8, 7), 421837188.0, 415090898.0),
+            # Same-dated, but TDX's total is EastMoney's for the next day.
+            ("688981.SH", date(2026, 9, 9), 8.5612e9, 1.9996e9),
+            # A real unlock EastMoney has not recorded.
+            ("300572.SZ", date(2026, 9, 30), 228988809.0, 225715215.0),
+        ]
+    )
+    stored = pl.DataFrame(
+        {
+            "symbol": ["300891.SZ", "002935.SZ", "688981.SH", "688981.SH", "300572.SZ"],
+            "change_date": [
+                date(2026, 8, 14),
+                date(2026, 8, 8),
+                date(2026, 8, 31),
+                date(2026, 9, 9),
+                date(2026, 6, 30),
+            ],
+            "total_shares": [400008440.0, 421837182.0, 8.5612e9, 8.5623e9, 228988812.0],
+            "float_shares": [333474370.0, 415090883.0, 8.014e9, 8.0141e9, 181339690.0],
+            "float_a_shares": [None, 415090883.0, 1.9996e9, 1.9996e9, 181339690.0],
+        }
+    )
+
+    finding, tdx_only, _ = share_peer.compare(events, stored)
+
+    assert finding["restated"] == 1
+    assert finding["date_shifted"] == ["002935.SZ@2026-08-07", "688981.SH@2026-09-09"]
+    assert finding["total_differ"] == []
+    assert finding["severity"] == "info"
+    assert tdx_only["symbol"].to_list() == ["300572.SZ"]
+
+
+def test_stored_prefers_the_later_fetch_of_a_restated_row(tmp_path):
+    cfg = Config(data_root=tmp_path / "lake")
+    part = cfg.curated_root / "share_structure" / "change_date=2026"
+    part.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["002134.SZ", "002134.SZ"],
+            "change_date": [date(2026, 10, 9)] * 2,
+            "total_shares": [248479170.0, 248288987.0],
+            "float_shares": [247366229.0, 247176046.0],
+            "announce_date": [date(2026, 10, 14)] * 2,
+            "fetched_at": [
+                datetime(2026, 10, 28, tzinfo=timezone.utc),
+                datetime(2026, 10, 16, tzinfo=timezone.utc),
+            ],
+        }
+    ).write_parquet(part / "part-merged.parquet")
+
+    stored = share_peer._stored(cfg, ["002134.SZ"])
+
+    assert stored["total_shares"].to_list() == [248479170.0]
+
+
 def test_backup_rows_are_disclosed_as_of_the_sweep_and_keep_unknowns_null():
     events = _events(
         [
