@@ -42,6 +42,7 @@ DEFAULT_SOURCE_INTERVALS: dict[str, float] = {
     "baostock": 1.0,
     "tushare": 1.0,
     "ths_official": 0.4,
+    "jin10": 1.0,
 }
 DEFAULT_UNKNOWN_SOURCE_INTERVAL_SECONDS = 1.0
 # Family-wide in-flight defaults for configs that omit source caps. Aliases
@@ -65,6 +66,7 @@ DEFAULT_SOURCE_CONCURRENCY: dict[str, int] = {
     "baostock": 1,
     "tushare": 2,
     "ths_official": 2,
+    "jin10": 1,
 }
 logger = logging.getLogger(__name__)
 

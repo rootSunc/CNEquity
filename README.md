@@ -101,7 +101,7 @@ print(bars.tail())
 
 ## 数据范围
 
-当前开发树注册 **55 个数据集：47 个 curated + 8 个 derived**，按用途分为 L0–L9。完整字段、主键、历史起点和来源集中在[数据集目录](docs/zh/datasets/catalog.md)与[数据源说明](docs/zh/datasets/sources.md)。
+当前开发树注册 **57 个数据集：49 个 curated + 8 个 derived**，按用途分为 L0–L9。完整字段、主键、历史起点和来源集中在[数据集目录](docs/zh/datasets/catalog.md)与[数据源说明](docs/zh/datasets/sources.md)。
 
 | 层次 | 研究用途 | 代表数据集 |
 |---|---|---|
@@ -160,7 +160,9 @@ print(bars.tail())
 | `sector_members` | L5 | eastmoney | — |
 | `macro_indicators` | L6 | eastmoney | pboc |
 | `market_breadth` | L6 | derived | — |
-| `economic_calendar` | L7 | eastmoney | — |
+| `economic_calendar` | L7 | jin10 | — |
+| `economic_events` | L7 | jin10 | — |
+| `market_holidays` | L7 | jin10 | — |
 | `flash_news_wire` | L7 | eastmoney | — |
 | `hot_rank` | L7 | eastmoney | — |
 | `news_headlines` | L7 | eastmoney | — |

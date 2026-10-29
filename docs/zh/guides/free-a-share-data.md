@@ -46,7 +46,7 @@ cne query --sql "SELECT symbol, trade_date, close FROM daily_bars ORDER BY trade
 
 ## 能拿到哪些数据
 
-共 55 个数据集，按用途分为行情、公司事件、基本面、资金面、行业与指数、宏观等，完整列表见[数据集目录](../datasets/catalog.md)。
+共 57 个数据集，按用途分为行情、公司事件、基本面、资金面、行业与指数、宏观等，完整列表见[数据集目录](../datasets/catalog.md)。
 
 需要注意的限制：
 

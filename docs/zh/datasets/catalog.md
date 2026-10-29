@@ -15,7 +15,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 !!! note "登记不等于默认采集"
     - 默认关闭、需要显式开启：分钟线 `minute_bars` / `minute_bars_5m`（`[minute_bars]`）、分笔 `trade_ticks`（独立的 `[trade_ticks]`）、期货/期权四张主表 `futures_contracts`、`option_contracts`、`futures_bars`、`option_bars`（`[futures]`，不进 `cne init`，见[产品边界](../architecture/overview.md)）。
     - derived 数据由已入湖数据派生：`adj_factors`、`industry_index`、`futures_continuous`、`option_greeks`、`delisting_events`；`minute_bars_15m` / `30m` / `60m` 默认不计算，按需派生。
-    - **on-demand** 数据集不进 curated 主路径。`flash_news_wire` 是新闻兼容读取，`economic_calendar` 是停用源占位。
+    - **on-demand** 数据集不进 curated 主路径。`flash_news_wire` 是新闻兼容读取。
     - 所以登记数既不是物理表数，也不是默认采集完成数。
 
 **图例**（下表）：语义 `by_date` / `snapshot`；水位 ✓ = 维护 `meta/state` 水位。
@@ -31,11 +31,11 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 | **L4** 资金面 | 北向、融资、主力 | fund_flow, fund_flow_ths, northbound_*, margin_trading, dragon_tiger, block_trades, institutional_holdings |
 | **L5** 结构行业 | 板块、指数成分、行业 | sector_members, index_constituents, industry_members, industry_index |
 | **L6** 宏观 | 利率、景气、货币 | macro_indicators, market_breadth |
-| **L7** 舆情 / 轮动 | 新闻、情绪、板块、人气、事件流 | sentiment_scores, hot_rank, sector_bars, sector_fund_flow, sector_fund_flow_ths, news_headlines, flash_news_wire, economic_calendar*（stock_news 为 on-demand） |
+| **L7** 舆情 / 轮动 | 新闻、情绪、板块、人气、事件流 | sentiment_scores, hot_rank, sector_bars, sector_fund_flow, sector_fund_flow_ths, news_headlines, flash_news_wire, economic_calendar*, economic_events*, market_holidays*（stock_news 为 on-demand） |
 | **L8** 风险合规 | 解禁、监管 | share_unlock_schedule, regulatory_events |
 | **L9** 衍生品 | 期货/期权合约、逐合约行情、连续合约、希腊字母、分钟线，以及商品期货主连 | commodity_bars*, futures_contracts*, option_contracts*, futures_bars*, option_bars*, futures_continuous*, option_greeks*, futures_minute_bars* |
 
-\*可选或 `required=false`：分钟线默认关；商品期货需显式回填；期货/期权四张表需 `[futures] enabled = true`；`economic_calendar` 东财源已下线，仅占位。
+\*可选或 `required=false`：分钟线默认关；商品期货需显式回填；期货/期权四张表需 `[futures] enabled = true`；`economic_calendar`、`economic_events`、`market_holidays` 来自金十数据；财经日历可用 `cne backfill economic_calendar` 回补 2008 年以来的历史，另外两张只能从启用后逐日积累。
 
 分层是**研究用途**，与存储 `layer` 正交：`adj_factors` / `delisting_events`（L1）和 `industry_index`（L5）落在 `derived/` 而非 `curated/`，但按用途归入各自层，所以没有单独的「派生」层。期货/期权按 [产品边界](../architecture/overview.md) 放在股票体系旁边，合约、行情与派生统一归 L9，面板和目录里作为一个整体查看。权威来源是 `DatasetSpec.tier`；`test_docs_catalog.py` 断言本文档与注册表逐层一致。
 
@@ -47,7 +47,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 |------|------|------|--------|
 | `core` 核心 | 开 | 历史可重建、日更稳定、有备源或权威对照；`cne check` 和稳定性门槛（`cne verify --runs`）只看这一档，不论由哪个调度组采集 | `instruments`, `trading_calendar`, `trading_status`, `daily_bars`, `index_bars`, `corporate_actions`, `financial_statement_items`, `share_structure`, `valuation_metrics`, `index_constituents`, `adj_factors`, `delisting_events` |
 | `extended` 扩展 | 开 | 历史可重建、日更基本稳定，但非必需或只有单一来源 | `etf_profiles`, `commodity_bars`, `announcement_index`, `earnings_disclosure_schedule`, `shareholder_counts`, `top_holders`, `margin_trading`, `dragon_tiger`, `block_trades`, `institutional_holdings`, `industry_members`, `macro_indicators`, `market_breadth`, `share_unlock_schedule`, `regulatory_events`, `industry_index` |
-| `best_effort` 尽力而为 | **关** | 只有启用后才开始积累的实时快照、已停更的来源，或经常失败的接口（东财 push2 资金流、新闻、人气榜）；在 `[datasets] best_effort` 中列出才启用 | `analyst_consensus`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar` |
+| `best_effort` 尽力而为 | **关** | 只有启用后才开始积累的实时快照、已停更的来源，或经常失败的接口（东财 push2 资金流、新闻、人气榜）；在 `[datasets] best_effort` 中列出才启用 | `analyst_consensus`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar`, `economic_events`, `market_holidays` |
 | `optional` 可选 | 关 | 由各自开关启用（`[minute_bars]`、`[trade_ticks]`、`[futures]`） | `minute_bars`, `minute_bars_5m`, `trade_ticks`, `futures_contracts`, `option_contracts`, `futures_bars`, `futures_minute_bars`, `option_bars`, `futures_continuous`, `option_greeks`, `minute_bars_15m`, `minute_bars_30m`, `minute_bars_60m` |
 
 ## 采集模式
@@ -74,8 +74,8 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 | history_mode | 含义 | 数据集 |
 |--------------|------|--------|
 | `by_date` | 可按日回补 / 缺口填补 | 绝大多数行情与事件表 |
-| `snapshot_with_backfill` | 日更是快照，但有专用历史源 | `valuation_metrics`→baostock；`index_constituents`→cni；`industry_members`→sw；`sector_bars`→ths |
-| `snapshot_only` | 只返回当前快照；可从启用后逐日积累，不能回补未采到的过去 | `analyst_consensus`、`fund_flow`、`sector_members`、`hot_rank`、`sector_fund_flow`、`news_headlines`、`flash_news_wire`、`economic_calendar` |
+| `snapshot_with_backfill` | 日更是快照，但有专用历史源 | `valuation_metrics`→baostock；`index_constituents`→cni；`industry_members`→sw；`sector_bars`→ths；`economic_calendar`→jin10（2008 起） |
+| `snapshot_only` | 只返回当前快照；可从启用后逐日积累，不能回补未采到的过去 | `analyst_consensus`、`fund_flow`、`sector_members`、`hot_rank`、`sector_fund_flow`、`news_headlines`、`flash_news_wire`、`economic_events`、`market_holidays` |
 
 `trading_status` 的停牌覆盖可从 `daily_bars` 起点派生；ST 覆盖必须以完整的 `historical_st_evidence` 收据为准。没有覆盖请求窗口的收据时，**不要**假定 2001 起 `universe="all_a"` 已剔除历史 ST。BJ 可选用 Tushare Pro：2016 年通过 `bak_basic` 的历史简称、2017-01-01 起通过 `stock_st`；2016 年以前仍需独立的更深历史源。
 
@@ -317,7 +317,9 @@ EM 响应若已包含尚未生效的调样行，会拒绝整份快照：删除�
 | sector_fund_flow_ths | trade_date | board_type, sector_code, trade_date | snapshot | ✓ | ths | 只在 push2 取不到 `sector_fund_flow` 时由同花顺补：行业（881xxx）+ 概念板块的流入/流出/净额，金额单位亿、精确到 0.01；同花顺板块分类，和东财板块代码不对应。新鲜度规则同 `fund_flow_ths` |
 | news_headlines | publish_date | news_id | snapshot | ✓ | eastmoney | 新闻标题 |
 | flash_news_wire | publish_date | wire_id, wire_source | 兼容读取 | ✓ | eastmoney | 由 `news_headlines` 事实表投影，兼容旧 revision 的实体文件；不再重复写入 |
-| economic_calendar | event_date（按年） | event_id | snapshot | ✓ | —（源已下线） | EM `RPT_ECONOMICCALENDAR` 已退役（code 9501），保留 schema 等替代源；`required=false`，空表不判 UNHEALTHY |
+| economic_calendar | event_date（按年） | event_id | snapshot | ✓ | jin10 | 金十数据财经日历，每日抓取前 2 天到后 14 天；同一事件以金十的 `data_id` 为键，公布实际值后更新同一行；`indicator_code`（金十 `indicator_id`）跨年份标识同一指标序列，2026-10-30 之前写入的行为空；`cne backfill economic_calendar` 按月回补，只抓湖里缺的日子；`required=false`，空表不判 UNHEALTHY |
+| economic_events | event_date（按年） | event_id | snapshot | ✓ | jin10 | 金十数据财经事件（央行议息、官员讲话、重要会议），窗口同财经日历；`event_time` 为空且 `time_status=待定` 表示时间未定；`required=false` |
+| market_holidays | holiday_date（按年） | holiday_id | snapshot | ✓ | jin10 | 金十数据全球交易所休市安排，每日抓取当日起的 30 条（约两个月）；`note` 注明港股通南、北向是否关闭；`required=false` |
 
 `sector_bars` 使用同花顺板块行情；历史通过 `cne backfill sector_bars` 分窗口补入。先用 `--plan` 检查范围；失败后重跑同一命令即从断点续跑，避免无故 `--refetch` 全量重抓。网络可达性以当前出口的小范围探测为准。
 

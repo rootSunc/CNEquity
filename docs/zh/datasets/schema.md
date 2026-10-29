@@ -1171,6 +1171,7 @@ PIT 查询过滤 `announce_date <= as_of`。
 | 列 | 类型 | 说明 |
 |--------|------|-------|
 | event_id | string |  |
+| indicator_code | string |  |
 | event_date | date |  |
 | event_time | string |  |
 | country | string |  |
@@ -1197,6 +1198,36 @@ PIT 查询过滤 `announce_date <= as_of`。
 | worst_final_return | float64 |  |
 | final_window_return | float64 |  |
 | bars | int64 |  |
+| source | string |  |
+| data_version | string |  |
+| fetched_at | timestamp |  |
+
+#### economic_events
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| event_id | string |  |
+| event_date | date |  |
+| event_time | string |  |
+| time_status | string |  |
+| country | string |  |
+| importance | int8 |  |
+| people | string |  |
+| content | string |  |
+| source | string |  |
+| data_version | string |  |
+| fetched_at | timestamp |  |
+
+#### market_holidays
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| holiday_id | string |  |
+| holiday_date | date |  |
+| country | string |  |
+| exchange | string |  |
+| name | string |  |
+| note | string |  |
 | source | string |  |
 | data_version | string |  |
 | fetched_at | timestamp |  |

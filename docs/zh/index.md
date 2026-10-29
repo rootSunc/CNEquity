@@ -135,7 +135,7 @@ cne check</code></pre>
           <span>01</span>
           <div>
             <h3>注册不等于已采集</h3>
-            <p>目前登记 55 个数据集（47 个 curated + 8 个 derived），其中有可选和占位入口。安装不会附带行情。</p>
+            <p>目前登记 57 个数据集（49 个 curated + 8 个 derived），其中有可选和占位入口。安装不会附带行情。</p>
             <a href="datasets/catalog/">看数据集目录</a>
           </div>
         </article>

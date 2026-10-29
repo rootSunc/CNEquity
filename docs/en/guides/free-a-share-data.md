@@ -46,7 +46,7 @@ Run `cne run daily` once a day from cron, launchd or Windows Task Scheduler, or 
 
 ## What you get
 
-55 datasets, grouped by use into market data, corporate events, fundamentals, fund flows, industries and indices, macro and more; the full list is in the [Dataset catalog](../datasets/catalog.md).
+57 datasets, grouped by use into market data, corporate events, fundamentals, fund flows, industries and indices, macro and more; the full list is in the [Dataset catalog](../datasets/catalog.md).
 
 Limits to keep in mind:
 

@@ -15,7 +15,7 @@ This page answers two questions: which datasets the lake registers, and where ea
 !!! note "Registered does not mean collected by default"
     - Off by default and enabled explicitly: minute bars `minute_bars` / `minute_bars_5m` (`[minute_bars]`), trade ticks `trade_ticks` (a separate `[trade_ticks]` section), and the four futures/options main tables `futures_contracts`, `option_contracts`, `futures_bars`, `option_bars` (`[futures]`, not part of `cne init`; see [Product boundaries](../architecture/overview.md)).
     - Derived datasets are computed from ingested data: `adj_factors`, `industry_index`, `futures_continuous`, `option_greeks`, `delisting_events`; `minute_bars_15m` / `30m` / `60m` are not computed by default and are derived on request.
-    - **On-demand** datasets stay off the curated main path. `flash_news_wire` is a compatibility read for news, and `economic_calendar` is a placeholder for a retired source.
+    - **On-demand** datasets stay off the curated main path. `flash_news_wire` is a compatibility read for news.
     - So the registered count is neither the number of physical tables nor the number collected by default.
 
 **Legend** (tables below): semantics `by_date` / `snapshot`; watermark ✓ = maintains a `meta/state` watermark.
@@ -31,11 +31,11 @@ This page answers two questions: which datasets the lake registers, and where ea
 | **L4** Capital flows | Northbound, margin financing, main-force flows | fund_flow, fund_flow_ths, northbound_*, margin_trading, dragon_tiger, block_trades, institutional_holdings |
 | **L5** Structure and industry | Sectors, index constituents, industries | sector_members, index_constituents, industry_members, industry_index |
 | **L6** Macro | Interest rates, business climate, money | macro_indicators, market_breadth |
-| **L7** Sentiment / rotation | News, sentiment, sectors, popularity, event streams | sentiment_scores, hot_rank, sector_bars, sector_fund_flow, sector_fund_flow_ths, news_headlines, flash_news_wire, economic_calendar* (stock_news is on-demand) |
+| **L7** Sentiment / rotation | News, sentiment, sectors, popularity, event streams | sentiment_scores, hot_rank, sector_bars, sector_fund_flow, sector_fund_flow_ths, news_headlines, flash_news_wire, economic_calendar*, economic_events*, market_holidays* (stock_news is on-demand) |
 | **L8** Risk and compliance | Share unlocks, regulation | share_unlock_schedule, regulatory_events |
 | **L9** Derivatives | Futures/options contracts, per-contract bars, continuous contracts, Greeks, minute bars, and commodity futures main continuous contracts | commodity_bars*, futures_contracts*, option_contracts*, futures_bars*, option_bars*, futures_continuous*, option_greeks*, futures_minute_bars* |
 
-\*Optional or `required=false`: minute bars are off by default; commodity futures need an explicit backfill; the four futures/options tables need `[futures] enabled = true`; the EastMoney source for `economic_calendar` has been retired, so it is only a placeholder.
+\*Optional or `required=false`: minute bars are off by default; commodity futures need an explicit backfill; the four futures/options tables need `[futures] enabled = true`; `economic_calendar`, `economic_events` and `market_holidays` come from Jin10; `cne backfill economic_calendar` fills the calendar back to 2008, while the other two accumulate only from the day they are turned on.
 
 Tiers describe **research use** and are orthogonal to the storage `layer`: `adj_factors` / `delisting_events` (L1) and `industry_index` (L5) live in `derived/` rather than `curated/`, but are filed under their tiers by use, so there is no separate "derived" tier. Per [Product boundaries](../architecture/overview.md), futures/options sit alongside the equity system; contracts, market data and derived series all belong to L9 and are viewed as one group in the dashboard and the catalog. The authoritative source is `DatasetSpec.tier`; `test_docs_catalog.py` asserts that this document matches the registry tier by tier.
 
@@ -47,7 +47,7 @@ A support level says how far the project stands behind a dataset, independent of
 |-------|---------|---------|----------|
 | `core` | on | Rebuildable history, a steady daily path, and a backup source or authority check; `cne check` and the stability gate (`cne verify --runs`) judge only this level, in whichever schedule group runs it | `instruments`, `trading_calendar`, `trading_status`, `daily_bars`, `index_bars`, `corporate_actions`, `financial_statement_items`, `share_structure`, `valuation_metrics`, `index_constituents`, `adj_factors`, `delisting_events` |
 | `extended` | on | Rebuildable and mostly steady, but not essential or single-sourced | `etf_profiles`, `commodity_bars`, `announcement_index`, `earnings_disclosure_schedule`, `shareholder_counts`, `top_holders`, `margin_trading`, `dragon_tiger`, `block_trades`, `institutional_holdings`, `industry_members`, `macro_indicators`, `market_breadth`, `share_unlock_schedule`, `regulatory_events`, `industry_index` |
-| `best_effort` | **off** | Live snapshots whose history starts the day a lake turns them on, a retired source, or feeds that fail often (EastMoney push2 money flow, news, popularity ranks); enabled only when listed in `[datasets] best_effort` | `analyst_consensus`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar` |
+| `best_effort` | **off** | Live snapshots whose history starts the day a lake turns them on, a retired source, or feeds that fail often (EastMoney push2 money flow, news, popularity ranks); enabled only when listed in `[datasets] best_effort` | `analyst_consensus`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar`, `economic_events`, `market_holidays` |
 | `optional` | off | Enabled by their own switches (`[minute_bars]`, `[trade_ticks]`, `[futures]`) | `minute_bars`, `minute_bars_5m`, `trade_ticks`, `futures_contracts`, `option_contracts`, `futures_bars`, `futures_minute_bars`, `option_bars`, `futures_continuous`, `option_greeks`, `minute_bars_15m`, `minute_bars_30m`, `minute_bars_60m` |
 
 ## Collection modes
@@ -74,8 +74,8 @@ Derived from `fetch_semantics` + `backfill_source` (see `list_datasets()`):
 | history_mode | Meaning | Datasets |
 |--------------|------|--------|
 | `by_date` | Can be backfilled by date / gaps can be filled | Most market data and event tables |
-| `snapshot_with_backfill` | Daily updates are snapshots, but a dedicated history source exists | `valuation_metrics`→baostock; `index_constituents`→cni; `industry_members`→sw; `sector_bars`→ths |
-| `snapshot_only` | Returns only the current snapshot; accumulates day by day once enabled, but past dates that were not collected cannot be backfilled | `analyst_consensus`, `fund_flow`, `sector_members`, `hot_rank`, `sector_fund_flow`, `news_headlines`, `flash_news_wire`, `economic_calendar` |
+| `snapshot_with_backfill` | Daily updates are snapshots, but a dedicated history source exists | `valuation_metrics`→baostock; `index_constituents`→cni; `industry_members`→sw; `sector_bars`→ths; `economic_calendar`→jin10 (from 2008) |
+| `snapshot_only` | Returns only the current snapshot; accumulates day by day once enabled, but past dates that were not collected cannot be backfilled | `analyst_consensus`, `fund_flow`, `sector_members`, `hot_rank`, `sector_fund_flow`, `news_headlines`, `flash_news_wire`, `economic_events`, `market_holidays` |
 
 Suspension coverage in `trading_status` can be derived back to the start of `daily_bars`; ST coverage must be backed by a complete `historical_st_evidence` receipt. Without a receipt covering the requested window, do **not** assume that `universe="all_a"` has excluded historical ST since 2001. For BJ, Tushare Pro is optional: historical short names via `bak_basic` for 2016, and `stock_st` from 2017-01-01; before 2016 a separate, deeper history source is still required.
 
@@ -317,7 +317,9 @@ An EM response containing a future adjustment rejects the whole snapshot: removi
 | sector_fund_flow_ths | trade_date | board_type, sector_code, trade_date | snapshot | ✓ | ths | Filled from THS only when push2 cannot provide `sector_fund_flow`: inflow/outflow/net for industries (881xxx) + concept sectors, amounts in units of 100 million yuan, precise to 0.01; THS sector classification, which does not map to EastMoney sector codes. Freshness follows the same rule as `fund_flow_ths` |
 | news_headlines | publish_date | news_id | snapshot | ✓ | eastmoney | News headlines |
 | flash_news_wire | publish_date | wire_id, wire_source | compatibility read | ✓ | eastmoney | Projected from the `news_headlines` fact table, compatible with entity files from old revisions; no longer written twice |
-| economic_calendar | event_date (yearly) | event_id | snapshot | ✓ | — (source retired) | EM `RPT_ECONOMICCALENDAR` has been retired (code 9501); the schema is kept pending a replacement source; `required=false`, an empty table is not judged UNHEALTHY |
+| economic_calendar | event_date (yearly) | event_id | snapshot | ✓ | jin10 | Jin10 economic calendar, fetched daily for two days back through two weeks ahead; one event is keyed by Jin10's `data_id`, so a released actual updates the same row; `indicator_code` (Jin10's `indicator_id`) names one indicator series across years and is null on rows written before 2026-10-30; `cne backfill economic_calendar` walks month by month and fetches only the days the lake lacks; `required=false`, an empty table is not judged UNHEALTHY |
+| economic_events | event_date (yearly) | event_id | snapshot | ✓ | jin10 | Jin10 economic events (central bank decisions, official speeches, major meetings) over the calendar's window; an empty `event_time` with `time_status=待定` means the time is not fixed; `required=false` |
+| market_holidays | holiday_date (yearly) | holiday_id | snapshot | ✓ | jin10 | Jin10 exchange closures worldwide, fetched daily as the next 30 from the run day (about two months); `note` says whether Stock Connect southbound/northbound is closed; `required=false` |
 
 `sector_bars` uses THS sector market data; history is filled in window by window with `cne backfill sector_bars`. Check the range with `--plan` first; after failures, rerunning the same command resumes from the checkpoint, so avoid needless `--refetch` full refetches. Network reachability is determined by a small-scope probe from the current egress.
 

@@ -69,6 +69,7 @@ OFFLINE_BENCHMARK_SOURCES = (
     "pboc",
     "nbs",
     "exchange",
+    "jin10",
 )
 
 

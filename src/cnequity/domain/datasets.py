@@ -1465,11 +1465,14 @@ _SPECS = [
         # A news wire does not close for the weekend.
         session_scope="calendar",
     ),
-    # EM datacenter report RPT_ECONOMICCALENDAR was retired (code 9501); keep the
-    # schema/registry for a replacement source, but do not fail lake health.
+    # EastMoney retired RPT_ECONOMICCALENDAR (code 9501); 金十数据's calendar
+    # replaced it on 2026-10-29.
     DatasetSpec(
         "economic_calendar",
-        primary_source="eastmoney",
+        primary_source="jin10",
+        # The same per-day endpoint answers past days back to 2008, so
+        # `cne backfill economic_calendar` walks it month by month.
+        backfill_source="jin10",
         tier="L7",
         partition_col="event_date",
         partition_granularity="year",
@@ -1479,9 +1482,32 @@ _SPECS = [
         # must not advance a freshness watermark beyond the run day.
         watermark=False,
         required=False,
-        # The EastMoney report was retired; no replacement source is wired.
-        # Keep the registry entry for the schema and future replacement, but
-        # do not present its expected empty root as an active quality warning.
+        # A snapshot cannot be backfilled, so an empty root before the first
+        # run is expected, as for the other best-effort snapshots.
+        empty_severity="info",
+    ),
+    # Same Jin10 calendar host: scheduled events (central banks, speeches,
+    # meetings) and exchange closures, both rolling windows with future dates.
+    DatasetSpec(
+        "economic_events",
+        primary_source="jin10",
+        tier="L7",
+        partition_col="event_date",
+        partition_granularity="year",
+        fetch_semantics="snapshot",
+        watermark=False,
+        required=False,
+        empty_severity="info",
+    ),
+    DatasetSpec(
+        "market_holidays",
+        primary_source="jin10",
+        tier="L7",
+        partition_col="holiday_date",
+        partition_granularity="year",
+        fetch_semantics="snapshot",
+        watermark=False,
+        required=False,
         empty_severity="info",
     ),
     # L8 risk
@@ -1678,6 +1704,8 @@ _SUPPORT: dict[str, Support] = {
             "flash_news_wire",
             "sentiment_scores",
             "economic_calendar",
+            "economic_events",
+            "market_holidays",
             "sector_bars",
         ),
         "best_effort",
@@ -1957,10 +1985,8 @@ def empty_freshness_label(dataset: str) -> str:
 
     A registry entry whose source has been retired with no replacement wired
     reads exactly like one the operator forgot to run — both print `empty`,
-    and only one is worth acting on. `economic_calendar` is the standing case:
-    EastMoney retired RPT_ECONOMICCALENDAR, the schema is kept for a
-    replacement, and its permanent emptiness was indistinguishable from a
-    schedule gap. The registry already says so through `empty_severity`, which
+    and only one is worth acting on. `economic_calendar` was the standing case
+    until 金十数据 replaced EastMoney's retired report. The registry already says so through `empty_severity`, which
     is `info` precisely for the datasets whose absence is not a finding.
     """
     spec = DATASETS.get(dataset)

@@ -108,24 +108,19 @@ def test_institutional_holdings_rejects_partial_period(cfg, monkeypatch):
 
 def test_snapshot_steps_reject_backfill(cfg, monkeypatch):
     cfg._backfill = True
-    calls = {"consensus": 0, "calendar": 0}
+    calls = {"consensus": 0}
 
     def _consensus(*args, **kwargs):
         calls["consensus"] += 1
         return pl.DataFrame()
 
-    def _calendar(*args, **kwargs):
-        calls["calendar"] += 1
-        return pl.DataFrame()
-
     monkeypatch.setattr(research, "fetch_analyst_consensus", _consensus)
-    monkeypatch.setattr(newsboard, "fetch_economic_calendar", _calendar)
 
     with pytest.raises(SnapshotBackfillError, match="analyst_consensus"):
         research.step_analyst_consensus(cfg, date(2024, 6, 28), "r-consensus", {})
-    with pytest.raises(SnapshotBackfillError, match="economic_calendar"):
-        newsboard.step_economic_calendar(cfg, date(2024, 6, 28), "r-calendar", {})
-    assert calls == {"consensus": 0, "calendar": 0}
+    with pytest.raises(SnapshotBackfillError, match="market_holidays"):
+        newsboard.step_market_holidays(cfg, date(2024, 6, 28), "r-holidays", {})
+    assert calls == {"consensus": 0}
 
 
 def test_economic_calendar_does_not_use_a_future_event_watermark():
@@ -220,6 +215,7 @@ def test_newsboard_and_commodity(cfg, monkeypatch):
     cfg.sources["eastmoney"] = False
     with pytest.raises(RuntimeError, match="disabled"):
         newsboard.step_flash_news_wire(cfg, date(2024, 6, 28), "r", {})
+    cfg.sources["jin10"] = False
     with pytest.raises(RuntimeError, match="disabled"):
         newsboard.step_economic_calendar(cfg, date(2024, 6, 28), "r", {})
 

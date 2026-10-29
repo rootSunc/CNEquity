@@ -53,6 +53,8 @@ OPTIONAL_COLUMNS = frozenset(
         "l3_code",
         "l3_name",
         "float_a_shares",
+        # economic_calendar rows written before 2026-10-30 carry no Jin10 id.
+        "indicator_code",
     }
 )
 
@@ -860,6 +862,7 @@ FLASH_NEWS_WIRE_SCHEMA = {
 
 ECONOMIC_CALENDAR_SCHEMA = {
     "event_id": pl.Utf8,
+    "indicator_code": pl.Utf8,
     "event_date": pl.Date,
     "event_time": pl.Utf8,
     "country": pl.Utf8,
@@ -869,6 +872,32 @@ ECONOMIC_CALENDAR_SCHEMA = {
     "previous": pl.Float64,
     "actual": pl.Float64,
     "unit": pl.Utf8,
+    "source": pl.Utf8,
+    "data_version": pl.Utf8,
+    "fetched_at": FETCHED_AT_DTYPE,
+}
+
+ECONOMIC_EVENTS_SCHEMA = {
+    "event_id": pl.Utf8,
+    "event_date": pl.Date,
+    "event_time": pl.Utf8,
+    "time_status": pl.Utf8,
+    "country": pl.Utf8,
+    "importance": pl.Int8,
+    "people": pl.Utf8,
+    "content": pl.Utf8,
+    "source": pl.Utf8,
+    "data_version": pl.Utf8,
+    "fetched_at": FETCHED_AT_DTYPE,
+}
+
+MARKET_HOLIDAYS_SCHEMA = {
+    "holiday_id": pl.Utf8,
+    "holiday_date": pl.Date,
+    "country": pl.Utf8,
+    "exchange": pl.Utf8,
+    "name": pl.Utf8,
+    "note": pl.Utf8,
     "source": pl.Utf8,
     "data_version": pl.Utf8,
     "fetched_at": FETCHED_AT_DTYPE,
@@ -976,6 +1005,8 @@ DATASET_SCHEMAS = {
     "news_headlines": NEWS_HEADLINES_SCHEMA,
     "flash_news_wire": FLASH_NEWS_WIRE_SCHEMA,
     "economic_calendar": ECONOMIC_CALENDAR_SCHEMA,
+    "economic_events": ECONOMIC_EVENTS_SCHEMA,
+    "market_holidays": MARKET_HOLIDAYS_SCHEMA,
     "delisting_events": DELISTING_EVENTS_SCHEMA,
 }
 
@@ -1065,6 +1096,8 @@ PRIMARY_KEYS = {
     "news_headlines": ["news_id"],
     "flash_news_wire": ["wire_id", "wire_source"],
     "economic_calendar": ["event_id"],
+    "economic_events": ["event_id"],
+    "market_holidays": ["holiday_id"],
     "delisting_events": ["symbol"],
 }
 

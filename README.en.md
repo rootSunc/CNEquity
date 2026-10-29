@@ -103,7 +103,7 @@ The same lake reads from Python, SQL and MCP: `load()` applies adjustment, PIT a
 
 ## Data coverage
 
-The current development tree registers **55 datasets: 47 curated + 8 derived**, organized into L0–L9. See the [catalog](docs/en/datasets/catalog.md) and [source limitations](docs/en/datasets/sources.md).
+The current development tree registers **57 datasets: 49 curated + 8 derived**, organized into L0–L9. See the [catalog](docs/en/datasets/catalog.md) and [source limitations](docs/en/datasets/sources.md).
 
 | Tier | Research use | Representative datasets |
 |---|---|---|
@@ -161,7 +161,9 @@ Minutes, trade snapshots and futures/options are disabled by default. Check each
 | `sector_members` | L5 | eastmoney | — |
 | `macro_indicators` | L6 | eastmoney | pboc |
 | `market_breadth` | L6 | derived | — |
-| `economic_calendar` | L7 | eastmoney | — |
+| `economic_calendar` | L7 | jin10 | — |
+| `economic_events` | L7 | jin10 | — |
+| `market_holidays` | L7 | jin10 | — |
 | `flash_news_wire` | L7 | eastmoney | — |
 | `hot_rank` | L7 | eastmoney | — |
 | `news_headlines` | L7 | eastmoney | — |

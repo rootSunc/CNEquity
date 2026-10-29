@@ -588,6 +588,9 @@ class Config:
             "shareholder_counts",
             "top_holders",
             "corporate_actions",
+            # Backfillable, but a day's consensus is only seen live: the
+            # rolling capture is the point-in-time record of each forecast.
+            "economic_calendar",
         } or (dataset in DATASETS and history_mode_for(DATASETS[dataset]) == "snapshot_only")
 
     def adj_factor_worker_count(self) -> int:

@@ -59,7 +59,7 @@ def test_audit_checks_all_partition_col_datasets(tmp_path):
     # nothing to be missing; every other registered dataset is judged.
     assert exists_checks == {ds for ds in PARTITION_COLS if is_dataset_enabled(ds, cfg)}
     assert "futures_bars" not in exists_checks and "trade_ticks" not in exists_checks
-    # Optional datasets (source not yet wired) must not fail lake health alone.
+    # Optional snapshot datasets must not fail lake health alone.
     optional_exists = [
         f
         for f in payload["findings"]

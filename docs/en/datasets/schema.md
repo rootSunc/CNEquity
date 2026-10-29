@@ -1178,6 +1178,7 @@ THS industry and concept sector fund flow, written only when push2 cannot provid
 | Column | Type | Description |
 |--------|------|-------|
 | event_id | string |  |
+| indicator_code | string |  |
 | event_date | date |  |
 | event_time | string |  |
 | country | string |  |
@@ -1204,6 +1205,36 @@ THS industry and concept sector fund flow, written only when push2 cannot provid
 | worst_final_return | float64 |  |
 | final_window_return | float64 |  |
 | bars | int64 |  |
+| source | string |  |
+| data_version | string |  |
+| fetched_at | timestamp |  |
+
+#### economic_events
+
+| Column | Type | Description |
+|--------|------|-------|
+| event_id | string |  |
+| event_date | date |  |
+| event_time | string |  |
+| time_status | string |  |
+| country | string |  |
+| importance | int8 |  |
+| people | string |  |
+| content | string |  |
+| source | string |  |
+| data_version | string |  |
+| fetched_at | timestamp |  |
+
+#### market_holidays
+
+| Column | Type | Description |
+|--------|------|-------|
+| holiday_id | string |  |
+| holiday_date | date |  |
+| country | string |  |
+| exchange | string |  |
+| name | string |  |
+| note | string |  |
 | source | string |  |
 | data_version | string |  |
 | fetched_at | timestamp |  |

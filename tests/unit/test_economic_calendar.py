@@ -1,167 +1,147 @@
-"""Economic calendar window parsing (adapters/eastmoney/economic_calendar.py)."""
+"""Economic calendar from 金十数据 (adapters/jin10/economic_calendar.py)."""
 
 from __future__ import annotations
 
 from datetime import date
 
-from cnequity.adapters.eastmoney.economic_calendar import (
-    _first_present,
-    _parse_float,
+import httpx
+import pytest
+
+from cnequity.adapters.jin10.economic_calendar import (
     fetch_economic_calendar,
     fetch_economic_calendar_window,
+    parse_day,
 )
 
 
-def test_parse_float_handles_blank_sentinels():
-    assert _parse_float(None) is None
-    assert _parse_float("") is None
-    assert _parse_float("--") is None
-
-
-def test_parse_float_strips_commas_and_percent():
-    assert _parse_float("1,234.5%") == 1234.5
-
-
-def test_parse_float_returns_none_on_bad_value():
-    assert _parse_float("not-a-number") is None
-    assert _parse_float("nan") is None
-    assert _parse_float("inf") is None
-
-
-def test_first_present_keeps_numeric_zero():
-    assert _first_present(0, 2) == 0
-    assert _first_present("", 2) == 2
-    assert _first_present(None, 2) == 2
-
-
-def _raw_item(**overrides) -> dict:
+def _item(**overrides) -> dict:
     base = {
-        "PUBLISH_DATE": "2024-06-28 08:30:00",
-        "TIME": "08:30",
-        "COUNTRY": "中国",
-        "INDICATOR": "CPI",
-        "STAR": 3,
-        "FORECAST": "2.1%",
-        "PREVIOUS": "2.0%",
-        "ACTUAL": "2.2%",
-        "UNIT": "%",
+        "data_id": 1145437,
+        "indicator_id": 21,
+        "indicator_name": "美联储利率决定(上限)",
+        "time_period": "至10月28日",
+        "previous": "4.00",
+        "consensus": "4.00",
+        "actual": "4",
+        "revised": None,
+        "pub_time": "2026-10-29 02:00",
+        "country": "美国",
+        "star": 5,
+        "unit": "%",
     }
     base.update(overrides)
     return base
 
 
-def test_fetch_economic_calendar_window_filters_and_parses(monkeypatch):
-    rows = [
-        _raw_item(),
-        _raw_item(ACTUAL="2.3%"),  # same event, keep the latest source row
-        _raw_item(PUBLISH_DATE="2024-01-01 00:00:00"),  # outside window
-        _raw_item(PUBLISH_DATE=""),  # missing date, skipped
-        _raw_item(PUBLISH_DATE="not-a-date"),  # unparsable, skipped
-    ]
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.economic_calendar.fetch_datacenter",
-        lambda client, report, **kwargs: rows,
+def test_parse_day_maps_the_fields():
+    (row,) = parse_day({"status": 200, "data": [_item()]}, date(2026, 10, 29))
+    assert row == {
+        "event_id": "jin10:1145437",
+        "indicator_code": "jin10:21",
+        "event_date": date(2026, 10, 29),
+        "event_time": "02:00",
+        "country": "美国",
+        "indicator": "美联储利率决定(上限)（至10月28日）",
+        "importance": 5,
+        "forecast": 4.0,
+        "previous": 4.0,
+        "actual": 4.0,
+        "unit": "%",
+    }
+
+
+def test_parse_day_prefers_the_revised_previous_and_blanks():
+    (row,) = parse_day(
+        {"status": 200, "data": [_item(revised="4.25", actual="", consensus="--")]},
+        date(2026, 10, 29),
     )
-    df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
-    assert df.height == 1
-    row = df.row(0, named=True)
-    assert row["event_date"] == date(2024, 6, 28)
-    assert row["forecast"] == 2.1
-    assert row["previous"] == 2.0
-    assert row["actual"] == 2.3
-    assert row["importance"] == 3
-    assert row["unit"] == "%"
-    assert row["event_id"] == "2024-06-28|08:30|中国|CPI"
+    assert row["previous"] == 4.25
+    assert row["actual"] is None
+    assert row["forecast"] is None
 
 
-def test_fetch_economic_calendar_window_handles_bad_star_and_lowercase_keys(monkeypatch):
-    rows = [
+def test_parse_day_drops_rows_without_identity_or_from_another_day():
+    rows = parse_day(
         {
-            "publish_date": "2024-06-28",
-            "time": "09:00",
-            "country": "美国",
-            "indicator": "PMI",
-            "star": "not-an-int",
-            "forecast": None,
-            "previous": None,
-            "actual": None,
-            "unit": "",
-        }
-    ]
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.economic_calendar.fetch_datacenter",
-        lambda client, report, **kwargs: rows,
+            "status": 200,
+            "data": [
+                _item(data_id=None),
+                _item(indicator_name=""),
+                _item(pub_time="2026-10-30 08:00"),
+                _item(pub_time="bad"),
+            ],
+        },
+        date(2026, 10, 29),
     )
-    df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
-    assert df.height == 1
-    row = df.row(0, named=True)
-    assert row["importance"] is None
-    assert row["unit"] is None
+    assert rows == []
 
 
-def test_fetch_economic_calendar_window_handles_nonfinite_star(monkeypatch):
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.economic_calendar.fetch_datacenter",
-        lambda client, report, **kwargs: [_raw_item(STAR=float("inf"))],
+def test_parse_day_rejects_a_refused_request():
+    with pytest.raises(RuntimeError, match="status"):
+        parse_day({"status": 401, "data": []}, date(2026, 10, 29))
+
+
+def test_window_requests_each_day_and_keeps_the_latest_reading():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        day = request.url.params["date"]
+        seen.append(day)
+        assert request.headers["x-app-id"]
+        actual = "4" if day == "2026-10-29" else ""
+        return httpx.Response(
+            200,
+            json={"status": 200, "data": [_item(pub_time=f"{day} 02:00", actual=actual)]},
+        )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        headers={"x-app-id": "test"},
     )
-    df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
-    assert df.row(0, named=True)["importance"] is None
+    frame = fetch_economic_calendar_window(date(2026, 10, 28), date(2026, 10, 30), client=client)
+    assert seen == ["2026-10-28", "2026-10-29", "2026-10-30"]
+    # One data_id is one event: the same id on several days collapses to one row.
+    assert frame.height == 1
 
 
-def test_fetch_economic_calendar_skips_rows_without_indicator(monkeypatch):
-    rows = [_raw_item(INDICATOR=""), _raw_item(INDICATOR="CPI")]
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.economic_calendar.fetch_datacenter",
-        lambda client, report, **kwargs: rows,
-    )
-    df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
-    assert df["indicator"].to_list() == ["CPI"]
+def test_daily_window_is_two_days_back_and_two_weeks_ahead(monkeypatch):
+    from cnequity.adapters.jin10 import economic_calendar as module
+
+    calls = {}
+
+    def window(start, end, **_kwargs):
+        calls["window"] = (start, end)
+        return None
+
+    monkeypatch.setattr(module, "fetch_economic_calendar_window", window)
+    fetch_economic_calendar(date(2026, 10, 29))
+    assert calls["window"] == (date(2026, 10, 27), date(2026, 11, 12))
 
 
-def test_fetch_economic_calendar_window_keeps_explicit_zero_values(monkeypatch):
-    rows = [_raw_item(FORECAST=0, PREVIOUS=0.0, ACTUAL="0%")]
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.economic_calendar.fetch_datacenter",
-        lambda client, report, **kwargs: rows,
-    )
-    df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
-    row = df.row(0, named=True)
-    assert row["forecast"] == 0.0
-    assert row["previous"] == 0.0
-    assert row["actual"] == 0.0
+def test_backfill_walks_by_month_and_fetches_only_missing_days(tmp_path, monkeypatch):
+    import polars as pl
 
+    from cnequity.config import Config
+    from cnequity.steps import newsboard
 
-def test_fetch_economic_calendar_window_empty_when_no_rows(monkeypatch):
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.economic_calendar.fetch_datacenter",
-        lambda client, report, **kwargs: [],
-    )
-    df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
-    assert df.is_empty()
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    cfg._backfill = True
+    cfg._backfill_start = date(2008, 1, 30)
+    cfg._backfill_end = date(2008, 3, 2)
+    present = {date(2008, 2, d) for d in range(1, 30)}
+    monkeypatch.setattr(newsboard, "_calendar_days_present", lambda config: present)
+    windows: list[tuple[date, date]] = []
 
+    def window(start, end, **_kwargs):
+        windows.append((start, end))
+        return pl.DataFrame(
+            parse_day({"status": 200, "data": [_item(pub_time=f"{start} 02:00")]}, start)
+        )
 
-def test_fetch_economic_calendar_window_none_data(monkeypatch):
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.economic_calendar.fetch_datacenter",
-        lambda client, report, **kwargs: None,
-    )
-    df = fetch_economic_calendar_window(date(2024, 6, 20), date(2024, 6, 30))
-    assert df.is_empty()
-
-
-def test_fetch_economic_calendar_uses_rolling_window(monkeypatch):
-    seen = {}
-
-    def _fake_window(start, end):
-        seen["start"] = start
-        seen["end"] = end
-        return "sentinel"
-
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.economic_calendar.fetch_economic_calendar_window",
-        _fake_window,
-    )
-    out = fetch_economic_calendar(date(2024, 6, 28))
-    assert out == "sentinel"
-    assert seen["start"] == date(2024, 6, 26)
-    assert seen["end"] == date(2024, 7, 12)
+    monkeypatch.setattr(newsboard, "fetch_economic_calendar_window", window)
+    result = newsboard.step_economic_calendar(cfg, date(2026, 10, 29), "r-bf", {})
+    # February is complete in curated; January and March fetch only their own span.
+    assert windows == [(date(2008, 1, 30), date(2008, 1, 31)), (date(2008, 3, 1), date(2008, 3, 2))]
+    assert result["months_fetched"] == 2
+    assert result["months_skipped"] == 1
+    assert result["rows_written"] == 2

@@ -727,7 +727,7 @@ cne verify --derivatives --dataset futures_bars --start 2026-09-01 --end 2026-09
 
 | 选项 | 说明 |
 |------|------|
-| `--datasets` | 逐数据集新鲜度表（dataset / layer / freshness / 覆盖区间 / watermark）；加 `--gate` 时有 STALE 退出 1。freshness 取值：`fresh` / `STALE` / `empty`（还没抓过）/ `no source`（源已下线且无替代，如 `economic_calendar`）/ `retired`（源已下线但湖已抓到最后一天，如 `northbound_flows`）/ `removed`（配置用 `steps_remove` 或 `enabled = false` 有意移出调度、没有别的组再跑它；保留真实的最后日期，不判落后，`cne check`、审计和门禁都不计入）/ `n/a`（配置里关闭，或不按日判新鲜度） |
+| `--datasets` | 逐数据集新鲜度表（dataset / layer / freshness / 覆盖区间 / watermark）；加 `--gate` 时有 STALE 退出 1。freshness 取值：`fresh` / `STALE` / `empty`（还没抓过）/ `no source`（源已下线且无替代）/ `retired`（源已下线但湖已抓到最后一天，如 `northbound_flows`）/ `removed`（配置用 `steps_remove` 或 `enabled = false` 有意移出调度、没有别的组再跑它；保留真实的最后日期，不判落后，`cne check`、审计和门禁都不计入）/ `n/a`（配置里关闭，或不按日判新鲜度） |
 | `--gate` | 显式质量验收：失败 / 新鲜度不合格返回 1，覆盖不足或降级返回 2；普通只读查询成功返回 0 |
 | `--all-columns` | 配合 `--datasets`：打印 `list_datasets` 的全部列（契约指纹、revision、PIT 存储列等），而非仅新鲜度 |
 | `--groups` | 配合 `--datasets`：在 `--gate` 模式下只对这些调度组拥有的数据集判失败（空格或逗号分隔）。其它组的数据集照常列出、照常报为调度缺口，但不触发退出 1。只调度 `core` 的主机应指定这个范围，避免未安排采集的可选组持续触发门禁。无人调度的数据集（`(unscheduled)`）仍然判失败，须明确处理 |

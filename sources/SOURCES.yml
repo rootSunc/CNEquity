@@ -97,6 +97,22 @@ sources:
     notes: 使用公开 HTTP 接口承载资金、估值、公告、板块和财务等数据。2025-07-18 生效的用户协议第六部分声明内容权利归东财或权利人，未经事先书面许可不得使用或创作衍生作品；行情数据未经交易所书面同意不得复制、向他人提供或用于开发衍生品。该协议没有明确授权未文档化接口的自动采集或本地长期缓存，因此这些项目继续保持 unknown。
     derived: false
 
+  jin10:
+    owner: 金十数据（Jin10）
+    access_type: public_http_endpoint
+    tos_url: unknown
+    tos_reviewed_at: unknown
+    authentication: web_app_headers
+    personal_use: unknown
+    commercial_use: unknown
+    cache_allowed: unknown
+    redistribution: unknown
+    rate_limit: unknown
+    retained_payloads: unknown
+    legal_status: unknown
+    notes: 财经日历（economic_calendar）、财经事件（economic_events）和全球休市安排（market_holidays）的来源；财经日历 2026-10-29 接替已下线的东财 RPT_ECONOMICCALENDAR。接口未文档化，要求带网页版的 x-app-id/x-version 请求头，按天请求、每秒不超过一次。用户协议、缓存与再分发条件尚未核实，权限字段保持 unknown。
+    derived: false
+
   sina:
     owner: 新浪财经（Sina Finance）
     access_type: public_http_endpoint
