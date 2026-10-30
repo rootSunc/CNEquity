@@ -483,7 +483,11 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
     from cnequity.domain.contracts import contract_fingerprint, dataset_contract
     from cnequity.orchestrator.compact_gate import compact_allowed, publication_files
     from cnequity.orchestrator.manifest import Manifest
-    from cnequity.storage.coverage import candidate_gaps, resolved_outstanding_keys
+    from cnequity.storage.coverage import (
+        candidate_gaps,
+        gap_summary,
+        resolved_outstanding_keys,
+    )
     from cnequity.storage.provenance import runtime_lineage
     from cnequity.storage.revisions import RevisionStore
 
@@ -718,7 +722,8 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
                 "end": trade_date.isoformat(),
                 "universe": config.ingest_universe,
             },
-            "gaps": remaining,
+            "gaps": gap_summary(remaining),
+            "gaps_source": "dataset_state",
             "resolved_outstanding_keys": len(resolved_keys[ds]),
         }
 

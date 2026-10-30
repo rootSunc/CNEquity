@@ -913,10 +913,14 @@ class JobEngine:
                 error=exc,
             )
             self.manifest.record_stage_metrics(run_id, name, elapsed)
+            from cnequity.storage.revisions import DiskSpaceError
+
             if outcome.reason_code in SOURCE_LIMIT_REASONS:
                 logger.warning(N_("Step %s source unavailable after %.1fs: %s"), name, elapsed, exc)
             elif outcome.execution_status == "skipped":
                 logger.warning(N_("Step %s skipped: %s"), name, exc)
+            elif isinstance(exc, DiskSpaceError):
+                logger.error(N_("Step %s failed after %.1fs: %s"), name, elapsed, exc)
             else:
                 logger.exception(N_("Step %s failed after %.1fs"), name, elapsed)
             if outcome.execution_status == "skipped":

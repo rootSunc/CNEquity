@@ -761,6 +761,8 @@ Newly written backfill runs store the dates, symbols, minute frequency, tick ran
 
 Preview compacted terminal run staging, overage orphans, source snapshots, logs and old versions. Even without `--dry-run` it never marks or deletes files; scheduled scripts can only produce notices.
 
+Backfill and the daily run drop older generations at the end, using [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention). The default is 5. This command does not delete. Set the value to `0` to delete none.
+
 | Option | Description |
 |------|------|
 | `--dry-run` | Compatibility option; cannot be combined with `--reconcile-runs`, which modifies run state |
@@ -778,11 +780,11 @@ The preview also returns `staging_inventory`, `staging_run_count`, and `skipped_
 
 ## cne storage
 
-The version lifecycle comprises reference registration, immutable plans, an in-place observation period, and physical reclamation within a maintenance window. Nothing is deleted automatically after 7 days. External readers must be stopped by the operator.
+The version lifecycle comprises reference registration, immutable plans, an in-place observation period, and physical reclamation within a maintenance window. Nothing is deleted automatically after 7 days. Backfill and the daily run remove older unretained generations at [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) (default 5); that is the only deletion that skips the observation period and the web confirmation. Set it to `0` to delete none. External readers must be stopped by the operator.
 
 | Command | Behavior |
 |---|---|
-| `inspect --keep 5` | Read-only listing of the versions that still exist and their retention reasons; without imported references it is only a first-pass screen |
+| `inspect --keep 5` | Read-only listing of the versions that still exist and their retention reasons. `logical_bytes` is the sum of file sizes; `exclusive_bytes` is what deleting that generation would release, and a file hard-linked from another generation is not included. An APFS clone is a separate file and still counts, so this is not a promise of freed space on that filesystem. Without imported references it is only a first-pass screen |
 | `explain OBJECT_ID` | Show the grounds for a version, such as current/recent/hold |
 | `import --manifest FILE` | Validate and merge a reviewed local reference manifest; never lifts existing protection automatically |
 | `hold OBJECT_ID --reason TEXT` | Add a retention reason for a version or cleanup resource, canceling the corresponding pending-deletion mark |

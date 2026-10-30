@@ -758,6 +758,8 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 
 预览已 compact 的终态 run staging、超龄 orphan、来源快照、日志和历史版本。即使不加 `--dry-run` 也不会标记或删除文件，定时脚本只能产生提示。
 
+回补和日更结束时会按 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) 丢掉更老的代，默认 5。这个命令本身不删除。设为 `0` 则一次都不删。
+
 | 选项 | 说明 |
 |------|------|
 | `--dry-run` | 兼容选项；不能与会修改运行状态的 `--reconcile-runs` 同用 |
@@ -775,11 +777,11 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 
 ## cne storage
 
-版本生命周期包括引用登记、不可变计划、原地观察期和维护窗口下的物理回收。满 7 天不会自动删除。外部读取须由操作者停止。
+版本生命周期包括引用登记、不可变计划、原地观察期和维护窗口下的物理回收。满 7 天不会自动删除。回补和日更会按 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention)（默认 5）删掉没有保留的更老代，这是唯一不经过观察期和网页确认的删除；设为 `0` 则不删。外部读取须由操作者停止。
 
 | 命令 | 行为 |
 |---|---|
-| `inspect --keep 5` | 只读列出仍存在的版本和保留原因；未导入引用时仅为初筛 |
+| `inspect --keep 5` | 只读列出仍存在的版本和保留原因。`logical_bytes` 是文件大小合计；`exclusive_bytes` 是删掉这一代能腾出的字节，和其他代硬链接共享的文件不计。APFS 上的克隆是独立文件，仍会计入，不能当成腾出空间的承诺。未导入引用时仅为初筛 |
 | `explain OBJECT_ID` | 显示版本的 current/recent/hold 等依据 |
 | `import --manifest FILE` | 校验并合并已审核的本地引用清单；不会自动解除已有保护 |
 | `hold OBJECT_ID --reason TEXT` | 新增版本或清理资源的保留理由，取消相应待删除标记 |

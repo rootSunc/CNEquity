@@ -472,6 +472,15 @@ max_payload_bytes = 33554432
 # per-page financial and shareholder backfills. This trades disk for recovery.
 # datasets = ["announcement_index", "financial_statement_items", "top_holders"]
 
+[storage.retention]
+# Generations kept after `cne backfill` and `cne run daily`. The default 5
+# matches the count already used when listing recent generations. 0 deletes
+# nothing. The current generation, an explicit hold, and a generation without
+# a usable receipt are always kept. Receipts stay; reading a removed
+# generation fails instead of following a newer one. freed_bytes counts only
+# files no kept generation still shares. `cne run clean` still only previews.
+keep_generations = 5
+
 [universe]
 # Which instrument classes the daily fetch covers. The security master also
 # contains subscription placeholders and unverified quote codes; listed funds

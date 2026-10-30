@@ -7,8 +7,10 @@ revision that downstream caches and research artifacts can pin.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import logging
 import os
 import shutil
 import stat
@@ -22,6 +24,7 @@ from typing import Any
 
 from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.i18n import _
 from cnequity.storage.atomic import (
     fsync_dir,
     replace_with_retry,
@@ -30,6 +33,16 @@ from cnequity.storage.atomic import (
 )
 from cnequity.storage.file_copy import copy2_isolated
 from cnequity.storage.state import StateStore
+
+logger = logging.getLogger(__name__)
+
+
+class DiskSpaceError(RuntimeError):
+    """A publish would not fit, or a write ran out of space.
+
+    The unfinished generation is removed before this is raised. The current
+    pointer stays on the previous generation.
+    """
 
 
 class RevisionConsistencyError(RuntimeError):
@@ -44,6 +57,10 @@ class RevisionConsistencyError(RuntimeError):
 
 _POINTER_SCHEMA_VERSION = 1
 _LEGACY_REVISION_ID = "legacy"
+# Room for the receipt and the directory entries around the new files. The
+# receipt no longer carries the whole gap index, so this is a bound, not a
+# measurement of that old payload.
+_RECEIPT_ALLOWANCE_BYTES = 1024 * 1024
 
 
 def _reject_symlink_path(path: Path, *, label: str = "path") -> None:
@@ -127,6 +144,72 @@ class DatasetRevision:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _link_generation_file(source: Path, target: Path) -> bool:
+    """Hard-link a committed generation file, or report that it must be copied."""
+    try:
+        os.link(source, target)
+    except OSError as exc:
+        if exc.errno in _LINK_UNSUPPORTED:
+            return False
+        raise
+    return True
+
+
+_LINK_UNSUPPORTED = {
+    errno.EXDEV,
+    errno.EPERM,
+    errno.EMLINK,
+    errno.ENOTSUP,
+    errno.EOPNOTSUPP,
+    errno.ENOSYS,
+}
+
+
+def _publish_space_message(dataset: str, required: int, free: int) -> str:
+    return _(
+        "{dataset} needs about {required} bytes ({required_mib} MiB) free for this publish, "
+        "and {free} bytes ({free_mib} MiB) are free. The unfinished generation was not kept. "
+        "Delete historical generations on the storage page of `cne serve`, or free space and "
+        "publish again. Lowering [storage.retention].keep_generations only takes effect after "
+        "a publish that fits, because older generations are removed once that publish succeeds. "
+        "`cne storage inspect` reports exclusive_bytes, the bytes deleting that generation "
+        "would release; a hard-linked file shared with another generation is not included."
+    ).format(
+        dataset=dataset,
+        required=required,
+        required_mib=f"{required / 1048576:.1f}",
+        free=free,
+        free_mib=f"{free / 1048576:.1f}",
+    )
+
+
+def _enospc_message(dataset: str, free: int) -> str:
+    return _(
+        "Publishing {dataset} ran out of disk space ({free} bytes, {free_mib} MiB free). "
+        "The unfinished generation was not kept. Delete historical generations on the storage "
+        "page of `cne serve`, or free space and publish again. Lowering "
+        "[storage.retention].keep_generations only takes effect after a publish that fits. "
+        "`cne storage inspect` reports exclusive_bytes for each generation."
+    ).format(dataset=dataset, free=free, free_mib=f"{free / 1048576:.1f}")
+
+
+def _bytes_to_store(selected: dict[Path, Path], inherited: dict[Path, RevisionFile | None]) -> int:
+    """Bytes this generation will write, excluding files it will hard-link."""
+    total = 0
+    for relative, source_file in selected.items():
+        if relative in inherited:
+            continue
+        total += source_file.stat().st_size
+    return total
+
+
+def _free_bytes(path: Path) -> int | None:
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return None
 
 
 def _partition_of(relative: Path) -> str:
@@ -468,6 +551,11 @@ class RevisionStore:
         generation. Bytes an interrupted run left in an undeclared partition
         therefore never reach a publication. A committed partition that the
         writer removed from the mutable tree stays removed.
+
+        Files carried over from the committed generation are hard-linked
+        rather than copied, and keep that generation's recorded digest.
+        Generations are never written in place, so sharing an inode between
+        them is safe; mutable files are always copied.
         """
         source = self._layer_root(dataset) / dataset
         destination = self.generation_root(dataset, revision_id)
@@ -487,6 +575,7 @@ class RevisionStore:
             if source_info is not None:
                 mutable = {path.relative_to(source): path for path in self._walk_files(source)}
             selected: dict[Path, Path]
+            inherited: dict[Path, RevisionFile | None] = {}
             if changed_files is None:
                 selected = mutable
             else:
@@ -507,11 +596,20 @@ class RevisionStore:
                     if _partition_of(relative) not in declared
                     and _partition_of(relative) in present
                 }
+                if base is not None:
+                    recorded = self._generation_records(dataset, base)
+                    inherited = {
+                        relative: recorded.get((Path(dataset) / relative).as_posix())
+                        for relative in selected
+                    }
                 selected.update(
                     (relative, path)
                     for relative, path in mutable.items()
                     if _partition_of(relative) in declared
                 )
+                for relative in mutable:
+                    if _partition_of(relative) in declared:
+                        inherited.pop(relative, None)
                 # Legacy baselines are adopted as they are; a new publication
                 # must match the registered layout.
                 problems = layout_violations(dataset, list(selected))
@@ -521,11 +619,21 @@ class RevisionStore:
                         f"({len(problems)} file(s)), e.g. {problems[0]}; "
                         f"run `cne repair layout {dataset}`"
                     )
+            required = _bytes_to_store(selected, inherited) + _RECEIPT_ALLOWANCE_BYTES
+            free = _free_bytes(destination.parent)
+            if free is not None and free < required:
+                raise DiskSpaceError(_publish_space_message(dataset, required, free))
             if selected:
                 for relative, source_file in sorted(selected.items()):
                     stored = temporary / relative
                     stored.parent.mkdir(parents=True, exist_ok=True)
-                    copy2_isolated(source_file, stored)
+                    linked = relative in inherited and _link_generation_file(source_file, stored)
+                    if not linked:
+                        copy2_isolated(source_file, stored)
+                    record = inherited.get(relative) if linked else None
+                    if record is not None and record.size_bytes == stored.stat().st_size:
+                        files.append(record)
+                        continue
                     files.append(
                         RevisionFile(
                             path=(Path(dataset) / relative).as_posix(),
@@ -541,10 +649,30 @@ class RevisionStore:
             # ``temporary`` because the pointer is published later.
             replace_with_retry(temporary, destination)
             return destination, tuple(files)
+        except OSError as exc:
+            shutil.rmtree(temporary, ignore_errors=True)
+            shutil.rmtree(destination, ignore_errors=True)
+            if exc.errno == errno.ENOSPC:
+                raise DiskSpaceError(
+                    _enospc_message(dataset, _free_bytes(destination.parent) or 0)
+                ) from exc
+            raise
         except Exception:
             shutil.rmtree(temporary, ignore_errors=True)
             shutil.rmtree(destination, ignore_errors=True)
             raise
+
+    def _generation_records(self, dataset: str, base: Path) -> dict[str, RevisionFile]:
+        """Digests the current receipt recorded for *base*, keyed by path."""
+        try:
+            receipt = self.latest(dataset)
+        except (OSError, ValueError, TypeError, RevisionConsistencyError):
+            return {}
+        if receipt is None or not receipt.generation_path:
+            return {}
+        if self.meta_root / receipt.generation_path != base:
+            return {}
+        return {item.path: item for item in receipt.generation_files}
 
     def ensure_current(self, dataset: str, *, _locked: bool = False) -> Path:
         """Materialise a legacy lake as revision-zero before a compact.
@@ -821,6 +949,17 @@ class RevisionStore:
             # so readers that already opened the old pointer finish on the old
             # generation while new readers select the new complete generation.
             write_json_atomic(self.pointer_path(dataset), pointer_payload, indent=2)
+        except OSError as exc:
+            # The pointer is still the previous generation. An out-of-space
+            # failure must not leave the new generation behind on a full disk.
+            if exc.errno == errno.ENOSPC:
+                shutil.rmtree(generation, ignore_errors=True)
+                if receipt_path.is_file():
+                    receipt_path.unlink()
+                raise DiskSpaceError(
+                    _enospc_message(dataset, _free_bytes(self.meta_root) or 0)
+                ) from exc
+            raise
         except Exception:
             # Do not remove an old generation.  The unpublished new generation
             # and receipt are harmless recovery artefacts and can be garbage
@@ -1058,3 +1197,156 @@ def prune_revision_generations(
                 )
             )
         return results
+
+
+def _exclusive_tree_bytes(root: Path) -> int:
+    """Bytes that disappear when *root* is removed.
+
+    A file hard-linked from a generation that is staying shares its inode, so
+    only a link count of one is counted. Copy-on-write clones are separate
+    inodes and are counted in full; this is not an APFS free-space promise.
+    """
+    total = 0
+    for directory, dirnames, names in os.walk(root, followlinks=False):
+        parent = Path(directory)
+        for name in dirnames:
+            path = parent / name
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise RevisionConsistencyError(f"generation contains a link: {path}")
+        for name in names:
+            path = parent / name
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                raise RevisionConsistencyError(f"generation contains a non-regular file: {path}")
+            if info.st_nlink == 1:
+                total += info.st_size
+    return total
+
+
+def retain_revision_generations(
+    meta_root: Path | str,
+    *,
+    keep: int,
+) -> list[GenerationPruneResult]:
+    """Delete generation directories older than the newest *keep* per dataset.
+
+    The current pointer, an explicit hold, and a generation whose receipt is
+    missing or unusable are kept. Receipts stay, so the publication history
+    remains; reading a removed generation fails instead of following a newer
+    one. Callers that have not imported a reference inventory are treated as
+    having no external references. A stale inventory or an unfinished purge
+    deletes nothing.
+    """
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        raise ValueError("keep must be at least 1")
+    from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, reference_fingerprint
+    from cnequity.storage.lifecycle.purge import unfinished
+
+    store = LifecycleStore(meta_root)
+    with lake_mutation_lock(store.meta):
+        if unfinished(store):
+            raise LifecycleError("Resume unfinished purge before revision retention")
+        registry = store.registry()
+        if registry is not None and (
+            reference_fingerprint(registry["reference_roots"], meta_root=store.meta)
+            != registry["reference_fingerprint"]
+        ):
+            raise LifecycleError(
+                "Reference inventory changed; refresh holds before revision retention"
+            )
+        report = store.inspect(keep=keep)
+        revision_store = RevisionStore(store.meta, store.meta.parent / "curated", create=False)
+        protected = set()
+        for dataset in {obj["dataset"] for obj in report["objects"]}:
+            pointer = revision_store.current_pointer(dataset)
+            raw_path = pointer.get("generation_path") if pointer else None
+            if isinstance(raw_path, str) and raw_path:
+                protected.add(raw_path)
+        chosen: dict[str, list[dict]] = {}
+        for obj in report["objects"]:
+            if obj["blocked_reasons"] or obj["current"] or obj["path"] in protected:
+                continue
+            relative = Path(obj["path"])
+            if relative.parts[:3] != ("revisions", "data", obj["dataset"]) or (
+                relative.name != obj["revision_id"]
+            ):
+                raise RevisionConsistencyError(
+                    f"refusing to delete unexpected generation path: {obj['path']}"
+                )
+            chosen.setdefault(obj["dataset"], []).append(obj)
+        results: list[GenerationPruneResult] = []
+        for dataset, objs in sorted(chosen.items()):
+            removed: list[str] = []
+            freed = 0
+            for obj in sorted(objs, key=lambda item: item["revision"]):
+                path = store.meta / obj["path"]
+                _reject_symlink_path(path, label="generation")
+                if not path.is_dir():
+                    continue
+                freed += _exclusive_tree_bytes(path)
+                shutil.rmtree(path)
+                removed.append(obj["revision_id"])
+            parent = store.meta / "revisions" / "data" / dataset
+            if parent.is_dir():
+                fsync_dir(parent)
+            removed_ids = set(removed)
+            results.append(
+                GenerationPruneResult(
+                    dataset=dataset,
+                    removed_revision_ids=tuple(removed),
+                    kept_revision_ids=tuple(
+                        obj["revision_id"]
+                        for obj in report["objects"]
+                        if obj["dataset"] == dataset and obj["revision_id"] not in removed_ids
+                    ),
+                    freed_bytes=freed,
+                    logical_bytes_selected=sum(
+                        obj["logical_bytes"] for obj in objs if obj["revision_id"] in removed_ids
+                    ),
+                )
+            )
+        return results
+
+
+def apply_configured_revision_retention(config) -> dict[str, Any] | None:
+    """Apply ``[storage.retention]`` after a publishing command, or do nothing.
+
+    ``keep_generations`` of 0 returns ``None`` without reading the lake. The
+    default is 5, the same count the storage page uses for a recent
+    generation. A failure is reported and does not undo the publication that
+    just finished; the next backfill or daily run tries again.
+    """
+    keep = getattr(config, "revision_keep_generations", 5)
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        return None
+    from cnequity.storage.lifecycle import LifecycleError
+
+    try:
+        removed = retain_revision_generations(config.meta_root, keep=keep)
+    except (LifecycleError, RevisionConsistencyError, OSError, ValueError) as exc:
+        logger.warning("revision retention failed: %s", exc)
+        return {
+            "status": "failed",
+            "keep": keep,
+            "error": f"{type(exc).__name__}: {exc}",
+            "removed": 0,
+            "freed_bytes": 0,
+            "datasets": [],
+        }
+    datasets = [
+        {
+            "dataset": item.dataset,
+            "removed_revision_ids": list(item.removed_revision_ids),
+            "kept_revision_ids": list(item.kept_revision_ids),
+            "freed_bytes": item.freed_bytes,
+        }
+        for item in removed
+    ]
+    return {
+        "status": "ok",
+        "keep": keep,
+        "removed": sum(len(item.removed_revision_ids) for item in removed),
+        "freed_bytes": sum(item.freed_bytes for item in removed),
+        "datasets": datasets,
+    }

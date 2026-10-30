@@ -15,7 +15,12 @@ from typing import Any
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.i18n import _
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.revisions import RevisionStore, _reject_symlink_path, sha256_file
+from cnequity.storage.revisions import (
+    RevisionStore,
+    _exclusive_tree_bytes,
+    _reject_symlink_path,
+    sha256_file,
+)
 
 GRACE_DAYS = 7
 TEXT_SUFFIXES = {".json", ".jsonl", ".md", ".py", ".toml", ".yaml", ".yml"}
@@ -442,6 +447,7 @@ class LifecycleStore:
                         "receipt_digest": receipt_digest,
                         "directory_identity": [info.st_dev, info.st_ino, info.st_mtime_ns],
                         "logical_bytes": sum(f["size_bytes"] for f in files),
+                        "exclusive_bytes": _exclusive_tree_bytes(path),
                         "current": bool(pointer and pointer["revision_id"] == rid),
                         "pointer_digest": digest(pointer),
                         "blocked_reasons": reasons,

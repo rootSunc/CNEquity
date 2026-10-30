@@ -464,6 +464,18 @@ By default only new PDF payloads go to the external folder; other responses stay
 
 Replay requires the external folder to be available; cloud files may need downloading first. An unavailable folder fails explicitly rather than being recreated empty or fetching the provider again. Portable snapshots materialize external payloads without machine-specific locations, which may download cloud files. macOS manages iCloud synchronization and Remove Download; registration alone does not confirm upload.
 
+## `[storage.retention]` {#storage-retention}
+
+Every backfill and daily publish leaves an immutable generation. At the end of `cne backfill` and `cne run daily`, each dataset keeps the newest 5 generations and the older generation directories are removed. That is the same count the storage page uses for a recent generation. The generation currently being read, a generation registered with `cne storage hold`, and a generation whose receipt is missing or unusable are never removed. Receipts stay under `meta/revisions/` as the record of what was published; reading a removed generation fails explicitly and does not follow a newer one. `cne run clean` still only previews. Deleting more aggressively than this count is still confirmed on the storage page of `cne serve`.
+
+| Key | Default | Description |
+|----|------|------|
+| `keep_generations` | `5` | Newest generations to keep per dataset. `0` does not delete automatically |
+
+A file hard-linked from a generation that is staying does not disappear with the old directory. `freed_bytes` counts only bytes that no kept generation still points at. With no imported reference inventory, "not registered" is treated as "no external reference". To pin one publication for a reproduction, run `cne storage import` and then `cne storage hold`, or set `keep_generations` to `0`. A small disk can lower the count.
+
+A retention failure (a stale reference inventory, or an unfinished deletion) does not fail a publish that already succeeded. The reason is printed on stderr, and the next backfill or daily run tries again.
+
 ## `[exchange_audit]`
 
 | Key | Default | Description |

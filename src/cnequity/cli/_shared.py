@@ -301,6 +301,39 @@ def parse_date_option(value: str | None, flag: str) -> date | None:
         ) from None
 
 
+def attach_revision_retention(config, payload: dict) -> None:
+    """Record configured generation retention on a finished publish.
+
+    Off by default. A failure is written onto *payload* and stderr; it does
+    not change the publish that already completed.
+    """
+    from cnequity.storage.revisions import apply_configured_revision_retention
+
+    report = apply_configured_revision_retention(config)
+    if report is None:
+        return
+    payload["revision_retention"] = report
+    if report["status"] != "ok":
+        click.echo(
+            _(
+                "Revision retention did not finish: {error}. Published data is unchanged; the next backfill or daily run tries again."
+            ).format(error=report["error"]),
+            err=True,
+        )
+        return
+    if report["removed"]:
+        click.echo(
+            _(
+                "Kept the latest {keep} generations per dataset, removed {removed} older ones, and released {freed_bytes} bytes that no kept generation shares."
+            ).format(
+                keep=report["keep"],
+                removed=report["removed"],
+                freed_bytes=report["freed_bytes"],
+            ),
+            err=True,
+        )
+
+
 def _run_status_exit_code(status: str) -> int:
     """Coverage limitations remain visible without failing usable execution."""
     from cnequity.orchestrator.outcomes import execution_exit_code

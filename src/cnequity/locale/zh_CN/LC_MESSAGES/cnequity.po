@@ -3418,6 +3418,11 @@ msgstr "每个数据集保留最近这么多代及 current/hold；其他版本�
 msgid "Keeps {kept} of {total} settings; the rest follow the built-in defaults of each release."
 msgstr "保留 {total} 项设置中的 {kept} 项；其余跟随每个版本的内置默认值。"
 
+#: cnequity/cli/_shared.py
+#, python-brace-format
+msgid "Kept the latest {keep} generations per dataset, removed {removed} older ones, and released {freed_bytes} bytes that no kept generation shares."
+msgstr "每个数据集保留最近 {keep} 代，删掉更早的 {removed} 代，释放了 {freed_bytes} 字节（只计没有保留代继续共享的文件）。"
+
 #: cnequity/cli/quality_cmds.py
 msgid "Keys to probe, comma-separated; costly/challenged endpoints are probed only when listed explicitly."
 msgstr "要探测的 key，逗号分隔；高成本/已受挑战的端点仅在显式列出时探测。"
@@ -4290,6 +4295,11 @@ msgstr "应用可确定的因子修正并保留旧版本；未解决项只作提
 msgid "Publish the finished data this run left in staging to the lake."
 msgstr "把这次 run 留在 staging 里、已经结束的数据发布到湖里。"
 
+#: cnequity/storage/revisions.py
+#, python-brace-format
+msgid "Publishing {dataset} ran out of disk space ({free} bytes, {free_mib} MiB free). The unfinished generation was not kept. Delete historical generations on the storage page of `cne serve`, or free space and publish again. Lowering [storage.retention].keep_generations only takes effect after a publish that fits. `cne storage inspect` reports exclusive_bytes for each generation."
+msgstr "发布 {dataset} 时磁盘空间用尽（剩余 {free} 字节，{free_mib} MiB）。未完成的这一代没有保留。请到 `cne serve` 的存储页删除历史版本，或腾出空间后再发布。调低 [storage.retention].keep_generations 只在一次放得下的发布成功之后才生效。`cne storage inspect` 会列出每一代的 exclusive_bytes。"
+
 #: cnequity/cli/init_summary.py
 msgid "Python:"
 msgstr "Python："
@@ -4756,6 +4766,11 @@ msgstr "复用 12 小时内的采集证据，只补探没碰过的来源。会�
 #: cnequity/cli/backfill_cmds.py
 msgid "Review price conflicts against historical exchange prices, TDX and EastMoney; replace whole bars only with agreeing evidence."
 msgstr "用交易所历史价格、通达信和东财复查价格冲突；只有证据一致时才整行替换。"
+
+#: cnequity/cli/_shared.py
+#, python-brace-format
+msgid "Revision retention did not finish: {error}. Published data is unchanged; the next backfill or daily run tries again."
+msgstr "旧版本清理没有完成：{error}。已经发布的数据没有改动，下一次回补或日更会再试。"
 
 #: cnequity/cli/repair_cmds.py
 msgid ""
@@ -5355,6 +5370,11 @@ msgstr "步骤 %s %s，用时 %.1fs（%s 行）"
 #, python-format
 msgid "Step %s failed after %.1fs"
 msgstr "步骤 %s 失败，用时 %.1fs"
+
+#: cnequity/orchestrator/engine.py
+#, python-format
+msgid "Step %s failed after %.1fs: %s"
+msgstr "步骤 %s 失败，用时 %.1fs：%s"
 
 #: cnequity/orchestrator/engine.py
 #, python-format
@@ -7312,6 +7332,11 @@ msgstr "{data_root} 里是合成的 sample 湖（source=mock），不会把真�
 #, python-brace-format
 msgid "{dataset} is missing whole exchanges: {value}"
 msgstr "{dataset} 缺整所：{value}"
+
+#: cnequity/storage/revisions.py
+#, python-brace-format
+msgid "{dataset} needs about {required} bytes ({required_mib} MiB) free for this publish, and {free} bytes ({free_mib} MiB) are free. The unfinished generation was not kept. Delete historical generations on the storage page of `cne serve`, or free space and publish again. Lowering [storage.retention].keep_generations only takes effect after a publish that fits, because older generations are removed once that publish succeeds. `cne storage inspect` reports exclusive_bytes, the bytes deleting that generation would release; a hard-linked file shared with another generation is not included."
+msgstr "这次发布 {dataset} 大约需要 {required} 字节（{required_mib} MiB）空闲空间，目前剩余 {free} 字节（{free_mib} MiB）。未完成的这一代没有保留。请到 `cne serve` 的存储页删除历史版本，或腾出空间后再发布。调低 [storage.retention].keep_generations 只在一次放得下的发布成功之后才生效，因为更早的代要等这次发布成功才会删。`cne storage inspect` 的 exclusive_bytes 是删掉这一代能腾出的字节；和其他代硬链接共享的文件不计入。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format

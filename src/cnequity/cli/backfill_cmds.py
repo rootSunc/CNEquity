@@ -21,6 +21,7 @@ from cnequity.cli._shared import (
     _cfg,
     _run_status_exit_code,
     attach_log_file,
+    attach_revision_retention,
     comma_option,
     comma_values,
     config_option,
@@ -1431,6 +1432,11 @@ def _finish_backfill_run(engine, result: dict) -> dict:
     persisted = engine.manifest.get_run(run_id) if hasattr(engine.manifest, "get_run") else None
     if persisted is not None:
         result["status"] = persisted["status"]
+    # Test doubles stand in for the engine and have no lake config. A real
+    # engine always does; retention is a no-op unless the config asks for it.
+    config = getattr(engine, "config", None)
+    if config is not None:
+        attach_revision_retention(config, result)
     return result
 
 
@@ -1586,13 +1592,15 @@ def _run_delisted_profile(cfg, since: date) -> dict:
         rows_written=result.get("rows_written", 0),
         error_message=error_message,
     )
-    return {
+    payload = {
         "run_id": run_id,
         **result,
         "status": run_status,
         "compact": compact_out,
         **engine._public_outcome(run_id),
     }
+    attach_revision_retention(cfg, payload)
+    return payload
 
 
 def _run_shfe_annual_archive(
@@ -1651,7 +1659,9 @@ def _run_shfe_annual_archive(
         if status != "success"
         else None,
     )
-    return {"run_id": run_id, **result, "status": status, "compact": compact}
+    payload = {"run_id": run_id, **result, "status": status, "compact": compact}
+    attach_revision_retention(cfg, payload)
+    return payload
 
 
 def _require_known_dataset(dataset: str) -> str:

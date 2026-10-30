@@ -224,7 +224,7 @@ Findings 文件：`meta/quality/findings/{run_id}.json`
 ## 症状：磁盘不足 / staging 膨胀
 
 1. `cne run compact`：自动找出并发布所有已结束、有 staging、还没有成功 compact 的 run
-2. `cne run clean` 查看候选；现在只预览，不再删除。历史版本到 serve 存储运维页确认，staging 暂仅报告
+2. `cne run clean` 查看候选；它只预览，不删除。回补和日更默认只留每个数据集最近 5 代（[`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention)）。小磁盘把这个数改小；要全部留下则设为 `0`。更老的代也可以到 serve 存储运维页确认删除。`cne storage inspect` 的 `exclusive_bytes` 是删掉这一代实际能腾出的字节。磁盘不够写这次发布时，命令会直接说明还差多少，不会只退出 1。staging 暂仅报告
 3. incomplete / 未 compact 的失败 run 默认保留供 `cne run retry`；只有确认可丢弃时才 `--force`
 4. 压缩或归档旧 `meta/source_snapshots/`（长期会膨胀）
 5. curated 勿删；用 backfill 重采而非部分删除

@@ -398,6 +398,9 @@ class Config:
     # Deno binary for the 同花顺 hexin-v token (adapters/ths/hexin.py); None
     # finds it on PATH or in the usual install locations.
     ths_js_runtime: str | None = None
+    # Generations kept after ``cne backfill`` and ``cne run daily``. Matches
+    # the existing retention count of 5. 0 keeps every generation.
+    revision_keep_generations: int = 5
 
     def __post_init__(self) -> None:
         """Normalize path-like fields for programmatic configurations.
@@ -1086,6 +1089,20 @@ def load_config(path: str | Path) -> Config:
     )
     derive_workers_raw = orch.get("derive_workers", derive_raw.get("workers"))
 
+    storage_raw = raw.get("storage") or {}
+    if not isinstance(storage_raw, dict):
+        raise ValueError("[storage] must be a table")
+    retention_raw = storage_raw.get("retention") or {}
+    if not isinstance(retention_raw, dict):
+        raise ValueError("[storage.retention] must be a table")
+    revision_keep_generations = retention_raw.get("keep_generations", 5)
+    if (
+        isinstance(revision_keep_generations, bool)
+        or not isinstance(revision_keep_generations, int)
+        or revision_keep_generations < 0
+    ):
+        raise ValueError("[storage.retention].keep_generations must be an integer >= 0")
+
     if "default" in raw.get("universe", {}):
         # Parsed into `universe_default` for a long time and read by nothing:
         # `load()` resolves its universe from the call and the profile, never
@@ -1154,6 +1171,7 @@ def load_config(path: str | Path) -> Config:
         eastmoney_datacenter_daily_budget=eastmoney_datacenter_daily_budget,
         eastmoney_daily_budget=eastmoney_daily_budget,
         ths_js_runtime=ths_js_runtime,
+        revision_keep_generations=revision_keep_generations,
         eastmoney_timeout_sec=eastmoney_timeout_sec,
         baostock_batch_size=baostock_batch_size,
         baostock_batch_rest_seconds=baostock_batch_rest_seconds,

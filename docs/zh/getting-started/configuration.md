@@ -464,6 +464,18 @@ cne storage raw-external --dataset financial_statement_items --source cninfo \
 
 原文重放需要外置目录可用；云端文件可能需要先下载。目录不可用时会明确报错，不会重建一个空目录或重新请求供应商。可移植快照会包含外置原文且不携带本机路径，生成快照可能触发云文件下载。iCloud 同步和“移除下载”由 macOS 管理，登记命令不代表已经上传成功。
 
+## `[storage.retention]` {#storage-retention}
+
+回补和日更每次发布都会留下一代不可变副本。`cne backfill` 和 `cne run daily` 结束时，每个数据集只留下最近 5 代，并删掉更早的代目录。这个数量和存储运维页上“最近 5 代”是同一个口径。当前正在读取的一代、`cne storage hold` 登记过的代、收据对不上或没有收据的代，都不会删。收据仍留在 `meta/revisions/`，用来说明当时发布了什么；再按被删掉的代去读，会明确失败，不会改读更新的一代。`cne run clean` 仍然只预览；要删得比这更激进，还是在 `cne serve` 的存储运维页确认。
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `keep_generations` | `5` | 每个数据集保留的最近代数。`0` 不自动删除 |
+
+和上一代硬链接共享的文件不会因为删掉旧目录而消失，报告里的 `freed_bytes` 只计算删除后没有任何保留代还指向的字节。没有导入引用清单时，按“没有外部引用”处理。要钉住某一次发布给研究复现，先 `cne storage import` 再 `cne storage hold`，或者把 `keep_generations` 设为 `0`。小磁盘可以把这个数改小。
+
+清理失败（引用清单已过期，或还有未完成的删除）不会让已经发布成功的回补失败；原因打在 stderr，下一次回补或日更会再试。
+
 ## `[exchange_audit]`
 
 | 键 | 默认 | 说明 |

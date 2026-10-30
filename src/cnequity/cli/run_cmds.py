@@ -23,6 +23,7 @@ from cnequity.cli._shared import (
     _progress_logging,
     _run_status_exit_code,
     attach_log_file,
+    attach_revision_retention,
     config_option,
     parse_date_option,
 )
@@ -434,6 +435,7 @@ def _run_all_groups(
         )
         if exit_code == 1 or worst == 0:
             worst = exit_code
+    attach_revision_retention(cfg, payload)
     click.echo(json.dumps(payload, indent=2, default=str))
     if worst:
         raise SystemExit(worst)
@@ -558,18 +560,15 @@ def _run_stale_only(
         )
     except RunLockError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo(
-        json.dumps(
-            {
-                "run_id": result["run_id"],
-                "status": result["status"],
-                "stale_plan": plan,
-                "repairs": repairs,
-                "backfill_applied": effective_backfill,
-            },
-            indent=2,
-        )
-    )
+    payload = {
+        "run_id": result["run_id"],
+        "status": result["status"],
+        "stale_plan": plan,
+        "repairs": repairs,
+        "backfill_applied": effective_backfill,
+    }
+    attach_revision_retention(cfg, payload)
+    click.echo(json.dumps(payload, indent=2))
     exit_code = _run_status_exit_code(result["status"])
     if exit_code:
         raise SystemExit(exit_code)
@@ -929,13 +928,9 @@ def run_daily(
                 )
     except RunLockError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo(
-        json.dumps(
-            {**result, "repairs": repairs},
-            indent=2,
-            default=str,
-        )
-    )
+    result = {**result, "repairs": repairs}
+    attach_revision_retention(cfg, result)
+    click.echo(json.dumps(result, indent=2, default=str))
     # Exit non-zero on failure so schedulers (launchd/cron) and the daily
     # pipeline can detect it; a non-trading-day skip is a success (exit 0).
     exit_code = _run_status_exit_code(result["status"])

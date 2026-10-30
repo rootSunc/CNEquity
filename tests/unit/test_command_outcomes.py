@@ -300,7 +300,28 @@ def test_published_repair_clears_only_matching_keys(tmp_path):
     receipt = json.loads((cfg.meta_root / pointer["receipt"]).read_text())
     coverage = receipt["metadata"]["coverage"]
     assert coverage["resolved_outstanding_keys"] == 1
-    assert [r["symbol"] for r in coverage["gaps"]["outstanding_keys"]] == ["000001.SZ"]
+    assert coverage["gaps_source"] == "dataset_state"
+    assert coverage["gaps"]["counts"]["outstanding_keys"] == 1
+    assert [r["symbol"] for r in coverage["gaps"]["sample"]["outstanding_keys"]] == ["000001.SZ"]
+
+
+def test_receipt_bounds_the_gap_index_it_records(tmp_path):
+    cfg = _config(tmp_path)
+    engine = JobEngine(cfg)
+    run = engine.manifest.start_run("backfill")
+    keys = [(f"{index:06d}.SZ", DAY) for index in range(1, 501)]
+    StateStore(cfg.meta_root).record_outstanding_keys(
+        "daily_bars", keys, run_id=run, reason="source_unavailable"
+    )
+    StagingWriter(cfg.staging_root).write_batch("daily_bars", run, "valid", _bars())
+    engine.run_step("compact", DAY, run)
+    pointer = RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars")
+    gaps = json.loads((cfg.meta_root / pointer["receipt"]).read_text())["metadata"]["coverage"][
+        "gaps"
+    ]
+    assert gaps["counts"]["outstanding_keys"] == 500
+    assert len(gaps["sample"]["outstanding_keys"]) == 20
+    assert gaps["truncated"] is True
 
 
 def test_source_limited_init_closes_and_reaches_later_phases(tmp_path, monkeypatch):
