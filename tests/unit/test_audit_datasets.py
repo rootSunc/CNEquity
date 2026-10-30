@@ -875,6 +875,21 @@ def test_a_stale_dataset_shrink_is_reported_without_accusing_the_data(tmp_path):
     assert "cne status --datasets" in cold["message"]
 
 
+def test_a_dataset_behind_the_audited_day_is_treated_as_stale(tmp_path):
+    """No partition covers the day: the newest one is short because the feed
+    stopped (sector_fund_flow after the push2 ban), not because rows vanished."""
+    cfg = Config(data_root=tmp_path / "data")
+    _write_daily_bars_partition(cfg, date(2024, 6, 26), [f"60{i:04d}.SH" for i in range(400)])
+    _write_daily_bars_partition(cfg, date(2024, 6, 27), ["600519.SH"])
+    root = cfg.curated_root / "daily_bars"
+
+    findings = audit_curated_dataset("daily_bars", "trade_date", root, date(2024, 7, 5))
+
+    mutation = next(f for f in findings if f["check"] == "row_count_mutation")
+    assert mutation["severity"] == "info"
+    assert mutation["stale_dataset"] is True
+
+
 def test_sample_profile_only_downgrades_the_synthetic_source_checks():
     """The profile allowance covers mock-source findings and nothing else, so
     an unconditional "these are expected" would speak for errors it has never

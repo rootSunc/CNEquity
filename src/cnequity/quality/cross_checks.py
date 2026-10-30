@@ -2873,7 +2873,12 @@ def financial_statement_peer_findings(config: Config) -> list[dict]:
         curated.sort([*keys, *order], nulls_last=False)
         .group_by(keys, maintain_order=True)
         .agg(
-            pl.col("item_value").last().alias("_curated"), pl.col("source").last().alias("_source")
+            pl.col("item_value").last().alias("_curated"),
+            pl.col("source").last().alias("_source"),
+            # A later vintage with another value is a correction the lake
+            # recorded: 000909.SZ restated FY2024 operating cost on 2026-09-28
+            # (前期会计差错更正), while the peer keeps the first filing.
+            (pl.col("item_value").n_unique() > 1).alias("_revised"),
         )
     )
     peer_order = [c for c in ("announce_date", "observed_at", "fetched_at") if c in peer.columns]
@@ -2916,7 +2921,10 @@ def financial_statement_peer_findings(config: Config) -> list[dict]:
         .agg(pl.col("report_period").max().alias("_latest_annual"))
     )
     scored = scored.join(latest_annual, on="symbol", how="left").with_columns(
-        (pl.col("report_period") < pl.col("_latest_annual")).fill_null(False).alias("_restatable")
+        (
+            (pl.col("report_period") < pl.col("_latest_annual")).fill_null(False)
+            | pl.col("_revised")
+        ).alias("_restatable")
     )
     breach = pl.col("_rel") > STATEMENT_PEER_TOLERANCE
     restated = int(scored.select((breach & pl.col("_restatable")).sum()).item())
@@ -2938,7 +2946,7 @@ def financial_statement_peer_findings(config: Config) -> list[dict]:
                 "check": "financial_statement_peer_restated",
                 "message": (
                     f"{restated} value(s) differ from the peer in periods a later annual "
-                    "report may have restated; the lake keeps the first disclosure"
+                    "report may have restated, or the lake recorded a correction"
                 ),
                 "disagreed": restated,
             }

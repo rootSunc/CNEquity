@@ -83,3 +83,12 @@ def test_restated_comparatives_are_reported_apart(tmp_path):
     assert [f["check"] for f in findings] == ["financial_statement_peer_restated"]
     assert findings[0]["severity"] == "info"
     assert findings[0]["disagreed"] == 1
+
+
+def test_a_correction_the_lake_recorded_is_reported_apart(tmp_path):
+    # 000909.SZ: FY2024 corrected on 2026-09-28 (前期会计差错更正); the lake holds
+    # both vintages, the peer only the first filing, and 2024Q4 is still the
+    # latest annual report, so only the lake's own vintages show the change.
+    lake = [_row(100), _row(99, announced=date(2026, 9, 28))]
+    findings = _findings(tmp_path, lake, [_row(100)])
+    assert [f["check"] for f in findings] == ["financial_statement_peer_restated"]

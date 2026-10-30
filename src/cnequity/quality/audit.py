@@ -450,10 +450,20 @@ def _collect_lake_findings(
                 "Historical ST evidence is an optional backfill outside init; "
                 "use cne backfill trading_status for historical ST research. " + message
             )
+        # Every supported symbol is covered and the rest sit on an exchange no
+        # free historical ST source serves (359 BSE codes): nothing a run can
+        # do, so it is a stated limit rather than a daily warning.
+        source_limited_only = evidence.get("reason") == "unsupported_exchange_symbols"
+        if source_limited_only and not evidence["verified"]:
+            message += "; a Tushare Pro token can fill BSE history (`cne backfill trading_status`)"
         findings.append(
             {
                 "dataset": "trading_status",
-                "severity": "info" if evidence["verified"] or optional_for_init else "warning",
+                "severity": (
+                    "info"
+                    if evidence["verified"] or optional_for_init or source_limited_only
+                    else "warning"
+                ),
                 "check": "trading_status_coverage_start",
                 "message": message,
                 "coverage_start": ts_start.isoformat(),

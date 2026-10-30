@@ -695,9 +695,14 @@ def audit_curated_dataset(
         # minutes for a dataset nobody is ingesting. Audit its newest
         # partition instead; the weekly `--full` sweep is what reads
         # everything.
-        current = next((p for p in partitions if p.covers(trade_date)), None) or (
-            partitions[-1] if partitions else None
-        )
+        current = next((p for p in partitions if p.covers(trade_date)), None)
+        if current is None and partitions:
+            # Nothing covers the audited day, so the newest partition is short
+            # because the feed stopped (sector_fund_flow since the 2026-09-22
+            # push2 ban), not because rows went missing: the same case as
+            # ``stale``, which a paused best-effort dataset is never marked.
+            current = partitions[-1]
+            stale = True
         if current is not None:
             partition_value = current.value
             prior = [p for p in partitions if p.start < current.start]
