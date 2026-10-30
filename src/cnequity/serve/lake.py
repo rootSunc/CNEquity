@@ -517,6 +517,13 @@ class LakeView:
             # Only sessions count as missing; a weekend is not a gap.
             from cnequity.query.calendar import _load_trading_calendar_df
 
+            if spec.name == "daily_bars":
+                # Same floor as the audit's missing-day check: the sparse
+                # 1990s history (952 sessions with no bar at all) is a known
+                # source limit, not a gap to repair.
+                from cnequity.domain.market_profile import HISTORY_BACKFILL_START
+
+                first = max(first, HISTORY_BACKFILL_START)
             calendar = _load_trading_calendar_df(self.config, start=first, end=last)
             if calendar is None or calendar.is_empty():
                 return {"missing": [], "total": 0, "unit": "day"}

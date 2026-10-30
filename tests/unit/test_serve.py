@@ -1132,3 +1132,27 @@ def test_open_runs_omit_handled_and_outdated(config):
     assert history["total"] == 8
     assert history["failed_daily_groups"] is None
     assert init_id in {row["run_id"] for row in history["runs"]}
+
+
+def test_daily_bar_gaps_start_at_the_history_floor(lake, config, monkeypatch):
+    """The 1990s sessions with no bar at all are a source limit, as in the audit."""
+    import polars as pl
+
+    import cnequity.query.calendar as calendar
+
+    old = date(1995, 2, 6)
+    _write(
+        config.curated_root / "daily_bars",
+        f"trade_date={old}",
+        [_full_row("daily_bars", symbol="600519.SH", trade_date=old, source="tdx_protocol")],
+    )
+    rebuild_stats(config)
+    sessions = [old, date(1995, 2, 7), FROZEN_TODAY - timedelta(days=1), FROZEN_TODAY]
+
+    def fake_calendar(_config, *, start=None, end=None, **_kwargs):
+        days = [d for d in sessions if (start is None or d >= start) and (end is None or d <= end)]
+        return pl.DataFrame({"trade_date": days, "is_trading": [True] * len(days)})
+
+    monkeypatch.setattr(calendar, "_load_trading_calendar_df", fake_calendar)
+    gaps = TestClient(create_app(lake)).get("/api/datasets/daily_bars").json()["gaps"]
+    assert gaps["total"] == 0
