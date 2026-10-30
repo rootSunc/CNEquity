@@ -486,3 +486,35 @@ def test_lot_rounding_on_a_thin_fund_is_not_an_outlier(cfg):
         for f in minute_bars_findings(cfg, TRADE_DATE)
         if f["check"] == "minute_bars_daily_outliers"
     ]
+
+
+def test_gaps_of_since_delisted_securities_are_info_not_warnings(cfg, monkeypatch):
+    """A vendor stops serving a delisted code, so its last sessions cannot be refetched."""
+    from cnequity.storage import instrument_catalog
+
+    cfg.minute_bars_enabled = True
+    cfg.minute_bars_scope = "watchlist"
+    cfg.minute_bars_symbols = ["600519.SH", "301139.SZ"]
+    cfg.minute_bars_frequencies = ["1m"]
+    _write_daily_bars(
+        cfg,
+        [
+            {"symbol": symbol, "trade_date": TRADE_DATE, "volume": 100, "amount": 1000.0}
+            for symbol in ("600519.SH", "301139.SZ")
+        ],
+    )
+    monkeypatch.setattr(
+        instrument_catalog,
+        "load_curated_instruments",
+        lambda config, read_context=None: pl.DataFrame(
+            {"symbol": ["600519.SH", "301139.SZ"], "delist_date": [None, TRADE_DATE]},
+            schema={"symbol": pl.Utf8, "delist_date": pl.Date},
+        ),
+    )
+    findings = {f["check"]: f for f in minute_bars_findings(cfg, TRADE_DATE)}
+    assert findings["minute_bars_missing_session"]["severity"] == "warning"
+    assert findings["minute_bars_missing_session"]["examples"] == [
+        {"symbol": "600519.SH", "trade_date": TRADE_DATE.isoformat()}
+    ]
+    delisted = findings["minute_bars_missing_session_delisted"]
+    assert delisted["severity"] == "info" and delisted["missing_symbol_days"] == 1

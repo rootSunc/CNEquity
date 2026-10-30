@@ -298,15 +298,6 @@ msgstr ""
 "\n"
 "已写入 {path}"
 
-#: cnequity/cli/quality_cmds.py
-#, python-brace-format
-msgid ""
-"\n"
-"{dataset}: {pending} sessions of input have not been recomputed yet; run cne derive {dataset} to update."
-msgstr ""
-"\n"
-"{dataset}：输入有 {pending} 个交易日尚未重算；运行 cne derive {dataset} 更新。"
-
 #: cnequity/cli/demo.py
 #, python-brace-format
 msgid ""

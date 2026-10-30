@@ -1048,30 +1048,6 @@ def verify(
         raise SystemExit(1)
 
 
-def _echo_resample_backlog(cfg, df) -> None:
-    """Name stored 15m/30m/60m resamples that trail their minute inputs.
-
-    They have no watermark, so the table can only say n/a; this line is the
-    one place a reader learns that a backfill has overtaken them.
-    """
-    from cnequity.derive.minute_resample import resample_backlog
-    from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
-
-    stored = {
-        row["dataset"]
-        for row in df.select("dataset", "has_data").iter_rows(named=True)
-        if row["has_data"] and row["dataset"] in RESAMPLED_MINUTE_DATASETS
-    }
-    for dataset in sorted(stored):
-        pending = resample_backlog(cfg, dataset)["pending"]
-        if pending:
-            click.echo(
-                _(
-                    "\n{dataset}: {pending} sessions of input have not been recomputed yet; run cne derive {dataset} to update."
-                ).format(dataset=dataset, pending=pending)
-            )
-
-
 @cli.command()
 @config_option
 @click.option(
@@ -1252,7 +1228,6 @@ def status(
                     "{value} more datasets have no data yet: their schedule groups are not enabled or have not run, which does not affect the conclusion here. Full list: cne status --datasets"
                 ).format(value=len(hidden))
             )
-        _echo_resample_backlog(cfg, df)
         if lake_profile == "sample":
             click.echo(
                 _(

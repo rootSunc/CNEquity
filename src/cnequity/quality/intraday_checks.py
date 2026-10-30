@@ -374,9 +374,31 @@ def missing_session_findings(
         )
     )
     gaps = missing.collect(engine="streaming").sort("symbol", "trade_date")
+    gaps, delisted = _split_delisted(config, gaps, end)
+    findings = []
+    if not delisted.is_empty():
+        # Vendors stop serving a code once it delists, so a refetch cannot fill
+        # these; keep the record without asking for an action that cannot
+        # succeed (2026-10-31: 301139.SZ's last two sessions).
+        findings.append(
+            {
+                "dataset": dataset,
+                "severity": "info",
+                "check": "minute_bars_missing_session_delisted",
+                "message": (
+                    f"{delisted.height} symbol-day(s) of since-delisted securities have daily bars "
+                    "but no minute bars; the source no longer serves them"
+                ),
+                "missing_symbol_days": delisted.height,
+                "examples": [
+                    {"symbol": row["symbol"], "trade_date": row["trade_date"].isoformat()}
+                    for row in delisted.head(10).iter_rows(named=True)
+                ],
+            }
+        )
     if gaps.is_empty():
-        return []
-    return [
+        return findings
+    return findings + [
         {
             "dataset": dataset,
             "severity": "warning",
@@ -393,6 +415,26 @@ def missing_session_findings(
             ],
         }
     ]
+
+
+def _split_delisted(
+    config: Config, gaps: pl.DataFrame, end: date
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Separate gaps whose security has delisted by *end* from the rest."""
+    if gaps.is_empty():
+        return gaps, gaps
+    from cnequity.storage.instrument_catalog import load_curated_instruments
+
+    instruments = load_curated_instruments(config)
+    if instruments is None or instruments.is_empty() or "delist_date" not in instruments.columns:
+        return gaps, gaps.clear()
+    gone = set(
+        instruments.filter(pl.col("delist_date").is_not_null() & (pl.col("delist_date") <= end))[
+            "symbol"
+        ].to_list()
+    )
+    flag = pl.col("symbol").is_in(sorted(gone))
+    return gaps.filter(~flag), gaps.filter(flag)
 
 
 def dataset_findings(

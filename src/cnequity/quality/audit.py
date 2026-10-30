@@ -225,11 +225,20 @@ def _unregistered_curated_dirs(config: Config) -> list[dict]:
 def _stale_dataset_names(config: Config, trade_date: date) -> set[str]:
     """Datasets already behind, judged exactly as `cne status --datasets` judges.
 
+    A dataset the config took out of its schedule counts too: its last
+    partition stops part-way through a period for good, which is not a shrink
+    (2026-10-31: sector_fund_flow, removed on 09-21, warned on its September).
+
     Best effort: a lake too young or too damaged to answer must not stop the
     audit, so an unreadable inventory means "nothing known to be stale" rather
     than an exception.
     """
-    from cnequity.domain.datasets import DATASETS, is_dataset_enabled, is_stale
+    from cnequity.domain.datasets import (
+        DATASETS,
+        is_dataset_enabled,
+        is_stale,
+        removed_from_schedule,
+    )
     from cnequity.query.reader import list_datasets
 
     try:
@@ -243,6 +252,9 @@ def _stale_dataset_names(config: Config, trade_date: date) -> set[str]:
         if name not in DATASETS or not row.get("has_data") or not row.get("watermarked"):
             continue
         if not is_dataset_enabled(name, config):
+            continue
+        if removed_from_schedule(config, name):
+            out.add(name)
             continue
         mark = row.get("watermark") or row.get("coverage_end")
         if mark is not None and is_stale(name, mark, anchor, config):

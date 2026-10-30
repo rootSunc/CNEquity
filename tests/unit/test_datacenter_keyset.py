@@ -54,8 +54,13 @@ class FakeDatacenter:
         rows = self.rows
         # Production uses a strict continuation; equality is the explicit
         # recovery request for a duplicate-key group split at the cap.
-        equality = re.search(r"SECUCODE='([^']+)'", filter_expr)
-        strict = re.search(r"SECUCODE>'([^']+)'", filter_expr)
+        # Like the live service: everything after ``AND`` is silently dropped,
+        # and a string predicate takes double quotes (2026-10-31).
+        filter_expr = filter_expr.split(" AND ")[0]
+        if re.search(r"SECUCODE[=>]'", filter_expr):
+            return _Resp({"success": False, "message": "参数预处理错误", "code": 9501})
+        equality = re.search(r'SECUCODE="([^"]+)"', filter_expr)
+        strict = re.search(r'SECUCODE>"([^"]+)"', filter_expr)
         if equality:
             rows = [r for r in rows if r["SECUCODE"] == equality.group(1)]
         elif strict:
@@ -107,14 +112,14 @@ def test_it_actually_had_to_re_anchor():
     """Guards the test above from passing because the cap never got hit."""
     client = FakeDatacenter(_table())
     _fetch(client, keyset_column="SECUCODE")
-    anchored = [f for f in client.filters if "SECUCODE>'" in f]
+    anchored = [f for f in client.filters if 'SECUCODE>"' in f]
     assert anchored, "expected at least one re-anchored shard"
     # One entry per request, so a shard's pages repeat its bound; collapse to
     # the sequence of shards. Bounds must strictly advance, or the sweep would
     # re-request the same shard forever.
     bounds: list[str] = []
     for f in anchored:
-        bound = re.search(r"SECUCODE>'([^']+)'", f).group(1)
+        bound = re.search(r'SECUCODE>"([^"]+)"', f).group(1)
         if not bounds or bounds[-1] != bound:
             bounds.append(bound)
     assert bounds == sorted(bounds)
@@ -147,7 +152,11 @@ def test_the_anchored_filter_is_encoded_exactly_once():
         assert "%25" not in query, f"double-encoded filter: {query}"
         assert "%27" in query, f"lost the quoting of the date literal: {query}"
         decoded = unquote(query)
-        assert " AND " in decoded, f"keyset predicate was not joined to base filter: {decoded}"
+        assert " AND " not in decoded, f"datacenter drops everything after AND: {decoded}"
+        assert decoded.startswith("(END_DATE='2025-06-30')(SECUCODE"), (
+            f"predicate not adjacent: {decoded}"
+        )
+        assert "%22" in query, f"string literal must be double-quoted: {query}"
     strict = [query for query in anchored if "%3E" in query]
     assert strict, "expected a strict keyset continuation on the wire"
 

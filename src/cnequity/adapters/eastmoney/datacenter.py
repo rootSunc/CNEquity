@@ -97,10 +97,9 @@ def _is_busy(message: str) -> bool:
 def _parenthesize_filter(expr: str) -> str:
     """Return one datacenter filter expression in a stable form.
 
-    Datacenter's grammar is surprisingly strict: adjacent parenthesised
-    predicates are accepted by some reports but are rejected by others once a
-    keyset predicate is appended.  Always joining two predicates with an
-    explicit ``AND`` keeps the wire request valid for both forms.
+    Wrapping an already-joined ``(a)(b)`` base again is harmless:
+    ``((a)(b))(c)`` is accepted. See `_join_filters` for why predicates are
+    adjacent rather than joined with ``AND``.
     """
     text = str(expr or "").strip()
     if text.startswith("(") and text.endswith(")"):
@@ -109,9 +108,23 @@ def _parenthesize_filter(expr: str) -> str:
 
 
 def _join_filters(base: str, predicate: str) -> str:
-    """Compose ``(base) AND (predicate)`` for the EM filter grammar."""
+    """Compose ``(base)(predicate)``: datacenter ANDs adjacent predicates.
+
+    Not ``AND``. Datacenter accepts ``(base) AND (predicate)`` and silently
+    drops everything after the ``AND`` (live, 2026-10-31, all four F10
+    shareholder reports): a keyset continuation then re-read page 1 of the
+    unfiltered window, and the equality recovery returned the whole report,
+    so top_holders stopped at the 100-page cap (56,505 rows, 2026-06-30).
+    """
     right = _parenthesize_filter(predicate)
-    return f"{_parenthesize_filter(base)} AND {right}" if str(base or "").strip() else right
+    return f"{_parenthesize_filter(base)}{right}" if str(base or "").strip() else right
+
+
+def _string_literal(value: object) -> str:
+    """A datacenter string literal. Strings take double quotes: a single-quoted
+    string in an appended predicate is refused with 9501 (dates in the base
+    range accept single quotes)."""
+    return '"' + str(value).replace('"', '""') + '"'
 
 
 def _keyset_filter(base: str, column: str, bound: str) -> str:
@@ -123,11 +136,7 @@ def _keyset_filter(base: str, column: str, bound: str) -> str:
     key group.  Duplicate key groups are recovered explicitly below before
     this predicate is emitted.
     """
-    # Datacenter values are string-like even for date/code columns.  Single
-    # quotes are the documented literal form; escape a quote defensively so a
-    # malformed upstream key cannot break the whole request.
-    literal = str(bound).replace("'", "''")
-    return _join_filters(base, f"{column}>'{literal}'")
+    return _join_filters(base, f"{column}>{_string_literal(bound)}")
 
 
 def _column_tokens(columns: str) -> set[str]:
@@ -499,7 +508,7 @@ def fetch_datacenter(
                 # accepting that response would duplicate or omit data.
                 boundary_filter = _join_filters(
                     effective_filter,
-                    f"{keyset_column}='{str(next_bound).replace(chr(39), chr(39) * 2)}'",
+                    f"{keyset_column}={_string_literal(next_bound)}",
                 )
                 boundary_rows = fetch_datacenter(
                     client,

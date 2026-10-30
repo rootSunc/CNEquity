@@ -280,5 +280,7 @@ def test_backlog_reaches_the_panel_and_status(tmp_path):
         contract_fingerprint="contract",
     )
     assert detail()["commands"][0]["why"] == "输入有 1 个交易日尚未重算"
+    # Resamples are on demand, so status and check no longer nag about them;
+    # the dataset page above is where the backlog shows.
     status = CliRunner().invoke(cli, ["status", "--datasets", "--config", cfg_path])
-    assert "minute_bars_15m：输入有 1 个交易日尚未重算" in status.output
+    assert "尚未重算" not in status.output
