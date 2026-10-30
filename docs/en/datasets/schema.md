@@ -1188,6 +1188,7 @@ THS industry and concept sector fund flow, written only when push2 cannot provid
 | previous | float64 |  |
 | actual | float64 |  |
 | unit | string |  |
+| withdrawn | bool |  |
 | source | string |  |
 | data_version | string |  |
 | fetched_at | timestamp |  |
@@ -1221,6 +1222,7 @@ THS industry and concept sector fund flow, written only when push2 cannot provid
 | importance | int8 |  |
 | people | string |  |
 | content | string |  |
+| withdrawn | bool |  |
 | source | string |  |
 | data_version | string |  |
 | fetched_at | timestamp |  |

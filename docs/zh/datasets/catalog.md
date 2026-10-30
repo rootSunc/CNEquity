@@ -317,8 +317,8 @@ EM 响应若已包含尚未生效的调样行，会拒绝整份快照：删除�
 | sector_fund_flow_ths | trade_date | board_type, sector_code, trade_date | snapshot | ✓ | ths | 只在 push2 取不到 `sector_fund_flow` 时由同花顺补：行业（881xxx）+ 概念板块的流入/流出/净额，金额单位亿、精确到 0.01；同花顺板块分类，和东财板块代码不对应。新鲜度规则同 `fund_flow_ths` |
 | news_headlines | publish_date | news_id | snapshot | ✓ | eastmoney | 新闻标题 |
 | flash_news_wire | publish_date | wire_id, wire_source | 兼容读取 | ✓ | eastmoney | 由 `news_headlines` 事实表投影，兼容旧 revision 的实体文件；不再重复写入 |
-| economic_calendar | event_date（按年） | event_id | snapshot | ✓ | jin10 | 金十数据财经日历，每日抓取前 2 天到后 14 天；同一事件以金十的 `data_id` 为键，公布实际值后更新同一行；`indicator_code`（金十 `indicator_id`）跨年份标识同一指标序列，2026-10-30 之前写入的行为空；`cne backfill economic_calendar` 按月回补，只抓湖里缺的日子；`required=false`，空表不判 UNHEALTHY |
-| economic_events | event_date（按年） | event_id | snapshot | ✓ | jin10 | 金十数据财经事件（央行议息、官员讲话、重要会议），窗口同财经日历；`event_time` 为空且 `time_status=待定` 表示时间未定；`required=false` |
+| economic_calendar | event_date（按年） | event_id | snapshot | ✓ | jin10 | 金十数据财经日历，每日抓取前 2 天到后 14 天；同一事件以金十的 `data_id` 为键，公布实际值后更新同一行；`indicator_code`（金十 `indicator_id`）跨年份标识同一指标序列，2026-10-30 之前写入的行为空；窗口内金十不再列出的事件（改期后换了新编号）标记 `withdrawn = true`，不删除；`cne backfill economic_calendar` 按月回补，只抓湖里缺的日子；`required=false`，空表不判 UNHEALTHY |
+| economic_events | event_date（按年） | event_id | snapshot | ✓ | jin10 | 金十数据财经事件（央行议息、官员讲话、重要会议），窗口同财经日历；`event_time` 为空且 `time_status=待定` 表示时间未定；窗口内不再出现的事件标记 `withdrawn = true`；`required=false` |
 | market_holidays | holiday_date（按年） | holiday_id | snapshot | ✓ | jin10 | 金十数据全球交易所休市安排，每日抓取当日起的 30 条（约两个月）；`note` 注明港股通南、北向是否关闭；`required=false` |
 
 `sector_bars` 使用同花顺板块行情；历史通过 `cne backfill sector_bars` 分窗口补入。先用 `--plan` 检查范围；失败后重跑同一命令即从断点续跑，避免无故 `--refetch` 全量重抓。网络可达性以当前出口的小范围探测为准。

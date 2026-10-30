@@ -1181,6 +1181,7 @@ PIT 查询过滤 `announce_date <= as_of`。
 | previous | float64 |  |
 | actual | float64 |  |
 | unit | string |  |
+| withdrawn | bool |  |
 | source | string |  |
 | data_version | string |  |
 | fetched_at | timestamp |  |
@@ -1214,6 +1215,7 @@ PIT 查询过滤 `announce_date <= as_of`。
 | importance | int8 |  |
 | people | string |  |
 | content | string |  |
+| withdrawn | bool |  |
 | source | string |  |
 | data_version | string |  |
 | fetched_at | timestamp |  |

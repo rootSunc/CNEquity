@@ -1312,7 +1312,8 @@
         "indicator_code": "string",
         "previous": "float64",
         "source": "string",
-        "unit": "string"
+        "unit": "string",
+        "withdrawn": "bool"
       },
       "compatibility": "additive",
       "contract_level": "stable",
@@ -1410,7 +1411,8 @@
         "indicator_code": "string",
         "previous": "float64",
         "source": "string",
-        "unit": "string"
+        "unit": "string",
+        "withdrawn": "bool"
       },
       "schema_version": 1,
       "source_retired_date": null,
@@ -1438,7 +1440,8 @@
         "importance": "int8",
         "people": "string",
         "source": "string",
-        "time_status": "string"
+        "time_status": "string",
+        "withdrawn": "bool"
       },
       "compatibility": "additive",
       "contract_level": "stable",
@@ -1531,7 +1534,8 @@
         "importance": "int8",
         "people": "string",
         "source": "string",
-        "time_status": "string"
+        "time_status": "string",
+        "withdrawn": "bool"
       },
       "schema_version": 1,
       "source_retired_date": null,
@@ -7487,7 +7491,7 @@
       "watermark": true
     }
   },
-  "fingerprint": "07f82a307b504d3dcf67526706b924b735b931f64318a831f513c8da29068d6f",
+  "fingerprint": "ce9c59e289090bfb10bc6d58b28eaf7164b057352cdbdd0e422bdd703bf425f4",
   "format": "cnequity.dataset-contract",
   "pit_contract": {
     "modes": [

@@ -559,11 +559,12 @@ def _define_central_bank_rates(con: duckdb.DuckDBPyConnection) -> None:
     )
     columns = {row[0] for row in con.execute("DESCRIBE economic_calendar").fetchall()}
     # A lake written before indicator_code existed has no series to join.
-    calendar = (
-        "economic_calendar"
-        if "indicator_code" in columns
-        else "(SELECT *, NULL::VARCHAR AS indicator_code FROM economic_calendar)"
+    extra = ", ".join(
+        f"NULL::{kind} AS {name}"
+        for name, kind in (("indicator_code", "VARCHAR"), ("withdrawn", "BOOLEAN"))
+        if name not in columns
     )
+    calendar = f"(SELECT *, {extra} FROM economic_calendar)" if extra else "economic_calendar"
     con.execute(
         f"""
         CREATE OR REPLACE VIEW central_bank_rates AS
@@ -575,5 +576,6 @@ def _define_central_bank_rates(con: duckdb.DuckDBPyConnection) -> None:
         FROM {calendar} c
         JOIN (VALUES {series}) AS s(indicator_code, bank, rate, policy)
           ON c.indicator_code = s.indicator_code
+        WHERE NOT coalesce(c.withdrawn, FALSE)
         """
     )

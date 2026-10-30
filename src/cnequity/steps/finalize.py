@@ -1089,7 +1089,55 @@ def step_derive_adj_factors(config: Config, trade_date: date, run_id: str, conte
             f"{len(result.failed)} symbol×type fetch failure(s)" if result.failed else None
         ),
     )
+    status_finding = _fill_traded_status(config, trade_date)
+    if status_finding is not None:
+        updates = out.setdefault("context_updates", {})
+        updates["audit_findings"] = [*(updates.get("audit_findings") or []), status_finding]
     return out
+
+
+# Sessions back the daily fill re-reads: a late bar repair can land a print a
+# few days after the status step ran.
+_TRADED_STATUS_LOOKBACK_DAYS = 10
+
+
+def _fill_traded_status(config: Config, trade_date: date) -> dict | None:
+    """Give a status row to every listed key that printed but no board listed.
+
+    Some funds print on a day no board the status step reads lists them
+    (158036.SZ on 2026-10-23), and that key went without a row until a manual
+    `cne repair status-traded`. A positive-volume bar is first-hand proof of
+    trading; this runs here, after compact, because the status step runs
+    before the day's bars exist. It only adds missing keys, and a zero-volume
+    bar proves nothing, so a fund that did not trade stays without a row.
+    """
+    from cnequity.storage.repairs.status_traded import repair_status_traded
+
+    try:
+        report = repair_status_traded(
+            config,
+            start=trade_date - timedelta(days=_TRADED_STATUS_LOOKBACK_DAYS),
+            end=trade_date,
+            apply=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — a missing status row is not a factor failure
+        logger.warning("trading_status: traded-status fill failed: %s", exc)
+        return {
+            "dataset": "trading_status",
+            "severity": "warning",
+            "check": "trading_status_traded_fill_failed",
+            "message": str(exc),
+        }
+    if report.get("rows"):
+        logger.info("trading_status: filled %d traded key(s) from bars", report["rows"])
+        return {
+            "dataset": "trading_status",
+            "severity": "info",
+            "check": "trading_status_traded_fill",
+            "message": f"{report['rows']} printed key(s) without a status row filled from bars",
+            "sample": report.get("sample", [])[:10],
+        }
+    return None
 
 
 @register_step(

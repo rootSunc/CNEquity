@@ -145,3 +145,39 @@ def test_backfill_walks_by_month_and_fetches_only_missing_days(tmp_path, monkeyp
     assert result["months_fetched"] == 2
     assert result["months_skipped"] == 1
     assert result["rows_written"] == 2
+
+
+def test_an_event_dropped_from_a_later_capture_is_marked_withdrawn(tmp_path):
+    import polars as pl
+
+    from cnequity.config import Config
+    from cnequity.steps.newsboard import _with_withdrawn
+
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    part = cfg.curated_root / "economic_calendar" / "event_date=2026"
+    part.mkdir(parents=True)
+    old = pl.DataFrame(
+        parse_day(
+            {
+                "status": 200,
+                "data": [
+                    _item(data_id=1178833, pub_time="2026-11-05 07:30"),
+                    _item(data_id=1, pub_time="2026-12-30 07:30"),
+                ],
+            },
+            date(2026, 11, 5),
+        )
+    )
+    old.write_parquet(part / "part.parquet")
+    fresh = pl.DataFrame(
+        parse_day(
+            {"status": 200, "data": [_item(data_id=1189668, pub_time="2026-11-02 07:30")]},
+            date(2026, 11, 2),
+        )
+    )
+
+    out = _with_withdrawn(cfg, "economic_calendar", fresh, date(2026, 10, 31), date(2026, 11, 14))
+    flags = dict(zip(out["event_id"], out["withdrawn"], strict=True))
+    # The reissued event is current; the one it replaced inside the window is
+    # flagged; nothing outside the window is touched.
+    assert flags == {"jin10:1189668": False, "jin10:1178833": True}

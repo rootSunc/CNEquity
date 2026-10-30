@@ -336,3 +336,26 @@ def test_fund_rows_written_unknown_are_marked_not_st_and_stocks_stay_unknown(lak
         "source"
     ].to_list() == ["baostock"]
     assert repair_status_traded(lake, start=D1, end=D2)["fund_rows_marked_not_st"] == 0
+
+
+def test_the_daily_derive_fills_printed_keys_and_never_fails_on_it(tmp_path, monkeypatch):
+    from cnequity.steps import finalize
+    from cnequity.storage.repairs import status_traded
+
+    calls = []
+
+    def fill(config, *, start, end, apply):
+        calls.append((start, end, apply))
+        return {"rows": 2, "sample": [{"symbol": "158036.SZ", "trade_date": "2026-10-23"}]}
+
+    monkeypatch.setattr(status_traded, "repair_status_traded", fill)
+    cfg = Config(data_root=tmp_path / "data")
+    finding = finalize._fill_traded_status(cfg, date(2026, 10, 30))
+    assert calls == [(date(2026, 10, 20), date(2026, 10, 30), True)]
+    assert finding["check"] == "trading_status_traded_fill" and finding["severity"] == "info"
+
+    def broken(*_a, **_k):
+        raise OSError("lake busy")
+
+    monkeypatch.setattr(status_traded, "repair_status_traded", broken)
+    assert finalize._fill_traded_status(cfg, date(2026, 10, 30))["severity"] == "warning"

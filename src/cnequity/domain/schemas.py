@@ -55,6 +55,8 @@ OPTIONAL_COLUMNS = frozenset(
         "float_a_shares",
         # economic_calendar rows written before 2026-10-30 carry no Jin10 id.
         "indicator_code",
+        # Jin10 calendar and events rows written before 2026-10-31.
+        "withdrawn",
     }
 )
 
@@ -872,6 +874,9 @@ ECONOMIC_CALENDAR_SCHEMA = {
     "previous": pl.Float64,
     "actual": pl.Float64,
     "unit": pl.Utf8,
+    # True once a later capture of the event's window no longer lists it:
+    # Jin10 reissues a rescheduled release under a new data_id.
+    "withdrawn": pl.Boolean,
     "source": pl.Utf8,
     "data_version": pl.Utf8,
     "fetched_at": FETCHED_AT_DTYPE,
@@ -886,6 +891,7 @@ ECONOMIC_EVENTS_SCHEMA = {
     "importance": pl.Int8,
     "people": pl.Utf8,
     "content": pl.Utf8,
+    "withdrawn": pl.Boolean,
     "source": pl.Utf8,
     "data_version": pl.Utf8,
     "fetched_at": FETCHED_AT_DTYPE,

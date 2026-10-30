@@ -51,6 +51,7 @@ def step_economic_calendar(config: Config, trade_date: date, run_id: str, contex
     empty_ok(df, "economic_calendar", trade_date)
     window_start = trade_date - timedelta(days=2)
     window_end = trade_date + timedelta(days=14)
+    df = _with_withdrawn(config, "economic_calendar", df, window_start, window_end)
     return write_fetched(
         config,
         run_id,
@@ -72,6 +73,40 @@ def step_economic_calendar(config: Config, trade_date: date, run_id: str, contex
     )
 
 
+def _with_withdrawn(config: Config, dataset: str, df, start: date, end: date):
+    """Mark the window's stored events this capture no longer lists.
+
+    Jin10 reissues a rescheduled release under a new data_id and drops the old
+    one (Japan's October manufacturing PMI final: jin10:1178833 on 11-05, then
+    jin10:1189668 on 11-02). The old row stays, flagged, so a reader can drop
+    it without losing what was announced.
+    """
+    import polars as pl
+
+    df = df.with_columns(pl.lit(False).alias("withdrawn"))
+    root = config.curated_root / dataset
+    files = list(root.glob("**/*.parquet")) if root.exists() else []
+    if not files:
+        return df
+    scan = pl.scan_parquet(files, missing_columns="insert")
+    names = scan.collect_schema().names()
+    # Columns no stored file has yet (rows from before they existed).
+    scan = scan.with_columns(
+        pl.lit(None, dtype=df.schema[c]).alias(c) for c in df.columns if c not in names
+    )
+    stored = (
+        scan.filter(pl.col("event_date").is_between(start, end))
+        .filter(~pl.col("withdrawn").fill_null(False))
+        .filter(~pl.col("event_id").is_in(df["event_id"].implode()))
+        .select(df.columns[:-1])
+        .collect()
+    )
+    if stored.is_empty():
+        return df
+    gone = stored.with_columns(pl.lit(True).alias("withdrawn"))
+    return pl.concat([df, gone.select(df.columns)], how="vertical_relaxed")
+
+
 CALENDAR_HISTORY_START = date(2008, 1, 1)
 
 
@@ -82,7 +117,16 @@ def _calendar_days_present(config: Config) -> set[date]:
     files = list(root.glob("**/*.parquet")) if root.exists() else []
     if not files:
         return set()
-    return set(pl.scan_parquet(files).select("event_date").unique().collect()["event_date"])
+    # A day written before indicator_code existed is not "present": the
+    # backfill refetches it so every row names its series.
+    days = (
+        pl.scan_parquet(files, missing_columns="insert")
+        .group_by("event_date")
+        .agg(pl.col("indicator_code").null_count().alias("uncoded"))
+        .filter(pl.col("uncoded") == 0)
+        .collect()
+    )
+    return set(days["event_date"])
 
 
 def _backfill_economic_calendar(config: Config, trade_date: date, run_id: str) -> dict:
@@ -154,6 +198,10 @@ def _jin10_snapshot(
         config=config,
     )
     empty_ok(df, dataset, trade_date)
+    if dataset == "economic_events":
+        df = _with_withdrawn(
+            config, dataset, df, trade_date - timedelta(days=2), trade_date + timedelta(days=14)
+        )
     return write_fetched(
         config,
         run_id,
