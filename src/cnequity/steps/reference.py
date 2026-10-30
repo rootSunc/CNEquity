@@ -149,6 +149,8 @@ def step_instruments(config: Config, trade_date: date, run_id: str, context: dic
     stage(N_("write"), held=df.height)
     df = _carry_lake_facts(config, df)
     result = write_simple(config, run_id, "instruments", df)
+    if not backfill:
+        findings.extend(_classify_new_delistings(config))
     new = new_instrument_rows(config, df)
     if new:
         result["context_updates"] = {"new_instruments": new}
@@ -158,6 +160,47 @@ def step_instruments(config: Config, trade_date: date, run_id: str, context: dic
         )
         result.setdefault("context_updates", {})["audit_findings"] = findings
     return result
+
+
+#: Codes a routine run may probe for the delisted directory. Normally a day
+#: delists a handful at most; a larger backlog is the one-off sweep's job.
+DAILY_DELISTED_DISCOVERY_LIMIT = 20
+
+
+def _classify_new_delistings(config: Config) -> list[dict]:
+    """File codes that stopped trading since the last sweep in the delisted directory.
+
+    Without this a delisting reached the directory only when someone ran
+    ``scripts/delisted_ops.py discover``, and until then the research-window
+    survivorship check reported an unprobed code (2026-10-30: 301139.SZ). The
+    probe is the sweep's own and resumable; a failed probe stays pending.
+    """
+    if config.tdx_allow_mock or not config.sources.get("sina", True):
+        return []
+    from cnequity.steps.delisted import discover_delisted
+
+    try:
+        result = discover_delisted(config, limit=DAILY_DELISTED_DISCOVERY_LIMIT)
+    except Exception as exc:  # noqa: BLE001 — the directory is evidence, not a gate on instruments
+        logger.warning("instruments: delisted discovery failed: %s", exc)
+        return [
+            {
+                "dataset": "instruments",
+                "severity": "warning",
+                "check": "delisted_discovery_incomplete",
+                "message": str(exc),
+            }
+        ]
+    if result.failed or result.remaining:
+        return [
+            {
+                "dataset": "instruments",
+                "severity": "warning",
+                "check": "delisted_discovery_incomplete",
+                "message": f"{len(result.failed)} probe(s) failed, {result.remaining} code(s) left for the next run",
+            }
+        ]
+    return []
 
 
 def _enrich_fund_list_dates_from_exchange(

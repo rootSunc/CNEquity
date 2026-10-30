@@ -251,3 +251,39 @@ def test_a_backfill_instruments_step_asks_baostock_once(tmp_path, monkeypatch):
 
     assert len(calls) == 1
     assert "600001.SH" in set(written["df"]["symbol"])
+
+
+def test_a_routine_instruments_run_files_new_delistings(tmp_path, monkeypatch):
+    """A code that stopped trading reaches the delisted directory on the next
+    routine run, not only when someone runs the one-off sweep."""
+    from cnequity.config import Config
+    from cnequity.steps import delisted, reference
+
+    cfg = Config(data_root=tmp_path / "data")
+    calls = []
+
+    def discover(config, *, limit=None):
+        calls.append(limit)
+        return delisted.DiscoveryResult(probed=1, delisted=1)
+
+    monkeypatch.setattr(delisted, "discover_delisted", discover)
+    assert reference._classify_new_delistings(cfg) == []
+    assert calls == [reference.DAILY_DELISTED_DISCOVERY_LIMIT]
+
+    monkeypatch.setattr(
+        delisted,
+        "discover_delisted",
+        lambda config, *, limit=None: delisted.DiscoveryResult(probed=1, failed=["301139.SZ"]),
+    )
+    [finding] = reference._classify_new_delistings(cfg)
+    assert finding["check"] == "delisted_discovery_incomplete"
+
+    calls.clear()
+    monkeypatch.setattr(delisted, "discover_delisted", discover)
+    assert (
+        reference._classify_new_delistings(
+            Config(data_root=tmp_path / "d2", sources={"sina": False})
+        )
+        == []
+    )
+    assert calls == []

@@ -545,6 +545,9 @@ class ViewUnavailable(RuntimeError):
     """A pinned server view never answered one of its pages."""
 
 
+_PARTITION_SURPLUS_ROWS = 5
+
+
 class PartitionCoverageError(RuntimeError):
     """A candidate split did not provably cover the query it replaced.
 
@@ -623,7 +626,24 @@ def _reconcile_partition_rows(
                 f"CNINFO {label} {axis} coverage for {column} {day} contains an unkeyed row"
             )
         by_identity[str(identity)] = row
-    if len(by_identity) != expected_total:
+    surplus = len(by_identity) - expected_total
+    # CNINFO's unfiltered total can undercount by a row the filtered queries
+    # do return: szse 2022-08-31 split to 5,854 unique rows against a total of
+    # 5,853 on four tries hours apart, and its plate views disagreed the same
+    # way (2,810 vs 2,811). A surplus of distinct, keyed rows that still holds
+    # every control identity loses nothing, so a small one is accepted; a
+    # shortfall never is.
+    if 0 < surplus <= max(1, min(_PARTITION_SURPLUS_ROWS, expected_total // 1000)):
+        logger.warning(
+            "CNINFO %s %s coverage for %s %s returned %d row(s) beyond the unfiltered total %d",
+            label,
+            axis,
+            column,
+            day,
+            surplus,
+            expected_total,
+        )
+    elif surplus != 0:
         raise PartitionCoverageError(
             f"CNINFO {label} {axis} coverage for {column} {day} returned "
             f"{len(by_identity)} unique rows; unfiltered total is {expected_total}"

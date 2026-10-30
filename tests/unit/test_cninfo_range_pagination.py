@@ -1090,3 +1090,53 @@ def test_an_exhausted_ladder_fails_loud_rather_than_publishing_part_of_a_day(mon
     # walk reports the cap it could not get under and leaves the day failed.
     with pytest.raises(RuntimeError, match="exceeded 100 reported pages"):
         fetch_announcement_index_range(target, client=Client())
+
+
+def test_a_split_one_row_over_the_unfiltered_total_is_accepted():
+    """szse 2022-08-31: 5,854 split rows against a total of 5,853, on every try."""
+    from cnequity.adapters.cninfo.announcements import (
+        PartitionCoverageError,
+        _reconcile_partition_rows,
+    )
+
+    rows = [{"announcementId": str(i)} for i in range(5854)]
+    kept = _reconcile_partition_rows(
+        rows,
+        expected_total=5853,
+        label="announcement",
+        column="szse",
+        day=date(2022, 8, 31),
+        axis="category",
+        required_identities={"0", "5853"},
+    )
+    assert len(kept) == 5854
+    # A larger surplus is not a miscount but a different question.
+    with pytest.raises(PartitionCoverageError, match="5860 unique rows"):
+        _reconcile_partition_rows(
+            [{"announcementId": str(i)} for i in range(5860)],
+            expected_total=5853,
+            label="announcement",
+            column="szse",
+            day=date(2022, 8, 31),
+            axis="category",
+        )
+    # A shortfall still fails, and so does a surplus missing a control row.
+    with pytest.raises(PartitionCoverageError, match="5852 unique rows"):
+        _reconcile_partition_rows(
+            rows[:5852],
+            expected_total=5853,
+            label="announcement",
+            column="szse",
+            day=date(2022, 8, 31),
+            axis="category",
+        )
+    with pytest.raises(PartitionCoverageError, match="replaced 1"):
+        _reconcile_partition_rows(
+            rows,
+            expected_total=5853,
+            label="announcement",
+            column="szse",
+            day=date(2022, 8, 31),
+            axis="category",
+            required_identities={"missing"},
+        )
