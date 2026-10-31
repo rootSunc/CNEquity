@@ -35,7 +35,7 @@ repair index-snapshots: ["--refresh-sources only", "Replays official files offli
 repair index-history: ["--refresh-sources only", "Replays the reviewed official attachment catalog for the selected SZSE Component or STAR 50 index offline by default; --apply replaces whole books on effective dates, retaining official dated weights and old revisions; unknown historical weights remain null"]
 repair financial-originals: ["--refresh-sources only", "Replays original periodic reports offline by default; --apply appends identifiable current-period consolidated figures, publishes through the repair gate and retains existing vintages and honest observation times"]
 repair repartition: ["none", "Read-only listing or preview by default; --apply rewrites partitions at the registered granularity under the lake lock and swaps them in"]
-run clean: ["none", "Only previews expired files; an explicit --reconcile-runs may modify run state"]
+run clean: ["none", "Previews expired files first; an interactive terminal confirms historical generations and compacted staging that is not in use as two separate questions; data and staging currently in use are never deleted automatically; a scheduled or non-interactive run only previews; an explicit --reconcile-runs may modify run state"]
 run compact: ["none", "Publishes finished, unpublished staging data to the lake"]
 run daily: ["when run", "Fetches incrementally and writes the lake; includes all schedule groups and event streams by default"]
 run events: ["when run", "Fetches events and writes the lake"]

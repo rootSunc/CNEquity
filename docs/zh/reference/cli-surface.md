@@ -42,7 +42,7 @@
 | `cne repair status-traded` | 无 | 默认只读预览；--apply 用已提交成交日线补缺失状态键，ST 保持未知，发布新版本并保留旧版本 |
 | `cne repair stock-listing-dates` | 仅 --refresh-sources 联网 | 默认离线回放 IPO 日历；--apply 补官方上市事件证实的股票上市日期，经修复门禁发布并保留旧版本 |
 | `cne repair valuation-outage` | 仅 --apply 时 | 默认只读预览；--apply 请求东财数据中心估值报表补断档窗口，取到全市场才写入 |
-| `cne run clean` | 无 | 仅预览过期文件；显式 --reconcile-runs 可修改运行状态 |
+| `cne run clean` | 无 | 先预览过期文件；交互终端分两次确认历史版本和已合并且不在使用中的 staging；正在使用的数据和 staging 不自动删除；定时和非交互只预览；显式 --reconcile-runs 可修改运行状态 |
 | `cne run compact` | 无 | 将已结束、未发布的暂存数据发布到湖 |
 | `cne run daily` | 执行时 | 增量取数并写湖；默认含全部调度组与事件流 |
 | `cne run events` | 执行时 | 事件取数并写湖 |

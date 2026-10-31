@@ -1905,20 +1905,21 @@ msgid ""
 "(`cne backfill <dataset> --outstanding`), the run audit (the whole lake on\n"
 "[job.maintenance].full_audit_weekday), the freshness gate,\n"
 "source probes and SLO, run evidence over 20 sessions, a metadata backup\n"
-"(manifest DB, receipts, quality findings; never curated Parquet), and `cne run clean`'s preview.\n"
+"(manifest DB, receipts, quality findings; never curated Parquet), and a preview of `cne run clean`.\n"
+"The preview passes --dry-run, so this command never asks to delete.\n"
 "Exits 1 when a group run, the audit, the freshness gate or the backup fails; source,\n"
 "debt-retry and run-evidence findings are reported without failing."
 msgstr ""
-"检查当天的日更，备份无法重建的数据，并预览过期文件。\n"
+"检查当天的更新，备份无法重建的内容，并预览过期文件。\n"
 "\n"
-"\n"
-"定时任务在每个交易日日更后运行一次。依次是：\n"
-"当个交易日各日更组的运行结果（[job.maintenance].gate_groups 失败立即判失败，其他组\n"
-"连续失败 soft_fail_max_days 个交易日才判失败）、重试欠账里的键（`cne backfill <数据集> --outstanding`）、\n"
-"运行审计（[job.maintenance].full_audit_weekday 那天改为全湖审计）、新鲜度门禁、源探针与 SLO、\n"
-"最近 20 个交易日的运行证据、元数据备份\n"
-"（manifest 数据库、收据、质量结论；不含 curated Parquet），以及 `cne run clean` 的预览。\n"
-"日更组、审计、新鲜度门禁或备份失败时退出 1；源探针、欠账重试和运行证据的发现只报告，不判失败。"
+"\n"
+"定时任务在每个交易日的日更之后跑一次。顺序是：\n"
+"当天各调度组的运行（[job.maintenance].gate_groups 失败立即算，其余连续 soft_fail_max_days 个交易日才算）、\n"
+"补欠账台账里的键（`cne backfill <dataset> --outstanding`）、运行审计（[job.maintenance].full_audit_weekday 那天改为全湖）、\n"
+"新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、元数据备份\n"
+"（manifest 数据库、收据、质量结论，不含 curated Parquet），以及 `cne run clean` 的预览。\n"
+"这次预览带 --dry-run，所以不会询问删除。\n"
+"调度组、审计、新鲜度门禁或备份失败时退出 1；源、欠账重试和运行证据只报告，不因此失败。"
 
 #: cnequity/cli/setup_cmds.py
 msgid ""
@@ -2051,10 +2052,6 @@ msgstr ""
 #, python-brace-format
 msgid "Compared with: {path}"
 msgstr "对照：{path}"
-
-#: cnequity/cli/maintain_cmds.py
-msgid "Compatibility option; all cleanup is now preview-only."
-msgstr "兼容选项；现在所有清理均只预览。"
 
 #: cnequity/cli/storage_cmds.py
 msgid "Compatibility option; cannot bypass the web delete confirmation."
@@ -2350,6 +2347,16 @@ msgstr "默认今天。"
 #: cnequity/cli/decision_data_cmds.py
 msgid "Defaults to today; when [research] holdout_start is configured, defaults to the day before it."
 msgstr "默认今天；配置了 [research] holdout_start 时默认其前一天。"
+
+#: cnequity/cli/maintain_cmds.py
+#, python-brace-format
+msgid "Delete {generations} historical generations from this preview? The generation currently in use, holds, generations with an unusable receipt, and all staging stay."
+msgstr "删除这次预览中的 {generations} 个历史版本吗？正在使用的一代、hold、收据不能用的代，以及全部 staging 都会留下。"
+
+#: cnequity/cli/maintain_cmds.py
+#, python-brace-format
+msgid "Delete {staging} compacted staging runs that are not in use? Running, locked, unfinished, uncompacted, orphaned and held staging stays."
+msgstr "删除 {staging} 个已合并且不在使用中的 staging 吗？正在运行、被锁住、未完成、未合并、orphan 和 hold 的 staging 会留下。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
@@ -3409,10 +3416,6 @@ msgstr "保留已有湖，交付本次通过校验的数据；缺口留在覆盖
 msgid "Keep the existing snapshot; add this dataset to the daily configuration so it accumulates from later collections."
 msgstr "保留已有快照；将该数据集加入日更配置，从后续采集开始积累。"
 
-#: cnequity/cli/maintain_cmds.py
-msgid "Keep the latest this many generations plus current/hold per dataset; other versions are only listed as candidates, not marked, and no bytes are freed. Import a reference manifest before marking in the web UI. 0 skips version handling."
-msgstr "每个数据集保留最近这么多代及 current/hold；其他版本只列出候选，不标记、不释放字节。网页标记前须导入引用清单。0 表示跳过版本处理。"
-
 #: cnequity/cli/setup_cmds.py
 #, python-brace-format
 msgid "Keeps {kept} of {total} settings; the rest follow the built-in defaults of each release."
@@ -3462,6 +3465,11 @@ msgstr "不选就按配置顺序跑全部。"
 #: cnequity/serve/ops/catalog.py
 msgid "Leave empty to run all schedule groups and event streams. If selected, only the matching schedule groups run."
 msgstr "不选则跑全部调度组和事件流。选择后只跑对应调度组。"
+
+#: cnequity/cli/maintain_cmds.py
+#, python-brace-format
+msgid "Left staging run {run_id} in place because it is still in use ({reason})."
+msgstr "staging run {run_id} 仍在使用（{reason}），已留下。"
 
 #: cnequity/cli/schedule_cmds.py
 #, python-brace-format
@@ -4131,23 +4139,26 @@ msgstr "预览配置升级"
 
 #: cnequity/cli/maintain_cmds.py
 msgid ""
-"Preview expired data without physically deleting it; deletion must be confirmed on the serve operations page.\n"
+"Preview expired data, then ask before deleting historical generations or compacted staging.\n"
 "\n"
 "\n"
-"\"Cleanable\" means: the run is in a terminal state (success/warning/degraded/failed), every batch has settled,\n"
-"and a successful compact has been recorded. Staging that did not finish or was never compacted stays for a retry;\n"
-"--force only widens the preview. Source snapshots and logs are preview-only too, with bytes_freed 0 throughout.\n"
-"Old versions and staging that merged successfully with no unfinished batches can be deleted after confirming on the serve storage page.\n"
-"Orphaned staging, source snapshots and logs are only reported for now."
+"A terminal and a scheduler see the same preview. Only an interactive terminal is asked,\n"
+"and the default answer is no. Historical generations and staging are separate questions.\n"
+"--dry-run never asks. Scheduled runs therefore stay preview-only.\n"
+"Staging that is running, locked, unfinished, uncompacted, orphaned or held is never\n"
+"deleted, even when the answer is yes. Source snapshots and logs are never deleted either.\n"
+"Current versions, holds and generations without a usable receipt are kept.\n"
+"Backfill and the daily run never delete staging or the generation currently in use."
 msgstr ""
-"预览过期数据，不执行物理删除；删除须在 serve 运维网页确认。\n"
+"先预览过期数据，再询问是否删除历史版本或已合并的 staging。\n"
 "\n"
 "\n"
-"「可清理」是指：run 处于终态（success/warning/degraded/failed）、所有批次都已落定，\n"
-"并且记录过一次成功的 compact。没跑完或从没 compact 过的 staging 会留着等重试，\n"
-"--force 只扩大预览范围。来源快照和日志也仅预览，全部 bytes_freed 为 0。\n"
-"历史版本和已成功合并且无未完成批次的 staging 可在 serve 存储运维页确认删除。\n"
-"orphan 暂存、来源快照和日志暂仅报告。"
+"终端和定时任务看到的预览相同。只有交互终端会被询问，默认不删。\n"
+"历史版本和 staging 是两个问题。--dry-run 从不询问。因此定时运行仍然只预览。\n"
+"正在运行、被锁住、未完成、未合并、orphan 或 hold 的 staging 不会删除，\n"
+"即使回答是也不会。来源快照和日志也不会删除。\n"
+"当前版本、hold 和收据不能用的代会保留。\n"
+"回补和日更不会删除 staging，也不会删除当前正在使用的一代。"
 
 #: cnequity/cli/maintain_cmds.py
 msgid "Preview meta/source_snapshots run_id directories older than this many days (the latest one per dataset / source is always kept)."
@@ -4200,6 +4211,10 @@ msgstr "只输出来源、范围和抓取方式；衍生品另给请求预算。
 #: cnequity/cli/setup_cmds.py
 msgid "Print the full machine-readable result at the end instead of the summary; the full result is always saved to the log directory too."
 msgstr "结束时输出完整的机器可读结果，而不是摘要；完整结果也总会存到日志目录。"
+
+#: cnequity/cli/maintain_cmds.py
+msgid "Print the preview and do not ask to delete."
+msgstr "只打印预览，不询问是否删除。"
 
 #: cnequity/cli/maintain_cmds.py
 msgid "Print the result as JSON."
@@ -6421,6 +6436,10 @@ msgstr "波次 %s：%s（并行：%s）"
 #: cnequity/diagnostics/health_page.py
 msgid "What the states mean"
 msgstr "状态的含义"
+
+#: cnequity/cli/maintain_cmds.py
+msgid "When a person confirms deletion, keep the latest this many generations plus the current version and holds. 0 skips version handling."
+msgstr "确认删除时，每个数据集保留最近这么多代，并保留当前版本和 hold。0 表示不处理版本。"
 
 #: cnequity/cli/run_cmds.py
 msgid "When run without arguments, skip the event streams (announcements, regulatory events, news)."

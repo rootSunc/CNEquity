@@ -401,11 +401,11 @@
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
-| `--dry-run` | `False` | 兼容选项；现在所有清理均只预览。 |
+| `--dry-run` | `False` | 只打印预览，不询问是否删除。 |
 | `--orphan-retention-days` | `7` | 预览超过这么多天、且 manifest 里没有记录的孤儿 staging。 |
 | `--snapshot-retention-days` | `14` | 预览超过这么多天的 meta/source_snapshots run_id 目录（每个数据集 / 源的最新一份始终保留）。 |
 | `--force` | `False` | 将未完成或未 compact 的 staging 也列入预览，不删除文件、不降级批次。 |
-| `--keep-revision-generations` | `5` | 每个数据集保留最近这么多代及 current/hold；其他版本只列出候选，不标记、不释放字节。网页标记前须导入引用清单。0 表示跳过版本处理。 |
+| `--keep-revision-generations` | `5` | 确认删除时，每个数据集保留最近这么多代，并保留当前版本和 hold。0 表示不处理版本。 |
 | `--log-retention-days` | `30` | 预览超过这么多天的 `logs/cne-*.log`，不删除；0 表示跳过。 |
 | `--reconcile-runs` | `False` | 清理前，把卡在 'running'（worker 崩溃）的 run 标成 failed。 |
 | `--reconcile-after-seconds` | `—` | 只对静默超过这么多秒的 run 做上面的对账（默认取 [orchestrator].batch_stale_seconds）。 |

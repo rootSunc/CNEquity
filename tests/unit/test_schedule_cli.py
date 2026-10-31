@@ -122,6 +122,7 @@ def test_maintain_runs_every_check_and_backs_up(maintain_env, monkeypatch):
     assert [calls[2][1], calls[3][1]] == ["probe", "slo"]
     assert ["--groups", "core"] == calls[1][3:5]
     assert calls[-1][:2] == ["run", "clean"]
+    assert "--dry-run" in calls[-1]
     assert list(config.backup_root.glob("meta-*.tar.gz"))
 
 

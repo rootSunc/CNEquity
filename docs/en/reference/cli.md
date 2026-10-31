@@ -27,7 +27,7 @@ The sections are defined by `SECTIONS` in `cnequity/cli/_root.py`; leaving any c
 | [`cne run events`](#cne-run-events) | 7×24 event streams (announcements, news), on the natural calendar rather than the trading calendar |
 | [`cne run retry`](#cne-run-retry) | Retry one run, or the latest failed run of each daily group |
 | [`cne run compact`](#cne-run-compact) | Merge finished, unpublished staging into curated |
-| [`cne run clean`](#cne-run-clean) | Preview expired staging, snapshots, logs and old versions |
+| [`cne run clean`](#cne-run-clean) | Preview expired staging, snapshots, logs and old versions; an interactive terminal can then confirm deletion |
 | [`cne storage`](#cne-storage) | Version-retention register, cleanup plans and in-place pending-deletion marks |
 | [`cne backfill`](#cne-backfill-dataset) | Backfill one dataset |
 | [`cne derive`](#cne-derive-name) | Compute derived datasets |
@@ -347,7 +347,7 @@ Success, a valid partial result, or `skipped_non_trading_day` exits 0; execution
 
 ## cne run maintain
 
-Maintenance after the daily update; the timer `cne schedule install` installs runs it once after each trading day's update: the run audit (the whole-lake audit on `[job.maintenance] full_audit_weekday`), the freshness gate, source probes and SLO, run evidence over the last 20 trading days, a metadata backup (manifest database, receipts, quality findings, never curated Parquet, rotated by the `[job.maintenance]` retention), and the preview of `cne run clean`.
+Maintenance after the daily update; the timer `cne schedule install` installs runs it once after each trading day's update: the run audit (the whole-lake audit on `[job.maintenance] full_audit_weekday`), the freshness gate, source probes and SLO, run evidence over the last 20 trading days, a metadata backup (manifest database, receipts, quality findings, never curated Parquet, rotated by the `[job.maintenance]` retention), and the preview of `cne run clean`. The timer has no terminal, so it never reaches the deletion prompt.
 
 | Option | Description |
 |------|------|
@@ -759,28 +759,28 @@ Newly written backfill runs store the dates, symbols, minute frequency, tick ran
 
 ## cne run clean
 
-Preview compacted terminal run staging, overage orphans, source snapshots, logs and old versions. Even without `--dry-run` it never marks or deletes files; scheduled scripts can only produce notices.
+Preview compacted terminal run staging, overage orphans, source snapshots, logs and old versions. An interactive terminal confirms twice after the preview: historical generations first, then compacted staging that is not in use. Data and staging currently in use are never deleted automatically. A scheduled script has no terminal and still only previews.
 
-Backfill and the daily run drop older generations at the end, using [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention). The default is 5. This command does not delete. Set the value to `0` to delete none.
+Backfill and the daily run drop older generations at the end, using [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention). The default is 5. After confirmation this command deletes using `--keep-revision-generations`, which also defaults to 5. Set the value to `0` to skip versions.
 
 | Option | Description |
 |------|------|
-| `--dry-run` | Compatibility option; cannot be combined with `--reconcile-runs`, which modifies run state |
+| `--dry-run` | Print the preview and do not ask; cannot be combined with `--reconcile-runs`, which modifies run state |
 | `--orphan-retention-days` | Days to keep orphan staging with no manifest (default 7) |
 | `--snapshot-retention-days` | Days to keep source snapshots (default 14); the newest one per dataset/source is kept |
-| `--keep-revision-generations` | Keep the latest 5 generations per dataset, additionally protecting current and hold; `0` skips the version preview |
+| `--keep-revision-generations` | On a confirmed deletion, keep the latest 5 generations per dataset, additionally protecting current and hold; `0` skips versions |
 | `--log-retention-days` | Preview `logs/cne-*.log` older than the given number of days (default 30); `0` skips |
 | `--reconcile-runs` | Explicitly mark orphaned running runs that meet the quiet condition as failed; this still modifies run state |
 | `--reconcile-after-seconds` | Override the reconciliation quiet window, default `[orchestrator].batch_stale_seconds` |
 | `--force` | Also include staging that is not cleanup-ready in the preview, without deleting or downgrading batches |
 
-Outputs `dry_run: true`, `confirmation_required: "serve_storage_page"`. Actual-deletion fields such as `removed` / `removed_run_ids` are empty or 0, and `bytes_freed` is always 0; candidates are in `candidate_run_ids`, `candidate_run_dirs` and `candidates`, and the logical size is in `logical_bytes_selected`. Old versions and terminal staging runs with successful compaction and no incomplete batches can be selected, reviewed and confirmed for deletion on the serve storage page. Confirmation rechecks run locks, holds, run state and per-file fingerprints. It processes only the original list and retains resumable deletion receipts. Orphan staging, uncompacted runs and runs with incomplete batches are excluded from web deletion. Source snapshots and logs are still report-only.
+The preview comes first: `dry_run: true`. Actual-deletion fields stay empty or 0, and `bytes_freed` is 0; candidates are in `candidate_run_ids`, `candidate_run_dirs` and `candidates`, and the logical size is in `logical_bytes_selected`. An interactive terminal then asks twice, and both default to no. The first question covers only generations beyond `--keep-revision-generations`; the generation in use, holds and generations with an unusable receipt stay. The second covers only staging whose compact succeeded, with no unfinished batches, lock or hold. Staging that is running, locked, uncompacted, orphaned or held stays even if the answer is yes. Source snapshots and logs are not deleted. Backfill and the daily run delete neither staging nor the generation currently in use. `--dry-run`, a pipe and a scheduled run do not ask. `confirmation_required` is `interactive` or `none`. Before deleting, the command rechecks run locks, holds, run state and per-file fingerprints, and it keeps a resumable deletion receipt. The storage page can still select a generation inside the newest 5 that is not the current pointer.
 
 The preview also returns `staging_inventory`, `staging_run_count`, and `skipped_reasons`, listing every run's status, size, age, incomplete batches, and candidate/retention reason. A run lock protects active retries; `--force` cannot bypass run locks or holds. Incomplete batches are not automatically retired based only on age or the existence of a newer successful run.
 
 ## cne storage
 
-The version lifecycle comprises reference registration, immutable plans, an in-place observation period, and physical reclamation within a maintenance window. Nothing is deleted automatically after 7 days. Backfill and the daily run remove older unretained generations at [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) (default 5); that is the only deletion that skips the observation period and the web confirmation. Set it to `0` to delete none. External readers must be stopped by the operator.
+The version lifecycle comprises reference registration, immutable plans, an in-place observation period, and physical reclamation within a maintenance window. Nothing is deleted automatically after 7 days. Backfill and the daily run remove older unretained generations at [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) (default 5). They do not touch staging or the generation currently in use. An interactive `cne run clean` asks twice after the preview, again without the observation period. None of these deletions go through the web confirmation. Set the value to `0` and backfill and the daily run delete none. External readers must be stopped by the operator.
 
 | Command | Behavior |
 |---|---|

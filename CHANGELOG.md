@@ -5,6 +5,7 @@
 ## [0.21.0] — 未发布
 
 - 每次发布新版本不再整份复制未变化的分区：新一代与上一代以硬链接共享这些文件，并沿用已记录的校验和，只有本次变化的分区写入新文件。此前在 Linux（ext4 等不支持写时复制的文件系统）上，`daily_bars` 每补一批就新增一份约 87MB 的完整副本（[#54](https://github.com/rootSunc/CNEquity/issues/54)）。文件系统不支持硬链接时照旧复制。
+- `cne run clean` 在交互终端里预览之后分两次询问，默认都不删。第一次只删超出保留数的历史版本，第二次只删已经合并且不在使用中的 staging。正在使用的一代、hold、收据不能用的代、正在运行或被锁住的 staging、orphan、未合并的 run、来源快照和日志都不删。回补和日更不会删 staging，也不会删当前正在使用的一代。`--dry-run`、管道和定时任务不提问。`cne storage apply --phase purge` 仍然不能绕过网页确认。
 - 磁盘放不下这次发布时，回补会说明缺多少空间，而不是只退出 1：发布前按“这次要新写的文件 + 1MB 收据余量”和磁盘剩余比较，不够就报 `DiskSpaceError`，并删掉写了一半的代。硬链接沿用的文件不计入需要的空间。写入中途空间耗尽同样报这个错，并清掉未发布的代。`cne storage inspect` 的每一代增加 `exclusive_bytes`，表示删掉这一代能腾出的字节，和其他代共享的硬链接不计（[#54](https://github.com/rootSunc/CNEquity/issues/54)）。
 - 回补和日更之后只保留每个数据集最近 5 代：`cne backfill` 和 `cne run daily` 结束会删掉更早的代目录（`[storage.retention].keep_generations`，默认 5，与存储页“最近 5 代”同一口径）。当前版本、`cne storage hold` 保住的版本、收据不完整的版本不删；收据保留，但再读取已删除的代会失败，不会悄悄改读更新的代。释放的字节只计删除后没有其他代还共享的文件。设为 `0` 则不删除。`cne run clean` 仍只预览，网页确认删除不变。引用清单过期或还有未完成的删除时，这一步跳过并在 stderr 说明，已经发布的数据不受影响。升级后第一次回补或日更就会按这个数量清理，要留住更老的代请先 hold 或把该值设为 `0`（[#54](https://github.com/rootSunc/CNEquity/issues/54)）。
 - 修订收据不再内联整个数据集的缺口清单：`metadata.coverage.gaps` 改为各类缺口的条数和前 20 条样例（`counts`、`sample`、`truncated`），完整清单仍以数据集状态为准（`gaps_source: "dataset_state"`）。此前欠账越多，每份收据越大，`daily_bars` 回补时单份可达 135MB（[#54](https://github.com/rootSunc/CNEquity/issues/54)）。读取收据中 `coverage.gaps.<类型>` 列表的脚本请改读 `sample` 或数据集状态；已有收据不变。

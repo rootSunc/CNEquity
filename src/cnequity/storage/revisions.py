@@ -1224,6 +1224,35 @@ def _exclusive_tree_bytes(root: Path) -> int:
     return total
 
 
+def _refuse_live_lake_deletion(meta: Path, path: Path, obj: dict, protected: set[str]) -> None:
+    """Automatic retention may remove only a historical generation directory.
+
+    The generation currently published, anything under staging, curated,
+    derived, logs or source snapshots, and a path that is not the generation
+    directory itself are refused. Staging is never deleted here; that takes a
+    separate confirmation.
+    """
+    if obj.get("current") or obj.get("blocked_reasons") or obj["path"] in protected:
+        raise RevisionConsistencyError(f"refusing to delete in-use generation: {obj['path']}")
+    relative = Path(obj["path"])
+    if (
+        relative.parts[:3] != ("revisions", "data", obj["dataset"])
+        or relative.name != obj["revision_id"]
+    ):
+        raise RevisionConsistencyError(
+            f"refusing to delete unexpected generation path: {obj['path']}"
+        )
+    lake = meta.parent
+    lexical = path
+    for name in ("staging", "curated", "derived", "logs"):
+        live = lake / name
+        if lexical == live or live in lexical.parents:
+            raise RevisionConsistencyError(f"refusing to delete in-use lake data: {path}")
+    snapshots = meta / "source_snapshots"
+    if lexical == snapshots or snapshots in lexical.parents:
+        raise RevisionConsistencyError(f"refusing to delete source snapshots: {path}")
+
+
 def retain_revision_generations(
     meta_root: Path | str,
     *,
@@ -1282,6 +1311,7 @@ def retain_revision_generations(
             for obj in sorted(objs, key=lambda item: item["revision"]):
                 path = store.meta / obj["path"]
                 _reject_symlink_path(path, label="generation")
+                _refuse_live_lake_deletion(store.meta, path, obj, protected)
                 if not path.is_dir():
                     continue
                 freed += _exclusive_tree_bytes(path)

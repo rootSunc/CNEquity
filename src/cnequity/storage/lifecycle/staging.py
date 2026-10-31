@@ -66,11 +66,16 @@ class StagingRetirement:
             raise LifecycleError("Staging changed during review")
         return {"signature": signature, "identity": [info.st_dev, info.st_ino], "files": files}
 
-    def plan(self, *, phase="purge", selected_ids=None) -> dict:
+    def plan(self, *, phase="purge", selected_ids=None, require_registry: bool = True) -> dict:
         if phase != "purge":
             raise LifecycleError("Staging supports deletion review only")
         with lake_mutation_lock(self.store.meta, blocking=False):
-            registry = self.store.registry(required=True)
+            registry = self.store.registry(required=require_registry)
+            if registry is None:
+                from cnequity.storage.lifecycle.snapshot import read_dependencies
+
+                if read_dependencies(self.store.meta) is not None:
+                    raise LifecycleError("Rebind imported lifecycle dependencies before cleanup")
             if unfinished(self.store):
                 raise LifecycleError("Resume the unfinished purge first")
             available = {o["object_id"]: o for o in self.inspect() if not o["reasons"]}
@@ -94,7 +99,7 @@ class StagingRetirement:
                 "schema_version": 1,
                 "phase": "purge",
                 "meta_root": str(self.store.meta),
-                "lake_id": registry["lake_id"],
+                "lake_id": None if registry is None else registry["lake_id"],
                 "staging_root": str(self.staging),
                 "objects": objects,
             }
@@ -159,7 +164,12 @@ class StagingRetirement:
         _reject_symlink_path(event_path)
         with lake_mutation_lock(self.store.meta, blocking=False), ExitStack() as locks:
             check_idle(self.config.manifest_path)
-            if self.store.registry(required=True)["lake_id"] != plan["lake_id"]:
+            registry = self.store.registry()
+            planned_lake = plan.get("lake_id")
+            if planned_lake is None:
+                if registry is not None:
+                    raise LifecycleError("Staging plan belongs to another lake")
+            elif registry is None or registry["lake_id"] != planned_lake:
                 raise LifecycleError("Staging plan belongs to another lake")
             if any(p != event_path for p in unfinished(self.store)):
                 raise LifecycleError("Resume the other unfinished purge first")

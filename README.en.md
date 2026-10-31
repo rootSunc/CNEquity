@@ -3,6 +3,7 @@
   <h1>CNEquity · A local data foundation for China-market research</h1>
   <p><strong>Collect once, keep it current, and research from the same traceable data.</strong></p>
 <p>No registration or token · Adjustment and PIT built in · Delisted stocks kept · Row-level provenance · MCP-native</p>
+<p>It covers Shanghai, Shenzhen and Beijing, including delisted stocks, in <strong>57</strong> datasets. A trial takes about <strong>1</strong> minute.</p>
 
 CNEquity is an open-source local data lake for China A-share (AShare / AStock) stock research. It turns stock prices, financial statements, futures, corporate events and capital-flow data into a local Parquet lake, with incremental ingestion, resumable batches, quality checks and consistent queries for quant research, backtesting and AI agents (via MCP).
 
@@ -37,16 +38,6 @@ How it differs from common data tools (full write-up in the [comparison](docs/en
 | Delisted stocks and PIT financials | Depends on the interface | Depends on the interface | Partly provided | Delisted stocks kept; financials strictly PIT by announcement date |
 | Row-level provenance | None | None | None | Every row carries source, version and fetch time |
 | Use by AI | Wrap it yourself | Wrap it yourself | Wrap it yourself | Read-only via `cne mcp` |
-
-**Survivorship bias: today's roster is not a historical universe.**
-
-The same equal-weight buy-and-hold strategy over the same dates produces a different result when stocks that later delisted are omitted. This historical sample compares the two universe definitions:
-
-![Survivorship bias in A-share backtests: historical equal-weight results with delisted stocks versus survivors only](docs/assets/survivorship-gap.svg)
-
-*This historical sample illustrates universe selection. Its returns and stock counts do not describe current lake coverage or future investment performance. Delisted names are valued at their last available bar; see the [universe profiles](docs/en/reference/universe-profiles.md) for evidence limits.*
-
-CNEquity retains delisted identities and makes adjustment, historical membership and PIT semantics part of the query contract.
 
 ## Quick start
 
@@ -91,19 +82,19 @@ Then run `cne run daily` once a day to stay current. For longer history, or what
 
 ## What can you research?
 
-| Question | Data and example | Check first |
-|---|---|---|
-| Returns across dividends and splits | `daily_bars` + `adj_factors` · [adjustment recipe](docs/en/recipes/research-baseline.md) | Use `adjust="hfq"` and `strict_adj=True` |
-| Financial facts visible on a rebalance date | `financial_statement_items` · [PIT recipe](docs/en/recipes/pit-rebalance.md) | Explicit `as_of` and `pit_mode="strict"`; backfilled history is not historical observation |
-| Historical universes and pre-delisting prices | `instruments`, `trading_status`, `delisting_events` · [profiles](docs/en/reference/universe-profiles.md) | Validate ST, delisting and price coverage |
-| Valuation, flows and sector rotation | Valuation, capital and structure datasets · [query guide](docs/en/datasets/query-guide.md) | Distinguish backfillable history from snapshots collected over time |
-| Futures curves, option chains and Greeks | Contract-level prices and derived datasets · [derivatives](docs/en/recipes/derivatives.md) | Opt in; verify exchange coverage and lifecycle evidence |
+| Question | Data and example |
+|---|---|
+| Returns across dividends and splits | `daily_bars` + `adj_factors` · [adjustment recipe](docs/en/recipes/research-baseline.md) |
+| Financial facts visible on a rebalance date | `financial_statement_items` · [PIT recipe](docs/en/recipes/pit-rebalance.md) |
+| Historical universes and pre-delisting prices | `instruments`, `trading_status`, `delisting_events` · [profiles](docs/en/reference/universe-profiles.md) |
+| Valuation, flows and sector rotation | Valuation, capital and structure datasets · [query guide](docs/en/datasets/query-guide.md) |
+| Futures curves, option chains and Greeks | Contract-level prices and derived datasets · [derivatives](docs/en/recipes/derivatives.md) |
 
 The same lake reads from Python, SQL and MCP: `load()` applies adjustment, PIT and universe semantics, `scan()` returns a raw LazyFrame, and `cne query --sql` runs DuckDB SQL. See the [Python API](docs/en/reference/python-api.md) and the [query guide](docs/en/datasets/query-guide.md).
 
 ## Data coverage
 
-The current development tree registers **57 datasets: 49 curated + 8 derived**, organized into L0–L9. See the [catalog](docs/en/datasets/catalog.md) and [source limitations](docs/en/datasets/sources.md).
+**57 datasets** (49 curated, 8 derived), organized into L0–L9. Fields, keys, history starts and sources are in the [catalog](docs/en/datasets/catalog.md) and [source notes](docs/en/datasets/sources.md).
 
 | Tier | Research use | Representative datasets |
 |---|---|---|
@@ -118,11 +109,12 @@ The current development tree registers **57 datasets: 49 curated + 8 derived**, 
 | L8 | Risk and regulation | Share unlocks and regulatory events |
 | L9 | Derivatives | Futures and options contracts, contract bars, continuous futures, Greeks and minutes |
 
-Minutes, trade snapshots and futures/options are disabled by default. Check each source's historical horizon and actual coverage after opting in. [Best-effort](docs/en/datasets/catalog.md#support-levels) datasets such as money flow, news and popularity ranks are off by default too; list them in `[datasets] best_effort` to collect them.
+Minutes, trade snapshots, futures/options, and [best-effort](docs/en/datasets/catalog.md#support-levels) datasets such as money flow, news and popularity ranks are off by default. Turn them on when you need them.
 
-<summary>Registered primary and backup sources (actual routing and history limits are in the catalog)</summary>
+<details>
+<summary>Primary and backup source for each dataset</summary>
 
-| Dataset | Tier | Registered primary | Registered backup |
+| Dataset | Tier | Primary | Backup |
 |---|---|---|---|
 | `instruments` | L0 | tdx_protocol | baostock |
 | `etf_profiles` | L0 | exchange | — |
@@ -182,7 +174,7 @@ Minutes, trade snapshots and futures/options are disabled by default. Check each
 | `option_contracts` | L9 | futures_exchange | — |
 | `option_greeks` | L9 | derived | — |
 
-Registered sources are dataset metadata; the daily tip, historical backfill and explicit repairs may take different routes. Read them together with the [source notes](docs/en/datasets/sources.md).
+Daily updates, historical backfill and repairs may take different routes. See the [source notes](docs/en/datasets/sources.md).
 
 </details>
 
@@ -190,7 +182,19 @@ Registered sources are dataset metadata; the daily tip, historical backfill and 
 
 ![CNEquity architecture from multiple sources through ingestion and a local Parquet lake to research consumers](docs/assets/architecture-diagram-v3.png)
 
-Adapters and batch orchestration collect data into staging; validated batches become curated or derived data. Quality checks, Python and SQL queries, the dashboard and MCP consume published data. The diagram explains responsibilities; see the [data flow](docs/en/architecture/data-flow.md) and [catalog](docs/en/datasets/catalog.md) for current source protocols and enabled datasets.
+Adapters and batch orchestration collect data into staging; validated batches are published. Quality checks, Python and SQL queries, the dashboard and MCP read published data. Sources and what is enabled are in the [data flow](docs/en/architecture/data-flow.md) and the [catalog](docs/en/datasets/catalog.md).
+
+## Survivorship bias
+
+**Today's roster is not a historical universe.**
+
+The same equal-weight buy-and-hold over the same dates leaves out stocks that later delisted if the universe is only names still trading today. This historical sample compares the two definitions:
+
+![Survivorship bias in A-share backtests: historical equal-weight results with delisted stocks versus survivors only](docs/assets/survivorship-gap.svg)
+
+*The sample illustrates universe selection. Its returns and stock counts do not describe current lake coverage or future investment performance. Delisted names are valued at their last available bar; limits are in the [universe profiles](docs/en/reference/universe-profiles.md).*
+
+CNEquity keeps delisted identities, and adjustment, historical membership and PIT are part of the query.
 
 ## Daily updates and upgrades
 
@@ -204,14 +208,13 @@ To upgrade: `pip install -U cnequity`, then `cne config upgrade` and `cne migrat
 
 ## Fit and limits
 
-CNEquity fits repeated historical research, ongoing collection and self-hosted data operations. A direct source call is lighter for an occasional quote. Existing research and trading platforms can consume the lake; see [choosing a data workflow](docs/en/architecture/overview.md). How it differs from and works alongside AKShare, Tushare and Baostock: [comparison](docs/en/architecture/comparison.md).
+CNEquity fits ongoing history, repeated queries and self-hosted data. A direct source call is lighter for an occasional quote. Existing research and trading platforms can use the lake as their data layer; see [choosing a data workflow](docs/en/architecture/overview.md).
 
-- The project is in **0.x development**. Repository documentation describes the current tree; the stable PyPI release may lag. Check `cne --version` and the [changelog](CHANGELOG.md).
-- Public-source connectivity, retention and publication schedules vary. Basic collection needs no token; some supplemental sources require your own credentials and permissions.
-- Fresh data does not establish complete historical coverage. Strict PIT may return no rows; strict universe queries may reject insufficient evidence.
-- CNEquity supplies data infrastructure, not a backtesting engine, trading signals or order execution. Code is [Apache-2.0](LICENSE); upstream data has [separate terms](docs/en/legal-and-data-sources.md). No data lake is distributed with the repository.
+The project is in **0.x**. It supplies data infrastructure, not a backtesting engine or order execution. Basic collection needs no token; some supplemental sources need your own credentials. Code is [Apache-2.0](LICENSE); upstream data has [separate terms](docs/en/legal-and-data-sources.md). No data lake is distributed with the repository. Check `cne --version` and the [changelog](CHANGELOG.md) before upgrading.
 
 ## Documentation and contributions
+
+To keep A-share history locally without an account, start with [Free A-share historical data](docs/en/guides/free-a-share-data.md). To choose among AKShare, Tushare and Baostock, read the [comparison](docs/en/architecture/comparison.md).
 
 | Task | Read |
 |---|---|

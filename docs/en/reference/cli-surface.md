@@ -42,7 +42,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne repair status-traded` | none | Read-only preview by default; --apply fills missing status keys from committed positive-volume bars, leaves ST unknown, publishes a new version and keeps the old one |
 | `cne repair stock-listing-dates` | --refresh-sources only | Replays IPO calendars offline by default; --apply fills stock listing dates confirmed by official listed events, publishes through the repair gate and retains old revisions |
 | `cne repair valuation-outage` | only with --apply | Read-only preview by default; --apply requests the EastMoney datacenter valuation report for the outage window and writes only when the whole market is retrieved |
-| `cne run clean` | none | Only previews expired files; an explicit --reconcile-runs may modify run state |
+| `cne run clean` | none | Previews expired files first; an interactive terminal confirms historical generations and compacted staging that is not in use as two separate questions; data and staging currently in use are never deleted automatically; a scheduled or non-interactive run only previews; an explicit --reconcile-runs may modify run state |
 | `cne run compact` | none | Publishes finished, unpublished staging data to the lake |
 | `cne run daily` | when run | Fetches incrementally and writes the lake; includes all schedule groups and event streams by default |
 | `cne run events` | when run | Fetches events and writes the lake |

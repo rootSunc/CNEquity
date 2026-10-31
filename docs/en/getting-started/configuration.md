@@ -466,7 +466,7 @@ Replay requires the external folder to be available; cloud files may need downlo
 
 ## `[storage.retention]` {#storage-retention}
 
-Every backfill and daily publish leaves an immutable generation. At the end of `cne backfill` and `cne run daily`, each dataset keeps the newest 5 generations and the older generation directories are removed. That is the same count the storage page uses for a recent generation. The generation currently being read, a generation registered with `cne storage hold`, and a generation whose receipt is missing or unusable are never removed. Receipts stay under `meta/revisions/` as the record of what was published; reading a removed generation fails explicitly and does not follow a newer one. `cne run clean` still only previews. Deleting more aggressively than this count is still confirmed on the storage page of `cne serve`.
+Every backfill and daily publish leaves an immutable generation. At the end of `cne backfill` and `cne run daily`, each dataset keeps the newest 5 generations and the older generation directories are removed. That is the same count the storage page uses for a recent generation. The generation currently being read, a generation registered with `cne storage hold`, a generation whose receipt is missing or unusable, and all staging are never removed by this automatic cleanup. Receipts stay under `meta/revisions/` as the record of what was published; reading a removed generation fails explicitly and does not follow a newer one. An interactive `cne run clean` can confirm deletion after the preview. Deleting a generation inside the newest 5 that is not the current pointer is still confirmed on the storage page of `cne serve`.
 
 | Key | Default | Description |
 |----|------|------|

@@ -186,7 +186,8 @@ def maintain(config_path: str, groups: str | None, notify: bool):
     (`cne backfill <dataset> --outstanding`), the run audit (the whole lake on
     [job.maintenance].full_audit_weekday), the freshness gate,
     source probes and SLO, run evidence over 20 sessions, a metadata backup
-    (manifest DB, receipts, quality findings; never curated Parquet), and `cne run clean`'s preview.
+    (manifest DB, receipts, quality findings; never curated Parquet), and a preview of `cne run clean`.
+    The preview passes --dry-run, so this command never asks to delete.
     Exits 1 when a group run, the audit, the freshness gate or the backup fails; source,
     debt-retry and run-evidence findings are reported without failing.
 
@@ -251,7 +252,7 @@ def maintain(config_path: str, groups: str | None, notify: bool):
         problems.append(_("Metadata backup"))
 
     click.echo(f"--- {_('Expiry preview')} ---", err=True)
-    if subprocess.run(_cne("run", "clean", "--config", path), check=False).returncode:
+    if subprocess.run(_cne("run", "clean", "--dry-run", "--config", path), check=False).returncode:
         notes.append(_("Expiry preview"))
 
     if notes:

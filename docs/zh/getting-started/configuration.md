@@ -466,7 +466,7 @@ cne storage raw-external --dataset financial_statement_items --source cninfo \
 
 ## `[storage.retention]` {#storage-retention}
 
-回补和日更每次发布都会留下一代不可变副本。`cne backfill` 和 `cne run daily` 结束时，每个数据集只留下最近 5 代，并删掉更早的代目录。这个数量和存储运维页上“最近 5 代”是同一个口径。当前正在读取的一代、`cne storage hold` 登记过的代、收据对不上或没有收据的代，都不会删。收据仍留在 `meta/revisions/`，用来说明当时发布了什么；再按被删掉的代去读，会明确失败，不会改读更新的一代。`cne run clean` 仍然只预览；要删得比这更激进，还是在 `cne serve` 的存储运维页确认。
+回补和日更每次发布都会留下一代不可变副本。`cne backfill` 和 `cne run daily` 结束时，每个数据集只留下最近 5 代，并删掉更早的代目录。这个数量和存储运维页上“最近 5 代”是同一个口径。当前正在读取的一代、`cne storage hold` 登记过的代、收据对不上或没有收据的代，以及任何 staging，都不会被这次自动清理删掉。收据仍留在 `meta/revisions/`，用来说明当时发布了什么；再按被删掉的代去读，会明确失败，不会改读更新的一代。交互终端里的 `cne run clean` 在预览后可以确认删除；要删最近 5 代里不是当前指针的版本，仍在 `cne serve` 的存储运维页确认。
 
 | 键 | 默认 | 说明 |
 |----|------|------|

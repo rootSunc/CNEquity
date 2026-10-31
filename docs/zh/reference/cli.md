@@ -27,7 +27,7 @@
 | [`cne run events`](#cne-run-events) | 7×24 事件流（公告、资讯），走自然日历而非交易日历 |
 | [`cne run retry`](#cne-run-retry) | 重试一个 run，或每个 daily 分组最新的失败 run |
 | [`cne run compact`](#cne-run-compact) | 把已结束、未发布的 staging 合进 curated |
-| [`cne run clean`](#cne-run-clean) | 预览过期 staging、快照、日志与历史版本 |
+| [`cne run clean`](#cne-run-clean) | 预览过期 staging、快照、日志与历史版本；交互终端可接着确认删除 |
 | [`cne storage`](#cne-storage) | 版本保留登记、清理计划与原地待删除标记 |
 | [`cne backfill`](#cne-backfill-dataset) | 回填一个数据集 |
 | [`cne derive`](#cne-derive-name) | 派生计算数据集 |
@@ -346,7 +346,7 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 
 ## cne run maintain
 
-日更之后的维护，`cne schedule install` 安装的定时任务每个交易日在日更后运行一次：运行审计（`[job.maintenance] full_audit_weekday` 那天改为全湖审计）、新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、元数据备份（manifest 数据库、收据、质量结论，不含 curated Parquet，按 `[job.maintenance]` 的保留期轮换），以及 `cne run clean` 的预览。
+日更之后的维护，`cne schedule install` 安装的定时任务每个交易日在日更后运行一次：运行审计（`[job.maintenance] full_audit_weekday` 那天改为全湖审计）、新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、元数据备份（manifest 数据库、收据、质量结论，不含 curated Parquet，按 `[job.maintenance]` 的保留期轮换），以及 `cne run clean` 的预览。定时任务没有终端，不会进入删除确认。
 
 | 选项 | 说明 |
 |------|------|
@@ -756,28 +756,28 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 
 ## cne run clean
 
-预览已 compact 的终态 run staging、超龄 orphan、来源快照、日志和历史版本。即使不加 `--dry-run` 也不会标记或删除文件，定时脚本只能产生提示。
+预览已 compact 的终态 run staging、超龄 orphan、来源快照、日志和历史版本。交互终端在预览后分两次确认：先是历史版本，再是已合并且不在使用中的 staging。正在使用的数据和 staging 不会自动删除。定时脚本没有终端，仍然只预览。
 
-回补和日更结束时会按 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) 丢掉更老的代，默认 5。这个命令本身不删除。设为 `0` 则一次都不删。
+回补和日更结束时会按 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) 丢掉更老的代，默认 5。这个命令在确认后按 `--keep-revision-generations` 删，默认也是 5。设为 `0` 则不处理版本。
 
 | 选项 | 说明 |
 |------|------|
-| `--dry-run` | 兼容选项；不能与会修改运行状态的 `--reconcile-runs` 同用 |
+| `--dry-run` | 只打印预览，不提问；不能与会修改运行状态的 `--reconcile-runs` 同用 |
 | `--orphan-retention-days` | 无 manifest 的 orphan staging 保留天数（默认 7） |
 | `--snapshot-retention-days` | 来源快照保留天数（默认 14）；每个 dataset/source 的最新一份保留 |
-| `--keep-revision-generations` | 每个数据集保留最近 5 代，另保护 current 和 hold；`0` 跳过版本预览 |
+| `--keep-revision-generations` | 确认删除时每个数据集保留最近 5 代，另保护 current 和 hold；`0` 跳过版本 |
 | `--log-retention-days` | 预览超过指定天数的 `logs/cne-*.log`（默认 30）；`0` 跳过 |
 | `--reconcile-runs` | 显式把符合静默条件的孤儿 running 跑次标记为 failed，仍会修改运行状态 |
 | `--reconcile-after-seconds` | 覆盖对账静默窗口，默认取 `[orchestrator].batch_stale_seconds` |
 | `--force` | 将未 cleanup-ready 的 staging 也列入预览，不删除、不降级批次 |
 
-输出 `dry_run: true`、`confirmation_required: "serve_storage_page"`。`removed` / `removed_run_ids` 等实际删除字段为空或 0，`bytes_freed` 全部为 0；候选见 `candidate_run_ids`、`candidate_run_dirs`、`candidates`，账面大小见 `logical_bytes_selected`。历史版本和已成功 compact 且无未完成批次的终态 staging 可在 serve 存储运维页勾选、审核并确认删除。确认时重新核验运行锁、引用保留、运行状态和逐文件指纹；执行只处理原清单，并保留可恢复的删除收据。orphan、未合并和有未完成批次的 staging 不在网页删除范围，来源快照和日志仍仅报告。
+先输出预览：`dry_run: true`。实际删除字段仍为空或 0，`bytes_freed` 为 0；候选见 `candidate_run_ids`、`candidate_run_dirs`、`candidates`，账面大小见 `logical_bytes_selected`。交互终端在预览后会分两次提问，默认都不删。第一次只针对超出 `--keep-revision-generations` 的历史版本；正在使用的一代、hold 和收据不能用的代不删。第二次只针对已经成功 compact、没有未完成批次、也没有被锁住或保留的 staging。正在运行、被锁住、未合并、orphan 或 hold 的 staging 即使回答是也不删。来源快照和日志不删。回补和日更不会删 staging，也不会删当前正在使用的一代。`--dry-run`、管道和定时任务不提问。`confirmation_required` 为 `interactive` 或 `none`。删除前重新核验运行锁、引用保留、运行状态和逐文件指纹，并保留可恢复的删除收据。存储页仍可勾选最近 5 代里不是当前指针的版本。
 
 预览另返回 `staging_inventory`、`staging_run_count` 和 `skipped_reasons`，逐运行列出状态、大小、年龄、未完成批次和候选/保留原因。正在重试的运行由运行锁保护；`--force` 不绕过运行锁或 hold。未完成批次不会仅因年老或存在更新的成功运行而自动淘汰。
 
 ## cne storage
 
-版本生命周期包括引用登记、不可变计划、原地观察期和维护窗口下的物理回收。满 7 天不会自动删除。回补和日更会按 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention)（默认 5）删掉没有保留的更老代，这是唯一不经过观察期和网页确认的删除；设为 `0` 则不删。外部读取须由操作者停止。
+版本生命周期包括引用登记、不可变计划、原地观察期和维护窗口下的物理回收。满 7 天不会自动删除。回补和日更会按 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention)（默认 5）删掉没有保留的更老代，不碰 staging，也不删当前正在使用的一代。交互终端里的 `cne run clean` 在预览后分两次确认，同样不等观察期。这些删除都不经过网页确认。设为 `0` 则回补和日更不删。外部读取须由操作者停止。
 
 | 命令 | 行为 |
 |---|---|

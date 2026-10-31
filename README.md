@@ -3,6 +3,7 @@
   <h1>CNEquity · 中国市场金融数据湖</h1>
   <p><strong>打破数据垄断，构建属于每个人的本地金融数据集</strong></p>
 <p>免注册、免 Token · 复权与 PIT 内置 · 保留退市股 · 行级溯源 · MCP 原生</p>
+<p>覆盖沪深京全市场并保留退市股，支持 <strong>57</strong> 个数据集，约 <strong>1</strong> 分钟可以试用。</p>
 
 CNEquity 是开源的中国 A股本地数据湖：将股票行情、财务数据、期货合约、公司事件和资金面等多源数据整理为本地 Parquet，提供增量采集、失败续跑、质量审计与统一查询。适合量化研究与反复回测、长期积累历史股票数据，也可通过 MCP 让 Claude、ChatGPT 等 AI Agent 直接查询 A股。
 
@@ -36,16 +37,6 @@ CNEquity 是开源的中国 A股本地数据湖：将股票行情、财务数据
 | 退市股与 PIT 财报 | 取决于接口 | 取决于接口 | 部分提供 | 保留退市股，财报按公告日严格 PIT |
 | 行级溯源 | 无 | 无 | 无 | 每行带来源、版本和抓取时间 |
 | 给 AI 用 | 自己封装 | 自己封装 | 自己封装 | `cne mcp` 只读接入 |
-
-**幸存者偏差：今天的名单不能代替历史股票池。**
-
-同一等权买入持有策略、同一时间窗口，仅按今天仍在交易的股票回看过去，会漏掉后来退市的标的。下图用历史样本展示两种股票池得到的结果差异：
-
-![A股回测幸存者偏差：含退市股与只留幸存者的历史等权持有结果对比](docs/assets/survivorship-gap.zh.svg)
-
-*历史样本仅用于说明股票池口径；图中收益和标的数量不代表当前湖覆盖或未来投资表现。退市股按最后一根可用行情计价，因子及退市覆盖限制见[股票池画像](docs/zh/reference/universe-profiles.md)。*
-
-CNEquity 在数据层保留退市身份，并让复权、历史成分和 PIT 口径进入查询契约，避免下游研究在无意中丢掉这些标的。
 
 ## 快速开始
 
@@ -89,19 +80,19 @@ print(bars.tail())
 
 ## 能用它研究什么
 
-| 你的问题 | 数据与入口 | 需要确认的口径 |
-|---|---|---|
-| 跨分红、送转后的历史收益 | `daily_bars` + `adj_factors` · [复权示例](docs/zh/recipes/research-baseline.md) | `adjust="hfq"`，研究时开启 `strict_adj=True` |
-| 某个调仓日已经知道哪些财报信息 | `financial_statement_items` · [PIT 示例](docs/zh/recipes/pit-rebalance.md) | 显式 `as_of` + `pit_mode="strict"`；新回填不等于当时可见 |
-| 历史股票池、退市前行情 | `instruments`、`trading_status`、`delisting_events` · [股票池画像](docs/zh/reference/universe-profiles.md) | 历史 ST、退市和行情覆盖需另行核验 |
-| 估值、资金流、行业轮动 | `valuation_metrics`、资金面与结构数据 · [查询指南](docs/zh/datasets/query-guide.md) | 分清可回补历史与启用后积累的快照 |
-| 期货期限结构、期权链与 Greeks | 逐合约行情和派生数据 · [衍生品指南](docs/zh/recipes/derivatives.md) | 默认关闭，按交易所、合约生命周期与覆盖证据验收 |
+| 你的问题 | 数据与入口 |
+|---|---|
+| 跨分红、送转后的历史收益 | `daily_bars` + `adj_factors` · [复权示例](docs/zh/recipes/research-baseline.md) |
+| 某个调仓日已经知道哪些财报信息 | `financial_statement_items` · [PIT 示例](docs/zh/recipes/pit-rebalance.md) |
+| 历史股票池、退市前行情 | `instruments`、`trading_status`、`delisting_events` · [股票池画像](docs/zh/reference/universe-profiles.md) |
+| 估值、资金流、行业轮动 | `valuation_metrics`、资金面与结构数据 · [查询指南](docs/zh/datasets/query-guide.md) |
+| 期货期限结构、期权链与 Greeks | 逐合约行情和派生数据 · [衍生品指南](docs/zh/recipes/derivatives.md) |
 
 同一份湖可以用 Python、SQL 和 MCP 读取：`load()` 提供复权、PIT 和股票池语义，`scan()` 提供原始 LazyFrame，`cne query --sql` 跑 DuckDB SQL。参数与边界见 [Python API](docs/zh/reference/python-api.md) 和[查询指南](docs/zh/datasets/query-guide.md)。
 
 ## 数据范围
 
-当前开发树注册 **57 个数据集：49 个 curated + 8 个 derived**，按用途分为 L0–L9。完整字段、主键、历史起点和来源集中在[数据集目录](docs/zh/datasets/catalog.md)与[数据源说明](docs/zh/datasets/sources.md)。
+支持 **57 个数据集**（49 个 curated、8 个 derived），按用途分为 L0–L9。字段、主键、历史起点和来源见[数据集目录](docs/zh/datasets/catalog.md)与[数据源说明](docs/zh/datasets/sources.md)。
 
 | 层次 | 研究用途 | 代表数据集 |
 |---|---|---|
@@ -116,12 +107,12 @@ print(bars.tail())
 | L8 | 风险合规 | 解禁日程、监管事件 |
 | L9 | 衍生品 | 期货与期权合约、逐合约行情、连续合约、Greeks、分钟线 |
 
-分钟线、分笔和期货/期权默认关闭；按需启用后仍须检查来源的历史视野与实际覆盖。资金流、新闻、人气榜等[尽力而为档](docs/zh/datasets/catalog.md#支持档位)数据集也默认关闭，在 `[datasets] best_effort` 中列出才采集。
+分钟线、分笔、期货/期权，以及资金流、新闻、人气榜等[尽力而为档](docs/zh/datasets/catalog.md#支持档位)数据集默认关闭，需要时再打开。
 
 <details>
-<summary>展开注册表的主备来源速查（实际路由与历史限制见数据集目录）</summary>
+<summary>各数据集的主备来源</summary>
 
-| 数据集 | 层次 | 登记主源 | 登记备源 |
+| 数据集 | 层次 | 主源 | 备源 |
 |---|---|---|---|
 | `instruments` | L0 | tdx_protocol | baostock |
 | `etf_profiles` | L0 | exchange | — |
@@ -181,7 +172,7 @@ print(bars.tail())
 | `option_contracts` | L9 | futures_exchange | — |
 | `option_greeks` | L9 | derived | — |
 
-登记主备源是数据集元数据；日更 tip、历史回填和显式修复可能走不同路径。请结合[来源说明](docs/zh/datasets/sources.md)使用。
+日更、历史回填和修复可能走不同路径，见[来源说明](docs/zh/datasets/sources.md)。
 
 </details>
 
@@ -190,7 +181,19 @@ print(bars.tail())
 
 ![CNEquity 从多源采集、编排到本地 Parquet 湖及研究消费的架构图](docs/assets/architecture-diagram-v3.png)
 
-数据经适配器与批次编排进入 staging，校验后发布为 curated 或 derived 数据；质量审计、Python/SQL 查询、控制台和 MCP 围绕已发布数据工作。图示用于说明职责边界，具体来源协议与启用状态以[数据流说明](docs/zh/architecture/data-flow.md)和[数据集目录](docs/zh/datasets/catalog.md)为准。
+数据经适配器与批次编排进入 staging，校验后发布；质量审计、Python/SQL 查询、控制台和 MCP 读取已发布的数据。来源与启用状态见[数据流说明](docs/zh/architecture/data-flow.md)和[数据集目录](docs/zh/datasets/catalog.md)。
+
+## 幸存者偏差
+
+**今天的名单不能代替历史股票池。**
+
+同一等权买入持有策略、同一时间窗口，只按今天仍在交易的股票回看，会漏掉后来退市的标的。下图用历史样本对比两种股票池：
+
+![A股回测幸存者偏差：含退市股与只留幸存者的历史等权持有结果对比](docs/assets/survivorship-gap.zh.svg)
+
+*历史样本只说明股票池口径；图中收益和标的数量不代表当前湖覆盖或未来投资表现。退市股按最后一根可用行情计价，限制见[股票池画像](docs/zh/reference/universe-profiles.md)。*
+
+CNEquity 在数据层保留退市身份，查询时可以直接使用复权、历史成分和 PIT 口径。
 
 ## 日常更新与升级
 
@@ -204,14 +207,13 @@ cne check              # 验收；有缺口或质量 error 时返回非零
 
 ## 适合与边界
 
-**适合**持续积累历史、反复查询、检查研究口径和自托管数据的工作。若只需偶尔取一个最新报价，直接调用取数接口通常更轻；已有研究或交易平台也可以把 CNEquity 放在数据层，见[选型说明](docs/zh/architecture/overview.md)；和 AKShare、Tushare、Baostock 的区别与配合见[对比说明](docs/zh/architecture/comparison.md)。
+适合持续积累历史、反复查询和自托管。偶尔只取一个最新报价，直接调用取数接口更轻。已有研究或交易平台可以把 CNEquity 放在数据层，见[选型说明](docs/zh/architecture/overview.md)。
 
-- 当前处于 **0.x 迭代阶段**。本仓库文档对应当前实现，PyPI 稳定版可能落后；升级前核对 `cne --version` 和[更新日志](CHANGELOG.md)。
-- 公共来源的网络可达性、历史深度和发布节奏会变化。基础采集无需 token，部分补充来源需要自备凭证；安装不代表获得所有上游权限。
-- `fresh` 表示新鲜度，不能单独证明历史完整或研究有效。严格 PIT 可能返回空结果，历史股票池可能因证据不足拒绝读取。
-- 项目提供数据基础设施，不含回测引擎、交易信号或下单功能。代码采用 [Apache-2.0](LICENSE)，数据另受[上游许可](docs/zh/legal-and-data-sources.md)约束，仓库不附带数据湖。
+项目处于 **0.x**。它提供数据基础设施，不含回测引擎或下单。基础采集无需 token，部分补充来源需要自备凭证。代码采用 [Apache-2.0](LICENSE)，数据另受[上游许可](docs/zh/legal-and-data-sources.md)约束，仓库不附带数据湖。升级前核对 `cne --version` 和[更新日志](CHANGELOG.md)。
 
 ## 文档与参与
+
+免费把 A 股历史数据落到本地，从[免费获取 A股历史数据](docs/zh/guides/free-a-share-data.md)开始。在 AKShare、Tushare、Baostock 之间选择，看[对比页](docs/zh/architecture/comparison.md)。
 
 | 想做什么 | 从这里开始 |
 |---|---|

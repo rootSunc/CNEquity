@@ -478,7 +478,8 @@ max_payload_bytes = 33554432
 # nothing. The current generation, an explicit hold, and a generation without
 # a usable receipt are always kept. Receipts stay; reading a removed
 # generation fails instead of following a newer one. freed_bytes counts only
-# files no kept generation still shares. `cne run clean` still only previews.
+# files no kept generation still shares. An interactive `cne run clean` can
+# delete after its preview; a scheduled run only previews.
 keep_generations = 5
 
 [universe]

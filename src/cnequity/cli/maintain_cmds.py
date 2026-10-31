@@ -7,6 +7,7 @@ to change what it holds.
 from __future__ import annotations
 
 import json
+import sys
 from contextlib import contextmanager
 from datetime import date
 
@@ -28,7 +29,7 @@ from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.query.parquet_scan import scan_parquet_files
-from cnequity.storage.revisions import prune_revision_generations
+from cnequity.storage.revisions import prune_revision_generations, retain_revision_generations
 from cnequity.storage.source_snapshots import (
     DEFAULT_SNAPSHOT_RETENTION_DAYS,
     clean_source_snapshots,
@@ -503,7 +504,9 @@ def derive(
 @run.command("clean")
 @config_option
 @click.option(
-    "--dry-run", is_flag=True, help=N_("Compatibility option; all cleanup is now preview-only.")
+    "--dry-run",
+    is_flag=True,
+    help=N_("Print the preview and do not ask to delete."),
 )
 @click.option(
     "--orphan-retention-days",
@@ -537,7 +540,7 @@ def derive(
     type=int,
     help=(
         N_(
-            "Keep the latest this many generations plus current/hold per dataset; other versions are only listed as candidates, not marked, and no bytes are freed. Import a reference manifest before marking in the web UI. 0 skips version handling."
+            "When a person confirms deletion, keep the latest this many generations plus the current version and holds. 0 skips version handling."
         )
     ),
 )
@@ -574,14 +577,16 @@ def clean(
     reconcile_runs: bool,
     reconcile_after_seconds: float | None,
 ):
-    """Preview expired data without physically deleting it; deletion must be confirmed on the serve operations page.
+    """Preview expired data, then ask before deleting historical generations or compacted staging.
 
     \b
-    "Cleanable" means: the run is in a terminal state (success/warning/degraded/failed), every batch has settled,
-    and a successful compact has been recorded. Staging that did not finish or was never compacted stays for a retry;
-    --force only widens the preview. Source snapshots and logs are preview-only too, with bytes_freed 0 throughout.
-    Old versions and staging that merged successfully with no unfinished batches can be deleted after confirming on the serve storage page.
-    Orphaned staging, source snapshots and logs are only reported for now.
+    A terminal and a scheduler see the same preview. Only an interactive terminal is asked,
+    and the default answer is no. Historical generations and staging are separate questions.
+    --dry-run never asks. Scheduled runs therefore stay preview-only.
+    Staging that is running, locked, unfinished, uncompacted, orphaned or held is never
+    deleted, even when the answer is yes. Source snapshots and logs are never deleted either.
+    Current versions, holds and generations without a usable receipt are kept.
+    Backfill and the daily run never delete staging or the generation currently in use.
 
     """
     if dry_run and reconcile_runs:
@@ -590,7 +595,9 @@ def clean(
                 "--dry-run cannot be combined with --reconcile-runs: reconciling changes run state. Drop --reconcile-runs to see the cleanup preview."
             )
         )
-    # Scheduled invocations must never bypass the browser confirmation flow.
+    # The preview executors never delete. A person at a terminal may confirm
+    # afterwards; a scheduler has no terminal and is not asked.
+    preview_only = dry_run
     dry_run = True
     cfg = _cfg(config_path)
     attach_log_file(cfg, "run-clean")
@@ -624,58 +631,173 @@ def clean(
         dry_run=dry_run,
     )
     logs = clean_run_logs(cfg.data_root, retention_days=log_retention_days, dry_run=dry_run)
-    click.echo(
-        json.dumps(
-            {
-                "dry_run": dry_run,
-                "confirmation_required": "serve_storage_page",
-                "reconciled": reconciled,
-                "removed_run_ids": [],
-                "candidate_run_ids": result.removed_run_ids,
-                "orphan_run_ids": result.orphan_run_ids,
-                "force_removed_run_ids": [],
-                "force_candidate_run_ids": result.force_removed_run_ids,
-                "skipped_run_ids": result.skipped_run_ids,
-                "skipped_reasons": result.skipped_reasons,
-                "staging_inventory": result.inventory,
-                "staging_run_count": len(result.inventory),
-                "bytes_freed": 0,
-                "logical_bytes_selected": (
-                    result.bytes_freed
-                    + snaps.bytes_freed
-                    + logs.bytes_freed
-                    + sum(item.logical_bytes_selected for item in generations)
-                ),
-                "source_snapshots": {
-                    "removed_run_dirs": [],
-                    "candidate_run_dirs": snaps.removed_run_dirs,
-                    "kept_run_dirs": snaps.kept_run_dirs,
-                    "bytes_freed": 0,
-                    "logical_bytes_selected": snaps.bytes_freed,
-                },
-                "run_logs": {
-                    "removed": 0,
-                    "candidates": len(logs.removed),
-                    "kept": logs.kept,
-                    "bytes_freed": 0,
-                    "logical_bytes_selected": logs.bytes_freed,
-                },
-                "revision_generations": [
-                    {
-                        "dataset": item.dataset,
-                        "removed": len(item.removed_revision_ids),
-                        "kept": len(item.kept_revision_ids),
-                        "bytes_freed": item.freed_bytes,
-                        "candidates": len(item.candidate_revision_ids),
-                        "marked": len(item.marked_revision_ids),
-                        "logical_bytes_selected": item.logical_bytes_selected,
-                    }
-                    for item in generations
-                ],
-            },
-            indent=2,
-        )
+    generation_candidates = sum(len(item.candidate_revision_ids) for item in generations)
+    staging_run_ids = list(result.removed_run_ids)
+    will_ask = (
+        not preview_only
+        and _stdin_is_tty()
+        and (generation_candidates > 0 or bool(staging_run_ids))
     )
+    payload = {
+        "dry_run": True,
+        "confirmation_required": "interactive" if will_ask else "none",
+        "reconciled": reconciled,
+        "removed_run_ids": [],
+        "candidate_run_ids": result.removed_run_ids,
+        "orphan_run_ids": result.orphan_run_ids,
+        "force_removed_run_ids": [],
+        "force_candidate_run_ids": result.force_removed_run_ids,
+        "skipped_run_ids": result.skipped_run_ids,
+        "skipped_reasons": result.skipped_reasons,
+        "staging_inventory": result.inventory,
+        "staging_run_count": len(result.inventory),
+        "bytes_freed": 0,
+        "logical_bytes_selected": (
+            result.bytes_freed
+            + snaps.bytes_freed
+            + logs.bytes_freed
+            + sum(item.logical_bytes_selected for item in generations)
+        ),
+        "source_snapshots": {
+            "removed_run_dirs": [],
+            "candidate_run_dirs": snaps.removed_run_dirs,
+            "kept_run_dirs": snaps.kept_run_dirs,
+            "bytes_freed": 0,
+            "logical_bytes_selected": snaps.bytes_freed,
+        },
+        "run_logs": {
+            "removed": 0,
+            "candidates": len(logs.removed),
+            "kept": logs.kept,
+            "bytes_freed": 0,
+            "logical_bytes_selected": logs.bytes_freed,
+        },
+        "revision_generations": [
+            {
+                "dataset": item.dataset,
+                "removed": len(item.removed_revision_ids),
+                "kept": len(item.kept_revision_ids),
+                "bytes_freed": item.freed_bytes,
+                "candidates": len(item.candidate_revision_ids),
+                "marked": len(item.marked_revision_ids),
+                "logical_bytes_selected": item.logical_bytes_selected,
+            }
+            for item in generations
+        ],
+    }
+    click.echo(json.dumps(payload, indent=2))
+    if not will_ask:
+        return
+    _delete_preview_selection(
+        cfg,
+        keep_revision_generations=keep_revision_generations,
+        generation_candidates=generation_candidates,
+        staging_run_ids=staging_run_ids,
+    )
+
+
+def _stdin_is_tty() -> bool:
+    return sys.stdin.isatty()
+
+
+def _confirm(text: str) -> bool:
+    try:
+        return click.confirm(text, default=False, err=True)
+    except click.Abort:
+        return False
+
+
+def _staging_in_use_reason(cfg, run_id: str, holds: set[str]) -> str | None:
+    """Why this staging run is still part of the live lake, or None if it is redundant."""
+    from cnequity.file_lock import is_locked
+    from cnequity.orchestrator.manifest import Manifest
+    from cnequity.storage.staging_cleanup import run_ready_for_staging_cleanup
+
+    if f"staging/{run_id}" in holds:
+        return "hold"
+    if is_locked(cfg.meta_root / "locks" / f"{run_id}.lock"):
+        return "active_run_lock"
+    manifest = Manifest(cfg.manifest_path)
+    run = manifest.get_run(run_id)
+    if run is None:
+        return "orphan"
+    if run["status"] == "running":
+        return "running"
+    if not run_ready_for_staging_cleanup(manifest, run_id):
+        return "unfinished_or_not_compacted"
+    return None
+
+
+def _delete_preview_selection(
+    cfg,
+    *,
+    keep_revision_generations: int,
+    generation_candidates: int,
+    staging_run_ids: list[str],
+) -> None:
+    """Ask separately, then delete only what the person accepted.
+
+    The preview is already on stdout. Questions go to stderr. Staging that is
+    still in use is left even when the staging answer is yes. Declining either
+    question deletes nothing from that group.
+    """
+    from cnequity.storage.lifecycle.resources import resource_holds
+
+    deleted: dict = {}
+    with resource_holds(cfg.meta_root, dry_run=True) as holds:
+        idle = []
+        for run_id in staging_run_ids:
+            reason = _staging_in_use_reason(cfg, run_id, holds)
+            if reason is None:
+                idle.append(run_id)
+                continue
+            click.echo(
+                _(
+                    "Left staging run {run_id} in place because it is still in use ({reason})."
+                ).format(run_id=run_id, reason=reason),
+                err=True,
+            )
+    if generation_candidates and keep_revision_generations > 0:
+        agreed = _confirm(
+            _(
+                "Delete {generations} historical generations from this preview? The generation "
+                "currently in use, holds, generations with an unusable receipt, and all staging "
+                "stay."
+            ).format(generations=generation_candidates)
+        )
+        if agreed:
+            removed = retain_revision_generations(cfg.meta_root, keep=keep_revision_generations)
+            deleted["revision_generations"] = [
+                {
+                    "dataset": item.dataset,
+                    "removed_revision_ids": list(item.removed_revision_ids),
+                    "freed_bytes": item.freed_bytes,
+                }
+                for item in removed
+            ]
+    if idle:
+        agreed = _confirm(
+            _(
+                "Delete {staging} compacted staging runs that are not in use? Running, locked, "
+                "unfinished, uncompacted, orphaned and held staging stays."
+            ).format(staging=len(idle))
+        )
+        if agreed:
+            from cnequity.storage.lifecycle.staging import StagingRetirement
+
+            retirement = StagingRetirement(cfg)
+            plan = retirement.plan(
+                phase="purge",
+                selected_ids=[f"staging/{run_id}" for run_id in idle],
+                require_registry=False,
+            )
+            journal = retirement.apply(plan["plan_id"], maintenance=True)
+            deleted["staging"] = {
+                "removed_run_ids": idle,
+                "logical_bytes_deleted": journal.get("logical_bytes_deleted", 0),
+            }
+    if deleted:
+        click.echo(json.dumps({"deleted": True, **deleted}, indent=2))
 
 
 @cli.group()
