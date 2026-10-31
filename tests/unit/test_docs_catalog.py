@@ -123,43 +123,10 @@ def test_sources_group_labels_match_the_shipped_schedule():
     assert mismatches == []
 
 
-# --- README data table -------------------------------------------------------
-# The README's dataset table names a primary and backup source per dataset. It
-# is written from DatasetSpec.primary_source / .backup_source precisely because
-# the hand-written source tables drifted — sector_bars sat on EastMoney long
-# after it moved to 同花顺, and fund_flow was filed under the wrong group.
-
-README = Path(__file__).resolve().parents[2] / "README.md"
-_DATA_ROW = re.compile(r"^\|\s*`([a-z][a-z0-9_]*)`\s*○?\s*\|([^|]*)\|([^|]*)\|([^|]*)\|")
-
-
-def _readme_rows() -> dict[str, tuple[str, str]]:
-    rows: dict[str, tuple[str, str]] = {}
-    for line in README.read_text(encoding="utf-8").splitlines():
-        m = _DATA_ROW.match(line.strip())
-        if m:
-            rows[m.group(1)] = (m.group(3).strip(), m.group(4).strip())
-    return rows
-
-
-def test_readme_table_lists_every_registered_dataset():
-    rows = _readme_rows()
-    assert set(rows) == set(DATASETS), (
-        f"missing from README: {sorted(set(DATASETS) - set(rows))}; "
-        f"unknown in README: {sorted(set(rows) - set(DATASETS))}"
-    )
-
-
-def test_readme_sources_match_the_registry():
-    mismatches = []
-    for name, (primary, backup) in _readme_rows().items():
-        spec = DATASETS[name]
-        want_backup = spec.backup_source or "—"
-        if primary != spec.primary_source or backup != want_backup:
-            mismatches.append(
-                f"{name}: README={primary}/{backup} registry={spec.primary_source}/{want_backup}"
-            )
-    assert mismatches == []
+# --- failover / primary_source -----------------------------------------------
+# Primary and backup used to be duplicated in a README details table; the
+# landing page no longer lists them. Failover config and the registry remain
+# the contract — catalog tier tables still name 主源 in prose.
 
 
 def test_failover_sources_match_the_registry():
@@ -188,7 +155,7 @@ def test_failover_sources_match_the_registry():
 
 
 def test_every_dataset_declares_a_primary_source():
-    """An empty primary_source would render as a blank cell in the README."""
+    """An empty primary_source would leave the catalog 主源 cell without a feed."""
     assert [n for n, s in DATASETS.items() if not s.primary_source] == []
 
 

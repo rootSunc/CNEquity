@@ -1,11 +1,9 @@
 <div align="center">
   <img src="docs/assets/cnequity-readme-banner.png" alt="CNEquity · open-source China A-share data lake for quant research and backtesting" width="100%">
   <h1>CNEquity · A local data foundation for China-market research</h1>
-  <p><strong>Collect once, keep it current, and research from the same traceable data.</strong></p>
 <p>No registration or token · Adjustment and PIT built in · Delisted stocks kept · Row-level provenance · MCP-native</p>
-<p>It covers Shanghai, Shenzhen and Beijing, including delisted stocks, in <strong>57</strong> datasets. A trial takes about <strong>1</strong> minute.</p>
 
-CNEquity is an open-source local data lake for China A-share (AShare / AStock) stock research. It turns stock prices, financial statements, futures, corporate events and capital-flow data into a local Parquet lake, with incremental ingestion, resumable batches, quality checks and consistent queries for quant research, backtesting and AI agents (via MCP).
+CNEquity is an open-source local data lake for China A-share stock market data: Shanghai and Shenzhen prices, stock data, financials and futures data, for quant research, quantitative trading and backtesting. 57 datasets land in local Parquet, with incremental resume, and MCP so an AI can query A-shares directly.
 
 [![CI](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/cnequity?logo=pypi&logoColor=white)](https://pypi.org/project/cnequity/)
@@ -24,11 +22,6 @@ CNEquity is an open-source local data lake for China A-share (AShare / AStock) s
 
 ## Why CNEquity
 
-- **Spend less time rebuilding ingestion.** Normalize symbols and columns once, track incremental windows, and resume failed work without discarding successful batches. There are 22 source-probe routes; costly endpoints require explicit selection.
-- **Make research assumptions explicit.** Store raw prices separately from adjustment factors; preserve delisted identities; distinguish strict point-in-time evidence from reconstructed history.
-- **Keep provenance and versions.** Rows carry `source`, `data_version` and `fetched_at`; immutable generations and research snapshots support later inspection.
-- **Own the storage.** Query open Parquet files through Python, DuckDB, Polars, the dashboard and a read-only MCP server.
-
 How it differs from common data tools (full write-up in the [comparison](docs/en/architecture/comparison.md)):
 
 | | AKShare | Tushare Pro | Baostock | CNEquity |
@@ -41,7 +34,7 @@ How it differs from common data tools (full write-up in the [comparison](docs/en
 
 ## Quick start
 
-Requires Python 3.10+ on macOS, Linux or Windows. No account or token needed. The CLI and dashboard speak English and Chinese and follow your system language; `export CNE_LANG=en` pins English.
+Requires Python 3.10+ on macOS, Linux or Windows. No account or token needed.
 
 **① Try it in a minute.** Fetch the last 30 trading days for 5 stocks from live sources into a separate directory that never touches your real lake:
 
@@ -61,7 +54,7 @@ See the [MCP guide](docs/en/reference/mcp.md#connecting-clients) for every clien
 
 ![Querying A-shares through cne mcp in Claude Code: CATL's highest close in the last 30 trading days](docs/assets/mcp-chat-demo.en.svg)
 
-*Real MCP tool calls and results on the demo lake (2026-10-26); closes are unadjusted.*
+*Real MCP tool calls and results on the demo lake; closes are unadjusted.*
 
 **③ Build the full lake.** Every Shanghai, Shenzhen and Beijing A-share, last 3 years:
 
@@ -90,8 +83,6 @@ Then run `cne run daily` once a day to stay current. For longer history, or what
 | Valuation, flows and sector rotation | Valuation, capital and structure datasets · [query guide](docs/en/datasets/query-guide.md) |
 | Futures curves, option chains and Greeks | Contract-level prices and derived datasets · [derivatives](docs/en/recipes/derivatives.md) |
 
-The same lake reads from Python, SQL and MCP: `load()` applies adjustment, PIT and universe semantics, `scan()` returns a raw LazyFrame, and `cne query --sql` runs DuckDB SQL. See the [Python API](docs/en/reference/python-api.md) and the [query guide](docs/en/datasets/query-guide.md).
-
 ## Data coverage
 
 **57 datasets** (49 curated, 8 derived), organized into L0–L9. Fields, keys, history starts and sources are in the [catalog](docs/en/datasets/catalog.md) and [source notes](docs/en/datasets/sources.md).
@@ -111,90 +102,15 @@ The same lake reads from Python, SQL and MCP: `load()` applies adjustment, PIT a
 
 Minutes, trade snapshots, futures/options, and [best-effort](docs/en/datasets/catalog.md#support-levels) datasets such as money flow, news and popularity ranks are off by default. Turn them on when you need them.
 
-<details>
-<summary>Primary and backup source for each dataset</summary>
-
-| Dataset | Tier | Primary | Backup |
-|---|---|---|---|
-| `instruments` | L0 | tdx_protocol | baostock |
-| `etf_profiles` | L0 | exchange | — |
-| `trading_calendar` | L0 | tdx_protocol | exchange |
-| `trading_status` | L0 | exchange | eastmoney |
-| `adj_factors` | L1 | sina | baostock |
-| `daily_bars` | L1 | tdx_protocol | eastmoney |
-| `delisting_events` | L1 | derived | — |
-| `index_bars` | L1 | tdx_protocol | eastmoney |
-| `minute_bars` | L1 | tdx_protocol | — |
-| `minute_bars_5m` | L1 | tdx_protocol | — |
-| `minute_bars_15m` | L1 | derived | — |
-| `minute_bars_30m` | L1 | derived | — |
-| `minute_bars_60m` | L1 | derived | — |
-| `trade_ticks` | L1 | tdx_protocol | — |
-| `announcement_index` | L2 | cninfo | — |
-| `corporate_actions` | L2 | tdx_protocol | eastmoney |
-| `earnings_disclosure_schedule` | L2 | eastmoney | — |
-| `analyst_consensus` | L3 | eastmoney | — |
-| `financial_statement_items` | L3 | eastmoney | tdx_fin |
-| `share_structure` | L3 | eastmoney | tdx_protocol |
-| `shareholder_counts` | L3 | eastmoney | — |
-| `top_holders` | L3 | eastmoney | — |
-| `valuation_metrics` | L3 | eastmoney | — |
-| `block_trades` | L4 | eastmoney | exchange |
-| `dragon_tiger` | L4 | eastmoney | exchange |
-| `fund_flow` | L4 | eastmoney | — |
-| `fund_flow_ths` | L4 | ths | — |
-| `institutional_holdings` | L4 | eastmoney | — |
-| `margin_trading` | L4 | exchange | — |
-| `northbound_flows` | L4 | eastmoney | — |
-| `northbound_holdings` | L4 | eastmoney | — |
-| `index_constituents` | L5 | exchange | eastmoney |
-| `industry_index` | L5 | derived | — |
-| `industry_members` | L5 | eastmoney | — |
-| `sector_members` | L5 | eastmoney | — |
-| `macro_indicators` | L6 | eastmoney | pboc |
-| `market_breadth` | L6 | derived | — |
-| `economic_calendar` | L7 | jin10 | — |
-| `economic_events` | L7 | jin10 | — |
-| `market_holidays` | L7 | jin10 | — |
-| `flash_news_wire` | L7 | eastmoney | — |
-| `hot_rank` | L7 | eastmoney | — |
-| `news_headlines` | L7 | eastmoney | — |
-| `sector_bars` | L7 | ths | — |
-| `sector_fund_flow` | L7 | eastmoney | — |
-| `sector_fund_flow_ths` | L7 | ths | — |
-| `sentiment_scores` | L7 | derived | eastmoney |
-| `regulatory_events` | L8 | cninfo | — |
-| `share_unlock_schedule` | L8 | eastmoney | — |
-| `commodity_bars` | L9 | sina | eastmoney |
-| `futures_bars` | L9 | futures_exchange | — |
-| `futures_continuous` | L9 | derived | — |
-| `futures_contracts` | L9 | futures_exchange | — |
-| `futures_minute_bars` | L9 | sina | — |
-| `option_bars` | L9 | futures_exchange | — |
-| `option_contracts` | L9 | futures_exchange | — |
-| `option_greeks` | L9 | derived | — |
-
-Daily updates, historical backfill and repairs may take different routes. See the [source notes](docs/en/datasets/sources.md).
-
-</details>
-
 ## Architecture
 
 ![CNEquity architecture from multiple sources through ingestion and a local Parquet lake to research consumers](docs/assets/architecture-diagram-v3.png)
-
-Adapters and batch orchestration collect data into staging; validated batches are published. Quality checks, Python and SQL queries, the dashboard and MCP read published data. Sources and what is enabled are in the [data flow](docs/en/architecture/data-flow.md) and the [catalog](docs/en/datasets/catalog.md).
 
 ## Survivorship bias
 
 **Today's roster is not a historical universe.**
 
-The same equal-weight buy-and-hold over the same dates leaves out stocks that later delisted if the universe is only names still trading today. This historical sample compares the two definitions:
-
 ![Survivorship bias in A-share backtests: historical equal-weight results with delisted stocks versus survivors only](docs/assets/survivorship-gap.svg)
-
-*The sample illustrates universe selection. Its returns and stock counts do not describe current lake coverage or future investment performance. Delisted names are valued at their last available bar; limits are in the [universe profiles](docs/en/reference/universe-profiles.md).*
-
-CNEquity keeps delisted identities, and adjustment, historical membership and PIT are part of the query.
 
 ## Daily updates and upgrades
 
@@ -204,17 +120,15 @@ cne run daily          # or run this yourself once a day
 cne check              # acceptance; exits non-zero on gaps or quality errors
 ```
 
-To upgrade: `pip install -U cnequity`, then `cne config upgrade` and `cne migrate` (preview first, then add `--apply`). Scheduling, the operations page and failure follow-up are in the [runbook](docs/en/operations/runbook.md); scope and resume in [initialization](docs/en/getting-started/initialization.md). The full documentation is available in [English](https://rootsunc.github.io/CNEquity/en/) and [Chinese](https://rootsunc.github.io/CNEquity/).
+To upgrade: `pip install -U cnequity`, then `cne config upgrade` and `cne migrate` (preview first, then add `--apply`). Scheduling, the operations page and failure follow-up are in the [runbook](docs/en/operations/runbook.md); scope and resume in [initialization](docs/en/getting-started/initialization.md).
 
 ## Fit and limits
 
-CNEquity fits ongoing history, repeated queries and self-hosted data. A direct source call is lighter for an occasional quote. Existing research and trading platforms can use the lake as their data layer; see [choosing a data workflow](docs/en/architecture/overview.md).
+CNEquity fits ongoing history, repeated queries and self-hosted data.
 
-The project is in **0.x**. It supplies data infrastructure, not a backtesting engine or order execution. Basic collection needs no token; some supplemental sources need your own credentials. Code is [Apache-2.0](LICENSE); upstream data has [separate terms](docs/en/legal-and-data-sources.md). No data lake is distributed with the repository. Check `cne --version` and the [changelog](CHANGELOG.md) before upgrading.
+The project is in **0.x**, with no backtesting engine or order execution. Code is [Apache-2.0](LICENSE); upstream data has [separate terms](docs/en/legal-and-data-sources.md). No data lake is distributed with the repository.
 
 ## Documentation and contributions
-
-To keep A-share history locally without an account, start with [Free A-share historical data](docs/en/guides/free-a-share-data.md). To choose among AKShare, Tushare and Baostock, read the [comparison](docs/en/architecture/comparison.md).
 
 | Task | Read |
 |---|---|

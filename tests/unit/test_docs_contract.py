@@ -64,7 +64,6 @@ def test_documented_counts_match_the_registries():
     falling back to the literal `strict` — a convergence that had already
     shipped as `not_applicable`.
     """
-    from cnequity.diagnostics.source_health import PROBES_BY_KEY
     from cnequity.domain.datasets import DATASETS
 
     claims = [
@@ -76,11 +75,6 @@ def test_documented_counts_match_the_registries():
         assert needle in path.read_text(encoding="utf-8"), (
             f"{path.name} no longer states {needle!r}"
         )
-
-    # The README pair counts the probe registry rather than the dataset one.
-    for name in ("README.md", "README.en.md"):
-        text = (ROOT / name).read_text(encoding="utf-8")
-        assert str(len(PROBES_BY_KEY)) in text, f"{name} lost the probe count"
 
     # `pit_quality` no longer falls back to a literal "strict" for non-PIT
     # tables; the contract page must not describe it as if it did.

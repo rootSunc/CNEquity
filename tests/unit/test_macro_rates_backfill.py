@@ -61,6 +61,12 @@ def _staged(cfg: Config) -> pl.DataFrame:
     return pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
 
 
+@pytest.fixture(autouse=True)
+def _no_live_usdcnh(monkeypatch):
+    """The rate tests answer the datacenter themselves. Sina stays off the network."""
+    monkeypatch.setattr(indicators, "fetch_usdcnh_closes", lambda *args, **kwargs: [])
+
+
 @pytest.fixture
 def cfg(tmp_path):
     c = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
@@ -323,3 +329,48 @@ def test_daily_run_reads_only_a_short_recent_window(cfg, monkeypatch):
     assert result.get("status") == "warning"  # 06-27 was asked for and not answered
     gap = result["context_updates"]["audit_findings"][0]
     assert gap["missing_dates"] == {"2024-06-27": ["cnbond_yield_10y", "shibor_3m"]}
+
+
+def test_range_fetch_keeps_the_offshore_yuan_close_and_ignores_a_bad_quote(monkeypatch):
+    calls: list[tuple[date, date]] = []
+
+    def _closes(start, end, **kwargs):
+        calls.append((start, end))
+        return [
+            {
+                "indicator_id": "usdcnh",
+                "obs_date": date(2026, 10, 29),
+                "value": 6.6558,
+                "frequency": "daily",
+                "source": "sina",
+            },
+            {
+                "indicator_id": "usdcnh",
+                "obs_date": date(2026, 10, 30),
+                "value": 6.6528,
+                "frequency": "daily",
+                "source": "sina",
+            },
+        ]
+
+    monkeypatch.setattr(indicators, "fetch_usdcnh_closes", _closes)
+    client = RecordingDatacenterClient(
+        {"RPTA_WEB_TREASURYYIELD": [{"SOLAR_DATE": "2026-10-30 00:00:00", "EMM00166466": 1.62}]}
+    )
+
+    df = fetch_daily_rates_range(date(2026, 10, 29), date(2026, 10, 30), client=client)  # type: ignore[arg-type]
+
+    assert calls == [(date(2026, 10, 29), date(2026, 10, 30))]
+    yuan = df.filter(pl.col("indicator_id") == "usdcnh").sort("obs_date")
+    assert yuan.select("obs_date", "value", "source").rows() == [
+        (date(2026, 10, 29), 6.6558, "sina"),
+        (date(2026, 10, 30), 6.6528, "sina"),
+    ]
+    assert df.filter(pl.col("indicator_id") == "cnbond_yield_10y").height == 1
+
+    def _broken(start, end, **kwargs):
+        raise RuntimeError("sina refused")
+
+    monkeypatch.setattr(indicators, "fetch_usdcnh_closes", _broken)
+    kept = fetch_daily_rates_range(date(2026, 10, 30), date(2026, 10, 30), client=client)  # type: ignore[arg-type]
+    assert kept["indicator_id"].to_list() == ["cnbond_yield_10y"]

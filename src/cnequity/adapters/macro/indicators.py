@@ -3,7 +3,7 @@
 Rows carry their own ``source`` rather than taking the step's blanket value, so
 a curated row always names the feed it came from.
 
-Every series except 社融 comes from EastMoney's datacenter; 社融 comes from the
+Every series except 社融 and 离岸人民币 comes from EastMoney's datacenter; 社融 comes from the
 PBOC, which publishes it. AkShare used to supply the monthly block, but its PMI and 货币供应量
 wrappers request the *same* ``datacenter-web.eastmoney.com`` endpoint this module
 already talks to, so going direct removes a parsing layer without changing the
@@ -12,6 +12,8 @@ See issue #3.
 
 The daily run asks each rate report for the run day only. The backfill reads
 the two daily rates over its whole window instead (``fetch_daily_rates_range``).
+离岸人民币 is the Sina forex day-kline close (``fx_susdcnh``). A failure there
+is recorded and does not drop the rates. push2his is not consulted.
 
 Monthly observations are stamped at month end. EastMoney reports them at month
 *start* (``REPORT_DATE = 2026-07-01``), so they are converted; changing this
@@ -21,6 +23,7 @@ convention would double-write every month already in curated under a second key.
 from __future__ import annotations
 
 import calendar
+import logging
 import math
 import re
 from datetime import date
@@ -29,14 +32,17 @@ import polars as pl
 
 from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError, fetch_datacenter
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
+from cnequity.adapters.sina.usdcnh import fetch_usdcnh_closes
+
+logger = logging.getLogger(__name__)
 
 _TREASURY_REPORT = "RPTA_WEB_TREASURYYIELD"
-_TREASURY_COLUMNS = "SOLAR_DATE,EMM00166466"
+_TREASURY_COLUMNS = "SOLAR_DATE,EMM00166466,EMG00001310"
 _SHIBOR_REPORT = "RPT_IMP_INTRESTRATEN"
 _SHIBOR_COLUMNS = "REPORT_DATE,IR_RATE"
 _SHIBOR_FILTER = '(MARKET_CODE="001")(CURRENCY_CODE="CNY")(INDICATOR_ID="203")'
 _LPR_REPORT = "RPTA_WEB_RATE"
-_LPR_COLUMNS = "TRADE_DATE,LPR1Y"
+_LPR_COLUMNS = "TRADE_DATE,LPR1Y,LPR5Y"
 
 # The daily series a backfill reads as a window instead of one day at a time.
 # Both reports take a `(COL>='…')(COL<='…')` range and page it — measured
@@ -84,7 +90,19 @@ _EM_MONTHLY_SERIES = {
             "CURRENCY,CURRENCY_SAME,FREE_CASH,FREE_CASH_SAME"
         ),
         # BASIC_CURRENCY is the M2 level; _SAME is its year-on-year change.
+        # CURRENCY_SAME is M1 year-on-year change, read from the same response.
         "value_column": "BASIC_CURRENCY_SAME",
+        "extra_columns": (("m1_yoy", "CURRENCY_SAME"),),
+    },
+    "cpi_yoy": {
+        "report": "RPT_ECONOMY_CPI",
+        "columns": "REPORT_DATE,TIME,NATIONAL_SAME,NATIONAL_BASE,NATIONAL_SEQUENTIAL",
+        "value_column": "NATIONAL_SAME",
+    },
+    "ppi_yoy": {
+        "report": "RPT_ECONOMY_PPI",
+        "columns": "REPORT_DATE,TIME,BASE,BASE_SAME,BASE_ACCUMULATE",
+        "value_column": "BASE_SAME",
     },
 }
 
@@ -154,7 +172,7 @@ def _capture_series(unit: str, fetch, failures, completed):
 
 
 def _eastmoney_daily(
-    client: EastMoneyClient, trade_date: date, *, failures=None, completed=None
+    client: EastMoneyClient, trade_date: date, *, config=None, failures=None, completed=None
 ) -> list[dict]:
     ds = trade_date.isoformat()
     rows: list[dict] = []
@@ -168,18 +186,24 @@ def _eastmoney_daily(
         completed,
     )
     for item in treasury:
-        val = _finite_float(item.get("EMM00166466"))
         obs = _parse_obs_date(item.get("SOLAR_DATE"))
-        if val is not None and obs == trade_date:
-            rows.append(
-                {
-                    "indicator_id": "cnbond_yield_10y",
-                    "obs_date": obs,
-                    "value": val,
-                    "frequency": "daily",
-                    "source": "eastmoney",
-                }
-            )
+        if obs != trade_date:
+            continue
+        for ind_id, col_name in (
+            ("cnbond_yield_10y", "EMM00166466"),
+            ("usbond_yield_10y", "EMG00001310"),
+        ):
+            val = _finite_float(item.get(col_name))
+            if val is not None:
+                rows.append(
+                    {
+                        "indicator_id": ind_id,
+                        "obs_date": obs,
+                        "value": val,
+                        "frequency": "daily",
+                        "source": "eastmoney",
+                    }
+                )
 
     shibor = _capture_series(
         "eastmoney:shibor_3m",
@@ -215,19 +239,30 @@ def _eastmoney_daily(
         completed,
     )
     for item in lpr:
-        val = _finite_float(item.get("LPR1Y"))
         obs = _parse_obs_date(item.get("TRADE_DATE"))
-        if val is not None and obs == trade_date:
-            rows.append(
-                {
-                    "indicator_id": "lpr_1y",
-                    "obs_date": obs,
-                    "value": val,
-                    "frequency": "monthly",
-                    "source": "eastmoney",
-                }
-            )
+        if obs != trade_date:
+            continue
+        for ind_id, col_name in (("lpr_1y", "LPR1Y"), ("lpr_5y", "LPR5Y")):
+            val = _finite_float(item.get(col_name))
+            if val is not None:
+                rows.append(
+                    {
+                        "indicator_id": ind_id,
+                        "obs_date": obs,
+                        "value": val,
+                        "frequency": "monthly",
+                        "source": "eastmoney",
+                    }
+                )
 
+    rows.extend(
+        _capture_series(
+            "sina:usdcnh",
+            lambda: fetch_usdcnh_closes(trade_date, trade_date, config=config),
+            failures,
+            completed,
+        )
+    )
     return rows
 
 
@@ -238,7 +273,7 @@ def fetch_daily_rates_range(
     client: EastMoneyClient | None = None,
     config=None,
 ) -> pl.DataFrame:
-    """cnbond_yield_10y and shibor_3m for every published day in ``[start, end]``.
+    """cnbond_yield_10y, shibor_3m and usdcnh for every published day in ``[start, end]``.
 
     The backfill path. The per-day path is only ever asked for the run day, so
     history before the first daily run never landed; here one paged range query
@@ -284,6 +319,12 @@ def fetch_daily_rates_range(
                         "source": "eastmoney",
                     }
                 )
+        try:
+            rows.extend(fetch_usdcnh_closes(start, end, config=config))
+        except Exception:
+            # Sina is a separate host from the rate reports. Losing it must
+            # not drop a window of treasury and Shibor that already arrived.
+            logger.warning("macro usdcnh range fetch failed", exc_info=True)
     finally:
         if owns:
             client.close()
@@ -319,25 +360,27 @@ def _eastmoney_monthly(
             completed,
         )
 
+        targets = [(indicator_id, value_column), *spec.get("extra_columns", ())]
         for item in records:
             obs = _parse_series_obs_date(item.get("REPORT_DATE") or item.get("TIME"))
             if obs is None or obs > trade_date:
                 continue
-            val = item.get(value_column)
-            if val is None:
-                continue
-            value = _finite_float(val)
-            if value is None:
-                continue
-            rows.append(
-                {
-                    "indicator_id": indicator_id,
-                    "obs_date": obs,
-                    "value": value,
-                    "frequency": "monthly",
-                    "source": "eastmoney",
-                }
-            )
+            for target_id, col_name in targets:
+                val = item.get(col_name)
+                if val is None:
+                    continue
+                value = _finite_float(val)
+                if value is None:
+                    continue
+                rows.append(
+                    {
+                        "indicator_id": target_id,
+                        "obs_date": obs,
+                        "value": value,
+                        "frequency": "monthly",
+                        "source": "eastmoney",
+                    }
+                )
     return rows
 
 
@@ -406,7 +449,9 @@ def fetch_macro_indicators(
         client = EastMoneyClient(config=config)
 
     try:
-        rows = _eastmoney_daily(client, trade_date, failures=failures, completed=completed_units)
+        rows = _eastmoney_daily(
+            client, trade_date, config=config, failures=failures, completed=completed_units
+        )
         # Daily rates first, so an LPR row already published on the daily report
         # wins over a monthly restatement of the same (indicator_id, obs_date).
         seen = {(r["indicator_id"], r["obs_date"]) for r in rows}

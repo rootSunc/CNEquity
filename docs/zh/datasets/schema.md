@@ -890,7 +890,7 @@ PIT 查询过滤 `announce_date <= as_of`。
 
 | 列 | 类型 | 说明 |
 |--------|------|-------|
-| indicator_id | string | 如 ``shibor_3m``、``cnbond_yield_10y``、``lpr_1y`` |
+| indicator_id | string | 如 ``shibor_3m``、``cnbond_yield_10y``、``lpr_1y``、``usdcnh``（美元兑离岸人民币收盘，新浪外汇日 K，`source=sina`） |
 | obs_date | date | 观测 / 发布日 |
 | value | float64 |  |
 | frequency | string | ``daily`` / ``monthly`` |

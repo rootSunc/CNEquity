@@ -40,8 +40,12 @@ _SAMPLE = 8
 MONTHLY_STALE_DAYS: dict[str, int] = {
     "pmi_manufacturing": 45,
     "m2_yoy": 75,
+    "m1_yoy": 75,
+    "cpi_yoy": 65,
+    "ppi_yoy": 65,
     "social_financing": 75,
     "lpr_1y": 45,
+    "lpr_5y": 45,
 }
 
 # A restatement past this is worth a look rather than routine revision noise.

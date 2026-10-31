@@ -1,11 +1,9 @@
 <div align="center">
   <img src="docs/assets/cnequity-readme-banner.png" alt="CNEquity · 开源 A股本地数据湖，用于量化研究与回测" width="100%">
   <h1>CNEquity · 中国市场金融数据湖</h1>
-  <p><strong>打破数据垄断，构建属于每个人的本地金融数据集</strong></p>
 <p>免注册、免 Token · 复权与 PIT 内置 · 保留退市股 · 行级溯源 · MCP 原生</p>
-<p>覆盖沪深京全市场并保留退市股，支持 <strong>57</strong> 个数据集，约 <strong>1</strong> 分钟可以试用。</p>
 
-CNEquity 是开源的中国 A股本地数据湖：将股票行情、财务数据、期货合约、公司事件和资金面等多源数据整理为本地 Parquet，提供增量采集、失败续跑、质量审计与统一查询。适合量化研究与反复回测、长期积累历史股票数据，也可通过 MCP 让 Claude、ChatGPT 等 AI Agent 直接查询 A股。
+CNEquity 是开源的中国 A股本地数据湖：整理沪深股票行情、股票数据、财务与期货数据，面向量化研究、量化交易与回测。57 个数据集落到本地 Parquet，可增量续跑，也能通过 MCP 让 AI 直接查 A 股。
 
 [![CI](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/cnequity?logo=pypi&logoColor=white)](https://pypi.org/project/cnequity/)
@@ -23,11 +21,6 @@ CNEquity 是开源的中国 A股本地数据湖：将股票行情、财务数据
 
 ## 为什么用 CNEquity
 
-- **少写重复的数据工程。** 代码、字段、分区和增量窗口由数据层管理；中断后保留成功批次，按失败范围续跑。22 条源探针路由帮助诊断可达性（高成本端点需显式选择）。
-- **把研究口径说清楚。** 原始价与复权因子分开存；历史股票池保留退市身份；财报查询区分严格 PIT 与事后重建。
-- **结果有来源，也有版本。** 行级 `source`、`data_version`、`fetched_at` 配合不可变数据版本与研究快照，支持复查和重现。
-- **数据留在自己手里。** 开放的 Parquet 文件，通过 Python、DuckDB、Polars、控制台和只读 MCP 消费。
-
 和常用取数工具的区别（完整说明见[对比页](docs/zh/architecture/comparison.md)）：
 
 | | AKShare | Tushare Pro | Baostock | CNEquity |
@@ -40,7 +33,7 @@ CNEquity 是开源的中国 A股本地数据湖：将股票行情、财务数据
 
 ## 快速开始
 
-需要 Python 3.10+（macOS / Linux / Windows），不需要账号或 token。命令行和控制台支持中英文，默认跟随系统语言，`export CNE_LANG=zh_CN` 可固定为中文。
+需要 Python 3.10+（macOS / Linux / Windows），不需要账号或 token。
 
 **① 一分钟试用。** 用真实数据源抓 5 只股票最近 30 个交易日，建在独立目录里，不影响以后的正式湖：
 
@@ -60,7 +53,7 @@ claude mcp add cnequity -- cne mcp --config /abs/path/to/configs/cnequity.demo.t
 
 ![在 Claude Code 里通过 cne mcp 查询 A股：宁德时代最近 30 个交易日的最高收盘价](docs/assets/mcp-chat-demo.zh.svg)
 
-*真实 MCP 工具调用与返回（2026-10-26）；收盘价为未复权价。*
+*真实 MCP 工具调用与返回；收盘价为未复权价。*
 
 **③ 建正式湖。** 沪深京全市场、最近 3 年：
 
@@ -88,8 +81,6 @@ print(bars.tail())
 | 估值、资金流、行业轮动 | `valuation_metrics`、资金面与结构数据 · [查询指南](docs/zh/datasets/query-guide.md) |
 | 期货期限结构、期权链与 Greeks | 逐合约行情和派生数据 · [衍生品指南](docs/zh/recipes/derivatives.md) |
 
-同一份湖可以用 Python、SQL 和 MCP 读取：`load()` 提供复权、PIT 和股票池语义，`scan()` 提供原始 LazyFrame，`cne query --sql` 跑 DuckDB SQL。参数与边界见 [Python API](docs/zh/reference/python-api.md) 和[查询指南](docs/zh/datasets/query-guide.md)。
-
 ## 数据范围
 
 支持 **57 个数据集**（49 个 curated、8 个 derived），按用途分为 L0–L9。字段、主键、历史起点和来源见[数据集目录](docs/zh/datasets/catalog.md)与[数据源说明](docs/zh/datasets/sources.md)。
@@ -107,93 +98,17 @@ print(bars.tail())
 | L8 | 风险合规 | 解禁日程、监管事件 |
 | L9 | 衍生品 | 期货与期权合约、逐合约行情、连续合约、Greeks、分钟线 |
 
-分钟线、分笔、期货/期权，以及资金流、新闻、人气榜等[尽力而为档](docs/zh/datasets/catalog.md#支持档位)数据集默认关闭，需要时再打开。
-
-<details>
-<summary>各数据集的主备来源</summary>
-
-| 数据集 | 层次 | 主源 | 备源 |
-|---|---|---|---|
-| `instruments` | L0 | tdx_protocol | baostock |
-| `etf_profiles` | L0 | exchange | — |
-| `trading_calendar` | L0 | tdx_protocol | exchange |
-| `trading_status` | L0 | exchange | eastmoney |
-| `adj_factors` | L1 | sina | baostock |
-| `daily_bars` | L1 | tdx_protocol | eastmoney |
-| `delisting_events` | L1 | derived | — |
-| `index_bars` | L1 | tdx_protocol | eastmoney |
-| `minute_bars` | L1 | tdx_protocol | — |
-| `minute_bars_5m` | L1 | tdx_protocol | — |
-| `minute_bars_15m` | L1 | derived | — |
-| `minute_bars_30m` | L1 | derived | — |
-| `minute_bars_60m` | L1 | derived | — |
-| `trade_ticks` | L1 | tdx_protocol | — |
-| `announcement_index` | L2 | cninfo | — |
-| `corporate_actions` | L2 | tdx_protocol | eastmoney |
-| `earnings_disclosure_schedule` | L2 | eastmoney | — |
-| `analyst_consensus` | L3 | eastmoney | — |
-| `financial_statement_items` | L3 | eastmoney | tdx_fin |
-| `share_structure` | L3 | eastmoney | tdx_protocol |
-| `shareholder_counts` | L3 | eastmoney | — |
-| `top_holders` | L3 | eastmoney | — |
-| `valuation_metrics` | L3 | eastmoney | — |
-| `block_trades` | L4 | eastmoney | exchange |
-| `dragon_tiger` | L4 | eastmoney | exchange |
-| `fund_flow` | L4 | eastmoney | — |
-| `fund_flow_ths` | L4 | ths | — |
-| `institutional_holdings` | L4 | eastmoney | — |
-| `margin_trading` | L4 | exchange | — |
-| `northbound_flows` | L4 | eastmoney | — |
-| `northbound_holdings` | L4 | eastmoney | — |
-| `index_constituents` | L5 | exchange | eastmoney |
-| `industry_index` | L5 | derived | — |
-| `industry_members` | L5 | eastmoney | — |
-| `sector_members` | L5 | eastmoney | — |
-| `macro_indicators` | L6 | eastmoney | pboc |
-| `market_breadth` | L6 | derived | — |
-| `economic_calendar` | L7 | jin10 | — |
-| `economic_events` | L7 | jin10 | — |
-| `market_holidays` | L7 | jin10 | — |
-| `flash_news_wire` | L7 | eastmoney | — |
-| `hot_rank` | L7 | eastmoney | — |
-| `news_headlines` | L7 | eastmoney | — |
-| `sector_bars` | L7 | ths | — |
-| `sector_fund_flow` | L7 | eastmoney | — |
-| `sector_fund_flow_ths` | L7 | ths | — |
-| `sentiment_scores` | L7 | derived | eastmoney |
-| `regulatory_events` | L8 | cninfo | — |
-| `share_unlock_schedule` | L8 | eastmoney | — |
-| `commodity_bars` | L9 | sina | eastmoney |
-| `futures_bars` | L9 | futures_exchange | — |
-| `futures_continuous` | L9 | derived | — |
-| `futures_contracts` | L9 | futures_exchange | — |
-| `futures_minute_bars` | L9 | sina | — |
-| `option_bars` | L9 | futures_exchange | — |
-| `option_contracts` | L9 | futures_exchange | — |
-| `option_greeks` | L9 | derived | — |
-
-日更、历史回填和修复可能走不同路径，见[来源说明](docs/zh/datasets/sources.md)。
-
-</details>
-
+分钟线、分笔、期货/期权，以及资金流、新闻、人气榜等[拓展数据集](docs/zh/datasets/catalog.md#支持档位)默认关闭，需要时用户自行打开。
 
 ## 架构
 
 ![CNEquity 从多源采集、编排到本地 Parquet 湖及研究消费的架构图](docs/assets/architecture-diagram-v3.png)
 
-数据经适配器与批次编排进入 staging，校验后发布；质量审计、Python/SQL 查询、控制台和 MCP 读取已发布的数据。来源与启用状态见[数据流说明](docs/zh/architecture/data-flow.md)和[数据集目录](docs/zh/datasets/catalog.md)。
-
 ## 幸存者偏差
 
 **今天的名单不能代替历史股票池。**
 
-同一等权买入持有策略、同一时间窗口，只按今天仍在交易的股票回看，会漏掉后来退市的标的。下图用历史样本对比两种股票池：
-
 ![A股回测幸存者偏差：含退市股与只留幸存者的历史等权持有结果对比](docs/assets/survivorship-gap.zh.svg)
-
-*历史样本只说明股票池口径；图中收益和标的数量不代表当前湖覆盖或未来投资表现。退市股按最后一根可用行情计价，限制见[股票池画像](docs/zh/reference/universe-profiles.md)。*
-
-CNEquity 在数据层保留退市身份，查询时可以直接使用复权、历史成分和 PIT 口径。
 
 ## 日常更新与升级
 
@@ -207,13 +122,11 @@ cne check              # 验收；有缺口或质量 error 时返回非零
 
 ## 适合与边界
 
-适合持续积累历史、反复查询和自托管。偶尔只取一个最新报价，直接调用取数接口更轻。已有研究或交易平台可以把 CNEquity 放在数据层，见[选型说明](docs/zh/architecture/overview.md)。
+适合持续积累历史、反复查询和自托管。
 
-项目处于 **0.x**。它提供数据基础设施，不含回测引擎或下单。基础采集无需 token，部分补充来源需要自备凭证。代码采用 [Apache-2.0](LICENSE)，数据另受[上游许可](docs/zh/legal-and-data-sources.md)约束，仓库不附带数据湖。升级前核对 `cne --version` 和[更新日志](CHANGELOG.md)。
+项目处于 **0.x**，不含回测引擎或下单。代码采用 [Apache-2.0](LICENSE)，数据另受[上游许可](docs/zh/legal-and-data-sources.md)约束，仓库不附带数据湖。
 
 ## 文档与参与
-
-免费把 A 股历史数据落到本地，从[免费获取 A股历史数据](docs/zh/guides/free-a-share-data.md)开始。在 AKShare、Tushare、Baostock 之间选择，看[对比页](docs/zh/architecture/comparison.md)。
 
 | 想做什么 | 从这里开始 |
 |---|---|

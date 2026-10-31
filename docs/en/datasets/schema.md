@@ -897,7 +897,7 @@ to `meta/industry_taxonomy.parquet`, with its level, name, `parent_id`, first an
 
 | Column | Type | Description |
 |--------|------|-------|
-| indicator_id | string | e.g. ``shibor_3m``, ``cnbond_yield_10y``, ``lpr_1y`` |
+| indicator_id | string | e.g. ``shibor_3m``, ``cnbond_yield_10y``, ``lpr_1y``, ``usdcnh`` (USD/offshore CNY close from Sina forex day-k, `source=sina`) |
 | obs_date | date | Observation / release date |
 | value | float64 |  |
 | frequency | string | ``daily`` / ``monthly`` |

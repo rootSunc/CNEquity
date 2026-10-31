@@ -6,11 +6,17 @@ import pytest
 import cnequity.steps  # noqa: F401
 from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError
 from cnequity.adapters.eastmoney.share_unlock import fetch_share_unlock_schedule
+from cnequity.adapters.macro import indicators
 from cnequity.adapters.macro.indicators import fetch_macro_indicators
 from cnequity.config import Config
 from cnequity.derive.market_breadth import compute_market_breadth
 from cnequity.domain.schemas import validate_dataframe
 from cnequity.query import load
+
+
+@pytest.fixture(autouse=True)
+def _no_live_usdcnh(monkeypatch):
+    monkeypatch.setattr(indicators, "fetch_usdcnh_closes", lambda *args, **kwargs: [])
 
 
 class FakeDatacenterClient:
@@ -321,6 +327,40 @@ def test_macro_m2_reads_the_yoy_column_not_a_positional_fallback():
     )
     m2 = [r for r in rows if r["indicator_id"] == "m2_yoy"]
     assert [r["value"] for r in m2] == [7.0]
+
+
+def test_macro_monthly_extracts_m1_cpi_ppi_and_lpr5y(monkeypatch):
+    _no_social_financing(monkeypatch)
+    batches = {
+        "RPTA_WEB_TREASURYYIELD": [
+            {"SOLAR_DATE": "2024-06-28", "EMM00166466": 2.25, "EMG00001310": 4.32}
+        ],
+        "RPT_IMP_INTRESTRATEN": [{"REPORT_DATE": "2024-06-28", "IR_RATE": 1.85}],
+        "RPTA_WEB_RATE": [{"TRADE_DATE": "2024-06-28", "LPR1Y": 3.45, "LPR5Y": 3.95}],
+        "RPT_ECONOMY_CURRENCY_SUPPLY": [
+            {
+                "REPORT_DATE": "2024-05-01 00:00:00",
+                "TIME": "2024年05月份",
+                "BASIC_CURRENCY_SAME": 7.0,
+                "CURRENCY_SAME": -4.2,
+            }
+        ],
+        "RPT_ECONOMY_CPI": [
+            {"REPORT_DATE": "2024-05-01 00:00:00", "TIME": "2024年05月份", "NATIONAL_SAME": 0.3}
+        ],
+        "RPT_ECONOMY_PPI": [
+            {"REPORT_DATE": "2024-05-01 00:00:00", "TIME": "2024年05月份", "BASE_SAME": -1.4}
+        ],
+    }
+    df = fetch_macro_indicators(date(2024, 6, 28), client=FakeDatacenterClient(batches))  # type: ignore[arg-type]
+    values = dict(zip(df["indicator_id"].to_list(), df["value"].to_list(), strict=True))
+    assert values["m1_yoy"] == -4.2
+    assert values["m2_yoy"] == 7.0
+    assert values["cpi_yoy"] == 0.3
+    assert values["ppi_yoy"] == -1.4
+    assert values["lpr_1y"] == 3.45
+    assert values["lpr_5y"] == 3.95
+    assert values["usbond_yield_10y"] == 4.32
 
 
 def test_macro_monthly_obs_dates_land_on_month_end_and_respect_trade_date():

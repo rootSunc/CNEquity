@@ -138,14 +138,14 @@
 | 项 | 值 |
 |------|-------|
 | 组 | `macro_risk`（日更） |
-| 主源 | eastmoney datacenter：`cnbond_yield_10y`（`RPTA_WEB_TREASURYYIELD`.`EMM00166466`）、`shibor_3m`（`RPT_IMP_INTRESTRATEN`，`INDICATOR_ID=203`）、`lpr_1y`（`RPTA_WEB_RATE`.`LPR1Y`）、`pmi_manufacturing`、`m2_yoy` |
+| 主源 | eastmoney datacenter：`cnbond_yield_10y`（`RPTA_WEB_TREASURYYIELD`.`EMM00166466`）、`shibor_3m`（`RPT_IMP_INTRESTRATEN`，`INDICATOR_ID=203`）、`lpr_1y`（`RPTA_WEB_RATE`.`LPR1Y`）、`pmi_manufacturing`、`m2_yoy`。另有 `usdcnh`：新浪外汇日 K `symbol=fx_susdcnh` 的收盘价（字段顺序 date,open,low,high,close，收盘是最后一个数），`source=sina`，单位是人民币元 / 美元 |
 | 补充源 | pboc：`social_financing`（社融增量） |
 | 主键 | (indicator_id, obs_date) |
-| 日更 | 三个利率逐日请求（`='{日期}'` 过滤），只走水位之后的交易日；两个日频利率另外回看最近 5 个交易日（一次范围查询）。运行当天的值还没发布时只记 `daily_series_pending` 提示、照常写入，次日回看补上；离开运行日仍缺的才是 `daily_series_gap` warning、挡住合并并重试。PMI、M2、社融每次都把整段历史读一遍 |
-| 回填 | `cne backfill macro_indicators --start 2016-01-01`：两个日频利率按窗口各发一次分页范围查询（`(COL>='…')(COL<='…')`），不再逐日请求；同时照旧做一次当天的日更抓取。默认起点 2016-01-01，`--end` 不超过当天 |
+| 日更 | 三个利率逐日请求（`='{日期}'` 过滤），只走水位之后的交易日；两个日频利率另外回看最近 5 个交易日（一次范围查询）。同一窗口再读一次新浪离岸人民币日 K。运行当天的利率还没发布时只记 `daily_series_pending` 提示、照常写入，次日回看补上；离开运行日仍缺的才是 `daily_series_gap` warning、挡住合并并重试。离岸人民币读失败只记来源单元 `sina:usdcnh`，不记 `daily_series_gap`，也不挡住国债和 Shibor，也不回退到 push2his。PMI、M2、社融每次都把整段历史读一遍 |
+| 回填 | `cne backfill macro_indicators --start 2016-01-01`：两个日频利率按窗口各发一次分页范围查询（`(COL>='…')(COL<='…')`），不再逐日请求；离岸人民币用新浪的一次日 K，再按窗口截取。同时照旧做一次当天的日更抓取。默认起点 2016-01-01，`--end` 不超过当天 |
 | 历史深度 | 10Y 国债与 Shibor 的历史起点不同；缺失交易日记录为 `daily_series_gap`，以实际覆盖报告为准。 |
 | 只留交易日 | 银行间市场在调休周末也开市，范围查询可能带回这些日子；回填按项目交易日历过滤，与日更的行密度一致 |
-| 已知限制 | `lpr_1y` 不走范围回填：`LPR1Y` 列 2013-10-25 至 2019-08 是旧的逐日贷款基础利率，此后才是改革后的月度 LPR，范围查询会把两种基准记在同一个指标下。它仍只在日更当天落盘 |
+| 已知限制 | `lpr_1y` 不走范围回填：`LPR1Y` 列 2013-10-25 至 2019-08 是旧的逐日贷款基础利率，此后才是改革后的月度 LPR，范围查询会把两种基准记在同一个指标下。它仍只在日更当天落盘。`usdcnh` 是离岸收盘，不是在岸中间价，也不是东财 push2his 的收盘。2026-10-31 测得新浪序列从 2014-11-07 起，当天收盘 6.65280，与东财同日 6.6533 相差约 5 个点；两条不拼接。新浪拒绝请求时这一列停更，利率照常写入。回填按交易日历丢掉非交易日，日更同样只落交易日 |
 
 #### futures_bars / option_bars / futures_contracts / option_contracts
 
