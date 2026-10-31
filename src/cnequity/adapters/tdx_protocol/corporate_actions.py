@@ -6,6 +6,7 @@ import logging
 import math
 from collections.abc import Callable
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 
 import polars as pl
 
@@ -67,13 +68,29 @@ _ACTION_TYPES = {
 _CATEGORY_DIVIDEND = 1
 _CATEGORY_UNIT_SPLIT = 11
 
+# xdxr amounts are float32. Widening them to float64 leaves a tail of at most
+# 4e-8 (0.42 arrives as 0.41999998688697815). Six decimal places sit more than
+# ten times that tail away, so half-up rounding recovers the published figure.
+_XDXR_PLACES = Decimal("0.000001")
+
+
+def _round_xdxr(value: float) -> float:
+    return float(Decimal(str(value)).quantize(_XDXR_PLACES, rounding=ROUND_HALF_UP))
+
+
+def _per_ten(amount: float) -> float:
+    """A rounded 每10股 amount, as the per-share figure the schema stores."""
+    return float(Decimal(str(amount)) / Decimal(10))
+
 
 def _num(value: object) -> float:
     try:
         parsed = float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-    return parsed if math.isfinite(parsed) else 0.0
+    if not math.isfinite(parsed):
+        return 0.0
+    return _round_xdxr(parsed)
 
 
 def _event_num(value: object) -> float:
@@ -86,7 +103,7 @@ def _event_num(value: object) -> float:
         raise ValueError(f"invalid corporate-action amount: {value!r}") from exc
     if not math.isfinite(parsed):
         raise ValueError(f"invalid corporate-action amount: {value!r}")
-    return parsed
+    return _round_xdxr(parsed)
 
 
 def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
@@ -152,7 +169,7 @@ def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
                     "symbol": symbol,
                     "ex_date": ex_date,
                     "action_type": _ACTION_TYPES["cash_dividend"],
-                    "cash_dividend": fenhong / 10.0,
+                    "cash_dividend": _per_ten(fenhong),
                     "bonus_ratio": 0.0,
                     "transfer_ratio": 0.0,
                     "allotment_ratio": None,
@@ -170,7 +187,7 @@ def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
                     # per-share contract: TDX songzhuangu is 每10股 (combined
                     # 送+转); divide by 10. All total goes to bonus_ratio —
                     # xdxr does not split 送 vs 转, but total mult is exact.
-                    "bonus_ratio": songzhuangu / 10.0,
+                    "bonus_ratio": _per_ten(songzhuangu),
                     "transfer_ratio": 0.0,
                     "allotment_ratio": None,
                     "allotment_price": None,
@@ -188,7 +205,7 @@ def _rows_from_xdxr(symbol: str, pdf: pl.DataFrame) -> list[dict]:
                     "transfer_ratio": 0.0,
                     # per-share contract: peigu is 每10股, divide by 10.
                     # peigujia is already a per-share price — leave as-is.
-                    "allotment_ratio": peigu / 10.0,
+                    "allotment_ratio": _per_ten(peigu),
                     "allotment_price": peigujia if peigujia > 0 else None,
                     "split_factor": None,
                 }

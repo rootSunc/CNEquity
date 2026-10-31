@@ -117,6 +117,8 @@ const DATASETS = {
   news_headlines: ["新闻标题", "News headlines"],
   flash_news_wire: ["快讯", "Flash news"],
   economic_calendar: ["财经日历", "Economic calendar"],
+  economic_events: ["财经事件", "Economic events"],
+  market_holidays: ["交易所休市", "Market holidays"],
   share_unlock_schedule: ["限售解禁", "Share unlocks"],
   regulatory_events: ["监管事件", "Regulatory events"],
   commodity_bars: ["商品主连", "Commodity bars"],

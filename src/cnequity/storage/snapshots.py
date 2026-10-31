@@ -2407,7 +2407,9 @@ class SnapshotStore:
         package_relative = Path("data") / lake_relative
         destination = temporary / package_relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        _reject_link_or_non_regular(source, hardlink=True)
+        # Generations share unchanged partitions by hard link. Copy the bytes
+        # so the package file does not share that inode.
+        _reject_link_or_non_regular(source)
         shutil.copy2(source, destination)
         return package_relative.as_posix()
 

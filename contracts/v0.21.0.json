@@ -1364,7 +1364,7 @@
         "reconciliation_lookback_mode": "calendar",
         "required": false,
         "row_grain": null,
-        "schema_version": 1,
+        "schema_version": 2,
         "source_retired_date": null,
         "tier": "L7",
         "unit_contract": {
@@ -1414,7 +1414,7 @@
         "unit": "string",
         "withdrawn": "bool"
       },
-      "schema_version": 1,
+      "schema_version": 2,
       "source_retired_date": null,
       "tier": "L7",
       "unit_contract": {
@@ -7491,7 +7491,7 @@
       "watermark": true
     }
   },
-  "fingerprint": "ce9c59e289090bfb10bc6d58b28eaf7164b057352cdbdd0e422bdd703bf425f4",
+  "fingerprint": "0f73963fd1780fb78d7df8f788c095d645fb11610303deb149f6aff61a68b54b",
   "format": "cnequity.dataset-contract",
   "pit_contract": {
     "modes": [

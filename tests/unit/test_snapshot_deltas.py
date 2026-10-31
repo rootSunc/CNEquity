@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import tarfile
 from datetime import date
@@ -59,6 +60,59 @@ def _file_hashes(root: Path) -> dict[str, str]:
         for path in root.rglob("*")
         if path.is_file() and Path("meta") / "locks" not in path.relative_to(root).parents
     }
+
+
+def test_delta_copies_hard_linked_revision_bytes(tmp_path):
+    baseline = tmp_path / "baseline"
+    target = tmp_path / "target"
+    day = date(2026, 8, 28)
+    _write_bar(baseline, day, 10.0)
+    _state(baseline, day)
+    _write_bar(target, day, 10.0)
+    _state(target, day)
+    source = next((target / "curated" / "daily_bars").rglob("*.parquet"))
+    generation = (
+        target
+        / "meta"
+        / "revisions"
+        / "data"
+        / "daily_bars"
+        / "gen-1"
+        / f"trade_date={day.isoformat()}"
+    )
+    generation.mkdir(parents=True)
+    linked = generation / "part-merged.parquet"
+    os.link(source, linked)
+    pointer = target / "meta" / "revisions" / "daily_bars"
+    pointer.mkdir(parents=True)
+    (pointer / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dataset": "daily_bars",
+                "revision": 1,
+                "revision_id": "gen-1",
+                "generation_path": "revisions/data/daily_bars/gen-1",
+            }
+        )
+    )
+
+    store = SnapshotStore(Config(data_root=target), tmp_path / "packages")
+    manifest_path = store.create_delta("linked", baseline, target, ["daily_bars"])
+    copied = (
+        manifest_path.parent
+        / "data"
+        / "meta"
+        / "revisions"
+        / "data"
+        / "daily_bars"
+        / "gen-1"
+        / f"trade_date={day.isoformat()}"
+        / "part-merged.parquet"
+    )
+    assert copied.is_file()
+    assert copied.stat().st_nlink == 1
+    assert copied.read_bytes() == linked.read_bytes()
 
 
 def test_delta_add_replace_delete_and_apply_is_idempotent(tmp_path):

@@ -2,10 +2,11 @@
 
 Relative links are pinned to the tag so they keep working from the release page.
 
-A section heading may carry a headline after the date,
-``## [0.20.0] — 2026-10-25 · 批量时点资料``; it becomes the release title
-(``--title``) and the first line of the notes, so the release page says what
-changed before the install command.
+From 0.21.0 on, the heading must carry one sentence after the date,
+``## [0.21.0] — 2026-10-31 · 一句话``. That sentence is the most important
+change in the version. It becomes the release title (``--title``) and the
+first line of the notes. A release at or after 0.21.0 without it is an error.
+Earlier headings may omit it.
 """
 
 from __future__ import annotations
@@ -35,6 +36,17 @@ def headline(changelog: str, version: str) -> str:
 def title(changelog: str, version: str) -> str:
     text = headline(changelog, version)
     return f"{version} · {text}" if text else version
+
+
+def require_headline(changelog: str, version: str) -> str:
+    """The one-sentence heading summary required for every release since 0.21.0."""
+    text = headline(changelog, version)
+    if tuple(int(part) for part in version.split(".")) >= (0, 21, 0) and not text:
+        raise ValueError(
+            f"CHANGELOG.md heading for {version} needs one sentence after the date, "
+            "for example: ## [0.21.0] — 2026-10-31 · 一句话总结这个版本最核心的变动"
+        )
+    return text
 
 
 def changelog_section(changelog: str, version: str) -> str:
@@ -73,6 +85,7 @@ def main() -> int:
     try:
         changelog = args.changelog.read_text(encoding="utf-8")
         version = args.tag[1:]
+        require_headline(changelog, version)
         sys.stdout.write(title(changelog, version) if args.title else render(changelog, version))
     except ValueError as exc:
         print(exc, file=sys.stderr)

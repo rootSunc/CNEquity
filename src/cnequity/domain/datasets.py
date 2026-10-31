@@ -1469,6 +1469,10 @@ _SPECS = [
     # replaced it on 2026-10-29.
     DatasetSpec(
         "economic_calendar",
+        # v2: backfill_source makes history_mode snapshot_with_backfill and
+        # pit_quality not_applicable. indicator_code and withdrawn, added in
+        # the same version, are nullable.
+        schema_version=2,
         primary_source="jin10",
         # The same per-day endpoint answers past days back to 2008, so
         # `cne backfill economic_calendar` walks it month by month.
@@ -1482,8 +1486,9 @@ _SPECS = [
         # must not advance a freshness watermark beyond the run day.
         watermark=False,
         required=False,
-        # A snapshot cannot be backfilled, so an empty root before the first
-        # run is expected, as for the other best-effort snapshots.
+        # An empty root before the first run is expected, as for the other
+        # best-effort snapshots. Past days are filled by backfill, not by
+        # the daily rolling window.
         empty_severity="info",
     ),
     # Same Jin10 calendar host: scheduled events (central banks, speeches,

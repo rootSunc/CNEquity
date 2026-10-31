@@ -607,7 +607,7 @@ Daily update: `macro_risk` group. History: `cne backfill commodity_bars [--start
 > **Unit contract (per share).** All ratios and amounts are relative to "1 share held",
 > not the "per 10 shares" basis common in TDX (`xdxr`) and EastMoney. Before staging, the adapter
 > divides source-side "per 10 shares" values by 10 (e.g. "CNY 8.5 per 10 shares" → 0.85, "8 bonus shares per 10" → 0.8,
-> "4 capitalization shares per 10" → 0.4, "3 rights shares per 10" → 0.3). Downstream accounting works on actual holdings with no further division by 10:
+> "4 capitalization shares per 10" → 0.4, "3 rights shares per 10" → 0.3). TDX sends these amounts as single-precision floats, so they are half-up rounded to 6 decimal places before that division (the tail is at most 4e-8); the rights price and the unit-split factor are rounded the same way and are not divided by 10. Downstream accounting works on actual holdings with no further division by 10:
 > `shares_after = shares × (1 + bonus_ratio + transfer_ratio) × split_factor`,
 > `cash = shares × cash_dividend`. `allotment_price` is a per-share price, not a ratio, and is not divided by 10.
 > `cash_dividend` is the declared per-share amount. When a company holds repurchased shares, the exchange computes the ex-rights reference price from a virtual per-share amount spread over total shares, which is smaller, so the adjustment factor steps slightly less (up to about 0.5% observed).

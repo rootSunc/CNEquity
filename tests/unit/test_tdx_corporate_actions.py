@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import struct
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pandas as pd
@@ -71,6 +73,64 @@ def test_rows_from_xdxr_cash_bonus_allotment_and_skips():
     assert by_type["allotment"]["allotment_ratio"] == 0.3
     assert by_type["allotment"]["allotment_price"] == 8.5
     assert all(r["ex_date"] == date(2024, 6, 28) for r in rows)
+
+
+def _float32(value: float) -> float:
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def test_rows_from_xdxr_rounds_float32_tails_to_six_decimals():
+    """0.42 survives the wire as 0.41999998688697815; half-up restores it."""
+    noisy = _float32(0.42)
+    assert noisy != 0.42
+    pdf = pl.DataFrame(
+        [
+            {
+                "year": 2024,
+                "month": 6,
+                "day": 28,
+                "category": 1,
+                "fenhong": noisy,
+                "songzhuangu": _float32(3.348),
+                "peigu": 0.42000000476,
+                "peigujia": _float32(8.5) + 3e-8,
+                "suogu": None,
+            },
+            {
+                "year": 2026,
+                "month": 7,
+                "day": 20,
+                "category": 11,
+                "fenhong": None,
+                "songzhuangu": None,
+                "peigu": None,
+                "peigujia": None,
+                "suogu": _float32(1.052),
+            },
+            # A tail within 4e-8 of 1 is "no split", not a new ratio.
+            {
+                "year": 2026,
+                "month": 7,
+                "day": 21,
+                "category": 11,
+                "fenhong": None,
+                "songzhuangu": None,
+                "peigu": None,
+                "peigujia": None,
+                "suogu": 1.0 + 4e-8,
+            },
+        ]
+    )
+    rows = ca._rows_from_xdxr("600519.SH", pdf)
+    by_type = {row["action_type"]: row for row in rows}
+    assert by_type["cash_dividend"]["cash_dividend"] == float(Decimal("0.042"))
+    assert by_type["bonus"]["bonus_ratio"] == float(Decimal("0.3348"))
+    assert by_type["allotment"]["allotment_ratio"] == float(Decimal("0.042"))
+    assert by_type["allotment"]["allotment_price"] == 8.5
+    assert by_type["unit_split"]["split_factor"] == 1.052
+    assert len(rows) == 4
+    # 四舍五入, not banker's rounding: the 6th decimal digit 6 is even.
+    assert ca._round_xdxr(1.2345665) == 1.234567
 
 
 def test_rows_from_xdxr_rejects_nonfinite_numeric_fields():

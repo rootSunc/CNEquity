@@ -44,6 +44,15 @@ def test_current_release_has_a_changelog_section():
     assert NOTES["changelog_section"]((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"), version)
 
 
+def test_release_since_0_21_requires_one_sentence_in_the_heading():
+    bare = "## [0.21.0] — 2026-10-31\n\n- 一项改动。\n"
+    with pytest.raises(ValueError, match="one sentence"):
+        NOTES["require_headline"](bare, "0.21.0")
+    titled = bare.replace("2026-10-31", "2026-10-31 · 核心数据集改由交易所更新")
+    assert NOTES["require_headline"](titled, "0.21.0") == "核心数据集改由交易所更新"
+    assert NOTES["require_headline"](CHANGELOG, "0.1.0") == ""
+
+
 def test_heading_headline_becomes_title_and_lead():
     changelog = CHANGELOG.replace("## [0.2.0] — 2026-01-02", "## [0.2.0] — 2026-01-02 · 新功能")
     assert NOTES["title"](changelog, "0.2.0") == "0.2.0 · 新功能"
