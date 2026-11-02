@@ -639,3 +639,23 @@ def test_slow_pool_that_heartbeats_is_not_killed(worker_config, monkeypatch, cap
     assert "no worker reported progress" not in caplog.text
     assert result["rows_written"] == 2  # the workers' own rows, not a retry's
     assert [b["status"] for b in batches] == ["success", "success"]
+
+
+def test_pool_context_falls_back_to_spawn_without_a_forkserver(monkeypatch):
+    """Windows CI: tests patch sys.platform to linux, which makes
+    get_all_start_methods() list forkserver on an interpreter that cannot build it."""
+    import multiprocessing
+
+    from cnequity.orchestrator.worker_pool import _process_pool_context
+
+    real = multiprocessing.get_context
+
+    def without_forkserver(method=None):
+        if method == "forkserver":
+            raise ValueError("cannot find context for 'forkserver'")
+        return real(method)
+
+    monkeypatch.setattr(multiprocessing, "get_context", without_forkserver)
+    monkeypatch.setattr("sys.platform", "linux")
+
+    assert _process_pool_context().get_start_method() == "spawn"

@@ -83,8 +83,13 @@ def _process_pool_context() -> multiprocessing.context.BaseContext:
     3.13. Workers already rebuild their config from ``config_path``, so a fresh
     interpreter loses nothing.
     """
-    method = "forkserver" if "forkserver" in multiprocessing.get_all_start_methods() else "spawn"
-    return multiprocessing.get_context(method)
+    # Ask for the context rather than trusting ``get_all_start_methods()``: that
+    # list follows ``sys.platform`` at call time, while the contexts a Windows
+    # interpreter can build were fixed at import — and has no forkserver.
+    try:
+        return multiprocessing.get_context("forkserver")
+    except ValueError:
+        return multiprocessing.get_context("spawn")
 
 
 class _PoolStalled(BrokenProcessPool):
