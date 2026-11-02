@@ -173,6 +173,101 @@ def test_heartbeat_names_the_step_the_silence_belongs_to(caplog):
     assert any("still working: daily_bars" in r.message for r in caplog.records)
 
 
+def test_heartbeat_adds_what_a_step_says_it_is_waiting_on(caplog):
+    """#56 showed only "still working: daily_bars" for 23 minutes."""
+    from cnequity import progress
+
+    def broken():
+        raise RuntimeError("manifest locked")
+
+    with caplog.at_level(logging.INFO, logger="cnequity.progress"):
+        with progress.step_scope("daily_bars"):
+            with progress.detail_scope(lambda: "batch-17 quiet for 9m"):
+                with progress.detail_scope(broken), progress.detail_scope(lambda: None):
+                    progress._beat_once(interval_seconds=0.0)
+            progress._beat_once(interval_seconds=0.0)
+    messages = [r.message for r in caplog.records]
+    assert messages.count("batch-17 quiet for 9m") == 1  # gone once its scope ends
+    assert sum("still working" in m for m in messages) == 2
+
+
+def test_daily_bars_heartbeat_names_the_quietest_batch(config):
+    from cnequity.orchestrator.manifest import Manifest
+    from cnequity.orchestrator.worker_pool import _describe_in_flight
+    from cnequity.storage.layout import init_data_layout
+
+    init_data_layout(config)
+    manifest = Manifest(config.manifest_path)
+    run_id = manifest.start_run("test")
+    describe = _describe_in_flight(manifest, run_id, "daily_bars")
+    assert describe() is None  # nothing in flight yet
+    for batch_id, symbols in [
+        ("batch-0", ["600519.SH"]),
+        ("batch-1", ["000001.SZ", "000002.SZ", "000004.SZ", "000005.SZ"]),
+    ]:
+        manifest.start_batch(
+            run_id,
+            batch_id,
+            task_id="daily_bars",
+            dataset="daily_bars",
+            symbols=symbols,
+            window_start="2024-06-27",
+            window_end="2024-06-28",
+        )
+    with manifest._connect() as conn:
+        conn.execute(
+            "UPDATE ingestion_batches SET heartbeat_at = ? WHERE batch_id = 'batch-1'",
+            ("2000-01-01T00:00:00+00:00",),
+        )
+    line = str(describe())
+    assert "2 batch(es) in flight" in line
+    assert "batch-1" in line and "batch-0" not in line
+    assert "000001.SZ, 000002.SZ, 000004.SZ …" in line
+
+
+@pytest.mark.skipif(not hasattr(__import__("signal"), "SIGUSR1"), reason="no SIGUSR1")
+def test_sigusr1_dumps_the_stack_of_a_blocked_run():
+    """Where a stuck run is stuck, without installing py-spy first (#56)."""
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    code = (
+        "import sys, threading\n"
+        "from cnequity.progress import enable_stack_dumps\n"
+        "assert enable_stack_dumps()\n"
+        "def stuck_in_this_frame():\n"
+        "    print('ready', flush=True)\n"
+        "    threading.Event().wait(30)\n"
+        "stuck_in_this_frame()\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    try:
+        assert proc.stdout.readline().strip() == "ready"
+        time.sleep(0.2)
+        proc.send_signal(signal.SIGUSR1)
+        time.sleep(0.5)
+    finally:
+        proc.kill()
+    _, stderr = proc.communicate(timeout=10)
+    assert "stuck_in_this_frame" in stderr
+
+
+def test_heartbeat_says_how_to_dump_stacks_once(caplog, monkeypatch):
+    from cnequity import progress
+
+    monkeypatch.setattr(progress, "_stack_dumps", True)
+    monkeypatch.setattr(progress, "_hinted", False)
+    with caplog.at_level(logging.INFO, logger="cnequity.progress"):
+        with progress.step_scope("daily_bars"):
+            progress._beat_once(interval_seconds=0.0)
+            progress._beat_once(interval_seconds=0.0)
+    assert sum("kill -USR1" in r.message for r in caplog.records) == 1
+
+
 def test_heartbeat_stays_quiet_when_nothing_is_running(caplog):
     """An idle process has nothing to reassure anyone about."""
     from cnequity import progress

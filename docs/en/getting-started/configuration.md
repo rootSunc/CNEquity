@@ -71,6 +71,7 @@ Derived paths (computed automatically in code, no config needed):
 | `max_retries` | 3 | Batch-level retry count |
 | `retry_backoff_seconds` | 5 | Retry backoff |
 | `batch_stale_seconds` | 3600 | A running batch with no heartbeat times out → stale → failed; the compact gate skips unfinished datasets. **Crashed runs are not bound by this window**: a run holds a lock throughout, and once the process dies it is reclaimed within 60 seconds |
+| `batch_stall_seconds` | 600 | Linux process pool for `daily_bars` only: when no batch finishes and no worker heartbeats for this long, the workers are killed and the unfinished batches are retried in-process, with the stuck batch ids in the log. Workers heartbeat before every symbol and each symbol request is capped at 30 seconds, so a healthy sweep never comes close. `0` turns it off |
 
 ## `[tdx_protocol]`
 

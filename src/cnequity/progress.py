@@ -14,8 +14,12 @@ about.
 
 from __future__ import annotations
 
+import faulthandler
 import itertools
 import logging
+import os
+import signal
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -163,6 +167,54 @@ def step_scope(name: str) -> Iterator[None]:
             _active.pop(token, None)
 
 
+_details: dict[int, Callable[[], object]] = {}
+_stack_dumps = False
+_hinted = False
+
+
+def enable_stack_dumps() -> bool:
+    """Make ``kill -USR1 <pid>`` write every thread's stack to stderr.
+
+    #56 asked how to see where a quiet run was stuck, and the only answer was
+    to install py-spy on the server first. The interpreter can already do it:
+    ``faulthandler`` dumps from a C signal handler, so it answers even while
+    the main thread is blocked. Pool workers call this too, so a worker's own
+    stack is one ``kill`` away. Off on Windows (no SIGUSR1) and when stderr has
+    no file descriptor. Returns whether dumps are on.
+    """
+    global _stack_dumps
+    sig = getattr(signal, "SIGUSR1", None)
+    if sig is None:
+        return False
+    try:
+        sys.stderr.fileno()
+    except (AttributeError, OSError, ValueError):
+        return False
+    faulthandler.register(sig, file=sys.stderr, all_threads=True, chain=False)
+    _stack_dumps = True
+    return True
+
+
+@contextmanager
+def detail_scope(describe: Callable[[], object]) -> Iterator[None]:
+    """Add *describe*'s answer to every heartbeat while the block runs.
+
+    A step name says *that* something is running, not *where*: #56 sat at
+    "still working: daily_bars" for 23 minutes and nobody could tell which of
+    105 batches was holding it. A step that knows its own in-flight work
+    registers a callable here; it runs on the heartbeat thread, so it must be
+    cheap and thread-safe, and returning None (or raising) prints nothing.
+    """
+    token = next(_tokens)
+    with _lock:
+        _details[token] = describe
+    try:
+        yield
+    finally:
+        with _lock:
+            _details.pop(token, None)
+
+
 def running_steps() -> list[tuple[str, float]]:
     """Active steps as (name, seconds running), oldest first."""
     now = time.monotonic()
@@ -241,6 +293,22 @@ def _beat_once(interval_seconds: float) -> bool:
         ", ".join(f"{name} {hms(elapsed)}" for name, elapsed in active),
         hms(silent_for),
     )
+    global _hinted
+    if _stack_dumps and not _hinted:
+        _hinted = True
+        logger.info(
+            N_("To see where it is, run `kill -USR1 %d`: every thread's stack goes to stderr."),
+            os.getpid(),
+        )
+    with _lock:
+        describers = list(_details.values())
+    for describe in describers:
+        try:
+            detail = describe()
+        except Exception:  # noqa: BLE001 — a heartbeat must never take the run down
+            continue
+        if detail:
+            logger.info("%s", detail)
     return True
 
 

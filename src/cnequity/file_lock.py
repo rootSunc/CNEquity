@@ -251,8 +251,13 @@ def exclusive_lock(
                 except LockUnavailable:
                     if timeout is not None and grace >= timeout:
                         raise
+                    # flock conflicts between file handles, not processes:
+                    # another thread of this same run queues here too (the
+                    # derive's lanes on baostock's one connection), and
+                    # blaming "another process" sent people hunting for one.
                     logger.info(
-                        "waiting for %s — another process holds it (up to %s)",
+                        "waiting for %s — held by another process or another thread of this run "
+                        "(up to %s)",
                         path.name,
                         _hms(timeout) if timeout is not None else "indefinitely",
                     )

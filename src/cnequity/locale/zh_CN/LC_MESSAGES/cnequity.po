@@ -868,6 +868,11 @@ msgstr "%s 无公告返回"
 msgid "%s returned no quotes"
 msgstr "%s 无行情返回"
 
+#: cnequity/orchestrator/worker_pool.py
+#, python-format
+msgid "%s: %d batch(es) in flight; %s last reported progress %s ago (%s)"
+msgstr "%s：%d 个批次在运行；%s 已有 %s 没有报告进度（%s）"
+
 #: cnequity/diagnostics/source_health.py
 #, python-format
 msgid "%s: %d futures contracts%s"
@@ -907,6 +912,11 @@ msgstr "%s：已中断"
 #, python-format
 msgid "%s: latest %d daily bars"
 msgstr "%s 最近 %d 根日线"
+
+#: cnequity/orchestrator/worker_pool.py
+#, python-format
+msgid "%s: no batch finished and no worker reported progress for %s; killing the worker pool and retrying %d unfinished batch(es) in-process (stuck: %s). If this recurs, set [orchestrator] tdx_daily_backend = \"thread\"."
+msgstr "%s：已有 %s 没有批次完成，也没有 worker 报告进度；结束 worker 进程池，在当前进程内重跑 %d 个未完成的批次（卡住的批次：%s）。如果反复出现，在 [orchestrator] 里设置 tdx_daily_backend = \"thread\"。"
 
 #: cnequity/orchestrator/worker_pool.py
 #, python-format
@@ -6137,6 +6147,11 @@ msgstr "这个交易日已执行或不在当前运行窗口，没有重复取数
 #, python-brace-format
 msgid "This user cannot use the system scheduler ({backend})."
 msgstr "当前用户无法使用系统调度器（{backend}）。"
+
+#: cnequity/progress.py
+#, python-format
+msgid "To see where it is, run `kill -USR1 %d`: every thread's stack goes to stderr."
+msgstr "想知道它停在哪里，可以运行 `kill -USR1 %d`：所有线程的调用栈会写到 stderr。"
 
 #: cnequity/serve/ops/preflight.py
 #, python-brace-format

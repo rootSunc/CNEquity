@@ -302,23 +302,34 @@ def fetch_daily_rates_range(
             )
             for item in records:
                 obs = _parse_obs_date(item.get(date_col))
-                val = _finite_float(item.get(value_col))
-                if obs is None or val is None:
+                if obs is None:
                     continue
-                if not start <= obs <= end:
-                    raise EastMoneyDatacenterError(
-                        f"EastMoney datacenter {report} returned {date_col}={obs.isoformat()} "
-                        f"for the range {lo}..{hi}; the range filter was not applied"
+                targets = (
+                    (
+                        ("cnbond_yield_10y", "EMM00166466"),
+                        ("usbond_yield_10y", "EMG00001310"),
                     )
-                rows.append(
-                    {
-                        "indicator_id": indicator_id,
-                        "obs_date": obs,
-                        "value": val,
-                        "frequency": "daily",
-                        "source": "eastmoney",
-                    }
+                    if indicator_id == "cnbond_yield_10y"
+                    else ((indicator_id, value_col),)
                 )
+                for target_id, col_name in targets:
+                    val = _finite_float(item.get(col_name))
+                    if val is None:
+                        continue
+                    if not start <= obs <= end:
+                        raise EastMoneyDatacenterError(
+                            f"EastMoney datacenter {report} returned {date_col}={obs.isoformat()} "
+                            f"for the range {lo}..{hi}; the range filter was not applied"
+                        )
+                    rows.append(
+                        {
+                            "indicator_id": target_id,
+                            "obs_date": obs,
+                            "value": val,
+                            "frequency": "daily",
+                            "source": "eastmoney",
+                        }
+                    )
         try:
             rows.extend(fetch_usdcnh_closes(start, end, config=config))
         except Exception:

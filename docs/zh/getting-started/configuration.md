@@ -71,6 +71,7 @@ enabled = false
 | `max_retries` | 3 | batch 级重试次数 |
 | `retry_backoff_seconds` | 5 | 重试退避 |
 | `batch_stale_seconds` | 3600 | running batch 无心跳超时 → stale → failed；compact 门禁会跳过未完成数据集。**崩溃的 run 不受这个窗口约束**：run 全程持锁，进程一死 60 秒内即被回收 |
+| `batch_stall_seconds` | 600 | 仅用于 Linux 上 `daily_bars` 的进程池：这么久既没有批次完成、也没有 worker 心跳，就结束 worker，在当前进程内重跑未完成的批次，并在日志里写出卡住的批次号。worker 每个代码前都会心跳，单个代码的请求最长 30 秒，正常运行远到不了这个时长。设为 `0` 关闭 |
 
 ## `[tdx_protocol]`
 

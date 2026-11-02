@@ -363,3 +363,56 @@ def test_sdk_exception_handler_cannot_swallow_query_deadline():
 
     with pytest.raises(TimeoutError, match="exceeded"):
         sess._fetch_with_deadline(vendor, 0.01, lambda: None)
+
+
+def test_concurrent_sweeps_leave_the_process_socket_default_alone():
+    """Saving and restoring the process-wide default raced across threads.
+
+    Four sweeps at once left the 30-second default behind in most rounds, and
+    every socket the run opened afterwards inherited it.
+    """
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+
+    class Session:
+        def login(self):
+            return type("R", (), {"error_code": "0", "error_msg": ""})()
+
+        def logout(self):
+            return None
+
+    def sweep(index):
+        return fetch_per_symbol(
+            [f"6005{index:02d}.SH"],
+            date(2026, 1, 1),
+            date(2026, 1, 2),
+            lambda *_: [{"symbol": "x"}],
+            bs=Session(),
+            sleep=lambda _: None,
+        )
+
+    before = socket.getdefaulttimeout()
+    for _ in range(50):
+        with ThreadPoolExecutor(4) as pool:
+            assert all(rows for rows, _failed in pool.map(sweep, range(4)))
+        assert socket.getdefaulttimeout() == before
+
+
+def test_sockets_baostock_opens_still_time_out():
+    """The timeout moved from the process default onto baostock's own sockets."""
+    import socket
+
+    import baostock.util.socketutil as socketutil
+
+    from cnequity.adapters.baostock import _session as sess
+
+    sess._install_socket_timeout()
+    sess._install_socket_timeout()  # idempotent: one wrapper, not a stack
+    assert isinstance(socketutil.socket, sess._TimedSocketModule)
+    assert socketutil.socket.AF_INET == socket.AF_INET
+    sock = socketutil.socket.socket(socketutil.socket.AF_INET, socketutil.socket.SOCK_STREAM)
+    try:
+        assert sock.gettimeout() == sess._SOCKET_TIMEOUT_SECONDS
+    finally:
+        sock.close()
+    assert socket.getdefaulttimeout() is None

@@ -104,6 +104,7 @@ class Config:
     max_retries: int = 3
     retry_backoff_seconds: int = 5
     batch_stale_seconds: int = 3600
+    batch_stall_seconds: int = 600
     tdx_enabled: bool = True
     tdx_min_interval_ms: int = 100
     tdx_lock_timeout_sec: float = 15.0
@@ -1149,6 +1150,7 @@ def load_config(path: str | Path) -> Config:
         max_retries=int(orch.get("max_retries", 3)),
         retry_backoff_seconds=int(orch.get("retry_backoff_seconds", 5)),
         batch_stale_seconds=int(orch.get("batch_stale_seconds", 3600)),
+        batch_stall_seconds=int(orch.get("batch_stall_seconds", 600)),
         tdx_enabled=bool(tdx.get("enabled", True)),
         tdx_min_interval_ms=int(tdx.get("min_interval_ms", 100)),
         tdx_lock_timeout_sec=float(tdx.get("lock_timeout_sec", 15.0)),
@@ -1407,6 +1409,8 @@ def validate_config(cfg: Config) -> list[str]:
         )
     if cfg.batch_size < 1:
         errors.append("orchestrator.batch_size must be >= 1")
+    if cfg.batch_stall_seconds < 0:
+        errors.append("orchestrator.batch_stall_seconds must be >= 0")
     if not 0 <= cfg.deep_reconciliation_dow <= 7:
         errors.append("[incremental].deep_reconciliation_dow must be 0-7 (0 disables tiering)")
     if cfg.negative_evidence_ttl_days < 0:

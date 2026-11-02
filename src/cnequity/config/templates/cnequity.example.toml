@@ -26,6 +26,7 @@ batch_size = 100
 max_retries = 3
 retry_backoff_seconds = 5
 batch_stale_seconds = 3600  # running batches without heartbeat for this long → stale (compact gate) / failed (retry)
+batch_stall_seconds = 600   # Linux process pool: no batch done and no heartbeat this long → kill workers, retry in-process (0 = off)
 
 [incremental]
 # TTL for symbol/window-level source-empty evidence.  Set to 0 to retry every

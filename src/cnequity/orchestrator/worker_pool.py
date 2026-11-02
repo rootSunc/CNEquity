@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
+import multiprocessing
+import multiprocessing.context
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from concurrent.futures.process import BrokenProcessPool
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +22,7 @@ from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.i18n import N_, Message
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.outcomes import SourcePayloadError, error_kind, step_outcome
+from cnequity.progress import detail_scope, enable_stack_dumps
 from cnequity.progress import hms as _hms
 from cnequity.steps.common import BACKFILL_START
 from cnequity.storage import StagingWriter
@@ -63,6 +69,97 @@ def _window_backfill(config: Config, start: date) -> bool:
     the date test for callers that reach here without the flag set.
     """
     return bool(getattr(config, "_backfill", False)) or start == BACKFILL_START
+
+
+def _process_pool_context() -> multiprocessing.context.BaseContext:
+    """A start method that never forks the orchestrator itself.
+
+    By the time a sweep starts, the parent has already run polars (the tip
+    snapshot, earlier steps), so its rayon thread pool exists. ``fork`` copies
+    that pool's state but none of its threads, and the child's first parallel
+    polars call then waits forever: the workers stay alive, no
+    ``BrokenProcessPool`` fires, and the run sits at "still working" with no
+    batch ever landing (#56). ``fork`` is the Linux default through Python
+    3.13. Workers already rebuild their config from ``config_path``, so a fresh
+    interpreter loses nothing.
+    """
+    method = "forkserver" if "forkserver" in multiprocessing.get_all_start_methods() else "spawn"
+    return multiprocessing.get_context(method)
+
+
+class _PoolStalled(BrokenProcessPool):
+    """The pool's workers stopped making progress and were killed."""
+
+
+def _kill_pool_workers(pool) -> None:
+    """Stop every worker now; the executor then reports itself broken."""
+    kill = getattr(pool, "kill_workers", None)  # Python 3.14+
+    if callable(kill):
+        kill()
+        return
+    for proc in list((getattr(pool, "_processes", None) or {}).values()):
+        with contextlib.suppress(Exception):
+            proc.kill()
+
+
+def _completed_unless_stalled(
+    pool,
+    futures: dict,
+    manifest: Manifest,
+    run_id: str,
+    dataset: str,
+    stall_seconds: float,
+):
+    """Yield futures as they finish, and break the pool once it stops moving.
+
+    A worker that hangs without dying never raises ``BrokenProcessPool``, so a
+    plain ``as_completed`` waits for it forever — #56 sat at "still working"
+    for 23 minutes with no batch landing. Progress is a finished future or a
+    batch heartbeat that moved; workers heartbeat before every symbol, and a
+    symbol request is bounded at 30 seconds, so a quiet spell of
+    ``stall_seconds`` means no worker is getting anywhere. The pool is then
+    killed and ``_PoolStalled`` raised, which the caller treats like any broken
+    pool: what has not finished is retried in-process.
+    """
+    if stall_seconds <= 0:
+        yield from as_completed(futures)
+        return
+    poll = min(30.0, max(0.05, stall_seconds / 4))
+    remaining = dict.fromkeys(futures)  # ordered: submission order breaks ties
+    last_progress = time.monotonic()
+    last_beat = None
+    while remaining:
+        try:
+            for fut in as_completed(list(remaining), timeout=poll):
+                remaining.pop(fut, None)
+                last_progress = time.monotonic()
+                yield fut
+        except FuturesTimeoutError:
+            pass
+        if not remaining:
+            return
+        in_flight = {futures[fut] for fut in remaining}
+        rows = [row for row in manifest.get_batches_for_run(run_id) if row["batch_id"] in in_flight]
+        beat = max((str(row["heartbeat_at"] or "") for row in rows), default="")
+        if beat != last_beat:
+            last_beat = beat
+            last_progress = time.monotonic()
+            continue
+        quiet = time.monotonic() - last_progress
+        if quiet < stall_seconds:
+            continue
+        running = sorted(row["batch_id"] for row in rows if row["status"] == "running")
+        logger.warning(
+            N_(
+                '%s: no batch finished and no worker reported progress for %s; killing the worker pool and retrying %d unfinished batch(es) in-process (stuck: %s). If this recurs, set [orchestrator] tdx_daily_backend = "thread".'
+            ),
+            dataset,
+            _hms(quiet),
+            len(remaining),
+            ", ".join(running[:5]) + (" …" if len(running) > 5 else "") if running else "-",
+        )
+        _kill_pool_workers(pool)
+        raise _PoolStalled(f"{dataset} worker pool stalled for {quiet:.0f}s")
 
 
 def _announce_drain(dataset: str, futures) -> None:
@@ -326,6 +423,46 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
         raise
 
 
+def _describe_in_flight(manifest: Manifest, run_id: str, dataset: str):
+    """Name the batch that has gone longest without a heartbeat, for the log.
+
+    Runs on the heartbeat thread; ``Manifest`` opens a connection per call.
+    """
+
+    def describe() -> Message | None:
+        rows = [
+            row
+            for row in manifest.get_batches_for_run(run_id)
+            if row["dataset"] == dataset and row["status"] == "running"
+        ]
+        if not rows:
+            return None
+        now = datetime.now(timezone.utc)
+
+        def quiet_for(row) -> float:
+            try:
+                stamp = datetime.fromisoformat(str(row["heartbeat_at"] or row["started_at"]))
+                return max(0.0, (now - stamp).total_seconds())
+            except (TypeError, ValueError):  # missing or naive stamp
+                return 0.0
+
+        oldest = max(rows, key=quiet_for)
+        try:
+            symbols = [str(symbol) for symbol in json.loads(oldest["symbols_json"] or "[]")]
+        except ValueError:
+            symbols = []
+        return Message(
+            N_("%s: %d batch(es) in flight; %s last reported progress %s ago (%s)"),
+            dataset,
+            len(rows),
+            oldest["batch_id"],
+            _hms(quiet_for(oldest)),
+            ", ".join(symbols[:3]) + (" …" if len(symbols) > 3 else "") if symbols else "-",
+        )
+
+    return describe
+
+
 def fetch_daily_bars_parallel(
     config: Config,
     symbols: list[str],
@@ -340,7 +477,26 @@ def fetch_daily_bars_parallel(
 
     Returns ``had_error`` / ``failed_symbols`` instead of raising so callers can
     route tip gaps through EastMoney clist (ADR-0005) before failing the step.
+    While it runs, each "still working" heartbeat also names the batch that has
+    been quiet longest, so a stuck sweep says where it is stuck.
     """
+    describe = _describe_in_flight(Manifest(config.manifest_path), run_id, dataset)
+    with detail_scope(describe):
+        return _fetch_daily_bars_parallel(
+            config, symbols, start, end, run_id, dataset, batch_specs=batch_specs
+        )
+
+
+def _fetch_daily_bars_parallel(
+    config: Config,
+    symbols: list[str],
+    start: date,
+    end: date,
+    run_id: str,
+    dataset: str,
+    *,
+    batch_specs: list[BatchSpec] | None,
+) -> dict[str, Any]:
     if batch_specs:
         batches = batch_specs
     elif not symbols:
@@ -816,11 +972,22 @@ def fetch_daily_bars_parallel(
     # retried serially instead of lost with it.
     try:
         futures: dict = {}
-        with ProcessPoolExecutor(max_workers=min(daily_workers, len(pending))) as pool:
+        with ProcessPoolExecutor(
+            max_workers=min(daily_workers, len(pending)),
+            mp_context=_process_pool_context(),
+            initializer=enable_stack_dumps,
+        ) as pool:
             try:
                 for batch in pending.values():
                     futures[pool.submit(_worker_fetch_batch, _task_for(batch))] = batch[0]
-                for fut in as_completed(futures):
+                for fut in _completed_unless_stalled(
+                    pool,
+                    futures,
+                    manifest,
+                    run_id,
+                    dataset,
+                    float(getattr(config, "batch_stall_seconds", 0) or 0),
+                ):
                     batch_id = futures[fut]
                     try:
                         # ``as_completed`` only yields futures that are already
@@ -858,17 +1025,19 @@ def fetch_daily_bars_parallel(
                 _announce_drain(dataset, futures)
                 pool.shutdown(wait=True, cancel_futures=True)
                 raise
-    except BrokenProcessPool:
-        # The pool died mid-run. Whatever is still pending never got a parent
-        # verdict — retry in-process. A child may already have finish_batch(success)
-        # before the OS killed the pool; re-running start_batch would demote that
-        # success via INSERT OR REPLACE. Trust the manifest when it already says
-        # success and skip the re-fetch.
-        logger.warning(
-            N_("%s: worker pool broke (likely OOM under load); retrying %d batch(es) serially"),
-            dataset,
-            len(pending),
-        )
+    except BrokenProcessPool as exc:
+        # The pool died mid-run, or was killed for stalling. Whatever is still
+        # pending never got a parent verdict — retry in-process. A child may
+        # already have finish_batch(success) before the pool went down;
+        # re-running start_batch would demote that success via INSERT OR
+        # REPLACE. Trust the manifest when it already says success and skip
+        # the re-fetch.
+        if not isinstance(exc, _PoolStalled):
+            logger.warning(
+                N_("%s: worker pool broke (likely OOM under load); retrying %d batch(es) serially"),
+                dataset,
+                len(pending),
+            )
         for batch in list(pending.values()):
             batch_id = batch[0]
             existing = manifest.get_batch(run_id, batch_id)

@@ -229,6 +229,9 @@ def _progress_logging(quiet: bool = False, *, take_over: bool = True) -> bool:
     )
     for noisy in ("httpx", "httpcore", "urllib3", "curl_cffi"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    from cnequity.progress import enable_stack_dumps
+
+    enable_stack_dumps()
     if not quiet:
         from cnequity.progress import start_heartbeat
 

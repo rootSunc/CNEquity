@@ -282,6 +282,42 @@ def to_baostock_symbol(symbol: str) -> str:
     return f"{prefix}.{info.code}"
 
 
+class _TimedSocketModule:
+    """What baostock sees as ``socket``: every socket it opens times out.
+
+    ``SocketUtil.connect`` opens its socket with no timeout, so a dead server
+    hangs ``login``. This used to be covered by ``socket.setdefaulttimeout``
+    around each sweep, saved and restored — but that default is process-wide,
+    and two sweeps on different threads (the engine runs a DAG level's steps
+    concurrently) restored each other's values in the wrong order. In 163 of
+    200 rounds of four concurrent sweeps the 30-second default outlived them,
+    applying to every socket the run opened afterwards; on macOS that broke
+    the ``forkserver`` handshake outright. Scoping the timeout to baostock's
+    own module needs no restore, so there is nothing to race.
+    """
+
+    def __init__(self, timeout: float) -> None:
+        self._timeout = timeout
+
+    def __getattr__(self, name: str):
+        return getattr(socket, name)
+
+    def socket(self, *args, **kwargs) -> socket.socket:
+        sock = socket.socket(*args, **kwargs)
+        sock.settimeout(self._timeout)
+        return sock
+
+
+def _install_socket_timeout(timeout: float = _SOCKET_TIMEOUT_SECONDS) -> None:
+    """Give sockets baostock opens a timeout, without touching anyone else's."""
+    try:
+        import baostock.util.socketutil as socketutil  # noqa: PLC0415 — optional dep, lazy
+    except ImportError:  # pragma: no cover — import_baostock reports this
+        return
+    if not isinstance(socketutil.socket, _TimedSocketModule):
+        socketutil.socket = _TimedSocketModule(timeout)
+
+
 def _ensure_socket_timeout(timeout: float = _SOCKET_TIMEOUT_SECONDS) -> None:
     """Pin timeout on baostock's live socket (setdefaulttimeout is not enough).
 
@@ -465,8 +501,7 @@ def fetch_per_symbol(
     if bs is None:
         bs = import_baostock()
 
-    prev_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(_SOCKET_TIMEOUT_SECONDS)
+    _install_socket_timeout()
     logged_in = False
     blacklisted = False
     rows: list[dict] = []
@@ -489,113 +524,110 @@ def fetch_per_symbol(
         blacklisted = True
         failed.extend(symbols[index:])
 
-    try:
-        with hold_baostock_connection(config):
-            try:
-                _login(bs, sleep=sleep, config=config)
-                logged_in = True
-                _ensure_socket_timeout()
-                for i, symbol in enumerate(symbols):
-                    _batch_rest(config, i, sleep=sleep)
-                    _pace_before_symbol(config, sleep=sleep)
-                    if i and _RELOGIN_EVERY and i % _RELOGIN_EVERY == 0:
-                        try:
-                            _relogin(bs, sleep=sleep, config=config)
-                            _ensure_socket_timeout()
-                        except SourceCoolingDown as exc:
-                            _keep_partial(i, exc)
-                            break
-                        except RuntimeError as exc:
-                            # Keep rows already collected so the caller can checkpoint;
-                            # remaining symbols stay on the resume set.
-                            logger.error(
-                                "%s mid-sweep login failed at %d/%d: %s; returning partial",
-                                label,
-                                i + 1,
-                                n_symbols,
-                                exc,
-                            )
-                            failed.extend(symbols[i:])
-                            break
-                    # Heartbeat every 10 symbols so multi-hour sweeps look alive on stdout.
-                    if i == 0 or (i + 1) % 10 == 0 or i + 1 == n_symbols:
-                        logger.info(
-                            "%s progress %d/%d symbol=%s ok_rows=%d failed=%d",
+    with hold_baostock_connection(config):
+        try:
+            _login(bs, sleep=sleep, config=config)
+            logged_in = True
+            _ensure_socket_timeout()
+            for i, symbol in enumerate(symbols):
+                _batch_rest(config, i, sleep=sleep)
+                _pace_before_symbol(config, sleep=sleep)
+                if i and _RELOGIN_EVERY and i % _RELOGIN_EVERY == 0:
+                    try:
+                        _relogin(bs, sleep=sleep, config=config)
+                        _ensure_socket_timeout()
+                    except SourceCoolingDown as exc:
+                        _keep_partial(i, exc)
+                        break
+                    except RuntimeError as exc:
+                        # Keep rows already collected so the caller can checkpoint;
+                        # remaining symbols stay on the resume set.
+                        logger.error(
+                            "%s mid-sweep login failed at %d/%d: %s; returning partial",
                             label,
                             i + 1,
                             n_symbols,
-                            symbol,
-                            len(rows),
-                            len(failed),
+                            exc,
                         )
-                    got: list[dict] | None = None
-                    abort_remaining = False
-                    for attempt in range(_MAX_RETRIES):
-                        try:
+                        failed.extend(symbols[i:])
+                        break
+                # Heartbeat every 10 symbols so multi-hour sweeps look alive on stdout.
+                if i == 0 or (i + 1) % 10 == 0 or i + 1 == n_symbols:
+                    logger.info(
+                        "%s progress %d/%d symbol=%s ok_rows=%d failed=%d",
+                        label,
+                        i + 1,
+                        n_symbols,
+                        symbol,
+                        len(rows),
+                        len(failed),
+                    )
+                got: list[dict] | None = None
+                abort_remaining = False
+                for attempt in range(_MAX_RETRIES):
+                    try:
 
-                            def invoke(symbol: str = symbol):
-                                if request_managed or config is None:
-                                    return fetch_one(bs, symbol, start, end)
-                                with _request_context(config):
-                                    return fetch_one(bs, symbol, start, end)
+                        def invoke(symbol: str = symbol):
+                            if request_managed or config is None:
+                                return fetch_one(bs, symbol, start, end)
+                            with _request_context(config):
+                                return fetch_one(bs, symbol, start, end)
 
-                            got = _fetch_with_deadline(
-                                invoke,
-                                deadline,
-                                on_deadline,
-                            )
-                        except Exception as exc:  # noqa: BLE001 — stalled socket / broken pipe
-                            if isinstance(exc, SourceCoolingDown):
-                                _keep_partial(i, exc)
-                                break
-                            if isinstance(exc, RawArchiveError):
-                                # A configured critical archive is a publish contract,
-                                # not a transient vendor query failure. Retrying and
-                                # converting it into a "failed symbol" would let a
-                                # captureless repair look like a legitimate empty.
-                                raise
-                            # A socket timeout, dropped connection, or watchdog-closed
-                            # socket raises here; treat it like a query error so the
-                            # symbol is retried on a fresh login.
-                            logger.warning("%s query error for %s: %s", label, symbol, exc)
-                            got = None
-                        if got is not None:
-                            break
-                        sleep(_BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS) - 1)])
-                        try:
-                            _relogin(bs, sleep=sleep, config=config)
-                            _ensure_socket_timeout()
-                        except SourceCoolingDown as exc:
+                        got = _fetch_with_deadline(
+                            invoke,
+                            deadline,
+                            on_deadline,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — stalled socket / broken pipe
+                        if isinstance(exc, SourceCoolingDown):
                             _keep_partial(i, exc)
                             break
-                        except RuntimeError as exc:
-                            logger.error(
-                                "%s login failed while retrying %s: %s; returning partial",
-                                label,
-                                symbol,
-                                exc,
-                            )
-                            got = None
-                            abort_remaining = True
-                            break
-                    if blacklisted:
+                        if isinstance(exc, RawArchiveError):
+                            # A configured critical archive is a publish contract,
+                            # not a transient vendor query failure. Retrying and
+                            # converting it into a "failed symbol" would let a
+                            # captureless repair look like a legitimate empty.
+                            raise
+                        # A socket timeout, dropped connection, or watchdog-closed
+                        # socket raises here; treat it like a query error so the
+                        # symbol is retried on a fresh login.
+                        logger.warning("%s query error for %s: %s", label, symbol, exc)
+                        got = None
+                    if got is not None:
                         break
-                    if got is None:
-                        logger.warning("%s failed for %s after retries", label, symbol)
-                        failed.append(symbol)
-                        if abort_remaining:
-                            failed.extend(symbols[i + 1 :])
-                            break
-                    else:
-                        rows.extend(got)
-            except SourceCoolingDown:
-                blacklisted = True
-                raise
-            finally:
-                if logged_in:
-                    _finish_session(bs, config=config, blacklisted=blacklisted)
-    finally:
-        socket.setdefaulttimeout(prev_timeout)
+                    sleep(_BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS) - 1)])
+                    try:
+                        _relogin(bs, sleep=sleep, config=config)
+                        _ensure_socket_timeout()
+                    except SourceCoolingDown as exc:
+                        _keep_partial(i, exc)
+                        break
+                    except RuntimeError as exc:
+                        logger.error(
+                            "%s login failed while retrying %s: %s; returning partial",
+                            label,
+                            symbol,
+                            exc,
+                        )
+                        got = None
+                        abort_remaining = True
+                        break
+                if blacklisted:
+                    break
+                if got is None:
+                    logger.warning("%s failed for %s after retries", label, symbol)
+                    failed.append(symbol)
+                    if abort_remaining:
+                        failed.extend(symbols[i + 1 :])
+                        break
+                else:
+                    rows.extend(got)
+        except SourceCoolingDown:
+            blacklisted = True
+            raise
+        finally:
+            if logged_in:
+                _finish_session(bs, config=config, blacklisted=blacklisted)
 
     # Callers that split a long sweep into checkpoint-sized batches need the
     # same cooldown that the in-process loop applies before symbol N+1. Keep

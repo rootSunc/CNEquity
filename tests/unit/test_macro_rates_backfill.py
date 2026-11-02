@@ -374,3 +374,24 @@ def test_range_fetch_keeps_the_offshore_yuan_close_and_ignores_a_bad_quote(monke
     monkeypatch.setattr(indicators, "fetch_usdcnh_closes", _broken)
     kept = fetch_daily_rates_range(date(2026, 10, 30), date(2026, 10, 30), client=client)  # type: ignore[arg-type]
     assert kept["indicator_id"].to_list() == ["cnbond_yield_10y"]
+
+
+def test_range_fetch_lands_the_us_10y_from_the_same_treasury_rows():
+    """The daily path already reads EMG00001310 beside the CN column; so does the range."""
+    client = RecordingDatacenterClient(
+        {
+            "RPTA_WEB_TREASURYYIELD": [
+                {"SOLAR_DATE": "2016-01-04 00:00:00", "EMM00166466": 2.82, "EMG00001310": 2.24},
+                # A US-only session: the CN column is null, the US yield is real.
+                {"SOLAR_DATE": "2016-01-18 00:00:00", "EMM00166466": None, "EMG00001310": 2.03},
+            ],
+        }
+    )
+
+    df = fetch_daily_rates_range(date(2016, 1, 1), date(2016, 1, 31), client=client)  # type: ignore[arg-type]
+
+    assert sorted(df.select("indicator_id", "obs_date", "value").rows()) == [
+        ("cnbond_yield_10y", date(2016, 1, 4), 2.82),
+        ("usbond_yield_10y", date(2016, 1, 4), 2.24),
+        ("usbond_yield_10y", date(2016, 1, 18), 2.03),
+    ]

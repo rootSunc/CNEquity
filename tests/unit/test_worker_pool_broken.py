@@ -9,6 +9,8 @@ serial retry of whatever never got a verdict.
 
 from __future__ import annotations
 
+import logging
+import time
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
 from datetime import date
@@ -70,7 +72,8 @@ def test_broken_pool_falls_back_to_serial(worker_config, monkeypatch):
         lambda *a, **k: _DeadPool(),
     )
     monkeypatch.setattr(
-        "cnequity.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
+        "cnequity.orchestrator.worker_pool.as_completed",
+        lambda futures, timeout=None: list(futures),
     )
 
     serial: list[str] = []
@@ -150,7 +153,7 @@ def test_process_pool_interrupt_cancels_queued_batches(worker_config, monkeypatc
     )
     monkeypatch.setattr(
         "cnequity.orchestrator.worker_pool.as_completed",
-        lambda futures: list(futures),
+        lambda futures, timeout=None: list(futures),
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -202,7 +205,8 @@ def test_interrupt_says_it_is_waiting_for_batches_in_flight(worker_config, monke
 
     monkeypatch.setattr("cnequity.orchestrator.worker_pool.ProcessPoolExecutor", _Pool)
     monkeypatch.setattr(
-        "cnequity.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
+        "cnequity.orchestrator.worker_pool.as_completed",
+        lambda futures, timeout=None: list(futures),
     )
     with caplog.at_level("WARNING"), pytest.raises(KeyboardInterrupt):
         fetch_daily_bars_parallel(
@@ -310,7 +314,8 @@ def test_broken_pool_skips_batches_already_success(worker_config, monkeypatch):
         lambda *a, **k: _DeadPool(),
     )
     monkeypatch.setattr(
-        "cnequity.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
+        "cnequity.orchestrator.worker_pool.as_completed",
+        lambda futures, timeout=None: list(futures),
     )
 
     fetched: list[str] = []
@@ -382,7 +387,8 @@ def test_completed_future_does_not_receive_fake_stale_timeout(worker_config, mon
         lambda *a, **k: _CompletedPool(),
     )
     monkeypatch.setattr(
-        "cnequity.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
+        "cnequity.orchestrator.worker_pool.as_completed",
+        lambda futures, timeout=None: list(futures),
     )
 
     result = fetch_daily_bars_parallel(
@@ -447,7 +453,8 @@ def test_process_pool_submits_only_pending_batches_and_sizes_pool_to_pending(
         lambda *args, **kwargs: _Pool(*args, **kwargs),
     )
     monkeypatch.setattr(
-        "cnequity.orchestrator.worker_pool.as_completed", lambda futures: list(futures)
+        "cnequity.orchestrator.worker_pool.as_completed",
+        lambda futures, timeout=None: list(futures),
     )
 
     result = fetch_daily_bars_parallel(
@@ -520,3 +527,115 @@ def test_macos_uses_independent_tdx_thread_budget(tmp_path, monkeypatch):
     assert result["had_error"] is False
     assert result["rows_written"] == 2
     assert {symbol for batch in calls for symbol in batch} == {"600519.SH", "000001.SZ"}
+
+
+def test_process_pool_never_forks_the_orchestrator(worker_config, monkeypatch):
+    """A forked worker inherits polars' thread pool without its threads and hangs (#56)."""
+    monkeypatch.setattr("sys.platform", "linux")
+    init_data_layout(worker_config)
+    run_id = Manifest(worker_config.manifest_path).start_run("test")
+    contexts: list[object] = []
+
+    class _CompletedPool:
+        def __init__(self, *a, mp_context=None, **k):
+            contexts.append(mp_context)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def submit(self, fn, task):
+            class _F:
+                def result(self, timeout=None):
+                    return {"rows_read": 1, "rows_written": 1}
+
+            return _F()
+
+    monkeypatch.setattr("cnequity.orchestrator.worker_pool.ProcessPoolExecutor", _CompletedPool)
+    monkeypatch.setattr(
+        "cnequity.orchestrator.worker_pool.as_completed",
+        lambda futures, timeout=None: list(futures),
+    )
+
+    fetch_daily_bars_parallel(
+        worker_config,
+        ["600519.SH", "000001.SZ"],
+        date(2024, 6, 27),
+        date(2024, 6, 27),
+        run_id,
+        "daily_bars",
+    )
+
+    assert len(contexts) == 1
+    assert contexts[0] is not None
+    assert contexts[0].get_start_method() in {"forkserver", "spawn"}
+
+
+def _hang_forever(task):
+    """A worker that never returns and never heartbeats, like #56's."""
+    time.sleep(3600)
+
+
+def _slow_but_alive(task):
+    """A worker slower than the stall window that keeps heartbeating."""
+    symbols, start, end, _, dataset, run_id, batch_id = task[:7]
+    manifest = Manifest(task[9])
+    manifest.start_batch(
+        run_id,
+        batch_id,
+        task_id=dataset,
+        dataset=dataset,
+        symbols=symbols,
+        window_start=start,
+        window_end=end,
+    )
+    for _ in range(12):
+        time.sleep(0.25)
+        manifest.touch_batch_heartbeat(run_id, batch_id)
+    manifest.finish_batch(run_id, batch_id, "success", rows_read=1, rows_written=1)
+    return {"rows_read": 1, "rows_written": 1, "batch_id": batch_id, "failed_symbols": []}
+
+
+def _real_process_pool(worker_config, monkeypatch, worker):
+    """Run the real process pool, with *worker* in place of the TDX fetch."""
+    worker_config.tdx_daily_executor = lambda: "process"
+    worker_config.batch_stall_seconds = 1
+    monkeypatch.setattr("cnequity.orchestrator.worker_pool._worker_fetch_batch", worker)
+    init_data_layout(worker_config)
+    manifest = Manifest(worker_config.manifest_path)
+    run_id = manifest.start_run("test")
+    started = time.monotonic()
+    result = fetch_daily_bars_parallel(
+        worker_config,
+        ["600519.SH", "000001.SZ"],
+        date(2024, 6, 27),
+        date(2024, 6, 28),
+        run_id,
+        "daily_bars",
+    )
+    return result, manifest.get_batches_for_run(run_id), time.monotonic() - started
+
+
+def test_stalled_pool_is_killed_and_retried_in_process(worker_config, monkeypatch, caplog):
+    """A hung worker used to hold the run at "still working" forever (#56)."""
+    with caplog.at_level(logging.WARNING, logger="cnequity.orchestrator.worker_pool"):
+        result, batches, elapsed = _real_process_pool(worker_config, monkeypatch, _hang_forever)
+
+    assert elapsed < 60
+    assert "no worker reported progress" in caplog.text
+    assert "likely OOM" not in caplog.text
+    assert result["had_error"] is False
+    assert result["rows_written"] == 4  # mock rows from the in-process retry
+    assert [b["status"] for b in batches] == ["success", "success"]
+
+
+def test_slow_pool_that_heartbeats_is_not_killed(worker_config, monkeypatch, caplog):
+    with caplog.at_level(logging.WARNING, logger="cnequity.orchestrator.worker_pool"):
+        result, batches, elapsed = _real_process_pool(worker_config, monkeypatch, _slow_but_alive)
+
+    assert elapsed > 2  # outlived the one-second stall window
+    assert "no worker reported progress" not in caplog.text
+    assert result["rows_written"] == 2  # the workers' own rows, not a retry's
+    assert [b["status"] for b in batches] == ["success", "success"]

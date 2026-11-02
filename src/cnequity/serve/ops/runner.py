@@ -249,7 +249,7 @@ class OpsService:
         err_handle = open(err, "ab")
         try:
             try:
-                subprocess.Popen(
+                child = subprocess.Popen(
                     [sys.executable, "-m", "cnequity.serve.ops.job", str(path)],
                     stdin=subprocess.DEVNULL,
                     stdout=out_handle,
@@ -273,6 +273,11 @@ class OpsService:
         finally:
             out_handle.close()
             err_handle.close()
+        # Reap the job the moment it exits. Unwaited, it lingers as a zombie,
+        # which `kill -0` still reports alive; Linux can tell from /proc, but
+        # macOS cannot, so a cancelled job stayed "running" in the panel until
+        # some unrelated subprocess call happened to trigger Python's cleanup.
+        threading.Thread(target=child.wait, name="ops-reap", daemon=True).start()
         deadline = time.monotonic() + 5
         current = read_record(path)
         while current.get("state") == "starting" and time.monotonic() < deadline:
