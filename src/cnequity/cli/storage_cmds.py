@@ -161,3 +161,36 @@ def apply(config_path: str, plan_id: str, phase: str, maintenance_window: bool):
         )
     else:
         _emit(_store(config_path).mark(plan_id))
+
+
+@storage.command("merge-files")
+@config_option
+@click.argument("datasets", nargs=-1)
+@click.option(
+    "--min-files",
+    type=click.IntRange(min=2),
+    default=None,
+    help=N_("Merge partitions with at least this many files (default 4)."),
+)
+@click.option(
+    "--apply", is_flag=True, help=N_("Publish the merge; without it, only report what would merge.")
+)
+def merge_files(config_path: str, datasets: tuple[str, ...], min_files: int | None, apply: bool):
+    """Merge partitions that incremental writes left in several files.
+
+    \b
+    New keys are written as a file of their own instead of rewriting the partition, so
+    partitions gather files over time. `cne run maintain` merges them after each daily
+    update; run this to merge now or to see what would merge.
+    """
+    from cnequity.storage.merge_files import MERGE_AT_FILES, merge_all, merge_dataset_files
+
+    cfg = _cfg(config_path)
+    threshold = min_files or MERGE_AT_FILES
+    if datasets:
+        reports = [
+            merge_dataset_files(cfg, name, apply=apply, min_files=threshold) for name in datasets
+        ]
+    else:
+        reports = merge_all(cfg, apply=apply, min_files=threshold)
+    _emit({"applied": apply, "min_files": threshold, "datasets": reports})

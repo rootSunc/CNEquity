@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import zlib
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
@@ -343,6 +347,306 @@ class CuratedWriter:
         return path
 
 
+#: The file a partition is merged into, and the name a fresh partition starts with.
+MERGED_FILE = "part-merged.parquet"
+#: A write that would leave more files than this in one partition merges them
+#: all instead. `cne run maintain` merges partitions well before this.
+MAX_PARTITION_FILES = 8
+#: A partition written whole with more rows than this is split into buckets of
+#: a key column, so that an update rewrites one bucket rather than, say, a
+#: whole 14M-row day of ticks. Partitions below it stay one file.
+BUCKET_ROWS = 200_000
+_BUCKET_FILE = re.compile(r"^part-b(\d{3})-of-(\d{3})\.parquet$")
+
+
+def bucket_name(index: int, count: int) -> str:
+    return f"part-b{index:03d}-of-{count:03d}.parquet"
+
+
+def parse_bucket(name: str) -> tuple[int, int] | None:
+    """``(index, count)`` of a bucket file name, or None."""
+    match = _BUCKET_FILE.match(name)
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def is_base_file(name: str, merged_name: str = MERGED_FILE) -> bool:
+    """The partition's merged file or one of its buckets — not an appended file."""
+    return name == merged_name or parse_bucket(name) is not None
+
+
+def bucket_column(frame: pl.DataFrame, dataset: str) -> str | None:
+    """The first string key column, which keeps a merge group in one bucket."""
+    for key in merge_group_keys(dataset):
+        if key in frame.columns and frame.schema[key] in (pl.String, pl.Categorical):
+            return key
+    return None
+
+
+def _bucket_count(rows: int) -> int:
+    count = 1
+    while rows / count > BUCKET_ROWS:
+        count *= 2
+    return min(count, 999)
+
+
+def _with_bucket_ids(frame: pl.DataFrame, column: str, count: int) -> pl.DataFrame:
+    """Stable bucket per value (crc32, not Polars' hash, which may change between versions)."""
+    values = frame.get_column(column).unique()
+    mapping = pl.DataFrame(
+        {
+            column: values,
+            "__bucket__": [zlib.crc32(str(value).encode()) % count for value in values],
+        },
+        schema={column: frame.schema[column], "__bucket__": pl.Int64},
+    )
+    return frame.join(mapping, on=column, how="left", nulls_equal=True, maintain_order="left")
+
+
+def emit_partition(
+    merged: pl.DataFrame,
+    dataset: str,
+    *,
+    affected: list[Path],
+    existing: list[Path],
+    read_dir: Path | None,
+    out_dir: Path,
+    merged_name: str = MERGED_FILE,
+) -> tuple[list[Path], list[Path]]:
+    """Write *merged* — the content of the *affected* files — back into the partition.
+
+    Returns ``(written, removed)``. *existing* is every committed file of the
+    partition; files outside *affected* are never written. In a bucketed
+    partition each row goes to its bucket unless that bucket exists and was
+    not loaded, in which case it joins one new appended file instead.
+    """
+    names = {path.name for path in affected}
+    buckets = {parsed: path for path in existing if (parsed := parse_bucket(path.name)) is not None}
+    counts = {count for _, count in buckets}
+    whole = not existing or merged_name in names or len(affected) == len(existing)
+    column = bucket_column(merged, dataset)
+    bucketed = column is not None and (bool(buckets) or (whole and merged.height > BUCKET_ROWS))
+    written: list[Path] = []
+    if not bucketed:
+        if whole:
+            name = merged_name
+        elif affected:
+            name = sorted(names)[0]
+        else:
+            name = f"part-{uuid4().hex[:12]}.parquet"
+        target = out_dir / name
+        write_parquet_atomic(target, merged, compression="zstd")
+        written.append(target)
+    else:
+        count = max(counts) if counts else _bucket_count(merged.height)
+        present = {index for index, size in buckets if size == count}
+        loaded = {
+            parsed[0]
+            for name in names
+            if (parsed := parse_bucket(name)) is not None and parsed[1] == count
+        }
+        spill: list[pl.DataFrame] = []
+        tagged = _with_bucket_ids(merged, column, count)
+        for (index,), group in tagged.partition_by("__bucket__", as_dict=True).items():
+            group = group.drop("__bucket__")
+            if index in loaded or index not in present:
+                target = out_dir / bucket_name(int(index), count)
+                write_parquet_atomic(target, group, compression="zstd")
+                written.append(target)
+            else:
+                spill.append(group)
+        if spill:
+            target = out_dir / f"part-{uuid4().hex[:12]}.parquet"
+            write_parquet_atomic(
+                target, pl.concat(spill, how="diagonal_relaxed"), compression="zstd"
+            )
+            written.append(target)
+    removed: list[Path] = []
+    for path in affected:
+        stale = (
+            out_dir / path.relative_to(read_dir) if read_dir is not None else out_dir / path.name
+        )
+        if stale not in written and stale.exists():
+            stale.unlink()
+            removed.append(stale)
+    return written, removed
+
+
+def merge_group_keys(dataset: str) -> list[str]:
+    """Columns whose equal values must share a file for dedupe to be correct.
+
+    Usually the primary key: storage dedupe never compares rows of different
+    keys, and PIT vintages share their business key. ``index_constituents``
+    picks one source per index book, so a whole (index, date) book is one group.
+    """
+    if dataset == "index_constituents":
+        return ["index_symbol", "as_of_date"]
+    return list(PRIMARY_KEYS.get(dataset, []))
+
+
+def _row_count(path: Path) -> int:
+    return int(pl.scan_parquet(path).select(pl.len()).collect().item())
+
+
+@dataclass
+class PartitionWrite:
+    """What one partition write did, for the caller's receipts and logs."""
+
+    rows: int
+    written: list[Path] = field(default_factory=list)
+    removed: list[Path] = field(default_factory=list)
+    changed: bool = False
+    change: dict | None = None
+
+
+def write_partition_rows(
+    incoming: pl.DataFrame,
+    dataset: str,
+    *,
+    read_dir: Path | None,
+    out_dir: Path,
+    load: Callable[[Path], pl.DataFrame],
+    dedupe: Callable[[pl.DataFrame], pl.DataFrame],
+    finish: Callable[[pl.DataFrame], pl.DataFrame] = lambda frame: frame,
+    pit_missing: Callable[[Path], bool] = lambda path: False,
+    want_change: bool = False,
+    replace_by: list[str] | None = None,
+    incoming_first: bool = True,
+    merged_name: str = MERGED_FILE,
+) -> PartitionWrite:
+    """Write *incoming* into one partition, touching only the files it must.
+
+    Every partition used to be read whole, merged and rewritten as one file,
+    so the cost of a write was the partition's size, not the change's: forty
+    symbols' month of daily bars rewrote 159,192 rows to add 840, and one
+    year-partitioned day of ``industry_index`` rewrote ~289k rows for ~1.2k.
+
+    Files in a partition hold disjoint merge groups (see `merge_group_keys`),
+    and readers already take every file. So only the key columns of the
+    existing files are read; a file is rewritten only when an incoming row
+    shares a group with it (or a group is split across files, which repairs a
+    legacy fragment), and rows of new groups go into one new file — unless a
+    rewrite is happening anyway, which takes them for free. A partition that
+    would pass `MAX_PARTITION_FILES` folds its smaller files into one, leaving
+    the large merged file alone unless the write touches it.
+
+    *replace_by* names columns whose incoming values are complete: stored rows
+    with those values are dropped rather than kept (a recomputed date replaces
+    the whole date). *incoming_first* orders incoming rows before stored ones
+    for dedupe ties, as compact always has; derived writers put stored first.
+    *merged_name* is the dataset's whole-partition file name.
+
+    *read_dir* is the committed partition, *out_dir* its mutable copy with the
+    same file names. *load* reads and normalizes one stored file, *dedupe*
+    applies storage dedupe, *finish* runs after dedupe on what is written.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    existing = (
+        sorted(read_dir.rglob("*.parquet")) if read_dir is not None and read_dir.exists() else []
+    )
+    keys = merge_group_keys(dataset)
+    nested = any(path.parent != read_dir for path in existing)
+    if not existing:
+        merged = finish(dedupe(incoming))
+        written, _ = emit_partition(
+            merged,
+            dataset,
+            affected=[],
+            existing=[],
+            read_dir=read_dir,
+            out_dir=out_dir,
+            merged_name=merged_name,
+        )
+        # Nothing is committed here, so anything else in the mutable copy is
+        # an interrupted write's leftover and would be read twice.
+        for stale in out_dir.rglob("*.parquet"):
+            if stale not in written:
+                stale.unlink()
+        change = None
+        if want_change:
+            change = summarize_changes(merged.clear(), merged, dataset)
+        return PartitionWrite(rows=merged.height, written=written, changed=True, change=change)
+
+    replace_by = list(replace_by or [])
+    route = list(dict.fromkeys([*keys, *replace_by]))
+    keyed = bool(keys) and all(column in incoming.columns for column in route)
+    affected: list[Path]
+    if not keyed or nested:
+        # No group to route by, or files below the partition directory that
+        # only a whole merge can account for: the old behaviour.
+        affected = list(existing)
+    else:
+        indexed = []
+        doubled: set[int] = set()
+        for index, path in enumerate(existing):
+            frame = pl.read_parquet(path, columns=route)
+            # A legacy file holding one key twice is repaired when touched,
+            # as every write used to; PIT vintages legitimately repeat it.
+            if dataset not in PIT_DATASET_NAMES and frame.select(keys).is_duplicated().any():
+                doubled.add(index)
+            indexed.append(frame.unique().with_columns(pl.lit(index).alias("__file__")))
+        stored = pl.concat(indexed, how="vertical_relaxed")
+        shared = stored.group_by(keys).agg(pl.col("__file__").n_unique().alias("__n__"))
+        split = shared.filter(pl.col("__n__") > 1).drop("__n__")
+        targets = incoming.select(keys).unique()
+        hit = (
+            pl.concat([targets, split], how="vertical_relaxed").unique()
+            if split.height
+            else targets
+        )
+        touched = set(stored.join(hit, on=keys, how="semi")["__file__"].to_list()) | doubled
+        if replace_by:
+            replaced = incoming.select(replace_by).unique()
+            touched |= set(stored.join(replaced, on=replace_by, how="semi")["__file__"].to_list())
+        affected = [existing[index] for index in sorted(touched)]
+        tails = [path for path in existing if not is_base_file(path.name, merged_name)]
+        if len(set(tails) - set(affected)) + 1 > MAX_PARTITION_FILES:
+            # Fold the appended files together; the merged file and the
+            # buckets are rewritten only where the write itself reaches.
+            affected = (
+                sorted(set(affected) | set(tails)) if len(tails) < len(existing) else list(existing)
+            )
+
+    before = (
+        finish(dedupe(pl.concat([load(path) for path in affected], how="diagonal_relaxed")))
+        if affected
+        else None
+    )
+    kept = before
+    if kept is not None and replace_by and all(c in kept.columns for c in replace_by):
+        kept = kept.join(incoming.select(replace_by).unique(), on=replace_by, how="anti")
+    if kept is None:
+        combined = incoming
+    elif incoming_first:
+        combined = pl.concat([incoming, kept], how="diagonal_relaxed")
+    else:
+        combined = pl.concat([kept, incoming], how="diagonal_relaxed")
+    merged = finish(dedupe(combined))
+    if before is None:
+        before = merged.clear()
+    unaffected_rows = sum(_row_count(path) for path in existing if path not in affected)
+    business = not _business_equal(before, merged)
+    if not business and not any(pit_missing(path) for path in affected):
+        return PartitionWrite(rows=unaffected_rows + merged.height)
+
+    written, removed = emit_partition(
+        merged,
+        dataset,
+        affected=affected,
+        existing=existing,
+        read_dir=read_dir,
+        out_dir=out_dir,
+        merged_name=merged_name,
+    )
+    change = summarize_changes(before, merged, dataset) if want_change and business else None
+    return PartitionWrite(
+        rows=unaffected_rows + merged.height,
+        written=written,
+        removed=removed,
+        changed=business,
+        change=change,
+    )
+
+
 def _pit_columns_absent(path: Path, dataset: str) -> bool:
     """True when *path* is a PIT dataset file that predates the PIT columns.
 
@@ -449,49 +753,34 @@ def compact_dataset(
 
     combined = _pit(combined)
 
-    if partition_col not in combined.columns:
-        out_dir = curated.curated_root / dataset
-        out_path = out_dir / "part-merged.parquet"
-        existing_dir = read_root
-        existing_files = sorted(existing_dir.rglob("*.parquet")) if existing_dir.exists() else []
-        before_digest = sha256_file(out_path) if out_path.is_file() else None
-        had_fragments = any(
-            path.relative_to(existing_dir) != Path(out_path.name) for path in existing_files
+    def _load(path: Path) -> pl.DataFrame:
+        return sanitize_dataset_rows(validate_dataframe(pl.read_parquet(path), dataset), dataset)
+
+    def _dedupe(frame: pl.DataFrame) -> pl.DataFrame:
+        return _dedupe_storage(frame, dataset) if pk else frame
+
+    def _write(group: pl.DataFrame, read_dir: Path, out_dir: Path, label: str | None) -> int:
+        result = write_partition_rows(
+            group,
+            dataset,
+            read_dir=read_dir,
+            out_dir=out_dir,
+            load=_load,
+            dedupe=_dedupe,
+            finish=_pit,
+            pit_missing=lambda path: _pit_columns_absent(path, dataset),
+            want_change=change_log is not None,
         )
-        existing = pl.DataFrame(schema=combined.schema)
-        if existing_files:
-            existing = pl.concat(
-                [
-                    sanitize_dataset_rows(
-                        validate_dataframe(pl.read_parquet(path), dataset), dataset
-                    )
-                    for path in existing_files
-                ],
-                how="diagonal_relaxed",
-            )
-            existing = _pit(existing)
-            combined = pl.concat([existing, combined], how="diagonal_relaxed")
-            if pk:
-                combined = _dedupe_storage(combined, dataset)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        business_changed = not _business_equal(existing, combined)
-        if change_log is not None and business_changed:
-            change_log.append({"partition": None, **summarize_changes(existing, combined, dataset)})
-        # One-time migration: a file written before the bitemporal columns
-        # existed keeps deriving them on every read until it is rewritten, and
-        # the digest above cannot see that because both sides are normalized.
-        pit_missing = _pit_columns_absent(out_path, dataset)
-        should_write = business_changed or had_fragments or pit_missing or not out_path.is_file()
-        if should_write:
-            write_parquet_atomic(out_path, combined, compression="zstd")
-            for stale in out_dir.rglob("*.parquet"):
-                if stale != out_path:
-                    stale.unlink()
-        if changed_files is not None and (
-            business_changed or had_fragments or before_digest is None
-        ):
-            changed_files.append(out_path)
-        return combined.height
+        if change_log is not None and result.change is not None:
+            change_log.append({"partition": label, **result.change})
+        # A rewrite that only adds the PIT columns is not a publication, as
+        # before; merging fragments away is, since the file set changed.
+        if changed_files is not None and (result.changed or result.removed):
+            changed_files.extend(result.written)
+        return result.rows
+
+    if partition_col not in combined.columns:
+        return _write(combined, read_root, curated.curated_root / dataset, None)
 
     _PART = "__partition__"
     combined = combined.with_columns(
@@ -501,59 +790,10 @@ def compact_dataset(
     total = 0
     for key, group in combined.partition_by(_PART, as_dict=True).items():
         val_str = str(key[0] if isinstance(key, tuple) else key)
-        group = group.drop(_PART)
-        existing_dir = curated.partition_path(dataset, partition_col, val_str)
-        read_partition_dir = read_root / f"{partition_col}={val_str}"
-        out_path = existing_dir / "part-merged.parquet"
-        before_digest = sha256_file(out_path) if out_path.is_file() else None
-        had_fragments = False
-        frames = [group]
-        existing = pl.DataFrame(schema=group.schema)
-        if read_partition_dir.exists():
-            existing_files = []
-            for existing_path in read_partition_dir.rglob("*.parquet"):
-                # A committed generation has no output path in the mutable
-                # destination, so every source file is a legitimate fragment.
-                had_fragments = had_fragments or existing_path.name != "part-merged.parquet"
-                existing_files.append(
-                    sanitize_dataset_rows(
-                        validate_dataframe(pl.read_parquet(existing_path), dataset), dataset
-                    )
-                )
-            if existing_files:
-                existing = pl.concat(existing_files, how="diagonal_relaxed")
-                if pk:
-                    existing = _dedupe_storage(existing, dataset)
-                existing = _pit(existing)
-                frames.append(existing)
-        merged = pl.concat(frames, how="diagonal_relaxed")
-        if pk:
-            merged = _dedupe_storage(merged, dataset)
-        merged = _pit(merged)
-        business_changed = not _business_equal(existing, merged)
-        if change_log is not None and business_changed:
-            change_log.append(
-                {
-                    "partition": f"{partition_col}={val_str}",
-                    **summarize_changes(existing, merged, dataset),
-                }
-            )
-        # See the unpartitioned branch: rewrite once so the columns stop being
-        # recomputed on every read.
-        pit_missing = _pit_columns_absent(out_path, dataset)
-        should_write = business_changed or had_fragments or pit_missing or not out_path.is_file()
-        if should_write:
-            written = curated.write_partition(
-                dataset, partition_col, val_str, merged, "part-merged.parquet"
-            )
-        else:
-            # Keep the existing inode untouched when reconciliation changed
-            # only fetched_at; this is the physical no-op that prevents a
-            # spurious changed_files entry and revision.
-            written = out_path
-        if changed_files is not None and (
-            business_changed or had_fragments or before_digest is None
-        ):
-            changed_files.append(written)
-        total += merged.height
+        total += _write(
+            group.drop(_PART),
+            read_root / f"{partition_col}={val_str}",
+            curated.partition_path(dataset, partition_col, val_str),
+            f"{partition_col}={val_str}",
+        )
     return total

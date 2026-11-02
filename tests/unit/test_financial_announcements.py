@@ -104,7 +104,11 @@ def test_late_value_is_visible_only_as_inexact_historical_reconstruction(tmp_pat
     assert early["available_at"].to_list() == [None]
     assert early["fetched_at"].to_list() == [OBSERVED]
     assert load(dataset, config=cfg, as_of=ORIGINAL, pit_mode="strict").is_empty()
-    raw = pl.read_parquet(list(store.current_root(dataset).rglob("*.parquet")))
+    # The late vintage is a new key, so it sits in a file beside the seed one.
+    raw = pl.concat(
+        [pl.read_parquet(p) for p in sorted(store.current_root(dataset).rglob("*.parquet"))],
+        how="diagonal_relaxed",
+    )
     assert raw.filter(pl.col("item_code") == "total_assets")["announce_date"].sort().to_list() == [
         ORIGINAL,
         LATE,

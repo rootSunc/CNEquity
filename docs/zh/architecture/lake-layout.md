@@ -26,4 +26,6 @@
 
 清理 staging 前先确认任务已完成并已合并。`meta/locks/` 和 `locks/` 里的锁文件存在，都不等于仍有进程持锁；不要靠删除锁文件恢复运行。见[排障](../operations/troubleshooting.md)。
 
+一个分区可以有多个 Parquet 文件，各文件的主键互不重叠，读取时取全部文件。回补和日更只把新增的键写成新文件，修改只重写包含这些键的文件，不再重写整个分区；`cne run maintain` 每天把文件数达到 4 个的分区合并回一个文件（也可手动运行 `cne storage merge-files`）。超过 20 万行的分区整份写入时按代码分桶成 `part-bNNN-of-MMM.parquet`，修改只重写所在的桶。直接读 Parquet 的外部程序要读取分区目录下的所有文件，而不是只读 `part-merged.parquet`。
+
 分区布局发生变化时，旧目录仍可能可读，但与新目录重叠会造成重复主键。按[迁移脚本说明](../operations/scripts.md)先预演、备份，再统一布局。

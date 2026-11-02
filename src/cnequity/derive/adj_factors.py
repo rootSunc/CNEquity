@@ -599,13 +599,33 @@ def _stale_cache_symbols(config: Config, through: date) -> set[str]:
     if not dataset_has_parquet(root) or not cache_dir.is_dir():
         return set()
     written: dict[str, date] = {}
+    backup_written: dict[str, date] = {}
+    backup_suffix = f"_{STORED_ADJUST_TYPE}_{BACKUP_SOURCE}"
     for entry in cache_dir.iterdir():
-        stem, _, adjust_type = entry.stem.rpartition("_")
-        # Only the stored type is refreshed; leftover qfq caches are not read.
-        if entry.suffix != ".parquet" or adjust_type != STORED_ADJUST_TYPE or "_" not in stem:
+        if entry.suffix != ".parquet":
+            continue
+        if entry.stem.endswith(backup_suffix):
+            target, stem = backup_written, entry.stem[: -len(backup_suffix)]
+        else:
+            stem, _, adjust_type = entry.stem.rpartition("_")
+            # Only the stored type is refreshed; leftover qfq caches are not read.
+            if adjust_type != STORED_ADJUST_TYPE:
+                continue
+            target = written
+        if "_" not in stem:
             continue
         code, _, exchange = stem.rpartition("_")
-        written[f"{code}.{exchange}"] = datetime.fromtimestamp(entry.stat().st_mtime).date()
+        target[f"{code}.{exchange}"] = datetime.fromtimestamp(entry.stat().st_mtime).date()
+    # A security arbitration moved to baostock is read from its own cache;
+    # its Sina cache is never rewritten. Judging it by the Sina file called it
+    # stale on every run, and each daily job and backfill refetched all of
+    # them from baostock one login at a time — 14 symbols, 2.5 minutes, every
+    # time. Judge it by the cache it is actually served from; with none yet,
+    # the override path fetches it anyway.
+    for symbol in _overridden_symbols(config):
+        written.pop(symbol, None)
+        if symbol in backup_written:
+            written[symbol] = backup_written[symbol]
     if not written:
         return set()
     latest = (
@@ -667,7 +687,7 @@ def _resolve_factors(
         cached = _load_cache(config, symbol, f"{adjust_type}_{BACKUP_SOURCE}")
         if not _needs_refresh(cached, force):
             return cached, BACKUP_SOURCE
-        backup = _resolve_factors_via_backup(config, symbol, adjust_type, sym_bars)
+        backup = _resolve_factors_via_backup(config, symbol, adjust_type, sym_bars, overridden=True)
         if backup is not None:
             _save_cache(config, symbol, f"{adjust_type}_{BACKUP_SOURCE}", backup)
             return backup, BACKUP_SOURCE
@@ -859,6 +879,8 @@ def _resolve_factors_via_backup(
     symbol: str,
     adjust_type: str,
     sym_bars: pl.DataFrame,
+    *,
+    overridden: bool = False,
 ) -> pl.DataFrame | None:
     """Reconstruct factors from Baostock when Sina cannot be reached.
 
@@ -904,7 +926,11 @@ def _resolve_factors_via_backup(
         return None
     if factors.is_empty():
         return None
-    logger.info("adj_factors: %s resolved from baostock after sina was unavailable", symbol)
+    if overridden:
+        # Sina was never asked: arbitration chose baostock for this security.
+        logger.info("adj_factors: %s fetched from baostock (arbitration override)", symbol)
+    else:
+        logger.info("adj_factors: %s resolved from baostock after sina was unavailable", symbol)
     return factors
 
 
@@ -1935,6 +1961,7 @@ def _write_adj_partitions(
     # query.__init__ imports this module for STORED_ADJUST_TYPE, so keep this
     # helper import lazy to avoid a derive↔query import cycle at module load.
     from cnequity.query.canonical import dedupe_by_primary_key
+    from cnequity.storage.parquet import write_partition_rows
 
     writer = CuratedWriter(config.derived_root)
     total = 0
@@ -1960,10 +1987,17 @@ def _write_adj_partitions(
                     # made each daily derive republish all ~6,250 partitions
                     # and keep a new copy of the whole table per revision.
                     continue
-                merged = pl.concat([existing, fresh], how="diagonal_relaxed")
-                merged = dedupe_by_primary_key(merged, "adj_factors")
-                writer.write_partition(
-                    "adj_factors", "trade_date", td_str, merged, "part-0.parquet"
+                # Rows for symbols the partition lacks go into a file of their
+                # own; only a file holding a changed symbol is rewritten.
+                write_partition_rows(
+                    fresh,
+                    "adj_factors",
+                    read_dir=out_dir,
+                    out_dir=out_dir,
+                    load=pl.read_parquet,
+                    dedupe=lambda frame: dedupe_by_primary_key(frame, "adj_factors"),
+                    incoming_first=False,
+                    merged_name="part-0.parquet",
                 )
                 continue
             merged = group

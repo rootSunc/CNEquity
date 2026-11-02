@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -248,7 +250,56 @@ def views_connection(config: Config, *, require_data: bool = False) -> duckdb.Du
     return con
 
 
-def ensure_duckdb_views(config: Config, *, require_data: bool = False) -> Path:
+def _views_inputs(config: Config, *, require_data: bool) -> dict:
+    """Digests of everything the view database is derived from.
+
+    A dataset's view reads the generation its ``current.json`` names, so that
+    pointer — moved by a publish, a rollback or a repair alike — or, for a
+    pointer-less dataset, its file stamps decide the view. The DuckDB settings
+    and the code that writes the SQL decide every view at once. Rebuilding the
+    whole database on every compact cost 3–9 s whether or not any had moved.
+    """
+    import hashlib
+
+    from cnequity import __version__
+
+    common = hashlib.sha256()
+    common.update(__version__.encode())
+    for module in ("query/views.py", "domain/datasets.py", "domain/schemas.py"):
+        source = Path(__file__).resolve().parents[1] / module
+        if source.is_file():
+            common.update(source.read_bytes())
+    common.update(
+        repr(
+            (
+                str(config.data_root.resolve()),
+                config.duckdb_memory_limit,
+                config.duckdb_threads,
+                require_data,
+            )
+        ).encode()
+    )
+    meta = config.data_root / "meta" / "revisions"
+    datasets: dict[str, str] = {}
+    for name, spec in sorted(DATASETS.items()):
+        digest = hashlib.sha256()
+        pointer = meta / name / "current.json"
+        if pointer.is_file():
+            digest.update(pointer.read_bytes())
+        else:
+            layer = config.derived_root if spec.layer == "derived" else config.curated_root
+            root = layer / name
+            if root.is_dir():
+                for path in sorted(root.rglob("*.parquet")):
+                    info = path.stat()
+                    digest.update(
+                        f"{path.relative_to(root)}:{info.st_size}:{info.st_mtime_ns}".encode()
+                    )
+        datasets[name] = digest.hexdigest()
+    return {"common": common.hexdigest(), "datasets": datasets}
+
+
+def ensure_duckdb_views(config: Config, *, require_data: bool = False, force: bool = False) -> Path:
     """Rewrite the on-disk view database for tools outside cnequity.
 
     Built beside the target and swapped in with one rename, so a DuckDB
@@ -256,17 +307,43 @@ def ensure_duckdb_views(config: Config, *, require_data: bool = False) -> Path:
     here ever waits for, or fights over, that file's lock. Where the rename is
     refused (Windows, while the file is open) the previous views stay: they
     read Parquet by glob, so they still see every new partition.
+
+    Skipped when nothing it is built from has changed since the last build
+    (see `_views_inputs`), unless *force*.
     """
     db_path = config.duckdb_path or (config.data_root / "duckdb" / "cnequity.duckdb")
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = db_path.with_name(db_path.name + ".inputs")
+    inputs = _views_inputs(config, require_data=require_data)
+    only: set[str] | None = None
+    if not force and db_path.is_file():
+        try:
+            previous = json.loads(stamp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+        if previous == inputs:
+            return db_path
+        if previous.get("common") == inputs["common"] and isinstance(
+            previous.get("datasets"), dict
+        ):
+            # Same code and settings: only the datasets whose generation
+            # moved need their view redefined over the previous database.
+            only = {
+                name
+                for name, digest in inputs["datasets"].items()
+                if previous["datasets"].get(name) != digest
+            }
+    stamp.unlink(missing_ok=True)
     handle, name = tempfile.mkstemp(dir=db_path.parent, prefix=f".{db_path.name}.", suffix=".tmp")
     os.close(handle)
     building = Path(name)
     building.unlink()  # DuckDB refuses to open an empty file as a database
+    if only is not None:
+        shutil.copy2(db_path, building)
     try:
         con = duckdb.connect(str(building))
         try:
-            _define_views(con, config, require_data=require_data)
+            _define_views(con, config, require_data=require_data, only=only)
             con.execute("CHECKPOINT")
         finally:
             con.close()
@@ -281,13 +358,40 @@ def ensure_duckdb_views(config: Config, *, require_data: bool = False) -> Path:
             logger.warning(
                 "Kept the previous DuckDB views at %s; replacing them failed: %s", db_path, exc
             )
+        else:
+            stamp.write_text(json.dumps(inputs, sort_keys=True), encoding="utf-8")
     finally:
         building.unlink(missing_ok=True)
         Path(f"{building}.wal").unlink(missing_ok=True)
     return db_path
 
 
-def _define_views(con: duckdb.DuckDBPyConnection, config: Config, *, require_data: bool) -> None:
+#: Datasets the views defined after the per-dataset loop read.
+_COMPOSITE_INPUTS = frozenset(
+    {
+        "instruments",
+        "daily_bars",
+        "adj_factors",
+        "corporate_actions",
+        "flash_news_wire",
+        "news_headlines",
+        "economic_calendar",
+        *OTC_SCOPED_DATASETS,
+    }
+)
+
+
+def _define_views(
+    con: duckdb.DuckDBPyConnection,
+    config: Config,
+    *,
+    require_data: bool,
+    only: set[str] | None = None,
+) -> None:
+    """Define every dataset view, or with *only* just those datasets' views.
+
+    The views built on several datasets below the loop are always redefined.
+    """
     # as_posix() keeps Windows drive letters (`C:/…`) while turning `\` into
     # `/`, which is what the SQL literals below and DuckDB's glob both want.
     root = config.data_root.resolve().as_posix()
@@ -296,6 +400,8 @@ def _define_views(con: duckdb.DuckDBPyConnection, config: Config, *, require_dat
     con.execute(f"SET threads={config.duckdb_threads}")
 
     for name, spec in sorted(DATASETS.items()):
+        if only is not None and name not in only:
+            continue
         view_name = "flash_news_wire_legacy" if name == "flash_news_wire" else name
         if name in OTC_SCOPED_DATASETS:
             # The public view leaves out Beijing NEEQ quotes, as load() does;
@@ -322,6 +428,10 @@ def _define_views(con: duckdb.DuckDBPyConnection, config: Config, *, require_dat
         else:
             con.execute(_empty_view_sql(name).replace(f"VIEW {name} AS", f"VIEW {view_name} AS"))
 
+    if only is not None and not (only & _COMPOSITE_INPUTS):
+        # The views below bind every file of the datasets they read (~3.5 s for
+        # the daily_bars family); none of their inputs changed.
+        return
     instrument_columns = {row[0] for row in con.execute("DESCRIBE instruments").fetchall()}
     # Without listing dates the cut is the select tier's opening alone, as in load().
     listing = (

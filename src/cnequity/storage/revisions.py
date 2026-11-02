@@ -212,6 +212,20 @@ def _free_bytes(path: Path) -> int | None:
         return None
 
 
+def _same_file_stamp(left: Path, right: Path) -> bool:
+    """Same size and modification time: a materialized copy of the same bytes.
+
+    Every copy into or out of the mutable tree preserves mtime (`copy2`
+    semantics), and every write replaces a file atomically under a new mtime,
+    so a matching stamp means nobody has rewritten the file since.
+    """
+    try:
+        a, b = left.stat(), right.stat()
+    except FileNotFoundError:
+        return False
+    return a.st_size == b.st_size and a.st_mtime_ns == b.st_mtime_ns
+
+
 def _partition_of(relative: Path) -> str:
     """Top-level partition directory of a dataset-relative file ('' for root files)."""
     return relative.parts[0] if len(relative.parts) > 1 else ""
@@ -607,9 +621,24 @@ class RevisionStore:
                     for relative, path in mutable.items()
                     if _partition_of(relative) in declared
                 )
-                for relative in mutable:
-                    if _partition_of(relative) in declared:
-                        inherited.pop(relative, None)
+                written = {Path(path).resolve().relative_to(source) for path in changed_files}
+                recorded = self._generation_records(dataset, base) if base is not None else {}
+                for relative, path in mutable.items():
+                    if _partition_of(relative) not in declared:
+                        continue
+                    inherited.pop(relative, None)
+                    # A partition can now change by gaining one file beside
+                    # files the write never opened. Those are still the
+                    # committed bytes (materialized with their size and
+                    # mtime), so link them like an untouched partition rather
+                    # than copying and re-hashing the whole partition.
+                    committed_file = committed.get(relative)
+                    if relative in written or committed_file is None:
+                        continue
+                    if not _same_file_stamp(path, committed_file):
+                        continue
+                    selected[relative] = committed_file
+                    inherited[relative] = recorded.get((Path(dataset) / relative).as_posix())
                 # Legacy baselines are adopted as they are; a new publication
                 # must match the registered layout.
                 problems = layout_violations(dataset, list(selected))
@@ -731,6 +760,8 @@ class RevisionStore:
         if current is None:
             return None
         target = self._layer_root(dataset) / dataset
+        if self._sync_mutable(current, target):
+            return current
         target_parent = target.parent
         target_parent.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=f".{dataset}-materialize-", dir=target_parent))
@@ -755,6 +786,57 @@ class RevisionStore:
             return current
         finally:
             shutil.rmtree(temporary, ignore_errors=True)
+
+    def _sync_mutable(self, current: Path, target: Path) -> bool:
+        """Bring an existing mutable tree back to *current*, file by file.
+
+        The whole committed generation used to be copied into a fresh tree
+        before every compact and derive: on a filesystem without clones (ext4,
+        the usual Linux server) that is a byte copy and an fsync per file —
+        453MB and 7,201 fsyncs for ``daily_bars``, 5.6GB for ``trade_ticks`` —
+        however little the run changed. After a commit the two trees already
+        match, so normally nothing is copied: only files whose size or mtime
+        differ are replaced, and files the generation lacks are removed.
+
+        Returns False when there is no plain directory to sync, leaving the
+        caller's whole-tree copy to build one.
+        """
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            return False
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            return False
+        wanted = {path.relative_to(current): path for path in self._walk_files(current)}
+        present = {path.relative_to(target): path for path in self._walk_files(target)}
+        for relative, source in wanted.items():
+            existing = present.get(relative)
+            if existing is not None and _same_file_stamp(existing, source):
+                continue
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            handle, name = tempfile.mkstemp(
+                dir=destination.parent, prefix=f".{destination.name}.", suffix=".sync"
+            )
+            os.close(handle)
+            staged = Path(name)
+            staged.unlink()
+            try:
+                copy2_isolated(source, staged)
+                replace_with_retry(staged, destination)
+            finally:
+                staged.unlink(missing_ok=True)
+        for relative, path in present.items():
+            if relative not in wanted:
+                path.unlink()
+        for directory in sorted(
+            (path for path in target.rglob("*") if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        ):
+            if not any(directory.iterdir()):
+                directory.rmdir()
+        return True
 
     def quarantine_candidate(
         self,

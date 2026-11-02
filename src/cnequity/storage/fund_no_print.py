@@ -20,6 +20,12 @@ def approved_no_print_keys(config, *, start=None, end=None, read_context=None) -
     if not directory.is_dir():
         return set()
     archive = RawPayloadArchive(config.meta_root, enabled=True)
+    cache_path = config.meta_root / "stats" / "partition_cache" / "fund_no_print_served.json"
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    fresh_cache: dict = {}
     keys = set()
     for path in sorted(directory.glob("*.json")):
         try:
@@ -34,10 +40,28 @@ def approved_no_print_keys(config, *, start=None, end=None, read_context=None) -
                 or not isinstance(proof.get("symbols"), list)
             ):
                 raise ValueError("invalid fund no-print proof")
-            served = report_no_print_symbols(archive.read(record), record, day)
+            # Every compact decompressed, hashed and parsed all of these
+            # publisher reports again (~2.5 s for 232). The answer moves only
+            # if the proof or its archived bytes do; a payload outside the
+            # lake's meta tree is always re-read.
+            stamp = _proof_stamp(config.meta_root, path, record)
+            entry = cache.get(path.name)
+            if stamp is not None and entry is not None and entry.get("stamp") == stamp:
+                served = set(entry["served"])
+            else:
+                served = set(report_no_print_symbols(archive.read(record), record, day))
+            if stamp is not None:
+                fresh_cache[path.name] = {"stamp": stamp, "served": sorted(served)}
             keys.update((symbol, day) for symbol in proof["symbols"] if symbol in served)
         except (OSError, ValueError, KeyError, TypeError, RawArchiveError) as exc:
             logger.warning("Ignoring unusable fund no-print proof %s: %s", path.name, exc)
+    if fresh_cache != cache:
+        from cnequity.storage.atomic import write_json_atomic
+
+        try:
+            write_json_atomic(cache_path, fresh_cache)
+        except OSError as exc:
+            logger.debug("fund no-print cache not written: %s", exc)
     if not keys:
         return set()
     from cnequity.storage.read_context import read_root
@@ -79,6 +103,27 @@ def approved_no_print_keys(config, *, start=None, end=None, read_context=None) -
         actual = actual.filter(printed).select("symbol", "trade_date").unique().collect()
         valid = valid.join(actual, on=["symbol", "trade_date"], how="anti")
     return set(valid.iter_rows())
+
+
+def _proof_stamp(meta_root, proof_path, record) -> list | None:
+    """Identity of a proof and the archived bytes it names, or None if unknowable."""
+    from pathlib import Path
+
+    if not isinstance(record, dict) or not record.get("payload_path"):
+        return None
+    payload = (Path(meta_root) / str(record["payload_path"])).resolve()
+    try:
+        payload.relative_to(Path(meta_root).resolve())
+        proof_info, payload_info = proof_path.stat(), payload.stat()
+    except (OSError, ValueError):
+        return None
+    return [
+        proof_info.st_size,
+        proof_info.st_mtime_ns,
+        str(record.get("payload_sha256", "")),
+        payload_info.st_size,
+        payload_info.st_mtime_ns,
+    ]
 
 
 def reconcile_no_print_coverage(config) -> dict:

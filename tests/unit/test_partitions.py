@@ -308,10 +308,13 @@ def test_compact_removes_legacy_index_weekend_rows(tmp_path):
     root = cfg.curated_root / "index_bars" / "trade_date=1991"
     root.mkdir(parents=True, exist_ok=True)
     _bar_frame([date(1991, 4, 5), date(1991, 4, 6)]).write_parquet(root / "part-merged.parquet")
-    _stage_bars(cfg, "index_bars", "run-clean", [date(1991, 4, 8)])
+    # Compaction cleans the files it rewrites: a staged row that shares a key
+    # with the legacy file pulls that file into the write.
+    _stage_bars(cfg, "index_bars", "run-clean", [date(1991, 4, 5), date(1991, 4, 8)])
 
     compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-clean")
 
+    assert [p.name for p in root.glob("*.parquet")] == ["part-merged.parquet"]
     dates = pl.read_parquet(root / "part-merged.parquet")["trade_date"].sort().to_list()
     assert dates == [date(1991, 4, 5), date(1991, 4, 8)]
 
@@ -464,3 +467,40 @@ def test_repartition_dedupes_pk_when_day_and_year_dirs_overlap(tmp_path):
     df = collect_parquet_root(root, partition_col="trade_date")
     assert df.height == 1
     assert df["is_trading"].to_list() == [True], "freshest fetched_at wins"
+
+
+def test_list_partitions_sees_a_directory_added_within_one_mtime_tick(tmp_path):
+    """Linux stamps directories from a coarse clock; a second mkdir in the same
+    tick leaves the mtime unchanged, and a cached listing must not hide it."""
+    import os
+
+    from cnequity.query.parquet_scan import list_partitions
+
+    (tmp_path / "trade_date=2024-01-02").mkdir()
+    stamp = os.stat(tmp_path).st_mtime_ns
+    assert len(list_partitions(tmp_path, "trade_date", resolve=False)) == 1
+    (tmp_path / "trade_date=2024-01-03").mkdir()
+    os.utime(tmp_path, ns=(stamp, stamp))  # what one coarse tick looks like
+
+    assert [p.value for p in list_partitions(tmp_path, "trade_date", resolve=False)] == [
+        "2024-01-02",
+        "2024-01-03",
+    ]
+
+
+def test_list_partitions_cache_sees_added_and_removed_directories(tmp_path):
+    from cnequity.query.parquet_scan import list_partitions
+
+    (tmp_path / "trade_date=2024-01-02").mkdir()
+    assert [p.value for p in list_partitions(tmp_path, "trade_date", resolve=False)] == [
+        "2024-01-02"
+    ]
+    (tmp_path / "trade_date=2024-01-03").mkdir()
+    assert [p.value for p in list_partitions(tmp_path, "trade_date", resolve=False)] == [
+        "2024-01-02",
+        "2024-01-03",
+    ]
+    (tmp_path / "trade_date=2024-01-02").rmdir()
+    assert [p.value for p in list_partitions(tmp_path, "trade_date", resolve=False)] == [
+        "2024-01-03"
+    ]

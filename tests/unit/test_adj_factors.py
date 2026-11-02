@@ -922,7 +922,8 @@ def test_failed_symbol_is_retried_after_global_watermark_advances(adj_config, mo
     assert second.rows == 1
     assert StateStore(adj_config.meta_root).get_string_set("adj_factors", "retry_symbols") == set()
     written = pl.read_parquet(
-        adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
+        # The retried symbol is new to the partition, so it lands in a file of its own.
+        adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "*.parquet"
     )
     assert written.filter(pl.col("symbol") == "600519.SH")["factor"].to_list() == [0.7]
 
@@ -950,8 +951,12 @@ def test_compute_adj_factors_fills_partial_watermark_partition(adj_config, monke
 
     assert result.rows == 1
     assert calls == []
-    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
-    df = pl.read_parquet(out)
+    # The late symbol joins the partition in a file of its own, beside the
+    # legacy file whose narrower schema it does not share.
+    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28"
+    df = pl.concat(
+        [pl.read_parquet(path) for path in sorted(out.glob("*.parquet"))], how="diagonal_relaxed"
+    )
     assert set(df["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
     assert df.filter(pl.col("symbol") == "600519.SH")["factor"][0] == 0.5
 
@@ -1666,6 +1671,39 @@ def test_a_cache_written_before_the_latest_ex_date_is_refreshed(tmp_path):
     _write_action(cfg, "600002.SH", date(2026, 10, 9), cash_dividend=0.5)
 
     assert _stale_cache_symbols(cfg, date(2026, 9, 28)) == {"600001.SH"}
+
+
+def test_an_overridden_symbol_is_judged_by_its_baostock_cache(tmp_path, monkeypatch):
+    """Its Sina cache is never rewritten, so judging by it refetched every run.
+
+    Fourteen securities arbitration moved to baostock were "stale" on every
+    daily job and backfill, and the derive spent ~170 s re-fetching them.
+    """
+    import os
+
+    from cnequity.derive import adj_factors as mod
+
+    cfg = Config(data_root=tmp_path)
+    series = pl.DataFrame({"trade_date": [date(2026, 1, 5)], "factor": [1.0]})
+
+    def stamp(symbol, adjust_type, day):
+        mod._save_cache(cfg, symbol, adjust_type, series)
+        when = datetime(day.year, day.month, day.day, 12).timestamp()
+        os.utime(mod._cache_path(cfg, symbol, adjust_type), (when, when))
+
+    # Both overridden; both Sina caches predate the ex-date and never move.
+    stamp("600906.SH", "hfq", date(2026, 7, 1))
+    stamp("600906.SH", "hfq_baostock", date(2026, 9, 1))  # served from, and current
+    stamp("600907.SH", "hfq", date(2026, 7, 1))
+    stamp("600907.SH", "hfq_baostock", date(2026, 7, 2))  # served from, and behind
+    stamp("600908.SH", "hfq", date(2026, 7, 1))  # not overridden: Sina is the cache
+    for symbol in ("600906.SH", "600907.SH", "600908.SH"):
+        _write_action(cfg, symbol, date(2026, 7, 10), cash_dividend=0.5)
+    monkeypatch.setattr(
+        mod, "_overridden_symbols", lambda _config: frozenset({"600906.SH", "600907.SH"})
+    )
+
+    assert mod._stale_cache_symbols(cfg, date(2026, 9, 28)) == {"600907.SH", "600908.SH"}
 
 
 def test_crosscheck_prices_a_restructuring_conversion_at_its_reference_price(crosscheck_config):

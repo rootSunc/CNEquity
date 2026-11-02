@@ -74,6 +74,7 @@
 | `cne storage hold` | 无 | 增加对象保护并取消待删除标记 |
 | `cne storage import` | 无 | 校验并登记引用清单；只增加保护 |
 | `cne storage inspect` | 无 | 读取版本与保留原因 |
+| `cne storage merge-files` | 无 | 预演只读；--apply 合并多文件分区并发布新版本，行内容不变 |
 | `cne storage plan` | 无 | 校验保留依赖并保存版本计划；不删除数据 |
 | `cne storage raw-external` | 无 | 登记外置原文目录；本地保留来源记录，不移动或删除文件 |
 | `cne ths-official backfill` | 执行时 | 调用凭证源并补缺 |

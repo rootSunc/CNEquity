@@ -1914,7 +1914,8 @@ msgid ""
 "soft_fail_max_days sessions in a row), a retry of keys in the debt ledger\n"
 "(`cne backfill <dataset> --outstanding`), the run audit (the whole lake on\n"
 "[job.maintenance].full_audit_weekday), the freshness gate,\n"
-"source probes and SLO, run evidence over 20 sessions, a metadata backup\n"
+"source probes and SLO, run evidence over 20 sessions, a merge of partitions that writes\n"
+"left in several files, a metadata backup\n"
 "(manifest DB, receipts, quality findings; never curated Parquet), and a preview of `cne run clean`.\n"
 "The preview passes --dry-run, so this command never asks to delete.\n"
 "Exits 1 when a group run, the audit, the freshness gate or the backup fails; source,\n"
@@ -1922,11 +1923,11 @@ msgid ""
 msgstr ""
 "检查当天的更新，备份无法重建的内容，并预览过期文件。\n"
 "\n"
-"\n"
+"\n"
 "定时任务在每个交易日的日更之后跑一次。顺序是：\n"
 "当天各调度组的运行（[job.maintenance].gate_groups 失败立即算，其余连续 soft_fail_max_days 个交易日才算）、\n"
 "补欠账台账里的键（`cne backfill <dataset> --outstanding`）、运行审计（[job.maintenance].full_audit_weekday 那天改为全湖）、\n"
-"新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、元数据备份\n"
+"新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、合并写入后分成多个文件的分区、元数据备份\n"
 "（manifest 数据库、收据、质量结论，不含 curated Parquet），以及 `cne run clean` 的预览。\n"
 "这次预览带 --dry-run，所以不会询问删除。\n"
 "调度组、审计、新鲜度门禁或备份失败时退出 1；源、欠账重试和运行证据只报告，不因此失败。"
@@ -3592,6 +3593,25 @@ msgstr ""
 "同一主键的多份观察只在非空值完全一致时互补填空；有冲突的键按规范规则整行取一份。\n"
 "重复键的全部原始观察写入 _quarantine 作为证据，旧版本继续保留。"
 
+#: cnequity/cli/storage_cmds.py
+msgid ""
+"Merge partitions that incremental writes left in several files.\n"
+"\n"
+"\n"
+"New keys are written as a file of their own instead of rewriting the partition, so\n"
+"partitions gather files over time. `cne run maintain` merges them after each daily\n"
+"update; run this to merge now or to see what would merge."
+msgstr ""
+"合并增量写入后分成多个文件的分区。\n"
+"\n"
+"\n"
+"新的键会写成单独的文件，而不是重写整个分区，所以分区里的文件会逐渐变多。\n"
+"`cne run maintain` 在每次日更之后合并它们；运行这条命令可以立即合并，或查看会合并哪些分区。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Merge partitions with at least this many files (default 4)."
+msgstr "合并文件数不少于这个值的分区（默认 4）。"
+
 #: cnequity/cli/schedule_cmds.py
 msgid "Metadata backup"
 msgstr "元数据备份"
@@ -4058,6 +4078,10 @@ msgstr "分页返回，空页与结束页长得一样——本项目按 pages/co
 msgid "Parquet of (symbol, trade_date, close) from an independent source."
 msgstr "来自独立源的 (symbol, trade_date, close) parquet。"
 
+#: cnequity/cli/schedule_cmds.py
+msgid "Partition file merge"
+msgstr "合并分区文件"
+
 #: cnequity/serve/lake.py
 #, python-brace-format
 msgid "Partitioned by {partition_granularity}: pick a period to get back all its rows."
@@ -4319,6 +4343,10 @@ msgstr "应用可确定的因子修正并保留旧版本；未解决项只作提
 #: cnequity/serve/ops/catalog.py
 msgid "Publish the finished data this run left in staging to the lake."
 msgstr "把这次 run 留在 staging 里、已经结束的数据发布到湖里。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Publish the merge; without it, only report what would merge."
+msgstr "发布合并结果；不加这个参数时只报告会合并哪些分区。"
 
 #: cnequity/storage/revisions.py
 #, python-brace-format

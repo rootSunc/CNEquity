@@ -185,7 +185,8 @@ def maintain(config_path: str, groups: str | None, notify: bool):
     soft_fail_max_days sessions in a row), a retry of keys in the debt ledger
     (`cne backfill <dataset> --outstanding`), the run audit (the whole lake on
     [job.maintenance].full_audit_weekday), the freshness gate,
-    source probes and SLO, run evidence over 20 sessions, a metadata backup
+    source probes and SLO, run evidence over 20 sessions, a merge of partitions that writes
+    left in several files, a metadata backup
     (manifest DB, receipts, quality findings; never curated Parquet), and a preview of `cne run clean`.
     The preview passes --dry-run, so this command never asks to delete.
     Exits 1 when a group run, the audit, the freshness gate or the backup fails; source,
@@ -229,6 +230,14 @@ def maintain(config_path: str, groups: str | None, notify: bool):
         click.echo(f"--- {_(label)} ---", err=True)
         if subprocess.run(_cne(*argv, "--config", path), check=False).returncode:
             (problems if gating else notes).append(_(label))
+
+    # Writes append new keys as files of their own; fold them back in here,
+    # once, rather than rewriting a partition on every write.
+    click.echo(f"--- {_('Partition file merge')} ---", err=True)
+    if subprocess.run(
+        _cne("storage", "merge-files", "--apply", "--config", path), check=False
+    ).returncode:
+        notes.append(_("Partition file merge"))
 
     click.echo(f"--- {_('Metadata backup')} ---", err=True)
     try:

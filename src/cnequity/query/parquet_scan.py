@@ -11,6 +11,8 @@ column, so a ``trade_date=2024`` directory next to a Date column raises
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import date
 from pathlib import Path
 
@@ -105,17 +107,52 @@ def list_partitions(
     """
     if resolve:
         root = _resolved_root(root)
-    if not root.exists():
+    try:
+        mtime_ns = os.stat(root).st_mtime_ns
+    except FileNotFoundError:
         return []
+    return list(_cached_partitions(str(root), partition_col, mtime_ns))
+
+
+# A directory's mtime changes whenever an entry is added, removed or renamed,
+# so it keys the listing safely for both committed generations (immutable) and
+# legacy mutable roots. Day-partitioned datasets hold ~8k directories; listing
+# them once per process instead of several times per read is most of a
+# single-symbol load.
+#
+# Only once the mtime is old enough, though. Linux stamps directories from a
+# coarse clock (a few milliseconds), so two partitions created within one tick
+# leave the mtime where the first one put it, and a listing cached in between
+# would hide the second. Within this window the directory is listed afresh and
+# nothing is cached — git's answer to the same "racy" timestamps.
+_PARTITION_CACHE: dict[tuple[str, str], tuple[int, tuple[Partition, ...]]] = {}
+_PARTITION_CACHE_MAX = 256
+_RACY_NS = 2_000_000_000
+
+
+def _cached_partitions(root: str, partition_col: str, mtime_ns: int) -> tuple[Partition, ...]:
+    key = (root, partition_col)
+    settled = time.time_ns() - mtime_ns >= _RACY_NS
+    hit = _PARTITION_CACHE.get(key)
+    if settled and hit is not None and hit[0] == mtime_ns:
+        return hit[1]
     prefix = f"{partition_col}="
     out: list[Partition] = []
-    for entry in root.iterdir():
-        if not entry.is_dir() or not entry.name.startswith(prefix):
-            continue
-        part = parse_partition(entry.name[len(prefix) :])
-        if part is not None:
-            out.append(part)
-    return sorted(out, key=lambda p: p.start)
+    with os.scandir(root) as entries:
+        for entry in entries:
+            if not entry.name.startswith(prefix) or not entry.is_dir():
+                continue
+            part = parse_partition(entry.name[len(prefix) :])
+            if part is not None:
+                out.append(part)
+    parts = tuple(sorted(out, key=lambda p: p.start))
+    if not settled:
+        _PARTITION_CACHE.pop(key, None)
+        return parts
+    if len(_PARTITION_CACHE) >= _PARTITION_CACHE_MAX:
+        _PARTITION_CACHE.clear()
+    _PARTITION_CACHE[key] = (mtime_ns, parts)
+    return parts
 
 
 def partition_dir(root: Path, partition_col: str, value: str) -> Path:

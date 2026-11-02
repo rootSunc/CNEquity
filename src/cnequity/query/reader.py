@@ -763,6 +763,7 @@ def _with_distribution_multiplier(
 # looking back this far covers that without scanning the whole factor history
 # on every adjusted load.
 _SUSPENDED_FACTOR_LOOKBACK_DAYS = 400
+_NARROW_FACTOR_READ_SYMBOLS = 500
 
 _FACTOR_SCHEMA = {"symbol": pl.Utf8, "trade_date": pl.Date, "factor": pl.Float64}
 
@@ -895,11 +896,21 @@ def _apply_adjustment(
     if bars.is_empty():
         return bars
 
+    # Every later step joins factors back onto these bars, so a narrow read
+    # only needs their symbols; a whole-market window of factors otherwise
+    # dominates a single-symbol adjusted load.
+    bar_symbols = bars.get_column("symbol").unique() if "symbol" in bars.columns else None
+    factor_symbols = (
+        sorted(bar_symbols.to_list())
+        if bar_symbols is not None and bar_symbols.len() <= _NARROW_FACTOR_READ_SYMBOLS
+        else None
+    )
     factors = _read_dataset(
         config,
         "adj_factors",
         start=start,
         end=end,
+        symbols=factor_symbols,
         revision=revision,
         read_context=read_context,
     )

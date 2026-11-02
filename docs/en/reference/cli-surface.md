@@ -74,6 +74,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne storage hold` | none | Adds object protection and clears pending-deletion marks |
 | `cne storage import` | none | Validates and registers a reference manifest; only adds protection |
 | `cne storage inspect` | none | Reads versions and retention reasons |
+| `cne storage merge-files` | none | Read-only preview; --apply merges many-file partitions and publishes a new version with the rows unchanged |
 | `cne storage plan` | none | Validates retention dependencies and saves a version plan; deletes no data |
 | `cne storage raw-external` | none | Registers external payload storage; retains local source sidecars and does not move or delete files |
 | `cne ths-official backfill` | when run | Calls the credentialed source and fills gaps |

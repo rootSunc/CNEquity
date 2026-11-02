@@ -789,6 +789,7 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 | `plan --keep 5 --phase purge` | 只选择观察期已满且内容未变的候选，逐文件核对 SHA-256；输出 `purge_ids` 和 `logical_bytes_to_purge` |
 | `apply PLAN_ID --phase mark` | 再次校验指针、引用、登记和文件身份，开始至少 7 天的原地观察期 |
 | `apply PLAN_ID --phase purge` | 已禁用；必须转到 serve 存储运维页重新检查并确认 |
+| `merge-files [DATASET...] [--min-files N] [--apply]` | 合并写入后分成多个文件的分区（默认文件数不少于 4）。不加 `--apply` 只报告会合并哪些分区；加上后像修复一样发布新版本，行内容不变。`cne run maintain` 每天自动执行 |
 
 每个子命令接受 `--config`。版本 `OBJECT_ID` 为当前湖内的 `revision/<dataset>/<revision_id>`；计划另外绑定湖身份及 metadata 根，不能直接在另一个湖使用。被引用但暂时缺失的版本也可通过清单登记保护，以便恢复后继续受到保护。
 

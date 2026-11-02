@@ -142,7 +142,7 @@ def test_an_overridden_symbol_is_served_from_baostock_with_its_own_cache(tmp_pat
     series = pl.DataFrame({"trade_date": DAYS, "factor": _steps({5: 1.05, 20: 1.03})})
     calls = []
 
-    def backup(config, symbol, adjust_type, sym_bars):
+    def backup(config, symbol, adjust_type, sym_bars, *, overridden=False):
         calls.append(symbol)
         return series
 

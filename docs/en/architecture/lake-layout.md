@@ -26,4 +26,6 @@ Read published data through the Python API or `cne query`. Do not modify version
 
 Before cleaning up staging, confirm that the task has finished and been merged. The presence of lock files in `meta/locks/` or `locks/` does not mean a process still holds the lock; do not recover a run by deleting lock files. See [Troubleshooting](../operations/troubleshooting.md).
 
+A partition can hold several Parquet files whose primary keys do not overlap; readers take all of them. Backfill and the daily run write only new keys as a new file and rewrite only the files that hold changed keys, instead of rewriting the whole partition; `cne run maintain` merges partitions that reach 4 files back into one each day (or run `cne storage merge-files`). A partition over 200,000 rows written whole is split into buckets by symbol, `part-bNNN-of-MMM.parquet`, so an update rewrites only its bucket. External programs that read the Parquet directly must read every file in a partition directory, not only `part-merged.parquet`.
+
 When the partition layout changes, old directories may still be readable, but overlapping with the new directories produces duplicate primary keys. Follow the [migration script notes](../operations/scripts.md) to dry-run and back up first, then unify the layout.

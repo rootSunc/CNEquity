@@ -697,6 +697,15 @@
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
 | `--keep` | `5` | — |
 
+## `cne storage merge-files`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `datasets` | `—` | 位置参数 |
+| `--min-files` | `—` | 合并文件数不少于这个值的分区（默认 4）。 |
+| `--apply` | `False` | 发布合并结果；不加这个参数时只报告会合并哪些分区。 |
+
 ## `cne storage plan`
 
 | 参数 | 默认值 | 说明 |

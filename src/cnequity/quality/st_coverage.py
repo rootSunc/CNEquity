@@ -157,6 +157,15 @@ def current_st_universe(
 
     bars_root = read_root(config, "daily_bars", read_context)
     if bars_root.exists() and any(bars_root.rglob("*.parquet")):
+        from cnequity.quality.verify import traded_daily_bar_symbols
+
+        try:
+            bars = traded_daily_bar_symbols(config, bars_root, start, end)
+        except (FileNotFoundError, OSError, pl.exceptions.PolarsError, ValueError):
+            bars = None
+        if bars is not None:
+            resolved_symbols = [symbol for symbol in resolved_symbols if symbol in bars]
+            return sorted(set(resolved_symbols))
         try:
             # Let the partition-aware scanner prune the requested bar window
             # and build one schema-aware lazy plan. The previous per-file
@@ -675,6 +684,48 @@ def publish_bse_st_observation_receipt(config: Config) -> Path | None:
     universe = getattr(config, "ingest_universe", "all_a")
     if universe not in ST_EVIDENCE_COMPATIBLE_UNIVERSES:
         universe = "all_a"
+    # Everything below reads only these three datasets. Every compact used to
+    # rebuild the receipt from them (~5 s), and almost every compact leaves
+    # them where they were; a lake without revision pointers always rebuilds.
+    inputs = _bse_observation_inputs(config, universe)
+    marker = config.meta_root / "state" / ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
+    if inputs is not None:
+        try:
+            previous = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+        if previous.get("inputs") == inputs:
+            receipt = previous.get("receipt")
+            if receipt is None:
+                return None
+            if Path(receipt).is_file():
+                return Path(receipt)
+    published = _publish_bse_st_observation_receipt(config, universe)
+    if inputs is not None:
+        _atomic_json(
+            marker, {"inputs": inputs, "receipt": None if published is None else str(published)}
+        )
+    return published
+
+
+def _bse_observation_inputs(config: Config, universe: str) -> dict | None:
+    """Revision identity of what the BJ observation receipt is built from."""
+    from cnequity.storage.revisions import RevisionStore
+
+    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
+    identity: dict = {"universe": universe, "evidence_version": ST_EVIDENCE_VERSION}
+    for dataset in ("instruments", "daily_bars", "trading_status"):
+        try:
+            pointer = store.current_pointer(dataset)
+        except Exception:  # noqa: BLE001 — an unreadable pointer means "rebuild"
+            return None
+        if not pointer or not pointer.get("revision_id"):
+            return None
+        identity[dataset] = pointer["revision_id"]
+    return identity
+
+
+def _publish_bse_st_observation_receipt(config: Config, universe: str) -> Path | None:
     symbols = current_st_universe(config, universe=universe)
     window = bse_st_observed_window(config, symbols)
     if window is None:

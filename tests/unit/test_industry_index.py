@@ -544,9 +544,10 @@ def test_derive_industry_index_aligns_new_schema_with_existing_partition(tmp_pat
 
     derive_industry_index(cfg, start=date(2026, 5, 15), end=date(2026, 5, 15))
 
-    written = pl.read_parquet(part / "part-000.parquet")
-    assert written.schema["n_priced"] == pl.UInt32
-    assert written.height == 3
+    # The new date is a file of its own, typed like the file beside it.
+    files = sorted(part.glob("*.parquet"))
+    assert all(pl.read_parquet_schema(path)["n_priced"] == pl.UInt32 for path in files)
+    assert sum(pl.read_parquet(path).height for path in files) == 3
 
 
 def test_catchup_after_watermark_keeps_first_day(tmp_path, monkeypatch):

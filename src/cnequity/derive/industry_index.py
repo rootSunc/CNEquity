@@ -370,7 +370,7 @@ def _derive_industry_index_locked(
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.schemas import with_provenance
     from cnequity.quality.verify import last_contiguous_dense_date
-    from cnequity.storage.parquet import CuratedWriter
+    from cnequity.storage.parquet import write_partition_rows
     from cnequity.storage.state import StateStore
 
     state = StateStore(config.meta_root)
@@ -399,7 +399,6 @@ def _derive_industry_index_locked(
     frame = dedupe_by_primary_key(frame, "industry_index")
 
     root = config.derived_root / "industry_index"
-    writer = CuratedWriter(config.derived_root)
     written = 0
     for (year,), group in (
         frame.with_columns(pl.col("trade_date").dt.year().alias("_y"))
@@ -409,30 +408,32 @@ def _derive_industry_index_locked(
         group = group.drop("_y")
         out_dir = root / f"trade_date={year}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        existing_files = sorted(out_dir.rglob("*.parquet"))
-        if existing_files:
-            # Same-year rerun: keep whatever the recompute did not cover.
-            existing = dedupe_by_primary_key(
-                pl.concat(
-                    [pl.read_parquet(path) for path in existing_files],
-                    how="diagonal_relaxed",
-                ),
-                "industry_index",
-            )
-            covered_dates = group.get_column("trade_date").unique().to_list()
-            keep = existing.filter(~pl.col("trade_date").is_in(covered_dates))
-            incoming = group.select(existing.columns)
+        stored = sorted(out_dir.glob("*.parquet"))
+        if stored:
+            # Keep one type per column across the partition's files: a rerun
+            # computes Int64 counts where older files hold UInt32.
+            schema = pl.read_parquet_schema(stored[0])
             casts = [
-                pl.col(name).cast(dtype).alias(name)
-                for name, dtype in existing.schema.items()
-                if name in incoming.columns and incoming.schema[name] != dtype
+                pl.col(name).cast(dtype)
+                for name, dtype in schema.items()
+                if name in group.columns and group.schema[name] != dtype
             ]
             if casts:
-                incoming = incoming.with_columns(casts)
-            group = pl.concat([keep, incoming]).sort(
-                "trade_date", "level", "weighting", "industry_code"
-            )
-        writer.write_partition("industry_index", "trade_date", str(year), group, "part-000.parquet")
+                group = group.with_columns(casts)
+        # A recomputed date replaces that whole date; a new date lands in a
+        # file of its own instead of rewriting the year (~289k rows for ~1.2k).
+        write_partition_rows(
+            group,
+            "industry_index",
+            read_dir=out_dir,
+            out_dir=out_dir,
+            load=pl.read_parquet,
+            dedupe=lambda frame: dedupe_by_primary_key(frame, "industry_index"),
+            finish=lambda frame: frame.sort("trade_date", "level", "weighting", "industry_code"),
+            replace_by=["trade_date"],
+            incoming_first=False,
+            merged_name="part-000.parquet",
+        )
         written += group.height
     # This derive writes directly to the derived tree instead of going through
     # the generic compact step. Do not advance past an interior session gap:

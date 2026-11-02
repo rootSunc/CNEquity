@@ -792,6 +792,7 @@ The version lifecycle comprises reference registration, immutable plans, an in-p
 | `plan --keep 5 --phase purge` | Select only candidates whose observation period has ended and whose content is unchanged, checking SHA-256 file by file; outputs `purge_ids` and `logical_bytes_to_purge` |
 | `apply PLAN_ID --phase mark` | Revalidate pointers, references, registrations and file identity, and start an in-place observation period of at least 7 days |
 | `apply PLAN_ID --phase purge` | Disabled; must go to the serve storage operations page to recheck and confirm |
+| `merge-files [DATASET...] [--min-files N] [--apply]` | Merge partitions that writes left in several files (4 or more by default). Without `--apply` it only reports what would merge; with it, it publishes a new version like a repair, with the rows unchanged. `cne run maintain` runs it every day |
 
 Every subcommand accepts `--config`. A version `OBJECT_ID` is `revision/<dataset>/<revision_id>` within the current lake; a plan is additionally bound to the lake identity and the metadata root, and cannot be used directly on another lake. A version that is referenced but temporarily missing can also be protected through manifest registration, so it stays protected after it is restored.
 
