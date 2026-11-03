@@ -241,3 +241,68 @@ def test_daily_bars_dense_prefix_starts_at_the_backfill_floor(tmp_path, monkeypa
 
     assert _watermark_date_for(cfg, "daily_bars", "trade_date") == date(2026, 10, 28)
     assert seen == {"daily_bars": BACKFILL_START}
+
+
+def test_compact_replays_no_print_proofs_only_when_daily_bars_publish(tmp_path, monkeypatch):
+    """A backfill that refetches what the lake holds publishes nothing new to check."""
+    from cnequity.steps import finalize
+    from cnequity.storage import StagingWriter
+
+    cfg = Config(data_root=tmp_path / "data")
+    day = date(2024, 6, 28)
+    replays: list[str] = []
+    reconciles: list[str] = []
+    monkeypatch.setattr(
+        "cnequity.storage.fund_no_print.reconcile_no_print_coverage",
+        lambda config: replays.append("replay") or {},
+    )
+    real_reconcile = finalize._reconcile_watermarks
+    monkeypatch.setattr(
+        finalize,
+        "_reconcile_watermarks",
+        lambda config: reconciles.append("reconcile") or real_reconcile(config),
+    )
+    bar = pl.DataFrame(
+        [
+            {
+                "symbol": "600519.SH",
+                "trade_date": day,
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.0,
+                "close": 10.5,
+                "volume": 1000,
+                "amount": 10_500.0,
+                "source": "mock",
+                "data_version": "v1",
+                "fetched_at": "2024-06-28T00:00:00+00:00",
+            }
+        ]
+    )
+    writer = StagingWriter(cfg.staging_root)
+
+    writer.write_batch("daily_bars", "first", "batch", bar)
+    first = finalize.step_compact(cfg, day, "first", {})
+    writer.write_batch("daily_bars", "again", "batch", bar)
+    again = finalize.step_compact(cfg, day, "again", {})
+
+    assert "daily_bars" in first["dataset_revisions"]
+    assert "dataset_revisions" not in again
+    assert replays == ["replay"]
+    # The reconcile guards runs that publish nothing because a source went dark.
+    assert reconciles == ["reconcile", "reconcile"]
+    assert StateStore(cfg.meta_root).get_date("daily_bars") == day
+
+
+def test_update_watermarks_replays_no_print_proofs_by_default(tmp_path, monkeypatch):
+    """Repair callers rely on the default replaying the proofs."""
+    cfg = Config(data_root=tmp_path / "data")
+    replays: list[str] = []
+    monkeypatch.setattr(
+        "cnequity.storage.fund_no_print.reconcile_no_print_coverage",
+        lambda config: replays.append("replay") or {},
+    )
+
+    _update_watermarks(cfg, frozenset({"daily_bars"}), date(2024, 6, 28))
+
+    assert replays == ["replay"]

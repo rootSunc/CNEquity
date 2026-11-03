@@ -320,6 +320,8 @@ def _update_watermarks(
     config: Config,
     datasets: frozenset[str] | None,
     trade_date: date,
+    *,
+    reconcile_no_print: bool = True,
 ) -> None:
     """Advance each compacted dataset's watermark to the freshest date it holds.
 
@@ -332,6 +334,11 @@ def _update_watermarks(
     it had zero rows, and the missed days never showed up as coverage gaps.
     Snapshot fetching only ever requests trade_date, so a truthful (possibly
     older) watermark cannot trigger a re-fetch storm — it just surfaces the hole.
+
+    ``reconcile_no_print=False`` skips replaying the fund no-print proofs. They
+    depend only on published daily_bars / instruments and the proof files, so
+    a compact that republished neither has nothing new to check; the replay
+    verifies every archived payload and costs ~3.4 s on a full lake.
     """
     state = StateStore(config.meta_root)
     from cnequity.domain.datasets import fetch_semantics
@@ -340,9 +347,10 @@ def _update_watermarks(
         if datasets is not None and dataset not in datasets:
             continue
         if dataset == "daily_bars":
-            from cnequity.storage.fund_no_print import reconcile_no_print_coverage
+            if reconcile_no_print:
+                from cnequity.storage.fund_no_print import reconcile_no_print_coverage
 
-            reconcile_no_print_coverage(config)
+                reconcile_no_print_coverage(config)
             from cnequity.storage.coverage import (
                 resolved_bj_session_dates,
                 resolved_prelisting_keys,
@@ -928,8 +936,19 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
                     [date.fromisoformat(day) for day in report.get("rejected_dates", [])],
                     reason="quarantined_rows",
                 )
+    # A dataset can compact rows without publishing anything: a backfill that
+    # refetches what the lake already holds rewrites nothing. The no-print
+    # replay reads only published content, so it then has nothing new to check.
+    # The watermark reconcile still runs: it exists for runs that publish
+    # nothing because a source went dark.
+    published = frozenset(committed_revisions)
     if compacted:
-        _update_watermarks(config, frozenset(compacted), trade_date)
+        _update_watermarks(
+            config,
+            frozenset(compacted),
+            trade_date,
+            reconcile_no_print=bool({"daily_bars", "instruments"} & published),
+        )
     audit_findings.extend(_reconcile_watermarks(config))
 
     from cnequity.query.views import ensure_duckdb_views
