@@ -341,8 +341,68 @@ def step_futures_bars(config: Config, trade_date: date, run_id: str, context: di
 
 @register_step("option_bars", group="derivatives")
 def step_option_bars(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    """Per-contract option daily bars from the exchanges' session files."""
+    """Per-contract option daily bars from the exchanges' session files.
+
+    ``cne backfill option_bars --source tushare`` instead fills the SSE/SZSE
+    ETF options, which no exchange archive covers.
+    """
+    if getattr(config, "_backfill", False) and getattr(config, "_option_source", None) == "tushare":
+        return _backfill_etf_options(config, trade_date, run_id)
     return _run_bars(config, trade_date, run_id, "options")
+
+
+def _backfill_etf_options(config: Config, trade_date: date, run_id: str) -> dict:
+    """SSE/SZSE ETF option bars and contracts from Tushare (optional token)."""
+    from cnequity.adapters.tushare.client import tushare_enabled
+    from cnequity.adapters.tushare.etf_options import (
+        ETF_OPTIONS_FLOOR,
+        fetch_contracts,
+        fetch_day,
+    )
+    from cnequity.adapters.tushare.etf_options import (
+        SOURCE as TUSHARE,
+    )
+    from cnequity.orchestrator.outcomes import SourceUnavailableError
+    from cnequity.steps.common import walk_day_backfill
+
+    if not tushare_enabled(config):
+        raise SourceUnavailableError("option_bars: --source tushare needs a Tushare token")
+    contracts = fetch_contracts(config)
+    if contracts.is_empty():
+        raise SourceUnavailableError("option_bars: tushare returned no ETF option contracts")
+    written = write_fetched(config, run_id, "option_contracts", contracts, source=TUSHARE)
+    result = walk_day_backfill(
+        config,
+        trade_date,
+        run_id,
+        "option_bars",
+        lambda day: fetch_day(day, contracts, config=config),
+        source=TUSHARE,
+        floor=ETF_OPTIONS_FLOOR,
+        existing_dates_fn=lambda days: _etf_option_days(config, days),
+        allow_empty_days=True,
+    )
+    result["contracts_written"] = written.get("rows_written", 0)
+    return result
+
+
+def _etf_option_days(config: Config, days: list[date]) -> set[date]:
+    """Sessions that already hold SSE/SZSE option rows (resume point)."""
+    from cnequity.adapters.tushare.etf_options import ETF_OPTION_EXCHANGES
+
+    bars = _scan_bars(config, "option_bars")
+    if bars is None or not days:
+        return set()
+    return set(
+        bars.filter(
+            pl.col("exchange").is_in(list(ETF_OPTION_EXCHANGES))
+            & pl.col("trade_date").is_between(min(days), max(days))
+        )
+        .select("trade_date")
+        .unique()
+        .collect()["trade_date"]
+        .to_list()
+    )
 
 
 def _scan_bars(config: Config, dataset: str, run_id: str | None = None) -> pl.LazyFrame | None:
@@ -466,6 +526,12 @@ def _run_contracts(config: Config, run_id: str, dataset: str) -> dict:
     bars = _scan_bars(config, "option_bars" if kind == "option" else "futures_bars", run_id)
     if bars is None:
         return {"rows_read": 0, "rows_written": 0, "note": "no bars observed yet"}
+    if kind == "option":
+        from cnequity.adapters.tushare.etf_options import ETF_OPTION_EXCHANGES
+
+        # ETF option contracts come from the exchanges' own list (via Tushare),
+        # not from parsing futures-style codes; their rows are left as written.
+        bars = bars.filter(~pl.col("exchange").is_in(list(ETF_OPTION_EXCHANGES)))
     findings: list[dict] = []
     reference = _reference(config, bars, findings, dataset)
     if reference is not None:

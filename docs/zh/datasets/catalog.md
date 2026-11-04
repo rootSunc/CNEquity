@@ -117,7 +117,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 | trade_ticks | **2024-01-02** | 客户端允许的最早请求日期，不代表每个标的完整覆盖 |
 | northbound_flows | **2014-11-17** | 沪股通开通日；更早没有该资金流 feed |
 | futures_bars | **2002-01-07** | 上期所文件最早可取日；郑商所 2010-01-04、中金所 2010-04-16、广期所 2022-12-22，各所起点由适配器截断 |
-| option_bars | **2017-04-19** | 郑商所白糖期权首日；上期所 2018-09-21、中金所 2019-12-23、广期所 2022-12-23 |
+| option_bars | **2015-02-09** | 郑商所白糖期权首日；上期所 2018-09-21、中金所 2019-12-23、广期所 2022-12-23；上交所 50ETF 期权 2015-02-09（Tushare） |
 
 两者的区别不是学术问题：把固定底写成滚动天数，`earliest_available()` 会每天往前漂，几个月后就把源端还愿意提供的数据挡在门外。
 
@@ -342,9 +342,9 @@ EM 响应若已包含尚未生效的调样行，会拒绝整份快照：删除�
 |--------|--------|------|------|------|------|------|
 | commodity_bars | trade_date | symbol, trade_date | by_date | ✓ | sina | 备源 eastmoney；国内主连 + COMEX金 `GC0.CMX`；`cne backfill commodity_bars`；required=false |
 | futures_contracts | —（单文件 merge） | symbol | by_date | — | futures_exchange | 期货合约表：上市/最后交易日只取权威参考；首末观测日独立保存，缺行情不等于到期；`dates_basis` 标注来源；由 futures_bars 重建；required=false |
-| option_contracts | —（单文件 merge） | symbol | by_date | — | futures_exchange | 期权合约表：标的、行权价、看涨/看跌、行权方式、到期日；中金所期权标的为指数（IO→000300.SH）；required=false |
+| option_contracts | —（单文件 merge） | symbol | by_date | — | futures_exchange | 期权合约表：标的、行权价、看涨/看跌、行权方式、到期日；中金所期权标的为指数（IO→000300.SH）；required=false。ETF 期权合约直接取自交易所合约清单（Tushare `opt_basic`），标的为 ETF（`underlying_kind=etf`），合约单位通常 10,000 份、分红后调整；日常重建不改动这些行 |
 | futures_bars | trade_date（按月） | symbol, trade_date | by_date | ✓ | futures_exchange | 逐合约日线，含结算价、持仓；**单边口径**（2020 年前上期/能源/大商/郑商的双边值已折半）；成交额为元；未成交行 OHLC 为空；多交易所各自为故障域，缺一家照写其余、三日回看加持久欠账重试；读上期所（含能源，2002 起）、郑商所（2010 起）、广期所（2022-12 起）、中金所（2010-04-16 起），大商所见 sources.md；required=false |
-| option_bars | trade_date | symbol, trade_date | by_date | ✓ | futures_exchange | 逐合约期权日线，含结算价、持仓、行权量与交易所发布的 Delta/IV；到期当天虚值合约结算价按 0 入湖；上期/能源 2018-09 起、郑商所 2017-04-19 起、广期所 2022-12-23 起、中金所 IO/MO/HO 2019-12-23 起；required=false |
+| option_bars | trade_date | symbol, trade_date | by_date | ✓ | futures_exchange | 逐合约期权日线，含结算价、持仓、行权量与交易所发布的 Delta/IV；到期当天虚值合约结算价按 0 入湖；上期/能源 2018-09 起、郑商所 2017-04-19 起、广期所 2022-12-23 起、中金所 IO/MO/HO 2019-12-23 起；required=false。沪深 ETF 期权（交易所 `SH`/`SZ`，50ETF 自 2015-02-09 起）由 `cne backfill option_bars --source tushare` 从 Tushare 回补，需要你自己的令牌；成交量、持仓为张，成交额为元，没有交易所发布的 Delta/IV |
 | futures_continuous | trade_date（按月） | symbol, series, trade_date | derived | ✓ | derived | 主力/次主力连续合约：T 日用哪个合约只看 T-1 收盘持仓，只向后换月，临近最后交易日 5 天（或进入交割月）即让位；`adj_ratio`/`adj_diff` 累计换月因子；`roll_yield` 为主力对次主力年化展期收益；`cne derive futures_continuous`；required=false |
 | option_greeks | trade_date | symbol, trade_date | derived | ✓ | derived | 本湖自己的期权 IV 与希腊字母：结算价反解，欧式 Black-76、美式 BAW；商品期权标的取同日期货结算价，中金所指数期权用平价倒推远期；利率 shibor_3m，缺失用 2% 并在 `rate_source` 标注；`status` 说明无解原因（到期当天为 `expiry_day`）；`cne derive option_greeks` 检测行情/合约/利率/模型内容依赖，自动重算失效日期；required=false |
 | futures_minute_bars | trade_date | symbol, bar_time | by_date | ✓ | sina | 期货 1 分钟线，**只对 watchlist**（`[futures] minute_*`）；新浪每合约只留最近 1023 根（夜盘品种约 2 个交易日），只能从开启日往后积累，必须每个交易日跑；夜盘 bar 归下一交易日；required=false |

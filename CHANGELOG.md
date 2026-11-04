@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- `option_bars` 和 `option_contracts` 收录沪深 ETF 期权：`cne backfill option_bars --source tushare` 用你自己的 Tushare 令牌回补上交所、深交所的全部 ETF 期权（50ETF 自 2015-02-09 起，另有 300ETF、500ETF、科创 50、创业板等），交易所记为 `SH`/`SZ`，标的为对应 ETF。合约条款直接取自交易所合约清单（Tushare `opt_basic`），期权合约表的日常重建不再解析、也不改动这些行；成交额从万元换算为元。期权希腊值对 ETF 期权和中金所股指期权一样用平价公式推远期价格。
 - 新增可选数据集 `fund_flow_tushare`：Tushare `moneyflow` 自算口径的个股资金流，2010 起，小单、中单、大单、特大单的买入和卖出量与额，以及净流入。它和 `fund_flow` 的东财口径不同，单独成表、不混用。需要你自己的 Tushare 令牌，只由 `cne backfill fund_flow_tushare` 采集；量换算为股，额换算为元。
 - 新增可选数据集 `limit_prices`：Tushare `stk_limit` 每只股票每个交易日的涨停价、跌停价，2007-01-04 起，可据此判断一根 K 线是否触及涨跌停。需要你自己的 Tushare 令牌，只由 `cne backfill limit_prices` 采集，默认不排日更；北交所 2024 年前的旧代码换成 920 代码，B 股不写入。实测 2026-11-04 的 5,578 只股票收盘价全部落在当日涨跌停价之内。
 - `sector_fund_flow` 恢复了：配置了自己的 Tushare 令牌时，`cne backfill sector_fund_flow` 用 `moneyflow_ind_dc`（Tushare 转发的东财板块资金流，2023-09-12 起）只补湖里没有的板块，已有的东财行不改；`[sources.eastmoney] push2_paused = true` 时日更直接从 Tushare 取当天（当晚未发布完整时这一步失败，由晚间补采重试，不写半天数据）。实测 2026-09-21 两边 1,000 个行业和概念板块的主力净流入、涨跌幅、名称全部一致。Tushare 行标 `source=tushare`，另有 31 个地域板块（`board_type=region`），没有换手率（`turnover_pct` 为空）。历史深度不均：2025-02-26 以前只有旧分类的 86 个行业板块，概念和地域板块自 2025-02-26 起，2025-10 起每天约 1,000 个板块。在本机湖上补入 355,862 行，2023-09-12 以来每个交易日都有数据。配置了令牌后，`fund_flow` 和 `sector_fund_flow` 不再算作只能逐日积累的快照，日更也就不再为它们归档原始响应。

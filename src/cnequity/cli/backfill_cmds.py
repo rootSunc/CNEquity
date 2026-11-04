@@ -66,8 +66,9 @@ from cnequity.orchestrator.engine import JobEngine
     default=None,
     help=N_(
         "Source to use for this backfill instead of the configured one, without editing the config. "
-        "Supported for margin_trading (exchange or eastmoney) and financial_statement_items "
-        "(tdx_fin: fill only the items the lake lacks)."
+        "Supported for margin_trading (exchange or eastmoney), financial_statement_items "
+        "(tdx_fin: fill only the items the lake lacks) and option_bars (tushare: SSE/SZSE ETF "
+        "options)."
     ),
 )
 @click.option(
@@ -174,6 +175,9 @@ def backfill(
     if source == "tdx_fin" and dataset == "financial_statement_items":
         _backfill_financials_tdx_fin(config_path, start_str, end_str)
         return
+    option_source = None
+    if source == "tushare" and dataset == "option_bars":
+        option_source, source = "tushare", None
     if source is not None:
         if dataset != "margin_trading":
             raise click.ClickException(
@@ -362,6 +366,7 @@ def backfill(
         symbols_str = ",".join(symbols)
     cfg = _cfg(config_path)
     cfg._backfill_refetch = bool(refetch and dataset == "fund_flow")
+    cfg._option_source = option_source
     derivatives = {
         "futures_bars",
         "option_bars",

@@ -351,7 +351,11 @@ def spec_findings(config: Config, dataset: str = "futures_bars") -> list[dict]:
     kind = "future" if dataset == "futures_bars" else "option"
     parse = parse_future_code if kind == "future" else parse_option_code
     findings: list[dict] = []
+    from cnequity.domain.derivatives import EXCHANGES
+
     for (exchange, product), group in recent.group_by(["exchange", "product"]):
+        if exchange not in EXCHANGES:
+            continue  # SSE/SZSE ETF options: terms come from the exchange list, not this table
         sample = group.row(0, named=True)
         contract = parse(sample["exchange_code"], exchange, sample["trade_date"])
         series = contract if kind == "future" else contract.series

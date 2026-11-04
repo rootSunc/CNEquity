@@ -43,6 +43,11 @@ PARITY_STRIKES = 3
 __all__ = ["compute_option_greeks", "derive_option_greeks"]
 
 
+#: Index and ETF options settle on no traded future; their forward comes from
+#: put-call parity (CFFEX index options, SSE/SZSE ETF options).
+_PARITY_EXCHANGES = ["CFE", "SH", "SZ"]
+
+
 def _parity_forwards(frame: pl.DataFrame) -> dict[tuple[str, date], float]:
     """Forward per (series, session) from put-call parity on settlements."""
     out: dict[tuple[str, date], float] = {}
@@ -126,7 +131,7 @@ def compute_option_greeks(
     )
     frame = frame.join(settles, on=["underlying_symbol", "trade_date"], how="left")
     forwards = _parity_forwards(
-        frame.filter((pl.col("exchange") == "CFE") & pl.col("t").is_not_null())
+        frame.filter(pl.col("exchange").is_in(_PARITY_EXCHANGES) & pl.col("t").is_not_null())
     )
     if forwards:
         frame = frame.join(
@@ -143,11 +148,11 @@ def compute_option_greeks(
     else:
         frame = frame.with_columns(pl.lit(None, dtype=pl.Float64).alias("_parity"))
     frame = frame.with_columns(
-        pl.when(pl.col("exchange") == "CFE")
+        pl.when(pl.col("exchange").is_in(_PARITY_EXCHANGES))
         .then(pl.col("_parity"))
         .otherwise(pl.col("_fut"))
         .alias("underlying_price"),
-        pl.when(pl.col("exchange") == "CFE")
+        pl.when(pl.col("exchange").is_in(_PARITY_EXCHANGES))
         .then(pl.lit("parity"))
         .otherwise(pl.lit("future_settle"))
         .alias("forward_source"),

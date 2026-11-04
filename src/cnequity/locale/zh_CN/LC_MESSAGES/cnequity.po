@@ -5363,8 +5363,8 @@ msgid "Source probes"
 msgstr "源探针"
 
 #: cnequity/cli/backfill_cmds.py
-msgid "Source to use for this backfill instead of the configured one, without editing the config. Supported for margin_trading (exchange or eastmoney) and financial_statement_items (tdx_fin: fill only the items the lake lacks)."
-msgstr "本次回填改用的来源，不修改配置。支持 margin_trading（exchange 或 eastmoney）和 financial_statement_items（tdx_fin：只补湖中缺少的科目）。"
+msgid "Source to use for this backfill instead of the configured one, without editing the config. Supported for margin_trading (exchange or eastmoney), financial_statement_items (tdx_fin: fill only the items the lake lacks) and option_bars (tushare: SSE/SZSE ETF options)."
+msgstr "本次回填改用的来源，不修改配置。支持 margin_trading（exchange 或 eastmoney）、financial_statement_items（tdx_fin：只补湖中缺少的科目）和 option_bars（tushare：沪深 ETF 期权）。"
 
 #: cnequity/serve/ops/catalog.py
 msgid "Start"
