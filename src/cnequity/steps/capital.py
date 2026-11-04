@@ -137,6 +137,46 @@ def _backfill_fund_flow_tushare(config: Config, trade_date: date, run_id: str) -
     )
 
 
+@register_step(
+    "fund_flow_tushare",
+    group="capital",
+    depends_on=["instruments"],
+    description="Tushare's own order-size money flow per stock",
+)
+def step_fund_flow_tushare(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """Tushare ``moneyflow``; no default schedule runs this. Skipped without a token."""
+    from cnequity.adapters.tushare.client import tushare_enabled
+    from cnequity.adapters.tushare.fund_flow_measure import (
+        FUND_FLOW_TUSHARE_FLOOR,
+        SOURCE,
+        fetch_fund_flow_measure,
+    )
+    from cnequity.steps.common import load_symbols, walk_day_backfill
+
+    if not tushare_enabled(config):
+        return {"rows_written": 0, "status": "skipped", "reason": "tushare not configured"}
+    universe = sorted(set(load_symbols(config)))
+
+    def fetch_day(day: date) -> pl.DataFrame:
+        frame = fetch_fund_flow_measure(day, config=config)
+        return frame.filter(pl.col("symbol").is_in(universe))
+
+    if getattr(config, "_backfill", False):
+        return walk_day_backfill(
+            config,
+            trade_date,
+            run_id,
+            "fund_flow_tushare",
+            fetch_day,
+            source=SOURCE,
+            floor=FUND_FLOW_TUSHARE_FLOOR,
+        )
+    df = fetch_day(trade_date)
+    if df.is_empty():
+        raise SourceUnavailableError(f"fund_flow_tushare: tushare has no rows for {trade_date}")
+    return write_fetched(config, run_id, "fund_flow_tushare", df, source=SOURCE)
+
+
 @register_step("northbound_holdings", group="capital", depends_on=["instruments"])
 def step_northbound_holdings(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if not config.sources.get("eastmoney", True):

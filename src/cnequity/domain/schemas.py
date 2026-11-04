@@ -683,6 +683,32 @@ BROKER_FORECASTS_SCHEMA = {
     "fetched_at": FETCHED_AT_DTYPE,
 }
 
+FUND_FLOW_TUSHARE_SCHEMA = {
+    "symbol": pl.Utf8,
+    "trade_date": pl.Date,
+    "buy_small_volume": pl.Float64,
+    "buy_small_amount": pl.Float64,
+    "sell_small_volume": pl.Float64,
+    "sell_small_amount": pl.Float64,
+    "buy_medium_volume": pl.Float64,
+    "buy_medium_amount": pl.Float64,
+    "sell_medium_volume": pl.Float64,
+    "sell_medium_amount": pl.Float64,
+    "buy_large_volume": pl.Float64,
+    "buy_large_amount": pl.Float64,
+    "sell_large_volume": pl.Float64,
+    "sell_large_amount": pl.Float64,
+    "buy_xlarge_volume": pl.Float64,
+    "buy_xlarge_amount": pl.Float64,
+    "sell_xlarge_volume": pl.Float64,
+    "sell_xlarge_amount": pl.Float64,
+    "net_volume": pl.Float64,
+    "net_amount": pl.Float64,
+    "source": pl.Utf8,
+    "data_version": pl.Utf8,
+    "fetched_at": FETCHED_AT_DTYPE,
+}
+
 LIMIT_PRICES_SCHEMA = {
     "symbol": pl.Utf8,
     "trade_date": pl.Date,
@@ -1051,6 +1077,7 @@ DATASET_SCHEMAS = {
     "broker_forecasts": BROKER_FORECASTS_SCHEMA,
     "name_history": NAME_HISTORY_SCHEMA,
     "limit_prices": LIMIT_PRICES_SCHEMA,
+    "fund_flow_tushare": FUND_FLOW_TUSHARE_SCHEMA,
     "index_constituents": INDEX_CONSTITUENTS_SCHEMA,
     "industry_members": INDUSTRY_MEMBERS_SCHEMA,
     "macro_indicators": MACRO_INDICATORS_SCHEMA,
@@ -1145,6 +1172,7 @@ PRIMARY_KEYS = {
     "broker_forecasts": ["forecast_id"],
     "name_history": ["symbol", "start_date", "name"],
     "limit_prices": ["symbol", "trade_date"],
+    "fund_flow_tushare": ["symbol", "trade_date"],
     "index_constituents": ["index_symbol", "symbol", "as_of_date"],
     "industry_members": ["symbol", "classification_system", "as_of_date"],
     "macro_indicators": ["indicator_id", "obs_date"],

@@ -36,3 +36,17 @@ def test_the_step_sends_nothing_without_a_token(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx.Client, "post", boom)
     result = step_limit_prices(Config(data_root=tmp_path), date(2026, 11, 4), "run-1", {})
     assert result["status"] == "skipped"
+
+
+def test_fund_flow_measure_converts_units_and_keeps_its_own_columns():
+    from cnequity.adapters.tushare import fund_flow_measure as fm
+
+    names = fm._FIELDS.split(",")
+    row = ["430017.BJ", "20240603", *[1.0] * (len(names) - 2)]
+    frame = fm.normalize(names, [row])
+    assert frame["symbol"][0] == "920017.BJ"
+    assert frame["buy_small_volume"][0] == 100.0
+    assert frame["net_amount"][0] == 10_000.0
+    validate_dataframe(
+        with_provenance(frame, source="tushare", data_version="v1"), "fund_flow_tushare"
+    )

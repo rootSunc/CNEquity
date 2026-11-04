@@ -1305,6 +1305,36 @@ Tushare `stk_limit` limit-up and limit-down prices; needs your own Tushare token
 | data_version | string | Provenance |
 | fetched_at | timestamp | Provenance |
 
+#### fund_flow_tushare
+
+Tushare's own `moneyflow` measure; needs your own Tushare token in `[sources.tushare]`. Not the same measure as `fund_flow` (EastMoney's) and never mixed with it. Volumes in shares, amounts in yuan.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Legacy Beijing codes are stored under the 920 code |
+| trade_date | date | Session |
+| buy_small_volume | float64 | Small-order buy volume (shares) |
+| buy_small_amount | float64 | Small-order buy amount (yuan) |
+| sell_small_volume | float64 | Small-order sell volume (shares) |
+| sell_small_amount | float64 | Small-order sell amount (yuan) |
+| buy_medium_volume | float64 | Medium-order buy volume (shares) |
+| buy_medium_amount | float64 | Medium-order buy amount (yuan) |
+| sell_medium_volume | float64 | Medium-order sell volume (shares) |
+| sell_medium_amount | float64 | Medium-order sell amount (yuan) |
+| buy_large_volume | float64 | Large-order buy volume (shares) |
+| buy_large_amount | float64 | Large-order buy amount (yuan) |
+| sell_large_volume | float64 | Large-order sell volume (shares) |
+| sell_large_amount | float64 | Large-order sell amount (yuan) |
+| buy_xlarge_volume | float64 | Extra-large-order buy volume (shares) |
+| buy_xlarge_amount | float64 | Extra-large-order buy amount (yuan) |
+| sell_xlarge_volume | float64 | Extra-large-order sell volume (shares) |
+| sell_xlarge_amount | float64 | Extra-large-order sell amount (yuan) |
+| net_volume | float64 | Net inflow volume (shares) |
+| net_amount | float64 | Net inflow amount (yuan) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
 ### Compact deduplication
 
 During compact, rows are grouped by primary key and the row with the largest `fetched_at` is kept.

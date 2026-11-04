@@ -223,6 +223,26 @@ _UNIT_CONTRACT_DEFAULTS: dict[str, UnitContract] = {
         "holding_mv": "CNY",
     },
     "limit_prices": {"up_limit": "CNY/share", "down_limit": "CNY/share"},
+    "fund_flow_tushare": {
+        "buy_small_volume": "share",
+        "buy_small_amount": "CNY",
+        "sell_small_volume": "share",
+        "sell_small_amount": "CNY",
+        "buy_medium_volume": "share",
+        "buy_medium_amount": "CNY",
+        "sell_medium_volume": "share",
+        "sell_medium_amount": "CNY",
+        "buy_large_volume": "share",
+        "buy_large_amount": "CNY",
+        "sell_large_volume": "share",
+        "sell_large_amount": "CNY",
+        "buy_xlarge_volume": "share",
+        "buy_xlarge_amount": "CNY",
+        "sell_xlarge_volume": "share",
+        "sell_xlarge_amount": "CNY",
+        "net_volume": "share",
+        "net_amount": "CNY",
+    },
     "broker_forecasts": {
         "op_rt": "10k_CNY",
         "op_pr": "10k_CNY",
@@ -812,6 +832,18 @@ _SPECS = [
         watermark=False,
         required=False,
         empty_severity="info",
+    ),
+    # Tushare's own order-size money flow (moneyflow, optional token), from
+    # 2010. A different measure from fund_flow's EastMoney one, so its own
+    # table. Only `cne backfill fund_flow_tushare` fills it.
+    DatasetSpec(
+        "fund_flow_tushare",
+        primary_source="tushare",
+        tier="L4",
+        partition_col="trade_date",
+        required=False,
+        empty_severity="info",
+        history_floor_date=date(2010, 1, 4),
     ),
     # Exchange price bands per stock and session (Tushare stk_limit, optional
     # token), from 2007. Only `cne backfill limit_prices` fills it.
@@ -1768,6 +1800,7 @@ _SUPPORT: dict[str, Support] = {
             "analyst_consensus",
             "broker_forecasts",
             "limit_prices",
+            "fund_flow_tushare",
             "sector_members",
             "northbound_holdings",
             "northbound_flows",

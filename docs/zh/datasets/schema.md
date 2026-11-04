@@ -1298,6 +1298,36 @@ Tushare `stk_limit` 涨停价、跌停价，需在 `[sources.tushare]` 配置自
 | data_version | string | 溯源 |
 | fetched_at | timestamp | 溯源 |
 
+#### fund_flow_tushare
+
+Tushare `moneyflow` 自算口径的个股资金流，需在 `[sources.tushare]` 配置自己的 Tushare 令牌。与 `fund_flow`（东财口径）不同，不混用。量为股，额为元。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| trade_date | date | 交易日 |
+| buy_small_volume | float64 | 小单买入量（股） |
+| buy_small_amount | float64 | 小单买入额（元） |
+| sell_small_volume | float64 | 小单卖出量（股） |
+| sell_small_amount | float64 | 小单卖出额（元） |
+| buy_medium_volume | float64 | 中单买入量（股） |
+| buy_medium_amount | float64 | 中单买入额（元） |
+| sell_medium_volume | float64 | 中单卖出量（股） |
+| sell_medium_amount | float64 | 中单卖出额（元） |
+| buy_large_volume | float64 | 大单买入量（股） |
+| buy_large_amount | float64 | 大单买入额（元） |
+| sell_large_volume | float64 | 大单卖出量（股） |
+| sell_large_amount | float64 | 大单卖出额（元） |
+| buy_xlarge_volume | float64 | 特大单买入量（股） |
+| buy_xlarge_amount | float64 | 特大单买入额（元） |
+| sell_xlarge_volume | float64 | 特大单卖出量（股） |
+| sell_xlarge_amount | float64 | 特大单卖出额（元） |
+| net_volume | float64 | 净流入量（股） |
+| net_amount | float64 | 净流入额（元） |
+| source | string | 溯源 |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
 ### Compact 去重
 
 Compact 时按主键分组，保留 `fetched_at` 最大的一行。
