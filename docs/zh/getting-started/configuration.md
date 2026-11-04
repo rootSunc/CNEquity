@@ -111,7 +111,7 @@ enabled = false
 | `ths_official` | **同花顺官方 API（keyed）**，见 [`cne ths-official`](../reference/cli.md#cne-ths-official) |
 | `sw` / `cni` | 申万历史行业、国证历史成分文件，默认间隔 1 秒、单请求在途 |
 | `futures_exchange` | 期货交易所文件，逐主机限速与缓存 |
-| `tushare` | 可选 Tushare Pro——BJ 历史 ST 证据（`stock_st`）。需 token：环境变量 `TUSHARE_TOKEN` 或 `token_file`，别把凭证写进配置 |
+| `tushare` | 可选 Tushare Pro——BJ 历史 ST 证据（`stock_st`）与 `broker_forecasts`（`report_rc`）。需你自己的 token：环境变量 `TUSHARE_TOKEN` 或 `token_file`，别把凭证写进配置；没有 token 时不发任何请求。`api_url` 默认 `https://api.tushare.pro`，只在使用其他兼容服务器时设置 |
 
 
 | 键 | 说明 |

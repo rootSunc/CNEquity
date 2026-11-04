@@ -652,6 +652,37 @@ BLOCK_TRADES_SCHEMA = {
     "fetched_at": FETCHED_AT_DTYPE,
 }
 
+# Tushare report_rc: one row per report × forecast fiscal year.
+# Money columns are 万元 as the source reports them; eps/max/min price CNY/share.
+BROKER_FORECASTS_SCHEMA = {
+    "forecast_id": pl.Utf8,
+    "symbol": pl.Utf8,
+    "report_date": pl.Date,
+    "fiscal_year": pl.Int16,
+    "name": pl.Utf8,
+    "report_title": pl.Utf8,
+    "report_type": pl.Utf8,
+    "classify": pl.Utf8,
+    "org_name": pl.Utf8,
+    "author_name": pl.Utf8,
+    "quarter": pl.Utf8,
+    "rating": pl.Utf8,
+    "op_rt": pl.Float64,
+    "op_pr": pl.Float64,
+    "tp": pl.Float64,
+    "np": pl.Float64,
+    "eps": pl.Float64,
+    "pe": pl.Float64,
+    "rd": pl.Float64,
+    "roe": pl.Float64,
+    "ev_ebitda": pl.Float64,
+    "max_price": pl.Float64,
+    "min_price": pl.Float64,
+    "source": pl.Utf8,
+    "data_version": pl.Utf8,
+    "fetched_at": FETCHED_AT_DTYPE,
+}
+
 INDEX_CONSTITUENTS_SCHEMA = {
     "index_symbol": pl.Utf8,
     "symbol": pl.Utf8,
@@ -994,6 +1025,7 @@ DATASET_SCHEMAS = {
     "earnings_disclosure_schedule": EARNINGS_DISCLOSURE_SCHEDULE_SCHEMA,
     "dragon_tiger": DRAGON_TIGER_SCHEMA,
     "block_trades": BLOCK_TRADES_SCHEMA,
+    "broker_forecasts": BROKER_FORECASTS_SCHEMA,
     "index_constituents": INDEX_CONSTITUENTS_SCHEMA,
     "industry_members": INDUSTRY_MEMBERS_SCHEMA,
     "macro_indicators": MACRO_INDICATORS_SCHEMA,
@@ -1085,6 +1117,7 @@ PRIMARY_KEYS = {
     "earnings_disclosure_schedule": ["symbol", "report_period"],
     "dragon_tiger": ["symbol", "trade_date", "reason"],
     "block_trades": ["symbol", "trade_date", "price", "volume"],
+    "broker_forecasts": ["forecast_id"],
     "index_constituents": ["index_symbol", "symbol", "as_of_date"],
     "industry_members": ["symbol", "classification_system", "as_of_date"],
     "macro_indicators": ["indicator_id", "obs_date"],

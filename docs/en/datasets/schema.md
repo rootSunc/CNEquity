@@ -1241,6 +1241,38 @@ THS industry and concept sector fund flow, written only when push2 cannot provid
 | data_version | string |  |
 | fetched_at | timestamp |  |
 
+#### broker_forecasts
+
+Tushare `report_rc` broker forecasts; needs your own Tushare token in `[sources.tushare]`. One row per report × forecast fiscal year; `report_date` rebuilds the consensus known on any past date.
+
+| Column | Type | Description |
+|--------|------|-------|
+| forecast_id | string | Primary key; hash of the whole source row (reports carry no ID) |
+| symbol | string |  |
+| report_date | date | Day the report was published; availability date |
+| fiscal_year | int16 | Forecast fiscal year, taken from quarter |
+| name | string | Stock short name |
+| report_title | string | Report title |
+| report_type | string | Report type |
+| classify | string | Report class |
+| org_name | string | Broker |
+| author_name | string | Analysts |
+| quarter | string | Forecast period, e.g. 2024Q4 |
+| rating | string | Rating, e.g. 买入/增持 |
+| op_rt | float64 | Revenue, 10k CNY |
+| op_pr | float64 | Operating profit, 10k CNY |
+| tp | float64 | Total profit, 10k CNY |
+| np | float64 | Net profit, 10k CNY |
+| eps | float64 | EPS, CNY |
+| pe | float64 | P/E |
+| rd | float64 | Dividend yield, % |
+| roe | float64 | ROE, % |
+| ev_ebitda | float64 | EV/EBITDA |
+| max_price | float64 | Target price high, CNY |
+| min_price | float64 | Target price low, CNY |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
 ### Compact deduplication
 
 During compact, rows are grouped by primary key and the row with the largest `fetched_at` is kept.

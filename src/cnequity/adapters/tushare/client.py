@@ -185,10 +185,47 @@ class TushareClient:
         assert last_error is not None
         raise last_error
 
+    def rows(
+        self, api: str, params: Mapping | None = None, fields: str = ""
+    ) -> tuple[list[str], list[list]]:
+        """One call as the source's field names and raw JSON rows."""
+        return _rows(api, self._post(api, params or {}, fields))
+
+    def all_rows(
+        self,
+        api: str,
+        params: Mapping | None = None,
+        fields: str = "",
+        *,
+        page_size: int = DEFAULT_PAGE_SIZE,
+        max_pages: int = DEFAULT_MAX_PAGES,
+    ) -> tuple[list[str], list[list]]:
+        """Every page of one query; a short page ends it.
+
+        A page that comes back exactly full past ``max_pages`` raises rather
+        than returning a silently truncated result, and so do pages whose
+        field lists disagree.
+        """
+        names: list[str] | None = None
+        items: list[list] = []
+        for page in range(max_pages):
+            page_names, page_items = self.rows(
+                api, {**(params or {}), "limit": page_size, "offset": page * page_size}, fields
+            )
+            if names is None:
+                names = page_names
+            elif page_items and page_names != names:
+                raise ValueError(f"tushare {api}: fields changed between pages")
+            items.extend(page_items)
+            if len(page_items) < page_size:
+                break
+        else:
+            raise RuntimeError(f"tushare {api}: pagination exceeded {max_pages} pages")
+        return names or [], items
+
     def query(self, api: str, params: Mapping | None = None, fields: str = "") -> pl.DataFrame:
-        """One call, as returned. Columns keep the source's names."""
-        body = self._post(api, params or {}, fields)
-        return _frame(api, body)
+        """One call as a DataFrame. Columns keep the source's names."""
+        return _frame(*self.rows(api, params, fields))
 
     def query_all(
         self,
@@ -199,26 +236,11 @@ class TushareClient:
         page_size: int = DEFAULT_PAGE_SIZE,
         max_pages: int = DEFAULT_MAX_PAGES,
     ) -> pl.DataFrame:
-        """Every page of one query; a short page ends it.
-
-        A page that comes back exactly full past ``max_pages`` raises rather
-        than returning a silently truncated result.
-        """
-        frames = []
-        for page in range(max_pages):
-            frame = self.query(
-                api, {**(params or {}), "limit": page_size, "offset": page * page_size}, fields
-            )
-            frames.append(frame)
-            if frame.height < page_size:
-                break
-        else:
-            raise RuntimeError(f"tushare {api}: pagination exceeded {max_pages} pages")
-        non_empty = [f for f in frames if f.width]
-        return pl.concat(non_empty, how="diagonal_relaxed") if non_empty else frames[0]
+        """``all_rows`` as one DataFrame, typed over every page at once."""
+        return _frame(*self.all_rows(api, params, fields, page_size=page_size, max_pages=max_pages))
 
 
-def _frame(api: str, body: dict) -> pl.DataFrame:
+def _rows(api: str, body: dict) -> tuple[list[str], list[list]]:
     data = body.get("data")
     if not isinstance(data, dict):
         raise ValueError(f"tushare {api}: response has no data object")
@@ -229,6 +251,10 @@ def _frame(api: str, body: dict) -> pl.DataFrame:
     for item in items:
         if not isinstance(item, list) or len(item) != len(names):
             raise ValueError(f"tushare {api}: response contains a malformed row")
+    return names, items
+
+
+def _frame(names: list[str], items: list[list]) -> pl.DataFrame:
     if not items:
         return pl.DataFrame(schema=dict.fromkeys(names, pl.Utf8))
     return pl.DataFrame(items, schema=names, orient="row", infer_schema_length=None, strict=False)

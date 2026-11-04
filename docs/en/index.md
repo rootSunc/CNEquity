@@ -135,7 +135,7 @@ cne check</code></pre>
           <span>01</span>
           <div>
             <h3>Registered is not collected</h3>
-            <p>57 datasets are registered (49 curated + 8 derived), including optional and placeholder entries. Installing does not ship any market data.</p>
+            <p>58 datasets are registered (50 curated + 8 derived), including optional and placeholder entries. Installing does not ship any market data.</p>
             <a href="datasets/catalog/">See the dataset catalog</a>
           </div>
         </article>

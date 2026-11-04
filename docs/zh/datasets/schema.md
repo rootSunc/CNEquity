@@ -1234,6 +1234,39 @@ PIT 查询过滤 `announce_date <= as_of`。
 | data_version | string |  |
 | fetched_at | timestamp |  |
 
+#### broker_forecasts
+
+Tushare `report_rc` 卖方盈利预测，需在 `[sources.tushare]` 配置自己的 Tushare 令牌。一份研报 × 一个预测财年一行；按 `report_date` 可重建任一历史日期已知的一致预期。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| forecast_id | string | 主键；源字段整行哈希（研报没有自带 ID） |
+| symbol | string |  |
+| report_date | date | 研报发布日；可用日 |
+| fiscal_year | int16 | 预测财年，由 quarter 取年 |
+| name | string | 股票简称 |
+| report_title | string | 研报标题 |
+| report_type | string | 研报类型 |
+| classify | string | 报告分类 |
+| org_name | string | 券商 |
+| author_name | string | 分析师 |
+| quarter | string | 预测期，如 2024Q4 |
+| rating | string | 评级，如 买入/增持 |
+| op_rt | float64 | 营业收入，万元 |
+| op_pr | float64 | 营业利润，万元 |
+| tp | float64 | 利润总额，万元 |
+| np | float64 | 净利润，万元 |
+| eps | float64 | 每股收益，元 |
+| pe | float64 | 市盈率 |
+| rd | float64 | 股息率，% |
+| roe | float64 | ROE，% |
+| ev_ebitda | float64 | EV/EBITDA |
+| max_price | float64 | 目标价上限，元 |
+| min_price | float64 | 目标价下限，元 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
 ### Compact 去重
 
 Compact 时按主键分组，保留 `fetched_at` 最大的一行。

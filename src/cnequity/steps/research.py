@@ -1,13 +1,19 @@
-"""L3/L4/L7 research steps: institutional holdings, analyst consensus, sentiment."""
+"""L3/L4/L7 research steps: institutional holdings, broker forecasts, analyst consensus, sentiment."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 
 from cnequity.adapters.eastmoney.consensus import fetch_analyst_consensus
 from cnequity.adapters.eastmoney.institutional import fetch_institutional_holdings
+from cnequity.adapters.tushare.broker_forecasts import (
+    BROKER_FORECASTS_FLOOR,
+    fetch_broker_forecasts,
+)
+from cnequity.adapters.tushare.client import SOURCE as TUSHARE_SOURCE
+from cnequity.adapters.tushare.client import tushare_enabled
 from cnequity.config import Config
 from cnequity.derive.sentiment_scores import compute_sentiment_scores
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
@@ -115,6 +121,39 @@ def step_institutional_holdings(
         return result
     empty_ok(df, "institutional_holdings", trade_date)
     return write_fetched(config, run_id, "institutional_holdings", df, source="eastmoney")
+
+
+# A daily run re-reads this many calendar days: reports land on weekends and
+# the provider adds late rows; forecast_id makes the overlap idempotent.
+_BROKER_FORECAST_LOOKBACK_DAYS = 7
+
+
+@register_step("broker_forecasts", group="research", depends_on=["instruments"])
+def step_broker_forecasts(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    if not tushare_enabled(config):
+        raise SourceUnavailableError(
+            "broker_forecasts: needs [sources.tushare] enabled with a token"
+        )
+    if getattr(config, "_backfill", False):
+        from cnequity.steps.common import walk_day_backfill
+
+        # Calendar days, not sessions: brokers publish on weekends too.
+        return walk_day_backfill(
+            config,
+            trade_date,
+            run_id,
+            "broker_forecasts",
+            lambda d: fetch_broker_forecasts(d, d, config=config),
+            source=TUSHARE_SOURCE,
+            date_col="report_date",
+            floor=BROKER_FORECASTS_FLOOR,
+            calendar_days=True,
+            allow_empty_days=True,
+        )
+    start = trade_date - timedelta(days=_BROKER_FORECAST_LOOKBACK_DAYS - 1)
+    df = fetch_broker_forecasts(start, trade_date, config=config)
+    empty_ok(df, "broker_forecasts", trade_date)
+    return write_fetched(config, run_id, "broker_forecasts", df, source=TUSHARE_SOURCE)
 
 
 @register_step("analyst_consensus", group="research", depends_on=["instruments"])

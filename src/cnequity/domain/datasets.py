@@ -222,6 +222,19 @@ _UNIT_CONTRACT_DEFAULTS: dict[str, UnitContract] = {
         "holding_ratio": "percent",
         "holding_mv": "CNY",
     },
+    "broker_forecasts": {
+        "op_rt": "10k_CNY",
+        "op_pr": "10k_CNY",
+        "tp": "10k_CNY",
+        "np": "10k_CNY",
+        "eps": "CNY/share",
+        "pe": "ratio",
+        "rd": "percent",
+        "roe": "percent",
+        "ev_ebitda": "ratio",
+        "max_price": "CNY/share",
+        "min_price": "CNY/share",
+    },
     "analyst_consensus": {
         "eps_forecast": "CNY/share",
         "target_price": "CNY/share",
@@ -1228,6 +1241,20 @@ _SPECS = [
         partition_col="forecast_date",
         fetch_semantics="snapshot",
     ),
+    # Dated per-report forecasts (Tushare report_rc, optional token);
+    # analyst_consensus above has no history. Reports also land on weekends,
+    # so each run reads every calendar day since the previous session.
+    DatasetSpec(
+        "broker_forecasts",
+        primary_source="tushare",
+        tier="L3",
+        partition_col="report_date",
+        partition_granularity="month",
+        fetch_semantics="by_date",
+        required=False,
+        empty_severity="info",
+        history_floor_date=date(2016, 1, 1),
+    ),
     # L4 capital flows
     DatasetSpec(
         "fund_flow",
@@ -1701,6 +1728,7 @@ _SUPPORT: dict[str, Support] = {
             "fund_flow_ths",
             "sector_fund_flow_ths",
             "analyst_consensus",
+            "broker_forecasts",
             "sector_members",
             "northbound_holdings",
             "northbound_flows",

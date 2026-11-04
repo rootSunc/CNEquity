@@ -133,11 +133,14 @@ class Config:
     # explicit `cne backfill trading_status` removes this bound and checkpoints
     # the full sweep while retaining the provider pacing above.
     st_history_symbols_per_run: int = 400
-    # Optional Tushare Pro token for historical BJ ST evidence: TUSHARE_TOKEN,
-    # then [sources.tushare].token_file, then .token (see `_credential`). Never
-    # written to manifests, checkpoints, or provenance.
+    # Optional Tushare Pro token: TUSHARE_TOKEN, then [sources.tushare].token_file,
+    # then .token (see `_credential`). Never written to manifests, checkpoints,
+    # or provenance. Every Tushare path stays off without it.
     tushare_token: str | None = field(default=None, repr=False)
     tushare_timeout_sec: float = 30.0
+    # [sources.tushare].api_url: any server speaking the Tushare Pro protocol;
+    # None means api.tushare.pro. Rows are stamped ``tushare`` either way.
+    tushare_api_url: str | None = None
     # Optional 同花顺 official API key: HITHINK_FINANCE_API_KEY, then
     # [sources.ths_official].api_key_file, then .api_key. Never written to
     # manifests, checkpoints, or provenance. The whole source is optional: with no key every path that
@@ -883,6 +886,7 @@ def load_config(path: str | Path) -> Config:
         sources_raw, "tushare", "token", "TUSHARE_TOKEN", config_path.parent
     )
     tushare_timeout_sec = 30.0
+    tushare_api_url: str | None = None
     ths_official_api_key, ths_official_inline = _credential(
         sources_raw, "ths_official", "api_key", "HITHINK_FINANCE_API_KEY", config_path.parent
     )
@@ -961,6 +965,8 @@ def load_config(path: str | Path) -> Config:
             if name == "tushare":
                 if val.get("timeout_sec") is not None:
                     tushare_timeout_sec = float(val["timeout_sec"])
+                if val.get("api_url"):
+                    tushare_api_url = str(val["api_url"]).strip().rstrip("/") or None
             if name == "ths_official":
                 if val.get("timeout_sec") is not None:
                     ths_official_timeout_sec = float(val["timeout_sec"])
@@ -1179,6 +1185,7 @@ def load_config(path: str | Path) -> Config:
         baostock_batch_rest_seconds=baostock_batch_rest_seconds,
         tushare_token=tushare_token,
         tushare_timeout_sec=tushare_timeout_sec,
+        tushare_api_url=tushare_api_url,
         ths_official_api_key=ths_official_api_key,
         inline_credentials=inline_credentials,
         ths_official_timeout_sec=ths_official_timeout_sec,

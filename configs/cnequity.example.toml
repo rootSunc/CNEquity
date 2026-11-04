@@ -253,16 +253,20 @@ min_interval_seconds = 1.0
 batch_size = 20
 batch_rest_seconds = 120
 
-# Optional Tushare Pro — historical BJ ST evidence (stock_st).
-# stock_st starts at 2017-01-01; 2016 uses bak_basic name evidence. Both need a
-# token; older BJ bars remain unresolved instead of certifying them as normal.
+# Optional Tushare Pro — never required. With your own token it adds historical
+# BJ ST evidence (stock_st from 2017, bak_basic names for 2016) and the
+# broker_forecasts dataset (report_rc); without one every Tushare path is
+# skipped and no request is sent. Which endpoints work depends on your account.
 # Credential lookup: TUSHARE_TOKEN, then token_file, then token. A file (chmod 600)
 # also reaches launchd/cron runs, which do not see your shell's environment;
 # `cne doctor` warns about a token written inline here.
+# api_url defaults to https://api.tushare.pro; set it only for another server
+# that speaks the same protocol. Rows are stamped `tushare` either way.
 [sources.tushare]
 enabled = false
 min_interval_seconds = 1.0
 # token_file = "~/.config/cnequity/tushare_token"
+# api_url = "https://api.tushare.pro"
 
 # Optional 同花顺 official API (fuyao.aicubes.cn) — a licensed peer source, never
 # a primary. With no key every path that uses it degrades to silence and the lake

@@ -111,7 +111,7 @@ Main sources and request channels in the template:
 | `ths_official` | **THS official API (keyed)**, see [`cne ths-official`](../reference/cli.md#cne-ths-official) |
 | `sw` / `cni` | Shenwan historical industry and CNI historical constituent files; default interval 1 second, a single request in flight |
 | `futures_exchange` | Futures exchange files, with per-host rate limiting and caching |
-| `tushare` | Optional Tushare Pro: BJ historical ST evidence (`stock_st`). Requires a token: the environment variable `TUSHARE_TOKEN` or `token_file`; do not put credentials in the config |
+| `tushare` | Optional Tushare Pro: BJ historical ST evidence (`stock_st`) and `broker_forecasts` (`report_rc`). Requires your own token: the environment variable `TUSHARE_TOKEN` or `token_file`; do not put credentials in the config. Without a token no request is sent. `api_url` defaults to `https://api.tushare.pro`; set it only for another compatible server |
 
 
 | Key | Description |
