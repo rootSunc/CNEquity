@@ -598,7 +598,11 @@ class Config:
             # Backfillable, but a day's consensus is only seen live: the
             # rolling capture is the point-in-time record of each forecast.
             "economic_calendar",
-        } or (dataset in DATASETS and history_mode_for(DATASETS[dataset]) == "snapshot_only")
+        } or (
+            # A snapshot this config can replay by date (a keyed history source
+            # with its credentials) has an honest historical source after all.
+            dataset in DATASETS and history_mode_for(DATASETS[dataset], self) == "snapshot_only"
+        )
 
     def adj_factor_worker_count(self) -> int:
         """Return the effective adjustment-factor worker budget."""

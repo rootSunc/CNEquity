@@ -75,7 +75,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 |--------------|------|--------|
 | `by_date` | 可按日回补 / 缺口填补 | 绝大多数行情与事件表 |
 | `snapshot_with_backfill` | 日更是快照，但有专用历史源 | `valuation_metrics`→baostock；`index_constituents`→cni；`industry_members`→sw；`sector_bars`→ths；`economic_calendar`→jin10（2008 起） |
-| `snapshot_only` | 只返回当前快照；可从启用后逐日积累，不能回补未采到的过去 | `analyst_consensus`、`fund_flow`（配置了 Tushare 令牌时可回补 2023-09-11 起）、`sector_members`、`hot_rank`、`sector_fund_flow`、`news_headlines`、`flash_news_wire`、`economic_events`、`market_holidays` |
+| `snapshot_only` | 只返回当前快照；可从启用后逐日积累，不能回补未采到的过去 | `analyst_consensus`、`fund_flow`（配置了 Tushare 令牌时可回补 2023-09-11 起）、`sector_members`、`hot_rank`、`sector_fund_flow`（配置了 Tushare 令牌时可回补 2023-09-12 起）、`news_headlines`、`flash_news_wire`、`economic_events`、`market_holidays` |
 
 `trading_status` 的停牌覆盖可从 `daily_bars` 起点派生；ST 覆盖必须以完整的 `historical_st_evidence` 收据为准。没有覆盖请求窗口的收据时，**不要**假定 2001 起 `universe="all_a"` 已剔除历史 ST。BJ 可选用 Tushare Pro：2016 年通过 `bak_basic` 的历史简称、2017-01-01 起通过 `stock_st`；2016 年以前仍需独立的更深历史源。
 
@@ -315,7 +315,7 @@ EM 响应若已包含尚未生效的调样行，会拒绝整份快照：删除�
 | sentiment_scores | trade_date | symbol, trade_date, score_channel | by_date | ✓ | derived | |
 | hot_rank | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 人气榜 top100（公开接口上限） |
 | sector_bars | trade_date | sector_code, trade_date | snapshot | ✓ | ths | 日更与回填都走同花顺 board-kline；无第二源 |
-| sector_fund_flow | trade_date | sector_code, trade_date | snapshot | ✓ | eastmoney | 板块主力净流入 |
+| sector_fund_flow | trade_date | sector_code, trade_date | snapshot | ✓ | eastmoney | 板块主力净流入。配置了自己的 Tushare 令牌时：`cne backfill sector_fund_flow` 用 `moneyflow_ind_dc`（同为东财板块，2023-09-12 起）只补湖里没有的板块；`[sources.eastmoney] push2_paused = true` 时日更直接从 Tushare 取当天，当晚尚未发布时这一步失败、由晚间补采重试。Tushare 行标 `source=tushare`，另有 `board_type=region` 的 31 个地域板块，`turnover_pct` 为空。历史深度不均：2025-02-26 以前只有旧分类的 86 个行业板块，概念和地域板块自 2025-02-26 起，2025-10 起每天约 1,000 个 |
 | sector_fund_flow_ths | trade_date | board_type, sector_code, trade_date | snapshot | ✓ | ths | 只在 push2 取不到 `sector_fund_flow` 时由同花顺补：行业（881xxx）+ 概念板块的流入/流出/净额，金额单位亿、精确到 0.01；同花顺板块分类，和东财板块代码不对应。新鲜度规则同 `fund_flow_ths` |
 | news_headlines | publish_date | news_id | snapshot | ✓ | eastmoney | 新闻标题 |
 | flash_news_wire | publish_date | wire_id, wire_source | 兼容读取 | ✓ | eastmoney | 由 `news_headlines` 事实表投影，兼容旧 revision 的实体文件；不再重复写入 |

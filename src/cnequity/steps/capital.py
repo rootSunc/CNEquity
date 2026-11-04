@@ -10,7 +10,6 @@ from __future__ import annotations
 import functools
 import logging
 from contextvars import copy_context
-from copy import copy
 from datetime import date, timedelta
 
 import polars as pl
@@ -118,70 +117,23 @@ def step_fund_flow(config: Config, trade_date: date, run_id: str, context: dict)
 
 
 def _backfill_fund_flow_tushare(config: Config, trade_date: date, run_id: str) -> dict:
-    """Fill ``fund_flow`` history from Tushare ``moneyflow_dc``, additively.
+    """Fill ``fund_flow`` history from Tushare ``moneyflow_dc`` (see ``tushare_fill``).
 
-    EastMoney no longer serves past sessions, so this is the only history route.
-    A day already in the lake keeps every row it has; Tushare adds only the
-    stocks missing from it (about 800 a day on the 千股千评 fallback, many of
-    them recent listings) and codes outside ``instruments`` (B shares) are left
-    out. A day counts as swept once it holds a Tushare row, so an interrupted
-    walk resumes where it stopped; ``--refetch`` asks every session again,
-    which still adds only what is missing.
+    Codes outside ``instruments`` (B shares) are left out; on the 千股千评
+    fallback the lake lacks about 800 stocks a day, many of them recent listings.
     """
-    from cnequity.adapters.tushare.fund_flow import MONEYFLOW_DC_FLOOR, SOURCE
+    from cnequity.adapters.tushare.fund_flow import MONEYFLOW_DC_FLOOR
     from cnequity.adapters.tushare.fund_flow import fetch_fund_flow as fetch_tushare
-    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
-    from cnequity.steps.common import load_symbols, walk_day_backfill
+    from cnequity.steps.common import load_symbols
+    from cnequity.steps.tushare_fill import backfill_missing_keys
 
-    start = getattr(config, "_backfill_start", None)
-    if start is not None and start < MONEYFLOW_DC_FLOOR:
-        # moneyflow_dc answers nothing earlier; asking for every older session
-        # would only record a run of empty days.
-        config = copy(config)
-        config._backfill_start = MONEYFLOW_DC_FLOOR
-    root = config.curated_root / "fund_flow"
-    universe = set(load_symbols(config))
+    universe = sorted(set(load_symbols(config)))
 
-    def lake_rows(start: date, end: date) -> pl.LazyFrame | None:
-        if not dataset_has_parquet(root):
-            return None
-        return scan_parquet_root(root, partition_col="trade_date", start=start, end=end)
+    def fetch_day(day: date) -> pl.DataFrame:
+        return fetch_tushare(day, config=config).filter(pl.col("symbol").is_in(universe))
 
-    refetch = bool(getattr(config, "_backfill_refetch", False))
-
-    def swept(days: list[date]) -> set[date]:
-        if not days or refetch:
-            return set()
-        rows = lake_rows(min(days), max(days))
-        if rows is None:
-            return set()
-        return set(
-            rows.filter(pl.col("source") == SOURCE)
-            .select(pl.col("trade_date").cast(pl.Date))
-            .unique()
-            .collect()["trade_date"]
-            .to_list()
-        )
-
-    def fetch_one(day: date) -> pl.DataFrame:
-        frame = fetch_tushare(day, config=config)
-        frame = frame.filter(pl.col("symbol").is_in(sorted(universe)))
-        rows = lake_rows(day, day)
-        if rows is not None:
-            held = rows.filter(pl.col("source") != SOURCE).select("symbol").unique().collect()
-            frame = frame.join(held, on="symbol", how="anti")
-        return frame
-
-    return walk_day_backfill(
-        config,
-        trade_date,
-        run_id,
-        "fund_flow",
-        fetch_one,
-        source=SOURCE,
-        floor=MONEYFLOW_DC_FLOOR,
-        existing_dates_fn=swept,
-        allow_empty_days=True,
+    return backfill_missing_keys(
+        config, trade_date, run_id, "fund_flow", fetch_day, key="symbol", floor=MONEYFLOW_DC_FLOOR
     )
 
 

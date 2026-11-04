@@ -3116,6 +3116,7 @@ def undeclared_source_findings(
                 spec.primary_source,
                 spec.backup_source,
                 spec.backfill_source,
+                getattr(spec, "keyed_backfill_source", None),
                 *getattr(spec, "supplementary_sources", ()),
                 # An operator-invoked repair is a declared writer too: its
                 # terms are in the matrix (`DatasetPolicy.repair`), it is just

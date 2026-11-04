@@ -358,6 +358,15 @@ def _backfill_sector_bars(config: Config, trade_date: date, run_id: str) -> dict
 
 @register_step("sector_fund_flow", group="research", depends_on=["instruments"])
 def step_sector_fund_flow(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    from cnequity.adapters.tushare.client import tushare_enabled
+
+    if tushare_enabled(config):
+        if getattr(config, "_backfill", False):
+            return _backfill_sector_fund_flow_tushare(config, trade_date, run_id)
+        if getattr(config, "eastmoney_push2_paused", False):
+            # push2 is the only EastMoney route for boards; Tushare serves the
+            # same boards by date, so the session is not lost while it is out.
+            return _sector_fund_flow_tushare_day(config, trade_date, run_id)
     try:
         return _step_sector_fund_flow(config, trade_date, run_id)
     except Exception:
@@ -366,6 +375,49 @@ def step_sector_fund_flow(config: Config, trade_date: date, run_id: str, context
 
         stage_ths_fallback(config, trade_date, run_id, "sector_fund_flow_ths")
         raise
+
+
+def _sector_fund_flow_tushare_day(config: Config, trade_date: date, run_id: str) -> dict:
+    """The run's session from Tushare ``moneyflow_ind_dc``.
+
+    Tushare publishes a session in the evening; before that the response is
+    empty or thin and the validator rejects it, so the step fails and the stale
+    job asks again later instead of recording a partial day.
+    """
+    from cnequity.adapters.tushare.sector_fund_flow import SOURCE, fetch_sector_fund_flow
+
+    return run_incremental_fetched(
+        config,
+        trade_date,
+        run_id,
+        "sector_fund_flow",
+        lambda d: _validate_sector_fund_flow_snapshot(fetch_sector_fund_flow(d, config=config)),
+        source=SOURCE,
+    )
+
+
+def _backfill_sector_fund_flow_tushare(config: Config, trade_date: date, run_id: str) -> dict:
+    """Fill ``sector_fund_flow`` history from Tushare (see ``tushare_fill``).
+
+    Older sessions are thinner than today's (86 industry boards before 2025-02-26)
+    and would fail the daily completeness check, so history is not validated
+    against it; each board is stored as published.
+    """
+    from cnequity.adapters.tushare.sector_fund_flow import (
+        MONEYFLOW_IND_DC_FLOOR,
+        fetch_sector_fund_flow,
+    )
+    from cnequity.steps.tushare_fill import backfill_missing_keys
+
+    return backfill_missing_keys(
+        config,
+        trade_date,
+        run_id,
+        "sector_fund_flow",
+        lambda d: fetch_sector_fund_flow(d, config=config),
+        key="sector_code",
+        floor=MONEYFLOW_IND_DC_FLOOR,
+    )
 
 
 def _step_sector_fund_flow(config: Config, trade_date: date, run_id: str) -> dict:

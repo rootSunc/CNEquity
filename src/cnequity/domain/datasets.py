@@ -1458,6 +1458,9 @@ _SPECS = [
         "sector_fund_flow",
         partial_rows=True,
         primary_source="eastmoney",
+        # Tushare moneyflow_ind_dc serves EastMoney's boards by date from
+        # 2023-09-12, and the session itself while push2 is paused.
+        keyed_backfill_source="tushare",
         tier="L7",
         partition_col="trade_date",
         partition_granularity="month",
