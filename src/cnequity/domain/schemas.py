@@ -683,6 +683,19 @@ BROKER_FORECASTS_SCHEMA = {
     "fetched_at": FETCHED_AT_DTYPE,
 }
 
+NAME_HISTORY_SCHEMA = {
+    "symbol": pl.Utf8,
+    "name": pl.Utf8,
+    "start_date": pl.Date,
+    "end_date": pl.Date,
+    "announce_date": pl.Date,
+    "change_reason": pl.Utf8,
+    "risk_warning": pl.Boolean,
+    "source": pl.Utf8,
+    "data_version": pl.Utf8,
+    "fetched_at": FETCHED_AT_DTYPE,
+}
+
 INDEX_CONSTITUENTS_SCHEMA = {
     "index_symbol": pl.Utf8,
     "symbol": pl.Utf8,
@@ -1026,6 +1039,7 @@ DATASET_SCHEMAS = {
     "dragon_tiger": DRAGON_TIGER_SCHEMA,
     "block_trades": BLOCK_TRADES_SCHEMA,
     "broker_forecasts": BROKER_FORECASTS_SCHEMA,
+    "name_history": NAME_HISTORY_SCHEMA,
     "index_constituents": INDEX_CONSTITUENTS_SCHEMA,
     "industry_members": INDUSTRY_MEMBERS_SCHEMA,
     "macro_indicators": MACRO_INDICATORS_SCHEMA,
@@ -1118,6 +1132,7 @@ PRIMARY_KEYS = {
     "dragon_tiger": ["symbol", "trade_date", "reason"],
     "block_trades": ["symbol", "trade_date", "price", "volume"],
     "broker_forecasts": ["forecast_id"],
+    "name_history": ["symbol", "start_date", "name"],
     "index_constituents": ["index_symbol", "symbol", "as_of_date"],
     "industry_members": ["symbol", "classification_system", "as_of_date"],
     "macro_indicators": ["indicator_id", "obs_date"],

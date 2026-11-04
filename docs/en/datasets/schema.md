@@ -1273,6 +1273,24 @@ Tushare `report_rc` broker forecasts; needs your own Tushare token in `[sources.
 | source | string | Provenance (tushare) |
 | data_version | string | Provenance |
 | fetched_at | timestamp | Provenance |
+
+#### name_history
+
+Tushare `namechange` security name history; needs your own Tushare token in `[sources.tushare]`. One row per short name. The ST label is the exchange's own name prefix, so it also covers halted sessions, and derived suspension rows take their `risk_warning` from here first.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | A security whose code changed is listed under its new code |
+| name | string | Short name |
+| start_date | date | First day the name was in force; availability date |
+| end_date | date | Last day of the name; null while still in use |
+| announce_date | date | Announcement date of the change; mostly null in early years |
+| change_reason | string | The source's reason (such as `*ST`, `撤销ST`, `其他`), stored as given |
+| risk_warning | bool | The name carries an ST/*ST prefix (including the S and G forms of 2005–2007); PT does not count |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
 ### Compact deduplication
 
 During compact, rows are grouped by primary key and the row with the largest `fetched_at` is kept.

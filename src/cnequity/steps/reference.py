@@ -1419,6 +1419,29 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
     return result
 
 
+@register_step(
+    "name_history",
+    group="core",
+    description="Security name history, the ST labels on halted sessions included (Tushare)",
+)
+def step_name_history(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """Re-read every security's name history from Tushare ``namechange``.
+
+    The suspension derive takes a halted session's ST label from here. Without
+    a token this sends nothing and reports skipped, so the core group never
+    fails for want of an optional source.
+    """
+    from cnequity.adapters.tushare.client import tushare_enabled
+    from cnequity.adapters.tushare.name_history import SOURCE, fetch_name_history
+
+    if not tushare_enabled(config):
+        return {"rows_written": 0, "status": "skipped", "reason": "tushare not configured"}
+    df = fetch_name_history(config)
+    if df.is_empty():
+        raise SourceUnavailableError("name_history: tushare returned no rows")
+    return write_fetched(config, run_id, "name_history", df, source=SOURCE)
+
+
 # How far back an unbounded derive re-examines sessions for interior bar gaps
 # — the tail an incremental `cne backfill daily_bars` re-derives. A halt only
 # becomes visible here once the symbol trades again, so the window has to

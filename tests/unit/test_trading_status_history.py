@@ -768,8 +768,8 @@ def _status_row(symbol, day, risk_warning, *, source="baostock", fetched_at=None
     }
 
 
-def test_a_halt_carries_risk_warning_only_when_both_sides_agree(tmp_path):
-    """2018-06-29: ten *ST names were halted and the lake read them as clean."""
+def _halt_lake(tmp_path):
+    """Five symbols halted 2024-06-25..27, with status readings on either side."""
     root = tmp_path / "data"
     cfg = Config(data_root=root)
     days = [date(2024, 6, d) for d in (24, 25, 26, 27, 28)]
@@ -849,17 +849,30 @@ def test_a_halt_carries_risk_warning_only_when_both_sides_agree(tmp_path):
     month.mkdir(parents=True)
     status.write_parquet(month / "part-merged.parquet")
 
-    assert _derive_and_publish(cfg) == len(symbols) * len(halted)
+    return cfg
 
+
+def _derived_labels(cfg):
     published = (
         scan_parquet_root(cfg.curated_root / "trading_status", partition_col="trade_date")
         .filter(pl.col("source") == "derived_bar_gap")
         .collect()
     )
-    by_symbol = {
-        symbol: set(group["risk_warning"].to_list())
-        for (symbol,), group in published.group_by("symbol")
+    return {
+        (symbol, day): value
+        for symbol, day, value in published.select(
+            "symbol", "trade_date", "risk_warning"
+        ).iter_rows()
     }
+
+
+def test_a_halt_carries_risk_warning_only_when_both_sides_agree(tmp_path):
+    """2018-06-29: ten *ST names were halted and the lake read them as clean."""
+    cfg = _halt_lake(tmp_path)
+    assert _derive_and_publish(cfg) == 15
+    by_symbol: dict[str, set] = {}
+    for (symbol, _day), value in _derived_labels(cfg).items():
+        by_symbol.setdefault(symbol, set()).add(value)
     assert by_symbol == {
         "000001.SZ": {True},
         "000002.SZ": {None},
@@ -867,3 +880,34 @@ def test_a_halt_carries_risk_warning_only_when_both_sides_agree(tmp_path):
         "000004.SZ": {None},
         "510300.SH": {False},
     }
+
+
+def test_name_history_dates_a_label_imposed_mid_halt(tmp_path):
+    """Where the bracketing readings disagree, the name in force decides."""
+    cfg = _halt_lake(tmp_path)
+    names = pl.DataFrame(
+        {
+            "symbol": ["000002.SZ", "000002.SZ", "000004.SZ"],
+            "name": ["某某", "*ST某某", "ST四"],
+            "start_date": [date(2010, 1, 1), date(2024, 6, 26), date(2023, 5, 1)],
+            "end_date": [date(2024, 6, 25), None, None],
+            "announce_date": [None, date(2024, 6, 25), None],
+            "change_reason": ["其他", "*ST", "ST"],
+            "risk_warning": [False, True, True],
+            "source": ["tushare"] * 3,
+            "data_version": ["v1"] * 3,
+            "fetched_at": ["2024-06-28T00:00:00+00:00"] * 3,
+        }
+    ).with_columns(pl.col("fetched_at").str.to_datetime(time_zone="UTC"))
+    (cfg.curated_root / "name_history").mkdir(parents=True)
+    names.write_parquet(cfg.curated_root / "name_history" / "part-merged.parquet")
+
+    _derive_and_publish(cfg)
+    labels = _derived_labels(cfg)
+
+    assert [labels[("000002.SZ", date(2024, 6, d))] for d in (25, 26, 27)] == [False, True, True]
+    # Covered by a name now, where the brackets alone could not say.
+    assert {labels[("000004.SZ", date(2024, 6, d))] for d in (25, 26, 27)} == {True}
+    # Symbols the history does not list still fall back to their brackets.
+    assert {labels[("000001.SZ", date(2024, 6, d))] for d in (25, 26, 27)} == {True}
+    assert {labels[("510300.SH", date(2024, 6, d))] for d in (25, 26, 27)} == {False}

@@ -310,7 +310,8 @@ sources:
     retained_payloads: unknown
     legal_status: unknown
     notes: 可选来源，从不是核心链依赖。没有令牌时所有 Tushare 路径直接跳过、不发请求。用于 BJ 历史 ST
-      证据（stock_st，2016 用 bak_basic）与 broker_forecasts（report_rc）。请求发往
+      证据（stock_st，2016 用 bak_basic）、broker_forecasts（report_rc）与 name_history（namechange，
+      停牌日 ST 标记的首选证据）。请求发往
       [sources.tushare].api_url（默认 https://api.tushare.pro）；指向其他兼容服务器时行仍标 tushare，
       该服务器的使用条款由使用者自行确认。维护者不转发 Tushare 数据，令牌与端点由用户自行配置。可用接口
       取决于账号积分与购买的权限；单次返回行数有上限，按 limit/offset 分页。

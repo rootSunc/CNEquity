@@ -16,13 +16,19 @@ longer erases one.
 Optional ``start`` / ``end`` bound the calendar cross-join so a 2001→today
 rebuild can run year-by-year without OOM.
 
-A derived row's ``risk_warning`` comes from the symbol's own first-hand
-readings around the halt: when the last reading before it and the first one
-after it agree, the halt carries that value; when they differ (an ST label
-imposed or lifted mid-halt) or one side is missing, it stays null. Funds are
-never ST, so theirs is ``False``. Checked against Tushare's name history on the
-whole lake (2026-11-04), agreeing brackets were right on 99.9% of 450k halted
-stock-days.
+A derived row's ``risk_warning`` is read, in order, from:
+
+1. ``name_history`` (optional, Tushare): the security's name in force that
+   day, whose ``ST``/``*ST`` prefix is the exchange's own label and which,
+   unlike a daily feed, covers halted sessions too;
+2. the symbol's own first-hand readings around the halt: when the last one
+   before it and the first one after it agree, the halt carries that value;
+   when they differ (a label imposed or lifted mid-halt) or one side is
+   missing, it stays null.
+
+Funds are never ST, so theirs is ``False``. Checked on the whole lake
+(2026-11-04), agreeing brackets matched the name history on 99.9% of 450k
+halted stock-days but leave the 27k halts with a change mid-way unknown.
 
 Only *interior* gaps are reported. Each symbol's window is clamped to its own
 first and last bar, so a session the bar feed has not delivered yet — today,
@@ -196,8 +202,9 @@ def _unfetched_sessions(config: Config) -> set[date]:
 def _risk_warning_across_halts(config: Config, pairs: pl.DataFrame) -> pl.Series:
     """``risk_warning`` for each derived (symbol, trade_date), aligned to *pairs*.
 
-    A halt carries the ST label only when the readings on both sides agree.
-    Before 2026-08-30 the derive wrote ``False`` here outright, and a
+    The name in force that day decides where ``name_history`` covers it;
+    elsewhere a halt carries the label only when the readings on both sides
+    agree. Before 2026-08-30 the derive wrote ``False`` here outright, and a
     suspension is exactly when a free feed stops answering, so the lake read
     every halted ST stock as clean.
     """
@@ -238,6 +245,11 @@ def _risk_warning_across_halts(config: Config, pairs: pl.DataFrame) -> pl.Series
     resolved = keyed.select("__row", "symbol").join(
         resolved.select("__row", "risk_warning"), on="__row", how="left"
     )
+    named = _named_risk_warning(config, keyed)
+    if named is not None:
+        resolved = resolved.join(named, on="__row", how="left").with_columns(
+            pl.coalesce("__named", "risk_warning").alias("risk_warning")
+        )
     if asset is not None:
         resolved = resolved.join(asset, on="symbol", how="left").with_columns(
             pl.when(pl.col("asset_type") == "etf")
@@ -248,6 +260,43 @@ def _risk_warning_across_halts(config: Config, pairs: pl.DataFrame) -> pl.Series
     if resolved.height != pairs.height:
         return unknown
     return resolved.sort("__row")["risk_warning"]
+
+
+def _named_risk_warning(config: Config, keyed: pl.DataFrame) -> pl.DataFrame | None:
+    """``__row / __named``: the ST label of the name each symbol carried that day.
+
+    ``None`` when the lake has no ``name_history``. A day before a symbol's
+    first recorded name, or a symbol the history does not list (a code that
+    was later changed, such as 000043.SZ), is left out rather than guessed.
+    """
+    root = config.curated_root / "name_history"
+    if not dataset_has_parquet(root):
+        return None
+    symbols = keyed["symbol"].unique().to_list()
+    names = (
+        dedupe_lazy_by_primary_key(scan_parquet_root(root, hive=False), "name_history")
+        .filter(pl.col("symbol").is_in(symbols) & pl.col("risk_warning").is_not_null())
+        # Two names starting the same day (a same-day correction) are rare; if
+        # either carries the label, the day was under a warning.
+        .group_by("symbol", "start_date")
+        .agg(pl.col("risk_warning").any().alias("__named"))
+        .sort("start_date")
+        .collect()
+    )
+    if names.is_empty():
+        return None
+    return (
+        keyed.sort("trade_date")
+        .join_asof(
+            names,
+            left_on="trade_date",
+            right_on="start_date",
+            by="symbol",
+            strategy="backward",
+            check_sortedness=False,
+        )
+        .select("__row", "__named")
+    )
 
 
 def _first_hand_readings(status_root, keyed: pl.DataFrame) -> pl.DataFrame | None:

@@ -1267,6 +1267,23 @@ Tushare `report_rc` 卖方盈利预测，需在 `[sources.tushare]` 配置自己
 | data_version | string | 溯源 |
 | fetched_at | timestamp | 溯源 |
 
+#### name_history
+
+Tushare `namechange` 证券名称史，需在 `[sources.tushare]` 配置自己的 Tushare 令牌。每个简称一行；ST 标记就是交易所给的简称前缀，所以停牌期间也有，派生停牌行的 `risk_warning` 优先取这里。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 代码变更过的证券记在新代码下 |
+| name | string | 证券简称 |
+| start_date | date | 该简称生效日；可用日 |
+| end_date | date | 该简称最后一天；仍在用为空 |
+| announce_date | date | 变更公告日；早年记录多为空 |
+| change_reason | string | 源给出的变更原因（如 `*ST`、`撤销ST`、`其他`），原样保存 |
+| risk_warning | bool | 简称带 ST/*ST 前缀（含 2005–2007 年的 S、G 前缀形式）；PT 不算 |
+| source | string | 溯源 |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
 ### Compact 去重
 
 Compact 时按主键分组，保留 `fetched_at` 最大的一行。

@@ -793,6 +793,20 @@ _SPECS = [
         watermark=False,
         backfill_source="baostock",
     ),
+    # Every name a security has carried, with its dates (Tushare namechange,
+    # optional token). The names are the exchange's ST labels and, unlike a
+    # daily feed, also cover halted sessions; the suspension derive reads
+    # trading_status.risk_warning from here. Small enough to re-read whole.
+    DatasetSpec(
+        "name_history",
+        primary_source="tushare",
+        tier="L0",
+        partition_col=None,
+        date_col="start_date",
+        watermark=False,
+        required=False,
+        empty_severity="info",
+    ),
     # Official exchange fund directories are current snapshots. A row first
     # observed today cannot be backdated into yesterday's ETF universe.
     DatasetSpec(
@@ -1700,6 +1714,7 @@ _SUPPORT: dict[str, Support] = {
     **dict.fromkeys(
         (
             "industry_members",
+            "name_history",
             "industry_index",
             "announcement_index",
             "earnings_disclosure_schedule",
