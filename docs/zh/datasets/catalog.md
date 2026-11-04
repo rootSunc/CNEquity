@@ -376,3 +376,22 @@ f_ex / f_prev = (1 + 送股 + 转股 + 配股) × 前收 / (前收 − 税前现
 
 没有除权日时右侧恒为 1，所以「因子在不该动的日子动了」和「该动的日子没动」都会被抓到。
 容差是重要性阈值不是等式检验（默认 50 bps，≥200 bps 升为 error），因为两个来源的取整方式不同。
+
+## 可选：与 Tushare 对照（peer checks）
+
+在 `[sources.tushare]` 启用并配置了你自己的令牌时，每次审计还会把最新交易日与 Tushare 对照一遍；没有令牌时不运行、不发请求。
+Tushare 是同级来源，不是发布方：它自己也有错，所以这些检查最多报 warning，从不改动数据，只给现有修复流程提供线索。
+结果写入 `meta/quality/source_diffs/tushare-peer-<date>.json`，包括一致、跳过和失败的检查。每次约十余个请求；账号没有权限的接口先探测并缓存一周，对应检查直接跳过（`cne doctor` 显示缓存的权限）。
+
+| 检查 | 数据集 | 对照接口 |
+|------|--------|--------|
+| `tushare_peer_daily_prices` / `_turnover` / `_missing` | daily_bars | `daily` |
+| `tushare_peer_factor_step` | adj_factors | `adj_factor`（当日与前一交易日的步长） |
+| `tushare_peer_dividend_terms` / `_missing` | corporate_actions | `dividend`（当日除权、已实施） |
+| `tushare_peer_suspended` / `tushare_peer_st` | trading_status | `suspend_d` / `stock_st` |
+| `tushare_peer_market_value` / `tushare_peer_total_shares` | valuation_metrics / share_structure | `daily_basic` |
+| `tushare_peer_margin` / `_missing` | margin_trading | `margin_detail`（湖中最新一日，仅股票） |
+| `tushare_peer_fund_flow` / `_missing` | fund_flow | `moneyflow_dc`（同为东财口径；缺口只计当日有成交的标的） |
+| `tushare_peer_index_members` | index_constituents | `index_weight` |
+
+不一致的标的数不超过 3 个或重叠部分的 0.5% 时记为 info，超过记为 warning；复权因子步长只要有不一致就是 warning。

@@ -376,3 +376,22 @@ f_ex / f_prev = (1 + bonus ratio + conversion ratio + rights ratio) × prev_clos
 
 With no ex-date, the right-hand side is always 1, so both "the factor moved on a day it should not have" and "it did not move on a day it should have" are caught.
 The tolerance is a materiality threshold, not an equality test (default 50 bps, escalated to error at ≥200 bps), because the two sources round differently.
+
+## Optional: checks against Tushare (peer checks)
+
+With `[sources.tushare]` enabled and your own token configured, every audit also compares the latest session with Tushare; without a token nothing runs and no request is sent.
+Tushare is a peer source, not the publisher: it has errors of its own, so these checks report at most a warning, never change data, and only give the existing repair paths a lead.
+Results go to `meta/quality/source_diffs/tushare-peer-<date>.json`, including checks that agreed, were skipped or failed. Each audit costs a dozen or so requests; endpoints your account cannot call are probed and cached for a week, and their checks are skipped (`cne doctor` shows the cached permissions).
+
+| Check | Dataset | Endpoint |
+|--------|--------|--------|
+| `tushare_peer_daily_prices` / `_turnover` / `_missing` | daily_bars | `daily` |
+| `tushare_peer_factor_step` | adj_factors | `adj_factor` (step from the previous session) |
+| `tushare_peer_dividend_terms` / `_missing` | corporate_actions | `dividend` (ex-date that day, implemented) |
+| `tushare_peer_suspended` / `tushare_peer_st` | trading_status | `suspend_d` / `stock_st` |
+| `tushare_peer_market_value` / `tushare_peer_total_shares` | valuation_metrics / share_structure | `daily_basic` |
+| `tushare_peer_margin` / `_missing` | margin_trading | `margin_detail` (the lake's newest day, stocks only) |
+| `tushare_peer_fund_flow` / `_missing` | fund_flow | `moneyflow_dc` (EastMoney's own definition, like the lake; gaps count only symbols that traded) |
+| `tushare_peer_index_members` | index_constituents | `index_weight` |
+
+Up to 3 disagreeing symbols, or 0.5% of the overlap, is reported as info; more is a warning. Any disagreeing adjustment-factor step is a warning.

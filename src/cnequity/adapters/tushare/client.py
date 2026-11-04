@@ -44,6 +44,7 @@ __all__ = [
     "TushareQuotaExhausted",
     "TushareRefused",
     "api_url",
+    "cached_permissions",
     "probe_permissions",
     "tushare_enabled",
 ]
@@ -260,6 +261,27 @@ def _frame(names: list[str], items: list[list]) -> pl.DataFrame:
     return pl.DataFrame(items, schema=names, orient="row", infer_schema_length=None, strict=False)
 
 
+def _permission_path(config):
+    token_key = hashlib.sha256(str(config.tushare_token).strip().encode()).hexdigest()[:16]
+    return config.meta_root / "tushare" / "permissions" / f"{token_key}.json"
+
+
+def _cached_entries(config) -> dict:
+    path = _permission_path(config)
+    try:
+        cached = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError):
+        cached = {}
+    return dict(cached.get("endpoints", {})) if cached.get("url") == api_url(config) else {}
+
+
+def cached_permissions(config) -> dict[str, str]:
+    """The last probe's result per endpoint, without any request."""
+    if not tushare_enabled(config):
+        return {}
+    return {api: entry["status"] for api, entry in sorted(_cached_entries(config).items())}
+
+
 def probe_permissions(
     config,
     probes: Mapping[str, Mapping],
@@ -277,13 +299,8 @@ def probe_permissions(
     """
     if not tushare_enabled(config):
         return {}
-    token_key = hashlib.sha256(str(config.tushare_token).strip().encode()).hexdigest()[:16]
-    path = config.meta_root / "tushare" / "permissions" / f"{token_key}.json"
-    try:
-        cached = json.loads(path.read_text()) if path.exists() else {}
-    except (OSError, ValueError):
-        cached = {}
-    entries = dict(cached.get("endpoints", {})) if cached.get("url") == api_url(config) else {}
+    path = _permission_path(config)
+    entries = _cached_entries(config)
     fresh = {
         api: entry
         for api, entry in entries.items()

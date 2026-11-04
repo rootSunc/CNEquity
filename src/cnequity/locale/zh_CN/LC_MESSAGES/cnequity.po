@@ -1954,6 +1954,10 @@ msgstr "检查数据湖"
 msgid "Checked once a minute. The daily update and catch-up each try once per trading day; the catch-up only handles snapshots and waits for the daily update to have run. Backups try once per calendar day once their time comes, and event streams run at their own frequency, weekends and holidays included. When a task is busy it waits and the next check decides again. It keeps working after the web page or serve is closed. Windows and macOS need the current user logged in; Linux needs the cron service running. Nothing runs during sleep, and it decides again after waking; the daily update and catch-up go no later than 09:15 on the next trading day, backups only make up the same day, and event streams do not accumulate missed runs. Only tasks created from the web are managed here; check existing scripts and other system tasks first to avoid double scheduling."
 msgstr "每分钟检查一次。日更与补抓每个交易日各尝试一次；补抓只处理快照，并等待日更已执行。备份每个自然日到点后尝试一次，事件流按独立频率运行，含周末和节假日。任务占用时等待，下次检查再判断。关闭网页或 serve 后继续生效。Windows 和 macOS 需要当前用户已登录；Linux 需要 cron 服务运行。休眠期间不执行，恢复后再判断；日更与补抓最迟到下个交易日 09:15，备份只补当天，事件流不累积补跑。这里只管理 Web 创建的任务，已有的脚本和其他系统任务请先核对，避免重复调度。"
 
+#: cnequity/diagnostics/report.py
+msgid "Checks that need these endpoints are skipped; your account decides which apply."
+msgstr "需要这些接口的检查会跳过；哪些可用取决于你的账号。"
+
 #: cnequity/storage/lifecycle/purge.py
 msgid "Choose historical versions without duplicates."
 msgstr "请选择不重复的历史版本。"
@@ -3814,6 +3818,11 @@ msgstr "本次未探测（配置关闭、--only 排除，或高成本端点需�
 #: cnequity/diagnostics/source_health.py
 msgid "Not the same host as Sina daily bars, but shares the same per-account 456 quota."
 msgstr "与 sina 日线不是同一台主机，但共用同一个按账号计的 456 配额。"
+
+#: cnequity/diagnostics/report.py
+#, python-format
+msgid "Not usable: %s"
+msgstr "不可用：%s"
 
 #: cnequity/cli/run_cmds.py
 #, python-brace-format
@@ -5911,6 +5920,10 @@ msgstr "度量表没能生成（{exc}）；`cne serve` 会在打开时后台重�
 msgid "The minute-bar source is limited; the data available in the demo lake was kept."
 msgstr "分钟线来源受限；已保留 demo 湖中可用的数据。"
 
+#: cnequity/diagnostics/report.py
+msgid "The next `cne audit` probes them and caches the result for a week."
+msgstr "下一次 `cne audit` 会探测并缓存结果一周。"
+
 #: cnequity/diagnostics/source_health.py
 msgid "The only source of adjustment factors, covering every stock back to its listing date."
 msgstr "复权因子唯一来源，覆盖到每只票的上市日。"
@@ -6223,6 +6236,15 @@ msgstr "把东财和国证缺失的指数权重改为空值"
 #: cnequity/storage/migrations.py
 msgid "Turn valuation zero placeholders into nulls"
 msgstr "把估值的零占位改为空值"
+
+#: cnequity/diagnostics/report.py
+msgid "Tushare is enabled; its endpoint permissions are not probed yet"
+msgstr "Tushare 已启用，但还没有探测各接口权限"
+
+#: cnequity/diagnostics/report.py
+#, python-format
+msgid "Tushare permissions: %s of %s probed endpoints usable"
+msgstr "Tushare 权限：可用 %s 个，共探测 %s 个接口"
 
 #: cnequity/research/packs.py
 #, python-brace-format

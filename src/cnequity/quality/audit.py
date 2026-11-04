@@ -601,6 +601,10 @@ def _collect_lake_findings(
     # the network.
     if not offline:
         findings.extend(run_authority_checks(config, trade_date))
+        # Optional peer: runs only with [sources.tushare] enabled and a token.
+        from cnequity.quality.tushare_peer import run_tushare_peer_checks
+
+        findings.extend(run_tushare_peer_checks(config, trade_date))
     return findings
 
 

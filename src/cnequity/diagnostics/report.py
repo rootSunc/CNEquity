@@ -181,6 +181,44 @@ def _check_migrations(config, findings: list[Finding]) -> None:
         )
 
 
+def _check_tushare(config, findings: list[Finding]) -> None:
+    """What the optional Tushare account may call, from the cached probe only.
+
+    Doctor stays offline: the probe itself runs with the audit's peer checks.
+    """
+    from cnequity.adapters.tushare.client import cached_permissions, tushare_enabled
+
+    if not tushare_enabled(config):
+        return
+    statuses = cached_permissions(config)
+    if not statuses:
+        findings.append(
+            Finding(
+                severity=Severity.OK,
+                title=N_("Tushare is enabled; its endpoint permissions are not probed yet"),
+                detail=N_("The next `cne audit` probes them and caches the result for a week."),
+            )
+        )
+        return
+    denied = sorted(api for api, status in statuses.items() if status != "ok")
+    findings.append(
+        Finding(
+            severity=Severity.WARN if denied else Severity.OK,
+            title=Message(
+                N_("Tushare permissions: %s of %s probed endpoints usable"),
+                len(statuses) - len(denied),
+                len(statuses),
+            ),
+            detail=Message(N_("Not usable: %s"), ", ".join(denied)) if denied else "",
+            fix=N_(
+                "Checks that need these endpoints are skipped; your account decides which apply."
+            )
+            if denied
+            else "",
+        )
+    )
+
+
 def _check_data_root(data_root: Path, findings: list[Finding]) -> None:
     if not data_root.is_absolute():
         findings.append(
@@ -252,6 +290,7 @@ def build_report(config=None, config_path: Path | None = None) -> Report:
         _check_data_root(Path(config.data_root), findings)
         _check_credentials(config, findings)
         _check_migrations(config, findings)
+        _check_tushare(config, findings)
 
     env = _environment()
     if config_path is not None:
