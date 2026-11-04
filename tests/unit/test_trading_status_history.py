@@ -5,6 +5,7 @@ import pytest
 
 from cnequity.config import Config
 from cnequity.derive.trading_status_history import derive_suspension_history
+from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.storage.parquet import compact_dataset
 
 
@@ -752,3 +753,117 @@ def test_a_session_the_bar_feed_missed_is_not_inferred_as_a_halt(tmp_path):
         "daily_bars", [days[1]], reason="bj_session_incomplete"
     )
     assert derive_suspension_history(cfg, "after-ledger") == 0
+
+
+def _status_row(symbol, day, risk_warning, *, source="baostock", fetched_at=None):
+    return {
+        "symbol": symbol,
+        "trade_date": day,
+        "is_trading": True,
+        "status": "normal",
+        "risk_warning": risk_warning,
+        "source": source,
+        "data_version": "v1",
+        "fetched_at": fetched_at or f"{day.isoformat()}T12:00:00+00:00",
+    }
+
+
+def test_a_halt_carries_risk_warning_only_when_both_sides_agree(tmp_path):
+    """2018-06-29: ten *ST names were halted and the lake read them as clean."""
+    root = tmp_path / "data"
+    cfg = Config(data_root=root)
+    days = [date(2024, 6, d) for d in (24, 25, 26, 27, 28)]
+    halted = days[1:4]
+    symbols = {
+        "000001.SZ": "stock",  # ST before and after: carried
+        "000002.SZ": "stock",  # ST imposed mid-halt: unknown
+        "000003.SZ": "stock",  # clean on both sides: carried as clean
+        "000004.SZ": "stock",  # only a restated snapshot after: unknown
+        "510300.SH": "etf",  # funds are never ST
+    }
+    for day in days:
+        _write(
+            root,
+            "trading_calendar",
+            "trade_date",
+            day.isoformat(),
+            pl.DataFrame(
+                {
+                    "trade_date": [day],
+                    "is_trading": [True],
+                    "source": ["seed"],
+                    "data_version": ["v1"],
+                    "fetched_at": ["2024-06-28T00:00:00+00:00"],
+                }
+            ),
+        )
+        bars = [
+            {
+                "symbol": symbol,
+                "trade_date": day,
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 1,
+                "amount": 1.0,
+                "source": "tdx_protocol",
+                "data_version": "v1",
+                "fetched_at": "2024-06-28T00:00:00+00:00",
+            }
+            for symbol in symbols
+            if day not in halted
+        ]
+        _write(root, "daily_bars", "trade_date", day.isoformat(), pl.DataFrame(bars))
+    (root / "curated" / "instruments").mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "symbol": list(symbols),
+            "asset_type": list(symbols.values()),
+            "list_date": [date(2010, 1, 1)] * len(symbols),
+            "delist_date": [None] * len(symbols),
+            "source": ["tdx"] * len(symbols),
+            "data_version": ["v1"] * len(symbols),
+            "fetched_at": ["2024-06-28T00:00:00+00:00"] * len(symbols),
+        }
+    ).write_parquet(root / "curated" / "instruments" / "part-merged.parquet")
+    first, last = days[0], days[-1]
+    status = pl.DataFrame(
+        [
+            _status_row("000001.SZ", first, True),
+            _status_row("000001.SZ", last, True),
+            _status_row("000002.SZ", first, False),
+            _status_row("000002.SZ", last, True),
+            _status_row("000003.SZ", first, False),
+            _status_row("000003.SZ", last, False),
+            _status_row("000004.SZ", first, True),
+            # Read a week later and stamped onto the resumption day: a guess.
+            _status_row(
+                "000004.SZ", last, True, source="eastmoney", fetched_at="2024-07-05T01:00:00+00:00"
+            ),
+            # A derived row is not a reading either.
+            _status_row("000004.SZ", date(2024, 6, 21), True, source="derived_traded"),
+        ]
+    ).with_columns(pl.col("fetched_at").str.to_datetime(time_zone="UTC"))
+    month = root / "curated" / "trading_status" / "trade_date=2024-06"
+    month.mkdir(parents=True)
+    status.write_parquet(month / "part-merged.parquet")
+
+    assert _derive_and_publish(cfg) == len(symbols) * len(halted)
+
+    published = (
+        scan_parquet_root(cfg.curated_root / "trading_status", partition_col="trade_date")
+        .filter(pl.col("source") == "derived_bar_gap")
+        .collect()
+    )
+    by_symbol = {
+        symbol: set(group["risk_warning"].to_list())
+        for (symbol,), group in published.group_by("symbol")
+    }
+    assert by_symbol == {
+        "000001.SZ": {True},
+        "000002.SZ": {None},
+        "000003.SZ": {False},
+        "000004.SZ": {None},
+        "510300.SH": {False},
+    }

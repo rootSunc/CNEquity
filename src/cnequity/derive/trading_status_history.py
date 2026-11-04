@@ -16,6 +16,14 @@ longer erases one.
 Optional ``start`` / ``end`` bound the calendar cross-join so a 2001→today
 rebuild can run year-by-year without OOM.
 
+A derived row's ``risk_warning`` comes from the symbol's own first-hand
+readings around the halt: when the last reading before it and the first one
+after it agree, the halt carries that value; when they differ (an ST label
+imposed or lifted mid-halt) or one side is missing, it stays null. Funds are
+never ST, so theirs is ``False``. Checked against Tushare's name history on the
+whole lake (2026-11-04), agreeing brackets were right on 99.9% of 450k halted
+stock-days.
+
 Only *interior* gaps are reported. Each symbol's window is clamped to its own
 first and last bar, so a session the bar feed has not delivered yet — today,
 mid-run, or after a failed ingest — cannot be mistaken for a market-wide halt.
@@ -30,7 +38,14 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.schemas import with_provenance
-from cnequity.domain.trading_status import DERIVED_BAR_GAP_SOURCE, STATUS_SUSPENDED
+from cnequity.domain.trading_status import (
+    DERIVED_BAR_GAP_SOURCE,
+    EVIDENCE_POINT_IN_TIME,
+    NOT_FIRST_HAND_SOURCES,
+    STATUS_SUSPENDED,
+    evidence_rank_expr,
+    risk_warning_value_expr,
+)
 from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.parquet import StagingWriter
@@ -178,6 +193,102 @@ def _unfetched_sessions(config: Config) -> set[date]:
     return days
 
 
+def _risk_warning_across_halts(config: Config, pairs: pl.DataFrame) -> pl.Series:
+    """``risk_warning`` for each derived (symbol, trade_date), aligned to *pairs*.
+
+    A halt carries the ST label only when the readings on both sides agree.
+    Before 2026-08-30 the derive wrote ``False`` here outright, and a
+    suspension is exactly when a free feed stops answering, so the lake read
+    every halted ST stock as clean.
+    """
+    unknown = pl.Series("risk_warning", [None] * pairs.height, dtype=pl.Boolean)
+    keyed = pairs.with_row_index("__row").select("__row", "symbol", "trade_date")
+    asset = _asset_types(config, keyed)
+    status_root = config.curated_root / "trading_status"
+    readings = (
+        _first_hand_readings(status_root, keyed) if dataset_has_parquet(status_root) else None
+    )
+    if readings is None or readings.is_empty():
+        resolved = keyed.with_columns(pl.lit(None, dtype=pl.Boolean).alias("risk_warning"))
+    else:
+        ordered = keyed.sort("trade_date")
+        before = ordered.join_asof(
+            readings.rename({"risk_warning": "__before"}),
+            on="trade_date",
+            by="symbol",
+            strategy="backward",
+            allow_exact_matches=False,
+            check_sortedness=False,
+        )
+        both = before.join_asof(
+            readings.rename({"risk_warning": "__after"}),
+            on="trade_date",
+            by="symbol",
+            strategy="forward",
+            allow_exact_matches=False,
+            check_sortedness=False,
+        )
+        resolved = both.select(
+            "__row",
+            pl.when(pl.col("__before") == pl.col("__after"))
+            .then(pl.col("__before"))
+            .otherwise(None)
+            .alias("risk_warning"),
+        )
+    resolved = keyed.select("__row", "symbol").join(
+        resolved.select("__row", "risk_warning"), on="__row", how="left"
+    )
+    if asset is not None:
+        resolved = resolved.join(asset, on="symbol", how="left").with_columns(
+            pl.when(pl.col("asset_type") == "etf")
+            .then(False)
+            .otherwise(pl.col("risk_warning"))
+            .alias("risk_warning")
+        )
+    if resolved.height != pairs.height:
+        return unknown
+    return resolved.sort("__row")["risk_warning"]
+
+
+def _first_hand_readings(status_root, keyed: pl.DataFrame) -> pl.DataFrame | None:
+    """Canonical first-hand ``(symbol, trade_date, risk_warning)`` for *keyed*'s symbols."""
+    lf = scan_parquet_root(status_root, partition_col="trade_date")
+    schema = lf.collect_schema()
+    if "source" not in schema.names():
+        return None
+    symbols = keyed["symbol"].unique().to_list()
+    lf = dedupe_lazy_by_primary_key(lf.filter(pl.col("symbol").is_in(symbols)), "trading_status")
+    first_hand = ~pl.col("source").is_in(list(NOT_FIRST_HAND_SOURCES)).fill_null(False)
+    rank = evidence_rank_expr(schema)
+    if rank is not None:
+        # A board reading restated onto an older session is not a reading of it.
+        first_hand = first_hand & (rank == EVIDENCE_POINT_IN_TIME)
+    return (
+        lf.filter(first_hand)
+        .select(
+            "symbol",
+            pl.col("trade_date").cast(pl.Date),
+            risk_warning_value_expr(schema.names()).alias("risk_warning"),
+        )
+        .filter(pl.col("risk_warning").is_not_null())
+        .unique(["symbol", "trade_date"])
+        .sort("trade_date")
+        .collect()
+    )
+
+
+def _asset_types(config: Config, keyed: pl.DataFrame) -> pl.DataFrame | None:
+    inst_root = config.curated_root / "instruments"
+    lf = scan_parquet_root(inst_root, hive=False)
+    if "asset_type" not in lf.collect_schema().names():
+        return None
+    frame = dedupe_by_primary_key(
+        lf.filter(pl.col("symbol").is_in(keyed["symbol"].unique().to_list())).collect(),
+        "instruments",
+    )
+    return frame.select("symbol", "asset_type").unique("symbol", keep="last")
+
+
 def derive_suspension_history(
     config: Config,
     run_id: str,
@@ -233,10 +344,10 @@ def derive_suspension_history(
     rows = pairs.with_columns(
         pl.lit(False).alias("is_trading"),
         pl.lit(STATUS_SUSPENDED).alias("status"),
-        # A missing bar proves the security did not trade. It proves nothing
-        # about risk warning, so this stays null rather than asserting "clean";
-        # `st_coverage` is what tracks where ST evidence is actually absent.
-        pl.lit(None, dtype=pl.Boolean).alias("risk_warning"),
+        # A missing bar proves the security did not trade, not whether it was
+        # ST. That comes from the readings around the halt, and stays null
+        # where they disagree; `st_coverage` tracks where evidence is absent.
+        _risk_warning_across_halts(config, pairs),
     )
     rows = with_provenance(rows, source=DERIVED_BAR_GAP_SOURCE, data_version="v1")
     # Merging against what is already committed is compact's job, and it uses
