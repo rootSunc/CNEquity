@@ -1284,6 +1284,20 @@ Tushare `namechange` 证券名称史，需在 `[sources.tushare]` 配置自己�
 | data_version | string | 溯源 |
 | fetched_at | timestamp | 溯源 |
 
+#### limit_prices
+
+Tushare `stk_limit` 涨停价、跌停价，需在 `[sources.tushare]` 配置自己的 Tushare 令牌。每只股票每个交易日一行，2007-01-04 起。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| trade_date | date | 交易日 |
+| up_limit | float64 | 涨停价（元） |
+| down_limit | float64 | 跌停价（元） |
+| source | string | 溯源 |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
 ### Compact 去重
 
 Compact 时按主键分组，保留 `fetched_at` 最大的一行。

@@ -222,6 +222,7 @@ _UNIT_CONTRACT_DEFAULTS: dict[str, UnitContract] = {
         "holding_ratio": "percent",
         "holding_mv": "CNY",
     },
+    "limit_prices": {"up_limit": "CNY/share", "down_limit": "CNY/share"},
     "broker_forecasts": {
         "op_rt": "10k_CNY",
         "op_pr": "10k_CNY",
@@ -811,6 +812,17 @@ _SPECS = [
         watermark=False,
         required=False,
         empty_severity="info",
+    ),
+    # Exchange price bands per stock and session (Tushare stk_limit, optional
+    # token), from 2007. Only `cne backfill limit_prices` fills it.
+    DatasetSpec(
+        "limit_prices",
+        primary_source="tushare",
+        tier="L1",
+        partition_col="trade_date",
+        required=False,
+        empty_severity="info",
+        history_floor_date=date(2007, 1, 4),
     ),
     # Official exchange fund directories are current snapshots. A row first
     # observed today cannot be backdated into yesterday's ETF universe.
@@ -1755,6 +1767,7 @@ _SUPPORT: dict[str, Support] = {
             "sector_fund_flow_ths",
             "analyst_consensus",
             "broker_forecasts",
+            "limit_prices",
             "sector_members",
             "northbound_holdings",
             "northbound_flows",

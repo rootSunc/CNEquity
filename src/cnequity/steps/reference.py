@@ -1420,6 +1420,49 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
 
 
 @register_step(
+    "limit_prices",
+    group="core",
+    depends_on=["instruments"],
+    description="Exchange limit-up / limit-down prices per stock (Tushare)",
+)
+def step_limit_prices(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """Price bands from Tushare ``stk_limit``; no default schedule runs this.
+
+    Without a token this sends nothing and reports skipped. Codes outside
+    ``instruments`` (B shares) are left out.
+    """
+    from cnequity.adapters.tushare.client import tushare_enabled
+    from cnequity.adapters.tushare.limit_prices import (
+        LIMIT_PRICES_FLOOR,
+        SOURCE,
+        fetch_limit_prices,
+    )
+    from cnequity.steps.common import load_symbols, walk_day_backfill
+
+    if not tushare_enabled(config):
+        return {"rows_written": 0, "status": "skipped", "reason": "tushare not configured"}
+    universe = sorted(set(load_symbols(config)))
+
+    def fetch_day(day: date) -> pl.DataFrame:
+        return fetch_limit_prices(day, config=config).filter(pl.col("symbol").is_in(universe))
+
+    if getattr(config, "_backfill", False):
+        return walk_day_backfill(
+            config,
+            trade_date,
+            run_id,
+            "limit_prices",
+            fetch_day,
+            source=SOURCE,
+            floor=LIMIT_PRICES_FLOOR,
+        )
+    df = fetch_day(trade_date)
+    if df.is_empty():
+        raise SourceUnavailableError(f"limit_prices: tushare has no bands for {trade_date}")
+    return write_fetched(config, run_id, "limit_prices", df, source=SOURCE)
+
+
+@register_step(
     "name_history",
     group="core",
     description="Security name history, the ST labels on halted sessions included (Tushare)",

@@ -3,7 +3,7 @@
   <h1>CNEquity · 中国市场金融数据湖</h1>
 <p>免注册、免 Token · 复权与 PIT 内置 · 保留退市股 · 行级溯源 · MCP 原生</p>
 
-CNEquity 是开源的中国 A股本地数据湖：整理沪深股票行情、股票数据、财务与期货数据，面向量化研究、量化交易与回测。59 个数据集落到本地 Parquet，可增量续跑，也能通过 MCP 让 AI 直接查 A 股。
+CNEquity 是开源的中国 A股本地数据湖：整理沪深股票行情、股票数据、财务与期货数据，面向量化研究、量化交易与回测。60 个数据集落到本地 Parquet，可增量续跑，也能通过 MCP 让 AI 直接查 A 股。
 
 [![CI](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/cnequity?logo=pypi&logoColor=white)](https://pypi.org/project/cnequity/)
@@ -83,7 +83,7 @@ print(bars.tail())
 
 ## 数据范围
 
-支持 **59 个数据集**（51 个 curated、8 个 derived），按用途分为 L0–L9。字段、主键、历史起点和来源见[数据集目录](docs/zh/datasets/catalog.md)与[数据源说明](docs/zh/datasets/sources.md)。
+支持 **60 个数据集**（52 个 curated、8 个 derived），按用途分为 L0–L9。字段、主键、历史起点和来源见[数据集目录](docs/zh/datasets/catalog.md)与[数据源说明](docs/zh/datasets/sources.md)。
 
 | 层次 | 研究用途 | 代表数据集 |
 |---|---|---|

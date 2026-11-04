@@ -1291,6 +1291,20 @@ Tushare `namechange` security name history; needs your own Tushare token in `[so
 | data_version | string | Provenance |
 | fetched_at | timestamp | Provenance |
 
+#### limit_prices
+
+Tushare `stk_limit` limit-up and limit-down prices; needs your own Tushare token in `[sources.tushare]`. One row per stock and session, from 2007-01-04.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Legacy Beijing codes are stored under the 920 code |
+| trade_date | date | Session |
+| up_limit | float64 | Limit-up price (yuan) |
+| down_limit | float64 | Limit-down price (yuan) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
 ### Compact deduplication
 
 During compact, rows are grouped by primary key and the row with the largest `fetched_at` is kept.

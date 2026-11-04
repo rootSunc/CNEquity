@@ -3828,6 +3828,125 @@
       "unit_contract": "canonical",
       "watermark": false
     },
+    "limit_prices": {
+      "append_only": false,
+      "availability_col": "trade_date",
+      "backfill_chunk_days": null,
+      "backfill_chunk_symbols": null,
+      "backfill_source": null,
+      "backup_source": null,
+      "columns": {
+        "data_version": "string",
+        "down_limit": "float64",
+        "fetched_at": "Datetime(time_unit='us', time_zone='UTC')",
+        "source": "string",
+        "symbol": "string",
+        "trade_date": "date",
+        "up_limit": "float64"
+      },
+      "compatibility": "additive",
+      "contract_level": "stable",
+      "coverage_mode": "sparse",
+      "date_col": null,
+      "empty_severity": "info",
+      "fetch_semantics": "by_date",
+      "history_floor_date": "2007-01-04",
+      "history_horizon_days": null,
+      "history_mode": "by_date",
+      "intraday_frequency": null,
+      "layer": "curated",
+      "max_staleness_days": 1,
+      "metadata": {
+        "append_only": false,
+        "availability_col": "trade_date",
+        "backfill_chunk_days": null,
+        "backfill_chunk_symbols": null,
+        "backfill_source": null,
+        "backup_source": null,
+        "compatibility": "additive",
+        "contract_level": "stable",
+        "coverage_mode": "sparse",
+        "date_col": null,
+        "empty_severity": "info",
+        "fetch_semantics": "by_date",
+        "history_floor_date": "2007-01-04",
+        "history_horizon_days": null,
+        "history_mode": "by_date",
+        "intraday_frequency": null,
+        "layer": "curated",
+        "max_staleness_days": 1,
+        "negative_evidence_ttl_days": 7,
+        "partition_col": "trade_date",
+        "partition_granularity": "day",
+        "pit": false,
+        "pit_grade": "none",
+        "pit_modes": [
+          "best_effort",
+          "strict"
+        ],
+        "pit_quality": "not_applicable",
+        "pit_storage_columns": [],
+        "pit_storage_dtypes": {},
+        "primary_source": "tushare",
+        "query_date_col": "trade_date",
+        "reconciliation_lookback_days": 0,
+        "reconciliation_lookback_mode": "calendar",
+        "required": false,
+        "row_grain": null,
+        "schema_version": 1,
+        "source_retired_date": null,
+        "tier": "L1",
+        "unit_contract": {
+          "down_limit": "CNY/share",
+          "up_limit": "CNY/share"
+        },
+        "watermark": true
+      },
+      "name": "limit_prices",
+      "negative_evidence_ttl_days": 7,
+      "partition_col": "trade_date",
+      "partition_granularity": "day",
+      "pit": false,
+      "pit_grade": "none",
+      "pit_modes": [
+        "best_effort",
+        "strict"
+      ],
+      "pit_quality": "not_applicable",
+      "pit_storage_columns": [],
+      "pit_storage_dtypes": {},
+      "primary_key": [
+        "symbol",
+        "trade_date"
+      ],
+      "primary_keys": [
+        "symbol",
+        "trade_date"
+      ],
+      "primary_source": "tushare",
+      "query_date_col": "trade_date",
+      "reconciliation_lookback_days": 0,
+      "reconciliation_lookback_mode": "calendar",
+      "required": false,
+      "row_grain": null,
+      "schema": {
+        "data_version": "string",
+        "down_limit": "float64",
+        "fetched_at": "Datetime(time_unit='us', time_zone='UTC')",
+        "source": "string",
+        "symbol": "string",
+        "trade_date": "date",
+        "up_limit": "float64"
+      },
+      "schema_version": 1,
+      "source_retired_date": null,
+      "tier": "L1",
+      "unit_contract": {
+        "down_limit": "CNY/share",
+        "up_limit": "CNY/share"
+      },
+      "watermark": true
+    },
     "macro_indicators": {
       "append_only": false,
       "availability_col": "obs_date",
@@ -7785,7 +7904,7 @@
       "watermark": true
     }
   },
-  "fingerprint": "d378d5fdb93c47cb62ce8a379b64b4290529aac8111b842bb9890b043d721d51",
+  "fingerprint": "35f4c960df1f83bf4603d55d2fdbee3c3724fafb91d4cc46091e5738935b2088",
   "format": "cnequity.dataset-contract",
   "pit_contract": {
     "modes": [

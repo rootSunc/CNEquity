@@ -1,0 +1,38 @@
+"""Offline tests for limit_prices (Tushare stk_limit)."""
+
+from __future__ import annotations
+
+from datetime import date
+
+import httpx
+
+from cnequity.adapters.tushare import limit_prices as lp
+from cnequity.config import Config
+from cnequity.domain.schemas import validate_dataframe, with_provenance
+
+FIELDS = lp._FIELDS.split(",")
+
+
+def test_normalize_maps_legacy_beijing_codes_and_drops_incomplete_rows():
+    frame = lp.normalize(
+        FIELDS,
+        [
+            ["20240603", "430017.BJ", 11.0, 7.0],
+            ["20240603", "600519.SH", 1800.0, 1500.0],
+            ["20240603", "600000.SH", None, 9.0],
+        ],
+    )
+    assert frame.select("symbol", "up_limit").rows() == [("920017.BJ", 11.0), ("600519.SH", 1800.0)]
+    assert frame["trade_date"][0] == date(2024, 6, 3)
+    validate_dataframe(with_provenance(frame, source="tushare", data_version="v1"), "limit_prices")
+
+
+def test_the_step_sends_nothing_without_a_token(tmp_path, monkeypatch):
+    from cnequity.steps.reference import step_limit_prices
+
+    def boom(*_a, **_k):  # pragma: no cover - must not be called
+        raise AssertionError("no request without a token")
+
+    monkeypatch.setattr(httpx.Client, "post", boom)
+    result = step_limit_prices(Config(data_root=tmp_path), date(2026, 11, 4), "run-1", {})
+    assert result["status"] == "skipped"

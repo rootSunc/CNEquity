@@ -25,7 +25,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 | 层次 | 说明 | 代表数据集 |
 |------|------|------------|
 | **L0** 基础参考 | Universe、ETF 目录、日历、交易状态、证券名称史 | instruments, etf_profiles, trading_calendar, trading_status, name_history |
-| **L1** 行情 | 未复权价量 + 复权因子 + 可选分钟/分笔 + 退市形态 | daily_bars, index_bars, minute_bars*, minute_bars_5m*, minute_bars_15m* / 30m* / 60m*, trade_ticks*, adj_factors, delisting_events |
+| **L1** 行情 | 未复权价量 + 复权因子 + 可选分钟/分笔 + 退市形态 | daily_bars, index_bars, minute_bars*, minute_bars_5m*, minute_bars_15m* / 30m* / 60m*, trade_ticks*, adj_factors, delisting_events, limit_prices |
 | **L2** 公司事件 | 除权除息、公告、预约披露 | corporate_actions, announcement_index, earnings_disclosure_schedule |
 | **L3** 基本面 | 财报、估值、一致预期 | financial_statement_items, valuation_metrics, analyst_consensus, broker_forecasts |
 | **L4** 资金面 | 北向、融资、主力 | fund_flow, fund_flow_ths, northbound_*, margin_trading, dragon_tiger, block_trades, institutional_holdings |
@@ -47,7 +47,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 |------|------|------|--------|
 | `core` 核心 | 开 | 历史可重建、日更稳定、有备源或权威对照；`cne check` 和稳定性门槛（`cne verify --runs`）只看这一档，不论由哪个调度组采集 | `instruments`, `trading_calendar`, `trading_status`, `daily_bars`, `index_bars`, `corporate_actions`, `financial_statement_items`, `share_structure`, `valuation_metrics`, `index_constituents`, `adj_factors`, `delisting_events` |
 | `extended` 扩展 | 开 | 历史可重建、日更基本稳定，但非必需或只有单一来源 | `etf_profiles`, `commodity_bars`, `announcement_index`, `earnings_disclosure_schedule`, `shareholder_counts`, `top_holders`, `margin_trading`, `dragon_tiger`, `block_trades`, `institutional_holdings`, `industry_members`, `name_history`, `macro_indicators`, `market_breadth`, `share_unlock_schedule`, `regulatory_events`, `industry_index` |
-| `best_effort` 尽力而为 | **关** | 只有启用后才开始积累的实时快照、已停更的来源，或经常失败的接口（东财 push2 资金流、新闻、人气榜）；在 `[datasets] best_effort` 中列出才启用 | `analyst_consensus`, `broker_forecasts`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar`, `economic_events`, `market_holidays` |
+| `best_effort` 尽力而为 | **关** | 只有启用后才开始积累的实时快照、已停更的来源，或经常失败的接口（东财 push2 资金流、新闻、人气榜）；在 `[datasets] best_effort` 中列出才启用 | `analyst_consensus`, `broker_forecasts`, `limit_prices`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar`, `economic_events`, `market_holidays` |
 | `optional` 可选 | 关 | 由各自开关启用（`[minute_bars]`、`[trade_ticks]`、`[futures]`） | `minute_bars`, `minute_bars_5m`, `trade_ticks`, `futures_contracts`, `option_contracts`, `futures_bars`, `futures_minute_bars`, `option_bars`, `futures_continuous`, `option_greeks`, `minute_bars_15m`, `minute_bars_30m`, `minute_bars_60m` |
 
 ## 采集模式
@@ -210,6 +210,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | 备注 |
 |--------|--------|------|------|------|------|------|
 | daily_bars | trade_date | symbol, trade_date | by_date | ✓ | tdx_protocol | tip 缺口东财 clist 路由进 curated；多日 kline；BJ→sina；显式开启后只追加正式目录已核验 ETF，其他基金不进入默认日更；snapshot 仍留 audit |
+| limit_prices | trade_date | symbol, trade_date | by_date | ✓ | tushare | Tushare `stk_limit` 每只股票每个交易日的涨停价、跌停价，2007-01-04 起。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill limit_prices` 采集，默认不排日更；北交所旧代码换成 920 代码，B 股不写入。可用来判断某根 K 线是否触及涨跌停 |
 | index_bars | trade_date | symbol, trade_date, frequency | by_date | ✓ | tdx_protocol | |
 | minute_bars | trade_date | symbol, trade_date, bar_time, frequency | by_date | ✓ | tdx_protocol | 1m。**可选**，默认关；`[minute_bars]` 配置范围；**源端只有 95 个交易日**（见下「历史视野」）；落盘量随标的数与窗口增长；required=false |
 | minute_bars_5m | trade_date | symbol, trade_date, bar_time, frequency | by_date | ✓ | tdx_protocol | 5m。同上可选；**491 个交易日（约 2 年），是唯一有真历史的日内频率**；落盘量随标的数与窗口增长；required=false |
