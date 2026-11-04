@@ -467,3 +467,40 @@ def test_plain_adjusted_load_skips_diagnostics_and_receipt_survives_them(tmp_pat
     result = load_with_receipt("daily_bars", config=cfg, symbols=["600001.SH"], adjust="hfq")
     assert result.frame.height == 10
     assert result.receipt["adjustment"]["diagnostics_assessed"] is False
+
+
+def _daily_slice(cfg, days):
+    from cnequity.derive.stock_factors import apply_stock_event_factors
+
+    out = pl.DataFrame(
+        {
+            "symbol": ["600001.SH"] * len(days),
+            "trade_date": days,
+            "adjust_type": ["hfq"] * len(days),
+            "factor": [2.0] * len(days),
+            "source": ["sina"] * len(days),
+        }
+    )
+    return apply_stock_event_factors(cfg, out, peer=pl.DataFrame())
+
+
+def test_daily_slice_does_not_step_on_a_correction_older_than_stored_history(tmp_path):
+    cfg = _lake(tmp_path)
+    for day in DAYS[8:]:
+        (cfg.derived_root / "adj_factors" / f"trade_date={day}" / "part.parquet").unlink()
+    out, findings = _daily_slice(cfg, DAYS[8:])
+    # Stored DAYS[3..7] still carry the uncorrected 2.0, so the new sessions
+    # must continue that level rather than jump by the 10/9 correction.
+    assert out["factor"].to_list() == [2.0, 2.0]
+    assert out["source"].to_list() == ["sina", "sina"]
+    pending = [f for f in findings if "pending_scale" in f]
+    assert pending and pending[0]["pending_scale"] == pytest.approx(10 / 9)
+
+
+def test_daily_slice_keeps_a_correction_dated_inside_it(tmp_path):
+    cfg = _lake(tmp_path)
+    for day in DAYS[3:]:
+        (cfg.derived_root / "adj_factors" / f"trade_date={day}" / "part.parquet").unlink()
+    out, findings = _daily_slice(cfg, DAYS[3:])
+    assert out["factor"].to_list() == pytest.approx([2.0 * 10 / 9] * 7)
+    assert not [f for f in findings if "pending_scale" in f]

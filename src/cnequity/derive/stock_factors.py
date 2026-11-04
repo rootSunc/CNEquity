@@ -302,6 +302,36 @@ def _by_symbol(frame: pl.DataFrame) -> dict[str, pl.DataFrame]:
     }
 
 
+def _continue_published(symbol, rebuilt, published, rows, findings):
+    """Keep a slice that extends stored history continuous with it.
+
+    A correction dated before the slice changes every later level. Writing it
+    into only the new sessions would put a false step at the slice start
+    (600981.SH: x1.35 on 2026-11-02), so it waits for a full repair instead.
+    """
+    if rows.is_empty() or published.is_empty():
+        return rebuilt
+    stored = published.filter(pl.col("trade_date") < rows["trade_date"].min())
+    if stored.is_empty():
+        return rebuilt
+    tip_day, tip_factor = stored.sort("trade_date").select("trade_date", "factor").row(-1)
+    level = rebuilt.sort("trade_date").filter(pl.col("trade_date") <= tip_day)
+    if level.is_empty() or not tip_factor or tip_factor <= 0:
+        return rebuilt
+    ratio = tip_factor / level["factor"][-1]
+    if not math.isfinite(ratio) or ratio <= 0 or abs(ratio - 1.0) <= 1e-12:
+        return rebuilt
+    findings.append(
+        {
+            "symbol": symbol,
+            "trade_date": str(tip_day),
+            "pending_scale": 1.0 / ratio,
+            "reason": "correction predates stored history; run `cne repair adj_factors`",
+        }
+    )
+    return rebuilt.with_columns(pl.col("factor") * ratio)
+
+
 def _reform_share_counts(config, symbols, read_context=None) -> pl.DataFrame:
     """Float A-share counts by change date, through the share-reform window."""
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
@@ -456,12 +486,17 @@ def apply_stock_event_factors(
         rebuilt = preserve_pending_steps(rebuilt, published, events, SOURCE)
         if not any("correction" in event for event in events):
             continue
+        rebuilt = _continue_published(symbol, rebuilt, published, rows, findings)
         first = min(date.fromisoformat(e["trade_date"]) for e in events if "correction" in e)
         selected = (
-            rows.select("symbol", "trade_date", "adjust_type")
+            rows.select("symbol", "trade_date", "adjust_type", pl.col("factor").alias("_original"))
             .sort("trade_date")
             .join_asof(rebuilt.sort("trade_date"), on="trade_date", strategy="backward")
-            .filter(pl.col("trade_date") >= first)
+            .filter(
+                (pl.col("trade_date") >= first)
+                & ((pl.col("factor") / pl.col("_original") - 1.0).abs() > 1e-12)
+            )
+            .drop("_original")
             .rename({"factor": "_stock_factor"})
         )
         replacements.append(selected)
