@@ -942,7 +942,7 @@ class JobEngine:
         spec = DATASETS.get(name)
         if not getattr(self.config, "_backfill", False) or spec is None:
             return self.config, None
-        if history_mode_for(spec) == "snapshot_only":
+        if history_mode_for(spec, self.config) == "snapshot_only":
             raise CapabilityLimitError(
                 f"{name}: snapshot source has no historical replay; retained observations "
                 "remain readable, and daily collection can accumulate future snapshots"

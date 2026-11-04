@@ -75,7 +75,7 @@ Derived from `fetch_semantics` + `backfill_source` (see `list_datasets()`):
 |--------------|------|--------|
 | `by_date` | Can be backfilled by date / gaps can be filled | Most market data and event tables |
 | `snapshot_with_backfill` | Daily updates are snapshots, but a dedicated history source exists | `valuation_metrics`→baostock; `index_constituents`→cni; `industry_members`→sw; `sector_bars`→ths; `economic_calendar`→jin10 (from 2008) |
-| `snapshot_only` | Returns only the current snapshot; accumulates day by day once enabled, but past dates that were not collected cannot be backfilled | `analyst_consensus`, `fund_flow`, `sector_members`, `hot_rank`, `sector_fund_flow`, `news_headlines`, `flash_news_wire`, `economic_events`, `market_holidays` |
+| `snapshot_only` | Returns only the current snapshot; accumulates day by day once enabled, but past dates that were not collected cannot be backfilled | `analyst_consensus`, `fund_flow` (backfillable from 2023-09-11 once a Tushare token is configured), `sector_members`, `hot_rank`, `sector_fund_flow`, `news_headlines`, `flash_news_wire`, `economic_events`, `market_holidays` |
 
 Suspension coverage in `trading_status` can be derived back to the start of `daily_bars`; ST coverage must be backed by a complete `historical_st_evidence` receipt. Without a receipt covering the requested window, do **not** assume that `universe="all_a"` has excluded historical ST since 2001. For BJ, Tushare Pro is optional: historical short names via `bak_basic` for 2016, and `stock_st` from 2017-01-01; before 2016 a separate, deeper history source is still required.
 
@@ -254,7 +254,7 @@ Vendor zero placeholders in PE, PB, PS and total/float market cap are stored as 
 
 | Dataset | Partition key | Primary key | Semantics | Watermark | Primary source | staleness |
 |--------|--------|------|------|------|------|-----------|
-| fund_flow | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 1d |
+| fund_flow | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 1d. History can only be backfilled from Tushare `moneyflow_dc` (the same EastMoney measure, from 2023-09-11; needs your own token in `[sources.tushare]`): `cne backfill fund_flow --start ... --end ...` adds only stocks the lake lacks and never changes existing EastMoney rows; added rows are stamped `source=tushare` and carry all five nets. B shares and untraded codes with every net at zero are not written |
 | fund_flow_ths | trade_date | symbol, trade_date | snapshot | ✓ | ths | Filled from THS only when push2 cannot provide `fund_flow`: inflow/outflow/net/turnover, with **no** main-force and extra-large…small order breakdown, amounts to 4 significant digits; source coverage is whatever the response returns, BSE is not promised; no report when empty. No freshness check by default; when a configured daily schedule group runs it (for example swapped in with `steps_add` while push2 is unavailable), the last closed session must have rows |
 | margin_trading | trade_date | symbol, trade_date | by_date | ✓ | exchange | Margin trading details compiled by the SSE and SZSE themselves; SH has no securities-lending balance (`short_balance` is null), SZSE publishes one trading day later, and rows are written only once both are in; `[margin_trading] source` can switch back to eastmoney |
 | northbound_holdings | trade_date | symbol, trade_date, channel | by_date | ✓ | eastmoney | 100d (quarterly) |

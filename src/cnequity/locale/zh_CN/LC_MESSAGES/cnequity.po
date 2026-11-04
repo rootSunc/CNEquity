@@ -1167,8 +1167,8 @@ msgid "--quality-only needs --full"
 msgstr "--quality-only 需要配合 --full"
 
 #: cnequity/cli/backfill_cmds.py
-msgid "--refetch applies to sector_bars, futures_bars and option_bars"
-msgstr "--refetch 只适用于 sector_bars、futures_bars 和 option_bars"
+msgid "--refetch applies to sector_bars, futures_bars, option_bars and fund_flow"
+msgstr "--refetch 只适用于 sector_bars、futures_bars、option_bars 和 fund_flow"
 
 #: cnequity/cli/consume_cmds.py
 msgid "--refresh needs both --dataset and --symbol"
@@ -3121,8 +3121,8 @@ msgid "If the scheduled daily update runs only these research packs, its schedul
 msgstr "定时日更若只跑这些研究包，调度组是 {groups}，不含事件流。"
 
 #: cnequity/cli/backfill_cmds.py
-msgid "Ignore completion receipts and checkpoints and fetch the range again (sector_bars, futures_bars, option_bars); circuit breakers still apply. Without it a backfill resumes."
-msgstr "忽略完成收据和 checkpoint，重新获取整个范围（sector_bars、futures_bars、option_bars）；熔断仍然生效。不加时回填从断点续跑。"
+msgid "Ignore completion receipts and checkpoints and fetch the range again (sector_bars, futures_bars, option_bars, fund_flow); circuit breakers still apply. Without it a backfill resumes."
+msgstr "忽略完成收据和 checkpoint，重新获取整个范围（sector_bars、futures_bars、option_bars、fund_flow）；熔断仍然生效。不加时回填从断点续跑。"
 
 #: cnequity/cli/backfill_cmds.py
 msgid "Import a Shanghai Futures Exchange annual ZIP of daily bars, offline and verified."

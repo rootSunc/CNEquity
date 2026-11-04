@@ -465,6 +465,11 @@ class DatasetSpec:
     # report and asserted against the adapters.
     backup_gaps: tuple[str, ...] = ()
     backfill_source: str | None = None
+    # A history source that needs the user's own credentials (Tushare). It
+    # makes the dataset replayable only for a config that has them; without
+    # one, and wherever no config is at hand, the dataset stays snapshot-only,
+    # so a lake without a token is never told to backfill what it cannot.
+    keyed_backfill_source: str | None = None
     # The rest of the recovery chain: sources that legitimately write rows to
     # this dataset without being any of the three roles above.
     #
@@ -1274,6 +1279,9 @@ _SPECS = [
         "fund_flow",
         partial_rows=True,
         primary_source="eastmoney",
+        # Tushare moneyflow_dc republishes EastMoney's own measure for every
+        # session since 2023-09-11; it only fills keys the lake does not have.
+        keyed_backfill_source="tushare",
         tier="L4",
         partition_col="trade_date",
         fetch_semantics="snapshot",
@@ -1881,19 +1889,34 @@ def fetch_semantics(dataset: str) -> FetchSemantics:
     return spec.fetch_semantics if spec else "by_date"
 
 
-def history_mode_for(spec: DatasetSpec) -> HistoryMode:
+def history_mode_for(spec: DatasetSpec, config=None) -> HistoryMode:
     """Whether the dataset can expose an honest historical series.
 
     Derived only from registry fields (no parallel flags):
     - ``by_date`` — gap-fill / date-walk
     - ``snapshot_with_backfill`` — daily tip snapshot + dedicated history source
     - ``snapshot_only`` — tip-only; no honest historical replay
+
+    A ``keyed_backfill_source`` counts only when *config* has that source's
+    credentials.
     """
     if spec.fetch_semantics == "by_date":
         return "by_date"
     if spec.backfill_source:
         return "snapshot_with_backfill"
+    if spec.keyed_backfill_source and config is not None:
+        if keyed_source_ready(spec.keyed_backfill_source, config):
+            return "snapshot_with_backfill"
     return "snapshot_only"
+
+
+def keyed_source_ready(source: str, config) -> bool:
+    """Whether *config* can call a credentialed *source* at all."""
+    if source == "tushare":
+        from cnequity.adapters.tushare.client import tushare_enabled
+
+        return tushare_enabled(config)
+    return False
 
 
 def history_mode(dataset: str) -> HistoryMode:

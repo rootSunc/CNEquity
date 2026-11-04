@@ -75,7 +75,8 @@ from cnequity.orchestrator.engine import JobEngine
     is_flag=True,
     help=N_(
         "Ignore completion receipts and checkpoints and fetch the range again (sector_bars, "
-        "futures_bars, option_bars); circuit breakers still apply. Without it a backfill resumes."
+        "futures_bars, option_bars, fund_flow); circuit breakers still apply. Without it a "
+        "backfill resumes."
     ),
 )
 @click.option(
@@ -190,9 +191,11 @@ def backfill(
             force = True
         elif dataset in {"futures_bars", "option_bars"}:
             refresh = True
+        elif dataset == "fund_flow":
+            pass  # applied to cfg once it is loaded below
         else:
             raise click.ClickException(
-                _("--refetch applies to sector_bars, futures_bars and option_bars")
+                _("--refetch applies to sector_bars, futures_bars, option_bars and fund_flow")
             )
     if turnover_peer_review and not turnover_repair:
         raise click.ClickException(_("--turnover-peer-review needs --turnover-repair"))
@@ -358,6 +361,7 @@ def backfill(
         symbols = list(dict.fromkeys(s.upper() for s in symbols))
         symbols_str = ",".join(symbols)
     cfg = _cfg(config_path)
+    cfg._backfill_refetch = bool(refetch and dataset == "fund_flow")
     derivatives = {
         "futures_bars",
         "option_bars",
@@ -964,10 +968,10 @@ def _backfill_plan(cfg, dataset, start, end, symbols, workers, repair_modes) -> 
         if symbols
         else "dataset default scope, possibly the whole market",
         "fetch_semantics": spec.fetch_semantics,
-        "history_mode": history_mode_for(spec),
+        "history_mode": history_mode_for(spec, cfg),
         "history_note": (
             "The source only has a current snapshot; history requests report the capability limit normally, keep existing data and give a daily collection plan"
-            if history_mode_for(spec) == "snapshot_only"
+            if history_mode_for(spec, cfg) == "snapshot_only"
             else "Ranges beyond the source's capability are recorded as coverage gaps; running fetches whatever range the source can still provide"
         ),
         "registered_sources": registered,

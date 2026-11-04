@@ -360,7 +360,7 @@
 | ths_bonus | HTTP | 同花顺分红送配页 | — | 限速更保守（3.0s）；跳过 + quality finding |
 | tdx_fin | HTTP | `financial_statement_items` 备源：全市场季度财务包（gpcw，MD5 校验） | — | 东财失败时日更只写近 14 天披露（`tdx_fin`）；`cne backfill --source tdx_fin` 只补湖中缺失的科目，旧季度值可能已被更正，标 `tdx_fin_backfill`，严格 PIT 排除；包内没有营业总收入，`revenue` 只给上一期营业收入等于湖里营业总收入的公司写入（有金融子公司、多出利息和手续费收入的公司留空）；不含 indicator 比率。每天 core 组在 compact 之后还用它对照近 14 天的新披露（容差 0.1%；`revenue` 只在通达信营业收入大于营业总收入时算不一致），并列出通达信已有、披露日早于当天、湖里却没有的报告（审计 `financial_statement_tdx_peer`）；包按 MD5 缓存在 `meta/source_cache/tdx_fin`，未变不重复下载 |
 | ths_official | HTTPS（keyed） | 可选有凭证来源：仲裁快照、财报补入、显式历史修复；版本化纠错遵循版本化发布规则 | — | 无 key 时全部 `skipped`，湖保持已有的源不变 |
-| tushare | HTTPS（keyed） | 可选：BJ 历史 ST 证据（`stock_st`，起 2017-01-01）；`broker_forecasts`（`report_rc`）；`name_history`（`namechange`，停牌日 ST 标记的首选证据） | bak_basic 名称证据（2016）；report_rc 自 2016；namechange 全历史 | 无 token 时不发请求：更早的 BJ bar 保持 unresolved，**不认定为正常**；broker_forecasts、name_history 不采集，停牌日 ST 只按停牌前后一致的第一手记录沿用。端点见 `[sources.tushare].api_url` |
+| tushare | HTTPS（keyed） | 可选：BJ 历史 ST 证据（`stock_st`，起 2017-01-01）；`broker_forecasts`（`report_rc`）；`name_history`（`namechange`，停牌日 ST 标记的首选证据）；`fund_flow` 历史（`moneyflow_dc`，只补湖里没有的股票） | bak_basic 名称证据（2016）；report_rc 自 2016；namechange 全历史；moneyflow_dc 自 2023-09-11 | 无 token 时不发请求：更早的 BJ bar 保持 unresolved，**不认定为正常**；broker_forecasts、name_history 不采集，停牌日 ST 只按停牌前后一致的第一手记录沿用。端点见 `[sources.tushare].api_url` |
 
 > **AkShare 已不再被任何适配器调用**（[issue #3](https://github.com/rootSunc/CNEquity/issues/3)）。
 > 它此前的两个调用点分别指向本项目已经直连的端点：ST 集合走的是同一个东财

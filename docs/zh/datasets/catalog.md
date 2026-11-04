@@ -75,7 +75,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 |--------------|------|--------|
 | `by_date` | 可按日回补 / 缺口填补 | 绝大多数行情与事件表 |
 | `snapshot_with_backfill` | 日更是快照，但有专用历史源 | `valuation_metrics`→baostock；`index_constituents`→cni；`industry_members`→sw；`sector_bars`→ths；`economic_calendar`→jin10（2008 起） |
-| `snapshot_only` | 只返回当前快照；可从启用后逐日积累，不能回补未采到的过去 | `analyst_consensus`、`fund_flow`、`sector_members`、`hot_rank`、`sector_fund_flow`、`news_headlines`、`flash_news_wire`、`economic_events`、`market_holidays` |
+| `snapshot_only` | 只返回当前快照；可从启用后逐日积累，不能回补未采到的过去 | `analyst_consensus`、`fund_flow`（配置了 Tushare 令牌时可回补 2023-09-11 起）、`sector_members`、`hot_rank`、`sector_fund_flow`、`news_headlines`、`flash_news_wire`、`economic_events`、`market_holidays` |
 
 `trading_status` 的停牌覆盖可从 `daily_bars` 起点派生；ST 覆盖必须以完整的 `historical_st_evidence` 收据为准。没有覆盖请求窗口的收据时，**不要**假定 2001 起 `universe="all_a"` 已剔除历史 ST。BJ 可选用 Tushare Pro：2016 年通过 `bak_basic` 的历史简称、2017-01-01 起通过 `stock_st`；2016 年以前仍需独立的更深历史源。
 
@@ -254,7 +254,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 
 | 数据集 | 分区键 | 主键 | 语义 | 水位 | 主源 | staleness |
 |--------|--------|------|------|------|------|-----------|
-| fund_flow | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 1d |
+| fund_flow | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 1d。历史只能用 Tushare `moneyflow_dc` 回补（同为东财口径，2023-09-11 起，需在 `[sources.tushare]` 配置自己的令牌）：`cne backfill fund_flow --start ... --end ...` 只补湖里没有的股票，已有的东财行不改，补入的行标 `source=tushare` 且五档净额齐全；B 股和全部净额为 0 的未交易代码不写入 |
 | fund_flow_ths | trade_date | symbol, trade_date | snapshot | ✓ | ths | 只在 push2 取不到 `fund_flow` 时由同花顺补：流入/流出/净额/成交额，**没有**主力与超大单…小单拆分，金额 4 位有效数字；源覆盖以响应为准，不承诺北交所；为空不报。默认不判新鲜度；配置的日更调度组里排了它（例如 push2 不可用时用 `steps_add` 换入），就要求最近收盘交易日有数据 |
 | margin_trading | trade_date | symbol, trade_date | by_date | ✓ | exchange | 沪深交易所自行编制的融资融券明细；SH 无融券余额（`short_balance` 为 null），深交所晚一个交易日发布、两边齐了才写；`[margin_trading] source` 可切回 eastmoney |
 | northbound_holdings | trade_date | symbol, trade_date, channel | by_date | ✓ | eastmoney | 100d（季频） |
