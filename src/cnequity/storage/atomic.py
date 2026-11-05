@@ -187,7 +187,7 @@ def write_parquet_atomic(path: Path, df: pl.DataFrame, **kwargs) -> Path:
         fsync_file(tmp)
         replace_with_retry(tmp, path)
         return path
-    except Exception:
+    except BaseException:
         if tmp.exists():
             try:
                 tmp.unlink(missing_ok=True)
@@ -212,7 +212,7 @@ def write_json_atomic(path: Path, payload: Any, **kwargs: Any) -> Path:
             os.fsync(handle.fileno())
         replace_with_retry(tmp, path)
         return path
-    except Exception:
+    except BaseException:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:

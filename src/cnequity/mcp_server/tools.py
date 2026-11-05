@@ -24,6 +24,7 @@ stays answerable without paying for it on every row.
 
 from __future__ import annotations
 
+import math
 import os
 from datetime import date, datetime
 from typing import Any
@@ -67,6 +68,9 @@ class ToolError(ValueError):
 
 
 def _scalar(value: Any) -> Any:
+    # Strict JSON has no NaN or Infinity; json.dumps would emit bare tokens.
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, date):

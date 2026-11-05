@@ -416,3 +416,34 @@ def test_sockets_baostock_opens_still_time_out():
     finally:
         sock.close()
     assert socket.getdefaulttimeout() is None
+
+
+@pytest.mark.parametrize("where", ["periodic", "retry"])
+def test_relogin_connection_error_keeps_fetched_rows(monkeypatch, where):
+    """A socket error during relogin is a dead session, not a reason to drop the sweep."""
+    from cnequity.adapters.baostock import _session as sess
+
+    monkeypatch.setattr(sess, "_RELOGIN_EVERY", 2 if where == "periodic" else 0)
+
+    class _ResetOnRelogin(_NoQueryBaostock):
+        def login(self):
+            self.logins += 1
+            if self.logins > 1:
+                raise ConnectionResetError(54, "Connection reset by peer")
+            return super().login()
+
+    def fetch(_bs, symbol, _s, _e):
+        if where == "retry" and symbol == "C.SH":
+            raise ConnectionError("query dropped")
+        return [{"symbol": symbol}]
+
+    rows, failed = fetch_per_symbol(
+        ["A.SH", "B.SH", "C.SH", "D.SH"],
+        date(2020, 1, 1),
+        date(2020, 12, 31),
+        fetch,
+        bs=_ResetOnRelogin(),
+        sleep=lambda _s: None,
+    )
+    assert {r["symbol"] for r in rows} == {"A.SH", "B.SH"}
+    assert failed == ["C.SH", "D.SH"]

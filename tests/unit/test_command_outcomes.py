@@ -78,6 +78,23 @@ def test_result_axes_do_not_infer_coverage_from_success(status, out, execution, 
 def test_unknown_errors_are_not_source_outages():
     assert error_kind(RuntimeError("network timeout in my buggy computation")) == "execution_error"
     assert error_kind(OSError("disk full")) == "storage_failure"
+
+
+def test_network_errors_that_subclass_oserror_are_source_transient():
+    import socket
+    import ssl
+
+    from curl_cffi.requests.exceptions import DNSError, Timeout
+
+    for exc in (
+        socket.gaierror(8, "nodename nor servname provided"),
+        ssl.SSLError("record layer failure"),
+        ssl.SSLCertVerificationError("unable to get local issuer certificate"),
+        DNSError("could not resolve host"),
+        Timeout("operation timed out"),
+    ):
+        assert error_kind(exc) == "source_transient", exc
+    assert error_kind(PermissionError("read-only lake")) == "storage_failure"
     assert step_outcome("failed", error=InputUnavailableError()).execution_status == "skipped"
     assert execution_exit_code("degraded") == 0
     assert execution_exit_code("failed") == 1

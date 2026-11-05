@@ -85,7 +85,7 @@ class StateStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             replace_with_retry(tmp_path, path)
-        except Exception:
+        except BaseException:
             try:
                 os.unlink(tmp_path)
             except OSError:

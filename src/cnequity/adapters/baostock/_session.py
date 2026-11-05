@@ -539,7 +539,7 @@ def fetch_per_symbol(
                     except SourceCoolingDown as exc:
                         _keep_partial(i, exc)
                         break
-                    except RuntimeError as exc:
+                    except Exception as exc:  # noqa: BLE001 - any relogin failure
                         # Keep rows already collected so the caller can checkpoint;
                         # remaining symbols stay on the resume set.
                         logger.error(
@@ -602,7 +602,7 @@ def fetch_per_symbol(
                     except SourceCoolingDown as exc:
                         _keep_partial(i, exc)
                         break
-                    except RuntimeError as exc:
+                    except Exception as exc:  # noqa: BLE001 - keep the partial sweep
                         logger.error(
                             "%s login failed while retrying %s: %s; returning partial",
                             label,

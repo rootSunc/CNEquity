@@ -980,3 +980,10 @@ def test_mcp_http_refuses_a_public_bind_without_token():
     result = CliRunner().invoke(cli, ["mcp", "--http", "--host", "0.0.0.0"])
     assert result.exit_code != 0
     assert "--token" in result.output
+
+
+def test_table_rows_send_non_finite_floats_as_null():
+    df = pl.DataFrame({"pe": [float("nan"), float("inf"), float("-inf"), 12.5]})
+    payload = tools._frame_payload(df, limit=10)
+    assert payload["rows"] == [[None], [None], [None], [12.5]]
+    json.dumps(payload, allow_nan=False)  # strict JSON parsers must accept it

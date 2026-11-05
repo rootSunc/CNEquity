@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import socket
+import ssl
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, TypedDict
@@ -101,6 +103,14 @@ class WorkerExecutionError(RuntimeError):
         self.reason_code = reason_code
 
 
+def _is_curl_request_error(error: BaseException) -> bool:
+    try:
+        from curl_cffi.requests.exceptions import RequestException
+    except ImportError:
+        return False
+    return isinstance(error, RequestException)
+
+
 def error_kind(error: BaseException) -> str:
     """Classify explicit boundaries; unknown exceptions remain real failures."""
     if isinstance(error, (KeyboardInterrupt, SystemExit)):
@@ -126,7 +136,11 @@ def error_kind(error: BaseException) -> str:
 
     if isinstance(error, (httpx.RequestError, httpx.HTTPStatusError)):
         return "source_transient"
-    if isinstance(error, (TimeoutError, ConnectionError)):
+    if isinstance(error, (TimeoutError, ConnectionError, socket.gaierror, socket.herror)):
+        return "source_transient"
+    # TLS and curl_cffi request errors subclass OSError; they are network
+    # failures, not a broken disk.
+    if isinstance(error, ssl.SSLError) or _is_curl_request_error(error):
         return "source_transient"
     if isinstance(error, OSError):
         return "storage_failure"
