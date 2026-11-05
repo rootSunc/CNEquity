@@ -12,6 +12,7 @@ column, so a ``trade_date=2024`` directory next to a Date column raises
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import date
 from pathlib import Path
@@ -214,6 +215,49 @@ def partition_files_in_range(
     return files
 
 
+# Footer schemas by file identity. Reading 11k footers was ~1 s of every
+# daily_bars history read. A committed generation's files are never rewritten
+# in place (new generations link or copy), and the key includes inode, size and
+# mtime, so a replaced or edited file is a miss rather than a stale hit.
+_SCHEMA_CACHE: dict[tuple[str, int, int, int], pl.Schema] = {}
+_SCHEMA_CACHE_MAX = 250_000
+_SCHEMA_CACHE_LOCK = threading.Lock()
+
+
+def _footer_schema(path: str) -> pl.Schema:
+    stat = os.stat(path)
+    key = (path, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    with _SCHEMA_CACHE_LOCK:
+        hit = _SCHEMA_CACHE.get(key)
+    if hit is not None:
+        return hit
+    schema = pl.read_parquet_schema(path)
+    with _SCHEMA_CACHE_LOCK:
+        if len(_SCHEMA_CACHE) >= _SCHEMA_CACHE_MAX:
+            _SCHEMA_CACHE.clear()
+        _SCHEMA_CACHE[key] = schema
+    return schema
+
+
+def _additive_union(schemas: list[pl.Schema]) -> pl.Schema | None:
+    """The columns of every schema, in first-seen order, when no dtype conflicts.
+
+    First-seen order is the order ``pl.concat(how="diagonal_relaxed")`` gives
+    across files in this order, so a scan against this schema returns the same
+    columns in the same places. A column whose dtype differs between files
+    needs ``diagonal_relaxed``'s supertype, so then there is no union: None.
+    """
+    union: dict[str, pl.DataType] = {}
+    for schema in schemas:
+        for name, dtype in schema.items():
+            seen = union.get(name)
+            if seen is None:
+                union[name] = dtype
+            elif seen != dtype:
+                return None
+    return pl.Schema(union)
+
+
 def _scan_parquet_paths(
     files: list[Path],
     *,
@@ -233,7 +277,7 @@ def _scan_parquet_paths(
     if not paths:
         raise FileNotFoundError("no parquet files to scan")
     try:
-        schemas = [pl.read_parquet_schema(path) for path in paths]
+        schemas = [_footer_schema(path) for path in paths]
     except Exception:
         # Keep construction lazy when a file is corrupt. Dataset audit first
         # identifies and removes unreadable files before collecting the frame;
@@ -246,6 +290,16 @@ def _scan_parquet_paths(
         )
     if all(schema == schemas[0] for schema in schemas[1:]):
         return pl.scan_parquet(paths, hive_partitioning=hive)
+    union = _additive_union(schemas)
+    if union is not None:
+        # The files differ only by columns some of them lack (daily_bars before
+        # ``pre_close``). One scan against the union schema inserts the nulls
+        # itself. The diagonal union below built one scan per run of equal
+        # schemas, and the two daily_bars schemas interleave by date into
+        # ~4,000 runs: a one-symbol history read spent ~1.7 s just planning.
+        return pl.scan_parquet(
+            paths, hive_partitioning=hive, schema=union, missing_columns="insert"
+        )
     scans: list[pl.LazyFrame] = []
     # Preserve file order (canonical tie-breaking depends on it), while
     # avoiding thousands of optimizer branches for a mostly uniform history.
