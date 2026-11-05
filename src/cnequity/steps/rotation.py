@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import tempfile
+import uuid
 from datetime import date, timedelta
 
 from cnequity.adapters.eastmoney.rotation import (
@@ -187,7 +188,24 @@ def _read_sector_bars_checkpoint(config: Config) -> dict:
         return {}
 
 
-def _sector_bars_completed(config: Config, window: tuple[date, date] | None = None) -> set[str]:
+def _checkpoint_covers(data: dict, window: tuple[date, date] | None) -> bool:
+    if window is None:
+        return True
+    stored = data.get("window") or {}
+    try:
+        return (
+            date.fromisoformat(stored["start"]) <= window[0]
+            and date.fromisoformat(stored["end"]) >= window[1]
+        )
+    except (KeyError, TypeError, ValueError):
+        # Pre-window checkpoints carry no provenance — re-sweep rather than
+        # trust them to cover a window they never recorded.
+        return False
+
+
+def _sector_bars_completed(
+    config: Config, window: tuple[date, date] | None = None, run_id: str | None = None
+) -> set[str]:
     """Boards already swept, but only those whose sweep covers ``window``.
 
     The checkpoint records *which* dates a board was fetched over. Without that,
@@ -195,22 +213,47 @@ def _sector_bars_completed(config: Config, window: tuple[date, date] | None = No
     done and make the next full 400-day backfill a no-op that reports success.
     A checkpoint therefore licenses skipping only when its window contains the
     one being asked for now.
+
+    Boards whose rows are only staged count as done for their own ``run_id``
+    alone: that run's staging still holds them, but another run's compact will
+    never publish them.
     """
     data = _read_sector_bars_checkpoint(config)
-    completed = set(data.get("completed", []))
-    if window is None or not completed:
-        return completed
-    stored = data.get("window") or {}
-    try:
-        covers = (
-            date.fromisoformat(stored["start"]) <= window[0]
-            and date.fromisoformat(stored["end"]) >= window[1]
-        )
-    except (KeyError, TypeError, ValueError):
-        # Pre-window checkpoints carry no provenance — re-sweep rather than
-        # trust them to cover a window they never recorded.
+    if not _checkpoint_covers(data, window):
         return set()
-    return completed if covers else set()
+    completed = set(data.get("completed", []))
+    if run_id is not None:
+        completed |= set((data.get("staged") or {}).get(run_id, []))
+    return completed
+
+
+def _write_sector_bars_checkpoint(config: Config, payload: dict) -> None:
+    path = _sector_bars_backfill_state_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        replace_with_retry(tmp, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def commit_sector_bars_staged(config: Config, run_id: str) -> None:
+    """Promote a run's staged boards to completed once its revision is published."""
+    data = _read_sector_bars_checkpoint(config)
+    staged = data.get("staged") or {}
+    codes = staged.pop(run_id, None)
+    if codes is None:
+        return
+    data["completed"] = sorted(set(data.get("completed", [])) | set(codes))
+    if staged:
+        data["staged"] = staged
+    else:
+        data.pop("staged", None)
+    _write_sector_bars_checkpoint(config, data)
 
 
 def clear_sector_bars_backfill_state(config: Config) -> None:
@@ -225,25 +268,31 @@ def clear_sector_bars_backfill_state(config: Config) -> None:
 
 
 def _mark_sector_bars_completed(
-    config: Config, sector_codes: list[str], window: tuple[date, date] | None = None
+    config: Config,
+    sector_codes: list[str],
+    window: tuple[date, date] | None = None,
+    *,
+    staged_run_id: str | None = None,
 ) -> None:
-    path = _sector_bars_backfill_state_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Record boards as done, or as staged by ``staged_run_id`` until it publishes."""
+    data = _read_sector_bars_checkpoint(config)
     # Boards carried over only if the stored sweep covers this one; a different
     # window starts its own tally rather than inheriting unrelated coverage.
-    completed = sorted(_sector_bars_completed(config, window) | set(sector_codes))
-    payload: dict = {"completed": completed}
+    covers = _checkpoint_covers(data, window)
+    completed = set(data.get("completed", [])) if covers else set()
+    staged = (
+        {run: set(codes) for run, codes in (data.get("staged") or {}).items()} if covers else {}
+    )
+    if staged_run_id is None:
+        completed |= set(sector_codes)
+    else:
+        staged.setdefault(staged_run_id, set()).update(sector_codes)
+    payload: dict = {"completed": sorted(completed)}
+    if staged:
+        payload["staged"] = {run: sorted(codes) for run, codes in sorted(staged.items())}
     if window is not None:
         payload["window"] = {"start": window[0].isoformat(), "end": window[1].isoformat()}
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-        replace_with_retry(tmp, path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    _write_sector_bars_checkpoint(config, payload)
 
 
 def _sweep_sector_bars(
@@ -268,6 +317,9 @@ def _sweep_sector_bars(
     window = (start, end)
     written = {"rows_read": 0, "rows_written": 0}
     batches = 0
+    # A retry of this run sweeps again into the same staging directory; a
+    # per-attempt token keeps it from replacing batches it skipped as done.
+    attempt = uuid.uuid4().hex[:8]
 
     def on_batch(rows: list[dict], sector_codes: list[str]) -> None:
         nonlocal batches
@@ -278,15 +330,23 @@ def _sweep_sector_bars(
                 "sector_bars",
                 pl.DataFrame(rows),
                 source="ths",
-                batch_id=f"batch-{batches}",
+                batch_id=f"batch-{attempt}-{batches}",
             )
             written["rows_read"] += out["rows_read"]
             written["rows_written"] += out["rows_written"]
             batches += 1
         # Checkpoint only after the rows are durable — the reverse order would
-        # let a crash mark boards done whose bars were never written.
+        # let a crash mark boards done whose bars were never written. Boards
+        # with rows stay staged until compact publishes this run; boards with
+        # none have nothing to lose and are done now.
         if mark_completed:
-            _mark_sector_bars_completed(config, sector_codes, window)
+            with_rows = {row["sector_code"] for row in rows}
+            staged = [code for code in sector_codes if code in with_rows]
+            empty = [code for code in sector_codes if code not in with_rows]
+            if staged:
+                _mark_sector_bars_completed(config, staged, window, staged_run_id=run_id)
+            if empty:
+                _mark_sector_bars_completed(config, empty, window)
 
     _, failed, succeeded, retired = sweep_board_bars(
         start,
@@ -351,7 +411,7 @@ def _backfill_sector_bars(config: Config, trade_date: date, run_id: str) -> dict
         run_id,
         start=start,
         end=end,
-        skip_sectors=_sector_bars_completed(config, (start, end)),
+        skip_sectors=_sector_bars_completed(config, (start, end), run_id=run_id),
         mark_completed=True,
     )
 

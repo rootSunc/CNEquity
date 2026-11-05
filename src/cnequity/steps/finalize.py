@@ -922,6 +922,10 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
             published_state.commit_staged_request_days(published_dataset, run_id)
             published_state.commit_staged_units(published_dataset, run_id)
             commit_observation(config, published_dataset, run_id)
+            if published_dataset == "sector_bars":
+                from cnequity.steps.rotation import commit_sector_bars_staged
+
+                commit_sector_bars_staged(config, run_id)
         if resolved_keys.get(published_dataset):
             published_state.clear_outstanding_keys(
                 published_dataset, resolved_keys[published_dataset]

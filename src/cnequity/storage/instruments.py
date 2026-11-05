@@ -239,11 +239,17 @@ def compact_instruments(
                     skipped_never_traded += 1
                     continue
                 prior = absence_state.get(symbol, {})
-                count = int(prior.get("count", 0)) + 1
+                count = int(prior.get("count", 0))
+                last_missing = prior.get("last_missing")
+                # Confirmations are distinct snapshot dates: a retry re-compacts
+                # the same staged listing, which is not new evidence.
+                if not (isinstance(last_missing, str) and last_missing >= trade_date.isoformat()):
+                    count += 1
+                    last_missing = trade_date.isoformat()
                 absence_state[symbol] = {
                     "count": count,
                     "first_missing": prior.get("first_missing") or trade_date.isoformat(),
-                    "last_missing": trade_date.isoformat(),
+                    "last_missing": last_missing,
                 }
                 if count >= ABSENT_DELIST_CONFIRMATIONS:
                     first_missing = date.fromisoformat(absence_state[symbol]["first_missing"])

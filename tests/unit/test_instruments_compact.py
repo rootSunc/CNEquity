@@ -94,6 +94,31 @@ def test_compact_instruments_preserves_missing_symbols_and_marks_delist(tmp_path
     assert active["delist_date"][0] is None
 
 
+def test_recompacting_one_snapshot_counts_its_absence_once(tmp_path):
+    cfg = Config(data_root=tmp_path / "data")
+    path = cfg.curated_root / "instruments" / "part-merged.parquet"
+    path.parent.mkdir(parents=True)
+    rows = [_instrument(f"600{i:03d}.SH", list_date=date(2000, 1, 1)) for i in range(100)]
+    pl.DataFrame(rows).write_parquet(path)
+    writer = StagingWriter(cfg.staging_root)
+    writer.write_batch("instruments", "run-a", "batch-0", pl.DataFrame(rows[1:]))
+    writer.write_batch("instruments", "run-b", "batch-0", pl.DataFrame(rows[1:]))
+
+    # A retry of run-a and a second run on the same day are the same evidence.
+    for run_id in ("run-a", "run-a", "run-b"):
+        _, findings = compact_instruments(
+            cfg.staging_root, cfg.curated_root, run_id, date(2024, 6, 28)
+        )
+        assert findings and findings[0]["check"] == "instruments_delist_pending"
+    missing = pl.read_parquet(path).filter(pl.col("symbol") == "600000.SH")
+    assert missing["delist_date"][0] is None
+
+    writer.write_batch("instruments", "run-c", "batch-0", pl.DataFrame(rows[1:]))
+    compact_instruments(cfg.staging_root, cfg.curated_root, "run-c", date(2024, 7, 1))
+    missing = pl.read_parquet(path).filter(pl.col("symbol") == "600000.SH")
+    assert missing["delist_date"][0] is not None
+
+
 def test_partial_instrument_snapshots_do_not_accumulate_delist_evidence(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     path = cfg.curated_root / "instruments" / "part-merged.parquet"
@@ -882,9 +907,9 @@ def test_absence_does_not_delist_a_security_that_never_traded(tmp_path, pending_
     ).write_parquet(bars / "part-merged.parquet")
 
     writer = StagingWriter(staging)
-    for run in ("run-nt-1", "run-nt-2"):
+    for run, day in (("run-nt-1", date(2026, 9, 10)), ("run-nt-2", date(2026, 9, 11))):
         writer.write_batch("instruments", run, "batch-0", pl.DataFrame(filler))
-        compact_instruments(staging, curated, run, date(2026, 9, 10))
+        compact_instruments(staging, curated, run, day)
 
     out = pl.read_parquet(curated / "instruments" / "part-merged.parquet")
     marks = dict(zip(out["symbol"].to_list(), out["delist_date"].to_list(), strict=True))

@@ -13,6 +13,7 @@ from cnequity.steps.rotation import (
     _backfill_sector_bars,
     _sector_bars_completed,
     clear_sector_bars_backfill_state,
+    commit_sector_bars_staged,
     step_sector_bars,
 )
 
@@ -67,6 +68,10 @@ def test_marks_succeeded_boards_and_resumes(tmp_path, monkeypatch):
     _patch_history(monkeypatch, returns=(df, [], ["885611"]))
     result = _backfill_sector_bars(cfg, date(2026, 7, 14), "run1")
     assert result["rows_written"] == 1
+    # Staged, not published: only run1's own retry may skip the board.
+    assert _sector_bars_completed(cfg) == set()
+    assert _sector_bars_completed(cfg, run_id="run1") == {"885611"}
+    commit_sector_bars_staged(cfg, "run1")
     assert _sector_bars_completed(cfg) == {"885611"}
 
     captured: dict = {}
@@ -103,7 +108,7 @@ def test_failed_boards_not_marked_and_emit_warning(tmp_path, monkeypatch):
     _patch_history(monkeypatch, returns=(df, ["885612", "885613"], ["885611"]))
     result = _backfill_sector_bars(cfg, date(2026, 7, 14), "run1")
 
-    assert _sector_bars_completed(cfg) == {"885611"}
+    assert _sector_bars_completed(cfg, run_id="run1") == {"885611"}
     assert result["failed_sectors"] == 2
     assert result["status"] == "warning"
     finding = result["context_updates"]["audit_findings"][0]
@@ -132,6 +137,7 @@ def test_force_clears_checkpoint(tmp_path, monkeypatch):
     )
     _patch_history(monkeypatch, returns=(df, [], ["885611"]))
     _backfill_sector_bars(cfg, date(2026, 7, 14), "run1")
+    commit_sector_bars_staged(cfg, "run1")
     assert _sector_bars_completed(cfg) == {"885611"}
 
     clear_sector_bars_backfill_state(cfg)
@@ -162,6 +168,7 @@ def test_narrow_gap_fill_does_not_satisfy_the_full_window(tmp_path, monkeypatch)
     cfg._backfill_start = date(2026, 7, 15)
     cfg._backfill_end = date(2026, 7, 21)
     _backfill_sector_bars(cfg, date(2026, 7, 21), "run1")
+    commit_sector_bars_staged(cfg, "run1")
 
     narrow = (date(2026, 7, 15), date(2026, 7, 21))
     assert _sector_bars_completed(cfg, narrow) == {"885611"}
@@ -225,3 +232,72 @@ def test_a_retired_board_is_checkpointed_and_reported_as_info(tmp_path, monkeypa
     assert finding["check"] == "sector_bars_board_retired"
     assert finding["severity"] == "info"
     assert "886109" in finding["message"]
+
+
+def _bar(code: str) -> dict:
+    return {
+        "sector_code": code,
+        "sector_name": code,
+        "board_type": "concept",
+        "trade_date": date(2026, 7, 10),
+        "open": 1.0,
+        "high": 1.0,
+        "low": 1.0,
+        "close": 1.0,
+        "volume": 1,
+        "amount": 1.0,
+        "change_pct": 0.1,
+    }
+
+
+def _patch_sweep(monkeypatch, codes, *, die_after=None):
+    """Stage one batch per board, optionally dying after ``die_after`` boards."""
+    seen: list[set[str]] = []
+
+    def fake_sweep(start, end, *, config=None, boards=None, skip_sectors=None, on_batch=None):
+        skip = set(skip_sectors or ())
+        seen.append(skip)
+        done = 0
+        for code in codes:
+            if code in skip:
+                continue
+            if die_after is not None and done >= die_after:
+                raise KeyboardInterrupt
+            on_batch([_bar(code)], [code])
+            done += 1
+        return [], [], [c for c in codes if c not in skip], []
+
+    monkeypatch.setattr("cnequity.adapters.ths.boards.sweep_board_bars", fake_sweep)
+    return seen
+
+
+def test_a_new_run_resweeps_boards_an_interrupted_run_only_staged(tmp_path, monkeypatch):
+    cfg = Config(data_root=tmp_path / "data")
+    codes = [f"8856{i:02d}" for i in range(5)]
+    _patch_sweep(monkeypatch, codes, die_after=3)
+    with pytest.raises(KeyboardInterrupt):
+        _backfill_sector_bars(cfg, date(2026, 7, 14), "dead-run")
+
+    # The dead run's staging is never published, so a fresh run owes all five.
+    seen = _patch_sweep(monkeypatch, codes)
+    _backfill_sector_bars(cfg, date(2026, 7, 14), "new-run")
+    assert seen == [set()]
+
+
+def test_a_retry_keeps_the_batches_it_skips(tmp_path, monkeypatch):
+    from cnequity.steps.finalize import step_compact
+
+    cfg = Config(data_root=tmp_path / "data")
+    codes = [f"8856{i:02d}" for i in range(5)]
+    _patch_sweep(monkeypatch, codes, die_after=3)
+    with pytest.raises(KeyboardInterrupt):
+        _backfill_sector_bars(cfg, date(2026, 7, 14), "run1")
+
+    seen = _patch_sweep(monkeypatch, codes)
+    _backfill_sector_bars(cfg, date(2026, 7, 14), "run1")
+    assert seen == [set(codes[:3])]
+
+    step_compact(cfg, date(2026, 7, 14), "run1", {})
+    published = pl.read_parquet(cfg.curated_root / "sector_bars", hive_partitioning=False)
+    assert sorted(published["sector_code"].unique().to_list()) == codes
+    assert _sector_bars_completed(cfg) == set(codes)

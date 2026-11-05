@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- 重试不再把正常交易的股票标成退市：证券列表的“连续缺席”按不同交易日计数，`cne run retry` 或同一天再跑一次只是重读同一份 TDX 列表，不再算第二次确认。此前一次不完整的列表经过重试就可能被计两次，股票被写上不会清除的 `delist_date`，从 `all_a` 和按股票池过滤的研究读取里消失。
+- `sector_bars` 回补中断后不再丢板块：板块只在本次运行整理发布之后才记为已完成，此前写入暂存就记完成，中断后按提示重跑 `cne backfill sector_bars` 会跳过那些只存在于中断运行暂存里、永远不会发布的板块；`cne run retry` 重试同一运行时，新批次也会覆盖旧批次文件。升级前中断过、尚未跑完的 `sector_bars` 回补，用 `cne backfill sector_bars --force` 重跑一次。
+
 - `corporate_actions` 新增 `action_type=exchange_reference`：不带分红送转条款，只记录交易所在除权日公布的前收盘（除权除息参考价），`reference_price` 必填。某个除权日已记录的条款与交易所前收盘不符时，复权核验和 `cne repair adj-factors` 以它为准，作为与 K 线自带前收盘同等的独立证据；股改期间的送股仍需流通股数佐证，不接受它。历史 K 线没有前收盘，这类行目前由 Tushare 日线的 `pre_close` 取证，原始响应随行归档。
 - `option_bars` 和 `option_contracts` 收录沪深 ETF 期权：`cne backfill option_bars --source tushare` 用你自己的 Tushare 令牌回补上交所、深交所的全部 ETF 期权（50ETF 自 2015-02-09 起，另有 300ETF、500ETF、科创 50、创业板等），交易所记为 `SH`/`SZ`，标的为对应 ETF。合约条款直接取自交易所合约清单（Tushare `opt_basic`），期权合约表的日常重建不再解析、也不改动这些行；成交额从万元换算为元。期权希腊值对 ETF 期权和中金所股指期权一样用平价公式推远期价格。
 - 新增可选数据集 `fund_flow_tushare`：Tushare `moneyflow` 自算口径的个股资金流，2010 起，小单、中单、大单、特大单的买入和卖出量与额，以及净流入。它和 `fund_flow` 的东财口径不同，单独成表、不混用。需要你自己的 Tushare 令牌，只由 `cne backfill fund_flow_tushare` 采集；量换算为股，额换算为元。
