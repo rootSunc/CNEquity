@@ -1034,25 +1034,6 @@ def _strip_subscription_placeholders(df: pl.DataFrame) -> pl.DataFrame:
     return df.filter(pl.Series(keep))
 
 
-def purge_subscription_placeholders(config: Config) -> int:
-    """Remove ``认购款`` stubs from curated instruments. Returns rows dropped."""
-    from cnequity.storage.atomic import write_parquet_atomic
-
-    existing = load_curated_instruments(config)
-    if existing is None:
-        return 0
-    path = config.curated_root / "instruments" / "part-merged.parquet"
-    cleaned = _strip_subscription_placeholders(existing)
-    dropped = existing.height - cleaned.height
-    if dropped:
-        write_parquet_atomic(path, cleaned, compression="zstd")
-        for stale in path.parent.rglob("*.parquet"):
-            if stale != path:
-                stale.unlink()
-        logger.info("purged %d subscription-placeholder instrument row(s)", dropped)
-    return dropped
-
-
 def repair_delisted_instruments(
     config: Config,
     run_id: str,
@@ -1161,8 +1142,6 @@ def repair_delisted_instruments(
     if already_haved:
         _mark_ingested(config, already_haved)
 
-    purged = purge_subscription_placeholders(config)
-
     still_need_bars = sorted(s for s in catalog if s not in spans)
     result = {
         "rows_read": rows_written,
@@ -1173,7 +1152,6 @@ def repair_delisted_instruments(
         "with_bars": len(spans),
         "instruments_spans": len(instrument_spans),
         "marked_ingested": len(already_haved),
-        "purged_placeholders": purged,
         "still_need_bars": still_need_bars,
     }
     if still_need_bars:

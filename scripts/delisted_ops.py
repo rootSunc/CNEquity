@@ -117,20 +117,15 @@ def repair(cfg, *, since: str | None) -> int:
     baostock, say) but instruments still has no delist_date — the gap that
     leaves ``universe=all_a`` selecting dead names. Also drops ``认购款`` stubs.
     """
-    from cnequity.steps.delisted import (
-        purge_subscription_placeholders,
-        repair_delisted_instruments,
-    )
+    from cnequity.steps.delisted import repair_delisted_instruments
 
     _progress()
     start = date.fromisoformat(since) if since else None
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("delisted_repair", {"since": since} if since else {})
     result = repair_delisted_instruments(cfg, run_id, start=start)
+    # Compact strips 认购款 stubs from the published catalog as it merges.
     compact_out = engine.run_step("compact", shanghai_today(), run_id)
-    # Compact can re-introduce nothing for placeholders; purge once more after
-    # the merge in case an older curated copy still carried them.
-    result["purged_placeholders_after_compact"] = purge_subscription_placeholders(cfg)
 
     # Anything that is not success has to survive the merge. Listing only the
     # spellings seen today is how `cne backfill` came to report success for a

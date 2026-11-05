@@ -167,7 +167,6 @@ def test_repair_records_a_run_and_rebuilds_the_views(ops, cfg_path, monkeypatch,
         "cnequity.steps.delisted.repair_delisted_instruments",
         lambda cfg, run_id, start=None: {"rows_written": 3, "updated": 3},
     )
-    monkeypatch.setattr("cnequity.steps.delisted.purge_subscription_placeholders", lambda cfg: 1)
 
     assert ops.main(["--config", cfg_path, "repair"]) == 0
     assert "repair-1" in capsys.readouterr().out
@@ -197,7 +196,6 @@ def test_repair_surfaces_incomplete_bars(ops, cfg_path, monkeypatch, capsys):
             "status": "warning",
         },
     )
-    monkeypatch.setattr("cnequity.steps.delisted.purge_subscription_placeholders", lambda cfg: 0)
 
     assert ops.main(["--config", cfg_path, "repair"]) == 1
 
@@ -233,7 +231,6 @@ def test_repair_does_not_let_a_degraded_step_read_as_success(ops, cfg_path, monk
             "status": "degraded",
         },
     )
-    monkeypatch.setattr("cnequity.steps.delisted.purge_subscription_placeholders", lambda cfg: 0)
 
     assert ops.main(["--config", cfg_path, "repair"]) == 1
     assert manifest.finished[0][1] == "warning"

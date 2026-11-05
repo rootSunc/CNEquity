@@ -1,7 +1,7 @@
 """Repair path: instruments from existing bars + catalog, no re-fetch."""
 
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 
 import polars as pl
 
@@ -105,21 +105,39 @@ def test_repair_marks_catalogued_symbols_with_bars_as_ingested(tmp_path):
     assert result["status"] == "warning"
 
 
-def test_repair_purges_subscription_placeholders(tmp_path):
+def test_repair_and_compact_publish_a_catalog_without_subscription_placeholders(tmp_path):
+    from cnequity.steps.finalize import step_compact
+    from cnequity.storage.revisions import RevisionStore
+
     cfg = _cfg(
         tmp_path,
         {"600070.SH": "2025-04-10"},
         live=("600519.SH", ("515844.SH", "认购款")),
     )
     _write_bars(cfg, "600070.SH", date(2016, 3, 1), date(2025, 4, 10))
+    catalog = cfg.curated_root / "instruments" / "part-merged.parquet"
+    pl.read_parquet(catalog).with_columns(
+        source=pl.lit("tdx_protocol"),
+        data_version=pl.lit("v1"),
+        fetched_at=pl.lit(datetime(2026, 7, 24, tzinfo=timezone.utc)),
+    ).write_parquet(catalog)
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
+    for dataset in ("instruments", "daily_bars"):
+        store.commit(
+            dataset,
+            run_id="seed",
+            changed_files=sorted((cfg.curated_root / dataset).rglob("*.parquet")),
+            schema_version=1,
+            contract_fingerprint="contract",
+        )
 
-    result = repair_delisted_instruments(cfg, "run-1")
+    repair_delisted_instruments(cfg, "run-1")
+    assert "515844.SH" not in _staged(cfg, "instruments", "run-1")["symbol"].to_list()
+    step_compact(cfg, date(2026, 7, 24), "run-1", {})
 
-    staged = _staged(cfg, "instruments", "run-1")
-    assert "515844.SH" not in staged["symbol"].to_list()
-    curated = pl.read_parquet(cfg.curated_root / "instruments" / "part-merged.parquet")
-    assert "515844.SH" not in curated["symbol"].to_list()
-    assert result["purged_placeholders"] == 1
+    # The stub must leave the catalog readers see, not only the mutable tree.
+    published = pl.read_parquet(store.current_root("instruments"), hive_partitioning=False)
+    assert sorted(published["symbol"].to_list()) == ["600070.SH", "600519.SH"]
 
 
 def test_repair_picks_up_orphan_bars_not_in_the_catalog(tmp_path):
