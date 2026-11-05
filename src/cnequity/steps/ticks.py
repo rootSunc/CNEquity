@@ -26,6 +26,7 @@ from cnequity.config import Config
 from cnequity.domain.datasets import get_dataset
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import incremental_window
 from cnequity.storage import StagingWriter
 
@@ -125,9 +126,9 @@ def _sessions(config: Config, trade_date: date) -> list[date]:
     the source has, and the honest answer is "here is everything that exists",
     logged so it is not mistaken for complete history.
     """
-    if getattr(config, "_backfill", False):
-        end = getattr(config, "_backfill_end", None) or trade_date
-        start = getattr(config, "_backfill_start", None) or (end - timedelta(days=30))
+    if backfill_of(config).active:
+        end = backfill_of(config).end or trade_date
+        start = backfill_of(config).start or (end - timedelta(days=30))
     else:
         start = incremental_window(config, DATASET, trade_date)
         end = trade_date

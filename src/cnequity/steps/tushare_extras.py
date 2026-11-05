@@ -15,6 +15,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
+from cnequity.run_scope import backfill_of
 from cnequity.steps.http_common import write_fetched
 
 _SKIPPED = {"rows_written": 0, "status": "skipped", "reason": "tushare not configured"}
@@ -41,7 +42,7 @@ def _by_day(
     from cnequity.adapters.tushare.client import SOURCE
     from cnequity.steps.common import walk_day_backfill
 
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return walk_day_backfill(
             config,
             trade_date,

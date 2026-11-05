@@ -20,6 +20,7 @@ from cnequity.adapters.eastmoney.common import (
 from cnequity.adapters.eastmoney.datacenter import fetch_datacenter
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient, rate_limit_if_unconfigured
 from cnequity.config import Config
+from cnequity.run_scope import backfill_of
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +99,8 @@ def fetch_institutional_holdings(
     if client is None:
         client = EastMoneyClient(config=config)
 
-    range_start = getattr(config, "_backfill_start", None) if backfill else None
-    range_end = getattr(config, "_backfill_end", None) if backfill else None
+    range_start = backfill_of(config).start if backfill else None
+    range_end = backfill_of(config).end if backfill else None
     periods = _quarter_end_dates(trade_date, start=range_start, end=range_end)
     if not backfill:
         periods = periods[:2]

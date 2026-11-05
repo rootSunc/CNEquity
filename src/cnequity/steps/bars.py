@@ -40,6 +40,7 @@ from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.worker_pool import fetch_daily_bars_parallel
 from cnequity.quality.audit import persist_step_findings
 from cnequity.query.canonical import dedupe_by_primary_key
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import (
     BACKFILL_START,
     DailyBarOwnership,
@@ -151,9 +152,9 @@ def _backfill_window(config: Config, trade_date: date) -> tuple[date, date]:
     stops before the forming bar, and a replay stops where it was told.
     """
     settled = _last_final_session()
-    requested_end = getattr(config, "_backfill_end", None) or min(trade_date, settled)
+    requested_end = backfill_of(config).end or min(trade_date, settled)
     end = last_session_on_or_before(config, requested_end)
-    start = getattr(config, "_backfill_start", None) or BACKFILL_START
+    start = backfill_of(config).start or BACKFILL_START
     return start, end
 
 
@@ -184,7 +185,7 @@ def _placeholder_bar_universe(
     wrote nothing and still reported success: `cne backfill daily_bars
     --symbols 000001.SZ` returned 0 rows against a source that had them.
     """
-    if getattr(config, "_backfill_symbols", None):
+    if backfill_of(config).symbol_list():
         return None
     if not any(list_date is None for list_date, _delist_date, _asset in spans.values()):
         return None
@@ -1581,8 +1582,7 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
         ownership = DailyBarOwnership()
         etf_retry_scopes: dict[date, list[str] | None] = {}
         explicit_retry = bool(
-            getattr(config, "_backfill", False)
-            and getattr(config, "_backfill_symbols", None) is not None
+            backfill_of(config).active and backfill_of(config).symbol_list() is not None
         )
         for batch_id, symbols, spec_start, spec_end in batch_specs:
             if explicit_retry:
@@ -1762,7 +1762,7 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
         return _merge_ownership_result(out, config, ownership, start, end, run_id)
 
     depth = None
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         start, end = _backfill_window(config, trade_date)
     else:
         start = incremental_window(config, "daily_bars", trade_date)
@@ -1772,25 +1772,23 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
 
     if getattr(config, "_tdx_amount_repair", False):
         return repair_sina_history_amounts_from_tdx(
-            config, start, end, run_id, getattr(config, "_backfill_symbols", None)
+            config, start, end, run_id, backfill_of(config).symbol_list()
         )
 
     if getattr(config, "_turnover_repair", False):
         return repair_daily_bar_turnover(
-            config, start, end, run_id, getattr(config, "_backfill_symbols", None)
+            config, start, end, run_id, backfill_of(config).symbol_list()
         )
 
     if getattr(config, "_bse_tip_repair", False):
         if start != end:
             raise RuntimeError("BSE tip repair requires a one-session daily_bars window")
-        explicit_scope = getattr(config, "_backfill_symbols", None)
+        explicit_scope = backfill_of(config).symbol_list()
         if explicit_scope is None:
             raise RuntimeError("BSE tip repair requires an explicit symbol scope")
         return repair_bse_tip_amounts_from_curated(config, end, run_id, explicit_scope)
 
-    explicit_scope = (
-        getattr(config, "_backfill_symbols", None) if getattr(config, "_backfill", False) else None
-    )
+    explicit_scope = backfill_of(config).symbol_list() if backfill_of(config).active else None
     catalog_etfs = (
         set(_daily_fund_bar_symbols(config, end) or ()) if explicit_scope is None else set()
     )
@@ -2481,7 +2479,7 @@ def _bj_history_start(config: Config, start: date, end: date) -> date:
     # `--symbols` window to its last session is what left fourteen securities
     # owing 225 sessions that the repair kept declining to fetch. The scope
     # itself bounds the cost, so honour the window the caller asked for.
-    scoped = list(getattr(config, "_backfill_symbols", None) or [])
+    scoped = list(backfill_of(config).symbol_list() or [])
     if scoped and len(scoped) <= _BJ_SCOPED_WINDOW_MAX_SYMBOLS:
         return sessions[0]
     lookback = max(int(getattr(config, "bj_history_lookback_days", 1) or 1), 1)
@@ -5016,7 +5014,7 @@ def fetch_bars_via_sina(
     bse_attempted = False
     if use_parallel and bse_symbols and config.sources.get("bse", False):
         sessions = list_trading_dates(config, start, end)
-        if len(sessions) == 1 and not getattr(config, "_backfill", False):
+        if len(sessions) == 1 and not backfill_of(config).active:
             bse_attempted = True
             try:
                 from cnequity.adapters.bse.daily_quotes import fetch_daily_quotes
@@ -5256,7 +5254,7 @@ def _index_bar_missing_keys(config: Config, df, start: date, end: date) -> list[
 
 @register_step("index_bars", group="core", depends_on=["instruments"])
 def step_index_bars(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         start, end = _backfill_window(config, trade_date)
     else:
         start = incremental_window(config, "index_bars", trade_date)
@@ -5271,7 +5269,7 @@ def step_index_bars(config: Config, trade_date: date, run_id: str, context: dict
         end,
         rate_limit=rl,
         allow_mock=config.tdx_allow_mock,
-        backfill=getattr(config, "_backfill", False),
+        backfill=backfill_of(config).active,
         config=config,
         allow_partial=True,
     )
@@ -5352,13 +5350,11 @@ def step_daily_bars_history(config: Config, trade_date: date, run_id: str, conte
     from cnequity.domain.schemas import data_version_for, with_provenance
     from cnequity.storage import StagingWriter
 
-    start = getattr(config, "_backfill_start", None) or HISTORY_BACKFILL_START
+    start = backfill_of(config).start or HISTORY_BACKFILL_START
     # Same normalisation as `_backfill_window`: one meaning for `_backfill_end`
     # across every reader, or a Saturday means "Friday" in one step and
     # "a session with no rows" in the next.
-    end = last_session_on_or_before(
-        config, getattr(config, "_backfill_end", None) or date(2015, 12, 31)
-    )
+    end = last_session_on_or_before(config, backfill_of(config).end or date(2015, 12, 31))
     plan = _history_plan(config, start, end)
     resume = set(context.get("_history_done") or [])
     if resume:
@@ -5575,8 +5571,8 @@ def step_daily_bars_delisted(config: Config, trade_date: date, run_id: str, cont
     from cnequity.domain.schemas import data_version_for, with_provenance
     from cnequity.storage import StagingWriter
 
-    start = getattr(config, "_backfill_start", None) or date(2016, 1, 1)
-    end = last_session_on_or_before(config, getattr(config, "_backfill_end", None) or trade_date)
+    start = backfill_of(config).start or date(2016, 1, 1)
+    end = last_session_on_or_before(config, backfill_of(config).end or trade_date)
     symbols = context.get("_delisted_symbols") or _delisted_universe(config, start, end)
     if not symbols:
         return {"rows_read": 0, "rows_written": 0, "note": "no survivorship gap found"}

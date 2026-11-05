@@ -15,13 +15,14 @@ from datetime import date
 
 from cnequity.config import Config
 from cnequity.orchestrator.registry import register_step
+from cnequity.run_scope import backfill_of
 from cnequity.steps.http_common import call_with_run_id, verify_raw_archive, write_fetched
 
 logger = logging.getLogger(__name__)
 
 
 def stage_ths_fallback(config: Config, trade_date: date, run_id: str, dataset: str) -> dict | None:
-    if getattr(config, "_backfill", False) or not config.sources.get("ths", True):
+    if backfill_of(config).active or not config.sources.get("ths", True):
         # The pages are live and undated: there is nothing to backfill from.
         return None
     if _already_held(config, dataset, trade_date):

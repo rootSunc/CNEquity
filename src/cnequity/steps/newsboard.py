@@ -13,6 +13,7 @@ from cnequity.adapters.jin10.events import fetch_economic_events, fetch_market_h
 from cnequity.config import Config
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import SnapshotBackfillError
 from cnequity.steps.http_common import (
     call_with_run_id,
@@ -38,7 +39,7 @@ def step_economic_calendar(config: Config, trade_date: date, run_id: str, contex
         raise SourceUnavailableError("economic_calendar: jin10 source disabled in config")
     # The daily run is a rolling live window with future dates; a backfill
     # walks past days of the same endpoint instead.
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return _backfill_economic_calendar(config, trade_date, run_id)
     df = call_with_run_id(
         fetch_economic_calendar,
@@ -139,10 +140,8 @@ def _backfill_economic_calendar(config: Config, trade_date: date, run_id: str) -
     from cnequity.domain.schemas import data_version_for, with_provenance
     from cnequity.storage import StagingWriter
 
-    start = max(
-        getattr(config, "_backfill_start", None) or CALENDAR_HISTORY_START, CALENDAR_HISTORY_START
-    )
-    end = min(getattr(config, "_backfill_end", None) or trade_date, trade_date)
+    start = max(backfill_of(config).start or CALENDAR_HISTORY_START, CALENDAR_HISTORY_START)
+    end = min(backfill_of(config).end or trade_date, trade_date)
     present = _calendar_days_present(config)
     writer = StagingWriter(config.staging_root)
     rows = months = skipped = 0
@@ -184,7 +183,7 @@ def _jin10_snapshot(
         raise SourceUnavailableError(f"{dataset}: jin10 source disabled in config")
     # Rolling live windows like the calendar: future dates are the point, so
     # there is no by-date history to backfill through this step.
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         raise SnapshotBackfillError(
             f"{dataset}: backfill not supported — fetch semantics are snapshot "
             "(rolling live window)"

@@ -21,6 +21,7 @@ from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
 from cnequity.progress import sweep_progress
 from cnequity.query.canonical import dedupe_lazy_by_primary_key
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import instrument_metadata, load_bar_universe, load_symbols
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
 from cnequity.storage import StagingWriter
@@ -98,7 +99,7 @@ def _validate_valuation_history_batch(
 
 @register_step("valuation_metrics", group="capital", depends_on=["instruments"])
 def step_valuation_metrics(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return _backfill_valuation_metrics(config, trade_date, run_id)
     if not config.sources.get("eastmoney", True):
         raise SourceUnavailableError("valuation_metrics: eastmoney source disabled in config")
@@ -420,10 +421,10 @@ def _backfill_valuation_metrics_locked(config: Config, trade_date: date, run_id:
         universe = [s for s in universe if s in bar_universe]
     history_end = _valuation_history_end(config, trade_date)
     history_start = max(
-        getattr(config, "_backfill_start", None) or _VALUATION_BACKFILL_START,
+        backfill_of(config).start or _VALUATION_BACKFILL_START,
         _VALUATION_BACKFILL_START,
     )
-    requested_end = getattr(config, "_backfill_end", None)
+    requested_end = backfill_of(config).end
     if getattr(config, "_valuation_fill_em_outage", False):
         start, end = _em_outage_window(config, trade_date, history_start, requested_end)
         return _fill_em_outage_from_datacenter(config, run_id, universe, start, end, purge_summary)
@@ -624,8 +625,8 @@ def _expected_financial_periods(config: Config, trade_date: date) -> set[str]:
         f"{period[:4]}Q{(int(period[5:7]) - 1) // 3 + 1}"
         for period in _report_period_dates(
             trade_date,
-            start=getattr(config, "_backfill_start", None),
-            end=getattr(config, "_backfill_end", None),
+            start=backfill_of(config).start,
+            end=backfill_of(config).end,
         )
     }
 
@@ -671,7 +672,7 @@ def step_financial_statement_items(
     # Quarterly data: daily runs pick up same-day announcements; backfill walks
     # every report period from 2001 (CLI --start/--end clips the walk;
     # NOTICE_DATE incremental cannot reach history).
-    backfill = getattr(config, "_backfill", False)
+    backfill = backfill_of(config).active
     if not config.sources.get("eastmoney", True):
         disabled = SourceUnavailableError(
             "financial_statement_items: eastmoney source disabled in config"
@@ -777,7 +778,7 @@ def step_financial_statement_items(
     # delisted names do not file in all 36 periods, so a correct repair came
     # back `warning` with `missing_statement_periods: 36`, and that warning
     # then had compact skip the dataset and strand all 3,120 repaired rows.
-    scoped = bool(getattr(config, "_backfill_symbols", None))
+    scoped = bool(backfill_of(config).symbol_list())
     if backfill and not scoped:
         expected = _expected_financial_periods(config, trade_date)
         observed = (
@@ -959,10 +960,10 @@ def _run_shareholder_step(
     if not config.sources.get("eastmoney", True):
         raise SourceUnavailableError(f"{dataset}: eastmoney source disabled in config")
 
-    symbols = getattr(config, "_backfill_symbols", None) if dataset == "share_structure" else None
-    if getattr(config, "_backfill", False):
-        start = getattr(config, "_backfill_start", None) or HISTORY_START
-        end = getattr(config, "_backfill_end", None) or trade_date
+    symbols = backfill_of(config).symbol_list() if dataset == "share_structure" else None
+    if backfill_of(config).active:
+        start = backfill_of(config).start or HISTORY_START
+        end = backfill_of(config).end or trade_date
         windows = (
             # A few named securities hold tens of changes in their whole
             # history: one window, not one request per year.
@@ -1027,7 +1028,7 @@ def _run_shareholder_step(
                     continue
             except (OSError, pl.exceptions.PolarsError):
                 pass
-        source = "eastmoney_backfill" if getattr(config, "_backfill", False) else "eastmoney"
+        source = "eastmoney_backfill" if backfill_of(config).active else "eastmoney"
         capture = None
         if config.should_archive_raw(dataset):
             from cnequity.adapters.eastmoney.shareholders import ShareholderCapture
@@ -1065,7 +1066,7 @@ def _run_shareholder_step(
         if part.is_empty():
             if not incomplete:
                 state.clear_missing_units(dataset, [unit])
-            if not incomplete and getattr(config, "_backfill", False):
+            if not incomplete and backfill_of(config).active:
                 empty_windows.append((win_start, win_end))
             continue
         chunk = write_fetched(

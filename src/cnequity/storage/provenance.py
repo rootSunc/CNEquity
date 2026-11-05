@@ -21,7 +21,7 @@ _LEGACY_SECRET_KEYS = {
 }
 _LOCATION_FIELDS = frozenset({"data_root", "config_path", "duckdb_path"})
 #: Runtime plumbing and diagnostics, not data-affecting settings.
-_NOT_DATA_FIELDS = frozenset({"_rate_limiters", "inline_credentials"})
+_NOT_DATA_FIELDS = frozenset({"_rate_limiters", "inline_credentials", "backfill_window"})
 
 
 def _json_value(value: Any) -> Any:
@@ -54,6 +54,13 @@ def config_fingerprint(config: Config) -> str:
             payload[name] = "configured" if value else None
             continue
         payload[name] = _json_value(value)
+    # These two were Config fields before the backfill window became one
+    # value. Hash them under their old names, exactly as before, so a config
+    # keeps its fingerprint and nothing reads as changed.
+    window = getattr(config, "backfill_window", None)
+    if window is not None:
+        payload["_backfill"] = window.active
+        payload["_backfill_symbols"] = window.symbol_list()
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

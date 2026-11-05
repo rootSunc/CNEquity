@@ -24,6 +24,7 @@ from cnequity.orchestrator.outcomes import (
     error_kind,
 )
 from cnequity.orchestrator.source_gaps import source_gap_dates
+from cnequity.run_scope import backfill_of
 from cnequity.storage import StagingWriter
 from cnequity.storage.instrument_catalog import load_curated_instruments as load_curated_instruments
 from cnequity.storage.instrument_catalog import (
@@ -486,7 +487,7 @@ def fetch_incremental_daily(
     earlier snapshot coverage (used by init).
     """
     semantics = fetch_semantics(dataset)
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         if semantics == "snapshot":
             raise SnapshotBackfillError(
                 f"{dataset}: backfill not supported — fetch semantics are snapshot "
@@ -1149,8 +1150,8 @@ def walk_day_backfill(
     measured safe at higher concurrency for these sources, and getting a
     correct sweep once is worth more than a faster wrong one.
     """
-    start = getattr(config, "_backfill_start", None) or floor
-    end = getattr(config, "_backfill_end", None) or trade_date
+    start = backfill_of(config).start or floor
+    end = backfill_of(config).end or trade_date
     bounded_end = min(end, trade_date)
     if calendar_days:
         days = (

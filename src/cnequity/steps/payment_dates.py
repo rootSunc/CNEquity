@@ -13,6 +13,7 @@ from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.domain.symbols import is_etf_symbol, parse_symbol
 from cnequity.orchestrator.source_gaps import record_source_gap
 from cnequity.query.reader import load
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import write_simple
 from cnequity.steps.http_common import verify_raw_archive, write_fetched
 
@@ -71,8 +72,8 @@ def match_payment_dates(existing: pl.DataFrame, fetched: pl.DataFrame):
 
 
 def repair_payment_dates(config, trade_date: date, run_id: str, context: dict):
-    symbols = context.get("_retry_symbols") or getattr(config, "_backfill_symbols", None)
-    start, end = getattr(config, "_backfill_start", None), getattr(config, "_backfill_end", None)
+    symbols = context.get("_retry_symbols") or backfill_of(config).symbol_list()
+    start, end = backfill_of(config).start, backfill_of(config).end
     if not symbols or start is None or end is None or start > end:
         raise ValueError("payment repair requires explicit symbols and valid start/end")
     # Reviewed stock terms are issuer evidence too; applying them here lets a

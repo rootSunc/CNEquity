@@ -20,6 +20,7 @@ import polars as pl
 from cnequity.adapters.eastmoney.common import parse_em_ymd
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient, is_transport_fail_fast
 from cnequity.adapters.numeric import finite_int64
+from cnequity.run_scope import backfill_of
 
 if TYPE_CHECKING:
     from cnequity.config import Config
@@ -311,11 +312,11 @@ def fetch_commodity_bars(
     """Daily / backfill entrypoint.
 
     - Normal incremental: bars for *trade_date* only.
-    - ``config._backfill``: full history from ``_backfill_start`` (default 2020-01-01)
+    - ``backfill_of(config).active``: full history from ``_backfill_start`` (default 2020-01-01)
       through ``_backfill_end`` or *trade_date*.
     """
-    if config is not None and getattr(config, "_backfill", False):
-        start = getattr(config, "_backfill_start", None) or DEFAULT_BACKFILL_START
-        end = getattr(config, "_backfill_end", None) or trade_date
+    if config is not None and backfill_of(config).active:
+        start = backfill_of(config).start or DEFAULT_BACKFILL_START
+        end = backfill_of(config).end or trade_date
         return fetch_commodity_bars_range(start, end, config=config, strict=strict)
     return fetch_commodity_bars_range(trade_date, trade_date, config=config, strict=strict)

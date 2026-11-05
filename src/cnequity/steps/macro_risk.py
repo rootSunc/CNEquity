@@ -18,6 +18,7 @@ from cnequity.derive.market_breadth import MARKET_BREADTH_METRICS, compute_marke
 from cnequity.orchestrator.outcomes import InputUnavailableError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.quality.macro_checks import macro_revision_findings
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import BACKFILL_START, list_trading_dates
 from cnequity.steps.http_common import run_incremental_fetched
 from cnequity.storage.state import StateStore
@@ -177,8 +178,8 @@ def _daily_rate_history(
     every session from there (measured 2026-09-25), and ``--start`` reaches back
     to each one's first value (``DAILY_SERIES_FIRST_OBS``).
     """
-    start = getattr(config, "_backfill_start", None) or BACKFILL_START
-    end = min(getattr(config, "_backfill_end", None) or trade_date, trade_date)
+    start = backfill_of(config).start or BACKFILL_START
+    end = min(backfill_of(config).end or trade_date, trade_date)
     return _daily_rates_between(config, start, end)
 
 
@@ -252,7 +253,7 @@ def step_macro_indicators(config: Config, trade_date: date, run_id: str, context
     completed_units: set[str] = set()
     daily_gaps: dict[date, list[str]] = {}
     daily_pending: dict[date, list[str]] = {}
-    backfill = getattr(config, "_backfill", False)
+    backfill = backfill_of(config).active
 
     def _fetch(day: date):
         df = fetch_macro_indicators(
@@ -364,7 +365,7 @@ def step_macro_indicators(config: Config, trade_date: date, run_id: str, context
 
 @register_step("market_breadth", group="macro_risk", depends_on=["daily_bars"])
 def step_market_breadth(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         from cnequity.steps.common import walk_day_backfill
 
         # Pure local computation from daily_bars — no network, no rate limit,
@@ -396,7 +397,7 @@ def step_share_unlock_schedule(
 ) -> dict:
     if not config.sources.get("eastmoney", True):
         raise SourceUnavailableError("share_unlock_schedule: eastmoney source disabled in config")
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return _backfill_share_unlock_schedule(config, trade_date, run_id)
     return run_incremental_fetched(
         config,
@@ -455,8 +456,8 @@ def _backfill_share_unlock_schedule(config: Config, trade_date: date, run_id: st
     from cnequity.domain.schemas import data_version_for, with_provenance
     from cnequity.storage import StagingWriter
 
-    start = getattr(config, "_backfill_start", None) or BACKFILL_START
-    end = getattr(config, "_backfill_end", None) or trade_date
+    start = backfill_of(config).start or BACKFILL_START
+    end = backfill_of(config).end or trade_date
     cursors = []
     cursor = start
     while cursor <= end:
@@ -511,9 +512,9 @@ def _regulatory_window(config: Config, trade_date: date) -> tuple[date, date]:
     """The calendar window this run should (re-)derive."""
     from cnequity.steps.common import incremental_window
 
-    if getattr(config, "_backfill", False):
-        start = getattr(config, "_backfill_start", None) or _REGULATORY_FLOOR
-        end = min(getattr(config, "_backfill_end", None) or trade_date, trade_date)
+    if backfill_of(config).active:
+        start = backfill_of(config).start or _REGULATORY_FLOOR
+        end = min(backfill_of(config).end or trade_date, trade_date)
         return max(start, _REGULATORY_FLOOR), end
     return incremental_window(config, "regulatory_events", trade_date), trade_date
 
@@ -554,7 +555,7 @@ def _announcement_coverage(config: Config, start: date, end: date) -> tuple[date
         # reporting that would make a healthy young lake permanently degraded.
         # A backfill start *was* asked for, and so is a clamp that leaves the
         # window empty — both change what the caller gets back.
-        if getattr(config, "_backfill", False) or start > end:
+        if backfill_of(config).active or start > end:
             findings.append(
                 {
                     "dataset": "regulatory_events",

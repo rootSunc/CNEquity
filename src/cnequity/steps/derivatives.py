@@ -50,6 +50,7 @@ from cnequity.domain.datasets import is_dataset_enabled
 from cnequity.domain.derivatives import PUBLISHED_FUTURES_ANOMALIES
 from cnequity.orchestrator.outcomes import SourceUnavailableError, error_kind
 from cnequity.orchestrator.registry import register_step
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import walk_day_backfill
 from cnequity.steps.http_common import run_incremental_fetched, write_fetched
 
@@ -297,13 +298,13 @@ def _run_bars(config: Config, trade_date: date, run_id: str, kind: Kind) -> dict
         {"_derivative_refreshed_requests": set, "_derivative_blocked_hosts": set},
     )
     findings: list[dict] = []
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         floor = earliest_session(config, kind)
         if floor is None:
             return {"rows_read": 0, "rows_written": 0, "note": "no enabled exchange lists these"}
-        start = getattr(config, "_backfill_start", None)
+        start = backfill_of(config).start
         if start is not None and start < floor:
-            config._backfill_start = floor
+            set_backfill(config, start=floor)
         result = walk_day_backfill(
             config,
             trade_date,
@@ -350,7 +351,7 @@ def step_option_bars(config: Config, trade_date: date, run_id: str, context: dic
     ``cne backfill option_bars --source tushare`` instead fills the SSE/SZSE
     ETF options, which no exchange archive covers.
     """
-    if getattr(config, "_backfill", False) and getattr(config, "_option_source", None) == "tushare":
+    if backfill_of(config).active and getattr(config, "_option_source", None) == "tushare":
         return _backfill_etf_options(config, trade_date, run_id)
     return _run_bars(config, trade_date, run_id, "options")
 
@@ -434,8 +435,8 @@ def _reference(config: Config, bars: pl.LazyFrame, findings: list[dict], dataset
         .select("exchange", "trade_date")
         .unique()
     )
-    start = getattr(config, "_backfill_start", None)
-    end = getattr(config, "_backfill_end", None)
+    start = backfill_of(config).start
+    end = backfill_of(config).end
     if start is not None or end is not None:
         if start is not None:
             selected = selected.filter(pl.col("trade_date") >= start)

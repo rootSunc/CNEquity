@@ -55,6 +55,7 @@ from cnequity.domain.financial_statements import (
     unchanged_republications,
 )
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.run_scope import backfill_of
 from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
 from cnequity.storage.read_context import ReadContext
 
@@ -407,8 +408,8 @@ def fetch_financial_statement_items(
     restatement is never backdated as an exact observation.
 
     ``backfill=True``: every A-share report for each quarter-end period from
-    2001 (or ``config._backfill_start``) through *trade_date* (or
-    ``config._backfill_end``). announce_date is resolved from ``RPT_LICO_FN_CPD``
+    2001 (or ``backfill_of(config).start``) through *trade_date* (or
+    ``backfill_of(config).end``). announce_date is resolved from ``RPT_LICO_FN_CPD``
     (see module docstring — the statement reports' own NOTICE_DATE is a
     republication timestamp and lands 1-2 years late).
     """
@@ -567,13 +568,13 @@ def fetch_financial_statement_items(
                 if dataset_has_parquet(root, committed=False):
                     known = original_disclosures(scan_parquet_root(root, committed=False)).collect()
                     known_dates = {(sym, period): day for sym, period, day in known.iter_rows()}
-            range_start = getattr(config, "_backfill_start", None) if config else None
-            range_end = getattr(config, "_backfill_end", None) if config else None
+            range_start = backfill_of(config).start if config else None
+            range_end = backfill_of(config).end if config else None
             # A scoped repair asks for a handful of securities, not the market.
             # Four delisted names and one BSE listing owed 149 (symbol, period)
             # balance rows that the licensed peer refuses by code; without this
             # the only way to reach them was 36 whole-market period sweeps.
-            scope = list(getattr(config, "_backfill_symbols", None) or []) if config else []
+            scope = list(backfill_of(config).symbol_list() or []) if config else []
             scope_expr = (
                 "(SECUCODE in (" + ",".join(f'"{sym}"' for sym in sorted(scope)) + "))"
                 if scope

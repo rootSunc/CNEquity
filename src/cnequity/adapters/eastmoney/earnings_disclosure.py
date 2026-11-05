@@ -21,6 +21,7 @@ from cnequity.adapters.eastmoney.common import (
 from cnequity.adapters.eastmoney.datacenter import fetch_datacenter
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient, rate_limit_if_unconfigured
 from cnequity.config import Config
+from cnequity.run_scope import backfill_of
 
 logger = logging.getLogger(__name__)
 
@@ -162,8 +163,8 @@ def fetch_earnings_disclosure_schedule(
         client = EastMoneyClient(config=config)
 
     if backfill:
-        range_start = getattr(config, "_backfill_start", None)
-        range_end = getattr(config, "_backfill_end", None)
+        range_start = backfill_of(config).start
+        range_end = backfill_of(config).end
         report_dates = _backfill_report_dates(trade_date, start=range_start, end=range_end)
     else:
         report_dates = _active_report_dates(trade_date)

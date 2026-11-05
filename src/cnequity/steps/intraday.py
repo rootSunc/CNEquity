@@ -24,6 +24,7 @@ from cnequity.domain.datasets import get_dataset, intraday_datasets
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.query.intraday_scope import MinuteBarsScopeError as MinuteBarsScopeError
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import incremental_window, instrument_metadata, load_symbols
 from cnequity.storage import StagingWriter
 
@@ -145,9 +146,9 @@ def _window(config: Config, dataset: str, trade_date: date) -> tuple[date, date]
     the source has, and the honest answer is "here is everything that exists",
     with the clamp logged so it is not mistaken for complete history.
     """
-    if getattr(config, "_backfill", False):
-        end = getattr(config, "_backfill_end", None) or trade_date
-        start = getattr(config, "_backfill_start", None) or (end - timedelta(days=365))
+    if backfill_of(config).active:
+        end = backfill_of(config).end or trade_date
+        start = backfill_of(config).start or (end - timedelta(days=365))
     else:
         start = incremental_window(config, dataset, trade_date)
         end = trade_date
@@ -254,7 +255,7 @@ def capture_intraday_bars(
                 end,
                 frequency=frequency,
                 rate_limit=rate_limit,
-                backfill=getattr(config, "_backfill", False),
+                backfill=backfill_of(config).active,
                 config=config,
                 max_pages=max_pages,
                 require_complete=True,

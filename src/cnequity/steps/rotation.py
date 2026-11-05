@@ -17,6 +17,7 @@ from cnequity.config import Config
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
+from cnequity.run_scope import backfill_of
 from cnequity.steps.http_common import (
     call_with_run_id,
     run_incremental_fetched,
@@ -157,11 +158,11 @@ def step_sector_bars(config: Config, trade_date: date, run_id: str, context: dic
     # stock and index bars, otherwise a pre-close run publishes partial OHLC.
     from cnequity.steps.bars import _reject_unfinished_daily_bar_window
 
-    endpoint = getattr(config, "_backfill_end", None) or trade_date
+    endpoint = backfill_of(config).end or trade_date
     _reject_unfinished_daily_bar_window(config, endpoint)
     if not config.sources.get("ths", True):
         raise SourceUnavailableError("sector_bars: ths source disabled in config")
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return _backfill_sector_bars(config, trade_date, run_id)
     return _sweep_sector_bars(
         config,
@@ -402,10 +403,8 @@ def _backfill_sector_bars(config: Config, trade_date: date, run_id: str) -> dict
 
     # `--start/--end` narrow the sweep so filling a small hole does not re-fetch
     # the whole window across every board. Default stays the full backfill depth.
-    end = getattr(config, "_backfill_end", None) or trade_date
-    start = getattr(config, "_backfill_start", None) or (
-        end - timedelta(days=_SECTOR_BARS_BACKFILL_DAYS)
-    )
+    end = backfill_of(config).end or trade_date
+    start = backfill_of(config).start or (end - timedelta(days=_SECTOR_BARS_BACKFILL_DAYS))
     return _sweep_sector_bars(
         config,
         run_id,
@@ -421,7 +420,7 @@ def step_sector_fund_flow(config: Config, trade_date: date, run_id: str, context
     from cnequity.adapters.tushare.client import tushare_enabled
 
     if tushare_enabled(config):
-        if getattr(config, "_backfill", False):
+        if backfill_of(config).active:
             return _backfill_sector_fund_flow_tushare(config, trade_date, run_id)
         if getattr(config, "eastmoney_push2_paused", False):
             # push2 is the only EastMoney route for boards; Tushare serves the

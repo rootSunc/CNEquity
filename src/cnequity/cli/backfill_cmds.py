@@ -31,6 +31,7 @@ from cnequity.domain.datasets import get_dataset
 from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
+from cnequity.run_scope import backfill_of, set_backfill
 
 
 @cli.command()
@@ -365,7 +366,7 @@ def backfill(
         symbols = list(dict.fromkeys(s.upper() for s in symbols))
         symbols_str = ",".join(symbols)
     cfg = _cfg(config_path)
-    cfg._backfill_refetch = bool(refetch and dataset == "fund_flow")
+    set_backfill(cfg, refetch=bool(refetch and dataset == "fund_flow"))
     cfg._option_source = option_source
     derivatives = {
         "futures_bars",
@@ -522,7 +523,7 @@ def backfill(
             "financial_statement_items",
             "share_structure",
         ):
-            cfg._backfill_symbols = symbols
+            set_backfill(cfg, symbols=symbols)
         else:
             _override_scope(cfg, dataset, symbols)
         if not plan:
@@ -533,10 +534,10 @@ def backfill(
                 err=True,
             )
     if start_d:
-        cfg._backfill_start = start_d
+        set_backfill(cfg, start=start_d)
     if end_d:
-        cfg._backfill_end = end_d
-    cfg._backfill_workers = workers
+        set_backfill(cfg, end=end_d)
+    set_backfill(cfg, workers=workers)
     if plan:
         repair_modes = [
             flag
@@ -1179,11 +1180,14 @@ def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
             ),
             err=True,
         )
-        cfg._backfill_symbols = symbols
-        cfg._backfill_start = date.fromisoformat(lo)
-        cfg._backfill_end = date.fromisoformat(hi)
-        cfg._backfill_workers = workers
-        window = (cfg._backfill_start, cfg._backfill_end)
+        set_backfill(
+            cfg,
+            symbols=symbols,
+            start=date.fromisoformat(lo),
+            end=date.fromisoformat(hi),
+            workers=workers,
+        )
+        window = (backfill_of(cfg).start, backfill_of(cfg).end)
         before = _bar_fingerprint(cfg, window) if dataset == "daily_bars" else None
         out = _backfill_once(cfg, dataset)
         if before is not None and out.get("status") != "failed":
@@ -1705,9 +1709,9 @@ def _run_backfill(cfg, dataset: str, start: date | None, end: date | None) -> di
     (see `_backfill_symbol_chunked`).
     """
     if start is not None:
-        cfg._backfill_start = start
+        set_backfill(cfg, start=start)
     if end is not None:
-        cfg._backfill_end = end
+        set_backfill(cfg, end=end)
     spec = get_dataset(dataset)
     if spec.backfill_chunk_symbols and start and end:
         return _backfill_symbol_chunked(cfg, dataset, start, end, spec.backfill_chunk_symbols)
@@ -1726,8 +1730,8 @@ def _backfill_once(cfg, dataset: str) -> dict:
     # indexed and clamps each slice to their range, so a floor that predates
     # the lake's own history costs a skipped slice, not a failed sweep.
     if dataset in {"announcement_index", "regulatory_events"}:
-        start = getattr(cfg, "_backfill_start", None) or date(2010, 1, 1)
-        end = getattr(cfg, "_backfill_end", None) or shanghai_today()
+        start = backfill_of(cfg).start or date(2010, 1, 1)
+        end = backfill_of(cfg).end or shanghai_today()
         return _backfill_chunked(cfg, dataset, start, end, get_dataset(dataset).backfill_chunk_days)
     engine = JobEngine(cfg)
     _recover_compactable_backfill_staging(engine, dataset)
@@ -1769,7 +1773,7 @@ def _backfill_symbol_chunked(cfg, dataset: str, start: date, end: date, chunk_sy
     rows_read = rows_written = 0
     original_scope = cfg.minute_bars_scope
     original_symbols = list(cfg.minute_bars_symbols)
-    cfg._backfill_start, cfg._backfill_end = start, end
+    set_backfill(cfg, start=start, end=end)
     try:
         for index in range(0, len(symbols), chunk_symbols):
             chunk = symbols[index : index + chunk_symbols]
@@ -1873,7 +1877,7 @@ def _backfill_chunked(cfg, dataset: str, start: date, end: date, chunk_days: int
     cursor = start
     while cursor <= end:
         slice_end = min(cursor + timedelta(days=chunk_days - 1), end)
-        cfg._backfill_start, cfg._backfill_end = cursor, slice_end
+        set_backfill(cfg, start=cursor, end=slice_end)
         click.echo(
             _("[{dataset}] slice {cursor}..{slice_end}").format(
                 dataset=dataset, cursor=cursor, slice_end=slice_end

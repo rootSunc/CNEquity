@@ -38,6 +38,7 @@ from cnequity.domain.symbols import (
     is_cdr_symbol,
     is_etf_symbol,
 )
+from cnequity.run_scope import backfill_of
 from cnequity.storage.raw_archive import RawArchiveError
 
 logger = logging.getLogger(__name__)
@@ -1204,10 +1205,8 @@ def fetch_corporate_actions(
         if not backfill:
             out = out.filter(pl.col("ex_date") == trade_date)
         else:
-            backfill_start = (
-                getattr(config, "_backfill_start", None) or CORPORATE_ACTIONS_BACKFILL_START
-            )
-            backfill_end = getattr(config, "_backfill_end", None) or trade_date
+            backfill_start = backfill_of(config).start or CORPORATE_ACTIONS_BACKFILL_START
+            backfill_end = backfill_of(config).end or trade_date
             out = out.filter(
                 (pl.col("ex_date") >= backfill_start) & (pl.col("ex_date") <= backfill_end)
             )

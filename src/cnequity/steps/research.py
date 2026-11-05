@@ -19,6 +19,7 @@ from cnequity.derive.sentiment_scores import compute_sentiment_scores
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
+from cnequity.run_scope import backfill_of
 from cnequity.steps.http_common import (
     call_with_run_id,
     empty_ok,
@@ -35,8 +36,8 @@ def _quarter_labels(config: Config, trade_date: date) -> set[str]:
 
     periods = _quarter_end_dates(
         trade_date,
-        start=getattr(config, "_backfill_start", None),
-        end=getattr(config, "_backfill_end", None),
+        start=backfill_of(config).start,
+        end=backfill_of(config).end,
     )
     return {f"{period[:4]}Q{(int(period[5:7]) - 1) // 3 + 1}" for period in periods}
 
@@ -81,7 +82,7 @@ def step_institutional_holdings(
         raise SourceUnavailableError("institutional_holdings: eastmoney source disabled in config")
     # Quarterly by REPORT_DATE: daily refreshes the latest quarter, backfill
     # walks all quarters from 2016.
-    backfill = getattr(config, "_backfill", False)
+    backfill = backfill_of(config).active
     df = _validate_institutional_holdings_snapshot(
         fetch_institutional_holdings(trade_date, backfill=backfill, config=config)
     )
@@ -134,7 +135,7 @@ def step_broker_forecasts(config: Config, trade_date: date, run_id: str, context
         raise SourceUnavailableError(
             "broker_forecasts: needs [sources.tushare] enabled with a token"
         )
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         from cnequity.steps.common import walk_day_backfill
 
         # Calendar days, not sessions: brokers publish on weekends too.

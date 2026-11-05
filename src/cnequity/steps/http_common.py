@@ -17,6 +17,7 @@ from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS, fetch_semantics
 from cnequity.domain.schemas import data_version_for, validate_dataframe, with_provenance
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import fetch_incremental_daily, write_simple
 from cnequity.storage import StagingWriter
 from cnequity.storage.raw_archive import (
@@ -561,7 +562,7 @@ def run_incremental_fetched(
 ) -> dict:
     checkpoint_days = (
         fetch_semantics(dataset) == "by_date"
-        and not getattr(config, "_backfill", False)
+        and not backfill_of(config).active
         and not config.should_archive_raw(dataset)
     )
     recovered: dict[date, pl.DataFrame] = {}

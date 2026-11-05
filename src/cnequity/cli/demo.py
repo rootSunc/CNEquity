@@ -31,6 +31,7 @@ from cnequity.domain.market_time import shanghai_today
 from cnequity.domain.schemas import validate_dataframe, with_provenance
 from cnequity.i18n import _
 from cnequity.orchestrator.engine import JobEngine
+from cnequity.run_scope import set_backfill
 from cnequity.storage.atomic import replace_with_retry, write_parquet_atomic
 from cnequity.storage.layout import init_data_layout
 
@@ -452,9 +453,7 @@ def _run_intraday_demo(cfg: Config, engine, symbols: list[str], end: date, days:
     cfg.minute_bars_scope = "watchlist"
     cfg.minute_bars_symbols = list(symbols)
     cfg.minute_bars_frequencies = ["1m"]
-    cfg._backfill = True
-    cfg._backfill_start = start
-    cfg._backfill_end = end
+    set_backfill(cfg, active=True, start=start, end=end)
 
     result = engine.run_job(
         "demo:intraday",
@@ -758,9 +757,7 @@ def run_demo(
     engine = JobEngine(cfg)
     as_of = trade_date or shanghai_today()
     # Seed calendar covers a wide range; backfill window is cheap (CSV/seed).
-    cfg._backfill = True
-    cfg._backfill_start = date(2020, 1, 1)
-    cfg._backfill_end = as_of
+    set_backfill(cfg, active=True, start=date(2020, 1, 1), end=as_of)
     cal = engine.run_job(
         "demo:calendar",
         trade_date=as_of,
@@ -789,15 +786,13 @@ def run_demo(
         )
 
     _banner(f"5/{steps}", _("daily_bars ({value} symbols)").format(value=len(kept)))
-    cfg._backfill = True
-    cfg._backfill_start = start
-    cfg._backfill_end = end
+    set_backfill(cfg, active=True, start=start, end=end)
     # Name the symbols rather than leaving the step to infer them from
     # `instruments`. TDX publishes no list_date, so an undated demo symbol with
     # no bar yet in the lake is classified as a pre-listing placeholder and
     # skipped — which made a second `--profile demo` run on an existing demo
     # lake fetch nothing and then blame TDX for the empty result.
-    cfg._backfill_symbols = list(kept)
+    set_backfill(cfg, symbols=list(kept))
     bars = engine.run_job(
         "demo:bars",
         trade_date=end,

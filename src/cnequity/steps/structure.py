@@ -26,6 +26,7 @@ from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
 from cnequity.query.canonical import dedupe_lazy_by_primary_key
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import BACKFILL_START, list_trading_dates
 from cnequity.steps.http_common import (
     call_with_run_id,
@@ -198,7 +199,7 @@ def step_index_constituents(config: Config, trade_date: date, run_id: str, conte
     the official book (``index_constituents_peer``). One index-date is written
     from one source only.
     """
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return _backfill_index_constituents(config, trade_date, run_id)
 
     import httpx
@@ -343,8 +344,8 @@ def _held_weight_books(config: Config) -> set[tuple[str, date]]:
 
 def _backfill_index_constituents(config: Config, trade_date: date, run_id: str) -> dict:
     """CNI adjustment history → as_of snapshots for 399001/399006 (C2)."""
-    start = getattr(config, "_backfill_start", None) or date(2021, 12, 1)
-    end = getattr(config, "_backfill_end", None) or trade_date
+    start = backfill_of(config).start or date(2021, 12, 1)
+    end = backfill_of(config).end or trade_date
     have = _existing_as_of_dates(
         config,
         "index_constituents",
@@ -465,7 +466,7 @@ def _backfill_index_constituents(config: Config, trade_date: date, run_id: str) 
 
 @register_step("industry_members", group="fundamentals", depends_on=["instruments"])
 def step_industry_members(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return _backfill_industry_members(config, trade_date, run_id)
     if not config.sources.get("eastmoney", True):
         raise SourceUnavailableError("industry_members: eastmoney source disabled in config")
@@ -492,8 +493,8 @@ def step_industry_members(config: Config, trade_date: date, run_id: str, context
 
 def _backfill_industry_members(config: Config, trade_date: date, run_id: str) -> dict:
     """Shenwan classification intervals → monthly as_of snapshots from 2020 (C2)."""
-    start = getattr(config, "_backfill_start", None) or max(BACKFILL_START, _INDUSTRY_HISTORY_START)
-    end = getattr(config, "_backfill_end", None) or trade_date
+    start = backfill_of(config).start or max(BACKFILL_START, _INDUSTRY_HISTORY_START)
+    end = backfill_of(config).end or trade_date
     have = _existing_as_of_dates(config, "industry_members")
     # Skip eastmoney daily snapshots already in lake when choosing SW months —
     # SW rows use classification_system=sw and share as_of_date partitions, so

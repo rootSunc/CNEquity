@@ -37,6 +37,7 @@ from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _, localize
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.run_lock import INIT_JOB_LOCK, is_run_locked
+from cnequity.run_scope import set_backfill
 from cnequity.steps.common import BACKFILL_START
 from cnequity.storage.layout import init_data_layout
 
@@ -461,7 +462,7 @@ def init(
     # history of an older full/custom run. Let the engine restore that run's
     # recorded window. `--since` is the one deliberate resume-time override.
     if history_start is not None and (not is_resume or since_str):
-        cfg._backfill_start = history_start
+        set_backfill(cfg, start=history_start)
         click.echo(
             _(
                 "History window: {value} .. {value2} ({value3}, {value4} depth). Go deeper later with `cne backfill daily_bars --start <an earlier date>`."

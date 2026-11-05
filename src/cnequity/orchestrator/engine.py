@@ -66,6 +66,7 @@ from cnequity.orchestrator.run_lock import (
     run_lock,
 )
 from cnequity.progress import step_scope
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import is_trading_day
 
 logger = logging.getLogger(__name__)
@@ -207,7 +208,7 @@ class JobEngine:
         finalize_run: bool = True,
     ) -> dict[str, Any]:
         trade_date = trade_date or shanghai_today()
-        self.config._backfill = backfill
+        set_backfill(self.config, active=backfill)
         # Here as well as at `cne` start-up: callers such as
         # scripts/run_catchup.py, run by another project's launchd agent at a
         # 256-descriptor limit, drive the engine without either entry point.
@@ -969,15 +970,15 @@ class JobEngine:
     def _backfill_source_scope(self, name: str, trade_date: date) -> tuple[Config, dict | None]:
         """Retain the requested scope while avoiding known unservable history."""
         spec = DATASETS.get(name)
-        if not getattr(self.config, "_backfill", False) or spec is None:
+        if not backfill_of(self.config).active or spec is None:
             return self.config, None
         if history_mode_for(spec, self.config) == "snapshot_only":
             raise CapabilityLimitError(
                 f"{name}: snapshot source has no historical replay; retained observations "
                 "remain readable, and daily collection can accumulate future snapshots"
             )
-        start = getattr(self.config, "_backfill_start", None)
-        end = getattr(self.config, "_backfill_end", None) or trade_date
+        start = backfill_of(self.config).start
+        end = backfill_of(self.config).end or trade_date
         floor = spec.earliest_available(shanghai_today())
         ceiling = spec.source_retired_date
         lo = max(start, floor) if start and floor else start
@@ -990,7 +991,7 @@ class JobEngine:
         if lo == start and hi == end:
             return self.config, None
         config = copy(self.config)
-        config._backfill_start, config._backfill_end = lo, hi
+        set_backfill(config, start=lo, end=hi)
         requested = {"start": start.isoformat() if start else None, "end": end.isoformat()}
         effective = {"start": lo.isoformat() if lo else None, "end": hi.isoformat()}
         finding = {
@@ -1082,12 +1083,10 @@ class JobEngine:
         start = (
             min(s for _, _, s, _ in specs)
             if specs
-            else getattr(self.config, "_backfill_start", None) or BACKFILL_START
+            else backfill_of(self.config).start or BACKFILL_START
         )
         end = (
-            max(e for _, _, _, e in specs)
-            if specs
-            else getattr(self.config, "_backfill_end", None) or trade_date
+            max(e for _, _, _, e in specs) if specs else backfill_of(self.config).end or trade_date
         )
         scope = {
             "start": start.isoformat(),
@@ -1621,7 +1620,7 @@ class JobEngine:
         stored_trade_date = run_meta.get("trade_date")
         if stored_trade_date:
             trade_date = date.fromisoformat(stored_trade_date)
-        self.config._backfill = bool(run_meta.get("backfill"))
+        set_backfill(self.config, active=bool(run_meta.get("backfill")))
         scope = run_meta.get("backfill_scope") or {}
         restore_backfill_scope(self.config, scope)
         timeout = self.manifest.advance_batch_timeouts(
@@ -1730,19 +1729,19 @@ class JobEngine:
 
         for step_name, worker_batches in worker_batches_by_step.items():
             context["_retry_batch_specs"] = self._worker_batch_specs(worker_batches, trade_date)
-            previous_backfill = self.config._backfill
+            previous_backfill = backfill_of(self.config).active
             if init_phases:
-                self.config._backfill = step_backfill(step_name, init_phases)
+                set_backfill(self.config, active=step_backfill(step_name, init_phases))
             try:
                 results.append(self._run_step(step_name, trade_date, run_id, context))
             finally:
-                self.config._backfill = previous_backfill
+                set_backfill(self.config, active=previous_backfill)
                 context.pop("_retry_batch_specs", None)
 
         for step_name, batches in step_batches_by_step.items():
-            previous_backfill = self.config._backfill
+            previous_backfill = backfill_of(self.config).active
             if init_phases:
-                self.config._backfill = step_backfill(step_name, init_phases)
+                set_backfill(self.config, active=step_backfill(step_name, init_phases))
             if step_name == "corporate_actions":
                 retry_symbols: list[str] = []
                 for batch in batches:
@@ -1760,7 +1759,7 @@ class JobEngine:
                     )
                 )
             finally:
-                self.config._backfill = previous_backfill
+                set_backfill(self.config, active=previous_backfill)
                 context.pop("_retry_symbols", None)
 
         ran_missing: list[str] = []
@@ -1776,13 +1775,13 @@ class JobEngine:
                 run_id, missing, in_run=in_run, init_phases=init_phases
             )
             for step in ran_missing:
-                prev_backfill = self.config._backfill
+                prev_backfill = backfill_of(self.config).active
                 if init_phases:
-                    self.config._backfill = step_backfill(step, init_phases)
+                    set_backfill(self.config, active=step_backfill(step, init_phases))
                 try:
                     results.append(self._run_step(step, trade_date, run_id, context))
                 finally:
-                    self.config._backfill = prev_backfill
+                    set_backfill(self.config, active=prev_backfill)
             retried += len(ran_missing)
             if blocked_missing:
                 logger.warning(
@@ -2028,10 +2027,10 @@ class JobEngine:
         # named one, so the resumed phases fetch the same depth as the ones that
         # already ran rather than a lake with two different floors.
         recorded = meta.get("history_start")
-        requested = getattr(self.config, "_backfill_start", None)
+        requested = backfill_of(self.config).start
         if recorded and not requested:
-            self.config._backfill_start = date.fromisoformat(str(recorded))
-            requested = self.config._backfill_start
+            set_backfill(self.config, start=date.fromisoformat(str(recorded)))
+            requested = backfill_of(self.config).start
 
         def _mark_resumed(current: dict[str, Any]) -> None:
             current["resumed_at"] = shanghai_today().isoformat()
@@ -2197,7 +2196,7 @@ class JobEngine:
         # config. A resume days later runs from a fresh CLI invocation, and
         # without this it would silently pick the default depth and spend hours
         # fetching years the operator chose not to have.
-        history_start = getattr(self.config, "_backfill_start", None)
+        history_start = backfill_of(self.config).start
         if history_start:
             metadata["history_start"] = history_start.isoformat()
         run_id = self.manifest.start_run("init", metadata)

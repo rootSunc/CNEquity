@@ -24,6 +24,7 @@ from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.outcomes import SourcePayloadError, error_kind, step_outcome
 from cnequity.progress import detail_scope, enable_stack_dumps
 from cnequity.progress import hms as _hms
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import BACKFILL_START
 from cnequity.storage import StagingWriter
 
@@ -50,7 +51,7 @@ def _worker_tdx_config(
     else:
         cfg = Config(data_root=Path(staging_root).parent)
     cfg.tdx_allow_mock = allow_mock
-    cfg._backfill = backfill
+    set_backfill(cfg, active=backfill)
     return cfg
 
 
@@ -68,7 +69,7 @@ def _window_backfill(config: Config, start: date) -> bool:
     ``_backfill`` on the config for exactly these phases — so ask it, and keep
     the date test for callers that reach here without the flag set.
     """
-    return bool(getattr(config, "_backfill", False)) or start == BACKFILL_START
+    return bool(backfill_of(config).active) or start == BACKFILL_START
 
 
 def _process_pool_context() -> multiprocessing.context.BaseContext:
@@ -794,7 +795,7 @@ def _fetch_daily_bars_parallel(
         max(len(batch[1]) for batch in batches),
         lanes,
     )
-    if window_start == window_end and getattr(config, "_backfill", False):
+    if window_start == window_end and backfill_of(config).active:
         # One request returns up to 800 bars, so this sweep costs the same
         # whether it asks for one session or several years. Someone filling a
         # month a day at a time pays for thirty sweeps and receives what one

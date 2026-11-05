@@ -47,6 +47,7 @@ from cnequity.quality.failover import (
     snapshot_corporate_actions_backup,
     snapshot_corporate_actions_tdx_backup,
 )
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import (
     fetch_incremental_daily,
     incremental_trade_dates,
@@ -200,8 +201,8 @@ def _cninfo_range_backfill(
     """
     from cnequity.steps.common import walk_day_backfill
 
-    requested_start = getattr(config, "_backfill_start", None) or floor
-    requested_end = min(getattr(config, "_backfill_end", None) or trade_date, trade_date)
+    requested_start = backfill_of(config).start or floor
+    requested_end = min(backfill_of(config).end or trade_date, trade_date)
     if requested_start > requested_end:
         return {
             "rows_read": 0,
@@ -221,10 +222,8 @@ def _cninfo_range_backfill(
     if chunk_days < 1:
         raise RuntimeError(f"{dataset}: CNINFO backfill chunk size must be a positive integer")
 
-    original_start_present = hasattr(config, "_backfill_start")
-    original_end_present = hasattr(config, "_backfill_end")
-    original_start = getattr(config, "_backfill_start", None)
-    original_end = getattr(config, "_backfill_end", None)
+    # Slices narrow the window in place; the caller's window comes back after.
+    original_window = backfill_of(config)
     slices: list[dict] = []
     total_rows_read = 0
     total_rows_written = 0
@@ -355,8 +354,7 @@ def _cninfo_range_backfill(
         cursor = requested_start
         while cursor <= requested_end:
             slice_end = min(cursor + timedelta(days=chunk_days - 1), requested_end)
-            config._backfill_start = cursor
-            config._backfill_end = slice_end
+            set_backfill(config, start=cursor, end=slice_end)
             result = run_slice(cursor, slice_end)
             rows_read = int(result.get("rows_read", 0) or 0)
             rows_written = int(result.get("rows_written", 0) or 0)
@@ -400,20 +398,7 @@ def _cninfo_range_backfill(
         )
         raise
     finally:
-        if original_start_present:
-            config._backfill_start = original_start
-        else:
-            try:
-                delattr(config, "_backfill_start")
-            except AttributeError:
-                pass
-        if original_end_present:
-            config._backfill_end = original_end
-        else:
-            try:
-                delattr(config, "_backfill_end")
-            except AttributeError:
-                pass
+        set_backfill(config, start=original_window.start, end=original_window.end)
 
     # Persist one aggregate performance document. Per-slice metrics remain in
     # the document so operators can identify the exact date window that was
@@ -1083,7 +1068,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
 
         return repair_payment_dates(config, trade_date, run_id, context)
     rl = config.tdx_rate_limit_spec()
-    backfill = getattr(config, "_backfill", False)
+    backfill = backfill_of(config).active
     findings: list[dict] = []
     failed_symbols: list[str] = []
     heal_written = 0
@@ -1095,11 +1080,12 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
     if backfill:
         symbols = list(
             context.get("_retry_symbols")
-            or getattr(config, "_backfill_symbols", None)
+            or backfill_of(config).symbol_list()
             or _sweep_universe(config)
         )
-        if getattr(config, "_corporate_actions_eastmoney_date_repair", None) and not getattr(
-            config, "_backfill_symbols", None
+        if (
+            getattr(config, "_corporate_actions_eastmoney_date_repair", None)
+            and not backfill_of(config).symbols
         ):
             # The repair asks EastMoney for named ex-dates. Sweeping every
             # symbol through TDX on the way would cost hours and answer a
@@ -1166,8 +1152,8 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             remaining_symbols[index : index + batch_size]
             for index in range(0, len(remaining_symbols), batch_size)
         ]
-        backfill_start = getattr(config, "_backfill_start", None)
-        backfill_end = getattr(config, "_backfill_end", None)
+        backfill_start = backfill_of(config).start
+        backfill_end = backfill_of(config).end
         chunk_window_start = backfill_start.isoformat() if backfill_start else None
         chunk_window_end = backfill_end.isoformat() if backfill_end else trade_date.isoformat()
         # How big the sweep was, recorded on the parent batch before the first
@@ -1319,10 +1305,8 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 raise RuntimeError(
                     "corporate_actions: the Baostock delisted-actions repair requires the baostock source"
                 )
-            repair_start = (
-                getattr(config, "_backfill_start", None) or CORPORATE_ACTIONS_BACKFILL_START
-            )
-            repair_end = getattr(config, "_backfill_end", None) or trade_date
+            repair_start = backfill_of(config).start or CORPORATE_ACTIONS_BACKFILL_START
+            repair_end = backfill_of(config).end or trade_date
             repair_windows = _delisted_sh_sz_windows(
                 config,
                 symbols,
@@ -1398,10 +1382,8 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 raise RuntimeError(
                     "corporate_actions: the THS delisted-actions repair requires the ths_bonus source"
                 )
-            repair_start = (
-                getattr(config, "_backfill_start", None) or CORPORATE_ACTIONS_BACKFILL_START
-            )
-            repair_end = getattr(config, "_backfill_end", None) or trade_date
+            repair_start = backfill_of(config).start or CORPORATE_ACTIONS_BACKFILL_START
+            repair_end = backfill_of(config).end or trade_date
             repair_windows = _delisted_bj_windows(config, symbols, repair_start, repair_end)
             repair_symbols = sorted(repair_windows)
             repair_scope = f"repair:ths:{repair_start.isoformat()}:{repair_end.isoformat()}"
@@ -1473,10 +1455,8 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 raise RuntimeError(
                     "corporate_actions: the ex-dates repair requires the eastmoney source"
                 )
-            repair_start = (
-                getattr(config, "_backfill_start", None) or CORPORATE_ACTIONS_BACKFILL_START
-            )
-            repair_end = getattr(config, "_backfill_end", None) or trade_date
+            repair_start = backfill_of(config).start or CORPORATE_ACTIONS_BACKFILL_START
+            repair_end = backfill_of(config).end or trade_date
             outside = [d for d in repair_dates if d < repair_start or d > repair_end]
             if outside:
                 raise RuntimeError(
@@ -1559,13 +1539,13 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 len(symbols),
             )
         swept = set(symbols) | completed_symbols
-        scoped = context.get("_retry_symbols") or getattr(config, "_backfill_symbols", None)
+        scoped = context.get("_retry_symbols") or backfill_of(config).symbol_list()
         # A `--symbols` sweep answers for those names only; it counts as a look
         # at the lake when, with this run's earlier chunks, it covered them all.
         if swept and not failed_symbols and (not scoped or swept >= set(_sweep_universe(config))):
             observed = (
-                getattr(config, "_backfill_start", None),
-                min(getattr(config, "_backfill_end", None) or trade_date, trade_date),
+                backfill_of(config).start,
+                min(backfill_of(config).end or trade_date, trade_date),
             )
         canonical_source = _CANONICAL_BACKFILL
     else:
@@ -1737,8 +1717,8 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             findings.append(fund_finding)
 
     if backfill and not df.is_empty():
-        start = getattr(config, "_backfill_start", None) or CORPORATE_ACTIONS_BACKFILL_START
-        end = getattr(config, "_backfill_end", None) or trade_date
+        start = backfill_of(config).start or CORPORATE_ACTIONS_BACKFILL_START
+        end = backfill_of(config).end or trade_date
         if "ex_date" not in df.columns:
             raise SourcePayloadError("corporate_actions: backfill response has no ex_date column")
         parsed_dates = df.get_column("ex_date").cast(pl.Date, strict=False)
@@ -1963,7 +1943,7 @@ def step_earnings_disclosure_schedule(
         )
     # Period-keyed like financial_statement_items (watermark=False): daily runs
     # refresh the open disclosure windows; backfill walks every period 2016+.
-    backfill = getattr(config, "_backfill", False)
+    backfill = backfill_of(config).active
     df = _validate_earnings_schedule_snapshot(
         fetch_earnings_disclosure_schedule(trade_date, backfill=backfill, config=config)
     )
@@ -1973,8 +1953,8 @@ def step_earnings_disclosure_schedule(
             f"{period[:4]}Q{(int(period[5:7]) - 1) // 3 + 1}"
             for period in _backfill_report_dates(
                 trade_date,
-                start=getattr(config, "_backfill_start", None),
-                end=getattr(config, "_backfill_end", None),
+                start=backfill_of(config).start,
+                end=backfill_of(config).end,
             )
         }
         observed = (
@@ -2017,7 +1997,7 @@ def step_earnings_disclosure_schedule(
 def step_announcement_index(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if not config.sources.get("cninfo", True):
         raise SourceUnavailableError("announcement_index: cninfo source disabled in config")
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return _cninfo_range_backfill(
             config,
             trade_date,

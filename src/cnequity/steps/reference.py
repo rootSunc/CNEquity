@@ -60,6 +60,7 @@ from cnequity.quality.st_coverage import (
     st_evidence_unsupported_symbols,
     write_st_checkpoint,
 )
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import (
     BACKFILL_START,
     fetch_incremental_daily,
@@ -96,7 +97,7 @@ _TUSHARE_ST_BACKFILL_CHUNK = 500
 @register_step("instruments", group="core", requires_workers=False)
 def step_instruments(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     rl = config.tdx_rate_limit_spec()
-    backfill = getattr(config, "_backfill", False)
+    backfill = backfill_of(config).active
     stage = stage_progress(logger, "instruments", 6 if backfill else 5)
     stage(N_("TDX security list"))
     df = fetch_instruments(rate_limit=rl, allow_mock=config.tdx_allow_mock, config=config)
@@ -707,8 +708,8 @@ def _earliest_bar_date(config: Config) -> date | None:
 
 @register_step("trading_calendar", group="core")
 def step_trading_calendar(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
-        start = getattr(config, "_backfill_start", None) or BACKFILL_START
+    if backfill_of(config).active:
+        start = backfill_of(config).start or BACKFILL_START
         # Deep history reaches back further than BACKFILL_START; follow the data.
         earliest = _earliest_bar_date(config)
         if earliest is not None and earliest < start:
@@ -1013,8 +1014,8 @@ def step_trading_status(config: Config, trade_date: date, run_id: str, context: 
         # Index history shares this phase's backfill flag. Init status is a
         # current snapshot; explicit backfill retains the historical ST path.
         config = copy(config)
-        config._backfill = False
-    if getattr(config, "_backfill", False):
+        set_backfill(config, active=False)
+    if backfill_of(config).active:
         return _backfill_trading_status_st(
             config,
             trade_date,
@@ -1446,7 +1447,7 @@ def step_limit_prices(config: Config, trade_date: date, run_id: str, context: di
     def fetch_day(day: date) -> pl.DataFrame:
         return fetch_limit_prices(day, config=config).filter(pl.col("symbol").is_in(universe))
 
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return walk_day_backfill(
             config,
             trade_date,
@@ -1527,7 +1528,7 @@ def step_trading_status_derive(
 
     start = context.get("derive_start")
     end = context.get("derive_end")
-    full = context.get("derive_full") or getattr(config, "_backfill", False)
+    full = context.get("derive_full") or backfill_of(config).active
     if start is None and end is None and not full:
         start = trade_date - timedelta(days=DERIVE_TAIL_DAYS)
         end = trade_date
@@ -1589,7 +1590,7 @@ def _resolve_explicit_st_symbols(config: Config, raw: list[str]) -> list[str]:
 
 
 def _resolve_st_backfill_universe(config: Config, start: date, end: date) -> tuple[list[str], str]:
-    explicit = getattr(config, "_backfill_symbols", None)
+    explicit = backfill_of(config).symbol_list()
     if explicit is not None:
         return _resolve_explicit_st_symbols(config, explicit), "explicit"
     universe = current_st_universe(config, start=start, end=end)
@@ -1619,8 +1620,8 @@ def _backfill_trading_status_st_source(
     else:
         raise ValueError(f"unknown historical ST source: {source}")
 
-    start = getattr(config, "_backfill_start", None) or BACKFILL_START
-    end = getattr(config, "_backfill_end", None) or trade_date
+    start = backfill_of(config).start or BACKFILL_START
+    end = backfill_of(config).end or trade_date
     scope = build_st_scope(universe, start, end, universe=universe_name, source=source)
     checkpoint = load_st_checkpoint(config, scope)
     completed = reusable_st_checkpoint_symbols(config, checkpoint, run_id)
@@ -1774,8 +1775,8 @@ def _backfill_trading_status_st(
     *,
     batch_id: str | None = None,
 ) -> dict:
-    start = getattr(config, "_backfill_start", None) or BACKFILL_START
-    end = getattr(config, "_backfill_end", None) or trade_date
+    start = backfill_of(config).start or BACKFILL_START
+    end = backfill_of(config).end or trade_date
     universe, universe_name = _resolve_st_backfill_universe(config, start, end)
 
     # Baostock has no BJ historical ST series. Do not spend a full retry cycle

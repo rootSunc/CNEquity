@@ -30,6 +30,7 @@ from cnequity.domain.market_time import shanghai_now
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap, source_gap_dates
+from cnequity.run_scope import backfill_of
 from cnequity.steps.common import BACKFILL_START, incremental_trade_dates, list_trading_dates
 from cnequity.steps.http_common import (
     call_with_run_id,
@@ -98,7 +99,7 @@ def _run_capital_step(
 
 @register_step("fund_flow", group="capital", depends_on=["instruments"])
 def step_fund_flow(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         from cnequity.adapters.tushare.client import tushare_enabled
 
         if tushare_enabled(config):
@@ -161,7 +162,7 @@ def step_fund_flow_tushare(config: Config, trade_date: date, run_id: str, contex
         frame = fetch_fund_flow_measure(day, config=config)
         return frame.filter(pl.col("symbol").is_in(universe))
 
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return walk_day_backfill(
             config,
             trade_date,
@@ -187,7 +188,7 @@ def step_northbound_holdings(config: Config, trade_date: date, run_id: str, cont
     # 2026-07), so history accrues forward only, one quarter per disclosure.
     from cnequity.steps.http_common import write_fetched
 
-    backfill = getattr(config, "_backfill", False)
+    backfill = backfill_of(config).active
     df = _validate_northbound_holdings_snapshot(
         fetch_northbound_holdings(trade_date, backfill=backfill, config=config)
     )
@@ -196,8 +197,8 @@ def step_northbound_holdings(config: Config, trade_date: date, run_id: str, cont
         expected = set(
             _quarter_end_dates(
                 trade_date,
-                start=getattr(config, "_backfill_start", None),
-                end=getattr(config, "_backfill_end", None),
+                start=backfill_of(config).start,
+                end=backfill_of(config).end,
             )
         )
         observed = (
@@ -247,9 +248,9 @@ def step_northbound_flows(config: Config, trade_date: date, run_id: str, context
     if not config.sources.get("eastmoney", True):
         raise SourceUnavailableError("northbound_flows: eastmoney source disabled in config")
 
-    if getattr(config, "_backfill", False):
-        start = getattr(config, "_backfill_start", None) or NORTHBOUND_HISTORY_START
-        end = getattr(config, "_backfill_end", None) or trade_date
+    if backfill_of(config).active:
+        start = backfill_of(config).start or NORTHBOUND_HISTORY_START
+        end = backfill_of(config).end or trade_date
     else:
         dates = incremental_trade_dates(config, "northbound_flows", trade_date)
         if not dates:
@@ -555,9 +556,9 @@ def _backfill_margin_trading(config: Config, trade_date: date, run_id: str) -> d
 
     source = _margin_source(config)
     fetch_day = _margin_fetcher(source)
-    start = getattr(config, "_backfill_start", None) or BACKFILL_START
-    end = getattr(config, "_backfill_end", None) or trade_date
-    workers = max(1, int(getattr(config, "_backfill_workers", 1)))
+    start = backfill_of(config).start or BACKFILL_START
+    end = backfill_of(config).end or trade_date
+    workers = max(1, int(backfill_of(config).workers))
     days = list_trading_dates(config, start, min(end, trade_date))
     have = _existing_margin_dates(config)
     todo = [d for d in days if d not in have]
@@ -713,7 +714,7 @@ def _backfill_margin_trading(config: Config, trade_date: date, run_id: str) -> d
 
 @register_step("margin_trading", group="capital", depends_on=["instruments"])
 def step_margin_trading(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         return _backfill_margin_trading(config, trade_date, run_id)
 
     source = _margin_source(config)
@@ -762,7 +763,7 @@ def _backfill_daily_report(
 
 @register_step("dragon_tiger", group="signals", depends_on=["instruments"])
 def step_dragon_tiger(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         # Confirmed live 2007-01-04 has rows, 2006-01-04 does not.
         return _backfill_daily_report(
             config, trade_date, run_id, "dragon_tiger", fetch_dragon_tiger, date(2007, 1, 1)
@@ -828,7 +829,7 @@ def _with_exchange_fallback(dataset: str, primary_fn, exchange_fn):
 
 @register_step("block_trades", group="signals", depends_on=["instruments"])
 def step_block_trades(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_backfill", False):
+    if backfill_of(config).active:
         # Confirmed live from 2010-01-04; older single-day probes were
         # ambiguous (block trades are sparse — a quiet day and "no report yet"
         # look identical), so this floor is the conservative, confirmed one.

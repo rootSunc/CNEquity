@@ -13,6 +13,7 @@ from cnequity.cli import backfill_cmds
 from cnequity.cli.main import cli
 from cnequity.domain.datasets import DatasetSpec, get_dataset
 from cnequity.domain.market_time import shanghai_today
+from cnequity.run_scope import backfill_of
 
 
 @pytest.mark.usefixtures("chinese_output")
@@ -94,7 +95,8 @@ class FakeEngine:
         FakeEngine.instances.append(self)
 
     def run_job(self, name, *, steps, backfill, finalize_run):
-        self.windows.append((self.cfg._backfill_start, self.cfg._backfill_end))
+        window = backfill_of(self.cfg)
+        self.windows.append((window.start, window.end))
         return {
             "run_id": f"run-{len(self.windows)}",
             "status": self._status(len(self.windows)),
@@ -360,7 +362,7 @@ def test_symbols_flag_scopes_daily_bar_repairs(tmp_path, monkeypatch):
 
     result = CliRunner().invoke(cli, _backfill_argv("daily_bars", "--symbols", "600519.SH"))
     assert result.exit_code == 0, result.output
-    assert cfg._backfill_symbols == ["600519.SH"]
+    assert backfill_of(cfg).symbol_list() == ["600519.SH"]
 
 
 @pytest.mark.usefixtures("chinese_output")

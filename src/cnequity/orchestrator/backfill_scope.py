@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import date
 
 from cnequity.config import Config
+from cnequity.run_scope import backfill_of, set_backfill
 
 _REPAIR_FLAGS = {
     "baostock_repair": "_corporate_actions_baostock_repair",
@@ -32,8 +33,10 @@ _SETTINGS = (
     "futures_minute_contracts",
     "futures_minute_max_contracts",
 )
+#: Stored under its old attribute name so runs recorded before the backfill
+#: window became one value restore the same way.
+_WORKERS_KEY = "_backfill_workers"
 _OPTIONAL_SETTINGS = {
-    "_backfill_workers": 1,
     "_corporate_actions_payment_repair": False,
     "_corporate_actions_issuer_notice_only": False,
     "_corporate_actions_eastmoney_date_repair": None,
@@ -47,10 +50,11 @@ def capture_backfill_scope(config: Config) -> dict:
     # operational scope: credentials, proxies and transport policy stay in the
     # current config. A sector --force checkpoint reset is a one-time action;
     # retry resumes that checkpoint instead of resetting it again.
+    window = backfill_of(config)
     scope = {
-        "start": getattr(config, "_backfill_start", None),
-        "end": getattr(config, "_backfill_end", None),
-        "symbols": deepcopy(config._backfill_symbols),
+        "start": window.start,
+        "end": window.end,
+        "symbols": window.symbol_list(),
         "minute_bars_scope": config.minute_bars_scope,
         "minute_bars_symbols": list(config.minute_bars_symbols),
         **{key: bool(getattr(config, attr, False)) for key, attr in _REPAIR_FLAGS.items()},
@@ -60,6 +64,7 @@ def capture_backfill_scope(config: Config) -> dict:
                 name: deepcopy(getattr(config, name, default))
                 for name, default in _OPTIONAL_SETTINGS.items()
             },
+            _WORKERS_KEY: window.workers,
         },
     }
     for key in ("start", "end"):
@@ -77,18 +82,18 @@ def restore_backfill_scope(config: Config, scope: dict) -> None:
     if "minute_bars_scope" in scope:
         config.minute_bars_scope = scope["minute_bars_scope"]
         config.minute_bars_symbols = list(scope.get("minute_bars_symbols") or [])
-    for key, attr in (
-        ("start", "_backfill_start"),
-        ("end", "_backfill_end"),
-        ("symbols", "_backfill_symbols"),
-    ):
-        value = deepcopy(scope.get(key))
-        if key in ("start", "end") and value:
-            value = date.fromisoformat(value)
-        setattr(config, attr, value)
+    start, end = scope.get("start"), scope.get("end")
+    window = {
+        "start": date.fromisoformat(start) if start else None,
+        "end": date.fromisoformat(end) if end else None,
+        "symbols": deepcopy(scope.get("symbols")),
+    }
     for key, attr in _REPAIR_FLAGS.items():
         setattr(config, attr, bool(scope.get(key, False)))
     settings = scope.get("settings") or {}
+    if _WORKERS_KEY in settings:
+        window["workers"] = settings[_WORKERS_KEY]
+    set_backfill(config, **window)
     # Legacy runs did not record these fields; keep their current config.
     # Unknown metadata must never set arbitrary config attributes.
     for name in (*_SETTINGS, *_OPTIONAL_SETTINGS):

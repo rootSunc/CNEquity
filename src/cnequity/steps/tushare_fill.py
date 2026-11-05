@@ -22,6 +22,7 @@ import polars as pl
 from cnequity.adapters.tushare.client import SOURCE
 from cnequity.config import Config
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import walk_day_backfill
 
 
@@ -36,14 +37,14 @@ def backfill_missing_keys(
     floor: date,
 ) -> dict:
     """Walk ``[start, end]`` from *floor*, staging Tushare rows whose *key* the day lacks."""
-    start = getattr(config, "_backfill_start", None)
+    start = backfill_of(config).start
     if start is not None and start < floor:
         # The endpoint answers nothing earlier; asking for every older session
         # would only record a run of empty days.
         config = copy(config)
-        config._backfill_start = floor
+        set_backfill(config, start=floor)
     root = config.curated_root / dataset
-    refetch = bool(getattr(config, "_backfill_refetch", False))
+    refetch = bool(backfill_of(config).refetch)
 
     def lake_rows(first: date, last: date) -> pl.LazyFrame | None:
         if not dataset_has_parquet(root):

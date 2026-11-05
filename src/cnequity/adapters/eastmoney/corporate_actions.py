@@ -15,6 +15,7 @@ from cnequity.adapters.eastmoney.datacenter import (
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient, rate_limit_if_unconfigured
 from cnequity.config import Config
 from cnequity.domain.symbols import format_symbol, is_all_a_symbol
+from cnequity.run_scope import backfill_of
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive, begin_capture
 
 logger = logging.getLogger(__name__)
@@ -233,8 +234,8 @@ def fetch_corporate_actions_eastmoney(
     stop_after = None
     if backfill:
         date_filter = ""
-        floor = getattr(config, "_backfill_start", None) or _BACKFILL_FLOOR
-        ceiling = getattr(config, "_backfill_end", None) or trade_date
+        floor = backfill_of(config).start or _BACKFILL_FLOOR
+        ceiling = backfill_of(config).end or trade_date
 
         def stop_after(batch: list[dict]) -> bool:
             for item in reversed(batch):

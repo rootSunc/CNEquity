@@ -22,6 +22,7 @@ from cnequity.adapters.eastmoney.raw import configured_archive
 from cnequity.config import Config
 from cnequity.domain.market_time import last_closed_session, shanghai_today
 from cnequity.domain.symbols import infer_exchange_from_code
+from cnequity.run_scope import backfill_of
 from cnequity.storage.raw_archive import RawArchiveError, captured_records
 
 logger = logging.getLogger(__name__)
@@ -390,8 +391,8 @@ def fetch_northbound_holdings(
         client = EastMoneyClient(config=config)
 
     if backfill:
-        range_start = getattr(config, "_backfill_start", None)
-        range_end = getattr(config, "_backfill_end", None)
+        range_start = backfill_of(config).start
+        range_end = backfill_of(config).end
         periods = _quarter_end_dates(trade_date, start=range_start, end=range_end)
     else:
         periods = _quarter_end_dates(trade_date)

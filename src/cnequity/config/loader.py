@@ -13,6 +13,7 @@ from typing import Literal
 from cnequity.config.errors import ConfigError
 from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.domain.symbols import INGEST_UNIVERSES
+from cnequity.run_scope import BackfillWindow, set_backfill
 
 logger = logging.getLogger(__name__)
 
@@ -301,8 +302,6 @@ class Config:
     exchange_audit_turnover_tolerance_bps: float = 100.0
     exchange_audit_turnover_max_fraction: float = 0.15
     config_path: Path | None = None
-    _backfill: bool = False
-    _backfill_symbols: list[str] | None = None
     _corporate_actions_baostock_repair: bool = False
     _corporate_actions_ths_repair: bool = False
     _bse_tip_repair: bool = False
@@ -405,6 +404,11 @@ class Config:
     # Generations kept after ``cne backfill`` and ``cne run daily``. Matches
     # the existing retention count of 5. 0 keeps every generation.
     revision_keep_generations: int = 5
+    # The run's backfill window: one frozen value instead of loose
+    # ``_backfill*`` attributes. Read it with ``run_scope.backfill_of`` and
+    # change it with ``run_scope.set_backfill``. Last, so positional callers
+    # keep their argument order; hidden from repr like other runtime state.
+    backfill_window: BackfillWindow = field(default_factory=BackfillWindow, repr=False)
 
     def __post_init__(self) -> None:
         """Normalize path-like fields for programmatic configurations.
@@ -644,6 +648,58 @@ class Config:
             str(self.rate_limit_root),
             self.tdx_lock_timeout_sec,
         )
+
+    # Compatibility for code written against the loose ``_backfill*``
+    # attributes (and for ``Config(_backfill=...)``-free tests that assign
+    # them). New code uses ``run_scope.backfill_of`` / ``set_backfill``;
+    # ``tests/unit/test_backfill_window.py`` keeps src from growing new uses.
+    @property
+    def _backfill(self) -> bool:
+        return self.backfill_window.active
+
+    @_backfill.setter
+    def _backfill(self, value: bool) -> None:
+        set_backfill(self, active=value)
+
+    @property
+    def _backfill_start(self) -> date | None:
+        return self.backfill_window.start
+
+    @_backfill_start.setter
+    def _backfill_start(self, value: date | None) -> None:
+        set_backfill(self, start=value)
+
+    @property
+    def _backfill_end(self) -> date | None:
+        return self.backfill_window.end
+
+    @_backfill_end.setter
+    def _backfill_end(self, value: date | None) -> None:
+        set_backfill(self, end=value)
+
+    @property
+    def _backfill_symbols(self) -> list[str] | None:
+        return self.backfill_window.symbol_list()
+
+    @_backfill_symbols.setter
+    def _backfill_symbols(self, value: list[str] | None) -> None:
+        set_backfill(self, symbols=value)
+
+    @property
+    def _backfill_workers(self) -> int:
+        return self.backfill_window.workers
+
+    @_backfill_workers.setter
+    def _backfill_workers(self, value: int) -> None:
+        set_backfill(self, workers=value)
+
+    @property
+    def _backfill_refetch(self) -> bool:
+        return self.backfill_window.refetch
+
+    @_backfill_refetch.setter
+    def _backfill_refetch(self, value: bool) -> None:
+        set_backfill(self, refetch=value)
 
     @property
     def rate_limit_root(self) -> Path:
