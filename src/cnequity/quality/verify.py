@@ -52,6 +52,7 @@ from cnequity.query.parquet_scan import (
     scan_parquet_root,
     uses_hive_partitions,
 )
+from cnequity.storage.locator import logical_root
 from cnequity.storage.observation import freshness_mark
 
 logger = logging.getLogger(__name__)
@@ -136,8 +137,7 @@ def _effective_anchor(spec: DatasetSpec, anchor: date) -> date:
 
 
 def _dataset_root(config: Config, spec: DatasetSpec):
-    root = config.derived_root if spec.layer == "derived" else config.curated_root
-    return root / spec.name
+    return logical_root(config, spec)
 
 
 def _nonempty_day_partition_dates(root, partition_col: str) -> list[date]:

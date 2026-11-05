@@ -21,9 +21,9 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.storage.locator import layer_root
 from cnequity.storage.parquet import CuratedWriter
 from cnequity.storage.revisions import RevisionStore
 
@@ -116,7 +116,7 @@ def _publish(
     from cnequity.quality.publication import check_repair_publication
 
     store.materialize_current(dataset)
-    layer = config.derived_root if DATASETS[dataset].layer == "derived" else config.curated_root
+    layer = layer_root(config, dataset)
     writer = CuratedWriter(layer)
     changed: list[Path] = []
     emptied = 0

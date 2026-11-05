@@ -5336,6 +5336,7 @@ def _validate_planned_stock_bars(
     "daily_bars_history",
     group="backfill",
     depends_on=["instruments"],
+    outputs=("daily_bars",),
 )
 def step_daily_bars_history(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     """Backfill pre-2016 unadjusted daily bars from 同花顺.
@@ -5558,6 +5559,7 @@ def _delisted_universe(config: Config, start: date, end: date) -> list[str]:
     "daily_bars_delisted",
     group="backfill",
     depends_on=["instruments"],
+    outputs=("daily_bars",),
 )
 def step_daily_bars_delisted(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     """Recover bars for stocks that delisted inside the window.

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+
 import polars as pl
 
 from cnequity.domain.action_evidence import evidence_level_expr as _action_evidence_level
+from cnequity.domain.action_evidence import evidence_level_sql as _action_evidence_level_sql
 from cnequity.domain.action_evidence import valid_payment_expr as _valid_payment
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.domain.trading_status import evidence_rank_expr as _trading_status_evidence_rank
+from cnequity.domain.trading_status import evidence_rank_sql as _trading_status_evidence_sql
 
 _SOURCE_RANK = "__canonical_source_rank"
 _EVIDENCE_RANK = "__canonical_evidence_rank"
@@ -32,6 +37,10 @@ def canonical_policy(dataset: str) -> str:
     }.get(dataset, "observation_recency_v1")
 
 
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _source_rank_expr(dataset: str, columns: set[str]) -> pl.Expr | None:
     """Rank primary/backup sources for deterministic same-timestamp ties."""
     if "source" not in columns:
@@ -47,6 +56,101 @@ def _source_rank_expr(dataset: str, columns: set[str]) -> pl.Expr | None:
     return rank
 
 
+def source_rank_sql(dataset: str, columns: Iterable[str]) -> str | None:
+    """SQL form of :func:`_source_rank_expr` (higher wins), or ``None`` if it adds nothing."""
+    if "source" not in set(columns):
+        return None
+    spec = DATASETS.get(dataset)
+    cases: list[str] = []
+    if spec and spec.backup_source:
+        cases.append(f"WHEN source = {_sql_literal(spec.backup_source)} THEN 1")
+    if spec and spec.primary_source:
+        cases.append(f"WHEN source = {_sql_literal(spec.primary_source)} THEN 2")
+    return "CASE " + " ".join(cases) + " ELSE 0 END" if cases else None
+
+
+@dataclass(frozen=True)
+class EvidenceRule:
+    """One dataset's authority ordering, written once for both read paths.
+
+    ``polars`` receives the frame schema and ``sql`` the column names (or the
+    DuckDB ``DESCRIBE`` mapping); each returns ``None`` when the columns it
+    needs are absent, and the caller then falls back to recency. A higher
+    value wins in both forms. Keeping the pair side by side is what lets
+    ``tests/unit/test_canonical_parity.py`` hold them to the same fixtures —
+    the Python reader and the DuckDB views must never pick different rows.
+    """
+
+    polars: Callable[[pl.Schema], pl.Expr | None]
+    sql: Callable[[Iterable[str] | Mapping[str, str]], str | None]
+
+
+def _fsi_polars(schema: pl.Schema) -> pl.Expr | None:
+    if "source" not in schema:
+        return None
+    return (
+        pl.when(pl.col("source") == "cninfo_original")
+        .then(2)
+        .when(pl.col("source").fill_null("").str.contains("backfill|reconstruct|snapshot"))
+        .then(0)
+        .otherwise(1)
+    )
+
+
+def _fsi_sql(columns) -> str | None:
+    if "source" not in set(columns):
+        return None
+    return (
+        "CASE WHEN source = 'cninfo_original' THEN 2 "
+        "WHEN regexp_matches(coalesce(source, ''), 'backfill|reconstruct|snapshot') "
+        "THEN 0 ELSE 1 END"
+    )
+
+
+def _index_weight_polars(schema: pl.Schema) -> pl.Expr | None:
+    # A later membership-only observation cannot erase a real weight for this
+    # exact date. No weight is ever carried between snapshot dates.
+    return pl.col("weight").is_not_null().cast(pl.Int8) if "weight" in schema else None
+
+
+def _index_weight_sql(columns) -> str | None:
+    return "(weight IS NOT NULL)" if "weight" in set(columns) else None
+
+
+def _bar_quantity_polars(schema: pl.Schema) -> pl.Expr | None:
+    # A later whole-lot history refresh must not resurrect a rounded zero
+    # quantity after an independently published share count repaired it.
+    # Preserve unresolved rows when no better observation exists; zero
+    # amount/no-print rows and missing amounts keep normal recency rules.
+    if not {"volume", "amount"} <= set(schema.names()):
+        return None
+    return pl.when((pl.col("volume") == 0) & (pl.col("amount") > 0)).then(0).otherwise(1)
+
+
+def _bar_quantity_sql(columns) -> str | None:
+    if not {"volume", "amount"} <= set(columns):
+        return None
+    return "CASE WHEN volume = 0 AND amount > 0 THEN 0 ELSE 1 END"
+
+
+EVIDENCE_RULES: dict[str, EvidenceRule] = {
+    "trading_status": EvidenceRule(_trading_status_evidence_rank, _trading_status_evidence_sql),
+    "corporate_actions": EvidenceRule(
+        lambda schema: _action_evidence_level(set(schema.names())),
+        lambda columns: _action_evidence_level_sql(set(columns)),
+    ),
+    "financial_statement_items": EvidenceRule(_fsi_polars, _fsi_sql),
+    "index_constituents": EvidenceRule(_index_weight_polars, _index_weight_sql),
+    "daily_bars": EvidenceRule(_bar_quantity_polars, _bar_quantity_sql),
+}
+
+
+def evidence_rank_sql(dataset: str, columns: Iterable[str] | Mapping[str, str]) -> str | None:
+    """SQL authority ordering for *dataset* (higher wins), or ``None``."""
+    rule = EVIDENCE_RULES.get(dataset)
+    return rule.sql(columns) if rule is not None else None
+
+
 def _evidence_rank_expr(dataset: str, schema) -> pl.Expr | None:
     """Authority ordering that outranks recency, for datasets that need one.
 
@@ -58,29 +162,12 @@ def _evidence_rank_expr(dataset: str, schema) -> pl.Expr | None:
     is the other: a vendor sweep must not displace a row an issuer notice or a
     reported payment date already settled (``domain/action_evidence``).
     """
-    if dataset == "trading_status":
-        return _trading_status_evidence_rank(schema)
-    if dataset == "corporate_actions":
-        return _action_evidence_level(set(schema.names()))
-    if dataset == "financial_statement_items" and "source" in schema:
-        return (
-            pl.when(pl.col("source") == "cninfo_original")
-            .then(2)
-            .when(pl.col("source").fill_null("").str.contains("backfill|reconstruct|snapshot"))
-            .then(0)
-            .otherwise(1)
-        )
-    if dataset == "index_constituents" and "weight" in schema:
-        # A later membership-only observation cannot erase a real weight for
-        # this exact date. No weight is ever carried between snapshot dates.
-        return pl.col("weight").is_not_null().cast(pl.Int8)
-    if dataset == "daily_bars" and {"volume", "amount"} <= set(schema.names()):
-        # A later whole-lot history refresh must not resurrect a rounded zero
-        # quantity after an independently published share count repaired it.
-        # Preserve unresolved rows when no better observation exists; zero
-        # amount/no-print rows and missing amounts keep normal recency rules.
-        return pl.when((pl.col("volume") == 0) & (pl.col("amount") > 0)).then(0).otherwise(1)
-    return None
+    rule = EVIDENCE_RULES.get(dataset)
+    if rule is None:
+        return None
+    if not isinstance(schema, pl.Schema):
+        schema = pl.Schema(schema)
+    return rule.polars(schema)
 
 
 def _sort_for_canonical(frame, dataset: str):

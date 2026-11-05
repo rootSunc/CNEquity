@@ -19,6 +19,7 @@ from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS
 from cnequity.quality.factor_policy import advisory_factor_findings, factor_advisory
 from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.locator import layer_root, logical_root
 from cnequity.storage.read_context import read_root
 
 # These checks describe absent observations, rather than contradictions in
@@ -348,9 +349,7 @@ def evaluate_publication(
             for name, spec in DATASETS.items():
                 source = read_root(config, name)
                 if source.is_dir():
-                    target = (
-                        view.derived_root if spec.layer == "derived" else view.curated_root
-                    ) / name
+                    target = logical_root(view, spec)
                     shutil.copytree(source, target, copy_function=_link_read_only)
             # Isolate every metadata write performed by audit helpers. No
             # pointers are copied: they would resolve back to published data.
@@ -381,9 +380,7 @@ def evaluate_publication(
             guard_actions = "corporate_actions" in candidates and bool(repair_symbols)
             actions_before = _repair_actions(view, repair_symbols) if guard_actions else None
             for name, source in candidates.items():
-                layer = (
-                    view.derived_root if DATASETS[name].layer == "derived" else view.curated_root
-                )
+                layer = layer_root(view, name)
                 target = layer / name
                 if target.exists():
                     shutil.rmtree(target)
@@ -475,7 +472,7 @@ def check_repair_publication(
     """Require a clean candidate comparison before an offline repair commits."""
     from cnequity.storage.revisions import RevisionStore
 
-    layer = config.derived_root if DATASETS[dataset].layer == "derived" else config.curated_root
+    layer = layer_root(config, dataset)
     candidate = layer / dataset
     report = evaluate_publication(
         replace(config, publication_gate="block"),

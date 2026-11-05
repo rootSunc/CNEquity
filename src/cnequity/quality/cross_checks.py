@@ -19,11 +19,11 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
 from cnequity.adapters.eastmoney.corporate_actions import EASTMONEY_BACKFILL_FLOOR
 from cnequity.adapters.exchange.st_lists import is_st_name
 from cnequity.config import Config
 from cnequity.domain.action_sessions import effective_session
+from cnequity.domain.holidays_cn import CLOSED_DATES
 from cnequity.domain.symbols import parse_symbol
 from cnequity.domain.trading_status import not_trading_expr, risk_warning_expr
 from cnequity.quality.ex_events import (
@@ -37,6 +37,7 @@ from cnequity.query.parquet_scan import (
     list_partitions,
     scan_parquet_root,
 )
+from cnequity.storage.locator import logical_root
 
 _SAMPLE = 8
 # Flag when valuation covers less than this share of symbols with bars that day.
@@ -226,7 +227,7 @@ def trading_calendar_horizon_findings(config: Config, trade_date: date) -> list[
     final holiday of a year is followed by weekdays that are real sessions.
     """
     from cnequity.adapters.calendar.exchange_calendar import calendar_seed_end
-    from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
+    from cnequity.domain.holidays_cn import CLOSED_DATES
 
     cal_root = config.curated_root / "trading_calendar"
     if not dataset_has_parquet(cal_root) or not CLOSED_DATES:
@@ -258,7 +259,7 @@ def trading_calendar_horizon_findings(config: Config, trade_date: date) -> list[
                 f"calendar marks trading days through {last_written.isoformat()} but the "
                 f"bundled holiday table ends {table_end.isoformat()}; dates past it only "
                 "drop weekends, so public holidays are marked as sessions — refresh "
-                "adapters/calendar/holidays_cn.py and the seed CSV"
+                "domain/holidays_cn.py and the seed CSV"
             ),
             "calendar_last_trading_day": last_written.isoformat(),
             "holiday_table_end": table_end.isoformat(),
@@ -3096,7 +3097,7 @@ def undeclared_source_findings(
     for name, spec in sorted(DATASETS.items()):
         if datasets is not None and name not in datasets:
             continue
-        root = (config.derived_root if spec.layer == "derived" else config.curated_root) / name
+        root = logical_root(config, spec)
         if not dataset_has_parquet(root):
             continue
         try:

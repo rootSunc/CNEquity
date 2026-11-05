@@ -26,6 +26,7 @@ from cnequity.domain.datasets import DATASETS
 from cnequity.domain.pit import normalize_pit_storage_columns
 from cnequity.domain.schemas import sanitize_dataset_rows, validate_dataframe
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.storage.locator import layer_root
 from cnequity.storage.parquet import (
     MERGED_FILE,
     _business_equal,
@@ -134,7 +135,7 @@ def _merge_locked(config: Config, dataset: str, *, apply: bool, min_files: int) 
     base = store.current_root(dataset)
     assert base is not None
     store.materialize_current(dataset)
-    layer = config.derived_root if spec.layer == "derived" else config.curated_root
+    layer = layer_root(config, spec)
     root = layer / dataset
     load = _load(dataset, spec.layer)
     name = merged_name(dataset)

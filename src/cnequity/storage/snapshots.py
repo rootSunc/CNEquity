@@ -33,6 +33,7 @@ from cnequity.storage.atomic import (
     write_json_atomic,
     write_parquet_atomic,
 )
+from cnequity.storage.locator import layer_root, logical_root
 from cnequity.storage.provenance import runtime_lineage
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
 from cnequity.storage.revisions import resolve_committed_root
@@ -1061,8 +1062,8 @@ class SnapshotStore:
         # boundary.
         _reject_symlink_path(self.config.data_root, label="data root")
         _reject_symlink_path(self.config.meta_root, label="metadata root")
-        base = self.config.derived_root if spec.layer == "derived" else self.config.curated_root
-        logical = base / dataset
+        base = layer_root(self.config, spec)
+        logical = logical_root(self.config, spec)
         _reject_symlink_path(base, label="lake source root")
         _reject_symlink_path(logical, label="dataset root")
         return spec.layer, resolve_committed_root(

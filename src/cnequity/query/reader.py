@@ -46,6 +46,7 @@ from cnequity.query.parquet_scan import (
     scan_parquet_root,
 )
 from cnequity.query.universe import apply_universe_filter
+from cnequity.storage.locator import logical_root
 from cnequity.storage.read_context import ReadContext
 
 logger = logging.getLogger(__name__)
@@ -1373,7 +1374,7 @@ def list_datasets(
     rows = []
     for name, spec in sorted(DATASETS.items()):
         state_payload = state.get_payload(name)
-        root = (cfg.derived_root if spec.layer == "derived" else cfg.curated_root) / name
+        root = logical_root(cfg, spec)
         has_data = dataset_has_parquet(
             root,
             dataset=name,

@@ -8,6 +8,7 @@ from pathlib import Path
 from cnequity.domain.datasets import DATASETS
 from cnequity.i18n import _
 from cnequity.serve.ops.catalog import OpsError
+from cnequity.storage.locator import layer_root
 from cnequity.storage.snapshots import SnapshotStore, _reject_symlink_path
 
 
@@ -47,7 +48,7 @@ def stored_datasets(config) -> list[str]:
 
     result = []
     for name, spec in DATASETS.items():
-        base = config.derived_root if spec.layer == "derived" else config.curated_root
+        base = layer_root(config, spec)
         try:
             path = resolve_committed_root(base / name, dataset=name, meta_root=config.meta_root)
         except (OSError, ValueError, RuntimeError):

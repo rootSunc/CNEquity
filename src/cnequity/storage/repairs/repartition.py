@@ -31,6 +31,7 @@ from cnequity.domain.schemas import PRIMARY_KEYS, sanitize_dataset_rows, validat
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import list_partitions
 from cnequity.storage.atomic import swap_with_backup, write_parquet_atomic
+from cnequity.storage.locator import logical_root
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +73,13 @@ def _has_sanitizable_rows(dataset: str, files: list[Path]) -> bool:
             continue
         predicate = pl.col("trade_date").dt.weekday() > 5
         if dataset in {"daily_bars", "index_bars"}:
-            from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
+            from cnequity.domain.holidays_cn import CLOSED_DATES
 
             predicate |= pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
         if dataset == "trading_calendar":
             if "is_trading" not in scan.collect_schema().names():
                 continue
-            from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
+            from cnequity.domain.holidays_cn import CLOSED_DATES
 
             predicate |= pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
             predicate &= pl.col("is_trading")
@@ -115,7 +116,7 @@ def _repartition_dataset_locked(
     if spec.partition_col is None:
         raise RepartitionError(f"{dataset} is merge-style (single file); nothing to repartition")
 
-    root = (config.derived_root if spec.layer == "derived" else config.curated_root) / dataset
+    root = logical_root(config, spec)
     partitions = list_partitions(root, spec.partition_col)
     if not partitions:
         raise RepartitionError(f"no partitions under {root}")
@@ -243,7 +244,7 @@ def repartition_candidates(config: Config) -> list[str]:
     for name, spec in sorted(DATASETS.items()):
         if spec.partition_col is None:
             continue
-        root = (config.derived_root if spec.layer == "derived" else config.curated_root) / name
+        root = logical_root(config, spec)
         parts = list_partitions(root, spec.partition_col)
         if not parts:
             continue

@@ -35,6 +35,7 @@ from cnequity.i18n import N_, _, localize
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.quality.audit import run_audit
 from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.locator import logical_root
 
 
 def _gate_groups(raw: str | None) -> set[str] | None:
@@ -653,8 +654,7 @@ def _datasets_with_data(cfg) -> list[str]:
 
     out = []
     for name, spec in DATASETS.items():
-        root = cfg.derived_root if spec.layer == "derived" else cfg.curated_root
-        if dataset_has_parquet(root / name):
+        if dataset_has_parquet(logical_root(cfg, spec)):
             out.append(name)
     return sorted(out)
 

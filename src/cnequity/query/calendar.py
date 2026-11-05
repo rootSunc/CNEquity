@@ -7,8 +7,8 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
 from cnequity.config import Config
+from cnequity.domain.holidays_cn import CLOSED_DATES
 from cnequity.storage.read_context import read_root
 
 logger = logging.getLogger(__name__)

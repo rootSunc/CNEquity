@@ -62,6 +62,7 @@ from cnequity.domain.partitions import granularity_of, parse_partition
 from cnequity.file_lock import LockUnavailable, exclusive_lock
 from cnequity.query.parquet_scan import list_partitions, partition_dir
 from cnequity.storage.atomic import write_json_atomic, write_parquet_atomic
+from cnequity.storage.locator import logical_root
 
 PARTITION_STATS_FILE = "partition_stats.parquet"
 PROVENANCE_STATS_FILE = "provenance_stats.parquet"
@@ -145,8 +146,7 @@ def summary_path(config: Config) -> Path:
 
 
 def dataset_root(config: Config, spec: DatasetSpec) -> Path:
-    base = config.derived_root if spec.layer == "derived" else config.curated_root
-    return base / spec.name
+    return logical_root(config, spec)
 
 
 def _partition_of(file_path: str, partition_col: str | None) -> str | None:

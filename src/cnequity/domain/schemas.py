@@ -1635,7 +1635,7 @@ def sanitize_dataset_rows(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
         and "trade_date" in df.columns
         and df.schema["trade_date"] == pl.Date
     ):
-        from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
+        from cnequity.domain.holidays_cn import CLOSED_DATES
 
         # SSE/SZSE sessions are Monday-Friday. Historical source payloads also
         # contain a small set of known holiday rows; retaining them contaminates
@@ -1650,7 +1650,7 @@ def sanitize_dataset_rows(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
         and "is_trading" in df.columns
         and df.schema["trade_date"] == pl.Date
     ):
-        from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
+        from cnequity.domain.holidays_cn import CLOSED_DATES
 
         return df.with_columns(
             (

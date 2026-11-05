@@ -13,7 +13,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from cnequity.config import Config
-from cnequity.domain.datasets import DATASETS
+from cnequity.storage.locator import logical_root
 from cnequity.storage.revisions import resolve_committed_root
 
 
@@ -30,11 +30,8 @@ class ReadContext:
     ) -> ReadContext:
         roots = {}
         for dataset in sorted(set(datasets)):
-            layer = (
-                config.derived_root if DATASETS[dataset].layer == "derived" else config.curated_root
-            )
             roots[dataset] = resolve_committed_root(
-                layer / dataset,
+                logical_root(config, dataset),
                 dataset=dataset,
                 meta_root=config.meta_root,
                 revision=revisions.get(dataset),
@@ -48,5 +45,6 @@ def read_root(config: Config, dataset: str, context: ReadContext | None = None) 
         # A missing dependency is a programming error, never permission to
         # silently fall back to a newer generation halfway through a query.
         return context.roots[dataset]
-    layer = config.derived_root if DATASETS[dataset].layer == "derived" else config.curated_root
-    return resolve_committed_root(layer / dataset, dataset=dataset, meta_root=config.meta_root)
+    return resolve_committed_root(
+        logical_root(config, dataset), dataset=dataset, meta_root=config.meta_root
+    )

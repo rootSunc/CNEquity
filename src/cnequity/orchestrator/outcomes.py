@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 RESULT_SCHEMA_VERSION = 2
 EXECUTION_STATUSES = frozenset(
@@ -18,6 +18,57 @@ TERMINAL_EXECUTION_STATUSES = frozenset({"completed", "skipped", "failed", "inte
 SOURCE_LIMIT_REASONS = frozenset(
     {"source_transient", "source_unavailable", "capability_limit", "source_payload_invalid"}
 )
+
+
+#: Step result keys that report scope the step could not cover. Any truthy
+#: value turns a ``success`` into a ``warning``. Listed explicitly so that a new
+#: key is a decision rather than an accident of its spelling: the engine used
+#: to recognise these by the ``failed`` prefix alone, which also caught any key
+#: that merely happened to start with it. A ``failed*`` key that is not listed
+#: is still treated as a partial failure (the safe reading) and logged, and
+#: ``tests/unit/test_step_result_contract.py`` keeps this list complete.
+PARTIAL_FAILURE_KEYS = frozenset(
+    {
+        "failed",
+        "failed_days",
+        "failed_indices",
+        "failed_passes",
+        "failed_requests",
+        "failed_scopes",
+        "failed_sectors",
+        "failed_symbol_days",
+        "failed_symbol_names",
+        "failed_symbols",
+        "failed_tasks",
+        "aborted",
+        "empty_days",
+        "days_empty",
+    }
+)
+#: Result flags that, when explicitly ``False``, mark a resumable sweep as
+#: incomplete.
+COMPLETION_FLAGS = frozenset({"complete", "coverage_complete"})
+
+
+class StepResult(TypedDict, total=False):
+    """The mapping a registered step returns to the engine.
+
+    Every key is optional; the engine fills defaults. Steps may add their own
+    diagnostic keys, which the engine passes through to the run record.
+    """
+
+    status: str  # success | warning | failed | skipped | blocked | degraded
+    rows_read: int
+    rows_written: int
+    dataset: str  # physical dataset, when it differs from the receipt key
+    reason_code: str | None
+    coverage_status: str  # see COVERAGE_STATUSES
+    usable_result: bool
+    batch_settled: bool  # work done although the result warns (see engine)
+    metrics: dict[str, Any]
+    context_updates: dict[str, Any]
+    # Partial-failure keys (PARTIAL_FAILURE_KEYS) and completion flags
+    # (COMPLETION_FLAGS) are read by the engine as well.
 
 
 class SourceUnavailableError(RuntimeError):

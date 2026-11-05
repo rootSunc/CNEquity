@@ -13,14 +13,14 @@ import duckdb
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.domain.action_evidence import evidence_level_sql
-from cnequity.domain.canonical import OFFICIAL_INDEX_SOURCES
+from cnequity.domain.canonical import OFFICIAL_INDEX_SOURCES, source_rank_sql
+from cnequity.domain.canonical import evidence_rank_sql as canonical_evidence_sql
 from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.domain.market_profile import OTC_SCOPED_DATASETS, otc_quote_sql
 from cnequity.domain.partitions import uses_hive
 from cnequity.domain.schemas import DATASET_SCHEMAS, OPTIONAL_COLUMNS, PRIMARY_KEYS
-from cnequity.domain.trading_status import evidence_rank_sql
 from cnequity.storage.atomic import replace_with_retry
+from cnequity.storage.locator import layer_name, logical_root
 from cnequity.storage.revisions import resolve_committed_root
 
 logger = logging.getLogger(__name__)
@@ -57,8 +57,7 @@ def _view_glob(data_root: str, spec: DatasetSpec) -> tuple[str, bool]:
     # *data_root* is always POSIX-form (see ensure_duckdb_views): DuckDB's
     # read_parquet glob accepts `/` on every platform, and backslashes would
     # either escape the SQL string or fail to match files on Windows.
-    layer_dir = "derived" if spec.layer == "derived" else "curated"
-    logical = Path(data_root) / layer_dir / spec.name
+    logical = Path(data_root) / layer_name(spec) / spec.name
     # DuckDB views are another public read path. Resolve the pointer before
     # constructing the glob so a refresh that rewrites several partitions
     # never leaves a view over a mixed mutable layout.
@@ -105,8 +104,7 @@ def view_read_roots(config: Config) -> list[Path]:
     for name, spec in sorted(DATASETS.items()):
         if (meta / name / "current.json").is_file():
             continue
-        layer_dir = "derived" if spec.layer == "derived" else "curated"
-        roots.append(root / layer_dir / name)
+        roots.append(root / layer_name(spec) / name)
     return roots
 
 
@@ -125,39 +123,20 @@ def _sql_literal(value: str) -> str:
 def _canonical_order_sql(name: str, columns: set[str] | dict[str, str]) -> str:
     """Return the DuckDB ordering used to select one canonical lake row.
 
-    Mirrors :func:`cnequity.domain.canonical.dedupe_by_primary_key`, including
-    the datasets whose evidence class outranks recency.
+    Mirrors :func:`cnequity.domain.canonical.dedupe_by_primary_key`. The
+    datasets whose evidence class outranks recency take their SQL from the
+    same ``EVIDENCE_RULES`` entry as the Polars reader.
     """
     order_by: list[str] = []
-    if name == "trading_status":
-        evidence = evidence_rank_sql(columns)
-        if evidence is not None:
-            order_by.append(f"{evidence} DESC")
-    elif name == "corporate_actions":
-        evidence = evidence_level_sql(set(columns))
-        if evidence is not None:
-            order_by.append(f"{evidence} DESC")
-    elif name == "financial_statement_items" and "source" in columns:
-        order_by.append(
-            "CASE WHEN source = 'cninfo_original' THEN 2 "
-            "WHEN regexp_matches(coalesce(source, ''), 'backfill|reconstruct|snapshot') "
-            "THEN 0 ELSE 1 END DESC"
-        )
-    elif name == "index_constituents" and "weight" in columns:
-        order_by.append("(weight IS NOT NULL) DESC")
-    elif name == "daily_bars" and {"volume", "amount"} <= set(columns):
-        order_by.append("CASE WHEN volume = 0 AND amount > 0 THEN 0 ELSE 1 END DESC")
+    evidence = canonical_evidence_sql(name, columns)
+    if evidence is not None:
+        order_by.append(f"{evidence} DESC")
     if "fetched_at" in columns:
         order_by.append("fetched_at DESC NULLS LAST")
     if "source" in columns:
-        spec = DATASETS.get(name)
-        cases: list[str] = []
-        if spec and spec.backup_source:
-            cases.append(f"WHEN source = {_sql_literal(spec.backup_source)} THEN 1")
-        if spec and spec.primary_source:
-            cases.append(f"WHEN source = {_sql_literal(spec.primary_source)} THEN 2")
-        if cases:
-            order_by.append("CASE " + " ".join(cases) + " ELSE 0 END DESC")
+        rank = source_rank_sql(name, columns)
+        if rank is not None:
+            order_by.append(f"{rank} DESC")
         order_by.append("source DESC NULLS LAST")
     if "data_version" in columns:
         order_by.append("data_version DESC NULLS LAST")
@@ -233,13 +212,29 @@ def _view_select_sql(
                 ) = 1
             )
         """
-    canonical = (
-        "SELECT * FROM "
-        f"{source} "
-        "QUALIFY ROW_NUMBER() OVER ("
-        f"PARTITION BY {partition_by} ORDER BY {order_by}"
-        ") = 1"
-    )
+    if "pre_close" in set(columns or ()):
+        # Mirrors domain/canonical._retain_pre_close: a K-line refresh that
+        # wins the key but carries no previous close keeps the latest one an
+        # earlier observation published. Descending order reverses Python's
+        # ascending forward-fill, so the frame looks forward from the winner.
+        canonical = (
+            "SELECT * EXCLUDE (__pre_close) REPLACE (__pre_close AS pre_close) FROM ("
+            "SELECT *, first_value(pre_close IGNORE NULLS) OVER ("
+            f"PARTITION BY {partition_by} ORDER BY {order_by} "
+            "ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS __pre_close "
+            f"FROM {source} "
+            "QUALIFY ROW_NUMBER() OVER ("
+            f"PARTITION BY {partition_by} ORDER BY {order_by}"
+            ") = 1)"
+        )
+    else:
+        canonical = (
+            "SELECT * FROM "
+            f"{source} "
+            "QUALIFY ROW_NUMBER() OVER ("
+            f"PARTITION BY {partition_by} ORDER BY {order_by}"
+            ") = 1"
+        )
     if name == "index_constituents" and {"source", "index_symbol", "as_of_date"} <= set(
         columns or ()
     ):
@@ -310,8 +305,7 @@ def _views_inputs(config: Config, *, require_data: bool) -> dict:
         if pointer.is_file():
             digest.update(pointer.read_bytes())
         else:
-            layer = config.derived_root if spec.layer == "derived" else config.curated_root
-            root = layer / name
+            root = logical_root(config, spec)
             if root.is_dir():
                 for path in sorted(root.rglob("*.parquet")):
                     info = path.stat()

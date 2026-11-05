@@ -1057,6 +1057,7 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
     parallelizable=False,
     depends_on=["daily_bars", "compact"],
     input_datasets=("daily_bars",),
+    outputs=("adj_factors",),
 )
 def step_derive_adj_factors(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     from cnequity.derive.adj_factors import AdjFactorsDeriveError, compute_adj_factors
@@ -1224,6 +1225,7 @@ def _fill_traded_status(config: Config, trade_date: date) -> dict | None:
     group="finalize",
     parallelizable=False,
     depends_on=["compact"],
+    outputs=("futures_continuous",),
 )
 def step_derive_futures_continuous(
     config: Config, trade_date: date, run_id: str, context: dict
@@ -1262,6 +1264,7 @@ def step_derive_futures_continuous(
     group="finalize",
     parallelizable=False,
     depends_on=["compact"],
+    outputs=("option_greeks",),
 )
 def step_derive_option_greeks(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     """The lake's own IV and Greeks for new option settlements."""
@@ -1299,6 +1302,7 @@ def step_derive_option_greeks(config: Config, trade_date: date, run_id: str, con
     parallelizable=False,
     depends_on=["derive_adj_factors"],
     input_datasets=("daily_bars", "industry_members"),
+    outputs=("industry_index",),
 )
 def step_derive_industry_index(
     config: Config, trade_date: date, run_id: str, context: dict

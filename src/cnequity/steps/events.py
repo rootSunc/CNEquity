@@ -1854,6 +1854,7 @@ _SWEEP_CHUNK = 200
     "corporate_actions_sweep",
     group="actions_sweep",
     depends_on=["instruments"],
+    outputs=("corporate_actions",),
     description="Re-read every symbol's TDX ex-rights records for the last month",
 )
 def step_corporate_actions_sweep(

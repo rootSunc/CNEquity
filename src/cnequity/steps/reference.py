@@ -1501,6 +1501,7 @@ DERIVE_TAIL_DAYS = 90
     group="core",
     depends_on=["daily_bars"],
     input_datasets=("daily_bars", "instruments", "trading_calendar"),
+    outputs=("trading_status",),
 )
 def step_trading_status_derive(
     config: Config, trade_date: date, run_id: str, context: dict

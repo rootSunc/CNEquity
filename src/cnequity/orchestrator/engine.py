@@ -19,7 +19,11 @@ from cnequity.domain.market_time import shanghai_today
 from cnequity.domain.request_meter import request_meter_scope
 from cnequity.i18n import N_, NP_, Message
 from cnequity.orchestrator.backfill_scope import capture_backfill_scope, restore_backfill_scope
-from cnequity.orchestrator.deps import step_execution_levels, validate_steps_registered
+from cnequity.orchestrator.deps import (
+    committed_reads_in_run,
+    step_execution_levels,
+    validate_steps_registered,
+)
 from cnequity.orchestrator.init_phases import (
     FACTOR_PREFETCH_PHASES,
     FACTOR_PREFETCH_STOP_PHASE,
@@ -43,6 +47,8 @@ from cnequity.orchestrator.init_phases import (
 from cnequity.orchestrator.init_phases import expected_steps as init_expected_steps
 from cnequity.orchestrator.manifest import QUEUED_BATCH_STATUS, Manifest
 from cnequity.orchestrator.outcomes import (
+    COMPLETION_FLAGS,
+    PARTIAL_FAILURE_KEYS,
     SOURCE_LIMIT_REASONS,
     CapabilityLimitError,
     InputUnavailableError,
@@ -50,7 +56,7 @@ from cnequity.orchestrator.outcomes import (
     result_is_usable,
     step_outcome,
 )
-from cnequity.orchestrator.registry import get_step
+from cnequity.orchestrator.registry import get_step, receipt_dataset
 from cnequity.orchestrator.run_lock import (
     DAILY_INGESTION_LOCK,
     EVENTS_INGESTION_LOCK,
@@ -99,14 +105,23 @@ def _has_partial_failures(result: dict[str, Any]) -> bool:
     being recorded as successful merely because it staged some rows.  Some
     resumable sweeps instead expose an explicit ``complete`` flag, so a false
     completion flag must use the same warning path.
+
+    The recognised keys are ``outcomes.PARTIAL_FAILURE_KEYS`` and
+    ``outcomes.COMPLETION_FLAGS``. An unlisted ``failed*`` key is still read
+    as a partial failure, as the prefix rule always did, but it is logged so
+    the contract list can be brought up to date.
     """
     for key, value in result.items():
-        if key in {"complete", "coverage_complete"}:
+        if key in COMPLETION_FLAGS:
             if value is False:
                 return True
             continue
-        if not (key.startswith("failed") or key in {"aborted", "empty_days", "days_empty"}):
-            continue
+        if key not in PARTIAL_FAILURE_KEYS:
+            if not key.startswith("failed"):
+                continue
+            logger.warning(
+                "step result key %r is not in PARTIAL_FAILURE_KEYS; treating it as one", key
+            )
         if isinstance(value, bool):
             if value:
                 return True
@@ -235,6 +250,13 @@ class JobEngine:
             wave_list = [WaveConfig(name="targeted", parallel=True, steps=steps)]
         all_steps = [name for wave in wave_list for name in wave.steps]
         validate_steps_registered(all_steps)
+        for consumer, dataset, producer in committed_reads_in_run(list(dict.fromkeys(all_steps))):
+            logger.info(
+                "Plan: %s reads committed %s; this run's %s rows reach it only after compact",
+                consumer,
+                dataset,
+                producer,
+            )
 
         metadata = {"trade_date": trade_date.isoformat(), "backfill": backfill}
         if backfill:
@@ -464,12 +486,7 @@ class JobEngine:
         explicit = out.get("dataset")
         if isinstance(explicit, str) and explicit:
             return explicit
-        return {
-            "derive_adj_factors": "adj_factors",
-            "derive_industry_index": "industry_index",
-            "derive_futures_continuous": "futures_continuous",
-            "derive_option_greeks": "option_greeks",
-        }.get(name, name)
+        return receipt_dataset(name)
 
     # These steps write their own dataset receipt (in ``steps/finalize.py``)
     # with finer detail than the engine has here — partial-fetch ratios and

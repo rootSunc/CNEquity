@@ -81,6 +81,42 @@ def _finalize_execution_levels(finalize_steps: list[str]) -> list[list[str]]:
     return levels
 
 
+def _deferred_steps(step_names: list[str]) -> set[str]:
+    """Finalize-group steps and everything downstream of them in *step_names*."""
+    deferred = {n for n in step_names if get_step(n).group in FINALIZE_STEP_GROUPS}
+    while True:
+        downstream = {n for n in step_names if set(get_step(n).depends_on) & deferred}
+        if downstream <= deferred:
+            return deferred
+        deferred.update(downstream)
+
+
+def committed_reads_in_run(step_names: list[str]) -> list[tuple[str, str, str]]:
+    """``(consumer, dataset, producer)`` where a step reads last run's generation.
+
+    ``input_datasets`` are read from the *committed* lake. When the step that
+    writes such a dataset runs in the same run, before ``compact``, the
+    consumer sees the previous generation, not this run's rows. That is
+    sometimes the intent (``trading_status_derive`` cannot see a halt on the
+    newest session either way) and sometimes a surprise, and ``depends_on``
+    alone does not say which: it orders the steps, it does not publish
+    anything. This makes the situation visible; it changes no plan.
+    """
+    validate_steps_registered(step_names)
+    deferred = _deferred_steps(step_names)
+    found: list[tuple[str, str, str]] = []
+    for consumer in step_names:
+        if consumer in deferred:
+            continue  # runs after compact: sees this run's publication
+        for dataset in get_step(consumer).input_datasets:
+            for producer in step_names:
+                if producer == consumer or producer in deferred:
+                    continue
+                if dataset in get_step(producer).outputs:
+                    found.append((consumer, dataset, producer))
+    return found
+
+
 def step_execution_levels(step_names: list[str]) -> list[list[str]]:
     """Group steps into dependency levels that may run in parallel within each level.
 
@@ -95,14 +131,9 @@ def step_execution_levels(step_names: list[str]) -> list[list[str]]:
     validate_steps_registered(step_names)
 
     names_set = set(step_names)
-    deferred = {n for n in step_names if get_step(n).group in FINALIZE_STEP_GROUPS}
     # A core step may consume compacted data. Defer its transitive dependents
     # as well instead of treating the fetch/finalize boundary as a cycle.
-    while True:
-        downstream = {n for n in step_names if set(get_step(n).depends_on) & deferred}
-        if downstream <= deferred:
-            break
-        deferred.update(downstream)
+    deferred = _deferred_steps(step_names)
     fetch_steps = [n for n in step_names if n not in deferred]
     finalize_steps = [n for n in step_names if n in deferred]
 

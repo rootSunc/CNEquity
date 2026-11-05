@@ -33,6 +33,7 @@ from cnequity.domain.pit import PIT_DATASET_NAMES
 from cnequity.domain.schemas import PRIMARY_KEYS, sanitize_dataset_rows, validate_dataframe
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.atomic import write_json_atomic, write_parquet_atomic
+from cnequity.storage.locator import layer_root
 from cnequity.storage.parquet import CuratedWriter, _partition_values
 from cnequity.storage.revisions import RevisionStore, _partition_of, layout_violations
 
@@ -156,7 +157,7 @@ def _repair_locked(config: Config, dataset: str, *, apply: bool) -> dict:
             partition_files.setdefault(_partition_of(rel), []).append(path)
 
     run_id = f"layout-repair-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
-    layer = config.derived_root if spec.layer == "derived" else config.curated_root
+    layer = layer_root(config, spec)
     writer = CuratedWriter(layer)
     if apply:
         # Seed the mutable tree from the committed base; only the target

@@ -12,9 +12,9 @@ from cnequity.adapters.calendar.exchange_calendar import (
     calendar_forward_coverage_days,
     calendar_seed_end,
 )
-from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
 from cnequity.config import Config
 from cnequity.domain.datasets import PARTITION_COLS, curated_dataset_names, is_dataset_enabled
+from cnequity.domain.holidays_cn import CLOSED_DATES
 from cnequity.domain.market_time import is_session_final
 from cnequity.quality.authority_checks import run_authority_checks
 from cnequity.quality.bar_finality import daily_bar_finality_findings

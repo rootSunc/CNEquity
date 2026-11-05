@@ -1995,7 +1995,7 @@ def staleness_counts_trading_sessions(dataset: str) -> bool:
 
 
 def _is_exchange_session(day: date) -> bool:
-    from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES, EXTRA_TRADING_DATES
+    from cnequity.domain.holidays_cn import CLOSED_DATES, EXTRA_TRADING_DATES
 
     iso = day.isoformat()
     if iso in EXTRA_TRADING_DATES:

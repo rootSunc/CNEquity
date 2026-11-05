@@ -10,7 +10,7 @@ from pathlib import Path
 
 import polars as pl
 
-from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES, EXTRA_TRADING_DATES
+from cnequity.domain.holidays_cn import CLOSED_DATES, EXTRA_TRADING_DATES
 
 logger = logging.getLogger(__name__)
 
