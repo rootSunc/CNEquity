@@ -322,8 +322,11 @@ def ensure_duckdb_views(config: Config, *, require_data: bool = False, force: bo
     Built beside the target and swapped in with one rename, so a DuckDB
     session or notebook holding the previous file keeps reading it and nothing
     here ever waits for, or fights over, that file's lock. Where the rename is
-    refused (Windows, while the file is open) the previous views stay: they
-    read Parquet by glob, so they still see every new partition.
+    refused (Windows, while the file is open) the previous views stay. Each
+    view globs the committed generation that was current when it was built,
+    so a stale view keeps returning that older generation rather than new
+    partitions, and fails once revision retention removes it; the next
+    successful rebuild points it at the current generation again.
 
     Skipped when nothing it is built from has changed since the last build
     (see `_views_inputs`), unless *force*.

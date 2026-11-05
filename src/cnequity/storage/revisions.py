@@ -1184,12 +1184,10 @@ def resolve_committed_root(
     name = dataset or logical.name
     if meta_root is None:
         # ``.../curated/<dataset>`` and ``.../derived/<dataset>`` are the two
-        # supported logical layouts.  A caller can pass meta_root explicitly
-        # for a custom root or a test fixture.
-        if logical.parent.name in {"curated", "derived"}:
-            meta = logical.parent.parent / "meta"
-        else:
-            meta = logical.parent.parent / "meta"
+        # supported logical layouts, and any other ``<root>/<layer>/<dataset>``
+        # resolves the same way: meta sits beside the layer directory. A caller
+        # can pass meta_root explicitly for a custom root or a test fixture.
+        meta = logical.parent.parent / "meta"
     else:
         # Preserve the lexical path until RevisionStore performs its lstat
         # boundary check.  Resolving first would turn a user-controlled
