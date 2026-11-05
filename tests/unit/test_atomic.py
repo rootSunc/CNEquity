@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
@@ -184,3 +185,46 @@ def test_swap_with_backup_names_the_backup_when_restore_also_fails(tmp_path, mon
     with pytest.raises(atomic_mod.RollbackIncompleteError, match=re.escape(str(backup))):
         atomic_mod.swap_with_backup(staged, target, backup)
     assert (backup / "part.parquet").read_text(encoding="utf-8") == "old"
+
+
+def _no_hard_links(monkeypatch, err=errno.ENOTSUP):
+    def refuse(src, dst):
+        raise OSError(err, "Operation not supported", str(src), None, str(dst))
+
+    monkeypatch.setattr(atomic_mod.os, "link", refuse)
+
+
+def test_raw_archive_writes_payloads_where_hard_links_are_unsupported(tmp_path, monkeypatch):
+    """exFAT/FAT and some network shares refuse ``link()`` with ENOTSUP."""
+    from cnequity.storage.raw_archive import RawPayloadArchive
+
+    _no_hard_links(monkeypatch)
+    archive = RawPayloadArchive(tmp_path / "meta")
+    first = archive.archive("daily_bars", {"k": 1}, source="tdx_protocol")
+    again = archive.archive("daily_bars", {"k": 1}, source="tdx_protocol")
+
+    assert again.payload_path == first.payload_path
+    payload = tmp_path / "meta" / first.payload_path
+    assert payload.is_file()
+    assert [p.name for p in payload.parent.iterdir() if p.name.startswith(".")] == []
+
+
+def test_publish_once_keeps_an_existing_target_without_hard_links(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch)
+    target = tmp_path / "payload"
+    target.write_bytes(b"first")
+    temporary = tmp_path / ".payload.tmp"
+    temporary.write_bytes(b"second")
+
+    assert atomic_mod.publish_once(temporary, target) is False
+    assert target.read_bytes() == b"first"
+    assert not temporary.exists()
+
+
+def test_publish_once_raises_link_errors_that_are_not_unsupported(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch, errno.EACCES)
+    temporary = tmp_path / ".payload.tmp"
+    temporary.write_bytes(b"x")
+
+    with pytest.raises(PermissionError):
+        atomic_mod.publish_once(temporary, tmp_path / "payload")

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.atomic import publish_once, write_json_atomic
 
 _SENSITIVE_KEY = re.compile(
     r"(?:token|secret|password|passwd|authorization|cookie|proxy|api[_-]?key|access[_-]?key|signature|credential)",
@@ -475,13 +475,9 @@ def _write_bytes_once(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-            temporary.unlink(missing_ok=True)
-        except FileExistsError:
-            # Same hash means the immutable payload is already present.  Do
-            # not overwrite it; callers can verify the bytes below.
-            temporary.unlink(missing_ok=True)
+        # An existing file with the same hash is the immutable payload already
+        # present. Do not overwrite it; callers verify the bytes afterwards.
+        publish_once(temporary, path)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise

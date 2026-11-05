@@ -26,6 +26,7 @@ from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.i18n import _
 from cnequity.storage.atomic import (
+    LINK_UNSUPPORTED_ERRNOS,
     fsync_dir,
     replace_with_retry,
     swap_with_backup,
@@ -151,20 +152,10 @@ def _link_generation_file(source: Path, target: Path) -> bool:
     try:
         os.link(source, target)
     except OSError as exc:
-        if exc.errno in _LINK_UNSUPPORTED:
+        if exc.errno in LINK_UNSUPPORTED_ERRNOS:
             return False
         raise
     return True
-
-
-_LINK_UNSUPPORTED = {
-    errno.EXDEV,
-    errno.EPERM,
-    errno.EMLINK,
-    errno.ENOTSUP,
-    errno.EOPNOTSUPP,
-    errno.ENOSYS,
-}
 
 
 def _publish_space_message(dataset: str, required: int, free: int) -> str:

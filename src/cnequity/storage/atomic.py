@@ -105,6 +105,39 @@ def replace_with_retry(tmp: Path | str, path: Path | str) -> None:
             return
 
 
+# exFAT/FAT volumes and some network shares refuse hard links outright.
+LINK_UNSUPPORTED_ERRNOS = frozenset(
+    {errno.EXDEV, errno.EPERM, errno.EMLINK, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS}
+)
+
+
+def publish_once(temporary: Path, path: Path) -> bool:
+    """Move a fully written *temporary* to *path* unless *path* already exists.
+
+    Returns False when *path* was already present. A hard link gives the
+    no-clobber guarantee atomically. Where links are unsupported, an existence
+    check plus a rename stands in; the window between them is safe only for
+    content-addressed paths, where a racing writer lands the same bytes.
+    *temporary* is consumed either way.
+    """
+    try:
+        os.link(temporary, path)
+    except FileExistsError:
+        Path(temporary).unlink(missing_ok=True)
+        return False
+    except OSError as exc:
+        if exc.errno not in LINK_UNSUPPORTED_ERRNOS:
+            raise
+        if os.path.lexists(path):
+            Path(temporary).unlink(missing_ok=True)
+            return False
+        replace_with_retry(temporary, path)
+        return True
+    Path(temporary).unlink(missing_ok=True)
+    fsync_dir(Path(path).parent)
+    return True
+
+
 def swap_with_backup(staged: Path, target: Path, backup: Path) -> None:
     """Replace *target* with *staged*, keeping the old tree at *backup*.
 
