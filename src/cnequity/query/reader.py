@@ -1351,6 +1351,11 @@ def dataset_schema(dataset: str) -> dict[str, pl.DataType]:
     return dict(DATASET_SCHEMAS[dataset])
 
 
+def _payload_date(payload: dict, field: str) -> date | None:
+    value = payload.get(field)
+    return date.fromisoformat(str(value)) if value else None
+
+
 def list_datasets(
     *,
     config: Config | None = None,
@@ -1373,7 +1378,18 @@ def list_datasets(
     state = StateStore(cfg.meta_root)
     rows = []
     for name, spec in sorted(DATASETS.items()):
-        state_payload = state.get_payload(name)
+        # One damaged state file must not take the whole catalog down. Its
+        # watermark is unknown, not absent, so say so rather than show null.
+        state_error = watermark = snapshot_date = None
+        try:
+            state_payload = state.get_payload(name)
+            if spec.watermark:
+                watermark = _payload_date(state_payload, "last_success_trade_date")
+            elif spec.fetch_semantics == "snapshot":
+                snapshot_date = _payload_date(state_payload, "last_snapshot_date")
+        except (OSError, ValueError) as exc:
+            logger.warning("state for %s is unreadable: %s", name, exc)
+            state_payload, state_error = {}, f"{type(exc).__name__}: {exc}"
         root = logical_root(cfg, spec)
         has_data = dataset_has_parquet(
             root,
@@ -1413,20 +1429,17 @@ def list_datasets(
                 "coverage_start": first_part,
                 "coverage_end": last_part,
                 "watermarked": spec.watermark,
-                "watermark": state.get_date(name) if spec.watermark else None,
+                "watermark": watermark,
                 # Snapshot-only feeds have no PIT watermark.  This capture
                 # marker records when the rolling live window was last
                 # observed so stale scheduling can recover a missed day
                 # without pretending that a future event is historical data.
-                "snapshot_date": (
-                    state.get_date(name, field="last_snapshot_date")
-                    if not spec.watermark and spec.fetch_semantics == "snapshot"
-                    else None
-                ),
+                "snapshot_date": snapshot_date,
                 "revision": state_payload.get("revision"),
                 "revision_id": state_payload.get("revision_id"),
                 "schema_version": state_payload.get("schema_version"),
                 "contract_fingerprint": state_payload.get("contract_fingerprint"),
+                "state_error": state_error,
             }
         )
     return pl.DataFrame(rows)

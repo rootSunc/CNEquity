@@ -47,11 +47,13 @@ def fsync_dir(path: Path | str) -> None:
         os.close(fd)
 
 
-def replace_with_retry(tmp: Path | str, path: Path | str) -> None:
+def replace_with_retry(tmp: Path | str, path: Path | str, *, sync_dir: bool = True) -> None:
     """``os.replace`` that rides out transient Windows sharing denials.
 
     The parent directory is synced afterwards, so the rename survives a
-    crash rather than only the renamed file's contents.
+    crash rather than only the renamed file's contents. ``sync_dir=False``
+    skips that for scratch state rewritten on every request, where losing the
+    last rename to a crash costs nothing.
     """
     for attempt in range(_REPLACE_ATTEMPTS):
         try:
@@ -79,7 +81,8 @@ def replace_with_retry(tmp: Path | str, path: Path | str) -> None:
                 str(path),
             ) from exc
         else:
-            fsync_dir(Path(path).parent)
+            if sync_dir:
+                fsync_dir(Path(path).parent)
             return
 
 

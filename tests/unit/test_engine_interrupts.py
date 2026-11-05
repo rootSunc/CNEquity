@@ -197,3 +197,52 @@ def test_the_same_step_runs_once_its_input_is_committed(tmp_path, monkeypatch):
 
     assert seen == ["instruments"]
     assert out["status"] == "success"
+
+
+@pytest.mark.parametrize("finalize_run", [False, True], ids=["backfill-caller", "daily-caller"])
+def test_a_crash_after_the_waves_closes_a_run_the_caller_cannot_name(
+    tmp_path, monkeypatch, finalize_run
+):
+    cfg = _config(tmp_path)
+    engine = JobEngine(cfg)
+    _install_steps(monkeypatch, lambda name: {"rows_written": 1})
+
+    def boom(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(engine, "_persist_unaudited_findings", boom)
+
+    with pytest.raises(OSError):
+        engine.run_job(
+            "backfill",
+            DAY,
+            waves=[WaveConfig(name="write", parallel=False, steps=["instruments"])],
+            finalize_run=finalize_run,
+        )
+
+    run = engine.manifest.latest_run("backfill")
+    assert run["status"] == "failed"
+    assert "No space left on device" in run["error_message"]
+    assert not is_run_locked(cfg.meta_root, run["run_id"])
+
+
+def test_a_caller_that_owns_the_run_still_closes_it_itself(tmp_path, monkeypatch):
+    """Init passes its run id with finalize_run=False and closes the run itself."""
+    cfg = _config(tmp_path)
+    engine = JobEngine(cfg)
+    run_id = engine.manifest.start_run("backfill")
+    _install_steps(monkeypatch, lambda name: {"rows_written": 1})
+    monkeypatch.setattr(
+        engine, "_persist_unaudited_findings", lambda *a, **k: (_ for _ in ()).throw(OSError())
+    )
+
+    with pytest.raises(OSError):
+        engine.run_job(
+            "backfill",
+            DAY,
+            waves=[WaveConfig(name="write", parallel=False, steps=["instruments"])],
+            run_id=run_id,
+            finalize_run=False,
+        )
+
+    assert engine.manifest.get_run(run_id)["status"] == "running"

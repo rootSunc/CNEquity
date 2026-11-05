@@ -269,6 +269,9 @@ class JobEngine:
             # both refuse, never both run.
             if family != "init":
                 refuse_overlap_with_init(self.config.meta_root)
+            # A caller that passes no run id cannot close the run if this
+            # raises: it never learns the id.
+            started_here = not run_id
             if not run_id:
                 # Pin the plan to the run. A retry days later must know what
                 # this run set out to do even if the process died before
@@ -381,6 +384,15 @@ class JobEngine:
                     run_id,
                     error_message="interrupted by operator",
                 )
+                raise
+            except Exception as exc:
+                # `cne backfill` runs with finalize_run=False and no run id, so
+                # a crash after the waves (an audit write, say) used to leave
+                # the run `running` until the orphan grace expired.
+                if finalize_run or started_here:
+                    self.manifest.interrupt_run(
+                        run_id, error_message=f"run failed: {type(exc).__name__}: {exc}"
+                    )
                 raise
             finally:
                 if finalize_run and not finalized:

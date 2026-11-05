@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from cnequity.file_lock import exclusive_lock
+from cnequity.file_replace import replace_with_retry
 
 DEFAULT_LOCK_TIMEOUT_SECONDS = 15.0
 # Code-level defaults for minimal TOML and programmatic Config callers. The
@@ -225,12 +226,6 @@ class RateLimiter:
 _CONCURRENCY_SCHEMA_VERSION = 1
 _CONCURRENCY_POLL_SECONDS = 0.02
 _CONCURRENCY_STALE_SECONDS = 3600.0
-# Windows refuses ``os.replace`` while any other handle (an unlocked reader,
-# AV, the search indexer, a sync client) has the destination open. These
-# ledgers are rewritten on every request, so a short backoff covers the
-# transient case; mirrors ``storage.atomic`` without importing polars here.
-_REPLACE_ATTEMPTS = 5
-_REPLACE_BACKOFF_SEC = 0.05
 # Leases whose release could not be persisted. The owning thread stays alive,
 # so the owner check alone would count them toward the cap until exit.
 _ORPHANED_LEASE_TOKENS: set[str] = set()
@@ -282,24 +277,14 @@ def _write_json(path: Path, payload: Mapping[str, object]) -> None:
             json.dump(payload, handle, sort_keys=True)
             handle.flush()
             os.fsync(handle.fileno())
-        _replace_with_retry(tmp_name, path)
-    except Exception:
+        # Rewritten on every request: no directory sync, just the Windows retry.
+        replace_with_retry(tmp_name, path, sync_dir=False)
+    except BaseException:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
         raise
-
-
-def _replace_with_retry(tmp_name: str, path: Path) -> None:
-    for attempt in range(_REPLACE_ATTEMPTS):
-        try:
-            os.replace(tmp_name, path)
-            return
-        except PermissionError:
-            if attempt + 1 >= _REPLACE_ATTEMPTS:
-                raise
-            time.sleep(_REPLACE_BACKOFF_SEC * (2**attempt))
 
 
 def _windows_pid_alive(pid: int) -> bool:

@@ -8,6 +8,7 @@ from threading import Barrier, Event, Lock
 
 import pytest
 
+from cnequity import file_replace
 from cnequity.config import Config
 from cnequity.domain.rate_limit import (
     RateLimiter,
@@ -343,7 +344,7 @@ def test_source_concurrency_retries_transient_windows_replace_denial(tmp_path, m
             raise PermissionError(5, "Access is denied")
         real_replace(src, dst)
 
-    monkeypatch.setattr(rate_limit, "_REPLACE_BACKOFF_SEC", 0.0)
+    monkeypatch.setattr(file_replace, "_REPLACE_BACKOFF_SEC", 0.0)
     monkeypatch.setattr(rate_limit.os, "replace", _flaky_replace)
     limiter = SourceConcurrencyLimiter("sina", 1, tmp_path / "rate_limits")
 
@@ -368,7 +369,7 @@ def test_source_concurrency_release_denial_does_not_abort_or_leak_slot(tmp_path,
             raise PermissionError(5, "Access is denied")
         real_replace(src, dst)
 
-    monkeypatch.setattr(rate_limit, "_REPLACE_BACKOFF_SEC", 0.0)
+    monkeypatch.setattr(file_replace, "_REPLACE_BACKOFF_SEC", 0.0)
     monkeypatch.setattr(rate_limit.os, "replace", _replace)
     limiter = SourceConcurrencyLimiter("sina", 1, tmp_path / "rate_limits")
 

@@ -206,3 +206,42 @@ def test_a_crashing_tool_over_http_is_200_with_is_error_not_500(lake, monkeypatc
     reply = resp.json()
     assert reply["result"]["isError"] is True
     assert _body(reply)["error"].startswith("RuntimeError: Out of Memory")
+
+
+def test_a_type_error_inside_a_tool_is_not_blamed_on_the_arguments(lake, monkeypatch):
+    def broken(config, include_empty=False):
+        return None + 1  # a bug in the tool, with correct arguments
+
+    monkeypatch.setitem(HANDLERS, "describe_lake", broken)
+
+    reply = _call(lake, "tools/call", {"name": "describe_lake", "arguments": {}})
+    assert reply["result"]["isError"] is True
+    error = _body(reply)["error"]
+    assert error.startswith("TypeError:")
+    assert "bad arguments" not in error
+
+    wrong = _call(lake, "tools/call", {"name": "describe_lake", "arguments": {"bogus": 1}})
+    assert _body(wrong)["error"].startswith("bad arguments for describe_lake")
+
+
+def test_one_damaged_state_file_does_not_take_down_the_catalog(lake):
+    from cnequity.query.reader import list_datasets
+    from cnequity.storage.state import StateStore
+
+    store = StateStore(lake.meta_root)
+    store.set_date("instruments", date(2024, 6, 27))
+    (store.root / "daily_bars.json").write_text("{", encoding="utf-8")
+
+    catalog = {row["dataset"]: row for row in list_datasets(config=lake).iter_rows(named=True)}
+    assert catalog["daily_bars"]["state_error"].startswith("JSONDecodeError")
+    assert catalog["daily_bars"]["watermark"] is None
+    assert catalog["instruments"]["state_error"] is None
+
+    reply = _call(lake, "tools/call", {"name": "describe_lake", "arguments": {}})
+    assert reply["result"]["isError"] is False
+    rows = {row["dataset"]: row for row in _body(reply)["datasets"]}
+    assert rows["daily_bars"]["state_error"].startswith("JSONDecodeError")
+    assert "state_error" not in rows["instruments"]
+    # Readers that need the watermark still fail loud.
+    with pytest.raises(ValueError):
+        store.get_date("daily_bars")

@@ -145,7 +145,15 @@ def source_probe_slot(root: Path, source: str) -> Iterator[None]:
         if token is not None:
             with exclusive_lock(path.with_suffix(".lock")):
                 state = _read_json(path)
-                if state.get("probe_token") == token:
+                if state.get("probe_token") == token and isinstance(
+                    exc, (KeyboardInterrupt, SystemExit, GeneratorExit)
+                ):
+                    # The operator stopped the run; the source said nothing.
+                    # Hand the probe back instead of re-cooling the source.
+                    for key in ("probe_token", "probe_started_at", "probe_pid", "probe_thread"):
+                        state.pop(key, None)
+                    _write_json(path, state)
+                elif state.get("probe_token") == token:
                     response = getattr(exc, "response", None)
                     status = getattr(response, "status_code", None)
                     credentials = _refusal_kind(status, getattr(response, "headers", {}) or {})

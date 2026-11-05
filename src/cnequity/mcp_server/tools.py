@@ -236,21 +236,23 @@ def describe_lake(config: Config, *, include_empty: bool = False) -> dict:
         if not include_empty and not row["has_data"]:
             continue
         spec = DATASETS.get(row["dataset"])
-        rows.append(
-            {
-                "dataset": row["dataset"],
-                "tier": spec.tier if spec else None,
-                "tier_label": TIER_LABELS.get(spec.tier) if spec else None,
-                "date_col": row["date_col"],
-                "history_mode": row["history_mode"],
-                "history_horizon_days": row["history_horizon_days"],
-                "pit": row["pit"],
-                "coverage_start": _scalar(row["coverage_start"]),
-                "coverage_end": _scalar(row["coverage_end"]),
-                "watermark": _scalar(row["watermark"]),
-                "has_data": row["has_data"],
-            }
-        )
+        entry = {
+            "dataset": row["dataset"],
+            "tier": spec.tier if spec else None,
+            "tier_label": TIER_LABELS.get(spec.tier) if spec else None,
+            "date_col": row["date_col"],
+            "history_mode": row["history_mode"],
+            "history_horizon_days": row["history_horizon_days"],
+            "pit": row["pit"],
+            "coverage_start": _scalar(row["coverage_start"]),
+            "coverage_end": _scalar(row["coverage_end"]),
+            "watermark": _scalar(row["watermark"]),
+            "has_data": row["has_data"],
+        }
+        if row["state_error"]:
+            # The watermark above is unknown, not absent.
+            entry["state_error"] = row["state_error"]
+        rows.append(entry)
 
     populated = [r for r in rows if r["has_data"]]
     contract = list(_CONTRACT)

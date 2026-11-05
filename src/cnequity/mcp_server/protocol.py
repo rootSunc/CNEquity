@@ -24,6 +24,7 @@ UTF-8 with bare `\n` line ends.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import logging
@@ -105,13 +106,17 @@ def _call_tool(config: Config, params: dict) -> dict:
     # That is the difference between the agent seeing "as_of is required" and
     # being able to retry, and the client swallowing the fault as a transport
     # problem the model never learns about.
+    # Bind first, so only a mismatch with the signature reads as bad arguments.
+    # A TypeError raised inside the tool is a fault in the tool; calling it
+    # "bad arguments" would send the agent off rewriting correct arguments.
+    try:
+        inspect.signature(handler).bind(config, **arguments)
+    except TypeError as exc:
+        return _text_result({"error": f"bad arguments for {name}: {exc}"}, is_error=True)
     try:
         return _text_result(handler(config, **arguments))
     except ToolError as exc:
         return _text_result({"error": str(exc)}, is_error=True)
-    except TypeError as exc:
-        # Almost always an argument the schema does not have; same reasoning.
-        return _text_result({"error": f"bad arguments for {name}: {exc}"}, is_error=True)
     except Exception as exc:  # noqa: BLE001 — one bad call must not end the session
         logger.exception("tool %s failed", name)
         return _text_result({"error": f"{type(exc).__name__}: {exc}"}, is_error=True)
