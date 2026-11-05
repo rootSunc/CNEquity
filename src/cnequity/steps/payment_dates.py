@@ -13,7 +13,7 @@ from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.domain.symbols import is_etf_symbol, parse_symbol
 from cnequity.orchestrator.source_gaps import record_source_gap
 from cnequity.query.reader import load
-from cnequity.run_scope import backfill_of
+from cnequity.run_scope import backfill_of, run_flags_of
 from cnequity.steps.common import write_simple
 from cnequity.steps.http_common import verify_raw_archive, write_fetched
 
@@ -200,7 +200,7 @@ def repair_payment_dates(config, trade_date: date, run_id: str, context: dict):
         symbol: set(pending.filter(pl.col("symbol") == symbol)["ex_date"].dt.year().to_list())
         for symbol in windows
     }
-    issuer_only = bool(getattr(config, "_corporate_actions_issuer_notice_only", False))
+    issuer_only = bool(run_flags_of(config).ca_issuer_notice_only)
     if windows and not issuer_only and not config.sources.get("baostock", False):
         raise ValueError("unresolved payment events require the baostock source")
     if windows and not issuer_only:

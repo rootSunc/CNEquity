@@ -25,6 +25,7 @@ from cnequity.cli._shared import (
 from cnequity.i18n import N_, _
 from cnequity.query.on_demand import OnDemandService
 from cnequity.query.views import views_connection
+from cnequity.run_scope import set_run_flags
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 # macOS resolves localhost to ::1 before 127.0.0.1, and a browser does not
@@ -426,7 +427,7 @@ def mcp_cmd(config_path: str, live: bool, use_http: bool, host: str, port: int, 
     cfg = _cfg(config_path)
     # Opt-in, never inferred. A lake user whose lake is broken must get "no
     # parquet data" and go fix it, not a quietly different answer from a vendor.
-    cfg._mcp_live = live
+    set_run_flags(cfg, mcp_live=live)
     if not live:
         _guard_mcp_data_root(cfg, config_path)
 

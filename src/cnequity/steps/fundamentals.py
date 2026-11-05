@@ -21,7 +21,7 @@ from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
 from cnequity.progress import sweep_progress
 from cnequity.query.canonical import dedupe_lazy_by_primary_key
-from cnequity.run_scope import backfill_of
+from cnequity.run_scope import backfill_of, run_flags_of
 from cnequity.steps.common import instrument_metadata, load_bar_universe, load_symbols
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
 from cnequity.storage import StagingWriter
@@ -425,7 +425,7 @@ def _backfill_valuation_metrics_locked(config: Config, trade_date: date, run_id:
         _VALUATION_BACKFILL_START,
     )
     requested_end = backfill_of(config).end
-    if getattr(config, "_valuation_fill_em_outage", False):
+    if run_flags_of(config).valuation_fill_em_outage:
         start, end = _em_outage_window(config, trade_date, history_start, requested_end)
         return _fill_em_outage_from_datacenter(config, run_id, universe, start, end, purge_summary)
     if requested_end is not None:

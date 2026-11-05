@@ -47,7 +47,7 @@ from cnequity.quality.failover import (
     snapshot_corporate_actions_backup,
     snapshot_corporate_actions_tdx_backup,
 )
-from cnequity.run_scope import backfill_of, set_backfill
+from cnequity.run_scope import backfill_of, run_flags_of, set_backfill
 from cnequity.steps.common import (
     fetch_incremental_daily,
     incremental_trade_dates,
@@ -1063,7 +1063,7 @@ _XDXR_MAX_LANES = 4
 
 @register_step("corporate_actions", group="core", depends_on=["instruments"])
 def step_corporate_actions(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    if getattr(config, "_corporate_actions_payment_repair", False):
+    if run_flags_of(config).ca_payment_repair:
         from cnequity.steps.payment_dates import repair_payment_dates
 
         return repair_payment_dates(config, trade_date, run_id, context)
@@ -1083,10 +1083,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             or backfill_of(config).symbol_list()
             or _sweep_universe(config)
         )
-        if (
-            getattr(config, "_corporate_actions_eastmoney_date_repair", None)
-            and not backfill_of(config).symbols
-        ):
+        if run_flags_of(config).ca_eastmoney_date_repair and not backfill_of(config).symbols:
             # The repair asks EastMoney for named ex-dates. Sweeping every
             # symbol through TDX on the way would cost hours and answer a
             # different question, so an unscoped date repair runs alone.
@@ -1300,7 +1297,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
         if not df.is_empty():
             df = with_provenance(df, source=_CANONICAL_BACKFILL, data_version="v1")
 
-        if getattr(config, "_corporate_actions_baostock_repair", False):
+        if run_flags_of(config).ca_baostock_repair:
             if not config.sources.get("baostock", False):
                 raise RuntimeError(
                     "corporate_actions: the Baostock delisted-actions repair requires the baostock source"
@@ -1377,7 +1374,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                     if df.is_empty()
                     else pl.concat([df, repair_df], how="diagonal_relaxed")
                 )
-        if getattr(config, "_corporate_actions_ths_repair", False):
+        if run_flags_of(config).ca_ths_repair:
             if not config.sources.get("ths_bonus", False):
                 raise RuntimeError(
                     "corporate_actions: the THS delisted-actions repair requires the ths_bonus source"
@@ -1449,7 +1446,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                     if df.is_empty()
                     else pl.concat([df, repair_df], how="diagonal_relaxed")
                 )
-        repair_dates = list(getattr(config, "_corporate_actions_eastmoney_date_repair", None) or [])
+        repair_dates = list(run_flags_of(config).ca_eastmoney_date_repair or [])
         if repair_dates:
             if not config.sources.get("eastmoney", False):
                 raise RuntimeError(

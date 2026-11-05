@@ -38,6 +38,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.market_time import shanghai_today
+from cnequity.run_scope import run_flags_of
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class LiveUnavailable(RuntimeError):
 
 
 def enabled(config: Config) -> bool:
-    return bool(getattr(config, "_mcp_live", False))
+    return bool(run_flags_of(config).mcp_live)
 
 
 def _guard(symbols: list[str] | None, start: date, end: date) -> None:

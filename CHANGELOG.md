@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 修订回执和湖快照里记录的 `config_fingerprint` 不再每次运行都变：配置里像 `[datasets] best_effort` 这样的集合项此前按进程随机的顺序参与哈希，同一份配置每次算出不同指纹，来源记录看起来像是配置一直在改。现在先排序再哈希；含集合项的配置在升级后的第一次运行会得到一个新指纹，此后保持不变。
 - MCP `query_dataset` 不再为一页结果把整个数据集读进内存：一次调用要读的 Parquet 超过 64 MiB、又没有给 20 个以内的 symbol 时，直接拒绝，并说明这个数据集覆盖的日期和能装下的最近窗口（如 `start=2023-03-29 end=2026-11-03 fits`）。此前不带日期范围调用会先加载全部数据再切出 200 行：`margin_trading` 要占约 2.6 GB 内存，`option_greeks` 约 4.8 GB，`trade_ticks` 则根本装不下。带日期范围或少量 symbol 的调用不受影响。
 - 新增 7 个可选的 Tushare 数据集，都需要你自己的 Tushare 令牌，只由 `cne backfill <名称>` 采集，不进任何日更组；没有令牌时不发请求：
   - `convertible_bonds`：可转债与可交换债条款（`cb_basic` + `cb_issue`），每只债一行；`conversion_price` 是读取时的转股价，不是历史。

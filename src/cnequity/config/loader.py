@@ -13,7 +13,14 @@ from typing import Literal
 from cnequity.config.errors import ConfigError
 from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.domain.symbols import INGEST_UNIVERSES
-from cnequity.run_scope import BackfillWindow, set_backfill
+from cnequity.run_scope import (
+    LEGACY_RUN_FLAG_ATTRS,
+    BackfillWindow,
+    RunFlags,
+    run_flags_of,
+    set_backfill,
+    set_run_flags,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -302,13 +309,6 @@ class Config:
     exchange_audit_turnover_tolerance_bps: float = 100.0
     exchange_audit_turnover_max_fraction: float = 0.15
     config_path: Path | None = None
-    _corporate_actions_baostock_repair: bool = False
-    _corporate_actions_ths_repair: bool = False
-    _bse_tip_repair: bool = False
-    _tdx_amount_repair: bool = False
-    _turnover_repair: bool = False
-    _turnover_peer_review: bool = False
-    _sector_bars_force: bool = False
     _rate_limiters: object | None = field(default=None, repr=False)
     # ``workers`` is the legacy/global scheduler budget.  Source-specific
     # pools below deliberately do not inherit platform-specific process
@@ -409,6 +409,8 @@ class Config:
     # change it with ``run_scope.set_backfill``. Last, so positional callers
     # keep their argument order; hidden from repr like other runtime state.
     backfill_window: BackfillWindow = field(default_factory=BackfillWindow, repr=False)
+    # One-off switches a command sets for this run; see ``run_scope.RunFlags``.
+    run_flags: RunFlags = field(default_factory=RunFlags, repr=False)
 
     def __post_init__(self) -> None:
         """Normalize path-like fields for programmatic configurations.
@@ -731,6 +733,24 @@ class Config:
     def backup_root(self) -> Path:
         """Where `cne run maintain` writes metadata archives."""
         return self.maintenance_backup_dir or self.data_root / "backups"
+
+
+def _run_flag_property(field_name: str) -> property:
+    def get(self: Config):
+        value = getattr(run_flags_of(self), field_name)
+        return list(value) if isinstance(value, tuple) else value
+
+    def set_(self: Config, value) -> None:
+        set_run_flags(self, **{field_name: value})
+
+    return property(get, set_, doc=f"Compatibility alias for ``run_flags.{field_name}``.")
+
+
+# The old private names stay readable and writable on Config so existing
+# callers keep working; src uses ``run_flags_of`` / ``set_run_flags``.
+for _attr, _field in LEGACY_RUN_FLAG_ATTRS.items():
+    setattr(Config, _attr, _run_flag_property(_field))
+del _attr, _field
 
 
 def _expand(path_str: str, data_root: Path, base: Path | None = None) -> Path:

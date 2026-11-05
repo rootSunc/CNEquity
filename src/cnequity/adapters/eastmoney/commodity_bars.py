@@ -20,7 +20,7 @@ import polars as pl
 from cnequity.adapters.eastmoney.common import parse_em_ymd
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient, is_transport_fail_fast
 from cnequity.adapters.numeric import finite_int64
-from cnequity.run_scope import backfill_of
+from cnequity.run_scope import backfill_of, run_flags_of
 
 if TYPE_CHECKING:
     from cnequity.config import Config
@@ -196,7 +196,7 @@ def fetch_commodity_bars_range(
     client_kwargs: dict = {"config": config} if config is not None else {"min_interval": 0.5}
     em_enabled = False
     if config is not None:
-        em_enabled = bool(getattr(config, "_commodity_via_eastmoney", False))
+        em_enabled = bool(run_flags_of(config).commodity_via_eastmoney)
     if em_enabled:
         with EastMoneyClient(**client_kwargs) as client:
             for symbol, secid, name, exchange in universe:

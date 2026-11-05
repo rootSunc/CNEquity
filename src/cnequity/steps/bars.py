@@ -40,7 +40,7 @@ from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.worker_pool import fetch_daily_bars_parallel
 from cnequity.quality.audit import persist_step_findings
 from cnequity.query.canonical import dedupe_by_primary_key
-from cnequity.run_scope import backfill_of
+from cnequity.run_scope import backfill_of, run_flags_of
 from cnequity.steps.common import (
     BACKFILL_START,
     DailyBarOwnership,
@@ -1248,7 +1248,7 @@ def repair_daily_bar_turnover(
     totals: dict[str, int] = dict.fromkeys(
         ("rows_checked", "rows_unserved", "rows_disagreeing", "rows_replaced"), 0
     )
-    peer_review = getattr(config, "_turnover_peer_review", False)
+    peer_review = run_flags_of(config).turnover_peer_review
     if peer_review and not (
         config.sources.get("eastmoney", True)
         or config.sources.get("exchange", True)
@@ -1770,17 +1770,17 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
         end = trade_date
     _reject_unfinished_daily_bar_window(config, end)
 
-    if getattr(config, "_tdx_amount_repair", False):
+    if run_flags_of(config).tdx_amount_repair:
         return repair_sina_history_amounts_from_tdx(
             config, start, end, run_id, backfill_of(config).symbol_list()
         )
 
-    if getattr(config, "_turnover_repair", False):
+    if run_flags_of(config).turnover_repair:
         return repair_daily_bar_turnover(
             config, start, end, run_id, backfill_of(config).symbol_list()
         )
 
-    if getattr(config, "_bse_tip_repair", False):
+    if run_flags_of(config).bse_tip_repair:
         if start != end:
             raise RuntimeError("BSE tip repair requires a one-session daily_bars window")
         explicit_scope = backfill_of(config).symbol_list()

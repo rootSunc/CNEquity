@@ -31,7 +31,7 @@ from cnequity.domain.datasets import get_dataset
 from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
-from cnequity.run_scope import backfill_of, set_backfill
+from cnequity.run_scope import backfill_of, run_flags_of, set_backfill, set_run_flags
 
 
 @cli.command()
@@ -367,7 +367,7 @@ def backfill(
         symbols_str = ",".join(symbols)
     cfg = _cfg(config_path)
     set_backfill(cfg, refetch=bool(refetch and dataset == "fund_flow"))
-    cfg._option_source = option_source
+    set_run_flags(cfg, option_source=option_source)
     derivatives = {
         "futures_bars",
         "option_bars",
@@ -411,8 +411,7 @@ def backfill(
             )
         import uuid
 
-        cfg._derivative_batch = uuid.uuid4().hex
-        cfg._derivatives_refresh = refresh
+        set_run_flags(cfg, derivative_batch=uuid.uuid4().hex, derivatives_refresh=refresh)
     if margin_source:
         if dataset != "margin_trading":
             raise click.ClickException(_("--margin-source only applies to margin_trading"))
@@ -428,8 +427,7 @@ def backfill(
             )
         if any((baostock_repair, ths_repair, eastmoney_date_repair, outstanding)):
             raise click.ClickException(_("Payment-date repair must run on its own"))
-        cfg._corporate_actions_payment_repair = True
-        cfg._corporate_actions_issuer_notice_only = issuer_notice_repair
+        set_run_flags(cfg, ca_payment_repair=True, ca_issuer_notice_only=issuer_notice_repair)
     if workers < 1:
         raise click.ClickException(_("--workers must be at least 1"))
     if workers > 1 and dataset != "margin_trading":
@@ -451,17 +449,17 @@ def backfill(
     if tdx_amount_repair and dataset != "daily_bars":
         raise click.ClickException(_("--tdx-amount-repair only applies to daily_bars"))
     if baostock_repair:
-        cfg._corporate_actions_baostock_repair = True
+        set_run_flags(cfg, ca_baostock_repair=True)
     if ths_repair:
-        cfg._corporate_actions_ths_repair = True
+        set_run_flags(cfg, ca_ths_repair=True)
     if eastmoney_date_repair:
         raw_dates = [d.strip() for d in (ex_dates_str or "").split(",") if d.strip()]
         if not raw_dates:
             raise click.ClickException(_("--eastmoney-date-repair needs --ex-dates"))
         seen = {parse_date_option(value, "--ex-dates") for value in raw_dates}
-        cfg._corporate_actions_eastmoney_date_repair = sorted(seen)
+        set_run_flags(cfg, ca_eastmoney_date_repair=sorted(seen))
     if dataset == "sector_bars":
-        cfg._sector_bars_force = force
+        set_run_flags(cfg, sector_bars_force=force)
     start_d = parse_date_option(start_str, "--start")
     end_d = parse_date_option(end_str, "--end")
     if start_d and end_d and start_d > end_d:
@@ -473,20 +471,19 @@ def backfill(
     if tdx_amount_repair:
         if start_d is None or end_d is None:
             raise click.ClickException(_("--tdx-amount-repair needs both --start and --end"))
-        cfg._tdx_amount_repair = True
+        set_run_flags(cfg, tdx_amount_repair=True)
     if turnover_repair:
         if dataset != "daily_bars":
             raise click.ClickException(_("--turnover-repair only applies to daily_bars"))
         if start_d is None or end_d is None:
             raise click.ClickException(_("--turnover-repair needs both --start and --end"))
-        cfg._turnover_repair = True
-        cfg._turnover_peer_review = turnover_peer_review
+        set_run_flags(cfg, turnover_repair=True, turnover_peer_review=turnover_peer_review)
     if fill_em_outage:
         if dataset != "valuation_metrics":
             raise click.ClickException(_("--fill-em-outage only applies to valuation_metrics"))
         if start_d is None or end_d is None:
             raise click.ClickException(_("--fill-em-outage needs both --start and --end"))
-        cfg._valuation_fill_em_outage = True
+        set_run_flags(cfg, valuation_fill_em_outage=True)
     if bse_tip_repair:
         if not symbols_str:
             raise click.ClickException(_("--bse-tip-repair needs --symbols"))
@@ -494,7 +491,7 @@ def backfill(
             raise click.ClickException(
                 _("--bse-tip-repair needs an explicit --start and --end on the same day")
             )
-        cfg._bse_tip_repair = True
+        set_run_flags(cfg, bse_tip_repair=True)
     if outstanding:
         if plan:
             raise click.ClickException(
@@ -1091,7 +1088,7 @@ def _derivatives_plan(cfg, dataset, start_str, end_str, symbols_str) -> dict:
         "dataset": dataset,
         "routes": routes,
         "source_capabilities": capabilities(),
-        "refresh": bool(getattr(cfg, "_derivatives_refresh", False)),
+        "refresh": bool(run_flags_of(cfg).derivatives_refresh),
         "cache": "Persistent response cache; skipped only when the receipt matches. The quote budget excludes retries; reference files list an upper bound separately (read only on dates with quotes). Actual cache hits must be checked against the full request key",
         "pacing_seconds": {"futures_exchange": 1.0, "sina": 0.3, **cfg.source_intervals},
         "followup_steps": _derivatives_followup(dataset),

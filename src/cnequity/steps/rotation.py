@@ -17,7 +17,7 @@ from cnequity.config import Config
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
-from cnequity.run_scope import backfill_of
+from cnequity.run_scope import backfill_of, run_flags_of
 from cnequity.steps.http_common import (
     call_with_run_id,
     run_incremental_fetched,
@@ -398,7 +398,7 @@ def _sweep_sector_bars(
 
 def _backfill_sector_bars(config: Config, trade_date: date, run_id: str) -> dict:
     """Historical board bars from 同花顺. Partial sweeps surface as an audit finding."""
-    if getattr(config, "_sector_bars_force", False):
+    if run_flags_of(config).sector_bars_force:
         clear_sector_bars_backfill_state(config)
 
     # `--start/--end` narrow the sweep so filling a small hole does not re-fetch

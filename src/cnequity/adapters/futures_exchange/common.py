@@ -40,6 +40,7 @@ from cnequity.domain.http_policy import (
     record_request_event,
 )
 from cnequity.domain.rate_limit import source_request
+from cnequity.run_scope import run_flags_of
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +214,7 @@ def fetch_bytes(
     budget = _budget_root(config)
     host = _host_key(url, source)
     refreshed = getattr(config, "_derivative_refreshed_requests", set())
-    refresh = bool(getattr(config, "_derivatives_refresh", False)) and key not in refreshed
+    refresh = bool(run_flags_of(config).derivatives_refresh) and key not in refreshed
     # Serialize per origin across processes. Independent origins remain free.
     lock = (
         exclusive_lock(budget / f"derivatives-http-{host}.lock", timeout=90)
@@ -279,7 +280,7 @@ def fetch_bytes(
                 raise FuturesPayloadError(f"{url}: {type(exc).__name__}: {exc}") from exc
         check_response(resp, url, config=config, source=source)
         body = resp.content
-        if config is not None and getattr(config, "_derivatives_refresh", False):
+        if config is not None and run_flags_of(config).derivatives_refresh:
             refreshed.add(key)
             config._derivative_refreshed_requests = refreshed
         with _cache_lock:

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from cnequity.config import Config
+from cnequity.run_scope import LEGACY_RUN_FLAG_ATTRS
 
 #: Fingerprinted as "configured or not" under these older payload names.
 _LEGACY_SECRET_KEYS = {
@@ -21,7 +22,19 @@ _LEGACY_SECRET_KEYS = {
 }
 _LOCATION_FIELDS = frozenset({"data_root", "config_path", "duckdb_path"})
 #: Runtime plumbing and diagnostics, not data-affecting settings.
-_NOT_DATA_FIELDS = frozenset({"_rate_limiters", "inline_credentials", "backfill_window"})
+#: Run flags that were declared Config fields, hashed under those names.
+_FINGERPRINTED_FLAGS = (
+    "_corporate_actions_baostock_repair",
+    "_corporate_actions_ths_repair",
+    "_bse_tip_repair",
+    "_tdx_amount_repair",
+    "_turnover_repair",
+    "_turnover_peer_review",
+    "_sector_bars_force",
+)
+_NOT_DATA_FIELDS = frozenset(
+    {"_rate_limiters", "inline_credentials", "backfill_window", "run_flags"}
+)
 
 
 def _json_value(value: Any) -> Any:
@@ -31,6 +44,10 @@ def _json_value(value: Any) -> Any:
         return {str(key): _json_value(item) for key, item in sorted(value.items())}
     if isinstance(value, (list, tuple)):
         return [_json_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        # Sorted: str() of a set follows per-process hash order, which made
+        # the same config hash differently on every run.
+        return sorted(_json_value(item) for item in value)
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
@@ -61,6 +78,12 @@ def config_fingerprint(config: Config) -> str:
     if window is not None:
         payload["_backfill"] = window.active
         payload["_backfill_symbols"] = window.symbol_list()
+    # Likewise the run flags that used to be declared Config fields; the
+    # others were never fields and never hashed.
+    flags = getattr(config, "run_flags", None)
+    if flags is not None:
+        for name in _FINGERPRINTED_FLAGS:
+            payload[name] = getattr(flags, LEGACY_RUN_FLAG_ATTRS[name])
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

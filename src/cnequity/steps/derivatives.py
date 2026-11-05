@@ -50,7 +50,7 @@ from cnequity.domain.datasets import is_dataset_enabled
 from cnequity.domain.derivatives import PUBLISHED_FUTURES_ANOMALIES
 from cnequity.orchestrator.outcomes import SourceUnavailableError, error_kind
 from cnequity.orchestrator.registry import register_step
-from cnequity.run_scope import backfill_of, set_backfill
+from cnequity.run_scope import backfill_of, run_flags_of, set_backfill
 from cnequity.steps.common import walk_day_backfill
 from cnequity.steps.http_common import run_incremental_fetched, write_fetched
 
@@ -148,7 +148,7 @@ def fetch_session(
         if (
             exchange == "DCE"
             and config.futures_dce_route == "sina"
-            and not getattr(config, "_derivatives_refresh", False)
+            and not run_flags_of(config).derivatives_refresh
         ):
             from cnequity.domain.market_time import shanghai_today
             from cnequity.storage.derivative_evidence import session_matches
@@ -240,7 +240,7 @@ def _completed_sessions(config: Config, kind: Kind, days: list[date]) -> set[dat
     from cnequity.query.parquet_scan import scan_parquet_files
     from cnequity.storage.derivative_evidence import session_matches
 
-    if getattr(config, "_derivatives_refresh", False):
+    if run_flags_of(config).derivatives_refresh:
         return set()
     frame = dedupe_lazy_by_primary_key(
         scan_parquet_files(files).filter(pl.col("trade_date").is_in(days)), _BARS_DATASET[kind]
@@ -294,7 +294,7 @@ def _run_bars(config: Config, trade_date: date, run_id: str, kind: Kind) -> dict
     ensure_run_scoped(
         config,
         "_derivative_http_run",
-        getattr(config, "_derivative_batch", run_id),
+        (run_flags_of(config).derivative_batch or run_id),
         {"_derivative_refreshed_requests": set, "_derivative_blocked_hosts": set},
     )
     findings: list[dict] = []
@@ -351,7 +351,7 @@ def step_option_bars(config: Config, trade_date: date, run_id: str, context: dic
     ``cne backfill option_bars --source tushare`` instead fills the SSE/SZSE
     ETF options, which no exchange archive covers.
     """
-    if backfill_of(config).active and getattr(config, "_option_source", None) == "tushare":
+    if backfill_of(config).active and run_flags_of(config).option_source == "tushare":
         return _backfill_etf_options(config, trade_date, run_id)
     return _run_bars(config, trade_date, run_id, "options")
 
