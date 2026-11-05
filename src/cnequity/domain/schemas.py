@@ -43,6 +43,9 @@ def data_version_for(dataset: str) -> str:
 
 # Columns a writer may leave out; validation adds them as null. Older rows and
 # sources that do not publish the value read the same way.
+#: Action types that carry the exchange's ex-rights reference price.
+REFERENCE_PRICE_ACTIONS = frozenset({"reorg_transfer", "exchange_reference"})
+
 OPTIONAL_COLUMNS = frozenset(
     {
         "pre_close",
@@ -427,9 +430,13 @@ CORPORATE_ACTIONS_SCHEMA = {
     "split_factor": pl.Float64,  # unit_split: units after / before; 1 is neutral
     "allotment_ratio": pl.Float64,  # per share (配股: offered shares per held share)
     "allotment_price": pl.Float64,  # per allotted share (yuan), NOT a ratio
-    # reorg_transfer only: the ex-rights reference price (yuan per share after
-    # the event) the issuer publishes for a restructuring conversion. Its
-    # price effect follows the court-approved formula, not 1 + transfer_ratio.
+    # reorg_transfer / exchange_reference only: the ex-rights reference price
+    # (yuan per share after the event). On reorg_transfer the issuer publishes
+    # it for a restructuring conversion, whose price effect follows the
+    # court-approved formula, not 1 + transfer_ratio. An exchange_reference row
+    # carries no terms: it records the exchange's published previous close for
+    # an ex-date whose recorded terms disagree with it, and that price sets the
+    # factor step.
     "reference_price": pl.Float64,
     "source": pl.Utf8,
     "data_version": pl.Utf8,
@@ -1477,14 +1484,15 @@ def validate_dataframe(
             if name not in df.columns:
                 df = df.with_columns(pl.lit(None, dtype=dtype).alias(name))
         if "action_type" in df.columns:
-            is_reorg = pl.col("action_type") == "reorg_transfer"
+            is_reorg = pl.col("action_type").is_in(list(REFERENCE_PRICE_ACTIONS))
             reference = pl.col("reference_price").cast(pl.Float64, strict=False)
             bad_reference = (is_reorg & (reference.is_null() | ~(reference > 0))) | (
                 ~is_reorg & reference.is_not_null()
             )
             if df.filter(bad_reference).height:
                 raise SchemaValidationError(
-                    "reference_price is required on reorg_transfer rows and only allowed there"
+                    "reference_price is required on reorg_transfer and exchange_reference rows "
+                    "and only allowed there"
                 )
         # Old rows predate explicit fund unit splits and retain neutral units.
         # A new split event must supply its ratio; never guess it from a bonus.

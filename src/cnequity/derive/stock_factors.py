@@ -17,6 +17,9 @@ _SHARE_RATIO_TOLERANCE = 0.005
 _SHARE_CHANGE_BEFORE = timedelta(days=7)
 _SHARE_CHANGE_AFTER = timedelta(days=3)
 
+#: Source of corporate_actions ``exchange_reference`` rows, the only rows it writes there.
+EXCHANGE_REFERENCE_SOURCE = "tushare"
+
 
 def preserve_pending_steps(series, published, events, source):
     """A partial rebuild must not retract previously published pending steps."""
@@ -236,6 +239,12 @@ def stock_event_series(
                 )
                 continue
         by_shares = bool(evidence)
+        if not by_shares and refs and EXCHANGE_REFERENCE_SOURCE in group["sources"]:
+            # An exchange_reference row is the exchange's own published previous
+            # close for the session (relayed by Tushare, wire archived): the same
+            # evidence as a native pre_close on the bar, which history lacks.
+            # The share-reform window never reaches here without share counts.
+            evidence.append(("exchange_reference", before / refs[0]))
         quote = None if by_shares else prices[day].get("pre_close")
         quote_source = prices[day].get("source") or ""
         if quote is not None and quote > 0 and not quote_source.startswith("derived"):

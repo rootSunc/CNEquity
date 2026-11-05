@@ -585,14 +585,14 @@
 | payment_source | string | 可空；到账日证据：`issuer_notice:…`（发行人公告）或 `baostock:dividPayDate`；合并时证据等级优先于抓取新旧 |
 | symbol | string |  |
 | ex_date | date |  |
-| action_type | string | cash_dividend/bonus/transfer/allotment/unit_split/reorg_transfer |
+| action_type | string | cash_dividend/bonus/transfer/allotment/unit_split/reorg_transfer/exchange_reference |
 | cash_dividend | float64 | **每股**（元，税前） |
 | bonus_ratio | float64 | **每股**（送股：每持有 1 股送出股数） |
 | transfer_ratio | float64 | **每股**（转股：每持有 1 股转增股数） |
 | split_factor | float64 | 份额拆分/合并：新份额 ÷ 原份额；中性值 1 |
 | allotment_ratio | float64 | **每股**（配股：每持有 1 股可配股数），可空 |
 | allotment_price | float64 | 配股价（元/股），**不是**比率，可空 |
-| reference_price | float64 | 仅 `reorg_transfer`：发行人公布的除权（息）参考价（元/股）；其他类型必须为空 |
+| reference_price | float64 | 仅 `reorg_transfer` 和 `exchange_reference`：除权（息）参考价（元/股）；其他类型必须为空 |
 | source | string |  |
 | data_version | string |  |
 | fetched_at | timestamp |  |
@@ -620,6 +620,8 @@
 而由发行人按交易所规则公布的除权（息）参考价决定。复权核验对这类记录使用
 `前收盘 ÷ reference_price` 作为当日台阶，不再套用送转公式。`reference_price` 缺失、非正，
 或出现在其他类型上，写入时即被拒绝。
+
+`exchange_reference` 不带任何分红送转条款，只记录交易所在除权日公布的前收盘（即除权除息参考价）。当某个除权日已记录的条款算出的台阶与交易所前收盘不符时，用它把台阶定为 `前一交易日收盘 ÷ reference_price`。目前由 Tushare 日线的 `pre_close` 取证（`source=tushare`）。
 
 #### adj_factors
 

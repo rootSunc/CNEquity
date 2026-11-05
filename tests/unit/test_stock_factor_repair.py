@@ -504,3 +504,20 @@ def test_daily_slice_keeps_a_correction_dated_inside_it(tmp_path):
     out, findings = _daily_slice(cfg, DAYS[3:])
     assert out["factor"].to_list() == pytest.approx([2.0 * 10 / 9] * 7)
     assert not [f for f in findings if "pending_scale" in f]
+
+
+def test_an_exchange_reference_row_proves_a_step_bars_cannot():
+    """History has no native pre_close; the exchange_reference row stands in for it."""
+    bars = pl.DataFrame({"trade_date": DAYS, "close": [10.0] * 10, "pre_close": [None] * 10})
+    vendor = pl.DataFrame({"trade_date": DAYS, "factor": [2.0] * 10})
+    terms = _terms((5,)).with_columns(
+        pl.lit(8.0).alias("_reference"), pl.lit(["tushare"]).alias("_term_sources")
+    )
+    result, events = stock_event_series(bars, vendor, terms, pl.DataFrame())
+    assert result["factor"].to_list() == pytest.approx([2.0] * 5 + [2.0 * 10 / 8] * 5)
+    assert events[0]["evidence"] == {"exchange_reference": pytest.approx(10 / 8)}
+
+    # The same reference from an issuer's notice alone is not evidence.
+    issuer = terms.with_columns(pl.lit(["cninfo"]).alias("_term_sources"))
+    result, events = stock_event_series(bars, vendor, issuer, pl.DataFrame())
+    assert result["factor"].to_list() == pytest.approx([2.0] * 10)

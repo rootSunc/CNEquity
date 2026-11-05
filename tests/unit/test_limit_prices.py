@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 import httpx
+import polars as pl
 
 from cnequity.adapters.tushare import limit_prices as lp
 from cnequity.config import Config
@@ -50,3 +51,44 @@ def test_fund_flow_measure_converts_units_and_keeps_its_own_columns():
     validate_dataframe(
         with_provenance(frame, source="tushare", data_version="v1"), "fund_flow_tushare"
     )
+
+
+def test_exchange_reference_rows_carry_a_reference_price_and_nothing_else_may():
+    import pytest
+
+    from cnequity.domain.schemas import SchemaValidationError
+
+    row = {
+        "symbol": "600080.SH",
+        "ex_date": date(2006, 6, 14),
+        "action_type": "exchange_reference",
+        "cash_dividend": 0.0,
+        "bonus_ratio": 0.0,
+        "transfer_ratio": 0.0,
+        "allotment_ratio": None,
+        "allotment_price": None,
+        "reference_price": 3.63,
+    }
+    validate_dataframe(
+        with_provenance(
+            pl.DataFrame(
+                [row],
+                schema_overrides={"allotment_ratio": pl.Float64, "allotment_price": pl.Float64},
+            ),
+            source="tushare",
+            data_version="v1",
+        ),
+        "corporate_actions",
+    )
+    with pytest.raises(SchemaValidationError):
+        validate_dataframe(
+            with_provenance(
+                pl.DataFrame(
+                    [{**row, "action_type": "cash_dividend"}],
+                    schema_overrides={"allotment_ratio": pl.Float64, "allotment_price": pl.Float64},
+                ),
+                source="tushare",
+                data_version="v1",
+            ),
+            "corporate_actions",
+        )

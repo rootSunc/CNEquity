@@ -592,14 +592,14 @@ Daily update: `macro_risk` group. History: `cne backfill commodity_bars [--start
 | payment_source | string | Nullable; evidence for the payment date: `issuer_notice:…` (issuer announcement) or `baostock:dividPayDate`; when merging, evidence grade takes precedence over fetch recency |
 | symbol | string |  |
 | ex_date | date |  |
-| action_type | string | cash_dividend/bonus/transfer/allotment/unit_split/reorg_transfer |
+| action_type | string | cash_dividend/bonus/transfer/allotment/unit_split/reorg_transfer/exchange_reference |
 | cash_dividend | float64 | **Per share** (CNY, pre-tax) |
 | bonus_ratio | float64 | **Per share** (bonus shares: shares issued per 1 share held) |
 | transfer_ratio | float64 | **Per share** (capitalization shares: shares issued per 1 share held) |
 | split_factor | float64 | Unit split/consolidation: new units ÷ original units; neutral value 1 |
 | allotment_ratio | float64 | **Per share** (rights issue: shares offered per 1 share held); nullable |
 | allotment_price | float64 | Rights issue price (CNY/share), **not** a ratio; nullable |
-| reference_price | float64 | `reorg_transfer` only: the ex-rights (ex-dividend) reference price published by the issuer (CNY/share); must be null for other types |
+| reference_price | float64 | `reorg_transfer` and `exchange_reference` only: the ex-rights (ex-dividend) reference price (CNY/share); must be null for other types |
 | source | string |  |
 | data_version | string |  |
 | fetched_at | timestamp |  |
@@ -627,6 +627,8 @@ and holdings are computed with the formula above; but most converted shares go t
 it is determined by the ex-rights (ex-dividend) reference price the issuer publishes under exchange rules. For such records, adjustment verification uses
 `previous close ÷ reference_price` as the day's step instead of the bonus/capitalization formula. A missing or non-positive `reference_price`,
 or one present on another type, is rejected at write time.
+
+`exchange_reference` carries no dividend or share terms; it records the previous close the exchange published for the ex-date (the ex-rights reference price). Where the terms recorded for an ex-date give a step that disagrees with the exchange's previous close, it sets the step to `previous session's close ÷ reference_price`. Evidence currently comes from Tushare daily `pre_close` (`source=tushare`).
 
 #### adj_factors
 
