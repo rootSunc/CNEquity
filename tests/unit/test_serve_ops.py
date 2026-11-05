@@ -917,7 +917,9 @@ def test_job_record_write_retries_transient_windows_replace_denial(tmp_path, mon
             raise PermissionError(5, "Access is denied")
         real_replace(src, dst)
 
-    monkeypatch.setattr(atomic, "_REPLACE_BACKOFF_SEC", 0.0)
+    import cnequity.file_replace as file_replace
+
+    monkeypatch.setattr(file_replace, "_REPLACE_BACKOFF_SEC", 0.0)
     monkeypatch.setattr(atomic.os, "replace", _flaky_replace)
     path = tmp_path / "jobs" / f"{'a' * 32}.json"
     atomic_write(path, {"job_id": "a" * 32, "state": "starting", "label": "日线"})

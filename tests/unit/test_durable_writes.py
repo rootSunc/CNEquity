@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from cnequity.storage import atomic, file_copy, revisions
+from cnequity import file_replace
+from cnequity.storage import file_copy, revisions
 from cnequity.storage.atomic import fsync_dir, fsync_file, replace_with_retry
 from cnequity.storage.revisions import RevisionStore
 from cnequity.storage.state import StateStore
@@ -30,7 +31,7 @@ def test_a_read_only_copy_can_still_be_synced(tmp_path):
 
 def test_a_replace_syncs_the_directory_it_renamed_into(tmp_path, monkeypatch):
     synced: list[Path] = []
-    monkeypatch.setattr(atomic, "fsync_dir", lambda path: synced.append(Path(path)))
+    monkeypatch.setattr(file_replace, "fsync_dir", lambda path: synced.append(Path(path)))
     tmp = tmp_path / ".pointer.tmp"
     tmp.write_text("{}")
 

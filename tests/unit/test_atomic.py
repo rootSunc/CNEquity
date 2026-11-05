@@ -10,6 +10,7 @@ from datetime import date
 import polars as pl
 import pytest
 
+from cnequity import file_replace
 from cnequity.storage import atomic as atomic_mod
 from cnequity.storage.atomic import write_json_atomic, write_parquet_atomic
 
@@ -49,7 +50,7 @@ def test_write_parquet_atomic_retries_permission_error(tmp_path, monkeypatch):
         return real_replace(src, dst)
 
     monkeypatch.setattr(atomic_mod.os, "replace", flaky_replace)
-    monkeypatch.setattr(atomic_mod.time, "sleep", lambda _: None)
+    monkeypatch.setattr(file_replace.time, "sleep", lambda _: None)
 
     write_parquet_atomic(out, _tiny_df())
     assert calls["n"] == 3
@@ -63,7 +64,7 @@ def test_write_parquet_atomic_raises_after_exhausted_retries(tmp_path, monkeypat
         "replace",
         lambda *_a, **_k: (_ for _ in ()).throw(PermissionError(32, "file in use")),
     )
-    monkeypatch.setattr(atomic_mod.time, "sleep", lambda _: None)
+    monkeypatch.setattr(file_replace.time, "sleep", lambda _: None)
 
     with pytest.raises(PermissionError):
         write_parquet_atomic(out, _tiny_df())
@@ -94,7 +95,7 @@ def test_write_json_atomic_retries_permission_error(tmp_path, monkeypatch):
         return real_replace(src, dst)
 
     monkeypatch.setattr(atomic_mod.os, "replace", flaky_replace)
-    monkeypatch.setattr(atomic_mod.time, "sleep", lambda _: None)
+    monkeypatch.setattr(file_replace.time, "sleep", lambda _: None)
 
     write_json_atomic(out, {"ok": True})
 
@@ -111,9 +112,9 @@ def test_replace_with_retry_explains_a_persistent_windows_lock(tmp_path, monkeyp
     out.write_text("old", encoding="utf-8")
     tmp = tmp_path / ".part.parquet.tmp"
     tmp.write_text("new", encoding="utf-8")
-    monkeypatch.setattr(atomic_mod, "IS_WINDOWS", True)
+    monkeypatch.setattr(file_replace, "IS_WINDOWS", True)
     monkeypatch.setattr(atomic_mod.os, "replace", _always_denied)
-    monkeypatch.setattr(atomic_mod.time, "sleep", lambda _: None)
+    monkeypatch.setattr(file_replace.time, "sleep", lambda _: None)
 
     with pytest.raises(atomic_mod.FileInUseError, match="in use by another program") as caught:
         atomic_mod.replace_with_retry(tmp, out)
@@ -123,9 +124,9 @@ def test_replace_with_retry_explains_a_persistent_windows_lock(tmp_path, monkeyp
 
 
 def test_replace_with_retry_keeps_the_raw_error_off_windows(tmp_path, monkeypatch):
-    monkeypatch.setattr(atomic_mod, "IS_WINDOWS", False)
+    monkeypatch.setattr(file_replace, "IS_WINDOWS", False)
     monkeypatch.setattr(atomic_mod.os, "replace", _always_denied)
-    monkeypatch.setattr(atomic_mod.time, "sleep", lambda _: None)
+    monkeypatch.setattr(file_replace.time, "sleep", lambda _: None)
 
     with pytest.raises(PermissionError) as caught:
         atomic_mod.replace_with_retry(tmp_path / "a", tmp_path / "b")
@@ -160,7 +161,7 @@ def test_swap_with_backup_puts_the_original_back_when_promotion_fails(tmp_path, 
         real_replace(src, dst)
 
     monkeypatch.setattr(atomic_mod.os, "replace", deny_promotion)
-    monkeypatch.setattr(atomic_mod.time, "sleep", lambda _: None)
+    monkeypatch.setattr(file_replace.time, "sleep", lambda _: None)
 
     with pytest.raises(PermissionError):
         atomic_mod.swap_with_backup(staged, target, backup)
@@ -180,7 +181,7 @@ def test_swap_with_backup_names_the_backup_when_restore_also_fails(tmp_path, mon
         raise PermissionError(13, "Access is denied")
 
     monkeypatch.setattr(atomic_mod.os, "replace", deny_after_move_aside)
-    monkeypatch.setattr(atomic_mod.time, "sleep", lambda _: None)
+    monkeypatch.setattr(file_replace.time, "sleep", lambda _: None)
 
     with pytest.raises(atomic_mod.RollbackIncompleteError, match=re.escape(str(backup))):
         atomic_mod.swap_with_backup(staged, target, backup)

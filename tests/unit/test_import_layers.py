@@ -32,6 +32,7 @@ _RANKS: dict[str, int] = {
     "cnequity": 0,
     "cnequity.i18n": 0,
     "cnequity.file_lock": 0,
+    "cnequity.file_replace": 0,
     "cnequity.fd_limit": 0,
     "cnequity.keep_awake": 0,
     "cnequity.windows_process": 0,

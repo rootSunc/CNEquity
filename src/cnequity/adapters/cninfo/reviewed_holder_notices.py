@@ -15,6 +15,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from cnequity.file_replace import publish_once
+
 _REVIEWED = {
     ("600025.SH", date(2019, 7, 5)): {
         "announcement_id": "1206408689",
@@ -212,18 +214,8 @@ def save_holder_evidence(meta_root: Path, run_id: str, symbol: str, entries: lis
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
-        try:
-            os.link(temp, target)
-        except FileExistsError:
-            pass
-        except OSError:
-            # exFAT/FAT and some network shares refuse hard links. The path is
-            # content addressed, so a racing writer lands the same bytes, and a
-            # real failure resurfaces from the rename. (Adapters sit below
-            # storage, so storage.atomic.publish_once is not importable here.)
-            if not os.path.lexists(target):
-                os.replace(temp, target)
-        if target.read_bytes() != raw:
+        # Content addressed, so an existing file must hold the same bytes.
+        if not publish_once(temp, target) and target.read_bytes() != raw:
             raise ValueError(f"holder cash evidence hash collision: {target}")
     finally:
         temp.unlink(missing_ok=True)

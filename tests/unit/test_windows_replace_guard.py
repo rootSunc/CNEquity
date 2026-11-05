@@ -19,7 +19,7 @@ PACKAGE_ROOT = Path(cnequity.__file__).resolve().parent
 
 ALLOWED_DIRECT_REPLACES = {
     # The retry helpers themselves.
-    "storage/atomic.py": 1,
+    "file_replace.py": 1,
     "domain/rate_limit.py": 1,
 }
 
