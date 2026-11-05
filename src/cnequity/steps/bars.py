@@ -6,8 +6,9 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -4348,6 +4349,257 @@ def _learn_suspensions_from_baostock(
     }
 
 
+# --------------------------------------------------------------- gap-fill chain
+#
+# ``_gapfill_multiday_via_kline`` asks a fixed list of sources, in order, for
+# the symbol×session keys still missing after the primary fetch. Each source is
+# one stage below; the chain is the tuple at the end. Every stage looks its
+# fetcher up by module name when it runs, so tests that patch
+# ``steps.bars._gapfill_…`` or ``fetch_bars_via_sina`` reach it.
+# ``tests/unit/test_daily_bars_gapfill_chain.py`` pins the order, the inputs
+# each source is handed and the merged result, and checks every stage's source
+# against what ``DATASETS["daily_bars"]`` declares.
+
+
+@dataclass
+class _ChainRun:
+    """What the chain has learned so far, shared by its stages."""
+
+    config: Config
+    run_id: str
+    start: date
+    end: date
+    requested: list[str]
+    require_complete: bool
+    missing_keys: Callable[[], set[tuple[str, date]]]
+    rows_read: int = 0
+    rows_written: int = 0
+    findings: list[dict] = field(default_factory=list)
+    source_outcomes: dict[str, dict] = field(default_factory=dict)
+    empty_evidence: dict[str, set[str]] = field(default_factory=dict)
+    exchange_complete: set[str] = field(default_factory=set)
+
+    def pending_symbols(self) -> list[str]:
+        """Symbols with a missing key the exchange did not already complete."""
+        return _research_first(
+            {symbol for symbol, _day in self.missing_keys()} - self.exchange_complete
+        )
+
+    def absorb(self, result: dict, *, empty_source: str | None = None) -> None:
+        """Merge one stage's counts, findings and outcomes, in a fixed order."""
+        self.rows_read += int(result.get("rows_read", 0))
+        self.rows_written += int(result.get("rows_written", 0))
+        self.findings.extend(result.get("audit_findings") or [])
+        self.source_outcomes.update(result.get("source_outcomes") or {})
+        if empty_source:
+            self.note_empty(result.get("empty_symbols") or [], empty_source)
+
+    def note_empty(self, symbols: Iterable[str], source: str) -> None:
+        for symbol in symbols:
+            self.empty_evidence.setdefault(symbol, set()).add(source)
+
+
+@dataclass(frozen=True)
+class GapFillStage:
+    """One source in the chain: its name, the registry source it reads, and how."""
+
+    name: str
+    #: The ``DatasetSpec`` source this stage reads; must be one daily_bars declares.
+    source: str
+    run: Callable[[_ChainRun], None]
+    #: Stop the chain after this stage when nothing is left for later sources.
+    settles_early: bool = False
+
+
+def _stage_exchange(run: _ChainRun) -> None:
+    # Fastest broad recovery first: one official SZSE request per session (and
+    # a same-session SSE snapshot) can complete hundreds of symbols at once.
+    exchange = _gapfill_complete_symbols_via_exchange(
+        run.config,
+        run.run_id,
+        symbols=run.requested,
+        start=run.start,
+        end=run.end,
+    )
+    run.absorb(exchange)
+    run.exchange_complete = set(exchange.get("complete_symbols") or [])
+
+
+def _stage_exchange_dayk(run: _ChainRun) -> None:
+    # Then the exchange's own per-fund day k-line, for the sub-lot fund
+    # sessions TDX cannot express and no bulk snapshot carries.
+    dayk = _gapfill_fund_keys_via_exchange_dayk(
+        run.config, run.run_id, missing=run.missing_keys(), start=run.start, end=run.end
+    )
+    run.absorb(dayk)
+
+
+def _stage_sina(run: _ChainRun) -> None:
+    # Sina is a bounded recent-tail request now. It remains skipped for the
+    # partial-only path because the bulk/primary staging may already contain
+    # valid keys and EastMoney/THS below can filter exact missing pairs.
+    if not (run.require_complete and run.config.sources.get("sina", True)):
+        return
+    sina = fetch_bars_via_sina(
+        run.config,
+        run.pending_symbols(),
+        run.start,
+        run.end,
+        run.run_id,
+        batch_prefix="sina-kline-gapfill",
+    )
+    run.rows_read += int(sina.get("rows_read", 0))
+    run.rows_written += int(sina.get("rows_written", 0))
+    run.findings.extend((sina.get("context_updates") or {}).get("audit_findings") or [])
+    run.source_outcomes.update(sina.get("source_outcomes") or {})
+    run.note_empty(sina.get("empty_symbol_names") or [], "sina")
+    if sina.get("empty_symbol_names"):
+        run.findings.append(
+            {
+                "dataset": "daily_bars",
+                "severity": "info",
+                "check": "daily_bars_sina_source_empty",
+                "message": (
+                    f"Sina returned an explicit empty payload for "
+                    f"{len(sina.get('empty_symbol_names') or [])} symbol(s); "
+                    "a second independent empty source is required before no-data certification"
+                ),
+                "symbols": sorted(sina.get("empty_symbol_names") or []),
+            }
+        )
+
+
+def _stage_eastmoney(run: _ChainRun) -> None:
+    import polars as pl
+
+    from cnequity.adapters.eastmoney.bars import fetch_daily_bars as fetch_em_kline
+    from cnequity.domain.schemas import data_version_for, with_provenance
+    from cnequity.quality.failover import failover_spec, write_backup_snapshot
+
+    config, start, end = run.config, run.start, run.end
+    pending = run.missing_keys()
+    pending_symbols = _research_first({symbol for symbol, _day in pending})
+    spec = failover_spec(config, "daily_bars")
+    if not (pending_symbols and spec is not None and config.sources.get(spec.backup, True)):
+        if pending_symbols:
+            run.source_outcomes["eastmoney"] = {"status": "disabled", "requests": 0}
+        return
+    diagnostics: dict = {}
+    df = fetch_em_kline(
+        pending_symbols,
+        start,
+        end,
+        config=config,
+        timeout_sec=8.0,
+        diagnostics=diagnostics,
+    )
+    run.rows_read += df.height
+    run.note_empty(diagnostics.get("empty_symbols") or [], "eastmoney")
+    failures = diagnostics.get("failed_symbols") or {}
+    if df.is_empty():
+        status = "failed" if failures else "empty"
+        written = 0
+    else:
+        wanted = pl.DataFrame(
+            {
+                "symbol": [symbol for symbol, _day in sorted(pending)],
+                "trade_date": [day for _symbol, day in sorted(pending)],
+            },
+            schema={"symbol": pl.Utf8, "trade_date": pl.Date},
+        )
+        gap_df = df.join(wanted, on=["symbol", "trade_date"], how="inner")
+        snapshot = with_provenance(
+            df,
+            source=spec.backup,
+            data_version=data_version_for("daily_bars"),
+        )
+        write_backup_snapshot(
+            config,
+            "daily_bars",
+            snapshot,
+            run_id=run.run_id,
+            batch_id="em-kline-snapshot",
+            source=spec.backup,
+            trade_date=end,
+        )
+        written = _stage_daily_gap_batch(
+            config,
+            run.run_id,
+            batch_id="em-kline-gapfill",
+            source=spec.backup,
+            frame=gap_df,
+            symbols=pending_symbols,
+            start=start,
+            end=end,
+        )
+        run.rows_written += written
+        status = "success" if written else "partial"
+    routes = (diagnostics.get("route_outcomes") or {}).values()
+    run.source_outcomes["eastmoney"] = {
+        "status": status,
+        "requests": len(pending_symbols),
+        "rows": df.height,
+        "rows_written": written,
+        "empty_symbols": len(diagnostics.get("empty_symbols") or []),
+        "failed_symbols": len(failures),
+        "failure_reasons": dict(sorted(failures.items())),
+        "proxy_failed": sum(bool(route.get("proxy_failed")) for route in routes),
+        "direct_failed": sum(bool(route.get("direct_failed")) for route in routes),
+        "direct_succeeded": sum(bool(route.get("direct_succeeded")) for route in routes),
+    }
+    run.findings.append(
+        {
+            "dataset": "daily_bars",
+            "severity": "warning" if status != "success" else "info",
+            "check": "daily_bars_eastmoney_gapfill",
+            "message": (
+                f"EastMoney historical fallback wrote {written} row(s) for "
+                f"{len(pending_symbols)} remaining symbol(s); status={status}"
+            ),
+            **run.source_outcomes["eastmoney"],
+        }
+    )
+
+
+def _stage_ths(run: _ChainRun) -> None:
+    ths = _gapfill_missing_keys_via_ths(
+        run.config,
+        run.run_id,
+        missing_keys=run.missing_keys(),
+        start=run.start,
+        end=run.end,
+    )
+    run.absorb(ths, empty_source="ths")
+
+
+def _stage_baostock(run: _ChainRun) -> None:
+    # Everything above can be unavailable at once — EastMoney's history host is
+    # unreachable from some egress, THS can be disabled, and the exchange
+    # publishes per session rather than per symbol. Reaching a fourth vendor in
+    # its own failure domain is what keeps the run from ending on "unknown"
+    # when the answer was obtainable; it costs nothing when the chain already
+    # resolved everything, because it is only handed what is still missing.
+    baostock = _gapfill_missing_keys_via_baostock(
+        run.config,
+        run.run_id,
+        missing_keys=run.missing_keys(),
+        start=run.start,
+        end=run.end,
+    )
+    run.absorb(baostock, empty_source="baostock")
+
+
+#: The order sources are asked for missing daily-bar keys.
+MULTIDAY_GAPFILL_CHAIN: tuple[GapFillStage, ...] = (
+    GapFillStage("exchange", "exchange", _stage_exchange),
+    GapFillStage("exchange_dayk", "exchange", _stage_exchange_dayk, settles_early=True),
+    GapFillStage("sina", "sina", _stage_sina),
+    GapFillStage("eastmoney", "eastmoney", _stage_eastmoney),
+    GapFillStage("ths", "ths", _stage_ths),
+    GapFillStage("baostock", "baostock", _stage_baostock),
+)
+
+
 def _gapfill_multiday_via_kline(
     config: Config,
     run_id: str,
@@ -4360,9 +4612,6 @@ def _gapfill_multiday_via_kline(
     """Fill exact missing keys through the bounded multi-source route chain."""
     import polars as pl
 
-    from cnequity.adapters.eastmoney.bars import fetch_daily_bars as fetch_em_kline
-    from cnequity.domain.schemas import data_version_for, with_provenance
-    from cnequity.quality.failover import failover_spec, write_backup_snapshot
     from cnequity.storage import StagingWriter
 
     if not symbols:
@@ -4393,207 +4642,34 @@ def _gapfill_multiday_via_kline(
     def missing_keys() -> set[tuple[str, date]]:
         return expected_keys - staged_keys()
 
-    rows_read = 0
-    rows_written = 0
-    findings: list[dict] = []
-    source_outcomes: dict[str, dict] = {}
-    empty_evidence: dict[str, set[str]] = {}
-
-    # Fastest broad recovery first: one official SZSE request per session (and
-    # a same-session SSE snapshot) can complete hundreds of symbols at once.
-    exchange = _gapfill_complete_symbols_via_exchange(
-        config,
-        run_id,
-        symbols=requested,
+    run = _ChainRun(
+        config=config,
+        run_id=run_id,
         start=start,
         end=end,
+        requested=requested,
+        require_complete=require_complete,
+        missing_keys=missing_keys,
     )
-    rows_read += int(exchange.get("rows_read", 0))
-    rows_written += int(exchange.get("rows_written", 0))
-    findings.extend(exchange.get("audit_findings") or [])
-    source_outcomes.update(exchange.get("source_outcomes") or {})
-    exchange_complete = set(exchange.get("complete_symbols") or [])
-    # Then the exchange's own per-fund day k-line, for the sub-lot fund
-    # sessions TDX cannot express and no bulk snapshot carries.
-    dayk = _gapfill_fund_keys_via_exchange_dayk(
-        config, run_id, missing=missing_keys(), start=start, end=end
-    )
-    rows_read += int(dayk.get("rows_read", 0))
-    rows_written += int(dayk.get("rows_written", 0))
-    findings.extend(dayk.get("audit_findings") or [])
-    source_outcomes.update(dayk.get("source_outcomes") or {})
-    pending_symbols = _research_first(
-        {symbol for symbol, _day in missing_keys()} - exchange_complete
-    )
-    if not pending_symbols:
-        return {
-            "rows_read": rows_read,
-            "rows_written": rows_written,
-            "filled": bool(rows_written),
-            "complete": True,
-            "audit_findings": findings,
-            "source_outcomes": source_outcomes,
-        }
-
-    # Sina is a bounded recent-tail request now. It remains skipped for the
-    # partial-only path because the bulk/primary staging may already contain
-    # valid keys and EastMoney/THS below can filter exact missing pairs.
-    if require_complete and config.sources.get("sina", True):
-        sina = fetch_bars_via_sina(
-            config,
-            pending_symbols,
-            start,
-            end,
-            run_id,
-            batch_prefix="sina-kline-gapfill",
-        )
-        rows_read += int(sina.get("rows_read", 0))
-        rows_written += int(sina.get("rows_written", 0))
-        findings.extend((sina.get("context_updates") or {}).get("audit_findings") or [])
-        source_outcomes.update(sina.get("source_outcomes") or {})
-        for symbol in sina.get("empty_symbol_names") or []:
-            empty_evidence.setdefault(symbol, set()).add("sina")
-        if sina.get("empty_symbol_names"):
-            findings.append(
-                {
-                    "dataset": "daily_bars",
-                    "severity": "info",
-                    "check": "daily_bars_sina_source_empty",
-                    "message": (
-                        f"Sina returned an explicit empty payload for "
-                        f"{len(sina.get('empty_symbol_names') or [])} symbol(s); "
-                        "a second independent empty source is required before no-data certification"
-                    ),
-                    "symbols": sorted(sina.get("empty_symbol_names") or []),
-                }
-            )
-
-    pending = missing_keys()
-    pending_symbols = _research_first({symbol for symbol, _day in pending})
-    spec = failover_spec(config, "daily_bars")
-    if pending_symbols and spec is not None and config.sources.get(spec.backup, True):
-        diagnostics: dict = {}
-        df = fetch_em_kline(
-            pending_symbols,
-            start,
-            end,
-            config=config,
-            timeout_sec=8.0,
-            diagnostics=diagnostics,
-        )
-        rows_read += df.height
-        for symbol in diagnostics.get("empty_symbols") or []:
-            empty_evidence.setdefault(symbol, set()).add("eastmoney")
-        failures = diagnostics.get("failed_symbols") or {}
-        if df.is_empty():
-            status = "failed" if failures else "empty"
-            written = 0
-        else:
-            wanted = pl.DataFrame(
-                {
-                    "symbol": [symbol for symbol, _day in sorted(pending)],
-                    "trade_date": [day for _symbol, day in sorted(pending)],
-                },
-                schema={"symbol": pl.Utf8, "trade_date": pl.Date},
-            )
-            gap_df = df.join(wanted, on=["symbol", "trade_date"], how="inner")
-            snapshot = with_provenance(
-                df,
-                source=spec.backup,
-                data_version=data_version_for("daily_bars"),
-            )
-            write_backup_snapshot(
-                config,
-                "daily_bars",
-                snapshot,
-                run_id=run_id,
-                batch_id="em-kline-snapshot",
-                source=spec.backup,
-                trade_date=end,
-            )
-            written = _stage_daily_gap_batch(
-                config,
-                run_id,
-                batch_id="em-kline-gapfill",
-                source=spec.backup,
-                frame=gap_df,
-                symbols=pending_symbols,
-                start=start,
-                end=end,
-            )
-            rows_written += written
-            status = "success" if written else "partial"
-        source_outcomes["eastmoney"] = {
-            "status": status,
-            "requests": len(pending_symbols),
-            "rows": df.height,
-            "rows_written": written,
-            "empty_symbols": len(diagnostics.get("empty_symbols") or []),
-            "failed_symbols": len(failures),
-            "failure_reasons": dict(sorted(failures.items())),
-            "proxy_failed": sum(
-                bool(route.get("proxy_failed"))
-                for route in (diagnostics.get("route_outcomes") or {}).values()
-            ),
-            "direct_failed": sum(
-                bool(route.get("direct_failed"))
-                for route in (diagnostics.get("route_outcomes") or {}).values()
-            ),
-            "direct_succeeded": sum(
-                bool(route.get("direct_succeeded"))
-                for route in (diagnostics.get("route_outcomes") or {}).values()
-            ),
-        }
-        findings.append(
-            {
-                "dataset": "daily_bars",
-                "severity": "warning" if status != "success" else "info",
-                "check": "daily_bars_eastmoney_gapfill",
-                "message": (
-                    f"EastMoney historical fallback wrote {written} row(s) for "
-                    f"{len(pending_symbols)} remaining symbol(s); status={status}"
-                ),
-                **source_outcomes["eastmoney"],
+    for stage in MULTIDAY_GAPFILL_CHAIN:
+        stage.run(run)
+        if stage.settles_early and not run.pending_symbols():
+            # The exchange stages answered for every symbol: nothing is left
+            # for the per-symbol vendors, and nothing needs certifying.
+            return {
+                "rows_read": run.rows_read,
+                "rows_written": run.rows_written,
+                "filled": bool(run.rows_written),
+                "complete": True,
+                "audit_findings": run.findings,
+                "source_outcomes": run.source_outcomes,
             }
-        )
-    elif pending_symbols:
-        source_outcomes["eastmoney"] = {"status": "disabled", "requests": 0}
-
-    pending = missing_keys()
-    ths = _gapfill_missing_keys_via_ths(
-        config,
-        run_id,
-        missing_keys=pending,
-        start=start,
-        end=end,
+    rows_read, rows_written = run.rows_read, run.rows_written
+    findings, source_outcomes, empty_evidence = (
+        run.findings,
+        run.source_outcomes,
+        run.empty_evidence,
     )
-    rows_read += int(ths.get("rows_read", 0))
-    rows_written += int(ths.get("rows_written", 0))
-    findings.extend(ths.get("audit_findings") or [])
-    source_outcomes.update(ths.get("source_outcomes") or {})
-    for symbol in ths.get("empty_symbols") or []:
-        empty_evidence.setdefault(symbol, set()).add("ths")
-
-    # Everything above can be unavailable at once — EastMoney's history host is
-    # unreachable from some egress, THS can be disabled, and the exchange
-    # publishes per session rather than per symbol. Reaching a fourth vendor in
-    # its own failure domain is what keeps the run from ending on "unknown"
-    # when the answer was obtainable; it costs nothing when the chain already
-    # resolved everything, because it is only handed what is still missing.
-    pending = missing_keys()
-    baostock = _gapfill_missing_keys_via_baostock(
-        config,
-        run_id,
-        missing_keys=pending,
-        start=start,
-        end=end,
-    )
-    rows_read += int(baostock.get("rows_read", 0))
-    rows_written += int(baostock.get("rows_written", 0))
-    findings.extend(baostock.get("audit_findings") or [])
-    source_outcomes.update(baostock.get("source_outcomes") or {})
-    for symbol in baostock.get("empty_symbols") or []:
-        empty_evidence.setdefault(symbol, set()).add("baostock")
 
     remaining = missing_keys()
     suspended: set[tuple[str, date]] = set()

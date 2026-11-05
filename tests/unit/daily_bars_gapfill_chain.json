@@ -1,0 +1,430 @@
+{
+ "each_stage_fills_part": {
+  "calls": [
+   {
+    "stage": "exchange",
+    "symbols": [
+     "600001.SH",
+     "600002.SH",
+     "600003.SH"
+    ]
+   },
+   {
+    "missing": [
+     "600002.SH@2026-07-20",
+     "600002.SH@2026-07-21",
+     "600003.SH@2026-07-20",
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "exchange_dayk"
+   },
+   {
+    "batch": "sina-kline-gapfill",
+    "stage": "sina",
+    "symbols": [
+     "600002.SH",
+     "600003.SH"
+    ]
+   },
+   {
+    "stage": "eastmoney",
+    "symbols": [
+     "600003.SH"
+    ]
+   },
+   {
+    "missing": [
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "ths"
+   },
+   {
+    "missing": [
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "baostock"
+   }
+  ],
+  "result": {
+   "audit_findings": [
+    {
+     "check": "fake_exchange"
+    },
+    {
+     "check": "fake_exchange_dayk"
+    },
+    {
+     "check": "daily_bars_eastmoney_gapfill",
+     "dataset": "daily_bars",
+     "direct_failed": 0,
+     "direct_succeeded": 0,
+     "empty_symbols": 0,
+     "failed_symbols": 0,
+     "failure_reasons": {},
+     "message": "EastMoney historical fallback wrote 1 row(s) for 1 remaining symbol(s); status=success",
+     "proxy_failed": 0,
+     "requests": 1,
+     "rows": 1,
+     "rows_written": 1,
+     "severity": "info",
+     "status": "success"
+    },
+    {
+     "check": "fake_ths"
+    },
+    {
+     "check": "fake_baostock"
+    }
+   ],
+   "complete": true,
+   "expected_no_data_symbols": [],
+   "filled": true,
+   "missing_keys": 0,
+   "rows_read": 6,
+   "rows_written": 6,
+   "source_outcomes": {
+    "baostock": {
+     "status": "success"
+    },
+    "eastmoney": {
+     "direct_failed": 0,
+     "direct_succeeded": 0,
+     "empty_symbols": 0,
+     "failed_symbols": 0,
+     "failure_reasons": {},
+     "proxy_failed": 0,
+     "requests": 1,
+     "rows": 1,
+     "rows_written": 1,
+     "status": "success"
+    },
+    "exchange": {
+     "status": "success"
+    },
+    "exchange_dayk": {
+     "status": "success"
+    },
+    "sina": {
+     "status": "success"
+    },
+    "ths": {
+     "status": "empty"
+    }
+   }
+  }
+ },
+ "exchange_settles_all": {
+  "calls": [
+   {
+    "stage": "exchange",
+    "symbols": [
+     "600001.SH",
+     "600002.SH",
+     "600003.SH"
+    ]
+   },
+   {
+    "missing": [],
+    "stage": "exchange_dayk"
+   }
+  ],
+  "result": {
+   "audit_findings": [
+    {
+     "check": "fake_exchange"
+    },
+    {
+     "check": "fake_exchange_dayk"
+    }
+   ],
+   "complete": true,
+   "filled": true,
+   "rows_read": 6,
+   "rows_written": 6,
+   "source_outcomes": {
+    "exchange": {
+     "status": "success"
+    },
+    "exchange_dayk": {
+     "status": "empty"
+    }
+   }
+  }
+ },
+ "nothing_fills_two_empty_sources": {
+  "calls": [
+   {
+    "stage": "exchange",
+    "symbols": [
+     "600001.SH",
+     "600002.SH",
+     "600003.SH"
+    ]
+   },
+   {
+    "missing": [
+     "600001.SH@2026-07-20",
+     "600001.SH@2026-07-21",
+     "600002.SH@2026-07-20",
+     "600002.SH@2026-07-21",
+     "600003.SH@2026-07-20",
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "exchange_dayk"
+   },
+   {
+    "batch": "sina-kline-gapfill",
+    "stage": "sina",
+    "symbols": [
+     "600001.SH",
+     "600002.SH",
+     "600003.SH"
+    ]
+   },
+   {
+    "stage": "eastmoney",
+    "symbols": [
+     "600001.SH",
+     "600002.SH",
+     "600003.SH"
+    ]
+   },
+   {
+    "missing": [
+     "600001.SH@2026-07-20",
+     "600001.SH@2026-07-21",
+     "600002.SH@2026-07-20",
+     "600002.SH@2026-07-21",
+     "600003.SH@2026-07-20",
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "ths"
+   },
+   {
+    "missing": [
+     "600001.SH@2026-07-20",
+     "600001.SH@2026-07-21",
+     "600002.SH@2026-07-20",
+     "600002.SH@2026-07-21",
+     "600003.SH@2026-07-20",
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "baostock"
+   },
+   {
+    "missing": [
+     "600001.SH@2026-07-20",
+     "600001.SH@2026-07-21",
+     "600002.SH@2026-07-20",
+     "600002.SH@2026-07-21",
+     "600003.SH@2026-07-20",
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "suspensions"
+   }
+  ],
+  "result": {
+   "audit_findings": [
+    {
+     "check": "fake_exchange"
+    },
+    {
+     "check": "fake_exchange_dayk"
+    },
+    {
+     "check": "daily_bars_sina_source_empty",
+     "dataset": "daily_bars",
+     "message": "Sina returned an explicit empty payload for 1 symbol(s); a second independent empty source is required before no-data certification",
+     "severity": "info",
+     "symbols": [
+      "600003.SH"
+     ]
+    },
+    {
+     "check": "daily_bars_eastmoney_gapfill",
+     "dataset": "daily_bars",
+     "direct_failed": 0,
+     "direct_succeeded": 0,
+     "empty_symbols": 0,
+     "failed_symbols": 0,
+     "failure_reasons": {},
+     "message": "EastMoney historical fallback wrote 0 row(s) for 3 remaining symbol(s); status=empty",
+     "proxy_failed": 0,
+     "requests": 3,
+     "rows": 0,
+     "rows_written": 0,
+     "severity": "warning",
+     "status": "empty"
+    },
+    {
+     "check": "fake_ths"
+    },
+    {
+     "check": "fake_baostock"
+    },
+    {
+     "check": "daily_bars_multi_source_no_data",
+     "dataset": "daily_bars",
+     "evidence": {
+      "600003.SH": [
+       "sina",
+       "ths"
+      ]
+     },
+     "message": "certified 1 symbol(s) as source-empty only after two independent per-symbol sources agreed",
+     "severity": "info",
+     "symbols": [
+      "600003.SH"
+     ]
+    },
+    {
+     "check": "daily_bars_gapfill_incomplete",
+     "dataset": "daily_bars",
+     "message": "multi-source gap-fill left 4 symbol\u00d7session key(s) unresolved over 2026-07-20..2026-07-21",
+     "missing_keys": 4,
+     "sample_keys": [
+      {
+       "symbol": "600001.SH",
+       "trade_date": "2026-07-20"
+      },
+      {
+       "symbol": "600001.SH",
+       "trade_date": "2026-07-21"
+      },
+      {
+       "symbol": "600002.SH",
+       "trade_date": "2026-07-20"
+      },
+      {
+       "symbol": "600002.SH",
+       "trade_date": "2026-07-21"
+      }
+     ],
+     "severity": "warning"
+    }
+   ],
+   "complete": false,
+   "expected_no_data_symbols": [
+    "600003.SH"
+   ],
+   "filled": true,
+   "missing_keys": 4,
+   "rows_read": 0,
+   "rows_written": 0,
+   "source_outcomes": {
+    "baostock": {
+     "status": "empty"
+    },
+    "baostock_suspensions": {
+     "status": "fake"
+    },
+    "eastmoney": {
+     "direct_failed": 0,
+     "direct_succeeded": 0,
+     "empty_symbols": 0,
+     "failed_symbols": 0,
+     "failure_reasons": {},
+     "proxy_failed": 0,
+     "requests": 3,
+     "rows": 0,
+     "rows_written": 0,
+     "status": "empty"
+    },
+    "exchange": {
+     "status": "empty"
+    },
+    "exchange_dayk": {
+     "status": "empty"
+    },
+    "sina": {
+     "status": "empty"
+    },
+    "ths": {
+     "status": "empty"
+    }
+   }
+  }
+ },
+ "partial_mode_eastmoney_off": {
+  "calls": [
+   {
+    "stage": "exchange",
+    "symbols": [
+     "600001.SH",
+     "600002.SH",
+     "600003.SH"
+    ]
+   },
+   {
+    "missing": [
+     "600001.SH@2026-07-20",
+     "600001.SH@2026-07-21",
+     "600002.SH@2026-07-20",
+     "600002.SH@2026-07-21",
+     "600003.SH@2026-07-20",
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "exchange_dayk"
+   },
+   {
+    "missing": [
+     "600001.SH@2026-07-20",
+     "600001.SH@2026-07-21",
+     "600002.SH@2026-07-20",
+     "600002.SH@2026-07-21",
+     "600003.SH@2026-07-20",
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "ths"
+   },
+   {
+    "missing": [
+     "600002.SH@2026-07-21",
+     "600003.SH@2026-07-20",
+     "600003.SH@2026-07-21"
+    ],
+    "stage": "baostock"
+   }
+  ],
+  "result": {
+   "audit_findings": [
+    {
+     "check": "fake_exchange"
+    },
+    {
+     "check": "fake_exchange_dayk"
+    },
+    {
+     "check": "fake_ths"
+    },
+    {
+     "check": "fake_baostock"
+    }
+   ],
+   "complete": true,
+   "expected_no_data_symbols": [],
+   "filled": true,
+   "missing_keys": 0,
+   "rows_read": 6,
+   "rows_written": 6,
+   "source_outcomes": {
+    "baostock": {
+     "status": "success"
+    },
+    "eastmoney": {
+     "requests": 0,
+     "status": "disabled"
+    },
+    "exchange": {
+     "status": "empty"
+    },
+    "exchange_dayk": {
+     "status": "empty"
+    },
+    "ths": {
+     "status": "success"
+    }
+   }
+  }
+ }
+}
