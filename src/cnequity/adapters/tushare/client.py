@@ -97,10 +97,9 @@ def api_url(config) -> str:
 
 def tushare_enabled(config) -> bool:
     """True only when the source is switched on and a token is configured."""
-    if config is None:
-        return False
-    sources = getattr(config, "sources", None) or {}
-    return bool(sources.get("tushare", False) and getattr(config, "tushare_token", None))
+    from cnequity.domain.datasets import keyed_source_ready
+
+    return keyed_source_ready("tushare", config)
 
 
 def _is_permission(code: object, message: str) -> bool:

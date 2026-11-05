@@ -42,9 +42,9 @@ from cnequity.domain.datasets import (
     DatasetSpec,
     history_mode_for,
     is_dataset_enabled,
-    is_stale,
     staleness_counts_trading_sessions,
 )
+from cnequity.quality.freshness import is_stale
 from cnequity.query.parquet_scan import (
     dataset_has_parquet,
     list_partitions,

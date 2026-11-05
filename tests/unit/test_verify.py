@@ -416,7 +416,7 @@ def test_a_retired_source_short_of_its_last_session_is_still_a_gap(tmp_path):
 
 
 def test_is_stale_respects_retirement():
-    from cnequity.domain.datasets import is_stale
+    from cnequity.quality.freshness import is_stale
 
     retired = date(2024, 8, 16)
     assert is_stale("northbound_flows", retired, ANCHOR) is False

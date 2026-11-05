@@ -497,7 +497,7 @@ def test_status_datasets_all_fresh(cfg_path, monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
     result = CliRunner().invoke(cli, ["status", "--gate", "--datasets", "--config", cfg_path])
     assert result.exit_code == 0, result.output
     assert "最后交易日：2024-06-28" in result.output
@@ -523,7 +523,7 @@ def test_status_datasets_keeps_long_dataset_names_on_one_line(cfg_path, monkeypa
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
     result = CliRunner().invoke(cli, ["status", "--datasets", "--config", cfg_path])
     assert result.exit_code == 0, result.output
     for name in names:
@@ -558,7 +558,7 @@ def test_status_datasets_fails_when_an_init_is_incomplete(cfg_path, monkeypatch)
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
 
     result = CliRunner().invoke(cli, ["status", "--gate", "--datasets", "--config", cfg_path])
 
@@ -610,7 +610,7 @@ def test_status_datasets_rejects_a_fresh_but_narrow_daily_bar_tip(cfg_path, monk
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
 
     result = CliRunner().invoke(cli, ["status", "--gate", "--datasets", "--config", cfg_path])
 
@@ -893,7 +893,7 @@ def test_status_datasets_shows_freshness_not_the_whole_inventory(cfg_path, monke
         lambda cfg, today: date(2024, 6, 28),
     )
     monkeypatch.setattr("cnequity.query.reader.list_datasets", _wide_inventory)
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
 
     result = CliRunner().invoke(cli, ["status", "--gate", "--datasets", "--config", cfg_path])
 
@@ -910,7 +910,7 @@ def test_status_datasets_all_columns_keeps_the_full_inventory(cfg_path, monkeypa
         lambda cfg, today: date(2024, 6, 28),
     )
     monkeypatch.setattr("cnequity.query.reader.list_datasets", _wide_inventory)
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
 
     result = CliRunner().invoke(
         cli, ["status", "--gate", "--datasets", "--all-columns", "--config", cfg_path]
@@ -1950,7 +1950,7 @@ def test_status_datasets_exits_1_when_something_is_stale(cfg_path, monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: True)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: True)
 
     result = CliRunner().invoke(cli, ["status", "--gate", "--datasets", "--config", cfg_path])
 
@@ -1975,7 +1975,7 @@ def _stale_lake(monkeypatch, datasets: list[str]):
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: True)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: True)
 
 
 @pytest.mark.usefixtures("chinese_output")
@@ -2560,7 +2560,7 @@ def test_scope_gate_respects_the_groups_flag_that_owns_daily_bars(cfg_path, monk
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
 
     runner = CliRunner()
     gated = runner.invoke(
@@ -2608,7 +2608,7 @@ def test_unprovable_coverage_exits_two_not_one(cfg_path, monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
 
     result = CliRunner().invoke(cli, ["status", "--gate", "--datasets", "--config", cfg_path])
     assert result.exit_code == 2, result.output
@@ -2650,7 +2650,7 @@ def test_no_scope_skips_the_cross_section_read_entirely(cfg_path, monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr("cnequity.domain.datasets.is_stale", lambda *a, **k: False)
+    monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
 
     result = CliRunner().invoke(
         cli, ["status", "--gate", "--datasets", "--no-scope", "--config", cfg_path]

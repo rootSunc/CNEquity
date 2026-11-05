@@ -210,7 +210,7 @@ def test_registered_fetch_steps_cover_curated_datasets():
 def test_is_stale_respects_per_dataset_tolerance():
     from datetime import date
 
-    from cnequity.domain.datasets import is_stale
+    from cnequity.quality.freshness import is_stale
 
     anchor = date(2026, 7, 8)
     # daily default tolerance = 1 → 07-07 fresh, 07-06 stale
@@ -229,7 +229,7 @@ def test_is_stale_counts_one_trading_session_across_a_weekend():
     """A Friday watermark is one session behind Monday, not three calendar days."""
     from datetime import date
 
-    from cnequity.domain.datasets import is_stale
+    from cnequity.quality.freshness import is_stale
 
     friday = date(2026, 9, 18)
     monday = date(2026, 9, 21)
@@ -245,7 +245,7 @@ def test_is_stale_counts_one_trading_session_across_a_weekend():
 def test_calendar_scoped_and_quarterly_tolerances_stay_on_calendar_days():
     from datetime import date
 
-    from cnequity.domain.datasets import is_stale
+    from cnequity.quality.freshness import is_stale
 
     # News publishes on weekends. Saturday → Monday is two calendar days.
     assert is_stale("news_headlines", date(2026, 9, 19), date(2026, 9, 21)) is True

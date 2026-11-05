@@ -84,8 +84,9 @@ def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> li
     registered step are excluded because there is nothing to run.
     """
     # Steps are registered by the module-level `import cnequity.steps`.
-    from cnequity.domain.datasets import DATASETS, history_mode_for, is_dataset_enabled, is_stale
+    from cnequity.domain.datasets import DATASETS, history_mode_for, is_dataset_enabled
     from cnequity.orchestrator.registry import STEP_REGISTRY
+    from cnequity.quality.freshness import is_stale
     from cnequity.query.reader import list_datasets
 
     def has_failed_attempt(dataset: str) -> bool:

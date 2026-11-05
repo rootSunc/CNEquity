@@ -73,7 +73,8 @@ def test_a_retired_source_is_labelled_retired_not_fresh():
     """
     from datetime import date
 
-    from cnequity.domain.datasets import DATASETS, is_stale
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.quality.freshness import is_stale
 
     spec = DATASETS["northbound_flows"]
     assert spec.source_retired_date == date(2024, 8, 16)

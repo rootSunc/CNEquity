@@ -37,13 +37,13 @@ from cnequity.domain.datasets import (
     TIER_LABELS,
     TIERS,
     empty_freshness_label,
-    freshness_state,
     history_mode_for,
     is_dataset_enabled,
 )
 from cnequity.domain.market_time import is_session_final, shanghai_today
 from cnequity.domain.partitions import parse_partition
 from cnequity.i18n import _, current_language
+from cnequity.quality.freshness import freshness_state
 from cnequity.storage.stats import (
     load_partition_stats,
     load_provenance_stats,

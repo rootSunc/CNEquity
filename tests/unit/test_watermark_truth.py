@@ -157,7 +157,7 @@ def test_an_outage_accumulates_staleness_instead_of_being_masked(tmp_path):
     alike. Anchored to the data, each day the source misses adds a day of lag
     until it crosses the staleness tolerance and gets reported.
     """
-    from cnequity.domain.datasets import is_stale
+    from cnequity.quality.freshness import is_stale
 
     cfg = Config(data_root=tmp_path / "data")
     state = StateStore(cfg.meta_root)

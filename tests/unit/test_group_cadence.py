@@ -10,8 +10,8 @@ import cnequity.steps  # noqa: F401 — registers steps (dependencies for due_st
 from cnequity.config import Config, load_config
 from cnequity.config.bootstrap import path_for_toml
 from cnequity.config.loader import ScheduleGroup, validate_config
-from cnequity.domain.datasets import is_stale
 from cnequity.orchestrator.cadence import due_steps, freshness_anchor, group_due, last_due_date
+from cnequity.quality.freshness import is_stale
 
 _WEEKLY = ScheduleGroup(at="17:30", steps=[], cadence="weekly")
 

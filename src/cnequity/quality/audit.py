@@ -233,12 +233,8 @@ def _stale_dataset_names(config: Config, trade_date: date) -> set[str]:
     audit, so an unreadable inventory means "nothing known to be stale" rather
     than an exception.
     """
-    from cnequity.domain.datasets import (
-        DATASETS,
-        is_dataset_enabled,
-        is_stale,
-        removed_from_schedule,
-    )
+    from cnequity.domain.datasets import DATASETS, is_dataset_enabled, removed_from_schedule
+    from cnequity.quality.freshness import is_stale
     from cnequity.query.reader import list_datasets
 
     try:
@@ -837,7 +833,8 @@ def lake_health(
     research_universe: str = "all_a",
 ) -> dict:
     """Lake health: findings + freshness → ``meta/quality/health-latest.json``."""
-    from cnequity.domain.datasets import DATASETS, is_dataset_enabled, is_stale
+    from cnequity.domain.datasets import DATASETS, is_dataset_enabled
+    from cnequity.quality.freshness import is_stale
     from cnequity.quality.historical_validity import historical_universe_validity
     from cnequity.query.reader import list_datasets
 

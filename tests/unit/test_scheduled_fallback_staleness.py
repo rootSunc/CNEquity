@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 from cnequity.config.loader import ScheduleGroup
-from cnequity.domain.datasets import is_stale
+from cnequity.quality.freshness import is_stale
 
 
 def _with_groups(config, steps):
@@ -47,7 +47,7 @@ def test_the_gate_skips_a_dataset_the_config_removed_on_purpose(config):
 def test_a_dataset_removed_on_purpose_is_a_separate_state_not_stale(config):
     from dataclasses import replace
 
-    from cnequity.domain.datasets import freshness_state
+    from cnequity.quality.freshness import freshness_state
 
     _with_groups(config, ["fund_flow_ths", "compact"])
     old, anchor = date(2026, 9, 21), date(2026, 10, 23)

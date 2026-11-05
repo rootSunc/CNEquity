@@ -26,7 +26,9 @@ def test_a_dataset_removed_from_the_schedule_counts_as_behind(tmp_path, monkeypa
         ),
     )
     monkeypatch.setattr(datasets, "is_dataset_enabled", lambda name, config: True)
-    monkeypatch.setattr(datasets, "is_stale", lambda name, mark, anchor, config=None: False)
+    from cnequity.quality import freshness
+
+    monkeypatch.setattr(freshness, "is_stale", lambda name, mark, anchor, config=None: False)
     monkeypatch.setattr(
         datasets, "removed_from_schedule", lambda config, name: name == "sector_fund_flow"
     )

@@ -1144,12 +1144,8 @@ def status(
     if show_datasets:
         import polars as pl_mod
 
-        from cnequity.domain.datasets import (
-            DATASETS,
-            empty_freshness_label,
-            freshness_state,
-            is_dataset_enabled,
-        )
+        from cnequity.domain.datasets import DATASETS, empty_freshness_label, is_dataset_enabled
+        from cnequity.quality.freshness import freshness_state
         from cnequity.query.reader import list_datasets
 
         anchor = _last_trading_day(cfg, shanghai_today())

@@ -44,13 +44,29 @@ _RANKS: dict[str, int] = {
     "cnequity.universe_profiles": 10,  # compatibility re-export of domain
     "cnequity.config": 20,
     "cnequity.compliance": 20,
+    # Write primitives every layer persists through: atomic replace and the
+    # raw-response archive. They import only root utilities, so adapters may
+    # use them; ranked here, the test keeps them from growing lake knowledge.
+    "cnequity.storage.atomic": 25,
+    # Outcome vocabulary (error types, reason codes) adapters raise and steps
+    # report; no first-party imports. The run lock wraps file_lock only.
+    "cnequity.orchestrator.outcomes": 25,
+    "cnequity.orchestrator.run_lock": 25,
+    "cnequity.storage.raw_archive": 25,
     # Vendor clients.
     "cnequity.adapters": 30,
     # The step SPI every step and helper is written against.
     "cnequity.orchestrator.registry": 35,
-    "cnequity.orchestrator.outcomes": 35,
     "cnequity.orchestrator.source_gaps": 35,
+    # Schedule policy: which group runs a step, and when a dataset is due.
+    "cnequity.orchestrator.cadence": 35,
     "cnequity.storage": 40,
+    # Read primitives storage itself needs (partition scans, canonical row
+    # order, the trading calendar). They sit beside storage, below the
+    # load()/views read API that the rest of ``query`` provides.
+    "cnequity.query.parquet_scan": 40,
+    "cnequity.query.canonical": 40,
+    "cnequity.query.calendar": 40,
     "cnequity.query": 50,
     "cnequity.quality": 60,
     "cnequity.derive": 60,
@@ -151,3 +167,27 @@ if __name__ == "__main__":
     )
     for line in sorted(layer_violations()):
         sys.stdout.write(line + "\n")
+
+
+def test_the_domain_layer_has_no_exceptions():
+    """``domain`` is the registry and its rules: pure, the root everything else
+    stands on. Its exceptions were paid off, so it gets none back — a new edge
+    out of ``domain`` cannot be absorbed into the baseline."""
+    grandfathered = sorted(pair for pair in _baseline() if pair.startswith("cnequity.domain."))
+    upward = sorted(pair for pair in layer_violations() if pair.startswith("cnequity.domain."))
+    assert not grandfathered and not upward, grandfathered + upward
+
+
+def test_every_rank_is_declared_once():
+    """A dict literal keeps the last of two equal keys, so a duplicate rank
+    silently overrides the one a reader sees first."""
+    import ast
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "_RANKS":
+            keys = [key.value for key in node.value.keys]
+            duplicates = sorted({key for key in keys if keys.count(key) > 1})
+            assert not duplicates, duplicates
+            return
+    raise AssertionError("_RANKS not found")

@@ -2103,9 +2103,11 @@ def history_mode_for(spec: DatasetSpec, config=None) -> HistoryMode:
 def keyed_source_ready(source: str, config) -> bool:
     """Whether *config* can call a credentialed *source* at all."""
     if source == "tushare":
-        from cnequity.adapters.tushare.client import tushare_enabled
-
-        return tushare_enabled(config)
+        # Switched on and a token configured; the Tushare client asks this too.
+        if config is None:
+            return False
+        sources = getattr(config, "sources", None) or {}
+        return bool(sources.get("tushare", False) and getattr(config, "tushare_token", None))
     return False
 
 
@@ -2180,14 +2182,7 @@ def removed_from_schedule(config, dataset: str) -> bool:
     return dataset not in scheduled_steps(config)
 
 
-def freshness_state(dataset: str, mark, anchor, config=None) -> str:
-    """``"fresh"``, ``"stale"`` or ``"removed"`` (see `removed_from_schedule`)."""
-    if removed_from_schedule(config, dataset):
-        return "removed"
-    return "stale" if is_stale(dataset, mark, anchor, config) else "fresh"
-
-
-def is_stale(dataset: str, mark, anchor, config=None) -> bool:
+def stale_between(dataset: str, mark, anchor, config=None) -> bool:
     """Whether *dataset*'s freshest date (*mark*) lags *anchor* beyond tolerance.
 
     *mark* and *anchor* are ``datetime.date`` (or None). A dataset with no mark
@@ -2201,23 +2196,15 @@ def is_stale(dataset: str, mark, anchor, config=None) -> bool:
     published session: there is nothing further to fetch, and calling that
     "stale" forever is how a freshness signal stops being read.
 
-    With *config*, the lake's last clean look at the source also counts: an
-    event dataset's newest row is its newest event, and a quiet window has none
-    (``storage/observation.py``).
+    This is the registry's rule alone. Judging a real lake also counts its
+    last clean look at the source and the schedule's cadence; that lives in
+    ``quality.freshness.is_stale``, which adjusts *mark* and *anchor* and then
+    asks this.
     """
     if mark is None or anchor is None:
         return False
     if removed_from_schedule(config, dataset):
         return False
-    if config is not None:
-        from cnequity.storage.observation import freshness_mark
-
-        mark = freshness_mark(config, dataset, mark)
-        # A history dataset fetched by a weekly group is due through that
-        # group's last scheduled session, not today (orchestrator/cadence.py).
-        from cnequity.orchestrator.cadence import freshness_anchor
-
-        anchor = freshness_anchor(config, dataset, anchor)
     spec = DATASETS.get(dataset)
     if spec is not None and spec.source_retired_date is not None:
         if mark >= spec.source_retired_date:

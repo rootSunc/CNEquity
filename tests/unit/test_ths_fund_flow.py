@@ -272,7 +272,8 @@ def test_no_fallback_on_a_backfill_or_when_push2_works(tmp_path, monkeypatch):
 
 
 def test_the_ths_tables_are_never_stale_or_missing():
-    from cnequity.domain.datasets import DATASETS, is_stale
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.quality.freshness import is_stale
 
     for name in ("fund_flow_ths", "sector_fund_flow_ths"):
         spec = DATASETS[name]
