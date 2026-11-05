@@ -287,7 +287,8 @@ def _closes(cfg: Config, symbol: str, closes: list[float]) -> None:
 
 
 def test_a_proven_miss_switches_the_stock_onto_baostock(tmp_path):
-    from cnequity.derive.factor_arbitration import settle_recent_unstepped_factors, source_overrides
+    from cnequity.derive.factor_arbitration import source_overrides
+    from cnequity.storage.repairs.adj_factors import settle_recent_unstepped_factors
 
     cfg = _lake(
         tmp_path,
@@ -317,8 +318,8 @@ def test_a_proven_miss_switches_the_stock_onto_baostock(tmp_path):
 
 def test_an_unconfirmed_action_does_not_fail_the_gate(tmp_path):
     """Baostock's factor is still too: the recorded action is not Sina's miss."""
-    from cnequity.derive.factor_arbitration import settle_recent_unstepped_factors
     from cnequity.quality.cross_checks import unstepped_corporate_action_findings
+    from cnequity.storage.repairs.adj_factors import settle_recent_unstepped_factors
 
     cfg = _lake(
         tmp_path,

@@ -25,15 +25,22 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 from typing import Any
 
 from cnequity.i18n import N_
-from cnequity.storage.atomic import write_json_atomic
 
-LAKE_FILE = Path("state") / "lake.json"
-FORMAT = 1
+# The lake record lives below the migrations that write to it: layout stamps
+# a new lake without importing the repairs these migrations run.
+from cnequity.storage.lake_record import (  # noqa: F401 — re-exported
+    FORMAT,
+    LAKE_FILE,
+    _parse,
+    _write_lake,
+    lake_path,
+    package_version,
+    read_lake,
+    stamp_new_lake,
+)
 
 
 @dataclass(frozen=True)
@@ -188,60 +195,6 @@ MIGRATIONS: tuple[Migration, ...] = (
         _repair("bar_listing_window", "repair_bar_listing_window"),
     ),
 )
-
-
-def package_version() -> str:
-    try:
-        return version("cnequity")
-    except PackageNotFoundError:
-        return "0.0.0"
-
-
-def _parse(value: str) -> tuple[int, ...]:
-    parts = []
-    for piece in str(value).split("."):
-        digits = "".join(ch for ch in piece if ch.isdigit())
-        parts.append(int(digits) if digits else 0)
-    return tuple(parts)
-
-
-def lake_path(config) -> Path:
-    return Path(config.meta_root) / LAKE_FILE
-
-
-def read_lake(config) -> dict:
-    """``lake.json``, or an empty record for a lake from before it existed."""
-    import json
-
-    path = lake_path(config)
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
-def _write_lake(config, record: dict) -> None:
-    record.setdefault("format", FORMAT)
-    write_json_atomic(lake_path(config), record, indent=2, sort_keys=True)
-
-
-def stamp_new_lake(config) -> None:
-    """Record the creating version on a lake that holds no data yet.
-
-    Only an empty lake is stamped: an old lake re-running `cne init` must not
-    claim this version built it, or every migration it still owes would vanish.
-    """
-    from cnequity.query.parquet_scan import dataset_has_parquet
-
-    if lake_path(config).exists():
-        return
-    curated = Path(config.curated_root)
-    if curated.is_dir() and any(dataset_has_parquet(p) for p in curated.iterdir() if p.is_dir()):
-        return
-    _write_lake(config, {"created_with": package_version(), "migrations": {}})
 
 
 def owed(config) -> list[Migration]:

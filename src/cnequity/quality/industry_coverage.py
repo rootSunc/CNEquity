@@ -272,7 +272,7 @@ def industry_coverage_report(
         }
         if system == "sw":
             # Dropped from the snapshots, so only the record still shows them.
-            from cnequity.storage.repairs.sw_never_listed import load_never_listed
+            from cnequity.storage.never_listed import load_never_listed
 
             dropped = load_never_listed(config)
             report["systems"][system]["excluded_never_listed"] = {

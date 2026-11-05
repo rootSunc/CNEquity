@@ -23,7 +23,7 @@ def init_data_layout(config: Config) -> None:
         config.data_root / "raw",
         config.data_root / "backups",
     ]
-    from cnequity.storage.migrations import stamp_new_lake
+    from cnequity.storage.lake_record import stamp_new_lake
 
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)

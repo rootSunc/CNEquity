@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import datetime, timezone
-from pathlib import Path
 
 import polars as pl
 
@@ -24,26 +23,17 @@ from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.never_listed import (  # noqa: F401 — re-exported
+    RECORD,
+    _record_path,
+    load_never_listed,
+)
 from cnequity.storage.read_context import ReadContext, read_root
 from cnequity.storage.repairs.orphan_symbols import _publish
 from cnequity.storage.revisions import RevisionStore
 
 DATASET = "industry_members"
 EVIDENCE = ("instruments", "daily_bars", "trading_status", "announcement_index")
-RECORD = "sw_never_listed.json"
-
-
-def _record_path(config: Config) -> Path:
-    return config.meta_root / RECORD
-
-
-def load_never_listed(config: Config) -> list[dict]:
-    import json
-
-    path = _record_path(config)
-    if not path.exists():
-        return []
-    return json.loads(path.read_text(encoding="utf-8")).get("securities", [])
 
 
 def record_never_listed(config: Config, securities: pl.DataFrame) -> None:

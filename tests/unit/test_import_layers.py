@@ -70,6 +70,13 @@ _RANKS: dict[str, int] = {
     "cnequity.query": 50,
     "cnequity.quality": 60,
     "cnequity.derive": 60,
+    # Offline repairs and the migrations that replay them: each publishes
+    # through the quality gate (``check_repair_publication``) and some re-run
+    # derives, so they sit above quality and derive, below the steps that call
+    # them. Readers of what they record (``storage.never_listed``,
+    # ``storage.lake_record``) stay in storage.
+    "cnequity.storage.repairs": 65,
+    "cnequity.storage.migrations": 65,
     "cnequity.steps": 70,
     "cnequity.orchestrator": 80,
     "cnequity.research": 90,

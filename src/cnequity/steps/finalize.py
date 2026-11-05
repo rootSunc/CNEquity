@@ -1010,7 +1010,7 @@ def step_derive_adj_factors(config: Config, trade_date: date, run_id: str, conte
     from cnequity.derive.adj_factors import AdjFactorsDeriveError, compute_adj_factors
 
     rebackfill = list(context.get("symbols_to_rebackfill") or [])
-    from cnequity.derive.factor_arbitration import settle_recent_unstepped_factors
+    from cnequity.storage.repairs.adj_factors import settle_recent_unstepped_factors
 
     # Before the audit gate. A price-proven miss switches onto Baostock and is
     # refreshed below; a miss Baostock cannot repair stays a warning.

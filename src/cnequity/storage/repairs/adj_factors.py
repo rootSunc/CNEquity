@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sys
 from contextlib import nullcontext, redirect_stdout
 from datetime import date, datetime, timezone
@@ -43,6 +44,8 @@ DEPENDENCIES = (
     "adj_factors",
     "share_structure",
 )
+logger = logging.getLogger(__name__)
+
 KEYS = ["symbol", "trade_date", "adjust_type"]
 ALGORITHM = "factor-repair-v1"
 
@@ -503,3 +506,56 @@ def repair_adj_factors(
                 indent=2,
             )
         return report
+
+
+_SETTLE_SAMPLE = 20
+
+
+def settle_recent_unstepped_factors(
+    config: Config,
+    trade_date: date,
+    *,
+    fetch=None,
+) -> list[str]:
+    """Switch recent unstepped stocks onto Baostock when the proof allows it.
+
+    Called from the daily factor derive, before the audit gate. It lives
+    with the repair it runs: ``derive.factor_arbitration`` only arbitrates,
+    and a derive that published through a repair was a cycle between them. A vendor
+    failure is logged and leaves the series on Sina: arbitration is how a
+    proven miss gets repaired, and it must not fail a day on its own.
+    Symbols Baostock's factor table does not cover are left untouched.
+    """
+    if fetch is None and not config.sources.get("baostock", False):
+        return []
+    try:
+        from cnequity.quality.cross_checks import recent_unstepped_actions
+
+        silent = recent_unstepped_actions(config, trade_date)
+        if silent.is_empty():
+            return []
+        names = sorted(
+            {
+                symbol
+                for symbol in silent.get_column("symbol").to_list()
+                if baostock_factor_symbol(symbol)
+            }
+        )
+        if not names:
+            return []
+        report = repair_adj_factors(
+            config, symbols=names[:100], refresh_sources=True, apply=True, fetch=fetch
+        )
+        switched = report.get("changed_symbols", []) if report.get("applied") else []
+    except Exception:
+        logger.warning(
+            "factor arbitration: could not settle recent unstepped factors", exc_info=True
+        )
+        return []
+    if switched:
+        logger.info(
+            "factor repair: corrected %d recent unstepped symbol(s): %s",
+            len(switched),
+            ", ".join(switched[:_SETTLE_SAMPLE]),
+        )
+    return switched
