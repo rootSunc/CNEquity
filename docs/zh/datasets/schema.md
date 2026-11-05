@@ -1330,6 +1330,160 @@ Tushare `moneyflow` 自算口径的个股资金流，需在 `[sources.tushare]` 
 | data_version | string | 溯源 |
 | fetched_at | timestamp | 溯源 |
 
+#### convertible_bonds
+
+Tushare `cb_basic` + `cb_issue` 可转债与可交换债条款，每只债一行；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。定向发行的债没有公开发行信息和上市日。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 债券代码，如 `113001.SH` |
+| name | string | 债券简称 |
+| full_name | string | 债券全称 |
+| bond_type | string | `convertible`（可转债）或 `exchangeable`（可交换债） |
+| stock_symbol | string | 正股代码 |
+| exchange | string | `SH` / `SZ` |
+| par_value | float64 | 面值（元） |
+| issue_price | float64 | 发行价（元） |
+| issue_size | float64 | 发行规模（元） |
+| remaining_size | float64 | 剩余规模（元） |
+| term_years | float64 | 期限（年） |
+| coupon_rate | float64 | 当前票面利率（%） |
+| coupon_schedule | string | 分年票息条款，原文 |
+| value_date | date | 起息日 |
+| maturity_date | date | 到期日 |
+| list_date | date | 上市日 |
+| delist_date | date | 摘牌日 |
+| conversion_start_date | date | 转股起始日 |
+| conversion_end_date | date | 转股截止日 |
+| conversion_stop_date | date | 暂停转股日 |
+| first_conversion_price | float64 | 初始转股价（元/股） |
+| conversion_price | float64 | 读取时的转股价（元/股），不是历史 |
+| issue_announce_date | date | 发行公告日 |
+| issue_method | string | 发行方式，原文 |
+| subscription_date | date | 网上申购日 |
+| holder_allotment_record_date | date | 老股东配售股权登记日 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### convertible_bond_bars
+
+Tushare `cb_daily` 可转债日线，2004-01-02 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 债券代码 |
+| trade_date | date | 交易日 |
+| open | float64 | 开盘价（元/百元面值） |
+| high | float64 | 最高价 |
+| low | float64 | 最低价 |
+| close | float64 | 收盘价 |
+| pre_close | float64 | 前收盘价 |
+| volume | int64 | 成交量（张） |
+| amount | float64 | 成交额（元） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### holder_trades
+
+Tushare `stk_holdertrade` 重要股东与高管增减持公告，2006 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。逐字重复的行只留一行。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| event_id | string | 全部字段的哈希 |
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| ann_date | date | 公告日，可用日期 |
+| holder_name | string | 股东名称 |
+| holder_type | string | `company`（公司）、`individual`（个人）、`executive`（高管） |
+| direction | string | `increase` / `decrease` |
+| change_shares | float64 | 变动股数 |
+| change_ratio | float64 | 变动占总股本比例（%） |
+| after_shares | float64 | 变动后持股数 |
+| after_ratio | float64 | 变动后持股比例（%） |
+| avg_price | float64 | 成交均价（元/股） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### share_repurchases
+
+Tushare `repurchase` 回购进展公告，2005 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| event_id | string | 全部字段的哈希 |
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| ann_date | date | 公告日，可用日期 |
+| progress_date | date | 进展截止日 |
+| stage | string | `plan`、`approved`、`in_progress`、`completed`、`stopped` |
+| expiry_date | date | 回购期限截止日 |
+| shares | float64 | 已回购（或计划）股数 |
+| amount | float64 | 已回购（或计划）金额（元） |
+| price_high | float64 | 回购价格上限（元/股） |
+| price_low | float64 | 回购价格下限（元/股） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### pledge_stats
+
+Tushare `pledge_stat` 每周股权质押统计，2014-03-07 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。源本身每周约有几十只股票重复出现，只留一行。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| end_date | date | 统计截止日（周五） |
+| pledge_count | int64 | 质押笔数 |
+| unrestricted_pledged_shares | float64 | 无限售股质押数（股） |
+| restricted_pledged_shares | float64 | 限售股质押数（股） |
+| total_shares | float64 | 总股本（股） |
+| pledge_ratio | float64 | 质押比例（%） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### chip_distribution
+
+Tushare `cyq_perf` 筹码分布估计，2018-01-02 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。Tushare 的模型结果，不是交易所数据。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| trade_date | date | 交易日 |
+| history_low | float64 | 历史最低价（元） |
+| history_high | float64 | 历史最高价（元） |
+| cost_5pct | float64 | 5 分位成本（元） |
+| cost_15pct | float64 | 15 分位成本（元） |
+| cost_50pct | float64 | 50 分位成本（元） |
+| cost_85pct | float64 | 85 分位成本（元） |
+| cost_95pct | float64 | 95 分位成本（元） |
+| cost_mean | float64 | 加权平均成本（元） |
+| winner_rate | float64 | 获利比例：成本低于收盘价的筹码占比（%） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### northbound_top10
+
+Tushare `hsgt_top10` 沪深股通每日十大成交股，2014-11-17 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| trade_date | date | 交易日 |
+| channel | string | `sh_connect`（沪股通）/ `sz_connect`（深股通） |
+| symbol | string | 股票代码 |
+| rank | int64 | 名次 |
+| close | float64 | 收盘价（元） |
+| change | float64 | 涨跌幅（%） |
+| amount | float64 | 成交额（元） |
+| net_amount | float64 | 净买入额（元）；2024-08-16 后为空 |
+| buy_amount | float64 | 买入额（元）；2024-08-16 后为空 |
+| sell_amount | float64 | 卖出额（元）；2024-08-16 后为空 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
 ### Compact 去重
 
 Compact 时按主键分组，保留 `fetched_at` 最大的一行。

@@ -24,15 +24,15 @@ This page answers two questions: which datasets the lake registers, and where ea
 
 | Tier | Description | Representative datasets |
 |------|------|------------|
-| **L0** Reference | Universe, ETF catalog, calendar, trading status, security name history | instruments, etf_profiles, trading_calendar, trading_status, name_history |
-| **L1** Market data | Unadjusted prices and volumes + adjustment factors + optional minute bars/trade ticks + delisting patterns | daily_bars, index_bars, minute_bars*, minute_bars_5m*, minute_bars_15m* / 30m* / 60m*, trade_ticks*, adj_factors, delisting_events, limit_prices |
-| **L2** Corporate events | Ex-rights/ex-dividend, announcements, scheduled disclosures | corporate_actions, announcement_index, earnings_disclosure_schedule |
+| **L0** Reference | Universe, ETF catalog, calendar, trading status, security name history | instruments, etf_profiles, trading_calendar, trading_status, name_history, convertible_bonds |
+| **L1** Market data | Unadjusted prices and volumes + adjustment factors + optional minute bars/trade ticks + delisting patterns | daily_bars, index_bars, minute_bars*, minute_bars_5m*, minute_bars_15m* / 30m* / 60m*, trade_ticks*, adj_factors, delisting_events, limit_prices, convertible_bond_bars |
+| **L2** Corporate events | Ex-rights/ex-dividend, announcements, scheduled disclosures | corporate_actions, announcement_index, earnings_disclosure_schedule, holder_trades, share_repurchases |
 | **L3** Fundamentals | Financial statements, valuation, analyst consensus | financial_statement_items, valuation_metrics, analyst_consensus, broker_forecasts |
-| **L4** Capital flows | Northbound, margin financing, main-force flows | fund_flow, fund_flow_ths, fund_flow_tushare, northbound_*, margin_trading, dragon_tiger, block_trades, institutional_holdings |
+| **L4** Capital flows | Northbound, margin financing, main-force flows | fund_flow, fund_flow_ths, fund_flow_tushare, northbound_*, margin_trading, dragon_tiger, block_trades, institutional_holdings, chip_distribution, northbound_top10 |
 | **L5** Structure and industry | Sectors, index constituents, industries | sector_members, index_constituents, industry_members, industry_index |
 | **L6** Macro | Interest rates, business climate, money | macro_indicators, market_breadth |
 | **L7** Sentiment / rotation | News, sentiment, sectors, popularity, event streams | sentiment_scores, hot_rank, sector_bars, sector_fund_flow, sector_fund_flow_ths, news_headlines, flash_news_wire, economic_calendar*, economic_events*, market_holidays* (stock_news is on-demand) |
-| **L8** Risk and compliance | Share unlocks, regulation | share_unlock_schedule, regulatory_events |
+| **L8** Risk and compliance | Share unlocks, regulation | share_unlock_schedule, regulatory_events, pledge_stats |
 | **L9** Derivatives | Futures/options contracts, per-contract bars, continuous contracts, Greeks, minute bars, and commodity futures main continuous contracts | commodity_bars*, futures_contracts*, option_contracts*, futures_bars*, option_bars*, futures_continuous*, option_greeks*, futures_minute_bars* |
 
 \*Optional or `required=false`: minute bars are off by default; commodity futures need an explicit backfill; the four futures/options tables need `[futures] enabled = true`; `economic_calendar`, `economic_events` and `market_holidays` come from Jin10; `cne backfill economic_calendar` fills the calendar back to 2008, while the other two accumulate only from the day they are turned on.
@@ -47,7 +47,7 @@ A support level says how far the project stands behind a dataset, independent of
 |-------|---------|---------|----------|
 | `core` | on | Rebuildable history, a steady daily path, and a backup source or authority check; `cne check` and the stability gate (`cne verify --runs`) judge only this level, in whichever schedule group runs it | `instruments`, `trading_calendar`, `trading_status`, `daily_bars`, `index_bars`, `corporate_actions`, `financial_statement_items`, `share_structure`, `valuation_metrics`, `index_constituents`, `adj_factors`, `delisting_events` |
 | `extended` | on | Rebuildable and mostly steady, but not essential or single-sourced | `etf_profiles`, `commodity_bars`, `announcement_index`, `earnings_disclosure_schedule`, `shareholder_counts`, `top_holders`, `margin_trading`, `dragon_tiger`, `block_trades`, `institutional_holdings`, `industry_members`, `name_history`, `macro_indicators`, `market_breadth`, `share_unlock_schedule`, `regulatory_events`, `industry_index` |
-| `best_effort` | **off** | Live snapshots whose history starts the day a lake turns them on, a retired source, or feeds that fail often (EastMoney push2 money flow, news, popularity ranks); enabled only when listed in `[datasets] best_effort` | `analyst_consensus`, `broker_forecasts`, `limit_prices`, `fund_flow_tushare`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar`, `economic_events`, `market_holidays` |
+| `best_effort` | **off** | Live snapshots whose history starts the day a lake turns them on, a retired source, or feeds that fail often (EastMoney push2 money flow, news, popularity ranks); enabled only when listed in `[datasets] best_effort` | `analyst_consensus`, `broker_forecasts`, `limit_prices`, `fund_flow_tushare`, `convertible_bonds`, `convertible_bond_bars`, `holder_trades`, `share_repurchases`, `pledge_stats`, `chip_distribution`, `northbound_top10`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar`, `economic_events`, `market_holidays` |
 | `optional` | off | Enabled by their own switches (`[minute_bars]`, `[trade_ticks]`, `[futures]`) | `minute_bars`, `minute_bars_5m`, `trade_ticks`, `futures_contracts`, `option_contracts`, `futures_bars`, `futures_minute_bars`, `option_bars`, `futures_continuous`, `option_greeks`, `minute_bars_15m`, `minute_bars_30m`, `minute_bars_60m` |
 
 ## Collection modes
@@ -200,6 +200,7 @@ Registry source code: `domain/datasets.py` (`DatasetSpec`), `domain/schemas.py` 
 | trading_calendar | trade_date | trade_date | by_date | ✓ | tdx_protocol | Fallback source: exchange CSV; seeded for 2016–2027 |
 | trading_status | trade_date (monthly) | symbol, trade_date | by_date | ✓ | exchange | baostock ST backfill; derived suspensions are written to monthly partitions. `status` (normal/suspended/**delisted**) and `risk_warning` (ST/*ST) are two columns — the old single column let a suspension overwrite the ST flag; delisted rows are determined from `instruments` and marked `derived_delisted`. Old lakes are read compatibly; for the physical migration see [schema](schema.md#trading_status) |
 | name_history | — (single-file merge) | symbol, start_date, name | by_date | — | tushare | Tushare `namechange` security name history: one row per short name with its start and end dates, announcement date and reason; `risk_warning` is read from the name prefix (ST, *ST, including the S and G forms of 2005–2007), and PT does not count as ST. Needs your own token in `[sources.tushare]`; without one the core-group step is skipped and sends nothing. About 14,000 rows for the whole market, re-read in full each run. It also covers halted sessions, so derived suspension rows take their `risk_warning` from here first |
+| convertible_bonds | — (single-file merge) | symbol | by_date | — | tushare | Tushare `cb_basic` + `cb_issue` convertible and exchangeable bond terms, one row per bond: underlying stock, par, issue and remaining size, coupon, value and maturity dates, listing and delisting dates, conversion window, first and current conversion price, public offering method and subscription date. `conversion_price` is the value when the list was read, not a history. Needs your own token in `[sources.tushare]`; only `cne backfill convertible_bonds` collects it and no default schedule runs it |
 
 The daily Beijing instrument catalogue attempts to enrich listing dates from confirmed same-day CNINFO IPO events. Subscription, prospectus and forecast dates do not establish listing dates. If that source is unavailable, the roster and unknown dates remain with a warning; compaction preserves dates already established.
 
@@ -220,6 +221,7 @@ Each day the instrument catalogue asks Baostock, EastMoney and the exchanges onl
 | trade_ticks | trade_date | symbol, trade_date, tick_seq | by_date | ✓ | tdx_protocol | Trade ticks. **Optional**, off by default; configured separately in `[trade_ticks]`; **not tick-by-tick trades** (see below); the source goes back to **2024-01-02**; on-disk size grows with the watchlist and window; required=false |
 | adj_factors | trade_date | symbol, trade_date, adjust_type | derived | ✓ | sina | hfq only; stocks read `f`, ETF/LOF read `s`; `cne derive adj_factors` |
 | delisting_events | — (single-file merge) | symbol | derived | — | derived | End-of-life pattern of each delisted stock; recovered bars come from sina; produced by `cne backfill daily_bars --profile delisted` |
+| convertible_bond_bars | trade_date (monthly) | symbol, trade_date | by_date | ✓ | tushare | Tushare `cb_daily` convertible bond bars, from 2004-01-02. Prices per 100 of face value; volume in bonds, amount in yuan. Needs your own token in `[sources.tushare]`; only `cne backfill convertible_bond_bars` collects it and no default schedule runs it |
 
 The two intraday datasets share one set of quality checks: duplicate primary keys (generic `pk_unique`), bars outside trading sessions, mismatched `trade_date` and `bar_time`, session gaps, and **two-way volume + turnover reconciliation against daily data**.
 
@@ -230,6 +232,8 @@ The two intraday datasets share one set of quality checks: duplicate primary key
 | corporate_actions | ex_date (yearly) | symbol, ex_date, action_type | by_date | ✓ | tdx_protocol (daily: the exchange's adjusted previous close names the session's ex-events, then TDX ex-rights records; EastMoney is the backup, the same-day peer and the source of the bonus/transfer split; the `actions_sweep` group re-reads every symbol's last 30 days weekly) | Backfill: tdx_protocol; for mixed granularity use `cne repair repartition` |
 | announcement_index | announce_date | announcement_id | by_date PIT | ✓ | cninfo | `as_of` filtering |
 | earnings_disclosure_schedule | report_period | symbol, report_period | by_date | — | eastmoney | Scheduled disclosure calendar (RPT_PUBLIC_BS_APPOIN); current-value semantics, not PIT: changes overwrite scheduled_date (first_scheduled_date keeps the first scheduled date, actual_date is filled in after disclosure); `cne backfill` covers all report periods from 2016 |
+| holder_trades | ann_date (yearly) | event_id | by_date | ✓ | tushare | Tushare `stk_holdertrade` announced trades by major holders and executives, from 2006, one row per trade. The source has no natural key and often repeats rows verbatim: repeats are dropped and `event_id` hashes every field. Needs your own token in `[sources.tushare]`; only `cne backfill holder_trades` collects it and no default schedule runs it |
+| share_repurchases | ann_date (yearly) | event_id | by_date | ✓ | tushare | Tushare `repurchase` buyback progress announcements, from 2005: one row each for plan, shareholder approval, implementation, completion and stop. Needs your own token in `[sources.tushare]`; only `cne backfill share_repurchases` collects it and no default schedule runs it |
 
 ## L3 Fundamentals
 
@@ -264,6 +268,8 @@ Vendor zero placeholders in PE, PB, PS and total/float market cap are stored as 
 | dragon_tiger | trade_date | symbol, trade_date, reason | by_date | ✓ | eastmoney | 1d; fallback source below |
 | block_trades | trade_date | symbol, trade_date, price, volume | by_date | ✓ | eastmoney | 1d; fallback source below |
 | institutional_holdings | report_period | symbol, holder_type, report_period | by_date | — | eastmoney | — |
+| chip_distribution | trade_date | symbol, trade_date | by_date | ✓ | tushare | Tushare `cyq_perf` holding-cost distribution estimate, from 2018: the 5/15/50/85/95th cost percentiles, weighted mean cost and winner rate. A Tushare model output, not exchange data. Needs your own token in `[sources.tushare]`; only `cne backfill chip_distribution` collects it and no default schedule runs it |
+| northbound_top10 | trade_date (yearly) | trade_date, channel, symbol | by_date | ✓ | tushare | Tushare `hsgt_top10` ten most traded Shanghai and Shenzhen Connect stocks per session, from 2014-11-17. The exchanges stopped publishing net, buy and sell amounts after 2024-08-16; those columns are null afterwards. Needs your own token in `[sources.tushare]`; only `cne backfill northbound_top10` collects it and no default schedule runs it |
 
 `dragon_tiger` and `block_trades` have exchange fallback sources: SZSE `ShowReport` with
 `CATALOGID=1265` (dragon-tiger list) and `1842_xxpl_after` (block trades); the SSE counterpart is `1902`.
@@ -333,6 +339,7 @@ An EM response containing a future adjustment rejects the whole snapshot: removi
 |--------|--------|------|------|------|------|
 | share_unlock_schedule | unlock_date | symbol, unlock_date | by_date | ✓ | eastmoney |
 | regulatory_events | event_date | event_id | by_date | ✓ | cninfo (derived from announcement_index) |
+| pledge_stats | end_date | symbol, end_date | by_date | ✓ | tushare |
 
 ## L9 Derivatives
 

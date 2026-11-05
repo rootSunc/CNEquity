@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+- 新增 7 个可选的 Tushare 数据集，都需要你自己的 Tushare 令牌，只由 `cne backfill <名称>` 采集，不进任何日更组；没有令牌时不发请求：
+  - `convertible_bonds`：可转债与可交换债条款（`cb_basic` + `cb_issue`），每只债一行；`conversion_price` 是读取时的转股价，不是历史。
+  - `convertible_bond_bars`：可转债日线（`cb_daily`），2004 起；价格按每 100 元面值，量为张、额为元。
+  - `holder_trades`：重要股东与高管增减持公告（`stk_holdertrade`），2006 起；源里逐字重复的行只留一行，`event_id` 为全部字段的哈希。
+  - `share_repurchases`：回购进展公告（`repurchase`），2005 起，每个阶段一行。
+  - `pledge_stats`：每周股权质押统计（`pledge_stat`），2014-03 起；股数换算为股。
+  - `chip_distribution`：Tushare 的筹码分布估计（`cyq_perf`），2018 起；是模型结果，不是交易所数据。
+  - `northbound_top10`：沪深股通每日十大成交股（`hsgt_top10`），2014-11-17 起；2024-08-16 后交易所不再公布净买入、买入、卖出额，这三列为空。
 - 等待湖锁时会说明是谁占着：`compact.lock` 和各运行锁被占用时，日志的“waiting for …”一行、超时报错和“运行已被锁定”的提示现在写出持有者的进程号、正在跑的步骤、开始持有的时间和命令行，例如 `held by pid 4242, step derive_option_greeks, since … (12m03s)` 后接命令行；排队结束后再记一行实际等了多久。此前只能看到“被另一个进程占用”，一次等满 1 小时超时失败的运行事后查不出是谁占的锁。持有者信息记在锁旁的 `<锁名>.holder.json`，释放锁时删除；进程崩溃留下的会被忽略，并随过期锁文件一起清理。
 - `cne serve` 和 `cne mcp --http` 的访问日志不再记下令牌：URL 里的 `/mcp/<token>` 和 `?token=` 会写成 `<redacted>`，此前令牌原样出现在每一行访问日志里，也会进入转发 stdout 的隧道或代理日志。用 URL 传令牌的接入方式照常可用。
 - MCP `run_sql` 不再能读到未发布的数据：原始 `read_parquet` 只放行各数据集已提交的版本目录，此前整个 `curated/` 都可读，能读到未发布或被隔离的候选数据；目录前缀也不再误放行同名开头的其他数据集。查询结果只取当前页，总数单独计数，返回字段不变。`query_dataset` 不给日期范围时仍会全量加载。

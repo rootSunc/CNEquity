@@ -18,4 +18,5 @@ from cnequity.steps import (  # noqa: F401
     structure,
     ths_fallback,
     ticks,
+    tushare_extras,
 )

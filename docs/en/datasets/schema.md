@@ -1337,6 +1337,160 @@ Tushare's own `moneyflow` measure; needs your own Tushare token in `[sources.tus
 | data_version | string | Provenance |
 | fetched_at | timestamp | Provenance |
 
+#### convertible_bonds
+
+Tushare `cb_basic` + `cb_issue` convertible and exchangeable bond terms, one row per bond. Needs your own Tushare token in `[sources.tushare]`. Privately placed bonds have no public offering and no listing date.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Bond code, such as `113001.SH` |
+| name | string | Short name |
+| full_name | string | Full name |
+| bond_type | string | `convertible` or `exchangeable` |
+| stock_symbol | string | Underlying stock |
+| exchange | string | `SH` / `SZ` |
+| par_value | float64 | Par value (yuan) |
+| issue_price | float64 | Issue price (yuan) |
+| issue_size | float64 | Issue size (yuan) |
+| remaining_size | float64 | Remaining size (yuan) |
+| term_years | float64 | Term (years) |
+| coupon_rate | float64 | Current coupon rate (%) |
+| coupon_schedule | string | Coupon schedule by year, as given |
+| value_date | date | Value date |
+| maturity_date | date | Maturity date |
+| list_date | date | Listing date |
+| delist_date | date | Delisting date |
+| conversion_start_date | date | First conversion day |
+| conversion_end_date | date | Last conversion day |
+| conversion_stop_date | date | Conversion suspended from |
+| first_conversion_price | float64 | Conversion price at issue (yuan/share) |
+| conversion_price | float64 | Conversion price when read (yuan/share); not a history |
+| issue_announce_date | date | Offering announcement date |
+| issue_method | string | Offering method, as given |
+| subscription_date | date | Online subscription date |
+| holder_allotment_record_date | date | Record date for the shareholder allotment |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### convertible_bond_bars
+
+Tushare `cb_daily` convertible bond bars, from 2004-01-02. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Bond code |
+| trade_date | date | Session |
+| open | float64 | Open (yuan per 100 face) |
+| high | float64 | High |
+| low | float64 | Low |
+| close | float64 | Close |
+| pre_close | float64 | Previous close |
+| volume | int64 | Volume (bonds) |
+| amount | float64 | Amount (yuan) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### holder_trades
+
+Tushare `stk_holdertrade` announced trades by major holders and executives, from 2006. Needs your own Tushare token in `[sources.tushare]`. Rows repeated verbatim are kept once.
+
+| Column | Type | Description |
+|--------|------|-------|
+| event_id | string | Hash of every field |
+| symbol | string | Legacy Beijing codes are stored under the 920 code |
+| ann_date | date | Announcement date; availability date |
+| holder_name | string | Holder |
+| holder_type | string | `company`, `individual` or `executive` |
+| direction | string | `increase` / `decrease` |
+| change_shares | float64 | Shares traded |
+| change_ratio | float64 | Shares traded as % of total shares |
+| after_shares | float64 | Shares held afterwards |
+| after_ratio | float64 | Holding afterwards (%) |
+| avg_price | float64 | Average price (yuan/share) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### share_repurchases
+
+Tushare `repurchase` buyback progress announcements, from 2005. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| event_id | string | Hash of every field |
+| symbol | string | Legacy Beijing codes are stored under the 920 code |
+| ann_date | date | Announcement date; availability date |
+| progress_date | date | Progress as of |
+| stage | string | `plan`, `approved`, `in_progress`, `completed` or `stopped` |
+| expiry_date | date | Buyback deadline |
+| shares | float64 | Shares bought back (or planned) |
+| amount | float64 | Amount bought back (or planned, yuan) |
+| price_high | float64 | Price cap (yuan/share) |
+| price_low | float64 | Price floor (yuan/share) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### pledge_stats
+
+Tushare `pledge_stat` weekly share-pledge totals, from 2014-03-07. Needs your own Tushare token in `[sources.tushare]`. The source lists a few dozen stocks twice each week; one row is kept.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Legacy Beijing codes are stored under the 920 code |
+| end_date | date | Week end (Friday) |
+| pledge_count | int64 | Number of pledges |
+| unrestricted_pledged_shares | float64 | Pledged unrestricted shares |
+| restricted_pledged_shares | float64 | Pledged restricted shares |
+| total_shares | float64 | Total shares |
+| pledge_ratio | float64 | Pledge ratio (%) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### chip_distribution
+
+Tushare `cyq_perf` holding-cost distribution estimate, from 2018-01-02. Needs your own Tushare token in `[sources.tushare]`. A Tushare model output, not exchange data.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Legacy Beijing codes are stored under the 920 code |
+| trade_date | date | Session |
+| history_low | float64 | All-time low (yuan) |
+| history_high | float64 | All-time high (yuan) |
+| cost_5pct | float64 | 5th percentile cost (yuan) |
+| cost_15pct | float64 | 15th percentile cost (yuan) |
+| cost_50pct | float64 | Median cost (yuan) |
+| cost_85pct | float64 | 85th percentile cost (yuan) |
+| cost_95pct | float64 | 95th percentile cost (yuan) |
+| cost_mean | float64 | Weighted mean cost (yuan) |
+| winner_rate | float64 | Winner rate: share of holdings with cost below the close (%) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### northbound_top10
+
+Tushare `hsgt_top10` ten most traded Connect stocks per session, from 2014-11-17. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| trade_date | date | Session |
+| channel | string | `sh_connect` / `sz_connect` |
+| symbol | string | Stock code |
+| rank | int64 | Rank |
+| close | float64 | Close (yuan) |
+| change | float64 | Change (%) |
+| amount | float64 | Turnover (yuan) |
+| net_amount | float64 | Net buy (yuan); null after 2024-08-16 |
+| buy_amount | float64 | Buy amount (yuan); null after 2024-08-16 |
+| sell_amount | float64 | Sell amount (yuan); null after 2024-08-16 |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
 ### Compact deduplication
 
 During compact, rows are grouped by primary key and the row with the largest `fetched_at` is kept.
