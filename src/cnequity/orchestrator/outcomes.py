@@ -139,7 +139,9 @@ def error_kind(error: BaseException) -> str:
     if isinstance(error, (TimeoutError, ConnectionError, socket.gaierror, socket.herror)):
         return "source_transient"
     # TLS and curl_cffi request errors subclass OSError; they are network
-    # failures, not a broken disk.
+    # failures, not a broken disk. Certificate failures are included on
+    # purpose: some exchange sites serve broken chains for a while, and the
+    # cooldown and retry caps keep repeated attempts cheap.
     if isinstance(error, ssl.SSLError) or _is_curl_request_error(error):
         return "source_transient"
     if isinstance(error, OSError):
