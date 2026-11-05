@@ -10,7 +10,13 @@ from pathlib import Path
 
 from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS
-from cnequity.file_lock import LockUnavailable, exclusive_lock, holder_path, is_locked
+from cnequity.file_lock import (
+    IS_WINDOWS,
+    LockUnavailable,
+    exclusive_lock,
+    holder_path,
+    is_locked,
+)
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.storage.lifecycle.resources import resource_holds
 from cnequity.storage.observation import STAGED_OBSERVATION_FIELD
@@ -199,21 +205,34 @@ def clean_stale_lock_files(
     for path in lock_dir.glob("*.lock"):
         if path.stat().st_mtime > cutoff:
             continue
-        if is_locked(path):
-            continue
-        if not dry_run:
-            try:
-                # Deliberately unlinked *after* the probe closed its handle:
-                # Windows refuses to delete an open file, so holding the lock
-                # across the unlink — which is what the flock version did —
-                # cannot work there. A holder that reappears in this gap turns
-                # the unlink into an OSError, and skipping is the right answer.
-                path.unlink(missing_ok=True)
-            except OSError:
+        if dry_run or IS_WINDOWS:
+            if is_locked(path):
                 continue
-            # A holder that crashed leaves its note behind; it goes with its lock.
-            with suppress(OSError):
-                holder_path(path).unlink(missing_ok=True)
+            if not dry_run:
+                try:
+                    # Windows refuses to delete an open file, so the lock
+                    # cannot be held across the unlink there. A holder that
+                    # reappears in this gap turns the unlink into an OSError.
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    continue
+                with suppress(OSError):
+                    holder_path(path).unlink(missing_ok=True)
+        else:
+            # POSIX unlinks under the lock: probing and then unlinking let a
+            # process take the lock in between and keep it on the deleted
+            # file while the next opener locked a fresh one — two holders of
+            # the lake lock. A waiter queued on this file re-opens the path
+            # once it gets the lock (see ``exclusive_lock``).
+            try:
+                with exclusive_lock(path, blocking=False):
+                    path.unlink(missing_ok=True)
+                    # A holder that crashed leaves its note behind; it goes
+                    # with its lock.
+                    with suppress(OSError):
+                        holder_path(path).unlink(missing_ok=True)
+            except (LockUnavailable, OSError):
+                continue
         removed += 1
     return removed
 

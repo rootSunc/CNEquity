@@ -683,3 +683,34 @@ def test_a_stalled_run_lock_names_its_holder(tmp_path, monkeypatch):
     message = str(exc.value)
     assert "Gave up waiting for the compact lock" in message
     assert "step ths_official_snapshot" in message
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot unlink an open lock file")
+def test_a_waiter_on_an_unlinked_lock_file_does_not_hold_the_lock(tmp_path):
+    """The stale-lock sweep unlinks a free lock file under its own lock.
+
+    A process queued on that file gets the lock on a nameless inode once the
+    sweep lets go, while the next opener creates a fresh file and locks that:
+    two holders. The waiter must re-open the path instead.
+    """
+    path = tmp_path / "locks" / "compact.lock"
+    waiter_holds = threading.Event()
+    release_waiter = threading.Event()
+
+    def waiter():
+        with exclusive_lock(path, blocking=True, timeout=10):
+            waiter_holds.set()
+            release_waiter.wait(10)
+
+    with exclusive_lock(path, blocking=False):
+        thread = threading.Thread(target=waiter, daemon=True)
+        thread.start()
+        time.sleep(0.2)  # the waiter has opened the old file and is queued on it
+        path.unlink()
+    # The waiter now owns the lock of record; nobody else may take it.
+    assert waiter_holds.wait(5)
+    with pytest.raises(LockUnavailable):
+        with exclusive_lock(path, blocking=False):
+            pass
+    release_waiter.set()
+    thread.join(5)

@@ -1,6 +1,9 @@
+import contextlib
+import sys
 from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
+import pytest
 
 from cnequity.config import Config
 from cnequity.config.bootstrap import path_for_toml
@@ -486,3 +489,53 @@ def test_pruning_logs_is_safe_without_a_logs_directory(tmp_path):
     from cnequity.storage.staging_cleanup import clean_run_logs
 
     assert clean_run_logs(tmp_path / "no-such-lake").removed == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot unlink an open lock file")
+def test_the_stale_lock_sweep_never_leaves_two_lake_lock_holders(tmp_path, monkeypatch):
+    """A command queued on compact.lock while the sweep deletes it.
+
+    The sweep used to probe the lock and unlink it afterwards; a command that
+    took the lock in that gap kept it on the deleted file while the next
+    command locked a fresh one, so two processes mutated the lake at once.
+    """
+    import os
+    import threading
+    import time
+
+    from cnequity.file_lock import LockUnavailable, lake_mutation_lock
+    from cnequity.storage import staging_cleanup
+
+    meta_root = tmp_path / "meta"
+    lock_path = meta_root / "locks" / "compact.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.touch()
+    old = time.time() - 30 * 86400
+    os.utime(lock_path, (old, old))
+
+    first_holds = threading.Event()
+    release_first = threading.Event()
+
+    def first_command():
+        with lake_mutation_lock(meta_root, blocking=True, timeout=10):
+            first_holds.set()
+            release_first.wait(10)
+
+    real_lock = staging_cleanup.exclusive_lock
+
+    @contextlib.contextmanager
+    def sweep_lock(path, **kwargs):
+        with real_lock(path, **kwargs) as handle:
+            # A command arrives and queues while the sweep holds the old file.
+            threading.Thread(target=first_command, daemon=True).start()
+            time.sleep(0.2)
+            yield handle
+
+    monkeypatch.setattr(staging_cleanup, "exclusive_lock", sweep_lock)
+    assert clean_stale_lock_files(meta_root, retention_days=7) == 1
+    assert first_holds.wait(5)
+
+    with pytest.raises(LockUnavailable):
+        with exclusive_lock(lock_path, blocking=False):
+            pass
+    release_first.set()

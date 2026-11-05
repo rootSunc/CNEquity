@@ -366,6 +366,22 @@ def _held_by(path: Path) -> str:
     return "held by another process or another thread of this run"
 
 
+def _still_at(handle: IO, path: Path) -> bool:
+    """True when *handle* is still the file at *path*.
+
+    Windows cannot unlink a file another handle has open, so only POSIX can
+    end up holding a lock on a file that is no longer at its path.
+    """
+    if IS_WINDOWS:
+        return True
+    try:
+        named = os.stat(path)
+    except FileNotFoundError:
+        return False
+    opened = os.fstat(handle.fileno())
+    return (named.st_dev, named.st_ino) == (opened.st_dev, opened.st_ino)
+
+
 @contextlib.contextmanager
 def exclusive_lock(
     path: Path | str,
@@ -392,70 +408,78 @@ def exclusive_lock(
     # "a+" creates without truncating. Truncation matters on Windows, where the
     # locks are mandatory: opening "w" against a file whose byte 0 another
     # process holds fails outright instead of politely queueing.
-    with open(path, "a+", encoding="utf-8") as handle:
-        if blocking:
-            # Try once without waiting, so queuing can be announced. A blocking
-            # acquire is otherwise indistinguishable from a hang: no output, no
-            # deadline, and the reason (someone else holds this) never said.
-            try:
-                _acquire(handle, blocking=False)
-            except LockUnavailable:
-                queued_at = time.monotonic()
-                # Wait out the routine queueing quietly, and only announce what
-                # is left — see QUIET_LOCK_WAIT_SECONDS.
-                grace = (
-                    QUIET_LOCK_WAIT_SECONDS
-                    if timeout is None
-                    else min(QUIET_LOCK_WAIT_SECONDS, timeout)
-                )
+    while True:
+        with open(path, "a+", encoding="utf-8") as handle:
+            if blocking:
+                # Try once without waiting, so queuing can be announced. A blocking
+                # acquire is otherwise indistinguishable from a hang: no output, no
+                # deadline, and the reason (someone else holds this) never said.
                 try:
-                    _acquire(handle, blocking=True, timeout=grace)
+                    _acquire(handle, blocking=False)
                 except LockUnavailable:
-                    if timeout is not None and grace >= timeout:
-                        raise
-                    # flock conflicts between file handles, not processes:
-                    # another thread of this same run queues here too (the
-                    # derive's lanes on baostock's one connection), and
-                    # blaming "another process" sent people hunting for one.
-                    # A holder note, when there is one, names it outright.
-                    logger.info(
-                        "waiting for %s — %s (up to %s)",
-                        path.name,
-                        _held_by(path),
-                        _hms(timeout) if timeout is not None else "indefinitely",
+                    queued_at = time.monotonic()
+                    # Wait out the routine queueing quietly, and only announce what
+                    # is left — see QUIET_LOCK_WAIT_SECONDS.
+                    grace = (
+                        QUIET_LOCK_WAIT_SECONDS
+                        if timeout is None
+                        else min(QUIET_LOCK_WAIT_SECONDS, timeout)
                     )
                     try:
-                        _acquire(
-                            handle,
-                            blocking=True,
-                            timeout=None if timeout is None else timeout - grace,
+                        _acquire(handle, blocking=True, timeout=grace)
+                    except LockUnavailable:
+                        if timeout is not None and grace >= timeout:
+                            raise
+                        # flock conflicts between file handles, not processes:
+                        # another thread of this same run queues here too (the
+                        # derive's lanes on baostock's one connection), and
+                        # blaming "another process" sent people hunting for one.
+                        # A holder note, when there is one, names it outright.
+                        logger.info(
+                            "waiting for %s — %s (up to %s)",
+                            path.name,
+                            _held_by(path),
+                            _hms(timeout) if timeout is not None else "indefinitely",
                         )
-                    except LockUnavailable as exc:
-                        raise LockUnavailable(
-                            f"{path}: timed out acquiring lock after "
-                            f"{_hms(time.monotonic() - queued_at)}; {_held_by(path)}"
-                        ) from exc
-                    # Closes the announced wait, so a log says how long the
-                    # queue actually cost instead of leaving it to be inferred.
-                    logger.info(
-                        "acquired %s after waiting %s",
-                        path.name,
-                        _hms(time.monotonic() - queued_at),
-                    )
-        else:
-            _acquire(handle, blocking=blocking, timeout=timeout)
-        _mark_held(path)
-        if record_holder:
-            _write_holder(path)
-        try:
-            yield handle
-        finally:
-            try:
-                if record_holder:
-                    _clear_holder(path)
+                        try:
+                            _acquire(
+                                handle,
+                                blocking=True,
+                                timeout=None if timeout is None else timeout - grace,
+                            )
+                        except LockUnavailable as exc:
+                            raise LockUnavailable(
+                                f"{path}: timed out acquiring lock after "
+                                f"{_hms(time.monotonic() - queued_at)}; {_held_by(path)}"
+                            ) from exc
+                        # Closes the announced wait, so a log says how long the
+                        # queue actually cost instead of leaving it to be inferred.
+                        logger.info(
+                            "acquired %s after waiting %s",
+                            path.name,
+                            _hms(time.monotonic() - queued_at),
+                        )
+            else:
+                _acquire(handle, blocking=blocking, timeout=timeout)
+            if not _still_at(handle, path):
+                # The stale-lock sweep unlinked this file while we waited on it.
+                # A lock on a nameless inode excludes nobody: the next opener
+                # creates a fresh file and takes its lock too. Start over on it.
                 _release(handle)
+                continue
+            _mark_held(path)
+            if record_holder:
+                _write_holder(path)
+            try:
+                yield handle
             finally:
-                _unmark_held(path)
+                try:
+                    if record_holder:
+                        _clear_holder(path)
+                    _release(handle)
+                finally:
+                    _unmark_held(path)
+            return
 
 
 def is_locked(path: Path | str) -> bool:
