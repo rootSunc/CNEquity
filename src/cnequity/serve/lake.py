@@ -57,6 +57,12 @@ logger = logging.getLogger(__name__)
 # to several endpoints at once and they would each redo it.
 _CACHE_TTL_SECONDS = 30.0
 
+#: Datasets owed a row on every session, whose gaps, date picker and heatmap
+#: are judged per session whatever their partition period. A month or year
+#: directory says nothing about one missing day inside it, so these read the
+#: days that actually hold rows.
+_SESSION_DATASETS = frozenset({"daily_bars"})
+
 # Heatmap cell alphabet. One char per (dataset, day) keeps a 40x250 grid a few
 # kilobytes instead of ten thousand JSON objects.
 CELL_COVERED = "#"
@@ -173,6 +179,7 @@ class LakeView:
         self._lock = threading.Lock()
         self._cache: dict[str, _Cached] = {}
         self._inflight: dict[str, threading.Event] = {}
+        self._session_days_cache: dict[str, tuple[object, frozenset[date]]] = {}
         self._refresh_lock = threading.Lock()
         self._refreshing = False
         self.maintenance_gate = None
@@ -498,6 +505,46 @@ class LakeView:
             .to_dicts()
         )
 
+    def _session_days(self, spec) -> frozenset[date] | None:
+        """Days *spec* holds rows on, for a session dataset not partitioned by day.
+
+        None when the directory names already answer it (day partitions) or the
+        dataset is not judged per session. Cached per committed generation, so a
+        dashboard pays one column scan per publish rather than per request.
+        """
+        if spec.name not in _SESSION_DATASETS or spec.partition_granularity == "day":
+            return None
+        from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+        from cnequity.storage.revisions import RevisionStore
+
+        root = self.config.curated_root / spec.name
+        pointer = RevisionStore(
+            self.config.meta_root, self.config.curated_root, create=False
+        ).current_pointer(spec.name)
+        key = (pointer or {}).get("revision_id") or (
+            root.stat().st_mtime_ns if root.exists() else None
+        )
+        with self._lock:
+            hit = self._session_days_cache.get(spec.name)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        if not dataset_has_parquet(root):
+            days: frozenset[date] = frozenset()
+        else:
+            column = spec.partition_col
+            frame = (
+                scan_parquet_root(
+                    root, partition_col=column, dataset=spec.name, meta_root=self.config.meta_root
+                )
+                .select(column)
+                .unique()
+                .collect()
+            )
+            days = frozenset(frame[column].drop_nulls().to_list())
+        with self._lock:
+            self._session_days_cache[spec.name] = (key, days)
+        return days
+
     def _gaps(self, spec, parts: list[dict]) -> dict:
         """Periods inside the covered span that hold no partition.
 
@@ -512,8 +559,13 @@ class LakeView:
         present = {p["partition"] for p in dated}
         first, last = dated[0]["period_start"], max(p["period_end"] for p in dated)
         missing: list[str] = []
+        session_days = self._session_days(spec)
+        if session_days is not None:
+            present = {day.isoformat() for day in session_days}
+            if session_days:
+                first, last = min(session_days), max(session_days)
 
-        if spec.partition_granularity == "day":
+        if spec.partition_granularity == "day" or session_days is not None:
             # Only sessions count as missing; a weekend is not a gap.
             from cnequity.query.calendar import _load_trading_calendar_df
 
@@ -543,7 +595,7 @@ class LakeView:
         return {
             "missing": missing[:60],
             "total": len(missing),
-            "unit": spec.partition_granularity,
+            "unit": "day" if session_days is not None else spec.partition_granularity,
         }
 
     def _resample_backlog(self, dataset: str) -> dict | None:
@@ -1266,9 +1318,14 @@ class LakeView:
             }
 
         values = [p["partition"] for p in reversed(parts) if p["partition"] is not None]
+        session_days = self._session_days(spec)
+        if session_days is not None:
+            values = [day.isoformat() for day in sorted(session_days, reverse=True)]
         if spec.partition_col == "report_period":
             kind = "report_period"
-        elif spec.partition_granularity == "day" and spec.partition_col == "trade_date":
+        elif session_days is not None or (
+            spec.partition_granularity == "day" and spec.partition_col == "trade_date"
+        ):
             kind = "trading_day"
         elif spec.partition_granularity == "day":
             kind = "event_day"
@@ -1280,7 +1337,7 @@ class LakeView:
             note = _(
                 "snapshot_only: each run lands one snapshot of that day. A day that did not run has no snapshot and cannot be made up; replaying would fabricate rows. The list only has dates that really exist."
             )
-        elif spec.partition_granularity != "day":
+        elif spec.partition_granularity != "day" and session_days is None:
             note = _(
                 "Partitioned by {partition_granularity}: pick a period to get back all its rows."
             ).format(partition_granularity=spec.partition_granularity)
@@ -1406,6 +1463,9 @@ class LakeView:
         for row in self._rows():
             name = row["dataset"]
             intervals = sorted(spans.get(name, []))
+            session_days = self._session_days(DATASETS[name])
+            if session_days is not None:
+                intervals = sorted((day, day) for day in session_days)
             if row["granularity"] is None:
                 cells = CELL_UNPARTITIONED * len(trading_days)
             elif not intervals:

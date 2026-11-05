@@ -123,12 +123,29 @@ def _halt_dated_removals(view: Config, before: pl.DataFrame, after: pl.DataFrame
     if removed.is_empty():
         return []
     bars_root = view.curated_root / "daily_bars"
-    market_open = removed.filter(
-        pl.col("ex_date").map_elements(
-            lambda day: (bars_root / f"trade_date={day.isoformat()}").is_dir(),
-            return_dtype=pl.Boolean,
+    from cnequity.query.parquet_scan import dataset_has_parquet
+
+    if not dataset_has_parquet(bars_root):
+        # No bars, no evidence the market was open on any of these days.
+        return []
+    # "The market was open" means some security has a bar that day. Ask the
+    # rows, not the layout: a day directory only answered it while daily_bars
+    # was day-partitioned, and a month partition would have read every
+    # ex-date as a closed market and waved every removal through.
+    ex_dates = removed.get_column("ex_date").unique()
+    open_days = (
+        scan_parquet_root(
+            bars_root,
+            partition_col="trade_date",
+            start=ex_dates.min(),
+            end=ex_dates.max(),
         )
+        .filter(pl.col("trade_date").is_in(ex_dates.implode()))
+        .select(pl.col("trade_date").alias("ex_date"))
+        .unique()
+        .collect()
     )
+    market_open = removed.join(open_days, on="ex_date", how="semi")
     if market_open.is_empty():
         return []
     traded = (

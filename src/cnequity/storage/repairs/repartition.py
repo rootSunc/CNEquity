@@ -100,7 +100,143 @@ def repartition_dataset(
     # must share compact's mutation lock or it can promote a stale snapshot and
     # discard rows compact wrote concurrently.
     with lake_mutation_lock(config.meta_root, blocking=True):
+        from cnequity.storage.revisions import RevisionStore
+
+        store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
+        if store.current_pointer(dataset) is not None:
+            # A published dataset is read through its committed generation;
+            # swapping the mutable tree would change nothing a reader sees and
+            # the next compact would overwrite it. Publish a revision instead.
+            return _repartition_published(config, store, dataset, dry_run=dry_run)
         return _repartition_dataset_locked(config, dataset, dry_run=dry_run)
+
+
+def _repartition_published(
+    config: Config,
+    store,
+    dataset: str,
+    *,
+    dry_run: bool = False,
+) -> RepartitionResult:
+    """Rewrite a published dataset's history at its period, one period at a time.
+
+    Starts from the committed generation (``materialize_current``), builds each
+    target partition from the old ones it covers — read in file order and
+    PK-deduped exactly as compact merges — and publishes the result as one
+    gated revision. Rows are never sanitised here: a layout change must not
+    change data. Memory holds one target period, not the dataset, which is
+    what makes this usable on daily_bars (20M rows).
+    """
+    from datetime import datetime, timezone
+
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.quality.publication import check_repair_publication
+    from cnequity.storage.parquet import CuratedWriter
+
+    spec = DATASETS.get(dataset)
+    if spec is None or spec.partition_col is None:
+        raise RepartitionError(f"{dataset} has no partitions to rewrite")
+    col = spec.partition_col
+    granularity = spec.partition_granularity
+    if not dry_run:
+        store.materialize_current(dataset)
+    root = logical_root(config, spec) if not dry_run else store.current_root(dataset)
+    partitions = list_partitions(root, col, resolve=False)
+    if not partitions:
+        raise RepartitionError(f"no partitions under {root}")
+
+    targets: dict[str, list] = {}
+    for part in partitions:
+        targets.setdefault(partition_value(part.start, granularity), []).append(part)
+    files_before = sorted(root.glob("**/*.parquet"))
+    result = RepartitionResult(
+        dataset=dataset,
+        rows=0,
+        partitions_before=len(partitions),
+        partitions_after=len(targets),
+        files_before=len(files_before),
+        files_after=0,
+        bytes_before=_dir_bytes(files_before),
+        bytes_after=0,
+        changed=False,
+    )
+    stale = {
+        value: parts for value, parts in targets.items() if [p.value for p in parts] != [value]
+    }
+    if not stale:
+        result.files_after, result.bytes_after = result.files_before, result.bytes_before
+        return result
+
+    writer = CuratedWriter(root.parent)
+    changed: list[Path] = []
+    rows_in = rows_out = 0
+    for value, parts in sorted(targets.items()):
+        files = [
+            path
+            for part in sorted(parts, key=lambda p: (p.start, p.value))
+            for path in sorted((root / f"{col}={part.value}").glob("**/*.parquet"))
+        ]
+        frame = pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
+        rows_in += frame.height
+        merged = dedupe_by_primary_key(frame, dataset)
+        rows_out += merged.height
+        if value not in stale:
+            continue
+        if dry_run:
+            result.files_after += 1
+            continue
+        target = writer.write_partition(dataset, col, value, merged, "part-merged.parquet")
+        if merged.height != pl.read_parquet(target).height:
+            raise RepartitionError(f"{dataset}: {col}={value} did not read back whole")
+        changed.append(target)
+        for part in parts:
+            if part.value != value:
+                shutil.rmtree(root / f"{col}={part.value}")
+    result.rows = rows_out
+    if rows_in != rows_out:
+        logger.info(
+            "repartition %s: %d duplicate PK row(s) folded, as compact would",
+            dataset,
+            rows_in - rows_out,
+        )
+    if dry_run:
+        result.files_after += sum(1 for value in targets if value not in stale)
+        return result
+
+    run_id = f"repartition-{dataset}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+    publication = check_repair_publication(config, dataset, run_id, changed)
+    contract = dataset_contract(dataset)
+    revision = store.commit(
+        dataset,
+        run_id=run_id,
+        changed_files=changed,
+        schema_version=int(contract["schema_version"]),
+        contract_fingerprint=contract_fingerprint(contract),
+        metadata={
+            "reason": "repartition",
+            "granularity": granularity,
+            "partitions_before": result.partitions_before,
+            "partitions_after": result.partitions_after,
+            "duplicate_rows_folded": rows_in - rows_out,
+            "publication_audit": publication["report_path"],
+        },
+        _locked=True,
+    )
+    if revision is None:
+        raise RepartitionError(f"{dataset}: repartition produced no revision")
+    files_after = sorted(root.glob("**/*.parquet"))
+    result.files_after = len(files_after)
+    result.bytes_after = _dir_bytes(files_after)
+    result.changed = True
+    logger.info(
+        "repartitioned %s to %s as revision %s: %d→%d files",
+        dataset,
+        granularity,
+        revision.revision,
+        result.files_before,
+        result.files_after,
+    )
+    return result
 
 
 def _repartition_dataset_locked(
