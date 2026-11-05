@@ -198,3 +198,41 @@ def _with_announced_halts(
     rows = rows.select([c for c in rows.columns if c in status.columns or c in key_schema])
     kept = status.join(announced, on=list(key_schema), how="anti")
     return pl.concat([kept, rows], how="diagonal_relaxed")
+
+
+def load_bar_universe(config: Config) -> set[str]:
+    """Symbols that carry at least one traded ``daily_bars`` row in the lake.
+
+    A suspended/pre-open placeholder can still be present in ``daily_bars`` with
+    ``volume=0``. It is not evidence that the symbol ever traded, so when the
+    column exists require positive volume. This is the *tradable* universe as
+    daily_bars actually realises it: delisted names (source returns no bars) and
+    never-traded instrument placeholders (IPO listed but not yet trading) are
+    absent. Live snapshots such as the EastMoney valuation clist return those
+    dead names, so filtering to this set keeps valuation_metrics in lock-step
+    with daily_bars coverage (audit check ``valuation_bars_orphan_symbol``). A
+    genuine IPO enters this set the same day it first trades and gets a bar.
+
+    Returns an empty set when no bars exist yet; callers must treat that as
+    "cannot reconcile" and skip filtering rather than dropping every row.
+    """
+    bars_root = config.curated_root / "daily_bars"
+    # Canonicalize the daily-bar identity before applying the volume contract.
+    # Filtering each file first lets an old positive retry keep a symbol in the
+    # valuation universe beside a newer zero-volume canonical row. The shared
+    # scanner preserves row-based semantics for legacy files without volume.
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    try:
+        scan = scan_parquet_root(
+            bars_root,
+            partition_col="trade_date",
+            traded_only=True,
+            dataset="daily_bars",
+            meta_root=config.meta_root,
+        )
+    except FileNotFoundError:
+        return set()
+    if "symbol" not in scan.collect_schema().names():
+        return set()
+    return set(scan.select("symbol").unique().collect()["symbol"].to_list())

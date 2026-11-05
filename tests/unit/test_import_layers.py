@@ -52,6 +52,10 @@ _RANKS: dict[str, int] = {
     # report; no first-party imports. The run lock wraps file_lock only.
     "cnequity.orchestrator.outcomes": 25,
     "cnequity.orchestrator.run_lock": 25,
+    # Per-step resource accounting; no first-party imports.
+    "cnequity.diagnostics.metrics": 25,
+    # Which init phase a step belongs to; imports only outcomes.
+    "cnequity.orchestrator.init_phases": 30,
     "cnequity.storage.raw_archive": 25,
     # Vendor clients.
     "cnequity.adapters": 30,
@@ -61,6 +65,10 @@ _RANKS: dict[str, int] = {
     # Schedule policy: which group runs a step, and when a dataset is due.
     "cnequity.orchestrator.cadence": 35,
     "cnequity.storage": 40,
+    # The run ledger (SQLite) and the gate that reads it are stores: steps and
+    # storage record into them, and they import nothing above storage.
+    "cnequity.orchestrator.manifest": 40,
+    "cnequity.orchestrator.compact_gate": 45,
     # Read primitives storage itself needs (partition scans, canonical row
     # order, the trading calendar). They sit beside storage, below the
     # load()/views read API that the rest of ``query`` provides.

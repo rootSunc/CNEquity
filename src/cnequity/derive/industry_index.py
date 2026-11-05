@@ -54,10 +54,10 @@ WEIGHTINGS = ("equal", "amount")
 
 def _prior_trading_day(config: Config, day: date) -> date | None:
     """Latest trading day strictly before *day*, or None if the calendar is empty."""
-    from cnequity.steps.common import list_trading_dates
+    from cnequity.query.calendar import list_trading_dates
 
     window_start = day - timedelta(days=_LOOKBACK_CALENDAR_DAYS)
-    prior = list_trading_dates(config, window_start, day - timedelta(days=1))
+    prior = list_trading_dates(config, window_start, day - timedelta(days=1), include_staging=True)
     return prior[-1] if prior else None
 
 
@@ -182,10 +182,10 @@ def _hfq_returns(config: Config, start: date, end: date, symbols: list[str]) -> 
     # and Chinese holidays are valid gaps); drop the first row after a gap so
     # the missing session remains visible to the dense-coverage watermark.
     if hasattr(config, "curated_root") and not out.is_empty():
-        from cnequity.steps.common import list_trading_dates
+        from cnequity.query.calendar import list_trading_dates
 
         days = sorted(out["trade_date"].unique().to_list())
-        sessions = list_trading_dates(config, days[0], days[-1])
+        sessions = list_trading_dates(config, days[0], days[-1], include_staging=True)
         if len(sessions) > 1:
             expected = pl.DataFrame(
                 {

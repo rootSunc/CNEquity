@@ -26,6 +26,7 @@ from cnequity.orchestrator.outcomes import (
 from cnequity.orchestrator.source_gaps import source_gap_dates
 from cnequity.run_scope import backfill_of
 from cnequity.storage import StagingWriter
+from cnequity.storage.instrument_catalog import load_bar_universe as load_bar_universe
 from cnequity.storage.instrument_catalog import load_curated_instruments as load_curated_instruments
 from cnequity.storage.instrument_catalog import (
     load_curated_trading_status as load_curated_trading_status,
@@ -1068,44 +1069,6 @@ def classify_daily_bar_ownership(
                 out.negative_cached.append(normalized)
                 out.no_data_reasons[normalized] = "negative_evidence"
     return out
-
-
-def load_bar_universe(config: Config) -> set[str]:
-    """Symbols that carry at least one traded ``daily_bars`` row in the lake.
-
-    A suspended/pre-open placeholder can still be present in ``daily_bars`` with
-    ``volume=0``. It is not evidence that the symbol ever traded, so when the
-    column exists require positive volume. This is the *tradable* universe as
-    daily_bars actually realises it: delisted names (source returns no bars) and
-    never-traded instrument placeholders (IPO listed but not yet trading) are
-    absent. Live snapshots such as the EastMoney valuation clist return those
-    dead names, so filtering to this set keeps valuation_metrics in lock-step
-    with daily_bars coverage (audit check ``valuation_bars_orphan_symbol``). A
-    genuine IPO enters this set the same day it first trades and gets a bar.
-
-    Returns an empty set when no bars exist yet; callers must treat that as
-    "cannot reconcile" and skip filtering rather than dropping every row.
-    """
-    bars_root = config.curated_root / "daily_bars"
-    # Canonicalize the daily-bar identity before applying the volume contract.
-    # Filtering each file first lets an old positive retry keep a symbol in the
-    # valuation universe beside a newer zero-volume canonical row. The shared
-    # scanner preserves row-based semantics for legacy files without volume.
-    from cnequity.query.parquet_scan import scan_parquet_root
-
-    try:
-        scan = scan_parquet_root(
-            bars_root,
-            partition_col="trade_date",
-            traded_only=True,
-            dataset="daily_bars",
-            meta_root=config.meta_root,
-        )
-    except FileNotFoundError:
-        return set()
-    if "symbol" not in scan.collect_schema().names():
-        return set()
-    return set(scan.select("symbol").unique().collect()["symbol"].to_list())
 
 
 def _existing_dates(config: Config, dataset: str, date_col: str) -> set[date]:

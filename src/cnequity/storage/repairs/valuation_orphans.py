@@ -15,7 +15,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.steps.common import load_bar_universe
+from cnequity.storage.instrument_catalog import load_bar_universe
 from cnequity.storage.repairs.orphan_symbols import _publish
 from cnequity.storage.revisions import RevisionStore
 
