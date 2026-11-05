@@ -987,3 +987,111 @@ def test_table_rows_send_non_finite_floats_as_null():
     payload = tools._frame_payload(df, limit=10)
     assert payload["rows"] == [[None], [None], [None], [12.5]]
     json.dumps(payload, allow_nan=False)  # strict JSON parsers must accept it
+
+
+# --- query_dataset read budget -----------------------------------------------
+#
+# load() canonicalises the whole selection before a page is cut, so an
+# unwindowed call held 2.6-4.8 GB on a real lake to return 200 rows, and
+# trade_ticks would not have fit at all. Oversized reads are refused up front.
+
+
+def _fund_flow_days(lake, days: list[date]) -> list[int]:
+    sizes = []
+    for day in days:
+        part = lake.curated_root / "fund_flow" / f"trade_date={day}"
+        part.mkdir(parents=True)
+        path = part / "part-0.parquet"
+        pl.DataFrame(
+            {
+                "symbol": ["600519.SH", "000001.SZ"],
+                "trade_date": [day, day],
+                "main_net_inflow": [1.0, 2.0],
+                "super_large_net_inflow": [1.0, 2.0],
+                "large_net_inflow": [1.0, 2.0],
+                "medium_net_inflow": [1.0, 2.0],
+                "small_net_inflow": [1.0, 2.0],
+                **_prov("eastmoney"),
+            }
+        ).write_parquet(path)
+        sizes.append(path.stat().st_size)
+    return sizes
+
+
+_FLOW_DAYS = [date(2024, 6, 24), date(2024, 6, 25), date(2024, 6, 26), date(2024, 6, 27)]
+
+
+def test_query_dataset_refuses_an_oversized_read_before_loading(lake, monkeypatch):
+    sizes = _fund_flow_days(lake, _FLOW_DAYS)
+    # Room for the newest two days, not all four.
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", sizes[-1] + sizes[-2])
+
+    def _must_not_load(*_args, **_kwargs):
+        raise AssertionError("an oversized read must be refused before load()")
+
+    monkeypatch.setattr(tools, "_read", _must_not_load)
+    with pytest.raises(tools.ToolError) as exc:
+        tools.query_dataset(lake, dataset="fund_flow")
+    message = str(exc.value)
+    assert "budget" in message
+    assert "It covers 2024-06-24..2024-06-27" in message
+    assert "start=2024-06-26 end=2024-06-27 fits" in message
+    assert "run_sql" in message
+
+
+def test_query_dataset_serves_the_window_it_suggested(lake, monkeypatch):
+    sizes = _fund_flow_days(lake, _FLOW_DAYS)
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", sizes[-1] + sizes[-2])
+    payload = tools.query_dataset(lake, dataset="fund_flow", start="2024-06-26", end="2024-06-27")
+    assert payload["total"] == 4
+    assert {row[1] for row in payload["rows"]} == {"2024-06-26", "2024-06-27"}
+
+
+def test_query_dataset_suggestion_stays_inside_the_requested_window(lake, monkeypatch):
+    sizes = _fund_flow_days(lake, _FLOW_DAYS)
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", sizes[0] + sizes[1])
+    with pytest.raises(tools.ToolError, match="start=2024-06-25 end=2024-06-26 fits"):
+        tools.query_dataset(lake, dataset="fund_flow", start="2024-06-24", end="2024-06-26")
+
+
+def test_query_dataset_short_symbol_lists_are_not_budgeted(lake, monkeypatch):
+    _fund_flow_days(lake, _FLOW_DAYS)
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", 1)
+    payload = tools.query_dataset(lake, dataset="fund_flow", symbols="600519.SH")
+    assert payload["total"] == 4
+    many = [f"{n:06d}.SZ" for n in range(tools._SYMBOL_SCAN_EXEMPT)] + ["600519.SH"]
+    with pytest.raises(tools.ToolError, match="budget"):
+        tools.query_dataset(lake, dataset="fund_flow", symbols=many)
+
+
+def test_query_dataset_leaves_bad_dates_to_the_reader(lake, monkeypatch):
+    _fund_flow_days(lake, _FLOW_DAYS)
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", 1)
+    with pytest.raises(ValueError, match="isoformat|Invalid"):
+        tools.query_dataset(lake, dataset="fund_flow", start="last tuesday")
+
+
+def test_read_budget_prunes_derived_datasets_by_partition(tmp_path, monkeypatch):
+    """The legacy PARTITION_COLS table has no derived datasets; sizing a window
+    through it read every file and refused windowed option_greeks calls."""
+    from cnequity.domain.datasets import DATASETS, PARTITION_COLS
+
+    derived = [
+        name
+        for name, spec in DATASETS.items()
+        if spec.layer == "derived"
+        and spec.partition_col
+        and spec.partition_granularity == "day"
+        and name not in PARTITION_COLS
+    ]
+    assert derived, "no derived day-partitioned dataset outside PARTITION_COLS"
+    name = derived[0]
+    config = Config(data_root=tmp_path / "data")
+    for day in ("2024-06-26", "2024-06-27"):
+        part = config.derived_root / name / f"{DATASETS[name].partition_col}={day}"
+        part.mkdir(parents=True)
+        (part / "part-0.parquet").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", 1500)
+    tools._refuse_oversized_read(config, name, start="2024-06-27", end=None, symbols=None)
+    with pytest.raises(tools.ToolError, match="budget"):
+        tools._refuse_oversized_read(config, name, start=None, end=None, symbols=None)

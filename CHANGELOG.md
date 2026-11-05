@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- MCP `query_dataset` 不再为一页结果把整个数据集读进内存：一次调用要读的 Parquet 超过 64 MiB、又没有给 20 个以内的 symbol 时，直接拒绝，并说明这个数据集覆盖的日期和能装下的最近窗口（如 `start=2023-03-29 end=2026-11-03 fits`）。此前不带日期范围调用会先加载全部数据再切出 200 行：`margin_trading` 要占约 2.6 GB 内存，`option_greeks` 约 4.8 GB，`trade_ticks` 则根本装不下。带日期范围或少量 symbol 的调用不受影响。
 - 新增 7 个可选的 Tushare 数据集，都需要你自己的 Tushare 令牌，只由 `cne backfill <名称>` 采集，不进任何日更组；没有令牌时不发请求：
   - `convertible_bonds`：可转债与可交换债条款（`cb_basic` + `cb_issue`），每只债一行；`conversion_price` 是读取时的转股价，不是历史。
   - `convertible_bond_bars`：可转债日线（`cb_daily`），2004 起；价格按每 100 元面值，量为张、额为元。

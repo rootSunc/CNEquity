@@ -551,8 +551,10 @@ def query_dataset(
     if dataset in BAR_DATASETS:
         raise ToolError(f"{dataset} is a bar dataset; use query_bars so adjustment is applied")
 
+    symbol_list = _symbols(symbols)
+    _refuse_oversized_read(config, dataset, start=start, end=end, symbols=symbol_list)
     try:
-        df = _read(config, dataset, start=start, end=end, symbols=_symbols(symbols))
+        df = _read(config, dataset, start=start, end=end, symbols=symbol_list)
     except LakeEmpty:
         if live.enabled(config):
             _live_only(
@@ -576,6 +578,123 @@ def query_dataset(
             "reach back before collection started."
         )
     return payload
+
+
+#: Compressed Parquet one ``query_dataset`` call may read when nothing narrows
+#: it by symbol. ``load()`` canonicalises the whole selection before the page
+#: is cut, so memory follows what is read, not what is returned: measured on a
+#: real lake, an unwindowed call held 2.6 GB for ``margin_trading`` (142 MiB on
+#: disk) and 4.8 GB for ``option_greeks`` (567 MiB) to return 200 rows, and
+#: ``trade_ticks`` (5.7 GiB) would not fit in memory at all.
+QUERY_SCAN_BUDGET_BYTES = 64 * 2**20
+
+#: A short symbol list is pushed into the scan and keeps the read small (one
+#: symbol over all of ``margin_trading`` peaked at 0.3 GB), so it is not
+#: budgeted. A long list reads close to everything and is.
+_SYMBOL_SCAN_EXEMPT = 20
+
+
+def _parse_window_date(value: str | None) -> date | None:
+    if value is None or value == "":
+        return None
+    return date.fromisoformat(str(value))
+
+
+def _committed_partitions(config: Config, dataset: str) -> tuple[Any, str | None]:
+    """The committed generation's root and partition column for *dataset*."""
+    from cnequity.storage.locator import logical_root
+    from cnequity.storage.revisions import resolve_committed_root
+
+    root = resolve_committed_root(
+        logical_root(config, dataset), dataset=dataset, meta_root=config.meta_root
+    )
+    # The registry, not the legacy PARTITION_COLS table: that one has no
+    # derived datasets, which would size a windowed option_greeks call as the
+    # whole dataset and refuse it.
+    return root, DATASETS[dataset].partition_col
+
+
+def _files_bytes(files: list) -> int:
+    return sum(path.stat().st_size for path in files)
+
+
+def _refuse_oversized_read(
+    config: Config,
+    dataset: str,
+    *,
+    start: str | None,
+    end: str | None,
+    symbols: list[str] | None,
+) -> None:
+    """Refuse, before reading, a selection too large to hold for one page.
+
+    The refusal names the dataset's coverage and the newest window that fits,
+    so the agent's next call can succeed instead of guessing.
+    """
+    if symbols and len(symbols) <= _SYMBOL_SCAN_EXEMPT:
+        return
+    try:
+        start_d, end_d = _parse_window_date(start), _parse_window_date(end)
+    except ValueError:
+        return  # load() reports the bad date in its own words
+    from cnequity.query.parquet_scan import list_partitions, partition_dir, partition_files_in_range
+
+    names = [dataset, "news_headlines"] if dataset == "flash_news_wire" else [dataset]
+    selected = 0
+    try:
+        for name in names:
+            root, column = _committed_partitions(config, name)
+            if not root.is_dir():
+                continue
+            if column:
+                files = partition_files_in_range(
+                    root, column, start=start_d, end=end_d, resolve=False
+                )
+            else:
+                files = sorted(root.rglob("*.parquet"))
+            selected += _files_bytes(files)
+        if selected <= QUERY_SCAN_BUDGET_BYTES:
+            return
+        root, column = _committed_partitions(config, dataset)
+        parts = list_partitions(root, column, resolve=False) if column else []
+    except (OSError, ValueError, RuntimeError):
+        # Sizing is a guard, not a reader: anything it cannot size goes to
+        # load(), which reports missing data or a bad revision properly.
+        return
+
+    size = f"{selected / 2**20:,.0f} MiB"
+    budget = f"{QUERY_SCAN_BUDGET_BYTES / 2**20:,.0f} MiB"
+    hint = ""
+    in_window = [p for p in parts if p.overlaps(start_d, end_d)]
+    if in_window:
+        # Newest first: the recent end of a series is what a page is usually for.
+        used, first = 0, None
+        for part in reversed(in_window):
+            part_bytes = _files_bytes(
+                sorted(partition_dir(root, column, part.value).glob("**/*.parquet"))
+            )
+            if first is not None and used + part_bytes > QUERY_SCAN_BUDGET_BYTES:
+                break
+            used += part_bytes
+            first = part
+        window_end = min(in_window[-1].end, end_d) if end_d else in_window[-1].end
+        window_start = max(first.start, start_d) if start_d else first.start
+        hint = (
+            f" It covers {parts[0].start}..{parts[-1].end}; "
+            f"start={window_start} end={window_end} fits"
+        )
+        if first is in_window[-1] and used > QUERY_SCAN_BUDGET_BYTES:
+            hint = (
+                f" It covers {parts[0].start}..{parts[-1].end}, and even its newest "
+                f"period ({first.value}) is over the budget"
+            )
+        hint += "."
+    raise ToolError(
+        f"{dataset} would read {size} of Parquet for this call (budget {budget}), and "
+        "every row is held in memory before the page is cut." + hint + " Narrow it with "
+        f"start/end, pass up to {_SYMBOL_SCAN_EXEMPT} symbols, or use run_sql, which "
+        "pages inside DuckDB."
+    )
 
 
 def _history_mode(dataset: str) -> str:

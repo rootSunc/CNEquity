@@ -203,7 +203,10 @@ TOOLS: list[dict] = [
             "list and each one's coverage. Bars go through query_bars and "
             "financial statements through query_fundamentals. Results are paged with "
             "limit/offset and the response reports the true total and a truncated "
-            "flag; for cross-sectional ranking use run_sql instead of paging."
+            "flag; for cross-sectional ranking use run_sql instead of paging. "
+            "A call that would read more than 64 MiB of Parquet without a short "
+            "symbol list is refused with the window that fits; pass start/end or "
+            "symbols on large datasets."
         ),
         "inputSchema": {
             "type": "object",

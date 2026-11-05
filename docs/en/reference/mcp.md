@@ -133,7 +133,7 @@ Each turn, the agent has to pick a tool from a flat list. One tool per dataset w
 | `resolve_symbol` | "茅台" (Moutai) → `600519.SH`. Includes delisted stocks, flagged with `delist_date` |
 | `query_bars` | Daily bars / indexes / minute bars, with `adjust` and `universe` |
 | `query_fundamentals` | Financial statement items; `as_of` is **required** (PIT) |
-| `query_dataset` | Any other dataset, filtered by date and symbol |
+| `query_dataset` | Any other dataset, filtered by date and symbol. A call that would read more than 64 MiB of Parquet without a list of up to 20 symbols is refused, and the agent is told the most recent date window that fits |
 | `run_sql` | A single read-only DuckDB SELECT for cross-dataset aggregation / ranking / quantiles |
 
 ### Semantics live in the response, not in the docs
