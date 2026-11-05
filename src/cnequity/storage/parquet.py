@@ -679,6 +679,64 @@ def _partition_values(df: pl.DataFrame, partition_col: str, granularity: Granula
     return col.dt.strftime("%Y-%m-%d")
 
 
+def _null_missing_valuations(curated_root: Path, frame: pl.DataFrame) -> pl.DataFrame:
+    from cnequity.domain.valuation import null_missing_valuations
+
+    return null_missing_valuations(frame)
+
+
+def _null_missing_index_weights(curated_root: Path, frame: pl.DataFrame) -> pl.DataFrame:
+    from cnequity.domain.membership import null_missing_index_weights
+
+    return null_missing_index_weights(frame)
+
+
+def _clear_invalid_payments(curated_root: Path, frame: pl.DataFrame) -> pl.DataFrame:
+    # A payment before the ex-date is a source typo, not a fact, so a new row
+    # never stores one.  Only staged rows are cleaned: rewriting the committed
+    # side here would hide the change from the diff below and a stored typo
+    # would never be republished without it.
+    return clear_invalid_payment_evidence(frame)
+
+
+#: Dataset-specific cleaning of a run's staged rows, applied before the
+#: primary-key dedupe of ``compact_dataset``. ``(curated_root, frame) -> frame``.
+#: Every entry must be row-local or keyed on the primary key unless the dataset
+#: is in ``_WHOLE_RUN_DATASETS``: partition-wise compact applies it per partition.
+_STAGED_ROW_HOOKS: dict[str, Callable[[Path, pl.DataFrame], pl.DataFrame]] = {
+    "trading_status": _guard_staged_status,
+    "valuation_metrics": _null_missing_valuations,
+    "index_constituents": _null_missing_index_weights,
+    "corporate_actions": _clear_invalid_payments,
+}
+
+
+#: Staged bytes of one dataset in one run at or above which compact merges one
+#: partition at a time (see ``_compact_partitionwise``). Below it the whole
+#: run is merged in memory, exactly as before; a daily run never gets near it.
+#: ``None`` disables partition-wise merging.
+STREAMING_COMPACT_MIN_BYTES: int | None = 256 * 1024 * 1024
+
+# Datasets whose pre-merge step needs the whole run at once: trading_status's
+# staging guard reloads ``instruments`` on every call and is applied once.
+_WHOLE_RUN_DATASETS = frozenset({"trading_status"})
+
+
+def _partitionwise_eligible(dataset: str, partition_col: str | None) -> bool:
+    """Whether merging per partition is provably the same as merging the run.
+
+    Every pre-merge step is row-local or keyed on the primary key, so it may
+    run per partition exactly when no key can span two partitions — that is,
+    when the partition column is part of the key. Where it is not
+    (``announcement_index`` keys on ``announcement_id``, partitions on
+    ``announce_date``), a re-dated row must still collapse across partitions,
+    which only a whole-run merge does.
+    """
+    if partition_col is None or dataset in _WHOLE_RUN_DATASETS:
+        return False
+    return partition_col in PRIMARY_KEYS.get(dataset, [])
+
+
 def compact_dataset(
     staging_root: Path,
     curated_root: Path,
@@ -690,12 +748,18 @@ def compact_dataset(
     base_root: Path | None = None,
     change_log: list[dict] | None = None,
     staging_files: list[Path] | None = None,
+    partitionwise_min_bytes: int | None = -1,
 ) -> int:
     """Merge staging batches into curated partitions, dedupe by PK.
 
     Granularity decides how many dates share one partition directory; it comes
     from the dataset's registry entry unless overridden. See
     ``domain/partitions.py`` for why it is not always a day.
+
+    A large run is merged one partition at a time (``STREAMING_COMPACT_MIN_BYTES``;
+    *partitionwise_min_bytes* overrides it, ``None`` disables it). The rows
+    written are the same either way; only the order of ``change_log`` entries
+    can differ (partition order instead of first appearance).
     """
     if granularity is None:
         granularity = granularity_for_dataset(dataset)
@@ -710,36 +774,7 @@ def compact_dataset(
     if not files:
         return 0
 
-    # Re-validate on read: staging/curated written before a schema change
-    # (e.g. fetched_at str → timestamp) must be normalized before concat.
-    combined = pl.concat(
-        [
-            sanitize_dataset_rows(validate_dataframe(pl.read_parquet(f), dataset), dataset)
-            for f in files
-        ],
-        how="diagonal_relaxed",
-    )
-    if dataset == "trading_status":
-        combined = _guard_staged_status(curated_root, combined)
-        if combined.is_empty():
-            return 0
-    if dataset == "valuation_metrics":
-        from cnequity.domain.valuation import null_missing_valuations
-
-        combined = null_missing_valuations(combined)
-    if dataset == "index_constituents":
-        from cnequity.domain.membership import null_missing_index_weights
-
-        combined = null_missing_index_weights(combined)
-    if dataset == "corporate_actions":
-        # A payment before the ex-date is a source typo, not a fact, so a new
-        # row never stores one.  Only staged rows are cleaned: rewriting the
-        # committed side here would hide the change from the diff below and a
-        # stored typo would never be republished without it.
-        combined = clear_invalid_payment_evidence(combined)
     pk = PRIMARY_KEYS.get(dataset, [])
-    if pk:
-        combined = _dedupe_storage(combined, dataset)
 
     def _pit(frame: pl.DataFrame) -> pl.DataFrame:
         """Materialize the bitemporal columns so they reach disk.
@@ -751,7 +786,22 @@ def compact_dataset(
         """
         return normalize_pit_storage_columns(frame, dataset)
 
-    combined = _pit(combined)
+    def _read_staged(path: Path) -> pl.DataFrame:
+        # Re-validate on read: staging/curated written before a schema change
+        # (e.g. fetched_at str → timestamp) must be normalized before concat.
+        return sanitize_dataset_rows(validate_dataframe(pl.read_parquet(path), dataset), dataset)
+
+    staged_rows_hook = _STAGED_ROW_HOOKS.get(dataset)
+
+    def _prepare(frame: pl.DataFrame) -> pl.DataFrame:
+        """Clean, deduplicate and complete the staged rows before the merge."""
+        if staged_rows_hook is not None:
+            frame = staged_rows_hook(curated_root, frame)
+            if frame.is_empty() and dataset == "trading_status":
+                return frame
+        if pk:
+            frame = _dedupe_storage(frame, dataset)
+        return _pit(frame)
 
     def _load(path: Path) -> pl.DataFrame:
         return sanitize_dataset_rows(validate_dataframe(pl.read_parquet(path), dataset), dataset)
@@ -779,6 +829,39 @@ def compact_dataset(
             changed_files.extend(result.written)
         return result.rows
 
+    def _write_partition(group: pl.DataFrame, val_str: str) -> int:
+        return _write(
+            group,
+            read_root / f"{partition_col}={val_str}",
+            curated.partition_path(dataset, partition_col, val_str),
+            f"{partition_col}={val_str}",
+        )
+
+    threshold = (
+        STREAMING_COMPACT_MIN_BYTES if partitionwise_min_bytes == -1 else partitionwise_min_bytes
+    )
+    if (
+        threshold is not None
+        and _partitionwise_eligible(dataset, partition_col)
+        and sum(Path(f).stat().st_size for f in files) >= threshold
+        and all(partition_col in pl.read_parquet_schema(f) for f in files)
+    ):
+        return _compact_partitionwise(
+            files,
+            staging_root=staging_root,
+            dataset=dataset,
+            partition_col=partition_col,
+            granularity=granularity,
+            read_staged=_read_staged,
+            prepare=_prepare,
+            write_partition=_write_partition,
+        )
+
+    combined = pl.concat([_read_staged(f) for f in files], how="diagonal_relaxed")
+    combined = _prepare(combined)
+    if combined.is_empty() and dataset == "trading_status":
+        return 0
+
     if partition_col not in combined.columns:
         return _write(combined, read_root, curated.curated_root / dataset, None)
 
@@ -790,10 +873,87 @@ def compact_dataset(
     total = 0
     for key, group in combined.partition_by(_PART, as_dict=True).items():
         val_str = str(key[0] if isinstance(key, tuple) else key)
-        total += _write(
-            group.drop(_PART),
-            read_root / f"{partition_col}={val_str}",
-            curated.partition_path(dataset, partition_col, val_str),
-            f"{partition_col}={val_str}",
-        )
+        total += _write_partition(group.drop(_PART), val_str)
     return total
+
+
+def _compact_partitionwise(
+    files: list[Path],
+    *,
+    staging_root: Path,
+    dataset: str,
+    partition_col: str,
+    granularity: Granularity,
+    read_staged: Callable[[Path], pl.DataFrame],
+    prepare: Callable[[pl.DataFrame], pl.DataFrame],
+    write_partition: Callable[[pl.DataFrame, str], int],
+) -> int:
+    """Merge a large run one partition at a time, holding one partition in memory.
+
+    The whole-run merge concatenates every staged file of the run into one
+    frame first — for a backfill that is the entire window, and the reason the
+    registry carries ``backfill_chunk_days`` at all. Here each staged file is
+    read once, validated, split by partition and spilled beside the staging
+    (same filesystem); then each partition's pieces are read back in file
+    order, given the run's full column set and dtypes — exactly what the
+    whole-run ``diagonal_relaxed`` concat would have given them — and merged.
+    Peak memory is one staged file or one partition, whichever is larger.
+    """
+    import shutil
+    import tempfile
+
+    _PART = "__partition__"
+    # The spill lives beside the run directories, never inside one: a file
+    # under ``run_id=…`` would be read back as staging. Compact and repairs
+    # hold the lake mutation lock, so a spill already present for this dataset
+    # can only be what a killed process left behind.
+    staging_root = Path(staging_root)
+    staging_root.mkdir(parents=True, exist_ok=True)
+    for stale in staging_root.glob(f".compact-{dataset}-*"):
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+    with tempfile.TemporaryDirectory(prefix=f".compact-{dataset}-", dir=staging_root) as tmp:
+        spill = Path(tmp)
+        pieces: dict[str, list[Path]] = {}
+        schema: dict[str, pl.DataType] = {}
+        for file_index, path in enumerate(files):
+            frame = read_staged(path)
+            for name, dtype in frame.schema.items():
+                if name not in schema:
+                    schema[name] = dtype
+                elif schema[name] != dtype:
+                    schema[name] = pl.concat(
+                        [
+                            pl.DataFrame(schema={name: schema[name]}),
+                            pl.DataFrame(schema={name: dtype}),
+                        ],
+                        how="vertical_relaxed",
+                    ).schema[name]
+            frame = frame.with_columns(
+                _partition_values(frame, partition_col, granularity).alias(_PART)
+            )
+            for key, group in frame.partition_by(_PART, as_dict=True).items():
+                val_str = str(key[0] if isinstance(key, tuple) else key)
+                bucket = pieces.setdefault(val_str, [])
+                target = spill / f"p{len(pieces):06d}" if not bucket else bucket[0].parent
+                target.mkdir(exist_ok=True)
+                piece = target / f"{file_index:06d}.parquet"
+                group.drop(_PART).write_parquet(piece)
+                bucket.append(piece)
+            del frame
+
+        total = 0
+        for val_str in sorted(pieces):
+            group = pl.concat(
+                [pl.read_parquet(piece) for piece in pieces[val_str]], how="diagonal_relaxed"
+            )
+            group = group.with_columns(
+                pl.lit(None, dtype=dtype).alias(name)
+                for name, dtype in schema.items()
+                if name not in group.columns
+            ).select(pl.col(name).cast(dtype) for name, dtype in schema.items())
+            group = prepare(group)
+            if group.is_empty():
+                continue
+            total += write_partition(group, val_str)
+        return total

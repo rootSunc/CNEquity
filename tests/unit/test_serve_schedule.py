@@ -292,6 +292,26 @@ def test_tick_claims_under_child_lock_and_rejects_duplicate_or_pause(scheduler, 
     assert tick(config)["status"] == "idle"
 
 
+def _wait_until_released(config, seconds: float = 20.0) -> None:
+    """Wait until the finished child has also released the slot and scheduler locks.
+
+    A job writes its final record a moment before its process exits and the
+    kernel drops its locks. A tick in that window correctly answers "waiting",
+    and the real scheduler simply starts the next job one tick later; a test
+    that ticks straight after the record turns terminal must wait out the same
+    window instead of racing it.
+    """
+    from cnequity.file_lock import is_locked
+    from cnequity.serve.ops.preflight import scheduler_blockers
+    from cnequity.serve.ops.records import slot_path
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and (
+        is_locked(slot_path(config)) or scheduler_blockers(config, "lake-write")
+    ):
+        time.sleep(0.05)
+
+
 def test_real_timer_child_logs_and_marks_once_without_web(scheduler, monkeypatch):
     # Freeze the exchange window in both parent and a real subprocess. No
     # production clock override or native scheduler installation is needed.
@@ -352,6 +372,7 @@ def test_real_timer_child_logs_and_marks_once_without_web(scheduler, monkeypatch
     assert "中文" in Path(record["logs"]["err"]).read_text(encoding="utf-8")
     assert marker_path(config.meta_root, "daily", session).exists()
     # Maintenance follows the day's run before the catch-up gets its turn.
+    _wait_until_released(config)
     after = tick(config)
     assert after["jobs"][0]["job"] == "maintain", after
     deadline = time.monotonic() + 20
@@ -362,6 +383,7 @@ def test_real_timer_child_logs_and_marks_once_without_web(scheduler, monkeypatch
         time.sleep(0.05)
     assert service.get_job(after["jobs"][0]["job_id"])["state"] == "complete"
     assert marker_path(config.meta_root, "maintain", session).exists()
+    _wait_until_released(config)
     late = tick(config)
     assert late["jobs"][0]["job"] == "stale", late
     deadline = time.monotonic() + 20
@@ -372,6 +394,7 @@ def test_real_timer_child_logs_and_marks_once_without_web(scheduler, monkeypatch
         time.sleep(0.05)
     assert service.get_job(late["jobs"][0]["job_id"])["state"] == "succeeded"
     assert marker_path(config.meta_root, "stale", session).exists()
+    _wait_until_released(config)
     assert tick(config)["status"] in {"idle", "waiting"}
     assert read_record(state_dir(config) / "last_tick.json")["status"] in {"idle", "waiting"}
 

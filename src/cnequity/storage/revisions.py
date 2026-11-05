@@ -64,6 +64,14 @@ _LEGACY_REVISION_ID = "legacy"
 _RECEIPT_ALLOWANCE_BYTES = 1024 * 1024
 
 
+#: Receipt metadata a new revision inherits from the previous one when its
+#: writer does not restate it. ``adj_factors``' reviewed source overrides and
+#: event proofs describe the dataset, not one derive run.
+_CARRIED_RECEIPT_METADATA: dict[str, tuple[str, ...]] = {
+    "adj_factors": ("factor_source_overrides", "factor_event_proofs"),
+}
+
+
 def _reject_symlink_path(path: Path, *, label: str = "path") -> None:
     """Reject user-controlled symlink ancestors without rejecting macOS aliases.
 
@@ -997,10 +1005,11 @@ class RevisionStore:
             generation_files=generation_files,
             pointer_path=self.pointer_path(dataset).relative_to(self.meta_root).as_posix(),
         )
-        if dataset == "adj_factors":
+        carried = _CARRIED_RECEIPT_METADATA.get(dataset, ())
+        if carried:
             previous = self.latest(dataset)
             if previous is not None:
-                for key in ("factor_source_overrides", "factor_event_proofs"):
+                for key in carried:
                     if key not in receipt.metadata and key in previous.metadata:
                         receipt.metadata[key] = previous.metadata[key]
 

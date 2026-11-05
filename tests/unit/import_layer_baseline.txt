@@ -85,13 +85,13 @@ cnequity.query.receipt -> cnequity.quality.factor_diagnostics
 cnequity.query.universe -> cnequity.quality.st_coverage
 cnequity.steps.bars -> cnequity.orchestrator.manifest
 cnequity.steps.bars -> cnequity.orchestrator.worker_pool
+cnequity.steps.compact_hooks -> cnequity.research.preview
 cnequity.steps.delisted -> cnequity.orchestrator.manifest
 cnequity.steps.delisted -> cnequity.orchestrator.run_lock
 cnequity.steps.events -> cnequity.orchestrator.manifest
 cnequity.steps.finalize -> cnequity.orchestrator.compact_gate
 cnequity.steps.finalize -> cnequity.orchestrator.manifest
 cnequity.steps.finalize -> cnequity.orchestrator.run_lock
-cnequity.steps.finalize -> cnequity.research.preview
 cnequity.steps.fundamentals -> cnequity.orchestrator.run_lock
 cnequity.steps.http_common -> cnequity.diagnostics.source_health
 cnequity.steps.reference -> cnequity.orchestrator.manifest
