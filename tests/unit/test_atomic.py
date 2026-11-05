@@ -228,3 +228,26 @@ def test_publish_once_raises_link_errors_that_are_not_unsupported(tmp_path, monk
 
     with pytest.raises(PermissionError):
         atomic_mod.publish_once(temporary, tmp_path / "payload")
+
+
+def test_immutable_evidence_writers_work_where_hard_links_are_unsupported(tmp_path, monkeypatch):
+    from cnequity.adapters.cninfo.reviewed_holder_notices import save_holder_evidence
+    from cnequity.quality.decision_gaps import save_immutable
+
+    _no_hard_links(monkeypatch)
+    gaps = save_immutable({"events": [1]}, tmp_path / "gaps")
+    assert save_immutable({"events": [1]}, tmp_path / "gaps") == gaps
+    entries = [{"ex_date": "2020-06-19"}]
+    holder = save_holder_evidence(tmp_path / "meta", "run-1", "600025.SH", entries)
+    assert save_holder_evidence(tmp_path / "meta", "run-1", "600025.SH", entries) == holder
+    for path in (gaps, holder):
+        assert [p.name for p in path.parent.iterdir()] == [path.name]
+
+    # An existing file is still never replaced, and a mismatch still fails.
+    gaps.write_text("corrupt")
+    holder.write_text("corrupt")
+    with pytest.raises(ValueError, match="different content"):
+        save_immutable({"events": [1]}, tmp_path / "gaps")
+    with pytest.raises(ValueError, match="hash collision"):
+        save_holder_evidence(tmp_path / "meta", "run-1", "600025.SH", entries)
+    assert gaps.read_text() == holder.read_text() == "corrupt"

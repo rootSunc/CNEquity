@@ -17,6 +17,7 @@ import polars as pl
 
 from cnequity.domain.action_evidence import ex_date_rule_applies
 from cnequity.query.reader import ReaderError, load
+from cnequity.storage.atomic import publish_once
 from cnequity.storage.revisions import committed_revision
 
 _NO_ACTIONS = "corporate_actions has no committed revision to pin; build it with `cne backfill corporate_actions`"
@@ -265,13 +266,8 @@ def save_immutable(payload: dict, output_dir: Path, *, prefix: str = "payment-ga
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        try:
-            os.link(tmp, target)
-        except FileExistsError:
-            if target.read_bytes() != encoded:
-                raise ValueError(
-                    f"existing gap inventory has different content: {target}"
-                ) from None
+        if not publish_once(tmp, target) and target.read_bytes() != encoded:
+            raise ValueError(f"existing gap inventory has different content: {target}")
     finally:
         tmp.unlink(missing_ok=True)
     return target
