@@ -12,6 +12,7 @@ from cnequity.file_lock import (
     DEFAULT_LOCK_WAIT_SECONDS,
     LockUnavailable,
     _held_count,
+    describe_holder,
     exclusive_lock,
     is_locked,
 )
@@ -171,19 +172,27 @@ def run_lock(
     started = time.monotonic()
     with contextlib.ExitStack() as stack:
         try:
-            stack.enter_context(exclusive_lock(path, blocking=blocking, timeout=timeout))
+            stack.enter_context(
+                exclusive_lock(path, blocking=blocking, timeout=timeout, record_holder=True)
+            )
         except LockUnavailable as exc:
             waited = time.monotonic() - started
             if blocking and timeout is not None and waited >= timeout:
                 raise RunLockError(_lock_stalled_message(run_id, path, waited)) from exc
-            raise RunLockError(_lock_busy_message(run_id)) from exc
+            message = _lock_busy_message(run_id)
+            holder = describe_holder(path)
+            if holder:
+                message += f" Held by {holder}."
+            raise RunLockError(message) from exc
         yield
 
 
 def _lock_stalled_message(run_id: str, path: Path, waited: float) -> str:
     """A bounded wait that ran out says so, and names what to look at."""
+    holder = describe_holder(path)
+    held_by = f"It is held by {holder}. " if holder else ""
     return (
-        f"Gave up waiting for the {run_id} lock after {int(waited)}s. "
+        f"Gave up waiting for the {run_id} lock after {int(waited)}s. {held_by}"
         f"A crashed holder would have released it immediately, so {path} is held "
         "by a process that is alive and stuck. Find it with "
         f"`lsof {path}` (or `fuser {path}`), then stop it or wait for it; "

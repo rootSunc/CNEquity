@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import shutil
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS
-from cnequity.file_lock import LockUnavailable, exclusive_lock, is_locked
+from cnequity.file_lock import LockUnavailable, exclusive_lock, holder_path, is_locked
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.storage.lifecycle.resources import resource_holds
 from cnequity.storage.observation import STAGED_OBSERVATION_FIELD
@@ -211,6 +211,9 @@ def clean_stale_lock_files(
                 path.unlink(missing_ok=True)
             except OSError:
                 continue
+            # A holder that crashed leaves its note behind; it goes with its lock.
+            with suppress(OSError):
+                holder_path(path).unlink(missing_ok=True)
         removed += 1
     return removed
 

@@ -20,12 +20,16 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import json
 import logging
 import os
+import shlex
+import socket
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
 
@@ -208,12 +212,167 @@ _acquire = _acquire_windows if IS_WINDOWS else _acquire_posix
 _release = _release_windows if IS_WINDOWS else _release_posix
 
 
+# ------------------------------------------------------------ holder notes
+#
+# "waiting for compact.lock — held by another process" was all a queued command
+# could say, and on the real lake that was not enough: a 1-hour wait on
+# 2026-10-11 timed out and failed an events run, and no log could tell which
+# process had held the lock. Locks taken with ``record_holder=True`` keep a
+# small JSON note beside the lock file naming the holder, written right after
+# acquiring and removed right before releasing — so a holder can only ever
+# remove its own note, never its successor's. The note is advisory: the kernel
+# lock stays the only authority, and a note that cannot be written or read
+# changes nothing about who gets the lock.
+
+#: Appended to the lock file's name. Not ``*.lock``, so the stale-lock sweep
+#: in ``staging_cleanup`` never mistakes a note for a lock.
+HOLDER_SUFFIX = ".holder.json"
+
+_COMMAND_CHARS = 240
+
+_holder_activity: Callable[[], str | None] | None = None
+
+
+def set_holder_activity(describe: Callable[[], str | None] | None) -> None:
+    """Register what the current thread is doing, for holder notes.
+
+    ``cnequity.progress`` registers the step running on the calling thread.
+    This module stays a leaf: it asks through this hook instead of importing.
+    """
+    global _holder_activity
+    _holder_activity = describe
+
+
+def holder_path(path: Path | str) -> Path:
+    path = Path(path)
+    return path.with_name(path.name + HOLDER_SUFFIX)
+
+
+def _command_line() -> str:
+    argv = list(sys.argv) or [sys.executable]
+    head = Path(argv[0]).name
+    if head == "-c":
+        head = "python -c"
+    elif head == "__main__.py":
+        # ``python -m cnequity ...`` puts the package's __main__ path here.
+        head = f"python -m {Path(argv[0]).parent.name}"
+    command = " ".join([head, *(shlex.quote(str(arg)) for arg in argv[1:])])
+    if len(command) > _COMMAND_CHARS:
+        command = command[: _COMMAND_CHARS - 1] + "…"
+    return command
+
+
+def _write_holder(path: Path) -> None:
+    activity = None
+    if _holder_activity is not None:
+        try:
+            activity = _holder_activity()
+        except Exception:  # noqa: BLE001 — a note must never fail the lock
+            activity = None
+    record = {
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "command": _command_line(),
+        "activity": activity,
+        "thread": threading.current_thread().name,
+        "acquired_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    target = holder_path(path)
+    # Written in place, not swapped in: only the lock holder ever writes the
+    # note, so there is no writer race, and a reader that catches it half
+    # written gets invalid JSON, which ``read_holder`` treats as "no note".
+    try:
+        target.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        logger.debug("could not write holder note %s", target, exc_info=True)
+
+
+def _clear_holder(path: Path) -> None:
+    # Still under the lock: nobody else can have written the note since we
+    # acquired, so whatever is there is ours (or a dead holder's) to remove.
+    with contextlib.suppress(OSError):
+        holder_path(path).unlink(missing_ok=True)
+
+
+def _pid_alive(pid: int) -> bool:
+    if IS_WINDOWS:
+        # os.kill(pid, 0) terminates the process on Windows. Without a safe
+        # probe, trust the note; the next recording holder overwrites it.
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def read_holder(path: Path | str) -> dict | None:
+    """The holder note for lock *path*, or None when absent, unreadable or stale.
+
+    A note left by a process that died on this host is stale: the kernel
+    already released its lock, so the note no longer names the holder.
+    """
+    try:
+        record = json.loads(holder_path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("pid"), int):
+        return None
+    if record.get("host") == socket.gethostname() and not _pid_alive(record["pid"]):
+        return None
+    return record
+
+
+def describe_holder(path: Path | str) -> str | None:
+    """One line naming who holds lock *path*, from its holder note."""
+    record = read_holder(path)
+    if record is None:
+        return None
+    pid = record["pid"]
+    if pid == os.getpid() and record.get("host") == socket.gethostname():
+        who = f"another thread of this process ({record.get('thread') or 'unnamed'})"
+    else:
+        who = f"pid {pid}"
+        host = record.get("host")
+        if host and host != socket.gethostname():
+            who += f" on {host}"
+    parts = [who]
+    activity = record.get("activity")
+    if activity:
+        parts.append(f"step {activity}")
+    since = record.get("acquired_at")
+    if isinstance(since, str):
+        try:
+            started = datetime.fromisoformat(since)
+            held = (datetime.now(timezone.utc) - started).total_seconds()
+            local = started.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            parts.append(f"since {local} ({_hms(max(held, 0.0))})")
+        except ValueError:
+            pass
+    command = record.get("command")
+    if command:
+        parts.append(f"`{command}`")
+    return ", ".join(parts)
+
+
+def _held_by(path: Path) -> str:
+    holder = describe_holder(path)
+    if holder:
+        return f"held by {holder}"
+    return "held by another process or another thread of this run"
+
+
 @contextlib.contextmanager
 def exclusive_lock(
     path: Path | str,
     *,
     blocking: bool = True,
     timeout: float | None = None,
+    record_holder: bool = False,
 ) -> Iterator[IO]:
     """Hold an exclusive lock on *path* for the duration of the block.
 
@@ -221,6 +380,8 @@ def exclusive_lock(
     ``blocking=False`` a lock already held elsewhere raises
     :class:`LockUnavailable` instead of waiting. With ``timeout`` set, a
     blocking acquire polls until the deadline and then raises the same error.
+    ``record_holder=True`` keeps a holder note beside the lock while it is
+    held (see :func:`describe_holder`); leave it off for per-request locks.
     """
     path = Path(path)
     if _held_count(path):
@@ -239,6 +400,7 @@ def exclusive_lock(
             try:
                 _acquire(handle, blocking=False)
             except LockUnavailable:
+                queued_at = time.monotonic()
                 # Wait out the routine queueing quietly, and only announce what
                 # is left — see QUIET_LOCK_WAIT_SECONDS.
                 grace = (
@@ -255,24 +417,42 @@ def exclusive_lock(
                     # another thread of this same run queues here too (the
                     # derive's lanes on baostock's one connection), and
                     # blaming "another process" sent people hunting for one.
+                    # A holder note, when there is one, names it outright.
                     logger.info(
-                        "waiting for %s — held by another process or another thread of this run "
-                        "(up to %s)",
+                        "waiting for %s — %s (up to %s)",
                         path.name,
+                        _held_by(path),
                         _hms(timeout) if timeout is not None else "indefinitely",
                     )
-                    _acquire(
-                        handle,
-                        blocking=True,
-                        timeout=None if timeout is None else timeout - grace,
+                    try:
+                        _acquire(
+                            handle,
+                            blocking=True,
+                            timeout=None if timeout is None else timeout - grace,
+                        )
+                    except LockUnavailable as exc:
+                        raise LockUnavailable(
+                            f"{path}: timed out acquiring lock after "
+                            f"{_hms(time.monotonic() - queued_at)}; {_held_by(path)}"
+                        ) from exc
+                    # Closes the announced wait, so a log says how long the
+                    # queue actually cost instead of leaving it to be inferred.
+                    logger.info(
+                        "acquired %s after waiting %s",
+                        path.name,
+                        _hms(time.monotonic() - queued_at),
                     )
         else:
             _acquire(handle, blocking=blocking, timeout=timeout)
         _mark_held(path)
+        if record_holder:
+            _write_holder(path)
         try:
             yield handle
         finally:
             try:
+                if record_holder:
+                    _clear_holder(path)
                 _release(handle)
             finally:
                 _unmark_held(path)
@@ -334,5 +514,5 @@ def lake_mutation_lock(
         # kernel through ``exclusive_lock``.
         yield None
         return
-    with exclusive_lock(path, blocking=blocking, timeout=timeout) as handle:
+    with exclusive_lock(path, blocking=blocking, timeout=timeout, record_holder=True) as handle:
         yield handle

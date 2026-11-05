@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
+from cnequity import file_lock
 from cnequity.i18n import N_, NP_, Message
 
 logger = logging.getLogger(__name__)
@@ -154,17 +155,36 @@ _heartbeat: threading.Thread | None = None
 _stop: threading.Event | None = None
 
 
+#: The step running on each thread, innermost last, for lock holder notes:
+#: ``_active`` says what runs in the process, not which thread took a lock.
+_thread_steps = threading.local()
+
+
 @contextmanager
 def step_scope(name: str) -> Iterator[None]:
     """Count *name* as running for as long as the block runs."""
     token = next(_tokens)
     with _lock:
         _active[token] = (name, time.monotonic())
+    stack = getattr(_thread_steps, "stack", None)
+    if stack is None:
+        stack = _thread_steps.stack = []
+    stack.append(name)
     try:
         yield
     finally:
+        stack.pop()
         with _lock:
             _active.pop(token, None)
+
+
+def current_step() -> str | None:
+    """The step running on the calling thread, if any."""
+    stack = getattr(_thread_steps, "stack", None)
+    return stack[-1] if stack else None
+
+
+file_lock.set_holder_activity(current_step)
 
 
 _details: dict[int, Callable[[], object]] = {}

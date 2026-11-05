@@ -289,6 +289,25 @@ def test_clean_stale_lock_files_removes_old_unheld_lock(tmp_path):
     assert not lock_path.exists()
 
 
+def test_clean_stale_lock_files_takes_a_crashed_holders_note_along(tmp_path):
+    import os
+
+    from cnequity.file_lock import holder_path
+
+    lock_dir = tmp_path / "meta" / "locks"
+    lock_dir.mkdir(parents=True)
+    lock_path = lock_dir / "run-crashed.lock"
+    lock_path.write_text("")
+    note = holder_path(lock_path)
+    note.write_text('{"pid": 1}', encoding="utf-8")
+    old = datetime.now(timezone.utc) - timedelta(days=30)
+    os.utime(lock_path, (old.timestamp(), old.timestamp()))
+
+    assert clean_stale_lock_files(tmp_path / "meta", retention_days=7) == 1
+    assert not lock_path.exists()
+    assert not note.exists()
+
+
 def test_clean_stale_lock_files_skips_recent_lock(tmp_path):
     meta_root = tmp_path / "meta"
     lock_dir = meta_root / "locks"
