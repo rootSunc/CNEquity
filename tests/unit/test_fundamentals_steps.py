@@ -295,6 +295,22 @@ def test_backfill_valuation_locked_nothing_to_do(cfg, monkeypatch):
     assert "already backfilled" in result["note"]
 
 
+def test_backfill_valuation_continues_when_the_orphan_purge_is_blocked(cfg, monkeypatch):
+    def blocked(config):
+        raise RuntimeError("repair publication gate blocked valuation_metrics")
+
+    monkeypatch.setattr(
+        "cnequity.storage.repairs.valuation_orphans.purge_valuation_orphan_symbols", blocked
+    )
+    monkeypatch.setattr(fund, "load_symbols", lambda config: ["600519.SH"])
+    monkeypatch.setattr(fund, "load_bar_universe", lambda config: {"600519.SH"})
+    monkeypatch.setattr(fund, "_symbols_needing_backfill", lambda config, universe, **kwargs: [])
+    monkeypatch.setattr(fund, "_valuation_history_end", lambda config, trade_date: date(2024, 6, 1))
+    result = fund._backfill_valuation_metrics_locked(cfg, date(2024, 6, 28), "run-v")
+    assert "already backfilled" in result["note"]
+    assert "gate blocked" in result["orphan_purge"]["error"]
+
+
 def test_backfill_valuation_locked_history_end_before_start(cfg, monkeypatch):
     monkeypatch.setattr(
         "cnequity.storage.repairs.valuation_orphans.purge_valuation_orphan_symbols",

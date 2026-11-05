@@ -401,7 +401,14 @@ def _backfill_valuation_metrics_locked(config: Config, trade_date: date, run_id:
     from cnequity.storage.repairs.valuation_orphans import purge_valuation_orphan_symbols
 
     # Drop leftover PE/PB for names that never have bars (pre-filter backfills).
-    purge_summary = purge_valuation_orphan_symbols(config)
+    try:
+        purge_summary = purge_valuation_orphan_symbols(config)
+    except RuntimeError as exc:
+        # The purge is hygiene and the universe filter below already keeps
+        # orphans out; a blocked repair gate must not stop the backfill. The
+        # audit keeps flagging the orphans until a purge publishes.
+        logger.warning("valuation orphan purge not published: %s", exc)
+        purge_summary = {"error": str(exc)}
 
     universe = [s for s in load_symbols(config) if _is_all_a(s)]
     # Only backfill symbols that actually have price bars: a delisted name still
