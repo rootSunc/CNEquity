@@ -87,6 +87,29 @@ def _view_glob(data_root: str, spec: DatasetSpec) -> tuple[str, bool]:
     )
 
 
+def view_read_roots(config: Config) -> list[Path]:
+    """Every directory a lake view can read, and nothing broader.
+
+    Mirrors ``_view_glob``: a dataset with a ``current.json`` is read from its
+    committed generation under ``meta/revisions/data``; only a pointer-less
+    (legacy) dataset is read from its logical ``curated/`` or ``derived/``
+    directory. Once a dataset has a pointer, that logical directory is the
+    mutable compatibility tree compact writes its *candidate* into, so a
+    sandbox that allowed the whole ``curated/`` root would let a raw
+    ``read_parquet`` see rows a publication gate has not passed, or has
+    quarantined.
+    """
+    root = config.data_root.resolve()
+    meta = root / "meta" / "revisions"
+    roots = [meta / "data"]
+    for name, spec in sorted(DATASETS.items()):
+        if (meta / name / "current.json").is_file():
+            continue
+        layer_dir = "derived" if spec.layer == "derived" else "curated"
+        roots.append(root / layer_dir / name)
+    return roots
+
+
 def _glob_has_files(pattern: str) -> bool:
     base = pattern.split("**")[0].split("*")[0].rstrip("/")
     p = Path(base)

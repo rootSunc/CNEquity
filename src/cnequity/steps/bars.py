@@ -3378,10 +3378,13 @@ def _staged_daily_bar_missing_keys(
     no_print = approved_no_print_keys(config, start=start, end=end)
     # Suspensions this run learned from the vendor are staged but not yet
     # curated, so they are not in `suspended` and would otherwise be
-    # condemned here as interior gaps.
+    # condemned here as interior gaps. Only this run's: a Config reused for a
+    # later run must not excuse that run's gaps with an earlier run's answer.
     learned = getattr(config, "_learned_suspensions", None)
     learned_suspensions: set[tuple[str, date]] = (
-        learned["keys"] if isinstance(learned, dict) and learned.get("keys") else set()
+        learned["keys"]
+        if isinstance(learned, dict) and learned.get("run_id") == run_id and learned.get("keys")
+        else set()
     )
     observed = staged.group_by("symbol").agg(pl.col("trade_date").unique().alias("dates"))
     for row in observed.iter_rows(named=True):
@@ -4329,11 +4332,15 @@ def _learn_suspensions_from_baostock(
     # The rows are staged, not curated, until this run's compact — and the
     # interior-gap gate below reads curated. Carry the answer on the config for
     # the rest of this run so the gate does not re-condemn what we just learned.
-    learned = getattr(config, "_learned_suspensions", None)
-    if not isinstance(learned, dict) or learned.get("run_id") != run_id:
-        learned = {"run_id": run_id, "keys": set()}
-        config._learned_suspensions = learned
-    learned["keys"].update(confirmed)
+    from cnequity.run_scope import ensure_run_scoped
+
+    ensure_run_scoped(
+        config,
+        "_learned_suspensions_run",
+        run_id,
+        {"_learned_suspensions": lambda: {"run_id": run_id, "keys": set()}},
+    )
+    config._learned_suspensions["keys"].update(confirmed)
     return confirmed, {
         "status": "success",
         "requests": len(symbols),

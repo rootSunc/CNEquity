@@ -476,6 +476,56 @@ def _reconcile_watermarks(config: Config) -> list[dict]:
     return findings
 
 
+def _settle_published_datasets(
+    config: Config,
+    datasets: set[str],
+    *,
+    run_id: str,
+    trade_date: date,
+    fully_selected: set[str],
+    resolved_keys: dict[str, set[tuple[str, str]]],
+    reconcile_no_print: bool = True,
+) -> None:
+    """Advance the coverage ledgers and watermarks of datasets compact published.
+
+    Runs once per compact after every revision commit, and — when a later
+    commit fails — for the datasets committed before it, so a dataset whose
+    generation is already current never keeps reporting its published days
+    as missing.
+    """
+    for published_dataset in datasets:
+        published_state = StateStore(config.meta_root)
+        if published_dataset in fully_selected:
+            published_state.commit_staged_request_days(published_dataset, run_id)
+            published_state.commit_staged_units(published_dataset, run_id)
+            commit_observation(config, published_dataset, run_id)
+            if published_dataset == "sector_bars":
+                from cnequity.steps.rotation import commit_sector_bars_staged
+
+                commit_sector_bars_staged(config, run_id)
+        if resolved_keys.get(published_dataset):
+            published_state.clear_outstanding_keys(
+                published_dataset, resolved_keys[published_dataset]
+            )
+        # Committing staged request days marks them covered; a partially
+        # accepted batch must leave its rejected dates in the missing ledger.
+        writer = StagingWriter(config.staging_root)
+        for report in writer.quality_receipts(published_dataset, run_id):
+            if report.get("rows_rejected"):
+                published_state.record_missing_dates(
+                    published_dataset,
+                    [date.fromisoformat(day) for day in report.get("rejected_dates", [])],
+                    reason="quarantined_rows",
+                )
+    if datasets:
+        _update_watermarks(
+            config,
+            frozenset(datasets),
+            trade_date,
+            reconcile_no_print=reconcile_no_print,
+        )
+
+
 @register_step("compact", group="finalize", parallelizable=False)
 def step_compact(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     from cnequity.orchestrator.run_lock import run_lock
@@ -829,7 +879,7 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
             )
         audit_findings.extend(publication["new_errors"])
         pending = [item for item in pending if item[0] not in blocked_datasets]
-    for ds, pcol, rows, changed_files, change_log, gate_spec in pending:
+    for index, (ds, pcol, rows, changed_files, change_log, gate_spec) in enumerate(pending):
         try:
             contract = dataset_contract(ds)
             revision = revisions.commit(
@@ -882,6 +932,29 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
                 error_code=type(exc).__name__,
                 error_message=str(exc),
             )
+            # Every dataset before this one already has its revision on disk:
+            # current.json names it and readers see it. Leaving their coverage
+            # ledgers and watermarks behind would keep reporting those
+            # published days as missing — and, once this run's staging is
+            # cleaned, nothing would ever settle them. Settle exactly the
+            # datasets whose publication is final, then fail as before.
+            unpublished = {item[0] for item in pending[index:]}
+            try:
+                _settle_published_datasets(
+                    config,
+                    compacted - unpublished,
+                    run_id=run_id,
+                    trade_date=trade_date,
+                    fully_selected=fully_selected,
+                    resolved_keys=resolved_keys,
+                    reconcile_no_print=bool(
+                        {"daily_bars", "instruments"} & set(committed_revisions)
+                    ),
+                )
+            except Exception:  # noqa: BLE001 — never mask the commit failure
+                logger.exception(
+                    "compact: could not settle ledgers of datasets published before %s", ds
+                )
             raise
         if ds in {"futures_bars", "option_bars"}:
             from cnequity.storage.derivative_evidence import confirm_receipts
@@ -916,43 +989,21 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
                 criticality=_dataset_criticality(ds),
                 rows_written=rows,
             )
-    for published_dataset in compacted:
-        published_state = StateStore(config.meta_root)
-        if published_dataset in fully_selected:
-            published_state.commit_staged_request_days(published_dataset, run_id)
-            published_state.commit_staged_units(published_dataset, run_id)
-            commit_observation(config, published_dataset, run_id)
-            if published_dataset == "sector_bars":
-                from cnequity.steps.rotation import commit_sector_bars_staged
-
-                commit_sector_bars_staged(config, run_id)
-        if resolved_keys.get(published_dataset):
-            published_state.clear_outstanding_keys(
-                published_dataset, resolved_keys[published_dataset]
-            )
-        # Committing staged request days marks them covered; a partially
-        # accepted batch must leave its rejected dates in the missing ledger.
-        writer = StagingWriter(config.staging_root)
-        for report in writer.quality_receipts(published_dataset, run_id):
-            if report.get("rows_rejected"):
-                published_state.record_missing_dates(
-                    published_dataset,
-                    [date.fromisoformat(day) for day in report.get("rejected_dates", [])],
-                    reason="quarantined_rows",
-                )
     # A dataset can compact rows without publishing anything: a backfill that
     # refetches what the lake already holds rewrites nothing. The no-print
     # replay reads only published content, so it then has nothing new to check.
     # The watermark reconcile still runs: it exists for runs that publish
     # nothing because a source went dark.
     published = frozenset(committed_revisions)
-    if compacted:
-        _update_watermarks(
-            config,
-            frozenset(compacted),
-            trade_date,
-            reconcile_no_print=bool({"daily_bars", "instruments"} & published),
-        )
+    _settle_published_datasets(
+        config,
+        compacted,
+        run_id=run_id,
+        trade_date=trade_date,
+        fully_selected=fully_selected,
+        resolved_keys=resolved_keys,
+        reconcile_no_print=bool({"daily_bars", "instruments"} & published),
+    )
     audit_findings.extend(_reconcile_watermarks(config))
 
     from cnequity.query.views import ensure_duckdb_views

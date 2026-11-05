@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 OBSERVED_THROUGH_FIELD = "observed_through"
 _STAGED_FIELD = "staged_observed_through"
+#: Run-keyed, like ``staged_request_days``; staging cleanup prunes it.
+STAGED_OBSERVATION_FIELD = _STAGED_FIELD
 
 
 def observed_through(config, dataset: str) -> date | None:

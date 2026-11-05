@@ -286,12 +286,16 @@ def _run_bars(config: Config, trade_date: date, run_id: str, kind: Kind) -> dict
     dataset = _BARS_DATASET[kind]
     if not is_dataset_enabled(dataset, config):
         return _disabled(dataset)
-    if getattr(config, "_derivative_http_run", None) != getattr(
-        config, "_derivative_batch", run_id
-    ):
-        config._derivative_http_run = getattr(config, "_derivative_batch", run_id)
-        config._derivative_refreshed_requests = set()
-        config._derivative_blocked_hosts = set()
+    # futures_bars and option_bars run side by side and share these caches;
+    # initialise them atomically so one cannot reset what the other recorded.
+    from cnequity.run_scope import ensure_run_scoped
+
+    ensure_run_scoped(
+        config,
+        "_derivative_http_run",
+        getattr(config, "_derivative_batch", run_id),
+        {"_derivative_refreshed_requests": set, "_derivative_blocked_hosts": set},
+    )
     findings: list[dict] = []
     if getattr(config, "_backfill", False):
         floor = earliest_session(config, kind)

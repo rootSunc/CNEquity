@@ -415,6 +415,77 @@ def test_run_sql_reads_a_published_generation(lake):
         )
 
 
+def _publish_daily_bars(lake) -> None:
+    from cnequity.storage.revisions import RevisionStore
+
+    store = RevisionStore(lake.meta_root, lake.curated_root)
+    files = sorted((lake.curated_root / "daily_bars").rglob("*.parquet"))
+    assert store.commit(
+        "daily_bars",
+        run_id="r1",
+        changed_files=files,
+        schema_version=1,
+        contract_fingerprint="test",
+    )
+
+
+def test_run_sql_cannot_read_an_unpublished_candidate(lake):
+    """Once a dataset publishes generations, ``curated/<ds>`` is the mutable
+    tree compact writes its candidate into. A raw read_parquet there would see
+    rows the publication gate has not passed (or has quarantined)."""
+    _publish_daily_bars(lake)
+    # Same schema as the published rows, so only the sandbox can refuse it.
+    published = lake.curated_root / "daily_bars" / "trade_date=2024-06-27" / "part-0.parquet"
+    candidate = lake.curated_root / "daily_bars" / "trade_date=2024-06-28"
+    candidate.mkdir(parents=True)
+    pl.read_parquet(published).with_columns(trade_date=pl.lit(date(2024, 6, 28))).write_parquet(
+        candidate / "part-0.parquet"
+    )
+
+    view = tools.run_sql(lake, sql="SELECT count(*) AS n FROM daily_bars")
+    assert view["rows"] == [[2]]
+    raw = (lake.curated_root / "daily_bars").as_posix()
+    with pytest.raises(tools.ToolError):
+        tools.run_sql(lake, sql=f"SELECT count(*) FROM read_parquet('{raw}/**/*.parquet')")
+
+
+def test_run_sql_still_reads_a_legacy_dataset_directly(lake):
+    """A pointer-less dataset has no generation yet; its logical root is what
+    the view reads, so it stays inside the sandbox."""
+    raw = (lake.curated_root / "daily_bars").as_posix()
+    payload = tools.run_sql(
+        lake, sql=f"SELECT count(*) AS n FROM read_parquet('{raw}/**/*.parquet')"
+    )
+    assert payload["rows"] == [[2]]
+
+
+def test_run_sql_sandbox_is_not_a_bare_prefix(lake):
+    """Allowing ``curated/daily_bars`` must not also allow ``curated/daily_bars_x``."""
+    sibling = lake.curated_root / "daily_bars_x"
+    sibling.mkdir(parents=True)
+    pl.DataFrame({"secret": ["must not be exposed"]}).write_parquet(sibling / "part-0.parquet")
+
+    with pytest.raises(tools.ToolError):
+        tools.run_sql(lake, sql=f"SELECT * FROM read_parquet('{sibling.as_posix()}/*.parquet')")
+
+
+def test_run_sql_pages_without_materialising_the_result(lake):
+    payload = tools.run_sql(
+        lake, sql="SELECT range AS n FROM range(5000) ORDER BY n DESC", limit=10
+    )
+    assert payload["returned"] == 10
+    assert payload["total"] == 5000
+    assert payload["truncated"] is True
+    assert [row[0] for row in payload["rows"]] == list(range(4999, 4989, -1))
+
+
+def test_run_sql_small_result_is_not_truncated(lake):
+    payload = tools.run_sql(lake, sql="SELECT 1 AS n;")
+    assert payload["rows"] == [[1]]
+    assert payload["total"] == 1
+    assert payload["truncated"] is False
+
+
 def test_run_sql_cannot_access_a_file_outside_the_lake(lake, tmp_path):
     secret = tmp_path / "outside-lake-secret.txt"
     secret.write_text("must not be exposed", encoding="utf-8")

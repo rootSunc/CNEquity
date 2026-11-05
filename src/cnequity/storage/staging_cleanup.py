@@ -9,9 +9,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cnequity.config import Config
+from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import LockUnavailable, exclusive_lock, is_locked
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.storage.lifecycle.resources import resource_holds
+from cnequity.storage.observation import STAGED_OBSERVATION_FIELD
+from cnequity.storage.state import StateStore
+
+# State fields keyed by run id that hold "validated in staging, not yet in a
+# revision" evidence. Compact pops a run's entry when it publishes that run's
+# staging in full; nothing else did, so a run whose staging was removed
+# without a full publish left its entry behind for good.
+_RUN_KEYED_STATE_FIELDS = ("staged_request_days", "staged_units", STAGED_OBSERVATION_FIELD)
 
 
 @dataclass
@@ -23,10 +32,75 @@ class StagingCleanupResult:
     force_removed_run_ids: list[str] = None  # type: ignore[assignment]
     skipped_reasons: dict[str, str] = field(default_factory=dict)
     inventory: list[dict] = field(default_factory=list)
+    # dataset -> run ids whose staged-ledger entries were (or, in a dry run,
+    # would be) dropped because their staging no longer exists.
+    pruned_ledgers: dict[str, list[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.force_removed_run_ids is None:
             self.force_removed_run_ids = []
+
+
+def prune_stale_staged_ledgers(
+    config: Config,
+    *,
+    manifest: Manifest | None = None,
+    dry_run: bool = False,
+) -> dict[str, list[str]]:
+    """Drop run-keyed staged-ledger entries whose staging is gone.
+
+    ``staged_request_days`` and its siblings record what a run validated into
+    staging, so a full compact of that staging can mark those days covered. An
+    entry is only meaningful while the staging it describes exists: once a run
+    directory is deleted (``cne run clean``, ``--force``, a lifecycle staging
+    purge), no compact can ever publish it, and the entry is dead weight that
+    every later state read and write of the dataset re-serialises.
+
+    An entry is kept while its run is still ``running`` — a step may record
+    the day before its staging write lands. Dropping an entry never marks a
+    day covered: the matching ``missing_ranges`` row stays, so the worst
+    outcome of a wrong call here is a refetch, not a false claim of coverage.
+    """
+    state_dir = config.meta_root / "state"
+    if not state_dir.is_dir():
+        return {}
+    manifest = manifest or Manifest(config.manifest_path)
+    store = StateStore(config.meta_root)
+    pruned: dict[str, list[str]] = {}
+    for path in sorted(state_dir.glob("*.json")):
+        dataset = path.stem
+        if dataset not in DATASETS:
+            continue  # e.g. lake.json, the migration record
+        payload = store.get_payload(dataset)
+        candidates = {
+            run_id
+            for name in _RUN_KEYED_STATE_FIELDS
+            if isinstance(payload.get(name), dict)
+            for run_id in payload[name]
+        }
+        stale: list[str] = []
+        for run_id in sorted(candidates):
+            if (config.staging_root / dataset / f"run_id={run_id}").is_dir():
+                continue
+            run = manifest.get_run(run_id)
+            if run is not None and run["status"] == "running":
+                continue
+            stale.append(run_id)
+        if not stale:
+            continue
+        pruned[dataset] = stale
+        if dry_run:
+            continue
+        with store.transaction(dataset) as current:
+            for name in _RUN_KEYED_STATE_FIELDS:
+                entries = current.get(name)
+                if not isinstance(entries, dict):
+                    continue
+                for run_id in stale:
+                    entries.pop(run_id, None)
+                if not entries:
+                    current.pop(name, None)
+    return pruned
 
 
 def list_staging_run_ids(staging_root: Path) -> set[str]:
@@ -253,6 +327,7 @@ def _clean_staging(
         retention_days=orphan_retention_days,
         dry_run=dry_run,
     )
+    pruned_ledgers = prune_stale_staged_ledgers(config, manifest=manifest, dry_run=dry_run)
 
     return StagingCleanupResult(
         removed_run_ids=removed,
@@ -262,6 +337,7 @@ def _clean_staging(
         force_removed_run_ids=force_removed,
         skipped_reasons=skipped_reasons,
         inventory=inventory,
+        pruned_ledgers=pruned_ledgers,
     )
 
 

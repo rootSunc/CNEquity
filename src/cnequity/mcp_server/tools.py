@@ -24,6 +24,7 @@ stays answerable without paying for it on every row.
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime
 from typing import Any
 
@@ -79,6 +80,7 @@ def _frame_payload(
     limit: int,
     offset: int = 0,
     include_provenance: bool = False,
+    total: int | None = None,
 ) -> dict:
     """Columnar page over *df*, with the honest total beside it.
 
@@ -86,13 +88,22 @@ def _frame_payload(
     and is told only about the 200 will average them and report the number as
     the market's. The total and the flag are what let it choose ``run_sql``
     instead.
+
+    *total*, when given, says *df* is already the page — the producer applied
+    the offset and limit itself so the full result never had to be held in
+    memory — and *total* is the full result's row count. ``sources`` then
+    describes the returned page, not the whole result.
     """
-    total = df.height
+    if total is None:
+        total = df.height
+        start = offset
+    else:
+        start = 0
     sources = sorted(set(df["source"].to_list())) if "source" in df.columns else []
     if not include_provenance:
         df = df.drop([c for c in PROVENANCE_COLS if c in df.columns])
 
-    page = df.slice(offset, limit)
+    page = df.slice(start, limit)
     payload: dict[str, Any] = {
         "columns": page.columns,
         "rows": [[_scalar(v) for v in row] for row in page.iter_rows()],
@@ -609,17 +620,19 @@ def _configure_sql_connection(con: Any, config: Config) -> None:
 
     ``read_only=True`` protects the DuckDB catalog, not the host filesystem:
     DuckDB SELECT table functions can still read local files or fetch remote
-    resources.  The views created by :func:`views_connection` only need the
-    curated and derived roots, so make those the sole allowed directories and
-    disable all other external access before locking the settings. A dataset
-    with a published generation reads from ``meta/revisions/data`` instead, so
-    that directory is allowed too — and nothing else under ``meta``.
+    resources.  The views created by :func:`views_connection` read only the
+    directories :func:`view_read_roots` names — committed generations under
+    ``meta/revisions/data``, plus the logical root of a dataset that has no
+    pointer yet — so make those the sole allowed directories and disable all
+    other external access before locking the settings. Nothing else under
+    ``meta`` is reachable, and neither is the mutable ``curated/`` candidate
+    tree of a dataset that already publishes generations.
     """
-    allowed = [
-        str(config.curated_root.resolve()),
-        str(config.derived_root.resolve()),
-        str((config.meta_root / "revisions" / "data").resolve()),
-    ]
+    from cnequity.query.views import view_read_roots
+
+    # A trailing separator keeps the prefix match from also admitting a
+    # sibling such as ``daily_bars_adj`` beside ``daily_bars``.
+    allowed = [os.path.join(str(path), "") for path in view_read_roots(config)]
     # This must be configured before enable_external_access is disabled.  Use
     # a bound list parameter so paths containing quotes cannot alter SQL.
     con.execute("SET allowed_directories = ?", [allowed])
@@ -657,12 +670,19 @@ def run_sql(config: Config, *, sql: str, limit: int | None = None) -> dict:
     con = views_connection(config)
     try:
         _configure_sql_connection(con, config)
-        df = pl.from_arrow(con.sql(text).to_arrow_table())
+        relation = con.sql(text)
+        # Only the page is materialised. Fetching the whole result and slicing
+        # it afterwards let one `SELECT * FROM minute_bars` claim the entire
+        # DuckDB memory limit and then copy it again into Polars, to return
+        # 200 rows. The count runs as its own aggregate, which DuckDB can
+        # answer with projection pushdown instead of carrying every column.
+        df = pl.from_arrow(relation.limit(limit).to_arrow_table())
+        total = int(relation.aggregate("count(*)").fetchone()[0])
     except Exception as exc:  # noqa: BLE001 — surfaced as a fixable tool error
         raise ToolError(f"query failed: {exc}") from exc
     finally:
         con.close()
 
-    payload = _frame_payload(df, limit=limit, include_provenance=True)
+    payload = _frame_payload(df, limit=limit, include_provenance=True, total=total)
     payload["sql"] = text
     return payload

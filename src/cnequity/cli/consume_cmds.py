@@ -9,6 +9,7 @@ from __future__ import annotations
 import errno
 import json
 import logging
+import re
 import socket
 import sys
 from pathlib import Path
@@ -101,9 +102,49 @@ def _panel_url(sockets: list[socket.socket], token: str | None) -> str:
     return f"http://{name}:{port}/{suffix}"
 
 
+_TOKEN_PATH = re.compile(r"(/mcp/)[^/?#\s]+")
+_TOKEN_QUERY = re.compile(r"([?&]token=)[^&#\s]*", re.IGNORECASE)
+_REDACTED = "<redacted>"
+
+
+def redact_url_secrets(path: str) -> str:
+    """Hide the access tokens a URL can carry: ``/mcp/<token>`` and ``?token=``.
+
+    Both the dashboard (``?token=``) and ``cne mcp --http`` (``/mcp/<token>``,
+    ``?token=``) accept a token in the URL, because some clients can only be
+    given a URL. uvicorn's access log records the full path with its query
+    string, so without this the secret lands in every log line, and in any
+    tunnel or proxy log that captures stdout.
+    """
+    return _TOKEN_QUERY.sub(rf"\1{_REDACTED}", _TOKEN_PATH.sub(rf"\1{_REDACTED}", path))
+
+
+class _AccessLogRedactor(logging.Filter):
+    """Rewrite the request path of a ``uvicorn.access`` record before it is emitted."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        # uvicorn: (client_addr, method, full_path, http_version, status_code)
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            record.args = (*args[:2], redact_url_secrets(args[2]), *args[3:])
+        elif isinstance(record.msg, str):
+            record.msg = redact_url_secrets(record.msg)
+        return True
+
+
+def _install_access_log_redaction() -> None:
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _AccessLogRedactor) for f in access.filters):
+        access.addFilter(_AccessLogRedactor())
+
+
 def _run_server(app, host: str, port: int, sockets: list[socket.socket] | None) -> None:
     import uvicorn
 
+    # uvicorn.Config re-applies its logging dictConfig on construction; that
+    # replaces the logger's handlers but keeps its filters, so installing the
+    # filter first is enough.
+    _install_access_log_redaction()
     if sockets is not None:
         uvicorn.Server(uvicorn.Config(app, log_level="info")).run(sockets=sockets)
         return
