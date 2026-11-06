@@ -11,6 +11,8 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.derive.adj_factors import INPUTS as ADJ_FACTOR_INPUTS
+from cnequity.derive.minute_resample import INPUTS as MINUTE_RESAMPLE_INPUTS
+from cnequity.derive.option_greeks import INPUTS as OPTION_GREEK_INPUTS
 from cnequity.domain.datasets import PARTITION_COLS, RESAMPLED_MINUTE_DATASETS, WATERMARK_SKIP
 from cnequity.orchestrator.registry import register_step
 from cnequity.progress import sweep_progress
@@ -137,8 +139,8 @@ DERIVE_INPUTS = {
     "adj_factors": ADJ_FACTOR_INPUTS,
     "industry_index": ("daily_bars", "industry_members", "adj_factors", "trading_calendar"),
     "futures_continuous": ("futures_bars", "futures_contracts"),
-    "option_greeks": ("option_bars", "futures_bars", "option_contracts", "macro_indicators"),
-    **{name: ("minute_bars", "minute_bars_5m") for name in RESAMPLED_MINUTE_DATASETS},
+    "option_greeks": OPTION_GREEK_INPUTS,
+    **{name: MINUTE_RESAMPLE_INPUTS for name in RESAMPLED_MINUTE_DATASETS},
 }
 
 

@@ -614,3 +614,15 @@ def test_share_structure_change_blocks_adj_factors_publication(tmp_path):
     with pytest.raises(InputUnavailableError, match="share_structure changed"):
         _publish_derived_revision(cfg, "adj_factors", "derive", DAY, {}, input_revisions=inputs)
     assert store.current_pointer("adj_factors") is None
+
+
+def test_derive_publication_pins_the_inputs_each_derive_reads():
+    """Publication guards must use the derive's own input list, not a copy."""
+    from cnequity.derive import adj_factors, minute_resample, option_greeks
+    from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
+    from cnequity.steps.finalize import DERIVE_INPUTS
+
+    assert DERIVE_INPUTS["adj_factors"] is adj_factors.INPUTS
+    assert DERIVE_INPUTS["option_greeks"] is option_greeks.INPUTS
+    for name in RESAMPLED_MINUTE_DATASETS:
+        assert DERIVE_INPUTS[name] is minute_resample.INPUTS

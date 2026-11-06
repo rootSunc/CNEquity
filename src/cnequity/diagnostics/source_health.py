@@ -632,7 +632,16 @@ PROBES: tuple[SourceProbe, ...] = (
         key="tdx_protocol",
         label=N_("TDX quote hosts (TCP 7709)"),
         host="tdx (TCP)",
-        powers=("daily_bars", "index_bars", "minute_bars", "trade_ticks", "instruments"),
+        powers=(
+            "daily_bars",
+            "index_bars",
+            "minute_bars",
+            "minute_bars_5m",
+            "trade_ticks",
+            "instruments",
+            "corporate_actions",
+            "trading_calendar",
+        ),
         run=_probe_tdx,
         note=N_(
             "Binary TCP protocol; shares no risk-control surface with any HTTP source. Direct connections from abroad usually time out."

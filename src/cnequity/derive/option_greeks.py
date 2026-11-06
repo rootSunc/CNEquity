@@ -215,14 +215,14 @@ def _solve(group: pl.DataFrame, model: str) -> pl.DataFrame:
 
 #: The inputs a derive reads, pinned once so its receipts name exactly the
 #: generations the Greeks were computed from.
-_INPUTS = ("option_bars", "futures_bars", "option_contracts", "macro_indicators")
+INPUTS = ("option_bars", "futures_bars", "option_contracts", "macro_indicators")
 _TERM_COLUMNS = ("expiry_date", "exercise_style", "expiry_month", "dates_basis")
 
 
 def _pin_inputs(config):
     from cnequity.storage.read_context import ReadContext
 
-    return ReadContext.capture(config, _INPUTS, {})
+    return ReadContext.capture(config, INPUTS, {})
 
 
 def _curated(config, dataset: str, context=None, **filters) -> pl.DataFrame | None:

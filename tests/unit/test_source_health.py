@@ -476,3 +476,23 @@ def test_probe_exits_zero_when_a_source_is_down(config, monkeypatch, tmp_path):
     result = CliRunner().invoke(cli, ["sources", "probe", "--config", str(cfg_path)])
     assert result.exit_code == 0
     assert "down" in result.output
+
+
+def test_a_sole_probe_names_the_core_datasets_its_source_serves():
+    """With one probe per source there is no ambiguity about which endpoint serves a dataset."""
+    from collections import defaultdict
+
+    from cnequity.diagnostics.source_health import PROBES
+    from cnequity.domain.datasets import DATASETS
+
+    probes = defaultdict(list)
+    for probe in PROBES:
+        probes[probe.config_key].append(probe)
+    unlisted = sorted(
+        (spec.primary_source, name)
+        for name, spec in DATASETS.items()
+        if spec.support == "core"
+        and len(probes.get(spec.primary_source, ())) == 1
+        and name not in probes[spec.primary_source][0].powers
+    )
+    assert not unlisted
