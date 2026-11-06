@@ -124,6 +124,32 @@ def test_financial_report_failure_keeps_valid_unit_for_same_run_retry(cfg, monke
     assert len(list(cfg.staging_root.glob("financial_statement_items/**/*.parquet"))) == 1
 
 
+def test_financial_backfill_stages_a_unit_from_every_report(cfg, monkeypatch):
+    """Issue #57: the F10 cash-flow units aborted the backfill as invalid."""
+    from cnequity.adapters.eastmoney.fundamentals import _REPORTS, _parse_rows
+
+    cfg._backfill = True
+    cfg._backfill_start = date(2024, 1, 1)
+    cfg._backfill_end = date(2024, 3, 31)
+
+    def fake_fetch(_day, *, on_unit, skip_units, failures, **_kwargs):
+        for report in _REPORTS:
+            raw = {
+                "SECUCODE": "600519.SH",
+                report.report_date_field: "2024-03-31",
+                "NOTICE_DATE": "2024-04-20",
+            } | {field: 1.0 for field in report.items.values()}
+            rows, _ = _parse_rows([raw], report, default_notice="2024-04-20")
+            on_unit(f"2024-03-31|{report.name}", f"backfill:2024-03-31:{report.name}", rows)
+        return pl.DataFrame()
+
+    monkeypatch.setattr(fund, "fetch_financial_statement_items", fake_fetch)
+    result = fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-all", {})
+    staged = list(cfg.staging_root.glob("financial_statement_items/**/*.parquet"))
+    assert len(staged) == len(_REPORTS)
+    assert result["rows_written"] == sum(len(report.items) for report in _REPORTS)
+
+
 def test_financial_statement_items_backfill_surfaces_partial_report_families(cfg, monkeypatch):
     cfg._backfill = True
     cfg._backfill_start = date(2024, 1, 1)

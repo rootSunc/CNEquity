@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- `cne backfill financial_statement_items` 不再在 F10 现金流表处报 `invalid report unit …|RPT_F10_FINANCE_GCASHFLOW` 退出（[#57](https://github.com/rootSunc/CNEquity/issues/57)）：0.21.0 起回补会拉取 F10 四张现金流表（取期末现金），但回补校验只认原来的四张报表，第一个 F10 单元就让整次回补中止。现在校验直接按拉取的报表清单判断，以后新增报表也不会再出现这个问题；日更不受影响。
 - `sector_fund_flow_ths` 的行业行往前补到 2024-09-10：来自 Tushare `moneyflow_ind_ths`，标 `source=tushare`，每天附原始响应作证据；金额只精确到 1 亿元，比同花顺页面的 0.01 亿元粗。
 - 再新增十三个可选的 Tushare 数据集，同样只由 `cne backfill` 采集、不排日更：游资名录与每日交易（`hot_money_traders`、`hot_money_trades`）、可转债赎回、转股与票息（`convertible_bond_calls`、`convertible_bond_conversions`、`convertible_bond_coupons`）、同花顺与东财人气榜（`popularity_ranks`）、连板天梯（`limit_ladder`）、最强板块（`strongest_sectors`）、开盘啦涨停榜（`kpl_limit_ups`）、同花顺口径分单资金流（`fund_flow_ths_tushare`）、互动问答（`investor_qa`）、董监高与薪酬持股（`executives`、`executive_compensation`）。
 - 巨潮公告回补的续传断点改为压缩存储（有 zstd 时用 zstd，否则用标准库 gzip）：一个长时间窗口的断点包含所有已整理的分页，原来是明文 JSON、每抓一页就整份重写一次，单个文件达 239 MB，全部合计 7.2 GB；zstd 压缩后约小 19 倍，回补时的写入量也相应减少。旧的明文断点照常读取，下次写入时替换。超过有效期（默认 7 天）的断点不会再被续用，公告步骤运行时会自动删除；有效期设为不限时不删除。

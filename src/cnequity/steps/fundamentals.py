@@ -10,7 +10,11 @@ import httpx
 import polars as pl
 
 from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError
-from cnequity.adapters.eastmoney.fundamentals import fetch_financial_statement_items
+from cnequity.adapters.eastmoney.fundamentals import (
+    STATEMENT_TYPES,
+    fetch_financial_statement_items,
+    valid_backfill_unit,
+)
 from cnequity.adapters.eastmoney.shareholders import CHANGE_DATE, NOTICE_DATE
 from cnequity.adapters.eastmoney.valuation import fetch_valuation_metrics
 from cnequity.config import Config
@@ -34,27 +38,6 @@ _VALUATION_BACKFILL_START = date(2016, 1, 1)
 # Checkpoint every N symbols so a mid-sweep kill still keeps prior chunks in
 # curated (resume via ``_symbols_needing_backfill`` / float_mv fill ratio).
 _VALUATION_BACKFILL_CHUNK = 50
-_REPORT_STATEMENT_TYPES = {
-    "RPT_LICO_FN_CPD": {"income", "indicator"},
-    "RPT_DMSK_FN_BALANCE": {"balance"},
-    "RPT_DMSK_FN_INCOME": {"income"},
-    "RPT_DMSK_FN_CASHFLOW": {"cashflow"},
-}
-
-
-def _valid_financial_unit(frame: pl.DataFrame, period: str, report: str) -> bool:
-    try:
-        day = date.fromisoformat(period)
-        quarter = f"{day.year}Q{(day.month - 1) // 3 + 1}"
-        return bool(
-            not frame.is_empty()
-            and {"report_period", "statement_type", "symbol"}.issubset(frame.columns)
-            and set(frame.get_column("report_period").to_list()) == {quarter}
-            and set(frame.get_column("statement_type").to_list()) <= _REPORT_STATEMENT_TYPES[report]
-            and frame.get_column("symbol").null_count() == 0
-        )
-    except (ValueError, KeyError):
-        return False
 
 
 def _validate_valuation_history_batch(
@@ -704,11 +687,15 @@ def step_financial_statement_items(
                 continue
             try:
                 recovered = pl.read_parquet(path)
-                if _valid_financial_unit(recovered, period, report):
+                if valid_backfill_unit(recovered, period, report):
                     recoverable_units.add(unit)
                     break
             except (OSError, pl.exceptions.PolarsError):
                 continue
+            except ValueError:
+                # A report recorded by an older version and since dropped:
+                # refetch rather than abort the retry.
+                break
     failures: list[tuple[str, str]] = []
     unit_stage_used = bool(backfill and recoverable_units)
 
@@ -722,7 +709,7 @@ def step_financial_statement_items(
             subset=["symbol", "report_period", "statement_type", "item_code", "announce_date"],
             keep="last",
         )
-        if not _valid_financial_unit(frame, period, report):
+        if not valid_backfill_unit(frame, period, report):
             raise RuntimeError(f"financial_statement_items: invalid report unit {unit}")
         evidence = (
             verify_raw_archive(
@@ -796,11 +783,10 @@ def step_financial_statement_items(
                 if period not in observed:
                     continue
                 present = set(row.get("statement_types") or [])
-                # The four statement-type families fetch_financial_statement_items
-                # actually issues requests for (adapters/eastmoney/fundamentals.py);
-                # checking only a subset let a missing income statement pass as
-                # a complete period.
-                missing = sorted({"income", "indicator", "balance", "cashflow"} - present)
+                # Every statement type the adapter's reports produce; checking
+                # only a subset let a missing income statement pass as a
+                # complete period.
+                missing = sorted(STATEMENT_TYPES - present)
                 if missing:
                     missing_statement_types[str(period)] = missing
 

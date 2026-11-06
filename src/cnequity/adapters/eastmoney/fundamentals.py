@@ -88,6 +88,10 @@ class _Report:
     authoritative_announce_date: bool = False
 
     @property
+    def statement_types(self) -> frozenset[str]:
+        return frozenset(statement_type for statement_type, _item in self.items)
+
+    @property
     def columns(self) -> str:
         fields = dict.fromkeys(self.items.values())
         return f"SECURITY_CODE,SECUCODE,{self.report_date_field},NOTICE_DATE," + ",".join(fields)
@@ -177,6 +181,33 @@ _REPORTS: tuple[_Report, ...] = (
 )
 
 _ANNOUNCE_SOURCE = next(r for r in _REPORTS if r.authoritative_announce_date)
+_REPORTS_BY_NAME = {report.name: report for report in _REPORTS}
+# Every statement type a complete period carries across all reports.
+STATEMENT_TYPES = frozenset().union(*(report.statement_types for report in _REPORTS))
+
+
+def valid_backfill_unit(frame: pl.DataFrame, period: str, report_name: str) -> bool:
+    """Whether *frame* is one complete ``period|report_name`` backfill unit.
+
+    The allowed statement types come from the report's own item map, so adding
+    a report to ``_REPORTS`` cannot leave this check behind. An unknown report
+    is a programming error and raises instead of reading as a bad payload.
+    """
+    report = _REPORTS_BY_NAME.get(report_name)
+    if report is None:
+        raise ValueError(f"financial_statement_items: unknown report {report_name!r}")
+    quarter = _report_period(period)
+    if (
+        quarter is None
+        or frame.is_empty()
+        or not {"report_period", "statement_type", "symbol"}.issubset(frame.columns)
+    ):
+        return False
+    return bool(
+        set(frame.get_column("report_period").to_list()) == {quarter}
+        and set(frame.get_column("statement_type").to_list()) <= report.statement_types
+        and frame.get_column("symbol").null_count() == 0
+    )
 
 
 def _report_period_dates(

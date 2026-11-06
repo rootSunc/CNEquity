@@ -2,15 +2,18 @@
 
 from datetime import date
 
+import polars as pl
 import pytest
 
 from cnequity.adapters.eastmoney import fundamentals as fundamentals_module
 from cnequity.adapters.eastmoney.fundamentals import (
     _ANNOUNCE_SOURCE,
     _REPORTS,
+    STATEMENT_TYPES,
     _announce_date_map,
     _parse_rows,
     fetch_financial_statement_items,
+    valid_backfill_unit,
 )
 
 _BALANCE = next(r for r in _REPORTS if r.name == "RPT_DMSK_FN_BALANCE")
@@ -465,3 +468,32 @@ def test_closing_cash_comes_from_every_f10_cashflow_family():
     """DMSK's END_CCE is empty; the F10 reports carry it for all four families."""
     owners = {r.name for r in _REPORTS if ("cashflow", "end_cash") in r.items}
     assert owners == {f"RPT_F10_FINANCE_{family}CASHFLOW" for family in "GBIS"}
+
+
+def _full_row(report, period="2024-03-31"):
+    row = {"SECUCODE": "600519.SH", report.report_date_field: period, "NOTICE_DATE": "2024-04-20"}
+    return row | {field: 1.0 for field in report.items.values()}
+
+
+@pytest.mark.parametrize("report", _REPORTS, ids=lambda report: report.name)
+def test_every_report_yields_a_valid_backfill_unit(report):
+    """Issue #57: a report added to _REPORTS must pass the step's unit check."""
+    rows, _ = _parse_rows([_full_row(report)], report, default_notice="2024-04-20")
+    assert valid_backfill_unit(pl.DataFrame(rows), "2024-03-31", report.name)
+
+
+def test_backfill_unit_rejects_wrong_period_or_statement_type():
+    rows, _ = _parse_rows([_full_row(_BALANCE)], _BALANCE, default_notice="2024-04-20")
+    frame = pl.DataFrame(rows)
+    assert not valid_backfill_unit(frame, "2024-06-30", _BALANCE.name)
+    assert not valid_backfill_unit(frame, "2024-03-31", "RPT_DMSK_FN_INCOME")
+    assert not valid_backfill_unit(frame.clear(), "2024-03-31", _BALANCE.name)
+
+
+def test_unknown_backfill_report_is_an_error_not_a_bad_payload():
+    with pytest.raises(ValueError, match="unknown report"):
+        valid_backfill_unit(pl.DataFrame(), "2024-03-31", "RPT_NOT_A_REPORT")
+
+
+def test_statement_types_cover_every_report():
+    assert STATEMENT_TYPES == {"income", "indicator", "balance", "cashflow"}
