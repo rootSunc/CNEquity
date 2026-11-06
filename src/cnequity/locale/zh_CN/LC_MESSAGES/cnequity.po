@@ -2527,6 +2527,9 @@ msgstr "删除落在证券上市窗口之外的 trading_status 行"
 msgid "Drop zero-volume daily bars dated after a security's delisting"
 msgstr "删除退市日之后的零成交量日线"
 
+msgid "Rewrite daily_bars history from one file per day into one file per month"
+msgstr "把 daily_bars 的历史从每天一个文件改写为每月一个文件"
+
 #: cnequity/serve/ops/settings.py
 msgid "EastMoney"
 msgstr "东财"

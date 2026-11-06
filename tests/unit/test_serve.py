@@ -239,7 +239,7 @@ def test_datasets_can_be_filtered_to_one_tier(client):
 def test_dataset_rows_carry_registry_and_measurement(client):
     rows = {r["dataset"]: r for r in client.get("/api/datasets").json()}
     bars = rows["daily_bars"]
-    assert (bars["tier"], bars["granularity"], bars["freshness"]) == ("L1", "day", "fresh")
+    assert (bars["tier"], bars["granularity"], bars["freshness"]) == ("L1", "month", "fresh")
     assert bars["row_count"] == 3
     assert rows["instruments"]["granularity"] is None  # merge-style
 

@@ -1051,6 +1051,10 @@ _SPECS = [
         supplementary_sources=("exchange", "bse", "sina", "ths", "ths_official", "baostock"),
         tier="L1",
         partition_col="trade_date",
+        # Month files: a one-symbol history read opened 11,149 day files of
+        # ~44 KiB each (0.87 s); 432 month files answer it in 0.11 s, and a
+        # daily compact merges one session into its month in ~30 ms.
+        partition_granularity="month",
         reconciliation_lookback_days=5,
         # TDX bills per symbol, not per session — one request returns up to 800
         # bars — so a short reconciliation window costs about the same as one

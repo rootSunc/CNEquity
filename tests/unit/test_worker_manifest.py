@@ -764,7 +764,7 @@ def test_retry_reruns_failed_symbol_batch_only(worker_config, monkeypatch):
     assert retry["status"] == "success"
     assert calls[-1] == ["600519.SH"]
     curated = (
-        worker_config.curated_root / "daily_bars" / "trade_date=2024-06-28" / "part-merged.parquet"
+        worker_config.curated_root / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet"
     )
     assert curated.exists()
     steps_run = {r.get("step") for r in retry["results"]}
@@ -820,7 +820,7 @@ def test_partial_batch_retry_scope_is_reduced_to_missing_symbols(worker_config, 
     assert calls == [["600519.SH", "000001.SZ"], ["600519.SH"]]
     import polars as pl
 
-    curated = worker_config.curated_root / "daily_bars" / "trade_date=2024-06-28"
+    curated = worker_config.curated_root / "daily_bars" / "trade_date=2024-06"
     rows = pl.concat([pl.read_parquet(path) for path in curated.glob("*.parquet")])
     assert set(rows["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
 
@@ -885,7 +885,7 @@ def test_retry_requeues_stale_running_batch(worker_config, monkeypatch):
     assert skipped["reason_code"] == "input_unavailable"
     assert calls == [["600519.SH"]]
     curated = (
-        worker_config.curated_root / "daily_bars" / "trade_date=2024-06-28" / "part-merged.parquet"
+        worker_config.curated_root / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet"
     )
     assert curated.exists()
 

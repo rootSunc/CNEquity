@@ -200,7 +200,8 @@ def test_view_glob_uses_forward_slashes():
     glob_path, hive = _view_glob("C:/Users/测试/lake", DATASETS["daily_bars"])
     assert "\\" not in glob_path
     assert glob_path.startswith("C:/Users/测试/lake/curated/daily_bars/")
-    assert hive is True
+    # Month directories are not dates; the trade_date column comes from the file.
+    assert hive is False
 
 
 def test_reviewed_stock_terms_outrank_newer_vendor_in_sql(tmp_path):

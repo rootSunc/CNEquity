@@ -160,7 +160,8 @@ def test_compact_advances_watermark_when_all_batches_succeed(tmp_path):
     step_compact(cfg, trade_date, run_id, {})
     assert state.get_date("daily_bars") == trade_date
     assert (
-        cfg.curated_root / "daily_bars" / "trade_date=2024-06-28" / "part-merged.parquet"
+        # daily_bars is month-partitioned: the session merges into its month file.
+        cfg.curated_root / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet"
     ).exists()
 
 
@@ -262,7 +263,7 @@ def test_source_diff_gate_rolls_back_mutable_candidate_before_next_partition(tmp
     assert skipped[0]["reason"] == "source_diff_gate"
     quarantine = Path(skipped[0]["quarantine"])
     assert quarantine.is_dir()
-    assert list(quarantine.rglob("trade_date=2024-07-01/*.parquet"))
+    assert list(quarantine.rglob("trade_date=2024-07/*.parquet"))
 
     revisions = RevisionStore(cfg.meta_root, cfg.curated_root)
     pointer = revisions.current_pointer("daily_bars")

@@ -69,6 +69,25 @@ def _repair(module: str, name: str, **kwargs: Any) -> Callable[..., dict]:
     return run
 
 
+def _repartition(dataset: str) -> Callable[..., dict]:
+    def run(config, *, apply: bool) -> dict:
+        from cnequity.storage.repairs.repartition import RepartitionError, repartition_dataset
+
+        try:
+            result = repartition_dataset(config, dataset, dry_run=not apply)
+        except RepartitionError:
+            # No partitions yet: nothing laid out the old way to rewrite.
+            return {"dataset": dataset, "rows_changed": 0}
+        stale = result.changed or result.partitions_after != result.partitions_before
+        return {
+            "dataset": dataset,
+            "rows_changed": result.rows if stale else 0,
+            "files": f"{result.files_before} -> {result.files_after}",
+        }
+
+    return run
+
+
 def _missing_values(dataset: str) -> Callable[..., dict]:
     def run(config, *, apply: bool) -> dict:
         from cnequity.storage.repairs.missing_values import repair_missing_values
@@ -193,6 +212,12 @@ MIGRATIONS: tuple[Migration, ...] = (
         N_("Drop zero-volume daily bars dated after a security's delisting"),
         "0.21.0",
         _repair("bar_listing_window", "repair_bar_listing_window"),
+    ),
+    Migration(
+        "daily-bars-month-partitions",
+        N_("Rewrite daily_bars history from one file per day into one file per month"),
+        "0.23.0",
+        _repartition("daily_bars"),
     ),
 )
 

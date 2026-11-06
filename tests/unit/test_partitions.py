@@ -295,7 +295,7 @@ def test_compact_prefers_primary_source_on_same_timestamp(tmp_path):
 
     rows = (
         pl.read_parquet(
-            cfg.curated_root / "daily_bars" / "trade_date=2024-06-03" / "part-merged.parquet"
+            cfg.curated_root / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet"
         )
         .select("source", "close")
         .to_dicts()
@@ -410,13 +410,17 @@ def test_candidates_lists_only_datasets_whose_layout_is_stale(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     _daily_layout(cfg)  # index_bars is configured year → stale
     _write_partition(
+        cfg.curated_root / "valuation_metrics", "trade_date", "2024-06-03", [date(2024, 6, 3)]
+    )
+    _write_partition(
         cfg.curated_root / "daily_bars", "trade_date", "2024-06-03", [date(2024, 6, 3)]
     )
 
     candidates = repartition_candidates(cfg)
 
     assert "index_bars" in candidates
-    assert "daily_bars" not in candidates, "already matches its configured day granularity"
+    assert "valuation_metrics" not in candidates, "already matches its configured day granularity"
+    assert "daily_bars" in candidates, "day directories under a month-partitioned dataset"
 
 
 def test_repartition_refuses_a_merge_style_dataset(tmp_path):

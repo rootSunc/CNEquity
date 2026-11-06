@@ -96,3 +96,19 @@ def test_a_layout_that_already_matches_is_left_alone(lake):
     revision = store.current_pointer("daily_bars")["revision"]
     assert not repartition_dataset(cfg, "daily_bars").changed
     assert store.current_pointer("daily_bars")["revision"] == revision
+
+
+def test_the_upgrade_migration_previews_applies_and_then_has_nothing_left(lake):
+    from cnequity.storage.migrations import MIGRATIONS, affected
+
+    cfg, store = lake
+    migration = next(m for m in MIGRATIONS if m.id == "daily-bars-month-partitions")
+    revision = store.current_pointer("daily_bars")["revision"]
+
+    preview = migration.apply(cfg, apply=False)
+    assert affected(preview) == 2 * len(DAYS)
+    assert store.current_pointer("daily_bars")["revision"] == revision
+
+    migration.apply(cfg, apply=True)
+    assert store.current_pointer("daily_bars")["revision"] == revision + 1
+    assert affected(migration.apply(cfg, apply=False)) == 0

@@ -157,7 +157,7 @@ def test_year_only_layout_matching_registry_is_clean(tmp_path):
 
 def test_day_granularity_dataset_is_not_flagged_for_day_dirs(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    root = cfg.curated_root / "daily_bars"
+    root = cfg.curated_root / "valuation_metrics"
     day = date(2024, 6, 3)
     part = root / f"trade_date={day.isoformat()}"
     part.mkdir(parents=True)
@@ -165,4 +165,4 @@ def test_day_granularity_dataset_is_not_flagged_for_day_dirs(tmp_path):
         part / "part-merged.parquet"
     )
 
-    assert check_mixed_partition_granularity("daily_bars", "trade_date", root) is None
+    assert check_mixed_partition_granularity("valuation_metrics", "trade_date", root) is None
