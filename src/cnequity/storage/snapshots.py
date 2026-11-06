@@ -326,9 +326,11 @@ def _reject_symlink_path(path: Path, *, label: str = "path") -> None:
 def _reject_link_or_non_regular(path: Path, *, hardlink: bool = False) -> os.stat_result:
     """Validate one path before reading/copying it.
 
-    Symlinks are rejected even when their target is inside the lake.  Hard
-    links are also rejected for snapshot materialization: otherwise two
-    manifest paths could silently share one mutable inode after extraction.
+    Symlinks are rejected even when their target is inside the lake.  With
+    ``hardlink=True`` hard links are rejected too, for snapshot packages:
+    otherwise two manifest paths could silently share one mutable inode after
+    extraction.  Live lake generations share unchanged files by hard link, so
+    lake sources are read without that flag and copied as independent files.
     """
 
     info = _lstat(path)
@@ -1146,7 +1148,11 @@ class SnapshotStore:
                 layer, source = self._source_root(dataset)
                 if not source.is_dir():
                     raise FileNotFoundError(f"dataset has no stored files: {dataset}")
-                source_entries, unsafe = _tree_files_no_follow(source, reject_hardlinks=True)
+                # The source is the committed generation, whose unchanged
+                # files are hard links shared with older generations.  They
+                # are regular files read once and copied into independent
+                # snapshot files, so only symlinks and special files are unsafe.
+                source_entries, unsafe = _tree_files_no_follow(source)
                 if unsafe:
                     raise ValueError(
                         f"dataset contains unsupported link or special file(s): "
@@ -1160,7 +1166,7 @@ class SnapshotStore:
                 if not files:
                     raise FileNotFoundError(f"dataset has no parquet files: {dataset}")
                 for source_file in files:
-                    _reject_link_or_non_regular(source_file, hardlink=True)
+                    _reject_link_or_non_regular(source_file)
                     relative = source_file.relative_to(source)
                     stored = temp / "data" / layer / dataset / relative
                     stored.parent.mkdir(parents=True, exist_ok=True)

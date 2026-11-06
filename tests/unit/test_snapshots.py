@@ -337,6 +337,77 @@ def test_snapshot_create_refuses_state_pointer_mismatch(tmp_path):
     assert not store.path("inconsistent").exists()
 
 
+def _commit_two_bar_generations(cfg: Config) -> Path:
+    """Publish two generations; the unchanged day is hard-linked between them."""
+    from cnequity.storage.revisions import RevisionStore
+
+    _write_bars(cfg)
+    second_dir = cfg.curated_root / "daily_bars" / "trade_date=2024-06-19"
+    second_dir.mkdir(parents=True)
+    second = second_dir / "part-merged.parquet"
+
+    def write_second(close: float) -> None:
+        pl.DataFrame(
+            {
+                "symbol": ["600000.SH"],
+                "trade_date": [date(2024, 6, 19)],
+                "close": [close],
+                "fetched_at": [datetime(2024, 6, 19, tzinfo=timezone.utc)],
+            }
+        ).write_parquet(second)
+
+    write_second(11.0)
+    first = cfg.curated_root / "daily_bars" / "trade_date=2024-06-18" / "part-merged.parquet"
+    revisions = RevisionStore(cfg.meta_root, cfg.curated_root)
+    for run_id, changed in (("r1", [first, second]), ("r2", [second])):
+        if run_id == "r2":
+            write_second(12.0)
+        assert (
+            revisions.commit(
+                "daily_bars",
+                run_id=run_id,
+                changed_files=changed,
+                schema_version=1,
+                contract_fingerprint="contract",
+            )
+            is not None
+        )
+    StateStore(cfg.meta_root).set_date("daily_bars", date(2024, 6, 19))
+    current = revisions.current_root("daily_bars")
+    assert current is not None
+    return current / "trade_date=2024-06-18" / "part-merged.parquet"
+
+
+def test_snapshot_copies_hard_linked_generation_files(tmp_path):
+    cfg = Config(data_root=tmp_path / "lake")
+    linked = _commit_two_bar_generations(cfg)
+    assert linked.stat().st_nlink > 1
+
+    store = SnapshotStore(cfg, tmp_path / "snapshots")
+    store.create("linked", ["daily_bars"])
+
+    assert store.verify("linked").passed
+    copies = list((store.path("linked")).rglob("trade_date=2024-06-18/*.parquet"))
+    assert copies and all(path.stat().st_nlink == 1 for path in copies)
+    restored = store.restore("linked", tmp_path / "restored")
+    file = restored / "curated" / "daily_bars" / "trade_date=2024-06-19" / "part-merged.parquet"
+    assert pl.read_parquet(file)["close"].to_list() == [12.0]
+
+
+def test_snapshot_still_refuses_symlink_in_generation(tmp_path):
+    cfg = Config(data_root=tmp_path / "lake")
+    linked = _commit_two_bar_generations(cfg)
+    external = tmp_path / "outside.parquet"
+    external.write_bytes(linked.read_bytes())
+    linked.unlink()
+    linked.symlink_to(external)
+
+    store = SnapshotStore(cfg, tmp_path / "snapshots")
+    with pytest.raises(ValueError, match="unsupported link or special file"):
+        store.create("symlinked", ["daily_bars"])
+    assert not store.path("symlinked").exists()
+
+
 def test_restore_rejects_targets_inside_source_snapshot_package(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
     _write_bars(cfg)
