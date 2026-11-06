@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 import pytest
 
+from cnequity import json_codec
 from cnequity.adapters.cninfo import announcements
 from cnequity.adapters.cninfo.announcements import (
     fetch_announcement_index_range,
@@ -150,7 +150,7 @@ def test_range_checkpoint_resumes_at_failed_page(monkeypatch, tmp_path):
             client=first,
             checkpoint_path=checkpoint,
         )
-    saved = json.loads(checkpoint.read_text())
+    saved = json_codec.read_json(checkpoint)
     slice_state = saved["slices"]["szse:2024-03-01:2024-03-01"]
     assert slice_state["next_page"] == 2
     assert [call["pageNum"] for call in first.calls] == [1, 2]
@@ -213,7 +213,7 @@ def test_cninfo_total_is_raw_rows_while_final_frame_uses_unique_keys(tmp_path):
     assert metrics["raw_rows"] == 2
     assert metrics["unique_keys"] == 1
     assert metrics["duplicate_rows"] == 1
-    saved = json.loads(checkpoint.read_text())
+    saved = json_codec.read_json(checkpoint)
     szse = saved["slices"]["szse:2024-04-01:2024-04-01"]
     assert szse["raw_row_count"] == 2
     assert szse["unique_keys"] == ["same"]
@@ -321,11 +321,11 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
     assert revised_frame["title"].to_list() == ["v3"]
     assert len(revised_source.calls) == 1
 
-    saved = json.loads(checkpoint.read_text())
+    saved = json_codec.read_json(checkpoint)
     old = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
     for record in saved["slices"].values():
         record["completed_at"] = old
-    checkpoint.write_text(json.dumps(saved))
+    json_codec.write_json(checkpoint, saved)
     expired = RevisingClient("v4")
     expired_frame = fetch_announcement_index_range(
         date(2024, 4, 2),
@@ -339,7 +339,7 @@ def test_cninfo_checkpoint_refresh_revision_and_ttl_absorb_same_date_corrections
     assert len(expired.calls) == 1
 
     invalidate_cninfo_checkpoint(checkpoint)
-    assert not checkpoint.exists()
+    assert not json_codec.exists(checkpoint)
 
 
 def test_single_day_repeated_page_101_is_terminal_but_resumable(tmp_path):
@@ -381,7 +381,7 @@ def test_single_day_repeated_page_101_is_terminal_but_resumable(tmp_path):
             max_pages_per_slice=200,
         )
     assert [call["pageNum"] for call in first.calls] == list(range(1, 102))
-    saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+    saved = json_codec.read_json(checkpoint)
     state = saved["slices"][f"szse:{target}:{target}"]
     assert state["status"] == "failed"
     assert state["failure_page"] == 101
@@ -473,7 +473,7 @@ def test_dense_single_day_splits_by_plate_and_reconciles_exact_total(monkeypatch
     assert metrics["partition_splits"] == 1
     assert metrics["partition_buckets"] == 2
     assert metrics["partition_axes"] == ["plate"]
-    saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+    saved = json_codec.read_json(checkpoint)
     parent = saved["slices"][f"szse:{target}:{target}"]
     assert parent["status"] == "complete"
     assert parent["partition_strategy"] == "plate"
@@ -564,7 +564,7 @@ def test_dense_single_day_rejects_incomplete_coverage(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="plate coverage.*2.*unfiltered total is 3"):
         fetch_announcement_index_range(target, client=Client(), checkpoint_path=checkpoint)
 
-    saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+    saved = json_codec.read_json(checkpoint)
     parent = saved["slices"][f"szse:{target}:{target}"]
     assert parent["status"] == "failed"
     assert parent["rows"] == []
@@ -798,7 +798,7 @@ def test_failed_contract_checkpoint_restarts_at_page_one(tmp_path):
 
     with pytest.raises(RuntimeError, match="raw row count"):
         fetch_announcement_index_range(target, client=BadTotal(), checkpoint_path=checkpoint)
-    failed = json.loads(checkpoint.read_text())["slices"]["szse:2024-06-03:2024-06-03"]
+    failed = json_codec.read_json(checkpoint)["slices"]["szse:2024-06-03:2024-06-03"]
     assert failed["status"] == "failed"
     assert failed["next_page"] == 1
     assert failed["rows"] == []
@@ -843,13 +843,13 @@ def test_expired_failed_checkpoint_restarts_instead_of_resuming(tmp_path):
         fetch_announcement_index_range(
             target, client=RepeatedPage(), checkpoint_path=checkpoint, max_pages_per_slice=10
         )
-    saved = json.loads(checkpoint.read_text())
+    saved = json_codec.read_json(checkpoint)
     old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     record = saved["slices"]["szse:2024-06-04:2024-06-04"]
     record["failed_at"] = old
     record["updated_at"] = old
     saved["updated_at"] = old
-    checkpoint.write_text(json.dumps(saved), encoding="utf-8")
+    json_codec.write_json(checkpoint, saved)
 
     class Fixed:
         def __init__(self):

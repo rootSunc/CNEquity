@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cnequity import json_codec
 from cnequity.adapters.cninfo import announcements
 from cnequity.adapters.cninfo.announcements import (
     fetch_announcement_index_range,
@@ -975,7 +976,7 @@ def test_checkpoint_cannot_reuse_rows_when_required_wire_archive_is_missing(tmp_
     fetch_announcement_index_range(
         date(2024, 1, 1), client=first, config=config, checkpoint_path=checkpoint
     )
-    saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+    saved = json_codec.read_json(checkpoint)
     reference = saved["slices"]["szse:2024-01-01:2024-01-01"]["raw_archives"][0]
     (config.meta_root / reference["payload_path"]).unlink()
 

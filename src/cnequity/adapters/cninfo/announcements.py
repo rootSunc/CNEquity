@@ -5,8 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping
@@ -17,11 +15,11 @@ from typing import Any
 import httpx
 import polars as pl
 
+from cnequity import json_codec
 from cnequity.domain.http_policy import SourceCoolingDown, record_http_response
 from cnequity.domain.market_time import SHANGHAI_TZ
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.symbols import format_symbol, infer_exchange_from_code, is_all_a_symbol
-from cnequity.storage.atomic import replace_with_retry
 from cnequity.storage.raw_archive import (
     RawArchiveError,
     RawPayloadArchive,
@@ -672,10 +670,10 @@ def _load_checkpoint(
     *,
     source_revision: str | None = None,
 ) -> dict[str, Any]:
-    if path is None or not path.exists():
+    if path is None or not json_codec.exists(path):
         return _empty_checkpoint(identity, source_revision=source_revision)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json_codec.read_json(path)
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"CNINFO checkpoint {path} is unreadable: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("identity") != identity:
@@ -745,11 +743,7 @@ def _checkpoint_running_is_fresh(
 
 def invalidate_cninfo_checkpoint(path: str | Path) -> None:
     """Explicitly discard a CNINFO pagination checkpoint before a refresh."""
-    checkpoint_path = Path(path)
-    try:
-        checkpoint_path.unlink()
-    except FileNotFoundError:
-        return
+    json_codec.remove(path)
 
 
 def _write_checkpoint(path: Path | None, payload: dict[str, Any]) -> None:
@@ -762,20 +756,10 @@ def _write_checkpoint(path: Path | None, payload: dict[str, Any]) -> None:
         for record in slices.values():
             if isinstance(record, dict) and record.get("status") == "running":
                 record["updated_at"] = updated_at
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, sort_keys=True, default=str)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        replace_with_retry(tmp_name, path)
-    finally:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
+    # Compressed (zstd, or gzip where no zstd binding exists): a long range's
+    # ledger holds every normalized page and is rewritten after each one, so
+    # plain JSON reached 239 MB per file and 7.2 GB in all. See json_codec.
+    json_codec.write_json(path, payload)
 
 
 def _midpoint(start: date, end: date) -> date:

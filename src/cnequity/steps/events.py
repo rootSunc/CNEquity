@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 
@@ -87,6 +88,39 @@ def _cninfo_checkpoint(config: Config, dataset: str, start: date, end: date):
     return (
         config.meta_root / "checkpoints" / dataset / f"{start.isoformat()}_{end.isoformat()}.json"
     )
+
+
+def prune_expired_cninfo_checkpoints(config: Config) -> int:
+    """Delete CNINFO checkpoints no run can use any more; return how many.
+
+    A completed slice is reused only within the checkpoint TTL (and only on an
+    explicit resume), and a running slice is resumed only within it, so a file
+    last written before the TTL is dead weight: these ledgers hold every
+    normalized page and had reached 7.2 GB. Nothing is pruned when the TTL is
+    disabled, since then any checkpoint may still be resumed. Temp files an
+    interrupted write left behind go with them.
+    """
+    ttl = getattr(config, "cninfo_checkpoint_ttl_days", _CNINFO_CHECKPOINT_TTL_DAYS)
+    root = getattr(config, "meta_root", None)
+    if ttl is None or root is None:
+        return 0
+    base = root / "checkpoints"
+    if not base.is_dir():
+        return 0
+    # One day of margin past the TTL: an update stamped inside the payload can
+    # trail the file's mtime by the length of one write.
+    cutoff = time.time() - (int(ttl) + 1) * 86400
+    removed = 0
+    for path in base.glob("*/*"):
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except FileNotFoundError:
+            continue
+    if removed:
+        logger.info("cninfo: removed %d checkpoint file(s) past their %d-day TTL", removed, ttl)
+    return removed
 
 
 def _record_cninfo_metrics(
@@ -1994,6 +2028,7 @@ def step_earnings_disclosure_schedule(
 def step_announcement_index(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if not config.sources.get("cninfo", True):
         raise SourceUnavailableError("announcement_index: cninfo source disabled in config")
+    prune_expired_cninfo_checkpoints(config)
     if backfill_of(config).active:
         return _cninfo_range_backfill(
             config,
