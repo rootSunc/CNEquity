@@ -21,6 +21,26 @@ from cnequity.derive.adj_factors import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _day_partitioned_factors(monkeypatch):
+    """These tests read the derive's output one day directory at a time.
+
+    The live registry stores adj_factors by month; the derive logic tested
+    here does not depend on the period, and the day layout is still what
+    unmigrated lakes hold. Month behaviour is covered in
+    ``test_adj_factors_month_layout.py``.
+    """
+    import dataclasses
+
+    from cnequity.domain import datasets as registry
+
+    monkeypatch.setitem(
+        registry.DATASETS,
+        "adj_factors",
+        dataclasses.replace(registry.DATASETS["adj_factors"], partition_granularity="day"),
+    )
+
+
 def test_to_sina_symbol():
     assert to_sina_symbol("600519.SH") == "sh600519"
     assert to_sina_symbol("000001.SZ") == "sz000001"

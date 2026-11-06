@@ -181,12 +181,13 @@ def test_nonempty_partition_survives_a_corrupt_sibling_file(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
     sessions = [date(2026, 8, 3), date(2026, 8, 4)]
     _calendar(cfg, sessions)
-    _write_days(cfg, "adj_factors", sessions, layer="derived")
-    (cfg.derived_root / "adj_factors" / f"trade_date={sessions[0].isoformat()}").joinpath(
+    # A day-partitioned dense dataset, so the directory fast path is used.
+    _write_days(cfg, "minute_bars", sessions)
+    (cfg.curated_root / "minute_bars" / f"trade_date={sessions[0].isoformat()}").joinpath(
         "part-broken.parquet"
     ).write_bytes(b"not a parquet file")
 
-    assert last_contiguous_dense_date(cfg, DATASETS["adj_factors"]) == sessions[-1]
+    assert last_contiguous_dense_date(cfg, DATASETS["minute_bars"]) == sessions[-1]
 
 
 def test_verify_reports_unreadable_dense_dataset_instead_of_crashing(tmp_path):

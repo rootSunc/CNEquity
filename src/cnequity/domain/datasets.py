@@ -1891,6 +1891,10 @@ _SPECS = [
         tier="L1",
         layer="derived",
         partition_col="trade_date",
+        # Month files, like daily_bars: an hfq history read joined 8,758 day
+        # files (~0.9 s); 432 month files answer it in ~0.2 s, and a factor
+        # series nearly constant per symbol compresses far better in them.
+        partition_granularity="month",
         coverage_mode="session_dense",
     ),
     # Industry returns computed from 申万 membership × hfq bars rather than

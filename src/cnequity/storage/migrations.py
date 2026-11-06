@@ -219,6 +219,12 @@ MIGRATIONS: tuple[Migration, ...] = (
         "0.23.0",
         _repartition("daily_bars"),
     ),
+    Migration(
+        "adj-factors-month-partitions",
+        N_("Rewrite adj_factors history from one file per day into one file per month"),
+        "0.23.0",
+        _repartition("adj_factors"),
+    ),
 )
 
 
