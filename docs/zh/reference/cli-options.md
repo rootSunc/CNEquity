@@ -507,6 +507,15 @@
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
 | `--snapshot-root` | `—` | 快照放在哪；默认是数据根目录下的 meta/snapshots。 |
 
+## `cne snapshot delete`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `name` | `—` | 必填；位置参数 |
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `--snapshot-root` | `—` | 快照放在哪；默认是数据根目录下的 meta/snapshots。 |
+| `--yes` | `False` | 不询问确认，直接删除。 |
+
 ## `cne snapshot delta apply`
 
 | 参数 | 默认值 | 说明 |

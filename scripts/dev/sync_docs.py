@@ -426,6 +426,7 @@ EFFECTS: dict[str, tuple[str, str]] = {
     "schedule remove": ("无", "确认后停用定时并注销系统任务；正在运行的任务继续"),
     "schedule status": ("无", "只读：系统定时任务状态与最近一次检查"),
     "snapshot create": ("无", "创建本地快照"),
+    "snapshot delete": ("无", "删除本地快照，并解除它带来的失效保留引用"),
     "snapshot delta apply": ("无", "应用本地增量包；--dry-run 仅校验"),
     "snapshot delta create": ("无", "创建本地增量包"),
     "snapshot delta verify": ("无", "校验本地增量包"),

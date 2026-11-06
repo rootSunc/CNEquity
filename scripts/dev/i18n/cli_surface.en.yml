@@ -46,6 +46,7 @@ schedule install: ["none", "After confirmation, registers the current user's sys
 schedule remove: ["none", "After confirmation, pauses scheduling and unregisters the system task; jobs already running continue"]
 schedule status: ["none", "Read-only: the system timer's state and its last check"]
 snapshot create: ["none", "Creates a local snapshot"]
+snapshot delete: ["none", "Deletes a local snapshot and releases the stale retention references it contributed"]
 snapshot delta apply: ["none", "Applies a local delta package; --dry-run only validates"]
 snapshot delta create: ["none", "Creates a local delta package"]
 snapshot delta verify: ["none", "Verifies a local delta package"]

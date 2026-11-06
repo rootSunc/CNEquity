@@ -1482,6 +1482,29 @@ class SnapshotStore:
             raise ValueError(f"unsupported snapshot manifest: {manifest}")
         return snapshot, payload
 
+    def delete(self, name: str) -> dict[str, Any]:
+        """Remove a snapshot and the retention references it contributed.
+
+        The directory is renamed aside before removal, so an interrupted
+        delete never leaves a half-snapshot under its own name. Only stale
+        references whose citing file lay inside the snapshot are released;
+        manual holds and every other citation stay.
+        """
+        from cnequity.storage.lifecycle import LifecycleStore
+
+        snapshot, _ = self._manifest(name)
+        meta = self.config.meta_root
+        with lake_mutation_lock(meta):
+            doomed = snapshot.with_name(f".deleting-{snapshot.name}-{uuid.uuid4().hex[:8]}")
+            absolute = snapshot.absolute()
+            replace_with_retry(snapshot, doomed)
+            shutil.rmtree(doomed)
+            store = LifecycleStore(meta)
+            released = store.release_references_under(absolute, f"snapshot {name} deleted")
+            if released:
+                store.refresh_references()
+        return {"snapshot": name, "path": str(absolute), "released": released}
+
     def verify(self, name: str) -> SnapshotVerification:
         snapshot, manifest = self._manifest(name)
         return self._verify_directory(name, snapshot, manifest)

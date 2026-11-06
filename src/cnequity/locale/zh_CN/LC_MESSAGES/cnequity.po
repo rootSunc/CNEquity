@@ -2363,6 +2363,29 @@ msgstr "默认今天。"
 msgid "Defaults to today; when [research] holdout_start is configured, defaults to the day before it."
 msgstr "默认今天；配置了 [research] holdout_start 时默认其前一天。"
 
+#: cnequity/cli/govern_cmds.py
+msgid ""
+"Delete a snapshot and release the retention references it contributed.\n"
+"\n"
+"\n"
+"Manual holds and references from anywhere else stay. Old versions the snapshot\n"
+"kept become reclaimable by the next retention run; current data is untouched."
+msgstr ""
+"删除快照，并解除它带来的保留引用。\n"
+"\n"
+"\n"
+"手动保留和来自其他位置的引用照旧保留。快照曾保住的旧版本\n"
+"会在下次清理时可被回收；当前数据不受影响。"
+
+#: cnequity/cli/govern_cmds.py
+#, python-format
+msgid "Delete snapshot %s permanently?"
+msgstr "永久删除快照 %s？"
+
+#: cnequity/cli/govern_cmds.py
+msgid "Delete without asking for confirmation."
+msgstr "不询问确认，直接删除。"
+
 #: cnequity/cli/maintain_cmds.py
 #, python-brace-format
 msgid "Delete {generations} historical generations from this preview? The generation currently in use, holds, generations with an unusable receipt, and all staging stay."
@@ -2518,6 +2541,10 @@ msgstr "删除湖里没有行情的证券的因子和公司行为行"
 #: cnequity/storage/migrations.py
 msgid "Drop inferred suspensions that later evidence contradicts"
 msgstr "删除被后来证据否定的推断停牌"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Drop manual holds and stale references on versions; case dependencies and live references stay."
+msgstr "解除版本上的手动保留与失效引用；案例依赖和仍有效的引用保留。"
 
 #: cnequity/storage/migrations.py
 msgid "Drop trading_status rows outside a security's listing window"
@@ -4402,14 +4429,6 @@ msgstr ""
 #: cnequity/serve/ops/catalog.py
 msgid "Re-run a specific day instead of the incremental window."
 msgstr "补跑某一天，不走增量窗口。"
-
-#: cnequity/cli/storage_cmds.py
-msgid "Drop manual holds and stale references on versions; case dependencies and live references stay."
-msgstr "解除版本上的手动保留与失效引用；案例依赖和仍有效的引用保留。"
-
-#: cnequity/cli/storage_cmds.py
-msgid "Why the protection is no longer needed."
-msgstr "为何不再需要这项保护。"
 
 #: cnequity/cli/storage_cmds.py
 msgid "Re-scan the registered reference roots and hold every version they now cite; never releases a hold."
@@ -6589,6 +6608,10 @@ msgstr "全湖审计"
 #: cnequity/research/packs.py
 msgid "Whole-market daily bars, adjustment, calendar, corporate actions and current trading status. Init always downloads this set."
 msgstr "全市场日线、复权、日历、公司行为和当前交易状态。初始化固定下载这一套。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Why the protection is no longer needed."
+msgstr "为何不再需要这项保护。"
 
 #: cnequity/cli/backfill_cmds.py
 msgid "Window end (YYYY-MM-DD)."

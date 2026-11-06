@@ -53,6 +53,7 @@
 | `cne schedule status` | 无 | 只读：系统定时任务状态与最近一次检查 |
 | `cne serve` | 条件 | 启动湖面板。回环地址可从操作页发起白名单内的取数与日更；--read-only 关闭写入口；远程取数须 --allow-remote-ops；存储清理仍须网页确认；取数开关经预览确认后写回配置并备份，不因此启动取数 |
 | `cne snapshot create` | 无 | 创建本地快照 |
+| `cne snapshot delete` | 无 | 删除本地快照，并解除它带来的失效保留引用 |
 | `cne snapshot delta apply` | 无 | 应用本地增量包；--dry-run 仅校验 |
 | `cne snapshot delta create` | 无 | 创建本地增量包 |
 | `cne snapshot delta verify` | 无 | 校验本地增量包 |

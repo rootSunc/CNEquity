@@ -431,26 +431,59 @@ class LifecycleStore:
         with lake_mutation_lock(self.meta):
             value = self.registry(required=True)
             assert value is not None
-            reasons = value["holds"].get(object_id)
-            if not reasons:
+            if not value["holds"].get(object_id):
                 raise LifecycleError(f"No hold on {object_id}")
-            kept, dropped = [], []
-            for reason in reasons:
-                (dropped if _releasable(reason) else kept).append(reason)
-            if kept:
-                value["holds"][object_id] = kept
-            else:
-                value["holds"].pop(object_id)
-            value.setdefault("releases", []).append(
-                {
-                    "object_id": object_id,
-                    "note": note,
-                    "released_at": datetime.now(timezone.utc).isoformat(),
-                    "dropped": dropped,
-                }
-            )
+            kept, dropped = self._drop(value, object_id, note, _releasable)
             self._save(value)
         return {"object_id": object_id, "dropped": len(dropped), "still_held_by": kept}
+
+    def release_references_under(self, root: Path, note: str) -> list[dict]:
+        """Drop stale references whose citing file lay below ``root``.
+
+        Used after a snapshot directory is deleted: only the references it
+        contributed go, so manual holds and other citations are untouched.
+        """
+        root = Path(root).absolute()
+
+        def stale_below(reason: dict) -> bool:
+            if reason.get("kind") != "reference" or "reason" in reason:
+                return False
+            source = Path(reason.get("source", ""))
+            return source.is_relative_to(root) and _releasable(reason)
+
+        with lake_mutation_lock(self.meta):
+            value = self.registry()
+            if value is None:
+                return []
+            results = []
+            for object_id in sorted(value["holds"]):
+                if any(stale_below(r) for r in value["holds"][object_id]):
+                    kept, dropped = self._drop(value, object_id, note, stale_below)
+                    results.append(
+                        {"object_id": object_id, "dropped": len(dropped), "still_held": bool(kept)}
+                    )
+            if results:
+                self._save(value)
+        return results
+
+    @staticmethod
+    def _drop(value: dict, object_id: str, note: str, releasable) -> tuple[list, list]:
+        kept, dropped = [], []
+        for reason in value["holds"][object_id]:
+            (dropped if releasable(reason) else kept).append(reason)
+        if kept:
+            value["holds"][object_id] = kept
+        else:
+            value["holds"].pop(object_id)
+        value.setdefault("releases", []).append(
+            {
+                "object_id": object_id,
+                "note": note,
+                "released_at": datetime.now(timezone.utc).isoformat(),
+                "dropped": dropped,
+            }
+        )
+        return kept, dropped
 
     def register_case(self, case: dict) -> None:
         """Add an immutable, evidence-backed case without weakening any hold."""

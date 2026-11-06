@@ -92,3 +92,58 @@ def test_digest_valid_but_missing_case_hold_rejected(tmp_path):
     write_json_atomic(store.meta / DEPENDENCIES_PATH, value)
     with pytest.raises(LifecycleError, match="lack protection"):
         read_dependencies(store.meta)
+
+
+def test_deleting_a_snapshot_releases_only_the_references_it_contributed(tmp_path):
+    cfg = Config(data_root=tmp_path / "lake")
+    source = cfg.curated_root / "daily_bars/part.parquet"
+    source.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {"symbol": ["600000.SH"], "trade_date": [date(2024, 1, 2)], "close": [10.0]}
+    ).write_parquet(source)
+    lifecycle = imported_store(cfg, tmp_path / "evidence")
+    snapshots = SnapshotStore(cfg)
+    path = snapshots.create("rollback", ["daily_bars"]).parent
+    rid = "a" * 32
+    note = tmp_path / "evidence" / "note.md"
+    note.write_text(f"{rid}\n", encoding="utf-8")
+    inside = {"kind": "reference", "source": str(path / "manifest.json"), "revision_id": rid}
+    outside = {"kind": "reference", "source": str(note), "revision_id": rid}
+    lifecycle.import_manifest(
+        {
+            "schema_version": 1,
+            "meta_root": str(lifecycle.meta),
+            "holds": {
+                "revision/daily_bars/aaa": [inside, outside],
+                "revision/daily_bars/bbb": [{**inside, "revision_id": "b" * 32}],
+            },
+            "reference_roots": [{"path": str(tmp_path / "evidence")}],
+            "reference_fingerprint": reference_fingerprint([{"path": str(tmp_path / "evidence")}]),
+        }
+    )
+
+    result = snapshots.delete("rollback")
+
+    assert not path.exists() and not list(path.parent.glob(".deleting-*"))
+    holds = lifecycle.registry()["holds"]
+    assert holds["revision/daily_bars/aaa"] == [outside], "a citation elsewhere still protects"
+    assert "revision/daily_bars/bbb" not in holds
+    assert holds["revision/daily_bars/previous"], "manual holds are never released here"
+    assert {r["object_id"] for r in result["released"]} == {
+        "revision/daily_bars/aaa",
+        "revision/daily_bars/bbb",
+    }
+    with pytest.raises(FileNotFoundError):
+        snapshots.delete("rollback")
+
+
+def test_snapshot_delete_cli_names_a_missing_snapshot(tmp_path):
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    cfg = Config(data_root=tmp_path / "lake")
+    config = tmp_path / "cne.toml"
+    config.write_text(f'data_root = "{cfg.data_root}"\n', encoding="utf-8")
+    missing = CliRunner().invoke(cli, ["snapshot", "delete", "nope", "--config", str(config)])
+    assert missing.exit_code != 0 and "no snapshot named" in missing.output
