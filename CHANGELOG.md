@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 新增五个可选的 Tushare 数据集，只由 `cne backfill` 采集、不排日更：`limit_events`（2020 起每日涨停、跌停与炸板）、`futures_member_positions`（2010 起各交易所期货会员成交量与多空持仓排名）、`earnings_forecasts`（2004 起业绩预告）、`business_segments`（2004 起按产品、地区、行业的主营业务构成）和 `investor_visits`（2021-08 起机构调研）。
 - `daily_bars` 改为按月分区：历史从 1.1 万个日文件（平均 44 KiB）改写为约 430 个月文件，读取单只股票的完整日线历史从约 0.9 秒降到约 0.12 秒，DuckDB 按股票或按日查询从约 1 秒降到 0.1 秒以内；每日整理把当天合并进当月文件，多花约 30 毫秒。已有的湖升级后运行一次 `cne migrate --apply`（迁移 `daily-bars-month-partitions`）把历史改写为月文件：逐月改写并作为一个新版本发布，数据不变；改写前新写入的月文件会与旧的日目录并存，读取不受影响，但每周体检会报 `mixed_partition_granularity`。
 - `cne snapshot create` 对发布过多个版本的数据集不再报 `dataset contains unsupported link or special file(s)`：0.21.0 起，各版本之间未改动的文件用硬链接共享。快照此前只在复制版本目录时放行硬链接，在复制数据集当前目录时仍拒绝它们，所以真实湖上的 `daily_bars` 等数据集无法做快照。现在这些文件按普通文件逐个复制成独立文件；符号链接和特殊文件仍被拒绝，快照包里的硬链接在校验时也仍被拒绝。
 - `cne repair repartition` 对已发布（有版本）的数据集改为逐个周期重写历史并作为一个经过发布闸门的新版本提交；此前它直接替换工作目录，读取方看到的仍是旧版本，下一次整理还会把改写覆盖掉。重写只合并同一主键的重复行（与整理一致），不改动数据，每次只在内存中保留一个周期。

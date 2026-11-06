@@ -3,7 +3,7 @@
   <h1>CNEquity · A local data foundation for China-market research</h1>
 <p>No registration or token · Adjustment and PIT built in · Delisted stocks kept · Row-level provenance · MCP-native</p>
 
-CNEquity is an open-source local data lake for China A-share stock market data: Shanghai and Shenzhen prices, stock data, financials and futures data, for quant research, quantitative trading and backtesting. 68 datasets land in local Parquet, with incremental resume, and MCP so an AI can query A-shares directly.
+CNEquity is an open-source local data lake for China A-share stock market data: Shanghai and Shenzhen prices, stock data, financials and futures data, for quant research, quantitative trading and backtesting. 73 datasets land in local Parquet, with incremental resume, and MCP so an AI can query A-shares directly.
 
 [![CI](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/cnequity?logo=pypi&logoColor=white)](https://pypi.org/project/cnequity/)
@@ -85,7 +85,7 @@ Then run `cne run daily` once a day to stay current. For longer history, or what
 
 ## Data coverage
 
-**68 datasets** (60 curated, 8 derived), organized into L0–L9. Fields, keys, history starts and sources are in the [catalog](docs/en/datasets/catalog.md) and [source notes](docs/en/datasets/sources.md).
+**73 datasets** (65 curated, 8 derived), organized into L0–L9. Fields, keys, history starts and sources are in the [catalog](docs/en/datasets/catalog.md) and [source notes](docs/en/datasets/sources.md).
 
 | Tier | Research use | Representative datasets |
 |---|---|---|

@@ -1,4 +1,4 @@
-"""Optional Tushare-only datasets: convertible bonds, holder events, chip and top-10 data.
+"""Optional Tushare-only datasets: bonds, holder events, market lists and disclosures.
 
 No schedule group lists these steps; they run through ``cne backfill <name>``
 or an explicit ``cne run step``. Without a Tushare token each one sends nothing
@@ -251,3 +251,166 @@ def step_northbound_top10(config: Config, trade_date: date, run_id: str, context
         sparse=True,
         calendar_days=False,
     )
+
+
+@register_step(
+    "limit_events",
+    group="capital",
+    description="Stocks at the price limit each session, with seal times (Tushare)",
+)
+def step_limit_events(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """``limit_list_d``, one session at a time; a quiet session can be empty."""
+    if not _enabled(config):
+        return dict(_SKIPPED)
+    from cnequity.adapters.tushare.market_stats import LIMIT_EVENTS_FLOOR, fetch_limit_events
+
+    return _by_day(
+        config,
+        trade_date,
+        run_id,
+        "limit_events",
+        lambda day: fetch_limit_events(day, config=config),
+        floor=LIMIT_EVENTS_FLOOR,
+        sparse=True,
+        calendar_days=False,
+    )
+
+
+@register_step(
+    "futures_member_positions",
+    group="research",
+    description="Daily futures member volume and open-interest rankings (Tushare)",
+)
+def step_futures_member_positions(
+    config: Config, trade_date: date, run_id: str, context: dict
+) -> dict:
+    """``fut_holding``, one session at a time, every exchange."""
+    if not _enabled(config):
+        return dict(_SKIPPED)
+    from cnequity.adapters.tushare.futures_positions import (
+        FUTURES_MEMBER_POSITIONS_FLOOR,
+        fetch_futures_member_positions,
+    )
+
+    return _by_day(
+        config,
+        trade_date,
+        run_id,
+        "futures_member_positions",
+        lambda day: fetch_futures_member_positions(day, config=config),
+        floor=FUTURES_MEMBER_POSITIONS_FLOOR,
+    )
+
+
+@register_step(
+    "earnings_forecasts",
+    group="fundamentals",
+    depends_on=["instruments"],
+    description="Company earnings forecasts (业绩预告) by announcement date (Tushare)",
+)
+def step_earnings_forecasts(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """``forecast`` by announcement date; codes outside ``instruments`` are dropped."""
+    if not _enabled(config):
+        return dict(_SKIPPED)
+    from cnequity.adapters.tushare.disclosures import (
+        EARNINGS_FORECASTS_FLOOR,
+        fetch_earnings_forecasts,
+    )
+    from cnequity.steps.common import load_symbols
+
+    universe = sorted(set(load_symbols(config)))
+    return _by_day(
+        config,
+        trade_date,
+        run_id,
+        "earnings_forecasts",
+        lambda day: fetch_earnings_forecasts(day, config=config).filter(
+            pl.col("symbol").is_in(universe)
+        ),
+        floor=EARNINGS_FORECASTS_FLOOR,
+        date_col="ann_date",
+        sparse=True,
+    )
+
+
+@register_step(
+    "investor_visits",
+    group="fundamentals",
+    depends_on=["instruments"],
+    description="Institutional investor visits to listed companies (Tushare)",
+)
+def step_investor_visits(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """``stk_surv`` by visit date; codes outside ``instruments`` are dropped."""
+    if not _enabled(config):
+        return dict(_SKIPPED)
+    from cnequity.adapters.tushare.disclosures import (
+        INVESTOR_VISITS_FLOOR,
+        fetch_investor_visits,
+    )
+    from cnequity.steps.common import load_symbols
+
+    universe = sorted(set(load_symbols(config)))
+    return _by_day(
+        config,
+        trade_date,
+        run_id,
+        "investor_visits",
+        lambda day: fetch_investor_visits(day, config=config).filter(
+            pl.col("symbol").is_in(universe)
+        ),
+        floor=INVESTOR_VISITS_FLOOR,
+        date_col="visit_date",
+        sparse=True,
+    )
+
+
+def quarter_ends(start: date, end: date) -> list[date]:
+    """Report period ends (03-31, 06-30, 09-30, 12-31) in ``[start, end]``."""
+    out = []
+    for year in range(start.year, end.year + 1):
+        for month, day in ((3, 31), (6, 30), (9, 30), (12, 31)):
+            if start <= (period := date(year, month, day)) <= end:
+                out.append(period)
+    return out
+
+
+@register_step(
+    "business_segments",
+    group="fundamentals",
+    depends_on=["instruments"],
+    description="Revenue, cost and gross profit by product, region and industry (Tushare)",
+)
+def step_business_segments(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """``fina_mainbz_vip`` per report period.
+
+    A plain run re-reads the two latest period ends, which reports are still
+    arriving for; a backfill walks every period end in its window.
+    """
+    if not _enabled(config):
+        return dict(_SKIPPED)
+    from cnequity.adapters.tushare.client import SOURCE, TushareClient
+    from cnequity.adapters.tushare.disclosures import (
+        BUSINESS_SEGMENTS_FLOOR,
+        fetch_business_segments,
+    )
+    from cnequity.steps.common import load_symbols
+
+    window = backfill_of(config)
+    if window.active:
+        periods = quarter_ends(
+            max(window.start or BUSINESS_SEGMENTS_FLOOR, BUSINESS_SEGMENTS_FLOOR),
+            window.end or trade_date,
+        )
+    else:
+        periods = quarter_ends(date(trade_date.year - 1, 1, 1), trade_date)[-2:]
+    universe = sorted(set(load_symbols(config)))
+    written = 0
+    with TushareClient(config) as client:
+        for period in periods:
+            df = fetch_business_segments(period, config=config, client=client).filter(
+                pl.col("symbol").is_in(universe)
+            )
+            if df.height:
+                result = write_fetched(config, run_id, "business_segments", df, source=SOURCE)
+                written += int(result.get("rows_written", 0))
+    return {"rows_written": written, "status": "success", "periods": len(periods)}

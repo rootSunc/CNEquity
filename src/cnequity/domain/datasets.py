@@ -279,6 +279,36 @@ _UNIT_CONTRACT_DEFAULTS: dict[str, UnitContract] = {
         "buy_amount": "CNY",
         "sell_amount": "CNY",
     },
+    "limit_events": {
+        "close": "CNY/share",
+        "pct_change": "percent",
+        "amount": "CNY",
+        "amount_at_limit": "CNY",
+        "seal_amount": "CNY",
+        "float_market_cap": "CNY",
+        "total_market_cap": "CNY",
+        "turnover_rate": "percent",
+    },
+    "futures_member_positions": {
+        "volume": "contract",
+        "volume_change": "contract",
+        "long_open_interest": "contract",
+        "long_change": "contract",
+        "short_open_interest": "contract",
+        "short_change": "contract",
+    },
+    "earnings_forecasts": {
+        "change_min_pct": "percent",
+        "change_max_pct": "percent",
+        "net_profit_min": "CNY",
+        "net_profit_max": "CNY",
+        "prior_net_profit": "CNY",
+    },
+    "business_segments": {
+        "revenue": "source_native",
+        "cost": "source_native",
+        "gross_profit": "source_native",
+    },
     "fund_flow_tushare": {
         "buy_small_volume": "share",
         "buy_small_amount": "CNY",
@@ -978,6 +1008,64 @@ _SPECS = [
         required=False,
         empty_severity="info",
         history_floor_date=date(2014, 11, 17),
+    ),
+    # Stocks at the price limit each session (Tushare limit_list_d), from 2020;
+    # up, down, and touched-up-but-opened (up_broken). ~100 a day.
+    DatasetSpec(
+        "limit_events",
+        primary_source="tushare",
+        tier="L4",
+        partition_col="trade_date",
+        partition_granularity="month",
+        required=False,
+        empty_severity="info",
+        history_floor_date=date(2020, 1, 2),
+    ),
+    # Futures member volume / long / short rankings per contract and session
+    # (Tushare fut_holding), every exchange from 2010; ~5,000 rows a day.
+    DatasetSpec(
+        "futures_member_positions",
+        primary_source="tushare",
+        tier="L9",
+        partition_col="trade_date",
+        required=False,
+        empty_severity="info",
+        history_floor_date=date(2010, 1, 4),
+    ),
+    # Company earnings forecasts (Tushare forecast) by announcement date, from 2004.
+    DatasetSpec(
+        "earnings_forecasts",
+        primary_source="tushare",
+        tier="L2",
+        partition_col="ann_date",
+        partition_granularity="year",
+        required=False,
+        empty_severity="info",
+        history_floor_date=date(2004, 1, 1),
+    ),
+    # Revenue, cost and gross profit per product / region / industry segment
+    # (Tushare fina_mainbz_vip), per report period from 2004.
+    DatasetSpec(
+        "business_segments",
+        primary_source="tushare",
+        tier="L3",
+        partition_col="period_end",
+        partition_granularity="year",
+        required=False,
+        empty_severity="info",
+        history_floor_date=date(2004, 3, 31),
+    ),
+    # Institutional investor visits, one row per visiting organisation (Tushare
+    # stk_surv), from 2021-08.
+    DatasetSpec(
+        "investor_visits",
+        primary_source="tushare",
+        tier="L2",
+        partition_col="visit_date",
+        partition_granularity="year",
+        required=False,
+        empty_severity="info",
+        history_floor_date=date(2021, 8, 1),
     ),
     # Exchange price bands per stock and session (Tushare stk_limit, optional
     # token), from 2007. Only `cne backfill limit_prices` fills it.
@@ -1946,6 +2034,11 @@ _SUPPORT: dict[str, Support] = {
             "pledge_stats",
             "chip_distribution",
             "northbound_top10",
+            "limit_events",
+            "futures_member_positions",
+            "earnings_forecasts",
+            "business_segments",
+            "investor_visits",
             "sector_members",
             "northbound_holdings",
             "northbound_flows",

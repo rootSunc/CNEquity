@@ -1491,6 +1491,114 @@ Tushare `hsgt_top10` ten most traded Connect stocks per session, from 2014-11-17
 | data_version | string | Provenance |
 | fetched_at | timestamp | Provenance |
 
+#### limit_events
+
+Tushare `limit_list_d` limit-up, limit-down and broken limit-up stocks, from 2020-01-02. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Beijing legacy codes stored under the 920 code |
+| trade_date | date | Session |
+| limit_type | string | `up` / `down` / `up_broken` (touched the up limit, then opened) |
+| close | float64 | Close (yuan) |
+| pct_change | float64 | Change (%) |
+| amount | float64 | Turnover (yuan) |
+| amount_at_limit | float64 | Turnover at the limit price (yuan) |
+| seal_amount | float64 | Seal order amount (yuan) |
+| float_market_cap | float64 | Float market cap (yuan) |
+| total_market_cap | float64 | Total market cap (yuan) |
+| turnover_rate | float64 | Turnover rate (%) |
+| first_limit_time | string | First seal time `HH:MM:SS` |
+| last_limit_time | string | Last seal time `HH:MM:SS` |
+| open_count | int64 | Times the limit opened |
+| consecutive_limits | int64 | Consecutive limit-ups |
+| recent_limit_ups | int64 | Recent limit-ups (N of the source's `up_stat`) |
+| recent_window_days | int64 | Days counted (T of the source's `up_stat`) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### futures_member_positions
+
+Tushare `fut_holding` futures member volume and long/short open-interest rankings, from 2010-01-04. Needs your own Tushare token in `[sources.tushare]`. A member missing from one list has nulls in that list's columns.
+
+| Column | Type | Description |
+|--------|------|-------|
+| trade_date | date | Session |
+| exchange | string | SHF / INE / DCE / CZC / CFE / GFE |
+| product | string | Product code |
+| symbol | string | Contract (`AG2606.SHF`) or product (`AG.SHF`) |
+| level | string | `contract` / `product` |
+| member | string | Member name; full-width brackets made half-width |
+| volume | int64 | Volume (contracts) |
+| volume_change | int64 | Volume change (contracts) |
+| long_open_interest | int64 | Long open interest (contracts) |
+| long_change | int64 | Long change (contracts) |
+| short_open_interest | int64 | Short open interest (contracts) |
+| short_change | int64 | Short change (contracts) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### earnings_forecasts
+
+Tushare `forecast` company earnings forecasts (业绩预告), from 2004. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Beijing legacy codes stored under the 920 code |
+| ann_date | date | Announcement date |
+| period_end | date | Report period end |
+| forecast_type | string | `increase` / `slight_increase` / `continued_profit` / `turnaround` / `decrease` / `slight_decrease` / `first_loss` / `continued_loss` / `loss_narrowed` / `loss_widened` / `uncertain` / `other` |
+| change_min_pct | float64 | Lower bound of the profit change (%) |
+| change_max_pct | float64 | Upper bound of the profit change (%) |
+| net_profit_min | float64 | Forecast net profit, lower bound (yuan) |
+| net_profit_max | float64 | Forecast net profit, upper bound (yuan) |
+| prior_net_profit | float64 | Prior-year net profit attributable to the parent (yuan) |
+| first_ann_date | date | First announcement date |
+| summary | string | Forecast summary |
+| change_reason | string | Reason for the change |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### business_segments
+
+Tushare `fina_mainbz_vip` revenue breakdown, from 2004. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Beijing legacy codes stored under the 920 code |
+| period_end | date | Report period end |
+| segment_type | string | `product` / `region` / `industry` |
+| segment | string | Segment name |
+| revenue | float64 | Revenue (in `currency` units) |
+| cost | float64 | Cost |
+| gross_profit | float64 | Gross profit (revenue minus cost) |
+| currency | string | Currency, almost all CNY |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### investor_visits
+
+Tushare `stk_surv` institutional investor visits, from 2021-08. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| event_id | string | Hash of every field |
+| symbol | string | Stock code |
+| visit_date | date | Visit date |
+| visitor_org | string | Visiting organisation |
+| org_type | string | Organisation type (source text) |
+| visitors | string | Visitors |
+| place | string | Place |
+| method | string | Method |
+| company_hosts | string | Company hosts |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
 ### Compact deduplication
 
 During compact, rows are grouped by primary key and the row with the largest `fetched_at` is kept.

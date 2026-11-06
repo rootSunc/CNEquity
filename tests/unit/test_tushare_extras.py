@@ -9,6 +9,8 @@ import polars as pl
 import pytest
 
 from cnequity.adapters.tushare import convertible_bonds as cb
+from cnequity.adapters.tushare import disclosures as dc
+from cnequity.adapters.tushare import futures_positions as fp
 from cnequity.adapters.tushare import holder_events as he
 from cnequity.adapters.tushare import market_stats as ms
 from cnequity.config import Config
@@ -132,6 +134,11 @@ def test_chip_distribution_and_top10_columns():
         "pledge_stats",
         "chip_distribution",
         "northbound_top10",
+        "limit_events",
+        "futures_member_positions",
+        "earnings_forecasts",
+        "business_segments",
+        "investor_visits",
     ],
 )
 def test_steps_send_nothing_without_a_token(step, tmp_path, monkeypatch):
@@ -144,3 +151,110 @@ def test_steps_send_nothing_without_a_token(step, tmp_path, monkeypatch):
     monkeypatch.setattr(httpx.Client, "post", boom)
     result = get_step(step).fn(Config(data_root=tmp_path), date(2026, 11, 4), "run-1", {})
     assert result["status"] == "skipped"
+
+
+def test_forecasts_prefer_the_flagged_copy_and_store_yuan():
+    names = ["ts_code", "ann_date", "end_date", "type", "p_change_min", "p_change_max",
+             "net_profit_min", "net_profit_max", "last_parent_net", "first_ann_date",
+             "summary", "change_reason", "update_flag"]  # fmt: skip
+    base = ["300389.SZ", "20261009", "20260930", "略增", 32.3, 43.1, 24500.0, 26500.0,
+            18517.75, "20261009", "预计盈利", None]  # fmt: skip
+    rows = [[*base, "1"], [*base[:10], "旧格式", None, "0"]]
+    out = dc.normalize_earnings_forecasts(names, rows)
+    assert out.height == 1
+    assert out["summary"][0] == "预计盈利"
+    assert out["forecast_type"][0] == "slight_increase"
+    assert out["net_profit_min"][0] == pytest.approx(245_000_000.0)
+    _valid(out, "earnings_forecasts")
+
+
+def test_segments_keep_the_current_beijing_code():
+    names = ["ts_code", "end_date", "bz_item", "bz_code", "bz_sales", "bz_profit",
+             "bz_cost", "curr_type"]  # fmt: skip
+    current = ["920017.BJ", "20251231", "设备 ", "P", 2.0, 1.0, 1.0, "CNY"]
+    legacy = ["430017.BJ", "20251231", "设备", "P", 9.0, 1.0, 8.0, "CNY"]
+    for rows in ([current, legacy], [legacy, current]):
+        out = dc.normalize_business_segments(names, rows)
+        assert out.height == 1
+        assert out["revenue"][0] == 2.0
+        assert out["segment_type"][0] == "product"
+    _valid(out, "business_segments")
+
+
+def test_visits_null_placeholders_and_drop_exact_repeats():
+    names = ["ts_code", "name", "surv_date", "fund_visitors", "rece_place", "rece_mode",
+             "rece_org", "org_type", "comp_rece"]  # fmt: skip
+    row = ["300857.SZ", "x", "20261029", "--", None, "特定对象调研", "兴业证券", "--", "董秘"]
+    other = [*row[:6], "华福证券", *row[7:]]
+    out = dc.normalize_investor_visits(names, [row, row, other])
+    assert out.height == 2
+    assert out["visitors"].null_count() == 2
+    assert out["org_type"].null_count() == 2
+    _valid(out, "investor_visits")
+
+
+def test_repeated_page_finds_a_relay_repeat():
+    rows = [[i] for i in range(10)]
+    assert dc.repeated_page(rows, 4) is None
+    assert dc.repeated_page(rows[:4] + rows[:4] + rows[8:], 4) == 1
+
+
+def test_limit_events_parse_times_and_streaks():
+    names = ["trade_date", "ts_code", "industry", "name", "close", "pct_chg", "amount",
+             "limit_amount", "float_mv", "total_mv", "turnover_ratio", "fd_amount",
+             "first_time", "last_time", "open_times", "up_stat", "limit_times", "limit"]  # fmt: skip
+    rows = [
+        ["20261104", "605288.SH", "i", "n", 72.7, 10.0, 1.4e8, None, 7.1e9, 7.2e9, 2.02,
+         3.1e7, "93142", "101821", 0.0, "3/6", 1.0, "U"],
+        ["20261104", "002774.SZ", "i", "n", 14.7, 9.4, 2e8, None, 4e9, 5e9, 4.9,
+         None, "0", None, 6.0, "0/0", None, "Z"],
+    ]  # fmt: skip
+    out = ms.normalize_limit_events(names, rows).sort("symbol")
+    assert out["limit_type"].to_list() == ["up_broken", "up"]
+    assert out["first_limit_time"].to_list() == [None, "09:31:42"]
+    assert out["recent_limit_ups"].to_list() == [0, 3]
+    assert out["recent_window_days"].to_list() == [0, 6]
+    _valid(out, "limit_events")
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("ag2606", ("SHF", "AG", "AG2606.SHF", "contract")),
+        ("TA705", ("CZC", "TA", "TA2705.CZC", "contract")),
+        ("AGACTV", ("SHF", "AG", "AG.SHF", "product")),
+        ("AG                  ", ("SHF", "AG", "AG.SHF", "product")),
+        ("PTA", ("CZC", "TA", "TA.CZC", "product")),
+        ("棉花CF", ("CZC", "CF", "CF.CZC", "product")),
+        ("IO2611", ("CFE", "IO", "IO2611.CFE", "contract")),
+        ("0", None),
+    ],
+)
+def test_futures_codes_map_to_lake_symbols(code, expected):
+    assert fp.contract_symbol(code, date(2026, 6, 29)) == expected
+
+
+def test_futures_positions_keep_the_named_czce_copy():
+    names = ["trade_date", "symbol", "broker", "vol", "vol_chg", "long_hld", "long_chg",
+             "short_hld", "short_chg"]  # fmt: skip
+    rows = [
+        ["20260617", "苹果AP", "一德期货（代客）", 0.0, 0.0, 1.0, 1.0, 4730.0, 49.0],
+        ["20260617", "AP", "一德期货(代客)", None, None, 1.0, 1.0, 4730.0, 49.0],
+        ["20260617", "0", "x", 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    ]
+    out = fp.normalize_futures_member_positions(names, rows, date(2026, 6, 17))
+    assert out.height == 1
+    assert out["member"][0] == "一德期货(代客)"
+    assert out["volume"][0] == 0
+    _valid(out, "futures_member_positions")
+
+
+def test_quarter_ends():
+    from cnequity.steps.tushare_extras import quarter_ends
+
+    assert quarter_ends(date(2025, 5, 1), date(2026, 3, 31)) == [
+        date(2025, 6, 30),
+        date(2025, 9, 30),
+        date(2025, 12, 31),
+        date(2026, 3, 31),
+    ]

@@ -176,6 +176,7 @@ def test_futures_and_options_are_one_tier_beside_the_equity_spine():
         "option_greeks",
         "futures_minute_bars",
         "commodity_bars",
+        "futures_member_positions",
     }
     assert set(datasets_by_tier()["L9"]) == family
     assert TIER_LABELS["L9"] == "Derivatives"

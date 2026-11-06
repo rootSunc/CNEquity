@@ -1484,6 +1484,114 @@ Tushare `hsgt_top10` 沪深股通每日十大成交股，2014-11-17 起；需在
 | data_version | string | 溯源 |
 | fetched_at | timestamp | 溯源 |
 
+#### limit_events
+
+Tushare `limit_list_d` 涨跌停与炸板，2020-01-02 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| trade_date | date | 交易日 |
+| limit_type | string | `up`（涨停）/ `down`（跌停）/ `up_broken`（触及涨停后打开） |
+| close | float64 | 收盘价（元） |
+| pct_change | float64 | 涨跌幅（%） |
+| amount | float64 | 成交额（元） |
+| amount_at_limit | float64 | 板上成交额（元） |
+| seal_amount | float64 | 封单金额（元） |
+| float_market_cap | float64 | 流通市值（元） |
+| total_market_cap | float64 | 总市值（元） |
+| turnover_rate | float64 | 换手率（%） |
+| first_limit_time | string | 首次封板时间 `HH:MM:SS` |
+| last_limit_time | string | 最后封板时间 `HH:MM:SS` |
+| open_count | int64 | 炸板次数 |
+| consecutive_limits | int64 | 连板数 |
+| recent_limit_ups | int64 | 近期涨停次数（源 `up_stat` 的 N） |
+| recent_window_days | int64 | 统计天数（源 `up_stat` 的 T） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### futures_member_positions
+
+Tushare `fut_holding` 期货会员成交量与多空持仓排名，2010-01-04 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。不在某张榜上的会员，该榜三列为空。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| trade_date | date | 交易日 |
+| exchange | string | SHF / INE / DCE / CZC / CFE / GFE |
+| product | string | 品种代码 |
+| symbol | string | 合约（`AG2606.SHF`）或品种（`AG.SHF`） |
+| level | string | `contract` / `product` |
+| member | string | 会员名称；全角括号改为半角 |
+| volume | int64 | 成交量（手） |
+| volume_change | int64 | 成交量增减（手） |
+| long_open_interest | int64 | 持买单量（手） |
+| long_change | int64 | 持买单增减（手） |
+| short_open_interest | int64 | 持卖单量（手） |
+| short_change | int64 | 持卖单增减（手） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### earnings_forecasts
+
+Tushare `forecast` 业绩预告，2004 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| ann_date | date | 公告日 |
+| period_end | date | 报告期末 |
+| forecast_type | string | `increase`（预增）/ `slight_increase`（略增）/ `continued_profit`（续盈）/ `turnaround`（扭亏）/ `decrease`（预减）/ `slight_decrease`（略减）/ `first_loss`（首亏）/ `continued_loss`（续亏）/ `loss_narrowed`（减亏）/ `loss_widened`（增亏）/ `uncertain`（不确定）/ `other`（其他） |
+| change_min_pct | float64 | 净利润变动幅度下限（%） |
+| change_max_pct | float64 | 净利润变动幅度上限（%） |
+| net_profit_min | float64 | 预计净利润下限（元） |
+| net_profit_max | float64 | 预计净利润上限（元） |
+| prior_net_profit | float64 | 上年同期归母净利润（元） |
+| first_ann_date | date | 首次公告日 |
+| summary | string | 业绩预告摘要 |
+| change_reason | string | 业绩变动原因 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### business_segments
+
+Tushare `fina_mainbz_vip` 主营业务构成，2004 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 北交所旧代码记在 920 代码下 |
+| period_end | date | 报告期末 |
+| segment_type | string | `product`（产品）/ `region`（地区）/ `industry`（行业） |
+| segment | string | 分部名称 |
+| revenue | float64 | 主营业务收入（`currency` 单位） |
+| cost | float64 | 主营业务成本 |
+| gross_profit | float64 | 主营业务利润（收入减成本） |
+| currency | string | 货币，几乎全为 CNY |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### investor_visits
+
+Tushare `stk_surv` 机构调研，2021-08 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| event_id | string | 全部字段的哈希 |
+| symbol | string | 股票代码 |
+| visit_date | date | 调研日期 |
+| visitor_org | string | 来访机构 |
+| org_type | string | 机构类型（源原文） |
+| visitors | string | 来访人员 |
+| place | string | 接待地点 |
+| method | string | 接待方式 |
+| company_hosts | string | 公司接待人员 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
 ### Compact 去重
 
 Compact 时按主键分组，保留 `fetched_at` 最大的一行。
