@@ -113,12 +113,29 @@ def _is_cdr(symbol: str) -> bool:
 
 
 def _adj_factors_watermark(config: Config) -> date | None:
-    """Latest trade_date partition already present under derived/adj_factors."""
-    # Lazy import: query.reader imports STORED_ADJUST_TYPE from this module.
-    from cnequity.query.parquet_scan import list_hive_partition_dates
+    """Latest trade_date already derived under derived/adj_factors.
 
-    dates = list_hive_partition_dates(config.derived_root / "adj_factors", "trade_date")
-    return dates[-1] if dates else None
+    A day partition's name is its date. A month (or coarser) partition's name
+    is only its first day, which would read every session after the 1st as not
+    yet derived; then the date comes from the rows of the newest period.
+    """
+    # Lazy import: query.reader imports STORED_ADJUST_TYPE from this module.
+    from cnequity.query.parquet_scan import list_partitions, scan_parquet_root
+
+    root = config.derived_root / "adj_factors"
+    parts = list_partitions(root, "trade_date")
+    if not parts:
+        return None
+    newest = parts[-1]
+    if newest.start == newest.end:
+        return newest.start
+    latest = (
+        scan_parquet_root(root, partition_col="trade_date", start=newest.start, end=newest.end)
+        .select(pl.col("trade_date").max())
+        .collect()
+        .item()
+    )
+    return latest if latest is not None else newest.start
 
 
 def _retry_symbols(config: Config) -> set[str]:
@@ -289,7 +306,6 @@ def _bars_for_derive(
 
 def _bars_missing_factor_partition(config: Config, watermark: date) -> pl.DataFrame:
     """Bars on the watermark date missing from its factor partition."""
-    from cnequity.query.parquet_scan import dataset_has_parquet
 
     bars = _load_daily_bar_dates(config, start=watermark).filter(pl.col("trade_date") == watermark)
     if bars.is_empty():
@@ -301,28 +317,38 @@ def _bars_missing_factor_partition(config: Config, watermark: date) -> pl.DataFr
         if bars.is_empty():
             return bars
 
-    part = config.derived_root / "adj_factors" / f"trade_date={watermark.isoformat()}"
-    if not dataset_has_parquet(part):
+    stored = _factor_partition_symbols(config, watermark)
+    if not stored:
         return bars
 
-    factors = pl.DataFrame(
-        {"symbol": sorted(_factor_partition_symbols(config, watermark))}, schema={"symbol": pl.Utf8}
-    )
+    factors = pl.DataFrame({"symbol": sorted(stored)}, schema={"symbol": pl.Utf8})
     return bars.join(factors, on="symbol", how="anti")
 
 
 def _factor_partition_symbols(config: Config, day: date) -> set[str]:
-    """Symbols with a row in the ``adj_factors`` partition for *day*."""
-    from cnequity.query.parquet_scan import dataset_has_parquet
+    """Symbols with an ``adj_factors`` row on *day*, in any partition layout."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
-    part = config.derived_root / "adj_factors" / f"trade_date={day.isoformat()}"
-    if not dataset_has_parquet(part):
+    root = config.derived_root / "adj_factors"
+    part = root / f"trade_date={day.isoformat()}"
+    if dataset_has_parquet(part):
+        return {
+            symbol
+            for path in sorted(part.rglob("*.parquet"))
+            for symbol in pl.read_parquet(path, columns=["symbol"])["symbol"].to_list()
+        }
+    if not dataset_has_parquet(root, committed=False):
         return set()
-    return {
-        symbol
-        for path in sorted(part.rglob("*.parquet"))
-        for symbol in pl.read_parquet(path, columns=["symbol"])["symbol"].to_list()
-    }
+    # Not a day directory: the day lives inside a coarser period. Read the same
+    # mutable tree the day path reads, filtered to the day.
+    return set(
+        scan_parquet_root(root, partition_col="trade_date", start=day, end=day, committed=False)
+        .filter(pl.col("trade_date") == day)
+        .select("symbol")
+        .unique()
+        .collect()["symbol"]
+        .to_list()
+    )
 
 
 def _align_factors_to_bars(
@@ -1960,14 +1986,25 @@ def _write_adj_partitions(
     """Persist aligned factors. Append-only merges into existing partitions unless *replace*."""
     # query.__init__ imports this module for STORED_ADJUST_TYPE, so keep this
     # helper import lazy to avoid a derive↔query import cycle at module load.
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.domain.partitions import partition_value
     from cnequity.query.canonical import dedupe_by_primary_key
     from cnequity.storage.parquet import write_partition_rows
 
     writer = CuratedWriter(config.derived_root)
     total = 0
-    for key, group in out.partition_by("trade_date", as_dict=True).items():
-        td = key[0] if isinstance(key, tuple) else key
-        td_str = td.isoformat() if isinstance(td, date) else str(td)
+    # One group per partition in the registry's period: a day directory per
+    # session, or a month file holding every session of the month. Replace
+    # mode only runs for a full derive, whose frame covers whole periods.
+    granularity = DATASETS["adj_factors"].partition_granularity
+    periods = out.with_columns(
+        pl.col("trade_date")
+        .map_elements(lambda d: partition_value(d, granularity), return_dtype=pl.Utf8)
+        .alias("_period")
+    )
+    for key, group in periods.partition_by("_period", as_dict=True).items():
+        td_str = str(key[0] if isinstance(key, tuple) else key)
+        group = group.drop("_period")
         out_dir = config.derived_root / "adj_factors" / f"trade_date={td_str}"
         out_dir.mkdir(parents=True, exist_ok=True)
         if replace:
