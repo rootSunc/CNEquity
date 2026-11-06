@@ -1599,6 +1599,253 @@ Tushare `stk_surv` institutional investor visits, from 2021-08. Needs your own T
 | data_version | string | Provenance |
 | fetched_at | timestamp | Provenance |
 
+#### hot_money_traders
+
+Tushare `hm_list` hot-money roster. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| trader | string | Trader name |
+| description | string | Description |
+| seats | string | Broker branches (source text) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### hot_money_trades
+
+Tushare `hm_detail` hot-money daily trades, from 2022-08. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| trade_date | date | Session |
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| trader | string | Trader name |
+| seats | string | Broker branches (source text) |
+| buy_amount | float64 | Buy amount (yuan) |
+| sell_amount | float64 | Sell amount (yuan) |
+| net_amount | float64 | Net amount (yuan) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### convertible_bond_calls
+
+Tushare `cb_call` convertible bond redemption announcements. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| ann_date | date | Announcement date |
+| call_type | string | `forced` / `maturity` |
+| stage | string | `condition_met` / `reminder` / `not_calling` / `calling` / `maturity_redemption` |
+| call_date | date | Redemption date |
+| call_price | float64 | Call price incl. interest (yuan per 100 face) |
+| call_price_after_tax | float64 | Call price after tax |
+| call_volume | float64 | Bonds redeemed |
+| call_amount | float64 | Amount redeemed (yuan) |
+| record_date | date | Record date |
+| payment_date | date | Payment date |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### convertible_bond_conversions
+
+Tushare `cb_share` convertible bond conversion reports. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| end_date | date | End date |
+| publish_date | date | Publication date |
+| issue_size | float64 | Issue size (yuan) |
+| first_conversion_price | float64 | Initial conversion price (yuan) |
+| conversion_price | float64 | Conversion price (yuan) |
+| converted_amount | float64 | Amount converted in the period (yuan) |
+| converted_shares | float64 | Shares from conversion in the period |
+| converted_pct | float64 | Converted in the period (% of issue) |
+| total_converted_amount | float64 | Total amount converted (yuan) |
+| total_converted_shares | float64 | Total shares from conversion |
+| total_converted_pct | float64 | Total converted (% of issue) |
+| remaining_size | float64 | Remaining size (yuan) |
+| total_shares | float64 | Total shares |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### convertible_bond_coupons
+
+Tushare `cb_rate` convertible bond coupon rates. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| start_date | date | Start date |
+| end_date | date | End date |
+| coupon_rate | float64 | Coupon rate (%) |
+| payments_per_year | int64 | Payments per year |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### popularity_ranks
+
+Tushare `ths_hot` / `dc_hot` popularity lists, from 2023-11. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| trade_date | date | Session |
+| provider | string | `ths` / `eastmoney` |
+| list | string | List; see the catalog |
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| name | string | Name |
+| rank | int64 | Rank |
+| pct_change | float64 | Change (%) |
+| price | float64 | Price (local currency) |
+| heat | float64 | Heat (source measure) |
+| concepts | string | Concepts |
+| reason | string | Reason |
+| rank_time | string | Snapshot time |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### limit_ladder
+
+Tushare `limit_step` limit-up ladder, from 2023-11. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| trade_date | date | Session |
+| consecutive_limits | int64 | Consecutive limit-ups |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### strongest_sectors
+
+Tushare `limit_cpt_list` strongest boards, from 2023-11. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| trade_date | date | Session |
+| sector_code | string | THS board code |
+| sector_name | string | Board name |
+| rank | int64 | Rank |
+| days_listed | int64 | Days on the list |
+| limit_stat | string | Limit-up summary (source text, e.g. 7天4板) |
+| consecutive_limit_stocks | int64 | Stocks on a streak |
+| limit_up_stocks | int64 | Limit-up stocks |
+| pct_change | float64 | Change (%) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### kpl_limit_ups
+
+Tushare `kpl_list` 开盘啦 limit-up list, from 2018-01. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| trade_date | date | Session |
+| status | string | Streak status (source text) |
+| first_limit_time | string | First seal time |
+| last_limit_time | string | Last seal time |
+| reason | string | Reason |
+| theme | string | Theme |
+| amount | float64 | Turnover (yuan) |
+| turnover_rate | float64 | Turnover rate (%) |
+| free_float_cap | float64 | Free-float market cap (yuan) |
+| main_net_amount | float64 | Main-force net flow (yuan) |
+| limit_order_amount | float64 | Seal order amount (yuan) |
+| max_limit_order_amount | float64 | Largest seal order (yuan) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### fund_flow_ths_tushare
+
+Tushare `moneyflow_ths` THS stock money flow, from 2024-12. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| trade_date | date | Session |
+| close | float64 | Close (yuan) |
+| change_pct | float64 | Change (%) |
+| net_amount | float64 | Net amount (yuan) |
+| net_amount_5d | float64 | 5-day net amount (yuan) |
+| large_net_amount | float64 | Large-order net (yuan) |
+| large_net_rate | float64 | Large-order net rate (%) |
+| medium_net_amount | float64 | Medium-order net (yuan) |
+| medium_net_rate | float64 | Medium-order net rate (%) |
+| small_net_amount | float64 | Small-order net (yuan) |
+| small_net_rate | float64 | Small-order net rate (%) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### investor_qa
+
+Tushare `irm_qa_sh` / `irm_qa_sz` investor Q&A. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| qa_id | string | Hash of stock, time, question and answer |
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| exchange | string | `SH` / `SZ` |
+| trade_date | date | Session |
+| published_at | string | Publication time |
+| question | string | Question |
+| answer | string | Answer |
+| industry | string | Industry (SZSE only) |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### executives
+
+Tushare `stk_managers` directors, supervisors and executives. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| record_id | string | Hash of the identifying fields |
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| ann_date | date | Announcement date |
+| name | string | Name |
+| gender | string | Gender M/F |
+| role_group | string | Group (source text) |
+| title | string | Title |
+| education | string | Education |
+| nationality | string | Nationality |
+| birth_year | string | Birth year |
+| start_date | date | Start date |
+| end_date | date | End date |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
+#### executive_compensation
+
+Tushare `stk_rewards` executive pay and holdings. Needs your own Tushare token in `[sources.tushare]`.
+
+| Column | Type | Description |
+|--------|------|-------|
+| record_id | string | Hash of the identifying fields |
+| symbol | string | Code; Beijing legacy codes stored under the 920 code |
+| period_end | date | Report period end |
+| name | string | Name |
+| title | string | Title |
+| ann_date | date | Announcement date |
+| pay | float64 | Pay (yuan) |
+| shares_held | float64 | Shares held |
+| source | string | Provenance (tushare) |
+| data_version | string | Provenance |
+| fetched_at | timestamp | Provenance |
+
 ### Compact deduplication
 
 During compact, rows are grouped by primary key and the row with the largest `fetched_at` is kept.

@@ -1592,6 +1592,253 @@ Tushare `stk_surv` 机构调研，2021-08 起；需在 `[sources.tushare]` 配�
 | data_version | string | 溯源 |
 | fetched_at | timestamp | 溯源 |
 
+#### hot_money_traders
+
+Tushare `hm_list` 游资名录；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| trader | string | 游资名称 |
+| description | string | 简介 |
+| seats | string | 营业部（源原文） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### hot_money_trades
+
+Tushare `hm_detail` 游资每日交易，2022-08 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| trade_date | date | 交易日 |
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| trader | string | 游资名称 |
+| seats | string | 营业部（源原文） |
+| buy_amount | float64 | 买入额（元） |
+| sell_amount | float64 | 卖出额（元） |
+| net_amount | float64 | 净额（元） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### convertible_bond_calls
+
+Tushare `cb_call` 可转债赎回公告；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| ann_date | date | 公告日 |
+| call_type | string | `forced`（强赎）/ `maturity`（到期赎回） |
+| stage | string | `condition_met` / `reminder` / `not_calling` / `calling` / `maturity_redemption` |
+| call_date | date | 赎回日 |
+| call_price | float64 | 赎回价（含息，元/100 元面值） |
+| call_price_after_tax | float64 | 税后赎回价 |
+| call_volume | float64 | 赎回张数 |
+| call_amount | float64 | 赎回金额（元） |
+| record_date | date | 登记日 |
+| payment_date | date | 兑付日 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### convertible_bond_conversions
+
+Tushare `cb_share` 可转债转股情况；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| end_date | date | 截止日 |
+| publish_date | date | 公告日 |
+| issue_size | float64 | 发行规模（元） |
+| first_conversion_price | float64 | 初始转股价（元） |
+| conversion_price | float64 | 当期转股价（元） |
+| converted_amount | float64 | 本期转股金额（元） |
+| converted_shares | float64 | 本期转股数（股） |
+| converted_pct | float64 | 本期转股比例（占发行规模 %） |
+| total_converted_amount | float64 | 累计转股金额（元） |
+| total_converted_shares | float64 | 累计转股数（股） |
+| total_converted_pct | float64 | 累计转股比例（%） |
+| remaining_size | float64 | 剩余规模（元） |
+| total_shares | float64 | 总股本（股） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### convertible_bond_coupons
+
+Tushare `cb_rate` 可转债票面利率；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| start_date | date | 起始日 |
+| end_date | date | 截止日 |
+| coupon_rate | float64 | 票面利率（%） |
+| payments_per_year | int64 | 每年付息次数 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### popularity_ranks
+
+Tushare `ths_hot` / `dc_hot` 人气榜，2023-11 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| trade_date | date | 交易日 |
+| provider | string | `ths` / `eastmoney` |
+| list | string | 榜单，见目录 |
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| name | string | 名称 |
+| rank | int64 | 名次 |
+| pct_change | float64 | 涨跌幅（%） |
+| price | float64 | 现价（当地货币） |
+| heat | float64 | 热度值（源口径） |
+| concepts | string | 概念 |
+| reason | string | 上榜或涨停原因 |
+| rank_time | string | 快照时间 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### limit_ladder
+
+Tushare `limit_step` 连板天梯，2023-11 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| trade_date | date | 交易日 |
+| consecutive_limits | int64 | 连板数 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### strongest_sectors
+
+Tushare `limit_cpt_list` 最强板块，2023-11 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| trade_date | date | 交易日 |
+| sector_code | string | 同花顺板块代码 |
+| sector_name | string | 板块名称 |
+| rank | int64 | 名次 |
+| days_listed | int64 | 上榜天数 |
+| limit_stat | string | 连板统计（源原文，如 7天4板） |
+| consecutive_limit_stocks | int64 | 连板家数 |
+| limit_up_stocks | int64 | 涨停家数 |
+| pct_change | float64 | 涨跌幅（%） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### kpl_limit_ups
+
+Tushare `kpl_list` 开盘啦涨停榜，2018-01 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| trade_date | date | 交易日 |
+| status | string | 连板状态（源原文，如 首板、2连板） |
+| first_limit_time | string | 首次封板时间 |
+| last_limit_time | string | 最后封板时间 |
+| reason | string | 上榜或涨停原因 |
+| theme | string | 题材 |
+| amount | float64 | 成交额（元） |
+| turnover_rate | float64 | 换手率（%） |
+| free_float_cap | float64 | 实际流通市值（元） |
+| main_net_amount | float64 | 主力净额（元） |
+| limit_order_amount | float64 | 封单金额（元） |
+| max_limit_order_amount | float64 | 最大封单金额（元） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### fund_flow_ths_tushare
+
+Tushare `moneyflow_ths` 同花顺个股资金流，2024-12 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| trade_date | date | 交易日 |
+| close | float64 | 收盘价（元） |
+| change_pct | float64 | 涨跌幅（%） |
+| net_amount | float64 | 净额（元） |
+| net_amount_5d | float64 | 5 日净额（元） |
+| large_net_amount | float64 | 大单净额（元） |
+| large_net_rate | float64 | 大单净额占比（%） |
+| medium_net_amount | float64 | 中单净额（元） |
+| medium_net_rate | float64 | 中单净额占比（%） |
+| small_net_amount | float64 | 小单净额（元） |
+| small_net_rate | float64 | 小单净额占比（%） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### investor_qa
+
+Tushare `irm_qa_sh` / `irm_qa_sz` 投资者问答；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| qa_id | string | 股票、时间、问题、回答的哈希 |
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| exchange | string | `SH` / `SZ` |
+| trade_date | date | 交易日 |
+| published_at | string | 发布时间 |
+| question | string | 提问 |
+| answer | string | 回复 |
+| industry | string | 行业（仅深市） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### executives
+
+Tushare `stk_managers` 董监高；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| record_id | string | 全部标识字段的哈希 |
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| ann_date | date | 公告日 |
+| name | string | 名称 |
+| gender | string | 性别 M/F |
+| role_group | string | 类别（源原文，如 董事会成员、高管） |
+| title | string | 职务 |
+| education | string | 学历 |
+| nationality | string | 国籍 |
+| birth_year | string | 出生年份 |
+| start_date | date | 起始日 |
+| end_date | date | 截止日 |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
+#### executive_compensation
+
+Tushare `stk_rewards` 高管薪酬与持股；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+
+| 列 | 类型 | 说明 |
+|--------|------|-------|
+| record_id | string | 全部标识字段的哈希 |
+| symbol | string | 代码；北交所旧代码记在 920 代码下 |
+| period_end | date | 报告期末 |
+| name | string | 名称 |
+| title | string | 职务 |
+| ann_date | date | 公告日 |
+| pay | float64 | 薪酬（元） |
+| shares_held | float64 | 持股数（股） |
+| source | string | 溯源（tushare） |
+| data_version | string | 溯源 |
+| fetched_at | timestamp | 溯源 |
+
 ### Compact 去重
 
 Compact 时按主键分组，保留 `fetched_at` 最大的一行。

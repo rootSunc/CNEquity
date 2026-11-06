@@ -24,14 +24,14 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 
 | 层次 | 说明 | 代表数据集 |
 |------|------|------------|
-| **L0** 基础参考 | Universe、ETF 目录、日历、交易状态、证券名称史 | instruments, etf_profiles, trading_calendar, trading_status, name_history, convertible_bonds |
+| **L0** 基础参考 | Universe、ETF 目录、日历、交易状态、证券名称史 | instruments, etf_profiles, trading_calendar, trading_status, name_history, convertible_bonds, convertible_bond_coupons, executives |
 | **L1** 行情 | 未复权价量 + 复权因子 + 可选分钟/分笔 + 退市形态 | daily_bars, index_bars, minute_bars*, minute_bars_5m*, minute_bars_15m* / 30m* / 60m*, trade_ticks*, adj_factors, delisting_events, limit_prices, convertible_bond_bars |
-| **L2** 公司事件 | 除权除息、公告、预约披露 | corporate_actions, announcement_index, earnings_disclosure_schedule, holder_trades, share_repurchases, earnings_forecasts, investor_visits |
-| **L3** 基本面 | 财报、估值、一致预期 | financial_statement_items, valuation_metrics, analyst_consensus, broker_forecasts, business_segments |
-| **L4** 资金面 | 北向、融资、主力 | fund_flow, fund_flow_ths, fund_flow_tushare, northbound_*, margin_trading, dragon_tiger, block_trades, institutional_holdings, chip_distribution, northbound_top10, limit_events |
+| **L2** 公司事件 | 除权除息、公告、预约披露 | corporate_actions, announcement_index, earnings_disclosure_schedule, holder_trades, share_repurchases, earnings_forecasts, investor_visits, convertible_bond_calls, convertible_bond_conversions |
+| **L3** 基本面 | 财报、估值、一致预期 | financial_statement_items, valuation_metrics, analyst_consensus, broker_forecasts, business_segments, executive_compensation |
+| **L4** 资金面 | 北向、融资、主力 | fund_flow, fund_flow_ths, fund_flow_tushare, northbound_*, margin_trading, dragon_tiger, block_trades, institutional_holdings, chip_distribution, northbound_top10, limit_events, hot_money_traders, hot_money_trades, limit_ladder, kpl_limit_ups, fund_flow_ths_tushare |
 | **L5** 结构行业 | 板块、指数成分、行业 | sector_members, index_constituents, industry_members, industry_index |
 | **L6** 宏观 | 利率、景气、货币 | macro_indicators, market_breadth |
-| **L7** 舆情 / 轮动 | 新闻、情绪、板块、人气、事件流 | sentiment_scores, hot_rank, sector_bars, sector_fund_flow, sector_fund_flow_ths, news_headlines, flash_news_wire, economic_calendar*, economic_events*, market_holidays*（stock_news 为 on-demand） |
+| **L7** 舆情 / 轮动 | 新闻、情绪、板块、人气、事件流 | sentiment_scores, hot_rank, sector_bars, sector_fund_flow, sector_fund_flow_ths, news_headlines, flash_news_wire, economic_calendar*, economic_events*, market_holidays*（stock_news 为 on-demand）, popularity_ranks, strongest_sectors, investor_qa |
 | **L8** 风险合规 | 解禁、监管 | share_unlock_schedule, regulatory_events, pledge_stats |
 | **L9** 衍生品 | 期货/期权合约、逐合约行情、连续合约、希腊字母、分钟线，以及商品期货主连 | commodity_bars*, futures_contracts*, option_contracts*, futures_bars*, option_bars*, futures_continuous*, option_greeks*, futures_minute_bars*, futures_member_positions* |
 
@@ -47,7 +47,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
 |------|------|------|--------|
 | `core` 核心 | 开 | 历史可重建、日更稳定、有备源或权威对照；`cne check` 和稳定性门槛（`cne verify --runs`）只看这一档，不论由哪个调度组采集 | `instruments`, `trading_calendar`, `trading_status`, `daily_bars`, `index_bars`, `corporate_actions`, `financial_statement_items`, `share_structure`, `valuation_metrics`, `index_constituents`, `adj_factors`, `delisting_events` |
 | `extended` 扩展 | 开 | 历史可重建、日更基本稳定，但非必需或只有单一来源 | `etf_profiles`, `commodity_bars`, `announcement_index`, `earnings_disclosure_schedule`, `shareholder_counts`, `top_holders`, `margin_trading`, `dragon_tiger`, `block_trades`, `institutional_holdings`, `industry_members`, `name_history`, `macro_indicators`, `market_breadth`, `share_unlock_schedule`, `regulatory_events`, `industry_index` |
-| `best_effort` 尽力而为 | **关** | 只有启用后才开始积累的实时快照、已停更的来源，或经常失败的接口（东财 push2 资金流、新闻、人气榜）；在 `[datasets] best_effort` 中列出才启用 | `analyst_consensus`, `broker_forecasts`, `limit_prices`, `fund_flow_tushare`, `convertible_bonds`, `convertible_bond_bars`, `holder_trades`, `share_repurchases`, `pledge_stats`, `chip_distribution`, `northbound_top10`, `limit_events`, `futures_member_positions`, `earnings_forecasts`, `business_segments`, `investor_visits`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar`, `economic_events`, `market_holidays` |
+| `best_effort` 尽力而为 | **关** | 只有启用后才开始积累的实时快照、已停更的来源，或经常失败的接口（东财 push2 资金流、新闻、人气榜）；在 `[datasets] best_effort` 中列出才启用 | `analyst_consensus`, `broker_forecasts`, `limit_prices`, `fund_flow_tushare`, `convertible_bonds`, `convertible_bond_bars`, `holder_trades`, `share_repurchases`, `pledge_stats`, `chip_distribution`, `northbound_top10`, `limit_events`, `futures_member_positions`, `earnings_forecasts`, `business_segments`, `investor_visits`, `hot_money_traders`, `hot_money_trades`, `convertible_bond_calls`, `convertible_bond_conversions`, `convertible_bond_coupons`, `popularity_ranks`, `limit_ladder`, `strongest_sectors`, `kpl_limit_ups`, `fund_flow_ths_tushare`, `investor_qa`, `executives`, `executive_compensation`, `fund_flow`, `northbound_holdings`, `northbound_flows`, `sector_members`, `sentiment_scores`, `hot_rank`, `sector_bars`, `sector_fund_flow`, `fund_flow_ths`, `sector_fund_flow_ths`, `news_headlines`, `flash_news_wire`, `economic_calendar`, `economic_events`, `market_holidays` |
 | `optional` 可选 | 关 | 由各自开关启用（`[minute_bars]`、`[trade_ticks]`、`[futures]`） | `minute_bars`, `minute_bars_5m`, `trade_ticks`, `futures_contracts`, `option_contracts`, `futures_bars`, `futures_minute_bars`, `option_bars`, `futures_continuous`, `option_greeks`, `minute_bars_15m`, `minute_bars_30m`, `minute_bars_60m` |
 
 ## 采集模式
@@ -201,6 +201,8 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 | trading_status | trade_date（按月） | symbol, trade_date | by_date | ✓ | exchange | baostock ST 回填；派生停牌写月分区。`status`（normal/suspended/**delisted**）与 `risk_warning`（ST/*ST）是两列——旧版单列会让停牌冲掉 ST 标记；退市行由 `instruments` 判定并标 `derived_delisted`。旧湖读取自动兼容，物理迁移见 [schema](schema.md#trading_status) |
 | name_history | —（单文件 merge） | symbol, start_date, name | by_date | — | tushare | Tushare `namechange` 证券名称史：每个简称一行，带起止日、公告日、变更原因；`risk_warning` 由简称前缀（ST、*ST，含 2005–2007 年的 S、G 前缀形式）读出，PT 不算 ST。需在 `[sources.tushare]` 配置自己的令牌，没有令牌时 core 组里的这一步跳过、不发请求；全市场约 1.4 万行，每次整表重读。停牌期间也覆盖，派生停牌行的 `risk_warning` 优先取这里 |
 | convertible_bonds | —（单文件 merge） | symbol | by_date | — | tushare | Tushare `cb_basic` + `cb_issue` 可转债与可交换债条款，每只债一行：正股、面值、发行规模、剩余规模、票息、起息与到期日、上市与摘牌日、转股期、初始与当前转股价、公开发行方式与申购日。`conversion_price` 是读取时的现值，不是历史。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill convertible_bonds` 采集，默认不排日更 |
+| convertible_bond_coupons | —（单文件 merge） | symbol, start_date | by_date | — | tushare | Tushare `cb_rate` 可转债每个计息年度的票面利率（%）与付息频率。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
+| executives | ann_date（按年） | record_id | by_date | — | tushare | Tushare `stk_managers` 公司公告的董事、监事、高管、委员会成员与核心技术人员：职务、任职起止日、性别、学历、国籍、出生年份。源没有自然主键，`record_id` 是全部字段的哈希。按股票逐只读取全部历史。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
 
 北交所日常证券目录会尝试用巨潮当日 IPO 日历的明确上市事件补上市日期；申购、招股或预告日期不能代替上市日期。来源不可用时保留目录和未知日期，并记录警告；已有上市日期在合并时保留。
 
@@ -236,6 +238,8 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 | share_repurchases | ann_date（按年） | event_id | by_date | ✓ | tushare | Tushare `repurchase` 回购进展公告，2005 起：预案、股东大会通过、实施、完成、停止各一行。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill share_repurchases` 采集，默认不排日更 |
 | earnings_forecasts | ann_date（按年） | symbol, ann_date, period_end | by_date | ✓ | tushare | Tushare `forecast` 业绩预告，2004 起，按公告日：预告类型、净利润变动幅度上下限、预计净利润上下限与上年同期（均换算为元）、摘要与变动原因。源有时把同一公告以新旧两种格式各发一次，保留 `update_flag=1` 的那份。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill earnings_forecasts` 采集，默认不排日更 |
 | investor_visits | visit_date（按年） | event_id | by_date | ✓ | tushare | Tushare `stk_surv` 机构调研，2021-08 起，每家来访机构一行：机构与类型、来访人员、地点、方式、公司接待人员。源没有自然主键：逐字重复的行去掉，`event_id` 是全部字段的哈希；源里的 `--` 记为空。单次最多返回 400 行，某页重复前页时整天报错、不写入。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill investor_visits` 采集，默认不排日更 |
+| convertible_bond_calls | —（单文件 merge） | symbol, ann_date, call_type, stage | by_date | — | tushare | Tushare `cb_call` 可转债强赎（`forced`）与到期赎回（`maturity`）公告：满足强赎条件、提示、不强赎、实施强赎与到期赎回各一行，含赎回价、赎回张数、赎回金额（元）、登记日与兑付日。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
+| convertible_bond_conversions | end_date（按年） | symbol, end_date | by_date | — | tushare | Tushare `cb_share` 可转债转股情况，每次披露一行：本期与累计转股金额、股数、转股比例（占发行规模的 %），剩余规模与总股本。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
 
 ## L3 基本面
 
@@ -246,6 +250,7 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 | analyst_consensus | forecast_date | symbol, forecast_date | snapshot | ✓ | eastmoney | |
 | broker_forecasts | report_date | forecast_id | by_date | ✓ | tushare | Tushare `report_rc` 卖方盈利预测（需在 `[sources.tushare]` 配置自己的令牌，没有令牌时跳过）；一份研报 × 一个预测财年一行，自 2016 起可回补；研报周末也发布，日更回读最近 7 个自然日 |
 | business_segments | period_end（按年） | symbol, period_end, segment_type, segment | by_date | — | tushare | Tushare `fina_mainbz_vip` 主营业务构成，2004 起每个报告期：按产品、地区、行业（`segment_type`）分的收入、成本与毛利，金额单位见 `currency`（几乎全为 CNY）。北交所股票常以新旧两个代码各发一次，取 920 代码那份。非 PIT：只有报告期，没有公告日。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill business_segments` 采集，默认不排日更 |
+| executive_compensation | period_end（按年） | record_id | by_date | — | tushare | Tushare `stk_rewards` 高管薪酬（元）与持股数，每人每个报告期每个职务一行，按年报公告。不少行没有职务，`record_id` 是股票、报告期、姓名、职务、公告日的哈希。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
 | share_structure | change_date | symbol, change_date, announce_date | by_date PIT | — | eastmoney | 总股本/流通/限售/流通A股/自由流通。`float_shares` 对 A+H 公司含 H 股，算 A 股流通市值用 `float_a_shares`（v2 新增，旧行为空）。**按变动日期扫，不是按报告期**：END_DATE 是股本变动日，不能只请求季末日期 |
 | shareholder_counts | count_date | symbol, count_date, announce_date | by_date PIT | — | eastmoney | 股东户数与户均持股，筹码集中度输入。**旬末/月末也披露**：不能只按季末日期筛选 |
 | top_holders | record_date | symbol, record_date, holder_scope, holder_rank, holder_name, announce_date | by_date PIT | — | eastmoney | 一张表两个口径：`holder_scope=total`（前十大股东）/ `float`（前十大流通股东）。披露日期不一定落在季末 |
@@ -274,6 +279,11 @@ THS 官方估值快照只能从启用后按日积累，不能用旧日期重放�
 | chip_distribution | trade_date | symbol, trade_date | by_date | ✓ | tushare | Tushare `cyq_perf` 筹码分布估计，2018 起：持仓成本的 5/15/50/85/95 分位、加权均价和获利比例。是 Tushare 的模型结果，不是交易所数据。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill chip_distribution` 采集，默认不排日更 |
 | northbound_top10 | trade_date（按年） | trade_date, channel, symbol | by_date | ✓ | tushare | Tushare `hsgt_top10` 沪股通、深股通每日十大成交股，2014-11-17 起。交易所 2024-08-16 后不再公布净买入、买入、卖出额，之后这三列为空。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill northbound_top10` 采集，默认不排日更 |
 | limit_events | trade_date（按月） | symbol, trade_date | by_date | ✓ | tushare | Tushare `limit_list_d` 涨跌停与炸板，2020 起：`limit_type` 为 `up`（涨停）、`down`（跌停）、`up_broken`（触及涨停后打开）；首次与最后封板时间、封单金额、炸板次数、连板数和近期涨停统计（`recent_limit_ups` / `recent_window_days`）。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill limit_events` 采集，默认不排日更 |
+| hot_money_traders | —（单文件 merge） | trader | by_date | — | tushare | Tushare `hm_list` 游资名录：名称、简介和常用营业部（`seats`，源的 JSON 列表原文），每次整表重读。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
+| hot_money_trades | trade_date（按月） | trade_date, symbol, trader, seats | by_date | ✓ | tushare | Tushare `hm_detail` 名录内游资每日在龙虎榜上的买入、卖出与净额（元），2022-08 起；一个游资用多组席位时每组一行。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
+| limit_ladder | trade_date（按年） | symbol, trade_date | by_date | ✓ | tushare | Tushare `limit_step` 连板天梯，2023-11 起：每只连板股与连板数。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
+| kpl_limit_ups | trade_date（按月） | symbol, trade_date | by_date | ✓ | tushare | Tushare `kpl_list` 开盘啦涨停榜，2018-01 起：连板状态、首次与最后封板时间、涨停原因与题材、成交额、换手率、流通市值、主力净额、封单金额与最大封单（元）。只采涨停榜；源的竞价与盘中涨幅字段全为空，不存。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
+| fund_flow_ths_tushare | trade_date | symbol, trade_date | by_date | ✓ | tushare | Tushare `moneyflow_ths` 同花顺口径个股资金流，2024-12 起：净额、5 日净额，以及大、中、小单各自的净额（元）与占比（%），三者相加等于净额。`net_amount` 与 `fund_flow_ths.net_inflow` 同源，但这里没有流入流出。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
 
 `dragon_tiger` 与 `block_trades` 有交易所备源：深交所 `ShowReport` 的
 `CATALOGID=1265`（龙虎榜）与 `1842_xxpl_after`（大宗交易），上交所对应 `1902`。
@@ -326,6 +336,9 @@ EM 响应若已包含尚未生效的调样行，会拒绝整份快照：删除�
 |--------|--------|------|------|------|------|------|
 | sentiment_scores | trade_date | symbol, trade_date, score_channel | by_date | ✓ | derived | |
 | hot_rank | trade_date | symbol, trade_date | snapshot | ✓ | eastmoney | 人气榜 top100（公开接口上限） |
+| popularity_ranks | trade_date | trade_date, provider, list, symbol | by_date | ✓ | tushare | Tushare `ths_hot`（同花顺，2023-11 起）与 `dc_hot`（东财，2024-03 起）人气榜：`list` 为 `stock`、`etf`、`convertible_bond`、`fund`、`hk_stock`、`us_stock`、`concept_board`、`industry_board`。一天有多次快照时每个代码保留当天最后一次；同花顺期货榜的代码不是合约代码，不存。港美股价格为当地货币。与 `hot_rank`（东财 14 点前后快照）是不同时点。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
+| strongest_sectors | trade_date（按年） | trade_date, sector_code | by_date | ✓ | tushare | Tushare `limit_cpt_list` 同花顺最强概念板块，2023-11 起：排名、上榜天数、连板统计、连板家数、涨停家数、涨跌幅。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
+| investor_qa | trade_date（按月） | qa_id | by_date | ✓ | tushare | Tushare `irm_qa_sh`（上证e互动，2023-04 起）与 `irm_qa_sz`（互动易，2022 起）投资者提问与公司回复，按回复日。同一问答常在多天重复返回，`qa_id` 是股票、时间、问题、回答的哈希，保留最早一天。深市约四分之一的行没有发布时间。需在 `[sources.tushare]` 配置自己的令牌，只由 `cne backfill {d}` 采集，默认不排日更 |
 | sector_bars | trade_date | sector_code, trade_date | snapshot | ✓ | ths | 日更与回填都走同花顺 board-kline；无第二源 |
 | sector_fund_flow | trade_date | sector_code, trade_date | snapshot | ✓ | eastmoney | 板块主力净流入。配置了自己的 Tushare 令牌时：`cne backfill sector_fund_flow` 用 `moneyflow_ind_dc`（同为东财板块，2023-09-12 起）只补湖里没有的板块；`[sources.eastmoney] push2_paused = true` 时日更直接从 Tushare 取当天，当晚尚未发布时这一步失败、由晚间补采重试。Tushare 行标 `source=tushare`，另有 `board_type=region` 的 31 个地域板块，`turnover_pct` 为空。历史深度不均：2025-02-26 以前只有旧分类的 86 个行业板块，概念和地域板块自 2025-02-26 起，2025-10 起每天约 1,000 个 |
 | sector_fund_flow_ths | trade_date | board_type, sector_code, trade_date | snapshot | ✓ | ths | 只在 push2 取不到 `sector_fund_flow` 时由同花顺补：行业（881xxx）+ 概念板块的流入/流出/净额，金额单位亿、精确到 0.01；同花顺板块分类，和东财板块代码不对应。新鲜度规则同 `fund_flow_ths` |

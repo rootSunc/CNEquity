@@ -414,3 +414,224 @@ def step_business_segments(config: Config, trade_date: date, run_id: str, contex
                 result = write_fetched(config, run_id, "business_segments", df, source=SOURCE)
                 written += int(result.get("rows_written", 0))
     return {"rows_written": written, "status": "success", "periods": len(periods)}
+
+
+def _per_code(
+    config: Config,
+    run_id: str,
+    dataset: str,
+    codes: list[str],
+    fetch_one: Callable[[str], pl.DataFrame],
+    *,
+    flush_every: int = 200,
+) -> dict:
+    """Fetch each code's whole history and stage it in chunks; for date-blind APIs."""
+    from cnequity.adapters.tushare.client import SOURCE
+
+    written, buffer = 0, []
+    for i, code in enumerate(codes, 1):
+        frame = fetch_one(code)
+        if frame.height:
+            buffer.append(frame)
+        if buffer and (i % flush_every == 0 or i == len(codes)):
+            result = write_fetched(config, run_id, dataset, pl.concat(buffer), source=SOURCE)
+            written += int(result.get("rows_written", 0))
+            buffer = []
+    return {"rows_written": written, "status": "success", "codes": len(codes)}
+
+
+def _stock_codes(config: Config) -> list[str]:
+    from cnequity.steps.common import instrument_metadata
+
+    meta = instrument_metadata(config)
+    return sorted(meta.filter(pl.col("asset_type") == "stock")["symbol"].unique().to_list())
+
+
+@register_step(
+    "hot_money_traders",
+    group="capital",
+    description="Hot-money trader roster with the seats they use (Tushare)",
+)
+def step_hot_money_traders(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """Re-read the whole ``hm_list`` roster."""
+    if not _enabled(config):
+        return dict(_SKIPPED)
+    from cnequity.adapters.tushare.hot_money import SOURCE, fetch_hot_money_traders
+
+    df = fetch_hot_money_traders(config=config)
+    if df.is_empty():
+        raise SourceUnavailableError("hot_money_traders: tushare returned no rows")
+    return write_fetched(config, run_id, "hot_money_traders", df, source=SOURCE)
+
+
+@register_step(
+    "hot_money_trades",
+    group="capital",
+    description="Hot-money traders' dragon-tiger trades per session (Tushare)",
+)
+def step_hot_money_trades(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """``hm_detail``, one session at a time."""
+    if not _enabled(config):
+        return dict(_SKIPPED)
+    from cnequity.adapters.tushare.hot_money import HOT_MONEY_TRADES_FLOOR, fetch_hot_money_trades
+
+    return _by_day(
+        config,
+        trade_date,
+        run_id,
+        "hot_money_trades",
+        lambda day: fetch_hot_money_trades(day, config=config),
+        floor=HOT_MONEY_TRADES_FLOOR,
+        sparse=True,
+        calendar_days=False,
+    )
+
+
+def _bond_events_step(dataset: str):
+    def step(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+        if not _enabled(config):
+            return dict(_SKIPPED)
+        from cnequity.adapters.tushare.client import TushareClient
+        from cnequity.adapters.tushare.convertible_bond_events import fetch_bond_events
+        from cnequity.adapters.tushare.convertible_bonds import fetch_bonds
+
+        with TushareClient(config) as client:
+            codes = sorted(fetch_bonds(config, client=client)["symbol"].to_list())
+            return _per_code(
+                config,
+                run_id,
+                dataset,
+                codes,
+                lambda code: fetch_bond_events(dataset, code, config=config, client=client),
+            )
+
+    step.__doc__ = f"Every bond's whole ``{dataset}`` history, one bond per request."
+    return step
+
+
+for _name, _description in (
+    ("convertible_bond_calls", "Convertible bond redemption announcements (Tushare)"),
+    ("convertible_bond_conversions", "Convertible bond conversion reports (Tushare)"),
+    ("convertible_bond_coupons", "Convertible bond coupon rates per interest year (Tushare)"),
+):
+    register_step(_name, group="research", description=_description)(_bond_events_step(_name))
+
+
+def _sentiment_day_step(dataset: str, floor_name: str):
+    def step(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+        if not _enabled(config):
+            return dict(_SKIPPED)
+        from cnequity.adapters.tushare import sentiment_lists
+
+        return _by_day(
+            config,
+            trade_date,
+            run_id,
+            dataset,
+            lambda day: sentiment_lists.fetch_day(dataset, day, config=config),
+            floor=getattr(sentiment_lists, floor_name),
+            sparse=True,
+            calendar_days=False,
+        )
+
+    step.__doc__ = f"``{dataset}``, one session at a time."
+    return step
+
+
+for _name, _floor, _group, _description in (
+    (
+        "popularity_ranks",
+        "POPULARITY_RANKS_FLOOR",
+        "research",
+        "THS and EastMoney popularity lists (Tushare)",
+    ),
+    (
+        "limit_ladder",
+        "LIMIT_LADDER_FLOOR",
+        "capital",
+        "Consecutive limit-up runs per session (Tushare)",
+    ),
+    (
+        "strongest_sectors",
+        "STRONGEST_SECTORS_FLOOR",
+        "research",
+        "THS concept boards ranked by limit-ups (Tushare)",
+    ),
+    (
+        "kpl_limit_ups",
+        "KPL_LIMIT_UPS_FLOOR",
+        "capital",
+        "开盘啦 limit-up list with seal times and reasons (Tushare)",
+    ),
+    (
+        "fund_flow_ths_tushare",
+        "FUND_FLOW_THS_TUSHARE_FLOOR",
+        "capital",
+        "THS net flow per stock by order size (Tushare)",
+    ),
+):
+    register_step(_name, group=_group, description=_description)(_sentiment_day_step(_name, _floor))
+
+
+@register_step(
+    "investor_qa",
+    group="research",
+    depends_on=["instruments"],
+    description="Investor questions and company answers on SSE/SZSE platforms (Tushare)",
+)
+def step_investor_qa(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    """``irm_qa_sh`` and ``irm_qa_sz`` by publication day, calendar days included."""
+    if not _enabled(config):
+        return dict(_SKIPPED)
+    from cnequity.adapters.tushare.company_people import INVESTOR_QA_FLOOR, fetch_investor_qa
+
+    return _by_day(
+        config,
+        trade_date,
+        run_id,
+        "investor_qa",
+        lambda day: fetch_investor_qa(day, config=config),
+        floor=INVESTOR_QA_FLOOR,
+        sparse=True,
+    )
+
+
+def _people_step(dataset: str, fetch_name: str):
+    def step(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+        if not _enabled(config):
+            return dict(_SKIPPED)
+        from cnequity.adapters.tushare import company_people
+        from cnequity.adapters.tushare.client import TushareClient
+
+        fetch = getattr(company_people, fetch_name)
+        codes = backfill_of(config).symbol_list() or _stock_codes(config)
+        with TushareClient(config) as client:
+            return _per_code(
+                config,
+                run_id,
+                dataset,
+                codes,
+                lambda code: fetch(code, config=config, client=client),
+            )
+
+    step.__doc__ = f"Every stock's whole ``{dataset}`` history, one stock per request."
+    return step
+
+
+for _name, _fetch, _group, _description in (
+    (
+        "executives",
+        "fetch_executives",
+        "fundamentals",
+        "Announced board members, supervisors and executives (Tushare)",
+    ),
+    (
+        "executive_compensation",
+        "fetch_executive_compensation",
+        "fundamentals",
+        "Executive pay and shareholdings per report period (Tushare)",
+    ),
+):
+    register_step(_name, group=_group, depends_on=["instruments"], description=_description)(
+        _people_step(_name, _fetch)
+    )

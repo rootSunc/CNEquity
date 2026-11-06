@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 再新增十三个可选的 Tushare 数据集，同样只由 `cne backfill` 采集、不排日更：游资名录与每日交易（`hot_money_traders`、`hot_money_trades`）、可转债赎回、转股与票息（`convertible_bond_calls`、`convertible_bond_conversions`、`convertible_bond_coupons`）、同花顺与东财人气榜（`popularity_ranks`）、连板天梯（`limit_ladder`）、最强板块（`strongest_sectors`）、开盘啦涨停榜（`kpl_limit_ups`）、同花顺口径分单资金流（`fund_flow_ths_tushare`）、互动问答（`investor_qa`）、董监高与薪酬持股（`executives`、`executive_compensation`）。
 - 巨潮公告回补的续传断点改为压缩存储（有 zstd 时用 zstd，否则用标准库 gzip）：一个长时间窗口的断点包含所有已整理的分页，原来是明文 JSON、每抓一页就整份重写一次，单个文件达 239 MB，全部合计 7.2 GB；zstd 压缩后约小 19 倍，回补时的写入量也相应减少。旧的明文断点照常读取，下次写入时替换。超过有效期（默认 7 天）的断点不会再被续用，公告步骤运行时会自动删除；有效期设为不限时不删除。
 - `margin_trading`、`valuation_metrics`、`limit_prices`、`fund_flow_tushare`、`chip_distribution` 也改为按月分区：合计约 2.4 万个日文件改写为约 1,060 个月文件，读取单只股票的完整历史从 0.3–0.7 秒降到 0.05–0.3 秒。看板对这几个数据集的缺口、日期选择和热力图仍按交易日判断。`cne repair repartition` 修复估值口径（`valuation-basis`）时改为按数据中的交易日读取日线，按日或按月存放都能正确处理。已有的湖升级后运行一次 `cne migrate --apply`，五个迁移（`*-month-partitions`）逐个把历史改写为月文件并作为新版本发布，数据不变。
 - `adj_factors` 也改为按月分区：8,758 个日文件改写为约 430 个月文件，体积从约 225 MB 降到约 81 MB；带 `adjust="hfq"` 读取单只股票的完整历史从约 0.9 秒降到约 0.2 秒。复权因子派生改为按分区周期读写，按月存放时仍从最新一个月的数据里读出已派生到哪天，日更只追加新的交易日。已有的湖升级后运行一次 `cne migrate --apply`（迁移 `adj-factors-month-partitions`），历史逐月改写并作为一个新版本发布，数据不变。
