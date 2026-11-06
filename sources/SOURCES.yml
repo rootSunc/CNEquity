@@ -316,7 +316,7 @@ sources:
       增减持（stk_holdertrade）、回购（repurchase）、股权质押（pledge_stat）、筹码分布（cyq_perf）、沪深股通十大成交股（hsgt_top10）、涨跌停（limit_list_d）、
       期货会员持仓排名（fut_holding）、业绩预告（forecast）、主营业务构成（fina_mainbz_vip）、机构调研（stk_surv）、
       游资（hm_list/hm_detail）、可转债赎回转股票息（cb_call/cb_share/cb_rate）、人气榜（ths_hot/dc_hot）、连板天梯与最强板块（limit_step/limit_cpt_list）、
-      开盘啦涨停榜（kpl_list）、同花顺资金流（moneyflow_ths）、互动问答（irm_qa_sh/irm_qa_sz）与董监高及薪酬（stk_managers/stk_rewards）。请求发往
+      开盘啦涨停榜（kpl_list）、同花顺资金流（moneyflow_ths/moneyflow_ind_ths）、互动问答（irm_qa_sh/irm_qa_sz）与董监高及薪酬（stk_managers/stk_rewards）。请求发往
       [sources.tushare].api_url（默认 https://api.tushare.pro）；指向其他兼容服务器时行仍标 tushare，
       该服务器的使用条款由使用者自行确认。维护者不转发 Tushare 数据，令牌与端点由用户自行配置。可用接口
       取决于账号积分与购买的权限；单次返回行数有上限，按 limit/offset 分页。
