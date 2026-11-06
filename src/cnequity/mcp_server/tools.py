@@ -802,7 +802,11 @@ def run_sql(config: Config, *, sql: str, limit: int | None = None) -> dict:
         # 200 rows. The count runs as its own aggregate, which DuckDB can
         # answer with projection pushdown instead of carrying every column.
         df = pl.from_arrow(relation.limit(limit).to_arrow_table())
-        total = int(relation.aggregate("count(*)").fetchone()[0])
+        # DuckDB 2 removed Relation.fetchone(): a relation keeps no result
+        # between calls. limit(1).fetchall() is the replacement and still
+        # works on 1.5, which is what Python 3.10 resolves.
+        counted = relation.aggregate("count(*)").limit(1).fetchall()
+        total = int(counted[0][0])
     except Exception as exc:  # noqa: BLE001 — surfaced as a fixable tool error
         raise ToolError(f"query failed: {exc}") from exc
     finally:

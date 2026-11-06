@@ -5,6 +5,7 @@
 ## [0.23.0] — 2026-11-06 · 供应商占位 0 改为空值，日线等数据集改为按月存放
 
 - **升级步骤：** `pip install -U cnequity` 后重启 `cne serve` 和已在运行的 `cne mcp`。`daily_bars`、`adj_factors`、`margin_trading`、`valuation_metrics` 升到 schema 版本 2：列和主键不变，分区从按日改为按月（目录 `trade_date=YYYY-MM`）。旧湖先 `cne migrate` 预览，再 `cne migrate --apply`。本版迁移为 `daily-bars-month-partitions`、`adj-factors-month-partitions`、`margin-trading-month-partitions`、`valuation-metrics-month-partitions`、`limit-prices-month-partitions`、`fund-flow-tushare-month-partitions`、`chip-distribution-month-partitions`（历史改写成月文件，行不变）和 `vendor-zero-nulls`（把供应商用来占位的 0 改写成空值）。迁移前 `cne audit` 会报告 `stored_value_placeholders`；月文件和旧的日目录并存时，每周体检会报 `mixed_partition_granularity`。直接读 Parquet 的程序对这几张表要关掉 Hive 分区推断，按文件里的日期列过滤。说明见 `contracts/migrations/0.23.0/`。`extends = "builtin"` 的配置不用改；完整展开的旧配置运行 `cne config upgrade`，把 `name_history` 加进 core 组。新增的 Tushare 数据集需要自己的令牌，多数只由 `cne backfill` 采集、不进日更。升级前中断且尚未跑完的 `sector_bars` 回补，用 `cne backfill sector_bars --force` 重跑一次。日更曾写出没有对应公司行为的因子跳变时，用 `cne repair adj-factors --apply` 改写整段历史。停牌行的 ST 标记用 `cne derive trading_status --start <日期> --end <日期>` 按年更新。配置里有集合项时，升级后第一次运行会得到新的 `config_fingerprint`，此后不变。
+- MCP `run_sql` 在 DuckDB 2 上可以计数了：Relation 不再提供 `fetchone()`，总数改为取 `limit(1).fetchall()` 的一行。DuckDB 1.5 照常可用。新安装会解析到 DuckDB 2，此前这条命令直接报 `query failed`。
 - 旧版本清理恢复自动运行：只要登记过的引用目录（湖的 `meta/` 和 `private/`）里有任何文本文件改动，清理就一直报 `Reference inventory changed` 而什么都不删，自 10-31 起每天如此。现在清理前会自动重新扫描引用目录，给其中提到的每个版本加上保留，再按保留代数清理；重新扫描只增加保留、从不解除，所以不会删掉任何仍被引用的版本。新增 `cne storage refresh` 可手动执行同样的扫描。Tushare 权限缓存（`meta/tushare`）也不再计入引用扫描，它每次体检都会被改写。
 - 新增 `cne snapshot delete <名称>`：删除快照，并解除由快照内文件带来的、已失效的保留引用。手动保留和来自其他位置的引用照旧保留；快照曾保住的旧版本会在下次清理时回收。删除前需要确认，`--yes` 可跳过。此前快照只能创建不能删除，只能手动删除目录后再逐个解除保留。
 - 新增 `cne storage release <版本…> --note <说明>`，用来解除不再需要的版本保留。它只去掉手动保留，以及引用文件已删除或不再提到该版本的引用保留；案例依赖和仍然有效的引用照旧保留，并会列在输出里。每次解除都会记入保留登记表。此前保留只能增加、无法解除，被保留的旧版本永远无法被清理。
@@ -36,7 +37,7 @@
   - `pledge_stats`：每周股权质押统计（`pledge_stat`），2014-03 起；股数换算为股。
   - `chip_distribution`：Tushare 的筹码分布估计（`cyq_perf`），2018 起；是模型结果，不是交易所数据。
   - `northbound_top10`：沪深股通每日十大成交股（`hsgt_top10`），2014-11-17 起；2024-08-16 后交易所不再公布净买入、买入、卖出额，这三列为空。
-- 等待湖锁时会说明是谁占着：`compact.lock` 和各运行锁被占用时，日志的“waiting for …”一行、超时报错和“运行已被锁定”的提示现在写出持有者的进程号、正在跑的步骤、开始持有的时间和命令行，例如 `held by pid 4242, step derive_option_greeks, since … (12m03s)` 后接命令行；排队结束后再记一行实际等了多久。此前只能看到“被另一个进程占用”，一次等满 1 小时超时失败的运行事后查不出是谁占的锁。持有者信息记在锁旁的 `<锁名>.holder.json`，释放锁时删除；进程崩溃留下的会被忽略，并随过期锁文件一起清理。
+- 等待湖锁时会说明是谁占着：`compact.lock` 和各运行锁被占用时，日志的“waiting for …”一行、超时报错和“运行已被锁定”的提示现在写出持有者的进程号、正在跑的步骤、开始持有的时间和命令行，例如 `held by pid 4242, step derive_option_greeks, since … (12m03s)` 后接命令行；排队结束后再记一行实际等了多久。此前只能看到“被另一个进程占用”，一次等满 1 小时超时失败的运行事后查不出是谁占的锁。持有者信息记在锁旁的 `<锁名>.holder.json`，释放锁时删除；进程崩溃留下的会被忽略，并随过期锁文件一起清理。Windows 上不再把已退出进程的说明当成仍有人持有。
 - `cne serve` 和 `cne mcp --http` 的访问日志不再记下令牌：URL 里的 `/mcp/<token>` 和 `?token=` 会写成 `<redacted>`，此前令牌原样出现在每一行访问日志里，也会进入转发 stdout 的隧道或代理日志。用 URL 传令牌的接入方式照常可用。
 - MCP `run_sql` 不再能读到未发布的数据：原始 `read_parquet` 只放行各数据集已提交的版本目录，此前整个 `curated/` 都可读，能读到未发布或被隔离的候选数据；目录前缀也不再误放行同名开头的其他数据集。查询结果只取当前页，总数单独计数，返回字段不变。`query_dataset` 不给日期范围时仍会全量加载。
 - 整理发布中某个数据集提交失败时，排在它前面、已经发布的数据集会照常更新覆盖台账和水位，然后再报错：此前这些数据集读取方已能看到新版本，台账却仍把那些日期记为缺失。失败的数据集及其后的数据集保持待补，重试仍会处理；全部提交成功时行为不变。

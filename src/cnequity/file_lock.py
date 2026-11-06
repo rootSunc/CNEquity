@@ -296,9 +296,11 @@ def _clear_holder(path: Path) -> None:
 
 def _pid_alive(pid: int) -> bool:
     if IS_WINDOWS:
-        # os.kill(pid, 0) terminates the process on Windows. Without a safe
-        # probe, trust the note; the next recording holder overwrites it.
-        return True
+        # os.kill(pid, 0) terminates the process on Windows. Wait on the
+        # process handle instead, so a note left by an exited process is stale.
+        from cnequity.windows_process import pid_alive
+
+        return pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

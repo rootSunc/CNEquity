@@ -144,6 +144,8 @@ def test_snapshot_delete_cli_names_a_missing_snapshot(tmp_path):
 
     cfg = Config(data_root=tmp_path / "lake")
     config = tmp_path / "cne.toml"
-    config.write_text(f'data_root = "{cfg.data_root}"\n', encoding="utf-8")
+    # as_posix keeps the path a valid TOML string on Windows, where the
+    # native form's backslashes are escape sequences.
+    config.write_text(f'data_root = "{cfg.data_root.as_posix()}"\n', encoding="utf-8")
     missing = CliRunner().invoke(cli, ["snapshot", "delete", "nope", "--config", str(config)])
     assert missing.exit_code != 0 and "no snapshot named" in missing.output
