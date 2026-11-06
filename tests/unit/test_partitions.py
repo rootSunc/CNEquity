@@ -410,7 +410,7 @@ def test_candidates_lists_only_datasets_whose_layout_is_stale(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     _daily_layout(cfg)  # index_bars is configured year → stale
     _write_partition(
-        cfg.curated_root / "valuation_metrics", "trade_date", "2024-06-03", [date(2024, 6, 3)]
+        cfg.curated_root / "option_bars", "trade_date", "2024-06-03", [date(2024, 6, 3)]
     )
     _write_partition(
         cfg.curated_root / "daily_bars", "trade_date", "2024-06-03", [date(2024, 6, 3)]
@@ -419,7 +419,7 @@ def test_candidates_lists_only_datasets_whose_layout_is_stale(tmp_path):
     candidates = repartition_candidates(cfg)
 
     assert "index_bars" in candidates
-    assert "valuation_metrics" not in candidates, "already matches its configured day granularity"
+    assert "option_bars" not in candidates, "already matches its configured day granularity"
     assert "daily_bars" in candidates, "day directories under a month-partitioned dataset"
 
 

@@ -42,14 +42,15 @@ _DATASET = "valuation_metrics"
 _BAR_COLUMNS = ("close", "low", "high", "volume", "amount")
 
 
-def _partition_day(name: str) -> date | None:
+def _partition_start(name: str) -> date | None:
+    """First day a ``trade_date=<period>`` directory covers (day, month or year)."""
+    from cnequity.domain.partitions import parse_partition
+
     column, _, value = name.partition("=")
     if column != "trade_date":
         return None
-    try:
-        return date.fromisoformat(value)
-    except ValueError:
-        return None
+    period = parse_partition(value)
+    return None if period is None else period.start
 
 
 def _bars(root: Path | None, days: list[date]) -> pl.DataFrame:
@@ -155,10 +156,10 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
         by_partition.setdefault(path.relative_to(base).parts[0], []).append(path)
     months: dict[str, list[str]] = {}
     for name in sorted(by_partition):
-        day = _partition_day(name)
-        if day is None:
+        start = _partition_start(name)
+        if start is None:
             raise RuntimeError(f"{_DATASET}: unexpected partition {name!r}; repair layout first")
-        months.setdefault(day.strftime("%Y-%m"), []).append(name)
+        months.setdefault(start.strftime("%Y-%m"), []).append(name)
 
     shares = load_share_counts(config)
     bars_root = store.current_root("daily_bars")
@@ -168,10 +169,8 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
     counts: Counter[str] = Counter()
     changed: list[Path] = []
     for names in months.values():
-        days = [d for d in (_partition_day(name) for name in names) if d is not None]
-        bars = _bars(bars_root, days)
-        for name in names:
-            original = pl.concat(
+        originals = {
+            name: pl.concat(
                 [
                     sanitize_dataset_rows(
                         validate_dataframe(pl.read_parquet(p), _DATASET), _DATASET
@@ -180,6 +179,16 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
                 ],
                 how="diagonal_relaxed",
             )
+            for name in names
+        }
+        # The sessions present in the rows: a day directory holds one, a month
+        # file holds the month's, and the bars are read for exactly those.
+        days = sorted(
+            {day for frame in originals.values() for day in frame["trade_date"].drop_nulls()}
+        )
+        bars = _bars(bars_root, days)
+        for name in names:
+            original = originals[name]
             repaired = validate_dataframe(repair_frame(original, bars, shares), _DATASET)
             report["rows"] += repaired.height
             before = original.select(

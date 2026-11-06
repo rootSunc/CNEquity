@@ -61,7 +61,16 @@ _CACHE_TTL_SECONDS = 30.0
 #: are judged per session whatever their partition period. A month or year
 #: directory says nothing about one missing day inside it, so these read the
 #: days that actually hold rows.
-_SESSION_DATASETS = frozenset({"daily_bars"})
+_SESSION_DATASETS = frozenset(
+    {
+        "daily_bars",
+        "margin_trading",
+        "valuation_metrics",
+        "limit_prices",
+        "fund_flow_tushare",
+        "chip_distribution",
+    }
+)
 
 # Heatmap cell alphabet. One char per (dataset, day) keeps a 40x250 grid a few
 # kilobytes instead of ten thousand JSON objects.

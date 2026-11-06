@@ -2533,6 +2533,21 @@ msgstr "把 daily_bars 的历史从每天一个文件改写为每月一个文件
 msgid "Rewrite adj_factors history from one file per day into one file per month"
 msgstr "把 adj_factors 的历史从每天一个文件改写为每月一个文件"
 
+msgid "Rewrite margin_trading history from one file per day into one file per month"
+msgstr "把 margin_trading 的历史从每天一个文件改写为每月一个文件"
+
+msgid "Rewrite valuation_metrics history from one file per day into one file per month"
+msgstr "把 valuation_metrics 的历史从每天一个文件改写为每月一个文件"
+
+msgid "Rewrite limit_prices history from one file per day into one file per month"
+msgstr "把 limit_prices 的历史从每天一个文件改写为每月一个文件"
+
+msgid "Rewrite fund_flow_tushare history from one file per day into one file per month"
+msgstr "把 fund_flow_tushare 的历史从每天一个文件改写为每月一个文件"
+
+msgid "Rewrite chip_distribution history from one file per day into one file per month"
+msgstr "把 chip_distribution 的历史从每天一个文件改写为每月一个文件"
+
 #: cnequity/serve/ops/settings.py
 msgid "EastMoney"
 msgstr "东财"

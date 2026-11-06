@@ -225,6 +225,36 @@ MIGRATIONS: tuple[Migration, ...] = (
         "0.23.0",
         _repartition("adj_factors"),
     ),
+    Migration(
+        "margin-trading-month-partitions",
+        N_("Rewrite margin_trading history from one file per day into one file per month"),
+        "0.23.0",
+        _repartition("margin_trading"),
+    ),
+    Migration(
+        "valuation-metrics-month-partitions",
+        N_("Rewrite valuation_metrics history from one file per day into one file per month"),
+        "0.23.0",
+        _repartition("valuation_metrics"),
+    ),
+    Migration(
+        "limit-prices-month-partitions",
+        N_("Rewrite limit_prices history from one file per day into one file per month"),
+        "0.23.0",
+        _repartition("limit_prices"),
+    ),
+    Migration(
+        "fund-flow-tushare-month-partitions",
+        N_("Rewrite fund_flow_tushare history from one file per day into one file per month"),
+        "0.23.0",
+        _repartition("fund_flow_tushare"),
+    ),
+    Migration(
+        "chip-distribution-month-partitions",
+        N_("Rewrite chip_distribution history from one file per day into one file per month"),
+        "0.23.0",
+        _repartition("chip_distribution"),
+    ),
 )
 
 

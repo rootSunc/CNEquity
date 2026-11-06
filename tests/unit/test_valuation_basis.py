@@ -50,7 +50,7 @@ def lake(tmp_path, request):
     curated = cfg.curated_root
     # Legacy layout: no basis columns at all, as written before 2026-09.
     _write(
-        curated / "valuation_metrics" / f"trade_date={DAY}" / "part-merged.parquet",
+        curated / "valuation_metrics" / f"trade_date={bar_partition}" / "part-merged.parquet",
         [
             _valuation(),  # bar consistent, share history present
             _valuation(symbol="000001.SZ", total_mv=2.0e11, float_mv=1.8e11),  # bar out of range
