@@ -129,6 +129,11 @@ class ExchangeQuotesResult:
     def is_empty(self) -> bool:
         return self.quotes.is_empty()
 
+    @property
+    def missing(self) -> frozenset[str]:
+        """Exchanges this fetch asks that did not publish."""
+        return frozenset(EXCHANGES) - self.covered
+
 
 def _client():
     from curl_cffi import requests as cr
@@ -313,12 +318,19 @@ def fetch_szse_daily_quotes(trade_date: date, *, config=None) -> pl.DataFrame:
     return _finish(rows)
 
 
+# What a complete result covers; callers compare against this, never a literal.
+EXCHANGES = ("sse", "szse")
+
+
 def fetch_exchange_daily_quotes(trade_date: date, *, config=None) -> ExchangeQuotesResult:
     """Both exchanges, without hiding which of them actually answered."""
     frames: list[pl.DataFrame] = []
     covered: set[str] = set()
     failures: dict[str, str] = {}
-    for exchange, fetch in (("sse", fetch_sse_daily_quotes), ("szse", fetch_szse_daily_quotes)):
+    # Looked up per call so tests can patch one exchange's fetcher.
+    fetchers = {"sse": fetch_sse_daily_quotes, "szse": fetch_szse_daily_quotes}
+    for exchange in EXCHANGES:
+        fetch = fetchers[exchange]
         try:
             fetched = fetch(trade_date, config=config)
         except Exception as exc:  # noqa: BLE001 — record status for the audit

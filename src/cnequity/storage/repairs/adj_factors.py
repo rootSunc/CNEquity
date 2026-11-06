@@ -15,6 +15,7 @@ from uuid import uuid4
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.derive.adj_factors import INPUTS as ADJ_FACTOR_INPUTS
 from cnequity.derive.factor_arbitration import (
     _baostock_factors,
     _cached_batches,
@@ -37,13 +38,7 @@ from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.revisions import RevisionStore, sha256_file
 
-DEPENDENCIES = (
-    "daily_bars",
-    "instruments",
-    "corporate_actions",
-    "adj_factors",
-    "share_structure",
-)
+DEPENDENCIES = (*ADJ_FACTOR_INPUTS, "adj_factors")
 logger = logging.getLogger(__name__)
 
 KEYS = ["symbol", "trade_date", "adjust_type"]

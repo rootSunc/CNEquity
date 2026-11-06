@@ -99,6 +99,11 @@ class ExchangeMarginResult:
     failures: dict[str, str]
 
     @property
+    def missing(self) -> frozenset[str]:
+        """Exchanges this fetch asks that did not publish."""
+        return frozenset(EXCHANGES) - self.covered
+
+    @property
     def is_empty(self) -> bool:
         return self.rows.is_empty()
 
@@ -275,15 +280,19 @@ def fetch_szse_margin_trading(trade_date: date, *, config=None) -> pl.DataFrame:
     return _finish(rows)
 
 
+# What a complete result covers; callers compare against this, never a literal.
+EXCHANGES = ("sse", "szse")
+
+
 def fetch_exchange_margin_trading(trade_date: date, *, config=None) -> ExchangeMarginResult:
     """Both exchanges, without hiding which of them published."""
     frames: list[pl.DataFrame] = []
     covered: set[str] = set()
     failures: dict[str, str] = {}
-    for exchange, fetch in (
-        ("sse", fetch_sse_margin_trading),
-        ("szse", fetch_szse_margin_trading),
-    ):
+    # Looked up per call so tests can patch one exchange's fetcher.
+    fetchers = {"sse": fetch_sse_margin_trading, "szse": fetch_szse_margin_trading}
+    for exchange in EXCHANGES:
+        fetch = fetchers[exchange]
         try:
             fetched = fetch(trade_date, config=config)
         except (SourceUnavailableError, SourcePayloadError) as exc:

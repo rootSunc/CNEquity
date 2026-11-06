@@ -28,6 +28,11 @@ from cnequity.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
 
+# Every dataset compute_adj_factors reads (share_structure through the
+# share-reform step in stock_factors). Publication pins these, so one missing
+# here escapes the changed-during-calculation and partial-input guards.
+INPUTS = ("daily_bars", "corporate_actions", "instruments", "share_structure")
+
 # Only hfq is persisted; qfq is derived at query time (ADR-0004).
 STORED_ADJUST_TYPE = "hfq"
 #: The declared backup vendor for this dataset. Rows it produced say so.

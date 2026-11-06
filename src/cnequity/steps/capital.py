@@ -392,8 +392,8 @@ def _fetch_margin_via_exchange(day: date, *, config: Config) -> pl.DataFrame:
     from cnequity.adapters.exchange.margin_trading import fetch_exchange_margin_trading
 
     result = fetch_exchange_margin_trading(day, config=config)
-    if result.covered != frozenset({"sse", "szse"}) and not result.rows.is_empty():
-        missing = sorted({"sse", "szse"} - result.covered)
+    if result.missing and not result.rows.is_empty():
+        missing = sorted(result.missing)
         record_source_gap(
             "margin_trading",
             f"margin_trading: {day.isoformat()} missing publisher(s) {','.join(missing)}; "

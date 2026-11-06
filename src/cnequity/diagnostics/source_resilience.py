@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cnequity.diagnostics.source_slo import CORE_DATASETS
 from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.storage.atomic import write_json_atomic
 
@@ -44,21 +45,11 @@ LEVEL_WEIGHTS: dict[str, int] = {
     "experimental": 1,
 }
 
-# Keep this aligned with the critical set used by source SLO evaluation.  The
-# list is intentionally explicit. ``adj_factors`` remains research-critical
-# and visible as a single-source blast radius, but is not a core run gate: an
-# outage degrades adjusted research while the committed raw price spine stays
-# valid (the run-status contract uses the same distinction).
-CORE_DATASETS = frozenset(
-    {
-        "daily_bars",
-        "index_bars",
-        "trading_calendar",
-        "instruments",
-        "trading_status",
-        "corporate_actions",
-    }
-)
+# The critical set is the source SLO's core gate, imported rather than copied.
+# ``adj_factors`` remains research-critical and visible as a single-source blast
+# radius, but is not a core run gate: an outage degrades adjusted research while
+# the committed raw price spine stays valid (the run-status contract uses the
+# same distinction).
 
 # A conservative failure-domain registry.  Unknown source names are assigned
 # their own domain, but the report marks that assignment as heuristic.  This

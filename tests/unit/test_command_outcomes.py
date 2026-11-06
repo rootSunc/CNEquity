@@ -584,3 +584,33 @@ def test_monthly_repair_does_not_count_other_scopes_as_attempted(tmp_path):
     rows = {row["trade_date"]: row for row in state.get_outstanding_keys("daily_bars")}
     assert rows[DAY.isoformat()]["attempts"] == 1
     assert rows["2024-05-28"].get("attempts", 0) == 0
+
+
+def test_share_structure_change_blocks_adj_factors_publication(tmp_path):
+    """The share-reform step reads share_structure, so publication must pin it."""
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.steps.finalize import _capture_derive_inputs, _publish_derived_revision
+
+    cfg = _config(tmp_path)
+    root = cfg.curated_root / "share_structure"
+    root.mkdir(parents=True)
+    path = root / "part.parquet"
+    pl.DataFrame({"symbol": ["600000.SH"], "float_a_shares": [1.0]}).write_parquet(path)
+    inputs = _capture_derive_inputs(cfg, "adj_factors")
+    assert "share_structure" in inputs
+    pl.DataFrame({"symbol": ["600000.SH"], "float_a_shares": [2.0]}).write_parquet(path)
+    contract = dataset_contract("share_structure")
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
+    store.commit(
+        "share_structure",
+        run_id="new-input",
+        changed_files=[path],
+        schema_version=contract["schema_version"],
+        contract_fingerprint=contract_fingerprint(contract),
+    )
+    target = cfg.derived_root / "adj_factors"
+    target.mkdir(parents=True)
+    _factor_frame().write_parquet(target / "part.parquet")
+    with pytest.raises(InputUnavailableError, match="share_structure changed"):
+        _publish_derived_revision(cfg, "adj_factors", "derive", DAY, {}, input_revisions=inputs)
+    assert store.current_pointer("adj_factors") is None

@@ -94,3 +94,9 @@ def test_repeated_source_failure_has_stable_dedupe_key_and_success_resets():
         build_source_incidents([*failed, _report(now + timedelta(hours=4), "ok")])["open_count"]
         == 0
     )
+
+
+def test_resilience_critical_set_is_the_slo_core_gate():
+    from cnequity.diagnostics import source_resilience, source_slo
+
+    assert source_resilience.CORE_DATASETS is source_slo.CORE_DATASETS

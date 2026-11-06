@@ -10,6 +10,7 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.derive.adj_factors import INPUTS as ADJ_FACTOR_INPUTS
 from cnequity.domain.datasets import PARTITION_COLS, RESAMPLED_MINUTE_DATASETS, WATERMARK_SKIP
 from cnequity.orchestrator.registry import register_step
 from cnequity.progress import sweep_progress
@@ -133,7 +134,7 @@ def _layer_file_identity(root: Path) -> dict[str, tuple[int, str]]:
 
 
 DERIVE_INPUTS = {
-    "adj_factors": ("daily_bars", "corporate_actions", "instruments"),
+    "adj_factors": ADJ_FACTOR_INPUTS,
     "industry_index": ("daily_bars", "industry_members", "adj_factors", "trading_calendar"),
     "futures_continuous": ("futures_bars", "futures_contracts"),
     "option_greeks": ("option_bars", "futures_bars", "option_contracts", "macro_indicators"),

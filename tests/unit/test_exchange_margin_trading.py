@@ -432,3 +432,19 @@ def test_the_grace_window_follows_the_publisher(tmp_path, monkeypatch):
     monkeypatch.setattr(cap, "fetch_margin_trading", lambda d, **k: pl.DataFrame())
     with pytest.raises(RuntimeError, match="no rows returned"):
         cap.step_margin_trading(cfg, date(2026, 6, 26), "run-b", {})
+
+
+def test_complete_session_covers_every_exchange_the_adapter_asks(monkeypatch):
+    """Completeness comes from the adapter's own exchange list, not a caller literal."""
+    import cnequity.adapters.exchange.margin_trading as adapter
+
+    row = {"symbol": "600000.SH", "trade_date": TD, "margin_balance": 1.0}
+    for exchange in adapter.EXCHANGES:
+        monkeypatch.setattr(
+            adapter, f"fetch_{exchange}_margin_trading", lambda *a, **k: adapter._finish([row])
+        )
+    result = adapter.fetch_exchange_margin_trading(TD)
+    assert result.covered == frozenset(adapter.EXCHANGES)
+    assert result.missing == frozenset()
+    partial = adapter.ExchangeMarginResult(rows=result.rows, covered=frozenset(), failures={})
+    assert partial.missing == frozenset(adapter.EXCHANGES)

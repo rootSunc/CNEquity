@@ -290,3 +290,25 @@ def test_combined_result_names_the_exchange_that_answered(monkeypatch):
     assert result.covered == frozenset({"szse"})
     assert "sse" in result.failures
     assert result.quotes.height == 1
+
+
+def test_complete_quotes_cover_every_exchange_the_adapter_asks(monkeypatch):
+    row = {
+        "symbol": "600000.SH",
+        "trade_date": TRADE_DATE,
+        "open": 1.0,
+        "high": 1.0,
+        "low": 1.0,
+        "close": 1.0,
+        "volume": 1.0,
+        "amount": 1.0,
+    }
+    for exchange in daily_quotes.EXCHANGES:
+        monkeypatch.setattr(
+            daily_quotes,
+            f"fetch_{exchange}_daily_quotes",
+            lambda *a, **k: daily_quotes._finish([row]),
+        )
+    result = daily_quotes.fetch_exchange_daily_quotes(TRADE_DATE)
+    assert result.covered == frozenset(daily_quotes.EXCHANGES)
+    assert result.missing == frozenset()

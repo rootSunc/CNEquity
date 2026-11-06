@@ -421,9 +421,7 @@ def _daily_bars_vs_exchange_outcome(config: Config, trade_date: date) -> Authori
 
     if findings:
         return AuthorityCheckOutcome("disagreed", findings)
-    return AuthorityCheckOutcome(
-        "agreed" if official.covered == frozenset({"sse", "szse"}) else "agreed_partial", []
-    )
+    return AuthorityCheckOutcome("agreed_partial" if official.missing else "agreed", [])
 
 
 def daily_bars_vs_exchange(config: Config, trade_date: date) -> list[dict]:
