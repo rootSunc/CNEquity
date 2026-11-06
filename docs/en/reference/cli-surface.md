@@ -77,6 +77,8 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne storage merge-files` | none | Read-only preview; --apply merges many-file partitions and publishes a new version with the rows unchanged |
 | `cne storage plan` | none | Validates retention dependencies and saves a version plan; deletes no data |
 | `cne storage raw-external` | none | Registers external payload storage; retains local source sidecars and does not move or delete files |
+| `cne storage refresh` | none | Re-scans the reference roots and adds holds for the versions they cite; never releases a hold |
+| `cne storage release` | none | Drops manual holds and stale references on the named versions; case dependencies and live references stay |
 | `cne ths-official backfill` | when run | Calls the credentialed source and fills gaps |
 | `cne ths-official capture` | when run | Calls the credentialed source and writes comparison evidence |
 | `cne ths-official repair-bars` | when run | Fetches even in a dry run; --apply writes repairs |

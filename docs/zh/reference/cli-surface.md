@@ -77,6 +77,8 @@
 | `cne storage merge-files` | 无 | 预演只读；--apply 合并多文件分区并发布新版本，行内容不变 |
 | `cne storage plan` | 无 | 校验保留依赖并保存版本计划；不删除数据 |
 | `cne storage raw-external` | 无 | 登记外置原文目录；本地保留来源记录，不移动或删除文件 |
+| `cne storage refresh` | 无 | 重新扫描引用目录，为其中提到的版本增加保留；不会解除保留 |
+| `cne storage release` | 无 | 解除指定版本的手动保留与失效引用；案例依赖和仍有效的引用保留 |
 | `cne ths-official backfill` | 执行时 | 调用凭证源并补缺 |
 | `cne ths-official capture` | 执行时 | 调用凭证源并写对照证据 |
 | `cne ths-official repair-bars` | 执行时 | 预演也取数；--apply 写修复 |

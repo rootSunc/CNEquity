@@ -4403,6 +4403,18 @@ msgstr ""
 msgid "Re-run a specific day instead of the incremental window."
 msgstr "补跑某一天，不走增量窗口。"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Drop manual holds and stale references on versions; case dependencies and live references stay."
+msgstr "解除版本上的手动保留与失效引用；案例依赖和仍有效的引用保留。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Why the protection is no longer needed."
+msgstr "为何不再需要这项保护。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Re-scan the registered reference roots and hold every version they now cite; never releases a hold."
+msgstr "重新扫描已登记的引用目录，保留其中现在提到的每个版本；不会解除任何保留。"
+
 #: cnequity/cli/ths_official_cmds.py
 msgid ""
 "Re-source the deep history from the licensed API instead of the scraper.\n"

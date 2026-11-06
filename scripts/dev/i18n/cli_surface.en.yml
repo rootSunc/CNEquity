@@ -69,6 +69,8 @@ storage import: ["none", "Validates and registers a reference manifest; only add
 storage inspect: ["none", "Reads versions and retention reasons"]
 storage merge-files: ["none", "Read-only preview; --apply merges many-file partitions and publishes a new version with the rows unchanged"]
 storage plan: ["none", "Validates retention dependencies and saves a version plan; deletes no data"]
+storage release: ["none", "Drops manual holds and stale references on the named versions; case dependencies and live references stay"]
+storage refresh: ["none", "Re-scans the reference roots and adds holds for the versions they cite; never releases a hold"]
 storage raw-external: ["none", "Registers external payload storage; retains local source sidecars and does not move or delete files"]
 ths-official backfill: ["when run", "Calls the credentialed source and fills gaps"]
 ths-official capture: ["when run", "Calls the credentialed source and writes comparison evidence"]

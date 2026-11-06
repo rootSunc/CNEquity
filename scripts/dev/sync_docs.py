@@ -445,6 +445,8 @@ EFFECTS: dict[str, tuple[str, str]] = {
     "storage apply": ("无", "复核版本计划并 mark；CLI purge 禁用，删除须在 serve 网页确认"),
     "storage explain": ("无", "读取版本保留依据"),
     "storage hold": ("无", "增加对象保护并取消待删除标记"),
+    "storage release": ("无", "解除指定版本的手动保留与失效引用；案例依赖和仍有效的引用保留"),
+    "storage refresh": ("无", "重新扫描引用目录，为其中提到的版本增加保留；不会解除保留"),
     "storage import": ("无", "校验并登记引用清单；只增加保护"),
     "storage inspect": ("无", "读取版本与保留原因"),
     "storage merge-files": ("无", "预演只读；--apply 合并多文件分区并发布新版本，行内容不变"),

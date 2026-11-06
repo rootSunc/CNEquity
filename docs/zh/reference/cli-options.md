@@ -724,6 +724,20 @@
 | `--root` | `—` | 必填 |
 | `--format` | `pdf` | — |
 
+## `cne storage refresh`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+
+## `cne storage release`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `object_ids` | `—` | 必填；位置参数 |
+| `--note` | `—` | 必填；为何不再需要这项保护。 |
+
 ## `cne ths-official backfill`
 
 | 参数 | 默认值 | 说明 |

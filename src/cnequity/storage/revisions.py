@@ -1361,9 +1361,11 @@ def retain_revision_generations(
             reference_fingerprint(registry["reference_roots"], meta_root=store.meta)
             != registry["reference_fingerprint"]
         ):
-            raise LifecycleError(
-                "Reference inventory changed; refresh holds before revision retention"
-            )
+            # A file under the reference roots changed. Re-scan and hold what
+            # it now cites before deleting anything; the refresh only adds
+            # holds, so it can never expose a generation a reference needs.
+            refreshed = store.refresh_references()
+            logger.info("revision retention: reference inventory refreshed: %s", refreshed)
         report = store.inspect(keep=keep)
         revision_store = RevisionStore(store.meta, store.meta.parent / "curated", create=False)
         protected = set()

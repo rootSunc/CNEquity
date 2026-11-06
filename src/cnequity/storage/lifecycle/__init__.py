@@ -37,6 +37,20 @@ def digest(value: Any) -> str:
     ).hexdigest()
 
 
+def _releasable(reason: dict) -> bool:
+    """A manual hold, or a reference whose citing file no longer cites it."""
+    if "reason" in reason and "kind" not in reason:
+        return True
+    if reason.get("kind") != "reference":
+        return False
+    source = Path(reason.get("source", ""))
+    try:
+        text = source.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    return reason.get("revision_id") not in set(_REVISION_ID.findall(text))
+
+
 def case_holds(cases: list[dict]) -> dict[str, list[dict]]:
     """Expand reviewed byte dependencies, without retaining provenance ancestors."""
     holds: dict[str, list[dict]] = {}
@@ -95,6 +109,8 @@ def _read(path: Path) -> dict:
 #: quality reports, and the derivatives capture records. None of it is a
 #: reference a reviewer registered, and scanning it made every run invalidate
 #: the import, so cleanup refused from the first run after one.
+_REVISION_ID = re.compile(r"(?<![a-f0-9])[a-f0-9]{32}(?![a-f0-9])")
+
 RUNTIME_META_PATHS = (
     "adj_factor_arbitration_cache",
     "checkpoints",
@@ -120,6 +136,8 @@ RUNTIME_META_PATHS = (
     "stability",
     "state",
     "stats",
+    # Tushare's per-interface permission cache, rewritten by the peer audit.
+    "tushare",
 )
 
 
@@ -316,6 +334,67 @@ class LifecycleStore:
             self._save(value)
             return value
 
+    def refresh_references(self) -> dict | None:
+        """Re-scan the registered reference roots and hold what they now cite.
+
+        Every retained revision whose 32-hex id appears in a reference file is
+        held, exactly as a reviewed import would hold it, and the inventory
+        fingerprint is brought up to date. Imports only add protection, so
+        doing this automatically releases nothing: a revision a new note
+        cites becomes protected, and one a note stopped citing stays held
+        until someone releases it. Returns the summary, or None when no
+        reference inventory has ever been imported.
+
+        Without this, retention refused to run from the first edit to any
+        file under the roots — a note in ``private/``, a snapshot manifest —
+        until someone re-ran a manual import, and old generations piled up.
+        """
+        registry = self.registry()
+        if registry is None:
+            return None
+        known: dict[str, set[str]] = {}
+        revisions = self.meta / "revisions"
+        for path in revisions.glob("*/*.json") if revisions.is_dir() else ():
+            if path.name == "current.json":
+                continue
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(record, dict) and record.get("revision_id") and record.get("dataset"):
+                known.setdefault(record["revision_id"], set()).add(
+                    f"revision/{record['dataset']}/{record['revision_id']}"
+                )
+        roots = registry["reference_roots"]
+        holds: dict[str, list[dict]] = {}
+        fingerprints = []
+        for path in reference_files(roots, meta_root=self.meta):
+            raw = path.read_bytes()
+            fingerprints.append((str(path), hashlib.sha256(raw).hexdigest()))
+            cited = set(_REVISION_ID.findall(raw.decode("utf-8", errors="replace")))
+            for revision_id in sorted(cited & known.keys()):
+                # Stable across edits of the citing file, so a re-scan after
+                # an unrelated edit adds no duplicate reason.
+                reason = {"kind": "reference", "source": str(path), "revision_id": revision_id}
+                for object_id in known[revision_id]:
+                    holds.setdefault(object_id, []).append(reason)
+        before = set(registry["holds"])
+        self.import_manifest(
+            {
+                "schema_version": 1,
+                "meta_root": str(self.meta),
+                "reference_roots": roots,
+                "reference_fingerprint": digest(fingerprints),
+                "holds": holds,
+                "experiments": [],
+            }
+        )
+        return {
+            "reference_files": len(fingerprints),
+            "cited_revisions": len(holds),
+            "new_holds": sorted(set(holds) - before),
+        }
+
     def hold(self, object_id: str, reason: str) -> None:
         if not reason.strip():
             raise LifecycleError("A hold requires a reason")
@@ -338,6 +417,40 @@ class LifecycleStore:
             value["pending"].pop(object_id, None)
             value.get("experiment_pending", {}).pop(object_id, None)
             self._save(value)
+
+    def release(self, object_id: str, note: str) -> dict:
+        """Drop the holds on one object that no longer protect anything real.
+
+        Removes every manual hold, and every reference whose source file is
+        gone or no longer cites the revision. Case dependencies and live
+        references stay; they are reported so the caller sees why the object
+        is still kept. Each release is logged in the registry.
+        """
+        if not note.strip():
+            raise LifecycleError("A release requires a note")
+        with lake_mutation_lock(self.meta):
+            value = self.registry(required=True)
+            assert value is not None
+            reasons = value["holds"].get(object_id)
+            if not reasons:
+                raise LifecycleError(f"No hold on {object_id}")
+            kept, dropped = [], []
+            for reason in reasons:
+                (dropped if _releasable(reason) else kept).append(reason)
+            if kept:
+                value["holds"][object_id] = kept
+            else:
+                value["holds"].pop(object_id)
+            value.setdefault("releases", []).append(
+                {
+                    "object_id": object_id,
+                    "note": note,
+                    "released_at": datetime.now(timezone.utc).isoformat(),
+                    "dropped": dropped,
+                }
+            )
+            self._save(value)
+        return {"object_id": object_id, "dropped": len(dropped), "still_held_by": kept}
 
     def register_case(self, case: dict) -> None:
         """Add an immutable, evidence-backed case without weakening any hold."""

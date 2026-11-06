@@ -130,8 +130,7 @@ def test_retention_keeps_a_held_generation_and_the_current_pointer(tmp_path):
     assert sum(len(item.removed_revision_ids) for item in removed) == 3
 
 
-def test_stale_reference_inventory_deletes_nothing(tmp_path):
-    cfg, _store, _receipts = _lake(tmp_path)
+def _imported_notes(tmp_path, cfg):
     notes = tmp_path / "notes"
     notes.mkdir()
     evidence = notes / "pin.md"
@@ -147,17 +146,95 @@ def test_stale_reference_inventory_deletes_nothing(tmp_path):
             "reference_fingerprint": reference_fingerprint(roots, meta_root=lifecycle.meta),
         }
     )
-    evidence.write_text("changed\n", encoding="utf-8")
-    before = _generation_names(cfg)
+    return lifecycle, evidence
 
-    with pytest.raises(LifecycleError, match="Reference inventory changed"):
-        retain_revision_generations(cfg.meta_root, keep=1)
 
-    assert _generation_names(cfg) == before
-    cfg.revision_keep_generations = 1
-    report = apply_configured_revision_retention(cfg)
-    assert report is not None and report["status"] == "failed"
-    assert _generation_names(cfg) == before
+def test_a_stale_inventory_is_refreshed_and_what_it_now_cites_is_kept(tmp_path):
+    """Retention used to refuse from the first edit under a reference root
+    until someone re-ran a manual import; it never ran again on a live lake.
+    It now re-scans, holds every revision the roots cite, and proceeds."""
+    cfg, _store, receipts = _lake(tmp_path)
+    lifecycle, evidence = _imported_notes(tmp_path, cfg)
+    cited = receipts[0]
+    evidence.write_text(f"see revision {cited.revision_id}\n", encoding="utf-8")
+
+    retain_revision_generations(cfg.meta_root, keep=1)
+
+    # The revision-zero legacy baseline has no receipt and is always kept.
+    remaining = _generation_names(cfg) - {"legacy"}
+    assert remaining == {cited.revision_id, receipts[-1].revision_id}, (
+        "the cited revision and the current one survive; uncited old ones go"
+    )
+    registry = lifecycle.registry()
+    assert f"revision/daily_bars/{cited.revision_id}" in registry["holds"]
+    assert registry["reference_fingerprint"] == reference_fingerprint(
+        registry["reference_roots"], meta_root=lifecycle.meta
+    )
+
+
+def test_refreshing_twice_adds_no_duplicate_reasons(tmp_path):
+    cfg, _store, receipts = _lake(tmp_path)
+    lifecycle, evidence = _imported_notes(tmp_path, cfg)
+    evidence.write_text(f"{receipts[0].revision_id}\n", encoding="utf-8")
+    lifecycle.refresh_references()
+    evidence.write_text(f"edited, still citing {receipts[0].revision_id}\n", encoding="utf-8")
+    lifecycle.refresh_references()
+    reasons = lifecycle.registry()["holds"][f"revision/daily_bars/{receipts[0].revision_id}"]
+    assert len(reasons) == 1
+
+
+def test_a_reference_that_disappears_keeps_its_hold(tmp_path):
+    """Refreshing only adds protection; releasing stays a deliberate act."""
+    cfg, _store, receipts = _lake(tmp_path)
+    lifecycle, evidence = _imported_notes(tmp_path, cfg)
+    evidence.write_text(f"{receipts[0].revision_id}\n", encoding="utf-8")
+    lifecycle.refresh_references()
+    evidence.write_text("no citation any more\n", encoding="utf-8")
+    retain_revision_generations(cfg.meta_root, keep=1)
+    assert receipts[0].revision_id in _generation_names(cfg)
+
+
+def test_release_drops_manual_and_stale_holds_and_retention_then_prunes(tmp_path):
+    cfg, _store, receipts = _lake(tmp_path)
+    lifecycle, evidence = _imported_notes(tmp_path, cfg)
+    oid = f"revision/daily_bars/{receipts[0].revision_id}"
+    evidence.write_text(f"{receipts[0].revision_id}\n", encoding="utf-8")
+    lifecycle.refresh_references()
+    lifecycle.hold(oid, "rollback")
+    evidence.unlink()
+
+    result = lifecycle.release(oid, "migration verified")
+
+    assert result["dropped"] == 2 and result["still_held_by"] == []
+    registry = lifecycle.registry()
+    assert oid not in registry["holds"]
+    assert registry["releases"][-1]["object_id"] == oid
+    retain_revision_generations(cfg.meta_root, keep=1)
+    assert receipts[0].revision_id not in _generation_names(cfg)
+
+
+def test_release_keeps_a_reference_that_still_cites_the_revision(tmp_path):
+    cfg, _store, receipts = _lake(tmp_path)
+    lifecycle, evidence = _imported_notes(tmp_path, cfg)
+    oid = f"revision/daily_bars/{receipts[0].revision_id}"
+    evidence.write_text(f"{receipts[0].revision_id}\n", encoding="utf-8")
+    lifecycle.refresh_references()
+
+    result = lifecycle.release(oid, "try")
+
+    assert result["dropped"] == 0
+    assert result["still_held_by"][0]["source"] == str(evidence.resolve())
+    assert oid in lifecycle.registry()["holds"]
+
+
+def test_release_requires_a_note_and_an_existing_hold(tmp_path):
+    cfg, _store, receipts = _lake(tmp_path)
+    lifecycle, _evidence = _imported_notes(tmp_path, cfg)
+    with pytest.raises(LifecycleError):
+        lifecycle.release(f"revision/daily_bars/{receipts[0].revision_id}", "note")
+    lifecycle.hold(f"revision/daily_bars/{receipts[0].revision_id}", "pin")
+    with pytest.raises(LifecycleError):
+        lifecycle.release(f"revision/daily_bars/{receipts[0].revision_id}", " ")
 
 
 def test_unfinished_purge_blocks_retention(tmp_path):

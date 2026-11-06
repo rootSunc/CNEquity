@@ -101,6 +101,16 @@ def import_references(config_path: str, manifest: Path):
     )
 
 
+@storage.command("refresh")
+@config_option
+def refresh_references(config_path: str):
+    """Re-scan the registered reference roots and hold every version they now cite; never releases a hold."""
+    summary = _store(config_path).refresh_references()
+    if summary is None:
+        raise click.ClickException("No reference inventory has been imported for this lake.")
+    _emit(summary)
+
+
 @storage.command("hold")
 @config_option
 @click.argument("object_id")
@@ -109,6 +119,16 @@ def hold(config_path: str, object_id: str, reason: str):
     """Retain a version or an existing cleanup resource, and cancel its pending-deletion mark."""
     _store(config_path).hold(object_id, reason)
     _emit({"object_id": object_id, "held": True})
+
+
+@storage.command("release")
+@config_option
+@click.argument("object_ids", nargs=-1, required=True)
+@click.option("--note", required=True, help=N_("Why the protection is no longer needed."))
+def release(config_path: str, object_ids: tuple[str, ...], note: str):
+    """Drop manual holds and stale references on versions; case dependencies and live references stay."""
+    store = _store(config_path)
+    _emit({"released": [store.release(object_id, note) for object_id in object_ids]})
 
 
 @storage.command("plan")
