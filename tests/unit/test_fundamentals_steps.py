@@ -814,3 +814,115 @@ def test_share_structure_symbol_refresh_is_one_window_scoped_to_the_names(cfg, m
     monkeypatch.setattr("cnequity.adapters.eastmoney.shareholders.fetch_share_structure", fetch)
     fund.step_share_structure(cfg, date(2026, 9, 29), "run-symbols", {})
     assert calls == [(date(1990, 1, 1), date(2026, 9, 29), ["603014.SH"])]
+
+
+def _fsi_row(period: str, statement_type: str) -> dict:
+    return {
+        "symbol": "600519.SH",
+        "report_period": period,
+        "statement_type": statement_type,
+        "item_code": f"{statement_type}_item",
+        "item_value": 1.0,
+        "announce_date": date(2024, 4, 20),
+    }
+
+
+def test_financial_backfill_resumes_after_units_an_interrupted_run_published(cfg, monkeypatch):
+    """A new run skips units an earlier run published; ``--refetch`` does not."""
+    from cnequity.storage.state import StateStore
+
+    cfg._backfill = True
+    cfg._backfill_start = date(2024, 1, 1)
+    cfg._backfill_end = date(2024, 3, 31)
+    unit = "2024-03-31|RPT_LICO_FN_CPD"
+    calls: list[set[str]] = []
+
+    def fake_fetch(_day, *, on_unit, skip_units, failures, **_kwargs):
+        calls.append(set(skip_units))
+        if unit not in skip_units:
+            on_unit(unit, "backfill:2024-03-31:RPT_LICO_FN_CPD", [_fsi_row("2024Q1", "income")])
+        return pl.DataFrame()
+
+    monkeypatch.setattr(fund, "fetch_financial_statement_items", fake_fetch)
+    fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-killed", {})
+    # The next invocation's staging recovery compacts the killed run.
+    StateStore(cfg.meta_root).commit_staged_units("financial_statement_items", "run-killed")
+    curated = cfg.curated_root / "financial_statement_items" / "report_period=2024Q1"
+    curated.mkdir(parents=True)
+    pl.DataFrame(
+        [_fsi_row("2024Q1", kind) for kind in ("income", "balance", "cashflow", "indicator")]
+    ).write_parquet(curated / "part-0.parquet")
+
+    resumed = fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-next", {})
+    assert calls[1] == {unit}
+    # The skipped period is judged by the lake, not reported as missing.
+    assert resumed.get("missing_periods") is None
+    assert resumed.get("missing_statement_periods") is None
+
+    cfg._backfill_refetch = True
+    fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-refetch", {})
+    assert calls[2] == set()
+
+
+def test_scoped_financial_repair_does_not_stand_in_for_the_market(cfg, monkeypatch):
+    from cnequity.storage.state import StateStore
+
+    cfg._backfill = True
+    cfg._backfill_start = date(2024, 1, 1)
+    cfg._backfill_end = date(2024, 3, 31)
+    cfg._backfill_symbols = ["600519.SH"]
+    unit = "2024-03-31|RPT_LICO_FN_CPD"
+    calls: list[set[str]] = []
+
+    def fake_fetch(_day, *, on_unit, skip_units, failures, **_kwargs):
+        calls.append(set(skip_units))
+        if unit not in skip_units:
+            on_unit(unit, "backfill:2024-03-31:RPT_LICO_FN_CPD", [_fsi_row("2024Q1", "income")])
+        return pl.DataFrame()
+
+    monkeypatch.setattr(fund, "fetch_financial_statement_items", fake_fetch)
+    fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-scoped", {})
+    StateStore(cfg.meta_root).commit_staged_units("financial_statement_items", "run-scoped")
+
+    cfg._backfill_symbols = None
+    fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-market", {})
+    assert calls[1] == set()
+
+
+def test_shareholder_backfill_resumes_after_windows_an_interrupted_run_published(cfg, monkeypatch):
+    from cnequity.storage.state import StateStore
+
+    cfg._backfill = True
+    cfg._backfill_start = date(2024, 1, 1)
+    cfg._backfill_end = date(2024, 12, 31)
+    calls = []
+    fail = {"value": True}
+
+    def fetch(start, end, **_kwargs):
+        calls.append(start.month)
+        if start.month == 7 and fail["value"]:
+            fail["value"] = False
+            raise fund.EastMoneyDatacenterError("page 30 timed out")
+        return pl.DataFrame({"record_date": [start], "symbol": ["600519.SH"]})
+
+    def write(config, run_id, dataset, frame, *, batch_id, **_kwargs):
+        path = config.staging_root / dataset / f"run_id={run_id}" / f"part-{batch_id}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.write_parquet(path)
+        return {"rows_read": frame.height, "rows_written": frame.height}
+
+    monkeypatch.setattr(fund, "write_fetched", write)
+    kwargs = {"daily_by": "record_date", "daily_lookback_days": 240}
+    fund._run_shareholder_step(cfg, date(2024, 12, 31), "run-a", "top_holders", fetch, **kwargs)
+    StateStore(cfg.meta_root).commit_staged_units("top_holders", "run-a")
+
+    resumed = fund._run_shareholder_step(
+        cfg, date(2024, 12, 31), "run-b", "top_holders", fetch, **kwargs
+    )
+    assert calls == [1, 4, 7, 7, 10]
+    assert resumed["windows_reused"] == 2
+    assert "missing_units" not in resumed
+
+    cfg._backfill_refetch = True
+    fund._run_shareholder_step(cfg, date(2024, 12, 31), "run-c", "top_holders", fetch, **kwargs)
+    assert calls[5:] == [1, 4, 7, 10]

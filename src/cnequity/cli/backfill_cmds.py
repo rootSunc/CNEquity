@@ -33,6 +33,19 @@ from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.run_scope import backfill_of, run_flags_of, set_backfill, set_run_flags
 
+# Datasets whose ``--refetch`` is read by the step from the backfill scope: it
+# ignores fund_flow's receipts and the published units an interrupted
+# financials or shareholder backfill would otherwise resume after.
+_REFETCH_VIA_SCOPE = frozenset(
+    {
+        "fund_flow",
+        "financial_statement_items",
+        "share_structure",
+        "shareholder_counts",
+        "top_holders",
+    }
+)
+
 
 @cli.command()
 @click.argument("dataset")
@@ -77,7 +90,8 @@ from cnequity.run_scope import backfill_of, run_flags_of, set_backfill, set_run_
     is_flag=True,
     help=N_(
         "Ignore completion receipts and checkpoints and fetch the range again (sector_bars, "
-        "futures_bars, option_bars, fund_flow); circuit breakers still apply. Without it a "
+        "futures_bars, option_bars, fund_flow, financial_statement_items, share_structure, "
+        "shareholder_counts, top_holders); circuit breakers still apply. Without it a "
         "backfill resumes."
     ),
 )
@@ -196,11 +210,15 @@ def backfill(
             force = True
         elif dataset in {"futures_bars", "option_bars"}:
             refresh = True
-        elif dataset == "fund_flow":
+        elif dataset in _REFETCH_VIA_SCOPE:
             pass  # applied to cfg once it is loaded below
         else:
             raise click.ClickException(
-                _("--refetch applies to sector_bars, futures_bars, option_bars and fund_flow")
+                _(
+                    "--refetch applies to sector_bars, futures_bars, option_bars, fund_flow, "
+                    "financial_statement_items, share_structure, shareholder_counts and "
+                    "top_holders"
+                )
             )
     if turnover_peer_review and not turnover_repair:
         raise click.ClickException(_("--turnover-peer-review needs --turnover-repair"))
@@ -366,7 +384,7 @@ def backfill(
         symbols = list(dict.fromkeys(s.upper() for s in symbols))
         symbols_str = ",".join(symbols)
     cfg = _cfg(config_path)
-    set_backfill(cfg, refetch=bool(refetch and dataset == "fund_flow"))
+    set_backfill(cfg, refetch=bool(refetch and dataset in _REFETCH_VIA_SCOPE))
     set_run_flags(cfg, option_source=option_source)
     derivatives = {
         "futures_bars",

@@ -601,6 +601,50 @@ def _is_all_a(symbol: str) -> bool:
     return is_all_a_symbol(info.code, info.exchange)
 
 
+def _resume_scope(dataset: str, symbols: list[str] | None = None) -> str:
+    """Identity a published backfill unit must match to be skipped by a rerun.
+
+    The schema version retires every unit fetched under an older contract, and
+    the symbol scope keeps a scoped repair from standing in for the market.
+    """
+    from cnequity.domain.schemas import data_version_for
+
+    scope = "symbols=" + ",".join(sorted(symbols)) if symbols else "market"
+    return f"{data_version_for(dataset)}:{scope}"
+
+
+def _reusable_units(config: Config, dataset: str, resume_scope: str) -> set[str]:
+    """Units a recent backfill already published; none under ``--refetch``."""
+    if backfill_of(config).refetch:
+        return set()
+    return StateStore(config.meta_root).published_units(dataset, resume_scope)
+
+
+def _quarter_of(period: str) -> str:
+    return f"{period[:4]}Q{(int(period[5:7]) - 1) // 3 + 1}"
+
+
+def _lake_statement_types(config: Config, quarters: set[str]) -> dict[str, set[str]]:
+    """Statement types the lake already holds for *quarters*."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
+    root = config.curated_root / "financial_statement_items"
+    if not quarters or not dataset_has_parquet(root):
+        return {}
+    frame = (
+        scan_parquet_root(root, dataset="financial_statement_items", meta_root=config.meta_root)
+        .filter(pl.col("report_period").is_in(sorted(quarters)))
+        .select("report_period", "statement_type")
+        .unique()
+        .collect()
+    )
+    types: dict[str, set[str]] = {}
+    for period, statement_type in frame.iter_rows():
+        if period is not None and statement_type is not None:
+            types.setdefault(str(period), set()).add(str(statement_type))
+    return types
+
+
 def _expected_financial_periods(config: Config, trade_date: date) -> set[str]:
     from cnequity.adapters.eastmoney.fundamentals import _report_period_dates
 
@@ -698,6 +742,14 @@ def step_financial_statement_items(
                 break
     failures: list[tuple[str, str]] = []
     unit_stage_used = bool(backfill and recoverable_units)
+    # Units a recent run already published (an interrupted backfill's staging
+    # is compacted by the next one) are skipped too; their rows are in the lake.
+    resume_scope = _resume_scope("financial_statement_items", backfill_of(config).symbol_list())
+    published_units = (
+        _reusable_units(config, "financial_statement_items", resume_scope) - recoverable_units
+        if backfill
+        else set()
+    )
 
     def _stage_unit(unit: str, scope: str, rows: list[dict]) -> None:
         nonlocal unit_stage_used
@@ -731,7 +783,9 @@ def step_financial_statement_items(
             batch_id=f"{unit_prefix}{period}-{report}-{uuid.uuid4().hex}",
             raw_archive_evidence=evidence,
         )
-        state.mark_staged_units("financial_statement_items", run_id, [unit])
+        state.mark_staged_units(
+            "financial_statement_items", run_id, [unit], resume_scope=resume_scope
+        )
 
     if backfill:
         df = fetch_financial_statement_items(
@@ -740,7 +794,7 @@ def step_financial_statement_items(
             config=config,
             run_id=run_id,
             on_unit=_stage_unit,
-            skip_units=recoverable_units,
+            skip_units=recoverable_units | published_units,
             failures=failures,
         )
         if failures:
@@ -773,16 +827,28 @@ def step_financial_statement_items(
             if not df.is_empty() and "report_period" in df.columns
             else set()
         )
-        missing_periods = expected - observed
+        present_by_period: dict[str, set[str]] = {}
         if not df.is_empty() and {"report_period", "statement_type"}.issubset(df.columns):
             by_period = df.group_by("report_period").agg(
                 pl.col("statement_type").drop_nulls().unique().alias("statement_types")
             )
             for row in by_period.iter_rows(named=True):
-                period = row.get("report_period")
+                present_by_period[str(row.get("report_period"))] = set(
+                    row.get("statement_types") or []
+                )
+        # A skipped unit's rows were published by an earlier run, so judge its
+        # period by what the lake holds rather than by this run's staging.
+        skipped_quarters = {
+            _quarter_of(unit.split("|", 1)[0]) for unit in published_units
+        } & expected
+        for period, types in _lake_statement_types(config, skipped_quarters).items():
+            present_by_period.setdefault(period, set()).update(types)
+            observed.add(period)
+        missing_periods = expected - observed
+        if present_by_period:
+            for period, present in present_by_period.items():
                 if period not in observed:
                     continue
-                present = set(row.get("statement_types") or [])
                 # Every statement type the adapter's reports produce; checking
                 # only a subset let a missing income statement pass as a
                 # complete period.
@@ -972,11 +1038,22 @@ def _run_shareholder_step(
     state = StateStore(config.meta_root)
     report = sweep_progress(logger, f"{dataset} windows", len(windows), every=1, unit="windows")
     staged = StagingWriter(config.staging_root).list_run_files(dataset, run_id)
+    # Windows a recent backfill already published are in the lake: an
+    # interrupted sweep resumes after them instead of starting over.
+    resume_scope = _resume_scope(dataset, symbols) if backfill_of(config).active else None
+    published_units = (
+        _reusable_units(config, dataset, resume_scope) if resume_scope is not None else set()
+    )
+    windows_reused = 0
     for index, (win_start, win_end) in enumerate(windows, start=1):
         unit = f"{by}:{win_start.isoformat()}:{win_end.isoformat()}"
         if symbols:
             # A targeted window is not evidence about the whole market's.
             unit += ":symbols=" + ",".join(sorted(symbols))
+        if unit in published_units:
+            windows_reused += 1
+            report(index)
+            continue
         if stopped:
             failures.append((unit, "earlier shareholder window failed"))
             report(index)
@@ -1009,7 +1086,7 @@ def _run_shareholder_step(
                 ):
                     rows_read += recovered.height
                     rows_written += recovered.height
-                    state.mark_staged_units(dataset, run_id, [unit])
+                    state.mark_staged_units(dataset, run_id, [unit], resume_scope=resume_scope)
                     report(index)
                     continue
             except (OSError, pl.exceptions.PolarsError):
@@ -1080,13 +1157,15 @@ def _run_shareholder_step(
             ),
         )
         if not incomplete:
-            state.mark_staged_units(dataset, run_id, [unit])
+            state.mark_staged_units(dataset, run_id, [unit], resume_scope=resume_scope)
         rows_read += int(chunk.get("rows_read", 0))
         rows_written += int(chunk.get("rows_written", 0))
 
     if failures:
         state.record_missing_units(dataset, failures)
     result: dict = {"rows_read": rows_read, "rows_written": rows_written, "windows": len(windows)}
+    if windows_reused:
+        result["windows_reused"] = windows_reused
     findings: list[dict] = []
     if failures:
         result["status"] = "degraded"

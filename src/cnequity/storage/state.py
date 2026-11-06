@@ -14,6 +14,11 @@ from typing import IO
 from cnequity.file_lock import exclusive_lock
 from cnequity.storage.atomic import replace_with_retry
 
+# How long a published backfill unit stays reusable by a later run. A rerun
+# after an interrupt is usually the same day; a week matches the CNINFO
+# checkpoint TTL and is well inside the daily jobs' own reconciliation.
+PUBLISHED_UNIT_TTL_DAYS = 7
+
 
 class StateStore:
     """Tracks last-success coverage per dataset (e.g. last trade_date)."""
@@ -287,18 +292,82 @@ class StateStore:
             )
             payload["updated_at"] = _utc_now().isoformat()
 
-    def mark_staged_units(self, dataset: str, run_id: str, units: Iterable[str]) -> None:
+    def mark_staged_units(
+        self,
+        dataset: str,
+        run_id: str,
+        units: Iterable[str],
+        *,
+        resume_scope: str | None = None,
+    ) -> None:
+        """Record units *run_id* validated into staging.
+
+        With *resume_scope*, the units also become reusable by a later run
+        once compact publishes them: see :meth:`published_units`. The scope
+        names what a unit was fetched for (contract version and symbol scope),
+        so a scoped repair never stands in for a whole-market unit.
+        """
         incoming = set(units)
         if not incoming:
             return
         with self.transaction(dataset) as payload:
             staged = payload.setdefault("staged_units", {})
             staged[run_id] = sorted(set(staged.get(run_id, [])) | incoming)
+            if resume_scope is not None:
+                resumable = payload.setdefault("staged_resume_units", {}).setdefault(run_id, {})
+                for unit in incoming:
+                    resumable[unit] = resume_scope
+
+    def published_units(
+        self,
+        dataset: str,
+        resume_scope: str,
+        *,
+        max_age_days: int = PUBLISHED_UNIT_TTL_DAYS,
+        now: datetime | None = None,
+    ) -> set[str]:
+        """Units of *resume_scope* that compact published within *max_age_days*.
+
+        A backfill interrupted after some units were published can skip them
+        on its next run instead of fetching them again. The age bound keeps
+        this a resume, not a cache: an older unit is fetched again so a long
+        idle gap is re-observed rather than trusted.
+        """
+        cutoff = _utc_now(now) - timedelta(days=max_age_days)
+        prefix = f"{resume_scope}|"
+        units: set[str] = set()
+        for key, stamp in self.get_payload(dataset).get("published_units", {}).items():
+            if not key.startswith(prefix):
+                continue
+            try:
+                published_at = _utc_now(datetime.fromisoformat(stamp))
+            except (TypeError, ValueError):
+                continue
+            if published_at >= cutoff:
+                units.add(key[len(prefix) :])
+        return units
 
     def commit_staged_units(self, dataset: str, run_id: str) -> None:
         with self.transaction(dataset) as payload:
             staged = payload.get("staged_units", {})
             units = staged.pop(run_id, [])
+            resumable = payload.get("staged_resume_units", {}).pop(run_id, {})
+            if not payload.get("staged_resume_units"):
+                payload.pop("staged_resume_units", None)
+            if resumable:
+                now = _utc_now()
+                cutoff = now - timedelta(days=PUBLISHED_UNIT_TTL_DAYS)
+                published = payload.setdefault("published_units", {})
+                for unit, scope in resumable.items():
+                    published[f"{scope}|{unit}"] = now.isoformat()
+                # Expired entries can never be reused; keep the ledger small.
+                for key, stamp in list(published.items()):
+                    try:
+                        expired = _utc_now(datetime.fromisoformat(stamp)) < cutoff
+                    except (TypeError, ValueError):
+                        expired = True
+                    if expired:
+                        del published[key]
             if not units:
                 return
             missing = payload.get("missing_units", {})

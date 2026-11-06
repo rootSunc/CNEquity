@@ -24,7 +24,7 @@
 | `--plan` | `False` | 只输出来源、范围和抓取方式；衍生品另给请求预算。不取数、不写湖。 |
 | `--exchange` | `—` | 仅衍生品：限定交易所，可重复。INE 归入 SHF 路由；2018 期货另取 INE 日文件。 |
 | `--source` | `—` | 本次回填改用的来源，不修改配置。支持 margin_trading（exchange 或 eastmoney）、financial_statement_items（tdx_fin：只补湖中缺少的科目）和 option_bars（tushare：沪深 ETF 期权）。 |
-| `--refetch` | `False` | 忽略完成收据和 checkpoint，重新获取整个范围（sector_bars、futures_bars、option_bars、fund_flow）；熔断仍然生效。不加时回填从断点续跑。 |
+| `--refetch` | `False` | 忽略完成收据和 checkpoint，重新获取整个范围（sector_bars、futures_bars、option_bars、fund_flow、financial_statement_items、share_structure、shareholder_counts、top_holders）；熔断仍然生效。不加时回填从断点续跑。 |
 | `--start` | `—` | 回填区间起点（YYYY-MM-DD），包括 daily_bars、minute_bars、衍生品日线、日期/报告期推进及 sector_bars。sector_bars 默认往前 400 天；超过来源历史深度的范围保留为缺口，可取范围照常交付并提供补数指引。 |
 | `--end` | `—` | 回填区间终点（YYYY-MM-DD，默认今天），与 --start 配合限定历史窗口。 |
 | `--outstanding` | `False` | 只修复被容忍缺口欠下的那些 key，范围和窗口都取自欠账台账，不看 --symbols/--start/--end。补上的 key 会销账，仍然缺的继续欠着。 |

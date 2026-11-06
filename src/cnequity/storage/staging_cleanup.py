@@ -26,7 +26,12 @@ from cnequity.storage.state import StateStore
 # revision" evidence. Compact pops a run's entry when it publishes that run's
 # staging in full; nothing else did, so a run whose staging was removed
 # without a full publish left its entry behind for good.
-_RUN_KEYED_STATE_FIELDS = ("staged_request_days", "staged_units", STAGED_OBSERVATION_FIELD)
+_RUN_KEYED_STATE_FIELDS = (
+    "staged_request_days",
+    "staged_units",
+    "staged_resume_units",
+    STAGED_OBSERVATION_FIELD,
+)
 
 
 @dataclass

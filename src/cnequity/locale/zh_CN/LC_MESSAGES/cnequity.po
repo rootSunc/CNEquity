@@ -848,7 +848,7 @@ msgstr "%s 批次 %s 失败：%s"
 msgid "%s futures file has no contracts"
 msgstr "%s 期货文件无合约"
 
-#: cnequity/storage/atomic.py
+#: cnequity/file_replace.py
 #, python-format
 msgid "%s is in use by another program and still cannot be replaced after %d attempts. Common causes: Jupyter/DuckDB/polars is reading this data, File Explorer has the folder open, or antivirus/sync software is scanning it. Close the program holding it and run again"
 msgstr "%s 正被其他程序占用，重试 %d 次后仍无法替换。常见原因：Jupyter/DuckDB/polars 正在读取这份数据、资源管理器打开了该目录，或杀毒/同步软件正在扫描。关闭占用的程序后重跑即可"
@@ -1167,8 +1167,8 @@ msgid "--quality-only needs --full"
 msgstr "--quality-only 需要配合 --full"
 
 #: cnequity/cli/backfill_cmds.py
-msgid "--refetch applies to sector_bars, futures_bars, option_bars and fund_flow"
-msgstr "--refetch 只适用于 sector_bars、futures_bars、option_bars 和 fund_flow"
+msgid "--refetch applies to sector_bars, futures_bars, option_bars, fund_flow, financial_statement_items, share_structure, shareholder_counts and top_holders"
+msgstr "--refetch 只适用于 sector_bars、futures_bars、option_bars、fund_flow、financial_statement_items、share_structure、shareholder_counts 和 top_holders"
 
 #: cnequity/cli/consume_cmds.py
 msgid "--refresh needs both --dataset and --symbol"
@@ -2527,27 +2527,6 @@ msgstr "删除落在证券上市窗口之外的 trading_status 行"
 msgid "Drop zero-volume daily bars dated after a security's delisting"
 msgstr "删除退市日之后的零成交量日线"
 
-msgid "Rewrite daily_bars history from one file per day into one file per month"
-msgstr "把 daily_bars 的历史从每天一个文件改写为每月一个文件"
-
-msgid "Rewrite adj_factors history from one file per day into one file per month"
-msgstr "把 adj_factors 的历史从每天一个文件改写为每月一个文件"
-
-msgid "Rewrite margin_trading history from one file per day into one file per month"
-msgstr "把 margin_trading 的历史从每天一个文件改写为每月一个文件"
-
-msgid "Rewrite valuation_metrics history from one file per day into one file per month"
-msgstr "把 valuation_metrics 的历史从每天一个文件改写为每月一个文件"
-
-msgid "Rewrite limit_prices history from one file per day into one file per month"
-msgstr "把 limit_prices 的历史从每天一个文件改写为每月一个文件"
-
-msgid "Rewrite fund_flow_tushare history from one file per day into one file per month"
-msgstr "把 fund_flow_tushare 的历史从每天一个文件改写为每月一个文件"
-
-msgid "Rewrite chip_distribution history from one file per day into one file per month"
-msgstr "把 chip_distribution 的历史从每天一个文件改写为每月一个文件"
-
 #: cnequity/serve/ops/settings.py
 msgid "EastMoney"
 msgstr "东财"
@@ -3142,8 +3121,8 @@ msgid "If the scheduled daily update runs only these research packs, its schedul
 msgstr "定时日更若只跑这些研究包，调度组是 {groups}，不含事件流。"
 
 #: cnequity/cli/backfill_cmds.py
-msgid "Ignore completion receipts and checkpoints and fetch the range again (sector_bars, futures_bars, option_bars, fund_flow); circuit breakers still apply. Without it a backfill resumes."
-msgstr "忽略完成收据和 checkpoint，重新获取整个范围（sector_bars、futures_bars、option_bars、fund_flow）；熔断仍然生效。不加时回填从断点续跑。"
+msgid "Ignore completion receipts and checkpoints and fetch the range again (sector_bars, futures_bars, option_bars, fund_flow, financial_statement_items, share_structure, shareholder_counts, top_holders); circuit breakers still apply. Without it a backfill resumes."
+msgstr "忽略完成收据和 checkpoint，重新获取整个范围（sector_bars、futures_bars、option_bars、fund_flow、financial_statement_items、share_structure、shareholder_counts、top_holders）；熔断仍然生效。不加时回填从断点续跑。"
 
 #: cnequity/cli/backfill_cmds.py
 msgid "Import a Shanghai Futures Exchange annual ZIP of daily bars, offline and verified."
@@ -4873,6 +4852,10 @@ msgstr ""
 "读取不受目录跨度影响，所以这只回收空间和文件打开次数，不修正确性：\n"
 "粒度变更留下旧布局时，审计会指向这里。"
 
+#: cnequity/storage/migrations.py
+msgid "Rewrite adj_factors history from one file per day into one file per month"
+msgstr "把 adj_factors 的历史从每天一个文件改写为每月一个文件"
+
 #: cnequity/cli/maintain_cmds.py
 msgid "Rewrite all partitions of adj_factors / industry_index / option_greeks / minute_bars_15m|30m|60m (default: incremental only)."
 msgstr "重写 adj_factors / industry_index / option_greeks / minute_bars_15m|30m|60m 的全部分区（默认只补增量）。"
@@ -4880,6 +4863,30 @@ msgstr "重写 adj_factors / industry_index / option_greeks / minute_bars_15m|30
 #: cnequity/cli/repair_cmds.py
 msgid "Rewrite and swap the partitions; by default only previews."
 msgstr "改写并换上分区；默认只预览。"
+
+#: cnequity/storage/migrations.py
+msgid "Rewrite chip_distribution history from one file per day into one file per month"
+msgstr "把 chip_distribution 的历史从每天一个文件改写为每月一个文件"
+
+#: cnequity/storage/migrations.py
+msgid "Rewrite daily_bars history from one file per day into one file per month"
+msgstr "把 daily_bars 的历史从每天一个文件改写为每月一个文件"
+
+#: cnequity/storage/migrations.py
+msgid "Rewrite fund_flow_tushare history from one file per day into one file per month"
+msgstr "把 fund_flow_tushare 的历史从每天一个文件改写为每月一个文件"
+
+#: cnequity/storage/migrations.py
+msgid "Rewrite limit_prices history from one file per day into one file per month"
+msgstr "把 limit_prices 的历史从每天一个文件改写为每月一个文件"
+
+#: cnequity/storage/migrations.py
+msgid "Rewrite margin_trading history from one file per day into one file per month"
+msgstr "把 margin_trading 的历史从每天一个文件改写为每月一个文件"
+
+#: cnequity/storage/migrations.py
+msgid "Rewrite valuation_metrics history from one file per day into one file per month"
+msgstr "把 valuation_metrics 的历史从每天一个文件改写为每月一个文件"
 
 #: cnequity/domain/datasets.py
 msgid "Risk and compliance"

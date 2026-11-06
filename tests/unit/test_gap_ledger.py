@@ -212,3 +212,34 @@ def test_state_on_disk_is_plain_json_after_every_ledger_operation(store):
     store.mark_staged_request_days("margin_trading", "run-a", [D1])
     store.record_missing_units("margin_trading", [("u", "timeout")])
     json.loads((store.root / "margin_trading.json").read_text(encoding="utf-8"))
+
+
+def test_published_units_are_reusable_only_for_their_scope_and_age(store):
+    from datetime import datetime, timezone
+
+    dataset = "top_holders"
+    store.mark_staged_units(dataset, "run-a", ["q1", "q2"], resume_scope="v1:market")
+    store.mark_staged_units(dataset, "run-b", ["q3"], resume_scope="v1:symbols=600519.SH")
+    store.mark_staged_units(dataset, "run-c", ["q4"])
+
+    # Staged is not published: nothing is reusable before compact commits it.
+    assert store.published_units(dataset, "v1:market") == set()
+    for run_id in ("run-a", "run-b", "run-c"):
+        store.commit_staged_units(dataset, run_id)
+    assert store.published_units(dataset, "v1:market") == {"q1", "q2"}
+    assert store.published_units(dataset, "v1:symbols=600519.SH") == {"q3"}
+    # A schema bump retires every unit fetched under the old contract.
+    assert store.published_units(dataset, "v2:market") == set()
+    assert "staged_resume_units" not in store.get_payload(dataset)
+
+    later = datetime.now(timezone.utc) + timedelta(days=8)
+    assert store.published_units(dataset, "v1:market", now=later) == set()
+
+
+def test_expired_published_units_are_pruned_on_the_next_commit(store):
+    dataset = "top_holders"
+    with store.transaction(dataset) as payload:
+        payload["published_units"] = {"v1:market|old": "2020-01-01T00:00:00+00:00"}
+    store.mark_staged_units(dataset, "run-a", ["new"], resume_scope="v1:market")
+    store.commit_staged_units(dataset, "run-a")
+    assert set(store.get_payload(dataset)["published_units"]) == {"v1:market|new"}
