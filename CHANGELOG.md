@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 供应商用 0 表示“没有值”的字段，统一存为空值，不再当作真实数值：可转债日线的开高低收和前收、同花顺/东财人气榜的价格、筹码分布的价位、`fund_flow_ths_tushare` 和 `limit_events` 的收盘价、涨跌停价、一致预期目标价、卖方预测的目标价区间、回购价格区间，以及原有的估值指标和东财/中证指数权重。此前这些 0 会被当作价格读出，例如跨过收盘价为 0 的一天算收益率会得到 −100%；同花顺可转债、ETF、港美股和板块榜单上 99% 的价格都是 0。可转债没有成交的交易日保留该行，开高低收为空。规则写在数据集注册表里，在统一的写入和读取校验中执行，不再由各个 adapter 和看板各自维护：读取时立即生效，已有的湖升级后运行一次 `cne migrate --apply`（迁移 `vendor-zero-nulls`），把存量的 0 改写为空值并作为新版本发布；迁移前 `cne audit` 会报告 `stored_value_placeholders`。可转债日线也开始执行与日线相同的价格合理性检查。
+- 看板按交易日判断缺口、日期选择和热力图的数据集改由注册表决定：除原有的几个外，`index_bars`、`adj_factors`、`industry_index` 和 `market_breadth` 也按交易日判断，此前它们按年或按月目录判断，缺了某一天看不出来。
 - `cne backfill announcement_index` 改为逐日拉取、逐日入库（[#58](https://github.com/rootSunc/CNEquity/issues/58)）：此前每个约 31 天的窗口要整月拉完才写入，中途停止时已拉的页全部作废，下次要向巨潮重新拉取，公告密集的 4、8、12 月一次中断就损失数小时。现在每天单独请求、单独留证、拉完即暂存，中断最多损失正在拉的那一天，重跑时自动跳过已入库的日期；某一天失败也不再连带重拉同一窗口的其他日期。没有公告的日子每天多一次请求。
 - 逐日回补（`margin_trading`、`limit_prices`、`fund_flow_tushare`、`broker_forecasts`、`market_breadth`、各 Tushare 补充数据集、`futures_bars`、`option_bars` 等）按 Ctrl-C 或被终止时，先把已拉完的日期写入再退出：这些回补每 60 天写入一次，此前中断会丢掉最近一次写入后已拉的最多 59 天，下次要重新请求；拉取出错时本来就会先写入，中断现在与之一致。
 - `financial_statement_items`、`share_structure`、`shareholder_counts`、`top_holders` 的回补中断后重跑，不再从头重拉：此前已完成的“报告期 × 报表”或时间窗只在同一次运行内跳过，重新执行 `cne backfill` 会从 2001 年起全部重新请求，而这些数据入湖时又会被去重。现在 7 天内已入湖的单元会被跳过（按 schema 版本和证券范围区分，限定证券的修复不会代替全市场），财报的完整性检查对跳过的报告期按湖里已有的数据判断。`cne backfill <名称> --refetch` 可忽略这些记录、全部重拉。

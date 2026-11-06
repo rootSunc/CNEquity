@@ -1666,72 +1666,22 @@ class SchemaValidationError(ValueError):
     """Raised when a DataFrame does not match the dataset contract."""
 
 
-_CORE_BAR_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "daily_bars": ("open", "high", "low", "close", "volume"),
-    "index_bars": ("open", "high", "low", "close", "volume"),
-    "minute_bars": ("open", "high", "low", "close", "volume"),
-    "minute_bars_5m": ("open", "high", "low", "close", "volume"),
-    "minute_bars_15m": ("open", "high", "low", "close", "volume"),
-    "minute_bars_30m": ("open", "high", "low", "close", "volume"),
-    "minute_bars_60m": ("open", "high", "low", "close", "volume"),
-    "commodity_bars": ("open", "high", "low", "close", "volume"),
-    "sector_bars": ("open", "high", "low", "close", "volume"),
-    "trade_ticks": ("price", "volume"),
-}
-
-# These fields are not part of a bar's numeric shape, but a null value is still
-# semantically unusable.  In particular, Polars casts an invalid boolean to
-# null; allowing that through would make calendar consumers treat an unknown
-# session as non-trading and would make status history silently incomplete.
-_CORE_SEMANTIC_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "etf_profiles": (
-        "exchange",
-        "name",
-        "eligibility_status",
-        "classification_basis",
-        "source_url",
-    ),
-    "trading_calendar": ("is_trading",),
-    "trading_status": ("is_trading", "status"),
-    "trade_ticks": ("trade_time", "direction"),
-    "futures_contracts": ("exchange", "exchange_code", "product", "dates_basis"),
-    "option_contracts": (
-        "exchange",
-        "exchange_code",
-        "product",
-        "underlying_symbol",
-        "option_type",
-        "strike",
-        "dates_basis",
-    ),
-    "futures_bars": ("exchange", "exchange_code", "product", "volume", "open_interest"),
-    "option_bars": (
-        "exchange",
-        "exchange_code",
-        "product",
-        "underlying_symbol",
-        "option_type",
-        "strike",
-        "volume",
-        "open_interest",
-    ),
-}
-
-
 def required_columns_for_dataset(dataset: str, schema: dict[str, pl.DataType]) -> list[str]:
     """Return columns that must be present and non-null for a stored row.
 
     Most fundamental fields are legitimately nullable (for example PE for a
     loss-making company, or Sina's unavailable turnover). Primary keys and
-    provenance are never nullable, while market-bar price/volume fields are
-    required because a null there means the source row was malformed.
+    provenance are never nullable. Beyond those, the registry's
+    ``value_rules.non_null`` names the fields whose null means the source row
+    was malformed: a market bar's price and volume, a calendar's ``is_trading``
+    (Polars casts an invalid boolean to null, and an unknown session read as
+    non-trading would silently thin the calendar).
     """
+    from cnequity.domain.value_rules import rules_for
+
     required = list(PRIMARY_KEYS.get(dataset, []))
     required.extend(col for col in PROVENANCE if col in schema and col not in required)
-    required.extend(col for col in _CORE_BAR_REQUIRED_COLUMNS.get(dataset, ()) if col in schema)
-    required.extend(
-        col for col in _CORE_SEMANTIC_REQUIRED_COLUMNS.get(dataset, ()) if col in schema
-    )
+    required.extend(col for col in rules_for(dataset).non_null if col in schema)
     return list(dict.fromkeys(required))
 
 
@@ -1739,9 +1689,13 @@ def market_bar_violations(dataset: str, columns: list[str]) -> pl.Expr | None:
     """Impossible equity/commodity market rows, shared by writers and audits.
 
     Historical Parquet can omit nullable columns, so only refer to columns
-    actually present in the frame being checked.
+    actually present in the frame being checked. Applies to the datasets whose
+    registry ``value_rules`` mark them ``market_bar``; a null price (a session
+    without a trade) is not a violation.
     """
-    if dataset not in _CORE_BAR_REQUIRED_COLUMNS:
+    from cnequity.domain.value_rules import rules_for
+
+    if not rules_for(dataset).market_bar:
         return None
 
     checks: list[pl.Expr] = []
@@ -2047,6 +2001,11 @@ def validate_dataframe(
         casts.append(pl.col(col).cast(PIT_STORAGE_DTYPES[col], strict=False))
     try:
         normalized = df.with_columns(casts).select([*columns, *pit_passthrough])
+        # Vendor placeholders become nulls here, once, for every writer and
+        # reader: see domain/value_rules.py.
+        from cnequity.domain.value_rules import apply_value_rules
+
+        normalized = apply_value_rules(normalized, dataset)
     except pl.exceptions.PolarsError as exc:
         # ``strict=False`` turns many bad scalar casts into nulls, but Polars
         # still raises for some Utf8 -> Boolean conversions. Keep all schema

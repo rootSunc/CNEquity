@@ -30,6 +30,7 @@ from cnequity.domain.pit import (  # noqa: F401
     PitMode,
     PitQuality,
 )
+from cnequity.domain.value_rules import NO_RULES, ValueRules
 from cnequity.i18n import N_
 
 FetchSemantics = Literal["by_date", "snapshot"]
@@ -792,6 +793,21 @@ class DatasetSpec:
     # ledger. Whole-set snapshots (membership, profiles, calendars) keep
     # all-or-nothing staging: a partial write there publishes a truncated set.
     partial_rows: bool = False
+    # Whether a row lands on every exchange session in the covered span, so a
+    # missing session is a gap whatever the partition period. The dashboard's
+    # gaps, date picker and heatmap judge such datasets per session; a month or
+    # year directory says nothing about one missing day inside it.
+    #
+    # Weaker than ``coverage_mode="session_dense"``, which implies it: dense
+    # also pins the incremental watermark to the last contiguous session and
+    # makes ``cne verify`` report each missing session, and a feed with old
+    # holes (``margin_trading`` across the push2 ban) would re-read years of
+    # history every run under it.
+    session_rows: bool = False
+    # How stored values are read: vendor placeholders that mean "no value",
+    # the columns that must never be null, and whether rows are market bars.
+    # Set from ``_VALUE_RULES``; applied once in ``validate_dataframe``.
+    value_rules: ValueRules = NO_RULES
 
     def __post_init__(self) -> None:
         """Materialise inferred contract fields without changing old APIs.
@@ -972,6 +988,7 @@ _SPECS = [
     # table. Only `cne backfill fund_flow_tushare` fills it.
     DatasetSpec(
         "fund_flow_tushare",
+        session_rows=True,
         primary_source="tushare",
         tier="L4",
         partition_col="trade_date",
@@ -1039,6 +1056,7 @@ _SPECS = [
     # Tushare's holding-cost distribution estimate per stock (cyq_perf), from 2018.
     DatasetSpec(
         "chip_distribution",
+        session_rows=True,
         primary_source="tushare",
         tier="L4",
         partition_col="trade_date",
@@ -1262,6 +1280,7 @@ _SPECS = [
     # token), from 2007. Only `cne backfill limit_prices` fills it.
     DatasetSpec(
         "limit_prices",
+        session_rows=True,
         primary_source="tushare",
         tier="L1",
         partition_col="trade_date",
@@ -1707,6 +1726,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "valuation_metrics",
+        session_rows=True,
         partial_rows=True,
         primary_source="eastmoney",
         tier="L3",
@@ -1751,6 +1771,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "margin_trading",
+        session_rows=True,
         partial_rows=True,
         primary_source="exchange",
         # `[margin_trading].source` picks between the two at runtime: the
@@ -2288,6 +2309,107 @@ if set(_SUPPORT) != {spec.name for spec in _SPECS}:  # pragma: no cover - regist
         f"unknown {sorted(set(_SUPPORT) - {spec.name for spec in _SPECS})}"
     )
 _SPECS = [replace(spec, support=_SUPPORT[spec.name]) for spec in _SPECS]
+
+_BAR = ("open", "high", "low", "close", "volume")
+
+#: Per dataset, how its stored values are read (see ``domain/value_rules.py``).
+#: A dataset not named here stores what its writer gives it.
+_VALUE_RULES: dict[str, ValueRules] = {
+    **{
+        name: ValueRules(non_null=_BAR, market_bar=True)
+        for name in (
+            "daily_bars",
+            "index_bars",
+            "minute_bars",
+            "minute_bars_5m",
+            "minute_bars_15m",
+            "minute_bars_30m",
+            "minute_bars_60m",
+            "commodity_bars",
+            "sector_bars",
+        )
+    },
+    "trade_ticks": ValueRules(
+        non_null=("price", "volume", "trade_time", "direction"), market_bar=True
+    ),
+    # Tushare sends 0 for the open, high and low of a session the bond did not
+    # trade (and for every price of one past its redemption): the row records
+    # the session, the prices do not exist.
+    "convertible_bond_bars": ValueRules(
+        zero_is_missing=("open", "high", "low", "close", "pre_close"),
+        no_trade_missing=("open", "high", "low", "close"),
+        non_null=("volume",),
+        market_bar=True,
+    ),
+    # A negative ratio is a loss-making company, so only 0 is the placeholder.
+    "valuation_metrics": ValueRules(
+        zero_is_missing=("pe_ttm", "pe_dynamic", "pb", "ps_ttm", "total_mv", "float_mv")
+    ),
+    "index_constituents": ValueRules(
+        zero_is_missing=("weight",), zero_is_missing_sources=("eastmoney", "cni")
+    ),
+    "analyst_consensus": ValueRules(zero_is_missing=("target_price",)),
+    "broker_forecasts": ValueRules(zero_is_missing=("max_price", "min_price")),
+    "chip_distribution": ValueRules(
+        zero_is_missing=(
+            "history_low",
+            "history_high",
+            "cost_5pct",
+            "cost_15pct",
+            "cost_50pct",
+            "cost_85pct",
+            "cost_95pct",
+            "cost_mean",
+        )
+    ),
+    "fund_flow_ths_tushare": ValueRules(zero_is_missing=("close",)),
+    # Both limits arrive as 0 together on sessions Tushare has none for.
+    "limit_prices": ValueRules(zero_is_missing=("up_limit", "down_limit")),
+    "limit_events": ValueRules(zero_is_missing=("close",)),
+    # THS gives no price for its bond, ETF, HK, US and board lists.
+    "popularity_ranks": ValueRules(zero_is_missing=("price",)),
+    "share_repurchases": ValueRules(zero_is_missing=("price_high", "price_low")),
+    "etf_profiles": ValueRules(
+        non_null=("exchange", "name", "eligibility_status", "classification_basis", "source_url")
+    ),
+    "trading_calendar": ValueRules(non_null=("is_trading",)),
+    "trading_status": ValueRules(non_null=("is_trading", "status")),
+    "futures_contracts": ValueRules(
+        non_null=("exchange", "exchange_code", "product", "dates_basis")
+    ),
+    "option_contracts": ValueRules(
+        non_null=(
+            "exchange",
+            "exchange_code",
+            "product",
+            "underlying_symbol",
+            "option_type",
+            "strike",
+            "dates_basis",
+        )
+    ),
+    "futures_bars": ValueRules(
+        non_null=("exchange", "exchange_code", "product", "volume", "open_interest")
+    ),
+    "option_bars": ValueRules(
+        non_null=(
+            "exchange",
+            "exchange_code",
+            "product",
+            "underlying_symbol",
+            "option_type",
+            "strike",
+            "volume",
+            "open_interest",
+        )
+    ),
+}
+if set(_VALUE_RULES) - {spec.name for spec in _SPECS}:  # pragma: no cover - registry edit
+    raise RuntimeError(
+        f"_VALUE_RULES names unregistered datasets: "
+        f"{sorted(set(_VALUE_RULES) - {spec.name for spec in _SPECS})}"
+    )
+_SPECS = [replace(spec, value_rules=_VALUE_RULES.get(spec.name, NO_RULES)) for spec in _SPECS]
 
 DATASETS: dict[str, DatasetSpec] = {spec.name: spec for spec in _SPECS}
 

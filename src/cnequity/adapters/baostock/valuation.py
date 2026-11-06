@@ -47,8 +47,8 @@ from cnequity.domain.rate_limit import source_request
 from cnequity.domain.valuation import (
     FLOAT_MV_TURN_IMPLIED,
     TOTAL_MV_YEAR_END_ESTIMATE,
-    null_missing_valuations,
 )
+from cnequity.domain.value_rules import apply_value_rules
 
 logger = logging.getLogger(__name__)
 
@@ -309,4 +309,4 @@ def fetch_valuation_history(
     df = pl.DataFrame(rows, schema=_OUTPUT_SCHEMA) if rows else pl.DataFrame(schema=_OUTPUT_SCHEMA)
     if not df.is_empty():
         df = df.unique(subset=["symbol", "trade_date"], keep="last").sort(["trade_date", "symbol"])
-    return null_missing_valuations(df), failed
+    return apply_value_rules(df, "valuation_metrics"), failed

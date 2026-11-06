@@ -1375,7 +1375,7 @@ Tushare `cb_basic` + `cb_issue` convertible and exchangeable bond terms, one row
 
 #### convertible_bond_bars
 
-Tushare `cb_daily` convertible bond bars, from 2004-01-02. Needs your own Tushare token in `[sources.tushare]`.
+Tushare `cb_daily` convertible bond bars, from 2004-01-02. Needs your own Tushare token in `[sources.tushare]`. A session without a trade (`volume` 0) keeps its row with `open`, `high`, `low` and `close` null; Tushare sends 0 where there is no price, and those zeros are stored as nulls, never as prices.
 
 | Column | Type | Description |
 |--------|------|-------|

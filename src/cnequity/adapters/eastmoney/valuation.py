@@ -11,7 +11,8 @@ from cnequity.adapters.eastmoney.clist import clist_rows_to_symbols, fetch_clist
 from cnequity.adapters.eastmoney.common import _to_float
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 from cnequity.domain.market_time import last_closed_session
-from cnequity.domain.valuation import MV_VENDOR_REPORTED, null_missing_valuations
+from cnequity.domain.valuation import MV_VENDOR_REPORTED
+from cnequity.domain.value_rules import apply_value_rules
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 
 # f130 is 市销率 TTM. f45 — which this used to read as ps_ttm — is an amount in
@@ -118,8 +119,9 @@ def _fetch_valuation_push2(
     finally:
         if owns:
             client.close()
-    return null_missing_valuations(
+    return apply_value_rules(
         pl.DataFrame(rows).unique(subset=["symbol", "trade_date"], keep="last")
         if rows
-        else pl.DataFrame()
+        else pl.DataFrame(),
+        "valuation_metrics",
     )

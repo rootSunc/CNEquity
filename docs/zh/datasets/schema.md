@@ -1368,7 +1368,7 @@ Tushare `cb_basic` + `cb_issue` 可转债与可交换债条款，每只债一行
 
 #### convertible_bond_bars
 
-Tushare `cb_daily` 可转债日线，2004-01-02 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。
+Tushare `cb_daily` 可转债日线，2004-01-02 起；需在 `[sources.tushare]` 配置自己的 Tushare 令牌。没有成交的交易日（`volume` 为 0）保留该行，`open`、`high`、`low`、`close` 为空；Tushare 用 0 表示没有价格，这些 0 一律存为空值，不当作价格。
 
 | 列 | 类型 | 说明 |
 |--------|------|-------|

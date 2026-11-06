@@ -25,6 +25,7 @@ from cnequity.domain.schemas import (
     market_bar_violations,
     required_columns_for_dataset,
 )
+from cnequity.domain.value_rules import apply_value_rules, placeholder_counts
 from cnequity.query.parquet_scan import (
     dataset_has_parquet,
     lazy_mock_row_count,
@@ -148,7 +149,10 @@ def _validate_parquet_file(path: Path, dataset: str) -> None:
         casts.extend(
             pl.lit(None, dtype=schema[col]).alias(col) for col in schema if col not in columns
         )
-    normalized = pl.scan_parquet(path).select(casts)
+    # Read stored values the way every reader does: a vendor placeholder the
+    # registry names is a null, reported once by ``stored_value_placeholders``
+    # rather than as a broken contract on every file it sits in.
+    normalized = apply_value_rules(pl.scan_parquet(path).select(casts), dataset)
     expressions = [pl.len().alias("_rows")]
     expressions.extend(pl.col(col).null_count().alias(f"_null_{col}") for col in required)
 
@@ -786,6 +790,21 @@ def audit_curated_dataset(
             audit_files,
             missing_columns="insert",
             extra_columns="ignore",
+        )
+
+    placeholders = placeholder_counts(audit_lf, dataset)
+    if placeholders:
+        findings.append(
+            {
+                "dataset": dataset,
+                "severity": "warning",
+                "check": "stored_value_placeholders",
+                "message": (
+                    f"{dataset}: {sum(placeholders.values())} stored value(s) are vendor "
+                    "placeholders that read as null; `cne migrate --apply` rewrites them"
+                ),
+                "fields": placeholders,
+            }
         )
 
     # Sample rows, not sample files: a single intraday Parquet file can hold

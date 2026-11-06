@@ -6265,6 +6265,10 @@ msgstr "把东财和国证缺失的指数权重改为空值"
 msgid "Turn valuation zero placeholders into nulls"
 msgstr "把估值的零占位改为空值"
 
+#: cnequity/storage/migrations.py
+msgid "Turn vendor zero placeholders into nulls, and convertible bond prices on sessions without a trade"
+msgstr "把供应商表示缺失的 0 改为空值，并把可转债无成交日的价格改为空值"
+
 #: cnequity/diagnostics/report.py
 msgid "Tushare is enabled; its endpoint permissions are not probed yet"
 msgstr "Tushare 已启用，但还没有探测各接口权限"

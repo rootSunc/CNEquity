@@ -255,6 +255,15 @@ MIGRATIONS: tuple[Migration, ...] = (
         "0.23.0",
         _repartition("chip_distribution"),
     ),
+    Migration(
+        "vendor-zero-nulls",
+        N_(
+            "Turn vendor zero placeholders into nulls, and convertible bond prices on "
+            "sessions without a trade"
+        ),
+        "0.23.0",
+        _repair("missing_values", "repair_all_missing_values"),
+    ),
 )
 
 

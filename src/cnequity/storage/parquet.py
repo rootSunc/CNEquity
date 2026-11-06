@@ -679,18 +679,6 @@ def _partition_values(df: pl.DataFrame, partition_col: str, granularity: Granula
     return col.dt.strftime("%Y-%m-%d")
 
 
-def _null_missing_valuations(curated_root: Path, frame: pl.DataFrame) -> pl.DataFrame:
-    from cnequity.domain.valuation import null_missing_valuations
-
-    return null_missing_valuations(frame)
-
-
-def _null_missing_index_weights(curated_root: Path, frame: pl.DataFrame) -> pl.DataFrame:
-    from cnequity.domain.membership import null_missing_index_weights
-
-    return null_missing_index_weights(frame)
-
-
 def _clear_invalid_payments(curated_root: Path, frame: pl.DataFrame) -> pl.DataFrame:
     # A payment before the ex-date is a source typo, not a fact, so a new row
     # never stores one.  Only staged rows are cleaned: rewriting the committed
@@ -705,8 +693,6 @@ def _clear_invalid_payments(curated_root: Path, frame: pl.DataFrame) -> pl.DataF
 #: is in ``_WHOLE_RUN_DATASETS``: partition-wise compact applies it per partition.
 _STAGED_ROW_HOOKS: dict[str, Callable[[Path, pl.DataFrame], pl.DataFrame]] = {
     "trading_status": _guard_staged_status,
-    "valuation_metrics": _null_missing_valuations,
-    "index_constituents": _null_missing_index_weights,
     "corporate_actions": _clear_invalid_payments,
 }
 

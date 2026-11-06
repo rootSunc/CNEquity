@@ -57,20 +57,6 @@ logger = logging.getLogger(__name__)
 # to several endpoints at once and they would each redo it.
 _CACHE_TTL_SECONDS = 30.0
 
-#: Datasets owed a row on every session, whose gaps, date picker and heatmap
-#: are judged per session whatever their partition period. A month or year
-#: directory says nothing about one missing day inside it, so these read the
-#: days that actually hold rows.
-_SESSION_DATASETS = frozenset(
-    {
-        "daily_bars",
-        "margin_trading",
-        "valuation_metrics",
-        "limit_prices",
-        "fund_flow_tushare",
-        "chip_distribution",
-    }
-)
 
 # Heatmap cell alphabet. One char per (dataset, day) keeps a 40x250 grid a few
 # kilobytes instead of ten thousand JSON objects.
@@ -518,17 +504,25 @@ class LakeView:
         """Days *spec* holds rows on, for a session dataset not partitioned by day.
 
         None when the directory names already answer it (day partitions) or the
-        dataset is not judged per session. Cached per committed generation, so a
+        dataset is not judged per session: the registry says which are, through
+        ``session_rows`` or ``coverage_mode="session_dense"``. A month or year
+        directory says nothing about one missing day inside it, so these read
+        the days that actually hold rows. Cached per committed generation, so a
         dashboard pays one column scan per publish rather than per request.
         """
-        if spec.name not in _SESSION_DATASETS or spec.partition_granularity == "day":
+        judged_per_session = spec.session_rows or spec.coverage_mode == "session_dense"
+        if not judged_per_session or spec.partition_granularity == "day":
             return None
         from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+        from cnequity.storage.locator import logical_root
         from cnequity.storage.revisions import RevisionStore
 
-        root = self.config.curated_root / spec.name
+        root = logical_root(self.config, spec)
         pointer = RevisionStore(
-            self.config.meta_root, self.config.curated_root, create=False
+            self.config.meta_root,
+            self.config.curated_root,
+            self.config.derived_root,
+            create=False,
         ).current_pointer(spec.name)
         key = (pointer or {}).get("revision_id") or (
             root.stat().st_mtime_ns if root.exists() else None

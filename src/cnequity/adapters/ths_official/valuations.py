@@ -148,7 +148,7 @@ def fetch_valuation_snapshot(
         )
     if not rows:
         return pl.DataFrame(schema=_OUTPUT_SCHEMA), counters
-    from cnequity.domain.valuation import null_missing_valuations
+    from cnequity.domain.value_rules import apply_value_rules
 
-    frame = null_missing_valuations(pl.DataFrame(rows, schema=_OUTPUT_SCHEMA))
+    frame = apply_value_rules(pl.DataFrame(rows, schema=_OUTPUT_SCHEMA), "valuation_metrics")
     return frame.unique(subset=["symbol", "trade_date"], keep="last").sort("symbol"), counters

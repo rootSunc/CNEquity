@@ -45,20 +45,6 @@ MV_BASES = _BASES | {FLOAT_MV_VWAP_TURN_IMPLIED}
 # bar's volume or amount is not on the same basis as its prices.
 _VWAP_RANGE_SLACK = 0.01
 
-VALUATION_VALUE_COLUMNS = ("pe_ttm", "pe_dynamic", "pb", "ps_ttm", "total_mv", "float_mv")
-
-
-def null_missing_valuations(frame: pl.DataFrame) -> pl.DataFrame:
-    """Vendor zero placeholders are missing; negative valuation ratios remain valid."""
-    return frame.with_columns(
-        pl.when(pl.col(column) == 0)
-        .then(pl.lit(None, dtype=pl.Float64))
-        .otherwise(pl.col(column).cast(pl.Float64))
-        .alias(column)
-        for column in VALUATION_VALUE_COLUMNS
-        if column in frame.columns
-    )
-
 
 def reconstruct_total_mv(frame: pl.DataFrame, shares: pl.DataFrame) -> pl.DataFrame:
     """Replace year-end estimates with ``close × shares effective that session``.
