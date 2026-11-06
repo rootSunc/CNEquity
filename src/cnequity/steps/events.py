@@ -214,24 +214,23 @@ def _cninfo_range_backfill(
     floor: date,
     batch_id: str | None = None,
 ) -> dict:
-    """Use bounded range-aware CNINFO walks behind the normal day-stage helper.
+    """Walk a CNINFO window one calendar day at a time, publishing each day.
 
     CNINFO's pagination is not a durable cursor: broad ``seDate`` requests
     have returned the same page again at a deep offset (and occasionally
-    failed at a much shallower one).  Running the complete historical window
-    through one request would make the whole backfill depend on that single
-    page walk and would also retain every row until the final compact.  The
-    registry therefore gives these feeds a small calendar chunk.  Each chunk
-    gets its own source capture and checkpoint identity, while the adapter's
-    recursive split remains the last line of defence for an unusually busy
-    window/day.
+    failed at a much shallower one).  The registry therefore bounds each run
+    to a small calendar chunk, and inside it every day is its own request:
+    its own source capture, receipt and checkpoint identity, the same shape
+    the daily step uses.  The adapter's recursive split remains the last line
+    of defence for an unusually busy day.
 
-    A chunk is published at most once (the registry value is below
-    ``walk_day_backfill``'s 60-day flush boundary), which is important for the
-    exact-wire capture receipt: consuming one receipt per chunk cannot make a
-    later flush fail with "capture already consumed".  The caller's private
-    backfill bounds are restored even when a page walk raises, so a failed
-    chunk can be resumed with the same persisted checkpoint on the next run.
+    A day is staged as soon as its walk completes, so an interrupted backfill
+    loses at most the day in flight: the next run recovers the staged days
+    and skips them.  Fetching a whole month first kept every row out of the
+    lake until the month finished, and the exact-wire receipt cannot adopt
+    pages a killed run observed, so a stop cost hours of busy-month pages.
+    Each day's receipt is consumed by exactly one publish.  The caller's
+    private backfill bounds are restored even when a page walk raises.
     """
     from cnequity.steps.common import walk_day_backfill
 
@@ -269,59 +268,65 @@ def _cninfo_range_backfill(
     all_metrics: list[dict] = []
     label = "announcement" if dataset == "announcement_index" else "regulatory"
 
+    def day_scope(day: date) -> str:
+        return f"range:{label}:{day.isoformat()}:{day.isoformat()}"
+
     def run_slice(start: date, end: date) -> dict:
-        """Fetch and stage one bounded date window."""
-        metrics: dict = {
-            "run_id": run_id,
-            "slice_start": start.isoformat(),
-            "slice_end": end.isoformat(),
-        }
-        # Register before fetching so a failing later slice participates in
-        # the run-level retry total as well as successful earlier slices.
-        all_metrics.append(metrics)
-        cached: dict[str, pl.DataFrame] = {}
-        request_scope = f"range:{label}:{start.isoformat()}:{end.isoformat()}"
+        """Fetch and stage one bounded window, one calendar day per request."""
 
         def fetch_one(day: date) -> pl.DataFrame:
-            if "frame" not in cached:
-                # Keep the source observation tied to this run even when a
-                # lightweight range adapter accepts an explicit run_id instead
-                # of reading it from the metrics object. Signature filtering
-                # preserves narrow offline doubles for archive-disabled tests.
-                options = {
-                    "config": config,
-                    "metrics": metrics,
-                    "run_id": run_id,
-                    "request_scope": request_scope,
-                }
-                options.update(_cninfo_checkpoint_options(config, dataset, start, end))
-                try:
-                    parameters = inspect.signature(fetch_range).parameters
-                except (TypeError, ValueError):
-                    parameters = {}
-                accepts_var_kwargs = any(
-                    parameter.kind is inspect.Parameter.VAR_KEYWORD
-                    for parameter in parameters.values()
-                )
-                if not accepts_var_kwargs:
-                    options = {key: value for key, value in options.items() if key in parameters}
-                try:
-                    cached["frame"] = fetch_range(start, end, **options)
-                except Exception:
-                    # The adapter persists its page checkpoint before
-                    # propagating a transport/contract failure. Preserve the
-                    # matching per-slice metrics as well; the next run can
-                    # identify the exact bounded window that needs a retry.
-                    metrics["status"] = "failed"
-                    _record_cninfo_metrics(config, run_id, dataset, metrics, batch_id=batch_id)
-                    raise
+            metrics: dict = {
+                "run_id": run_id,
+                "slice_start": day.isoformat(),
+                "slice_end": day.isoformat(),
+            }
+            # Register before fetching so a failing later day participates in
+            # the run-level retry total as well as successful earlier days.
+            all_metrics.append(metrics)
+            # Keep the source observation tied to this run even when a
+            # lightweight range adapter accepts an explicit run_id instead of
+            # reading it from the metrics object. Signature filtering
+            # preserves narrow offline doubles for archive-disabled tests.
+            options = {
+                "config": config,
+                "metrics": metrics,
+                "run_id": run_id,
+                "request_scope": day_scope(day),
+            }
+            options.update(_cninfo_checkpoint_options(config, dataset, day, day))
+            try:
+                parameters = inspect.signature(fetch_range).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            accepts_var_kwargs = any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+            )
+            if not accepts_var_kwargs:
+                options = {key: value for key, value in options.items() if key in parameters}
+            try:
+                frame = fetch_range(day, day, **options)
+            except Exception:
+                # The adapter persists its page checkpoint before propagating
+                # a transport/contract failure. Preserve the matching metrics
+                # as well so the next run can identify the day that failed.
+                metrics["status"] = "failed"
                 _record_cninfo_metrics(config, run_id, dataset, metrics, batch_id=batch_id)
-            frame = cached["frame"]
+                raise
+            _record_cninfo_metrics(config, run_id, dataset, metrics, batch_id=batch_id)
             if frame.is_empty() or date_col not in frame.columns:
                 return pl.DataFrame()
             return frame.filter(pl.col(date_col) == day)
 
-        def publish(part: pl.DataFrame, batch_id: str) -> object:
+        def publish(part: pl.DataFrame, part_batch_id: str) -> object:
+            # ``flush_days=1`` below hands over exactly one day per part, so
+            # the part maps to one capture. A multi-day part would need
+            # several receipts; refuse it rather than verify only one.
+            days = part.get_column(date_col).cast(pl.Date).unique().to_list()
+            if len(days) != 1:
+                raise RuntimeError(
+                    f"{dataset}: a CNINFO publish must cover one day, got {len(days)}"
+                )
+            day = days[0]
             # CNINFO range adapters archive each POST response before returning
             # their normalized frame. Verification happens immediately before
             # the writer boundary; a missing/captureless receipt therefore
@@ -332,7 +337,7 @@ def _cninfo_range_backfill(
                     dataset,
                     run_id,
                     source="cninfo",
-                    request_scope=request_scope,
+                    request_scope=day_scope(day),
                 )
                 if config.should_archive_raw(dataset)
                 else None
@@ -344,16 +349,16 @@ def _cninfo_range_backfill(
                 part,
                 source="cninfo",
                 # ``walk_day_backfill`` numbers parts from zero on every
-                # invocation. Include the slice in the staging key so a later
-                # slice cannot replace an earlier ``bf-0000`` in this run.
-                batch_id=f"{start.isoformat()}_{end.isoformat()}-{batch_id}",
+                # invocation. Include the day in the staging key so a later
+                # walk cannot replace an earlier ``bf-0000`` in this run.
+                batch_id=f"{day.isoformat()}-{part_batch_id}",
                 raw_archive_evidence=evidence,
             )
 
         # ``walk_day_backfill`` reads these private bounds to decide its date
         # list. They are set by the outer loop and restored in the caller's
         # finally block.
-        result = walk_day_backfill(
+        return walk_day_backfill(
             config,
             end,
             run_id,
@@ -362,15 +367,16 @@ def _cninfo_range_backfill(
             source="cninfo",
             date_col=date_col,
             floor=start,
+            # Stage every day as soon as it is fetched: a kill then costs only
+            # the day in flight, and each part consumes one day's receipt.
+            flush_days=1,
             calendar_days=True,
-            # CNINFO returns a fully bounded range response. A missing day in
-            # that successful response is a valid negative observation for
-            # sparse announcements/regulatory events, not a fetch failure.
+            # CNINFO returns a fully bounded day response. A day with no rows
+            # is a valid negative observation for sparse announcements, not a
+            # fetch failure.
             allow_empty_days=True,
             publish_fn=publish,
         )
-        result["metrics"] = metrics
-        return result
 
     def aggregate_cninfo_metrics() -> dict:
         return {

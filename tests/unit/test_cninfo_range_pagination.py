@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
@@ -764,8 +765,13 @@ def test_cninfo_step_uses_registry_date_chunks_for_default_backfill(tmp_path, mo
         floor=date(2010, 1, 1),
     )
 
-    assert calls == [(date(2024, 1, 1), date(2024, 1, 31)), (date(2024, 2, 1), date(2024, 2, 10))]
-    assert len(result["slices"]) == 2
+    # Two registry chunks, each walked one calendar day per request.
+    days = [date(2024, 1, 1) + timedelta(days=offset) for offset in range(41)]
+    assert calls == [(day, day) for day in days]
+    assert [(item["start"], item["end"]) for item in result["slices"]] == [
+        (date(2024, 1, 1), date(2024, 1, 31)),
+        (date(2024, 2, 1), date(2024, 2, 10)),
+    ]
     assert result["rows_written"] == 41
     staged = list((config.staging_root / "announcement_index").rglob("*.parquet"))
     assert pl.concat([pl.read_parquet(path) for path in staged]).height == 41
@@ -1140,3 +1146,101 @@ def test_a_split_one_row_over_the_unfiltered_total_is_accepted():
             axis="category",
             required_identities={"missing"},
         )
+
+
+class _WireResponse:
+    """A response carrying wire bytes, as the exact-wire archive requires."""
+
+    status_code = 200
+    url = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
+    headers = {"content-type": "application/json"}
+
+    def __init__(self, payload: dict):
+        self.payload = payload
+        self.content = json.dumps(payload, ensure_ascii=False).encode()
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+def test_interrupted_cninfo_backfill_keeps_every_day_already_fetched(tmp_path, monkeypatch):
+    """A stop mid-window loses only the day in flight, each day under its own receipt."""
+    config = Config(data_root=tmp_path / "data")
+    assert config.should_archive_raw("announcement_index")
+    config._backfill_start = date(2024, 1, 1)
+    config._backfill_end = date(2024, 1, 31)
+
+    class _DayClient:
+        def post(self, _url, data):
+            day = data["seDate"].split("~")[0]
+            assert data["seDate"] == f"{day}~{day}"
+            return _WireResponse(
+                {"announcements": [_row(f"a-{day}", day)], "totalpages": 1, "hasMore": False}
+            )
+
+    def fetch_range(start, end, **kwargs):
+        if start == date(2024, 1, 3):
+            raise KeyboardInterrupt
+        return fetch_announcement_index_range(start, end, client=_DayClient(), **kwargs)
+
+    monkeypatch.setattr(events, "_record_cninfo_metrics", lambda *_args, **_kwargs: None)
+    with pytest.raises(KeyboardInterrupt):
+        events._cninfo_range_backfill(
+            config,
+            date(2024, 1, 31),
+            "run-interrupted",
+            "announcement_index",
+            fetch_range,
+            date_col="announce_date",
+            floor=date(2010, 1, 1),
+        )
+
+    staged = sorted((config.staging_root / "announcement_index").rglob("*.parquet"))
+    staged_days = [
+        pl.read_parquet(path).get_column("announce_date").unique().to_list() for path in staged
+    ]
+    assert sorted(staged_days) == [[date(2024, 1, 1)], [date(2024, 1, 2)]]
+    assert config._backfill_start == date(2024, 1, 1)
+    assert config._backfill_end == date(2024, 1, 31)
+
+
+def test_a_failed_cninfo_day_does_not_refetch_its_neighbours(tmp_path, monkeypatch):
+    config = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    config._backfill_start = date(2024, 1, 1)
+    config._backfill_end = date(2024, 1, 4)
+    calls: list[date] = []
+
+    def fetch_range(start, end, **_kwargs):
+        assert start == end
+        calls.append(start)
+        if start == date(2024, 1, 2):
+            raise events.SourceUnavailableError("cninfo down for one day")
+        return pl.DataFrame(
+            [
+                {
+                    "announcement_id": f"a-{start}",
+                    "symbol": "000001.SZ",
+                    "title": "公告",
+                    "announce_date": start,
+                    "category": "",
+                    "url": "",
+                }
+            ]
+        )
+
+    monkeypatch.setattr(events, "_record_cninfo_metrics", lambda *_args, **_kwargs: None)
+    result = events._cninfo_range_backfill(
+        config,
+        date(2024, 1, 4),
+        "run-one-bad-day",
+        "announcement_index",
+        fetch_range,
+        date_col="announce_date",
+        floor=date(2010, 1, 1),
+    )
+
+    assert calls == [date(2024, 1, day) for day in range(1, 5)]
+    assert result["rows_written"] == 3
