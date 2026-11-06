@@ -253,6 +253,54 @@ def test_flushes_already_fetched_days_before_reraising(tmp_path):
     assert set(df["trade_date"].to_list()) == {date(2026, 6, d) for d in (1, 2, 3, 4)}
 
 
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
+def test_an_interrupt_stages_the_days_already_fetched(tmp_path, interrupt):
+    """Ctrl-C is not an ``Exception``; it used to drop every unflushed day."""
+    cfg = Config(data_root=tmp_path / "data")
+    cfg._backfill_start = date(2026, 6, 1)
+    cfg._backfill_end = date(2026, 6, 10)
+
+    def fetch_one(d: date) -> pl.DataFrame:
+        if d == date(2026, 6, 5):
+            raise interrupt
+        return pl.DataFrame([_fake_row(d, "trade_date")])
+
+    with pytest.raises(interrupt):
+        walk_day_backfill(
+            cfg, date(2026, 7, 1), "run-1", "market_breadth", fetch_one, source="derived"
+        )
+
+    staged = list((cfg.staging_root / "market_breadth").glob("**/*.parquet"))
+    assert len(staged) == 1
+    df = pl.read_parquet(staged[0])
+    assert set(df["trade_date"].to_list()) == {date(2026, 6, d) for d in (1, 2, 3, 4)}
+
+
+def test_an_interrupt_is_not_masked_by_a_failed_flush(tmp_path):
+    cfg = Config(data_root=tmp_path / "data")
+    cfg._backfill_start = date(2026, 6, 1)
+    cfg._backfill_end = date(2026, 6, 10)
+
+    def fetch_one(d: date) -> pl.DataFrame:
+        if d == date(2026, 6, 3):
+            raise KeyboardInterrupt
+        return pl.DataFrame([_fake_row(d, "trade_date")])
+
+    def publish(_part: pl.DataFrame, _batch_id: str) -> object:
+        raise OSError("disk full")
+
+    with pytest.raises(KeyboardInterrupt):
+        walk_day_backfill(
+            cfg,
+            date(2026, 7, 1),
+            "run-1",
+            "market_breadth",
+            fetch_one,
+            source="derived",
+            publish_fn=publish,
+        )
+
+
 def test_same_run_retry_keeps_earlier_successful_chunks(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     cfg._backfill_start = date(2026, 6, 1)

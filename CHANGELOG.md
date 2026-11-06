@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 - `cne backfill announcement_index` 改为逐日拉取、逐日入库（[#58](https://github.com/rootSunc/CNEquity/issues/58)）：此前每个约 31 天的窗口要整月拉完才写入，中途停止时已拉的页全部作废，下次要向巨潮重新拉取，公告密集的 4、8、12 月一次中断就损失数小时。现在每天单独请求、单独留证、拉完即暂存，中断最多损失正在拉的那一天，重跑时自动跳过已入库的日期；某一天失败也不再连带重拉同一窗口的其他日期。没有公告的日子每天多一次请求。
+- 逐日回补（`margin_trading`、`limit_prices`、`fund_flow_tushare`、`broker_forecasts`、`market_breadth`、各 Tushare 补充数据集、`futures_bars`、`option_bars` 等）按 Ctrl-C 或被终止时，先把已拉完的日期写入再退出：这些回补每 60 天写入一次，此前中断会丢掉最近一次写入后已拉的最多 59 天，下次要重新请求；拉取出错时本来就会先写入，中断现在与之一致。
 - `cne backfill financial_statement_items` 不再在 F10 现金流表处报 `invalid report unit …|RPT_F10_FINANCE_GCASHFLOW` 退出（[#57](https://github.com/rootSunc/CNEquity/issues/57)）：0.21.0 起回补会拉取 F10 四张现金流表（取期末现金），但回补校验只认原来的四张报表，第一个 F10 单元就让整次回补中止。现在校验直接按拉取的报表清单判断，以后新增报表也不会再出现这个问题；日更不受影响。
 - 派生 `adj_factors` 时，`share_structure` 也算作输入：股改窗口的因子要读它，但它此前不在输入清单里，计算期间它发布了新版本也照常发布结果，它的部分覆盖状态也不会传到 `adj_factors`。现在它和其他输入一样会被记录、校验和传递；派生和因子修复共用同一份输入清单。
 - `sector_fund_flow_ths` 的行业行往前补到 2024-09-10：来自 Tushare `moneyflow_ind_ths`，标 `source=tushare`，每天附原始响应作证据；金额只精确到 1 亿元，比同花顺页面的 0.01 亿元粗。

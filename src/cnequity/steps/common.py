@@ -1218,6 +1218,15 @@ def walk_day_backfill(
                         f"with a different or invalid {date_col}"
                     )
                 frames.append(df)
+        except (KeyboardInterrupt, SystemExit):
+            # Ctrl-C or a kill used to bypass the flush below and drop up to
+            # ``flush_days - 1`` complete days. Stage them, then stop; a
+            # staging failure here is logged so the interrupt still wins.
+            try:
+                flush()
+            except Exception:  # noqa: BLE001 — never mask the interrupt
+                logger.exception("%s backfill: could not stage fetched days on interrupt", dataset)
+            raise
         except Exception as exc:
             kind = error_kind(exc)
             if kind == "storage_failure":
