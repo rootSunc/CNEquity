@@ -57,16 +57,30 @@ def _bars(root: Path | None, days: list[date]) -> pl.DataFrame:
     empty = pl.DataFrame(
         schema={"symbol": pl.Utf8, "trade_date": pl.Date, **dict.fromkeys(_BAR_COLUMNS, pl.Float64)}
     )
-    if root is None:
+    if root is None or not days:
         return empty
-    frames = []
-    for day in days:
-        directory = root / f"trade_date={day.isoformat()}"
-        for path in sorted(directory.rglob("*.parquet")) if directory.is_dir() else []:
-            frames.append(validate_dataframe(pl.read_parquet(path), "daily_bars"))
-    if not frames:
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
+    if not dataset_has_parquet(root, committed=False):
         return empty
-    bars = dedupe_by_primary_key(pl.concat(frames, how="diagonal_relaxed"), "daily_bars")
+    # Rows, not day directories: daily_bars is month-partitioned, and a day
+    # directory lookup found nothing at all once it was, so every valuation
+    # row lost the bars its basis is checked against.
+    wanted = sorted(set(days))
+    frame = (
+        scan_parquet_root(
+            root,
+            partition_col="trade_date",
+            start=wanted[0],
+            end=wanted[-1],
+            committed=False,
+        )
+        .filter(pl.col("trade_date").is_in(wanted))
+        .collect()
+    )
+    if frame.is_empty():
+        return empty
+    bars = dedupe_by_primary_key(validate_dataframe(frame, "daily_bars"), "daily_bars")
     return bars.select("symbol", "trade_date", *[pl.col(c).cast(pl.Float64) for c in _BAR_COLUMNS])
 
 

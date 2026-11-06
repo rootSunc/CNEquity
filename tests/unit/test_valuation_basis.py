@@ -43,8 +43,9 @@ def _write(path, rows: list[dict]) -> None:
     pl.DataFrame(rows).write_parquet(path)
 
 
-@pytest.fixture
-def lake(tmp_path):
+@pytest.fixture(params=["day", "month"])
+def lake(tmp_path, request):
+    bar_partition = DAY.isoformat() if request.param == "day" else f"{DAY:%Y-%m}"
     cfg = Config(data_root=tmp_path)
     curated = cfg.curated_root
     # Legacy layout: no basis columns at all, as written before 2026-09.
@@ -86,7 +87,9 @@ def lake(tmp_path):
         },
     ]
     _write(
-        curated / "daily_bars" / f"trade_date={DAY}" / "part-merged.parquet",
+        # daily_bars is month-partitioned on live lakes and day-partitioned on
+        # unmigrated ones; the repair must find its bars in either.
+        curated / "daily_bars" / f"trade_date={bar_partition}" / "part-merged.parquet",
         [
             {
                 **bar,

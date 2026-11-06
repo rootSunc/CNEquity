@@ -667,9 +667,17 @@ def run_sample_demo(
         instruments,
         compression="zstd",
     )
-    for (session,), frame in bars.partition_by("trade_date", as_dict=True).items():
-        out = cfg.curated_root / "daily_bars" / f"trade_date={session.isoformat()}"
-        write_parquet_atomic(out / "part-sample.parquet", frame, compression="zstd")
+    # Same period as every other writer (month for daily_bars), so a fresh
+    # sample lake does not start out with a layout the audit calls mixed.
+    from cnequity.domain.datasets import DATASETS
+
+    spec = DATASETS["daily_bars"]
+    periods = bars.with_columns(
+        pl.col("trade_date").map_elements(spec.partition_for, return_dtype=pl.Utf8).alias("_p")
+    )
+    for (period,), frame in periods.partition_by("_p", as_dict=True).items():
+        out = cfg.curated_root / "daily_bars" / f"trade_date={period}"
+        write_parquet_atomic(out / "part-sample.parquet", frame.drop("_p"), compression="zstd")
     ensure_duckdb_views(cfg)
     _rebuild_demo_stats(cfg)
 
