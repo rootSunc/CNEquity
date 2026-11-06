@@ -54,14 +54,14 @@
 
 | 数据集 | 分区 |
 |---------|-----------|
-| daily_bars | `trade_date`（按日） |
+| daily_bars | `trade_date`（按月） |
 | index_bars | `trade_date`（按年） |
 | minute_bars / minute_bars_5m | `trade_date`（按日） |
 | minute_bars_15m / minute_bars_30m / minute_bars_60m | `trade_date`（按日） |
 | trade_ticks | `trade_date`（按日） |
 | trading_status | `trade_date`（按月） |
 | corporate_actions | `ex_date`（按年） |
-| adj_factors | `trade_date`（按日） |
+| adj_factors | `trade_date`（按月） |
 | financial_statement_items | `report_period` |
 | industry_members | `as_of_date` |
 | northbound_flows | `trade_date` |
@@ -1851,14 +1851,14 @@ Compact 时按主键分组，保留 `fetched_at` 最大的一行。
 见 [lake-layout](../architecture/lake-layout.md)。
 
 ```sql
--- daily_bars / adj_factors 为按日分区，hive=true 安全
+-- daily_bars / adj_factors 为按月分区（目录 trade_date=YYYY-MM），必须关掉 hive
 CREATE VIEW daily_bars_view AS
-SELECT * FROM read_parquet('{root}/curated/daily_bars/**/*.parquet', hive_partitioning=true);
+SELECT * FROM read_parquet('{root}/curated/daily_bars/**/*.parquet', hive_partitioning=false);
 
 CREATE VIEW daily_bars_adj AS
 SELECT b.*, b.close * a.factor AS adj_close
 FROM daily_bars_view b
-LEFT JOIN read_parquet('{root}/derived/adj_factors/**/*.parquet', hive_partitioning=true) a
+LEFT JOIN read_parquet('{root}/derived/adj_factors/**/*.parquet', hive_partitioning=false) a
   ON b.symbol = a.symbol AND b.trade_date = a.trade_date AND a.adjust_type = 'qfq';
 
 -- 反例：index_bars 等按年分区时必须关掉 hive，否则目录 "1993" 会污染 DATE 列

@@ -1342,6 +1342,8 @@ _SPECS = [
     # L1 bars
     DatasetSpec(
         "daily_bars",
+        # v2 records month partitions. Columns and the primary key are unchanged.
+        schema_version=2,
         partial_rows=True,
         primary_source="tdx_protocol",
         backup_source="eastmoney",
@@ -1726,6 +1728,8 @@ _SPECS = [
     ),
     DatasetSpec(
         "valuation_metrics",
+        # v2 records month partitions. Columns and the primary key are unchanged.
+        schema_version=2,
         session_rows=True,
         partial_rows=True,
         primary_source="eastmoney",
@@ -1771,6 +1775,8 @@ _SPECS = [
     ),
     DatasetSpec(
         "margin_trading",
+        # v2 records month partitions. Columns and the primary key are unchanged.
+        schema_version=2,
         session_rows=True,
         partial_rows=True,
         primary_source="exchange",
@@ -2092,6 +2098,8 @@ _SPECS = [
     # for, so these carry the tier of the question they answer, not "derived".
     DatasetSpec(
         "adj_factors",
+        # v2 records month partitions. Columns and the primary key are unchanged.
+        schema_version=2,
         primary_source="sina",
         # Sina bans by account, not by endpoint, so the one vendor behind every
         # return in this lake could be taken out by an unrelated sweep. Baostock

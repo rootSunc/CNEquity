@@ -437,7 +437,7 @@ After the compact + derive of init or the first full backfill succeeds and `cne 
 ```bash
 cne status --config configs/cnequity.toml # success, failed batch = 0
 cne audit  --config configs/cnequity.toml # no mock_source / pk_duplicate error
-ls data/cnequity/curated/daily_bars/      # should contain trade_date=YYYY-MM-DD partitions
+ls data/cnequity/curated/daily_bars/      # should contain trade_date=YYYY-MM partitions
 ```
 
 If `[adj_factors].adjust_types` in the configuration has only `qfq` and you want hfq, first add `"hfq"` and rerun

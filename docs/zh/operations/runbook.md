@@ -437,7 +437,7 @@ Init 或首次全量回填 compact + derive 成功且 `cne status` 为 success �
 ```bash
 cne status --config configs/cnequity.toml # success，failed batch = 0
 cne audit  --config configs/cnequity.toml # 无 mock_source / pk_duplicate error
-ls data/cnequity/curated/daily_bars/      # 应有 trade_date=YYYY-MM-DD 分区
+ls data/cnequity/curated/daily_bars/      # 应有 trade_date=YYYY-MM 分区
 ```
 
 若配置里 `[adj_factors].adjust_types` 只有 `qfq` 而你要用后复权，先追加 `"hfq"` 并重跑

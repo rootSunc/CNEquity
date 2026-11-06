@@ -54,14 +54,14 @@ and each revision copies the whole dataset.
 
 | Dataset | Partition |
 |---------|-----------|
-| daily_bars | `trade_date` (daily) |
+| daily_bars | `trade_date` (monthly) |
 | index_bars | `trade_date` (yearly) |
 | minute_bars / minute_bars_5m | `trade_date` (daily) |
 | minute_bars_15m / minute_bars_30m / minute_bars_60m | `trade_date` (daily) |
 | trade_ticks | `trade_date` (daily) |
 | trading_status | `trade_date` (monthly) |
 | corporate_actions | `ex_date` (yearly) |
-| adj_factors | `trade_date` (daily) |
+| adj_factors | `trade_date` (monthly) |
 | financial_statement_items | `report_period` |
 | industry_members | `as_of_date` |
 | northbound_flows | `trade_date` |
@@ -1858,14 +1858,14 @@ over hand-written globs over a whole layer. `hive_partitioning=true` applies **o
 See [lake-layout](../architecture/lake-layout.md).
 
 ```sql
--- daily_bars / adj_factors are partitioned by day, so hive=true is safe
+-- daily_bars / adj_factors are partitioned by month (directories trade_date=YYYY-MM), so hive must be off
 CREATE VIEW daily_bars_view AS
-SELECT * FROM read_parquet('{root}/curated/daily_bars/**/*.parquet', hive_partitioning=true);
+SELECT * FROM read_parquet('{root}/curated/daily_bars/**/*.parquet', hive_partitioning=false);
 
 CREATE VIEW daily_bars_adj AS
 SELECT b.*, b.close * a.factor AS adj_close
 FROM daily_bars_view b
-LEFT JOIN read_parquet('{root}/derived/adj_factors/**/*.parquet', hive_partitioning=true) a
+LEFT JOIN read_parquet('{root}/derived/adj_factors/**/*.parquet', hive_partitioning=false) a
   ON b.symbol = a.symbol AND b.trade_date = a.trade_date AND a.adjust_type = 'qfq';
 
 -- Counterexample: for yearly-partitioned datasets such as index_bars, hive must be off, or the directory "1993" pollutes the DATE column

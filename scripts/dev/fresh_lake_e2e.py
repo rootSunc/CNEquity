@@ -378,7 +378,12 @@ def _next_day_update(root: Path, packages: Path, baseline: Path) -> dict[str, An
         run_id, batch_id, "success", rows_read=frame.height, rows_written=frame.height
     )
     compact = step_compact(cfg, DAY2, run_id, {})
-    _assert(compact.get("rows_written") == len(SYMBOLS), f"next-day compact failed: {compact}")
+    # DAY1 and DAY2 share 2024-06. Compact rewrites that month file, so the
+    # written rows are both sessions, not only the new day.
+    _assert(
+        compact.get("rows_written") == len(SYMBOLS) * 2,
+        f"next-day compact failed: {compact}",
+    )
     manifest.finish_run(run_id, "success", rows_written=frame.height)
     pointer = RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars")
     _assert(pointer is not None and pointer["revision"] == 2, f"unexpected next pointer: {pointer}")

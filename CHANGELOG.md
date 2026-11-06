@@ -2,8 +2,9 @@
 
 这里记录面向用户的主要功能、修复与兼容性变化。历史版本中的命令名反映当时的接口；当前用法以 [CLI 参考](docs/zh/reference/cli.md)为准。升级前阅读[升级与兼容性](docs/zh/getting-started/installation.md#升级与兼容性)。
 
-## [Unreleased]
+## [0.23.0] — 2026-11-06 · 供应商占位 0 改为空值，日线等数据集改为按月存放
 
+- **升级步骤：** `pip install -U cnequity` 后重启 `cne serve` 和已在运行的 `cne mcp`。`daily_bars`、`adj_factors`、`margin_trading`、`valuation_metrics` 升到 schema 版本 2：列和主键不变，分区从按日改为按月（目录 `trade_date=YYYY-MM`）。旧湖先 `cne migrate` 预览，再 `cne migrate --apply`。本版迁移为 `daily-bars-month-partitions`、`adj-factors-month-partitions`、`margin-trading-month-partitions`、`valuation-metrics-month-partitions`、`limit-prices-month-partitions`、`fund-flow-tushare-month-partitions`、`chip-distribution-month-partitions`（历史改写成月文件，行不变）和 `vendor-zero-nulls`（把供应商用来占位的 0 改写成空值）。迁移前 `cne audit` 会报告 `stored_value_placeholders`；月文件和旧的日目录并存时，每周体检会报 `mixed_partition_granularity`。直接读 Parquet 的程序对这几张表要关掉 Hive 分区推断，按文件里的日期列过滤。说明见 `contracts/migrations/0.23.0/`。`extends = "builtin"` 的配置不用改；完整展开的旧配置运行 `cne config upgrade`，把 `name_history` 加进 core 组。新增的 Tushare 数据集需要自己的令牌，多数只由 `cne backfill` 采集、不进日更。升级前中断且尚未跑完的 `sector_bars` 回补，用 `cne backfill sector_bars --force` 重跑一次。日更曾写出没有对应公司行为的因子跳变时，用 `cne repair adj-factors --apply` 改写整段历史。停牌行的 ST 标记用 `cne derive trading_status --start <日期> --end <日期>` 按年更新。配置里有集合项时，升级后第一次运行会得到新的 `config_fingerprint`，此后不变。
 - 旧版本清理恢复自动运行：只要登记过的引用目录（湖的 `meta/` 和 `private/`）里有任何文本文件改动，清理就一直报 `Reference inventory changed` 而什么都不删，自 10-31 起每天如此。现在清理前会自动重新扫描引用目录，给其中提到的每个版本加上保留，再按保留代数清理；重新扫描只增加保留、从不解除，所以不会删掉任何仍被引用的版本。新增 `cne storage refresh` 可手动执行同样的扫描。Tushare 权限缓存（`meta/tushare`）也不再计入引用扫描，它每次体检都会被改写。
 - 新增 `cne snapshot delete <名称>`：删除快照，并解除由快照内文件带来的、已失效的保留引用。手动保留和来自其他位置的引用照旧保留；快照曾保住的旧版本会在下次清理时回收。删除前需要确认，`--yes` 可跳过。此前快照只能创建不能删除，只能手动删除目录后再逐个解除保留。
 - 新增 `cne storage release <版本…> --note <说明>`，用来解除不再需要的版本保留。它只去掉手动保留，以及引用文件已删除或不再提到该版本的引用保留；案例依赖和仍然有效的引用照旧保留，并会列在输出里。每次解除都会记入保留登记表。此前保留只能增加、无法解除，被保留的旧版本永远无法被清理。
