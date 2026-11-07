@@ -20,4 +20,4 @@ Data corrections are published as new versions. Long-term reproduction requires 
 
 Prioritize clear entry points for installation, running, diagnosis, and recovery. Compatibility changes are communicated to users through the changelog and migration notes.
 
-For current features and limitations, see [Product direction](overview.md), the [data catalog](../datasets/catalog.md), and the [upgrade notes](../getting-started/installation.md#upgrades-and-compatibility).
+For the shared Error / Warning / Caveat boundaries and Quality Tiers (`A`/`B`/`C`) across CNEquity and USEquity, see the [Shared Data Quality Contract](data-quality-contract.md). For current features and limitations, see [Product direction](overview.md), the [data catalog](../datasets/catalog.md), and the [upgrade notes](../getting-started/installation.md#upgrades-and-compatibility).
