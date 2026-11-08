@@ -253,7 +253,9 @@ def test_backlog_reaches_the_panel_and_status(tmp_path):
 
     def detail():
         app = create_app(load_config(cfg_path), read_only=True)
-        return TestClient(app).get("/api/datasets/minute_bars_15m").json()
+        return (
+            TestClient(app, base_url="http://127.0.0.1").get("/api/datasets/minute_bars_15m").json()
+        )
 
     before = detail()
     assert before["resample"] == {"pending": 2, "input_sessions": 2, "derived": False}

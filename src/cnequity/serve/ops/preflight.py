@@ -155,6 +155,87 @@ def blockers(config, spec: OpSpec, *, storage_busy: bool, lock_class: str) -> li
     return found
 
 
+def source_status(config) -> dict:
+    """push2 pause, today's breakers, request counts, keys and failures per source.
+
+    ``readable`` is false when the breaker ledger cannot be read; the page
+    still opens. ``requests`` holds the EastMoney host profiles the ledger
+    counts. ``keys`` says whether each paid source has a credential, never the
+    credential. ``failures`` counts today's failed batches by the primary
+    source of their dataset.
+    """
+    if config is None:
+        return {"push2_paused": False, "breakers": [], "readable": True}
+    paused = bool(getattr(config, "eastmoney_push2_paused", False))
+    shown = {
+        "push2_paused": paused,
+        "breakers": [],
+        "readable": True,
+        "requests": {},
+        "keys": {
+            "tushare": bool(getattr(config, "tushare_token", None)),
+            "ths_official": bool(getattr(config, "ths_official_api_key", None)),
+        },
+        "failures": _failures_today(config),
+    }
+    try:
+        from cnequity.adapters.eastmoney.host_guard import status
+
+        ledger = status(config)
+    except (OSError, ValueError):
+        shown["readable"] = False
+        return shown
+    for name, section in ledger.items():
+        if not isinstance(section, dict):
+            continue
+        if section.get("breaker"):
+            shown["breakers"].append(name)
+        if "requests" in section:
+            shown["requests"][name] = {
+                "requests": int(section.get("requests") or 0),
+                "budget": int(section.get("budget") or 0) or None,
+            }
+    return shown
+
+
+def _failures_today(config) -> dict[str, dict]:
+    """Failed batches since Beijing midnight, grouped by their dataset's primary source."""
+    path = Path(config.manifest_path)
+    if not path.exists():
+        return {}
+    import sqlite3
+    from contextlib import closing
+    from datetime import time
+    from zoneinfo import ZoneInfo
+
+    from cnequity.domain.datasets import DATASETS
+
+    since = (
+        datetime.combine(shanghai_today(), time(0), tzinfo=ZoneInfo("Asia/Shanghai"))
+        .astimezone(timezone.utc)
+        .isoformat()
+    )
+    try:
+        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+            rows = conn.execute(
+                "SELECT dataset, COUNT(*) FROM ingestion_batches WHERE status = 'failed' "
+                "AND COALESCE(finished_at, started_at) >= ? GROUP BY dataset",
+                (since,),
+            ).fetchall()
+    except sqlite3.Error:
+        return {}
+    grouped: dict[str, dict] = {}
+    for dataset, count in rows:
+        spec = DATASETS.get(dataset)
+        source = getattr(spec, "primary_source", None) or "unknown"
+        entry = grouped.setdefault(source, {"batches": 0, "datasets": []})
+        entry["batches"] += int(count)
+        entry["datasets"].append(dataset)
+    for entry in grouped.values():
+        entry["datasets"].sort()
+    return grouped
+
+
 def hints(config, spec: OpSpec, params: dict) -> list[str]:
     if config is None:
         return []
@@ -175,24 +256,20 @@ def hints(config, spec: OpSpec, params: dict) -> list[str]:
                         "Today's daily update time {daily_run_at} (Beijing time) has not come yet, and today's data may not be published."
                     ).format(daily_run_at=config.daily_run_at)
                 )
-    if getattr(config, "eastmoney_push2_paused", False):
+    sources = source_status(config)
+    if sources["push2_paused"]:
         notes.append(
             _("push2 is paused (config push2_paused); related datasets will degrade or be missing.")
         )
-    try:
-        from cnequity.adapters.eastmoney.host_guard import status
-
-        ledger = status(config)
-    except (OSError, ValueError):
+    if not sources["readable"]:
         notes.append(_("Could not read the source circuit-breaker state."))
     else:
-        for name, section in ledger.items():
-            if isinstance(section, dict) and section.get("breaker"):
-                notes.append(
-                    _(
-                        "The {name} circuit breaker already tripped today; related requests will fail until tomorrow."
-                    ).format(name=name)
-                )
+        for name in sources["breakers"]:
+            notes.append(
+                _(
+                    "The {name} circuit breaker already tripped today; related requests will fail until tomorrow."
+                ).format(name=name)
+            )
     if spec.id not in {"init.start", "init.resume", "diag.doctor"}:
         pending = incomplete_init(config)
         if pending and not pending["running"]:
@@ -272,9 +349,8 @@ def occupancy(config, *, storage_busy: bool) -> dict:
         ]
         root = lock_directory(config)
         schedulers = [name for name in ("daily", "events") if scheduler_lock_holder(root, name)]
+    # push2 pausing is reported once, through ``sources``; the status bar shows it.
     notes: list[str] = []
-    if config is not None and getattr(config, "eastmoney_push2_paused", False):
-        notes.append(_("push2 is paused."))
     return {
         "slot": (
             {
@@ -294,6 +370,7 @@ def occupancy(config, *, storage_busy: bool) -> dict:
         "incomplete_init": incomplete_init(config),
         "lake_empty": lake_empty(config),
         "schedule": schedule_view(config),
+        "sources": source_status(config),
         "hints": notes,
     }
 

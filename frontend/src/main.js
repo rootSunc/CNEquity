@@ -1,10 +1,10 @@
 // Lake dashboard. Two views routed on the hash: the tier overview (#/) and one
 // dataset (#/dataset/<name>[/state|meta]).
 import { renderStorage, closeStorage } from "./storage.js";
-import { renderOps, closeOps } from "./ops.js";
+import { closeOps, renderOps, setRunBoardPainter } from "./ops.js";
 import { configDriftBanner } from "./drift.js";
 import { closeRunStream, renderRunDetail, renderRuns } from "./runs.js";
-import { disposeAll, heatmap, provenanceSeries, runGantt, severityTimeline } from "./charts.js";
+import { disposeAll, heatmap, partitionSeries, provenanceSeries, runGantt, severityTimeline } from "./charts.js";
 import {
   ds,
   dsMarkup,
@@ -19,6 +19,8 @@ import {
   tierText,
   tr,
 } from "./i18n.js";
+
+setRunBoardPainter((el, detail) => runGantt(el, detail));
 
 const qs = new URLSearchParams(location.search);
 const TOKEN = qs.get("token");
@@ -65,6 +67,16 @@ function pageShell(content, active = "overview") {
     </header>
     <main class="page-main">${content}</main>
   </div>`;
+}
+
+// Each route() call owns the page until the next one starts. A slow render
+// (the overview's heatmap, say) must not paint over the page the user has
+// since moved to, so every render checks live() after each await.
+let routeSeq = 0;
+function beginRoute() {
+  const seq = ++routeSeq;
+  const live = () => seq === routeSeq;
+  return { live, setPage: (content, active) => (live() ? setPage(content, active) : undefined) };
 }
 
 function setPage(content, active = "overview") {
@@ -240,13 +252,14 @@ function dsLink(id) {
   return `<span class="ds-link" data-ds="${esc(id)}">${dsMarkup(id)}</span>`;
 }
 
-async function renderOverview() {
+async function renderOverview(view) {
   const [h, tiers, datasets, hm] = await Promise.all([
     api("/api/health"),
     api("/api/tiers"),
     api("/api/datasets"),
     api(`/api/heatmap?days=${DAYS}`),
   ]);
+  if (!view.live()) return;
   const sev = h.findings_by_severity || {};
   const notes = [];
   // The reason strings come from the ingestion layer and are English, with a
@@ -275,6 +288,7 @@ async function renderOverview() {
   let primaryLabel = tr("查看质量", "Open quality");
   try {
     const ops = await api("/api/ops");
+    if (!view.live()) return;
     const pending = ops.occupancy?.incomplete_init;
     if (pending?.running) {
       // An empty lake during its first init is expected; offering to start
@@ -331,6 +345,17 @@ async function renderOverview() {
 
   const byTier = {};
   for (const d of datasets) (byTier[d.tier] ||= []).push(d);
+  const totalBytes = tiers.reduce((sum, tier) => sum + (tier.bytes || 0), 0);
+  const tierMeters = (tier) => {
+    const count = tier.datasets || 0;
+    const width = (n) => (count ? ((n || 0) / count) * 100 : 0);
+    const share = totalBytes ? ((tier.bytes || 0) / totalBytes) * 100 : 0;
+    const title = tr(
+      `${tier.fresh} 最新，${tier.stale} 落后，${tier.empty} 为空`,
+      `${tier.fresh} fresh, ${tier.stale} stale, ${tier.empty} empty`,
+    );
+    return `<span class="tier-meters"><span class="tier-health" title="${esc(title)}"><i class="fresh" style="width:${width(tier.fresh)}%"></i><i class="stale" style="width:${width(tier.stale)}%"></i><i class="empty" style="width:${width(tier.empty)}%"></i></span><span class="tier-share" title="${esc(mb(tier.bytes))}"><i style="width:${share}%"></i></span></span>`;
+  };
 
   const state = sev.error ? "error" : notes.length ? "attention" : "healthy";
   const stateLabel = {
@@ -365,7 +390,7 @@ async function renderOverview() {
       return `<details class="tier-card" ${tier.stale || tier.empty ? "open" : ""}>
         <summary><span class="tier-summary"><span class="tier-name"><span class="tier-tag">${esc(tier.tier)}</span>${esc(tierText(tier.tier, tier.label))}</span>
           <span class="tier-counts"><span><b>${tier.datasets}</b> ${tr("个数据集", "datasets")}</span><span><b>${fmt(tier.rows)}</b> ${tr("行", "rows")}</span></span>
-          <span class="tier-status ${tier.stale ? "is-stale" : tier.empty ? "is-empty" : "is-fresh"}">${status}</span></span></summary>
+          <span class="tier-status-wrap">${tierMeters(tier)}<span class="tier-status ${tier.stale ? "is-stale" : tier.empty ? "is-empty" : "is-fresh"}">${status}</span></span></span></summary>
         <div class="tier-members">${membersTable(byTier[tier.tier] || [])}</div>
       </details>`;
     })
@@ -424,31 +449,107 @@ function datasetActionButtons(dataset) {
   return buttons.join("");
 }
 
-async function renderDatasets() {
+function datasetQuick(d) {
+  if (d.history_mode === "derived") return `<a class="table-link" href="${opsHref("derive.run", { name: d.dataset })}">${tr("重算", "Recompute")}</a>`;
+  if (d.freshness === "stale") return `<a class="table-link" href="${opsHref("daily.stale")}">${tr("补抓", "Catch up")}</a>`;
+  if (!d.has_data && d.history_mode !== "snapshot_only") return `<a class="table-link" href="${opsHref("backfill.run", { dataset: d.dataset })}">${tr("回填", "Backfill")}</a>`;
+  return `<a class="table-link" href="#/dataset/${encodeURIComponent(d.dataset)}/data">${tr("数据", "Data")}</a>`;
+}
+
+async function renderDatasets(view) {
   const datasets = await api("/api/datasets");
+  if (!view.live()) return;
   const stale = datasets.filter((d) => d.freshness === "stale").length;
+  const removed = datasets.some((d) => d.freshness === "removed");
+  const filters = [
+    ["all", tr("全部", "All")],
+    ["fresh", tr("最新", "Fresh")],
+    ["stale", tr("落后", "Stale")],
+    ["empty", tr("为空", "Empty")],
+  ];
+  if (removed) filters.push(["removed", tr("已移出", "Removed")]);
+  const tiers = [...new Set(datasets.map((d) => d.tier).filter(Boolean))].sort();
+  const sortHead = (key, label, numeric = false) =>
+    `<th${numeric ? ' class="n"' : ""}><button type="button" class="sort" data-sort="${key}">${label}</button></th>`;
   const rows = (items) =>
     items
       .map(
-        (d) => `<tr class="dataset-row"><td><span class="dot ${d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty"}"></span>${dsLink(d.dataset)}${removedNote(d)}</td><td>${esc(tierText(d.tier, d.tier_label))}</td><td>${esc(historyText(d.history_mode))}</td><td>${esc(partitionText(d.granularity))}</td><td>${esc(d.watermark || "-")}</td><td class="n">${fmt(d.row_count)}</td><td class="n">${mb(d.bytes)}</td></tr>`,
+        (d) => `<tr class="dataset-row"><td><span class="dot ${d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty"}"></span>${dsLink(d.dataset)}${removedNote(d)}</td><td>${esc(tierText(d.tier, d.tier_label))}</td><td>${esc(historyText(d.history_mode))}</td><td>${esc(partitionText(d.granularity))}</td><td>${esc(d.watermark || "-")}</td><td class="n">${fmt(d.row_count)}</td><td class="n">${mb(d.bytes)}</td><td>${datasetQuick(d)}</td></tr>`,
       )
       .join("");
   setPage(`<section class="page-heading"><div class="heading-row"><h1>${tr("数据集", "Datasets")}</h1>
     ${stale ? `<div class="action-row"><a class="button button-primary" href="#/ops?op=daily.stale">${tr(`补抓 ${stale} 个落后数据集`, `Catch up ${stale} stale ${stale === 1 ? "dataset" : "datasets"}`)}</a></div>` : ""}</div></section>
-    <section class="surface-panel catalog-panel"><div class="catalog-toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><input id="dataset-search" type="search" placeholder="${tr("搜索数据集、层级或语义", "Search name, layer, or semantics")}" autocomplete="off"></label><span class="panel-meta" id="dataset-count">${datasets.length} ${tr("个结果", "results")}</span></div><div class="scroll"><table id="dataset-table"><thead><tr><th>${tr("数据集", "Dataset")}</th><th>${tr("分层", "Layer")}</th><th>${tr("语义", "Semantics")}</th><th>${tr("粒度", "Grain")}</th><th>${tr("水位", "Watermark")}</th><th class="n">${tr("行", "Rows")}</th><th class="n">${tr("体积", "Size")}</th></tr></thead><tbody></tbody></table></div></section>`, "datasets");
+    <section class="surface-panel catalog-panel"><div class="catalog-toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><input id="dataset-search" type="search" placeholder="${tr("搜索数据集、层级或语义", "Search name, layer, or semantics")}" autocomplete="off"></label><span class="panel-meta" id="dataset-count">${datasets.length} ${tr("个结果", "results")}</span></div>
+    <div class="catalog-filters" id="dataset-filters">${filters.map(([id, label]) => `<button type="button" class="button ${id === "all" ? "button-primary" : "button-ghost"}" data-freshness="${id}">${label}</button>`).join("")}</div>
+    <div class="catalog-filters" id="dataset-tiers"><button type="button" class="button button-primary" data-tier="all">${tr("全部层级", "All layers")}</button>${tiers.map((code) => `<button type="button" class="button button-ghost" data-tier="${esc(code)}">${esc(tierText(code))}</button>`).join("")}</div>
+    <div class="scroll"><table id="dataset-table"><thead><tr>${sortHead("name", tr("数据集", "Dataset"))}${sortHead("tier", tr("分层", "Layer"))}<th>${tr("语义", "Semantics")}</th><th>${tr("粒度", "Grain")}</th>${sortHead("watermark", tr("水位", "Watermark"))}${sortHead("rows", tr("行", "Rows"), true)}${sortHead("bytes", tr("体积", "Size"), true)}<th>${tr("操作", "Action")}</th></tr></thead><tbody></tbody></table></div></section>`, "datasets");
   const table = document.querySelector("#dataset-table tbody");
   const count = document.getElementById("dataset-count");
-  const render = (query = "") => {
-    const q = query.trim().toLowerCase();
-    const filtered = datasets.filter((d) =>
-      [dsSearch(d.dataset), d.tier, tierText(d.tier, d.tier_label), historyText(d.history_mode), d.history_mode, partitionText(d.granularity), d.granularity].some((v) =>
-        String(v || "").toLowerCase().includes(q),
-      ),
-    );
-    table.innerHTML = filtered.length ? rows(filtered) : `<tr><td colspan="7" class="empty-table"><span>${tr("没有匹配的数据集。", "No matching dataset.")}</span></td></tr>`;
-    count.textContent = `${filtered.length} ${tr("个结果", "results")}`;
+  const state = { freshness: "all", tier: "all", sort: "name", dir: 1, query: "" };
+  const sortValue = (d) => {
+    if (state.sort === "tier") return tierText(d.tier, d.tier_label);
+    if (state.sort === "watermark") return d.watermark || "";
+    if (state.sort === "rows") return d.row_count || 0;
+    if (state.sort === "bytes") return d.bytes || 0;
+    return ds(d.dataset);
   };
-  document.getElementById("dataset-search").addEventListener("input", (e) => render(e.target.value));
+  const render = () => {
+    const q = state.query.trim().toLowerCase();
+    const filtered = datasets.filter((d) => {
+      if (state.freshness !== "all" && d.freshness !== state.freshness) return false;
+      if (state.tier !== "all" && d.tier !== state.tier) return false;
+      return [dsSearch(d.dataset), d.tier, tierText(d.tier, d.tier_label), historyText(d.history_mode), d.history_mode, partitionText(d.granularity), d.granularity].some((v) =>
+        String(v || "").toLowerCase().includes(q),
+      );
+    });
+    const collator = getLang() === "en" ? "en" : "zh-CN";
+    const sorted = filtered.slice().sort((a, b) => {
+      const av = sortValue(a);
+      const bv = sortValue(b);
+      const order = typeof av === "number" && typeof bv === "number" ? av - bv : String(av).localeCompare(String(bv), collator);
+      return order * state.dir;
+    });
+    table.innerHTML = sorted.length ? rows(sorted) : `<tr><td colspan="8" class="empty-table"><span>${tr("没有匹配的数据集。", "No matching dataset.")}</span></td></tr>`;
+    count.textContent = `${sorted.length} ${tr("个结果", "results")}`;
+    document.querySelectorAll("#dataset-filters button").forEach((button) => {
+      button.className = `button ${button.dataset.freshness === state.freshness ? "button-primary" : "button-ghost"}`;
+    });
+    document.querySelectorAll("#dataset-tiers button").forEach((button) => {
+      button.className = `button ${button.dataset.tier === state.tier ? "button-primary" : "button-ghost"}`;
+    });
+    document.querySelectorAll("#dataset-table button.sort").forEach((button) => {
+      const on = button.dataset.sort === state.sort;
+      button.className = `sort${on ? " on" : ""}`;
+      button.dataset.dir = on ? String(state.dir) : "";
+    });
+  };
+  document.getElementById("dataset-search").addEventListener("input", (event) => {
+    state.query = event.target.value;
+    render();
+  });
+  document.getElementById("dataset-filters").addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    state.freshness = button.dataset.freshness || "all";
+    render();
+  });
+  document.getElementById("dataset-tiers").addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    state.tier = button.dataset.tier || "all";
+    render();
+  });
+  document.querySelectorAll("#dataset-table button.sort").forEach((button) => {
+    button.onclick = () => {
+      const key = button.dataset.sort;
+      if (state.sort === key) state.dir *= -1;
+      else {
+        state.sort = key;
+        state.dir = key === "name" ? 1 : -1;
+      }
+      render();
+    };
+  });
   render();
 }
 
@@ -474,21 +575,89 @@ function membersTable(rows) {
 
 // --- dataset detail ---------------------------------------------------------
 
-function coverageBar(d) {
+function periodMs(value) {
+  const text = String(value || "");
+  const day = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+  if (day) return Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3]));
+  const month = /^(\d{4})-(\d{2})$/.exec(text);
+  if (month) return Date.UTC(Number(month[1]), Number(month[2]) - 1, 1);
+  const year = /^(\d{4})$/.exec(text);
+  if (year) return Date.UTC(Number(year[1]), 0, 1);
+  return null;
+}
+
+function repairHref(d, start, end) {
+  if (d.history_mode === "snapshot_only" || d.max_staleness_days > 1) return "";
+  if (d.history_mode === "derived") return opsHref("derive.run", { name: d.dataset });
+  return opsHref("backfill.run", { dataset: d.dataset, start, end });
+}
+
+function gapMarks(d, start, right, pct) {
+  const points = [];
+  for (const value of d.gaps?.missing || []) {
+    const ms = periodMs(value);
+    if (ms == null || ms < start || ms > right) continue;
+    points.push({ ms, value: String(value) });
+  }
+  points.sort((a, b) => a.ms - b.ms);
+  const marks = points
+    .map((point) => {
+      const title = tr(`回填 ${point.value}`, `Backfill ${point.value}`);
+      const href = repairHref(d, point.value, point.value);
+      if (!href) return `<i class="gap-mark" style="left:${pct(point.ms)}%" title="${esc(title)}"></i>`;
+      return `<a class="gap-mark" href="${esc(href)}" style="left:${pct(point.ms)}%" title="${esc(title)}"></a>`;
+    })
+    .join("");
+  const action = points.length && repairHref(d, points[0].value, points[points.length - 1].value)
+    ? `<a href="${esc(repairHref(d, points[0].value, points[points.length - 1].value))}">${tr(`回填这 ${points.length} 处缺口`, points.length === 1 ? "Backfill this gap" : `Backfill these ${points.length} gaps`)}</a>`
+    : "";
+  return { marks, action };
+}
+
+function coverageBar(d, anchor) {
   if (!d.coverage_start) return `<p class="muted">${tr("尚无分区。", "No partitions yet.")}</p>`;
-  const start = new Date(d.coverage_start).getTime();
-  const end = new Date(d.coverage_end).getTime();
-  const span = Math.max(end - start, 1);
+  const start = periodMs(d.coverage_start);
+  const end = periodMs(d.coverage_end);
+  if (start == null || end == null) {
+    return `<div class="cover"><div class="fill" style="left:0;width:100%"></div></div>
+      <p class="legend"><span>${esc(d.coverage_start)}</span><span style="margin-left:auto">${esc(d.coverage_end || "")}</span></p>`;
+  }
+  const anchorMs = periodMs(anchor);
+  const right = d.freshness === "stale" && anchorMs != null && anchorMs > end ? anchorMs : end;
+  const span = Math.max(right - start, 1);
+  const pct = (ms) => (((ms - start) / span) * 100).toFixed(2);
+  const watermark = d.watermark ? periodMs(d.watermark) : null;
+  const dataMs = watermark != null ? Math.min(Math.max(watermark, start), right) : end;
+  const covered = Math.max(0, Math.min(100, Number(pct(dataMs))));
+  const lag = Math.max(0, 100 - covered);
   let horizon = "";
   if (d.earliest_available) {
-    const h = new Date(d.earliest_available).getTime();
-    if (h > start && h < end) {
-      const pct = ((h - start) / span) * 100;
-      horizon = `<div class="horizon" style="left:${pct}%" title="${tr(`源端历史天花板 ${d.earliest_available}`, `Source history ceiling ${d.earliest_available}`)}"></div>`;
+    const floor = periodMs(d.earliest_available);
+    if (floor != null && floor > start && floor < right) {
+      horizon = `<div class="horizon" style="left:${pct(floor)}%" title="${esc(tr(`源端历史天花板 ${d.earliest_available}`, `Source history ceiling ${d.earliest_available}`))}"></div>`;
     }
   }
-  return `<div class="cover"><div class="fill" style="left:0;right:0"></div>${horizon}</div>
-    <p class="legend"><span>${d.coverage_start}</span><span style="margin-left:auto">${d.coverage_end}</span></p>`;
+  const gaps = gapMarks(d, start, right, pct);
+  const behind = d.freshness === "stale" && lag === 0;
+  const rightLabel = right > end ? anchor : d.coverage_end;
+  const title = lag > 0
+    ? tr(`水位 ${d.watermark || d.coverage_end} 到 ${rightLabel} 还没跟上`, `Watermark ${d.watermark || d.coverage_end} lags through ${rightLabel}`)
+    : behind
+      ? tr(`水位停在 ${d.watermark || d.coverage_end}，尚未跟上`, `Watermark stopped at ${d.watermark || d.coverage_end} and is behind`)
+      : tr(`${d.coverage_start} → ${d.coverage_end}`, `${d.coverage_start} → ${d.coverage_end}`);
+  let lagHtml = "";
+  if (lag > 0) {
+    const from = d.watermark || d.coverage_end;
+    const lagTitle = tr(`从 ${from} 补到 ${rightLabel}`, `Fill from ${from} through ${rightLabel}`);
+    const href = repairHref(d, from, rightLabel);
+    const style = `left:${covered}%;width:${lag}%`;
+    lagHtml = href
+      ? `<a class="fill lag" href="${esc(href)}" style="${style}" title="${esc(lagTitle)}"></a>`
+      : `<div class="fill lag" style="${style}" title="${esc(lagTitle)}"></div>`;
+  }
+  const action = gaps.action ? `<p class="legend">${gaps.action}</p>` : "";
+  return `<div class="cover${behind ? " is-stale" : ""}" title="${esc(title)}"><div class="fill" style="left:0;width:${covered}%"></div>${lagHtml}${gaps.marks}${horizon}</div>
+    <p class="legend"><span>${esc(d.coverage_start)}</span><span style="margin-left:auto">${esc(rightLabel || "")}</span></p>${action}`;
 }
 
 function gapsNote(d) {
@@ -521,7 +690,7 @@ function resampleNote(d) {
     : tr("已与 1m / 5m 一致，没有待重算的交易日。", "In step with 1m / 5m; no session waits to be recomputed."));
 }
 
-function stateTab(d, prov) {
+function stateTab(d, prov, anchor) {
   const provTable = dataTable(
     ["source", "data_version", { h: tr("行", "Rows"), n: true }, tr("fetched_at 跨度", "fetched_at span")],
     prov.map(
@@ -554,7 +723,14 @@ function stateTab(d, prov) {
   );
 
   return `
-    <h3>${tr("覆盖", "Coverage")}</h3>${coverageBar(d)}${resampleNote(d)}${gapsNote(d)}
+    <h3>${tr("覆盖", "Coverage")}</h3>${coverageBar(d, anchor)}${resampleNote(d)}${gapsNote(d)}
+    <h3>${tr("分区体量", "Partition size")}</h3>
+    <div class="controls" id="parts-mode">
+      <button type="button" class="button button-primary" data-part-mode="both">${tr("同时", "Both")}</button>
+      <button type="button" class="button button-ghost" data-part-mode="rows">${tr("行数", "Rows")}</button>
+      <button type="button" class="button button-ghost" data-part-mode="bytes">${tr("体积", "Size")}</button>
+    </div>
+    <div id="parts"></div>
     <h3>${tr("溯源分布（按时间）", "Provenance over time")}</h3><div id="prov"></div><p class="muted" id="provnote"></p>
     <h3>${tr("溯源合计", "Provenance totals")}</h3>${provTable}
     <h3>${tr("审计 findings", "Audit findings")}</h3>${findings}
@@ -680,10 +856,10 @@ function dataControls(d, dates) {
   const picker =
     dates.kind === "none"
       ? ""
-      : `<label>${kindLabel(dates.kind)}
+      : `<div class="period-step"><button type="button" id="q-older">${tr("更早", "Older")}</button><label>${kindLabel(dates.kind)}
         <select id="q-period">${dates.values
           .map((v) => `<option value="${esc(v)}">${esc(v)}</option>`)
-          .join("")}</select></label>`;
+          .join("")}</select></label><button type="button" id="q-newer">${tr("更新", "Newer")}</button></div>`;
   const symbol = `<label>${tr("标的", "Symbol")} <input id="q-symbol" placeholder="600519.SH" size="12"></label>`;
   // PIT datasets have no default "current" view. load() refuses without a
   // cutoff, on purpose. Seed it with today so the tab opens on something, and
@@ -702,32 +878,143 @@ function dataControls(d, dates) {
     <button id="q-run">${tr("查询", "Query")}</button></div>${note}`;
 }
 
-function rowTable(page, primaryKey) {
+const PROVENANCE_COLUMNS = ["source", "data_version", "fetched_at"];
+
+function numericDtype(dtype) {
+  const text = String(dtype || "").toLowerCase();
+  return text.startsWith("int") || text.startsWith("uint") || text.startsWith("float") || text.startsWith("decimal");
+}
+
+function formatCell(column, value, dtype) {
+  if (value === null || value === undefined) return '<span class="muted">null</span>';
+  if (numericDtype(dtype)) {
+    const number = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(number)) return `<span title="${esc(value)}">${esc(number.toLocaleString(getLang() === "en" ? "en" : "zh-CN"))}</span>`;
+  }
+  if (column === "symbol") return `<button type="button" class="cell-symbol" data-symbol="${esc(value)}">${esc(value)}</button>`;
+  return esc(value);
+}
+
+function downloadRows(page, ext, columns) {
+  const sep = ext === "tsv" ? "\t" : ",";
+  const cols = columns || page.columns;
+  const indexOf = new Map(page.columns.map((column, index) => [column, index]));
+  const cell = (value) => {
+    const text = value == null ? "" : String(value);
+    if (ext === "tsv") return text.split("\t").join(" ").split("\n").join(" ").split("\r").join(" ");
+    const needsQuote = text.includes('"') || text.includes(",") || text.includes("\n") || text.includes("\r");
+    return needsQuote ? `"${text.replaceAll('"', '""')}"` : text;
+  };
+  const lines = [cols.map(cell).join(sep), ...page.rows.map((row) => cols.map((column) => cell(row[indexOf.get(column)])).join(sep))];
+  const blob = new Blob([`\uFEFF${lines.join("\n")}`], { type: "text/plain;charset=utf-8" });
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.href = url;
+  link.download = ext === "tsv" ? "rows.tsv" : "rows.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function columnOrder(columns) {
+  const body = [];
+  const prov = [];
+  for (const column of columns) {
+    if (PROVENANCE_COLUMNS.includes(column)) prov.push(column);
+    else body.push(column);
+  }
+  return body.concat(PROVENANCE_COLUMNS.filter((column) => prov.includes(column)));
+}
+
+function rowTable(page, primaryKey, schema, showProv = true) {
   if (!page.rows.length) return `<p class="muted">${tr("没有匹配的行。", "No matching rows.")}</p>`;
-  const head = page.columns
-    .map((c) => `<th${primaryKey.includes(c) ? ' class="pk"' : ""}>${esc(c)}</th>`)
+  const keys = primaryKey || [];
+  const dtypes = new Map((schema || []).map((col) => [col.column, col.dtype]));
+  const order = columnOrder(page.columns);
+  const indexOf = new Map(page.columns.map((column, index) => [column, index]));
+  const provStart = order.find((column) => PROVENANCE_COLUMNS.includes(column));
+  const cellClass = (column, sticky) =>
+    [sticky ? "pk sticky" : keys.includes(column) ? "pk" : "", numericDtype(dtypes.get(column)) ? "n" : "", column === provStart ? "prov-start" : "", PROVENANCE_COLUMNS.includes(column) ? "prov" : ""].filter(Boolean).join(" ");
+  let stuck = false;
+  const head = order
+    .map((column) => {
+      const sticky = keys.includes(column) && !stuck;
+      if (sticky) stuck = true;
+      const cls = cellClass(column, sticky).split(" ").filter((name) => name !== "n").join(" ");
+      return `<th${cls ? ` class="${cls}"` : ""}>${esc(column)}</th>`;
+    })
     .join("");
   const body = page.rows
-    .map((r) => `<tr>${r.map((v) => `<td>${v === null ? '<span class="muted">null</span>' : esc(v)}</td>`).join("")}</tr>`)
+    .map((row) => {
+      stuck = false;
+      const cells = order.map((column) => {
+        const sticky = keys.includes(column) && !stuck;
+        if (sticky) stuck = true;
+        const cls = cellClass(column, sticky);
+        return `<td${cls ? ` class="${cls}"` : ""}>${formatCell(column, row[indexOf.get(column)], dtypes.get(column))}</td>`;
+      });
+      return `<tr>${cells.join("")}</tr>`;
+    })
     .join("");
   const shown = `${page.offset + 1}-${page.offset + page.rows.length} / ${fmt(page.total)}`;
   const quality = page.adjustment;
   const factorNote = quality ? `<p class="meta-row"><span>${tr("复权来源", "Factor sources")} ${esc(Object.keys(quality.factor_sources || {}).join(", ") || "—")}</span><span>${quality.diagnostics_assessed ? tr(`待核实事件 ${quality.related_event_count || 0} 个`, `${quality.related_event_count || 0} unresolved events`) : tr("历史事件未核验", "Historical events not assessed")}</span></p>` : "";
-  return `${factorNote}<div class="scroll"><table class="rows"><tr>${head}</tr>${body}</table></div>
+  const provButton = order.some((column) => PROVENANCE_COLUMNS.includes(column))
+    ? `<button id="q-prov" type="button">${showProv ? tr("隐藏溯源列", "Hide provenance") : tr("显示溯源列", "Show provenance")}</button>`
+    : "";
+  return `${factorNote}<div class="scroll"><table class="rows${showProv ? " show-prov" : ""}"><tr>${head}</tr>${body}</table></div>
     <div class="controls">
-      <button id="q-prev" ${page.offset === 0 ? "disabled" : ""}>${tr("上一页", "Previous")}</button>
-      <button id="q-next" ${page.offset + page.limit >= page.total ? "disabled" : ""}>${tr("下一页", "Next")}</button>
+      <button id="q-prev" type="button" ${page.offset === 0 ? "disabled" : ""}>${tr("上一页", "Previous")}</button>
+      <button id="q-next" type="button" ${page.offset + page.limit >= page.total ? "disabled" : ""}>${tr("下一页", "Next")}</button>
       <span class="muted">${shown}</span>
+      <button id="q-csv" type="button" title="${tr("导出当前页", "Export this page")}">CSV</button>
+      <button id="q-tsv" type="button" title="${tr("导出当前页", "Export this page")}">TSV</button>
+      ${provButton}
     </div>`;
 }
 
-async function dataTab(d, host) {
+async function dataTab(d, host, view) {
   const enc = encodeURIComponent(d.dataset);
   const dates = await api(`/api/datasets/${enc}/dates`);
+  if (!view.live()) return;
   host.innerHTML = `${dataControls(d, dates)}<div id="q-out"></div>`;
 
-  const state = { offset: 0 };
+  const state = { offset: 0, provenance: true };
   const out = document.getElementById("q-out");
+  let shown = null;
+
+  function bindPage(page) {
+    const prev = document.getElementById("q-prev");
+    const next = document.getElementById("q-next");
+    if (prev) prev.onclick = () => { state.offset = Math.max(0, state.offset - page.limit); run(); };
+    if (next) next.onclick = () => { state.offset += page.limit; run(); };
+    const csv = document.getElementById("q-csv");
+    const tsv = document.getElementById("q-tsv");
+    const columns = columnOrder(page.columns).filter((column) => state.provenance || !PROVENANCE_COLUMNS.includes(column));
+    if (csv) csv.onclick = () => downloadRows(page, "csv", columns);
+    if (tsv) tsv.onclick = () => downloadRows(page, "tsv", columns);
+    const prov = document.getElementById("q-prov");
+    if (prov) prov.onclick = () => {
+      state.provenance = !state.provenance;
+      if (shown) paint(shown);
+    };
+    if (typeof out.querySelectorAll === "function") {
+      out.querySelectorAll("[data-symbol]").forEach((button) => {
+        button.onclick = () => {
+          const input = document.getElementById("q-symbol");
+          if (!input) return;
+          input.value = button.dataset.symbol || "";
+          state.offset = 0;
+          run();
+        };
+      });
+    }
+  }
+
+  function paint(page) {
+    shown = page;
+    out.innerHTML = rowTable(page, d.primary_key, d.schema, state.provenance);
+    bindPage(page);
+  }
 
   async function run() {
     const params = new URLSearchParams();
@@ -743,11 +1030,7 @@ async function dataTab(d, host) {
     out.innerHTML = `<p class="muted">${tr("查询中…", "Querying…")}</p>`;
     try {
       const page = await api(`/api/datasets/${enc}/rows?${params}`);
-      out.innerHTML = rowTable(page, d.primary_key);
-      const prev = document.getElementById("q-prev");
-      const next = document.getElementById("q-next");
-      if (prev) prev.onclick = () => { state.offset = Math.max(0, state.offset - page.limit); run(); };
-      if (next) next.onclick = () => { state.offset += page.limit; run(); };
+      paint(page);
     } catch (err) {
       out.innerHTML = `<p class="err">${esc(err.message)}</p>`;
     }
@@ -757,17 +1040,53 @@ async function dataTab(d, host) {
     state.offset = 0;
     run();
   };
+  const stepPeriod = (delta) => {
+    const select = document.getElementById("q-period");
+    if (!select) return;
+    const next = select.selectedIndex + delta;
+    if (next < 0 || next >= select.options.length) return;
+    select.selectedIndex = next;
+    state.offset = 0;
+    syncPeriod();
+    run();
+  };
+  const syncPeriod = () => {
+    const select = document.getElementById("q-period");
+    const older = document.getElementById("q-older");
+    const newer = document.getElementById("q-newer");
+    if (!select || !older || !newer) return;
+    older.disabled = select.selectedIndex >= select.options.length - 1;
+    newer.disabled = select.selectedIndex <= 0;
+  };
+  const older = document.getElementById("q-older");
+  const newer = document.getElementById("q-newer");
+  const period = document.getElementById("q-period");
+  if (older) older.onclick = () => stepPeriod(1);
+  if (newer) newer.onclick = () => stepPeriod(-1);
+  if (period) period.onchange = () => { state.offset = 0; syncPeriod(); run(); };
+  syncPeriod();
+  host.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const id = event.target?.id;
+    if (id !== "q-symbol" && id !== "q-asof" && id !== "q-period") return;
+    event.preventDefault();
+    state.offset = 0;
+    run();
+  });
   run();
 }
 
-async function renderDetail(name, tab) {
-  setPage(`<div class="loading-state"><span>${tr(`加载 ${esc(ds(name))}…`, `Loading ${esc(ds(name))}…`)}</span></div>`, "datasets");
+async function renderDetail(name, tab, view) {
+  view.setPage(`<div class="loading-state"><span>${tr(`加载 ${esc(ds(name))}…`, `Loading ${esc(ds(name))}…`)}</span></div>`, "datasets");
   const enc = encodeURIComponent(name);
-  const [d, series, prov] = await Promise.all([
+  const [d, series, prov, parts, health] = await Promise.all([
     api(`/api/datasets/${enc}`),
     api(`/api/datasets/${enc}/provenance/series`),
     api(`/api/datasets/${enc}/provenance`),
+    api(`/api/datasets/${enc}/partitions`).catch(() => []),
+    api("/api/health").catch(() => null),
   ]);
+  if (!view.live()) return;
   const cls = d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty";
   setPage(`
     <section class="page-heading">
@@ -793,14 +1112,26 @@ async function renderDetail(name, tab) {
         )
         .join("")}
     </nav>
-    <div id="tabbody" class="tab-body">${tab === "meta" ? metaTab(d) : tab === "data" ? "" : stateTab(d, prov)}</div>
+    <div id="tabbody" class="tab-body">${tab === "meta" ? metaTab(d) : tab === "data" ? "" : stateTab(d, prov, health?.anchor || "")}</div>
     </section>`, "datasets");
 
   if (tab === "state") {
     provenanceSeries(document.getElementById("prov"), series);
+    const paintParts = (mode) => {
+      partitionSeries(document.getElementById("parts"), parts, mode);
+      document.querySelectorAll("#parts-mode button").forEach((button) => {
+        button.className = `button ${button.dataset.partMode === mode ? "button-primary" : "button-ghost"}`;
+      });
+    };
+    paintParts("both");
+    document.getElementById("parts-mode")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-part-mode]");
+      if (button) paintParts(button.dataset.partMode);
+    });
     document.getElementById("provnote").textContent = tr(`每点跨度：${bucketText(series.bucket)}`, `Each point spans a ${bucketText(series.bucket)}`);
   } else if (tab === "data") {
-    await dataTab(d, document.getElementById("tabbody"));
+    await dataTab(d, document.getElementById("tabbody"), view);
+    if (!view.live()) return;
   }
 
   app.querySelectorAll("button[data-copy]").forEach((b) => {
@@ -811,8 +1142,9 @@ async function renderDetail(name, tab) {
 
 // --- quality ----------------------------------------------------------------
 
-async function renderQuality() {
+async function renderQuality(view) {
   const q = await api("/api/quality");
+  if (!view.live()) return;
   const latestFindings = q.findings_runs[0]?.by_severity || {};
   const quarantineFiles = q.quarantine.reduce((sum, item) => sum + (item.files || 0), 0);
   const quarantineBytes = q.quarantine.reduce((sum, item) => sum + (item.bytes || 0), 0);
@@ -898,8 +1230,9 @@ async function renderQuality() {
   severityTimeline(document.getElementById("sev-chart"), q.findings_runs);
 }
 
-async function renderQualityRun(runId) {
+async function renderQualityRun(runId, view) {
   const d = await api(`/api/quality/runs/${encodeURIComponent(runId)}`);
+  if (!view.live()) return;
   // severity was coloured only when it read exactly "error", so a warning row
   // looked identical to an info row. It is the column the reader sorts by eye.
   const table = (rows, cols) =>
@@ -926,10 +1259,10 @@ async function renderQualityRun(runId) {
     <section class="surface-panel report-panel"><div class="panel-header"><h2>${tr("跨源差异", "Cross-source diffs")}</h2><span class="panel-meta">${d.diffs.length}</span></div>${table(d.diffs, ["severity", "dataset", "check", "field", "bps", "message"])}</section></div>`, "quality");
 }
 
-function runCtx() {
+function runCtx(view) {
   return {
     api,
-    setPage,
+    setPage: view.setPage,
     esc,
     dataTable,
     kpi,
@@ -951,29 +1284,32 @@ async function route() {
   closeRunStream();
   closeStorage();
   closeOps();
+  const view = beginRoute();
+  const ctx = { api, setPage: view.setPage, esc, dataTable };
   const dataset = location.hash.match(/^#\/dataset\/([^/]+)(?:\/(state|meta|data))?/);
   const run = location.hash.match(/^#\/runs\/([^/?]+)/);
   const qrun = location.hash.match(/^#\/quality\/(.+)$/);
   const opsJob = location.hash.match(/^#\/ops\/jobs\/([^/?]+)/);
   const opsPage = location.hash === "#/ops" || location.hash.startsWith("#/ops?");
   try {
-    if (opsJob) await renderOps({ api, setPage, esc, dataTable, jobId: decodeURIComponent(opsJob[1]) });
-    else if (opsPage) await renderOps({ api, setPage, esc, dataTable });
-    else if (location.hash === "#/storage") await renderStorage({ api, setPage, esc, dataTable });
-    else if (dataset) await renderDetail(decodeURIComponent(dataset[1]), dataset[2] || "state");
-    else if (run) await renderRunDetail(decodeURIComponent(run[1]), runCtx());
-    else if (location.hash.startsWith("#/runs")) await renderRuns(runCtx());
-    else if (qrun) await renderQualityRun(decodeURIComponent(qrun[1]));
-    else if (location.hash.startsWith("#/quality")) await renderQuality();
-    else if (location.hash.startsWith("#/datasets")) await renderDatasets();
-    else await renderOverview();
-    if (!location.hash.includes("?")) window.scrollTo(0, 0);
+    if (opsJob) await renderOps({ ...ctx, jobId: decodeURIComponent(opsJob[1]) });
+    else if (opsPage) await renderOps(ctx);
+    else if (location.hash === "#/storage") await renderStorage(ctx);
+    else if (dataset) await renderDetail(decodeURIComponent(dataset[1]), dataset[2] || "state", view);
+    else if (run) await renderRunDetail(decodeURIComponent(run[1]), runCtx(view));
+    else if (location.hash.startsWith("#/runs")) await renderRuns(runCtx(view));
+    else if (qrun) await renderQualityRun(decodeURIComponent(qrun[1]), view);
+    else if (location.hash.startsWith("#/quality")) await renderQuality(view);
+    else if (location.hash.startsWith("#/datasets")) await renderDatasets(view);
+    else await renderOverview(view);
+    if (view.live() && !location.hash.includes("?")) window.scrollTo(0, 0);
   } catch (err) {
+    if (!view.live()) return;
     if (String(err.message || "").includes("尚未配置")) { // i18n-ignore
-      await renderOps({ api, setPage, esc, dataTable });
+      await renderOps(ctx);
       return;
     }
-    setPage(`<section class="error-state"><h1>${tr("加载失败", "Failed to load")}</h1><p class="sub err">${esc(err.message)}</p><a class="button button-primary" href="#/">${tr("返回概览", "Back to overview")}</a></section>`);
+    view.setPage(`<section class="error-state"><h1>${tr("加载失败", "Failed to load")}</h1><p class="sub err">${esc(err.message)}</p><a class="button button-primary" href="#/">${tr("返回概览", "Back to overview")}</a></section>`);
   }
 }
 

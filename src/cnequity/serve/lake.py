@@ -925,6 +925,75 @@ class LakeView:
         )
         return total, self._decorate_runs(runs), None
 
+    def daily_matrix(self, sessions: int = 14) -> dict:
+        """The latest attempt of each ``daily:*`` group for the newest sessions.
+
+        A session is a ``trade_date`` some daily run recorded. Skipped runs (a
+        holiday, a session another run already covered) are not attempts and
+        do not add a column. ``attempts`` counts every try of that group on
+        that session, so a retried cell can say so.
+        """
+        ignored = ",".join("?" * len(_NON_ATTEMPT_STATUSES))
+        status, status_params = self._status_sql(self._orphaned_runs())
+        rows = self._manifest_rows(
+            f"""
+            WITH dated AS (
+                SELECT run_id, job_name, {status} AS status, started_at, finished_at,
+                       rows_written, json_extract(metadata_json, '$.trade_date') AS trade_date
+                FROM ingestion_runs
+                WHERE job_name LIKE 'daily:%'
+            ),
+            attempts AS (
+                SELECT * FROM dated
+                WHERE trade_date IS NOT NULL AND status NOT IN ({ignored})
+            ),
+            days AS (
+                SELECT DISTINCT trade_date FROM attempts ORDER BY trade_date DESC LIMIT ?
+            ),
+            ranked AS (
+                SELECT attempts.*,
+                       COUNT(*) OVER (PARTITION BY job_name, trade_date) AS tries,
+                       MIN(started_at) OVER (PARTITION BY job_name, trade_date) AS first_try,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY job_name, trade_date
+                           ORDER BY started_at DESC, run_id DESC
+                       ) AS rn
+                FROM attempts
+                WHERE trade_date IN (SELECT trade_date FROM days)
+            )
+            SELECT run_id, job_name, status, started_at, finished_at, rows_written,
+                   trade_date, tries, first_try
+            FROM ranked WHERE rn = 1
+            ORDER BY trade_date, started_at
+            """,
+            (*status_params, *_NON_ATTEMPT_STATUSES, sessions),
+        )
+        days = sorted({str(row["trade_date"]) for row in rows})
+        # Groups in the order they first ran on the newest session they appear in;
+        # a retry later that day does not move a group down.
+        first_seen: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            group = str(row["job_name"]).removeprefix("daily:")
+            key = (str(row["trade_date"]), str(row["first_try"] or ""))
+            seen = first_seen.get(group)
+            if seen is None or key[0] > seen[0] or (key[0] == seen[0] and key[1] < seen[1]):
+                first_seen[group] = key
+        groups = sorted(first_seen, key=lambda name: (first_seen[name][1][11:], name))
+        cells = [
+            {
+                "group": str(row["job_name"]).removeprefix("daily:"),
+                "trade_date": str(row["trade_date"]),
+                "status": row["status"],
+                "run_id": row["run_id"],
+                "attempts": int(row["tries"] or 1),
+                "rows_written": row["rows_written"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+            }
+            for row in rows
+        ]
+        return {"sessions": days, "groups": groups, "cells": cells}
+
     def _open_attention_runs(self) -> list[dict]:
         """Latest still-open attempt of each job, newest first."""
         ignored = ",".join("?" * len(_NON_ATTEMPT_STATUSES))

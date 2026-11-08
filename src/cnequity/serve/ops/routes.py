@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -220,9 +221,21 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
             raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/ops/jobs")
-    def ops_jobs(request: Request, limit: int = Query(default=50, ge=1, le=50)) -> list[dict]:
+    def ops_jobs(
+        request: Request,
+        limit: Annotated[int, Query(ge=1, le=500)] = 50,
+        since: Annotated[
+            datetime | None, Query(description="Only jobs created at or after this ISO time.")
+        ] = None,
+        op: Annotated[str, Query(description="Comma-separated operation ids to keep.")] = "",
+        exclude_op: Annotated[
+            str, Query(description="Comma-separated operation ids to drop.")
+        ] = "",
+    ) -> list[dict]:
         check_browser(request, mutation=False, scope="ops")
-        return _service(request).list_jobs(limit)
+        return _service(request).list_jobs(
+            limit, since=since, ops=_id_list(op), exclude_ops=_id_list(exclude_op)
+        )
 
     @app.get("/api/ops/jobs/{job_id}")
     def ops_job(job_id: str, request: Request) -> dict:
@@ -397,6 +410,10 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
             "hint": hint,
             "mode": mode_payload(request),
         }
+
+
+def _id_list(text: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(part.strip() for part in text.split(",") if part.strip()))
 
 
 def _read_chunk(path: Path, offset: int) -> bytes:

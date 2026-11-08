@@ -79,11 +79,11 @@ The three frequencies are three independent datasets; derive whichever you need.
 
 After `cne serve` opens the dashboard, there are three entry points, all opening the same form:
 
-1. **Operations → Manual update**: set "What to update" to "One derived dataset (start and end)", and "Derived" to "15-minute bars · minute_bars_15m" (or 30m, 60m).
+1. **Operations → Today → What to run → More → Recompute a derived dataset**: in the form that opens on the right, set "Derived" to "15-minute bars · minute_bars_15m" (or 30m, 60m).
 2. **Operations → Commands → Backfill → Recompute**: the same form.
 3. **Datasets page**: open "15-minute bars" or another of these datasets under "Datasets", then click "Recompute" at the top of the page; the form opens with that dataset preselected.
 
-Once a minute bar target is selected, the form explains the computation rules above. Leaving both start and end empty computes only trading days not yet computed or whose input has been updated; check "Full rewrite" to recompute all trading days. Click "Preview" to see the command that will run; after you confirm, it runs as a background job, and its progress and results appear under "Recent jobs". Closing the page or serve does not interrupt the job.
+Once a minute bar target is selected, the form explains the computation rules above. Leaving both start and end empty computes only trading days not yet computed or whose input has been updated; check "Full rewrite" to recompute all trading days. Once the fields are filled, the form previews the command that will run; after you confirm, it runs as a background job, and its progress and results appear under "Recent jobs" and on the job timeline. Closing the page or serve does not interrupt the job.
 
 You can also open `http://127.0.0.1:8787/#/ops?op=derive.run&name=minute_bars_15m` directly, and the form opens with the target preselected. Read-only mode (`--read-only`) and non-loopback addresses cannot start it from the page by default; see the [CLI reference](../reference/cli.md#cne-serve).
 

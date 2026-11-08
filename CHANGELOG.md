@@ -2,6 +2,21 @@
 
 这里记录面向用户的主要功能、修复与兼容性变化。历史版本中的命令名反映当时的接口；当前用法以 [CLI 参考](docs/zh/reference/cli.md)为准。升级前阅读[升级与兼容性](docs/zh/getting-started/installation.md#升级与兼容性)。
 
+## [Unreleased]
+
+- 修复安全问题：`cne serve` 未设 `--token` 时，只有操作页和存储页检查请求的 Host，数据接口（`/api/datasets`、`/api/read`、`/rows`、运行记录、质量、事件流等）和页面不检查。恶意网页可借 DNS 重绑定把自己的域名指向 127.0.0.1，以同源身份读取湖数据和运行记录。现在未设令牌时，Host 不是 localhost、127.0.0.1 或 ::1 的请求一律返回 403；在本机浏览器打开不受影响，远程访问仍需 `--token`。
+- 网页控制台（`cne serve`）的操作页改版，先给出今天的状况，再给出要做的事：
+  - 「今日」新增任务时间线，按北京时间画出今天或昨天每个任务的起止和结果，标出定时日更、收尾补抓和备份的时间；
+  - 新增近 14 个交易日的日更矩阵：每格是一个调度组在一个交易日的最后一次尝试，按成功、降级、失败着色，重试过的格子另有标记，点开进入那次运行；
+  - 落后的数据集直接列在操作页，按落后天数排列：按日期的数据集给出预填起止日期的回填，快照数据集给出补抓落后，并注明漏掉的日子补不回来；
+  - 「要做什么」只保留跑日更、补一段历史、补抓落后三个主按钮，其余收进「更多」；表单改在右侧抽屉里打开，不再把页面往下推，执行计划默认折叠；填写时当场检查：起点晚于终点、交易日晚于今天时不预览，给快照数据集填旧起点或终点晚于今天时给出提醒；
+  - 最近的任务把同一天的事件流合成一行，写明成功和部分交付的次数及常缺的数据集；日更任务写明哪些组失败或降级，收尾补抓等任务写明哪些数据集失败及原因；每条带耗时、写入行数和到运行的链接；可以按类型和「有问题」筛选。此前最近 50 条几乎全是每小时一次的事件流，日更和回填看不到；
+  - 「巡检」改成卡片，每项写明上次结果；命令模板和只能在终端运行的命令收进「命令参考」；
+  - 标签从四个合成三个：今日、巡检，以及定时、数据源与备份；今天是否交易日、定时会话有没有跑过只写在日更状态卡里，不再在操作区重复；
+  - 每个数据源开关旁标出今天的状态（开启、关闭、暂停、熔断或缺少密钥），写明东财各主机的今日请求数和预算，以及主源为它的数据集今天失败了几批；定时任务的检查时间改按北京时间显示；push2 暂停只在数据源状态卡里提示一次，不再在页面顶部重复。
+- 新增只读接口 `GET /api/runs/daily-matrix?sessions=N`，返回每个日更调度组在最近 N 个交易日的最后一次尝试；`GET /api/ops/jobs` 新增 `since`、`op`、`exclude_op` 参数，`limit` 上限从 50 提高到 500，每个任务带上 `rows_written` 和 `failed_datasets`；`GET /api/ops` 的 `occupancy.sources` 增加各主机请求数、付费源是否配置了密钥（不含密钥本身）和今日按数据源统计的失败批次。
+- 网页控制台切换页面时，前一个页面晚到的请求不再覆盖当前页面：此前从概览打开操作页，地址栏停在操作页，内容却会被加载较慢的概览替换。
+
 ## [0.23.0] — 2026-11-06 · 供应商占位 0 改为空值，日线等数据集改为按月存放
 
 - **升级步骤：** `pip install -U cnequity` 后重启 `cne serve` 和已在运行的 `cne mcp`。`daily_bars`、`adj_factors`、`margin_trading`、`valuation_metrics` 升到 schema 版本 2：列和主键不变，分区从按日改为按月（目录 `trade_date=YYYY-MM`）。旧湖先 `cne migrate` 预览，再 `cne migrate --apply`。本版迁移为 `daily-bars-month-partitions`、`adj-factors-month-partitions`、`margin-trading-month-partitions`、`valuation-metrics-month-partitions`、`limit-prices-month-partitions`、`fund-flow-tushare-month-partitions`、`chip-distribution-month-partitions`（历史改写成月文件，行不变）和 `vendor-zero-nulls`（把供应商用来占位的 0 改写成空值）。迁移前 `cne audit` 会报告 `stored_value_placeholders`；月文件和旧的日目录并存时，每周体检会报 `mixed_partition_granularity`。直接读 Parquet 的程序对这几张表要关掉 Hive 分区推断，按文件里的日期列过滤。说明见 `contracts/migrations/0.23.0/`。`extends = "builtin"` 的配置不用改；完整展开的旧配置运行 `cne config upgrade`，把 `name_history` 加进 core 组。新增的 Tushare 数据集需要自己的令牌，多数只由 `cne backfill` 采集、不进日更。升级前中断且尚未跑完的 `sector_bars` 回补，用 `cne backfill sector_bars --force` 重跑一次。日更曾写出没有对应公司行为的因子跳变时，用 `cne repair adj-factors --apply` 改写整段历史。停牌行的 ST 标记用 `cne derive trading_status --start <日期> --end <日期>` 按年更新。配置里有集合项时，升级后第一次运行会得到新的 `config_fingerprint`，此后不变。

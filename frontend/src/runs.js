@@ -2,7 +2,7 @@
 // The form is the operations page form: preview, then confirm, one job at a time.
 import { runGantt } from "./charts.js";
 import { pick, statusText, tr } from "./i18n.js";
-import { beginOps, mountOpForm, opsIsCurrent, runLauncherModel } from "./ops.js";
+import { beginOps, mountOpForm, openJobStreams, opsIsCurrent, runLauncherModel } from "./ops.js";
 import {
   NEEDS_ACTION,
   failurePreview,
@@ -347,6 +347,18 @@ export async function renderRunDetail(runId, ctx) {
   let home = null;
   if (state.op) home = await ctx.api("/api/ops").catch(() => null);
   if (!opsIsCurrent(current)) return;
+  let panelJob = null;
+  if (detail.launch_id) {
+    panelJob = await ctx.api(`/api/ops/jobs/${encodeURIComponent(detail.launch_id)}`).catch(() => null);
+    if (!opsIsCurrent(current)) return;
+  }
+  const jobLive = Boolean(panelJob && (panelJob.state === "running" || panelJob.state === "starting"));
+  let csrf = home?.csrf_token || "";
+  if (jobLive && !csrf) {
+    const opsHome = await ctx.api("/api/ops").catch(() => null);
+    if (!opsIsCurrent(current)) return;
+    csrf = opsHome?.csrf_token || "";
+  }
   const hrefFor = (op, params) => detailHref(runId, { op, ...params });
   const links = runActions(detail, hrefFor, true);
   const actions = [`<a class="button button-ghost" href="#/runs">${tr("返回运行", "Runs")}</a>`];
@@ -354,6 +366,7 @@ export async function renderRunDetail(runId, ctx) {
   if (detail.launch_id) {
     actions.push(`<a class="button button-ghost" href="#/ops/jobs/${encodeURIComponent(detail.launch_id)}">${tr("面板任务", "Panel job")}</a>`);
   }
+  if (jobLive) actions.push(`<button class="button button-danger" id="run-cancel" type="button">${tr("取消", "Cancel")}</button>`);
   const title = jobTitle(detail.job_name);
   const raw = String(detail.job_name || "");
   ctx.setPage(`
@@ -369,6 +382,7 @@ export async function renderRunDetail(runId, ctx) {
     </section>
     <div id="run-note"></div>
     <div id="run-errors" class="report-stack"></div>
+    ${jobLive ? `<details class="surface-panel report-panel" id="run-job-logs"><summary>${tr("任务日志", "Job logs")}</summary><pre class="ops-log" id="run-job-log"></pre><pre class="ops-log" id="run-job-out"></pre></details>` : ""}
     <section class="surface-panel report-panel"><div class="panel-header"><h2>${tr("时间线", "Timeline")}</h2></div><div id="run-gantt"></div>
     <p class="legend">
       <span><i class="swatch" style="background:var(--cell-covered)"></i> ${tr("成功", "success")}</span>
@@ -378,6 +392,28 @@ export async function renderRunDetail(runId, ctx) {
       <span>${tr("橙色描边 = 有重试；斜纹 = 已静默", "Orange outline = retried; hatch = silent")}</span>
     </p></section>`, "runs");
   paintRun(detail, ctx);
+  if (jobLive) {
+    const cancel = document.getElementById("run-cancel");
+    if (cancel) {
+      cancel.onclick = async () => {
+        cancel.disabled = true;
+        try {
+          await ctx.api(`/api/ops/jobs/${encodeURIComponent(detail.launch_id)}/cancel`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CNE-CSRF": csrf },
+            body: "{}",
+          });
+        } catch (err) {
+          const note = document.getElementById("run-note");
+          if (note) note.insertAdjacentHTML("beforeend", `<p class="err">${ctx.esc(err.message)}</p>`);
+        }
+      };
+    }
+    openJobStreams(detail.launch_id, current, {
+      log: document.getElementById("run-job-log"),
+      out: document.getElementById("run-job-out"),
+    });
+  }
   if (state.op) openRunForm(ctx, home, current, state, detailHref(runId));
   if (detail.status !== "running") return;
   startRunTicker(ctx);

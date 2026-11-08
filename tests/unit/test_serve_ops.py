@@ -930,3 +930,73 @@ def test_job_record_write_retries_transient_windows_replace_denial(tmp_path, mon
     assert read_record(path)["state"] == "running"
     assert "日线" in path.read_text(encoding="utf-8")
     assert not list(path.parent.glob("*.tmp"))
+
+
+def test_job_list_filters_by_time_and_operation(config):
+    from cnequity.serve.ops.records import atomic_write, jobs_dir
+
+    stamps = {
+        "a" * 32: ("events.run", "2026-11-08T21:00:00+00:00"),
+        "b" * 32: ("daily.full", "2026-11-08T09:30:00+00:00"),
+        "c" * 32: ("events.run", "2026-11-08T08:00:00+00:00"),
+        "d" * 32: ("check.status", "2026-11-07T08:00:00+00:00"),
+    }
+    for job_id, (op, created) in stamps.items():
+        atomic_write(
+            jobs_dir(config) / f"{job_id}.json",
+            {"job_id": job_id, "op": op, "state": "complete", "created_at": created},
+        )
+    client = _client(config)
+    since = client.get(
+        "/api/ops/jobs", params={"since": "2026-11-08T00:00:00+00:00", "limit": 500}
+    ).json()
+    assert [job["job_id"] for job in since] == ["a" * 32, "b" * 32, "c" * 32]
+    quiet = client.get("/api/ops/jobs", params={"exclude_op": "events.run"}).json()
+    assert [job["op"] for job in quiet] == ["daily.full", "check.status"]
+    only = client.get("/api/ops/jobs", params={"op": "check.status,daily.full", "limit": 1}).json()
+    assert [job["op"] for job in only] == ["daily.full"]
+
+
+def test_job_list_carries_rows_written_and_failed_datasets(config):
+    from cnequity.orchestrator.manifest import Manifest
+    from cnequity.serve.ops.records import atomic_write, jobs_dir
+
+    manifest = Manifest(config.manifest_path)
+    run_id = manifest.start_run("daily:stale")
+    manifest.start_batch(run_id, "b1", "task", "hot_rank")
+    manifest.finish_batch(
+        run_id, "b1", "failed", error_message="403", reason_code="source_transient"
+    )
+    manifest.start_batch(run_id, "b2", "task", "valuation_metrics")
+    manifest.finish_batch(run_id, "b2", "success", rows_written=7)
+    manifest.finish_run(run_id, "failed", rows_written=7)
+    job_id = "e" * 32
+    atomic_write(
+        jobs_dir(config) / f"{job_id}.json",
+        {
+            "job_id": job_id,
+            "op": "daily.stale",
+            "state": "failed",
+            "created_at": "2026-11-08T21:00:00+00:00",
+            "result": {"status": "failed", "run_ids": [run_id]},
+        },
+    )
+    job = _client(config).get("/api/ops/jobs").json()[0]
+    assert job["rows_written"] == 7
+    assert job["failed_datasets"] == [{"dataset": "hot_rank", "reason_codes": ["source_transient"]}]
+
+
+def test_source_status_counts_requests_keys_and_todays_failures(config, monkeypatch):
+    from cnequity.orchestrator.manifest import Manifest
+    from cnequity.serve.ops.preflight import source_status
+
+    manifest = Manifest(config.manifest_path)
+    run_id = manifest.start_run("events:news_wire")
+    manifest.start_batch(run_id, "b1", "task", "news_headlines")
+    manifest.finish_batch(run_id, "b1", "failed", error_message="proxy down")
+    manifest.finish_run(run_id, "failed")
+    monkeypatch.setattr(config, "tushare_token", None, raising=False)
+    shown = source_status(config)
+    assert shown["keys"]["tushare"] is False
+    assert shown["failures"]["eastmoney"] == {"batches": 1, "datasets": ["news_headlines"]}
+    assert "push2" in shown["requests"]

@@ -1,6 +1,52 @@
 // Current-user OS schedules, with a separate preview before registration.
 import { driftHeldNote } from "./drift.js";
-import { dsWithCode, pick, tr } from "./i18n.js";
+import { dsWithCode, locale, pick, tr } from "./i18n.js";
+// "11-08 22:29" in Beijing time, or the raw text when it is not a timestamp.
+function tickText(raw) {
+  const at = Date.parse(raw || "");
+  if (!Number.isFinite(at)) return raw || "";
+  return new Intl.DateTimeFormat(locale(), {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "Asia/Shanghai",
+  }).format(new Date(at));
+}
+
+function paintSchedulerStatus(value, esc) {
+  const el = document.getElementById("ops-status-scheduler");
+  if (!el || !value) return;
+  const native = value.native || {};
+  let title = tr("已暂停 / 未启用", "Paused / not enabled");
+  let detail = tr("尚无调度检查记录。", "No scheduler checks yet.");
+  let tone = "muted";
+  const last = value.last_tick?.at ? tr(`最近检查 ${tickText(value.last_tick.at)}`, `Last check ${tickText(value.last_tick.at)}`) : "";
+  if (value.held) {
+    title = tr("已锁定", "Locked");
+    detail = tr("配置不一致，先处理页面顶部的提示。", "Config drift is holding this. See the notice at the top of the page.");
+    tone = "warn";
+  } else if (native.error) {
+    title = tr("系统状态未知", "System status unknown");
+    detail = native.error;
+    tone = "bad";
+  } else if (value.enabled) {
+    title = tr("已启用", "Enabled");
+    tone = "ok";
+    if (value.timer_health === "stale") {
+      detail = tr("超过 20 分钟未收到系统触发。", "No system trigger for over 20 minutes.");
+      tone = "warn";
+    } else if (last) detail = last;
+    else detail = tr("已注册，等待系统触发。", "Registered; waiting for a system trigger.");
+  } else if (value.timer_health === "stale") {
+    detail = tr("超过 20 分钟未收到系统触发。", "No system trigger for over 20 minutes.");
+  } else if (last) {
+    detail = last;
+  }
+  el.innerHTML = `<span class="metric-label"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${tr("定时任务", "Schedule")}</span><strong>${esc(title)}</strong><p>${esc(detail)}</p>`;
+}
+
 export async function renderSchedule(ctx, home, alive) {
   const { api, esc } = ctx;
   const host = document.getElementById("ops-schedule");
@@ -12,16 +58,21 @@ export async function renderSchedule(ctx, home, alive) {
   const held = driftHeldNote(home, tr("定时任务", "Schedule"));
   if (held) {
     host.innerHTML = held;
+    paintSchedulerStatus({ held: true }, esc);
     return;
   }
   let value;
   try {
     value = await api("/api/ops/schedule");
   } catch (err) {
-    if (alive()) host.innerHTML = `<p class="panel-note err">${tr("定时任务", "Schedule")}: ${esc(err.message)}</p>`;
+    if (alive()) {
+      host.innerHTML = `<p class="panel-note err">${tr("定时任务", "Schedule")}: ${esc(err.message)}</p>`;
+      paintSchedulerStatus({ native: { error: err.message } }, esc);
+    }
     return;
   }
   if (!alive()) return;
+  paintSchedulerStatus(value, esc);
   const native = value.native || {};
   const writable = home.mode.ops_enabled;
   const disabled = writable ? "" : "disabled";
@@ -56,7 +107,7 @@ export async function renderSchedule(ctx, home, alive) {
     ${value.timer_health === "stale" ? `<p class="panel-note err">${tr("超过 20 分钟未收到系统触发，请检查登录状态、休眠或 cron 服务，再刷新状态。", "No system trigger for over 20 minutes. Check the login session, sleep settings, or the cron service, then refresh the status.")}</p>` : ""}
     ${value.timer_health === "not_seen" ? `<p class="panel-note">${tr("已注册，等待首次系统检查（最多约 1 分钟）。", "Registered; waiting for the first system check (up to about 1 minute).")}</p>` : ""}
     ${native.installed && (!native.active || !native.matches) ? `<p class="panel-note err">${tr("系统任务未加载或定义与当前安装不符，请核对后重新设置。", "The system job is not loaded or does not match this installation. Check it and set the schedule again.")}</p>` : ""}
-    ${last ? `<p class="panel-note">${tr(`最近检查 ${esc(last.at)}`, `Last check ${esc(last.at)}`)} ${esc(tickLabels[last.status] || last.status)} ${esc(last.message || "")} ${links}</p>` : `<p class="panel-note">${tr("尚无调度检查记录。", "No scheduler checks yet.")}</p>`}
+    ${last ? `<p class="panel-note">${tr(`最近检查 ${esc(tickText(last.at))}`, `Last check ${esc(tickText(last.at))}`)} ${esc(tickLabels[last.status] || last.status)} ${esc(last.message || "")} ${links}</p>` : `<p class="panel-note">${tr("尚无调度检查记录。", "No scheduler checks yet.")}</p>`}
     <form id="schedule-fields" class="ops-fields">
       <label class="ops-check"><input id="schedule-daily" type="checkbox" ${value.daily ? "checked" : ""} ${writable ? "" : "disabled"}> ${tr("自动日更（未选研究包时跑全部日更组与事件流）", "Automatic daily update (runs every daily update group and event stream when no research pack is selected)")}</label>
       <fieldset class="ops-fields">
@@ -114,11 +165,10 @@ export async function renderSchedule(ctx, home, alive) {
         <li>${tr("每日备份 ", "Daily backup ")}${preview.backup ? `${esc(preview.backup_run_at)} ${esc((preview.backup_datasets || []).map(dsWithCode).join(", "))} → ${esc(preview.backup_root)}` : tr("关闭", "off")}</li>
         <li>${tr("事件流 ", "Event stream ")}${!preview.events ? tr("关闭", "off") : schedules.length ? schedules.map(describeSchedule).join(tr("；", "; ")) : `${esc(preview.events_group)} ${tr(`每 ${esc(preview.events_interval_minutes)} 分钟`, `every ${esc(preview.events_interval_minutes)} min`)}`}</li></ul>
         <details><summary>${tr("查看系统任务定义", "View system job definition")}</summary><pre class="ops-log">${esc(preview.artifact || tr("移除本页面创建的定时触发。", "Removes the schedule triggers this page created."))}</pre></details>
-        <label class="ops-check"><input id="schedule-ack" type="checkbox"> ${esc(pick(preview, "confirmation"))}</label>
-        <div class="action-row"><button class="button button-primary" id="schedule-apply" type="button" disabled>${tr(`确认${esc(preview.action)}`, esc(pick(preview, "action")))}</button></div>
+        <p class="panel-note">${esc(pick(preview, "confirmation"))}</p>
+        <div class="action-row"><button class="button button-primary" id="schedule-apply" type="button">${tr(`确认${esc(preview.action)}`, esc(pick(preview, "action")))}</button></div>
         <p class="panel-note" id="schedule-note"></p>`;
       const button = document.getElementById("schedule-apply");
-      document.getElementById("schedule-ack").onchange = (event) => { button.disabled = !event.target.checked; };
       button.onclick = async () => {
         if (!alive() || current !== previewGeneration) return;
         button.disabled = true;

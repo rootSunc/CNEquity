@@ -321,7 +321,11 @@ def test_sample_ends_ready_for_the_panel_and_an_agent(tmp_path):
 
     cfg = load_config(config_out)
     assert not stats_freshness(cfg).stale
-    health = TestClient(create_app(cfg, read_only=True)).get("/api/health").json()
+    health = (
+        TestClient(create_app(cfg, read_only=True), base_url="http://127.0.0.1")
+        .get("/api/health")
+        .json()
+    )
     assert health["empty_required"] == []
     assert health["rows"] > 0
 

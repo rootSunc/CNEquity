@@ -3989,6 +3989,10 @@ msgstr "面板操作请从 localhost 或 127.0.0.1 打开；远程访问须配�
 msgid "Open storage operations from localhost or 127.0.0.1; remote access needs a token."
 msgstr "存储运维请从 localhost 或 127.0.0.1 打开；远程访问须配置令牌。"
 
+#: cnequity/serve/app.py
+msgid "Open the dashboard at localhost or 127.0.0.1; any other address needs a token."
+msgstr "请通过 localhost 或 127.0.0.1 打开面板；其他地址须配置令牌。"
+
 #: cnequity/cli/consume_cmds.py
 msgid ""
 "Open this lake to AI agents over MCP (stdio or HTTP).\n"
@@ -7260,10 +7264,6 @@ msgstr "入湖发布"
 #: cnequity/serve/ops/preflight.py
 msgid "push2 is paused (config push2_paused); related datasets will degrade or be missing."
 msgstr "push2 已暂停（配置 push2_paused），相关数据集会降级或缺失。"
-
-#: cnequity/serve/ops/preflight.py
-msgid "push2 is paused."
-msgstr "push2 已暂停。"
 
 #: cnequity/cli/init_summary.py
 msgid "quality audit"

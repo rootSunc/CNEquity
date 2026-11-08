@@ -137,7 +137,7 @@ def lake(config, monkeypatch):
 
 @pytest.fixture
 def client(lake):
-    return TestClient(create_app(lake))
+    return TestClient(create_app(lake), base_url="http://127.0.0.1")
 
 
 def test_health_counts_every_registered_dataset(client):
@@ -166,7 +166,7 @@ def test_http_read_returns_a_replayable_receipt_for_the_exact_rows(lake):
         contract_fingerprint="http-receipt-fixture",
     )
     assert committed is not None
-    app_client = TestClient(create_app(lake))
+    app_client = TestClient(create_app(lake), base_url="http://127.0.0.1")
     response = app_client.get(
         "/api/read/daily_bars",
         params={"start": "2026-07-30", "end": "2026-07-31", "symbol": "600519.SH"},
@@ -205,7 +205,7 @@ def test_disabled_optional_historical_capture_is_not_stale(lake):
     )
     rebuild_stats(lake, datasets=["trade_ticks"])
 
-    app_client = TestClient(create_app(lake))
+    app_client = TestClient(create_app(lake), base_url="http://127.0.0.1")
     body = app_client.get("/api/health").json()
     assert "trade_ticks" not in body["stale_datasets"]
     row = next(r for r in app_client.get("/api/datasets").json() if r["dataset"] == "trade_ticks")
@@ -715,7 +715,7 @@ def test_health_exposes_historical_research_gate(lake):
         encoding="utf-8",
     )
 
-    body = TestClient(create_app(lake)).get("/api/health").json()
+    body = TestClient(create_app(lake), base_url="http://127.0.0.1").get("/api/health").json()
 
     assert body["historical_universe_ready"] is False
     assert body["historical_universe"] == "all_a"
@@ -775,7 +775,7 @@ def test_quality_summarises_findings_by_severity(lake):
             ],
         },
     )
-    body = TestClient(create_app(lake)).get("/api/quality").json()
+    body = TestClient(create_app(lake), base_url="http://127.0.0.1").get("/api/quality").json()
     run = body["findings_runs"][0]
     assert run["total"] == 3
     assert run["by_severity"] == {"error": 2, "info": 1}
@@ -800,7 +800,11 @@ def test_quality_names_step_findings_written_with_the_legacy_code_key(lake):
             ],
         },
     )
-    run = TestClient(create_app(lake)).get("/api/quality").json()["findings_runs"][0]
+    run = (
+        TestClient(create_app(lake), base_url="http://127.0.0.1")
+        .get("/api/quality")
+        .json()["findings_runs"][0]
+    )
     assert run["top_checks"] == [["sector_bars_sweep_incomplete", 1]]
 
 
@@ -809,7 +813,7 @@ def test_quality_skips_artefacts_that_are_not_per_run(lake):
     _quality(lake, "findings", RUN_A, {"trade_date": "2026-07-31", "findings": []})
     _quality(lake, "findings", "authority-2026-08-02", {"totally": "different"})
 
-    body = TestClient(create_app(lake)).get("/api/quality").json()
+    body = TestClient(create_app(lake), base_url="http://127.0.0.1").get("/api/quality").json()
     assert [r["run_id"] for r in body["findings_runs"]] == [RUN_A]
 
 
@@ -819,7 +823,7 @@ def test_quality_lists_quarantine_with_its_size(lake):
     entry.mkdir(parents=True, exist_ok=True)
     (entry / "part.parquet").write_bytes(b"x" * 2048)
 
-    body = TestClient(create_app(lake)).get("/api/quality").json()
+    body = TestClient(create_app(lake), base_url="http://127.0.0.1").get("/api/quality").json()
     assert body["quarantine"] == [
         {
             "name": "sector_bars_2026-07-16",
@@ -832,7 +836,12 @@ def test_quality_lists_quarantine_with_its_size(lake):
 
 def test_an_empty_on_demand_cache_is_not_an_error(lake):
     """Nobody has queried one yet; that is a normal state."""
-    assert TestClient(create_app(lake)).get("/api/quality").json()["on_demand"] == []
+    assert (
+        TestClient(create_app(lake), base_url="http://127.0.0.1")
+        .get("/api/quality")
+        .json()["on_demand"]
+        == []
+    )
 
 
 def test_quality_run_returns_findings_and_diffs_together(lake):
@@ -843,7 +852,7 @@ def test_quality_run_returns_findings_and_diffs_together(lake):
         RUN_A,
         {"trade_date": "2026-07-31", "diff_count": 2, "diffs": [{"b": 1}, {"b": 2}]},
     )
-    client = TestClient(create_app(lake))
+    client = TestClient(create_app(lake), base_url="http://127.0.0.1")
 
     detail = client.get(f"/api/quality/runs/{RUN_A}").json()
     assert len(detail["findings"]) == 1
@@ -929,7 +938,7 @@ def test_runs_list_names_each_batch_failure(config):
     )
     manifest.finish_run(run_id, "failed", error_message="one or more core steps failed")
 
-    client = TestClient(create_app(config))
+    client = TestClient(create_app(config), base_url="http://127.0.0.1")
     page = client.get("/api/runs?limit=10").json()
     assert page["offset"] == 0
     assert page["limit"] == 10
@@ -1053,7 +1062,7 @@ def test_open_runs_omit_handled_and_outdated(config):
     manifest.finish_run(init_id, "failed", error_message="one or more init steps are incomplete")
     _stamp_run(path, init_id, "2026-10-01T00:00:00+00:00")
 
-    client = TestClient(create_app(config))
+    client = TestClient(create_app(config), base_url="http://127.0.0.1")
     alone = client.get("/api/runs", params={"open": "true"}).json()
     assert alone["total"] == 1
     assert alone["runs"][0]["run_id"] == init_id
@@ -1154,5 +1163,48 @@ def test_daily_bar_gaps_start_at_the_history_floor(lake, config, monkeypatch):
         return pl.DataFrame({"trade_date": days, "is_trading": [True] * len(days)})
 
     monkeypatch.setattr(calendar, "_load_trading_calendar_df", fake_calendar)
-    gaps = TestClient(create_app(lake)).get("/api/datasets/daily_bars").json()["gaps"]
+    gaps = (
+        TestClient(create_app(lake), base_url="http://127.0.0.1")
+        .get("/api/datasets/daily_bars")
+        .json()["gaps"]
+    )
     assert gaps["total"] == 0
+
+
+def test_daily_matrix_keeps_the_latest_attempt_per_group_and_session(config):
+    from cnequity.orchestrator.manifest import Manifest
+
+    manifest = Manifest(config.manifest_path)
+    path = config.manifest_path
+
+    def run(group, trade_date, status, started):
+        run_id = manifest.start_run(f"daily:{group}", {"trade_date": trade_date})
+        manifest.finish_run(run_id, status)
+        _stamp_run(path, run_id, started)
+        return run_id
+
+    run("core", "2026-11-05", "success", "2026-11-05T09:40:00+00:00")
+    run("capital", "2026-11-05", "failed", "2026-11-05T10:00:00+00:00")
+    run("core", "2026-11-06", "failed", "2026-11-06T09:40:00+00:00")
+    retried = run("core", "2026-11-06", "success", "2026-11-06T12:00:00+00:00")
+    run("capital", "2026-11-06", "degraded", "2026-11-06T10:00:00+00:00")
+    run("core", "2026-11-08", "skipped_non_trading_day", "2026-11-08T09:40:00+00:00")
+    manifest.finish_run(manifest.start_run("events:news_wire"), "success")
+
+    body = (
+        TestClient(create_app(config), base_url="http://127.0.0.1")
+        .get("/api/runs/daily-matrix?sessions=14")
+        .json()
+    )
+    assert body["sessions"] == ["2026-11-05", "2026-11-06"]
+    assert body["groups"] == ["core", "capital"]
+    cells = {(cell["group"], cell["trade_date"]): cell for cell in body["cells"]}
+    assert cells[("core", "2026-11-06")]["run_id"] == retried
+    assert cells[("core", "2026-11-06")]["attempts"] == 2
+    assert cells[("capital", "2026-11-06")]["status"] == "degraded"
+    one = (
+        TestClient(create_app(config), base_url="http://127.0.0.1")
+        .get("/api/runs/daily-matrix?sessions=1")
+        .json()
+    )
+    assert one["sessions"] == ["2026-11-06"]

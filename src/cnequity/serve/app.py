@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from cnequity.config import Config
 from cnequity.i18n import _, normalize_language, use_language
+from cnequity.serve.guard import LOOPBACK_HOSTS, client_host
 from cnequity.serve.lake import RUN_STATUSES, LakeView
 
 logger = logging.getLogger(__name__)
@@ -288,6 +289,26 @@ class RunPage(BaseModel):
         default=None,
         description="When open=true, daily schedule groups whose latest attempt failed. "
         "Null on an ordinary list.",
+    )
+
+
+class DailyMatrixCell(BaseModel):
+    group: str
+    trade_date: str
+    status: str
+    run_id: str
+    attempts: int = Field(description="Every try of this group on this session.")
+    rows_written: int | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+
+
+class DailyMatrix(BaseModel):
+    sessions: list[str] = Field(description="Trade dates with a daily attempt, oldest first.")
+    groups: list[str] = Field(description="Daily schedule groups, in the order they ran.")
+    cells: list[DailyMatrixCell] = Field(
+        description="The latest attempt of each group on each session. A missing cell "
+        "means the group did not run for that session."
     )
 
 
@@ -573,6 +594,21 @@ def create_app(
                 from fastapi.responses import JSONResponse
 
                 return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        elif client_host(request) not in LOOPBACK_HOSTS:
+            # Without a token `cne serve` only listens on loopback, so a request
+            # naming any other host reached it through DNS rebinding: a page on
+            # that name would otherwise read the lake as same-origin. Refuse
+            # every route here, not only the ones `check_browser` guards.
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                {
+                    "detail": _(
+                        "Open the dashboard at localhost or 127.0.0.1; any other address needs a token."
+                    )
+                },
+                status_code=403,
+            )
         path = request.url.path
         # Operations and storage answer while a purge has closed the read gate,
         # and they must not count as readers the purge is waiting on.
@@ -870,6 +906,13 @@ def create_app(
             runs=[RunSummary(**row) for row in rows],
             failed_daily_groups=failed_daily,
         )
+
+    @app.get("/api/runs/daily-matrix", response_model=DailyMatrix)
+    def daily_matrix(
+        view: View,
+        sessions: Annotated[int, Query(ge=1, le=60)] = 14,
+    ) -> DailyMatrix:
+        return DailyMatrix(**view.daily_matrix(sessions))
 
     @app.get("/api/runs/{run_id}", response_model=RunDetail)
     def run_detail(run_id: str, view: View) -> RunDetail:

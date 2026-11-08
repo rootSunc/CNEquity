@@ -3,8 +3,26 @@ import { renderSchedule } from "./schedule.js";
 import { renderBackups } from "./backups.js";
 import { renderSettings } from "./settings.js";
 import { choiceLabel, ds, locale, modeLabel, pick, tr } from "./i18n.js";
+import {
+  beijingDate,
+  beijingMidnight,
+  digestJobs,
+  jobTone,
+  matrixHtml,
+  recentHtml,
+  staleHtml,
+  staleRows,
+  timelineLegend,
+  timelineModel,
+  timelineSvg,
+} from "./ops-today.js";
 let generation = 0;
 let streams = [];
+let paintRunBoard = () => {};
+
+export function setRunBoardPainter(paint) {
+  paintRunBoard = typeof paint === "function" ? paint : () => {};
+}
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // Readiness rows carry the pack's Chinese title; the id names it in English.
@@ -160,12 +178,12 @@ function previewReady(params, specs) {
   return specs.every((spec) => !spec.required || (Array.isArray(params[spec.name]) ? params[spec.name].length : params[spec.name]));
 }
 
-function autoPreview(form, specs, run) {
+function autoPreview(form, specs, run, blocked = () => false) {
   if (!form || typeof form.addEventListener !== "function" || typeof form.querySelector !== "function") return;
   let timer = 0;
   const fire = () => {
     const params = readForm(form, specs);
-    if (previewReady(params, specs)) void run();
+    if (previewReady(params, specs) && !blocked(params)) void run();
   };
   form.addEventListener("input", () => {
     clearTimeout(timer);
@@ -211,23 +229,16 @@ function control(spec, source) {
   return `<label>${esc(pick(spec, "label"))}<input name="${esc(spec.name)}" type="${type}" value="${esc(value)}" ${spec.required ? "required" : ""}></label>${help}`;
 }
 
-function scopes() {
-  return [
-    { id: "packs", label: tr("研究包（一个交易日）", "Research pack (one session)"), op: "daily.full", note: tr("不选研究包就跑全部日更组和事件流。日更只有一个交易日。", "With no pack selected, every daily group and the event stream run. A daily update is one session.") },
-    { id: "group", label: tr("一个调度组（一个交易日）", "One schedule group (one session)"), op: "daily.group", note: tr("只跑这一组，不会把那天记成定时日更已完成。", "Runs only this group, and does not mark that session's scheduled update done.") },
-    { id: "events", label: tr("事件流（一个自然日）", "Event stream (one calendar day)"), op: "events.run", note: tr("周末和节假日也可以。公告和资讯不在研究包日更里。", "Weekends and holidays are included. Announcements and news are not part of a research-pack daily update.") },
-    { id: "dataset", label: tr("一个数据集（起止日期）", "One dataset (start and end)"), op: "backfill.run", note: tr("一段历史走回填。一次只能回填一个数据集。", "A history range is a backfill. One dataset at a time.") },
-    { id: "derive", label: tr("一个派生（起止日期）", "One derived dataset (start and end)"), op: "derive.run", note: tr("从已发布的数据重算。全量会重写分区。15 / 30 / 60 分钟线默认不计算，也在这里入湖。", "Recompute from published data. A full range rewrites partitions. 15/30/60-minute bars are not computed by default; store them here too.") },
-    { id: "stale", label: tr("只补仍落后的数据", "Only what is still stale"), op: "daily.stale", note: tr("没有日期。只重抓仍然落后的数据集。快照漏掉的当天只在当天再试。", "No date. Refetch only datasets that are still stale. A missed snapshot day can only be retried that day.") },
-  ];
-}
-
-function manualLimits() {
-  return [
-    tr(`日更只有一个交易日。要补一段日线，把范围改成一个数据集并选择 ${ds("daily_bars")}。`, `A daily update is one session. To fill a range of daily bars, choose one dataset and select ${ds("daily_bars")}.`),
-    tr("交易状态这类快照漏掉当天，改一个旧日期补不回来；收尾补抓只在当天再试。", "A missed snapshot day, such as trading status, cannot be recovered by picking an old date. The catch-up only retries that day."),
-    tr("手动运行一个调度组或一次回填，不会把那天记成定时日更已完成。", "A manual group run or backfill does not mark that day's scheduled update done."),
-  ];
+// What each launchable operation can and cannot do, shown above its form.
+function opNote(opId) {
+  return {
+    "daily.full": tr("不选研究包就跑全部日更组和事件流。日更只有一个交易日。", "With no pack selected, every daily group and the event stream run. A daily update is one session."),
+    "daily.group": tr("只跑这一组，不会把那天记成定时日更已完成。", "Runs only this group, and does not mark that session's scheduled update done."),
+    "events.run": tr("周末和节假日也可以。公告和资讯不在研究包日更里。", "Weekends and holidays are included. Announcements and news are not part of a research-pack daily update."),
+    "backfill.run": tr("一段历史走回填。一次只能回填一个数据集。交易状态这类快照漏掉的日子，改一个旧日期也补不回来。", "A history range is a backfill, one dataset at a time. A missed snapshot day, such as trading status, cannot be recovered by picking an old date."),
+    "derive.run": tr("从已发布的数据重算。全量会重写分区。15 / 30 / 60 分钟线也在这里入湖。", "Recompute from published data. A full range rewrites partitions. 15/30/60-minute bars are stored from here too."),
+    "daily.stale": tr("没有日期。只重抓仍然落后的数据集。快照漏掉的当天只在当天再试。", "No date. Refetch only datasets that are still stale. A missed snapshot day can only be retried that day."),
+  }[opId] || "";
 }
 
 function commandGroups() {
@@ -247,18 +258,6 @@ function cliOnly() {
     ["cne config create / validate / diff / upgrade", tr("配置写入留在终端。页面只预览 cne config upgrade --dry-run。", "Config writes stay in the terminal. The page only previews cne config upgrade --dry-run.")],
     ["python scripts/delisted_ops.py", tr("退市名录是仓库里的一次性工程脚本，不能从页面启动。", "The delisting list is a one-off repo script and cannot be started from the page.")],
   ];
-}
-
-function workflowOf(opId) {
-  if (opId === "diag.doctor" || opId.startsWith("init.")) return "init";
-  if (opId.startsWith("daily.") || opId === "events.run") return "daily";
-  if (opId === "backfill.run" || opId === "derive.run") return "manual";
-  if (opId.startsWith("snapshot.")) return "backup";
-  return "commands";
-}
-
-function scopeById(id) {
-  return scopes().find((item) => item.id === id) || scopes()[0];
 }
 
 function dailyHeader(schedule) {
@@ -365,57 +364,72 @@ function dailyPrimaryAction(home, schedule, escapeHtml) {
   return `<a class="button button-primary" href="#/ops?op=daily.full&trade_date=${encodeURIComponent(date)}">${escapeHtml(label)}</a>`;
 }
 
-function dailyBlock(home, escapeHtml) {
+function moreMenu(home) {
+  const items = [
+    ["daily.group", tr("一个调度组", "One schedule group")],
+    ["events.run", tr("跑事件流", "Run the event stream")],
+    ["derive.run", tr("重算派生", "Recompute a derived dataset")],
+  ]
+    .map(([id, label]) => opButton(home, id, label, "ops-menu-item"))
+    .filter(Boolean)
+    .join("");
+  return items ? `<details class="ops-more"><summary class="button button-ghost">${tr("更多", "More")}</summary><div class="ops-menu">${items}</div></details>` : "";
+}
+
+function intentBlock(home, escapeHtml) {
   const schedule = home.occupancy.schedule || {};
-  const header = dailyHeader(schedule);
   const actions = [
     dailyPrimaryAction(home, schedule, escapeHtml),
-    opButton(home, "daily.stale", tr("收尾补抓", "Catch up stale data"), "button button-ghost"),
-    opButton(home, "events.run", tr("跑事件流", "Run the event stream"), "button button-ghost"),
+    opButton(home, "backfill.run", tr("补一段历史", "Fill a history range"), "button button-ghost"),
+    opButton(home, "daily.stale", tr("补抓落后", "Catch up stale data"), "button button-ghost"),
+    moreMenu(home),
   ].filter(Boolean).join("");
   const closedToday = schedule.today_is_session === false && !schedule.daily_pending
-    ? `<p class="ops-hint">${tr("今天不是交易日，所以没有“现在跑今天”。要重跑某一个交易日，用手动更新并填写日期。", "Today is not a trading session, so there is no run-today action. To rerun one session, use a manual update and enter the date.")}</p>`
+    ? `<p class="ops-hint">${tr("今天不是交易日，所以没有“现在跑今天”。要重跑某一个交易日，打开「更多 → 一个调度组」并填写日期。", "Today is not a trading session, so there is no run-today action. To rerun one session, open More → One schedule group and enter the date.")}</p>`
     : "";
-  const when = schedule.daily_run_at ? `<span class="muted">${escapeHtml(schedule.daily_run_at)}</span>` : "";
   const pending = home.occupancy.incomplete_init;
   const initLeads = Boolean(home.occupancy.lake_empty) || Boolean(pending);
-  return `<section class="surface-panel report-panel ops-workflow${initLeads ? "" : " ops-card-primary"}" id="ops-daily" data-workflow="daily">
-    <div class="panel-header"><h2>${tr("日更", "Daily")}</h2></div>
-    <p class="ops-lead">${header ? escapeHtml(header) : tr("还没有定时日更时间。", "No scheduled daily time yet.")}</p>
+  return `<section class="surface-panel report-panel ops-workflow ops-intents${initLeads ? "" : " ops-card-primary"}" id="ops-daily" data-workflow="daily">
+    <div class="panel-header"><h2>${tr("要做什么", "What to run")}</h2></div>
     ${actions ? `<div class="ops-actions">${actions}</div>` : ""}
     ${closedToday}
-    <p class="ops-hint">${tr("要补一段日线，请用", "To fill a range of daily bars, use")} <a href="#/ops?op=backfill.run&dataset=daily_bars">${tr("回填", "Backfill")} ${ds("daily_bars")}</a>${tr("。", ".")}</p>
-    <details class="ops-fold ops-nested"><summary>${tr("定时设置", "Schedule")}${when ? ` ${when}` : ""}</summary><section class="surface-panel report-panel" id="ops-schedule">${tr("正在读取定时任务状态…", "Reading schedule status…")}</section></details>
   </section>`;
 }
 
-function manualFields(home, scope, preset) {
-  const card = home.operations.find((item) => item.id === scope.op);
-  if (!card) return `<p class="panel-note">${tr("当前没有这项操作。", "This operation is not available.")}</p>`;
-  const disabled = !card.available || !home.mode.ops_enabled;
-  return `${card.params.map((spec) => control(spec, preset)).join("")}
-    <div class="action-row"><button class="button button-ghost" type="submit" ${disabled ? "disabled" : ""}>${tr("预览", "Preview")}</button></div>`;
+// Checks a reader runs by name, each with what it did last time. The full
+// allowlist with command lines stays below as a folded reference.
+const CHECK_IDS = [
+  "check.status",
+  "check.verify",
+  "check.audit",
+  "check.sources_probe",
+  "diag.doctor",
+  "maint.stats_rebuild",
+  "config.upgrade_preview",
+  "run.retry_failed_groups",
+  "run.retry",
+  "run.compact",
+];
+
+function launchButton(card, disabled, escapeHtml) {
+  const quick = card.confirm === "none" && !(card.params || []).some((spec) => spec.required);
+  return quick
+    ? `<button type="button" class="button button-primary" data-op-quick="${escapeHtml(card.id)}" ${disabled ? "disabled" : ""}>${tr("运行", "Run")}</button>`
+    : `<button type="button" class="button button-ghost" data-op="${escapeHtml(card.id)}" ${disabled ? "disabled" : ""}>${tr("用这个", "Use this")}</button>`;
 }
 
-function manualBlock(home, escapeHtml, preset) {
-  const scope = scopeById("packs");
-  const options = scopes().map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("");
-  const session = formNoteText(home.occupancy.schedule || {}, scope.op, {});
-  return `<section class="ops-workflow" id="ops-manual" data-workflow="manual">
-    <p class="ops-hint">${tr("先选要更新的数据，再选时间。一次只启动一条命令。", "Choose the data, then the time. One command at a time.")}</p>
-    <ul class="ops-limits">${manualLimits().map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
-    <form id="ops-manual-form" class="ops-fields">
-      <label>${tr("更新范围", "What to update")}<select id="ops-scope">${options}</select></label>
-      <p class="ops-hint" id="ops-manual-note">${escapeHtml(scope.note)}</p>
-      <p class="ops-hint" id="ops-manual-session" ${session ? "" : "hidden"}>${escapeHtml(session)}</p>
-      <div id="ops-manual-fields">${manualFields(home, scope, preset)}</div>
-    </form>
-    <div id="ops-manual-preview"></div>
-  </section>`;
-}
-
-function commandBlock(home, escapeHtml) {
+function checksBlock(home, escapeHtml) {
   const byId = new Map(home.operations.map((card) => [card.id, card]));
+  const cards = CHECK_IDS.map((id) => {
+    const card = byId.get(id);
+    if (!card) return "";
+    const disabled = !card.available || !home.mode.ops_enabled;
+    return `<article class="ops-check-card" data-check="${escapeHtml(id)}">
+      <div><strong>${escapeHtml(pick(card, "title"))}</strong><p class="muted">${escapeHtml(pick(card, "summary"))}</p></div>
+      <p class="ops-check-last" id="ops-last-${escapeHtml(id)}">${tr("近期没有从页面运行过。", "Not run from the page lately.")}</p>
+      <div class="ops-actions">${launchButton(card, disabled, escapeHtml)}</div>
+    </article>`;
+  }).join("");
   const groups = commandGroups().map(([title, ids]) => {
     const rows = ids
       .map((id) => {
@@ -425,21 +439,153 @@ function commandBlock(home, escapeHtml) {
         const copy = card.command
           ? `<button type="button" class="button button-ghost" data-copy-command="${escapeHtml(card.command)}">${tr("复制", "Copy")}</button>`
           : "";
-        return `<div class="ops-command"><div><strong>${escapeHtml(pick(card, "title"))}</strong><div class="muted">${escapeHtml(pick(card, "summary"))}</div><code>${escapeHtml(card.command || "")}</code></div>
-          <div class="ops-actions">${copy}<button type="button" class="button button-ghost" data-op="${escapeHtml(card.id)}" ${disabled ? "disabled" : ""}>${tr("用这个", "Use this")}</button></div></div>`;
+        return `<div class="ops-command"><div><strong>${escapeHtml(pick(card, "title"))}</strong><code>${escapeHtml(card.command || "")}</code></div>
+          <div class="ops-actions">${copy}${launchButton(card, disabled, escapeHtml)}</div></div>`;
       })
       .join("");
-    if (!rows) return "";
-    return `<section class="ops-command-group"><h3>${escapeHtml(title)}</h3>${rows}</section>`;
+    return rows ? `<section class="ops-command-group"><h3>${escapeHtml(title)}</h3>${rows}</section>` : "";
   }).join("");
   const cli = cliOnly().map(
     ([command, why]) => `<div class="ops-command ops-cli-only"><div><code>${escapeHtml(command)}</code><div class="muted">${escapeHtml(why)}</div></div></div>`,
   ).join("");
-  return `<section class="ops-workflow" id="ops-commands" data-workflow="commands">
-    <p class="ops-hint">${tr("和页面启动的是同一套白名单。点「用这个」打开表单，确认命令后启动。", "This is the same allowlist the page can start. Use this opens the form; check the command, then start.")}</p>
-    ${groups}
-    <section class="ops-command-group"><h3>${tr("仅命令行", "Terminal only")}</h3>${cli}</section>
+  return `<section class="ops-workflow" id="ops-commands-fold" data-workflow="commands">
+    <p class="ops-hint">${tr("没有参数、也不改数据的巡检直接运行；其余点「用这个」打开表单，确认命令后启动。", "A check with no parameters and no data change runs directly. Use this opens the form for the rest; check the command, then start.")}</p>
+    ${cards ? `<div class="ops-check-grid">${cards}</div>` : ""}
+    <details class="ops-fold" id="ops-reference"><summary>${tr("命令参考", "Command reference")}</summary>
+      <div class="ops-workflow">
+        <p class="ops-hint">${tr("和页面能启动的是同一套白名单。", "The same allowlist the page can start.")}</p>
+        ${groups}
+        <section class="ops-command-group"><h3>${tr("仅命令行", "Terminal only")}</h3>${cli}</section>
+      </div>
+    </details>
   </section>`;
+}
+
+function paintLastRuns(jobs) {
+  for (const id of CHECK_IDS) {
+    const node = document.getElementById(`ops-last-${id}`);
+    const job = (jobs || []).find((item) => item.op === id);
+    if (!node || !job) continue;
+    const tone = jobTone(job.state);
+    const when = jobStamp(job);
+    node.innerHTML = `<i class="ops-dot tone-${tone}" aria-hidden="true"></i>${tr("上次", "Last")} <a href="#/ops/jobs/${encodeURIComponent(job.job_id)}">${esc(pick(job, "label") || job.state)}</a>${when ? ` · ${esc(when)}` : ""}`;
+  }
+}
+
+const OPS_TABS = ["today", "checks", "schedule"];
+
+function tabForOp(opId) {
+  if (!opId) return "today";
+  if (opId.startsWith("snapshot.")) return "schedule";
+  if (["check.", "maint.", "config.", "run.", "diag."].some((prefix) => opId.startsWith(prefix))) return "checks";
+  return "today";
+}
+
+function showOpsTab(name) {
+  for (const id of OPS_TABS) {
+    const panel = document.getElementById(`ops-panel-${id}`);
+    const tab = document.getElementById(`ops-tab-${id}`);
+    const on = id === name;
+    if (panel) panel.hidden = !on;
+    if (tab) {
+      tab.className = `tab${on ? " on" : ""}`;
+      tab.setAttribute?.("aria-selected", String(on));
+    }
+  }
+}
+
+// The start form opens in a side drawer over the page, so choosing an action
+// never moves the page under the reader.
+function setDrawer(open) {
+  const host = document.getElementById("ops-form");
+  const backdrop = document.getElementById("ops-drawer-backdrop");
+  if (host) host.hidden = !open;
+  if (backdrop) backdrop.hidden = !open;
+  if (!open && host) host.innerHTML = "";
+}
+
+function closeDrawer() {
+  setDrawer(false);
+  try {
+    if (/[?&]op=/.test(location.hash)) history.replaceState(null, "", "#/ops");
+  } catch {
+    /* the drawer still closes when the address cannot be updated */
+  }
+}
+
+let drawerKeys = false;
+function bindDrawer() {
+  const backdrop = document.getElementById("ops-drawer-backdrop");
+  if (backdrop) backdrop.onclick = closeDrawer;
+  if (drawerKeys || typeof document.addEventListener !== "function") return;
+  drawerKeys = true;
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.getElementById("ops-form")?.hidden === false) closeDrawer();
+  });
+  // The "More" menu is a <details>; a click anywhere else folds it again.
+  document.addEventListener("click", (event) => {
+    document.querySelectorAll?.("details.ops-more[open]").forEach((menu) => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
+}
+
+function sessionGlance(schedule) {
+  const at = schedule.daily_run_at ? tr(`北京时间 ${schedule.daily_run_at}`, `${schedule.daily_run_at} Beijing`) : "";
+  if (schedule.daily_pending) return { title: tr(`待跑 ${schedule.daily_pending}`, `Due ${schedule.daily_pending}`), detail: at };
+  if (schedule.daily_done && schedule.daily_due) return { title: tr(`${schedule.daily_due} 已跑过`, `${schedule.daily_due} already ran`), detail: at };
+  if (schedule.today_is_session === false) return { title: tr("非交易日", "Not a session"), detail: at || tr("今天不跑日更。", "No daily update today.") };
+  if (schedule.today_is_session) return { title: tr("交易日", "Trading session"), detail: at || tr("可以跑今天。", "Today can run.") };
+  return { title: tr("日更", "Daily"), detail: at || tr("还没有定时时间。", "No scheduled time yet.") };
+}
+
+function sourceGlance(sources) {
+  if (!sources) return { title: tr("—", "—"), detail: tr("随操作页一起读取。", "Shown with the operations page."), alert: false };
+  const count = (sources.breakers || []).length;
+  if (sources.readable === false) return { title: tr("不可读", "Unreadable"), detail: tr("读不到熔断账本。", "Could not read the breaker ledger."), alert: true };
+  if (sources.push2_paused && count) {
+    return {
+      title: tr("降级", "Degraded"),
+      detail: tr(`push2 已暂停，${count} 个源已熔断。`, count === 1 ? "push2 is paused; 1 source tripped." : `push2 is paused; ${count} sources tripped.`),
+      alert: true,
+    };
+  }
+  if (sources.push2_paused) return { title: tr("push2 暂停", "push2 paused"), detail: tr("今日没有熔断。", "No breaker tripped today."), alert: true };
+  if (count) {
+    return {
+      title: tr("已熔断", "Tripped"),
+      detail: tr(`${count} 个源今日已熔断。`, count === 1 ? "1 source tripped today." : `${count} sources tripped today.`),
+      alert: true,
+    };
+  }
+  return { title: tr("正常", "Clear"), detail: tr("push2 可用，今日没有熔断。", "push2 is available; no breaker tripped today."), alert: false };
+}
+
+function statusCard(id, label, title, detail, extra = "", action = "") {
+  const tone = extra.includes("alert") ? "warn" : extra.includes("live") ? "live" : "ok";
+  return `<article class="ops-status-card${extra}" id="${id}"><span class="metric-label"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${label}</span><strong>${title}</strong><p>${detail}</p>${action}</article>`;
+}
+
+function statusBar(home, escapeHtml) {
+  const session = sessionGlance(home.occupancy.schedule || {});
+  const sources = sourceGlance(home.occupancy.sources);
+  const slot = home.occupancy.slot;
+  const slotLive = slot && (slot.state === "running" || slot.state === "starting");
+  const slotDetail = slotLive
+    ? `<a href="#/ops/jobs/${encodeURIComponent(slot.job_id)}">${escapeHtml(pick(slot, "title") || slot.op || "")}</a>`
+    : escapeHtml(tr("可以启动下一条命令。", "The next command can start."));
+  const tabs = [
+    ["today", tr("今日", "Today")],
+    ["checks", tr("巡检", "Checks")],
+    ["schedule", tr("定时、数据源与备份", "Schedule, sources & backups")],
+  ].map(([id, label]) => `<button type="button" class="tab" role="tab" id="ops-tab-${id}">${label}</button>`).join("");
+  return `<section class="ops-status-bar" aria-label="${tr("运维状态", "Operations status")}">
+    ${statusCard("ops-status-session", tr("日更", "Daily"), escapeHtml(session.title), escapeHtml(dailyHeader(home.occupancy.schedule || {}) || session.detail), home.occupancy.schedule?.daily_pending ? " ops-status-alert" : "")}
+    ${statusCard("ops-status-scheduler", tr("定时任务", "Schedule"), escapeHtml(tr("正在读取…", "Reading…")), escapeHtml(tr("正在读取定时任务状态…", "Reading schedule status…")))}
+    ${statusCard("ops-status-sources", tr("数据源", "Sources"), escapeHtml(sources.title), escapeHtml(sources.detail), sources.alert ? " ops-status-alert" : "")}
+    ${statusCard("ops-status-slot", tr("执行槽", "Slot"), escapeHtml(slotLive ? tr("执行中", "Running") : tr("空闲", "Idle")), slotDetail, slotLive ? " ops-status-live" : "")}
+  </section>
+  <nav class="tabs ops-tabs" role="tablist" aria-label="${tr("操作分区", "Operations sections")}">${tabs}</nav>`;
 }
 
 export async function renderOps(ctx) {
@@ -465,15 +611,12 @@ export async function renderOps(ctx) {
   }
   const preset = hashQuery();
   const selected = preset.get("op");
-  const slot = home.occupancy.slot;
   const emptyLake = Boolean(home.occupancy.lake_empty);
-  const backupOpen = (selected || "").startsWith("snapshot.") || preset.get("snapshot_root") ? " open" : "";
-  const manualOpen = selected && workflowOf(selected) === "manual" ? " open" : "";
-  const commandOpen = selected && workflowOf(selected) === "commands" ? " open" : "";
+  const activeTab = tabForOp(selected || (preset.get("snapshot_root") ? "snapshot.create" : ""));
+  const hide = (name) => (activeTab === name ? "" : " hidden");
+  // The status cards already show the session, the sources and the slot; the
+  // banner only carries what blocks starting anything from here.
   const alerts = (home.occupancy.hints || []).map((hint) => `<li>${esc(hint)}</li>`);
-  if (slot) {
-    alerts.push(`<li>${tr("正在执行", "Running")} <a href="#/ops/jobs/${encodeURIComponent(slot.job_id)}">${esc(pick(slot, "title") || slot.op)}</a></li>`);
-  }
   if (!home.mode.ops_enabled) alerts.push(`<li>${tr("当前模式不能从面板启动命令。", "This mode cannot start commands from the panel.")}</li>`);
   if (home.mode.config_drift) alerts.push(`<li>${tr("配置文件和这个控制台用的不是同一个数据湖，处理好之前不能从这里启动任务，见页面顶部的提示。", "The config file and this console disagree about the lake. Jobs cannot start from here until that is resolved; see the notice at the top of the page.")}</li>`);
   const attention = alerts.length
@@ -489,48 +632,166 @@ export async function renderOps(ctx) {
         <p class="meta-row"><span>${tr("数据目录", "Data directory")}</span><code>${esc(home.mode.data_root || "—")}</code></p></div>
       <span class="status-pill">${esc(modeLabel(home.mode.label))}</span></div></section>
     ${attention}
-    <div id="ops-recent" hidden></div>
-    <div class="ops-work" id="ops-work">${initBlock(home, esc)}
-      ${deferredOpen}${dailyBlock(home, esc)}
-      <details class="ops-fold" id="ops-manual-fold"${manualOpen}><summary>${tr("手动更新", "Manual update")}</summary>${manualBlock(home, esc, preset)}</details>
-      ${deferredClose}
-      <details class="ops-fold" id="ops-commands-fold"${commandOpen}><summary>${tr("常用命令", "Commands")}</summary>${commandBlock(home, esc)}</details>
-      <div id="ops-form"></div></div>
-    <details class="ops-fold"><summary>${tr("取数设置", "Fetch settings")}</summary><section class="surface-panel report-panel" id="ops-settings">${tr("正在读取取数设置…", "Reading fetch settings…")}</section></details>
-    <details class="ops-fold" data-workflow="backup"${backupOpen}><summary>${tr("数据备份", "Backups")}</summary><section class="surface-panel report-panel" id="ops-backups">${tr("正在读取数据备份…", "Reading backups…")}</section></details>`,
+    <div class="ops-work" id="ops-work">${statusBar(home, esc)}
+      <div id="ops-panel-today" data-ops-panel="today"${hide("today")}>${initBlock(home, esc)}
+        ${deferredOpen}${intentBlock(home, esc)}${deferredClose}
+        <section class="surface-panel report-panel ops-timeline" id="ops-timeline">
+          <div class="panel-header"><h2>${tr("任务时间线", "Job timeline")}</h2>
+            <div class="ops-day-switch" role="group" aria-label="${tr("选择日期", "Pick a day")}"><span class="panel-meta">${tr("北京时间", "Beijing time")}</span>
+              <button type="button" class="ops-filter" data-tl-day="1" aria-pressed="false">${tr("昨天", "Yesterday")}</button><button type="button" class="ops-filter on" data-tl-day="0" aria-pressed="true">${tr("今天", "Today")}</button></div></div>
+          <div id="ops-timeline-body"><p class="muted">${tr("正在读取今天的任务…", "Reading today's jobs…")}</p></div>
+        </section>
+        <div class="ops-split">
+          <section class="surface-panel report-panel" id="ops-stale"><div class="panel-header"><h2>${tr("落后的数据集", "Stale datasets")}</h2></div><div id="ops-stale-body"><p class="muted">${tr("正在读取…", "Reading…")}</p></div></section>
+          <section class="surface-panel report-panel" id="ops-matrix"><div class="panel-header"><h2>${tr("近 14 个交易日的日更", "Daily groups, last 14 sessions")}</h2><a class="panel-meta" href="#/runs">${tr("全部运行", "All runs")}</a></div><div id="ops-matrix-body"><p class="muted">${tr("正在读取…", "Reading…")}</p></div></section>
+        </div>
+        <div id="ops-recent" hidden></div>
+      </div>
+      <div id="ops-panel-checks" data-ops-panel="checks"${hide("checks")}>${checksBlock(home, esc)}</div>
+      <div id="ops-panel-schedule" data-ops-panel="schedule"${hide("schedule")}>
+        <section class="surface-panel report-panel" id="ops-schedule">${tr("正在读取定时任务状态…", "Reading schedule status…")}</section>
+        <section class="surface-panel report-panel" id="ops-settings">${tr("正在读取取数设置…", "Reading fetch settings…")}</section>
+        <section class="surface-panel report-panel" id="ops-backups" data-workflow="backup">${tr("正在读取数据备份…", "Reading backups…")}</section>
+      </div>
+    </div>
+    <div class="ops-drawer-backdrop" id="ops-drawer-backdrop" hidden></div>
+    <aside class="ops-drawer" id="ops-form" hidden aria-label="${tr("启动表单", "Start form")}"></aside>`,
     "ops",
   );
+  showOpsTab(activeTab);
   bindOps(ctx, home, current);
-  bindManual(ctx, home, current);
+  bindDrawer();
   void renderSettings(ctx, home, alive);
   void renderSchedule(ctx, home, alive);
   void renderBackups(ctx, home, alive, preset.get("snapshot_root") || "");
-  const jobs = await api("/api/ops/jobs?limit=8");
+  void paintStale(ctx, home, current);
+  void paintMatrix(ctx, alive);
+  await paintJobs(ctx, home, alive);
   if (!alive()) return;
-  const recent = document.getElementById("ops-recent");
-  if (recent) {
-    if (!jobs.length) {
-      recent.hidden = true;
-      recent.innerHTML = "";
-    } else {
-      recent.hidden = false;
-      recent.innerHTML = `<section class="surface-panel report-panel ops-recent"><div class="panel-header"><h2>${tr("最近的任务", "Recent jobs")}</h2></div><ul class="ops-jobs">${jobs
-        .map((job) => {
-          const when = jobStamp(job);
-          return `<li><a href="#/ops/jobs/${encodeURIComponent(job.job_id)}">${esc(pick(job, "title") || job.op)}</a><span class="meta-row"><span>${esc(pick(job, "label") || job.state)}</span>${job.scheduled ? `<span>${tr("定时", "Scheduled")}</span>` : ""}${when ? `<span>${esc(when)}</span>` : ""}</span></li>`;
-        })
-        .join("")}</ul></section>`;
-    }
-  }
   if (selected && home.operations.some((card) => card.id === selected && card.available)) {
     showForm(ctx, home, selected, preset, current);
   }
 }
 
+let jobFilter = "all";
+
+async function paintJobs(ctx, home, alive) {
+  const since = new Date(beijingMidnight() - 86400000).toISOString();
+  let today = [];
+  let recent = [];
+  let schedule = null;
+  try {
+    [today, recent, schedule] = await Promise.all([
+      ctx.api(`/api/ops/jobs?limit=500&since=${encodeURIComponent(since)}`),
+      ctx.api("/api/ops/jobs?limit=50&exclude_op=events.run"),
+      ctx.api("/api/ops/schedule").catch(() => null),
+    ]);
+  } catch (err) {
+    if (!alive()) return;
+    const body = document.getElementById("ops-timeline-body");
+    if (body) body.innerHTML = `<p class="panel-note err">${esc(err.message)}</p>`;
+    return;
+  }
+  if (!alive()) return;
+  const body = document.getElementById("ops-timeline-body");
+  if (body) {
+    const marks = { ...(home.occupancy.schedule || {}), ...(schedule || {}) };
+    const legend = timelineLegend(schedule?.events ? schedule.events_interval_minutes : null);
+    const draw = (daysBack) => {
+      body.innerHTML = `<div class="ops-timeline-scroll">${timelineSvg(timelineModel(today, marks, Date.now(), daysBack))}</div>${legend}`;
+      if (typeof document.querySelectorAll !== "function") return;
+      document.querySelectorAll("[data-tl-day]").forEach((button) => {
+        const on = Number(button.dataset.tlDay) === daysBack;
+        button.className = `ops-filter${on ? " on" : ""}`;
+        button.setAttribute?.("aria-pressed", String(on));
+        button.onclick = () => draw(Number(button.dataset.tlDay));
+      });
+    };
+    draw(0);
+  }
+  paintLastRuns(recent);
+  const host = document.getElementById("ops-recent");
+  if (!host) return;
+  const rows = digestJobs([...(today || []), ...(recent || [])]);
+  if (!rows.length) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  let expanded = false;
+  const paint = () => {
+    host.hidden = false;
+    host.innerHTML = recentHtml(rows, jobFilter, expanded);
+    if (typeof document.querySelectorAll !== "function") return;
+    document.querySelectorAll("[data-job-filter]").forEach((button) => {
+      button.onclick = () => {
+        jobFilter = button.dataset.jobFilter;
+        expanded = false;
+        paint();
+      };
+    });
+    document.querySelectorAll("[data-job-more]").forEach((button) => {
+      button.onclick = () => {
+        expanded = true;
+        paint();
+      };
+    });
+  };
+  paint();
+}
+
+async function paintStale(ctx, home, current) {
+  let health;
+  let datasets;
+  try {
+    [health, datasets] = await Promise.all([ctx.api("/api/health"), ctx.api("/api/datasets")]);
+  } catch {
+    const host = document.getElementById("ops-stale");
+    if (current === generation && host) host.hidden = true;
+    return;
+  }
+  const host = document.getElementById("ops-stale");
+  const body = document.getElementById("ops-stale-body");
+  if (current !== generation || !host || !body) return;
+  host.hidden = false;
+  body.innerHTML = staleHtml(staleRows(health, datasets), health.anchor || "", !home.mode.ops_enabled);
+  if (typeof body.querySelectorAll !== "function") return;
+  body.querySelectorAll("a.button[href^='#/ops?']").forEach((link) => {
+    link.onclick = (event) => {
+      const query = new URLSearchParams(link.getAttribute("href").split("?")[1] || "");
+      const opId = query.get("op");
+      if (!home.operations.some((card) => card.id === opId && card.available)) return;
+      event.preventDefault();
+      try {
+        history.replaceState(null, "", link.getAttribute("href"));
+      } catch {
+        /* the form still opens */
+      }
+      showForm(ctx, home, opId, query, current);
+    };
+  });
+}
+
+async function paintMatrix(ctx, alive) {
+  let matrix;
+  try {
+    matrix = await ctx.api("/api/runs/daily-matrix?sessions=14");
+  } catch {
+    const host = document.getElementById("ops-matrix");
+    if (alive() && host) host.hidden = true;
+    return;
+  }
+  const host = document.getElementById("ops-matrix");
+  const body = document.getElementById("ops-matrix-body");
+  if (!alive() || !host || !body) return;
+  host.hidden = false;
+  body.innerHTML = matrixHtml(matrix);
+}
+
 function bindOps(ctx, home, current) {
   const open = (opId) => {
     if (typeof document.querySelectorAll === "function") {
-      document.querySelectorAll("[data-op]").forEach((item) => item.classList.toggle("on", item.dataset.op === opId));
+      document.querySelectorAll("[data-op]").forEach((item) => item.classList?.toggle("on", item.dataset.op === opId));
     }
     try {
       const next = `#/ops?op=${encodeURIComponent(opId)}`;
@@ -540,81 +801,106 @@ function bindOps(ctx, home, current) {
     }
     showForm(ctx, home, opId, hashQuery(), current);
   };
+  const quick = async (opId) => {
+    const card = home.operations.find((item) => item.id === opId);
+    const needsForm = !card || card.confirm !== "none" || (card.params || []).some((spec) => spec.required) || !home.mode.ops_enabled;
+    if (needsForm) {
+      open(opId);
+      return;
+    }
+    let body;
+    try {
+      body = await ctx.api("/api/ops/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CNE-CSRF": home.csrf_token },
+        body: JSON.stringify({ op: card.id, params: {} }),
+      });
+    } catch (err) {
+      open(opId);
+      const target = document.getElementById("ops-preview");
+      if (target && current === generation) target.innerHTML = `<p class="panel-note err">${ctx.esc(err.message)}</p>`;
+      return;
+    }
+    if (current !== generation) return;
+    if (!body.launch_token || (body.blockers || []).length || (body.acknowledgements || []).length) {
+      open(opId);
+      await previewCard(ctx, home, card, {}, current, document.getElementById("ops-preview"));
+      return;
+    }
+    try {
+      const job = await ctx.api("/api/ops/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CNE-CSRF": home.csrf_token },
+        body: JSON.stringify({ preview_id: body.preview_id, launch_token: body.launch_token, acknowledged: [] }),
+      });
+      location.hash = `#/ops/jobs/${encodeURIComponent(job.job_id)}`;
+    } catch (err) {
+      open(opId);
+      const target = document.getElementById("ops-preview");
+      if (target && current === generation) target.innerHTML = `<p class="panel-note err">${ctx.esc(err.message)}</p>`;
+    }
+  };
   if (typeof document.querySelectorAll !== "function") return;
   document.querySelectorAll("[data-op]").forEach((button) => {
     button.onclick = () => open(button.dataset.op);
   });
+  document.querySelectorAll("[data-op-quick]").forEach((button) => {
+    button.onclick = () => { void quick(button.dataset.opQuick); };
+  });
   document.querySelectorAll("[data-copy-command]").forEach((button) => {
     button.onclick = () => navigator.clipboard?.writeText(button.dataset.copyCommand || "");
   });
+  for (const id of OPS_TABS) {
+    const tab = document.getElementById(`ops-tab-${id}`);
+    if (tab) tab.onclick = () => showOpsTab(id);
+  }
 }
 
-function bindManual(ctx, home, current) {
-  const select = document.getElementById("ops-scope");
-  const form = document.getElementById("ops-manual-form");
-  if (!select || !form) return;
-  const paint = () => {
-    const scope = scopeById(select.value || "packs");
-    const note = document.getElementById("ops-manual-note");
-    if (note) note.textContent = scope.note;
-    const fields = document.getElementById("ops-manual-fields");
-    if (fields) fields.innerHTML = manualFields(home, scope, hashQuery());
-    const session = document.getElementById("ops-manual-session");
-    if (!session) return;
-    const card = home.operations.find((item) => item.id === scope.op);
-    const params = card && typeof form.querySelector === "function" ? readForm(form, card.params) : {};
-    const text = formNoteText(home.occupancy.schedule || {}, scope.op, params);
-    session.hidden = !text;
-    session.textContent = text;
-  };
-  const run = async () => {
-    const scope = scopeById(select.value || "packs");
-    const card = home.operations.find((item) => item.id === scope.op);
-    if (!card || typeof form.querySelector !== "function") return;
-    const params = readForm(form, card.params);
-    const session = document.getElementById("ops-manual-session");
-    if (session) {
-      const text = formNoteText(home.occupancy.schedule || {}, card.id, params);
-      session.hidden = !text;
-      session.textContent = text;
-    }
-    await previewCard(ctx, home, card, params, current, document.getElementById("ops-manual-preview"));
-  };
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    await run();
-  };
-  let timer = 0;
-  const maybeRun = () => {
-    if (!home.mode.ops_enabled || typeof form.querySelector !== "function") return;
-    const card = home.operations.find((item) => item.id === scopeById(select.value || "packs").op);
-    if (card && previewReady(readForm(form, card.params), card.params)) void run();
-  };
-  select.onchange = () => {
-    paint();
-    const target = document.getElementById("ops-manual-preview");
-    if (target) target.innerHTML = "";
-    maybeRun();
-  };
-  if (typeof form.addEventListener === "function") {
-    form.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(maybeRun, 450);
-    });
-    form.addEventListener("input", () => {
-      const scope = scopeById(select.value || "packs");
-      const card = home.operations.find((item) => item.id === scope.op);
-      const session = document.getElementById("ops-manual-session");
-      if (!card || !session || typeof form.querySelector !== "function") return;
-      const text = formNoteText(home.occupancy.schedule || {}, card.id, readForm(form, card.params));
-      session.hidden = !text;
-      session.textContent = text;
+// Dataset facts the form checks against (history mode), read once per page load.
+let datasetFacts = null;
+async function loadDatasetFacts(ctx) {
+  if (datasetFacts) return datasetFacts;
+  try {
+    const rows = await ctx.api("/api/datasets");
+    datasetFacts = new Map((rows || []).map((row) => [row.dataset, row]));
+  } catch {
+    return new Map();
+  }
+  return datasetFacts;
+}
+
+/**
+ * What is wrong with the filled fields before anything is previewed. A
+ * blocking problem stops the automatic preview; the others only warn.
+ */
+export function fieldProblems(opId, params, { today = "", facts = new Map() } = {}) {
+  const problems = [];
+  const start = String(params.start || "");
+  const end = String(params.end || "");
+  const date = String(params.trade_date || "");
+  if (start && end && start > end) {
+    problems.push({ blocking: true, text: tr(`起点 ${start} 晚于终点 ${end}。`, `The start ${start} is after the end ${end}.`) });
+  }
+  if (date && today && date > today) {
+    problems.push({ blocking: true, text: tr(`交易日 ${date} 晚于今天 ${today}。`, `The trade date ${date} is after today, ${today}.`) });
+  }
+  if (end && today && end > today) {
+    problems.push({ blocking: false, text: tr(`终点晚于今天 ${today}，之后的日期还没有数据。`, `The end is after today, ${today}; later dates have no data yet.`) });
+  }
+  const fact = params.dataset ? facts.get(params.dataset) : null;
+  if (opId === "backfill.run" && fact?.history_mode === "snapshot_only" && (!start || !today || start < today)) {
+    problems.push({
+      blocking: false,
+      text: tr(
+        `${ds(params.dataset)}是快照数据集：源只给当天的数据，填旧的起点补不回漏掉的日子。要补今天，用「补抓落后」。`,
+        `${ds(params.dataset)} is a snapshot dataset: the source only serves today, so an old start cannot recover missed days. To fetch today, use Catch up stale data.`,
+      ),
     });
   }
-  paint();
+  return problems;
 }
 
-export function mountOpForm(ctx, home, opId, preset, host, current) {
+export function mountOpForm(ctx, home, opId, preset, host, current, options = {}) {
   const card = home.operations.find((item) => item.id === opId);
   if (!card || !host || current !== generation) return null;
   const initial = {};
@@ -625,50 +911,77 @@ export function mountOpForm(ctx, home, opId, preset, host, current) {
   }
   const sessionText = formNoteText(home.occupancy.schedule || {}, card.id, initial);
   const rangeNote = card.id === "daily.full" || card.id === "daily.group" ? `<p class="panel-note">${dailyRangeNote()}</p>` : "";
+  const note = opNote(card.id);
+  const close = options.drawer
+    ? `<button class="button button-ghost ops-drawer-close" id="ops-drawer-close" type="button" aria-label="${tr("关闭", "Close")}">${tr("关闭", "Close")}</button>`
+    : "";
   host.innerHTML = `<section class="surface-panel report-panel ops-form">
-    <div class="panel-header"><div><h2>${ctx.esc(pick(card, "title"))}</h2><p class="sub">${ctx.esc(pick(card, "summary"))}</p></div></div>
+    <div class="panel-header"><div><h2>${ctx.esc(pick(card, "title"))}</h2><p class="sub">${ctx.esc(pick(card, "summary"))}</p></div>${close}</div>
+    ${note ? `<p class="panel-note" id="ops-op-note">${ctx.esc(note)}</p>` : ""}
+    <ul class="ops-list ops-field-problems" id="ops-field-problems" hidden></ul>
     ${rangeNote}
     ${sessionText ? `<p class="panel-note" id="ops-session">${ctx.esc(sessionText)}</p>` : `<p class="panel-note" id="ops-session" hidden></p>`}
     <form id="ops-fields" class="ops-fields">${card.params.map((spec) => control(spec, preset)).join("")}
-      <div class="action-row"><button class="button button-ghost" type="submit" ${home.mode.ops_enabled ? "" : "disabled"}>${tr("重新预览", "Preview again")}</button></div>
+      ${home.mode.ops_enabled ? "" : `<div class="action-row"><button class="button button-ghost" type="submit" disabled>${tr("重新预览", "Preview again")}</button></div>`}
     </form>
     <div id="ops-preview"></div>
   </section>`;
-  host.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  if (options.scroll !== false) host.scrollIntoView?.({ behavior: "smooth", block: "start" });
   const form = document.getElementById("ops-fields");
+  const today = home.occupancy.schedule?.today || beijingDate(Date.now());
+  let facts = datasetFacts || new Map();
+  const problemsOf = (params) => fieldProblems(card.id, params, { today, facts });
+  const blocked = (params) => problemsOf(params).some((item) => item.blocking);
+  const paintProblems = (params) => {
+    const list = document.getElementById("ops-field-problems");
+    if (!list) return;
+    const problems = problemsOf(params);
+    list.hidden = !problems.length;
+    list.innerHTML = problems.map((item) => `<li class="${item.blocking ? "err" : ""}">${ctx.esc(item.text)}</li>`).join("");
+  };
   if (form && typeof form.querySelector === "function") {
     const paintSession = () => {
-      const text = formNoteText(home.occupancy.schedule || {}, card.id, readForm(form, card.params));
+      const params = readForm(form, card.params);
+      const text = formNoteText(home.occupancy.schedule || {}, card.id, params);
+      paintProblems(params);
       const session = document.getElementById("ops-session");
       if (!session) return;
       session.hidden = !text;
       session.textContent = text;
     };
     form.addEventListener("input", paintSession);
+    paintProblems(readForm(form, card.params));
+    if (card.params.some((spec) => spec.name === "dataset") && !datasetFacts) {
+      void loadDatasetFacts(ctx).then((loaded) => {
+        if (current !== generation || document.getElementById("ops-fields") !== form) return;
+        facts = loaded;
+        paintProblems(readForm(form, card.params));
+      });
+    }
   }
   if (form) {
     form.onsubmit = async (event) => {
       event.preventDefault();
+      if (typeof form.querySelector === "function" && blocked(readForm(form, card.params))) return;
       await preview(ctx, home, card, current);
     };
-    if (home.mode.ops_enabled) autoPreview(form, card.params, () => preview(ctx, home, card, current));
+    if (home.mode.ops_enabled) autoPreview(form, card.params, () => preview(ctx, home, card, current), blocked);
   }
   return card;
 }
 
-function showForm(ctx, home, opId, preset, current) {
+function showForm(ctx, home, opId, preset, current, options = {}) {
   const card = home.operations.find((item) => item.id === opId);
   const host = document.getElementById("ops-form");
   if (!card || !host || current !== generation) return;
-  if (typeof document.querySelector === "function" && typeof CSS !== "undefined") {
-    const section = document.querySelector(`[data-workflow="${CSS.escape(workflowOf(card.id))}"]`);
-    if (section?.after) {
-      section.after(host);
-      const fold = section.closest?.("details");
-      if (fold) fold.open = true;
-    }
+  if (typeof document.querySelectorAll === "function") {
+    document.querySelectorAll("details.ops-more[open]").forEach((menu) => { menu.open = false; });
   }
-  mountOpForm(ctx, home, opId, preset, host, current);
+  mountOpForm(ctx, home, opId, preset, host, current, { ...options, drawer: true, scroll: false });
+  setDrawer(true);
+  const close = document.getElementById("ops-drawer-close");
+  if (close) close.onclick = closeDrawer;
+  host.querySelector?.("input, select, button")?.focus?.();
 }
 
 async function preview(ctx, home, card, current) {
@@ -697,29 +1010,19 @@ async function previewCard(ctx, home, card, params, current, target) {
   if (current !== generation) return;
   const blockers = (body.blockers || []).map((item) => `<li>${esc(item)}</li>`).join("");
   const hints = (body.hints || []).map((item) => `<li>${esc(item)}</li>`).join("");
-  const checks = (body.acknowledgements || [])
-    .map(
-      (item) =>
-        `<label class="ops-check"><input type="checkbox" data-ack="${esc(item.id)}"> ${esc(pick(item, "text"))}</label>`,
-    )
-    .join("");
+  const ackItems = body.acknowledgements || [];
+  const startLabel = ackItems.length ? pick(ackItems[0], "text") : tr("启动", "Start");
   target.innerHTML = `<p class="panel-note">${tr("将执行", "Will run")} <code>${esc(body.command)}</code></p>
-    ${body.plan ? `<pre class="ops-log">${esc(body.plan)}</pre>` : ""}
+    ${body.plan ? `<details class="ops-plan"><summary>${tr("查看执行计划", "Show the plan")}</summary><pre class="ops-log">${esc(body.plan)}</pre></details>` : ""}
     ${blockers ? `<ul class="ops-list err">${blockers}</ul>` : ""}
     ${hints ? `<ul class="ops-list">${hints}</ul>` : ""}
-    ${checks}
-    <div class="action-row"><button class="button button-primary" data-ops-start type="button" ${body.launch_token ? "" : "disabled"}>${tr("启动", "Start")}</button></div>`;
+    <div class="action-row"><button class="button button-primary ops-start" data-ops-start type="button" ${body.launch_token ? "" : "disabled"}>${esc(startLabel)}</button></div>`;
   const button = typeof target.querySelector === "function" ? target.querySelector("[data-ops-start]") : document.getElementById("ops-start");
   if (!button) return;
-  const refresh = () => {
-    const inputs = [...target.querySelectorAll("[data-ack]")];
-    button.disabled = !body.launch_token || inputs.some((input) => !input.checked);
-  };
-  target.querySelectorAll("[data-ack]").forEach((input) => input.addEventListener("change", refresh));
-  refresh();
+  button.disabled = !body.launch_token;
   button.onclick = async () => {
     button.disabled = true;
-    const acknowledged = [...target.querySelectorAll("[data-ack]:checked")].map((input) => input.dataset.ack);
+    const acknowledged = ackItems.map((item) => item.id);
     try {
       const job = await api("/api/ops/jobs", {
         method: "POST",
@@ -797,6 +1100,121 @@ async function renderPackFinish(job, api, csrf) {
   });
 }
 
+export function openJobStreams(jobId, ticket, { log, out, follow, onDone, onText } = {}) {
+  const token = new URLSearchParams(location.search).get("token");
+  const open = (which, node) => {
+    const url = `/api/stream/ops/jobs/${encodeURIComponent(jobId)}?stream=${which}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
+    const source = new EventSource(url);
+    streams.push(source);
+    source.onmessage = (event) => {
+      if (ticket !== generation) return source.close();
+      let frame;
+      try {
+        frame = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (frame.text && node) {
+        node.textContent += frame.text;
+        if (onText) onText(which, node.textContent);
+        if (!follow || follow()) node.scrollTop = node.scrollHeight;
+      }
+      if (frame.done) {
+        source.close();
+        if (onDone) onDone();
+      }
+    };
+  };
+  open("err", log);
+  open("out", out);
+}
+
+function writtenCount(rows) {
+  const number = Number(rows) || 0;
+  if (number >= 10000) return new Intl.NumberFormat(locale(), { notation: "compact", maximumFractionDigits: 1 }).format(number);
+  return number.toLocaleString(locale());
+}
+
+function elapsedText(detail) {
+  if (!detail.started_at) return "";
+  const start = Date.parse(detail.started_at);
+  const end = detail.finished_at ? Date.parse(detail.finished_at) : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "";
+  const seconds = Math.max(0, Math.round((end - start) / 1000));
+  if (seconds < 60) return tr(`耗时 ${seconds} 秒`, `${seconds}s`);
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return tr(`耗时 ${minutes} 分 ${rest} 秒`, `${minutes}m ${rest}s`);
+}
+
+function batchProgress(detail) {
+  const batches = detail.batches || [];
+  const settled = batches.filter((batch) => batch.status === "success" || batch.status === "failed" || batch.status === "stale").length;
+  const active = batches.filter((batch) => batch.status === "running").map((batch) => ds(batch.dataset));
+  const rows = detail.rows_written ?? batches.reduce((sum, batch) => sum + (Number(batch.rows_written) || 0), 0);
+  const parts = [
+    tr(`${settled}/${batches.length} 个批次`, `${settled}/${batches.length} batches`),
+    tr(`写入 ${writtenCount(rows)} 行`, `${writtenCount(rows)} rows written`),
+  ];
+  const elapsed = elapsedText(detail);
+  if (elapsed) parts.push(elapsed);
+  if (active.length) parts.push(tr(`进行中：${active.slice(0, 3).join("、")}`, `In progress: ${active.slice(0, 3).join(", ")}`));
+  return parts.join(tr(" · ", " · "));
+}
+
+function stdoutSummary(text) {
+  const raw = String(text || "");
+  let payload = null;
+  let cursor = raw.length;
+  while (cursor > 0) {
+    const at = raw.lastIndexOf("{", cursor - 1);
+    if (at < 0) break;
+    try {
+      payload = JSON.parse(raw.slice(at));
+      break;
+    } catch {
+      cursor = at;
+    }
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "";
+  const preferred = ["status", "rows", "row_count", "rows_written", "message", "datasets", "errors"];
+  const keys = preferred.filter((key) => key in payload).concat(Object.keys(payload).filter((key) => !preferred.includes(key))).slice(0, 6);
+  if (!keys.length) return "";
+  const items = keys
+    .map((key) => {
+      const value = payload[key];
+      const shown = value != null && typeof value === "object" ? JSON.stringify(value) : String(value ?? "");
+      return `<li><span>${esc(key)}</span> ${esc(shown.slice(0, 160))}</li>`;
+    })
+    .join("");
+  return `<ul class="ops-changes">${items}</ul>`;
+}
+
+function paintJobBoard(detail) {
+  if (!detail || !Array.isArray(detail.batches)) return;
+  const progress = document.getElementById("ops-progress");
+  if (progress) progress.textContent = batchProgress(detail);
+  const fill = document.getElementById("ops-meter-fill");
+  if (fill && fill.style) {
+    const batches = detail.batches || [];
+    const settled = batches.filter((batch) => batch.status === "success" || batch.status === "failed" || batch.status === "stale").length;
+    fill.style.width = `${batches.length ? Math.round((settled / batches.length) * 100) : 0}%`;
+  }
+  const root = document.getElementById("ops-run-board");
+  if (!root) return;
+  let board = root;
+  if (detail.run_id && typeof root.appendChild === "function") {
+    const id = `ops-run-${String(detail.run_id).replace(/[^\w-]/g, "_")}`;
+    board = document.getElementById(id);
+    if (!board) {
+      board = document.createElement("div");
+      board.id = id;
+      root.appendChild(board);
+    }
+  }
+  if (board && board.style) paintRunBoard(board, detail);
+}
+
 async function renderJob(ctx, current) {
   const { api, setPage, esc, jobId } = ctx;
   let job;
@@ -811,12 +1229,10 @@ async function renderJob(ctx, current) {
   if (current !== generation) return;
   const home = await api("/api/ops");
   if (current !== generation) return;
-  const runs = (job.runs || [])
-    .map(
-      (run) =>
-        `<li><a href="#/runs/${encodeURIComponent(run.run_id)}">${esc(run.job_name)}</a> ${esc(run.status)}</li>`,
-    )
-    .join("");
+  const runItems = (runs) =>
+    (runs || [])
+      .map((run) => `<li><a href="#/runs/${encodeURIComponent(run.run_id)}">${esc(run.job_name)}</a> ${esc(run.status)}</li>`)
+      .join("");
   setPage(
     `<section class="page-heading">
       <div class="heading-row"><div><h1>${esc(pick(job, "title") || job.op)}</h1><p class="meta-row"><span id="ops-job-state">${esc(pick(job, "label") || job.state)}</span><code>${esc(job.command || "")}</code></p></div>
@@ -825,36 +1241,59 @@ async function renderJob(ctx, current) {
     <p class="panel-note" id="ops-job-note">${esc(job.outcome?.message || "")}</p>
     <p class="panel-note" id="ops-next" ${jobNextStep(job) ? "" : "hidden"}>${jobNextStep(job)}</p>
     <div id="ops-readiness"></div>
-    ${runs ? `<section class="surface-panel report-panel"><h2>${tr("关联运行", "Related runs")}</h2><ul class="ops-jobs">${runs}</ul></section>` : `<div id="ops-runs"></div>`}
-    <section class="surface-panel report-panel"><div class="panel-header"><h2>${tr("进度", "Progress")}</h2><label class="ops-check"><input type="checkbox" id="ops-follow" checked> ${tr("跟随", "Follow")}</label></div>
-      <pre class="ops-log" id="ops-log"></pre></section>
-    <section class="surface-panel report-panel"><h2>${tr("命令输出", "Command output")}</h2><pre class="ops-log" id="ops-out"></pre></section>`,
+    <section class="surface-panel report-panel" id="ops-runs">
+      <div class="panel-header"><h2>${tr("关联运行", "Related runs")}</h2></div>
+      <div class="ops-meter" id="ops-meter"><i id="ops-meter-fill"></i></div>
+      <p class="panel-meta" id="ops-progress"></p>
+      ${job.runs?.length ? "" : `<p class="muted" id="ops-runs-empty">${tr("还没有关联运行。", "No related runs yet.")}</p>`}
+      <ul class="ops-jobs" id="ops-runs-list">${runItems(job.runs)}</ul>
+      <div id="ops-run-board"></div>
+    </section>
+    <details class="surface-panel report-panel" id="ops-logs" ${job.state === "running" || job.state === "starting" ? "open" : ""}>
+      <summary>${tr("终端日志", "Terminal logs")}</summary>
+      <div class="ops-log-grid">
+        <section>
+          <div class="panel-header"><h2>${tr("进度", "Progress")}</h2><label class="ops-check"><input type="checkbox" id="ops-follow" checked> ${tr("跟随", "Follow")}</label></div>
+          <pre class="ops-log" id="ops-log"></pre>
+        </section>
+        <section>
+          <h2>${tr("命令输出", "Command output")}</h2>
+          <div id="ops-out-summary"></div>
+          <pre class="ops-log" id="ops-out"></pre>
+        </section>
+      </div>
+    </details>`,
     "ops",
   );
-  const log = document.getElementById("ops-log");
-  const out = document.getElementById("ops-out");
-  const follow = () => document.getElementById("ops-follow")?.checked;
-  const token = new URLSearchParams(location.search).get("token");
-  const open = (which, node) => {
-    const url = `/api/stream/ops/jobs/${encodeURIComponent(jobId)}?stream=${which}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
-    const source = new EventSource(url);
-    streams.push(source);
-    source.onmessage = (event) => {
-      if (current !== generation) return source.close();
-      const frame = JSON.parse(event.data);
-      if (frame.text) {
-        node.textContent += frame.text;
-        if (follow()) node.scrollTop = node.scrollHeight;
+  const seenRuns = new Set();
+  async function watchRuns(runs) {
+    for (const run of runs || []) {
+      if (!run?.run_id || seenRuns.has(run.run_id)) continue;
+      seenRuns.add(run.run_id);
+      let detail = null;
+      try {
+        detail = await api(`/api/runs/${encodeURIComponent(run.run_id)}`);
+      } catch {
+        detail = null;
       }
-      if (frame.done) {
-        source.close();
-        refreshJob();
-      }
-    };
-    return source;
-  };
-  open("err", log);
-  open("out", out);
+      if (current !== generation) return;
+      if (detail) paintJobBoard(detail);
+      if (detail?.status && detail.status !== "running") continue;
+      const source = new EventSource(`/api/stream/runs/${encodeURIComponent(run.run_id)}`);
+      streams.push(source);
+      source.onmessage = (event) => {
+        if (current !== generation) return source.close();
+        let frame;
+        try {
+          frame = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        paintJobBoard(frame);
+        if (frame.status && frame.status !== "running") source.close();
+      };
+    }
+  }
   async function refreshJob() {
     if (current !== generation) return;
     const latest = await api(`/api/ops/jobs/${encodeURIComponent(jobId)}`);
@@ -871,13 +1310,32 @@ async function renderJob(ctx, current) {
     const cancel = document.getElementById("ops-cancel");
     if (cancel) cancel.disabled = !(latest.state === "running" || latest.state === "starting");
     await renderPackFinish(latest, api, home.csrf_token);
-    const host = document.getElementById("ops-runs");
-    if (host && latest.runs?.length) {
-      host.innerHTML = `<section class="surface-panel report-panel"><h2>${tr("关联运行", "Related runs")}</h2><ul class="ops-jobs">${latest.runs
-        .map((run) => `<li><a href="#/runs/${encodeURIComponent(run.run_id)}">${esc(run.job_name)}</a> ${esc(run.status)}</li>`)
-        .join("")}</ul></section>`;
+    const list = document.getElementById("ops-runs-list");
+    if (list && latest.runs?.length) {
+      list.innerHTML = runItems(latest.runs);
+      const empty = document.getElementById("ops-runs-empty");
+      if (empty) empty.hidden = true;
     }
+    await watchRuns(latest.runs);
   }
+  openJobStreams(jobId, current, {
+    log: document.getElementById("ops-log"),
+    out: document.getElementById("ops-out"),
+    follow: () => document.getElementById("ops-follow")?.checked,
+    onText: (which, text) => {
+      if (which !== "out") return;
+      const host = document.getElementById("ops-out-summary");
+      const pre = document.getElementById("ops-out");
+      if (!host) return;
+      const summary = stdoutSummary(text);
+      host.innerHTML = summary;
+      if (pre) pre.hidden = Boolean(summary);
+    },
+    onDone: () => {
+      void refreshJob();
+    },
+  });
+  await watchRuns(job.runs);
   document.getElementById("ops-cancel").onclick = async () => {
     const button = document.getElementById("ops-cancel");
     button.disabled = true;

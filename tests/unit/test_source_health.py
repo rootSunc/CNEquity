@@ -355,7 +355,7 @@ def _serve_client(config):
 
     from cnequity.serve.app import create_app
 
-    return TestClient(create_app(config))
+    return TestClient(create_app(config), base_url="http://127.0.0.1")
 
 
 def _store(config, vantage: str, payload) -> None:

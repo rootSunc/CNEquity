@@ -188,6 +188,42 @@ def launch_runs(config, launch_id: str, target_run_id: str | None) -> list[dict]
     return rows
 
 
+def launch_stats(config, run_ids: list[str]) -> dict[str, dict]:
+    """Rows written and still-failed batches of these runs, keyed by run id.
+
+    One read of the manifest for a whole job list. A failed batch keeps its
+    dataset and reason code, so a job whose result names no fallback (a stale
+    catch-up, say) can still say what it could not fetch.
+    """
+    if config is None or not run_ids or not Path(config.manifest_path).exists():
+        return {}
+    import sqlite3
+
+    stats: dict[str, dict] = {}
+    unique = list(dict.fromkeys(run_ids))
+    try:
+        with closing(sqlite3.connect(f"file:{config.manifest_path}?mode=ro", uri=True)) as conn:
+            for start in range(0, len(unique), 500):
+                chunk = unique[start : start + 500]
+                marks = ",".join("?" * len(chunk))
+                for run_id, rows in conn.execute(
+                    f"SELECT run_id, rows_written FROM ingestion_runs WHERE run_id IN ({marks})",
+                    chunk,
+                ):
+                    stats.setdefault(run_id, {"rows_written": 0, "failed": []})
+                    stats[run_id]["rows_written"] = int(rows or 0)
+                for run_id, dataset, reason in conn.execute(
+                    f"SELECT run_id, dataset, reason_code FROM ingestion_batches "
+                    f"WHERE run_id IN ({marks}) AND status = 'failed'",
+                    chunk,
+                ):
+                    entry = stats.setdefault(run_id, {"rows_written": 0, "failed": []})
+                    entry["failed"].append({"dataset": dataset, "reason_code": reason})
+    except sqlite3.Error:
+        return {}
+    return stats
+
+
 def classify(result_kind: str, exit_code: int, runs: list[dict], stdout: str) -> tuple[str, str]:
     """``(state, message)`` after a command returned. Exceptions are handled earlier."""
     if result_kind == "gate":

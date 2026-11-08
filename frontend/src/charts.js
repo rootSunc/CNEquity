@@ -1,7 +1,7 @@
 // ECharts, registered piece by piece rather than pulled in whole: the prebuilt
 // bundle is 1.1MB and half of it is chart types this dashboard never draws.
 import * as echarts from "echarts/core";
-import { BarChart, CustomChart, HeatmapChart } from "echarts/charts";
+import { BarChart, CustomChart, HeatmapChart, LineChart } from "echarts/charts";
 import {
   DataZoomComponent,
   GridComponent,
@@ -16,6 +16,7 @@ echarts.use([
   BarChart,
   CustomChart,
   HeatmapChart,
+  LineChart,
   DataZoomComponent,
   GridComponent,
   LegendComponent,
@@ -274,6 +275,104 @@ export function provenanceSeries(el, data) {
       barMaxWidth: 40,
       data: periods.map((d) => bucket.get(`${d}|${key}`) || 0),
     })),
+  }));
+}
+
+export function partitionSeries(el, rows, mode = "both") {
+  const t = tokens();
+  const points = (rows || []).filter((row) => row.period_start != null);
+  if (!el) return null;
+  if (!points.length) {
+    el.innerHTML = `<p class="muted">${tr("没有分区体积。", "No partition sizes yet.")}</p>`;
+    return null;
+  }
+  const labels = points.map((row) => String(row.period_start).slice(0, 10));
+  const rowName = tr("行", "Rows");
+  const byteName = tr("体积", "Size");
+  const showRows = mode !== "bytes";
+  const showBytes = mode !== "rows";
+  el.style.height = "230px";
+  const rowAxis = {
+    type: "value",
+    splitLine: { lineStyle: { color: t.line } },
+    axisLabel: {
+      color: t.muted,
+      fontSize: 12,
+      formatter: (v) => (v >= 1e6 ? `${v / 1e6}M` : v >= 1e3 ? `${v / 1e3}k` : v),
+    },
+  };
+  const byteAxis = {
+    type: "value",
+    splitLine: { show: false },
+    axisLabel: {
+      color: t.muted,
+      fontSize: 12,
+      formatter: (v) => (v >= 1e9 ? `${v / 1e9}G` : v >= 1e6 ? `${v / 1e6}M` : v >= 1e3 ? `${v / 1e3}k` : v),
+    },
+  };
+  const yAxis = [];
+  const series = [];
+  if (showRows) {
+    yAxis.push(rowAxis);
+    series.push({
+      name: rowName,
+      type: "bar",
+      yAxisIndex: yAxis.length - 1,
+      color: t.series[0],
+      barMaxWidth: 18,
+      data: points.map((row) => row.row_count || 0),
+    });
+  }
+  if (showBytes) {
+    yAxis.push(byteAxis);
+    series.push({
+      name: byteName,
+      type: "line",
+      yAxisIndex: yAxis.length - 1,
+      color: t.series[1],
+      showSymbol: false,
+      data: points.map((row) => row.bytes || 0),
+    });
+  }
+  return mount(el, () => ({
+    animation: false,
+    grid: { left: 62, right: showRows && showBytes ? 62 : 16, top: 16, bottom: 72 },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: t.surface,
+      borderColor: t.line,
+      borderWidth: 0.5,
+      textStyle: { color: t.ink, fontSize: 12 },
+    },
+    legend: {
+      data: [showRows ? rowName : "", showBytes ? byteName : ""].filter(Boolean),
+      bottom: 0,
+      textStyle: { color: t.muted, fontSize: 12 },
+      itemWidth: 10,
+      itemHeight: 10,
+      icon: "roundRect",
+    },
+    dataZoom: [
+      { type: "inside" },
+      {
+        type: "slider",
+        bottom: 28,
+        height: 16,
+        borderColor: t.line,
+        fillerColor: "transparent",
+        handleStyle: { color: t.muted },
+        textStyle: { color: t.muted, fontSize: 12 },
+      },
+    ],
+    xAxis: {
+      type: "category",
+      data: labels,
+      axisLine: { lineStyle: { color: t.line } },
+      axisTick: { show: false },
+      axisLabel: { color: t.muted, fontSize: 12, hideOverlap: true },
+    },
+    yAxis,
+    series,
   }));
 }
 

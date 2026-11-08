@@ -1,6 +1,6 @@
 // Lake switches. A preview writes nothing; apply updates the config file only.
 import { driftHeldNote } from "./drift.js";
-import { pick, tr } from "./i18n.js";
+import { ds, pick, tr } from "./i18n.js";
 export async function renderSettings(ctx, home, alive, flash = "") {
   const { api, esc } = ctx;
   const host = document.getElementById("ops-settings");
@@ -24,13 +24,19 @@ export async function renderSettings(ctx, home, alive, flash = "") {
   if (!alive()) return;
   const writable = home.mode.ops_enabled;
   const disabled = writable ? "" : "disabled";
+  const sources = home.occupancy?.sources;
   const sections = (value.sections || [])
     .map((section) => {
-      const fields = (section.settings || []).map((spec) => field(spec, disabled, esc)).join("");
-      return `<h3>${esc(pick(section, "title"))}</h3>${fields}`;
+      const lit = SOURCE_SECTIONS.has(section.id);
+      const fields = (section.settings || [])
+        .map((spec) => (lit
+          ? `<div class="ops-source-row">${field(spec, disabled, esc)}${sourceState(spec, sources, esc)}</div>`
+          : field(spec, disabled, esc)))
+        .join("");
+      return `<h3>${esc(pick(section, "title"))}</h3>${lit ? `<div class="ops-source-list">${fields}</div>` : fields}`;
     })
     .join("");
-  host.innerHTML = `<div class="panel-header"><h2>${tr("取数设置", "Fetch settings")}</h2></div>
+  host.innerHTML = `<div class="panel-header"><h2>${tr("数据源与取数设置", "Sources and fetch settings")}</h2></div>
     <p class="panel-note">${esc(pick(value, "note") || "")}</p>
     ${value.push2_env_note ? `<p class="panel-note">${esc(pick(value, "push2_env_note"))}</p>` : ""}
     ${writable ? "" : `<p class="panel-note">${tr("当前模式不能修改这些设置。", "This mode cannot change these settings.")}</p>`}
@@ -70,17 +76,14 @@ export async function renderSettings(ctx, home, alive, flash = "") {
       const items = (preview.changes || [])
         .map((change) => `<li>${esc(pick(change, "label"))}${tr("：", ": ")}${esc(pick(change, "before_label"))} → ${esc(pick(change, "after_label"))}</li>`)
         .join("");
+      const count = (preview.changes || []).length;
       target.innerHTML = `<p class="panel-note">${esc(pick(preview, "note") || "")}</p>
         ${preview.push2_env_note ? `<p class="panel-note">${esc(preview.push2_env_note)}</p>` : ""}
-        <ul class="ops-list">${items}</ul>
-        <label class="ops-check"><input id="settings-ack" type="checkbox"> ${esc(pick(preview, "acknowledgement"))}</label>
-        <div class="action-row"><button class="button button-primary" id="settings-apply" type="button" disabled>${tr("保存设置", "Save settings")}</button></div>
+        <ul class="ops-list ops-changes">${items}</ul>
+        <p class="panel-note">${esc(pick(preview, "acknowledgement"))}</p>
+        <div class="action-row"><button class="button button-primary" id="settings-apply" type="button">${tr(`保存这 ${count} 项改动`, `Save these ${count} changes`)}</button></div>
         <p class="panel-note" id="settings-note"></p>`;
       const button = document.getElementById("settings-apply");
-      button.disabled = true;
-      document.getElementById("settings-ack").onchange = (change) => {
-        button.disabled = !change.target.checked;
-      };
       button.onclick = async () => {
         if (!alive() || current !== previewGeneration) return;
         button.disabled = true;
@@ -109,6 +112,65 @@ export async function renderSettings(ctx, home, alive, flash = "") {
       if (alive() && current === previewGeneration) target.innerHTML = `<p class="panel-note err">${esc(err.message)}</p>`;
     }
   };
+}
+
+const SOURCE_SECTIONS = new Set(["sources", "licensed"]);
+
+// The registry source each switch controls; today's failures are counted by it.
+const SWITCH_SOURCE = {
+  tdx: "tdx_protocol",
+  eastmoney: "eastmoney",
+  sina_bars: "sina",
+  baostock: "baostock",
+  ths: "ths",
+  cninfo: "cninfo",
+  tushare: "tushare",
+  ths_official: "ths_official",
+};
+
+// Each source switch with what it is doing today: off, paused, tripped, missing
+// its key, or on — plus today's requests and failed batches where known.
+function sourceState(spec, sources, esc) {
+  if (spec.kind !== "bool") return "";
+  const breakers = sources?.breakers || [];
+  const keys = sources?.keys || {};
+  let tone = "ok";
+  let word = tr("开启", "On");
+  if (spec.id === "push2_paused") {
+    tone = spec.value ? "warn" : "ok";
+    word = spec.value ? tr("已暂停", "Paused") : tr("可用", "Available");
+  } else if (!spec.value) {
+    tone = "muted";
+    word = tr("关闭", "Off");
+  } else if (spec.id in keys && !keys[spec.id]) {
+    tone = "bad";
+    word = tr("缺少密钥，不会发请求", "No key; no request is sent");
+  } else if (spec.id === "eastmoney" && breakers.length) {
+    tone = "bad";
+    word = tr(`今日熔断：${breakers.join("、")}`, `Tripped today: ${breakers.join(", ")}`);
+  } else if (spec.id === "eastmoney" && sources?.push2_paused) {
+    tone = "warn";
+    word = tr("push2 暂停，其余可用", "push2 paused, the rest available");
+  } else if (spec.id in keys) {
+    word = tr("开启，密钥已配置", "On, key configured");
+  }
+  const facts = [];
+  if (spec.id === "eastmoney" || spec.id === "push2_paused") {
+    const hosts = Object.entries(sources?.requests || {}).filter(([name]) => (spec.id === "push2_paused" ? name === "push2" : name !== "push2"));
+    for (const [name, item] of hosts) {
+      facts.push(item.budget
+        ? tr(`${name} 今日请求 ${item.requests}/${item.budget}`, `${name} ${item.requests}/${item.budget} requests today`)
+        : tr(`${name} 今日请求 ${item.requests}`, `${name} ${item.requests} requests today`));
+    }
+  }
+  const failed = sources?.failures?.[SWITCH_SOURCE[spec.id]];
+  if (failed?.batches) {
+    const names = failed.datasets.slice(0, 3).map((name) => ds(name)).join(tr("、", ", "));
+    facts.push(tr(`今日失败 ${failed.batches} 批：${names}`, `${failed.batches} failed ${failed.batches === 1 ? "batch" : "batches"} today: ${names}`));
+    if (tone === "ok") tone = "warn";
+  }
+  const detail = facts.length ? `<small class="ops-source-facts">${esc(facts.join(tr("；", "; ")))}</small>` : "";
+  return `<span class="ops-source-state"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${esc(word)}</span>${detail}`;
 }
 
 function field(spec, disabled, esc) {

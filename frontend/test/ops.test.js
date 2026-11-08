@@ -267,8 +267,6 @@ test("schedule only applies after preview and explicit confirmation", async (t) 
     backup: true, backup_run_at: "22:45", backup_root: "/external/backups", backup_datasets: ["daily_bars"],
     events: true, events_group: "news", events_interval_minutes: 5, daily_packs: [],
   });
-  ctx.node("schedule-ack").onchange({ target: { checked: true } });
-  assert.equal(ctx.node("schedule-apply").disabled, false);
   await ctx.node("schedule-apply").onclick();
   assert.deepEqual(calls.find(([path]) => path.endsWith("/apply"))[1], { token: "once", acknowledged: true });
   assert.equal(calls.filter(([path]) => path === "/api/ops/schedule").length, 2);
@@ -383,9 +381,11 @@ test("a finished scheduled session names that trade date", async (t) => {
   assert.match(html(), /id="ops-recent" hidden/);
   assert.equal(ctx.node("ops-recent").hidden, true);
   assert.equal(ctx.node("ops-recent").innerHTML, "");
-  assert.match(html(), /id="ops-daily"[\s\S]*id="ops-schedule"/);
-  assert.match(html(), /<details class="ops-fold" id="ops-manual-fold"><summary>手动更新<\/summary>/);
-  assert.match(html(), /<details class="ops-fold" id="ops-commands-fold"><summary>常用命令<\/summary>/);
+  assert.match(html(), /id="ops-daily"[\s\S]*id="ops-timeline"[\s\S]*id="ops-schedule"/);
+  assert.match(html(), /id="ops-status-session"/);
+  assert.match(html(), /id="ops-tab-today"/);
+  assert.match(html(), /id="ops-form" hidden/);
+  assert.match(html(), /id="ops-commands-fold"/);
   assert.match(html(), /初始化已完成/);
 });
 
@@ -415,11 +415,14 @@ test("a closed session does not offer run today, and a pending one names that da
   ctx.api = consoleApi(home);
   const daily = () => {
     const pageHtml = html();
-    return pageHtml.slice(pageHtml.indexOf('id="ops-daily"'), pageHtml.indexOf('id="ops-manual-fold"'));
+    return pageHtml.slice(pageHtml.indexOf('id="ops-daily"'), pageHtml.indexOf('id="ops-timeline"'));
   };
   await renderOps(ctx);
-  assert.match(daily(), /今天 2026-10-05 不是交易日。/);
-  assert.match(daily(), /2026-09-30 的定时日更（17:30）已经跑过。/);
+  // The session sentence lives on the status card only, not again above the buttons.
+  const card = () => html().slice(html().indexOf('id="ops-status-session"'), html().indexOf('id="ops-status-scheduler"'));
+  assert.match(card(), /今天 2026-10-05 不是交易日。/);
+  assert.match(card(), /2026-09-30 的定时日更（17:30）已经跑过。/);
+  assert.doesNotMatch(daily(), /已经跑过/);
   assert.doesNotMatch(daily(), /data-op="daily.full"/);
   assert.match(daily(), /今天不是交易日，所以没有“现在跑今天”。/);
   assert.match(daily(), /data-op="daily.stale"/);
@@ -489,7 +492,7 @@ test("the daily form says whether this run counts as the scheduled session", asy
   assert.match(ctx.node("ops-form").innerHTML, /这次不会写“定时日更已跑过”的标记。/);
 });
 
-test("manual update switches a date range onto one dataset", async (t) => {
+test("intents open one start form in the drawer, and a range goes to one dataset", async (t) => {
   const ctx = page(t);
   const html = capture(ctx);
   ctx.api = consoleApi({
@@ -513,20 +516,70 @@ test("manual update switches a date range onto one dataset", async (t) => {
     ],
     occupancy: { hints: [], lake_empty: false, schedule: {} },
   });
+  const buttons = new Map();
+  globalThis.document.querySelectorAll = (selector) => {
+    if (selector !== "[data-op]") return [];
+    const found = [...html().matchAll(/data-op="([^"]+)"/g)].map((match) => match[1]);
+    return found.map((op) => {
+      if (!buttons.has(op)) buttons.set(op, { dataset: { op } });
+      return buttons.get(op);
+    });
+  };
   await renderOps(ctx);
   const pageHtml = html();
-  assert.match(pageHtml, /日更只有一个交易日/);
-  assert.match(pageHtml, /不会把那天记成定时日更已完成/);
+  assert.match(pageHtml, /补一段历史/);
   assert.match(pageHtml, /cne repair/);
-  assert.match(pageHtml, /用这个/);
-  assert.match(ctx.node("ops-manual-fields").innerHTML, /交易日/);
-  ctx.node("ops-scope").value = "dataset";
-  ctx.node("ops-scope").onchange();
-  const fields = ctx.node("ops-manual-fields").innerHTML;
+  assert.match(pageHtml, /命令参考/);
+  assert.equal(ctx.node("ops-form").innerHTML, "", "nothing opens until the reader picks an action");
+  buttons.get("backfill.run").onclick();
+  const fields = ctx.node("ops-form").innerHTML;
+  assert.equal(ctx.node("ops-form").hidden, false);
   assert.match(fields, /起点/);
   assert.match(fields, /终点/);
   assert.match(fields, /daily_bars/);
-  assert.doesNotMatch(fields, /交易日/);
+  assert.match(fields, /一次只能回填一个数据集/);
+  assert.match(fields, /id="ops-drawer-close"/);
+  ctx.node("ops-drawer-close").onclick();
+  assert.equal(ctx.node("ops-form").hidden, true);
+  assert.equal(ctx.node("ops-form").innerHTML, "");
+});
+
+test("a live job shows batch progress from the run stream", async (t) => {
+  const ctx = page(t);
+  ctx.jobId = "job-live";
+  const job = {
+    state: "running",
+    op: "daily.full",
+    title: "跑一天的更新",
+    command: "cne run daily",
+    runs: [{ run_id: "run-1", job_name: "daily", status: "running" }],
+  };
+  const detail = {
+    run_id: "run-1",
+    status: "running",
+    rows_written: 1200,
+    batches: [
+      { dataset: "daily_bars", status: "success", rows_written: 1000 },
+      { dataset: "adj_factors", status: "running", rows_written: 200 },
+    ],
+  };
+  ctx.api = async (path) => {
+    if (path === "/api/ops") return { csrf_token: "csrf" };
+    if (path === "/api/runs/run-1") return detail;
+    if (path === "/api/ops/jobs/job-live") return job;
+    throw new Error(path);
+  };
+  await renderOps(ctx);
+  assert.match(ctx.node("ops-progress").textContent, /1\/2 个批次/);
+  assert.match(ctx.node("ops-progress").textContent, /1,200/);
+  const runSource = ctx.sources.find((source) => source.url.includes("/api/stream/runs/run-1"));
+  assert.ok(runSource);
+  detail.batches[1].status = "success";
+  detail.rows_written = 1500;
+  detail.status = "succeeded";
+  runSource.onmessage({ data: JSON.stringify(detail) });
+  assert.match(ctx.node("ops-progress").textContent, /2\/2 个批次/);
+  assert.equal(runSource.closed, true);
 });
 
 test("a finished job offers the next step for that command", async (t) => {
@@ -622,7 +675,7 @@ test("settings apply only after preview and confirmation", async (t) => {
   });
   assert.match(ctx.node("settings-preview").innerHTML, /暂停 push2：关 → 开/);
   assert.match(ctx.node("settings-preview").innerHTML, /定时日更、收尾补抓和之后的命令都会按新值执行/);
-  ctx.node("settings-ack").onchange({ target: { checked: true } });
+  assert.match(ctx.node("settings-preview").innerHTML, /保存这 1 项改动/);
   assert.equal(ctx.node("settings-apply").disabled, false);
   await ctx.node("settings-apply").onclick();
   assert.deepEqual(calls.find(([path]) => path.endsWith("/apply"))[1], { token: "once", acknowledged: true });
@@ -657,6 +710,23 @@ test("read-only settings render disabled controls", async (t) => {
   assert.match(ctx.node("ops-settings").innerHTML, /当前模式不能修改这些设置/);
 });
 
+test("each source switch shows today's state, requests and failed batches", async (t) => {
+  const ctx = page(t);
+  ctx.api = async () => settingsState();
+  const sources = {
+    push2_paused: true,
+    breakers: [],
+    requests: { push2: { requests: 3, budget: 150 } },
+    keys: {},
+    failures: { tdx_protocol: { batches: 2, datasets: ["daily_bars"] } },
+  };
+  await renderSettings(ctx, { mode: { ops_enabled: true }, occupancy: { sources } }, () => true);
+  const html = ctx.node("ops-settings").innerHTML;
+  assert.match(html, /tone-ok[^<]*<\/i>可用/);
+  assert.match(html, /push2 今日请求 3\/150/);
+  assert.match(html, /今日失败 2 批：/);
+});
+
 test("daily runs point at a dated daily_bars backfill and keep a single trade date", async (t) => {
   const ctx = page(t);
   const html = capture(ctx);
@@ -682,7 +752,6 @@ test("daily runs point at a dated daily_bars backfill and keep a single trade da
     occupancy: { hints: [], lake_empty: false, schedule: {} },
   });
   await renderOps(ctx);
-  assert.match(html(), /#\/ops\?op=backfill.run&dataset=daily_bars/);
   assert.match(ctx.node("ops-form").innerHTML, /#\/ops\?op=backfill.run&dataset=daily_bars/);
   assert.doesNotMatch(ctx.node("ops-form").innerHTML, /name="start"/);
   globalThis.location.hash = "#/ops?op=backfill.run&dataset=daily_bars";
@@ -709,3 +778,32 @@ test("backup inventory only reads and links to job previews", async (t) => {
   await renderBackups(ctx, { mode: { ops_enabled: false } }, () => true);
   assert.doesNotMatch(ctx.node("ops-backups").innerHTML, /op=snapshot.restore/);
 });
+
+test("the today panel draws stale datasets, the daily matrix and today's timeline", async (t) => {
+  const ctx = page(t);
+  const base = consoleApi({
+    csrf_token: "csrf",
+    mode: { ops_enabled: true, label: "可发起取数" },
+    operations: [{ id: "backfill.run", title: "回填一个数据集", summary: "回填", available: true, params: [] }],
+    occupancy: { hints: [], lake_empty: false, schedule: { daily_run_at: "17:30" }, sources: { push2_paused: true, breakers: [] } },
+  });
+  const asked = [];
+  ctx.api = async (path) => {
+    asked.push(path);
+    if (path === "/api/health") return { anchor: "2026-11-06", stale_datasets: ["valuation_metrics"] };
+    if (path === "/api/datasets") return [{ dataset: "valuation_metrics", history_mode: "by_date", watermark: "2026-11-03" }];
+    if (path.startsWith("/api/runs/daily-matrix")) {
+      return { sessions: ["2026-11-06"], groups: ["core"], cells: [{ group: "core", trade_date: "2026-11-06", status: "failed", run_id: "r1", attempts: 1 }] };
+    }
+    return base(path);
+  };
+  await renderOps(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(asked.some((path) => /^\/api\/ops\/jobs\?limit=500&since=/.test(path)), "today's jobs are asked by time, not by count");
+  assert.ok(asked.includes("/api/ops/jobs?limit=50&exclude_op=events.run"));
+  assert.match(ctx.node("ops-stale-body").innerHTML, /落后 3 天/);
+  assert.match(ctx.node("ops-stale-body").innerHTML, /op=backfill.run&amp;dataset=valuation_metrics|op=backfill.run&dataset=valuation_metrics/);
+  assert.match(ctx.node("ops-matrix-body").innerHTML, /href="#\/runs\/r1"/);
+  assert.match(ctx.node("ops-timeline-body").innerHTML, /<svg class="ops-timeline-svg"/);
+});
+
