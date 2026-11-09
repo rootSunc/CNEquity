@@ -11,11 +11,12 @@ import polars as pl
 
 from cnequity.domain.datasets import (
     DATASETS,
+    PIT_DATASET_NAMES,
     ROW_COUNT_MUTATION_MIN_BASELINE_ROWS,
     ROW_COUNT_MUTATION_MIN_RATIO,
 )
 from cnequity.domain.partitions import granularity_of
-from cnequity.domain.pit import PIT_DATASET_NAMES, normalize_pit_storage_columns
+from cnequity.domain.pit import normalize_pit_storage_columns
 from cnequity.domain.schemas import (
     DATASET_SCHEMAS,
     MOCK_SOURCE,

@@ -13,10 +13,9 @@ import polars as pl
 
 from cnequity.domain.action_evidence import clear_invalid_payment_evidence
 from cnequity.domain.canonical import dedupe_by_primary_key
-from cnequity.domain.datasets import granularity_for_dataset
+from cnequity.domain.datasets import PIT_DATASET_NAMES, granularity_for_dataset
 from cnequity.domain.partitions import Granularity
 from cnequity.domain.pit import (
-    PIT_DATASET_NAMES,
     PIT_STORAGE_COLUMNS,
     normalize_pit_storage_columns,
     retain_pit_vintages,

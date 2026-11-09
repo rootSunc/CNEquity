@@ -28,6 +28,14 @@
   - `cne storage plan` 改为只读预览，输出 `keep`、`candidate_ids`、`logical_bytes_selected`，`--keep` 默认取配置值；`--phase` 不再使用。`cne storage apply` 已移除，调用时报错并说明替代做法。`cne storage inspect --keep` 也默认取配置值；
   - 网页存储页去掉「检查到期项目」「检查待标记项目」，页头写明保留几代，超出保留代数的版本标为「下次回补或日更时删除」。此前页头写着「不自动删除」，与实际不符。`/api/storage` 不再返回 `grace_days` 和 `not_before`，新增 `automatic_retention`，`keep` 取配置值；版本的 `status` 改为 `scheduled`、`deletable` 或 `protected`，暂存的 `unmarked` 改为 `deletable`；`POST /api/storage/reviews` 必须带 `object_ids` 或 `resume_plan_id`，不再接受 `phase: "mark"`；
   - `cne run clean` 的 JSON 去掉总为 0 的 `revision_generations[].marked`。
+- 修复 `cne repair valuation-outage` 每次运行都报错退出（`AttributeError: 'tuple' object has no attribute 'split'`），预览和 `--apply` 都无法使用。
+- `cne backfill financial_statement_items --source tdx_fin --plan` 不再直接开始回补：此前 `--source tdx_fin` 先于 `--plan` 处理，加了 `--plan` 也会下载并写入。现在只打印起止日期和要下载的报告期。
+- `cne backfill` 的 `--source`、`--refetch`、`--workers` 是否可用，改由各数据集自己声明，回补命令和各个 `cne repair` 子命令共用同一处检查。行为不变，只有报错措辞变了：
+  - 给不支持的数据集用 `--source` 时，报错列出所有支持的数据集及其来源（含此前漏写的 `option_bars (tushare)`）；给 `financial_statement_items` 或 `option_bars` 传了它们不接受的来源时，改为指出该数据集可用的来源，退出码由 1 变为 2（参数错误）；
+  - `--refetch` 不适用时列出的数据集按注册表顺序排列。
+- `futures_continuous`（期货连续合约）写入和体检时也按期货行情的规则校验：结算价必须为正，成交量和持仓量不能缺失或为负，有完整 K 线时最高、最低价必须包住开盘和收盘。此前只有 `futures_bars`、`option_bars`、`futures_minute_bars` 校验，连续合约照单全收。现有数据全部通过（41.5 万行），无需迁移。
+- 访问新浪的四处重试改用同一套规则：遇到限流（HTTP 429/456）先让所有新浪通道一起冷却 30 秒再重试，遇到 5xx 依次等 5 秒、10 秒再重试，最多 3 次。此前退市股历史恢复遇到限流只在本线程睡几秒就再次请求，容易招致更长的封禁；美元离岸人民币（USD/CNH）和国内期货行情遇到 5xx 则立即重试，不做等待。日线补缺在同一只股票第二次被限流时停止本次补缺的做法保持不变。
+- 自行构造 `DatasetSpec` 的代码不能再传 `pit` 和 `pit_grade`：二者改由 `pit_quality` 推出（`strict` 与 `reconstructed` 为点时数据集），读取这两个属性的结果不变，导出的数据集契约逐字节不变。每个数据集的支持级别、取值规则、单位和 `data_version` 也都写回各自的注册项，不再分散在按名字查找的旁表里。
 - 网页控制台切换页面时，前一个页面晚到的请求不再覆盖当前页面：此前从概览打开操作页，地址栏停在操作页，内容却会被加载较慢的概览替换。
 - 期货和期权行情的成交量、持仓量、持仓变化、成交额单元格为空时，不再读成 0：各交易所文件和新浪接口都用 0 表示没有成交或持仓，空单元格是损坏的数据。此前空成交量会让一个有成交的合约被存成无成交行，价格被清空。现在空值保持为空，成交量或持仓量为空的行按行隔离并报 `futures_row_rejected` 警告，同一交易日的其他合约照常写入。已有数据不需要迁移：正常文件里不会出现空的计数单元格，郑商所、上期所、中金所和广期所文件还会按小计核对成交量和持仓量。
 - 数据集版本号不再重复使用：一次发布若在写下版本回执之后、切换 `current.json` 之前中断，下一次成功发布此前会沿用同一个版本号，同一编号就有两份回执，按编号固定读取的查询和 `dataset_revisions()` 可能读到从未发布的那一份。现在编号跳过中断留下的号码，`dataset_revisions()` 沿已发布版本的链回溯，按编号或 id 固定读取一个比当前版本更新、从未发布的版本时直接报错。已有的湖不受影响，无需迁移。

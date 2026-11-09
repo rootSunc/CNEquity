@@ -135,11 +135,16 @@ def test_sweep_retries_transient_sina_rate_limit(tmp_path, monkeypatch):
             raise httpx.HTTPStatusError("rate limited", request=request, response=response)
         return date(2009, 12, 15)
 
-    monkeypatch.setattr("cnequity.steps.delisted.time.sleep", sleeps.append)
+    deferred: list[tuple[str, float]] = []
+    monkeypatch.setattr("cnequity.domain.rate_limit.time.sleep", sleeps.append)
+    monkeypatch.setattr(cfg, "defer_source", lambda source, s: deferred.append((source, s)))
     result = discover_delisted(cfg, limit=1, probe=flaky)
 
     assert attempts == 3
-    assert sleeps == [5.0, 10.0]
+    # A rate limit cools every Sina lane; it used to sleep in this thread only
+    # and ask again, which is what earns a longer ban.
+    assert sleeps == []
+    assert deferred == [("sina_bars", 30.0), ("sina_bars", 30.0)]
     assert result.delisted == 1
     assert result.failed == []
 

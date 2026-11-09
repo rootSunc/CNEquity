@@ -9,8 +9,8 @@ from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import (
     DATASET_SCHEMAS,
-    DERIVATIVE_BAR_DATASETS,
     SchemaValidationError,
+    derivative_bar_violations,
     validate_dataframe,
 )
 from cnequity.domain.value_rules import apply_value_rules
@@ -54,17 +54,76 @@ def test_every_rule_names_a_column_its_dataset_stores():
 
 
 def test_every_dataset_with_ohlc_is_checked_as_a_bar():
-    """convertible_bond_bars stored 15k impossible rows because no list named it."""
+    """convertible_bond_bars stored 15k impossible rows because no list named it.
+
+    futures_continuous was the last exception, on the grounds that its rows come
+    from checked futures_bars; it is now checked when written and audited too.
+    """
     unchecked = sorted(
         name
         for name, schema in DATASET_SCHEMAS.items()
         if {"open", "high", "low", "close"} <= set(schema)
-        and not DATASETS[name].value_rules.market_bar
-        and name not in DERIVATIVE_BAR_DATASETS
-        # Rolled from futures_bars, which is checked as written.
-        and name != "futures_continuous"
+        and DATASETS[name].value_rules.bar_kind is None
     )
     assert not unchecked
+
+
+def test_bar_kind_is_one_of_the_two_rule_sets():
+    from cnequity.domain.value_rules import ValueRules
+
+    with pytest.raises(ValueError, match="bar_kind"):
+        ValueRules(bar_kind="equity")
+    kinds = {name: spec.value_rules.bar_kind for name, spec in DATASETS.items()}
+    assert {name for name, kind in kinds.items() if kind == "derivative"} == {
+        "futures_bars",
+        "option_bars",
+        "futures_minute_bars",
+        "futures_continuous",
+    }
+
+
+def _continuous(**values) -> dict:
+    row = {
+        "symbol": "CU",
+        "series": "main",
+        "trade_date": DAY,
+        "contract_symbol": "CU2402.SHF",
+        "open": 68000.0,
+        "high": 68500.0,
+        "low": 67800.0,
+        "close": 68200.0,
+        "settle": 68100.0,
+        "volume": 1200,
+        "open_interest": 54000,
+        "rolled": False,
+        "adj_ratio": 1.0,
+        "adj_diff": 0.0,
+        "roll_yield": None,
+        "rule": "oi_t-1_v2",
+        "source": "derived",
+        "data_version": "v1",
+        "fetched_at": STAMP,
+    }
+    return row | values
+
+
+def test_futures_continuous_is_checked_with_the_futures_rules():
+    good = pl.DataFrame([_continuous()])
+    assert validate_dataframe(good, "futures_continuous").height == 1
+    # A close-only session is a real futures row, not a violation.
+    close_only = _continuous(open=None, high=None, low=None)
+    assert validate_dataframe(pl.DataFrame([close_only]), "futures_continuous").height == 1
+    for bad in (
+        _continuous(settle=0.0),
+        _continuous(high=68100.0),
+        _continuous(volume=None),
+        _continuous(open_interest=-1),
+    ):
+        with pytest.raises(SchemaValidationError, match="futures/option bar invariants"):
+            validate_dataframe(pl.DataFrame([bad]), "futures_continuous")
+    # It stores no pre_settle or amount, so the predicate never names them.
+    predicate = derivative_bar_violations("futures_continuous")
+    assert good.filter(predicate).height == 0
 
 
 def test_an_untraded_bond_session_keeps_its_row_without_prices():

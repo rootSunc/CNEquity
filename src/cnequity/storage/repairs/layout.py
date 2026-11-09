@@ -28,8 +28,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_by_primary_key
-from cnequity.domain.datasets import DATASETS, granularity_for_dataset
-from cnequity.domain.pit import PIT_DATASET_NAMES
+from cnequity.domain.datasets import DATASETS, PIT_DATASET_NAMES, granularity_for_dataset
 from cnequity.domain.schemas import PRIMARY_KEYS, sanitize_dataset_rows, validate_dataframe
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.atomic import write_json_atomic, write_parquet_atomic

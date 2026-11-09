@@ -158,7 +158,7 @@ cnequity = [
     "adapters/cni/seeds/*.json",
     "adapters/exchange/seeds/*.json",
     # Required by BSE symbol migration and full-lake audits on installed wheels.
-    "adapters/eastmoney/seeds/*.json",
+    "domain/seeds/*.json",
     "adapters/ths/seeds/*.json",
     # hexin-v token generator for 同花顺 data pages (vendored from AKShare, MIT);
     # run under Deno with no permissions — see adapters/ths/hexin.py.

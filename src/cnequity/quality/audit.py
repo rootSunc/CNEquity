@@ -14,7 +14,7 @@ from cnequity.adapters.calendar.exchange_calendar import (
 )
 from cnequity.config import Config
 from cnequity.domain.datasets import PARTITION_COLS, curated_dataset_names, is_dataset_enabled
-from cnequity.domain.holidays_cn import CLOSED_DATES
+from cnequity.domain.holidays_cn import session_expr
 from cnequity.quality.authority_checks import run_authority_checks
 from cnequity.quality.bar_finality import daily_bar_finality_findings
 from cnequity.quality.cross_checks import (
@@ -122,11 +122,7 @@ def _index_bars_coverage_findings(config: Config, trade_date: date) -> list[dict
             scan_parquet_root(cal_root, partition_col="trade_date", end=trade_date),
             "trading_calendar",
         )
-        .filter(
-            pl.col("is_trading")
-            & (pl.col("trade_date").dt.weekday() <= 5)
-            & ~pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
-        )
+        .filter(session_expr())
         .select("trade_date")
         .unique()
         .collect(engine="streaming")

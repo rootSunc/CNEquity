@@ -214,11 +214,14 @@ def test_delisted_sina_retries_transient_rate_limit(tmp_path, monkeypatch):
             raise httpx.HTTPStatusError("rate limited", request=request, response=response)
         return _bars(symbol, date(2016, 3, 1), date(2025, 4, 10))
 
-    monkeypatch.setattr("cnequity.steps.delisted.time.sleep", sleeps.append)
+    deferred: list[tuple[str, float]] = []
+    monkeypatch.setattr("cnequity.domain.rate_limit.time.sleep", sleeps.append)
+    monkeypatch.setattr(cfg, "defer_source", lambda source, s: deferred.append((source, s)))
     result = backfill_delisted_bars(cfg, "run-retry", _START, fetch=flaky)
 
     assert attempts == 3
-    assert sleeps == [5.0, 10.0]
+    assert sleeps == []
+    assert deferred == [("sina_bars", 30.0), ("sina_bars", 30.0)]
     assert result["rows_written"] == 2
     assert result["coverage_pending_compact"] is True
 

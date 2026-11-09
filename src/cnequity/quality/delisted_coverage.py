@@ -132,9 +132,9 @@ def renamed_symbols() -> frozenset[str]:
     the repo already carries it, so the answer is looked up rather than
     inferred.
     """
-    from cnequity.adapters.eastmoney.corporate_actions_migration import _code_mapping
+    from cnequity.domain.bse_codes import legacy_to_current
 
-    return frozenset(f"{old}.BJ" for old in _code_mapping())
+    return frozenset(f"{old}.BJ" for old in legacy_to_current())
 
 
 def _in_historical_universe(symbol: str, universe: str) -> bool:

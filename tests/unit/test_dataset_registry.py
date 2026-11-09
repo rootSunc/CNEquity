@@ -304,3 +304,68 @@ def test_every_intraday_dataset_declares_a_row_grain():
     assert DATASETS["trade_ticks"].intraday_frequency is None
     assert DATASETS["minute_bars"].row_grain == "1m"
     assert DATASETS["daily_bars"].row_grain is None
+
+
+def test_the_pit_set_is_declared_once_on_the_specs():
+    """`domain/pit.py` used to hold its own hand-written copy of this set."""
+    from cnequity.domain import pit
+    from cnequity.domain.datasets import DATASETS, PIT_DATASET_NAMES
+    from cnequity.query.reader import PIT_DATASETS
+
+    assert PIT_DATASET_NAMES == {name for name, spec in DATASETS.items() if spec.pit}
+    assert "PIT_DATASET_NAMES" not in vars(pit), "derive it; do not declare it again"
+    assert pit.PIT_DATASET_NAMES is PIT_DATASET_NAMES
+    assert PIT_DATASETS == PIT_DATASET_NAMES
+
+
+def test_each_dataset_declares_its_facts_on_its_own_entry():
+    """Support levels, value rules, units and data versions used to sit in side
+    tables keyed by name, applied with `replace()` after the specs were built."""
+    from cnequity.domain import datasets
+    from cnequity.domain.datasets import DATASETS, SUPPORT_LEVELS
+
+    for table in ("_SUPPORT", "_VALUE_RULES", "_UNIT_CONTRACT_DEFAULTS", "FUTURES_DATASETS"):
+        assert not hasattr(datasets, table), table
+    assert all(spec.support in SUPPORT_LEVELS for spec in DATASETS.values())
+    # pit and pit_grade are read from pit_quality, so they cannot disagree.
+    for spec in DATASETS.values():
+        assert spec.pit == (spec.pit_quality in ("strict", "reconstructed"))
+        assert spec.pit_grade == {"strict": "strict", "reconstructed": "partial"}.get(
+            spec.pit_quality, "none"
+        )
+
+
+def test_optional_captures_are_switched_by_their_entry():
+    from types import SimpleNamespace
+
+    from cnequity.domain.datasets import DATASETS, is_dataset_enabled
+
+    switched = {name for name, spec in DATASETS.items() if spec.enable_switch}
+    off = SimpleNamespace(best_effort_enabled=None)
+    # futures_options defaults on, but it needs futures_enabled first.
+    assert {name for name in DATASETS if not is_dataset_enabled(name, off)} == switched
+    on = SimpleNamespace(
+        futures_enabled=True,
+        futures_minute_enabled=True,
+        trade_ticks_enabled=True,
+        minute_bars_enabled=True,
+        minute_bars_frequencies=("1m", "5m"),
+        best_effort_enabled=None,
+    )
+    assert all(is_dataset_enabled(name, on) for name in DATASETS)
+
+
+def test_what_load_offers_is_declared_on_the_entry():
+    """These were dataset names written into `query/reader.py`."""
+    from cnequity.domain.datasets import DATASETS, intraday_dataset_names
+    from cnequity.query.reader import ADJUSTABLE_DATASETS
+
+    def declaring(field):
+        return {name for name, spec in DATASETS.items() if getattr(spec, field)}
+
+    assert ADJUSTABLE_DATASETS == declaring("adjustable")
+    assert set(intraday_dataset_names()) <= ADJUSTABLE_DATASETS
+    assert declaring("universe_filter") == declaring("total_return") == {"daily_bars"}
+    # Not every session-dense dataset: fetched bars have real historical
+    # closures, so capping at the first gap would end daily_bars in the 1990s.
+    assert declaring("coverage_end_contiguous") == {"market_breadth", "industry_index"}

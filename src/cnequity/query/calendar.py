@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.domain.holidays_cn import CLOSED_DATES
+from cnequity.domain.holidays_cn import exchange_may_open, session_expr
 from cnequity.domain.market_time import is_session_final
 from cnequity.storage.read_context import read_root
 
@@ -112,15 +112,7 @@ def list_trading_dates(
         covered = set(cal.get_column("trade_date").drop_nulls().to_list())
         expected_days = (end - start).days + 1
         if len(covered) == expected_days:
-            out = (
-                cal.filter(
-                    pl.col("is_trading")
-                    & (pl.col("trade_date").dt.weekday() <= 5)
-                    & ~pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
-                )["trade_date"]
-                .sort()
-                .to_list()
-            )
+            out = cal.filter(session_expr())["trade_date"].sort().to_list()
             if out:
                 return out
         else:
@@ -145,20 +137,12 @@ def list_trading_dates(
         seed_path=effective_seed,
         curated_root=config.curated_root if config.curated_root.exists() else None,
     )
-    return (
-        calendar.filter(
-            pl.col("is_trading")
-            & (pl.col("trade_date").dt.weekday() <= 5)
-            & ~pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
-        )["trade_date"]
-        .sort()
-        .to_list()
-    )
+    return calendar.filter(session_expr())["trade_date"].sort().to_list()
 
 
 def is_trading_day(config: Config, trade_date: date, *, include_staging: bool = False) -> bool:
     """Return whether *trade_date* is a trading day per curated calendar or seed."""
-    if trade_date.weekday() >= 5 or trade_date.isoformat() in CLOSED_DATES:
+    if not exchange_may_open(trade_date):
         return False
     cal = _load_trading_calendar_df(
         config, start=trade_date, end=trade_date, include_staging=include_staging

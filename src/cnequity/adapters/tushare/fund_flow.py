@@ -23,8 +23,8 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.eastmoney.corporate_actions_migration import _code_mapping
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
+from cnequity.domain.bse_codes import legacy_symbol_map
 
 __all__ = ["MONEYFLOW_DC_FLOOR", "SOURCE", "fetch_fund_flow", "normalize"]
 
@@ -58,7 +58,7 @@ def normalize(names: list[str], items: list[list]) -> pl.DataFrame:
             pl.col("ts_code")
             .cast(pl.Utf8)
             .str.strip_chars()
-            .replace({f"{old}.BJ": f"{new}.BJ" for old, new in _code_mapping().items()})
+            .replace(legacy_symbol_map())
             .alias("symbol"),
             pl.col("trade_date").cast(pl.Utf8).str.strptime(pl.Date, "%Y%m%d", strict=False),
             *nets,

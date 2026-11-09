@@ -1009,25 +1009,9 @@ msgstr "--archive-downloaded-at 需要 ISO 8601 时间"
 msgid "--archive-url must be an HTTPS link on the SHFE website"
 msgstr "--archive-url 必须是上期所的 HTTPS 链接"
 
-#: cnequity/cli/backfill_cmds.py
-msgid "--baostock-repair only applies to corporate_actions"
-msgstr "--baostock-repair 只适用于 corporate_actions"
-
 #: cnequity/cli/quality_cmds.py
 msgid "--bars needs --start"
 msgstr "--bars 需要配合 --start"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--bse-tip-repair needs --symbols"
-msgstr "--bse-tip-repair 需要 --symbols"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--bse-tip-repair needs an explicit --start and --end on the same day"
-msgstr "--bse-tip-repair 需要显式给出同一天的 --start 和 --end"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--bse-tip-repair only applies to daily_bars"
-msgstr "--bse-tip-repair 只适用于 daily_bars"
 
 #: cnequity/cli/run_cmds.py
 msgid "--core-only runs only the core backbone and cannot be combined with --group / --all-groups / --stale-only."
@@ -1061,37 +1045,17 @@ msgstr "--dry-run 不能与 --reconcile-runs 同用：对账会修改运行状�
 msgid "--dry-run only applies to `cne config upgrade`"
 msgstr "--dry-run 只用于 `cne config upgrade`"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "--eastmoney-date-repair needs --ex-dates"
 msgstr "--eastmoney-date-repair 需要 --ex-dates"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--eastmoney-date-repair only applies to corporate_actions"
-msgstr "--eastmoney-date-repair 只适用于 corporate_actions"
 
 #: cnequity/cli/repair_cmds.py
 msgid "--end must be on or after --start"
 msgstr "--end 必须晚于或等于 --start"
 
-#: cnequity/cli/backfill_cmds.py
-msgid "--ex-dates needs --eastmoney-date-repair"
-msgstr "--ex-dates 需要配合 --eastmoney-date-repair"
-
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "--exchange / --refresh only apply to derivatives datasets"
 msgstr "--exchange / --refresh 只适用于衍生品采集数据集"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--fill-em-outage needs both --start and --end"
-msgstr "--fill-em-outage 需要同时给 --start 和 --end"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--fill-em-outage only applies to valuation_metrics"
-msgstr "--fill-em-outage 只适用于 valuation_metrics"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--force / --retry-failed only apply to sector_bars; to refetch derivatives use --refresh"
-msgstr "--force / --retry-failed 只适用于 sector_bars；衍生品重取请用 --refresh"
 
 #: cnequity/cli/run_cmds.py
 msgid "--groups cannot be empty"
@@ -1131,10 +1095,6 @@ msgstr "--if-stale 会重算整个湖；请去掉 --dataset，或者去掉 --if-
 msgid "--industry takes only --start and --end"
 msgstr "--industry 只接受 --start 和 --end"
 
-#: cnequity/cli/backfill_cmds.py
-msgid "--margin-source only applies to margin_trading"
-msgstr "--margin-source 只适用于 margin_trading"
-
 #: cnequity/cli/setup_cmds.py
 msgid "--minimize only applies to `cne config upgrade`"
 msgstr "--minimize 只适用于 `cne config upgrade`"
@@ -1147,7 +1107,7 @@ msgstr "--no-events 只用于不带 --group / --all-groups / --stale-only / --co
 msgid "--no-scope only works with --datasets"
 msgstr "--no-scope 只能配合 --datasets 使用"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "--outstanding takes its scope from the debt ledger; drop --symbols/--start/--end"
 msgstr "--outstanding 的范围取自欠账台账；请去掉 --symbols/--start/--end"
 
@@ -1159,15 +1119,15 @@ msgstr "--pack 只选择研究包的调度组，不能和 --group / --all-groups
 msgid "--phase is no longer used: there is no mark phase, and this only previews."
 msgstr "--phase 已不再使用：标记阶段已移除，这条命令只做预览。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "--plan needs a dataset scope; --outstanding repairs from the debt ledger"
 msgstr "--plan 请指定数据集范围；--outstanding 使用欠账台账执行修复"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "--profile delisted only accepts --start, --plan and --config"
 msgstr "--profile delisted 只接受 --start、--plan 与 --config"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "--profile delisted only applies to daily_bars"
 msgstr "--profile delisted 只适用于 daily_bars"
 
@@ -1175,17 +1135,14 @@ msgstr "--profile delisted 只适用于 daily_bars"
 msgid "--quality-only needs --full"
 msgstr "--quality-only 需要配合 --full"
 
-#: cnequity/cli/backfill_cmds.py
-msgid "--refetch applies to sector_bars, futures_bars, option_bars, fund_flow, financial_statement_items, share_structure, shareholder_counts and top_holders"
-msgstr "--refetch 只适用于 sector_bars、futures_bars、option_bars、fund_flow、financial_statement_items、share_structure、shareholder_counts 和 top_holders"
+#: cnequity/orchestrator/backfill_request.py
+#, python-brace-format
+msgid "--refetch applies to {datasets}"
+msgstr "--refetch 只适用于 {datasets}"
 
 #: cnequity/cli/consume_cmds.py
 msgid "--refresh needs both --dataset and --symbol"
 msgstr "--refresh 需要同时给 --dataset 和 --symbol"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--refresh only applies to futures_bars / option_bars"
-msgstr "--refresh 只适用于 futures_bars / option_bars"
 
 #: cnequity/cli/quality_cmds.py
 msgid "--research-end needs --research-start"
@@ -1203,17 +1160,14 @@ msgstr "--research-start 需要配合 --full"
 msgid "--sample cannot be combined with --intraday or --research"
 msgstr "--sample 不能和 --intraday 或 --research 一起用"
 
-#: cnequity/cli/backfill_cmds.py
-msgid "--shfe-annual-archive only applies to futures_bars/option_bars"
-msgstr "--shfe-annual-archive 只适用于 futures_bars/option_bars"
-
 #: cnequity/cli/run_cmds.py
 msgid "--snapshots-only only works with --stale-only"
 msgstr "--snapshots-only 只能配合 --stale-only"
 
-#: cnequity/cli/backfill_cmds.py
-msgid "--source is supported for margin_trading and financial_statement_items (tdx_fin)"
-msgstr "--source 只支持 margin_trading 和 financial_statement_items（tdx_fin）"
+#: cnequity/orchestrator/backfill_request.py
+#, python-brace-format
+msgid "--source is supported for {datasets}"
+msgstr "--source 只支持 {datasets}"
 
 #: cnequity/cli/run_cmds.py
 msgid "--stale-only picks its own steps; drop --all-groups."
@@ -1228,7 +1182,7 @@ msgid "--start is after --end"
 msgstr "--start 晚于 --end"
 
 #: cnequity/cli/backfill_cmds.py cnequity/cli/maintain_cmds.py
-#: cnequity/cli/quality_cmds.py
+#: cnequity/cli/quality_cmds.py cnequity/orchestrator/backfill_request.py
 msgid "--start must be on or before --end"
 msgstr "--start 必须早于或等于 --end"
 
@@ -1249,35 +1203,11 @@ msgstr "--symbols 至少要给一只标的"
 msgid "--symbols only applies to datasets with a scope in the config ({value}); {dataset} does not support overriding the scope by symbol."
 msgstr "--symbols 只适用于配置里有 scope 的数据集（{value}）；{dataset} 不支持按标的覆盖范围。"
 
-#: cnequity/cli/backfill_cmds.py
-msgid "--tdx-amount-repair needs both --start and --end"
-msgstr "--tdx-amount-repair 需要同时给 --start 和 --end"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--tdx-amount-repair only applies to daily_bars"
-msgstr "--tdx-amount-repair 只适用于 daily_bars"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--ths-repair only applies to corporate_actions"
-msgstr "--ths-repair 只适用于 corporate_actions"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--turnover-peer-review needs --turnover-repair"
-msgstr "--turnover-peer-review 需要 --turnover-repair"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--turnover-repair needs both --start and --end"
-msgstr "--turnover-repair 需要同时给 --start 和 --end"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "--turnover-repair only applies to daily_bars"
-msgstr "--turnover-repair 只适用于 daily_bars"
-
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "--workers > 1 is only supported for margin_trading for now; other backfills use a single date-advancing lane"
 msgstr "--workers > 1 目前只支持 margin_trading；其它回填只用一条日期推进通道"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "--workers must be at least 1"
 msgstr "--workers 至少为 1"
 
@@ -1579,10 +1509,6 @@ msgstr "公告、财务和资金流。关掉后不再请求东财。"
 #: cnequity/serve/ops/catalog.py
 msgid "Announcements, regulatory events and news. Also runs on weekends and holidays."
 msgstr "公告、监管事件和资讯。周末和节假日也会跑。"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "Annual package import only accepts --start/--end/--plan and the archive options"
-msgstr "年度包导入只接受 --start/--end/--plan 和归档参数"
 
 #: cnequity/serve/ops/scheduler_backend.py
 msgid "Another lake of the current user is changing the system scheduler; try again shortly."
@@ -2419,11 +2345,11 @@ msgstr "深度"
 msgid "Derivatives"
 msgstr "衍生品"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "Derivatives daily bars are fetched from exchange files; use --exchange, --symbols is not supported"
 msgstr "衍生品日线按交易所文件取数；使用 --exchange，不支持 --symbols"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "Derivatives debts are retried persistently by the daily update; give --start / --end to repair a historical range"
 msgstr "衍生品欠账由日更持久重试；指定 --start / --end 可修复历史区间"
 
@@ -4172,14 +4098,6 @@ msgstr "暂停"
 msgid "Pause push2"
 msgstr "暂停 push2"
 
-#: cnequity/cli/backfill_cmds.py
-msgid "Payment-date repair must run on its own"
-msgstr "付款日修复必须独立运行"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "Payment-date repair needs corporate_actions, --symbols, --start and --end"
-msgstr "付款日修复需要 corporate_actions、--symbols、--start 和 --end"
-
 #: cnequity/cli/quality_cmds.py
 msgid "Per-dataset freshness: coverage range, watermark, and whether it is stale relative to the last trading day."
 msgstr "逐数据集的新鲜度：覆盖区间、水位，以及相对最后交易日是否陈旧。"
@@ -5710,10 +5628,6 @@ msgid "The SZSE export did not return an xlsx"
 msgstr "深交所导出返回的不是 xlsx"
 
 #: cnequity/cli/backfill_cmds.py
-msgid "The annual archive options need --shfe-annual-archive ZIP"
-msgstr "年度归档选项需要 --shfe-annual-archive ZIP"
-
-#: cnequity/cli/backfill_cmds.py
 msgid "The annual package has unverified members or rows; the valid slices and the gaps were saved"
 msgstr "年度包有未验证成员或行；已保存有效切片与缺口"
 
@@ -6150,10 +6064,6 @@ msgstr "任务进程异常退出。"
 #: cnequity/serve/ops/runner.py
 msgid "The task was rejected."
 msgstr "任务被拒绝。"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "The two payment-date repair modes cannot be used together"
-msgstr "两种付款日修复模式不能同时使用"
 
 #: cnequity/serve/ops/settings.py
 #, python-brace-format
@@ -7127,7 +7037,7 @@ msgstr "基金上市日期"
 msgid "futures_continuous must be recomputed in full and does not support --start / --end"
 msgstr "futures_continuous 必须全量重算，不支持 --start / --end"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/orchestrator/backfill_request.py
 msgid "futures_minute_bars can only collect a recent window and cannot request history by --start / --end"
 msgstr "futures_minute_bars 只能采集近期窗口，不能按 --start / --end 请求历史"
 
@@ -7204,10 +7114,6 @@ msgstr "大陆出口"
 #: cnequity/cli/backfill_cmds.py
 msgid "margin_trading only: concurrency for date advancement. Each request still goes through the shared source rate limiter from the config; must be 1 for other datasets."
 msgstr "仅 margin_trading 的日期推进并发数。每个请求仍然走配置里共享的源限流器；其它数据集必须为 1。"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "margin_trading sources are exchange and eastmoney"
-msgstr "margin_trading 的来源是 exchange 和 eastmoney"
 
 #: cnequity/cli/demo.py
 #, python-brace-format
@@ -7529,6 +7435,11 @@ msgstr "这次发布 {dataset} 大约需要 {required} 字节（{required_mib} M
 #, python-brace-format
 msgid "{dataset} sessions still owed: {owed} (e.g. {value})"
 msgstr "{dataset} 待补交易日：{owed}（例：{value}）"
+
+#: cnequity/orchestrator/backfill_request.py
+#, python-brace-format
+msgid "{dataset} sources are {sources}"
+msgstr "{dataset} 的来源只能是 {sources}"
 
 #: cnequity/serve/lake.py
 #, python-brace-format

@@ -33,11 +33,7 @@ import polars as pl
 from cnequity.adapters.numeric import finite_int64
 from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.rate_limit import (
-    SINA_FETCH_ATTEMPTS,
-    SINA_RATE_LIMIT_COOLDOWN_SECONDS,
-    SINA_RATE_LIMIT_STATUS_CODES,
-    SINA_RETRY_STATUS_CODES,
-    source_request,
+    sina_retry,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,42 +183,14 @@ def _get_with_cooldown(client, sina_sym: str, *, config):
     `defer_source`; this is the third sweep on the same budget and it now uses
     the same policy.
     """
-    last: Exception | None = None
-    for attempt in range(SINA_FETCH_ATTEMPTS):
-        try:
-            with source_request(config, "sina"):
-                resp = client.get(_URL, params={"symbol": sina_sym})
-                record_http_response(config, "sina", resp)
-            resp.raise_for_status()
-            return resp
-        except Exception as exc:  # noqa: BLE001 — classified on the status below
-            last = exc
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status not in SINA_RETRY_STATUS_CODES or attempt + 1 >= SINA_FETCH_ATTEMPTS:
-                raise
-            if status in SINA_RATE_LIMIT_STATUS_CODES:
-                # Cool every Sina lane, not this endpoint: the budget is
-                # vendor-wide, so continuing here strands the equity sweeps too.
-                if config is not None and hasattr(config, "defer_source"):
-                    config.defer_source("sina", SINA_RATE_LIMIT_COOLDOWN_SECONDS)
-                logger.warning(
-                    "domestic commodity_bars: Sina HTTP %s for %s; cooling all Sina "
-                    "lanes %.0fs before retry %d/%d",
-                    status,
-                    sina_sym,
-                    SINA_RATE_LIMIT_COOLDOWN_SECONDS,
-                    attempt + 2,
-                    SINA_FETCH_ATTEMPTS,
-                )
-            else:
-                logger.warning(
-                    "domestic commodity_bars: transient HTTP %s for %s; retry %d/%d",
-                    status,
-                    sina_sym,
-                    attempt + 2,
-                    SINA_FETCH_ATTEMPTS,
-                )
-    raise last if last is not None else RuntimeError("unreachable")
+
+    def get():
+        resp = client.get(_URL, params={"symbol": sina_sym})
+        record_http_response(config, "sina", resp)
+        resp.raise_for_status()
+        return resp
+
+    return sina_retry(config, "sina", get, describe=f"domestic commodity_bars {sina_sym}")
 
 
 def fetch_domestic_commodity_bars_range(

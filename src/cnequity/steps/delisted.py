@@ -27,9 +27,8 @@ import logging
 import os
 import shutil
 import tempfile
-import time
 from collections import Counter
-from contextlib import nullcontext, suppress
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -40,9 +39,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.rate_limit import (
-    SINA_FETCH_ATTEMPTS,
-    SINA_RETRY_STATUS_CODES,
-    source_request,
+    sina_retry,
 )
 from cnequity.domain.symbols import is_cdr_symbol, issued_code_space, parse_symbol
 from cnequity.quality.delisted_coverage import (
@@ -100,12 +97,6 @@ from cnequity.storage.read_context import ReadContext
 logger = logging.getLogger(__name__)
 
 _CATALOG_FILE = "delisted_catalog.json"
-# Sina returns HTTP 456 when a bulk history sweep exceeds its anti-abuse
-# budget.  Delisted recovery is another daily-kline sweep, so it needs the
-# same bounded retry policy as the live BJ fallback instead of turning a
-# transient rate limit into a durable unresolved symbol.
-_SINA_RETRY_STATUS_CODES = SINA_RETRY_STATUS_CODES
-_SINA_FETCH_ATTEMPTS = SINA_FETCH_ATTEMPTS
 # Checkpoint cadence. Small enough that an interrupted sweep loses seconds of
 # work, large enough that the state file is not rewritten on every request.
 _CHECKPOINT_EVERY = 100
@@ -159,7 +150,7 @@ def _run_sina_with_retry(
     config: Config,
     request_managed: bool = False,
 ):
-    """Run one Sina recovery operation with bounded retries.
+    """Run one Sina recovery operation under the shared Sina retry policy (``sina_retry``).
 
     Injected operations are guarded here for callers that do not expose the
     adapter's request boundary. The built-in probe/fetch functions pass the
@@ -168,28 +159,13 @@ def _run_sina_with_retry(
     lease around those operations would deadlock at a cap of one and would
     count the two wire requests as one QPS event.
     """
-    for attempt in range(_SINA_FETCH_ATTEMPTS):
-        try:
-            context = nullcontext() if request_managed else source_request(config, "sina_bars")
-            with context:
-                return operation()
-        except Exception as exc:  # noqa: BLE001 — classify transport response below
-            status_code = getattr(getattr(exc, "response", None), "status_code", None)
-            retryable = status_code in _SINA_RETRY_STATUS_CODES
-            if not retryable or attempt + 1 >= _SINA_FETCH_ATTEMPTS:
-                raise
-            delay = max(float(getattr(config, "retry_backoff_seconds", 5)), 1.0) * (attempt + 1)
-            logger.warning(
-                "sina %s transient HTTP %s for %s; retrying in %.1fs (%d/%d)",
-                operation_name,
-                status_code,
-                symbol,
-                delay,
-                attempt + 1,
-                _SINA_FETCH_ATTEMPTS - 1,
-            )
-            time.sleep(delay)
-    raise AssertionError("unreachable")
+    return sina_retry(
+        config,
+        "sina_bars",
+        operation,
+        describe=f"sina {operation_name} for {symbol}",
+        request_managed=request_managed,
+    )
 
 
 def _file_sha256(path: Path) -> str:

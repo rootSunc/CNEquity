@@ -34,6 +34,7 @@ from cnequity.adapters.baostock.wide_history import query_history
 from cnequity.adapters.numeric import finite_int64
 from cnequity.domain.http_policy import SourceCoolingDown
 from cnequity.domain.rate_limit import source_request
+from cnequity.domain.symbols import from_baostock_symbol, is_baostock_stock
 
 logger = logging.getLogger(__name__)
 
@@ -48,22 +49,8 @@ def _is_stock(bs_code: str) -> bool:
     Shanghai 000xxx is an index (000001 is the composite), Shenzhen 000xxx is a
     stock, so the prefix has to be read per exchange.
     """
-    if not isinstance(bs_code, str):
-        return False
-    try:
-        ex, code = bs_code.split(".")
-    except ValueError:
-        return False
-    if ex == "sh":
-        return code.startswith(("60", "688"))
-    if ex == "sz":
-        return code.startswith(("00", "30"))
-    return False
-
-
-def to_lake_symbol(bs_code: str) -> str:
-    ex, code = bs_code.split(".")
-    return f"{code}.{'SH' if ex == 'sh' else 'SZ'}"
+    symbol = from_baostock_symbol(bs_code)
+    return symbol is not None and is_baostock_stock(symbol)
 
 
 def _roster_rows(bs, day: date, config) -> set[str]:
@@ -81,7 +68,7 @@ def _roster_rows(bs, day: date, config) -> set[str]:
             continue
         code = row[0]
         if _is_stock(code):
-            out.add(to_lake_symbol(code))
+            out.add(from_baostock_symbol(code))
     if not out:
         logger.warning("baostock roster for %s came back empty", day)
     return out

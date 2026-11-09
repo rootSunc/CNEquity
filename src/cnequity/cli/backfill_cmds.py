@@ -30,21 +30,20 @@ from cnequity.cli._shared import (
 from cnequity.domain.datasets import get_dataset
 from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _
+from cnequity.orchestrator.backfill_request import (
+    DERIVATIVE_DATASETS,
+    REPAIRS,
+    BackfillRequest,
+    BackfillRequestError,
+    plan_modes,
+    run_flags,
+    validate,
+)
+from cnequity.orchestrator.backfill_request import (
+    window as request_window,
+)
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.run_scope import backfill_of, run_flags_of, set_backfill, set_run_flags
-
-# Datasets whose ``--refetch`` is read by the step from the backfill scope: it
-# ignores fund_flow's receipts and the published units an interrupted
-# financials or shareholder backfill would otherwise resume after.
-_REFETCH_VIA_SCOPE = frozenset(
-    {
-        "fund_flow",
-        "financial_statement_items",
-        "share_structure",
-        "shareholder_counts",
-        "top_holders",
-    }
-)
 
 
 @cli.command()
@@ -155,28 +154,6 @@ def backfill(
     workers: int,
     source: str | None = None,
     refetch: bool = False,
-    *,
-    # Modes of the `cne repair` / `cne import` commands below, which run on this
-    # machinery; they are not options of `cne backfill` itself.
-    shfe_annual_archive: Path | None = None,
-    archive_year: int | None = None,
-    accept_partial_fields: bool = False,
-    archive_url: str | None = None,
-    archive_downloaded_at: str | None = None,
-    refresh: bool = False,
-    force: bool = False,
-    margin_source: str | None = None,
-    baostock_repair: bool = False,
-    payment_date_repair: bool = False,
-    issuer_notice_repair: bool = False,
-    ths_repair: bool = False,
-    eastmoney_date_repair: bool = False,
-    ex_dates_str: str | None = None,
-    bse_tip_repair: bool = False,
-    tdx_amount_repair: bool = False,
-    turnover_repair: bool = False,
-    turnover_peer_review: bool = False,
-    fill_em_outage: bool = False,
 ):
     """Backfill a dataset.
 
@@ -186,343 +163,64 @@ def backfill(
     To verify quickly rather than run the whole market, narrow the scope with `--symbols`.
 
     """
-    dataset = _require_known_dataset(dataset)
-    if source == "tdx_fin" and dataset == "financial_statement_items":
-        _backfill_financials_tdx_fin(config_path, start_str, end_str)
-        return
-    option_source = None
-    if source == "tushare" and dataset == "option_bars":
-        option_source, source = "tushare", None
-    if source is not None:
-        if dataset != "margin_trading":
-            raise click.ClickException(
-                _(
-                    "--source is supported for margin_trading and financial_statement_items (tdx_fin)"
-                )
-            )
-        if source not in {"exchange", "eastmoney"}:
-            raise click.BadParameter(
-                _("margin_trading sources are exchange and eastmoney"), param_hint="--source"
-            )
-        margin_source = source
-    if refetch:
-        if dataset == "sector_bars":
-            force = True
-        elif dataset in {"futures_bars", "option_bars"}:
-            refresh = True
-        elif dataset in _REFETCH_VIA_SCOPE:
-            pass  # applied to cfg once it is loaded below
-        else:
-            raise click.ClickException(
-                _(
-                    "--refetch applies to sector_bars, futures_bars, option_bars, fund_flow, "
-                    "financial_statement_items, share_structure, shareholder_counts and "
-                    "top_holders"
-                )
-            )
-    if turnover_peer_review and not turnover_repair:
-        raise click.ClickException(_("--turnover-peer-review needs --turnover-repair"))
-    if profile == "delisted":
-        if dataset != "daily_bars":
-            raise click.ClickException(_("--profile delisted only applies to daily_bars"))
-        if (
-            end_str
-            or symbols_str
-            or outstanding
-            or exchanges
-            or refresh
-            or force
-            or workers != 1
-            or margin_source
-            or baostock_repair
-            or payment_date_repair
-            or issuer_notice_repair
-            or ths_repair
-            or eastmoney_date_repair
-            or ex_dates_str
-            or bse_tip_repair
-            or tdx_amount_repair
-            or turnover_repair
-            or fill_em_outage
-            or shfe_annual_archive
-            or archive_year
-            or accept_partial_fields
-            or archive_url
-            or archive_downloaded_at
-        ):
-            raise click.ClickException(
-                _("--profile delisted only accepts --start, --plan and --config")
-            )
-        since = parse_date_option(start_str or "2016-01-01", "--start")
-        if plan:
-            click.echo(
-                json.dumps(
-                    {
-                        "dataset": dataset,
-                        "profile": profile,
-                        "since": since.isoformat(),
-                        "source": "sina",
-                        "mode": "confirmed_delisted_catalog",
-                        "note": "When run, resumes over the pending symbols of the delisted directory; the request count depends on the directory and completed receipts",
-                    },
-                    indent=2,
-                )
-            )
-            return
-        cfg = _cfg(config_path)
-        attach_log_file(cfg, "delisted-backfill")
-        window = _bar_lineage_window(since, None)
-        bars_before = _bar_fingerprint(cfg, window)
-        result = _run_delisted_profile(cfg, since)
-        if result.get("status") != "failed":
-            _follow_lineage(result, lambda: _after_daily_bars(cfg, bars_before, window, result))
-        click.echo(json.dumps(result, indent=2, default=str))
-        if _run_status_exit_code(result["status"]):
-            raise click.ClickException("delisted recovery execution or publication failed")
-        return
-    if shfe_annual_archive is not None:
-        if dataset not in {"futures_bars", "option_bars"}:
-            raise click.ClickException(
-                _("--shfe-annual-archive only applies to futures_bars/option_bars")
-            )
-        if archive_year is None or not accept_partial_fields:
-            raise click.ClickException(
-                _(
-                    "The annual package lacks daily-file fields; --archive-year and --accept-partial-fields are required"
-                )
-            )
-        if archive_url:
-            parsed_url = urlsplit(archive_url)
-            host = parsed_url.hostname or ""
-            if parsed_url.scheme != "https" or not (
-                host == "shfe.com.cn" or host.endswith(".shfe.com.cn")
-            ):
-                raise click.ClickException(
-                    _("--archive-url must be an HTTPS link on the SHFE website")
-                )
-        if archive_downloaded_at:
-            try:
-                downloaded = datetime.fromisoformat(archive_downloaded_at.replace("Z", "+00:00"))
-            except ValueError as exc:
-                raise click.ClickException(
-                    _("--archive-downloaded-at needs an ISO 8601 time")
-                ) from exc
-            if downloaded.tzinfo is None:
-                raise click.ClickException(_("--archive-downloaded-at must include a time zone"))
-            archive_downloaded_at = downloaded.isoformat()
-        if (
-            profile != "default"
-            or symbols_str
-            or outstanding
-            or exchanges
-            or refresh
-            or force
-            or workers != 1
-            or margin_source
-            or baostock_repair
-            or payment_date_repair
-            or issuer_notice_repair
-            or ths_repair
-            or eastmoney_date_repair
-            or ex_dates_str
-            or bse_tip_repair
-            or tdx_amount_repair
-            or turnover_repair
-            or fill_em_outage
-        ):
-            raise click.ClickException(
-                _("Annual package import only accepts --start/--end/--plan and the archive options")
-            )
-        start = parse_date_option(start_str, "--start") if start_str else None
-        end = parse_date_option(end_str, "--end") if end_str else None
-        first, last = date(archive_year, 1, 1), date(archive_year, 12, 31)
-        if (start and not first <= start <= last) or (end and not first <= end <= last):
-            raise click.ClickException(_("--start/--end must fall inside --archive-year"))
-        if start and end and start > end:
-            raise click.ClickException(_("--start must not be after --end"))
-        if plan:
-            click.echo(
-                json.dumps(
-                    {
-                        "dataset": dataset,
-                        "archive": str(shfe_annual_archive),
-                        "year": archive_year,
-                        "start": str(start or first),
-                        "end": str(end or last),
-                        "mode": "offline_partial_fields",
-                        "existing_daily_rows": "protected",
-                        "network_requests": 0,
-                    },
-                    indent=2,
-                )
-            )
-            return
-        cfg = _cfg(config_path)
-        attach_log_file(cfg, "shfe-annual-import")
-        result = _run_shfe_annual_archive(
-            cfg,
-            dataset,
-            shfe_annual_archive,
-            archive_year,
-            start=start,
-            end=end,
-            source_url=archive_url,
-            downloaded_at=archive_downloaded_at,
-        )
-        click.echo(json.dumps(result, indent=2, default=str))
-        if result["status"] != "success":
-            raise click.ClickException(
-                _(
-                    "The annual package has unverified members or rows; the valid slices and the gaps were saved"
-                )
-            )
-        return
-    if archive_year is not None or accept_partial_fields or archive_url or archive_downloaded_at:
-        raise click.ClickException(_("The annual archive options need --shfe-annual-archive ZIP"))
+    request = BackfillRequest(
+        dataset=_require_known_dataset(dataset),
+        start=parse_date_option(start_str, "--start"),
+        end=parse_date_option(end_str, "--end"),
+        symbols=_symbol_tuple(symbols_str),
+        outstanding=outstanding,
+        workers=workers,
+        source=source,
+        refetch=refetch,
+        exchanges=tuple(e.upper() for e in exchanges),
+        profile=profile,
+        plan=plan,
+    )
+    run_backfill(config_path, request)
+
+
+def _symbol_tuple(symbols_str: str | None) -> tuple[str, ...] | None:
     symbols = comma_values(symbols_str, "--symbols")
-    if symbols is not None:
-        symbols = list(dict.fromkeys(s.upper() for s in symbols))
-        symbols_str = ",".join(symbols)
+    return None if symbols is None else tuple(dict.fromkeys(s.upper() for s in symbols))
+
+
+def run_backfill(config_path: str, request: BackfillRequest) -> None:
+    """Check *request*, then plan or run it; `cne backfill` and `cne repair` share this."""
+    try:
+        validate(request)
+    except BackfillRequestError as exc:
+        if exc.param_hint:
+            raise click.BadParameter(str(exc), param_hint=exc.param_hint) from None
+        raise click.ClickException(str(exc)) from None
+    dataset, plan = request.dataset, request.plan
+    if request.profile == "delisted":
+        _run_delisted_backfill(config_path, request)
+        return
+    if request.source == "tdx_fin":
+        _backfill_financials_tdx_fin(config_path, request)
+        return
+    symbols = None if request.symbols is None else list(request.symbols)
+    spec = get_dataset(dataset)
+    derivatives = dataset in DERIVATIVE_DATASETS
     cfg = _cfg(config_path)
-    set_backfill(cfg, refetch=bool(refetch and dataset in _REFETCH_VIA_SCOPE))
-    set_run_flags(cfg, option_source=option_source)
-    derivatives = {
-        "futures_bars",
-        "option_bars",
-        "futures_contracts",
-        "option_contracts",
-        "futures_minute_bars",
-    }
-    if (exchanges or refresh) and dataset not in derivatives:
-        raise click.ClickException(_("--exchange / --refresh only apply to derivatives datasets"))
-    if force and dataset != "sector_bars":
-        raise click.ClickException(
-            _(
-                "--force / --retry-failed only apply to sector_bars; to refetch derivatives use --refresh"
-            )
-        )
-    if dataset in derivatives:
+    scope = request_window(request)
+    set_backfill(cfg, refetch=scope.pop("refetch"))
+    flags = run_flags(request)
+    if derivatives:
+        import uuid
+
         cfg.futures_enabled = True
         if dataset.startswith("option_"):
             cfg.futures_options = True
-        if exchanges:
-            cfg.futures_exchanges = [e.upper() for e in exchanges]
-        if refresh and dataset not in {"futures_bars", "option_bars"}:
-            raise click.ClickException(_("--refresh only applies to futures_bars / option_bars"))
-        if outstanding:
-            raise click.ClickException(
-                _(
-                    "Derivatives debts are retried persistently by the daily update; give --start / --end to repair a historical range"
-                )
-            )
-        if dataset == "futures_minute_bars" and (start_str or end_str):
-            raise click.ClickException(
-                _(
-                    "futures_minute_bars can only collect a recent window and cannot request history by --start / --end"
-                )
-            )
-        if symbols_str and dataset != "futures_minute_bars":
-            raise click.ClickException(
-                _(
-                    "Derivatives daily bars are fetched from exchange files; use --exchange, --symbols is not supported"
-                )
-            )
-        import uuid
-
-        set_run_flags(cfg, derivative_batch=uuid.uuid4().hex, derivatives_refresh=refresh)
-    if margin_source:
-        if dataset != "margin_trading":
-            raise click.ClickException(_("--margin-source only applies to margin_trading"))
-        cfg.margin_trading_source = margin_source
-    if payment_date_repair or issuer_notice_repair:
-        if dataset != "corporate_actions" or not symbols_str or not start_str or not end_str:
-            raise click.ClickException(
-                _("Payment-date repair needs corporate_actions, --symbols, --start and --end")
-            )
-        if payment_date_repair and issuer_notice_repair:
-            raise click.ClickException(
-                _("The two payment-date repair modes cannot be used together")
-            )
-        if any((baostock_repair, ths_repair, eastmoney_date_repair, outstanding)):
-            raise click.ClickException(_("Payment-date repair must run on its own"))
-        set_run_flags(cfg, ca_payment_repair=True, ca_issuer_notice_only=issuer_notice_repair)
-    if workers < 1:
-        raise click.ClickException(_("--workers must be at least 1"))
-    if workers > 1 and dataset != "margin_trading":
-        raise click.ClickException(
-            _(
-                "--workers > 1 is only supported for margin_trading for now; other backfills use a single date-advancing lane"
-            )
-        )
-    if baostock_repair and dataset != "corporate_actions":
-        raise click.ClickException(_("--baostock-repair only applies to corporate_actions"))
-    if ths_repair and dataset != "corporate_actions":
-        raise click.ClickException(_("--ths-repair only applies to corporate_actions"))
-    if eastmoney_date_repair and dataset != "corporate_actions":
-        raise click.ClickException(_("--eastmoney-date-repair only applies to corporate_actions"))
-    if ex_dates_str and not eastmoney_date_repair:
-        raise click.ClickException(_("--ex-dates needs --eastmoney-date-repair"))
-    if bse_tip_repair and dataset != "daily_bars":
-        raise click.ClickException(_("--bse-tip-repair only applies to daily_bars"))
-    if tdx_amount_repair and dataset != "daily_bars":
-        raise click.ClickException(_("--tdx-amount-repair only applies to daily_bars"))
-    if baostock_repair:
-        set_run_flags(cfg, ca_baostock_repair=True)
-    if ths_repair:
-        set_run_flags(cfg, ca_ths_repair=True)
-    if eastmoney_date_repair:
-        raw_dates = [d.strip() for d in (ex_dates_str or "").split(",") if d.strip()]
-        if not raw_dates:
-            raise click.ClickException(_("--eastmoney-date-repair needs --ex-dates"))
-        seen = {parse_date_option(value, "--ex-dates") for value in raw_dates}
-        set_run_flags(cfg, ca_eastmoney_date_repair=sorted(seen))
-    if dataset == "sector_bars":
-        set_run_flags(cfg, sector_bars_force=force)
-    start_d = parse_date_option(start_str, "--start")
-    end_d = parse_date_option(end_str, "--end")
-    if start_d and end_d and start_d > end_d:
-        # Transposing the two used to cost a full network sweep: the walk had no
-        # days in it, the step raised, the engine logged the traceback, and the
-        # command still printed status=success with rows_written=0. `derive`,
-        # `verify --bars` and `audit` all refuse this up front; so does this now.
-        raise click.ClickException(_("--start must be on or before --end"))
-    if tdx_amount_repair:
-        if start_d is None or end_d is None:
-            raise click.ClickException(_("--tdx-amount-repair needs both --start and --end"))
-        set_run_flags(cfg, tdx_amount_repair=True)
-    if turnover_repair:
-        if dataset != "daily_bars":
-            raise click.ClickException(_("--turnover-repair only applies to daily_bars"))
-        if start_d is None or end_d is None:
-            raise click.ClickException(_("--turnover-repair needs both --start and --end"))
-        set_run_flags(cfg, turnover_repair=True, turnover_peer_review=turnover_peer_review)
-    if fill_em_outage:
-        if dataset != "valuation_metrics":
-            raise click.ClickException(_("--fill-em-outage only applies to valuation_metrics"))
-        if start_d is None or end_d is None:
-            raise click.ClickException(_("--fill-em-outage needs both --start and --end"))
-        set_run_flags(cfg, valuation_fill_em_outage=True)
-    if bse_tip_repair:
-        if not symbols_str:
-            raise click.ClickException(_("--bse-tip-repair needs --symbols"))
-        if start_d is None or end_d is None or start_d != end_d:
-            raise click.ClickException(
-                _("--bse-tip-repair needs an explicit --start and --end on the same day")
-            )
-        set_run_flags(cfg, bse_tip_repair=True)
-    if outstanding:
-        if plan:
-            raise click.ClickException(
-                _("--plan needs a dataset scope; --outstanding repairs from the debt ledger")
-            )
-        if symbols_str or start_d or end_d:
-            raise click.ClickException(
-                _(
-                    "--outstanding takes its scope from the debt ledger; drop --symbols/--start/--end"
-                )
-            )
+        if request.exchanges:
+            cfg.futures_exchanges = list(request.exchanges)
+        flags["derivative_batch"] = uuid.uuid4().hex
+    set_run_flags(cfg, **flags)
+    if request.source and dataset == "margin_trading":
+        cfg.margin_trading_source = request.source
+    if request.outstanding:
         attach_log_file(cfg, f"backfill-{dataset}")
-        result = _repair_outstanding(cfg, dataset, workers)
+        result = _repair_outstanding(cfg, dataset, request.workers)
         click.echo(json.dumps(result, indent=2, default=str))
         if _fetched_nothing(result):
             _explain_fetched_nothing()
@@ -531,15 +229,7 @@ def backfill(
             raise SystemExit(code)
         return
     if symbols is not None:
-        if dataset in (
-            "daily_bars",
-            "trading_status",
-            "corporate_actions",
-            "financial_statement_items",
-            "share_structure",
-        ):
-            set_backfill(cfg, symbols=symbols)
-        else:
+        if not spec.backfill_symbols_in_window:
             _override_scope(cfg, dataset, symbols)
         if not plan:
             click.echo(
@@ -548,32 +238,21 @@ def backfill(
                 ),
                 err=True,
             )
-    if start_d:
-        set_backfill(cfg, start=start_d)
-    if end_d:
-        set_backfill(cfg, end=end_d)
-    set_backfill(cfg, workers=workers)
+    set_backfill(cfg, **scope)
+    start_d, end_d = request.start, request.end
     if plan:
-        repair_modes = [
-            flag
-            for enabled, flag in (
-                (payment_date_repair, "payment-date-repair"),
-                (issuer_notice_repair, "issuer-notice-repair"),
-                (baostock_repair, "baostock-repair"),
-                (ths_repair, "ths-repair"),
-                (eastmoney_date_repair, "eastmoney-date-repair"),
-                (bse_tip_repair, "bse-tip-repair"),
-                (tdx_amount_repair, "tdx-amount-repair"),
-                (turnover_repair, "turnover-repair"),
-                (fill_em_outage, "fill-em-outage"),
-                (force, "force"),
-            )
-            if enabled
-        ]
         payload = (
-            _derivatives_plan(cfg, dataset, start_str, end_str, symbols_str)
-            if dataset in derivatives
-            else _backfill_plan(cfg, dataset, start_d, end_d, symbols, workers, repair_modes)
+            _derivatives_plan(
+                cfg,
+                dataset,
+                start_d and start_d.isoformat(),
+                end_d and end_d.isoformat(),
+                None if symbols is None else ",".join(symbols),
+            )
+            if derivatives
+            else _backfill_plan(
+                cfg, dataset, start_d, end_d, symbols, request.workers, plan_modes(request)
+            )
         )
         click.echo(json.dumps(payload, indent=2, default=str, ensure_ascii=False))
         return
@@ -585,7 +264,6 @@ def backfill(
         # the command had finished the job.
         cfg.st_history_symbols_per_run = 0
 
-    spec = get_dataset(dataset)
     watermark_before = _watermark(cfg, dataset)
     # Explicit lineage: fingerprint the inputs a derive reads before fetching,
     # so the follow-up below derives exactly what this backfill changed.
@@ -621,8 +299,6 @@ def backfill(
         )
     if bars_before is not None and result.get("status") != "failed" and not fetched_nothing:
         _follow_lineage(result, lambda: _after_daily_bars(cfg, bars_before, bar_window, result))
-    if outstanding:
-        result["outstanding"] = _settle_outstanding(cfg, dataset)
     _explain_watermark_pullback(cfg, dataset, watermark_before, result)
     click.echo(json.dumps(result, indent=2, default=str))
     if fetched_nothing:
@@ -631,6 +307,36 @@ def backfill(
     code = _run_status_exit_code(result["status"])
     if code:
         raise SystemExit(code)
+
+
+def _run_delisted_backfill(config_path: str, request: BackfillRequest) -> None:
+    """`--profile delisted`: the confirmed delisting list, from independent evidence."""
+    since = request.start or date(2016, 1, 1)
+    if request.plan:
+        click.echo(
+            json.dumps(
+                {
+                    "dataset": request.dataset,
+                    "profile": request.profile,
+                    "since": since.isoformat(),
+                    "source": "sina",
+                    "mode": "confirmed_delisted_catalog",
+                    "note": "When run, resumes over the pending symbols of the delisted directory; the request count depends on the directory and completed receipts",
+                },
+                indent=2,
+            )
+        )
+        return
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "delisted-backfill")
+    window_ = _bar_lineage_window(since, None)
+    bars_before = _bar_fingerprint(cfg, window_)
+    result = _run_delisted_profile(cfg, since)
+    if result.get("status") != "failed":
+        _follow_lineage(result, lambda: _after_daily_bars(cfg, bars_before, window_, result))
+    click.echo(json.dumps(result, indent=2, default=str))
+    if _run_status_exit_code(result["status"]):
+        raise click.ClickException("delisted recovery execution or publication failed")
 
 
 def _fetched_nothing(result: dict) -> bool:
@@ -1923,9 +1629,10 @@ def _backfill_chunked(cfg, dataset: str, start: date, end: date, chunk_days: int
 # --- Repairs and imports that run on the backfill machinery -------------------
 #
 # Each of these used to be a mode flag on `cne backfill`, valid for one dataset,
-# which made its help a list of exceptions. They keep the same machinery — the
-# window, scope, lineage follow-up and `--plan` output — but follow the repair
-# convention: a preview by default, `--apply` to run.
+# which made its help a list of exceptions. Each builds a `BackfillRequest` with
+# its `REPAIRS` mode and runs it through `run_backfill`, so it keeps the same
+# machinery — the window, scope, lineage follow-up and `--plan` output — while
+# following the repair convention: a preview by default, `--apply` to run.
 
 
 def _repair_group():
@@ -1934,9 +1641,27 @@ def _repair_group():
     return repair
 
 
-def _run_on_backfill(dataset: str, config_path: str, apply: bool, **flags) -> None:
-    ctx = click.get_current_context()
-    ctx.invoke(backfill, dataset=dataset, config_path=config_path, plan=not apply, **flags)
+def _run_repair(
+    repair: str,
+    config_path: str,
+    apply: bool,
+    *,
+    start_str: str | None = None,
+    end_str: str | None = None,
+    symbols_str: str | None = None,
+    **fields,
+) -> None:
+    """Run a ``REPAIRS`` mode on the backfill machinery; a preview unless *apply*."""
+    request = BackfillRequest(
+        dataset=REPAIRS[repair].dataset,
+        start=parse_date_option(start_str, "--start"),
+        end=parse_date_option(end_str, "--end"),
+        symbols=_symbol_tuple(symbols_str),
+        plan=not apply,
+        repair=repair,
+        **fields,
+    )
+    run_backfill(config_path, request)
     if not apply:
         click.echo(_("Preview only; add --apply to run it."), err=True)
 
@@ -1978,15 +1703,13 @@ def repair_payment_dates(config_path, symbols_str, start_str, end_str, issuer_no
     A payment date earlier than the ex-date is treated as unknown. With --issuer-notices-only,
     reviewed bonus/transfer share terms are repaired too and Baostock is not queried.
     """
-    _run_on_backfill(
-        "corporate_actions",
+    _run_repair(
+        "issuer-notices" if issuer_notices_only else "payment-dates",
         config_path,
         apply,
         symbols_str=symbols_str,
         start_str=start_str,
         end_str=end_str,
-        payment_date_repair=not issuer_notices_only,
-        issuer_notice_repair=issuer_notices_only,
     )
 
 
@@ -2004,15 +1727,13 @@ def repair_payment_dates(config_path, symbols_str, start_str, end_str, issuer_no
 @_apply_option
 def repair_delisted_actions(config_path, source, symbols_str, start_str, end_str, apply):
     """Fill historical dividends and ex-rights of delisted symbols from Baostock or THS."""
-    _run_on_backfill(
-        "corporate_actions",
+    _run_repair(
+        f"{source}-actions",
         config_path,
         apply,
         symbols_str=symbols_str,
         start_str=start_str,
         end_str=end_str,
-        baostock_repair=source == "baostock",
-        ths_repair=source == "ths",
     )
 
 
@@ -2029,13 +1750,13 @@ def repair_ex_dates(config_path, ex_dates_str, symbols_str, apply):
     The backfill path's primary source is TDX; only EastMoney's per-day filter reaches rows
     before 2015-09-29.
     """
-    _run_on_backfill(
-        "corporate_actions",
+    raw_dates = [d.strip() for d in ex_dates_str.split(",") if d.strip()]
+    _run_repair(
+        "ex-dates",
         config_path,
         apply,
         symbols_str=symbols_str,
-        eastmoney_date_repair=True,
-        ex_dates_str=ex_dates_str,
+        ex_dates=tuple(parse_date_option(value, "--ex-dates") for value in raw_dates),
     )
 
 
@@ -2050,14 +1771,13 @@ def repair_bar_amounts(config_path, start_str, end_str, symbols_str, apply):
     Turnover is filled only when open/high/low/close match and volume differs by under one lot;
     codes TDX lacks keep their Sina rows. Stored prices and volumes are never touched.
     """
-    _run_on_backfill(
-        "daily_bars",
+    _run_repair(
+        "bar-amounts",
         config_path,
         apply,
         start_str=start_str,
         end_str=end_str,
         symbols_str=symbols_str,
-        tdx_amount_repair=True,
     )
 
 
@@ -2080,15 +1800,14 @@ def repair_bar_turnover(config_path, start_str, end_str, symbols_str, peer_revie
     The whole same-day Baostock row replaces it when OHLC agree within half a cent; otherwise,
     or when Baostock has no row, the original values stay.
     """
-    _run_on_backfill(
-        "daily_bars",
+    _run_repair(
+        "bar-turnover",
         config_path,
         apply,
         start_str=start_str,
         end_str=end_str,
         symbols_str=symbols_str,
-        turnover_repair=True,
-        turnover_peer_review=peer_review,
+        peer_review=peer_review,
     )
 
 
@@ -2103,14 +1822,13 @@ def repair_bse_tip_turnover(config_path, symbols_str, day, apply):
     For when the board was unavailable during the daily update. The board is a current
     snapshot, so only the latest session qualifies; Sina is not refetched.
     """
-    _run_on_backfill(
-        "daily_bars",
+    _run_repair(
+        "bse-tip",
         config_path,
         apply,
         symbols_str=symbols_str,
         start_str=day,
         end_str=day,
-        bse_tip_repair=True,
     )
 
 
@@ -2124,13 +1842,12 @@ def repair_valuation_outage(config_path, start_str, end_str, apply):
     Covers the window after EastMoney's last complete day and before today; writes only when the
     whole market is retrieved.
     """
-    _run_on_backfill(
-        "valuation_metrics",
+    _run_repair(
+        "valuation-outage",
         config_path,
         apply,
         start_str=start_str,
         end_str=end_str,
-        fill_em_outage=True,
     )
 
 
@@ -2181,34 +1898,103 @@ def import_shfe_archive(
     apply,
 ):
     """Import a Shanghai Futures Exchange annual ZIP of daily bars, offline and verified."""
-    _run_on_backfill(
+    if not accept_partial_fields:
+        raise click.ClickException(
+            _(
+                "The annual package lacks daily-file fields; --archive-year and --accept-partial-fields are required"
+            )
+        )
+    if url:
+        parsed_url = urlsplit(url)
+        host = parsed_url.hostname or ""
+        if parsed_url.scheme != "https" or not (
+            host == "shfe.com.cn" or host.endswith(".shfe.com.cn")
+        ):
+            raise click.ClickException(_("--archive-url must be an HTTPS link on the SHFE website"))
+    if downloaded_at:
+        try:
+            downloaded = datetime.fromisoformat(downloaded_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise click.ClickException(_("--archive-downloaded-at needs an ISO 8601 time")) from exc
+        if downloaded.tzinfo is None:
+            raise click.ClickException(_("--archive-downloaded-at must include a time zone"))
+        downloaded_at = downloaded.isoformat()
+    start = parse_date_option(start_str, "--start") if start_str else None
+    end = parse_date_option(end_str, "--end") if end_str else None
+    first, last = date(year, 1, 1), date(year, 12, 31)
+    if (start and not first <= start <= last) or (end and not first <= end <= last):
+        raise click.ClickException(_("--start/--end must fall inside --archive-year"))
+    if start and end and start > end:
+        raise click.ClickException(_("--start must not be after --end"))
+    if not apply:
+        click.echo(
+            json.dumps(
+                {
+                    "dataset": dataset,
+                    "archive": str(archive),
+                    "year": year,
+                    "start": str(start or first),
+                    "end": str(end or last),
+                    "mode": "offline_partial_fields",
+                    "existing_daily_rows": "protected",
+                    "network_requests": 0,
+                },
+                indent=2,
+            )
+        )
+        click.echo(_("Preview only; add --apply to run it."), err=True)
+        return
+    cfg = _cfg(config_path)
+    attach_log_file(cfg, "shfe-annual-import")
+    result = _run_shfe_annual_archive(
+        cfg,
         dataset,
-        config_path,
-        apply,
-        shfe_annual_archive=archive,
-        archive_year=year,
-        accept_partial_fields=accept_partial_fields,
-        archive_url=url,
-        archive_downloaded_at=downloaded_at,
-        start_str=start_str,
-        end_str=end_str,
+        archive,
+        year,
+        start=start,
+        end=end,
+        source_url=url,
+        downloaded_at=downloaded_at,
     )
+    click.echo(json.dumps(result, indent=2, default=str))
+    if result["status"] != "success":
+        raise click.ClickException(
+            _(
+                "The annual package has unverified members or rows; the valid slices and the gaps were saved"
+            )
+        )
 
 
-def _backfill_financials_tdx_fin(config_path: str, start_str: str | None, end_str: str | None):
+def _backfill_financials_tdx_fin(config_path: str, request: BackfillRequest):
     """Fill the statement items the lake lacks from 通达信's quarterly packages."""
     from cnequity.adapters.tdx_fin.packages import latest_periods
     from cnequity.cli.ths_official_cmds import _publish_staged, _staged_run
     from cnequity.steps.fundamentals import stage_financials_tdx_fin
 
-    cfg = _cfg(config_path)
     today = shanghai_today()
-    end = parse_date_option(end_str, "--end") if end_str else today
-    start = parse_date_option(start_str, "--start") if start_str else date(2001, 1, 1)
+    end = request.end or today
+    start = request.start or date(2001, 1, 1)
     if start > end:
         raise click.BadParameter(_("--start is after --end"), param_hint="--start")
     periods = latest_periods(end, count=4 * (end.year - start.year + 1))
     periods = sorted(p for p in periods if p >= f"{start.year}Q{(start.month - 1) // 3 + 1}")
+    if request.plan:
+        # It used to run here: `--source tdx_fin` was read before `--plan`.
+        click.echo(
+            json.dumps(
+                {
+                    "dataset": request.dataset,
+                    "source": "tdx_fin",
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "periods": periods,
+                    "mode": "fill_missing_items",
+                },
+                indent=2,
+            )
+        )
+        return
+    cfg = _cfg(config_path)
     attach_log_file(cfg, "backfill-financial_statement_items-tdx_fin")
     with _staged_run(
         cfg,

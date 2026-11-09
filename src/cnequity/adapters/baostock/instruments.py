@@ -34,7 +34,7 @@ from cnequity.adapters.baostock.access import hold_baostock_connection
 from cnequity.domain.http_policy import SourceCoolingDown
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.symbols import (
-    format_symbol,
+    from_baostock_symbol,
     is_cdr_symbol,
     is_etf_symbol,
 )
@@ -69,17 +69,6 @@ def _parse_date(value: str | None) -> date | None:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
-
-
-def _symbol_from_baostock(code: str) -> str | None:
-    """``sh.600519`` -> ``600519.SH``. None for markets we do not model."""
-    if "." not in code:
-        return None
-    prefix, num = code.split(".", 1)
-    exchange = {"sh": "SH", "sz": "SZ", "bj": "BJ"}.get(prefix.lower())
-    if exchange is None or len(num) != 6 or not num.isdigit():
-        return None
-    return format_symbol(num, exchange)
 
 
 def _asset_type(code: str, exchange: str, bs_type: str) -> str | None:
@@ -123,7 +112,7 @@ def fetch_instrument_basics(*, bs=None, sleep=time.sleep, config=None) -> pl.Dat
                 )
             while rs.next():
                 code, name, ipo_raw, out_raw, bs_type, status = (rs.get_row_data() + [""] * 6)[:6]
-                symbol = _symbol_from_baostock(code)
+                symbol = from_baostock_symbol(code)
                 if symbol is None:
                     skipped_market += 1
                     continue

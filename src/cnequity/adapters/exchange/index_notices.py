@@ -15,7 +15,7 @@ from pypdf import PdfReader
 
 from cnequity.adapters.calendar.exchange_calendar import load_seed_calendar
 from cnequity.adapters.cni.index_announcements import MembershipChange
-from cnequity.domain.symbols import is_all_a_symbol
+from cnequity.domain.symbols import infer_exchange_from_code, is_all_a_symbol
 
 
 class _Text(HTMLParser):
@@ -344,7 +344,7 @@ def parse_csi300_opening(payload: bytes) -> tuple[date, frozenset[str]]:
             raise ValueError("CSI 300 opening is not a unique complete 300-member book")
         members = []
         for code in codes:
-            market = "SH" if code.startswith("6") else "SZ"
+            market = infer_exchange_from_code(code)
             if not is_all_a_symbol(code, market):
                 raise ValueError("CSI 300 opening has an unsupported member identity")
             members.append(code + "." + market)
@@ -381,7 +381,7 @@ def parse_csi300_change_workbook(payload: bytes, *, effective_date: date) -> Mem
         for code in codes:
             if not isinstance(code, str) or not re.fullmatch(r"\d{6}", code):
                 raise ValueError("CSI 300 workbook has an unsupported security code")
-            market = "SH" if code.startswith("6") else "SZ"
+            market = infer_exchange_from_code(code)
             if not is_all_a_symbol(code, market):
                 raise ValueError("CSI 300 workbook has an unsupported member identity")
             members.append(code + "." + market)
@@ -424,7 +424,7 @@ def parse_csi300_conditional_delistings(
         raise ValueError("conditional notice has incomplete or duplicate replacements")
 
     def symbol(code):
-        market = "SH" if code.startswith("6") else "SZ"
+        market = infer_exchange_from_code(code)
         if not is_all_a_symbol(code, market):
             raise ValueError("conditional notice has an unsupported security identity")
         return code + "." + market
@@ -554,7 +554,7 @@ def parse_csi300_change_table(payload: bytes) -> tuple[frozenset[str], frozenset
             raise ValueError("CSI 300 table duplicates a directed member")
         members = []
         for code in side:
-            market = "SH" if code.startswith("6") else "SZ"
+            market = infer_exchange_from_code(code)
             if not is_all_a_symbol(code, market):
                 raise ValueError("CSI 300 table has an unsupported member identity")
             members.append(code + "." + market)
@@ -621,7 +621,7 @@ def parse_csi300_inline_workbook(payload: bytes) -> tuple[frozenset[str], frozen
                         continue
                     if not re.fullmatch(r"\d{6}", code) or not name or name == "-":
                         raise ValueError("inline CSI 300 sheet has an incomplete security identity")
-                    market = "SH" if code.startswith("6") else "SZ"
+                    market = infer_exchange_from_code(code)
                     if not is_all_a_symbol(code, market):
                         raise ValueError("inline CSI 300 sheet has an unsupported member identity")
                     members.append(code + "." + market)
@@ -891,7 +891,7 @@ def _parse_csi300_mixed_change_table(payload: bytes, *, unordered_pairs: bool):
                     if len(codes) != 1 or len(names) != 1:
                         raise ValueError("mixed CSI pair has no unique literal code and name")
                     code, name = codes[0], names[0]
-                market = "SH" if code.startswith("6") else "SZ"
+                market = infer_exchange_from_code(code)
                 if (
                     not re.fullmatch(r"\d{6}", code)
                     or not name

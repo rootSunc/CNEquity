@@ -28,6 +28,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
+from cnequity.domain.symbols import is_baostock_stock
 from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.state import StateStore
@@ -74,19 +75,9 @@ def source_overrides(config: Config) -> dict[str, dict]:
     return overrides if isinstance(overrides, dict) else {}
 
 
-def baostock_factor_symbol(symbol: str) -> bool:
-    """Whether Baostock's adjust-factor table can replace this security's series.
-
-    The table is Shanghai main board and STAR, plus Shenzhen main board and
-    ChiNext. Funds, Beijing and anything else stay on Sina: there is no series
-    here to switch them to.
-    """
-    code, _, exchange = symbol.partition(".")
-    if exchange == "SH":
-        return code.startswith(("60", "688"))
-    if exchange == "SZ":
-        return code.startswith(("00", "30"))
-    return False
+# Baostock's adjust-factor table covers ``is_baostock_stock`` symbols. Funds,
+# Beijing and anything else stay on Sina: there is no series to switch them to.
+baostock_factor_symbol = is_baostock_stock
 
 
 def _level_steps(column: str) -> pl.Expr:

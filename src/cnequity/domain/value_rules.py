@@ -14,8 +14,10 @@ reader passes through. An adapter that needs the normalized values before its
 own later logic calls :func:`apply_value_rules` with the same dataset name.
 
 The same declarations drive the value checks: ``non_null`` columns must hold a
-value on every stored row, and a ``market_bar`` dataset's rows must satisfy
-the price/volume invariants in :func:`cnequity.domain.schemas.market_bar_violations`.
+value on every stored row, and a dataset's ``bar_kind`` names the price/volume
+invariants its rows must satisfy: ``market`` for
+:func:`cnequity.domain.schemas.market_bar_violations`, ``derivative`` for
+:func:`cnequity.domain.schemas.derivative_bar_violations`.
 """
 
 from __future__ import annotations
@@ -43,9 +45,21 @@ class ValueRules:
     #: Columns that must hold a value on every stored row, beyond the primary
     #: key and provenance.
     non_null: tuple[str, ...] = ()
-    #: Rows are market bars: prices positive, volume and amount non-negative,
-    #: and a traded row's high/low enclose its open and close.
-    market_bar: bool = False
+    #: Which bar invariants the rows must satisfy, or None for none.
+    #: ``market``: prices positive, volume and amount non-negative, and a
+    #: traded row's high/low enclose its open and close. ``derivative``: the
+    #: futures/option rules, which allow a close-only row and a zero option
+    #: settlement but not a missing count.
+    bar_kind: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.bar_kind not in (None, "market", "derivative"):
+            raise ValueError(f"unknown bar_kind: {self.bar_kind!r}")
+
+    @property
+    def market_bar(self) -> bool:
+        """Checked as an equity/commodity market bar."""
+        return self.bar_kind == "market"
 
     @property
     def rewrites(self) -> bool:

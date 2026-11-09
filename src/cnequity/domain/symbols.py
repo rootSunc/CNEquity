@@ -156,6 +156,37 @@ def infer_exchange_from_code(code: str) -> str:
     return "SZ"
 
 
+#: The stocks Baostock serves daily bars, adjustment factors and history for:
+#: SH main board and STAR, SZ main board and ChiNext. Not Beijing, not funds,
+#: and not SH ``000xxx``, which are indices there.
+BAOSTOCK_STOCK_PREFIXES = {"SH": ("60", "688"), "SZ": ("00", "30")}
+_BAOSTOCK_MARKETS = {"SH": "sh", "SZ": "sz", "BJ": "bj"}
+
+
+def is_baostock_stock(symbol: str) -> bool:
+    """Whether Baostock has a stock series for *symbol* (``600519.SH``)."""
+    code, _, exchange = str(symbol).partition(".")
+    return code.startswith(BAOSTOCK_STOCK_PREFIXES.get(exchange, ()))
+
+
+def to_baostock_symbol(symbol: str) -> str:
+    """``600519.SH`` -> ``sh.600519`` (Baostock's market-prefixed form)."""
+    info = parse_symbol(symbol)
+    prefix = _BAOSTOCK_MARKETS.get(info.exchange, info.exchange.lower())
+    return f"{prefix}.{info.code}"
+
+
+def from_baostock_symbol(code: str) -> str | None:
+    """``sh.600519`` -> ``600519.SH``; None for a market the lake does not model."""
+    if not isinstance(code, str) or "." not in code:
+        return None
+    prefix, num = code.split(".", 1)
+    exchange = {v: k for k, v in _BAOSTOCK_MARKETS.items()}.get(prefix.lower())
+    if exchange is None or len(num) != 6 or not num.isdigit():
+        return None
+    return format_symbol(num, exchange)
+
+
 def is_all_a_symbol(code: str, exchange: str) -> bool:
     if not isinstance(code, str) or len(code) != 6 or not code.isdigit():
         return False

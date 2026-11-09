@@ -5,17 +5,17 @@ from types import SimpleNamespace
 
 import polars as pl
 
-from cnequity.adapters.eastmoney.bse_code_map import BSE_ISSUER_CODE_MAP
 from cnequity.adapters.eastmoney.bse_payment_notices import (
     _matches_reviewed_issuer_code,
     _notice_query_codes,
     _parse_bj_payment_text,
     repair_bj_payment_notices,
 )
+from cnequity.domain.bse_codes import current_to_legacy
 
 
 def test_reviewed_old_code_mapping_does_not_guess_other_issuers():
-    assert len(BSE_ISSUER_CODE_MAP) == 248
+    assert len(current_to_legacy()) == 248
     assert _matches_reviewed_issuer_code("920454", "833454")
     assert _matches_reviewed_issuer_code("920926", "870726")
     assert _matches_reviewed_issuer_code("920252", "873152")

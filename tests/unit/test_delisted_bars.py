@@ -16,9 +16,9 @@ from cnequity.adapters.baostock.delisted_bars import (
     _fetch_one,
     _is_stock,
     roster_on,
-    to_lake_symbol,
 )
 from cnequity.config import Config
+from cnequity.domain.symbols import from_baostock_symbol
 from cnequity.steps.bars import _delisted_universe
 
 
@@ -73,8 +73,8 @@ def test_shanghai_000_is_an_index_shenzhen_000_is_a_stock():
 
 
 def test_symbol_conversion_round_trip():
-    assert to_lake_symbol("sh.600519") == "600519.SH"
-    assert to_lake_symbol("sz.000001") == "000001.SZ"
+    assert from_baostock_symbol("sh.600519") == "600519.SH"
+    assert from_baostock_symbol("sz.000001") == "000001.SZ"
 
 
 def test_roster_logs_in_before_querying(monkeypatch):

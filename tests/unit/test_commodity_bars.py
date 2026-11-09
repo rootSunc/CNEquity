@@ -433,6 +433,7 @@ def test_a_sina_rate_limit_cools_every_lane_instead_of_retrying_straight_away():
     import httpx
 
     from cnequity.adapters.sina import domestic_futures as df
+    from cnequity.domain import rate_limit as rl
 
     deferred: list[tuple[str, float]] = []
 
@@ -459,10 +460,10 @@ def test_a_sina_rate_limit_cools_every_lane_instead_of_retrying_straight_away():
     with pytest.raises(httpx.HTTPStatusError):
         df._get_with_cooldown(client, "NI0", config=_Config())
 
-    assert client.calls == df.SINA_FETCH_ATTEMPTS
+    assert client.calls == rl.SINA_FETCH_ATTEMPTS
     # Cooled before every retry, and the whole vendor rather than this endpoint.
-    assert deferred == [("sina", df.SINA_RATE_LIMIT_COOLDOWN_SECONDS)] * (
-        df.SINA_FETCH_ATTEMPTS - 1
+    assert deferred == [("sina", rl.SINA_RATE_LIMIT_COOLDOWN_SECONDS)] * (
+        rl.SINA_FETCH_ATTEMPTS - 1
     )
 
 

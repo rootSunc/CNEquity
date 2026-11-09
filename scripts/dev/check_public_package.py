@@ -15,7 +15,7 @@ RETIRED = {
 }
 LOCAL_CONFIGS = {"cnequity.toml", "cnequity.demo.toml"}
 TEMPLATE = "cnequity/config/templates/cnequity.example.toml"
-REQUIRED_FILES = (TEMPLATE, "cnequity/adapters/eastmoney/seeds/bse_code_mapping.json")
+REQUIRED_FILES = (TEMPLATE, "cnequity/domain/seeds/bse_code_mapping.json")
 
 
 def check_members(names: list[str]) -> list[str]:

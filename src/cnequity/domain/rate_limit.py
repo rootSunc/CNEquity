@@ -9,10 +9,11 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
 from cnequity.file_lock import exclusive_lock
 from cnequity.file_replace import replace_with_retry
@@ -70,6 +71,8 @@ DEFAULT_SOURCE_CONCURRENCY: dict[str, int] = {
     "jin10": 1,
 }
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 def _policy_day(now: float) -> str:
@@ -700,3 +703,67 @@ SINA_RATE_LIMIT_STATUS_CODES = frozenset({429, 456})
 SINA_FETCH_ATTEMPTS = 3
 SINA_RATE_LIMIT_COOLDOWN_SECONDS = 30.0
 SINA_RATE_LIMIT_CIRCUIT_SECONDS = 120.0
+
+
+def sina_retry(
+    config,
+    lane: str,
+    operation: Callable[[], T],
+    *,
+    describe: str,
+    request_managed: bool = False,
+    on_rate_limit: Callable[[int], None] | None = None,
+    before_retry: Callable[[], None] | None = None,
+) -> T:
+    """Run one Sina request under the vendor's retry policy.
+
+    Up to ``SINA_FETCH_ATTEMPTS`` tries. A 429/456 means Sina wants the whole
+    vendor to slow down: every Sina lane is cooled for
+    ``SINA_RATE_LIMIT_COOLDOWN_SECONDS`` (the next ``source_request`` waits it
+    out) and the request is tried again. A 5xx waits ``retry_backoff_seconds``
+    times the attempt number, at least one second. Anything else raises at once.
+
+    Four sweeps used to write this loop, each a little differently: the delisted
+    recovery answered a 456 by sleeping in its own thread and asking again, and
+    two adapters retried a 5xx with no wait at all.
+
+    ``request_managed``: *operation* takes its own ``source_request`` leases (an
+    adapter that may make several wire calls); otherwise each try holds one on
+    *lane*. ``on_rate_limit(status)`` runs before the cooldown and may raise to
+    stop; ``before_retry()`` runs before every further try and may raise too.
+    """
+    for attempt in range(SINA_FETCH_ATTEMPTS):
+        if attempt and before_retry is not None:
+            before_retry()
+        try:
+            with nullcontext() if request_managed else source_request(config, lane):
+                return operation()
+        except Exception as exc:  # noqa: BLE001 - classified on the HTTP status below
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status not in SINA_RETRY_STATUS_CODES or attempt + 1 >= SINA_FETCH_ATTEMPTS:
+                raise
+            if status in SINA_RATE_LIMIT_STATUS_CODES:
+                if on_rate_limit is not None:
+                    on_rate_limit(status)
+                if config is not None and hasattr(config, "defer_source"):
+                    config.defer_source(lane, SINA_RATE_LIMIT_COOLDOWN_SECONDS)
+                logger.warning(
+                    "%s: Sina HTTP %s; cooling every Sina lane %.0fs before retry %d/%d",
+                    describe,
+                    status,
+                    SINA_RATE_LIMIT_COOLDOWN_SECONDS,
+                    attempt + 2,
+                    SINA_FETCH_ATTEMPTS,
+                )
+                continue
+            delay = max(float(getattr(config, "retry_backoff_seconds", 5)), 1.0) * (attempt + 1)
+            logger.warning(
+                "%s: transient Sina HTTP %s; retrying in %.1fs (%d/%d)",
+                describe,
+                status,
+                delay,
+                attempt + 2,
+                SINA_FETCH_ATTEMPTS,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")

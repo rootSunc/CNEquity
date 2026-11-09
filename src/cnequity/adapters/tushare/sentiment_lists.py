@@ -25,8 +25,8 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.eastmoney.corporate_actions_migration import _code_mapping
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
+from cnequity.domain.bse_codes import legacy_symbol_map
 
 __all__ = [
     "FUND_FLOW_THS_TUSHARE_FLOOR",
@@ -158,7 +158,7 @@ def _text(column: str) -> pl.Expr:
 
 
 def _symbol() -> pl.Expr:
-    legacy_bj = {f"{old}.BJ": f"{new}.BJ" for old, new in _code_mapping().items()}
+    legacy_bj = legacy_symbol_map()
     return _text("ts_code").replace(legacy_bj).alias("symbol")
 
 

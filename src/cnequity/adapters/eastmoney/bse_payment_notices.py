@@ -17,8 +17,8 @@ from datetime import date, timedelta
 import polars as pl
 from pypdf import PdfReader
 
-from cnequity.adapters.eastmoney.bse_code_map import BSE_ISSUER_CODE_MAP
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
+from cnequity.domain.bse_codes import current_to_legacy
 from cnequity.steps.http_common import verify_raw_archive, write_fetched
 from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
 
@@ -31,7 +31,7 @@ _DATE = r"(20\d{2})年(\d{1,2})月(\d{1,2})日"
 # trading-symbol conversions.  Never infer an effective date from the BSE
 # table's "listing date" (for former Select-tier issuers it is their tier date).
 # https://www.bse.cn/service/code_mapping.html
-_REVIEWED_OLD_CODES = BSE_ISSUER_CODE_MAP
+_REVIEWED_OLD_CODES = current_to_legacy()
 
 
 def _matches_reviewed_issuer_code(current_code: str, pdf_code: str) -> bool:

@@ -10,7 +10,11 @@ from pathlib import Path
 
 import polars as pl
 
-from cnequity.domain.holidays_cn import CLOSED_DATES, EXTRA_TRADING_DATES
+from cnequity.domain.holidays_cn import (
+    CLOSED_DATES,
+    exchange_may_open,
+    exchange_may_open_expr,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +37,7 @@ def calendar_forward_coverage_days(as_of: date) -> int:
     return (_SEED_END - as_of).days
 
 
-def _is_trading_day(d: date) -> bool:
-    iso = d.isoformat()
-    if iso in EXTRA_TRADING_DATES:
-        return True
-    if d.weekday() >= 5:
-        return False
-    return iso not in CLOSED_DATES
+_is_trading_day = exchange_may_open
 
 
 def _generate_seed_rows(start: date, end: date) -> list[tuple[str, bool]]:
@@ -102,10 +100,7 @@ def _bar_dates(curated_root: Path, dataset: str) -> set[date]:
             from cnequity.query.parquet_scan import scan_parquet_root
 
             scan = scan_parquet_root(root, partition_col="trade_date", traded_only=True)
-            scan = scan.filter(
-                (pl.col("trade_date").dt.weekday() <= 5)
-                & ~pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
-            )
+            scan = scan.filter(exchange_may_open_expr())
             values = scan.select("trade_date").collect().get_column("trade_date").drop_nulls()
             return set(values.to_list())
         except (FileNotFoundError, OSError, pl.exceptions.PolarsError, ValueError) as exc:
@@ -120,10 +115,7 @@ def _bar_dates(curated_root: Path, dataset: str) -> set[date]:
             # SSE/SZSE sessions are Monday-Friday.  Historical source rows
             # must never turn a weekend into a market session while deriving
             # the pre-seed calendar.
-            scan = scan.filter(
-                (pl.col("trade_date").dt.weekday() <= 5)
-                & ~pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
-            )
+            scan = scan.filter(exchange_may_open_expr())
             if dataset == "daily_bars" and "volume" in names:
                 scan = scan.filter(pl.col("volume") > 0)
             values = scan.select("trade_date").collect().get_column("trade_date").drop_nulls()

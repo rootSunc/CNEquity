@@ -6,6 +6,10 @@ separately; only weekday closures and weekend makeup sessions are listed here.
 
 from __future__ import annotations
 
+from datetime import date
+
+import polars as pl
+
 # Weekday market closures (CNY, National Day, etc.)
 CLOSED_DATES: frozenset[str] = frozenset(
     {
@@ -250,3 +254,34 @@ CLOSED_DATES: frozenset[str] = frozenset(
 # daily_bars/index_bars presence (2016–2026): every former entry had zero
 # trades. Do not repopulate this with make-up weekends.
 EXTRA_TRADING_DATES: frozenset[str] = frozenset()
+
+
+def exchange_may_open(day: date) -> bool:
+    """Whether SSE/SZSE can hold a session on *day*: a weekday not on the closure list.
+
+    A listed make-up session counts too, though there are none (see above).
+    This is the calendar-free rule; a stored ``trading_calendar`` row is a
+    session when it also says ``is_trading`` (:func:`session_expr`).
+    """
+    iso = day.isoformat()
+    if iso in EXTRA_TRADING_DATES:
+        return True
+    return day.weekday() < 5 and iso not in CLOSED_DATES
+
+
+def exchange_may_open_expr(column: str = "trade_date") -> pl.Expr:
+    """:func:`exchange_may_open` over a date column."""
+    iso = pl.col(column).dt.strftime("%Y-%m-%d")
+    weekday = (pl.col(column).dt.weekday() <= 5) & ~iso.is_in(sorted(CLOSED_DATES))
+    if not EXTRA_TRADING_DATES:
+        return weekday
+    return iso.is_in(sorted(EXTRA_TRADING_DATES)) | weekday
+
+
+def session_expr(column: str = "trade_date") -> pl.Expr:
+    """``trading_calendar`` rows that are sessions: ``is_trading`` on a day the exchange may open.
+
+    The calendar is built from vendor rows, so this keeps a vendor's weekend or
+    holiday row from becoming a session. Five readers used to write it out.
+    """
+    return pl.col("is_trading") & exchange_may_open_expr(column)

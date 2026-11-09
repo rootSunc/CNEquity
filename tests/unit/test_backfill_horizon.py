@@ -414,7 +414,7 @@ def test_margin_source_override_is_one_run_only_and_dataset_scoped(monkeypatch):
 
     invalid = runner.invoke(cli, _backfill_argv("daily_bars", "--source", "exchange"))
     assert invalid.exit_code != 0
-    assert "只支持 margin_trading" in invalid.output
+    assert "只支持" in invalid.output and "margin_trading (exchange, eastmoney)" in invalid.output
 
 
 @pytest.mark.usefixtures("chinese_output")

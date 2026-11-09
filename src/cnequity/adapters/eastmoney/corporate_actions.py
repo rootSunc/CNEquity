@@ -14,7 +14,7 @@ from cnequity.adapters.eastmoney.datacenter import (
 )
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient, rate_limit_if_unconfigured
 from cnequity.config import Config
-from cnequity.domain.symbols import format_symbol, is_all_a_symbol
+from cnequity.domain.symbols import format_symbol, infer_exchange_from_code, is_all_a_symbol
 from cnequity.run_scope import backfill_of
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive, begin_capture
 
@@ -118,14 +118,9 @@ def _parse_rows(row: dict) -> list[dict]:
     secucode = str(row.get("SECUCODE") or "")
     code_part, _, suffix = secucode.partition(".")
     code = str(row.get("SECURITY_CODE") or code_part or "").zfill(6)
-    if suffix in ("SH", "SZ", "BJ"):
-        exchange = suffix
-    elif code.startswith(("60", "68")):
-        exchange = "SH"
-    elif code.startswith(("43", "83", "87", "88", "92")):
-        exchange = "BJ"
-    else:
-        exchange = "SZ"
+    # 88xxxx used to be read as Beijing here; it is not in any whitelist, so
+    # is_all_a_symbol below drops it under either label.
+    exchange = suffix if suffix in ("SH", "SZ", "BJ") else infer_exchange_from_code(code)
     if not code.isdigit() or not is_all_a_symbol(code, exchange):
         return []
     symbol = format_symbol(code, exchange)

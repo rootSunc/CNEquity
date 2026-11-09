@@ -23,7 +23,7 @@ from cnequity.adapters.eastmoney.corporate_actions import EASTMONEY_BACKFILL_FLO
 from cnequity.adapters.exchange.st_lists import is_st_name
 from cnequity.config import Config
 from cnequity.domain.action_sessions import effective_session
-from cnequity.domain.holidays_cn import CLOSED_DATES
+from cnequity.domain.holidays_cn import session_expr
 from cnequity.domain.symbols import parse_symbol
 from cnequity.domain.trading_status import not_trading_expr, risk_warning_expr
 from cnequity.quality.ex_events import (
@@ -117,11 +117,7 @@ def _trading_days(config: Config, trade_date: date) -> set[date]:
             scan_parquet_root(cal_root, partition_col="trade_date", end=trade_date),
             "trading_calendar",
         )
-        .filter(
-            pl.col("is_trading")
-            & (pl.col("trade_date").dt.weekday() <= 5)
-            & ~pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
-        )
+        .filter(session_expr())
         .select("trade_date")
         .unique()
         .collect(engine="streaming")
@@ -236,11 +232,7 @@ def trading_calendar_horizon_findings(config: Config, trade_date: date) -> list[
 
     written = (
         dedupe_lazy_by_primary_key(scan_parquet_root(cal_root), "trading_calendar")
-        .filter(
-            pl.col("is_trading")
-            & (pl.col("trade_date").dt.weekday() <= 5)
-            & ~pl.col("trade_date").dt.strftime("%Y-%m-%d").is_in(CLOSED_DATES)
-        )
+        .filter(session_expr())
         .select(pl.col("trade_date").max().alias("last"))
         .collect(engine="streaming")
     )

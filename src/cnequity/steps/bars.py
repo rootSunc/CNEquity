@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import time
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -24,15 +23,14 @@ from cnequity.config import Config
 from cnequity.domain.frames import with_columns_unless_blank
 from cnequity.domain.market_time import A_SHARE_FINAL_AT, shanghai_now
 from cnequity.domain.rate_limit import (
-    SINA_FETCH_ATTEMPTS,
     SINA_RATE_LIMIT_CIRCUIT_SECONDS,
-    SINA_RATE_LIMIT_COOLDOWN_SECONDS,
     SINA_RATE_LIMIT_STATUS_CODES,
-    SINA_RETRY_STATUS_CODES,
+    sina_retry,
 )
 from cnequity.domain.symbols import (
     filter_ingest_universe,
     in_ingest_universe,
+    is_baostock_stock,
     parse_symbol,
     split_by_quote_source,
 )
@@ -68,12 +66,10 @@ logger = logging.getLogger(__name__)
 # The closing auction ends at 15:00. Leave a small settlement buffer before
 # trusting TDX's current daily bar; the default core schedule starts at 16:00.
 _DAILY_BAR_FINAL_AT = A_SHARE_FINAL_AT
-# Sina's anti-abuse policy is shared with the other two sweeps that hit it;
-# see cnequity/domain/rate_limit.py.
-_SINA_RETRY_STATUS_CODES = SINA_RETRY_STATUS_CODES
+# Sina's anti-abuse policy is shared with every sweep that hits it: the retry
+# loop is cnequity.domain.rate_limit.sina_retry; the circuit below is the
+# gap-fill's own addition.
 _SINA_RATE_LIMIT_STATUS_CODES = SINA_RATE_LIMIT_STATUS_CODES
-_SINA_FETCH_ATTEMPTS = SINA_FETCH_ATTEMPTS
-_SINA_RATE_LIMIT_COOLDOWN_SECONDS = SINA_RATE_LIMIT_COOLDOWN_SECONDS
 _SINA_RATE_LIMIT_CIRCUIT_SECONDS = SINA_RATE_LIMIT_CIRCUIT_SECONDS
 _EXCHANGE_BULK_GAPFILL_MAX_SESSIONS = 20
 
@@ -1088,16 +1084,6 @@ _TURNOVER_REPAIR_PRICE_TOLERANCE = 0.006
 _TURNOVER_REPAIR_BATCH = 100
 
 
-def _baostock_stock(symbol: str) -> bool:
-    """SH/SZ stocks, the only daily bars baostock serves."""
-    code, _, exchange = symbol.partition(".")
-    if exchange == "SH":
-        return code.startswith(("60", "688"))
-    if exchange == "SZ":
-        return code.startswith(("00", "30"))
-    return False
-
-
 def _turnover_replacements(
     stored: pl.DataFrame, fresh: pl.DataFrame
 ) -> tuple[pl.DataFrame, dict[str, int]]:
@@ -1280,7 +1266,7 @@ def repair_daily_bar_turnover(
             .filter(pl.col("_defect").is_not_null())
         )
         defective = defective.filter(
-            pl.col("symbol").map_elements(_baostock_stock, return_dtype=pl.Boolean)
+            pl.col("symbol").map_elements(is_baostock_stock, return_dtype=pl.Boolean)
         )
         if not defective.is_empty():
             parts.append(defective)
@@ -4070,7 +4056,7 @@ def _gapfill_missing_keys_via_baostock(
     for symbol, session in missing_keys:
         # Its history covers SH/SZ stocks, not the ETF/LOF and index codes TDX
         # can serve. An unsupported code returning empty proves no absence.
-        if not _baostock_stock(symbol):
+        if not is_baostock_stock(symbol):
             continue
         by_symbol.setdefault(symbol, set()).add(session)
     if not by_symbol:
@@ -4282,7 +4268,7 @@ def _learn_suspensions_from_baostock(
         return set(), {"status": "disabled" if missing else "not_needed", "requests": 0}
     # Unsupported funds, indexes and BJ securities cannot supply suspension
     # evidence merely because their codes can be requested through TDX.
-    symbols = sorted({symbol for symbol, _day in missing if _baostock_stock(symbol)})
+    symbols = sorted({symbol for symbol, _day in missing if is_baostock_stock(symbol)})
     if not symbols:
         return set(), {"status": "skipped", "requests": 0, "reason": "no SH/SZ stock key"}
     if len(symbols) > _BAOSTOCK_GAPFILL_MAX_SYMBOLS:
@@ -5140,79 +5126,67 @@ def fetch_bars_via_sina(
                         }
                     )
 
-    def fetch_one(symbol: str, client: httpx.Client) -> tuple[str, pl.DataFrame | None, str | None]:
-        rate_limit_failures = 0
-        for attempt in range(_SINA_FETCH_ATTEMPTS):
-            if config._sina_bar_circuit == (run_id, True):
-                return symbol, None, "circuit_open"
-            # Gapfill is a best-effort repair path. Keep one unresponsive
-            # symbol from holding the whole daily run for the full timeout.
-            try:
-                from cnequity.domain.rate_limit import source_request
+    class _Stop(Exception):
+        def __init__(self, reason: str):
+            super().__init__(reason)
+            self.reason = reason
 
-                if default_fetch:
-                    # The adapter owns the exact HTTP boundary. Keeping
-                    # the lease there matters if it adds a probe or retry
-                    # request in the future; an outer lease would turn
-                    # several wire calls into one slot/QPS event.
-                    bars = fetch(symbol, client)
-                else:
-                    # Injected integrations historically receive only
-                    # ``(symbol, client)``; guard their opaque operation at
-                    # this boundary so custom network fetchers remain
-                    # source-limited too.
-                    with source_request(config, "sina_bars"):
-                        bars = fetch(symbol, client)
-            except Exception as exc:  # noqa: BLE001 — keep the rest of the board
-                status_code = getattr(getattr(exc, "response", None), "status_code", None)
-                retryable = status_code in _SINA_RETRY_STATUS_CODES
-                if not retryable or attempt + 1 >= _SINA_FETCH_ATTEMPTS:
-                    logger.warning("sina bars failed for %s: %s", symbol, exc)
-                    if status_code in _SINA_RATE_LIMIT_STATUS_CODES:
-                        reason = "rate_limited"
-                    elif status_code is not None:
-                        reason = "http_error"
-                    elif isinstance(exc, httpx.TransportError):
-                        reason = "transport_error"
-                    else:
-                        reason = "parse_or_adapter_error"
-                    return symbol, None, reason
-                if status_code in _SINA_RATE_LIMIT_STATUS_CODES:
-                    rate_limit_failures += 1
-                    if rate_limit_failures >= 2:
-                        config.defer_source("sina_bars", _SINA_RATE_LIMIT_CIRCUIT_SECONDS)
-                        config._sina_bar_circuit = (run_id, True)
-                        logger.warning(
-                            "sina bars repeated HTTP %s; opening run-local circuit and "
-                            "cooling all Sina lanes for %.0fs",
-                            status_code,
-                            _SINA_RATE_LIMIT_CIRCUIT_SECONDS,
-                        )
-                        return symbol, None, "rate_limited"
-                    delay = _SINA_RATE_LIMIT_COOLDOWN_SECONDS
-                    config.defer_source("sina_bars", delay)
-                    logger.warning(
-                        "sina bars HTTP %s for %s; vendor-wide cooldown %.0fs before one retry",
-                        status_code,
-                        symbol,
-                        delay,
-                    )
-                    continue
-                delay = max(float(getattr(config, "retry_backoff_seconds", 5)), 1.0) * (attempt + 1)
+    def fetch_one(symbol: str, client: httpx.Client) -> tuple[str, pl.DataFrame | None, str | None]:
+        if config._sina_bar_circuit == (run_id, True):
+            return symbol, None, "circuit_open"
+        rate_limits = 0
+
+        def before_retry() -> None:
+            if config._sina_bar_circuit == (run_id, True):
+                raise _Stop("circuit_open")
+
+        def on_rate_limit(status_code: int) -> None:
+            # A second rate limit in one symbol stops the whole gap-fill for
+            # this run, on top of the vendor-wide cooldown every caller gets.
+            nonlocal rate_limits
+            rate_limits += 1
+            if rate_limits >= 2:
+                config.defer_source("sina_bars", _SINA_RATE_LIMIT_CIRCUIT_SECONDS)
+                config._sina_bar_circuit = (run_id, True)
                 logger.warning(
-                    "sina bars transient HTTP %s for %s; retrying in %.1fs (%d/%d)",
+                    "sina bars repeated HTTP %s; opening run-local circuit and "
+                    "cooling all Sina lanes for %.0fs",
                     status_code,
-                    symbol,
-                    delay,
-                    attempt + 1,
-                    _SINA_FETCH_ATTEMPTS - 1,
+                    _SINA_RATE_LIMIT_CIRCUIT_SECONDS,
                 )
-                time.sleep(delay)
-                continue
-            if bars.is_empty():
-                return symbol, None, "source_empty"
-            return symbol, bars, None
-        return symbol, None, "failed"
+                raise _Stop("rate_limited")
+
+        # Gapfill is a best-effort repair path. Keep one unresponsive symbol
+        # from holding the whole daily run for the full timeout. The default
+        # adapter owns its HTTP boundary (an outer lease would turn several
+        # wire calls into one slot/QPS event); an injected fetch is leased here.
+        try:
+            bars = sina_retry(
+                config,
+                "sina_bars",
+                lambda: fetch(symbol, client),
+                describe=f"sina bars for {symbol}",
+                request_managed=default_fetch,
+                on_rate_limit=on_rate_limit,
+                before_retry=before_retry,
+            )
+        except _Stop as stop:
+            return symbol, None, stop.reason
+        except Exception as exc:  # noqa: BLE001 — keep the rest of the board
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            logger.warning("sina bars failed for %s: %s", symbol, exc)
+            if status_code in _SINA_RATE_LIMIT_STATUS_CODES:
+                reason = "rate_limited"
+            elif status_code is not None:
+                reason = "http_error"
+            elif isinstance(exc, httpx.TransportError):
+                reason = "transport_error"
+            else:
+                reason = "parse_or_adapter_error"
+            return symbol, None, reason
+        if bars.is_empty():
+            return symbol, None, "source_empty"
+        return symbol, bars, None
 
     with httpx.Client(timeout=8.0) as client:
         if use_parallel and requested_symbols:

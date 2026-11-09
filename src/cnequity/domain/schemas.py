@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import polars as pl
 
+from cnequity.domain.datasets import DATASETS, PIT_DATASET_NAMES
 from cnequity.domain.pit import (
-    PIT_DATASET_NAMES,
     PIT_STORAGE_COLUMNS,
     PIT_STORAGE_DTYPES,
 )
@@ -20,20 +20,12 @@ MOCK_SOURCE = "mock"
 
 DEFAULT_DATA_VERSION = "v1"
 
-# Datasets whose stored values changed *meaning* — not shape. Adding a column
-# is a schema change and leaves `data_version` alone; reinterpreting a value
-# already written does not, because old and new rows are then not comparable
-# and a reader has no other way to tell them apart.
-#
-# daily_bars v2: `volume` is 股 for every source. v1 rows are 手 from
-# tdx_protocol and sina, 股 from ths and baostock — see
-# `cnequity.domain.units` and docs/zh/datasets/schema.md.
+#: Datasets past ``v1``: derived from ``DatasetSpec.data_version``, which says
+#: when a version is bumped.
 DATASET_DATA_VERSION = {
-    "daily_bars": "v2",
-    # v2: industry_code is the level-3 leaf and the level columns are filled.
-    "industry_members": "v2",
-    # v2: `float_a_shares` is filled.
-    "share_structure": "v2",
+    name: spec.data_version
+    for name, spec in DATASETS.items()
+    if spec.data_version != DEFAULT_DATA_VERSION
 }
 
 
@@ -1744,9 +1736,6 @@ def _validate_bar_semantics(df: pl.DataFrame, dataset: str) -> None:
         )
 
 
-DERIVATIVE_BAR_DATASETS = frozenset({"futures_bars", "option_bars", "futures_minute_bars"})
-
-
 def derivative_bar_violations(dataset: str) -> pl.Expr | None:
     """Rows of a futures/option bar frame that cannot be true, as one predicate.
 
@@ -1760,9 +1749,16 @@ def derivative_bar_violations(dataset: str) -> pl.Expr | None:
     option settlement, a missing or negative count, and a full candle whose
     high or low does not bound its open and close. Every source prints 0 for no
     volume or no position, so a missing count is a malformed cell, not a zero.
+
+    Applies to the datasets whose ``value_rules`` say ``bar_kind="derivative"``.
+    A check names only columns the dataset stores: ``futures_continuous`` has
+    no ``pre_settle`` or ``amount``.
     """
-    if dataset not in DERIVATIVE_BAR_DATASETS:
+    from cnequity.domain.value_rules import rules_for
+
+    if rules_for(dataset).bar_kind != "derivative":
         return None
+    stored = set(DATASET_SCHEMAS.get(dataset, ()))
     ohlc = ("open", "high", "low", "close")
     every = pl.all_horizontal([pl.col(c).is_not_null() for c in ohlc])
     if dataset == "futures_minute_bars":
@@ -1778,14 +1774,16 @@ def derivative_bar_violations(dataset: str) -> pl.Expr | None:
     settle_floor = pl.col("settle") < 0 if dataset == "option_bars" else pl.col("settle") <= 0
     checks = [
         pl.col("settle").is_not_null() & settle_floor,
-        pl.col("pre_settle").is_not_null() & (pl.col("pre_settle") <= 0),
         *[pl.col(c).is_not_null() & (pl.col(c) <= 0) for c in ohlc],
         pl.col("volume").is_null() | (pl.col("volume") < 0),
         pl.col("open_interest").is_null() | (pl.col("open_interest") < 0),
-        pl.col("amount").is_not_null() & (pl.col("amount") < 0),
         every & (pl.col("high") < pl.max_horizontal("open", "close")),
         every & (pl.col("low") > pl.min_horizontal("open", "close")),
     ]
+    if "pre_settle" in stored:
+        checks.append(pl.col("pre_settle").is_not_null() & (pl.col("pre_settle") <= 0))
+    if "amount" in stored:
+        checks.append(pl.col("amount").is_not_null() & (pl.col("amount") < 0))
     if dataset == "option_bars":
         checks.extend(
             [

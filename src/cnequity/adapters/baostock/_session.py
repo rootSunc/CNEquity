@@ -19,7 +19,7 @@ from datetime import date
 from cnequity.adapters.baostock.access import hold_baostock_connection, record_blacklist
 from cnequity.domain.http_policy import SourceCoolingDown
 from cnequity.domain.rate_limit import source_request
-from cnequity.domain.symbols import parse_symbol
+from cnequity.domain.symbols import to_baostock_symbol  # noqa: F401 - re-exported
 from cnequity.storage.raw_archive import RawArchiveError
 
 logger = logging.getLogger(__name__)
@@ -273,13 +273,6 @@ def _relogin(bs, *, sleep=time.sleep, config=None) -> None:
     except Exception:  # noqa: BLE001 - logout on a dead socket may raise; ignore
         pass
     _login(bs, sleep=sleep, config=config)
-
-
-def to_baostock_symbol(symbol: str) -> str:
-    """``600519.SH`` -> ``sh.600519`` (baostock's market-prefixed form)."""
-    info = parse_symbol(symbol)
-    prefix = {"SH": "sh", "SZ": "sz", "BJ": "bj"}.get(info.exchange, info.exchange.lower())
-    return f"{prefix}.{info.code}"
 
 
 class _TimedSocketModule:

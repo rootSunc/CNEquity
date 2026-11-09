@@ -22,11 +22,7 @@ import httpx
 
 from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.rate_limit import (
-    SINA_FETCH_ATTEMPTS,
-    SINA_RATE_LIMIT_COOLDOWN_SECONDS,
-    SINA_RATE_LIMIT_STATUS_CODES,
-    SINA_RETRY_STATUS_CODES,
-    source_request,
+    sina_retry,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,34 +108,14 @@ def fetch_usdcnh_closes(
             },
         )
     try:
-        last: Exception | None = None
-        response = None
-        for attempt in range(SINA_FETCH_ATTEMPTS):
-            try:
-                with source_request(config, "sina"):
-                    response = client.get(_URL, params={"symbol": _SYMBOL})
-                    record_http_response(config, "sina", response)
-                response.raise_for_status()
-                break
-            except Exception as exc:  # noqa: BLE001 — classified on the status below
-                last = exc
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                if status not in SINA_RETRY_STATUS_CODES or attempt + 1 >= SINA_FETCH_ATTEMPTS:
-                    raise
-                if (
-                    status in SINA_RATE_LIMIT_STATUS_CODES
-                    and config is not None
-                    and hasattr(config, "defer_source")
-                ):
-                    config.defer_source("sina", SINA_RATE_LIMIT_COOLDOWN_SECONDS)
-                logger.warning(
-                    "usdcnh: Sina HTTP %s; retry %d/%d",
-                    status,
-                    attempt + 2,
-                    SINA_FETCH_ATTEMPTS,
-                )
-        if response is None:
-            raise last if last is not None else RuntimeError("usdcnh: Sina returned no response")
+
+        def get():
+            response = client.get(_URL, params={"symbol": _SYMBOL})
+            record_http_response(config, "sina", response)
+            response.raise_for_status()
+            return response
+
+        response = sina_retry(config, "sina", get, describe="usdcnh")
         return parse_usdcnh_body(response.text, start=start, end=end)
     finally:
         if owns:

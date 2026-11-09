@@ -66,18 +66,20 @@ PIT_STORAGE_DTYPES: dict[str, pl.DataType] = {
 # totalling 190 MB, and copied whole into each committed generation.
 REVISION_ID_HEX_CHARS = 24
 
-# Current PIT registry members.  Keeping this small constant independent of
-# DatasetSpec avoids a domain import cycle; registry code re-exports the same
-# public aliases and the reader derives its set from DATASETS.
-PIT_DATASET_NAMES = frozenset(
-    {
-        "financial_statement_items",
-        "announcement_index",
-        "share_structure",
-        "shareholder_counts",
-        "top_holders",
-    }
-)
+
+def _pit_dataset_names() -> frozenset[str]:
+    """``domain.datasets.PIT_DATASET_NAMES``, imported late: the registry imports this module."""
+    from cnequity.domain.datasets import PIT_DATASET_NAMES
+
+    return PIT_DATASET_NAMES
+
+
+def __getattr__(name: str):
+    # The set used to be declared here as well as by ``pit=True`` on each spec.
+    # It is derived from the specs now; the old import path still answers.
+    if name == "PIT_DATASET_NAMES":
+        return _pit_dataset_names()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _json_default(value: object) -> str:
@@ -156,7 +158,7 @@ def normalize_pit_storage_columns(
         # a row that never existed. See domain/frames.py.
         return df
 
-    if dataset not in PIT_DATASET_NAMES:
+    if dataset not in _pit_dataset_names():
         return df
 
     out = df
@@ -203,7 +205,7 @@ def retain_pit_vintages(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
     from cnequity.domain.schemas import PRIMARY_KEYS
 
     out = normalize_pit_storage_columns(df, dataset)
-    if dataset not in PIT_DATASET_NAMES or out.is_empty():
+    if dataset not in _pit_dataset_names() or out.is_empty():
         return out
     keys = [*PRIMARY_KEYS[dataset], "revision_id"]
     order = [name for name in ("observed_at", "fetched_at") if name in out.columns]
@@ -318,7 +320,6 @@ def classify_pit_rows(
 
 
 __all__ = [
-    "PIT_DATASET_NAMES",
     "PIT_MODES",
     "PIT_QUALITIES",
     "PIT_STORAGE_COLUMNS",

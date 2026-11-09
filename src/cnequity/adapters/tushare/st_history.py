@@ -23,13 +23,12 @@ import logging
 import time
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime, timezone
-from functools import lru_cache
 
 import httpx
 import polars as pl
 
-from cnequity.adapters.eastmoney.corporate_actions_migration import _code_mapping
 from cnequity.config import Config
+from cnequity.domain.bse_codes import current_to_legacy, legacy_to_current
 from cnequity.domain.http_policy import (
     SourceCoolingDown,
     record_business_refusal,
@@ -122,18 +121,12 @@ def _post_json(
     raise last_error
 
 
-@lru_cache(maxsize=1)
-def _reverse_code_mapping() -> dict[str, str]:
-    """Return current 920xxx code -> legacy code for source aliasing."""
-    return {new: old for old, new in _code_mapping().items()}
-
-
 def _source_codes(symbol: str) -> tuple[str, ...]:
     info = parse_symbol(symbol)
     if info.exchange != "BJ":
         return (f"{info.code}.{info.exchange}",)
-    mapping = _code_mapping()
-    reverse = _reverse_code_mapping()
+    mapping = legacy_to_current()
+    reverse = current_to_legacy()
     aliases = {info.code}
     if info.code in mapping:
         aliases.add(mapping[info.code])

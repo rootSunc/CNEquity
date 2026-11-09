@@ -13,8 +13,7 @@ a registered step.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Literal
 
@@ -54,397 +53,6 @@ UnitContract = str | Mapping[str, str]
 DEFAULT_SCHEMA_VERSION = 1
 DEFAULT_CONTRACT_LEVEL = "stable"
 DEFAULT_COMPATIBILITY = "additive"
-
-# The unit strings are identifiers, not prose.  A mapping is used where a
-# dataset has more than one numeric dimension; a scalar is enough when the
-# dataset has no numeric values whose interpretation needs an explicit unit.
-# These defaults are intentionally conservative: ``source_native`` means that
-# the value has not been silently rescaled by the canonical adapter.
-_UNIT_CONTRACT_DEFAULTS: dict[str, UnitContract] = {
-    "daily_bars": {
-        "price": "CNY/share",
-        "volume": "share",
-        "amount": "CNY",
-    },
-    "index_bars": {
-        "price": "index_point",
-        "volume": "source_native",
-        "amount": "source_native",
-    },
-    "minute_bars": {
-        "price": "CNY/share",
-        "volume": "share",
-        "amount": "CNY",
-    },
-    "minute_bars_5m": {
-        "price": "CNY/share",
-        "volume": "share",
-        "amount": "CNY",
-    },
-    "minute_bars_15m": {
-        "price": "CNY/share",
-        "volume": "share",
-        "amount": "CNY",
-    },
-    "minute_bars_30m": {
-        "price": "CNY/share",
-        "volume": "share",
-        "amount": "CNY",
-    },
-    "minute_bars_60m": {
-        "price": "CNY/share",
-        "volume": "share",
-        "amount": "CNY",
-    },
-    "trade_ticks": {
-        "price": "CNY/share",
-        "volume": "share",
-        "direction": "inferred_tick_rule",
-    },
-    "commodity_bars": {
-        "price": "source_native",
-        "volume": "contract",
-        "amount": "source_native",
-        "open_interest": "contract",
-    },
-    # Derivatives (ADR-0013): prices in each product's quote unit, counts on
-    # one side of the trade whatever the exchange published, turnover in 元.
-    "futures_contracts": {"multiplier": "quote_unit_to_CNY", "tick_size": "source_native"},
-    "option_contracts": {
-        "strike": "source_native",
-        "multiplier": "quote_unit_to_CNY",
-        "tick_size": "source_native",
-    },
-    "option_greeks": {
-        "underlying_price": "source_native",
-        "time_to_expiry": "year",
-        "rate": "fraction",
-        "iv": "fraction",
-        "delta": "unitless",
-        "gamma": "per_quote_unit",
-        "vega": "price_per_unit_vol",
-        "theta": "price_per_year",
-        "rho": "price_per_unit_rate",
-    },
-    "futures_minute_bars": {
-        "price": "source_native",
-        "volume": "contract_single_sided",
-        "open_interest": "contract_single_sided",
-    },
-    "futures_continuous": {
-        "price": "source_native",
-        "volume": "contract_single_sided",
-        "open_interest": "contract_single_sided",
-        "adj_ratio": "unitless",
-        "adj_diff": "source_native",
-        "roll_yield": "fraction_per_year",
-    },
-    "futures_bars": {
-        "price": "source_native",
-        "volume": "contract_single_sided",
-        "amount": "CNY",
-        "open_interest": "contract_single_sided",
-    },
-    "option_bars": {
-        "price": "source_native",
-        "strike": "source_native",
-        "volume": "contract_single_sided",
-        "amount": "CNY",
-        "open_interest": "contract_single_sided",
-        "exercise_volume": "contract_single_sided",
-        "delta": "unitless",
-        "implied_vol": "fraction",
-        "series_implied_vol": "fraction",
-    },
-    "corporate_actions": {
-        "cash_dividend": "CNY/share",
-        "bonus_ratio": "share/share",
-        "transfer_ratio": "share/share",
-        "split_factor": "unit/unit",
-        "allotment_ratio": "share/share",
-        "allotment_price": "CNY/share",
-        "reference_price": "CNY/share",
-    },
-    "financial_statement_items": {"item_value": "source_native"},
-    "share_structure": {
-        "total_shares": "share",
-        "float_shares": "share",
-        "restricted_shares": "share",
-        "float_a_shares": "share",
-        "free_float_shares": "share",
-    },
-    "shareholder_counts": {
-        "holder_count": "holder",
-        "avg_float_shares": "share",
-        "avg_holding_value": "CNY",
-        "holder_count_change_pct": "percent",
-    },
-    "top_holders": {"holding_shares": "share", "holding_pct": "fraction"},
-    "fund_flow": {
-        "main_net_inflow": "CNY",
-        "super_large_net_inflow": "CNY",
-        "large_net_inflow": "CNY",
-        "medium_net_inflow": "CNY",
-        "small_net_inflow": "CNY",
-    },
-    "margin_trading": {
-        "margin_balance": "CNY",
-        "margin_buy": "CNY",
-        "short_balance": "CNY",
-        "short_sell_volume": "share",
-    },
-    "northbound_holdings": {
-        "holding_shares": "share",
-        "holding_mv": "CNY",
-        "holding_ratio": "fraction",
-    },
-    "northbound_flows": {"net_buy": "CNY", "buy_amount": "CNY", "sell_amount": "CNY"},
-    "valuation_metrics": {
-        "pe_ttm": "ratio",
-        "pe_dynamic": "ratio",
-        "pb": "ratio",
-        "ps_ttm": "ratio",
-        "total_mv": "CNY",
-        "float_mv": "CNY",
-    },
-    # EastMoney's report is in 万股 / 万元 and the exchange backup keeps that
-    # scale; declared as stored, not as the other bar datasets are.
-    "block_trades": {
-        "price": "CNY/share",
-        "volume": "10k_share",
-        "amount": "10k_CNY",
-        "premium_ratio": "fraction",
-    },
-    "index_constituents": {"weight": "fraction"},
-    "macro_indicators": {"value": "source_native"},
-    "share_unlock_schedule": {"unlock_shares": "share", "unlock_ratio": "fraction"},
-    "institutional_holdings": {
-        "holding_shares": "share",
-        "holding_ratio": "percent",
-        "holding_mv": "CNY",
-    },
-    "limit_prices": {"up_limit": "CNY/share", "down_limit": "CNY/share"},
-    "convertible_bonds": {
-        "par_value": "CNY",
-        "issue_price": "CNY",
-        "issue_size": "CNY",
-        "remaining_size": "CNY",
-        "coupon_rate": "percent",
-        "first_conversion_price": "CNY/share",
-        "conversion_price": "CNY/share",
-    },
-    "convertible_bond_bars": {
-        "open": "CNY/100_face",
-        "high": "CNY/100_face",
-        "low": "CNY/100_face",
-        "close": "CNY/100_face",
-        "pre_close": "CNY/100_face",
-        "volume": "bond",
-        "amount": "CNY",
-    },
-    "holder_trades": {
-        "change_shares": "share",
-        "change_ratio": "percent",
-        "after_shares": "share",
-        "after_ratio": "percent",
-        "avg_price": "CNY/share",
-    },
-    "share_repurchases": {
-        "shares": "share",
-        "amount": "CNY",
-        "price_high": "CNY/share",
-        "price_low": "CNY/share",
-    },
-    "pledge_stats": {
-        "unrestricted_pledged_shares": "share",
-        "restricted_pledged_shares": "share",
-        "total_shares": "share",
-        "pledge_ratio": "percent",
-    },
-    "chip_distribution": {
-        "history_low": "CNY/share",
-        "history_high": "CNY/share",
-        "cost_5pct": "CNY/share",
-        "cost_15pct": "CNY/share",
-        "cost_50pct": "CNY/share",
-        "cost_85pct": "CNY/share",
-        "cost_95pct": "CNY/share",
-        "cost_mean": "CNY/share",
-        "winner_rate": "percent",
-    },
-    "northbound_top10": {
-        "close": "CNY/share",
-        "change": "percent",
-        "amount": "CNY",
-        "net_amount": "CNY",
-        "buy_amount": "CNY",
-        "sell_amount": "CNY",
-    },
-    "limit_events": {
-        "close": "CNY/share",
-        "pct_change": "percent",
-        "amount": "CNY",
-        "amount_at_limit": "CNY",
-        "seal_amount": "CNY",
-        "float_market_cap": "CNY",
-        "total_market_cap": "CNY",
-        "turnover_rate": "percent",
-    },
-    "futures_member_positions": {
-        "volume": "contract",
-        "volume_change": "contract",
-        "long_open_interest": "contract",
-        "long_change": "contract",
-        "short_open_interest": "contract",
-        "short_change": "contract",
-    },
-    "earnings_forecasts": {
-        "change_min_pct": "percent",
-        "change_max_pct": "percent",
-        "net_profit_min": "CNY",
-        "net_profit_max": "CNY",
-        "prior_net_profit": "CNY",
-    },
-    "business_segments": {
-        "revenue": "source_native",
-        "cost": "source_native",
-        "gross_profit": "source_native",
-    },
-    "hot_money_trades": {"buy_amount": "CNY", "sell_amount": "CNY", "net_amount": "CNY"},
-    "convertible_bond_calls": {
-        "call_price": "CNY/100_face",
-        "call_price_after_tax": "CNY/100_face",
-        "call_volume": "bond",
-        "call_amount": "CNY",
-    },
-    "convertible_bond_conversions": {
-        "issue_size": "CNY",
-        "first_conversion_price": "CNY/share",
-        "conversion_price": "CNY/share",
-        "converted_amount": "CNY",
-        "converted_shares": "share",
-        "converted_pct": "percent",
-        "total_converted_amount": "CNY",
-        "total_converted_shares": "share",
-        "total_converted_pct": "percent",
-        "remaining_size": "CNY",
-        "total_shares": "share",
-    },
-    "convertible_bond_coupons": {"coupon_rate": "percent"},
-    "popularity_ranks": {
-        "pct_change": "percent",
-        "price": "source_native",
-        "heat": "source_native",
-    },
-    "strongest_sectors": {"pct_change": "percent"},
-    "kpl_limit_ups": {
-        "amount": "CNY",
-        "turnover_rate": "percent",
-        "free_float_cap": "CNY",
-        "main_net_amount": "CNY",
-        "limit_order_amount": "CNY",
-        "max_limit_order_amount": "CNY",
-    },
-    "fund_flow_ths_tushare": {
-        "close": "CNY/share",
-        "change_pct": "percent",
-        "net_amount": "CNY",
-        "net_amount_5d": "CNY",
-        "large_net_amount": "CNY",
-        "large_net_rate": "percent",
-        "medium_net_amount": "CNY",
-        "medium_net_rate": "percent",
-        "small_net_amount": "CNY",
-        "small_net_rate": "percent",
-    },
-    "executive_compensation": {"pay": "CNY", "shares_held": "share"},
-    "fund_flow_tushare": {
-        "buy_small_volume": "share",
-        "buy_small_amount": "CNY",
-        "sell_small_volume": "share",
-        "sell_small_amount": "CNY",
-        "buy_medium_volume": "share",
-        "buy_medium_amount": "CNY",
-        "sell_medium_volume": "share",
-        "sell_medium_amount": "CNY",
-        "buy_large_volume": "share",
-        "buy_large_amount": "CNY",
-        "sell_large_volume": "share",
-        "sell_large_amount": "CNY",
-        "buy_xlarge_volume": "share",
-        "buy_xlarge_amount": "CNY",
-        "sell_xlarge_volume": "share",
-        "sell_xlarge_amount": "CNY",
-        "net_volume": "share",
-        "net_amount": "CNY",
-    },
-    "broker_forecasts": {
-        "op_rt": "10k_CNY",
-        "op_pr": "10k_CNY",
-        "tp": "10k_CNY",
-        "np": "10k_CNY",
-        "eps": "CNY/share",
-        "pe": "ratio",
-        "rd": "percent",
-        "roe": "percent",
-        "ev_ebitda": "ratio",
-        "max_price": "CNY/share",
-        "min_price": "CNY/share",
-    },
-    "analyst_consensus": {
-        "eps_forecast": "CNY/share",
-        "target_price": "CNY/share",
-        "pe_forecast": "ratio",
-        "analyst_count": "analyst",
-    },
-    "sentiment_scores": {"sentiment_score": "normalized[-1,1]", "headline_count": "headline"},
-    "sector_bars": {
-        "price": "index_point",
-        "volume": "source_native",
-        "amount": "source_native",
-    },
-    "sector_fund_flow": {
-        "main_net_inflow": "CNY",
-        "change_pct": "percent",
-        "turnover_pct": "percent",
-    },
-    "fund_flow_ths": {
-        "inflow": "CNY",
-        "outflow": "CNY",
-        "net_inflow": "CNY",
-        "amount": "CNY",
-        "change_pct": "percent",
-        "turnover_pct": "percent",
-    },
-    "sector_fund_flow_ths": {
-        "sector_index": "index_point",
-        "change_pct": "percent",
-        "inflow": "CNY",
-        "outflow": "CNY",
-        "net_inflow": "CNY",
-        "company_count": "count",
-    },
-    "economic_calendar": {"value": "source_native"},
-    "industry_index": {"ret": "fraction", "amount": "source_native"},
-    "delisting_events": {
-        "final_close": "CNY/share",
-        "worst_final_return": "fraction",
-        "final_window_return": "fraction",
-    },
-}
-
-
-def _default_unit_contract(name: str) -> UnitContract:
-    """Return a detached unit declaration for *name*.
-
-    Most event/identity tables have no numeric field whose unit can be
-    inferred from the registry.  ``canonical`` still makes that fact explicit
-    in the exported contract and, importantly, gives diff tooling a stable
-    value to compare when a future release adds a unit declaration.
-    """
-
-    declared = _UNIT_CONTRACT_DEFAULTS.get(name)
-    return deepcopy(declared) if declared is not None else "canonical"
 
 
 # Research-use classification, orthogonal to ``Layer`` (which is a storage
@@ -494,9 +102,8 @@ class DatasetSpec:
     """Orchestration/query metadata for one dataset.
 
     support:
-        How much the project stands behind it (see ``Support``). Left None on
-        construction and set for every registered dataset from ``_SUPPORT``,
-        which must name each one exactly once.
+        How much the project stands behind it (see ``Support``). Every
+        registered dataset declares it; the registry refuses to load without.
 
     tier:
         L0–L9 research classification (see ``Tier``). Mandatory and without a
@@ -528,9 +135,11 @@ class DatasetSpec:
     watermark:
         Maintain a date watermark under ``meta/state`` (False for datasets
         partitioned by non-date keys like report_period).
-    pit:
-        Point-in-time dataset — ``load()`` requires ``as_of`` and filters on
-        ``announce_date``.
+    pit_quality:
+        How honestly the dataset answers "what was known on day D" (see the
+        field below). ``pit`` and ``pit_grade`` are read from it: a ``strict``
+        or ``reconstructed`` dataset is point-in-time — ``load()`` requires
+        ``as_of`` and filters on ``announce_date``.
     backfill_source:
         Name of an external historical source that can replay this dataset even
         though daily ``fetch_semantics`` is ``snapshot`` (e.g. valuation_metrics:
@@ -604,7 +213,6 @@ class DatasetSpec:
     date_col: str | None = None
     fetch_semantics: FetchSemantics = "by_date"
     watermark: bool = True
-    pit: bool = False
     # Which upstream the daily path actually reads, and what it falls back to.
     # Kept in the registry rather than in prose because the prose drifted: the
     # published source table had `sector_bars` on EastMoney long after it moved
@@ -687,6 +295,22 @@ class DatasetSpec:
     # tip→horizon walk. Symbol chunks keep one walk per name and still bound
     # compact memory (200 × 240 × 95 ≈ 4.6M rows of 1m per sub-run).
     backfill_chunk_symbols: int | None = None
+    # What `cne backfill` accepts beyond a window and a symbol list. The
+    # command looks these up instead of naming datasets; see
+    # ``cnequity.orchestrator.backfill_request``.
+    #
+    # ``--source`` values that replace the configured source for one run.
+    backfill_source_overrides: tuple[str, ...] = ()
+    # How ``--refetch`` reaches the run, or None when it does not apply:
+    # ``scope`` — the step reads it from the backfill window and ignores its
+    # receipts; ``checkpoint`` — the date checkpoint is reset once;
+    # ``derivatives`` — exchange files are downloaded again.
+    backfill_refetch: str | None = None
+    # ``--workers`` above 1: dates advance on parallel lanes.
+    backfill_parallel_dates: bool = False
+    # ``--symbols`` is carried on the backfill window, which the step reads;
+    # otherwise it overrides the dataset's configured scope for the run.
+    backfill_symbols_in_window: bool = False
     # Bar frequency for intraday datasets ("1m", "5m"), None for everything
     # else. One dataset holds exactly one frequency, so this is also what marks
     # a dataset as intraday — steps, audit checks and the reader all derive the
@@ -730,11 +354,6 @@ class DatasetSpec:
     # ------------------------------------------------------------------
     schema_version: int = DEFAULT_SCHEMA_VERSION
     contract_level: ContractLevel = DEFAULT_CONTRACT_LEVEL
-    # ``None`` means infer the honest grade from ``pit``.  A PIT dataset is
-    # strict by default; a non-PIT dataset is explicitly ``none``.  Keeping
-    # the optional input allows a future release to add a partial PIT grade
-    # without making old callers pass a new value.
-    pit_grade: PitGrade | None = None
     # ``None`` means infer from the query/date axis (or ``list_date`` for the
     # merge-style instruments table and ``announce_date`` for PIT tables).
     availability_col: str | None = None
@@ -748,8 +367,10 @@ class DatasetSpec:
     # Canonical PIT evidence quality.  ``reconstructed`` is used for the
     # current historical backfill, whose values are today's restated snapshot
     # paired with an older report/disclosure date.  ``snapshot_only`` denotes
-    # a live snapshot with no honest PIT replay.  ``pit_grade`` remains as the
-    # legacy none/strict/partial spelling in exported 0.x contracts.
+    # a live snapshot with no honest PIT replay.  ``None`` infers
+    # ``snapshot_only`` or ``not_applicable`` from ``fetch_semantics``. The
+    # ``pit`` flag and the ``pit_grade`` spelling of exported 0.x contracts
+    # are derived from it; they used to be declared alongside and had to agree.
     pit_quality: PitQuality | None = None
     # Number of already-covered observations to reconcile on every
     # incremental run. A non-zero value deliberately re-reads the tail
@@ -806,8 +427,40 @@ class DatasetSpec:
     session_rows: bool = False
     # How stored values are read: vendor placeholders that mean "no value",
     # the columns that must never be null, and whether rows are market bars.
-    # Set from ``_VALUE_RULES``; applied once in ``validate_dataframe``.
+    # Declared on the dataset's entry; applied once in ``validate_dataframe``.
     value_rules: ValueRules = NO_RULES
+    # The config switch an optional capture needs (a key of ``_SWITCHES``), or
+    # None for a dataset that is always on. See ``is_dataset_enabled``.
+    enable_switch: str | None = None
+    # Bumped when stored values change *meaning*, not shape: adding a column is
+    # a schema change and leaves it alone; reinterpreting a value already
+    # written does not, because old and new rows are then not comparable and a
+    # reader has no other way to tell them apart. Stamped on every row as
+    # ``data_version`` (see ``domain.schemas.data_version_for``).
+    data_version: str = "v1"
+    # What ``query.load`` offers on top of a plain read. They used to be names
+    # written into the reader.
+    #
+    # ``adjust=`` joins ``adj_factors``: per-share prices stored unadjusted.
+    adjustable: bool = False
+    # ``universe=`` / ``profile=`` filter the rows by a research universe.
+    universe_filter: bool = False
+    # ``adjust="total_return"`` also reinvests fund distributions.
+    total_return: bool = False
+    # The catalog reports coverage only up to the last session before the first
+    # missing one. For derived dense series, where a hole means the derive has
+    # not caught up; not for fetched bars, whose history has real closures.
+    coverage_end_contiguous: bool = False
+
+    @property
+    def pit(self) -> bool:
+        """Point-in-time: ``load()`` requires ``as_of`` and filters on ``announce_date``."""
+        return self.pit_quality in ("strict", "reconstructed")
+
+    @property
+    def pit_grade(self) -> PitGrade:
+        """The none/strict/partial spelling of ``pit_quality`` in exported 0.x contracts."""
+        return {"strict": "strict", "reconstructed": "partial"}.get(self.pit_quality, "none")
 
     def __post_init__(self) -> None:
         """Materialise inferred contract fields without changing old APIs.
@@ -822,6 +475,8 @@ class DatasetSpec:
             raise ValueError("schema_version must be >= 1")
         if self.reconciliation_lookback_days < 0:
             raise ValueError("reconciliation_lookback_days must be >= 0")
+        if self.backfill_refetch not in (None, "scope", "checkpoint", "derivatives"):
+            raise ValueError(f"unknown backfill_refetch: {self.backfill_refetch!r}")
         if self.shallow_reconciliation_lookback_days < 0:
             raise ValueError("shallow_reconciliation_lookback_days must be >= 0")
         if (
@@ -843,12 +498,8 @@ class DatasetSpec:
             raise ValueError("session_scope must be 'session' or 'calendar'")
 
         if self.pit_quality is None:
-            if self.pit_grade == "partial":
-                quality: PitQuality = "reconstructed"
-            elif self.pit:
-                quality = "strict"
-            elif self.fetch_semantics == "snapshot" and not self.backfill_source:
-                quality = "snapshot_only"
+            if self.fetch_semantics == "snapshot" and not self.backfill_source:
+                quality: PitQuality = "snapshot_only"
             else:
                 # Non-PIT by-date data makes no PIT quality claim. This used to
                 # default to ``strict`` so the exported contract stayed total,
@@ -864,16 +515,6 @@ class DatasetSpec:
                 f"pit_quality must be one of {PIT_QUALITIES}, got {self.pit_quality!r}"
             )
 
-        if self.pit_grade is None:
-            legacy_grade = (
-                "partial"
-                if self.pit_quality == "reconstructed"
-                else "strict"
-                if self.pit
-                else "none"
-            )
-            object.__setattr__(self, "pit_grade", legacy_grade)
-
         if self.availability_col is None:
             if self.pit:
                 # All current PIT schemas carry the first-known/disclosure
@@ -888,7 +529,10 @@ class DatasetSpec:
             object.__setattr__(self, "availability_col", availability)
 
         if self.unit_contract is None:
-            object.__setattr__(self, "unit_contract", _default_unit_contract(self.name))
+            # Most event/identity tables have no numeric field whose unit needs
+            # declaring. ``canonical`` still states that in the contract and
+            # gives diff tooling a stable value for when one is added.
+            object.__setattr__(self, "unit_contract", "canonical")
         elif isinstance(self.unit_contract, Mapping):
             object.__setattr__(self, "unit_contract", dict(self.unit_contract))
 
@@ -950,6 +594,8 @@ DERIVE_COMMAND_DATASETS = frozenset(
     | set(RESAMPLED_MINUTE_DATASETS)
 )
 
+_BAR = ("open", "high", "low", "close", "volume")
+
 _SPECS = [
     # L0 reference
     # Live sources (TDX/EM) only list what trades today; baostock's stock_basic
@@ -957,6 +603,7 @@ _SPECS = [
     # path to a survivorship-free universe.
     DatasetSpec(
         "instruments",
+        support="core",
         primary_source="tdx_protocol",
         backup_source="baostock",
         # TDX serves SH/SZ only, so the Beijing board is where BJ names enter
@@ -975,6 +622,7 @@ _SPECS = [
     # trading_status.risk_warning from here. Small enough to re-read whole.
     DatasetSpec(
         "name_history",
+        support="extended",
         primary_source="tushare",
         tier="L0",
         partition_col=None,
@@ -988,6 +636,27 @@ _SPECS = [
     # table. Only `cne backfill fund_flow_tushare` fills it.
     DatasetSpec(
         "fund_flow_tushare",
+        support="best_effort",
+        unit_contract={
+            "buy_small_volume": "share",
+            "buy_small_amount": "CNY",
+            "sell_small_volume": "share",
+            "sell_small_amount": "CNY",
+            "buy_medium_volume": "share",
+            "buy_medium_amount": "CNY",
+            "sell_medium_volume": "share",
+            "sell_medium_amount": "CNY",
+            "buy_large_volume": "share",
+            "buy_large_amount": "CNY",
+            "sell_large_volume": "share",
+            "sell_large_amount": "CNY",
+            "buy_xlarge_volume": "share",
+            "buy_xlarge_amount": "CNY",
+            "sell_xlarge_volume": "share",
+            "sell_xlarge_amount": "CNY",
+            "net_volume": "share",
+            "net_amount": "CNY",
+        },
         session_rows=True,
         primary_source="tushare",
         tier="L4",
@@ -1001,6 +670,16 @@ _SPECS = [
     # token): one row per bond, re-read whole; conversion_price is the current one.
     DatasetSpec(
         "convertible_bonds",
+        support="best_effort",
+        unit_contract={
+            "par_value": "CNY",
+            "issue_price": "CNY",
+            "issue_size": "CNY",
+            "remaining_size": "CNY",
+            "coupon_rate": "percent",
+            "first_conversion_price": "CNY/share",
+            "conversion_price": "CNY/share",
+        },
         primary_source="tushare",
         tier="L0",
         partition_col=None,
@@ -1012,6 +691,25 @@ _SPECS = [
     # Daily convertible bond bars (Tushare cb_daily), from 2004; ~300 bonds a day.
     DatasetSpec(
         "convertible_bond_bars",
+        support="best_effort",
+        # Tushare sends 0 for the open, high and low of a session the bond did not
+        # trade (and for every price of one past its redemption): the row records
+        # the session, the prices do not exist.
+        value_rules=ValueRules(
+            zero_is_missing=("open", "high", "low", "close", "pre_close"),
+            no_trade_missing=("open", "high", "low", "close"),
+            non_null=("volume",),
+            bar_kind="market",
+        ),
+        unit_contract={
+            "open": "CNY/100_face",
+            "high": "CNY/100_face",
+            "low": "CNY/100_face",
+            "close": "CNY/100_face",
+            "pre_close": "CNY/100_face",
+            "volume": "bond",
+            "amount": "CNY",
+        },
         primary_source="tushare",
         tier="L1",
         partition_col="trade_date",
@@ -1024,6 +722,14 @@ _SPECS = [
     # announcement date from 2006; tens a day.
     DatasetSpec(
         "holder_trades",
+        support="best_effort",
+        unit_contract={
+            "change_shares": "share",
+            "change_ratio": "percent",
+            "after_shares": "share",
+            "after_ratio": "percent",
+            "avg_price": "CNY/share",
+        },
         primary_source="tushare",
         tier="L2",
         partition_col="ann_date",
@@ -1035,6 +741,14 @@ _SPECS = [
     # Share buyback progress announcements (Tushare repurchase), from 2005.
     DatasetSpec(
         "share_repurchases",
+        support="best_effort",
+        value_rules=ValueRules(zero_is_missing=("price_high", "price_low")),
+        unit_contract={
+            "shares": "share",
+            "amount": "CNY",
+            "price_high": "CNY/share",
+            "price_low": "CNY/share",
+        },
         primary_source="tushare",
         tier="L2",
         partition_col="ann_date",
@@ -1046,6 +760,13 @@ _SPECS = [
     # Weekly share-pledge totals per stock (Tushare pledge_stat), from 2014-03-07.
     DatasetSpec(
         "pledge_stats",
+        support="best_effort",
+        unit_contract={
+            "unrestricted_pledged_shares": "share",
+            "restricted_pledged_shares": "share",
+            "total_shares": "share",
+            "pledge_ratio": "percent",
+        },
         primary_source="tushare",
         tier="L8",
         partition_col="end_date",
@@ -1056,6 +777,30 @@ _SPECS = [
     # Tushare's holding-cost distribution estimate per stock (cyq_perf), from 2018.
     DatasetSpec(
         "chip_distribution",
+        support="best_effort",
+        value_rules=ValueRules(
+            zero_is_missing=(
+                "history_low",
+                "history_high",
+                "cost_5pct",
+                "cost_15pct",
+                "cost_50pct",
+                "cost_85pct",
+                "cost_95pct",
+                "cost_mean",
+            )
+        ),
+        unit_contract={
+            "history_low": "CNY/share",
+            "history_high": "CNY/share",
+            "cost_5pct": "CNY/share",
+            "cost_15pct": "CNY/share",
+            "cost_50pct": "CNY/share",
+            "cost_85pct": "CNY/share",
+            "cost_95pct": "CNY/share",
+            "cost_mean": "CNY/share",
+            "winner_rate": "percent",
+        },
         session_rows=True,
         primary_source="tushare",
         tier="L4",
@@ -1069,6 +814,15 @@ _SPECS = [
     # from 2014-11-17; net/buy/sell amounts end 2024-08-16.
     DatasetSpec(
         "northbound_top10",
+        support="best_effort",
+        unit_contract={
+            "close": "CNY/share",
+            "change": "percent",
+            "amount": "CNY",
+            "net_amount": "CNY",
+            "buy_amount": "CNY",
+            "sell_amount": "CNY",
+        },
         primary_source="tushare",
         tier="L4",
         partition_col="trade_date",
@@ -1081,6 +835,18 @@ _SPECS = [
     # up, down, and touched-up-but-opened (up_broken). ~100 a day.
     DatasetSpec(
         "limit_events",
+        support="best_effort",
+        value_rules=ValueRules(zero_is_missing=("close",)),
+        unit_contract={
+            "close": "CNY/share",
+            "pct_change": "percent",
+            "amount": "CNY",
+            "amount_at_limit": "CNY",
+            "seal_amount": "CNY",
+            "float_market_cap": "CNY",
+            "total_market_cap": "CNY",
+            "turnover_rate": "percent",
+        },
         primary_source="tushare",
         tier="L4",
         partition_col="trade_date",
@@ -1093,6 +859,15 @@ _SPECS = [
     # (Tushare fut_holding), every exchange from 2010; ~5,000 rows a day.
     DatasetSpec(
         "futures_member_positions",
+        support="best_effort",
+        unit_contract={
+            "volume": "contract",
+            "volume_change": "contract",
+            "long_open_interest": "contract",
+            "long_change": "contract",
+            "short_open_interest": "contract",
+            "short_change": "contract",
+        },
         primary_source="tushare",
         tier="L9",
         partition_col="trade_date",
@@ -1103,6 +878,14 @@ _SPECS = [
     # Company earnings forecasts (Tushare forecast) by announcement date, from 2004.
     DatasetSpec(
         "earnings_forecasts",
+        support="best_effort",
+        unit_contract={
+            "change_min_pct": "percent",
+            "change_max_pct": "percent",
+            "net_profit_min": "CNY",
+            "net_profit_max": "CNY",
+            "prior_net_profit": "CNY",
+        },
         primary_source="tushare",
         tier="L2",
         partition_col="ann_date",
@@ -1115,6 +898,12 @@ _SPECS = [
     # (Tushare fina_mainbz_vip), per report period from 2004.
     DatasetSpec(
         "business_segments",
+        support="best_effort",
+        unit_contract={
+            "revenue": "source_native",
+            "cost": "source_native",
+            "gross_profit": "source_native",
+        },
         primary_source="tushare",
         tier="L3",
         partition_col="period_end",
@@ -1127,6 +916,7 @@ _SPECS = [
     # stk_surv), from 2021-08.
     DatasetSpec(
         "investor_visits",
+        support="best_effort",
         primary_source="tushare",
         tier="L2",
         partition_col="visit_date",
@@ -1138,6 +928,7 @@ _SPECS = [
     # Tushare's hot-money trader roster with seats (hm_list), re-read whole.
     DatasetSpec(
         "hot_money_traders",
+        support="best_effort",
         primary_source="tushare",
         tier="L4",
         partition_col=None,
@@ -1149,6 +940,8 @@ _SPECS = [
     # Roster traders' daily dragon-tiger trades (Tushare hm_detail), from 2022-08.
     DatasetSpec(
         "hot_money_trades",
+        support="best_effort",
+        unit_contract={"buy_amount": "CNY", "sell_amount": "CNY", "net_amount": "CNY"},
         primary_source="tushare",
         tier="L4",
         partition_col="trade_date",
@@ -1160,6 +953,13 @@ _SPECS = [
     # Convertible bond redemption announcements (Tushare cb_call), per bond.
     DatasetSpec(
         "convertible_bond_calls",
+        support="best_effort",
+        unit_contract={
+            "call_price": "CNY/100_face",
+            "call_price_after_tax": "CNY/100_face",
+            "call_volume": "bond",
+            "call_amount": "CNY",
+        },
         primary_source="tushare",
         tier="L2",
         partition_col=None,
@@ -1171,6 +971,20 @@ _SPECS = [
     # Periodic convertible bond conversion reports (Tushare cb_share).
     DatasetSpec(
         "convertible_bond_conversions",
+        support="best_effort",
+        unit_contract={
+            "issue_size": "CNY",
+            "first_conversion_price": "CNY/share",
+            "conversion_price": "CNY/share",
+            "converted_amount": "CNY",
+            "converted_shares": "share",
+            "converted_pct": "percent",
+            "total_converted_amount": "CNY",
+            "total_converted_shares": "share",
+            "total_converted_pct": "percent",
+            "remaining_size": "CNY",
+            "total_shares": "share",
+        },
         primary_source="tushare",
         tier="L2",
         partition_col="end_date",
@@ -1182,6 +996,8 @@ _SPECS = [
     # Convertible bond coupon rate per interest year (Tushare cb_rate).
     DatasetSpec(
         "convertible_bond_coupons",
+        support="best_effort",
+        unit_contract={"coupon_rate": "percent"},
         primary_source="tushare",
         tier="L0",
         partition_col=None,
@@ -1193,6 +1009,14 @@ _SPECS = [
     # THS and EastMoney popularity lists (Tushare ths_hot / dc_hot), from 2023-11.
     DatasetSpec(
         "popularity_ranks",
+        support="best_effort",
+        # THS gives no price for its bond, ETF, HK, US and board lists.
+        value_rules=ValueRules(zero_is_missing=("price",)),
+        unit_contract={
+            "pct_change": "percent",
+            "price": "source_native",
+            "heat": "source_native",
+        },
         primary_source="tushare",
         tier="L7",
         partition_col="trade_date",
@@ -1203,6 +1027,7 @@ _SPECS = [
     # Consecutive limit-up runs (Tushare limit_step), from 2023-11.
     DatasetSpec(
         "limit_ladder",
+        support="best_effort",
         primary_source="tushare",
         tier="L4",
         partition_col="trade_date",
@@ -1214,6 +1039,8 @@ _SPECS = [
     # THS concept boards ranked by limit-up activity (Tushare limit_cpt_list).
     DatasetSpec(
         "strongest_sectors",
+        support="best_effort",
+        unit_contract={"pct_change": "percent"},
         primary_source="tushare",
         tier="L7",
         partition_col="trade_date",
@@ -1225,6 +1052,15 @@ _SPECS = [
     # 开盘啦 limit-up list (Tushare kpl_list, tag 涨停), from 2018-01.
     DatasetSpec(
         "kpl_limit_ups",
+        support="best_effort",
+        unit_contract={
+            "amount": "CNY",
+            "turnover_rate": "percent",
+            "free_float_cap": "CNY",
+            "main_net_amount": "CNY",
+            "limit_order_amount": "CNY",
+            "max_limit_order_amount": "CNY",
+        },
         primary_source="tushare",
         tier="L4",
         partition_col="trade_date",
@@ -1236,6 +1072,20 @@ _SPECS = [
     # THS net flow per stock by order size (Tushare moneyflow_ths), from 2024-12.
     DatasetSpec(
         "fund_flow_ths_tushare",
+        support="best_effort",
+        value_rules=ValueRules(zero_is_missing=("close",)),
+        unit_contract={
+            "close": "CNY/share",
+            "change_pct": "percent",
+            "net_amount": "CNY",
+            "net_amount_5d": "CNY",
+            "large_net_amount": "CNY",
+            "large_net_rate": "percent",
+            "medium_net_amount": "CNY",
+            "medium_net_rate": "percent",
+            "small_net_amount": "CNY",
+            "small_net_rate": "percent",
+        },
         primary_source="tushare",
         tier="L4",
         partition_col="trade_date",
@@ -1246,6 +1096,7 @@ _SPECS = [
     # Investor questions and company answers on SSE/SZSE platforms (Tushare irm_qa_sh/sz).
     DatasetSpec(
         "investor_qa",
+        support="best_effort",
         primary_source="tushare",
         tier="L7",
         partition_col="trade_date",
@@ -1257,6 +1108,7 @@ _SPECS = [
     # Announced board members, supervisors and executives (Tushare stk_managers).
     DatasetSpec(
         "executives",
+        support="best_effort",
         primary_source="tushare",
         tier="L0",
         partition_col="ann_date",
@@ -1268,6 +1120,8 @@ _SPECS = [
     # Executive pay and shareholdings per report period (Tushare stk_rewards).
     DatasetSpec(
         "executive_compensation",
+        support="best_effort",
+        unit_contract={"pay": "CNY", "shares_held": "share"},
         primary_source="tushare",
         tier="L3",
         partition_col="period_end",
@@ -1280,6 +1134,10 @@ _SPECS = [
     # token), from 2007. Only `cne backfill limit_prices` fills it.
     DatasetSpec(
         "limit_prices",
+        support="best_effort",
+        # Both limits arrive as 0 together on sessions Tushare has none for.
+        value_rules=ValueRules(zero_is_missing=("up_limit", "down_limit")),
+        unit_contract={"up_limit": "CNY/share", "down_limit": "CNY/share"},
         session_rows=True,
         primary_source="tushare",
         tier="L1",
@@ -1293,6 +1151,16 @@ _SPECS = [
     # observed today cannot be backdated into yesterday's ETF universe.
     DatasetSpec(
         "etf_profiles",
+        support="extended",
+        value_rules=ValueRules(
+            non_null=(
+                "exchange",
+                "name",
+                "eligibility_status",
+                "classification_basis",
+                "source_url",
+            )
+        ),
         primary_source="exchange",
         tier="L0",
         partition_col="as_of_date",
@@ -1304,6 +1172,8 @@ _SPECS = [
     ),
     DatasetSpec(
         "trading_calendar",
+        support="core",
+        value_rules=ValueRules(non_null=("is_trading",)),
         primary_source="tdx_protocol",
         backup_source="exchange",
         tier="L0",
@@ -1312,6 +1182,9 @@ _SPECS = [
     ),
     DatasetSpec(
         "trading_status",
+        support="core",
+        value_rules=ValueRules(non_null=("is_trading", "status")),
+        backfill_symbols_in_window=True,
         # The exchanges' own boards come first: both publish every listed
         # security with its OHLC and its 证券简称, which carries the halt
         # (Shanghai zeroes open/high/low beside a reference close; Shenzhen
@@ -1342,6 +1215,21 @@ _SPECS = [
     # L1 bars
     DatasetSpec(
         "daily_bars",
+        adjustable=True,
+        universe_filter=True,
+        total_return=True,
+        # data_version v2: `volume` is 股 for every source. v1 rows are 手 from
+        # tdx_protocol and sina, 股 from ths and baostock — see
+        # `cnequity.domain.units` and docs/zh/datasets/schema.md.
+        data_version="v2",
+        support="core",
+        value_rules=ValueRules(non_null=_BAR, bar_kind="market"),
+        unit_contract={
+            "price": "CNY/share",
+            "volume": "share",
+            "amount": "CNY",
+        },
+        backfill_symbols_in_window=True,
         # v2 records month partitions. Columns and the primary key are unchanged.
         schema_version=2,
         partial_rows=True,
@@ -1368,6 +1256,13 @@ _SPECS = [
     ),
     DatasetSpec(
         "index_bars",
+        support="core",
+        value_rules=ValueRules(non_null=_BAR, bar_kind="market"),
+        unit_contract={
+            "price": "index_point",
+            "volume": "source_native",
+            "amount": "source_native",
+        },
         partial_rows=True,
         primary_source="tdx_protocol",
         backup_source="eastmoney",
@@ -1391,6 +1286,15 @@ _SPECS = [
     # that never enabled it must not be judged unhealthy for holding no rows.
     DatasetSpec(
         "minute_bars",
+        adjustable=True,
+        enable_switch="minute_bars_1m",
+        support="optional",
+        value_rules=ValueRules(non_null=_BAR, bar_kind="market"),
+        unit_contract={
+            "price": "CNY/share",
+            "volume": "share",
+            "amount": "CNY",
+        },
         partial_rows=True,
         primary_source="tdx_protocol",
         tier="L1",
@@ -1424,6 +1328,15 @@ _SPECS = [
     # opt-in derived datasets below (`cne derive minute_bars_15m`).
     DatasetSpec(
         "minute_bars_5m",
+        adjustable=True,
+        enable_switch="minute_bars_5m",
+        support="optional",
+        value_rules=ValueRules(non_null=_BAR, bar_kind="market"),
+        unit_contract={
+            "price": "CNY/share",
+            "volume": "share",
+            "amount": "CNY",
+        },
         partial_rows=True,
         primary_source="tdx_protocol",
         tier="L1",
@@ -1457,6 +1370,17 @@ _SPECS = [
     # on the wrong column. It carries its own step group and its own checks.
     DatasetSpec(
         "trade_ticks",
+        adjustable=True,
+        enable_switch="trade_ticks",
+        support="optional",
+        value_rules=ValueRules(
+            non_null=("price", "volume", "trade_time", "direction"), bar_kind="market"
+        ),
+        unit_contract={
+            "price": "CNY/share",
+            "volume": "share",
+            "direction": "inferred_tick_rule",
+        },
         primary_source="tdx_protocol",
         tier="L1",
         partition_col="trade_date",
@@ -1485,6 +1409,14 @@ _SPECS = [
     # gold (Sina COMEX ``GC0.CMX``); not A-share equity.
     DatasetSpec(
         "commodity_bars",
+        support="extended",
+        value_rules=ValueRules(non_null=_BAR, bar_kind="market"),
+        unit_contract={
+            "price": "source_native",
+            "volume": "contract",
+            "amount": "source_native",
+            "open_interest": "contract",
+        },
         partial_rows=True,
         primary_source="sina",
         backup_source="eastmoney",
@@ -1502,6 +1434,12 @@ _SPECS = [
     # no watermark of their own.
     DatasetSpec(
         "futures_contracts",
+        enable_switch="futures",
+        support="optional",
+        value_rules=ValueRules(non_null=("exchange", "exchange_code", "product", "dates_basis")),
+        # Derivatives (ADR-0013): prices in each product's quote unit, counts on
+        # one side of the trade whatever the exchange published, turnover in 元.
+        unit_contract={"multiplier": "quote_unit_to_CNY", "tick_size": "source_native"},
         primary_source="futures_exchange",
         # DCE's contracts, while its own endpoints stay behind a challenge.
         supplementary_sources=("sina",),
@@ -1513,6 +1451,24 @@ _SPECS = [
     ),
     DatasetSpec(
         "option_contracts",
+        enable_switch="futures_options",
+        support="optional",
+        value_rules=ValueRules(
+            non_null=(
+                "exchange",
+                "exchange_code",
+                "product",
+                "underlying_symbol",
+                "option_type",
+                "strike",
+                "dates_basis",
+            )
+        ),
+        unit_contract={
+            "strike": "source_native",
+            "multiplier": "quote_unit_to_CNY",
+            "tick_size": "source_native",
+        },
         primary_source="futures_exchange",
         tier="L9",
         partition_col=None,
@@ -1528,6 +1484,19 @@ _SPECS = [
     # completeness is proved per exchange by `cne status` and the audit.
     DatasetSpec(
         "futures_bars",
+        enable_switch="futures",
+        support="optional",
+        value_rules=ValueRules(
+            non_null=("exchange", "exchange_code", "product", "volume", "open_interest"),
+            bar_kind="derivative",
+        ),
+        unit_contract={
+            "price": "source_native",
+            "volume": "contract_single_sided",
+            "amount": "CNY",
+            "open_interest": "contract_single_sided",
+        },
+        backfill_refetch="derivatives",
         partial_rows=True,
         primary_source="futures_exchange",
         # DCE, from mid-2018: no turnover, no-trade sessions absent (ADR-0013).
@@ -1549,6 +1518,14 @@ _SPECS = [
     # trade_date == bar_time.date() do not hold for night sessions.
     DatasetSpec(
         "futures_minute_bars",
+        enable_switch="futures_minute",
+        support="optional",
+        value_rules=ValueRules(bar_kind="derivative"),
+        unit_contract={
+            "price": "source_native",
+            "volume": "contract_single_sided",
+            "open_interest": "contract_single_sided",
+        },
         primary_source="sina",
         tier="L9",
         partition_col="trade_date",
@@ -1559,6 +1536,34 @@ _SPECS = [
     ),
     DatasetSpec(
         "option_bars",
+        enable_switch="futures_options",
+        support="optional",
+        value_rules=ValueRules(
+            non_null=(
+                "exchange",
+                "exchange_code",
+                "product",
+                "underlying_symbol",
+                "option_type",
+                "strike",
+                "volume",
+                "open_interest",
+            ),
+            bar_kind="derivative",
+        ),
+        unit_contract={
+            "price": "source_native",
+            "strike": "source_native",
+            "volume": "contract_single_sided",
+            "amount": "CNY",
+            "open_interest": "contract_single_sided",
+            "exercise_volume": "contract_single_sided",
+            "delta": "unitless",
+            "implied_vol": "fraction",
+            "series_implied_vol": "fraction",
+        },
+        backfill_source_overrides=("tushare",),
+        backfill_refetch="derivatives",
         partial_rows=True,
         primary_source="futures_exchange",
         tier="L9",
@@ -1573,6 +1578,17 @@ _SPECS = [
     # L2 corporate events
     DatasetSpec(
         "corporate_actions",
+        support="core",
+        unit_contract={
+            "cash_dividend": "CNY/share",
+            "bonus_ratio": "share/share",
+            "transfer_ratio": "share/share",
+            "split_factor": "unit/unit",
+            "allotment_ratio": "share/share",
+            "allotment_price": "CNY/share",
+            "reference_price": "CNY/share",
+        },
+        backfill_symbols_in_window=True,
         schema_version=2,
         # Daily: the exchange's adjusted previous close (TDX quotes) names the
         # session's ex-events and TDX xdxr records them; EastMoney's one
@@ -1596,10 +1612,11 @@ _SPECS = [
     ),
     DatasetSpec(
         "announcement_index",
+        support="extended",
         primary_source="cninfo",
         tier="L2",
         partition_col="announce_date",
-        pit=True,
+        pit_quality="strict",
         # Listed companies disclose on Saturdays, and CNINFO indexes those
         # announcements under the calendar date they were published.
         session_scope="calendar",
@@ -1616,6 +1633,7 @@ _SPECS = [
     # Current-state timetable (revisions overwrite scheduled_date; not PIT).
     DatasetSpec(
         "earnings_disclosure_schedule",
+        support="extended",
         primary_source="eastmoney",
         tier="L2",
         partition_col="report_period",
@@ -1626,6 +1644,11 @@ _SPECS = [
     # L3 fundamentals
     DatasetSpec(
         "financial_statement_items",
+        support="core",
+        unit_contract={"item_value": "source_native"},
+        backfill_source_overrides=("tdx_fin",),
+        backfill_refetch="scope",
+        backfill_symbols_in_window=True,
         primary_source="eastmoney",
         # 通达信's quarterly packages: the daily route when EastMoney fails, and
         # the source `cne backfill --source tdx_fin` fills missing keys from.
@@ -1640,12 +1663,10 @@ _SPECS = [
         partition_col="report_period",
         partition_granularity="quarter",
         watermark=False,
-        pit=True,
         # Historical EastMoney backfill returns today's current/restated
         # value while borrowing the first-disclosure date from LICO.  It is
         # useful for exploratory reads but cannot be advertised as exact PIT.
         pit_quality="reconstructed",
-        pit_grade="partial",
         # Original-date rows rebuilt from a daily capture keep this label.
         reconstructed_sources=(
             ("eastmoney", "daily:", "eastmoney_backfill"),
@@ -1669,6 +1690,18 @@ _SPECS = [
     # would let a July backtest read August's filing.
     DatasetSpec(
         "share_structure",
+        # data_version v2: `float_a_shares` is filled.
+        data_version="v2",
+        support="core",
+        unit_contract={
+            "total_shares": "share",
+            "float_shares": "share",
+            "restricted_shares": "share",
+            "float_a_shares": "share",
+            "free_float_shares": "share",
+        },
+        backfill_refetch="scope",
+        backfill_symbols_in_window=True,
         # v2: `float_a_shares` (流通A股).
         schema_version=2,
         primary_source="eastmoney",
@@ -1685,13 +1718,19 @@ _SPECS = [
         # nothing before it. A fixed vendor floor, not a rolling budget.
         history_floor_date=date(1990, 1, 1),
         watermark=False,
-        pit=True,
         pit_quality="reconstructed",
-        pit_grade="partial",
         reconciliation_lookback_days=30,
     ),
     DatasetSpec(
         "shareholder_counts",
+        support="extended",
+        unit_contract={
+            "holder_count": "holder",
+            "avg_float_shares": "share",
+            "avg_holding_value": "CNY",
+            "holder_count_change_pct": "percent",
+        },
+        backfill_refetch="scope",
         primary_source="eastmoney",
         tier="L3",
         partition_col="count_date",
@@ -1700,13 +1739,14 @@ _SPECS = [
         # RPT_F10_EH_HOLDERNUM: 25 rows in 1992, none in 1990/1991.
         history_floor_date=date(1992, 1, 1),
         watermark=False,
-        pit=True,
         pit_quality="reconstructed",
-        pit_grade="partial",
         reconciliation_lookback_days=30,
     ),
     DatasetSpec(
         "top_holders",
+        support="extended",
+        unit_contract={"holding_shares": "share", "holding_pct": "fraction"},
+        backfill_refetch="scope",
         primary_source="eastmoney",
         tier="L3",
         partition_col="record_date",
@@ -1721,13 +1761,24 @@ _SPECS = [
         # further back fetches ~112k rows across four years and writes none.
         history_floor_date=date(2003, 1, 1),
         watermark=False,
-        pit=True,
         pit_quality="reconstructed",
-        pit_grade="partial",
         reconciliation_lookback_days=240,
     ),
     DatasetSpec(
         "valuation_metrics",
+        support="core",
+        # A negative ratio is a loss-making company, so only 0 is the placeholder.
+        value_rules=ValueRules(
+            zero_is_missing=("pe_ttm", "pe_dynamic", "pb", "ps_ttm", "total_mv", "float_mv")
+        ),
+        unit_contract={
+            "pe_ttm": "ratio",
+            "pe_dynamic": "ratio",
+            "pb": "ratio",
+            "ps_ttm": "ratio",
+            "total_mv": "CNY",
+            "float_mv": "CNY",
+        },
         # v2 records month partitions. Columns and the primary key are unchanged.
         schema_version=2,
         session_rows=True,
@@ -1742,6 +1793,14 @@ _SPECS = [
     ),
     DatasetSpec(
         "analyst_consensus",
+        support="best_effort",
+        value_rules=ValueRules(zero_is_missing=("target_price",)),
+        unit_contract={
+            "eps_forecast": "CNY/share",
+            "target_price": "CNY/share",
+            "pe_forecast": "ratio",
+            "analyst_count": "analyst",
+        },
         primary_source="eastmoney",
         tier="L3",
         partition_col="forecast_date",
@@ -1752,6 +1811,21 @@ _SPECS = [
     # so each run reads every calendar day since the previous session.
     DatasetSpec(
         "broker_forecasts",
+        support="best_effort",
+        value_rules=ValueRules(zero_is_missing=("max_price", "min_price")),
+        unit_contract={
+            "op_rt": "10k_CNY",
+            "op_pr": "10k_CNY",
+            "tp": "10k_CNY",
+            "np": "10k_CNY",
+            "eps": "CNY/share",
+            "pe": "ratio",
+            "rd": "percent",
+            "roe": "percent",
+            "ev_ebitda": "ratio",
+            "max_price": "CNY/share",
+            "min_price": "CNY/share",
+        },
         primary_source="tushare",
         tier="L3",
         partition_col="report_date",
@@ -1764,6 +1838,15 @@ _SPECS = [
     # L4 capital flows
     DatasetSpec(
         "fund_flow",
+        support="best_effort",
+        unit_contract={
+            "main_net_inflow": "CNY",
+            "super_large_net_inflow": "CNY",
+            "large_net_inflow": "CNY",
+            "medium_net_inflow": "CNY",
+            "small_net_inflow": "CNY",
+        },
+        backfill_refetch="scope",
         partial_rows=True,
         primary_source="eastmoney",
         # Tushare moneyflow_dc republishes EastMoney's own measure for every
@@ -1775,6 +1858,15 @@ _SPECS = [
     ),
     DatasetSpec(
         "margin_trading",
+        support="extended",
+        unit_contract={
+            "margin_balance": "CNY",
+            "margin_buy": "CNY",
+            "short_balance": "CNY",
+            "short_sell_volume": "share",
+        },
+        backfill_source_overrides=("exchange", "eastmoney"),
+        backfill_parallel_dates=True,
         # v2 records month partitions. Columns and the primary key are unchanged.
         schema_version=2,
         session_rows=True,
@@ -1794,6 +1886,12 @@ _SPECS = [
     # gap to the next quarter-end before flagging stale.
     DatasetSpec(
         "northbound_holdings",
+        support="best_effort",
+        unit_contract={
+            "holding_shares": "share",
+            "holding_mv": "CNY",
+            "holding_ratio": "fraction",
+        },
         primary_source="eastmoney",
         tier="L4",
         partition_col="trade_date",
@@ -1802,6 +1900,8 @@ _SPECS = [
     ),
     DatasetSpec(
         "northbound_flows",
+        support="best_effort",
+        unit_contract={"net_buy": "CNY", "buy_amount": "CNY", "sell_amount": "CNY"},
         primary_source="eastmoney",
         tier="L4",
         partition_col="trade_date",
@@ -1819,6 +1919,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "dragon_tiger",
+        support="extended",
         primary_source="eastmoney",
         # Availability, not equivalence. Both exchanges publish their own
         # 龙虎榜 and reach today's session, so a EastMoney outage costs the
@@ -1832,6 +1933,15 @@ _SPECS = [
     ),
     DatasetSpec(
         "block_trades",
+        support="extended",
+        # EastMoney's report is in 万股 / 万元 and the exchange backup keeps that
+        # scale; declared as stored, not as the other bar datasets are.
+        unit_contract={
+            "price": "CNY/share",
+            "volume": "10k_share",
+            "amount": "10k_CNY",
+            "premium_ratio": "fraction",
+        },
         # v2: the declared volume/amount units now say 万股/万元, as stored.
         schema_version=2,
         primary_source="eastmoney",
@@ -1847,6 +1957,12 @@ _SPECS = [
     ),
     DatasetSpec(
         "institutional_holdings",
+        support="extended",
+        unit_contract={
+            "holding_shares": "share",
+            "holding_ratio": "percent",
+            "holding_mv": "CNY",
+        },
         primary_source="eastmoney",
         schema_version=2,
         tier="L4",
@@ -1857,6 +1973,7 @@ _SPECS = [
     # L5 structure
     DatasetSpec(
         "sector_members",
+        support="best_effort",
         primary_source="eastmoney",
         tier="L5",
         partition_col="as_of_date",
@@ -1864,6 +1981,11 @@ _SPECS = [
     ),
     DatasetSpec(
         "index_constituents",
+        support="core",
+        value_rules=ValueRules(
+            zero_is_missing=("weight",), zero_is_missing_sources=("eastmoney", "cni")
+        ),
+        unit_contract={"weight": "fraction"},
         # The publishers' own books: CSI files (labelled `exchange`) daily, and
         # CNI (`cni` membership, `cni_weights` books) for the Shenzhen indices.
         # EastMoney fills an index only when its publisher cannot be read.
@@ -1883,6 +2005,9 @@ _SPECS = [
     ),
     DatasetSpec(
         "industry_members",
+        # data_version v2: industry_code is the level-3 leaf and the level columns are filled.
+        data_version="v2",
+        support="extended",
         # v2: level columns; industry_code is the level-3 leaf.
         schema_version=2,
         primary_source="eastmoney",
@@ -1895,6 +2020,8 @@ _SPECS = [
     # L6 macro
     DatasetSpec(
         "macro_indicators",
+        support="extended",
+        unit_contract={"value": "source_native"},
         primary_source="eastmoney",
         backup_source="pboc",
         tier="L6",
@@ -1903,6 +2030,8 @@ _SPECS = [
     ),
     DatasetSpec(
         "market_breadth",
+        coverage_end_contiguous=True,
+        support="extended",
         primary_source="derived",
         tier="L6",
         partition_col="trade_date",
@@ -1915,6 +2044,8 @@ _SPECS = [
     # L7 sentiment / rotation
     DatasetSpec(
         "sentiment_scores",
+        support="best_effort",
+        unit_contract={"sentiment_score": "normalized[-1,1]", "headline_count": "headline"},
         primary_source="derived",
         backup_source="eastmoney",
         tier="L7",
@@ -1923,6 +2054,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "hot_rank",
+        support="best_effort",
         primary_source="eastmoney",
         tier="L7",
         partition_col="trade_date",
@@ -1931,6 +2063,14 @@ _SPECS = [
     ),
     DatasetSpec(
         "sector_bars",
+        support="best_effort",
+        value_rules=ValueRules(non_null=_BAR, bar_kind="market"),
+        unit_contract={
+            "price": "index_point",
+            "volume": "source_native",
+            "amount": "source_native",
+        },
+        backfill_refetch="checkpoint",
         partial_rows=True,
         primary_source="ths",
         tier="L7",
@@ -1947,6 +2087,12 @@ _SPECS = [
     ),
     DatasetSpec(
         "sector_fund_flow",
+        support="best_effort",
+        unit_contract={
+            "main_net_inflow": "CNY",
+            "change_pct": "percent",
+            "turnover_pct": "percent",
+        },
         partial_rows=True,
         primary_source="eastmoney",
         # Tushare moneyflow_ind_dc serves EastMoney's boards by date from
@@ -1963,6 +2109,15 @@ _SPECS = [
     # or old table is not a finding.
     DatasetSpec(
         "fund_flow_ths",
+        support="best_effort",
+        unit_contract={
+            "inflow": "CNY",
+            "outflow": "CNY",
+            "net_inflow": "CNY",
+            "amount": "CNY",
+            "change_pct": "percent",
+            "turnover_pct": "percent",
+        },
         partial_rows=True,
         primary_source="ths",
         tier="L4",
@@ -1975,6 +2130,15 @@ _SPECS = [
     ),
     DatasetSpec(
         "sector_fund_flow_ths",
+        support="best_effort",
+        unit_contract={
+            "sector_index": "index_point",
+            "change_pct": "percent",
+            "inflow": "CNY",
+            "outflow": "CNY",
+            "net_inflow": "CNY",
+            "company_count": "count",
+        },
         partial_rows=True,
         primary_source="ths",
         tier="L7",
@@ -1987,6 +2151,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "news_headlines",
+        support="best_effort",
         primary_source="eastmoney",
         tier="L7",
         partition_col="publish_date",
@@ -1997,6 +2162,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "flash_news_wire",
+        support="best_effort",
         primary_source="eastmoney",
         tier="L7",
         partition_col="publish_date",
@@ -2012,6 +2178,8 @@ _SPECS = [
     # replaced it on 2026-10-29.
     DatasetSpec(
         "economic_calendar",
+        support="best_effort",
+        unit_contract={"value": "source_native"},
         # v2: backfill_source makes history_mode snapshot_with_backfill and
         # pit_quality not_applicable. indicator_code and withdrawn, added in
         # the same version, are nullable.
@@ -2038,6 +2206,7 @@ _SPECS = [
     # meetings) and exchange closures, both rolling windows with future dates.
     DatasetSpec(
         "economic_events",
+        support="best_effort",
         primary_source="jin10",
         tier="L7",
         partition_col="event_date",
@@ -2049,6 +2218,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "market_holidays",
+        support="best_effort",
         primary_source="jin10",
         tier="L7",
         partition_col="holiday_date",
@@ -2061,6 +2231,8 @@ _SPECS = [
     # L8 risk
     DatasetSpec(
         "share_unlock_schedule",
+        support="extended",
+        unit_contract={"unlock_shares": "share", "unlock_ratio": "fraction"},
         primary_source="eastmoney",
         # No backup, and the exchanges are not one. SZSE's `CATALOGID=1902`
         # looked like cover until it was asked for a future month: 28 rows for
@@ -2081,6 +2253,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "regulatory_events",
+        support="extended",
         primary_source="cninfo",
         tier="L8",
         partition_col="event_date",
@@ -2098,6 +2271,7 @@ _SPECS = [
     # for, so these carry the tier of the question they answer, not "derived".
     DatasetSpec(
         "adj_factors",
+        support="core",
         # v2 records month partitions. Columns and the primary key are unchanged.
         schema_version=2,
         primary_source="sina",
@@ -2128,6 +2302,9 @@ _SPECS = [
     # membership table that produces it rather than beside the bars.
     DatasetSpec(
         "industry_index",
+        coverage_end_contiguous=True,
+        support="extended",
+        unit_contract={"ret": "fraction", "amount": "source_native"},
         primary_source="derived",
         tier="L5",
         layer="derived",
@@ -2142,6 +2319,19 @@ _SPECS = [
     # futures_bars, so it has no incremental watermark of its own.
     DatasetSpec(
         "futures_continuous",
+        enable_switch="futures",
+        support="optional",
+        # Rolled from futures_bars and stored at raw contract prices (the
+        # adjustment factors are applied at query time), so the same rules hold.
+        value_rules=ValueRules(bar_kind="derivative"),
+        unit_contract={
+            "price": "source_native",
+            "volume": "contract_single_sided",
+            "open_interest": "contract_single_sided",
+            "adj_ratio": "unitless",
+            "adj_diff": "source_native",
+            "roll_yield": "fraction_per_year",
+        },
         primary_source="derived",
         tier="L9",
         layer="derived",
@@ -2154,6 +2344,19 @@ _SPECS = [
     # exchange, beside the exchanges' own delta/IV in option_bars.
     DatasetSpec(
         "option_greeks",
+        enable_switch="futures_options",
+        support="optional",
+        unit_contract={
+            "underlying_price": "source_native",
+            "time_to_expiry": "year",
+            "rate": "fraction",
+            "iv": "fraction",
+            "delta": "unitless",
+            "gamma": "per_quote_unit",
+            "vega": "price_per_unit_vol",
+            "theta": "price_per_year",
+            "rho": "price_per_unit_rate",
+        },
         primary_source="derived",
         tier="L9",
         layer="derived",
@@ -2171,6 +2374,14 @@ _SPECS = [
     *(
         DatasetSpec(
             name,
+            adjustable=True,
+            support="optional",
+            value_rules=ValueRules(non_null=_BAR, bar_kind="market"),
+            unit_contract={
+                "price": "CNY/share",
+                "volume": "share",
+                "amount": "CNY",
+            },
             primary_source="derived",
             tier="L1",
             layer="derived",
@@ -2187,6 +2398,12 @@ _SPECS = [
     # rows total. date_col (not partition_col) so load(start=/end=) still filters.
     DatasetSpec(
         "delisting_events",
+        support="core",
+        unit_contract={
+            "final_close": "CNY/share",
+            "worst_final_return": "fraction",
+            "final_window_return": "fraction",
+        },
         primary_source="derived",
         # Recovered delisted names carry Sina's label: the derivation reads
         # bars that only Sina could serve for those codes.
@@ -2198,226 +2415,10 @@ _SPECS = [
         watermark=False,
     ),
 ]
-
-# Measured 2026-10-26 over 60 days of scheduled runs: core datasets failed on
-# at most two days in 30, with a backup source or an authority cross-check.
-_SUPPORT: dict[str, Support] = {
-    **dict.fromkeys(
-        (
-            "trading_calendar",
-            "instruments",
-            "trading_status",
-            "delisting_events",
-            "daily_bars",
-            "adj_factors",
-            "index_bars",
-            "corporate_actions",
-            "financial_statement_items",
-            "valuation_metrics",
-            "share_structure",
-            "index_constituents",
-        ),
-        "core",
-    ),
-    **dict.fromkeys(
-        (
-            "industry_members",
-            "name_history",
-            "industry_index",
-            "announcement_index",
-            "earnings_disclosure_schedule",
-            "shareholder_counts",
-            "top_holders",
-            "institutional_holdings",
-            "block_trades",
-            "dragon_tiger",
-            "margin_trading",
-            "market_breadth",
-            "macro_indicators",
-            "regulatory_events",
-            "share_unlock_schedule",
-            "etf_profiles",
-            "commodity_bars",
-        ),
-        "extended",
-    ),
-    # Not rebuildable (live snapshots, or a source retired in 2024) or unsteady:
-    # fund_flow and sector_fund_flow ride EastMoney push2, which bans an
-    # address after heavy use; the news feeds failed on up to half their days.
-    **dict.fromkeys(
-        (
-            "fund_flow",
-            "sector_fund_flow",
-            "fund_flow_ths",
-            "sector_fund_flow_ths",
-            "analyst_consensus",
-            "broker_forecasts",
-            "limit_prices",
-            "fund_flow_tushare",
-            "convertible_bonds",
-            "convertible_bond_bars",
-            "holder_trades",
-            "share_repurchases",
-            "pledge_stats",
-            "chip_distribution",
-            "northbound_top10",
-            "limit_events",
-            "futures_member_positions",
-            "earnings_forecasts",
-            "business_segments",
-            "investor_visits",
-            "hot_money_traders",
-            "hot_money_trades",
-            "convertible_bond_calls",
-            "convertible_bond_conversions",
-            "convertible_bond_coupons",
-            "popularity_ranks",
-            "limit_ladder",
-            "strongest_sectors",
-            "kpl_limit_ups",
-            "fund_flow_ths_tushare",
-            "executives",
-            "executive_compensation",
-            "investor_qa",
-            "sector_members",
-            "northbound_holdings",
-            "northbound_flows",
-            "hot_rank",
-            "news_headlines",
-            "flash_news_wire",
-            "sentiment_scores",
-            "economic_calendar",
-            "economic_events",
-            "market_holidays",
-            "sector_bars",
-        ),
-        "best_effort",
-    ),
-    **dict.fromkeys(
-        (
-            "minute_bars",
-            "minute_bars_5m",
-            *RESAMPLED_MINUTE_DATASETS,
-            "trade_ticks",
-            "futures_bars",
-            "futures_continuous",
-            "futures_contracts",
-            "futures_minute_bars",
-            "option_bars",
-            "option_contracts",
-            "option_greeks",
-        ),
-        "optional",
-    ),
-}
-if set(_SUPPORT) != {spec.name for spec in _SPECS}:  # pragma: no cover - registry edit
-    raise RuntimeError(
-        "_SUPPORT must classify every registered dataset exactly once: "
-        f"missing {sorted({spec.name for spec in _SPECS} - set(_SUPPORT))}, "
-        f"unknown {sorted(set(_SUPPORT) - {spec.name for spec in _SPECS})}"
-    )
-_SPECS = [replace(spec, support=_SUPPORT[spec.name]) for spec in _SPECS]
-
-_BAR = ("open", "high", "low", "close", "volume")
-
-#: Per dataset, how its stored values are read (see ``domain/value_rules.py``).
-#: A dataset not named here stores what its writer gives it.
-_VALUE_RULES: dict[str, ValueRules] = {
-    **{
-        name: ValueRules(non_null=_BAR, market_bar=True)
-        for name in (
-            "daily_bars",
-            "index_bars",
-            "minute_bars",
-            "minute_bars_5m",
-            "minute_bars_15m",
-            "minute_bars_30m",
-            "minute_bars_60m",
-            "commodity_bars",
-            "sector_bars",
-        )
-    },
-    "trade_ticks": ValueRules(
-        non_null=("price", "volume", "trade_time", "direction"), market_bar=True
-    ),
-    # Tushare sends 0 for the open, high and low of a session the bond did not
-    # trade (and for every price of one past its redemption): the row records
-    # the session, the prices do not exist.
-    "convertible_bond_bars": ValueRules(
-        zero_is_missing=("open", "high", "low", "close", "pre_close"),
-        no_trade_missing=("open", "high", "low", "close"),
-        non_null=("volume",),
-        market_bar=True,
-    ),
-    # A negative ratio is a loss-making company, so only 0 is the placeholder.
-    "valuation_metrics": ValueRules(
-        zero_is_missing=("pe_ttm", "pe_dynamic", "pb", "ps_ttm", "total_mv", "float_mv")
-    ),
-    "index_constituents": ValueRules(
-        zero_is_missing=("weight",), zero_is_missing_sources=("eastmoney", "cni")
-    ),
-    "analyst_consensus": ValueRules(zero_is_missing=("target_price",)),
-    "broker_forecasts": ValueRules(zero_is_missing=("max_price", "min_price")),
-    "chip_distribution": ValueRules(
-        zero_is_missing=(
-            "history_low",
-            "history_high",
-            "cost_5pct",
-            "cost_15pct",
-            "cost_50pct",
-            "cost_85pct",
-            "cost_95pct",
-            "cost_mean",
-        )
-    ),
-    "fund_flow_ths_tushare": ValueRules(zero_is_missing=("close",)),
-    # Both limits arrive as 0 together on sessions Tushare has none for.
-    "limit_prices": ValueRules(zero_is_missing=("up_limit", "down_limit")),
-    "limit_events": ValueRules(zero_is_missing=("close",)),
-    # THS gives no price for its bond, ETF, HK, US and board lists.
-    "popularity_ranks": ValueRules(zero_is_missing=("price",)),
-    "share_repurchases": ValueRules(zero_is_missing=("price_high", "price_low")),
-    "etf_profiles": ValueRules(
-        non_null=("exchange", "name", "eligibility_status", "classification_basis", "source_url")
-    ),
-    "trading_calendar": ValueRules(non_null=("is_trading",)),
-    "trading_status": ValueRules(non_null=("is_trading", "status")),
-    "futures_contracts": ValueRules(
-        non_null=("exchange", "exchange_code", "product", "dates_basis")
-    ),
-    "option_contracts": ValueRules(
-        non_null=(
-            "exchange",
-            "exchange_code",
-            "product",
-            "underlying_symbol",
-            "option_type",
-            "strike",
-            "dates_basis",
-        )
-    ),
-    "futures_bars": ValueRules(
-        non_null=("exchange", "exchange_code", "product", "volume", "open_interest")
-    ),
-    "option_bars": ValueRules(
-        non_null=(
-            "exchange",
-            "exchange_code",
-            "product",
-            "underlying_symbol",
-            "option_type",
-            "strike",
-            "volume",
-            "open_interest",
-        )
-    ),
-}
-if set(_VALUE_RULES) - {spec.name for spec in _SPECS}:  # pragma: no cover - registry edit
-    raise RuntimeError(
-        f"_VALUE_RULES names unregistered datasets: "
-        f"{sorted(set(_VALUE_RULES) - {spec.name for spec in _SPECS})}"
-    )
-_SPECS = [replace(spec, value_rules=_VALUE_RULES.get(spec.name, NO_RULES)) for spec in _SPECS]
+if _unsupported := [
+    spec.name for spec in _SPECS if spec.support not in SUPPORT_LEVELS
+]:  # pragma: no cover
+    raise RuntimeError(f"every registered dataset must declare its support level: {_unsupported}")
 
 DATASETS: dict[str, DatasetSpec] = {spec.name: spec for spec in _SPECS}
 
@@ -2485,6 +2486,14 @@ def best_effort_dataset_names() -> frozenset[str]:
 
 def pit_dataset_names() -> frozenset[str]:
     return frozenset(s.name for s in DATASETS.values() if s.pit)
+
+
+#: The point-in-time datasets: every spec whose ``pit_quality`` is strict or
+#: reconstructed (``DatasetSpec.pit``). Storage, quality
+#: and the schema checks used to read a second, hand-written copy of this set
+#: in ``domain/pit.py``; a dataset added to one and not the other would have
+#: been stored as PIT and read as plain, or the reverse.
+PIT_DATASET_NAMES = pit_dataset_names()
 
 
 def intraday_dataset_names() -> frozenset[str]:
@@ -2712,17 +2721,34 @@ def empty_freshness_label(dataset: str) -> str:
 
 
 #: The derivatives family, all switched by `[futures] enabled` together.
-FUTURES_DATASETS = frozenset(
-    {
-        "futures_contracts",
-        "option_contracts",
-        "futures_bars",
-        "option_bars",
-        "futures_continuous",
-        "option_greeks",
-        "futures_minute_bars",
-    }
-)
+def _minute_frequency(frequency: str):
+    def enabled(config) -> bool:
+        return bool(
+            getattr(config, "minute_bars_enabled", False)
+            and frequency in getattr(config, "minute_bars_frequencies", ())
+        )
+
+    return enabled
+
+
+#: What each ``DatasetSpec.enable_switch`` reads from the config. A stand-in
+#: config without a field reads its default, as the CLI and tests always have.
+_SWITCHES = {
+    "futures": lambda c: bool(getattr(c, "futures_enabled", False)),
+    "futures_options": lambda c: bool(
+        getattr(c, "futures_enabled", False) and getattr(c, "futures_options", True)
+    ),
+    "futures_minute": lambda c: bool(
+        getattr(c, "futures_enabled", False) and getattr(c, "futures_minute_enabled", False)
+    ),
+    "trade_ticks": lambda c: bool(getattr(c, "trade_ticks_enabled", False)),
+    "minute_bars_1m": _minute_frequency("1m"),
+    "minute_bars_5m": _minute_frequency("5m"),
+}
+if _unknown := sorted(  # pragma: no cover - registry edit
+    {s.enable_switch for s in DATASETS.values() if s.enable_switch} - set(_SWITCHES)
+):
+    raise RuntimeError(f"unknown enable_switch: {_unknown}")
 
 
 def is_dataset_enabled(dataset: str, config) -> bool:
@@ -2743,26 +2769,8 @@ def is_dataset_enabled(dataset: str, config) -> bool:
         enabled = getattr(config, "best_effort_enabled", None)
         if enabled is not None and dataset not in enabled:
             return False
-    if dataset in FUTURES_DATASETS:
-        if not getattr(config, "futures_enabled", False):
-            return False
-        if dataset == "futures_minute_bars":
-            return bool(getattr(config, "futures_minute_enabled", False))
-        if dataset.startswith("option_"):
-            return bool(getattr(config, "futures_options", True))
-        return True
-    if dataset == "trade_ticks":
-        return bool(getattr(config, "trade_ticks_enabled", False))
-    if dataset == "minute_bars":
-        return bool(
-            getattr(config, "minute_bars_enabled", False)
-            and "1m" in getattr(config, "minute_bars_frequencies", ())
-        )
-    if dataset == "minute_bars_5m":
-        return bool(
-            getattr(config, "minute_bars_enabled", False)
-            and "5m" in getattr(config, "minute_bars_frequencies", ())
-        )
+    if spec is not None and spec.enable_switch is not None:
+        return _SWITCHES[spec.enable_switch](config)
     return True
 
 

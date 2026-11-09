@@ -18,10 +18,8 @@ from cnequity.domain.action_sessions import effective_session
 from cnequity.domain.datasets import (
     DATASETS,
     DERIVE_COMMAND_DATASETS,
-    RESAMPLED_MINUTE_DATASETS,
     curated_dataset_names,
     derived_dataset_names,
-    intraday_dataset_names,
     pit_dataset_names,
 )
 from cnequity.domain.market_profile import OTC_SCOPED_DATASETS, otc_quote_expr
@@ -77,9 +75,8 @@ PRICE_COLS = ("open", "high", "low", "close", "price")
 # (see its DatasetSpec), but its prices still cross ex-dividend dates and a
 # comparison spanning one would otherwise see a gap that is not a price move.
 # The stored 15m/30m/60m resamples are unadjusted per-share prices too.
-ADJUSTABLE_DATASETS = (
-    {"daily_bars", "trade_ticks"} | set(intraday_dataset_names()) | set(RESAMPLED_MINUTE_DATASETS)
-)
+#: Datasets ``adjust=`` applies to (``DatasetSpec.adjustable``).
+ADJUSTABLE_DATASETS = frozenset(name for name, spec in DATASETS.items() if spec.adjustable)
 
 
 class ReaderError(ValueError):
@@ -414,7 +411,7 @@ def _catalog_coverage_bounds(config: Config, dataset: str) -> tuple[date | None,
         )
     except FileNotFoundError:
         return None, None
-    if spec.name in {"market_breadth", "industry_index"} and bounds[1] is not None:
+    if spec.coverage_end_contiguous and bounds[1] is not None:
         from cnequity.quality.verify import last_contiguous_dense_date
 
         safe_end = last_contiguous_dense_date(config, spec)
@@ -1169,16 +1166,19 @@ def load(
     if effective_pit_mode not in ("strict", "best_effort"):
         raise ReaderError(f"unsupported pit_mode {pit_mode!r}; use 'strict' or 'best_effort'")
 
-    if (effective_universe or resolved_profile) and dataset != "daily_bars":
+    spec = DATASETS[dataset]
+    if (effective_universe or resolved_profile) and not spec.universe_filter:
+        supported = ", ".join(n for n, s in DATASETS.items() if s.universe_filter)
         raise ReaderError(
-            f"universe filter applies to daily_bars only; it is not supported for {dataset}"
+            f"universe filter applies to {supported} only; it is not supported for {dataset}"
         )
     if adjust and dataset == "index_bars":
         raise ReaderError(
             "adjustment applies to per-share prices only; index_bars levels are not adjustable"
         )
-    if adjust == "total_return" and dataset != "daily_bars":
-        raise ReaderError("adjust='total_return' applies to daily_bars only")
+    if adjust == "total_return" and not spec.total_return:
+        supported = ", ".join(n for n, s in DATASETS.items() if s.total_return)
+        raise ReaderError(f"adjust='total_return' applies to {supported} only")
 
     start_d = _parse_date(start)
     end_d = _parse_date(end)
