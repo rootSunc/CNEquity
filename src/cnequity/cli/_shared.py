@@ -305,10 +305,10 @@ def parse_date_option(value: str | None, flag: str) -> date | None:
 
 
 def attach_revision_retention(config, payload: dict) -> None:
-    """Record configured generation retention on a finished publish.
+    """Delete generations beyond ``[storage.retention].keep_generations`` after a publish.
 
-    Off by default. A failure is written onto *payload* and stderr; it does
-    not change the publish that already completed.
+    On by default (keep 5); 0 turns it off. A failure is written onto *payload*
+    and stderr; it does not change the publish that already completed.
     """
     from cnequity.storage.revisions import apply_configured_revision_retention
 

@@ -28,7 +28,7 @@
 | [`cne run retry`](#cne-run-retry) | 重试一个 run，或每个 daily 分组最新的失败 run |
 | [`cne run compact`](#cne-run-compact) | 把已结束、未发布的 staging 合进 curated |
 | [`cne run clean`](#cne-run-clean) | 预览过期 staging、快照、日志与历史版本；交互终端可接着确认删除 |
-| [`cne storage`](#cne-storage) | 版本保留登记、清理计划与原地待删除标记 |
+| [`cne storage`](#cne-storage) | 版本保留登记、引用，以及预览自动清理会删除什么 |
 | [`cne backfill`](#cne-backfill-dataset) | 回填一个数据集 |
 | [`cne derive`](#cne-derive-name) | 派生计算数据集 |
 | [`cne import shfe-archive`](#cne-import-shfe-archive) | 离线导入上期所官方年度包 |
@@ -777,39 +777,36 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 
 ## cne storage
 
-版本生命周期包括引用登记、不可变计划、原地观察期和维护窗口下的物理回收。满 7 天不会自动删除。回补和日更会按 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention)（默认 5）删掉没有保留的更老代，不碰 staging，也不删当前正在使用的一代。交互终端里的 `cne run clean` 在预览后分两次确认，同样不等观察期。这些删除都不经过网页确认。设为 `0` 则回补和日更不删。外部读取须由操作者停止。
+版本只有一种保留规则：每个数据集保留最近 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) 代（默认 5），回补和日更结束时删掉更老的代，不碰 staging，也不删当前正在使用的一代、`hold` 保住的版本和仍被引用的版本。只合并文件、行内容不变的版本（`storage merge-files` 发布的）不占名额：它夹在保留的代之间时一起保留，随它们一起过期。设为 `0` 则回补和日更不删。要提前删除选定的历史，在 `cne serve` 的存储页勾选并确认；交互终端里的 `cne run clean` 也会在预览后询问。外部读取须由操作者停止。
 
 | 命令 | 行为 |
 |---|---|
-| `inspect --keep 5` | 只读列出仍存在的版本和保留原因。`logical_bytes` 是文件大小合计；`exclusive_bytes` 是删掉这一代能腾出的字节，和其他代硬链接共享的文件不计。APFS 上的克隆是独立文件，仍会计入，不能当成腾出空间的承诺。未导入引用时仅为初筛 |
+| `inspect [--keep N]` | 只读列出仍存在的版本和保留原因。`logical_bytes` 是文件大小合计；`exclusive_bytes` 是删掉这一代能腾出的字节，和其他代硬链接共享的文件不计。APFS 上的克隆是独立文件，仍会计入，不能当成腾出空间的承诺。未导入引用时仅为初筛 |
 | `explain OBJECT_ID` | 显示版本的 current/recent/hold 等依据 |
 | `import --manifest FILE` | 校验并合并已审核的本地引用清单；不会自动解除已有保护 |
-| `hold OBJECT_ID --reason TEXT` | 新增版本或清理资源的保留理由，取消相应待删除标记 |
-| `plan --keep 5 --phase mark` | 校验引用源后保存内容寻址的标记计划，返回 `plan_id` |
-| `plan --keep 5 --phase purge` | 只选择观察期已满且内容未变的候选，逐文件核对 SHA-256；输出 `purge_ids` 和 `logical_bytes_to_purge` |
-| `apply PLAN_ID --phase mark` | 再次校验指针、引用、登记和文件身份，开始至少 7 天的原地观察期 |
-| `apply PLAN_ID --phase purge` | 已禁用；必须转到 serve 存储运维页重新检查并确认 |
+| `hold OBJECT_ID --reason TEXT` | 新增版本或清理资源的保留理由；自动清理不再删除它 |
+| `plan [--keep N]` | 只读预览：按当前保护，自动清理现在会删除哪些代，输出 `candidate_ids` 和 `logical_bytes_selected` |
 | `merge-files [DATASET...] [--min-files N] [--apply]` | 合并写入后分成多个文件的分区（默认文件数不少于 4）。不加 `--apply` 只报告会合并哪些分区；加上后像修复一样发布新版本，行内容不变。`cne run maintain` 每天自动执行 |
 
 每个子命令接受 `--config`。版本 `OBJECT_ID` 为当前湖内的 `revision/<dataset>/<revision_id>`；计划另外绑定湖身份及 metadata 根，不能直接在另一个湖使用。被引用但暂时缺失的版本也可通过清单登记保护，以便恢复后继续受到保护。
 
 引用清单 schema 为 `schema_version: 1`，包含绝对 `meta_root`、`holds`（对象 ID 到非空理由列表）、`reference_roots`（绝对目录及可选的相对 `exclude` 列表）、`reference_fingerprint` 和可选 `experiments`。集成程序可用 `cnequity.storage.lifecycle.reference_files()` 枚举引用源，分类后生成 holds，并用 `reference_fingerprint()` 计算文件集合及 SHA-256 的指纹；两者都传 `meta_root=` 湖的 `meta` 目录。以该目录为根时，湖每次运行都会改写的内容（来源缓存、`state`、`checkpoints`、`quality`、`source_snapshots`、衍生品抓取记录等，完整列表见 `RUNTIME_META_PATHS`）不计入引用，否则任何一次运行都会让导入失效，清理随即拒绝执行。导入只校验清单是否仍对应这些文件，不代替引用语义审核；排除项和外部未登记消费者需由操作者核实。
 
-新增、删除或修改引用文件都会阻止旧计划继续标记，须重新审核并导入。重复导入保留已有 hold。当前没有自动解除 hold 的命令；改变保留承诺需要单独审核。无收据、缺少完整文件清单或缺少当前指针的目录不会成为清理候选。
+新增、删除或修改引用文件后，回补和日更会先重新扫描引用、补上保留再清理；网页上的旧删除计划失效，须重新审核。重复导入保留已有 hold。当前没有自动解除 hold 的命令；改变保留承诺需要单独审核。无收据、缺少完整文件清单或缺少当前指针的目录不会成为清理候选。
 
-引用清单还可携带 `cases`：每项具有不可变 `case_id`、`roots`（对象 ID 列表）、`dependencies`（`from`、`to`、`kind`）。`requires_bytes` 从根递归产生 hold；`provenance` 仅记录来源，不递归保留字节。循环依赖只计算一次。通过 Python `LifecycleStore.register_case()` 可单独增加案例，需提供 `evidence`（绝对 `path` 及 `sha256`）；此操作只增加保护，取消受影响对象的待删除标记，不解除旧 hold，也不证明完整重放已可用。
+引用清单还可携带 `cases`：每项具有不可变 `case_id`、`roots`（对象 ID 列表）、`dependencies`（`from`、`to`、`kind`）。`requires_bytes` 从根递归产生 hold；`provenance` 仅记录来源，不递归保留字节。循环依赖只计算一次。通过 Python `LifecycleStore.register_case()` 可单独增加案例，需提供 `evidence`（绝对 `path` 及 `sha256`）；此操作只增加保护，不解除旧 hold，也不证明完整重放已可用。
 
 **物理删除需要网页确认和维护窗口。** 操作者须在网页确认新的调度、其他服务及所有外部查询已停止，并等待延迟读取结束。面板只会暂停本实例的数据请求并等待后台扫描结束，不会自动停止外部进程。执行器还会尝试取得发布锁，并拒绝 manifest 中仍有 running 跑次的情况。只暂停采集但仍保留外部 LazyFrame 读取，不满足该条件。
 
 所有候选在删除前重新验证。执行器先记录意图，再把单个 generation 原子移入同文件系统的 `meta/lifecycle/trash/<plan-id>/`，随后删除内容。receipt 保留；指定旧版本读取会明确失败。遇到错误不会静默跳过或扩大范围，操作记录位于 `meta/lifecycle/purges/<plan-id>.json`。在保护条件未变时，在网页“未完成的删除记录”重新审核、确认原清单后，会核验残留文件并继续原计划；已完成计划只返回原结果，不再次删除。若期间新增 hold、引用或发布，重试会停止，需先人工核查和恢复受影响的残留内容，不能用新计划绕过未完成操作。
 
-`logical_bytes_deleted` 仅累计已完整删除的版本；部分失败的字节不计入，并报告 `partial_deletion_possible`。文件系统可用空间另记录前后值，可能受到其他系统活动影响。待删除标记和删除收据都不能替代备份。
+`logical_bytes_deleted` 仅累计已完整删除的版本；部分失败的字节不计入，并报告 `partial_deletion_possible`。文件系统可用空间另记录前后值，可能受到其他系统活动影响。删除收据不能替代备份。
 
-`logical_bytes_selected` 来自版本文件清单，不是实际磁盘释放量；APFS 克隆和系统快照可使两者相差很大。标记阶段所有字节保持原位。
+`logical_bytes_selected` 来自版本文件清单，不是实际磁盘释放量；APFS 克隆和系统快照可使两者相差很大。
 
 现有其他清理器共享 hold：`staging/<run_id>`、`source_snapshot/<dataset>/source=<source>/data_version=<version>/run_id=<run>`、`log/<cne-*.log文件名>`。可通过 `storage hold` 保护已存在对象，或由 case 的 `requires_bytes` 提供保护。年龄、compact/readiness 和每类最新快照规则继续有效；`--force` 不绕过 hold。登记后的引用源发生变化或不可读时，这些清理器也停止并要求刷新清单。
 
-完整快照保存生命周期保留依据与外部对象清单，标记 `external_bytes_materialized: false`。这不会把外部工件和全部历史版本打包进快照。恢复后须重新绑定、审核引用源并导入；导入会继承保存的 holds/cases，创建新湖身份，不继承待删除状态或本机删除计划。含生命周期登记的湖暂不支持增量包，创建和应用会明确拒绝；使用完整快照保留这些依赖。
+完整快照保存生命周期保留依据与外部对象清单，标记 `external_bytes_materialized: false`。这不会把外部工件和全部历史版本打包进快照。恢复后须重新绑定、审核引用源并导入；导入会继承保存的 holds/cases，创建新湖身份，不继承本机删除计划。含生命周期登记的湖暂不支持增量包，创建和应用会明确拒绝；使用完整快照保留这些依赖。
 
 ## cne serve
 
@@ -847,11 +844,11 @@ cne serve
 
 从别的机器打开（`--host` 不是回环地址）时，浏览和存储清理沿用 `--token`；操作页默认不能启动命令，需要同时给 `--allow-remote-ops`。首次配置始终只接受本机。
 
-**存储运维在 `#/storage`。** 打开后先看到可以删除的历史版本，按数据集汇总，账面大的排在前面。正在使用和受保护的版本在另外两个计数里，不能勾选。所有大小均为账面值，APFS 克隆下不能据此承诺释放空间。浏览、刷新、观察期到期均不执行删除。
+**存储运维在 `#/storage`。** 页头写明回补和日更保留最近几代。打开后先看到可以删除的历史版本，按数据集汇总，账面大的排在前面。正在使用和受保护的版本在另外两个计数里，不能勾选。所有大小均为账面值，APFS 克隆下不能据此承诺释放空间。浏览和刷新不执行删除。
 
-勾选数据集或单个版本后点「删除所选」。确认单列出将要删除的项目；勾选不可撤销和外部任务已停止，再点「永久删除」才会核验并删除。一次超过 200 项会分批核验。可以选择观察期内尚未到期的历史版本，以及最近 5 代里不是当前指针的版本。当前版本、仍被引用、人工保留、仍在使用的试验，以及缺少收据或归档的项目不能选。删除完成后，页面列出删掉的版本、账面大小，以及删除前后的磁盘可用空间；可用空间没有增加时会直接说明，不能把账面大小当成实际腾出的空间。
+勾选数据集或单个版本后点「删除所选」。确认单列出将要删除的项目；勾选不可撤销和外部任务已停止，再点「永久删除」才会核验并删除。一次超过 200 项会分批核验。可以选择超出保留代数的历史版本（自动清理开着时标为「下次回补或日更时删除」），以及保留代数内不是当前指针的版本。当前版本、仍被引用、人工保留、仍在使用的试验，以及缺少收据或归档的项目不能选。删除完成后，页面列出删掉的版本、账面大小，以及删除前后的磁盘可用空间；可用空间没有增加时会直接说明，不能把账面大小当成实际腾出的空间。
 
-也可以按范围点击“检查到期项目”，只针对已经到期的项目生成清单。等待完整性与引用核验后核对清单。只有勾选不可撤销确认、外部读写停止确认，并点击“永久删除”才执行；确认凭据 10 分钟后失效，服务重启后也失效。执行前再次检查保护条件和文件摘要。未标记对象可先“检查待标记项目”，确认后开始至少 7 天观察期，标记不释放空间。失败可能留下部分已删内容，须重新审核未完成记录，不能自动重试删除。
+确认凭据 10 分钟后失效，服务重启后也失效。执行前再次检查保护条件和文件摘要。失败可能留下部分已删内容，须在「未完成的删除」里重新审核原清单，不能自动重试删除。
 
 操作和存储清理都只接受当前页面的同源请求和页面确认凭据。匿名访问使用 localhost / 回环 IP；远程访问须配置令牌。`meta/stats` 仍会在后台按需重建。健康页只展示已经写好的探测报告，不会因为打开页面去请求第三方主机。
 

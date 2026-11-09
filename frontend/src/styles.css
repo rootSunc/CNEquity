@@ -506,7 +506,7 @@ table.rows .prov-start { box-shadow: inset 2px 0 0 var(--line); }
 #run-job-logs pre { margin-top: 12px; }
 .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
 .controls label, .storage-toolbar label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--text-sm); }
-.controls select, .controls input, .controls button, .storage-toolbar input, .storage-actions select, .ops-fields input, .ops-fields select, .ops-form input, .ops-form select {
+.controls select, .controls input, .controls button, .storage-toolbar input, .ops-fields input, .ops-fields select, .ops-form input, .ops-form select {
   min-height: 32px;
   padding: 4px 8px;
   border: 0.5px solid var(--border);
@@ -581,7 +581,6 @@ table.rows .prov-start { box-shadow: inset 2px 0 0 var(--line); }
   padding: 8px 0;
 }
 .storage-group-toggle::before,
-.storage-fold > summary::before,
 .ops-fold > summary::before {
   content: "";
   width: 0;
@@ -591,7 +590,6 @@ table.rows .prov-start { box-shadow: inset 2px 0 0 var(--line); }
   border-bottom: 4px solid transparent;
 }
 .storage-group-toggle[aria-expanded="true"]::before,
-.storage-fold[open] > summary::before,
 .ops-fold[open] > summary::before {
   margin-top: 3px;
   border-left: 4px solid transparent;
@@ -616,20 +614,7 @@ table.rows .prov-start { box-shadow: inset 2px 0 0 var(--line); }
 }
 .storage-dock:empty { display: none; }
 .storage-dock p { margin: 0; color: var(--muted); font-size: var(--text-sm); }
-.storage-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 8px 0 4px; }
 .storage-review { margin-top: 16px; }
-.storage-fold { margin-top: 16px; border-top: 0.5px solid var(--line); }
-.storage-fold > summary {
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 0;
-  font-weight: 600;
-  list-style: none;
-}
-.storage-fold > summary::-webkit-details-marker { display: none; }
-.storage-fold-body { padding-bottom: 8px; }
 .storage-review input[type="checkbox"], .storage-group-head input, .storage-consent input, .ops-check input[type="checkbox"] {
   width: 16px;
   height: 16px;

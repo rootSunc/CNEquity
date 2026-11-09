@@ -23,6 +23,11 @@
   - 样例湖（`profile = "sample"`）的合成数据，控制台此前按真实日期判断，现在与 `cne status` 一样标为样例数据；
   - `cne status --datasets` 也像控制台一样，在当天定时日更开始或完成之前按上一个交易日判断，不再在收盘后、日更前把所有日更数据集报为落后。
 - `cne check` 和 `cne audit` 改用同一条规则判断审计 error 是否不合格，同一份审计结果不再一个通过、一个失败。此前 `cne check` 不计「缺数据」一类的覆盖 error，核心数据集 `daily_bars` 缺了交易日时 `cne audit` 失败，`cne check` 却给出「湖可用」。现在核心数据集的覆盖 error 也让 `cne check` 退出 1；核心之外数据集的 error 仍不计入 `cne check`，但会报出条数，由 `cne audit` 列出。发布和日更的 audit 步骤仍只计数据本身有误的 error，缺数据不影响已有行。
+- 旧版本清理只保留一种规则：回补和日更后每个数据集保留最近 `[storage.retention].keep_generations` 代（默认 5），更早的代当场删除；要提前删除选定的历史，仍在网页存储页勾选并确认。原先并存的「标记后等 7 天再删」已移除：自动清理会在 7 天到期前就删掉被标记的代，观察期形同虚设，已有的标记在读取登记时丢弃。
+  - 只合并文件、行内容不变的版本（`cne storage merge-files` 发布的）不再占用保留名额：它夹在保留的代之间时一起保留，随它们一起过期。此前每次合并都会挤掉一个真实的历史版本；
+  - `cne storage plan` 改为只读预览，输出 `keep`、`candidate_ids`、`logical_bytes_selected`，`--keep` 默认取配置值；`--phase` 不再使用。`cne storage apply` 已移除，调用时报错并说明替代做法。`cne storage inspect --keep` 也默认取配置值；
+  - 网页存储页去掉「检查到期项目」「检查待标记项目」，页头写明保留几代，超出保留代数的版本标为「下次回补或日更时删除」。此前页头写着「不自动删除」，与实际不符。`/api/storage` 不再返回 `grace_days` 和 `not_before`，新增 `automatic_retention`，`keep` 取配置值；版本的 `status` 改为 `scheduled`、`deletable` 或 `protected`，暂存的 `unmarked` 改为 `deletable`；`POST /api/storage/reviews` 必须带 `object_ids` 或 `resume_plan_id`，不再接受 `phase: "mark"`；
+  - `cne run clean` 的 JSON 去掉总为 0 的 `revision_generations[].marked`。
 - 网页控制台切换页面时，前一个页面晚到的请求不再覆盖当前页面：此前从概览打开操作页，地址栏停在操作页，内容却会被加载较慢的概览替换。
 - 期货和期权行情的成交量、持仓量、持仓变化、成交额单元格为空时，不再读成 0：各交易所文件和新浪接口都用 0 表示没有成交或持仓，空单元格是损坏的数据。此前空成交量会让一个有成交的合约被存成无成交行，价格被清空。现在空值保持为空，成交量或持仓量为空的行按行隔离并报 `futures_row_rejected` 警告，同一交易日的其他合约照常写入。已有数据不需要迁移：正常文件里不会出现空的计数单元格，郑商所、上期所、中金所和广期所文件还会按小计核对成交量和持仓量。
 - 数据集版本号不再重复使用：一次发布若在写下版本回执之后、切换 `current.json` 之前中断，下一次成功发布此前会沿用同一个版本号，同一编号就有两份回执，按编号固定读取的查询和 `dataset_revisions()` 可能读到从未发布的那一份。现在编号跳过中断留下的号码，`dataset_revisions()` 沿已发布版本的链回溯，按编号或 id 固定读取一个比当前版本更新、从未发布的版本时直接报错。已有的湖不受影响，无需迁移。

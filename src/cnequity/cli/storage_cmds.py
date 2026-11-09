@@ -1,4 +1,4 @@
-"""Inspect revision protection and begin a non-destructive observation period."""
+"""Inspect revision retention: what is kept, why, and what retention would delete next."""
 
 from __future__ import annotations
 
@@ -39,9 +39,28 @@ def _emit(value: dict) -> None:
     click.echo(json.dumps(value, indent=2, ensure_ascii=False))
 
 
+def _keep(config_path: str, keep: int | None) -> int:
+    """``--keep``, else the count backfill and the daily run keep (5 when they keep all)."""
+    if keep is not None:
+        return keep
+    configured = getattr(_cfg(config_path), "revision_keep_generations", 5)
+    return configured if isinstance(configured, int) and configured >= 1 else 5
+
+
+_KEEP_HELP = N_(
+    "Generations to keep per dataset; defaults to [storage.retention].keep_generations."
+)
+
+
 @cli.group(cls=_LifecycleGroup)
 def storage():
-    """Version retention holds and observation periods; physical deletion must be confirmed on the serve web page."""
+    """Version retention: holds, references and a preview of what retention deletes.
+
+    \b
+    Backfill and the daily run keep the newest [storage.retention].keep_generations
+    generations of each dataset and delete older ones. Deleting chosen history
+    earlier is confirmed on the storage page of `cne serve`.
+    """
 
 
 @storage.command("raw-external")
@@ -62,10 +81,10 @@ def raw_external(config_path: str, dataset: str, source: str, root: Path, format
 
 @storage.command("inspect")
 @config_option
-@click.option("--keep", type=click.IntRange(min=1), default=5, show_default=True)
-def inspect(config_path: str, keep: int):
+@click.option("--keep", type=click.IntRange(min=1), default=None, help=_KEEP_HELP)
+def inspect(config_path: str, keep: int | None):
     """List versions and their retention reasons, read-only."""
-    _emit(_store(config_path).inspect(keep=keep))
+    _emit(_store(config_path).inspect(keep=_keep(config_path, keep)))
 
 
 @storage.command("explain")
@@ -116,7 +135,7 @@ def refresh_references(config_path: str):
 @click.argument("object_id")
 @click.option("--reason", required=True)
 def hold(config_path: str, object_id: str, reason: str):
-    """Retain a version or an existing cleanup resource, and cancel its pending-deletion mark."""
+    """Retain a version or an existing cleanup resource; retention then never deletes it."""
     _store(config_path).hold(object_id, reason)
     _emit({"object_id": object_id, "held": True})
 
@@ -133,54 +152,41 @@ def release(config_path: str, object_ids: tuple[str, ...], note: str):
 
 @storage.command("plan")
 @config_option
-@click.option("--keep", type=click.IntRange(min=1), default=5, show_default=True)
-@click.option("--phase", type=click.Choice(["mark", "purge"]), default="mark", show_default=True)
-def plan(config_path: str, keep: int, phase: str):
-    """Check references and save an immutable version cleanup plan; deletes no data."""
-    result = _store(config_path).plan(keep=keep, phase=phase)
-    summary = {
-        k: result[k]
-        for k in (
-            "plan_id",
-            "logical_bytes_selected",
-            "candidate_ids",
-            "grace_days",
-            "purge_available",
-            "phase",
+@click.option("--keep", type=click.IntRange(min=1), default=None, help=_KEEP_HELP)
+@click.option("--phase", type=click.Choice(["mark", "purge"]), default=None, hidden=True)
+def plan(config_path: str, keep: int | None, phase: str | None):
+    """Preview which generations retention would delete now; deletes nothing."""
+    from cnequity.storage.revisions import preview_revision_retention
+
+    if phase is not None:
+        click.echo(
+            _("--phase is no longer used: there is no mark phase, and this only previews."),
+            err=True,
         )
-    }
-    if phase == "purge":
-        summary.update({k: result[k] for k in ("purge_ids", "logical_bytes_to_purge")})
-    _emit(summary)
+    keep = _keep(config_path, keep)
+    preview = preview_revision_retention(_cfg(config_path).meta_root, keep=keep)
+    _emit(
+        {
+            "keep": keep,
+            "candidate_ids": [
+                f"revision/{item.dataset}/{rid}"
+                for item in preview
+                for rid in item.candidate_revision_ids
+            ],
+            "logical_bytes_selected": sum(item.logical_bytes_selected for item in preview),
+        }
+    )
 
 
-@storage.command("apply")
-@config_option
-@click.argument("plan_id")
-@click.option(
-    "--phase",
-    type=click.Choice(["mark", "purge"]),
-    default="mark",
-    show_default=True,
-    help=N_(
-        "mark marks in place; purge is disabled, use the serve storage operations page instead."
-    ),
-)
-@click.option(
-    "--maintenance-window",
-    is_flag=True,
-    help=N_("Compatibility option; cannot bypass the web delete confirmation."),
-)
-def apply(config_path: str, plan_id: str, phase: str, maintenance_window: bool):
-    """Mark after reviewing the plan; the CLI does not allow physical deletion."""
-    if phase == "purge":
-        raise click.ClickException(
-            _(
-                "Physical deletion must be reviewed and confirmed on the storage operations page of cne serve; the CLI only allows previewing and marking."
-            )
+@storage.command("apply", hidden=True, context_settings={"ignore_unknown_options": True})
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def apply(args: tuple[str, ...]):
+    """Removed: marking versions for a waiting period."""
+    raise click.ClickException(
+        _(
+            "`cne storage apply` was removed with the mark-and-wait phase: backfill and the daily run already delete generations beyond [storage.retention].keep_generations. Keep a version with `cne storage hold`; delete chosen history earlier on the storage page of `cne serve`."
         )
-    else:
-        _emit(_store(config_path).mark(plan_id))
+    )
 
 
 @storage.command("merge-files")

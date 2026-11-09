@@ -70,13 +70,13 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne stats rebuild` | none | Rebuilds local stats |
 | `cne stats show` | none | Reads local stats; recomputes automatically when stale or when a detail view needs it |
 | `cne status` | none | Reads run state and dataset coverage |
-| `cne storage apply` | none | Rechecks the version plan and marks; CLI purge is disabled, deletion must be confirmed in the serve web UI |
+| `cne storage apply` | none | Removed with the mark-and-wait phase; only reports the error and what to use instead |
 | `cne storage explain` | none | Reads the retention reasons for versions |
-| `cne storage hold` | none | Adds object protection and clears pending-deletion marks |
+| `cne storage hold` | none | Adds object protection; automatic retention no longer deletes it |
 | `cne storage import` | none | Validates and registers a reference manifest; only adds protection |
 | `cne storage inspect` | none | Reads versions and retention reasons |
 | `cne storage merge-files` | none | Read-only preview; --apply merges many-file partitions and publishes a new version with the rows unchanged |
-| `cne storage plan` | none | Validates retention dependencies and saves a version plan; deletes no data |
+| `cne storage plan` | none | Previews which generations retention would delete now; deletes no data |
 | `cne storage raw-external` | none | Registers external payload storage; retains local source sidecars and does not move or delete files |
 | `cne storage refresh` | none | Re-scans the reference roots and adds holds for the versions they cite; never releases a hold |
 | `cne storage release` | none | Drops manual holds and stale references on the named versions; case dependencies and live references stay |

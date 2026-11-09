@@ -1155,6 +1155,10 @@ msgstr "--outstanding 的范围取自欠账台账；请去掉 --symbols/--start/
 msgid "--pack only selects research packs' schedule groups and cannot be combined with --group / --all-groups / --stale-only / --core-only."
 msgstr "--pack 只选择研究包的调度组，不能和 --group / --all-groups / --stale-only / --core-only 同用。"
 
+#: cnequity/cli/storage_cmds.py
+msgid "--phase is no longer used: there is no mark phase, and this only previews."
+msgstr "--phase 已不再使用：标记阶段已移除，这条命令只做预览。"
+
 #: cnequity/cli/backfill_cmds.py
 msgid "--plan needs a dataset scope; --outstanding repairs from the debt ledger"
 msgstr "--plan 请指定数据集范围；--outstanding 使用欠账台账执行修复"
@@ -1367,14 +1371,6 @@ msgstr "面板有任务正在执行，请等它结束后再确认删除。"
 msgid "A loopback address listens on both 127.0.0.1 and localhost. A non-loopback address requires --token."
 msgstr "回环地址会同时监听 127.0.0.1 和 localhost。非回环地址必须配 --token。"
 
-#: cnequity/serve/storage.py
-msgid "A manual selection can only be used for a new deletion, not together with marked or restore records."
-msgstr "手动选择只能用于新的删除，不能和标记或恢复记录一起用。"
-
-#: cnequity/storage/lifecycle/__init__.py
-msgid "A manual selection can only be used for deletion."
-msgstr "手动选择只能用于删除。"
-
 #: cnequity/diagnostics/report.py
 msgid "A relative path resolves against the process CWD. A scheduler's (launchd/cron) CWD differs from the one you run by hand, so it silently builds a second, empty lake elsewhere, which may go unnoticed for days."
 msgstr "相对路径按进程 CWD 解析。调度器（launchd/cron）的 CWD 与你手跑时不同，会在别处静默建出第二个空湖，可能几天后才发现。"
@@ -1390,6 +1386,10 @@ msgstr "定时日更或收尾补抓正在运行。"
 #: cnequity/serve/ops/preflight.py
 msgid "A scheduled event stream is running."
 msgstr "定时事件流正在运行。"
+
+#: cnequity/serve/storage.py
+msgid "A selection starts a new deletion; it cannot resume another one."
+msgstr "勾选的版本只能开始一次新的删除，不能接着另一次删除继续。"
 
 #: cnequity/orchestrator/recovery.py
 msgid "A snapshot source cannot recreate missed history; a retry only obtains the observations the source can still offer."
@@ -1901,10 +1901,6 @@ msgstr "改为检查「证券 × 交易日」，含窗口内一行都没有的�
 msgid "Check debts against explicit fund auction daily-bar coverage evidence from the Shanghai and Shenzhen exchanges; being tradable does not mean there was an auction trade that day."
 msgstr "用沪深交易所明确的基金竞价日线覆盖证据核对欠账；正常可交易不等于当日有竞价成交。"
 
-#: cnequity/cli/storage_cmds.py
-msgid "Check references and save an immutable version cleanup plan; deletes no data."
-msgstr "校验引用并保存不可变版本清理计划，不删除数据。"
-
 #: cnequity/cli/quality_cmds.py
 msgid "Check run evidence over consecutive trading days instead; fills no gaps."
 msgstr "改为检查连续交易日的运行证据，不补任何缺口。"
@@ -1966,6 +1962,10 @@ msgstr "需要这些接口的检查会跳过；哪些可用取决于你的账号
 #: cnequity/storage/lifecycle/purge.py
 msgid "Choose historical versions without duplicates."
 msgstr "请选择不重复的历史版本。"
+
+#: cnequity/serve/storage.py
+msgid "Choose the versions to delete."
+msgstr "请选择要删除的版本。"
 
 #: cnequity/serve/ops/settings.py
 msgid "Choose which securities the daily update fetches. ST, suspended and delisted names are kept."
@@ -2072,10 +2072,6 @@ msgstr ""
 #, python-brace-format
 msgid "Compared with: {path}"
 msgstr "对照：{path}"
-
-#: cnequity/cli/storage_cmds.py
-msgid "Compatibility option; cannot bypass the web delete confirmation."
-msgstr "兼容选项；不能绕过网页删除确认。"
 
 #: cnequity/serve/ops/records.py
 msgid "Complete"
@@ -3035,6 +3031,10 @@ msgstr "先生成配置，再设置定时任务。"
 msgid "Generated: {value}  run: {value2}{stale_note}"
 msgstr "生成于：{value}  run：{value2}{stale_note}"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Generations to keep per dataset; defaults to [storage.retention].keep_generations."
+msgstr "每个数据集保留的代数；默认取 [storage.retention].keep_generations。"
+
 #: cnequity/cli/govern_cmds.py
 msgid "Give --from BASELINE or --from-revision REVISION"
 msgstr "请给出 --from BASELINE 或 --from-revision REVISION"
@@ -3594,10 +3594,6 @@ msgstr "维护发现问题：{names}"
 #: cnequity/serve/storage.py
 msgid "Maintenance is running; follow its progress in the operation records."
 msgstr "维护正在执行，请通过操作记录查看进度。"
-
-#: cnequity/cli/storage_cmds.py
-msgid "Mark after reviewing the plan; the CLI does not allow physical deletion."
-msgstr "复查计划后标记；CLI 不允许执行物理删除。"
 
 #: cnequity/research/packs.py
 msgid "Market"
@@ -4192,10 +4188,6 @@ msgstr "逐数据集的新鲜度：覆盖区间、水位，以及相对最后交
 msgid "Per-partition detail for one dataset."
 msgstr "某一个数据集的逐分区明细。"
 
-#: cnequity/cli/storage_cmds.py
-msgid "Physical deletion must be reviewed and confirmed on the storage operations page of cne serve; the CLI only allows previewing and marking."
-msgstr "物理删除必须在 cne serve 的存储运维网页中检查并确认；CLI 只允许预览和标记。"
-
 #: cnequity/cli/setup_cmds.py
 #, python-brace-format
 msgid "Pin [data].root: {written} → {absolute} (a relative root is now read against the config's directory)"
@@ -4266,6 +4258,10 @@ msgstr "仅预览；加 --apply 才运行。"
 #: cnequity/cli/maintain_cmds.py
 msgid "Preview orphan staging older than this many days that is not recorded in the manifest."
 msgstr "预览超过这么多天、且 manifest 里没有记录的孤儿 staging。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Preview which generations retention would delete now; deletes nothing."
+msgstr "预览自动清理现在会删除哪些代；不删除任何数据。"
 
 #: cnequity/cli/repair_cmds.py
 msgid ""
@@ -4621,6 +4617,10 @@ msgstr "不询问确认直接移除。"
 msgid "Removed. Nothing runs on a schedule for this lake now."
 msgstr "已移除。这个湖现在没有任何定时任务。"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Removed: marking versions for a waiting period."
+msgstr "已移除：标记版本并等待观察期。"
+
 #: cnequity/cli/repair_cmds.py
 msgid "Repair Shanghai/Shenzhen exchange-traded funds with zero volume but positive turnover; must agree with official daily prices and amounts."
 msgstr "修复零成交量、正成交额的沪深场内基金；须与官方日线价格及金额一致。"
@@ -4825,8 +4825,8 @@ msgid "Resuming init run %s"
 msgstr "续跑初始化 run %s"
 
 #: cnequity/cli/storage_cmds.py
-msgid "Retain a version or an existing cleanup resource, and cancel its pending-deletion mark."
-msgstr "保留版本或已存在的清理资源，并取消待删除标记。"
+msgid "Retain a version or an existing cleanup resource; retention then never deletes it."
+msgstr "保留一个版本或已有的清理资源；自动清理不会再删除它。"
 
 #: cnequity/serve/ops/catalog.py
 msgid "Retry a run"
@@ -6543,8 +6543,19 @@ msgid "Verify, then restore into a new or empty directory. You can inspect the r
 msgstr "校验后恢复到新的或空目录，完成后可检查恢复结果。"
 
 #: cnequity/cli/storage_cmds.py
-msgid "Version retention holds and observation periods; physical deletion must be confirmed on the serve web page."
-msgstr "版本保留登记与观察期；物理删除须在 serve 网页确认。"
+msgid ""
+"Version retention: holds, references and a preview of what retention deletes.\n"
+"\n"
+"\n"
+"Backfill and the daily run keep the newest [storage.retention].keep_generations\n"
+"generations of each dataset and delete older ones. Deleting chosen history\n"
+"earlier is confirmed on the storage page of `cne serve`."
+msgstr ""
+"版本保留：保护、引用，以及自动清理将删除内容的预览。\n"
+"\n"
+"\n"
+"回补和日更为每个数据集保留最近 [storage.retention].keep_generations\n"
+"代，删除更早的代。要提前删除选定的历史，在 `cne serve` 的存储页确认。"
 
 #: cnequity/cli/govern_cmds.py
 msgid "View and validate registered dataset data contracts."
@@ -6858,6 +6869,10 @@ msgstr "[{table}] steps_add = {added}；steps_remove = {removed}"
 #, python-brace-format
 msgid "`cne config {action}` has been renamed; use `{moved}` instead."
 msgstr "`cne config {action}` 已改名，请改用 `{moved}`。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "`cne storage apply` was removed with the mark-and-wait phase: backfill and the daily run already delete generations beyond [storage.retention].keep_generations. Keep a version with `cne storage hold`; delete chosen history earlier on the storage page of `cne serve`."
+msgstr "`cne storage apply` 已随标记观察期一起移除：回补和日更已经会删除超出 [storage.retention].keep_generations 的代。要留住某个版本用 `cne storage hold`；要提前删除选定的历史，在 `cne serve` 的存储页操作。"
 
 #: cnequity/cli/_root.py
 #, python-brace-format
@@ -7193,10 +7208,6 @@ msgstr "仅 margin_trading 的日期推进并发数。每个请求仍然走配�
 #: cnequity/cli/backfill_cmds.py
 msgid "margin_trading sources are exchange and eastmoney"
 msgstr "margin_trading 的来源是 exchange 和 eastmoney"
-
-#: cnequity/cli/storage_cmds.py
-msgid "mark marks in place; purge is disabled, use the serve storage operations page instead."
-msgstr "mark 原地标记；purge 已禁用，请转到 serve 存储运维页。"
 
 #: cnequity/cli/demo.py
 #, python-brace-format

@@ -51,7 +51,7 @@ class StagingRetirement:
                 "current": False,
                 "label": row["run_id"],
                 "logical_bytes": row["bytes"],
-                "status": "unmarked" if row["decision"] == "compacted_candidate" else "protected",
+                "status": "deletable" if row["decision"] == "compacted_candidate" else "protected",
                 "reasons": [] if row["decision"] == "compacted_candidate" else [row["decision"]],
             }
             for row in inventory

@@ -16,7 +16,6 @@ import shutil
 import stat
 import tempfile
 import uuid
-from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1254,59 +1253,44 @@ def committed_revision(
 
 @dataclass(frozen=True)
 class GenerationPruneResult:
-    """Revision candidates; legacy cleanup marks them without removing bytes."""
+    """One dataset's generations that retention removed, or would remove."""
 
     dataset: str
     removed_revision_ids: tuple[str, ...]
     kept_revision_ids: tuple[str, ...]
     freed_bytes: int
     candidate_revision_ids: tuple[str, ...] = ()
-    marked_revision_ids: tuple[str, ...] = ()
     logical_bytes_selected: int = 0
 
 
-def prune_revision_generations(
-    meta_root: Path | str,
-    *,
-    keep: int = 5,
-    dry_run: bool = False,
-) -> list[GenerationPruneResult]:
-    """Preview or mark old generations through the shared retention policy.
+def preview_revision_retention(meta_root: Path | str, *, keep: int) -> list[GenerationPruneResult]:
+    """What ``retain_revision_generations(keep=keep)`` would delete now; reads only.
 
-    This compatibility entry point no longer deletes generation directories.
-    Explicit holds and current pointers always win over the recent count.
-    Non-dry operations require an imported reference inventory. Physical purge
-    requires a separate plan and the explicit maintenance-window entry point.
+    Holds, references, the current pointer and the newest *keep* generations
+    (see ``LifecycleStore.inspect``) win over age.
     """
     from cnequity.storage.lifecycle import LifecycleStore
 
-    store = LifecycleStore(meta_root)
-    with nullcontext() if dry_run else lake_mutation_lock(store.meta):
-        report = store.inspect(keep=max(1, int(keep)))
-        candidates = [o for o in report["objects"] if not o["blocked_reasons"]]
-        if candidates and not dry_run:
-            plan = store.plan(keep=max(1, int(keep)))
-            store.mark(plan["plan_id"])
-        results = []
-        for dataset in sorted({o["dataset"] for o in candidates}):
-            selected = [o for o in candidates if o["dataset"] == dataset]
-            ids = tuple(o["revision_id"] for o in selected)
-            results.append(
-                GenerationPruneResult(
-                    dataset=dataset,
-                    removed_revision_ids=(),
-                    kept_revision_ids=tuple(
-                        o["revision_id"]
-                        for o in report["objects"]
-                        if o["dataset"] == dataset and o["blocked_reasons"]
-                    ),
-                    freed_bytes=0,
-                    candidate_revision_ids=ids,
-                    marked_revision_ids=ids if not dry_run else (),
-                    logical_bytes_selected=sum(o["logical_bytes"] for o in selected),
-                )
+    report = LifecycleStore(meta_root).inspect(keep=max(1, int(keep)))
+    candidates = [o for o in report["objects"] if not o["blocked_reasons"]]
+    results = []
+    for dataset in sorted({o["dataset"] for o in candidates}):
+        selected = [o for o in candidates if o["dataset"] == dataset]
+        results.append(
+            GenerationPruneResult(
+                dataset=dataset,
+                removed_revision_ids=(),
+                kept_revision_ids=tuple(
+                    o["revision_id"]
+                    for o in report["objects"]
+                    if o["dataset"] == dataset and o["blocked_reasons"]
+                ),
+                freed_bytes=0,
+                candidate_revision_ids=tuple(o["revision_id"] for o in selected),
+                logical_bytes_selected=sum(o["logical_bytes"] for o in selected),
             )
-        return results
+        )
+    return results
 
 
 def _exclusive_tree_bytes(root: Path) -> int:

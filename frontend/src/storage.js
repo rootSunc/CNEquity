@@ -2,9 +2,11 @@
 import { dsMarkup, dsSearch, dsWithCode, locale, tr } from "./i18n.js";
 
 const canPick = o => !o.current && o.reasons.every(r => r === "recent_generation");
+// The count backfill and the daily run keep; set from each summary.
+let keepCount = 5;
 const reasonText = code => ({
   current_generation: tr("当前版本", "Current version"),
-  recent_generation: tr("最近 5 代", "Latest 5 generations"),
+  recent_generation: tr(`最近 ${keepCount} 代`, `Latest ${keepCount} generations`),
   explicit_hold: tr("审计或人工保留", "Audit or manual hold"),
   referenced_path: tr("仍有路径引用", "Still referenced"),
   missing_current_pointer: tr("缺少当前版本指针", "Missing current pointer"),
@@ -19,9 +21,7 @@ const reasonText = code => ({
   young_orphan: tr("新近孤立暂存", "Recent orphan staging"),
 }[code] || code);
 const statusText = code => ({
-  due: tr("已过观察期", "Past the observation period"),
-  observing: tr("观察期内", "Still observing"),
-  unmarked: tr("尚未标记", "Not marked"),
+  scheduled: tr("下次回补或日更时删除", "Deleted by the next backfill or daily run"),
   protected: tr("受保护", "Protected"),
 }[code] || code);
 const size = n => n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(2)} GiB` : n >= 2 ** 20 ? `${(n / 2 ** 20).toFixed(2)} MiB` : `${(n / 1024).toFixed(1)} KiB`;
@@ -43,7 +43,7 @@ const why = o => {
   if (o.current) return tr("正在读取", "In use");
   if (canPick(o)) {
     const bits = [];
-    if (o.status === "due" || o.status === "observing" || o.status === "unmarked") bits.push(statusText(o.status));
+    if (o.status === "scheduled") bits.push(statusText(o.status));
     if (o.reasons.includes("recent_generation")) bits.push(reasonText("recent_generation"));
     return bits.join(tr("，", ", ")) || tr("可以删除", "Deletable");
   }
@@ -93,37 +93,32 @@ export async function renderStorage({ api, setPage, esc, dataTable }) {
   }
   function showReview(job) {
     review = job;
-    const purge = job.phase === "purge";
     const target = document.getElementById("storage-review");
     if (!job.objects.length) {
       target.innerHTML = "";
-      showMessage(purge
-        ? tr("没有可删除的项目。", "Nothing to delete.")
-        : tr("没有可标记的项目。", "Nothing to mark."));
+      showMessage(tr("没有可删除的项目。", "Nothing to delete."));
       return;
     }
     const count = job.objects.length;
     showMessage(tr("请核对清单。确认在 10 分钟内有效。", "Review the list. Confirmation is valid for 10 minutes."));
     target.innerHTML = `<section class="surface-panel report-panel storage-confirm" aria-labelledby="storage-review-title">
-      <div class="panel-header"><h2 id="storage-review-title" tabindex="-1">${purge ? tr(`确认删除 ${count} 项`, `Confirm deletion of ${count} items`) : tr(`确认标记 ${count} 项`, `Confirm marking ${count} items`)}</h2><span class="panel-meta">${tr(`账面 ${size(job.logical_bytes)}`, `Logical ${size(job.logical_bytes)}`)}</span></div>
-      <p class="panel-note">${purge ? tr("删除后不能从原路径读取。当前版本和受保护对象会保留。", "After deletion these paths cannot be read. The current version and protected items stay.") : tr("只开始至少 7 天的观察期，不释放空间。到期后仍需在此确认删除。", "This starts an observation period of at least 7 days and frees no space. Deletion still needs confirmation here once it is due.")}${job.resuming ? tr(" 已完成的项目会跳过。", " Finished items are skipped.") : ""}</p>
+      <div class="panel-header"><h2 id="storage-review-title" tabindex="-1">${tr(`确认删除 ${count} 项`, `Confirm deletion of ${count} items`)}</h2><span class="panel-meta">${tr(`账面 ${size(job.logical_bytes)}`, `Logical ${size(job.logical_bytes)}`)}</span></div>
+      <p class="panel-note">${tr("删除后不能从原路径读取。当前版本和受保护对象会保留。", "After deletion these paths cannot be read. The current version and protected items stay.")}${job.resuming ? tr(" 已完成的项目会跳过。", " Finished items are skipped.") : ""}</p>
       <div class="storage-confirm-scroll">${dataTable([tr("数据集", "Dataset"), tr("版本", "Version"), { h: tr("账面大小", "Logical size"), n: true }], rows(job.objects, job.kind), tr("没有项目", "No items"))}</div>
-      <div class="storage-consent"><label><input type="checkbox" id="storage-ack">${purge ? tr("我已核对清单，理解删除不可撤销，确认删除这些历史数据。", "I checked the list, understand this cannot be undone, and confirm deleting this history.") : tr("我已核对清单，确认开始观察期。", "I checked the list and confirm starting the observation period.")}</label>
-      ${purge ? `<label><input type="checkbox" id="storage-idle">${tr("我已停止外部查询、其他 serve 实例和采集调度，确保维护期间不会重新启动。", "I stopped external queries, other serve instances and collection schedules, and they will not restart during maintenance.")}</label>` : ""}
-      <div class="action-row"><button class="button ${purge ? "button-danger" : "button-primary"}" id="storage-confirm" type="button" disabled>${purge ? tr(`永久删除这 ${count} 项`, `Permanently delete these ${count}`) : tr(`标记这 ${count} 项`, `Mark these ${count}`)}</button><button class="button button-ghost" id="storage-cancel" type="button">${tr("取消", "Cancel")}</button></div></div></section>`;
+      <div class="storage-consent"><label><input type="checkbox" id="storage-ack">${tr("我已核对清单，理解删除不可撤销，确认删除这些历史数据。", "I checked the list, understand this cannot be undone, and confirm deleting this history.")}</label>
+      <label><input type="checkbox" id="storage-idle">${tr("我已停止外部查询、其他 serve 实例和采集调度，确保维护期间不会重新启动。", "I stopped external queries, other serve instances and collection schedules, and they will not restart during maintenance.")}</label>
+      <div class="action-row"><button class="button button-danger" id="storage-confirm" type="button" disabled>${tr(`永久删除这 ${count} 项`, `Permanently delete these ${count}`)}</button><button class="button button-ghost" id="storage-cancel" type="button">${tr("取消", "Cancel")}</button></div></div></section>`;
     const button = document.getElementById("storage-confirm");
-    const consent = () => { button.disabled = !document.getElementById("storage-ack").checked || (purge && !document.getElementById("storage-idle").checked); };
+    const consent = () => { button.disabled = !document.getElementById("storage-ack").checked || !document.getElementById("storage-idle").checked; };
     target.querySelectorAll("input").forEach(el => el.addEventListener("change", consent));
     document.getElementById("storage-cancel").onclick = () => { review = null; target.innerHTML = ""; showMessage(tr("已取消，没有执行此清单。", "Cancelled. This list was not run.")); };
     button.onclick = async () => {
       if (running || !review) return;
       controls(true);
       target.querySelectorAll("button, input").forEach(el => { el.disabled = true; });
-      showMessage(purge
-        ? tr("正在执行已确认的清单。本面板读取暂时暂停，请保持外部任务停止。", "Running the confirmed list. This panel pauses its reads; keep external jobs stopped.")
-        : tr("正在记录观察期…", "Recording the observation period…"));
+      showMessage(tr("正在执行已确认的清单。本面板读取暂时暂停，请保持外部任务停止。", "Running the confirmed list. This panel pauses its reads; keep external jobs stopped."));
       try {
-        const job = await post("/api/storage/confirm", { review_id: review.job_id, confirmation_token: review.confirmation_token, confirmed: true, maintenance_confirmed: purge });
+        const job = await post("/api/storage/confirm", { review_id: review.job_id, confirmation_token: review.confirmation_token, confirmed: true, maintenance_confirmed: true });
         await finish(job);
       } catch (err) { if (alive()) { target.innerHTML = ""; review = null; await reloadAfterError(err); } }
       finally { if (alive()) controls(false); }
@@ -151,26 +146,24 @@ export async function renderStorage({ api, setPage, esc, dataTable }) {
     const known = review ? review.objects : [];
     const result = await poll(job);
     if (!result) return;
-    const purge = result.phase === "purge";
     summary = await api("/api/storage");
     if (!alive()) return;
     paint();
-    if (purge) showDeletion([{ objects: known, journal: result.result || {}, kind: review?.kind }]);
-    else showMessage(tr("已标记并开始观察期。至少 7 天后重新检查，删除仍需在此页面确认。", "Marked; the observation period has started. Check again in 7 days or more; deletion still needs confirmation on this page."));
+    showDeletion([{ objects: known, journal: result.result || {}, kind: review?.kind }]);
   }
   async function reloadAfterError(err) {
     try { summary = await api("/api/storage"); if (alive()) paint(); } catch { /* retain the original error */ }
     showMessage(err.message, true);
   }
-  async function check(phase, resume) {
+  // Review an unfinished deletion again; finished items are skipped.
+  async function resumeDeletion(resume) {
     if (running) return;
     controls(true);
     review = null;
     document.getElementById("storage-review").innerHTML = "";
     showMessage(tr("正在核验引用、版本和文件完整性。大目录检查可能需要几分钟；这一步不会删除数据。", "Verifying references, versions, and file integrity. Large directories can take a few minutes; this step deletes nothing."));
     try {
-      const kind = resume?.kind || "revisions";
-      const job = await poll(await post("/api/storage/reviews", { kind, phase, ...(resume ? { resume_plan_id: resume.plan_id } : {}) }));
+      const job = await poll(await post("/api/storage/reviews", { kind: resume.kind, phase: "purge", resume_plan_id: resume.plan_id }));
       if (job) showReview(job);
     } catch (err) { showMessage(err.message, true); }
     finally { if (alive()) controls(false); }
@@ -358,25 +351,25 @@ export async function renderStorage({ api, setPage, esc, dataTable }) {
   function paint() {
     review = null;
     picked = new Set();
-    const toolsOpen = document.getElementById("storage-tools")?.open ?? false;
     const live = summary.objects.filter(o => o.current);
     const deletable = summary.objects.filter(canPick);
     const kept = summary.objects.filter(o => !o.current && !canPick(o));
     const metric = (id, title, items, note) => `<button type="button" class="storage-metric${view === id ? " on" : ""}" data-storage-action data-view="${id}" aria-pressed="${view === id}"><span class="metric-label">${title}</span><span class="metric-value">${items.length.toLocaleString("zh-CN")}</span><span class="metric-note">${note || countText(items)}</span></button>`;
     const unfinished = summary.unfinished.length ? `<section class="surface-panel report-panel storage-review"><h2>${tr("有未完成的删除", "An unfinished deletion is open")}</h2><p class="panel-note">${tr("已完成的不会再次删除。请核对剩余项目。", "Finished items are not deleted again. Review what remains.")}</p>${summary.unfinished.map((x, i) => `<div class="storage-resume"><code>${esc(x.plan_id)}</code><button class="button button-primary" data-storage-action data-resume="${i}" type="button">${tr("重新审核", "Review again")} ${x.kind === "revisions" ? tr("版本", "versions") : tr("暂存", "staging")}</button></div>`).join("")}</section>` : "";
-    setPage(`<section class="page-heading"><div class="heading-row"><h1>${tr("存储", "Storage")}</h1><span class="status-pill">${tr("不自动删除", "No automatic deletion")}</span></div></section>
+    keepCount = summary.keep;
+    const pill = summary.automatic_retention
+      ? tr(`回补和日更后保留最近 ${keepCount} 代`, `Backfill and the daily run keep the latest ${keepCount}`)
+      : tr("不自动删除", "No automatic deletion");
+    setPage(`<section class="page-heading"><div class="heading-row"><h1>${tr("存储", "Storage")}</h1><span class="status-pill">${pill}</span></div></section>
       ${unfinished}
-      ${!summary.registered ? `<p class="panel-note err">${tr("尚未导入生命周期引用。按到期规则检查前，先运行 <code>cne storage import</code>。", "Lifecycle references are not imported. Run <code>cne storage import</code> before a retention check.")}</p>` : ""}
+      ${!summary.registered ? `<p class="panel-note err">${tr("尚未导入生命周期引用。删除历史版本前，先运行 <code>cne storage import</code>。", "Lifecycle references are not imported. Run <code>cne storage import</code> before deleting old versions.")}</p>` : ""}
       <div class="storage-metrics">${metric("deletable", tr("可删除", "Deletable"), deletable, size(bytesOf(deletable)))}${metric("current", tr("正在使用", "In use"), live, size(bytesOf(live)))}${metric("kept", tr("受保护", "Protected"), kept, size(bytesOf(kept)))}<div class="storage-metric is-static"><span class="metric-label">${tr("磁盘可用", "Disk free")}</span><span class="metric-value">${size(summary.disk_free_bytes)}</span><span class="metric-note">${tr("共", "of")} ${size(summary.disk_total_bytes)}</span></div></div>
       <p id="storage-message" class="panel-note" role="status" aria-live="polite"></p>
       <div id="storage-review" class="storage-review"></div>
-      <section class="surface-panel storage-board"><div class="storage-toolbar"><label for="storage-query">${tr("筛选", "Filter")}</label><input id="storage-query" type="search" value="${esc(query)}" placeholder="${tr("数据集、版本或原因", "Dataset, version, or reason")}"></div><div id="storage-dock"></div><div id="storage-list"></div></section>
-      <details class="storage-fold" id="storage-tools"${toolsOpen ? " open" : ""}><summary>${tr("按到期规则检查", "Check by retention rule")}</summary><div class="storage-fold-body"><div class="storage-actions"><button class="button button-primary" data-storage-action id="storage-check" type="button">${tr("检查到期项目", "Check due items")}</button><button class="button button-ghost" data-storage-action id="storage-mark" type="button">${tr("检查待标记项目", "Check unmarked items")}</button></div></div></details>`, "storage");
+      <section class="surface-panel storage-board"><div class="storage-toolbar"><label for="storage-query">${tr("筛选", "Filter")}</label><input id="storage-query" type="search" value="${esc(query)}" placeholder="${tr("数据集、版本或原因", "Dataset, version, or reason")}"></div><div id="storage-dock"></div><div id="storage-list"></div></section>`, "storage");
     document.getElementById("storage-query").oninput = event => { query = event.target.value; renderList(); };
     document.querySelectorAll("[data-view]").forEach(el => { el.onclick = () => setView(el.dataset.view); });
-    document.getElementById("storage-check").onclick = () => check("purge");
-    document.getElementById("storage-mark").onclick = () => check("mark");
-    document.querySelectorAll("[data-resume]").forEach(el => { el.onclick = () => check("purge", summary.unfinished[Number(el.dataset.resume)]); });
+    document.querySelectorAll("[data-resume]").forEach(el => { el.onclick = () => resumeDeletion(summary.unfinished[Number(el.dataset.resume)]); });
     renderList();
   }
   setPage(`<section class="page-heading"><h1>${tr("存储", "Storage")}</h1><p class="meta-row" role="status">${tr("正在读取…", "Reading…")}</p></section>`, "storage");

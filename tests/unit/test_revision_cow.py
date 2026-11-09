@@ -613,9 +613,12 @@ def test_raw_archive_rejects_same_size_payload_tampering(tmp_path):
         archive.archive("financial_statement_items", {"value": 1}, source="eastmoney")
 
 
-def test_prune_keeps_the_pointer_and_the_newest_generations(tmp_path):
-    """Marking protects recent/current generations and preserves all bytes."""
-    from cnequity.storage.revisions import prune_revision_generations
+def test_retention_keeps_the_pointer_and_the_newest_generations(tmp_path):
+    """The preview deletes nothing; retention deletes exactly what it previewed."""
+    from cnequity.storage.revisions import (
+        preview_revision_retention,
+        retain_revision_generations,
+    )
 
     cfg = Config(data_root=tmp_path / "data")
     path = cfg.curated_root / "daily_bars/trade_date=2026-01-01/part.parquet"
@@ -638,28 +641,15 @@ def test_prune_keeps_the_pointer_and_the_newest_generations(tmp_path):
     receipts_before = {p.name for p in receipts.glob("*.json")}
     current_before = store.current_root("daily_bars")
 
-    dry = prune_revision_generations(cfg.meta_root, keep=2, dry_run=True)
-    assert dry, "there is something to prune"
-    assert {p.name for p in generations.iterdir()} == before, "dry run must not delete"
+    preview = preview_revision_retention(cfg.meta_root, keep=2)
+    planned = {rid for item in preview for rid in item.candidate_revision_ids}
+    assert planned, "there is something to delete"
+    assert {p.name for p in generations.iterdir()} == before, "a preview must not delete"
 
-    from cnequity.storage.lifecycle import LifecycleStore, digest
+    removed = retain_revision_generations(cfg.meta_root, keep=2)
 
-    lifecycle = LifecycleStore(cfg.meta_root)
-    lifecycle.import_manifest(
-        {
-            "schema_version": 1,
-            "meta_root": str(cfg.meta_root.resolve()),
-            "holds": {},
-            "reference_roots": [],
-            "reference_fingerprint": digest([]),
-        }
-    )
-    marked = prune_revision_generations(cfg.meta_root, keep=2)
-
-    after = {p.name for p in generations.iterdir()}
-    assert after == before, "marking preserves all generation bytes"
-    assert sum(len(r.marked_revision_ids) for r in marked) == len(before) - 3
-    assert all(r.freed_bytes == 0 and not r.removed_revision_ids for r in marked)
+    assert {rid for item in removed for rid in item.removed_revision_ids} == planned
+    assert {p.name for p in generations.iterdir()} == before - planned
     # The generation every reader resolves to survived, and still reads.
     assert current_before is not None and current_before.is_dir()
     assert store.current_root("daily_bars") == current_before
@@ -668,15 +658,15 @@ def test_prune_keeps_the_pointer_and_the_newest_generations(tmp_path):
     assert {p.name for p in receipts.glob("*.json")} == receipts_before
 
 
-def test_prune_keeps_what_the_pointer_resolves_to_even_at_keep_one(tmp_path):
+def test_retention_keeps_what_the_pointer_resolves_to_even_at_keep_one(tmp_path):
     """`keep=1` is the most aggressive setting and must still leave a readable lake."""
-    from cnequity.storage.revisions import prune_revision_generations
+    from cnequity.storage.revisions import retain_revision_generations
 
     cfg, store, _path = _revision_lake(tmp_path, 10.0)
     generations = cfg.meta_root / "revisions" / "data" / "daily_bars"
     current = store.current_root("daily_bars")
 
-    prune_revision_generations(cfg.meta_root, keep=1)
+    retain_revision_generations(cfg.meta_root, keep=1)
 
     assert current is not None and current.is_dir()
     assert store.current_root("daily_bars") == current

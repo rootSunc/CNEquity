@@ -18,7 +18,7 @@ from cnequity.storage.revisions import RevisionConsistencyError
 class ReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["revisions", "staging"]
-    phase: Literal["mark", "purge"] = "purge"
+    phase: Literal["purge"] = "purge"
     resume_plan_id: str | None = None
     object_ids: list[str] | None = None
 

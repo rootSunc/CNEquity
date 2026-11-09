@@ -1,4 +1,4 @@
-"""Maintenance-window revision reclamation with durable, resumable receipts.
+"""Maintenance-window deletion of chosen revisions, with durable, resumable receipts.
 
 External file readers do not participate in the lake lock. The caller must
 stop them and new jobs before explicitly confirming the maintenance window.
@@ -9,32 +9,14 @@ from __future__ import annotations
 import shutil
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.i18n import _
 from cnequity.storage.atomic import replace_with_retry, write_json_atomic
-from cnequity.storage.lifecycle import GRACE_DAYS, LifecycleError, _read, _tree_signature, digest
+from cnequity.storage.lifecycle import LifecycleError, _read, _tree_signature, digest
 from cnequity.storage.revisions import _reject_symlink_path, sha256_file
-
-
-def eligible(obj: dict, now: datetime) -> bool:
-    pending = obj.get("pending")
-    if not pending or obj["blocked_reasons"]:
-        return False
-    try:
-        marked = datetime.fromisoformat(pending["marked_at"])
-        after = datetime.fromisoformat(pending["not_before"])
-        if (
-            marked.tzinfo is None
-            or after.tzinfo is None
-            or after < marked + timedelta(days=GRACE_DAYS)
-        ):
-            raise ValueError("invalid observation period")
-    except (KeyError, TypeError, ValueError) as exc:
-        raise LifecycleError(f"Invalid observation record: {obj['object_id']}") from exc
-    return now >= after and pending.get("tree_signature") == obj.get("tree_signature")
 
 
 def check_idle(manifest: Path) -> None:
@@ -112,18 +94,6 @@ def verify_content(store, obj: dict, root: Path, *, partial: bool = False) -> in
     return sum(expected[p]["size_bytes"] for p in actual)
 
 
-def prepare(store, report: dict) -> dict:
-    if unfinished(store):
-        raise LifecycleError("An unfinished purge must be resumed before creating another plan")
-    now = datetime.now(timezone.utc)
-    selected = [o for o in report["objects"] if eligible(o, now)]
-    for obj in selected:
-        verify_content(store, obj, store.meta / obj["path"])
-    report["purge_ids"] = [o["object_id"] for o in selected]
-    report["logical_bytes_to_purge"] = sum(o["logical_bytes"] for o in selected)
-    return report
-
-
 def explicit_deletable(obj: dict) -> bool:
     """Operator-chosen history. Current, holds, references and broken receipts stay."""
     if obj.get("current"):
@@ -132,7 +102,7 @@ def explicit_deletable(obj: dict) -> bool:
 
 
 def prepare_selected(store, report: dict, object_ids: list[str]) -> dict:
-    """Purge exactly the chosen historical generations, including ones still kept or observing."""
+    """Purge exactly the chosen historical generations, including ones still among the newest N."""
     if unfinished(store):
         raise LifecycleError("An unfinished purge must be resumed before creating another plan")
     if not object_ids or len(object_ids) != len(set(object_ids)):
@@ -163,7 +133,7 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
         )
     plan = store.read_plan(plan_id)
     if plan.get("phase") != "purge":
-        raise LifecycleError("A fresh --phase purge plan is required")
+        raise LifecycleError("A deletion plan is required")
     event_path = store.root / "purges" / f"{plan_id}.json"
     _reject_symlink_path(event_path)
     with lake_mutation_lock(store.meta, blocking=False):
@@ -258,18 +228,15 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
         )
         if actual != expected:
             raise LifecycleError("Purge plan is stale; protections or contents changed")
-        now = datetime.now(timezone.utc)
-        explicit = plan.get("explicit_selection") is True
+        # A plan of the retired mark-and-wait phase selected generations with
+        # no protection at all, so the same check covers it.
         for obj in selected:
-            if explicit:
-                if not explicit_deletable(obj):
-                    raise LifecycleError(
-                        _("Cannot delete {oid}: its protection has changed.").format(
-                            oid=obj["object_id"]
-                        )
+            if not explicit_deletable(obj):
+                raise LifecycleError(
+                    _("Cannot delete {oid}: its protection has changed.").format(
+                        oid=obj["object_id"]
                     )
-            elif not eligible(obj, now):
-                raise LifecycleError("Observation period is incomplete or content changed")
+                )
             if obj["object_id"] not in removed_from_source:
                 verify_content(store, obj, store.meta / obj["path"])
         # All candidates are validated before the first destructive operation.
@@ -317,6 +284,6 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
             journal["error"] = f"{type(exc).__name__}: {exc}"
             save()
             raise
-        # The journal is authoritative; pending records remain historical marking
-        # evidence. inventory no longer exposes physically removed generations.
+        # The journal is authoritative; inventory no longer exposes physically
+        # removed generations.
         return journal

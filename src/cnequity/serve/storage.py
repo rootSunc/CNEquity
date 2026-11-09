@@ -1,7 +1,7 @@
 """Storage notices and explicit, short-lived browser approvals.
 
-GETs never plan, mark or delete. Only an approved review can invoke the existing
-lifecycle executor. External readers still require operator maintenance consent.
+GETs never plan or delete. Only an approved review of chosen versions can invoke
+the lifecycle executor. External readers still require operator maintenance consent.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ from typing import Literal
 from cnequity.config import Config
 from cnequity.i18n import _, carry_language
 from cnequity.storage.lifecycle import LifecycleError, LifecycleStore
-from cnequity.storage.lifecycle.purge import eligible, unfinished
+from cnequity.storage.lifecycle.purge import unfinished
 from cnequity.storage.lifecycle.staging import StagingRetirement
 
 Kind = Literal["revisions", "staging"]
-Phase = Literal["mark", "purge"]
+Phase = Literal["purge"]
 APPROVAL_SECONDS = 600
 
 
@@ -103,20 +103,20 @@ class StorageMaintenance:
 
     def _summary(self) -> dict:
         now = datetime.now(timezone.utc)
-        report = self.store.inspect()
+        # The same count backfill and the daily run keep; 0 means they keep all.
+        configured = getattr(self.config, "revision_keep_generations", 5)
+        automatic = (
+            isinstance(configured, int) and not isinstance(configured, bool) and configured > 0
+        )
+        keep = configured if automatic else 5
+        report = self.store.inspect(keep=keep)
         registry = self.store.registry()
         objects = []
         for obj in report["objects"]:
-            pending = obj["pending"]
-            # Overview only: don't hash generations or create a cleanup plan.
-            candidate = {
-                **obj,
-                "tree_signature": pending.get("tree_signature") if pending else None,
-            }
+            # Unprotected history is deleted by the next backfill or daily run
+            # when automatic retention is on.
             status = (
-                "protected"
-                if obj["blocked_reasons"]
-                else ("due" if eligible(candidate, now) else "observing" if pending else "unmarked")
+                "protected" if obj["blocked_reasons"] else "scheduled" if automatic else "deletable"
             )
             objects.append(
                 {
@@ -128,7 +128,6 @@ class StorageMaintenance:
                     ),
                     "status": status,
                     "logical_bytes": obj["logical_bytes"],
-                    "not_before": pending.get("not_before") if pending else None,
                     "reasons": obj["blocked_reasons"],
                 }
             )
@@ -159,8 +158,8 @@ class StorageMaintenance:
             "active_jobs": active,
             "disk_free_bytes": usage.free,
             "disk_total_bytes": usage.total,
-            "keep": 5,
-            "grace_days": 7,
+            "keep": keep,
+            "automatic_retention": automatic,
             "generated_at": now.isoformat(),
         }
 
@@ -272,9 +271,7 @@ class StorageMaintenance:
             elif object_ids:
                 if phase != "purge" or resume_plan_id:
                     raise LifecycleError(
-                        _(
-                            "A manual selection can only be used for a new deletion, not together with marked or restore records."
-                        )
+                        _("A selection starts a new deletion; it cannot resume another one.")
                     )
                 if len(object_ids) > 200 or len(object_ids) != len(set(object_ids)):
                     raise LifecycleError(_("Select 1 to 200 distinct historical versions."))
@@ -283,11 +280,11 @@ class StorageMaintenance:
                     for oid in object_ids
                 ):
                     raise LifecycleError(_("Invalid version number."))
-                plan = self.store.plan(phase="purge", selected_ids=object_ids)
+                plan = self.store.plan(selected_ids=object_ids)
             else:
-                plan = self.store.plan(phase=phase)
+                raise LifecycleError(_("Choose the versions to delete."))
             if kind == "revisions":
-                selected = set(plan["purge_ids"] if phase == "purge" else plan["candidate_ids"])
+                selected = set(plan["purge_ids"])
                 objects = [o for o in plan["objects"] if o["object_id"] in selected]
             else:
                 objects = plan["objects"]
@@ -351,12 +348,8 @@ class StorageMaintenance:
                 self.gate.drain()
                 plan_id = review["plan_id"]
                 if review["kind"] == "revisions":
-                    result = (
-                        self.store.purge(
-                            plan_id, maintenance=True, manifest=self.config.manifest_path
-                        )
-                        if review["phase"] == "purge"
-                        else self.store.mark(plan_id)
+                    result = self.store.purge(
+                        plan_id, maintenance=True, manifest=self.config.manifest_path
                     )
                 else:
                     result = StagingRetirement(self.config).apply(plan_id, maintenance=maintenance)

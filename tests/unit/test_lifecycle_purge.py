@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
 
 import polars as pl
 import pytest
@@ -42,32 +41,22 @@ def lake(tmp_path):
     return cfg, store, writer
 
 
-def matured(store, monkeypatch):
-    class Earlier(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime.now(timezone.utc) - timedelta(days=8)
-
-    with monkeypatch.context() as patch:
-        patch.setattr("cnequity.storage.lifecycle.datetime", Earlier)
-        store.mark(store.plan(keep=2)["plan_id"])
-    return store.plan(keep=2, phase="purge")
+def matured(store, monkeypatch=None, keep: int = 2):
+    """A deletion plan of every generation *keep* leaves unprotected."""
+    ids = [o["object_id"] for o in store.inspect(keep=keep)["objects"] if not o["blocked_reasons"]]
+    return store.plan(selected_ids=ids, keep=keep)
 
 
-def test_purge_only_after_grace_and_separate_plan(lake, monkeypatch):
+def test_a_deletion_plan_names_its_versions(lake):
     cfg, store, writer = lake
-    mark = store.plan(keep=2)
-    store.mark(mark["plan_id"])
-    assert store.plan(keep=2, phase="purge")["purge_ids"] == []
-    with pytest.raises(LifecycleError, match="fresh"):
-        store.purge(mark["plan_id"], maintenance=True)
-    # A changed mark cannot become old by editing only its not_before field.
-    value = store.registry()
-    for pending in value["pending"].values():
-        pending["not_before"] = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    store._save(value)
-    with pytest.raises(LifecycleError, match="observation"):
-        store.plan(keep=2, phase="purge")
+    with pytest.raises(LifecycleError, match="without duplicates"):
+        store.plan(selected_ids=[])
+    current = next(o["object_id"] for o in store.inspect()["objects"] if o["current"])
+    with pytest.raises(LifecycleError, match="current version"):
+        store.plan(selected_ids=[current])
+    plan = matured(store)
+    assert len(plan["purge_ids"]) == 3
+    assert plan["explicit_selection"] is True
 
 
 def test_purge_keeps_current_receipts_and_is_idempotent(lake, monkeypatch):
@@ -176,7 +165,7 @@ def test_partial_failure_resumes_without_expanding_scope(lake, monkeypatch):
     journal = json.loads((store.root / "purges" / f"{plan['plan_id']}.json").read_text())
     assert journal["status"] == "error" and journal["logical_bytes_deleted"] == 0
     with pytest.raises(LifecycleError, match="unfinished"):
-        store.plan()
+        store.plan(selected_ids=plan["purge_ids"])
     assert purge.shutil.rmtree == real
     result = store.purge(plan["plan_id"], maintenance=True)
     assert result["status"] == "complete"
@@ -266,7 +255,10 @@ def test_requires_bytes_closure_and_provenance_are_distinct(lake):
     store.import_manifest({**store.registry(), "cases": [case]})
     value = store.registry()
     assert a in value["holds"] and b in value["holds"] and c not in value["holds"]
-    assert a not in store.plan(keep=1)["candidate_ids"]
+    candidates = [
+        o["object_id"] for o in store.inspect(keep=1)["objects"] if not o["blocked_reasons"]
+    ]
+    assert a not in candidates
     with pytest.raises(LifecycleError, match="immutable"):
         store.import_manifest({**value, "cases": [{**case, "roots": [c]}]})
     value["holds"].pop(b)
@@ -275,7 +267,7 @@ def test_requires_bytes_closure_and_provenance_are_distinct(lake):
         store.registry()
 
 
-def test_case_registration_checks_evidence_and_cancels_pending(lake, monkeypatch, tmp_path):
+def test_case_registration_checks_evidence_and_holds(lake, monkeypatch, tmp_path):
     from cnequity.storage.revisions import sha256_file
 
     _, store, _ = lake
@@ -290,7 +282,6 @@ def test_case_registration_checks_evidence_and_cancels_pending(lake, monkeypatch
         "evidence": [{"path": str(evidence), "sha256": sha256_file(evidence)}],
     }
     store.register_case(case)
-    assert oid not in store.registry()["pending"]
     assert oid in store.registry()["holds"]
     store.register_case(case)
     assert len(store.registry()["cases"]) == 1
@@ -309,10 +300,10 @@ def test_cli_cannot_bypass_web_confirmation(lake, monkeypatch):
     plan = matured(store, monkeypatch)
     monkeypatch.setattr("cnequity.cli.storage_cmds._cfg", lambda _: cfg)
     runner = CliRunner()
-    denied = runner.invoke(cli, ["storage", "apply", plan["plan_id"], "--phase", "purge"])
-    assert denied.exit_code == 1 and "网页" in denied.output
-    result = runner.invoke(
-        cli, ["storage", "apply", plan["plan_id"], "--phase", "purge", "--maintenance-window"]
-    )
-    assert result.exit_code == 1 and "网页" in result.output
+    for argv in (
+        ["storage", "apply", plan["plan_id"], "--phase", "purge"],
+        ["storage", "apply", plan["plan_id"], "--phase", "purge", "--maintenance-window"],
+    ):
+        denied = runner.invoke(cli, argv)
+        assert denied.exit_code == 1 and "存储页" in denied.output, denied.output
     assert all((cfg.meta_root / o["path"]).exists() for o in plan["objects"])

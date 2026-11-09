@@ -1,4 +1,16 @@
-"""Revision retention: registered holds, immutable plans and an observation period."""
+"""Revision retention: registered holds, references and reviewed deletion.
+
+One retention model: keep the newest N generations per dataset
+(``[storage.retention].keep_generations``). Backfill and the daily run delete
+the rest right away (``revisions.retain_revision_generations``); a person can
+also delete chosen history earlier, through an immutable plan and a journalled
+purge on the dashboard. Current versions, holds and references always stay.
+
+A seven-day mark-and-wait phase used to sit beside this. Automatic retention
+deleted the marked generations before their wait ended, so it protected
+nothing and was removed; registries still carrying its ``pending`` marks load
+without them.
+"""
 
 from __future__ import annotations
 
@@ -8,12 +20,11 @@ import os
 import re
 import stat
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.i18n import _
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.revisions import (
     RevisionStore,
@@ -22,7 +33,6 @@ from cnequity.storage.revisions import (
     sha256_file,
 )
 
-GRACE_DAYS = 7
 TEXT_SUFFIXES = {".json", ".jsonl", ".md", ".py", ".toml", ".yaml", ".yml"}
 _TOKEN = re.compile(r"[a-zA-Z0-9_-]+\Z")
 
@@ -227,7 +237,7 @@ class LifecycleStore:
         if not self.registry_path.exists() and not self.registry_path.is_symlink():
             if required:
                 raise LifecycleError(
-                    "Import a reviewed reference manifest before marking revisions"
+                    "Import a reviewed reference manifest before planning a deletion"
                 )
             return None
         value = _read(self.registry_path)
@@ -236,7 +246,7 @@ class LifecycleStore:
             or value.get("meta_root") != str(self.meta)
             or not isinstance(value.get("lake_id"), str)
             or not isinstance(value.get("holds"), dict)
-            or not isinstance(value.get("pending"), dict)
+            or not isinstance(value.get("pending", {}), dict)
             or not isinstance(value.get("experiments"), list)
             or not isinstance(value.get("reference_roots"), list)
             or not isinstance(value.get("reference_fingerprint"), str)
@@ -255,6 +265,8 @@ class LifecycleStore:
         for oid, reasons in case_holds(cases).items():
             if any(reason not in value["holds"].get(oid, []) for reason in reasons):
                 raise LifecycleError("Case dependencies are missing registered holds")
+        # Marks of the retired mark-and-wait phase (see the module docstring).
+        value.pop("pending", None)
         return value
 
     def _save(self, value: dict) -> None:
@@ -285,7 +297,6 @@ class LifecycleStore:
                 "meta_root": str(self.meta),
                 "holds": inherited.get("holds", {}),
                 "cases": inherited.get("cases", []),
-                "pending": {},
                 "experiments": [],
             }
             cases = {case["case_id"]: case for case in value.get("cases", [])}
@@ -314,7 +325,6 @@ class LifecycleStore:
                 for reason in reasons:
                     if reason not in value["holds"][oid]:
                         value["holds"][oid].append(reason)
-                value["pending"].pop(oid, None)
                 value.get("experiment_pending", {}).pop(oid, None)
             experiments = {item["object_id"]: item for item in value["experiments"]}
             for item in manifest.get("experiments", []):
@@ -414,7 +424,6 @@ class LifecycleStore:
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
-            value["pending"].pop(object_id, None)
             value.get("experiment_pending", {}).pop(object_id, None)
             self._save(value)
 
@@ -509,7 +518,6 @@ class LifecycleStore:
             for oid, reasons in additions.items():
                 existing = value["holds"].setdefault(oid, [])
                 existing.extend(reason for reason in reasons if reason not in existing)
-                value["pending"].pop(oid, None)
                 value.get("experiment_pending", {}).pop(oid, None)
             value["cases"] = list(cases.values())
             self._save(value)
@@ -595,6 +603,10 @@ class LifecycleStore:
                         "logical_bytes": sum(f["size_bytes"] for f in files),
                         "exclusive_bytes": _exclusive_tree_bytes(path),
                         "current": bool(pointer and pointer["revision_id"] == rid),
+                        # A merge that rewrote files without changing a row
+                        # says so in its receipt; see `inspect`.
+                        "content_changed": (record.get("metadata") or {}).get("content_changed")
+                        is not False,
                         "pointer_digest": digest(pointer),
                         "blocked_reasons": reasons,
                     }
@@ -611,7 +623,7 @@ class LifecycleStore:
                 (o for o in objects if o["dataset"] == dataset and not o["blocked_reasons"]),
                 key=lambda o: o["revision"],
             )
-            for obj in valid[-keep:]:
+            for obj in _recent(valid, keep):
                 obj["blocked_reasons"].append("recent_generation")
         for obj in objects:
             oid = obj["object_id"]
@@ -620,7 +632,6 @@ class LifecycleStore:
             obj["holds"] = registry["holds"].get(oid, []) if registry else []
             if obj["holds"]:
                 obj["blocked_reasons"].append("explicit_hold")
-            obj["pending"] = registry["pending"].get(oid) if registry else None
         return {
             "schema_version": 1,
             "meta_root": str(self.meta),
@@ -654,27 +665,17 @@ class LifecycleStore:
             obj["tree_signature"] = _tree_signature(self.meta / obj["path"])
         report["candidate_ids"] = [o["object_id"] for o in candidates]
         report["logical_bytes_selected"] = sum(o["logical_bytes"] for o in candidates)
-        report["grace_days"] = GRACE_DAYS
         return report
 
-    def plan(
-        self, *, keep: int = 5, phase: str = "mark", selected_ids: list[str] | None = None
-    ) -> dict:
-        from cnequity.storage.lifecycle.purge import prepare, prepare_selected, unfinished
+    def plan(self, *, selected_ids: list[str], keep: int = 5) -> dict:
+        """Save an immutable plan to delete exactly *selected_ids*; deletes nothing."""
+        from cnequity.storage.lifecycle.purge import prepare_selected, unfinished
 
-        if phase not in ("mark", "purge"):
-            raise LifecycleError("Invalid lifecycle plan phase")
-        if selected_ids is not None and phase != "purge":
-            raise LifecycleError(_("A manual selection can only be used for deletion."))
         with lake_mutation_lock(self.meta):
             if unfinished(self):
                 raise LifecycleError("Resume unfinished purge before creating another plan")
-            report = self._plan(keep)
-            if selected_ids is not None:
-                report = prepare_selected(self, report, selected_ids)
-            elif phase == "purge":
-                report = prepare(self, report)
-            report["phase"] = phase
+            report = prepare_selected(self, self._plan(keep), selected_ids)
+            report["phase"] = "purge"
             report["created_at"] = datetime.now(timezone.utc).isoformat()
             plan_id = digest(report)
             path = self.root / "plans" / f"{plan_id}.json"
@@ -697,48 +698,17 @@ class LifecycleStore:
 
         return execute(self, plan_id, maintenance=maintenance, manifest=manifest)
 
-    def mark(self, plan_id: str) -> dict:
-        from cnequity.storage.lifecycle.purge import unfinished
 
-        with lake_mutation_lock(self.meta):
-            if unfinished(self):
-                raise LifecycleError("Resume unfinished purge before marking revisions")
-            plan = self.read_plan(plan_id)
-            if plan.get("phase", "mark") != "mark":
-                raise LifecycleError("A mark plan is required")
-            expected = {k: v for k, v in plan.items() if k not in ("created_at", "phase")}
-            if self._plan(plan["keep"]) != expected:
-                raise LifecycleError("Plan is stale; refresh the plan")
-            value = self.registry(required=True)
-            assert value is not None
-            now = datetime.now(timezone.utc)
-            candidates = set(plan["candidate_ids"])
-            # A new protection or changed content restarts the observation period.
-            pending = {}
-            for obj in plan["objects"]:
-                oid = obj["object_id"]
-                if oid not in candidates:
-                    continue
-                previous = value["pending"].get(oid)
-                if previous and previous.get("tree_signature") == obj["tree_signature"]:
-                    pending[oid] = previous
-                else:
-                    pending[oid] = {
-                        "marked_at": now.isoformat(),
-                        "not_before": (now + timedelta(days=GRACE_DAYS)).isoformat(),
-                        "tree_signature": obj["tree_signature"],
-                        "plan_id": plan_id,
-                    }
-            value["pending"] = pending
-            self._save(value)
-            return {
-                "plan_id": plan_id,
-                "marked": len(pending),
-                "logical_bytes_selected": plan["logical_bytes_selected"],
-                "logical_bytes_deleted": 0,
-                "purge_available": True,
-                "earliest_not_before": min(
-                    (p["not_before"] for p in pending.values()),
-                    default=None,
-                ),
-            }
+def _recent(valid: list[dict], keep: int) -> list[dict]:
+    """The generations *keep* protects, oldest first.
+
+    The newest *keep* generations that changed content, and every generation
+    after the oldest of them. A merge that only rewrote files is not history of
+    its own, so it does not use up a place; it stays while it sits between
+    kept generations, and goes with them when they age out.
+    """
+    counted = [obj for obj in valid if obj.get("content_changed", True)]
+    if len(counted) <= keep:
+        return valid
+    floor = counted[-keep]["revision"]
+    return [obj for obj in valid if obj["revision"] >= floor]

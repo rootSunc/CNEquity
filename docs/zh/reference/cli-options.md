@@ -672,10 +672,7 @@
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
-| `plan_id` | `—` | 必填；位置参数 |
-| `--phase` | `mark` | mark 原地标记；purge 已禁用，请转到 serve 存储运维页。 |
-| `--maintenance-window` | `False` | 兼容选项；不能绕过网页删除确认。 |
+| `args` | `—` | 位置参数 |
 
 ## `cne storage explain`
 
@@ -704,7 +701,7 @@
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
-| `--keep` | `5` | — |
+| `--keep` | `—` | 每个数据集保留的代数；默认取 [storage.retention].keep_generations。 |
 
 ## `cne storage merge-files`
 
@@ -720,8 +717,8 @@
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
-| `--keep` | `5` | — |
-| `--phase` | `mark` | — |
+| `--keep` | `—` | 每个数据集保留的代数；默认取 [storage.retention].keep_generations。 |
+| `--phase` | `—` | — |
 
 ## `cne storage raw-external`
 

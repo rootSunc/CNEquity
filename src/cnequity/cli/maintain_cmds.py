@@ -29,7 +29,7 @@ from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.query.parquet_scan import scan_parquet_files
-from cnequity.storage.revisions import prune_revision_generations, retain_revision_generations
+from cnequity.storage.revisions import preview_revision_retention, retain_revision_generations
 from cnequity.storage.source_snapshots import (
     DEFAULT_SNAPSHOT_RETENTION_DAYS,
     clean_source_snapshots,
@@ -603,7 +603,7 @@ def clean(
     attach_log_file(cfg, "run-clean")
     # Preview the candidate inventory; no cleanup executor receives write authority.
     generations = (
-        prune_revision_generations(cfg.meta_root, keep=keep_revision_generations, dry_run=dry_run)
+        preview_revision_retention(cfg.meta_root, keep=keep_revision_generations)
         if keep_revision_generations > 0
         else []
     )
@@ -679,7 +679,6 @@ def clean(
                 "kept": len(item.kept_revision_ids),
                 "bytes_freed": item.freed_bytes,
                 "candidates": len(item.candidate_revision_ids),
-                "marked": len(item.marked_revision_ids),
                 "logical_bytes_selected": item.logical_bytes_selected,
             }
             for item in generations

@@ -53,7 +53,7 @@ def test_snapshot_restores_protection_without_deletion_authority(tmp_path):
     assert dependencies["protection"]["holds"] == lifecycle.registry()["holds"]
     assert not restored.registry_path.exists()
     with pytest.raises(LifecycleError, match="Import"):
-        restored.plan()
+        restored.plan(selected_ids=["revision/daily_bars/any"])
     assert export_dependencies(restored) == dependencies
     roots = [{"path": str(tmp_path / "evidence")}]
     restored.import_manifest(
@@ -67,7 +67,7 @@ def test_snapshot_restores_protection_without_deletion_authority(tmp_path):
     )
     assert restored.registry()["holds"] == lifecycle.registry()["holds"]
     assert restored.registry()["lake_id"] != lifecycle.registry()["lake_id"]
-    assert not restored.registry()["pending"]
+    assert "pending" not in restored.registry()
     with pytest.raises(ValueError, match="full snapshot"):
         snapshots._lake_index(cfg.data_root, ["daily_bars"])
 

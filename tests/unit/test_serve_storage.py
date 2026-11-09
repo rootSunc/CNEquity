@@ -1,7 +1,6 @@
 """Browser approvals and deletion safety on isolated, tiny local lakes."""
 
 import time
-from datetime import datetime, timedelta, timezone
 
 import polars as pl
 import pytest
@@ -40,15 +39,6 @@ def web(tmp_path, monkeypatch):
             "reference_fingerprint": digest([]),
         }
     )
-
-    class Earlier(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime.now(timezone.utc) - timedelta(days=8)
-
-    with monkeypatch.context() as patch:
-        patch.setattr("cnequity.storage.lifecycle.datetime", Earlier)
-        store.mark(store.plan()["plan_id"])
     client = TestClient(create_app(cfg), base_url="http://127.0.0.1")
     return client, cfg, store, writer
 
@@ -71,7 +61,15 @@ def wait(client, response):
     return job
 
 
+def scheduled(client) -> list[str]:
+    """The history the next backfill or daily run would delete (keep 5)."""
+    summary = client.get("/api/storage").json()
+    return [o["object_id"] for o in summary["objects"] if o["status"] == "scheduled"]
+
+
 def review(client, kind="revisions", phase="purge", **kwargs):
+    if kind == "revisions" and not kwargs:
+        kwargs = {"object_ids": scheduled(client)}
     return wait(
         client,
         client.post(
@@ -100,7 +98,8 @@ def test_reading_and_review_never_delete_then_explicit_confirmation_does(web):
     original = store.registry()
     for _ in range(2):
         summary = client.get("/api/storage").json()
-        assert sum(o["status"] == "due" for o in summary["objects"]) == 2
+        assert summary["keep"] == 5 and summary["automatic_retention"] is True
+        assert sum(o["status"] == "scheduled" for o in summary["objects"]) == 2
         assert sum(o["status"] == "protected" for o in summary["objects"]) == 6
         in_use = [o for o in summary["objects"] if o["current"]]
         assert len(in_use) == 1
@@ -137,7 +136,10 @@ def test_operator_can_delete_selected_history_and_the_result_reports_space(web):
     legacy = next(o for o in summary["objects"] if "unreceipted_generation" in o["reasons"])
     assert review(client, object_ids=[live["object_id"]])["status"] == "error"
     assert review(client, object_ids=[legacy["object_id"]])["status"] == "error"
-    assert review(client, phase="mark", object_ids=[recent[0]["object_id"]])["status"] == "error"
+    mark = {"kind": "revisions", "phase": "mark", "object_ids": [recent[0]["object_id"]]}
+    assert (
+        client.post("/api/storage/reviews", headers=headers(client), json=mark).status_code == 422
+    )
     store.hold(recent[0]["object_id"], "audit")
     assert review(client, object_ids=[recent[0]["object_id"]])["status"] == "error"
     assert len(store.inspect()["objects"]) == 8
@@ -156,11 +158,8 @@ def test_operator_can_delete_selected_history_and_the_result_reports_space(web):
     assert (current / "part.parquet").read_bytes() == contents
     assert writer.current_root("daily_bars") == current
 
-    value = store.registry()
-    value["pending"] = {}
-    store._save(value)
     summary = client.get("/api/storage").json()
-    unmarked = next(o for o in summary["objects"] if o["status"] == "unmarked" and can_pick(o))
+    unmarked = next(o for o in summary["objects"] if o["status"] == "scheduled" and can_pick(o))
     job = review(client, object_ids=[unmarked["object_id"]])
     assert job["status"] == "ready", job
     result = wait(client, confirm(client, job))
@@ -200,7 +199,11 @@ def test_staging_browser_confirmation_is_selected_and_leaves_incomplete_batches(
     staging = {o["object_id"]: o for o in summary["objects"] if o["kind"] == "staging"}
     assert staging[f"staging/{selected}"]["reasons"] == []
     assert staging[f"staging/{incomplete}"]["reasons"] == ["incomplete_batches"]
-    assert review(client, kind="staging", phase="mark")["status"] == "error"
+    staging_mark = {"kind": "staging", "phase": "mark"}
+    assert (
+        client.post("/api/storage/reviews", headers=headers(client), json=staging_mark).status_code
+        == 422
+    )
     assert review(client, kind="staging", object_ids=[f"staging/{incomplete}"])["status"] == "error"
     job = review(client, kind="staging", object_ids=[f"staging/{selected}"])
     assert job["status"] == "ready", job
@@ -418,19 +421,27 @@ def test_execution_drains_reads_and_blocks_new_ones_but_keeps_shell_available(we
     assert wait(client, response)["status"] == "complete"
 
 
-def test_mark_requires_confirmation_and_cannot_delete_before_grace(web):
+def test_there_is_no_mark_phase_and_a_review_needs_a_selection(web):
+    """The seven-day mark phase was retired: deletion is always of chosen versions."""
+    client, _, store, _ = web
+    for body in ({"kind": "revisions", "phase": "mark"}, {"kind": "revisions"}):
+        response = client.post("/api/storage/reviews", headers=headers(client), json=body)
+        if response.status_code == 202:
+            assert wait(client, response)["status"] == "error"
+        else:
+            assert response.status_code == 422
+    assert "pending" not in store.registry()
+    assert len(store.inspect()["objects"]) == 8
+
+
+def test_marks_from_the_retired_phase_are_dropped(web):
     client, _, store, _ = web
     value = store.registry()
-    value["pending"] = {}
+    value["pending"] = {"revision/daily_bars/gone": {"not_before": "2026-10-05T00:00:00+00:00"}}
     store._save(value)
-    job = review(client, phase="mark")
-    assert not store.registry()["pending"]
-    assert wait(client, confirm(client, job, maintenance_confirmed=False))["status"] == "complete"
-    assert len(store.registry()["pending"]) == 2
-    empty = review(client)
-    assert empty["objects"] == []
-    assert confirm(client, empty).status_code == 409
-    assert len(store.inspect()["objects"]) == 8
+    assert "pending" not in store.registry()
+    store.hold(scheduled(client)[0], "keep it")
+    assert "pending" not in store.registry_path.read_text(encoding="utf-8")
 
 
 def test_registered_experiments_from_older_versions_are_left_alone(web, tmp_path):
@@ -486,7 +497,6 @@ def test_clean_without_dry_run_never_requests_deletion(web, monkeypatch):
         "clean_staging",
         "clean_source_snapshots",
         "clean_run_logs",
-        "prune_revision_generations",
     ]:
         original = getattr(commands, name)
 
