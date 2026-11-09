@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from cnequity.cli.quality_cmds import _gates_on_dataset, _gating_finding
+from cnequity.cli.quality_cmds import _gates_on_dataset
+from cnequity.quality.gate import is_core
 
 
 def test_only_core_datasets_gate_when_core_only():
@@ -17,10 +18,10 @@ def test_only_core_datasets_gate_when_core_only():
 
 
 def test_audit_errors_count_for_core_and_lake_wide_findings_only():
-    assert _gating_finding({"dataset": "financial_statement_items"})
-    assert _gating_finding({"dataset": "sources"})
-    assert _gating_finding({})
-    assert not _gating_finding({"dataset": "minute_bars"})
+    assert is_core("financial_statement_items")
+    assert is_core("sources")
+    assert is_core("")
+    assert not is_core("minute_bars")
 
 
 def test_trading_status_scope_excuses_a_never_traded_undated_code(monkeypatch):

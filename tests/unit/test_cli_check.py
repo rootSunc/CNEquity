@@ -213,3 +213,71 @@ def test_hide_empty_folds_datasets_without_data(lake):
     assert "valuation_metrics" not in folded.output
     assert "daily_bars" in folded.output
     assert "个数据集还没有数据" in folded.output
+
+
+def _audit_reads(monkeypatch, findings: list[dict]):
+    """`cne audit` sees the same findings `cne check` reads from the run file."""
+
+    def run_audit(cfg, rid, day, context=None):
+        errors = [f for f in findings if f.get("severity") == "error"]
+        context["audit_by_severity"] = {"error": len(errors)}
+        context["audit_error_findings"] = errors
+        return len(findings)
+
+    monkeypatch.setattr(quality_cmds, "run_audit", run_audit)
+
+
+def test_a_core_coverage_gap_fails_both_audit_and_check(lake, monkeypatch):
+    """`check` used to drop coverage gaps that `audit` failed on.
+
+    A daily_bars calendar gap is coverage-only: it does not make the stored bars
+    wrong, so publication still counts only contradictions. But a lake missing
+    sessions of a core dataset is not usable, and both gates now say so.
+    """
+    gap = {
+        "severity": "error",
+        "dataset": "daily_bars",
+        "check": "daily_bars_calendar_missing_day",
+        "message": "3 calendar trading day(s) have zero traded bars",
+    }
+    _status_exits(monkeypatch, 0)
+    _findings(lake, [gap])
+    _audit_reads(monkeypatch, [gap])
+
+    audit = CliRunner().invoke(cli, ["audit", "--config", lake])
+    check = CliRunner().invoke(cli, ["check", "--config", lake])
+
+    assert audit.exit_code == 1, audit.output
+    assert check.exit_code == 1, check.output
+    assert "[error] daily_bars" in check.output
+
+
+def test_check_names_the_errors_outside_its_scope(lake, monkeypatch):
+    """A non-core error fails the whole-lake audit and is counted, not hidden, by check."""
+    error = {
+        "severity": "error",
+        "dataset": "futures_bars",
+        "check": "futures_exchange_missing",
+        "message": "no bars from one exchange",
+    }
+    _status_exits(monkeypatch, 0)
+    _findings(lake, [error])
+    _audit_reads(monkeypatch, [error])
+
+    audit = CliRunner().invoke(cli, ["audit", "--config", lake])
+    check = CliRunner().invoke(cli, ["check", "--config", lake])
+
+    assert audit.exit_code == 1, audit.output
+    assert check.exit_code == 0, check.output
+    assert "1 more errors are on datasets outside the core" in check.output
+
+
+def test_advisory_factor_errors_fail_neither_gate(lake, monkeypatch):
+    """A findings file written before factor findings were downgraded."""
+    advisory = {"severity": "error", "dataset": "adj_factors", "check": "adj_factor_continuity"}
+    _status_exits(monkeypatch, 0)
+    _findings(lake, [advisory])
+    _audit_reads(monkeypatch, [advisory])
+
+    assert CliRunner().invoke(cli, ["audit", "--config", lake]).exit_code == 0
+    assert CliRunner().invoke(cli, ["check", "--config", lake]).exit_code == 0

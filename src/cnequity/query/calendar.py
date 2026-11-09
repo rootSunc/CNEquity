@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.holidays_cn import CLOSED_DATES
+from cnequity.domain.market_time import is_session_final
 from cnequity.storage.read_context import read_root
 
 logger = logging.getLogger(__name__)
@@ -186,3 +187,21 @@ def is_trading_day(config: Config, trade_date: date, *, include_staging: bool = 
             "refusing to classify it by weekday"
         )
     return bool(day_cal["is_trading"][0])
+
+
+def last_trading_day(
+    config: Config, day: date, *, include_staging: bool = False, now: datetime | None = None
+) -> date:
+    """The newest trading day on or before *day* whose session is final.
+
+    *day* itself counts only once its session has closed (see
+    ``is_session_final``; *now* defaults to the clock). Gives up after 15 calendar days, the longest A-share
+    closure plus margin, and returns *day*. The CLI, the dashboard and the
+    audit each had their own copy of this loop.
+    """
+    candidate = day if is_session_final(day, now) else day - timedelta(days=1)
+    for _ in range(15):
+        if is_trading_day(config, candidate, include_staging=include_staging):
+            return candidate
+        candidate -= timedelta(days=1)
+    return day

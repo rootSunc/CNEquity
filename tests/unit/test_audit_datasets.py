@@ -729,7 +729,7 @@ def test_full_health_anchors_observations_to_last_trading_day(tmp_path, monkeypa
     observed: dict[str, date] = {}
 
     monkeypatch.setattr(
-        "cnequity.quality.audit._last_trading_day",
+        "cnequity.quality.audit.last_trading_day",
         lambda _config, _trade_date: last_trading_day,
     )
     monkeypatch.setattr(

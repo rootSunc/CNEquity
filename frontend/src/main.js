@@ -553,8 +553,18 @@ async function renderDatasets(view) {
   render();
 }
 
-// A dataset the config took out of its schedule on purpose: real last date, not owed.
-const removedNote = (d) => (d.freshness === "removed" ? ` <span class="muted" title="${tr("配置用 steps_remove / enabled = false 移出了调度", "Removed from the schedule by steps_remove / enabled = false")}">${tr("已移出调度", "removed in config")}</span>` : "");
+// Datasets with a real last date that is owed nothing more: taken out of the
+// schedule in config, or a source that stopped publishing. Both would
+// otherwise show only a grey "empty" dot.
+const removedNote = (d) => {
+  if (d.freshness === "removed") return ` <span class="muted" title="${tr("配置用 steps_remove / enabled = false 移出了调度", "Removed from the schedule by steps_remove / enabled = false")}">${tr("已移出调度", "removed in config")}</span>`;
+  if (d.freshness === "retired") return ` <span class="muted" title="${tr("数据源已停止发布，水位之后不再有新数据", "The source stopped publishing; there is nothing after the watermark")}">${tr("源已停更", "source retired")}</span>`;
+  return "";
+};
+
+// The pill keeps the fresh/stale/empty tone; retired and sample get their own word.
+const freshnessPill = (d, cls) =>
+  statusPill(cls, d.freshness === "retired" || d.freshness === "sample" ? statusText(d.freshness) : undefined);
 
 function membersTable(rows) {
   const body = rows.map((d) => {
@@ -1090,7 +1100,7 @@ async function renderDetail(name, tab, view) {
   const cls = d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty";
   setPage(`
     <section class="page-heading">
-      <div class="heading-row"><div><div class="page-title-with-status"><h1>${dsMarkup(d.dataset)}</h1>${statusPill(cls)}${removedNote(d)}</div>
+      <div class="heading-row"><div><div class="page-title-with-status"><h1>${dsMarkup(d.dataset)}</h1>${freshnessPill(d, cls)}${d.freshness === "retired" ? "" : removedNote(d)}</div>
         <p class="meta-row"><span>${esc(tierText(d.tier, d.tier_label))}</span><span>${esc(d.layer)}</span><span>${esc(historyText(d.history_mode))}</span>${d.required ? "" : `<span>${tr("可选", "Optional")}</span>`}</p></div>
         <div class="action-row">${datasetActionButtons(d)}</div>
       </div>

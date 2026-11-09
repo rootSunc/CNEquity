@@ -94,6 +94,7 @@ def lake(config, monkeypatch):
     """
     monkeypatch.setattr("cnequity.serve.lake.date", _FrozenDate)
     monkeypatch.setattr("cnequity.serve.lake.shanghai_today", lambda: FROZEN_TODAY)
+    monkeypatch.setattr("cnequity.serve.lake.current_anchor", lambda config: FROZEN_TODAY)
     last, prev = FROZEN_TODAY, FROZEN_TODAY - timedelta(days=1)
     bar = lambda sym, day, src="tdx_protocol": _full_row(  # noqa: E731
         "daily_bars", symbol=sym, trade_date=day, source=src
@@ -147,9 +148,8 @@ def test_health_counts_every_registered_dataset(client):
     assert body["datasets"] == len(DATASETS)
     # `no_source` is its own bucket: a dataset whose feed was retired with no
     # replacement is not work someone forgot to do. It still has to be counted.
-    assert body["fresh"] + body["stale"] + body["empty"] + body["no_source"] + body[
-        "not_applicable"
-    ] == len(DATASETS)
+    buckets = ("fresh", "stale", "empty", "no_source", "not_applicable", "retired", "removed")
+    assert sum(body[bucket] for bucket in (*buckets, "sample")) == len(DATASETS)
     # 3 daily_bars + 1 instruments + 2 trading_calendar + 1 fsi
     assert body["rows"] == 7
 

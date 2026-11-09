@@ -32,11 +32,12 @@ def test_current_session_is_provisional_before_settlement_buffer():
 def test_helsinki_2300_catchup_anchors_previous_chinese_session(monkeypatch, month, shanghai_hour):
     from zoneinfo import ZoneInfo
 
-    from cnequity.cli import quality_cmds
+    from cnequity.query.calendar import last_trading_day
 
     local = datetime(2026, month, 16, 23, tzinfo=ZoneInfo("Europe/Helsinki"))
     assert shanghai_now(local).hour == shanghai_hour
     assert shanghai_today(local) == date(2026, month, 17)
-    monkeypatch.setattr(quality_cmds, "is_session_final", lambda day: is_session_final(day, local))
-    monkeypatch.setattr("cnequity.steps.common.is_trading_day", lambda cfg, day: day.weekday() < 5)
-    assert quality_cmds._last_trading_day(None, shanghai_today(local)) == date(2026, month, 16)
+    monkeypatch.setattr(
+        "cnequity.query.calendar.is_trading_day", lambda cfg, day, **_k: day.weekday() < 5
+    )
+    assert last_trading_day(None, shanghai_today(local), now=local) == date(2026, month, 16)

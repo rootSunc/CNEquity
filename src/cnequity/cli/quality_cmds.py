@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import click
@@ -30,10 +30,12 @@ from cnequity.cli._shared import (
 )
 from cnequity.cli.backfill_cmds import _require_known_dataset, _run_backfill
 from cnequity.domain.market_profile import BSE_FIRST_SESSION
-from cnequity.domain.market_time import is_session_final, shanghai_today
+from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _, localize
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.quality.audit import run_audit
+from cnequity.quality.gate import audit_verdict, is_core
+from cnequity.query.calendar import last_trading_day
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.locator import logical_root
 
@@ -89,7 +91,7 @@ def _gates_on_dataset(
     out of its groups on purpose (``steps_remove``, ``enabled = false``) is the
     one exception: the operator has said this host does not fetch it.
     """
-    if core_only and not _is_core(dataset):
+    if core_only and not is_core(dataset):
         return False
     if wanted_groups is None:
         return True
@@ -102,13 +104,6 @@ def _gates_on_dataset(
     if not owners:
         return True
     return any(group in wanted_groups or group == "(unscheduled)" for group in owners)
-
-
-def _is_core(dataset: str) -> bool:
-    """A core dataset, or a name the registry does not know (judged as before)."""
-    from cnequity.domain.datasets import DATASETS, core_dataset_names
-
-    return dataset not in DATASETS or dataset in core_dataset_names()
 
 
 def _scope_exit_code(
@@ -563,7 +558,8 @@ def audit(
             click.echo(_("HEALTHY (operationally; BLOCKED for research)"))
         else:
             click.echo("HEALTHY")
-        failed = bool(sev.get("error", 0)) if quality_only else not health["healthy"]
+        quality_failed = not audit_verdict(health["error_findings"]).passed
+        failed = quality_failed if quality_only else not health["healthy"]
         if quality_only:
             click.echo(
                 "Quality gate: FAILED"
@@ -581,7 +577,8 @@ def audit(
     severities: dict = {"related_run_ids": list(dict.fromkeys(run_id))} if run_id else {}
     n = run_audit(cfg, rid, shanghai_today(), severities)
     by_severity = severities.get("audit_by_severity", {})
-    errors = int(by_severity.get("error", 0))
+    verdict = audit_verdict(severities.get("audit_error_findings", []))
+    errors = len(verdict.errors)
     warnings = int(by_severity.get("warning", 0))
     click.echo(
         _("Audit finished: wrote {n} findings ({errors} error, {warnings} warning)").format(
@@ -617,21 +614,9 @@ def audit(
     # the daily health check had to shell out and re-read the findings file to
     # learn what the command already knew.
     if errors:
-        for finding in severities.get("audit_error_findings", []):
+        for finding in verdict.errors:
             click.echo(f"  [error] {finding.get('dataset', ''):22} {finding.get('message', '')}")
         raise SystemExit(1)
-
-
-def _last_trading_day(cfg, today: date) -> date:
-
-    from cnequity.steps.common import is_trading_day
-
-    d = today if is_session_final(today) else today - timedelta(days=1)
-    for _day in range(15):
-        if is_trading_day(cfg, d):
-            return d
-        d -= timedelta(days=1)
-    return today
 
 
 _GAP_LABELS = {
@@ -666,7 +651,7 @@ def _verify_bars(cfg, start: str | None, end: str | None) -> None:
     if not start:
         raise click.UsageError(_("--bars needs --start"))
     start_date = parse_date_option(start, "--start")
-    end_date = parse_date_option(end, "--end") or _last_trading_day(cfg, shanghai_today())
+    end_date = parse_date_option(end, "--end") or last_trading_day(cfg, shanghai_today())
     if start_date > end_date:
         raise click.ClickException(_("--start must be on or before --end"))
     result = daily_bar_coverage(cfg, start_date, end_date)
@@ -901,7 +886,7 @@ def verify(
         _verify_runs(cfg, days, as_of, enforce)
         return
 
-    anchor = _last_trading_day(cfg, shanghai_today())
+    anchor = last_trading_day(cfg, shanghai_today())
     names = comma_values(only, "--dataset")
     if names:
         # `verify_lake` warns and skips an unknown name, which is right for a
@@ -1144,46 +1129,19 @@ def status(
     if show_datasets:
         import polars as pl_mod
 
-        from cnequity.domain.datasets import (
-            DATASETS,
-            empty_freshness_label,
-            is_dataset_enabled,
-        )
-        from cnequity.quality.freshness import freshness_owed, freshness_state
+        from cnequity.domain.datasets import is_dataset_enabled
+        from cnequity.orchestrator.run_window import current_anchor
+        from cnequity.quality.freshness import dataset_freshness
         from cnequity.query.reader import list_datasets
 
-        anchor = _last_trading_day(cfg, shanghai_today())
+        anchor = current_anchor(cfg)
         df = list_datasets(config=cfg)
         lake_profile = getattr(cfg, "lake_profile", None)
 
         def _freshness(row: dict) -> str:
-            if lake_profile == "sample":
-                return "sample" if row["has_data"] else "n/a"
-            if lake_profile == "demo" and not row["has_data"]:
-                return "n/a"
-            if not freshness_owed(cfg, row["dataset"]):
-                return "n/a"
-            if not row["has_data"]:
-                # "empty" alone cannot say whether the dataset is waiting
-                # for its first run or for a source that no longer exists.
-                return empty_freshness_label(row["dataset"])
-            if not is_dataset_enabled(row["dataset"], cfg):
-                return "n/a"
-            # Datasets keyed by report_period (no daily watermark) are not
-            # judged on a daily cadence.
-            if not row["watermarked"]:
-                return "n/a"
-            mark = row["watermark"] or row["coverage_end"]
-            # A source the exchanges retired has nothing further to publish, so
-            # it is not stale — but calling a watermark from 2024 "fresh" reads
-            # as current data. Name it for what it is.
-            spec = DATASETS.get(row["dataset"])
-            retired = getattr(spec, "source_retired_date", None) if spec else None
-            if retired is not None and mark is not None and mark >= retired:
-                return "retired"
-            # Per-dataset tolerance (T+1, quarterly …) — inherent lag is not STALE.
-            state = freshness_state(row["dataset"], mark, anchor, cfg)
-            return {"stale": "STALE", "removed": "removed"}.get(state, state)
+            # Upper-case so a lagging dataset stands out in the terminal table.
+            label = dataset_freshness(cfg, row, anchor)
+            return "STALE" if label == "stale" else label
 
         df = df.with_columns(
             pl_mod.Series("freshness", [_freshness(r) for r in df.iter_rows(named=True)])
@@ -1375,9 +1333,7 @@ def status(
         _report_outstanding_keys(cfg, df["dataset"].to_list())
         stale_rows = df.filter(pl_mod.col("freshness") == "STALE")
         if core_only:
-            reported = sorted(
-                name for name in stale_rows["dataset"].to_list() if not _is_core(name)
-            )
+            reported = sorted(name for name in stale_rows["dataset"].to_list() if not is_core(name))
             if reported:
                 click.echo(
                     _("\nStale but not core, so not gating: {value}").format(
@@ -1966,10 +1922,15 @@ def check(ctx: click.Context, config_path: str, full: bool, pack_names: tuple[st
 
 
 def _check_quality(cfg, *, full: bool) -> tuple[int, str | None]:
-    """Gate on recorded audit errors; rerun the whole-lake audit only when asked."""
+    """Gate on recorded audit errors; rerun the whole-lake audit only when asked.
+
+    The verdict is ``quality.gate.audit_verdict`` on the core datasets, the
+    same rule ``cne audit`` applies to the whole lake. Errors outside the core
+    are counted in the output, not in the exit code.
+    """
     from datetime import datetime
 
-    from cnequity.quality.publication import coverage_only
+    from cnequity.quality.factor_policy import advisory_factor_findings
 
     quality_root = cfg.meta_root / "quality"
     code, note = 0, None
@@ -1979,27 +1940,23 @@ def _check_quality(cfg, *, full: bool) -> tuple[int, str | None]:
     )
     if runs:
         payload = json.loads(runs[0].read_text(encoding="utf-8"))
-        from cnequity.quality.factor_policy import advisory_factor_findings
-
         findings = advisory_factor_findings(payload.get("findings", []))
-        errors = [
-            f
-            for f in findings
-            if f.get("severity") == "error" and not coverage_only(f) and _gating_finding(f)
-        ]
+        verdict = audit_verdict(findings, core_only=True)
         warnings = sum(f.get("severity") == "warning" for f in findings)
         click.echo(
             _("  Latest run audit ({value}, {value2}): {value3} error, {warnings} warning").format(
                 value=payload.get("run_id"),
                 value2=payload.get("trade_date"),
-                value3=len(errors),
+                value3=len(verdict.errors),
                 warnings=warnings,
             )
         )
-        for finding in errors[:10]:
-            click.echo(f"    [error] {finding.get('dataset', ''):22} {finding.get('message', '')}")
-        if errors:
-            code, note = 1, _("the latest audit has {value} errors").format(value=len(errors))
+        _echo_verdict(verdict)
+        if verdict.errors:
+            code, note = (
+                1,
+                _("the latest audit has {value} errors").format(value=len(verdict.errors)),
+            )
     else:
         click.echo(_("  No run audit records yet"))
 
@@ -2008,31 +1965,29 @@ def _check_quality(cfg, *, full: bool) -> tuple[int, str | None]:
 
         click.echo(_("  Re-running the whole-lake audit (reads every historical partition)…"))
         health = lake_health(cfg, shanghai_today())
-        health_errors = _health_errors(health, coverage_only)
+        verdict = audit_verdict(_health_errors(health), core_only=True)
         click.echo(
-            _("  Whole-lake audit (just now): {value} error").format(value=len(health_errors))
+            _("  Whole-lake audit (just now): {value} error").format(value=len(verdict.errors))
         )
         label = _("whole-lake audit")
     else:
         snapshot = quality_root / "health-latest.json"
-        health_errors = []
+        verdict = audit_verdict([])
         if snapshot.exists():
             health = json.loads(snapshot.read_text(encoding="utf-8"))
             age = (datetime.now() - datetime.fromtimestamp(snapshot.stat().st_mtime)).days
-            health_errors = _health_errors(health, coverage_only)
+            verdict = audit_verdict(_health_errors(health), core_only=True)
             click.echo(
                 _(
                     "  Whole-lake audit snapshot ({value}, {age} days ago): {value2} error; add --full to re-run now"
-                ).format(value=health.get("trade_date"), age=age, value2=len(health_errors))
+                ).format(value=health.get("trade_date"), age=age, value2=len(verdict.errors))
             )
         else:
             click.echo(_("  No whole-lake audit snapshot yet; add --full to generate one now"))
         label = _("whole-lake audit snapshot")
-    health_errors = [f for f in health_errors if not f or _gating_finding(f)]
-    for finding in [f for f in health_errors if f][:10]:
-        click.echo(f"    [error] {finding.get('dataset', ''):22} {finding.get('message', '')}")
-    if health_errors:
-        found = _("{label} has {value} errors").format(label=label, value=len(health_errors))
+    _echo_verdict(verdict)
+    if verdict.errors:
+        found = _("{label} has {value} errors").format(label=label, value=len(verdict.errors))
         code, note = (
             1,
             found if note is None else _("{note}, {found}").format(note=note, found=found),
@@ -2045,23 +2000,28 @@ def _check_quality(cfg, *, full: bool) -> tuple[int, str | None]:
     return code, note
 
 
-def _gating_finding(finding: dict) -> bool:
-    """An error `cne check` counts: a core dataset's, or one about no dataset."""
-    return _is_core(str(finding.get("dataset") or ""))
+def _echo_verdict(verdict) -> None:
+    """List the errors that fail the check, and count the ones it does not judge."""
+    for finding in [f for f in verdict.errors if f.get("dataset") or f.get("message")][:10]:
+        click.echo(f"    [error] {finding.get('dataset', ''):22} {finding.get('message', '')}")
+    if verdict.outside_scope:
+        click.echo(
+            _(
+                "    {count} more errors are on datasets outside the core and do not fail the check; `cne audit` lists them"
+            ).format(count=len(verdict.outside_scope))
+        )
 
 
-def _health_errors(health: dict, coverage_only) -> list[dict]:
-    """Quality errors in a whole-lake audit, without the coverage-only ones.
+def _health_errors(health: dict) -> list[dict]:
+    """A whole-lake audit's error findings.
 
     A snapshot from before ``error_findings`` was recorded has only counts;
-    those count as errors with nothing to list.
+    each counts as an error with nothing to list.
     """
     if "error_findings" not in health:
         count = int(health.get("findings_by_severity", {}).get("error", 0))
-        return [{} for _ in range(count)]
-    from cnequity.quality.factor_policy import factor_advisory
-
-    return [f for f in health["error_findings"] if not coverage_only(f) and not factor_advisory(f)]
+        return [{"severity": "error"} for _ in range(count)]
+    return health["error_findings"]
 
 
 def _check_size(cfg) -> None:

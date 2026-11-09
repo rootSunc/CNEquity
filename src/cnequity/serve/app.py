@@ -58,6 +58,11 @@ class Health(BaseModel):
         description="Registered but permanently sourceless — counted apart from empty.",
     )
     not_applicable: int
+    retired: int = Field(
+        default=0, description="The source stopped publishing; nothing further is owed."
+    )
+    removed: int = Field(default=0, description="Taken out of the schedule in config.")
+    sample: int = Field(default=0, description="Synthetic rows of a sample lake, not judged.")
     stale_datasets: list[str]
     empty_optional: list[str] = Field(description="Empty and required=False — expected, not a gap.")
     empty_required: list[str] = Field(description="Empty and required — a real gap.")

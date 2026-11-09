@@ -62,7 +62,8 @@ def demo_lake(tmp_path, monkeypatch):
     monkeypatch.setattr(events, "load_symbols", lambda _cfg: list(SYMBOLS))
     monkeypatch.setattr(events, "fetch_corporate_actions", fake_tdx)
     monkeypatch.setattr(events, "_funds_ingested", lambda _cfg: True)
-    monkeypatch.setattr("cnequity.cli.quality_cmds._last_trading_day", lambda cfg, today: ANCHOR)
+    monkeypatch.setattr("cnequity.cli.quality_cmds.last_trading_day", lambda cfg, today: ANCHOR)
+    monkeypatch.setattr("cnequity.orchestrator.run_window.current_anchor", lambda cfg: ANCHOR)
     monkeypatch.setattr("cnequity.orchestrator.engine.shanghai_today", lambda: ANCHOR)
     monkeypatch.setattr("cnequity.cli.backfill_cmds.shanghai_today", lambda: ANCHOR)
 

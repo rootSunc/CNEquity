@@ -194,6 +194,8 @@ const STATUS = {
   fresh: ["最新", "Fresh"],
   stale: ["落后", "Stale"],
   empty: ["空", "Empty"],
+  retired: ["源已停更", "Source retired"],
+  sample: ["样例数据", "Sample data"],
   success: ["成功", "Success"],
   running: ["运行中", "Running"],
   failed: ["失败", "Failed"],

@@ -36,14 +36,13 @@ from cnequity.domain.datasets import (
     DATASETS,
     TIER_LABELS,
     TIERS,
-    empty_freshness_label,
     history_mode_for,
-    is_dataset_enabled,
 )
-from cnequity.domain.market_time import is_session_final, shanghai_now, shanghai_today
+from cnequity.domain.market_time import shanghai_today
 from cnequity.domain.partitions import parse_partition
 from cnequity.i18n import _, current_language
-from cnequity.quality.freshness import freshness_owed, freshness_state
+from cnequity.orchestrator.run_window import current_anchor
+from cnequity.quality.freshness import dataset_freshness
 from cnequity.storage.stats import (
     load_partition_stats,
     load_provenance_stats,
@@ -281,41 +280,8 @@ class LakeView:
     # --- primitives --------------------------------------------------------
 
     def anchor(self) -> date:
-        """Last trading day — the date freshness is judged against.
-
-        Today counts once the scheduled daily update is due or done. Between
-        the close and ``daily_run_at`` many sources have not published today
-        yet, and judging against today listed every daily dataset as stale.
-        """
-
-        def _build() -> date:
-            from cnequity.steps.common import is_trading_day
-
-            today = shanghai_today()
-            final = is_session_final(today) and not self._before_daily_update(today)
-            day = today if final else today - timedelta(days=1)
-            for _day in range(15):
-                if is_trading_day(self.config, day):
-                    return day
-                day -= timedelta(days=1)
-            return shanghai_today()
-
-        return self._cached("anchor", _build)
-
-    def _before_daily_update(self, today: date) -> bool:
-        """Whether today's scheduled daily update has neither come due nor run."""
-        from cnequity.orchestrator.run_window import is_done, parse_run_at
-
-        run_at = getattr(self.config, "daily_run_at", None)
-        if not run_at:
-            return False
-        try:
-            due = parse_run_at(run_at)
-        except ValueError:
-            return False
-        if shanghai_now().time() >= due:
-            return False
-        return not is_done(self.config.meta_root, "daily", today, self.config)
+        """Last trading day, the date freshness is judged against (``current_anchor``)."""
+        return self._cached("anchor", lambda: current_anchor(self.config))
 
     def _catalog(self) -> pl.DataFrame:
         """``list_datasets()`` joined with the measured rows and bytes."""
@@ -356,24 +322,8 @@ class LakeView:
         return self._cached("health_findings", _build)
 
     def _freshness_of(self, row: dict, anchor: date) -> str:
-        """fresh / STALE / empty / n/a, on the same rules as ``cne status``."""
-        # Optional Tushare backfills are not a daily obligation. Judged before
-        # the empty label so a default install does not list them as sourceless.
-        if not freshness_owed(self.config, row["dataset"]):
-            return "n/a"
-        if not row["has_data"]:
-            # A demo or sample lake leaves most of the registry empty on
-            # purpose. `cne status` calls those n/a; reporting them here as
-            # empty-and-required painted a first-run lake red.
-            if getattr(self.config, "lake_profile", None) in {"demo", "sample"}:
-                return "n/a"
-            return empty_freshness_label(row["dataset"])
-        if not is_dataset_enabled(row["dataset"], self.config):
-            return "n/a"
-        if not row["watermarked"]:
-            return "n/a"
-        mark = row["watermark"] or row["coverage_end"]
-        return freshness_state(row["dataset"], mark, anchor, self.config)
+        """The label ``cne status --datasets`` prints, in lower case."""
+        return dataset_freshness(self.config, row, anchor)
 
     def _rows(self) -> list[dict]:
         """One enriched dict per registered dataset."""
@@ -421,10 +371,14 @@ class LakeView:
             "stale": counts.get("stale", 0),
             "empty": counts.get("empty", 0),
             # Registered, permanently sourceless (see `empty_freshness_label`).
-            # Counted apart from `empty` so the four buckets still add up to
+            # Counted apart from `empty` so the buckets still add up to
             # `datasets` and nothing reads it as work someone forgot to do.
             "no_source": counts.get("no source", 0),
             "not_applicable": counts.get("n/a", 0),
+            # See `dataset_freshness`: not owed anything, but not current either.
+            "retired": counts.get("retired", 0),
+            "removed": counts.get("removed", 0),
+            "sample": counts.get("sample", 0),
             "stale_datasets": sorted(r["dataset"] for r in rows if r["freshness"] == "stale"),
             # Empty is not automatically a problem: an opt-in dataset nobody
             # enabled and a required one that failed look identical on disk.

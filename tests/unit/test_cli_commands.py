@@ -482,8 +482,8 @@ def test_status_run_core_failure_exits_one(tmp_path, cfg_path):
 @pytest.mark.usefixtures("chinese_output")
 def test_status_datasets_all_fresh(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda cfg, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
@@ -506,8 +506,8 @@ def test_status_datasets_all_fresh(cfg_path, monkeypatch):
 def test_status_datasets_keeps_long_dataset_names_on_one_line(cfg_path, monkeypatch):
     names = ["earnings_disclosure_schedule", "financial_statement_items"]
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda cfg, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
@@ -543,8 +543,8 @@ def test_status_datasets_fails_when_an_init_is_incomplete(cfg_path, monkeypatch)
     manifest.finish_run(run_id, "failed", error_message="interrupted")
 
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda config, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
@@ -595,8 +595,8 @@ def test_status_datasets_rejects_a_fresh_but_narrow_daily_bar_tip(cfg_path, monk
     ).write_parquet(bars_root / "part-0.parquet")
 
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda config, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
@@ -818,8 +818,8 @@ def test_status_datasets_treats_sample_dates_as_non_gating(tmp_path, monkeypatch
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda config, today: date(2026, 9, 18),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2026, 9, 18),
     )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
@@ -844,8 +844,8 @@ def test_status_datasets_treats_sample_dates_as_non_gating(tmp_path, monkeypatch
 
 def test_status_datasets_ignores_disabled_optional_capture(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda cfg, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
@@ -889,8 +889,8 @@ def test_status_datasets_shows_freshness_not_the_whole_inventory(cfg_path, monke
     it promises; the governance columns have `--all-columns`.
     """
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda cfg, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr("cnequity.query.reader.list_datasets", _wide_inventory)
     monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
@@ -906,8 +906,8 @@ def test_status_datasets_shows_freshness_not_the_whole_inventory(cfg_path, monke
 
 def test_status_datasets_all_columns_keeps_the_full_inventory(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda cfg, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr("cnequity.query.reader.list_datasets", _wide_inventory)
     monkeypatch.setattr("cnequity.quality.freshness.is_stale", lambda *a, **k: False)
@@ -1281,7 +1281,8 @@ def _stub_audit(monkeypatch, *, errors: int = 0, warnings: int = 0, total: int =
         if context is not None:
             context["audit_by_severity"] = {"error": errors, "warning": warnings}
             context["audit_error_findings"] = [
-                {"dataset": "daily_bars", "message": "boom"} for _ in range(errors)
+                {"severity": "error", "dataset": "daily_bars", "message": "boom"}
+                for _ in range(errors)
             ]
         return total
 
@@ -1302,7 +1303,7 @@ def test_audit_multiple_run_ids_are_collected_in_one_pass(cfg_path, monkeypatch)
     def audit(cfg, rid, day, context):
         calls.append((rid, context["related_run_ids"]))
         context["audit_by_severity"] = {"error": 1}
-        context["audit_error_findings"] = [{"message": "early group error"}]
+        context["audit_error_findings"] = [{"severity": "error", "message": "early group error"}]
         return 1
 
     monkeypatch.setattr("cnequity.cli.quality_cmds.run_audit", audit)
@@ -1935,8 +1936,8 @@ def test_status_datasets_exits_1_when_something_is_stale(cfg_path, monkeypatch):
     re-fetching what it missed.
     """
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda cfg, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
@@ -1960,8 +1961,8 @@ def test_status_datasets_exits_1_when_something_is_stale(cfg_path, monkeypatch):
 
 def _stale_lake(monkeypatch, datasets: list[str]):
     monkeypatch.setattr(
-        "cnequity.cli.quality_cmds._last_trading_day",
-        lambda cfg, today: date(2024, 6, 28),
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
     )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
@@ -2040,7 +2041,7 @@ def test_full_quality_gate_does_not_conflate_optional_freshness(
             "findings_by_severity": {"error": errors},
             "empty_datasets": [],
             "stale_datasets": ["minute_bars"],
-            "error_findings": [],
+            "error_findings": [{"severity": "error", "dataset": "daily_bars"}] * errors,
             "warning_findings": [],
             "healthy": False,
             "historical_universe_validity": {
@@ -2283,7 +2284,9 @@ def _pin_monday(monkeypatch, *, final: bool) -> date:
     settled = (lambda _day: True) if final else (lambda day: day != monday)
     monkeypatch.setattr("cnequity.cli.run_cmds.shanghai_today", lambda: monday)
     monkeypatch.setattr("cnequity.cli.run_cmds.is_session_final", settled)
-    monkeypatch.setattr("cnequity.cli.quality_cmds.is_session_final", settled)
+    monkeypatch.setattr(
+        "cnequity.query.calendar.is_session_final", lambda day, now=None: settled(day)
+    )
     return monday
 
 
@@ -2547,7 +2550,10 @@ def test_scope_gate_respects_the_groups_flag_that_owns_daily_bars(cfg_path, monk
         ),
     )
     monkeypatch.setattr(qc, "stale_datasets_by_group", lambda cfg, names: {"core": list(names)})
-    monkeypatch.setattr(qc, "_last_trading_day", lambda config, today: date(2024, 6, 28))
+    monkeypatch.setattr(
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
+    )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
         lambda config=None: pl.DataFrame(
@@ -2595,7 +2601,10 @@ def test_unprovable_coverage_exits_two_not_one(cfg_path, monkeypatch):
             else None
         ),
     )
-    monkeypatch.setattr(qc, "_last_trading_day", lambda config, today: date(2024, 6, 28))
+    monkeypatch.setattr(
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
+    )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
         lambda config=None: pl.DataFrame(
@@ -2637,7 +2646,10 @@ def test_no_scope_skips_the_cross_section_read_entirely(cfg_path, monkeypatch):
         }
 
     monkeypatch.setattr(qc, "_tip_scope", _scope)
-    monkeypatch.setattr(qc, "_last_trading_day", lambda config, today: date(2024, 6, 28))
+    monkeypatch.setattr(
+        "cnequity.orchestrator.run_window.current_anchor",
+        lambda config, now=None: date(2024, 6, 28),
+    )
     monkeypatch.setattr(
         "cnequity.query.reader.list_datasets",
         lambda config=None: pl.DataFrame(

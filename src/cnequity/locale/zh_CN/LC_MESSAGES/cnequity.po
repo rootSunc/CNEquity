@@ -423,6 +423,11 @@ msgstr "    失败：{source} ({role})  端点 {endpoints}"
 msgid "    not probed: {sources}"
 msgstr "    未探测：{sources}"
 
+#: cnequity/cli/quality_cmds.py
+#, python-brace-format
+msgid "    {count} more errors are on datasets outside the core and do not fail the check; `cne audit` lists them"
+msgstr "    另有 {count} 条 error 在核心之外的数据集上，不计入验收；`cne audit` 会列出它们"
+
 #: cnequity/cli/backfill_cmds.py
 #, python-brace-format
 msgid "  Affected symbols:   {value:,}"

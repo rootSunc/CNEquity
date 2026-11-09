@@ -15,7 +15,6 @@ from cnequity.adapters.calendar.exchange_calendar import (
 from cnequity.config import Config
 from cnequity.domain.datasets import PARTITION_COLS, curated_dataset_names, is_dataset_enabled
 from cnequity.domain.holidays_cn import CLOSED_DATES
-from cnequity.domain.market_time import is_session_final
 from cnequity.quality.authority_checks import run_authority_checks
 from cnequity.quality.bar_finality import daily_bar_finality_findings
 from cnequity.quality.cross_checks import (
@@ -63,6 +62,7 @@ from cnequity.quality.unit_checks import (
     daily_bars_volume_unit_findings,
     valuation_ratio_unit_findings,
 )
+from cnequity.query.calendar import last_trading_day
 from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.query.universe import (
@@ -241,7 +241,7 @@ def _stale_dataset_names(config: Config, trade_date: date) -> set[str]:
         rows = list_datasets(config=config).iter_rows(named=True)
     except Exception:  # noqa: BLE001 — freshness is an input here, not the subject
         return set()
-    anchor = _last_trading_day(config, trade_date)
+    anchor = last_trading_day(config, trade_date)
     out: set[str] = set()
     for row in rows:
         name = row["dataset"]
@@ -406,7 +406,7 @@ def _collect_lake_findings(
     ts_start = trading_status_coverage_start(config)
     if ts_start is not None:
         bars_start = coverage_start_date(config, "daily_bars")
-        bars_end = coverage_end_date(config, "daily_bars") or _last_trading_day(config, trade_date)
+        bars_end = coverage_end_date(config, "daily_bars") or last_trading_day(config, trade_date)
         observed_st_start = st_coverage_start(config)
         # The audit may run on a weekend or holiday. Evidence must cover the
         # actual bar window, not the wall-clock date when the audit runs;
@@ -525,7 +525,7 @@ def _collect_lake_findings(
     # lake without it (and every unit test) stays offline.
     if not offline:
         findings.extend(
-            daily_bars_close_crosscheck_findings(config, _last_trading_day(config, trade_date))
+            daily_bars_close_crosscheck_findings(config, last_trading_day(config, trade_date))
         )
     if feeds("valuation_metrics", "daily_bars"):
         findings.extend(valuation_bars_coverage_findings(config, trade_date))
@@ -835,10 +835,11 @@ def lake_health(
     """Lake health: findings + freshness → ``meta/quality/health-latest.json``."""
     from cnequity.domain.datasets import DATASETS, is_dataset_enabled
     from cnequity.quality.freshness import is_stale
+    from cnequity.quality.gate import audit_verdict
     from cnequity.quality.historical_validity import historical_universe_validity
     from cnequity.query.reader import list_datasets
 
-    anchor = _last_trading_day(config, trade_date)
+    anchor = last_trading_day(config, trade_date)
     # Health can be requested on a weekend/holiday. All data observations
     # (including source snapshots) must use the last actual session; the raw
     # calendar date is retained below for reporting only.
@@ -904,7 +905,8 @@ def lake_health(
         "historical_universe_validity": historical_validity,
         "historical_universe": historical_validity.get("universe", research_universe),
         "historical_all_a_st_evidence": all_a_st_evidence,
-        "healthy": by_severity.get("error", 0) == 0 and not stale,
+        # The same verdict `cne audit` and `cne check` give (see `quality.gate`).
+        "healthy": audit_verdict(findings).passed and not stale,
     }
 
     out_dir = config.meta_root / "quality"
@@ -924,16 +926,3 @@ def lake_health(
         default=str,
     )
     return health
-
-
-def _last_trading_day(config: Config, trade_date: date) -> date:
-    from datetime import timedelta
-
-    from cnequity.query.calendar import is_trading_day
-
-    d = trade_date if is_session_final(trade_date) else trade_date - timedelta(days=1)
-    for _ in range(15):
-        if is_trading_day(config, d):
-            return d
-        d -= timedelta(days=1)
-    return trade_date

@@ -1066,26 +1066,21 @@ def test_the_tushare_probe_sorts_refusals_and_turns_the_source_on_only_for_itsel
     assert config.sources["tushare"] is False
 
 
-def test_the_freshness_anchor_waits_for_todays_daily_update(config, monkeypatch):
+def test_the_freshness_anchor_waits_for_todays_daily_update(config):
     from datetime import date, datetime
     from datetime import time as clock
+    from zoneinfo import ZoneInfo
 
-    import cnequity.serve.lake as lake_mod
-    from cnequity.orchestrator.run_window import mark_done
-    from cnequity.serve.lake import LakeView
+    from cnequity.orchestrator.run_window import current_anchor, mark_done
 
     monday = date(2026, 11, 9)
-    monkeypatch.setattr(lake_mod, "shanghai_today", lambda: monday)
-    monkeypatch.setattr(lake_mod, "is_session_final", lambda day: True)
     config.daily_run_at = "17:30"
 
     def anchor_at(hour, minute):
-        monkeypatch.setattr(
-            lake_mod, "shanghai_now", lambda: datetime.combine(monday, clock(hour, minute))
-        )
-        view = LakeView(config)
-        return view.anchor()
+        now = datetime.combine(monday, clock(hour, minute), tzinfo=ZoneInfo("Asia/Shanghai"))
+        return current_anchor(config, now)
 
+    assert anchor_at(14, 0) == date(2026, 11, 6), "the session is not final yet"
     assert anchor_at(16, 0) == date(2026, 11, 6), "before 17:30 Friday is still the anchor"
     assert anchor_at(17, 30) == monday
     mark_done(config.meta_root, "daily", monday)

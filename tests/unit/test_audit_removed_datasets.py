@@ -32,5 +32,5 @@ def test_a_dataset_removed_from_the_schedule_counts_as_behind(tmp_path, monkeypa
     monkeypatch.setattr(
         datasets, "removed_from_schedule", lambda config, name: name == "sector_fund_flow"
     )
-    monkeypatch.setattr(audit, "_last_trading_day", lambda config, day: day)
+    monkeypatch.setattr(audit, "last_trading_day", lambda config, day: day)
     assert audit._stale_dataset_names(cfg, date(2026, 10, 30)) == {"sector_fund_flow"}

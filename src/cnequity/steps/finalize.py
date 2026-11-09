@@ -1350,15 +1350,17 @@ def step_derive_industry_index(
 )
 def step_audit(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     from cnequity.quality.audit import run_audit
-    from cnequity.quality.factor_policy import factor_advisory
-    from cnequity.quality.publication import coverage_only
+    from cnequity.quality.gate import coverage_only, is_contradiction
 
     findings = run_audit(config, run_id, trade_date, context)
     by_severity = context.get("audit_by_severity", {}) if isinstance(context, dict) else {}
+    error_findings = context.get("audit_error_findings", [])
+    # A run's status asks whether what it wrote is right, so only
+    # contradictions count (see `cnequity.quality.gate`); a coverage gap
+    # marks it a warning.
     errors = int(by_severity.get("error", 0))
-    coverage_errors = sum(coverage_only(item) for item in context.get("audit_error_findings", []))
-    errors -= coverage_errors
-    errors -= sum(factor_advisory(item) for item in context.get("audit_error_findings", []))
+    errors -= sum(not is_contradiction(item) for item in error_findings)
+    coverage_errors = sum(coverage_only(item) for item in error_findings)
 
     # This step depends on `compact`, so by the time it runs the rows are
     # already in curated: the audit has never been able to *prevent* anything,

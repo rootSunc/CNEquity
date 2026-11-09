@@ -123,3 +123,36 @@ def pending_session(config, job: str, now: datetime | None = None) -> date | Non
         # anything to do.
         return None
     return session
+
+
+def current_anchor(config, now: datetime | None = None) -> date:
+    """The trading day freshness is judged against at *now* (default: now).
+
+    Today counts once its session is final and the scheduled daily update has
+    come due or run. Between the close and ``daily_run_at`` many sources have
+    not published today yet, and judging against today listed every daily
+    dataset as stale. ``cne status --datasets`` and the dashboard both judge
+    against this day.
+    """
+    from cnequity.domain.market_time import is_session_final, shanghai_now
+    from cnequity.query.calendar import last_trading_day
+
+    now = shanghai_now(now)
+    today = now.date()
+    if is_session_final(today, now) and not _before_daily_update(config, today, now):
+        return last_trading_day(config, today, now=now)
+    return last_trading_day(config, today - timedelta(days=1), now=now)
+
+
+def _before_daily_update(config, today: date, now: datetime) -> bool:
+    """Whether today's scheduled daily update has neither come due nor run."""
+    run_at = getattr(config, "daily_run_at", None)
+    if not run_at:
+        return False
+    try:
+        due = parse_run_at(run_at)
+    except ValueError:
+        return False
+    if now.time() >= due:
+        return False
+    return not is_done(config.meta_root, "daily", today, config)

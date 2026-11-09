@@ -717,7 +717,7 @@ Fetch / write commands: `success` and source-limited `warning` / `degraded` (inc
 Accepts the whole lake in one command, reporting in order:
 
 1. **Freshness and coverage**: the same as `cne status --datasets --gate`, including the cross-section check on the latest trading day and unfinished init;
-2. **Data quality**: the audit of the most recent run and the most recent whole-lake audit snapshot and its age; errors in either are listed and count toward the exit code;
+2. **Data quality**: the audit of the most recent run and the most recent whole-lake audit snapshot and its age. Errors on core datasets are listed and count toward the exit code, coverage errors (missing data) included; errors outside the core are only counted, and `cne audit` lists them. `cne audit` applies the same rule to the whole lake;
 3. **Size**: datasets, rows and volume; stale statistics tables are recomputed automatically first.
 
 | Option | Description |
@@ -730,7 +730,7 @@ The exit code is the worst of the three: 0 usable; 1 gaps or quality errors; 2 c
 
 | Option | Description |
 |------|------|
-| `--datasets` | Per-dataset freshness table (dataset / layer / freshness / coverage range / watermark); with `--gate`, exits 1 if anything is STALE. freshness values: `fresh` / `STALE` / `empty` (never fetched) / `no source` (source retired with no replacement) / `retired` (source retired but the lake captured through its last day, such as `northbound_flows`) / `removed` (taken out of the schedule on purpose with `steps_remove` or `enabled = false`, and no other group runs it; keeps its real last date, is not stale, and `cne check`, the audit and the gate do not count it) / `n/a` (disabled in configuration, or freshness not judged by day) |
+| `--datasets` | Per-dataset freshness table (dataset / layer / freshness / coverage range / watermark); with `--gate`, exits 1 if anything is STALE. freshness values: `fresh` / `STALE` / `empty` (never fetched) / `no source` (source retired with no replacement) / `retired` (source retired but the lake captured through its last day, such as `northbound_flows`) / `removed` (taken out of the schedule on purpose with `steps_remove` or `enabled = false`, and no other group runs it; keeps its real last date, is not stale, and `cne check`, the audit and the gate do not count it) / `sample` (synthetic rows of a sample lake, whose dates do not count) / `n/a` (disabled in configuration, or freshness not judged by day). Freshness is judged against the last closed trading day; today counts only once the scheduled daily update has started or finished. The `cne serve` console uses the same rules |
 | `--gate` | Explicit quality acceptance: failure / unacceptable freshness returns 1, insufficient coverage or degradation returns 2; an ordinary read-only query returns 0 on success |
 | `--all-columns` | With `--datasets`: print all columns of `list_datasets` (contract fingerprint, revision, PIT storage columns, etc.) rather than only freshness |
 | `--groups` | With `--datasets`: in `--gate` mode, fail only on datasets owned by these schedule groups (space- or comma-separated). Datasets of other groups are still listed and still reported as schedule gaps, but do not trigger exit 1. A host that schedules only `core` should specify this scope, so optional groups with no scheduled collection do not keep tripping the gate. Datasets nobody schedules (`(unscheduled)`) still fail and must be handled explicitly |

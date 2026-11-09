@@ -27,12 +27,12 @@ from cnequity.cli._shared import (
     config_option,
     parse_date_option,
 )
-from cnequity.cli.quality_cmds import _last_trading_day
 from cnequity.config import WaveConfig
 from cnequity.domain.market_time import is_session_final, shanghai_today
 from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.run_lock import RunLockError
+from cnequity.query.calendar import last_trading_day
 
 
 def _stale_priority(spec, row: dict, anchor: date) -> tuple[int, int, int, str]:
@@ -325,7 +325,7 @@ def _run_all_groups(
     from cnequity.orchestrator.cadence import due_steps
 
     session = _settled_session(cfg, td)
-    schedule_date = session or _last_trading_day(cfg, shanghai_today())
+    schedule_date = session or last_trading_day(cfg, shanghai_today(), include_staging=True)
     selected = (
         cfg.schedule_groups.items()
         if only is None
@@ -459,7 +459,7 @@ def _settled_session(cfg, td: date | None) -> date | None:
     today = shanghai_today()
     if is_session_final(today) or not is_trading_day(cfg, today):
         return None
-    settled = _last_trading_day(cfg, today)
+    settled = last_trading_day(cfg, today, include_staging=True)
     click.echo(
         _(
             "Today's session ({today}) is not final until 15:05 Beijing time; the schedule groups update through {settled}."
@@ -487,7 +487,7 @@ def _run_stale_only(
     no later run could have recovered them. Per-host retries already exist and
     were exhausted; what was missing was a second window.
     """
-    anchor = _last_trading_day(cfg, trade_date or shanghai_today())
+    anchor = last_trading_day(cfg, trade_date or shanghai_today(), include_staging=True)
     if groups is not None and repair_gaps:
         raise click.ClickException(
             _("With --groups set, the lake-wide --repair-gaps cannot be used")
@@ -795,7 +795,9 @@ def run_daily(
         return
     repairs = []
     if repair_gaps:
-        repairs = _auto_repair_gaps(cfg, _last_trading_day(cfg, td or shanghai_today()))
+        repairs = _auto_repair_gaps(
+            cfg, last_trading_day(cfg, td or shanghai_today(), include_staging=True)
+        )
     if all_groups:
         _run_all_groups(cfg, engine, td, backfill=backfill, repairs=repairs)
         return
@@ -860,7 +862,9 @@ def run_daily(
 
             steps = group.steps
             if not backfill:
-                steps = due_steps(group, session or _last_trading_day(cfg, shanghai_today()))
+                steps = due_steps(
+                    group, session or last_trading_day(cfg, shanghai_today(), include_staging=True)
+                )
             if not steps:
                 click.echo(
                     json.dumps(

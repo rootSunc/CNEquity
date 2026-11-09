@@ -118,7 +118,7 @@ def test_nothing_stale_is_a_clean_no_op(config, monkeypatch):
     _snapshot_capture(config, "economic_calendar", ANCHOR)
     _snapshot_capture(config, "share_unlock_schedule", ANCHOR)
     _snapshot_capture(config, "etf_profiles", ANCHOR)
-    monkeypatch.setattr("cnequity.cli.run_cmds._last_trading_day", lambda cfg, today: ANCHOR)
+    monkeypatch.setattr("cnequity.cli.run_cmds.last_trading_day", lambda *_a, **_k: ANCHOR)
 
     result = CliRunner().invoke(
         cli, ["run", "daily", "--stale-only", "--config", str(config.config_path)]
@@ -146,7 +146,7 @@ def test_scoped_retry_derives_core_outputs_after_compaction(config, monkeypatch)
             steps=["daily_bars", "compact", "derive_adj_factors", "derive_industry_index"],
         )
     }
-    monkeypatch.setattr("cnequity.cli.run_cmds._last_trading_day", lambda *args: ANCHOR)
+    monkeypatch.setattr("cnequity.cli.run_cmds.last_trading_day", lambda *_a, **_k: ANCHOR)
     monkeypatch.setattr(
         "cnequity.cli.run_cmds.stale_fetch_plan",
         lambda *args, **kwargs: [{"dataset": "daily_bars", "priority": 1}],
