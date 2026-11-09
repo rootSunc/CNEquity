@@ -7514,20 +7514,20 @@ msgstr "这次发布 {dataset} 大约需要 {required} 字节（{required_mib} M
 msgid "{dataset} sessions still owed: {owed} (e.g. {value})"
 msgstr "{dataset} 待补交易日：{owed}（例：{value}）"
 
+#: cnequity/serve/lake.py
+#, python-brace-format
+msgid "{dataset} would read {size} of Parquet for this page (budget {budget}), and every row is held in memory before the page is cut. Enter a symbol."
+msgstr "{dataset} 这一页要读取 {size} 的 Parquet（预算 {budget}），分页前每一行都要先载入内存。请输入标的。"
+
+#: cnequity/serve/lake.py
+#, python-brace-format
+msgid "{dataset} would read {size} of Parquet for this page (budget {budget}), and every row is held in memory before the page is cut. Pick a period or enter a symbol."
+msgstr "{dataset} 这一页要读取 {size} 的 Parquet（预算 {budget}），分页前每一行都要先载入内存。请选择一个时段或输入标的。"
+
 #: cnequity/serve/storage.py
 #, python-brace-format
 msgid "{dataset} · revision {revision}"
 msgstr "{dataset} · 第 {revision} 版"
-
-#: cnequity/cli/backfill_cmds.py
-#, python-brace-format
-msgid "{dataset}: --start {start} is before the source's history floor. For every symbol, upstream provides nothing earlier than {earliest}, and no backfill source extends it. Use --start {earliest} or later."
-msgstr "{dataset}：--start {start} 早于源的历史下限。对任何标的，上游都不提供早于 {earliest} 的数据，也没有任何回填源能延长它。请改用 --start {earliest} 或更晚的日期。"
-
-#: cnequity/cli/backfill_cmds.py
-#, python-brace-format
-msgid "{dataset}: --start {start} is beyond the history depth the source can provide. For symbols quoted every session, upstream keeps only about {history_horizon_days} sessions per symbol (back to roughly {earliest}), and no backfill source extends it. Use --start {earliest} or later. (Thinly traded symbols have bars on fewer days, so they reach further back. To get those, narrow [{block}].scope to a watchlist first: sweeping the whole market from that start burns hours on symbols with no data at all.)"
-msgstr "{dataset}：--start {start} 早于源能提供的历史深度。对每个交易日都有报价的标的，上游每个标的大约只保留 {history_horizon_days} 个交易日（大致回到 {earliest}），并且没有任何回填源能延长它。请改用 --start {earliest} 或更晚的日期。（成交稀疏的标的有 K 线的天数更少，因此能回溯得更远。要取那些，请先把 [{block}].scope 收窄成一个观察列表 —— 用那个起点扫全市场，会在根本没有数据的标的上耗掉好几个小时。）"
 
 #: cnequity/cli/maintain_cmds.py
 #, python-brace-format
@@ -7731,11 +7731,3 @@ msgstr "✗ 建湖还没完成（run {run_id}）。已下载的部分都已保�
 msgid "✗ This backfill fetched nothing usable, so the range stays a gap in the coverage record. `fallback` above gives the reason (sources unavailable, or unable to serve this range) and the sources tried; the log has the reason for each key."
 msgstr "✗ 本次回填没有取到可用数据，该范围作为缺口留在覆盖记录中。上方 `fallback` 给出了原因（数据源不可用，或无法提供这段范围）和尝试过的来源；日志里有每个键的原因。"
 
-
-#: cnequity/serve/lake.py
-msgid "{dataset} would read {size} of Parquet for this page (budget {budget}), and every row is held in memory before the page is cut. Pick a period or enter a symbol."
-msgstr "{dataset} 这一页要读取 {size} 的 Parquet（预算 {budget}），分页前每一行都要先载入内存。请选择一个时段或输入标的。"
-
-#: cnequity/serve/lake.py
-msgid "{dataset} would read {size} of Parquet for this page (budget {budget}), and every row is held in memory before the page is cut. Enter a symbol."
-msgstr "{dataset} 这一页要读取 {size} 的 Parquet（预算 {budget}），分页前每一行都要先载入内存。请输入标的。"

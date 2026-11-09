@@ -648,6 +648,36 @@ def _apply_pit_date_range(
     return _apply_date_range(df, dataset, start, end)
 
 
+def pit_scan_window(
+    dataset: str,
+    start: date | None,
+    end: date | None,
+    as_of: date | None,
+    *,
+    all_vintages: bool = False,
+) -> tuple[date | None, date | None]:
+    """The partitions a PIT ``load()`` must scan for its result not to change.
+
+    The result is collapsed to the vintage current on ``as_of`` before
+    ``start``/``end`` apply, so pruning is safe only where every vintage of a
+    fact lies in the same window. When the date column is part of the fact's
+    key (``report_period``, ``record_date``) all its vintages share it. When it
+    is ``announce_date`` a later vintage may land after ``end``, but never
+    after ``as_of``: nothing announced later is visible. Any other layout is
+    read whole.
+    """
+    column = DATE_COLUMNS.get(dataset)
+    if column is None or DATASETS[dataset].partition_col != column:
+        return None, None
+    if column in PRIMARY_KEYS.get(dataset, []) and column != "announce_date":
+        return start, end
+    if column == "announce_date":
+        if all_vintages and end is not None and as_of is not None:
+            return start, min(end, as_of)
+        return start, as_of
+    return None, None
+
+
 def _apply_symbol_filter(df: pl.DataFrame, symbols: list[str] | None) -> pl.DataFrame:
     if not symbols or df.is_empty() or "symbol" not in df.columns:
         return df
@@ -1191,9 +1221,16 @@ def load(
     if dataset in PIT_DATASETS:
         if as_of_d is None:
             raise ReaderError(f"{dataset} requires as_of= for point-in-time queries")
+        # Every later step scales with what is scanned: an unwindowed read of
+        # one financial_statement_items quarter held 5.9 GB for 161k rows.
+        scan_start, scan_end = pit_scan_window(
+            dataset, start_d, end_d, as_of_d, all_vintages=all_vintages
+        )
         df = _read_dataset(
             cfg,
             dataset,
+            start=scan_start,
+            end=scan_end,
             symbols=symbols,
             revision=_revision_for_dataset(revision_selection, dataset),
             read_context=read_context,
@@ -1208,9 +1245,11 @@ def load(
         )
         df = _apply_pit_date_range(df, dataset, start_d, end_d)
         df = _apply_symbol_filter(df, symbols)
-        sort_cols = [
-            c for c in ("announce_date", "symbol", "report_period", "item_code") if c in df.columns
-        ]
+        # The rest of the key breaks ties. Several top holders share one
+        # announce_date and symbol, and their order otherwise followed the scan.
+        leading = ("announce_date", "symbol", "report_period", "item_code")
+        tie_break = [c for c in (*PRIMARY_KEYS.get(dataset, []), "revision_id") if c not in leading]
+        sort_cols = [c for c in (*leading, *tie_break) if c in df.columns]
         return df.sort(sort_cols) if sort_cols else df
 
     if dataset == "flash_news_wire":

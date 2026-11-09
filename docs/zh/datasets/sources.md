@@ -317,7 +317,7 @@
 | 口径 | 一张表两个口径，靠 `holder_scope` 区分：`total`=前十大股东，`float`=前十大流通股东。`holding_pct` 两边分母不同（占总股本 vs 占流通股），**不可直接比较** |
 | PIT | `RPT_F10_EH_HOLDERS` 没有 `NOTICE_DATE`，其披露日按 (symbol, report_period) 从 FREEHOLDERS 借；借不到的行**丢弃**而不是拿期末日期充数 |
 | 采集方式 | 按 `END_DATE` 区间扫（全口径报表没有 `NOTICE_DATE`，两张报表若按不同列开窗，借披露日就没得匹配）。日更回看 240 天 |
-| 源端历史底 | 当前支持 2003 年起。更早的全口径记录缺少可关联的披露日期，不用报告期冒充 PIT 时间；越界回填会被拒绝。 |
+| 源端历史底 | 当前支持 2003 年起。更早的全口径记录缺少可关联的披露日期，不用报告期冒充 PIT 时间。回填起点早于 2003 年时从 2003-01-01 开始取，并报 `source_scope_incomplete` 警告；整段都早于 2003 年的回填会被拒绝。 |
 | 分页 | 单期超过 EastMoney 的 100 页上限，靠 `keyset_column="SECUCODE"` 换锚点翻过去（见 `datacenter.py`） |
 
 ### 按需数据集（On-demand）

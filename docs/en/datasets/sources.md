@@ -317,7 +317,7 @@ Historical event contradictions never block `audit_gate`, `publication_gate` or 
 | Basis | One table with two bases, distinguished by `holder_scope`: `total` = top ten shareholders, `float` = top ten float shareholders. `holding_pct` has different denominators on the two sides (share of total shares vs share of float shares) and is **not directly comparable** |
 | PIT | `RPT_F10_EH_HOLDERS` has no `NOTICE_DATE`; its disclosure date is borrowed from FREEHOLDERS by (symbol, report_period); rows that cannot borrow one are **dropped** rather than padded with the period-end date |
 | Collection method | Scanned by `END_DATE` range (the total-basis report has no `NOTICE_DATE`; if the two reports were windowed on different columns, the borrowed disclosure dates would have nothing to match). The daily update looks back 240 days |
-| Source history floor | Currently supported from 2003. Earlier total-basis records lack a linkable disclosure date, and the reporting period is not passed off as PIT time; out-of-range backfills are rejected. |
+| Source history floor | Currently supported from 2003. Earlier total-basis records lack a linkable disclosure date, and the reporting period is not passed off as PIT time. A backfill starting before 2003 fetches from 2003-01-01 and reports a `source_scope_incomplete` warning; one that lies entirely before 2003 is rejected. |
 | Pagination | A single period exceeds EastMoney's 100-page limit, so `keyset_column="SECUCODE"` switches anchors to page past it (see `datacenter.py`) |
 
 ### On-demand datasets

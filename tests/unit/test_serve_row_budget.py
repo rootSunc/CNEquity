@@ -81,20 +81,63 @@ def test_one_period_or_one_symbol_fits(config, monkeypatch):
     assert by_symbol.status_code == 200 and by_symbol.json()["total"] == 3
 
 
-def test_a_point_in_time_page_is_sized_as_the_whole_dataset(config, monkeypatch):
-    # load() reads every vintage of a PIT dataset whatever the period, so one
-    # quarter costs what the dataset costs.
+def _two_quarters_of_statements(config, monkeypatch) -> list[dict]:
     root = config.curated_root / "financial_statement_items"
     for quarter in ("2024Q3", "2024Q4"):
         part = root / f"report_period={quarter}"
         part.mkdir(parents=True)
         (part / "part-0.parquet").write_bytes(b"x" * 1000)
     monkeypatch.setattr(read_budget, "SCAN_BUDGET_BYTES", 1500)
+    import cnequity.query.reader as reader
+
+    calls: list[dict] = []
+
+    def _load(dataset, **kwargs):
+        calls.append(kwargs)
+        return pl.DataFrame({"report_period": ["2024Q3", "2024Q4"]})
+
+    monkeypatch.setattr(reader, "load", _load)
+    return calls
+
+
+def test_a_point_in_time_page_is_sized_by_its_period(config, monkeypatch):
+    # load() scans only the report period's partition, so one quarter costs
+    # one quarter, not the whole dataset.
+    calls = _two_quarters_of_statements(config, monkeypatch)
 
     response = _rows(config, "financial_statement_items", period="2024Q4", as_of="2025-01-01")
 
-    assert response.status_code == 422
-    assert response.json()["detail"].endswith("Enter a symbol.")
+    assert response.status_code == 200 and response.json()["total"] == 1
+    assert (calls[0]["start"], calls[0]["end"]) == (date(2024, 10, 1), date(2024, 12, 31))
+
+
+def test_a_point_in_time_page_without_a_period_asks_for_one(config, monkeypatch):
+    calls = _two_quarters_of_statements(config, monkeypatch)
+
+    response = _rows(config, "financial_statement_items", as_of="2025-01-01")
+
+    assert response.status_code == 422 and not calls
+    assert response.json()["detail"].endswith("Pick a period or enter a symbol.")
+
+
+def test_an_announcement_page_is_sized_up_to_its_as_of(config, monkeypatch):
+    # A correction announced after the day but by as_of replaces the row, so
+    # those days are scanned too and count toward the budget.
+    root = config.curated_root / "announcement_index"
+    for day in ("2024-06-10", "2024-06-11", "2024-06-12"):
+        part = root / f"announce_date={day}"
+        part.mkdir(parents=True)
+        (part / "part-0.parquet").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(read_budget, "SCAN_BUDGET_BYTES", 1500)
+    import cnequity.query.reader as reader
+
+    monkeypatch.setattr(reader, "load", lambda *_a, **_k: pl.DataFrame({"announcement_id": ["A"]}))
+
+    fits = _rows(config, "announcement_index", period="2024-06-10", as_of="2024-06-10")
+    over = _rows(config, "announcement_index", period="2024-06-10", as_of="2024-06-12")
+
+    assert fits.status_code == 200
+    assert over.status_code == 422 and over.json()["detail"].endswith("Enter a symbol.")
 
 
 @pytest.mark.parametrize("language", ["zh_CN"])

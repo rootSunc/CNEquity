@@ -1477,9 +1477,9 @@ class LakeView:
 
         if period:
             part = parse_partition(period)
-            if spec.partition_col == "report_period":
-                # A String column: the period *is* the value, and a date range
-                # over it would compare text to dates.
+            if spec.partition_col == "report_period" and not (spec.pit and part):
+                # A String column: the period *is* the value, filtered below.
+                # A PIT load maps its dates to report-period labels itself.
                 pass
             elif part is None:
                 raise ValueError(f"{period!r} is not a period for {dataset}")
@@ -1528,19 +1528,26 @@ class LakeView:
 
         ``load()`` holds the whole selection before the page is cut: one
         ``trade_ticks`` day peaked at 5.2 GB for 200 rows, and a request with
-        no period would select all of it. A point-in-time or report-period
-        read loads the whole dataset whatever the period, so it is sized whole.
+        no period would select all of it. A point-in-time read is sized by the
+        partitions ``load()`` scans for it; a report-period read of any other
+        dataset loads the whole dataset whatever the period, so it is sized whole.
         """
         from cnequity.query.read_budget import oversized_read
+        from cnequity.query.reader import pit_scan_window
 
         spec = DATASETS[dataset]
-        whole = spec.pit or spec.partition_col == "report_period"
+        start, end = kwargs.get("start"), kwargs.get("end")
+        if spec.pit:
+            start, end = pit_scan_window(dataset, start, end, kwargs.get("as_of"))
+            # Whether a period would narrow the scan at all.
+            day = date.today()
+            whole = pit_scan_window(dataset, day, day, day) == (None, None)
+        else:
+            whole = spec.partition_col == "report_period"
+        if whole:
+            start = end = None
         over = oversized_read(
-            self.config,
-            dataset,
-            start=None if whole else kwargs.get("start"),
-            end=None if whole else kwargs.get("end"),
-            symbols=kwargs.get("symbols"),
+            self.config, dataset, start=start, end=end, symbols=kwargs.get("symbols")
         )
         if over is None:
             return

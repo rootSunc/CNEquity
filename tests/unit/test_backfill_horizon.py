@@ -16,30 +16,58 @@ from cnequity.domain.market_time import shanghai_today
 from cnequity.run_scope import backfill_of
 
 
-@pytest.mark.usefixtures("chinese_output")
-def test_horizon_guard_refuses_a_window_the_source_cannot_serve():
-    spec = get_dataset("minute_bars")
+def _clamp(dataset: str, start: date, end: date):
+    """The window ``cne backfill`` actually fetches for *dataset*, and its finding.
+
+    Commit c2d6c7c3 replaced the CLI's refusal with this clamp: a range the
+    source cannot serve stays a recorded gap, and the part it can serve is
+    still delivered.
+    """
+    from types import SimpleNamespace
+
+    from cnequity.config import Config
+    from cnequity.orchestrator.engine import JobEngine
+    from cnequity.run_scope import set_backfill
+
+    cfg = Config(data_root=Path("/tmp/lake"))
+    set_backfill(cfg, active=True, start=start, end=end)
+    scoped, finding = JobEngine._backfill_source_scope(SimpleNamespace(config=cfg), dataset, end)
+    return backfill_of(scoped), finding
+
+
+def test_a_window_older_than_the_horizon_is_clamped_and_reported():
     today = shanghai_today()
-    too_old = spec.earliest_available(today) - timedelta(days=1)
-    with pytest.raises(click.ClickException) as excinfo:
-        backfill_cmds._guard_history_horizon("minute_bars", too_old)
-    message = str(excinfo.value)
-    # The error has to say the data does not exist, not that the run failed —
-    # otherwise it reads as a lake bug rather than a vendor limit.
-    assert "早于源能提供的历史深度" in message
-    assert str(spec.history_horizon_days) in message
-    assert str(spec.earliest_available(today)) in message
+    earliest = get_dataset("minute_bars").earliest_available(today)
+
+    window, finding = _clamp("minute_bars", earliest - timedelta(days=30), today)
+
+    assert window.start == earliest
+    assert finding["check"] == "source_scope_incomplete"
+    assert finding["severity"] == "warning"
+    assert finding["effective_scope"]["start"] == earliest.isoformat()
 
 
-def test_horizon_guard_allows_a_window_inside_the_horizon():
-    inside = get_dataset("minute_bars").earliest_available(shanghai_today()) + timedelta(days=1)
-    backfill_cmds._guard_history_horizon("minute_bars", inside)
+def test_a_window_inside_the_horizon_is_left_alone():
+    today = shanghai_today()
+    inside = get_dataset("minute_bars").earliest_available(today) + timedelta(days=1)
+
+    window, finding = _clamp("minute_bars", inside, today)
+
+    assert (window.start, finding) == (inside, None)
 
 
-def test_horizon_guard_is_a_no_op_without_a_horizon():
+def test_a_dataset_without_a_limit_keeps_an_old_start():
     # daily_bars has no vendor ceiling; a 2001 start must stay legal.
-    backfill_cmds._guard_history_horizon("daily_bars", date(2001, 1, 1))
-    backfill_cmds._guard_history_horizon("minute_bars", None)
+    window, finding = _clamp("daily_bars", date(2001, 1, 1), date(2001, 2, 1))
+
+    assert (window.start, finding) == (date(2001, 1, 1), None)
+
+
+def test_a_window_entirely_before_the_floor_is_a_capability_limit():
+    from cnequity.orchestrator.outcomes import CapabilityLimitError
+
+    with pytest.raises(CapabilityLimitError, match="outside available history"):
+        _clamp("northbound_flows", date(2014, 1, 1), date(2014, 6, 30))
 
 
 @pytest.mark.parametrize("dataset", ["announcement_index", "regulatory_events"])
@@ -443,55 +471,25 @@ def test_symbols_flag_lifts_the_tick_ceiling_for_a_hand_typed_list():
     assert cfg.trade_ticks_max_symbols == 3
 
 
-@pytest.mark.usefixtures("chinese_output")
-def test_tick_horizon_guard_does_not_suggest_narrowing_the_scope():
-    """A fixed floor has no narrower scope that reaches further back.
+@pytest.mark.parametrize(
+    ("dataset", "floor"),
+    [
+        ("trade_ticks", date(2024, 1, 2)),
+        # 2003 is where the *disclosure dates* start, not where the data starts:
+        # RPT_F10_EH_HOLDERS reaches into the 1990s but borrows its NOTICE_DATE
+        # from RPT_F10_EH_FREEHOLDERS, which serves 0 rows before 2003, and rows
+        # that cannot borrow a date are dropped. Fetching 1999-2002 writes none.
+        ("top_holders", date(2003, 1, 1)),
+        ("northbound_flows", date(2014, 11, 17)),
+    ],
+)
+def test_a_fixed_floor_clamps_the_start_to_the_floor(dataset, floor):
+    assert get_dataset(dataset).history_floor_date == floor
 
-    The minute-bar message tells you to narrow the watchlist, because there the
-    limit is a per-symbol bar count and an illiquid name does reach deeper.
-    Repeating that advice here would send someone editing a setting that cannot
-    help them.
-    """
-    with pytest.raises(click.ClickException) as excinfo:
-        backfill_cmds._guard_history_horizon("trade_ticks", date(2023, 1, 1))
-    message = str(excinfo.value)
-    assert "历史下限" in message
-    assert "narrow" not in message
-    assert "2024-01-02" in message
+    window, finding = _clamp(dataset, floor - timedelta(days=400), floor + timedelta(days=30))
 
-
-@pytest.mark.usefixtures("chinese_output")
-def test_top_holders_floor_is_the_pit_boundary_not_the_data_boundary():
-    """2003 is where the *disclosure dates* start, not where the data starts.
-
-    RPT_F10_EH_HOLDERS reaches into the 1990s, but it carries no NOTICE_DATE and
-    borrows one from RPT_F10_EH_FREEHOLDERS, which serves 0 rows before 2003
-    (13,853 in 2003). Rows that cannot borrow a date are dropped rather than
-    stamped with the period end, so a backfill reaching further back fetches
-    ~112k rows across 1999-2002 and writes none of them. Refusing the window is
-    the difference between a clear message and four wasted hours.
-    """
-    from cnequity.domain.datasets import get_dataset
-
-    assert get_dataset("top_holders").history_floor_date == date(2003, 1, 1)
-    with pytest.raises(click.ClickException) as excinfo:
-        backfill_cmds._guard_history_horizon("top_holders", date(2001, 1, 1))
-    message = str(excinfo.value)
-    assert "历史下限" in message
-    assert "2003-01-01" in message
-    assert "narrow" not in message, "a fixed floor has no narrower scope that helps"
-
-
-@pytest.mark.usefixtures("chinese_output")
-def test_northbound_flows_declares_the_exchange_opening_floor():
-    spec = get_dataset("northbound_flows")
-    assert spec.history_floor_date == date(2014, 11, 17)
-    with pytest.raises(click.ClickException) as excinfo:
-        backfill_cmds._guard_history_horizon("northbound_flows", date(2014, 11, 16))
-    message = str(excinfo.value)
-    assert "历史下限" in message
-    assert "2014-11-17" in message
-    assert "narrow" not in message
+    assert window.start == floor
+    assert finding["check"] == "source_scope_incomplete"
 
 
 def test_chunked_backfill_keeps_a_warning_status_across_later_successes(monkeypatch):

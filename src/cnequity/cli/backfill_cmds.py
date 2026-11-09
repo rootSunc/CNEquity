@@ -1388,40 +1388,6 @@ def _override_scope(cfg, dataset: str, symbols: list[str]) -> None:
         cfg.minute_bars_frequencies = [*cfg.minute_bars_frequencies, frequency]
 
 
-def _guard_history_horizon(dataset: str, start: date | None) -> None:
-    """Refuse a window the source cannot serve, instead of sweeping into nothing.
-
-    A horizon-limited source does not return *less* data for an older window,
-    it returns none — so without this an ``cne backfill minute_bars --start
-    2016-01-01`` spends hours producing an empty lake and reads as a bug in the
-    lake rather than a limit of the vendor.
-    """
-    spec = get_dataset(dataset)
-    earliest = spec.earliest_available(shanghai_today())
-    if earliest is None or start is None or start >= earliest:
-        return
-    if spec.history_floor_date is not None:
-        # A fixed floor, not a per-symbol budget: no symbol reaches further
-        # back, so there is no narrower scope that would help.
-        raise click.ClickException(
-            _(
-                "{dataset}: --start {start} is before the source's history floor. For every symbol, upstream provides nothing earlier than {earliest}, and no backfill source extends it. Use --start {earliest} or later."
-            ).format(dataset=dataset, start=start, earliest=earliest)
-        )
-    block = SCOPED_DATASETS.get(dataset, "minute_bars")
-    raise click.ClickException(
-        _(
-            "{dataset}: --start {start} is beyond the history depth the source can provide. For symbols quoted every session, upstream keeps only about {history_horizon_days} sessions per symbol (back to roughly {earliest}), and no backfill source extends it. Use --start {earliest} or later. (Thinly traded symbols have bars on fewer days, so they reach further back. To get those, narrow [{block}].scope to a watchlist first: sweeping the whole market from that start burns hours on symbols with no data at all.)"
-        ).format(
-            dataset=dataset,
-            start=start,
-            history_horizon_days=spec.history_horizon_days,
-            earliest=earliest,
-            block=block,
-        )
-    )
-
-
 def _finish_backfill_run(engine, result: dict) -> dict:
     """Compact this run's staging, then close the run out."""
     run_id = result["run_id"]

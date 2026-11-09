@@ -24,6 +24,7 @@ from cnequity.domain.datasets import granularity_for_dataset
 from cnequity.domain.partitions import (
     Partition,
     parse_partition,
+    partition_value,
 )
 from cnequity.storage.revisions import resolve_committed_root
 
@@ -397,11 +398,19 @@ def scan_parquet_root(
     # Still filter on the column: a coarse partition covers days outside the
     # window, and pruning alone would over-return at the period edges.
     if partition_col and (start is not None or end is not None):
-        if partition_col in lf.collect_schema().names():
-            if start is not None:
-                lf = lf.filter(pl.col(partition_col) >= start)
-            if end is not None:
-                lf = lf.filter(pl.col(partition_col) <= end)
+        schema = lf.collect_schema()
+        if partition_col in schema.names():
+            low, high = start, end
+            if schema[partition_col] == pl.String:
+                # A report period is stored as its directory label (``2026Q3``),
+                # and labels sort as text. Comparing the column to a date raised.
+                granularity = granularity_for_dataset(logical_dataset)
+                low = partition_value(start, granularity) if start is not None else None
+                high = partition_value(end, granularity) if end is not None else None
+            if low is not None:
+                lf = lf.filter(pl.col(partition_col) >= low)
+            if high is not None:
+                lf = lf.filter(pl.col(partition_col) <= high)
     if symbols and "symbol" in lf.collect_schema().names():
         lf = lf.filter(pl.col("symbol").is_in(symbols))
     if traded_only:
