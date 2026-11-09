@@ -14,6 +14,7 @@ from cnequity.adapters.calendar.exchange_calendar import (
 )
 from cnequity.config import Config
 from cnequity.domain.datasets import PARTITION_COLS, curated_dataset_names, is_dataset_enabled
+from cnequity.domain.findings import checked_findings
 from cnequity.domain.holidays_cn import session_expr
 from cnequity.quality.authority_checks import run_authority_checks
 from cnequity.quality.bar_finality import daily_bar_finality_findings
@@ -728,7 +729,9 @@ def run_audit(config: Config, run_id: str, trade_date: date, context: dict | Non
     # not the second directory) can mistake "audit completed" for "sources
     # agreed".
     findings.extend(run_source_diffs(config, run_id, trade_date))
-    findings = _unique_findings(findings + _profile_adjusted_findings(config, steps + related))
+    findings = checked_findings(
+        _unique_findings(findings + _profile_adjusted_findings(config, steps + related))
+    )
 
     out_dir = config.meta_root / "quality" / "findings"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -847,6 +850,7 @@ def lake_health(
     # already-captured backup snapshot. Running it here makes an explicit
     # health check authoritative even when no ingestion run happened today.
     findings.extend(run_source_diffs(config, f"health-{anchor.isoformat()}", anchor))
+    findings = checked_findings(findings)
     by_severity: dict[str, int] = {}
     for f in findings:
         sev = f.get("severity", "info")

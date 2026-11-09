@@ -17,6 +17,7 @@ from cnequity.adapters.sina.adj_factors import (
 from cnequity.config import Config
 from cnequity.domain.action_sessions import effective_session
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
+from cnequity.domain.findings import finding
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import with_provenance
 from cnequity.domain.symbols import is_cdr_symbol, parse_symbol
@@ -2336,27 +2337,11 @@ def _compute_adj_factors_locked(
     from cnequity.derive.fund_factors import apply_fund_share_factors
 
     out, fund_findings = apply_fund_share_factors(config, out)
-    findings.extend(
-        {
-            "dataset": "adj_factors",
-            "check": "fund_share_factor",
-            "severity": "warning" if "reason" in item else "info",
-            **item,
-        }
-        for item in fund_findings
-    )
+    findings.extend(_factor_finding("fund_share_factor", item) for item in fund_findings)
     from cnequity.derive.stock_factors import apply_stock_event_factors
 
     out, stock_findings = apply_stock_event_factors(config, out)
-    findings.extend(
-        {
-            "dataset": "adj_factors",
-            "check": "stock_event_factor",
-            "severity": "warning" if "reason" in item else "info",
-            **item,
-        }
-        for item in stock_findings
-    )
+    findings.extend(_factor_finding("stock_event_factor", item) for item in stock_findings)
     findings.extend(_factor_continuity_findings(out))
     findings.extend(_corporate_action_crosscheck_findings(config, out))
     findings.extend(_pre_close_step_findings(config, out))
@@ -2382,3 +2367,25 @@ def _compute_adj_factors_locked(
         newly_unavailable=newly_unavailable,
     )
     return AdjFactorsResult(total, len(tasks), failed, findings)
+
+
+def _factor_finding(check: str, item: dict) -> dict:
+    """A fund-share or stock-event factor result as a finding a person can read.
+
+    The item says one of three things: the vendor step was left as is (and
+    why), it was corrected by a ratio, or it was confirmed.
+    """
+    where = " ".join(str(item[key]) for key in ("symbol", "trade_date") if item.get(key))
+    where = f"{where}: " if where else ""
+    if "reason" in item:
+        message = f"{where}{item['reason']}; vendor factor left as is"
+    elif "correction" in item:
+        message = f"{where}vendor step corrected by x{float(item['correction']):.6g}"
+    else:
+        message = f"{where}{item.get('confirmed') or 'vendor step confirmed'}"
+    return finding(
+        dataset="adj_factors",
+        check=check,
+        severity="warning" if "reason" in item else "info",
+        **{"message": message, **item},
+    )
