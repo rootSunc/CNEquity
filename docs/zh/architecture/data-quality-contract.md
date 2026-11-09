@@ -1,6 +1,6 @@
 # CNEquity / USEquity 共享数据质量契约（Data Quality Contract）
 
-版本：1.0 · 状态：生效（2026-11-07）  
+版本：1.0 · 状态：目标规范（2026-11-07）；CNEquity 目前实现了哪些、与之有何差异，见[第 7 节](#cnequity-status)  
 适用范围：`CNEquity`（A 股个人投资研究数据基础设施）与 `USEquity`（美股个人投资研究数据基础设施）共享基础设施层。
 
 ---
@@ -98,3 +98,25 @@
 | **行情与公司行动** | OHLCV 标准表结构、拆股/分红事件表结构、复权计算接口 | **CN**：涨跌停限制、ST/*ST 标记、停复牌、送转配股<br>**US**：Split / Reverse Split、Cash Dividend、Spin-off、ADR 换股比例 |
 | **基本面数据** | 财务事实存储、报告期对齐、标准化指标派生框架 | **CN**：中国企业会计准则（CAS）固定报表结构、按日历季披露<br>**US**：SEC EDGAR / XBRL Company Facts、GAAP/Non-GAAP、公司自定义财年（Fiscal Calendar） |
 | **数据质量与运维** | **本契约（Error/Warning/Caveat、Tier A/B/C、Provenance 字段）**、Parquet + DuckDB 存储、CLI / MCP | 各市场专属的异常阈值（如 A 股涨跌停阈值 vs 美股无涨跌停跳变阈值） |
+
+---
+
+## 7. CNEquity 当前实现情况 {#cnequity-status}
+
+本契约描述两个系统共同的目标。CNEquity 目前**没有** `quality_tier`、`quality_flags` 与 `ingested_at` 三列，读取接口也不按质量等级过滤；下游代码不要依赖这些列。下表逐条列出 CNEquity 今天的做法。
+
+| 契约条款 | CNEquity 现状 | 状态 |
+|---|---|---|
+| `source` | 每个数据集都有 `source`，与 `data_version`、`fetched_at` 一起构成溯源列 | 已实现 |
+| `ingested_at` | 对应 `fetched_at`（UTC 时间戳） | 已实现，列名不同 |
+| `published_at` | 没有统一列。每个数据集在契约中声明可得时间列 `availability_col`（PIT 表为 `announce_date` 等），PIT 表可另带 `available_at`、`source_published_at` | 部分实现 |
+| `quality_tier`（A/B/C） | 没有行级等级。数据集级有两个相近的声明：支持档位 `support`（`core` / `extended` / `best_effort` / `optional`，见[数据集目录](../datasets/catalog.md)）与 PIT 证据等级 `pit_quality`（见[数据契约](../datasets/contract.md)） | 未实现 |
+| `quality_flags` | 没有行级标签。质量问题由 `cne check` / `cne audit` 报告为检查结果，带 `info` / `warning` / `error` 严重度 | 未实现 |
+| 读取默认排除 Tier `C` | 读取接口不做质量过滤 | 未实现 |
+| 缺失值写成 `NULL`，不写 `0` | 数据集登记的取值规则（`value_rules`）在写入校验时把厂商占位 `0` 转为 `NULL`，无成交日的价格占位同样置空。少数期货适配器仍会把空单元格读成 `0`，待修复 | 大部分实现 |
+| 无交易 / 停牌不造 Bar | 不补造行情；停牌状态记在 `trading_status`（`normal` / `suspended` / `delisted`） | 已实现 |
+| 数据源暂时不可用 | 失败的步骤不提交新版本，已入湖数据保持不变；运行标记为 `degraded`，覆盖标记为 `partial` | 已实现 |
+| 跨源不一致 | `cne check` 对照参考源（如 `daily_bars_close_mismatch`），个别不一致报 `warning`，全市场性不一致报 `error`；不写入行标签 | 部分实现 |
+| 严重异常降级为 Tier `C` | 没有降级机制；异常只作为检查结果报告 | 未实现 |
+| `HARD_ERROR` 只拒绝问题行 | 写入校验发现必填列为空、非有限数值或行情不变量（如 `high < low`）被违反时，**整批**拒绝。只有衍生品行情、北交所涨跌停越界与日线探测占位行按行隔离到 `_quarantine` | 部分实现 |
+| 重复主键 | 不拒绝：同一主键按证据类别、`fetched_at` 先后与来源优先级保留一行；PIT 表保留各个版本 | 与契约不同 |

@@ -1,6 +1,6 @@
 # Shared CNEquity / USEquity Data Quality Contract
 
-Version: 1.0 · Status: Active (2026-11-07)  
+Version: 1.0 · Status: Target specification (2026-11-07); for what CNEquity implements today and where it differs, see [section 7](#cnequity-status)  
 Scope: Shared data infrastructure across `CNEquity` (China market research data lake) and `USEquity` (US equity personal research infrastructure).
 
 ---
@@ -61,3 +61,25 @@ The goal of this contract is **"to reliably use imperfect data"** rather than "t
 | `published_at` | `timestamp / date` | No | Source publication timestamp (`announce_date` / SEC `acceptance_datetime`; `NULL` if unknown) |
 | `quality_tier` | `enum('A','B','C')` | Yes | Quality tier (`A`, `B`, or `C`) |
 | `quality_flags` | `list<string>` | Yes | Warning flags (`[]` when clean) |
+
+---
+
+## 7. What CNEquity implements today {#cnequity-status}
+
+This contract describes the shared target for both systems. CNEquity does **not** have the `quality_tier`, `quality_flags` or `ingested_at` columns today, and its read interfaces do not filter by quality tier; downstream code should not rely on them. The table lists what CNEquity does for each clause.
+
+| Contract clause | CNEquity today | Status |
+|---|---|---|
+| `source` | Every dataset has `source`, which together with `data_version` and `fetched_at` forms the provenance columns | Implemented |
+| `ingested_at` | Corresponds to `fetched_at` (UTC timestamp) | Implemented under another name |
+| `published_at` | No uniform column. Each dataset declares its availability column `availability_col` in the contract (`announce_date` and similar for PIT tables); PIT tables can also carry `available_at` and `source_published_at` | Partial |
+| `quality_tier` (A/B/C) | No row-level tier. Two dataset-level declarations are close: the support level `support` (`core` / `extended` / `best_effort` / `optional`, see the [dataset catalog](../datasets/catalog.md)) and the PIT evidence grade `pit_quality` (see the [data contract](../datasets/contract.md)) | Not implemented |
+| `quality_flags` | No row-level flags. `cne check` / `cne audit` report quality problems as findings with an `info` / `warning` / `error` severity | Not implemented |
+| Reads exclude Tier `C` by default | Read interfaces apply no quality filter | Not implemented |
+| Missing values stored as `NULL`, not `0` | Each dataset's registered value rules (`value_rules`) turn vendor placeholder `0`s into `NULL` during write validation, and blank out price placeholders on no-trade sessions. A few futures adapters still read a blank cell as `0`; a fix is pending | Mostly implemented |
+| No synthetic bars for no-trade / halted days | No bars are fabricated; halts are recorded in `trading_status` (`normal` / `suspended` / `delisted`) | Implemented |
+| Source temporarily unavailable | A failed step commits no new revision, so data already in the lake is unchanged; the run is marked `degraded` and its coverage `partial` | Implemented |
+| Cross-source discrepancy | `cne check` compares against a reference source (e.g. `daily_bars_close_mismatch`): isolated mismatches are a `warning`, a market-wide one is an `error`; nothing is written to the rows | Partial |
+| Severe anomaly downgraded to Tier `C` | No downgrade mechanism; anomalies are only reported as findings | Not implemented |
+| `HARD_ERROR` rejects only the bad record | When write validation finds a required column empty, a non-finite number or a broken market-data invariant (such as `high < low`), the **whole batch** is rejected. Only derivative bars, Beijing price-limit breaches and daily-bar probe placeholders are quarantined row by row into `_quarantine` | Partial |
+| Duplicate primary keys | Not rejected: one row per key is kept by evidence class, `fetched_at` order and source priority; PIT tables keep every vintage | Differs from the contract |
