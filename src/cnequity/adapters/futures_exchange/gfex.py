@@ -88,9 +88,15 @@ def _checked(rows: list[dict], trade_date: date) -> list[dict]:
     return contracts
 
 
+def _whole(value) -> int | None:
+    """A count cell; blank stays None: the file prints 0 for none, never a blank."""
+    number = parse_number(value)
+    return None if number is None else int(number)
+
+
 def _bar(raw: dict, code: str, trade_date: date) -> dict:
-    volume = int(parse_number(raw.get("volumn")) or 0)
-    traded = volume > 0
+    volume = _whole(raw.get("volumn"))
+    traded = bool(volume)
     amount = parse_number(raw.get("turnover"))
     return {
         "exchange": EXCHANGE,
@@ -104,8 +110,8 @@ def _bar(raw: dict, code: str, trade_date: date) -> dict:
         "pre_settle": parse_price(raw.get("lastClear")),
         "volume": volume,
         "amount": None if amount is None else round(amount * WAN_YUAN, 2),
-        "open_interest": int(parse_number(raw.get("openInterest")) or 0),
-        "oi_change": int(parse_number(raw.get("diffI")) or 0),
+        "open_interest": _whole(raw.get("openInterest")),
+        "oi_change": _whole(raw.get("diffI")),
     }
 
 

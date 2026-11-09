@@ -81,16 +81,16 @@ def _rows(body: bytes, trade_date: date) -> list[dict]:
 
 
 def _bar(raw: dict, code: str, trade_date: date) -> dict:
-    def count(field: str) -> int:
+    def count(field: str) -> int | None:
         return single_sided_count(
-            parse_number(raw.get(field)) or 0.0,
+            parse_number(raw.get(field)),
             exchange=EXCHANGE,
             trade_date=trade_date,
             field=field,
         )
 
     volume = count("volumn")
-    traded = volume > 0
+    traded = bool(volume)
     amount = single_sided_amount(
         parse_number(raw.get("turnover")), exchange=EXCHANGE, trade_date=trade_date
     )

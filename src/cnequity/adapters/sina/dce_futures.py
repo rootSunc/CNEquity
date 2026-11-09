@@ -104,13 +104,13 @@ def _history_rows(code: str, payload: list[dict]) -> dict[date, dict]:
         contract = contract or parse_future_code(code, EXCHANGE, day)
         try:
             volume = single_sided_count(
-                parse_number(item.get("v")) or 0.0,
+                parse_number(item.get("v")),
                 exchange=EXCHANGE,
                 trade_date=day,
                 field="volume",
             )
             open_interest = single_sided_count(
-                parse_number(item.get("p")) or 0.0,
+                parse_number(item.get("p")),
                 exchange=EXCHANGE,
                 trade_date=day,
                 field="open_interest",
@@ -118,7 +118,7 @@ def _history_rows(code: str, payload: list[dict]) -> dict[date, dict]:
         except CountingBasisError as exc:
             logger.warning("dce via sina: %s %s skipped: %s", code, day, exc)
             continue
-        traded = volume > 0
+        traded = bool(volume)
         out[day] = {
             "symbol": contract.symbol,
             "exchange": EXCHANGE,
@@ -202,9 +202,9 @@ def parse_quotes(text: str, trade_date: date) -> pl.DataFrame:
             continue
         contract = parse_future_code(code, EXCHANGE, trade_date)
         volume = single_sided_count(
-            parse_number(fields[14]) or 0.0, exchange=EXCHANGE, trade_date=trade_date, field="v"
+            parse_number(fields[14]), exchange=EXCHANGE, trade_date=trade_date, field="v"
         )
-        traded = volume > 0
+        traded = bool(volume)
         rows.append(
             {
                 "symbol": contract.symbol,
@@ -221,7 +221,7 @@ def parse_quotes(text: str, trade_date: date) -> pl.DataFrame:
                 "volume": volume,
                 "amount": None,
                 "open_interest": single_sided_count(
-                    parse_number(fields[13]) or 0.0,
+                    parse_number(fields[13]),
                     exchange=EXCHANGE,
                     trade_date=trade_date,
                     field="oi",

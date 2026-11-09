@@ -167,6 +167,8 @@ def _parse_rows(
                 # than derived from price × volume: a main-continuous series
                 # splices contracts, so that product is not the session's money.
                 "amount": None,
+                # A main-continuous series always holds positions, so a 0 here
+                # means the feed carries none for it, not an empty book.
                 "open_interest": oi if oi and oi > 0 else None,
                 "source": "sina",
             }

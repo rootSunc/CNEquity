@@ -60,6 +60,11 @@ def session_of(bar_time: datetime, sessions: list[date]) -> date | None:
     return day if day in sessions else None
 
 
+def _whole(value) -> int | None:
+    number = parse_number(value)
+    return None if number is None else int(number)
+
+
 def parse_minutes(payload: list[dict], *, symbol: str, sessions: list[date]) -> pl.DataFrame:
     rows = []
     exchange = symbol.rsplit(".", 1)[1]
@@ -73,8 +78,9 @@ def parse_minutes(payload: list[dict], *, symbol: str, sessions: list[date]) -> 
         trade_date = session_of(bar_time, sessions)
         if trade_date is None:
             continue
-        volume = int(parse_number(item.get("v")) or 0)
-        traded = volume > 0
+        # A blank count stays None, never 0: the feed prints 0 for a quiet minute.
+        volume = _whole(item.get("v"))
+        traded = bool(volume)
         rows.append(
             {
                 "symbol": symbol,
@@ -87,7 +93,7 @@ def parse_minutes(payload: list[dict], *, symbol: str, sessions: list[date]) -> 
                 "low": parse_price(item.get("l")) if traded else None,
                 "close": parse_price(item.get("c")),
                 "volume": volume,
-                "open_interest": int(parse_number(item.get("p")) or 0),
+                "open_interest": _whole(item.get("p")),
                 "source": SOURCE,
             }
         )

@@ -93,10 +93,9 @@ def _root(product_id) -> str:
     return str(product_id or "").strip().rsplit("_", 1)[0].strip()
 
 
-def _count(value, *, exchange: str, trade_date: date, field: str) -> int:
-    number = parse_number(value)
+def _count(value, *, exchange: str, trade_date: date, field: str) -> int | None:
     return single_sided_count(
-        0 if number is None else number, exchange=exchange, trade_date=trade_date, field=field
+        parse_number(value), exchange=exchange, trade_date=trade_date, field=field
     )
 
 
@@ -114,7 +113,7 @@ def _check(block: list[dict], subtotal: dict, label: str) -> None:
 
 def _bar(raw: dict, *, exchange: str, trade_date: date) -> dict:
     volume = _count(raw.get("VOLUME"), exchange=exchange, trade_date=trade_date, field="volume")
-    traded = volume > 0
+    traded = bool(volume)
     amount = single_sided_amount(
         parse_number(raw.get("TURNOVER")), exchange=exchange, trade_date=trade_date
     )

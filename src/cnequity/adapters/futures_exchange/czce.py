@@ -165,16 +165,16 @@ def _check(block: list[dict], subtotal: dict, trade_date: date) -> None:
 
 
 def _bar(record: dict, trade_date: date) -> dict:
-    def count(field: str) -> int:
+    def count(field: str) -> int | None:
         return single_sided_count(
-            parse_number(record.get(field)) or 0.0,
+            parse_number(record.get(field)),
             exchange=EXCHANGE,
             trade_date=trade_date,
             field=field,
         )
 
     volume = count("volume")
-    traded = volume > 0
+    traded = bool(volume)
     amount = single_sided_amount(
         parse_number(record.get("amount")), exchange=EXCHANGE, trade_date=trade_date
     )

@@ -544,6 +544,13 @@ class RevisionStore:
                 wanted_id is not None and payload.get("revision_id") != wanted_id
             ):
                 continue
+            number = payload.get("revision")
+            published = pointer.get("revision")
+            if isinstance(number, int) and isinstance(published, int) and number > published:
+                # Newer than current.json: a publish that stopped after its receipt.
+                raise RevisionConsistencyError(
+                    f"revision {revision!r} of {dataset} was never published"
+                )
             raw = payload.get("generation_path")
             if not isinstance(raw, str) or not raw:
                 raise RevisionConsistencyError(f"receipt {receipt_path} has no retained generation")
@@ -975,7 +982,11 @@ class RevisionStore:
         current = pointer.get("revision", 0)
         if isinstance(current, bool) or not isinstance(current, int) or current < 0:
             raise RevisionConsistencyError(f"invalid current revision for {dataset}")
-        revision = current + 1
+        # A publish interrupted after its receipt was written leaves that
+        # receipt's number behind. Reusing it would give one number two
+        # receipts, and a pinned read or a revision delta could pick the one
+        # that was never published, so numbering continues after it.
+        revision = max(current, self._highest_receipt_number(dataset)) + 1
         committed_at = datetime.now(timezone.utc).isoformat()
         revision_id = uuid.uuid4().hex
         generation, generation_files = self._copy_generation(
@@ -1083,6 +1094,11 @@ class RevisionStore:
         if not relative:
             return None
         path = self._safe_meta_path(self._safe_relative(str(relative)), label="receipt")
+        return self._load_receipt(
+            path, pointer_path=self.pointer_path(dataset).relative_to(self.meta_root).as_posix()
+        )
+
+    def _load_receipt(self, path: Path, *, pointer_path: str = "") -> DatasetRevision:
         self._assert_regular(path)
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["files"] = tuple(RevisionFile(**item) for item in payload.get("files", []))
@@ -1091,51 +1107,65 @@ class RevisionStore:
             RevisionFile(**item) for item in payload.get("generation_files", [])
         )
         payload.setdefault("generation_path", "")
-        payload.setdefault(
-            "pointer_path", self.pointer_path(dataset).relative_to(self.meta_root).as_posix()
-        )
+        payload.setdefault("pointer_path", pointer_path)
         return DatasetRevision(**payload)
+
+    def _receipt_paths(self, dataset: str) -> list[tuple[int, str, Path]]:
+        """``(number, revision id, path)`` for every receipt file, published or not."""
+        directory = self.root / dataset
+        _reject_symlink_path(directory, label="revision directory")
+        out = []
+        for path in directory.glob("*-*.json") if directory.is_dir() else ():
+            number, _, rid = path.stem.partition("-")
+            if number.isdigit():
+                out.append((int(number), rid, path))
+        return out
+
+    def _highest_receipt_number(self, dataset: str) -> int:
+        return max((number for number, _, _ in self._receipt_paths(dataset)), default=0)
 
     def history_after(self, dataset: str, revision_id: str) -> tuple[DatasetRevision, ...]:
         """Return every committed receipt after *revision_id*, oldest first.
 
         Raises :class:`RevisionConsistencyError` when *revision_id* is not in
-        the receipt directory or the sequence after it has a gap, so a caller
-        can never mistake a partial history for "nothing changed".
+        the receipt directory, was never published, or the chain after it has
+        a gap, so a caller can never mistake a partial history for "nothing
+        changed".
         """
-        directory = self.root / dataset
-        _reject_symlink_path(directory, label="revision directory")
-        receipts: dict[int, Path] = {}
-        start: int | None = None
-        for path in directory.glob("*-*.json") if directory.is_dir() else ():
-            number, _, rid = path.stem.partition("-")
-            if not number.isdigit():
-                continue
-            receipts[int(number)] = path
-            if rid == revision_id:
-                start = int(number)
-        if start is None:
+        by_id: dict[str, tuple[int, Path]] = {}
+        by_number: dict[int, list[Path]] = {}
+        for number, rid, path in self._receipt_paths(dataset):
+            by_id[rid] = (number, path)
+            by_number.setdefault(number, []).append(path)
+        if revision_id not in by_id:
             raise RevisionConsistencyError(
                 f"revision {revision_id} of {dataset} is not in the receipt history"
             )
-        latest = self.latest(dataset)
-        end = latest.revision if latest is not None else start
+        start = by_id[revision_id][0]
+        current = self.latest(dataset)
         out: list[DatasetRevision] = []
-        for number in range(start + 1, end + 1):
-            path = receipts.get(number)
-            if path is None:
-                raise RevisionConsistencyError(f"revision {number} of {dataset} is missing")
-            self._assert_regular(path)
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            payload["files"] = tuple(RevisionFile(**item) for item in payload.get("files", []))
-            payload["changed_partitions"] = tuple(payload.get("changed_partitions", []))
-            payload["generation_files"] = tuple(
-                RevisionFile(**item) for item in payload.get("generation_files", [])
-            )
-            payload.setdefault("generation_path", "")
-            payload.setdefault("pointer_path", "")
-            out.append(DatasetRevision(**payload))
-        return tuple(out)
+        # Walk back from the published revision along ``base_revision_id``, so
+        # a receipt whose publish stopped short is never part of the history.
+        # Receipts written before that link existed fall back to the previous
+        # number, which a failed publish could not yet have taken.
+        while current is not None and current.revision_id != revision_id:
+            if current.revision <= start:
+                raise RevisionConsistencyError(
+                    f"revision {revision_id} of {dataset} was never published"
+                )
+            out.append(current)
+            base = current.metadata.get("base_revision_id")
+            if base:
+                previous = by_id.get(str(base), (None, None))[1]
+            else:
+                candidates = by_number.get(current.revision - 1, [])
+                previous = candidates[0] if len(candidates) == 1 else None
+            if previous is None:
+                raise RevisionConsistencyError(
+                    f"the revision before {current.revision} of {dataset} is missing"
+                )
+            current = self._load_receipt(previous)
+        return tuple(reversed(out))
 
     def sync_state(self, dataset: str) -> None:
         """Repair the denormalised state file from the committed pointer."""

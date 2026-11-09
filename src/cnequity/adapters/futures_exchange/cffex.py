@@ -84,21 +84,22 @@ def _url(template: str, trade_date: date) -> str:
     )
 
 
-def _int(value, field: str, code: str) -> int:
+def _int(value, field: str, code: str) -> int | None:
+    """A count cell; blank stays None: the file prints 0 for none, never a blank."""
     number = parse_number(value)
     if number is None:
-        return 0
+        return None
     if not math.isfinite(number) or not number.is_integer():
         raise FuturesPayloadError(f"CFFEX {code}: {field}={value!r} is not a whole number")
     return int(number)
 
 
 def _check_block(product: str, block: list[dict], subtotal: list[str], index: dict) -> None:
-    volume = sum(r["volume"] for r in block)
-    oi = sum(r["open_interest"] for r in block)
-    amount = sum(r["_amount_wan"] for r in block)
-    want_volume = _int(subtotal[index["volume"]], "volume", "小计")
-    want_oi = _int(subtotal[index["open_interest"]], "open_interest", "小计")
+    volume = sum(r["volume"] or 0 for r in block)
+    oi = sum(r["open_interest"] or 0 for r in block)
+    amount = sum(r["_amount_wan"] or 0.0 for r in block)
+    want_volume = _int(subtotal[index["volume"]], "volume", "小计") or 0
+    want_oi = _int(subtotal[index["open_interest"]], "open_interest", "小计") or 0
     want_amount = parse_number(subtotal[index["amount"]]) or 0.0
     if volume != want_volume or oi != want_oi or abs(amount - want_amount) > 0.01:
         raise FuturesPayloadError(
@@ -139,8 +140,8 @@ def parse_daily_csv(body: bytes, trade_date: date) -> ExchangeDay:
             return row[index[key]] if index[key] < len(row) else None
 
         volume = _int(cell("volume"), "volume", code)
-        traded = volume > 0
-        amount_wan = parse_number(cell("amount")) or 0.0
+        traded = bool(volume)
+        amount_wan = parse_number(cell("amount"))
         settle = parse_price(cell("settle"))
         row = {
             "exchange": EXCHANGE,
@@ -153,7 +154,7 @@ def parse_daily_csv(body: bytes, trade_date: date) -> ExchangeDay:
             "settle": settle,
             "pre_settle": parse_price(cell("pre_settle")),
             "volume": volume,
-            "amount": round(amount_wan * WAN_YUAN, 2),
+            "amount": None if amount_wan is None else round(amount_wan * WAN_YUAN, 2),
             "open_interest": _int(cell("open_interest"), "open_interest", code),
             "oi_change": _int(cell("oi_change"), "oi_change", code),
             "_amount_wan": amount_wan,

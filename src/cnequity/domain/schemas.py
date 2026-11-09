@@ -1757,8 +1757,9 @@ def derivative_bar_violations(dataset: str) -> pl.Expr | None:
     open/high/low — and an expiring option can carry no settlement at all, or
     settle at exactly zero when it expires out of the money. What stays
     impossible: a non-positive trade price or futures settlement, a negative
-    option settlement, a negative count, and a full candle whose high or low
-    does not bound its open and close.
+    option settlement, a missing or negative count, and a full candle whose
+    high or low does not bound its open and close. Every source prints 0 for no
+    volume or no position, so a missing count is a malformed cell, not a zero.
     """
     if dataset not in DERIVATIVE_BAR_DATASETS:
         return None
@@ -1768,8 +1769,8 @@ def derivative_bar_violations(dataset: str) -> pl.Expr | None:
         return pl.any_horizontal(
             [
                 *[pl.col(c).is_not_null() & (pl.col(c) <= 0) for c in ohlc],
-                pl.col("volume") < 0,
-                pl.col("open_interest") < 0,
+                pl.col("volume").is_null() | (pl.col("volume") < 0),
+                pl.col("open_interest").is_null() | (pl.col("open_interest") < 0),
                 every & (pl.col("high") < pl.max_horizontal("open", "close")),
                 every & (pl.col("low") > pl.min_horizontal("open", "close")),
             ]
@@ -1779,8 +1780,8 @@ def derivative_bar_violations(dataset: str) -> pl.Expr | None:
         pl.col("settle").is_not_null() & settle_floor,
         pl.col("pre_settle").is_not_null() & (pl.col("pre_settle") <= 0),
         *[pl.col(c).is_not_null() & (pl.col(c) <= 0) for c in ohlc],
-        pl.col("volume") < 0,
-        pl.col("open_interest") < 0,
+        pl.col("volume").is_null() | (pl.col("volume") < 0),
+        pl.col("open_interest").is_null() | (pl.col("open_interest") < 0),
         pl.col("amount").is_not_null() & (pl.col("amount") < 0),
         every & (pl.col("high") < pl.max_horizontal("open", "close")),
         every & (pl.col("low") > pl.min_horizontal("open", "close")),

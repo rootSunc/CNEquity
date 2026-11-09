@@ -140,7 +140,9 @@ def _parse_rows(
                 # `settlement` is a price, not a position count.  Do not use
                 # it as a fill when the feed omits open interest: the two
                 # fields have different units and the resulting value looks
-                # plausible enough to survive schema validation.
+                # plausible enough to survive schema validation. A main-continuous
+                # series always holds positions, so a 0 means the feed carries none
+                # (COMEX gold has none on every row), not an empty book.
                 "open_interest": oi if oi and oi > 0 else None,
                 "source": "sina",
             }
