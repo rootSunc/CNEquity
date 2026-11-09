@@ -111,7 +111,7 @@ enabled = false
 | `ths_official` | **同花顺官方 API（keyed）**，见 [`cne ths-official`](../reference/cli.md#cne-ths-official) |
 | `sw` / `cni` | 申万历史行业、国证历史成分文件，默认间隔 1 秒、单请求在途 |
 | `futures_exchange` | 期货交易所文件，逐主机限速与缓存 |
-| `tushare` | 可选 Tushare Pro——BJ 历史 ST 证据（`stock_st`）与 `broker_forecasts`（`report_rc`）。需你自己的 token：环境变量 `TUSHARE_TOKEN` 或 `token_file`，别把凭证写进配置；没有 token 时不发任何请求。`api_url` 默认 `https://api.tushare.pro`，只在使用其他兼容服务器时设置 |
+| `tushare` | 可选 Tushare Pro——BJ 历史 ST 证据（`stock_st`）与 `broker_forecasts`（`report_rc`）。需你自己的 token：环境变量 `TUSHARE_TOKEN` 或 `token_file`，别把凭证写进配置；没有 token 时不发任何请求。`api_url` 默认 `https://api.tushare.pro`，只在使用其他兼容服务器时设置。只由 `cne backfill` 采集、没有排进日更的 Tushare 数据集默认不算落后，`cne serve` 不提示它们 |
 
 
 | 键 | 说明 |
@@ -136,7 +136,7 @@ enabled = false
 | `backfill`（ths_official） | 默认 **关**。它会改变湖里的内容，所以必须显式打开。持有凭证、启用源、允许它改数据是三个决定 |
 | `api_key` / `api_key_file`（ths_official） | 建议用环境变量 `HITHINK_FINANCE_API_KEY` 或 `api_key_file`，而非写进配置 |
 
-`cne serve` 的取数设置只改通达信、东财、新浪日线、Baostock、北交所官网、同花顺页面和巨潮的 `enabled`，以及东财的 `push2_paused`。分钟线、分笔、期货开关和 `[universe] ingest` / `ingest_listed_funds` / `ingest_eligible_etfs` 也在那一页。确认前先列出差异，写入前备份；间隔、预算、熔断和凭据不动。环境变量 `CNE_PUSH2_PAUSED=1` 仍优先于配置里的暂停开关。
+`cne serve` 的取数设置改通达信、东财、新浪日线、Baostock、北交所官网、同花顺页面和巨潮的 `enabled`，以及东财的 `push2_paused`。Tushare 和同花顺官方接口在「付费数据源」里，默认关闭，只改各自的 `enabled`。每个付费源标出是否配置了密钥和上次检测的结果；检测只发一次小请求，`meta/sources/key-checks.json` 里只记密钥的短摘要。Tushare 令牌上次检测被拒绝时，它的数据集不算落后。分钟线、分笔、期货开关和 `[universe] ingest` / `ingest_listed_funds` / `ingest_eligible_etfs` 也在那一页。确认前先列出差异，写入前备份；间隔、预算、熔断和凭据不动。环境变量 `CNE_PUSH2_PAUSED=1` 仍优先于配置里的暂停开关。
 
 `cne serve` 启动后一直使用启动时的数据湖。直接编辑配置文件改了 `data.root`，要重启 serve 才会切换；在那之前，控制台每页顶部会对照显示配置文件里的新目录和当前仍在使用的目录，并给出重启命令。配置文件读不出来时会指出出错的行和列。这两种情况下页面照常浏览原来的湖，但不能从控制台启动任务、修改取数设置或定时任务，因为任务会按配置文件读到另一个湖。
 

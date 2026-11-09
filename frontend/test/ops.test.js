@@ -727,6 +727,60 @@ test("each source switch shows today's state, requests and failed batches", asyn
   assert.match(html, /今日失败 2 批：/);
 });
 
+test("paid sources sit in their own group with the key's last check and a check button", async (t) => {
+  const ctx = page(t);
+  const calls = [];
+  const state = settingsState();
+  state.sections.splice(1, 0, {
+    id: "licensed",
+    title: "付费数据源",
+    settings: [
+      { id: "tushare", kind: "bool", label: "Tushare", value: true },
+      { id: "ths_official", kind: "bool", label: "同花顺官方 API", value: false },
+    ],
+  });
+  ctx.api = async (path, options) => {
+    calls.push([path, options]);
+    if (path === "/api/ops/settings") return state;
+    if (path === "/api/ops/sources/tushare/check-key") {
+      return { state: "rejected", message: "tushare trade_cal refused (40101): token 不对", checked_at: "2026-11-09T08:00:00+00:00" };
+    }
+    throw new Error(path);
+  };
+  const sources = {
+    keys: { tushare: true, ths_official: false },
+    key_checks: { tushare: null, ths_official: null },
+    failures: {},
+  };
+  await renderSettings(ctx, { mode: { ops_enabled: true }, csrf_token: "csrf", occupancy: { sources } }, () => true);
+  const html = ctx.node("ops-settings").innerHTML;
+  assert.match(html, /<h3>付费数据源<\/h3>/);
+  assert.match(html, /开启 · 密钥未检测/);
+  assert.match(html, /关闭 · 未配置密钥/);
+  assert.match(html, /data-check-key="tushare"/);
+  assert.doesNotMatch(html, /data-check-key="ths_official"/, "no key, nothing to check");
+  const slot = ctx.node("source-state-tushare");
+  await ctx.node("settings-fields").onclick({ target: { closest: () => ({ dataset: { checkKey: "tushare" }, disabled: false, textContent: "" }) } });
+  assert.equal(calls.at(-1)[0], "/api/ops/sources/tushare/check-key");
+  assert.equal(calls.at(-1)[1].method, "POST");
+  assert.match(slot.innerHTML, /tone-bad[^<]*<\/i>开启 · 密钥被拒绝/);
+  assert.match(slot.innerHTML, /检测于 11-09 16:00/);
+  assert.match(slot.innerHTML, /它的数据集不计入落后/);
+  assert.match(slot.innerHTML, /重新检测/);
+});
+
+test("read-only settings show the key's state without a check button", async (t) => {
+  const ctx = page(t);
+  const state = settingsState();
+  state.sections = [{ id: "licensed", title: "付费数据源", settings: [{ id: "tushare", kind: "bool", label: "Tushare", value: true }] }];
+  ctx.api = async () => state;
+  const sources = { keys: { tushare: true }, key_checks: { tushare: { state: "ok", message: "", checked_at: "2026-11-09T08:00:00+00:00" } } };
+  await renderSettings(ctx, { mode: { ops_enabled: false }, occupancy: { sources } }, () => true);
+  const html = ctx.node("ops-settings").innerHTML;
+  assert.match(html, /tone-ok[^<]*<\/i>开启 · 密钥可用/);
+  assert.doesNotMatch(html, /data-check-key/);
+});
+
 test("daily runs point at a dated daily_bars backfill and keep a single trade date", async (t) => {
   const ctx = page(t);
   const html = capture(ctx);

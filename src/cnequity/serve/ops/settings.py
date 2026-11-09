@@ -203,6 +203,30 @@ SETTINGS: tuple[Setting, ...] = (
         True,
     ),
     Setting(
+        "tushare",
+        "licensed",
+        "sources.tushare",
+        "enabled",
+        "bool",
+        N_("Tushare"),
+        N_(
+            "Off by default. Needs your own token; the token stays in the config file. When off, no Tushare request is sent, and its datasets are not listed as stale."
+        ),
+        False,
+    ),
+    Setting(
+        "ths_official",
+        "licensed",
+        "sources.ths_official",
+        "enabled",
+        "bool",
+        N_("THS official API"),
+        N_(
+            "Off by default. A licensed API; the key stays in the config file. When off, no request is sent."
+        ),
+        False,
+    ),
+    Setting(
         "minute_bars",
         "capture",
         "minute_bars",
@@ -288,6 +312,7 @@ SETTINGS: tuple[Setting, ...] = (
 _BY_ID = {spec.id: spec for spec in SETTINGS}
 GROUPS = (
     ("sources", N_("Data sources")),
+    ("licensed", N_("Paid sources")),
     ("capture", N_("Optional collection")),
     ("universe", N_("Daily update coverage")),
 )

@@ -274,6 +274,7 @@ def test_normal_write_routes_are_exactly_the_whitelist(config):
         ("/api/ops/schedule/apply", "POST"),
         ("/api/ops/settings/preview", "POST"),
         ("/api/ops/settings/apply", "POST"),
+        ("/api/ops/sources/{source}/check-key", "POST"),
         ("/api/setup/config", "POST"),
     }
 
@@ -1000,3 +1001,92 @@ def test_source_status_counts_requests_keys_and_todays_failures(config, monkeypa
     assert shown["keys"]["tushare"] is False
     assert shown["failures"]["eastmoney"] == {"batches": 1, "datasets": ["news_headlines"]}
     assert "push2" in shown["requests"]
+
+
+def test_a_key_check_probes_once_and_reports_the_verdict(config, monkeypatch):
+    import cnequity.serve.ops.keys as keys
+    from cnequity.adapters.tushare.client import TushareRefused
+
+    monkeypatch.delenv("HITHINK_FINANCE_API_KEY", raising=False)
+    config.tushare_token = "test-token"
+    config.ths_official_api_key = None
+    client = _client(config)
+    headers = _csrf(client)
+    assert client.post("/api/ops/sources/eastmoney/check-key", headers=headers).status_code == 404
+    assert (
+        client.post("/api/ops/sources/ths_official/check-key", headers=headers).status_code == 422
+    )
+
+    calls = []
+
+    def refuse(cfg):
+        calls.append(cfg)
+        return "rejected", str(TushareRefused("trade_cal", 40101, "token 不对"))
+
+    monkeypatch.setitem(keys._PROBES, "tushare", refuse)
+    response = client.post("/api/ops/sources/tushare/check-key", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "rejected"
+    assert "test-token" not in response.text
+    assert (
+        client.get("/api/ops").json()["occupancy"]["sources"]["key_checks"]["tushare"]["state"]
+        == "rejected"
+    )
+    assert len(calls) == 1
+    assert client.post("/api/ops/sources/tushare/check-key").status_code in (400, 403)
+    assert len(calls) == 1
+
+
+def test_the_tushare_probe_sorts_refusals_and_turns_the_source_on_only_for_itself(
+    config, monkeypatch
+):
+    import cnequity.adapters.tushare.client as client_mod
+    from cnequity.serve.ops.keys import _probe_tushare
+
+    config.tushare_token = "test-token"
+    config.sources = {**config.sources, "tushare": False}
+    replies = iter(
+        [
+            client_mod.TusharePermissionDenied("trade_cal", 40203, "积分不足"),
+            client_mod.TushareRefused("trade_cal", 40101, "token 不对"),
+            None,
+        ]
+    )
+
+    def fake_rows(self, api, params=None, fields=""):
+        reply = next(replies)
+        if reply is not None:
+            raise reply
+        return ["cal_date"], [["20261109"]]
+
+    monkeypatch.setattr(client_mod.TushareClient, "rows", fake_rows)
+    assert _probe_tushare(config)[0] == "limited"
+    assert _probe_tushare(config)[0] == "rejected"
+    assert _probe_tushare(config) == ("ok", "")
+    assert config.sources["tushare"] is False
+
+
+def test_the_freshness_anchor_waits_for_todays_daily_update(config, monkeypatch):
+    from datetime import date, datetime
+    from datetime import time as clock
+
+    import cnequity.serve.lake as lake_mod
+    from cnequity.orchestrator.run_window import mark_done
+    from cnequity.serve.lake import LakeView
+
+    monday = date(2026, 11, 9)
+    monkeypatch.setattr(lake_mod, "shanghai_today", lambda: monday)
+    monkeypatch.setattr(lake_mod, "is_session_final", lambda day: True)
+    config.daily_run_at = "17:30"
+
+    def anchor_at(hour, minute):
+        monkeypatch.setattr(
+            lake_mod, "shanghai_now", lambda: datetime.combine(monday, clock(hour, minute))
+        )
+        view = LakeView(config)
+        return view.anchor()
+
+    assert anchor_at(16, 0) == date(2026, 11, 6), "before 17:30 Friday is still the anchor"
+    assert anchor_at(17, 30) == monday
+    mark_done(config.meta_root, "daily", monday)
+    assert anchor_at(16, 0) == monday, "a finished daily update counts at once"

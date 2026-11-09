@@ -308,6 +308,23 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
         except (OpsError, OSError, ValueError) as exc:
             raise HTTPException(422, str(exc)) from exc
 
+    @app.post("/api/ops/sources/{source}/check-key")
+    def source_check_key(source: str, request: Request) -> dict:
+        """One small request with the paid source's key; the lake is not touched."""
+        check_browser(request, mutation=True, scope="ops")
+        from cnequity.serve.ops.keys import PAID_SOURCES, check_key
+
+        if source not in PAID_SOURCES:
+            raise HTTPException(404, f"{source} is not a paid source")
+        try:
+            result = check_key(request.app.state.config, source)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        # A refused Tushare key changes which datasets count as stale.
+        if request.app.state.view is not None:
+            request.app.state.view.invalidate()
+        return result
+
     @app.post("/api/ops/schedule/preview")
     def schedule_preview(body: ScheduleBody, request: Request) -> dict:
         check_browser(request, mutation=True, scope="ops")

@@ -82,6 +82,8 @@ def test_the_whitelist_is_the_page_and_daily_has_no_range():
         "bse",
         "ths",
         "cninfo",
+        "tushare",
+        "ths_official",
         "minute_bars",
         "trade_ticks",
         "futures",
@@ -95,6 +97,51 @@ def test_the_whitelist_is_the_page_and_daily_has_no_range():
         assert "start" not in names
         assert "end" not in names
         assert "daily_bars" not in names
+
+
+def test_a_config_without_paid_sources_reads_them_off():
+    values = read_values('[data]\nroot = "/tmp/lake"\n')
+    assert values["tushare"] is False
+    assert values["ths_official"] is False
+
+
+def test_paid_sources_default_off_and_a_toggle_keeps_the_token(tmp_path):
+    path = _rich(tmp_path)
+    config = load_config(path)
+    client = _client(config)
+    headers = _headers(client)
+    body = client.get("/api/ops/settings").json()
+    licensed = next(section for section in body["sections"] if section["id"] == "licensed")
+    assert [(item["id"], item["value"]) for item in licensed["settings"]] == [
+        ("tushare", False),
+        ("ths_official", False),
+    ]
+    assert "付费数据源" in licensed["title"]
+
+    preview = client.post(
+        "/api/ops/settings/preview",
+        headers=headers,
+        json={"values": _values(body, tushare=True)},
+    )
+    assert preview.status_code == 200, preview.text
+    assert {item["id"] for item in preview.json()["changes"]} == {"tushare"}
+    assert SECRET not in preview.text
+
+    applied = client.post(
+        "/api/ops/settings/apply",
+        headers=headers,
+        json={"token": preview.json()["token"], "acknowledged": True},
+    )
+    assert applied.status_code == 200, applied.text
+    written = path.read_text(encoding="utf-8")
+    assert f'token = "{SECRET}"' in written
+    assert f'api_key = "{API_KEY}"' in written
+    tushare = written.split("[sources.tushare]", 1)[1].split("[", 1)[0]
+    official = written.split("[sources.ths_official]", 1)[1].split("[", 1)[0]
+    assert "enabled = true" in tushare
+    assert "enabled = false" in official
+    assert client.app.state.config.sources["tushare"] is True
+    assert client.app.state.config.sources["ths_official"] is False
 
 
 def test_preview_does_not_write_and_apply_keeps_secrets(tmp_path):

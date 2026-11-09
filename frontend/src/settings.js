@@ -30,7 +30,7 @@ export async function renderSettings(ctx, home, alive, flash = "") {
       const lit = SOURCE_SECTIONS.has(section.id);
       const fields = (section.settings || [])
         .map((spec) => (lit
-          ? `<div class="ops-source-row">${field(spec, disabled, esc)}${sourceState(spec, sources, esc)}</div>`
+          ? `<div class="ops-source-row">${field(spec, disabled, esc)}<span class="ops-source-status" id="source-state-${esc(spec.id)}">${sourceState(spec, sources, esc, writable)}</span></div>`
           : field(spec, disabled, esc)))
         .join("");
       return `<h3>${esc(pick(section, "title"))}</h3>${lit ? `<div class="ops-source-list">${fields}</div>` : fields}`;
@@ -46,6 +46,27 @@ export async function renderSettings(ctx, home, alive, flash = "") {
     </form><div id="settings-preview"></div>`;
   const form = document.getElementById("settings-fields");
   const target = document.getElementById("settings-preview");
+  const specById = Object.fromEntries((value.sections || []).flatMap((section) => section.settings || []).map((spec) => [spec.id, spec]));
+  form.onclick = async (event) => {
+    const button = event.target.closest?.("[data-check-key]");
+    if (!button || !writable) return;
+    const source = button.dataset.checkKey;
+    button.disabled = true;
+    button.textContent = tr("正在检测…", "Checking…");
+    let result;
+    try {
+      result = await api(`/api/ops/sources/${encodeURIComponent(source)}/check-key`, {
+        method: "POST",
+        headers: { "X-CNE-CSRF": home.csrf_token },
+      });
+    } catch (err) {
+      result = { state: "error", message: err.message, checked_at: null };
+    }
+    if (!alive()) return;
+    if (sources) sources.key_checks = { ...(sources.key_checks || {}), [source]: result };
+    const slot = document.getElementById(`source-state-${source}`);
+    if (slot) slot.innerHTML = sourceState(specById[source], sources, esc, writable);
+  };
   const specs = (value.sections || []).flatMap((section) => section.settings || []);
   let previewGeneration = 0;
   form.oninput = () => {
@@ -115,6 +136,7 @@ export async function renderSettings(ctx, home, alive, flash = "") {
 }
 
 const SOURCE_SECTIONS = new Set(["sources", "licensed"]);
+const PAID = { tushare: true, ths_official: true };
 
 // The registry source each switch controls; today's failures are counted by it.
 const SWITCH_SOURCE = {
@@ -128,12 +150,62 @@ const SWITCH_SOURCE = {
   ths_official: "ths_official",
 };
 
+// A paid source: its switch, whether a key is configured, and the last check
+// of that key. The check sends one small request; it never runs by itself.
+export function paidSourceState(spec, sources, esc, writable = false) {
+  const configured = Boolean(sources?.keys?.[spec.id]);
+  const check = sources?.key_checks?.[spec.id];
+  const when = check?.checked_at ? checkedAt(check.checked_at) : "";
+  let tone = "muted";
+  let word;
+  if (!configured) {
+    tone = spec.value ? "bad" : "muted";
+    word = spec.value ? tr("未配置密钥，不会发请求", "No key; no request is sent") : tr("关闭 · 未配置密钥", "Off · no key");
+  } else if (!check) {
+    tone = spec.value ? "warn" : "muted";
+    word = spec.value ? tr("开启 · 密钥未检测", "On · key not checked") : tr("关闭 · 密钥未检测", "Off · key not checked");
+  } else {
+    const prefix = spec.value ? tr("开启", "On") : tr("关闭", "Off");
+    const verdict = {
+      ok: [tr("密钥可用", "Key accepted"), "ok"],
+      limited: [tr("密钥有效，套餐不含检测接口", "Key valid; the probe is outside its plan"), "ok"],
+      rejected: [tr("密钥被拒绝", "Key rejected"), "bad"],
+      error: [tr("检测没有结果", "Check inconclusive"), "warn"],
+    }[check.state] || [tr("检测没有结果", "Check inconclusive"), "warn"];
+    word = `${prefix} · ${verdict[0]}`;
+    tone = spec.value || check.state === "rejected" ? verdict[1] : "muted";
+  }
+  const facts = [];
+  if (check && when) facts.push(tr(`检测于 ${when}`, `checked ${when}`));
+  if (check && check.state !== "ok" && check.message) facts.push(check.message);
+  if (configured && check?.state === "rejected" && spec.id === "tushare") {
+    facts.push(tr("它的数据集不计入落后", "Its datasets are not counted as stale"));
+  }
+  const failed = sources?.failures?.[SWITCH_SOURCE[spec.id]];
+  if (failed?.batches) {
+    const names = failed.datasets.slice(0, 3).map((name) => ds(name)).join(tr("、", ", "));
+    facts.push(tr(`今日失败 ${failed.batches} 批：${names}`, `${failed.batches} failed ${failed.batches === 1 ? "batch" : "batches"} today: ${names}`));
+  }
+  const button = configured && writable
+    ? `<button class="button button-ghost" type="button" data-check-key="${esc(spec.id)}">${check ? tr("重新检测", "Check again") : tr("检测密钥", "Check key")}</button>`
+    : "";
+  const detail = facts.length ? `<small class="ops-source-facts">${esc(facts.join(tr("；", "; ")))}</small>` : "";
+  return `<span class="ops-source-state"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${esc(word)}${button}</span>${detail}`;
+}
+
+function checkedAt(iso) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const text = at.toLocaleString("sv-SE", { timeZone: "Asia/Shanghai" });
+  return text.slice(5, 16);
+}
+
 // Each source switch with what it is doing today: off, paused, tripped, missing
 // its key, or on — plus today's requests and failed batches where known.
-function sourceState(spec, sources, esc) {
+function sourceState(spec, sources, esc, writable = false) {
   if (spec.kind !== "bool") return "";
+  if (spec.id in PAID) return paidSourceState(spec, sources, esc, writable);
   const breakers = sources?.breakers || [];
-  const keys = sources?.keys || {};
   let tone = "ok";
   let word = tr("开启", "On");
   if (spec.id === "push2_paused") {
@@ -142,17 +214,12 @@ function sourceState(spec, sources, esc) {
   } else if (!spec.value) {
     tone = "muted";
     word = tr("关闭", "Off");
-  } else if (spec.id in keys && !keys[spec.id]) {
-    tone = "bad";
-    word = tr("缺少密钥，不会发请求", "No key; no request is sent");
   } else if (spec.id === "eastmoney" && breakers.length) {
     tone = "bad";
     word = tr(`今日熔断：${breakers.join("、")}`, `Tripped today: ${breakers.join(", ")}`);
   } else if (spec.id === "eastmoney" && sources?.push2_paused) {
     tone = "warn";
     word = tr("push2 暂停，其余可用", "push2 paused, the rest available");
-  } else if (spec.id in keys) {
-    word = tr("开启，密钥已配置", "On, key configured");
   }
   const facts = [];
   if (spec.id === "eastmoney" || spec.id === "push2_paused") {

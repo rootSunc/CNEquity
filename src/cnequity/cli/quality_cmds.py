@@ -1144,8 +1144,12 @@ def status(
     if show_datasets:
         import polars as pl_mod
 
-        from cnequity.domain.datasets import DATASETS, empty_freshness_label, is_dataset_enabled
-        from cnequity.quality.freshness import freshness_state
+        from cnequity.domain.datasets import (
+            DATASETS,
+            empty_freshness_label,
+            is_dataset_enabled,
+        )
+        from cnequity.quality.freshness import freshness_owed, freshness_state
         from cnequity.query.reader import list_datasets
 
         anchor = _last_trading_day(cfg, shanghai_today())
@@ -1156,6 +1160,8 @@ def status(
             if lake_profile == "sample":
                 return "sample" if row["has_data"] else "n/a"
             if lake_profile == "demo" and not row["has_data"]:
+                return "n/a"
+            if not freshness_owed(cfg, row["dataset"]):
                 return "n/a"
             if not row["has_data"]:
                 # "empty" alone cannot say whether the dataset is waiting

@@ -40,10 +40,10 @@ from cnequity.domain.datasets import (
     history_mode_for,
     is_dataset_enabled,
 )
-from cnequity.domain.market_time import is_session_final, shanghai_today
+from cnequity.domain.market_time import is_session_final, shanghai_now, shanghai_today
 from cnequity.domain.partitions import parse_partition
 from cnequity.i18n import _, current_language
-from cnequity.quality.freshness import freshness_state
+from cnequity.quality.freshness import freshness_owed, freshness_state
 from cnequity.storage.stats import (
     load_partition_stats,
     load_provenance_stats,
@@ -281,13 +281,19 @@ class LakeView:
     # --- primitives --------------------------------------------------------
 
     def anchor(self) -> date:
-        """Last trading day — the date freshness is judged against."""
+        """Last trading day — the date freshness is judged against.
+
+        Today counts once the scheduled daily update is due or done. Between
+        the close and ``daily_run_at`` many sources have not published today
+        yet, and judging against today listed every daily dataset as stale.
+        """
 
         def _build() -> date:
             from cnequity.steps.common import is_trading_day
 
             today = shanghai_today()
-            day = today if is_session_final(today) else today - timedelta(days=1)
+            final = is_session_final(today) and not self._before_daily_update(today)
+            day = today if final else today - timedelta(days=1)
             for _day in range(15):
                 if is_trading_day(self.config, day):
                     return day
@@ -295,6 +301,21 @@ class LakeView:
             return shanghai_today()
 
         return self._cached("anchor", _build)
+
+    def _before_daily_update(self, today: date) -> bool:
+        """Whether today's scheduled daily update has neither come due nor run."""
+        from cnequity.orchestrator.run_window import is_done, parse_run_at
+
+        run_at = getattr(self.config, "daily_run_at", None)
+        if not run_at:
+            return False
+        try:
+            due = parse_run_at(run_at)
+        except ValueError:
+            return False
+        if shanghai_now().time() >= due:
+            return False
+        return not is_done(self.config.meta_root, "daily", today, self.config)
 
     def _catalog(self) -> pl.DataFrame:
         """``list_datasets()`` joined with the measured rows and bytes."""
@@ -336,6 +357,10 @@ class LakeView:
 
     def _freshness_of(self, row: dict, anchor: date) -> str:
         """fresh / STALE / empty / n/a, on the same rules as ``cne status``."""
+        # Optional Tushare backfills are not a daily obligation. Judged before
+        # the empty label so a default install does not list them as sourceless.
+        if not freshness_owed(self.config, row["dataset"]):
+            return "n/a"
         if not row["has_data"]:
             # A demo or sample lake leaves most of the registry empty on
             # purpose. `cne status` calls those n/a; reporting them here as
@@ -1467,6 +1492,7 @@ class LakeView:
             kwargs["pit_mode"] = pit_mode or "best_effort"
         if adjust:
             kwargs["adjust"] = adjust
+        self._refuse_oversized_page(dataset, kwargs, period=period)
 
         try:
             adjustment = None
@@ -1496,6 +1522,47 @@ class LakeView:
             "limit": limit,
             "adjustment": adjustment,
         }
+
+    def _refuse_oversized_page(self, dataset: str, kwargs: dict, *, period: str | None) -> None:
+        """Refuse a page whose read would not be bounded, the way MCP does.
+
+        ``load()`` holds the whole selection before the page is cut: one
+        ``trade_ticks`` day peaked at 5.2 GB for 200 rows, and a request with
+        no period would select all of it. A point-in-time or report-period
+        read loads the whole dataset whatever the period, so it is sized whole.
+        """
+        from cnequity.query.read_budget import oversized_read
+
+        spec = DATASETS[dataset]
+        whole = spec.pit or spec.partition_col == "report_period"
+        over = oversized_read(
+            self.config,
+            dataset,
+            start=None if whole else kwargs.get("start"),
+            end=None if whole else kwargs.get("end"),
+            symbols=kwargs.get("symbols"),
+        )
+        if over is None:
+            return
+        values = {
+            "dataset": dataset,
+            "size": f"{over.selected_bytes / 2**20:,.0f} MiB",
+            "budget": f"{over.budget_bytes / 2**20:,.0f} MiB",
+        }
+        if not whole and not period and over.fits:
+            raise ValueError(
+                _(
+                    "{dataset} would read {size} of Parquet for this page (budget {budget}), "
+                    "and every row is held in memory before the page is cut. "
+                    "Pick a period or enter a symbol."
+                ).format(**values)
+            )
+        raise ValueError(
+            _(
+                "{dataset} would read {size} of Parquet for this page (budget {budget}), "
+                "and every row is held in memory before the page is cut. Enter a symbol."
+            ).format(**values)
+        )
 
     def heatmap(self, *, days: int = 90) -> dict:
         """Coverage grid: one row per dataset, one cell per recent trading day.

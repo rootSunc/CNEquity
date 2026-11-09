@@ -2620,6 +2620,36 @@ def removed_from_schedule(config, dataset: str) -> bool:
     return dataset not in scheduled_steps(config)
 
 
+def tushare_backfill_dataset(dataset: str) -> bool:
+    """A Tushare-primary best-effort dataset, filled by ``cne backfill``.
+
+    These need the user's own token and are not on the default daily schedule.
+    ``name_history`` is not one of them: it is an extended dataset the core
+    group already runs, and without a token that step sends nothing.
+    """
+    spec = DATASETS.get(dataset)
+    return spec is not None and spec.primary_source == "tushare" and spec.support == "best_effort"
+
+
+def daily_freshness_owed(config, dataset: str) -> bool:
+    """Whether *dataset* is supposed to keep up with the last trading session.
+
+    Tushare backfill datasets are optional and off unless the user turns the
+    source on. The open-source default leaves ``[sources.tushare]`` disabled,
+    so an empty table or a one-time pull is not a missed daily update and must
+    not show up as stale in ``cne serve``. They become due only when that
+    source is configured and a daily schedule group actually lists the step.
+    ``cnequity.quality.freshness.freshness_owed`` also drops a refused key.
+    With no config there is no lake to exempt, so the registry rule stands.
+    Every other dataset is owed exactly as before.
+    """
+    if not tushare_backfill_dataset(dataset) or config is None:
+        return True
+    if not keyed_source_ready("tushare", config):
+        return False
+    return dataset in scheduled_steps(config)
+
+
 def stale_between(dataset: str, mark, anchor, config=None) -> bool:
     """Whether *dataset*'s freshest date (*mark*) lags *anchor* beyond tolerance.
 

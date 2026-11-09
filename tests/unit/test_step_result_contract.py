@@ -67,7 +67,8 @@ def test_only_an_explicit_false_completion_flag_counts(flag):
 # Literal ``"failed…":`` dict keys and ``["failed…"] =`` assignments.
 _KEY_LITERAL = re.compile(r"""["'](failed[a-z_]*)["']\s*:|\[["'](failed[a-z_]*)["']\]\s*=""")
 # ``failed_at`` stamps an adapter's own retry record; it never reaches a step result.
-_NOT_RESULT_KEYS = {"failed_at"}
+# failed_datasets is a serve job-record field, not a step result key.
+_NOT_RESULT_KEYS = {"failed_at", "failed_datasets"}
 
 
 def test_every_failed_key_in_the_code_is_listed():

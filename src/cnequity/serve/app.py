@@ -481,6 +481,8 @@ def reload_lake_config(app: FastAPI) -> Config:
     app.state.config = config
     if app.state.view is not None:
         app.state.view.config = config
+        # A source switch changes which datasets count as stale.
+        app.state.view.invalidate()
     if app.state.storage_maintenance is not None:
         app.state.storage_maintenance.config = config
     if config.config_path is not None:

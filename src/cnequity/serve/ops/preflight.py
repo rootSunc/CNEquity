@@ -31,6 +31,7 @@ from cnequity.orchestrator.scheduler_lock import lock_directory, scheduler_lock_
 from cnequity.serve.display import en, local
 from cnequity.serve.ops.catalog import OpSpec
 from cnequity.serve.ops.records import live_holder, slot_path
+from cnequity.storage.key_checks import last_check
 
 ENGINE_TEXT = {
     DAILY_INGESTION_LOCK: N_(
@@ -161,7 +162,8 @@ def source_status(config) -> dict:
     ``readable`` is false when the breaker ledger cannot be read; the page
     still opens. ``requests`` holds the EastMoney host profiles the ledger
     counts. ``keys`` says whether each paid source has a credential, never the
-    credential. ``failures`` counts today's failed batches by the primary
+    credential, and ``key_checks`` holds the last check of that credential
+    (see ``cnequity.storage.key_checks``). ``failures`` counts today's failed batches by the primary
     source of their dataset.
     """
     if config is None:
@@ -175,6 +177,9 @@ def source_status(config) -> dict:
         "keys": {
             "tushare": bool(getattr(config, "tushare_token", None)),
             "ths_official": bool(getattr(config, "ths_official_api_key", None)),
+        },
+        "key_checks": {
+            source: last_check(config, source) for source in ("tushare", "ths_official")
         },
         "failures": _failures_today(config),
     }

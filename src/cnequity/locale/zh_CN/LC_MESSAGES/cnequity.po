@@ -3922,6 +3922,14 @@ msgid "Off"
 msgstr "关"
 
 #: cnequity/serve/ops/settings.py
+msgid "Off by default. A licensed API; the key stays in the config file. When off, no request is sent."
+msgstr "默认关闭。需授权的接口，密钥仍留在配置文件里。关闭后不发请求。"
+
+#: cnequity/serve/ops/settings.py
+msgid "Off by default. Needs your own token; the token stays in the config file. When off, no Tushare request is sent, and its datasets are not listed as stale."
+msgstr "默认关闭。需要你自己的令牌，令牌仍留在配置文件里。关闭后不向 Tushare 发请求，它的数据集也不算落后。"
+
+#: cnequity/serve/ops/settings.py
 msgid "Off by default. When on, the daily update fetches futures and options."
 msgstr "默认关闭。打开后日更会抓取期货和期权。"
 
@@ -4113,6 +4121,10 @@ msgstr "页面生成于 {generated} · 数据由 <code>cne sources probe</code> 
 #: cnequity/diagnostics/source_health.py
 msgid "Paginated, and an empty page looks just like the last page — this project reconciles by pages/count."
 msgstr "分页返回，空页与结束页长得一样——本项目按 pages/count 对账。"
+
+#: cnequity/serve/ops/settings.py
+msgid "Paid sources"
+msgstr "付费数据源"
 
 #: cnequity/cli/ths_official_cmds.py
 msgid "Parquet of (symbol, trade_date, close) from an independent source."
@@ -5653,6 +5665,10 @@ msgid "THS d.10jqka (K-lines)"
 msgstr "同花顺 d.10jqka（K 线）"
 
 #: cnequity/serve/ops/settings.py
+msgid "THS official API"
+msgstr "同花顺官方接口"
+
+#: cnequity/serve/ops/settings.py
 msgid "THS pages"
 msgstr "同花顺页面"
 
@@ -6303,6 +6319,10 @@ msgstr "把估值的零占位改为空值"
 #: cnequity/storage/migrations.py
 msgid "Turn vendor zero placeholders into nulls, and convertible bond prices on sessions without a trade"
 msgstr "把供应商表示缺失的 0 改为空值，并把可转债无成交日的价格改为空值"
+
+#: cnequity/serve/ops/settings.py
+msgid "Tushare"
+msgstr "Tushare"
 
 #: cnequity/diagnostics/report.py
 msgid "Tushare is enabled; its endpoint permissions are not probed yet"
@@ -7711,3 +7731,11 @@ msgstr "✗ 建湖还没完成（run {run_id}）。已下载的部分都已保�
 msgid "✗ This backfill fetched nothing usable, so the range stays a gap in the coverage record. `fallback` above gives the reason (sources unavailable, or unable to serve this range) and the sources tried; the log has the reason for each key."
 msgstr "✗ 本次回填没有取到可用数据，该范围作为缺口留在覆盖记录中。上方 `fallback` 给出了原因（数据源不可用，或无法提供这段范围）和尝试过的来源；日志里有每个键的原因。"
 
+
+#: cnequity/serve/lake.py
+msgid "{dataset} would read {size} of Parquet for this page (budget {budget}), and every row is held in memory before the page is cut. Pick a period or enter a symbol."
+msgstr "{dataset} 这一页要读取 {size} 的 Parquet（预算 {budget}），分页前每一行都要先载入内存。请选择一个时段或输入标的。"
+
+#: cnequity/serve/lake.py
+msgid "{dataset} would read {size} of Parquet for this page (budget {budget}), and every row is held in memory before the page is cut. Enter a symbol."
+msgstr "{dataset} 这一页要读取 {size} 的 Parquet（预算 {budget}），分页前每一行都要先载入内存。请输入标的。"

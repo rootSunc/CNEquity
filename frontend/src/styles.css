@@ -857,7 +857,9 @@ a.ops-cell:hover { outline: 1.5px solid var(--fg); outline-offset: 1px; }
 .ops-source-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; align-items: start; padding: 8px 0; border-top: 0.5px solid var(--line); }
 .ops-source-row:first-child { border-top: 0; }
 .ops-source-row > small { grid-column: 1; }
-.ops-source-row > small.ops-source-facts { grid-column: 1 / -1; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ops-source-status { display: contents; }
+.ops-source-state .button { margin-left: 8px; min-height: 0; padding: 2px 8px; font-size: var(--text-sm); }
+.ops-source-row small.ops-source-facts { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ops-source-state { grid-column: 2; grid-row: 1; display: inline-flex; align-items: center; color: var(--muted); font-size: var(--text-sm); white-space: nowrap; }
 .ops-drawer-backdrop { position: fixed; inset: 0; z-index: 40; background: rgb(0 0 0 / 24%); }
 .ops-drawer {
