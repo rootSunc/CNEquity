@@ -4,6 +4,7 @@ from datetime import date
 from types import SimpleNamespace
 
 import polars as pl
+import pytest
 
 from cnequity.adapters.eastmoney.bse_payment_notices import (
     _matches_reviewed_issuer_code,
@@ -39,6 +40,7 @@ def test_bj_cash_repair_blocks_same_day_stock_terms_before_network():
         SimpleNamespace(sources={"eastmoney": True}),
         "test-run",
         pl.DataFrame([cash]),
+        stage=lambda *a, **k: pytest.fail("blocked before staging anything"),
         all_actions=pl.DataFrame([cash, stock]),
     )
     assert matched == []

@@ -781,3 +781,65 @@ def test_layout_violations_flags_root_files_beside_partitions_and_foreign_keys()
     # A root-only legacy layout or a legacy granularity is left to the audit.
     assert layout_violations("daily_bars", [Path("merged.parquet")]) == []
     assert layout_violations("instruments", [Path("part-merged.parquet")]) == []
+
+
+def test_a_change_made_only_of_removed_partitions_publishes(tmp_path):
+    """`commit` read "no changed files" as "unchanged", so a repair that only
+    deleted partitions had to rewrite an untouched one to get published."""
+    cfg, store, first = _revision_lake(tmp_path, 10.0)
+    second = cfg.curated_root / "daily_bars/trade_date=2026-01-02/part.parquet"
+    _bars(second, date(2026, 1, 2), 11.0)
+    store.commit(
+        "daily_bars",
+        run_id="r-2",
+        changed_files=[second],
+        schema_version=1,
+        contract_fingerprint="contract",
+    )
+    kept = store.current_root("daily_bars") / "trade_date=2026-01-01/part.parquet"
+    kept_bytes = kept.read_bytes()
+
+    shutil.rmtree(second.parent)
+    receipt = store.commit(
+        "daily_bars",
+        run_id="r-3",
+        changed_files=[],
+        removed_partitions=["trade_date=2026-01-02"],
+        schema_version=1,
+        contract_fingerprint="contract",
+    )
+
+    assert receipt is not None
+    assert receipt.changed_partitions == ("daily_bars/trade_date=2026-01-02",)
+    assert receipt.metadata["removed_partitions"] == ["daily_bars/trade_date=2026-01-02"]
+    current = store.current_root("daily_bars")
+    assert not (current / "trade_date=2026-01-02").exists()
+    assert (current / "trade_date=2026-01-01/part.parquet").read_bytes() == kept_bytes
+    assert load("daily_bars", config=cfg)["close"].to_list() == [10.0]
+    # Nothing declared and nothing changed is still "unchanged".
+    assert (
+        store.commit(
+            "daily_bars",
+            run_id="r-4",
+            changed_files=[],
+            schema_version=1,
+            contract_fingerprint="contract",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("name", ["trade_date=2026-01-01", "trade_date=1999-01-01", "../x"])
+def test_a_removal_must_be_real(tmp_path, name):
+    from cnequity.storage.revisions import RevisionConsistencyError
+
+    _cfg, store, _path = _revision_lake(tmp_path, 10.0)
+    with pytest.raises(RevisionConsistencyError):
+        store.commit(
+            "daily_bars",
+            run_id="r-x",
+            changed_files=[],
+            removed_partitions=[name],
+            schema_version=1,
+            contract_fingerprint="contract",
+        )

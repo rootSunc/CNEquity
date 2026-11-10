@@ -26,8 +26,12 @@ from cnequity.adapters.cninfo.reviewed_holder_notices import reviewed_holder_not
 from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.market_time import SHANGHAI_TZ
 from cnequity.domain.rate_limit import source_request
-from cnequity.steps.http_common import verify_raw_archive, write_fetched
-from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
+from cnequity.storage.raw_archive import (
+    RawPayloadArchive,
+    StageWrite,
+    begin_capture,
+    verify_raw_archive,
+)
 
 _DIRECTORY_URL = "https://www.cninfo.com.cn/new/data/szse_stock.json"
 _QUERY_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
@@ -474,6 +478,7 @@ def repair_cninfo_payment_notices(
     run_id: str,
     existing: pl.DataFrame,
     *,
+    stage: StageWrite,
     metrics: dict[str, int] | None = None,
 ) -> tuple[list[tuple[str, date]], list[dict]]:
     """Fetch, validate, archive and stage exact issuer-notice repairs."""
@@ -722,7 +727,7 @@ def repair_cninfo_payment_notices(
                     request_scope=scope,
                     records=records,
                 )
-                write_fetched(
+                stage(
                     config,
                     run_id,
                     "corporate_actions",

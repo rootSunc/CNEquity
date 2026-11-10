@@ -15,7 +15,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.orphan_symbols import _publish
+from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.repairs.status_listing_window import instrument_spans
 from cnequity.storage.revisions import RevisionStore
 
@@ -72,7 +72,7 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
         return flagged.filter(~hit).drop("_outside")
 
     report.update(
-        _publish(
+        publish_repair(
             config,
             store,
             DATASET,

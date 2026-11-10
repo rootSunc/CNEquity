@@ -16,7 +16,7 @@ from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.storage.instrument_catalog import load_bar_universe
-from cnequity.storage.repairs.orphan_symbols import _publish
+from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ def _purge_valuation_orphan_symbols_locked(config: Config) -> dict:
     removed = scan.filter(pl.col("symbol").is_in(orphans)).select(pl.len()).collect().item()
 
     base = store.repair_base(_DATASET, register=True)
-    published = _publish(
+    published = publish_repair(
         config,
         store,
         _DATASET,

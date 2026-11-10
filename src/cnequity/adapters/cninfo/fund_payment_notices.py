@@ -19,8 +19,12 @@ from pypdf import PdfReader
 
 from cnequity.adapters.cninfo.announcements import post_with_retry
 from cnequity.adapters.cninfo.payment_notices import _get, _source_date
-from cnequity.steps.http_common import verify_raw_archive, write_fetched
-from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
+from cnequity.storage.raw_archive import (
+    RawPayloadArchive,
+    StageWrite,
+    begin_capture,
+    verify_raw_archive,
+)
 
 _DIRECTORY = "https://www.cninfo.com.cn/new/data/fund_stock.json"
 _QUERY = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
@@ -175,7 +179,9 @@ def _query_notices(client, config, code: str, org_id: str, year: int, on_respons
         page += 1
 
 
-def repair_fund_payment_notices(config, run_id: str, existing: pl.DataFrame, *, metrics=None):
+def repair_fund_payment_notices(
+    config, run_id: str, existing: pl.DataFrame, *, stage: StageWrite, metrics=None
+):
     """Archive original responses and stage only unique exact issuer facts."""
     if existing.is_empty() or not config.sources.get("cninfo", False):
         return [], []
@@ -354,7 +360,7 @@ def repair_fund_payment_notices(config, run_id: str, existing: pl.DataFrame, *, 
                         request_scope=scope,
                         records=records,
                     )
-                    write_fetched(
+                    stage(
                         config,
                         run_id,
                         "corporate_actions",

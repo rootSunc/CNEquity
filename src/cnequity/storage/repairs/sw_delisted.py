@@ -18,7 +18,7 @@ from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.read_context import ReadContext
-from cnequity.storage.repairs.orphan_symbols import _publish
+from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
 
 DATASET = "industry_members"
@@ -77,7 +77,7 @@ def repair_sw_delisted(config: Config, *, apply: bool = False) -> dict:
         if not apply or not hits.height:
             return report
         report.update(
-            _publish(
+            publish_repair(
                 config,
                 store,
                 DATASET,

@@ -19,8 +19,12 @@ from pypdf import PdfReader
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 from cnequity.domain.action_evidence import REVIEWED_BJ_CORRECTION_CHAIN, REVIEWED_BJ_TRANSFERS
 from cnequity.query.reader import load
-from cnequity.steps.http_common import verify_raw_archive, write_fetched
-from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
+from cnequity.storage.raw_archive import (
+    RawPayloadArchive,
+    StageWrite,
+    begin_capture,
+    verify_raw_archive,
+)
 
 # The reviewed events live in the domain registry, which the canonical merge
 # also reads so a later vendor sweep cannot undo them.  Each PDF must still
@@ -125,7 +129,7 @@ def verified_correction_chain(rows: list[dict], correction: bytes, final: bytes)
 
 
 def repair_reviewed_bj_stock_terms(
-    config, run_id: str, symbols: list[str], start: date, end: date
+    config, run_id: str, symbols: list[str], start: date, end: date, *, stage: StageWrite
 ) -> dict:
     keys = [(symbol, day) for symbol, day in REVIEWED if symbol in symbols and start <= day <= end]
     correction_key = (CORRECTED_CHAIN["symbol"], CORRECTED_CHAIN["ex_date"])
@@ -149,7 +153,7 @@ def repair_reviewed_bj_stock_terms(
             response = client.get(url)
             response.raise_for_status()
             corrected = verified_bonus_correction(rows, response.content, expected)
-            write_fetched(
+            stage(
                 config,
                 run_id,
                 "corporate_actions",
@@ -221,7 +225,7 @@ def repair_reviewed_bj_stock_terms(
                     request_scope=scope,
                     records=records,
                 )
-                write_fetched(
+                stage(
                     config,
                     run_id,
                     "corporate_actions",

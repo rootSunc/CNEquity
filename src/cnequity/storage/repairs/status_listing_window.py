@@ -33,7 +33,7 @@ from cnequity.domain.trading_status import (
 )
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.orphan_symbols import _publish
+from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
 
 DATASET = "trading_status"
@@ -152,7 +152,7 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
         return flagged.filter(~hit).drop("_outside")
 
     report.update(
-        _publish(
+        publish_repair(
             config,
             store,
             DATASET,

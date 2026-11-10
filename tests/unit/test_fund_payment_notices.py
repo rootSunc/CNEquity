@@ -126,7 +126,11 @@ def test_missing_fund_directory_identity_is_event_scoped(monkeypatch):
     )
     frame = pl.DataFrame({"symbol": ["510720.SH"], "ex_date": [date(2024, 5, 10)]})
     config = SimpleNamespace(sources={"cninfo": True})
-    assert fund_payment_notices.repair_fund_payment_notices(config, "run", frame) == (
+
+    def never(*args, **kwargs):
+        raise AssertionError("nothing is staged without a directory identity")
+
+    assert fund_payment_notices.repair_fund_payment_notices(config, "run", frame, stage=never) == (
         [],
         [
             {

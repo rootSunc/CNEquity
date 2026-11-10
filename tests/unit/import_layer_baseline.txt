@@ -1,14 +1,8 @@
 # importer -> imported pairs that point up the layer stack; see test_import_layers.py
 cnequity.adapters.calendar.exchange_calendar -> cnequity.query.parquet_scan
-cnequity.adapters.cninfo.fund_payment_notices -> cnequity.steps.http_common
-cnequity.adapters.cninfo.payment_notices -> cnequity.steps.http_common
-cnequity.adapters.eastmoney.bse_payment_notices -> cnequity.steps.http_common
 cnequity.adapters.eastmoney.bse_stock_terms -> cnequity.query.reader
-cnequity.adapters.eastmoney.bse_stock_terms -> cnequity.steps.http_common
 cnequity.adapters.eastmoney.fundamentals -> cnequity.query.parquet_scan
 cnequity.adapters.eastmoney.fundamentals -> cnequity.storage.read_context
-cnequity.adapters.eastmoney.payment_notices -> cnequity.steps.http_common
-cnequity.adapters.exchange.fund_payment_notices -> cnequity.steps.http_common
 cnequity.adapters.exchange.margin_trading -> cnequity.orchestrator.source_gaps
 cnequity.adapters.futures_exchange.common -> cnequity.storage.derivative_evidence
 cnequity.adapters.sina.dce_futures -> cnequity.query.calendar

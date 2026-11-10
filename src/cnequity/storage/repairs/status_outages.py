@@ -34,7 +34,7 @@ from cnequity.domain.trading_status import (
 )
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.orphan_symbols import _publish
+from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.repairs.status_listing_window import listing_spans
 from cnequity.storage.revisions import RevisionStore
 
@@ -195,7 +195,7 @@ def _repair_locked(config: Config, *, start: date, end: date, apply: bool) -> di
         )
 
     report.update(
-        _publish(
+        publish_repair(
             config,
             store,
             "trading_status",

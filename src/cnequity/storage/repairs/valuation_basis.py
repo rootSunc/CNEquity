@@ -35,6 +35,7 @@ from cnequity.domain.valuation import (
     split_dynamic_pe,
 )
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.query.share_counts import load_share_counts
 from cnequity.storage.parquet import CuratedWriter, _business_equal
 from cnequity.storage.revisions import RevisionStore
 
@@ -83,26 +84,6 @@ def _bars(root: Path | None, days: list[date]) -> pl.DataFrame:
         return empty
     bars = dedupe_by_primary_key(validate_dataframe(frame, "daily_bars"), "daily_bars")
     return bars.select("symbol", "trade_date", *[pl.col(c).cast(pl.Float64) for c in _BAR_COLUMNS])
-
-
-def load_share_counts(config: Config) -> pl.DataFrame:
-    """Latest known total share count per (symbol, change_date), or empty.
-
-    Empty only when the lake holds no share history; a history that cannot
-    be read is an error, not a reason to keep estimates silently.
-    """
-    from cnequity.query import load
-
-    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    if (
-        store.current_root("share_structure") is None
-        and not (config.curated_root / "share_structure").is_dir()
-    ):
-        return pl.DataFrame(
-            schema={"symbol": pl.Utf8, "change_date": pl.Date, "total_shares": pl.Float64}
-        )
-    frame = load("share_structure", as_of=datetime.now(timezone.utc).date(), config=config)
-    return frame.select("symbol", "change_date", "total_shares")
 
 
 def repair_frame(frame: pl.DataFrame, bars: pl.DataFrame, shares: pl.DataFrame) -> pl.DataFrame:

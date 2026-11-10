@@ -7,9 +7,8 @@ Rows that stored ``outDate`` directly ran one session late. The removal date
 itself stays in the delisted identity evidence.
 """
 
-from bisect import bisect_left
 from contextlib import nullcontext
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
@@ -19,34 +18,11 @@ import polars as pl
 from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.publication import check_repair_publication
+from cnequity.query.calendar import last_listed_sessions
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.revisions import RevisionStore
-
-# A removal is announced within weeks of the last listed session; a calendar
-# gap wider than this means the calendar does not reach that far back.
-_MAX_LOOKBACK_DAYS = 60
-
-
-def last_listed_sessions(config, removals: dict[str, date]) -> dict[str, date]:
-    """``symbol -> last trading session before its removal date``.
-
-    Symbols whose removal predates the trading calendar are left out rather
-    than given a calendar-day guess.
-    """
-    if not removals:
-        return {}
-    from cnequity.query.calendar import list_trading_dates
-
-    start = min(removals.values()) - timedelta(days=_MAX_LOOKBACK_DAYS)
-    sessions = list_trading_dates(config, start, max(removals.values()), include_staging=True)
-    out = {}
-    for symbol, removal in removals.items():
-        index = bisect_left(sessions, removal) - 1
-        if index >= 0 and (removal - sessions[index]).days <= _MAX_LOOKBACK_DAYS:
-            out[symbol] = sessions[index]
-    return out
 
 
 def _last_traded(context, symbols: list[str]) -> dict[str, date]:

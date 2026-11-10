@@ -12,8 +12,12 @@ from datetime import date
 import polars as pl
 
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
-from cnequity.steps.http_common import verify_raw_archive, write_fetched
-from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
+from cnequity.storage.raw_archive import (
+    RawPayloadArchive,
+    StageWrite,
+    begin_capture,
+    verify_raw_archive,
+)
 
 # Issuer notice 2024-045, pages 1 and 2: A-share cash 0.03 CNY,
 # ex-date/payment 2024-09-11. B shares pay 2024-09-27 and are NOT this event.
@@ -127,7 +131,9 @@ def verified_notice_row(old: dict, notice: dict, raw: bytes | list[bytes]) -> di
     }
 
 
-def repair_reviewed_notices(config, run_id: str, existing: pl.DataFrame) -> list[tuple[str, date]]:
+def repair_reviewed_notices(
+    config, run_id: str, existing: pl.DataFrame, *, stage: StageWrite
+) -> list[tuple[str, date]]:
     matches = [row for row in existing.to_dicts() if (row["symbol"], row["ex_date"]) in NOTICES]
     if not matches or not config.sources.get("eastmoney", False):
         return []
@@ -148,7 +154,7 @@ def repair_reviewed_notices(config, run_id: str, existing: pl.DataFrame) -> list
             batch_id = f"payment-notice-{old['symbol']}-{old['ex_date']}"
             if len(documents) == 1:
                 document = documents[0]
-                write_fetched(
+                stage(
                     config,
                     run_id,
                     "corporate_actions",
@@ -220,7 +226,7 @@ def repair_reviewed_notices(config, run_id: str, existing: pl.DataFrame) -> list
                     request_scope=scope,
                     records=records,
                 )
-                write_fetched(
+                stage(
                     config,
                     run_id,
                     "corporate_actions",

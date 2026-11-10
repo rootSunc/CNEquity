@@ -1098,3 +1098,201 @@ __all__ = [
     "sanitize_request_params",
     "sanitize_url",
 ]
+
+
+# --------------------------------------------------------------------------
+# Sealed evidence that a run's exact wire bytes are in the archive. It lives
+# here, not with the staging writer, so an adapter that verifies its own
+# capture does not have to import the step layer to do it.
+# --------------------------------------------------------------------------
+
+#: How a source-evidence repair stages what it verified: the step passes
+#: ``steps.http_common.write_fetched``, so the adapter neither imports the step
+#: layer nor decides how staging is written.
+StageWrite = Callable[..., dict]
+
+_RAW_ARCHIVE_EVIDENCE_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class RawArchiveEvidence:
+    """A sealed receipt for exact wire observations already in the archive.
+
+    Page-oriented adapters archive before they return their normalized frame,
+    so ``write_fetched`` cannot receive source bytes a second time.  The
+    receipt is intentionally not a boolean compatibility flag: it carries the
+    concrete sidecar/hash identities and is revalidated at the publish
+    boundary before any staging write is allowed.
+    """
+
+    dataset: str
+    run_id: str
+    source: str
+    request_scope: str
+    capture_nonce: str
+    record_keys: tuple[tuple[str, str], ...]
+    observation_ids: tuple[str, ...]
+    _seal: object = field(repr=False, compare=False)
+
+    def __init__(
+        self,
+        dataset: str,
+        run_id: str,
+        source: str,
+        request_scope: str,
+        capture_nonce: str,
+        record_keys: tuple[tuple[str, str], ...],
+        observation_ids: tuple[str, ...],
+        *,
+        _seal: object,
+    ) -> None:
+        if _seal is not _RAW_ARCHIVE_EVIDENCE_SEAL:
+            raise TypeError("RawArchiveEvidence must be created by archive verification")
+        object.__setattr__(self, "dataset", str(dataset))
+        object.__setattr__(self, "run_id", str(run_id))
+        object.__setattr__(self, "source", str(source))
+        object.__setattr__(self, "request_scope", str(request_scope))
+        object.__setattr__(self, "capture_nonce", str(capture_nonce))
+        object.__setattr__(self, "record_keys", tuple(record_keys))
+        object.__setattr__(self, "observation_ids", tuple(str(item) for item in observation_ids))
+        object.__setattr__(self, "_seal", _seal)
+
+    @classmethod
+    def _verified(
+        cls,
+        dataset: str,
+        run_id: str,
+        source: str,
+        request_scope: str,
+        capture_nonce: str,
+        record_keys: tuple[tuple[str, str], ...],
+        observation_ids: tuple[str, ...],
+    ) -> RawArchiveEvidence:
+        return cls(
+            dataset,
+            run_id,
+            source,
+            request_scope,
+            capture_nonce,
+            record_keys,
+            observation_ids,
+            _seal=_RAW_ARCHIVE_EVIDENCE_SEAL,
+        )
+
+
+def _raw_archive(config, dataset: str) -> RawPayloadArchive:
+    """Construct the strict archive view used for receipt validation."""
+    return RawPayloadArchive(
+        config.meta_root,
+        enabled=True,
+        datasets=[dataset],
+        compression=config.raw_archive_compression,
+        max_payload_bytes=config.raw_archive_max_payload_bytes,
+    )
+
+
+def verify_raw_archive(
+    config,
+    dataset: str,
+    run_id: str,
+    *,
+    source: str,
+    request_scope: str,
+    records: list[RawPayloadRecord] | tuple[RawPayloadRecord, ...] | None = None,
+) -> RawArchiveEvidence:
+    """Verify and seal exact wire evidence for one run/dataset.
+
+    This is the only factory for :class:`RawArchiveEvidence`.  Listing the
+    archive also integrity-checks payload bytes; the additional metadata check
+    rejects an adapter that wrote a normalized or otherwise non-wire payload.
+    """
+    if not run_id:
+        raise RawArchiveError(f"{dataset}: raw archive evidence requires a non-empty run_id")
+    if not source or not request_scope:
+        raise RawArchiveError(f"{dataset}: raw archive evidence requires source and request_scope")
+    nonce = capture_nonce(
+        config,
+        dataset,
+        str(run_id),
+        source=source,
+        request_scope=request_scope,
+    )
+    if not nonce:
+        raise RawArchiveError(
+            f"{dataset}: archive capture is not active for source {source!r}, "
+            f"scope {request_scope!r}"
+        )
+    if capture_is_consumed(
+        config,
+        dataset,
+        str(run_id),
+        source=source,
+        request_scope=request_scope,
+        nonce=nonce,
+    ):
+        raise RawArchiveError(f"{dataset}: archive capture was already consumed")
+    archive = _raw_archive(config, dataset)
+    current = captured_records(
+        config,
+        dataset,
+        str(run_id),
+        source=source,
+        request_scope=request_scope,
+    )
+    if records is None:
+        selected = current
+    else:
+        selected = list(records)
+        current_keys = {
+            (item.metadata_path, item.payload_sha256, item.observation_id) for item in current
+        }
+        if any(
+            item.capture_nonce != nonce
+            or (item.metadata_path, item.payload_sha256, item.observation_id) not in current_keys
+            for item in selected
+        ):
+            raise RawArchiveError(
+                f"{dataset}: supplied archive records are not from the active capture"
+            )
+    if not selected:
+        raise RawArchiveError(
+            f"{dataset}: archive is required but no exact wire observation exists "
+            f"for run_id {run_id!r}, source {source!r}, scope {request_scope!r}"
+        )
+    keys: list[tuple[str, str]] = []
+    observation_ids: list[str] = []
+    for record in selected:
+        if (
+            record.dataset != str(dataset)
+            or record.run_id != str(run_id)
+            or record.source != str(source)
+            or record.request_scope != str(request_scope)
+            or record.capture_nonce != nonce
+            or not record.observation_id
+        ):
+            raise RawArchiveError(
+                f"{dataset}: archive observation is outside the current source/scope"
+            )
+        if (
+            not isinstance(record.http_metadata, dict)
+            or record.http_metadata.get("wire_exact") is not True
+        ):
+            raise RawArchiveError(
+                f"{dataset}: archive observation {record.metadata_path!r} "
+                "does not carry verified exact wire evidence"
+            )
+        # ``records`` already reads each payload, but keep this explicit so a
+        # receipt is tied to the exact payload it names rather than just the
+        # existence of a JSON sidecar.
+        archive.record(record.metadata_path)
+        keys.append((record.metadata_path, record.payload_sha256))
+        observation_ids.append(str(record.observation_id))
+    return RawArchiveEvidence._verified(
+        dataset,
+        str(run_id),
+        str(source),
+        str(request_scope),
+        str(nonce),
+        tuple(keys),
+        tuple(observation_ids),
+    )

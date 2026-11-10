@@ -14,8 +14,6 @@ gate. Previous revisions stay readable.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 
 import polars as pl
@@ -23,8 +21,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.locator import layer_root
-from cnequity.storage.parquet import CuratedWriter
+from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
 
 logger = logging.getLogger(__name__)
@@ -85,7 +82,7 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
         if apply:
             dropped = list(orphans)
             entry.update(
-                _publish(
+                publish_repair(
                     config,
                     store,
                     dataset,
@@ -98,100 +95,6 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
             )
     report["applied"] = apply
     return report
-
-
-def _publish(
-    config: Config,
-    store: RevisionStore,
-    dataset: str,
-    partition_col: str,
-    base: Path,
-    *,
-    keep: Callable[[pl.DataFrame], pl.DataFrame],
-    reason: str,
-    metadata: dict,
-) -> dict:
-    """Rewrite the partitions ``keep`` changes and publish one gated revision."""
-    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
-    from cnequity.quality.publication import check_repair_publication
-
-    store.materialize_current(dataset)
-    layer = layer_root(config, dataset)
-    writer = CuratedWriter(layer)
-    changed: list[Path] = []
-    emptied = 0
-    for directory in sorted(p for p in base.iterdir() if p.is_dir()):
-        files = sorted(directory.rglob("*.parquet"))
-        if not files:
-            continue
-        frame = pl.concat([pl.read_parquet(p) for p in files], how="diagonal_relaxed")
-        kept = keep(frame)
-        if kept is frame or (kept.height == frame.height and kept.equals(frame)):
-            continue
-        value = directory.name.partition("=")[2]
-        if kept.is_empty():
-            # The commit carries an undeclared partition only while it is
-            # still present, so removing it here removes it from the revision.
-            target = layer / dataset / directory.name
-            for path in sorted(target.rglob("*"), reverse=True):
-                path.unlink() if path.is_file() else path.rmdir()
-            target.rmdir()
-            emptied += 1
-            continue
-        changed.append(
-            writer.write_partition(dataset, partition_col, value, kept, "part-merged.parquet")
-        )
-    if not changed and emptied:
-        # commit() reads "no changed files" as "unchanged", so a change made
-        # only of removed partitions would never publish. Re-declare one
-        # untouched partition, content as committed, to carry the removals.
-        survivor = next(
-            (
-                p
-                for p in sorted((layer / dataset).iterdir())
-                if p.is_dir() and any(p.rglob("*.parquet"))
-            ),
-            None,
-        )
-        if survivor is not None:
-            frame = pl.concat(
-                [pl.read_parquet(p) for p in sorted(survivor.rglob("*.parquet"))],
-                how="diagonal_relaxed",
-            )
-            changed.append(
-                writer.write_partition(
-                    dataset,
-                    partition_col,
-                    survivor.name.partition("=")[2],
-                    frame,
-                    "part-merged.parquet",
-                )
-            )
-    run_id = f"{reason}-{dataset}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
-    publication = check_repair_publication(config, dataset, run_id, changed)
-    contract = dataset_contract(dataset)
-    revision = store.commit(
-        dataset,
-        run_id=run_id,
-        changed_files=changed,
-        schema_version=int(contract["schema_version"]),
-        contract_fingerprint=contract_fingerprint(contract),
-        metadata={
-            "reason": reason,
-            **metadata,
-            "partitions_emptied": emptied,
-            "publication_audit": publication["report_path"],
-        },
-    )
-    if revision is None:
-        raise RuntimeError(f"{dataset}: {reason} produced no revision; nothing published")
-    logger.info("%s: %s published revision %s", dataset, reason, revision.revision)
-    return {
-        "revision": revision.revision,
-        "partitions_rewritten": len(changed),
-        "partitions_emptied": emptied,
-        "publication_audit": publication["report_path"],
-    }
 
 
 def repair_stale_derived_suspensions(config: Config, *, apply: bool = False) -> dict:
@@ -250,7 +153,7 @@ def _repair_stale_locked(config: Config, *, apply: bool) -> dict:
         return flagged.filter(~drop).drop("_stale")
 
     report.update(
-        _publish(
+        publish_repair(
             config,
             store,
             "trading_status",

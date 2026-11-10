@@ -16,6 +16,7 @@ import shutil
 import stat
 import tempfile
 import uuid
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -898,6 +899,31 @@ class RevisionStore:
             label = "derived" if layer_root == self.derived_root else "curated"
             raise ValueError(f"revision file is outside {label} root: {path}") from exc
 
+    def _removed_partitions(self, dataset: str, names: Iterable[str]) -> tuple[str, ...]:
+        """``dataset/<name>`` for each committed partition the writer deleted.
+
+        A name still present in the mutable tree, or absent from the committed
+        generation, is not a removal: refusing it keeps a typo from publishing
+        an unchanged revision that claims a deletion.
+        """
+        names = tuple(dict.fromkeys(str(name) for name in names))
+        if not names:
+            return ()
+        mutable = self._layer_root(dataset) / dataset
+        base = self.current_root(dataset)
+        out = []
+        for name in names:
+            if "/" in name or "\\" in name or "=" not in name:
+                raise RevisionConsistencyError(f"{dataset}: not a partition directory: {name!r}")
+            if (mutable / name).exists():
+                raise RevisionConsistencyError(f"{dataset}: {name} is still in the mutable tree")
+            if base is None or not (base / name).is_dir():
+                raise RevisionConsistencyError(
+                    f"{dataset}: {name} is not in the committed generation"
+                )
+            out.append(f"{dataset}/{name}")
+        return tuple(sorted(out))
+
     def _file_records(self, files: list[Path], dataset: str) -> tuple[RevisionFile, ...]:
         records: list[RevisionFile] = []
         for path in sorted({Path(item) for item in files}, key=lambda item: str(item)):
@@ -938,9 +964,15 @@ class RevisionStore:
         schema_version: int,
         contract_fingerprint: str,
         metadata: dict[str, Any] | None = None,
+        removed_partitions: Iterable[str] = (),
         _locked: bool = False,
     ) -> DatasetRevision | None:
         """Commit a new immutable generation, or return ``None`` if unchanged.
+
+        ``removed_partitions`` names partition directories (``trade_date=2024``)
+        the writer deleted from the mutable tree. A change made only of removals
+        has no changed file, and used to read as "unchanged"; a repair had to
+        rewrite an untouched partition to get it published.
 
         Compaction still writes the backwards-compatible ``curated/<dataset>``
         layout.  This method snapshots that complete result into a private
@@ -959,6 +991,7 @@ class RevisionStore:
                     schema_version=schema_version,
                     contract_fingerprint=contract_fingerprint,
                     metadata=metadata,
+                    removed_partitions=removed_partitions,
                     _locked=True,
                 )
 
@@ -967,7 +1000,8 @@ class RevisionStore:
         if not contract_fingerprint:
             raise ValueError("contract_fingerprint must not be empty")
         files = self._file_records(changed_files, dataset)
-        if not files:
+        removed = self._removed_partitions(dataset, removed_partitions)
+        if not files and not removed:
             return None
 
         # A direct caller may commit a legacy dataset without first calling
@@ -993,7 +1027,9 @@ class RevisionStore:
         )
         # File records are already POSIX; Path(str).parent would re-inject
         # Windows separators into the published partition identity.
-        partitions = tuple(sorted({Path(item.path).parent.as_posix() for item in files}))
+        partitions = tuple(
+            sorted({Path(item.path).parent.as_posix() for item in files} | set(removed))
+        )
         receipt_path = self.root / dataset / f"{revision:08d}-{revision_id}.json"
         receipt_relative = receipt_path.relative_to(self.meta_root).as_posix()
         generation_relative = generation.relative_to(self.meta_root).as_posix()
@@ -1010,7 +1046,11 @@ class RevisionStore:
             ),
             changed_partitions=partitions,
             files=files,
-            metadata={**dict(metadata or {}), "base_revision_id": pointer.get("revision_id")},
+            metadata={
+                **dict(metadata or {}),
+                **({"removed_partitions": list(removed)} if removed else {}),
+                "base_revision_id": pointer.get("revision_id"),
+            },
             generation_path=generation_relative,
             generation_files=generation_files,
             pointer_path=self.pointer_path(dataset).relative_to(self.meta_root).as_posix(),

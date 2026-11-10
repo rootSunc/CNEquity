@@ -13,8 +13,12 @@ import polars as pl
 from cnequity.adapters.cninfo.fund_payment_notices import parse_fund_payment_pdf
 from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.rate_limit import source_request
-from cnequity.steps.http_common import verify_raw_archive, write_fetched
-from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
+from cnequity.storage.raw_archive import (
+    RawPayloadArchive,
+    StageWrite,
+    begin_capture,
+    verify_raw_archive,
+)
 
 _QUERY = "https://query.sse.com.cn/commonQuery.do"
 _ROOT = "https://www.sse.com.cn"
@@ -86,7 +90,9 @@ def _query_symbol(client, config, code: str, year: int, archive, run_id: str, sc
     return list(seen.values()), records
 
 
-def repair_sse_fund_payment_notices(config, run_id: str, existing: pl.DataFrame, *, metrics=None):
+def repair_sse_fund_payment_notices(
+    config, run_id: str, existing: pl.DataFrame, *, stage: StageWrite, metrics=None
+):
     """Stage only unique code/date/amount matches from official PDFs."""
     if existing.is_empty() or not config.sources.get("exchange", False):
         return [], []
@@ -226,7 +232,7 @@ def repair_sse_fund_payment_notices(config, run_id: str, existing: pl.DataFrame,
                         request_scope=scope,
                         records=records,
                     )
-                    write_fetched(
+                    stage(
                         config,
                         run_id,
                         "corporate_actions",

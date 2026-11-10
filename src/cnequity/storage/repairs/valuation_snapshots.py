@@ -24,7 +24,7 @@ from cnequity.domain.market_time import last_closed_session
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.orphan_symbols import _publish
+from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
 
 DATASET = "valuation_metrics"
@@ -123,7 +123,7 @@ def _repair_locked(config: Config, *, apply: bool, fetch: Fetch | None) -> dict:
         )
 
     report.update(
-        _publish(
+        publish_repair(
             config,
             store,
             DATASET,

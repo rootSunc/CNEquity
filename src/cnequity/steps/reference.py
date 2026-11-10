@@ -664,7 +664,7 @@ def _merge_delisted_instruments(
     if delisted.is_empty():
         return df
     # outDate is the removal date; delist_date is the last listed session.
-    from cnequity.storage.repairs.delist_dates import last_listed_sessions
+    from cnequity.query.calendar import last_listed_sessions
 
     sessions = last_listed_sessions(
         config, dict(delisted.select("symbol", "delist_date").iter_rows())

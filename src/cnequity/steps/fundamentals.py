@@ -440,7 +440,7 @@ def _backfill_valuation_metrics_locked(config: Config, trade_date: date, run_id:
         }
 
     from cnequity.domain.valuation import reconstruct_total_mv
-    from cnequity.storage.repairs.valuation_basis import load_share_counts
+    from cnequity.query.share_counts import load_share_counts
 
     # Year-end share counts miss intra-year changes; the lake's own share
     # history gives the count effective on each session where it has one.

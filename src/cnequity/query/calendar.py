@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from bisect import bisect_left
 from datetime import date, datetime, timedelta
 
 import polars as pl
@@ -189,3 +190,26 @@ def last_trading_day(
             return candidate
         candidate -= timedelta(days=1)
     return day
+
+
+# A removal is announced within weeks of the last listed session; a calendar
+# gap wider than this means the calendar does not reach that far back.
+_MAX_LOOKBACK_DAYS = 60
+
+
+def last_listed_sessions(config, removals: dict[str, date]) -> dict[str, date]:
+    """``symbol -> last trading session before its removal date``.
+
+    Symbols whose removal predates the trading calendar are left out rather
+    than given a calendar-day guess.
+    """
+    if not removals:
+        return {}
+    start = min(removals.values()) - timedelta(days=_MAX_LOOKBACK_DAYS)
+    sessions = list_trading_dates(config, start, max(removals.values()), include_staging=True)
+    out = {}
+    for symbol, removal in removals.items():
+        index = bisect_left(sessions, removal) - 1
+        if index >= 0 and (removal - sessions[index]).days <= _MAX_LOOKBACK_DAYS:
+            out[symbol] = sessions[index]
+    return out

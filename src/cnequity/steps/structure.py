@@ -584,7 +584,7 @@ def _backfill_industry_members(config: Config, trade_date: date, run_id: str) ->
 def _drop_never_listed(config: Config, df: pl.DataFrame) -> pl.DataFrame:
     """Drop Shenwan classes of securities the lake has no record of ever listing."""
     from cnequity.query.parquet_scan import dataset_has_parquet
-    from cnequity.storage.repairs.sw_never_listed import never_listed, record_never_listed
+    from cnequity.storage.never_listed import never_listed, record_never_listed
 
     # Without a security master there is no evidence either way.
     if df.is_empty() or not dataset_has_parquet(config.curated_root / "instruments"):

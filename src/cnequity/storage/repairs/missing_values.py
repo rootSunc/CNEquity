@@ -19,7 +19,7 @@ from cnequity.domain.value_rules import (
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.read_context import ReadContext
-from cnequity.storage.repairs.orphan_symbols import _publish
+from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
 
 
@@ -59,7 +59,7 @@ def repair_missing_values(config: Config, dataset: str, *, apply: bool = False) 
         if not apply or not rows:
             return report
         report.update(
-            _publish(
+            publish_repair(
                 config,
                 store,
                 dataset,

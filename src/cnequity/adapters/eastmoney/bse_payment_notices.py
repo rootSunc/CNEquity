@@ -19,8 +19,12 @@ from pypdf import PdfReader
 
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 from cnequity.domain.bse_codes import current_to_legacy
-from cnequity.steps.http_common import verify_raw_archive, write_fetched
-from cnequity.storage.raw_archive import RawPayloadArchive, begin_capture
+from cnequity.storage.raw_archive import (
+    RawPayloadArchive,
+    StageWrite,
+    begin_capture,
+    verify_raw_archive,
+)
 
 _QUERY = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 _PDF = "https://pdf.dfcfw.com/pdf/H2_{art_code}_1.pdf"
@@ -160,6 +164,7 @@ def repair_bj_payment_notices(
     run_id: str,
     existing: pl.DataFrame,
     *,
+    stage: StageWrite,
     all_actions: pl.DataFrame | None = None,
     metrics: dict | None = None,
 ):
@@ -355,7 +360,7 @@ def repair_bj_payment_notices(
                         request_scope=scope,
                         records=records,
                     )
-                    write_fetched(
+                    stage(
                         config,
                         run_id,
                         "corporate_actions",

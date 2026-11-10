@@ -80,7 +80,9 @@ def repair_payment_dates(config, trade_date: date, run_id: str, context: dict):
     # new lake reproduce every reviewed correction through one entry point.
     from cnequity.adapters.eastmoney.bse_stock_terms import repair_reviewed_bj_stock_terms
 
-    stock_terms = repair_reviewed_bj_stock_terms(config, run_id, symbols, start, end)
+    stock_terms = repair_reviewed_bj_stock_terms(
+        config, run_id, symbols, start, end, stage=write_fetched
+    )
     all_actions = load("corporate_actions", data_root=config.data_root, start=start, end=end)
     existing = all_actions.filter(
         pl.col("symbol").is_in(symbols)
@@ -111,7 +113,7 @@ def repair_payment_dates(config, trade_date: date, run_id: str, context: dict):
     from cnequity.adapters.exchange.fund_payment_notices import repair_sse_fund_payment_notices
 
     sse_fund_keys, sse_fund_diagnostics = repair_sse_fund_payment_notices(
-        config, run_id, fund_pending, metrics=metrics
+        config, run_id, fund_pending, stage=write_fetched, metrics=metrics
     )
     sse_correction_blocked = [
         (issue["symbol"], date.fromisoformat(issue["ex_date"]))
@@ -128,7 +130,7 @@ def repair_payment_dates(config, trade_date: date, run_id: str, context: dict):
             )
         )
     cninfo_fund_keys, cninfo_fund_diagnostics = repair_fund_payment_notices(
-        config, run_id, fund_pending, metrics=metrics
+        config, run_id, fund_pending, stage=write_fetched, metrics=metrics
     )
     fund_keys = [*sse_fund_keys, *cninfo_fund_keys]
     repaired_fund_keys = {(symbol, str(day)) for symbol, day in fund_keys}
@@ -165,10 +167,10 @@ def repair_payment_dates(config, trade_date: date, run_id: str, context: dict):
     from cnequity.adapters.eastmoney.bse_payment_notices import repair_bj_payment_notices
     from cnequity.adapters.eastmoney.payment_notices import repair_reviewed_notices
 
-    reviewed_keys = repair_reviewed_notices(config, run_id, pending)
+    reviewed_keys = repair_reviewed_notices(config, run_id, pending, stage=write_fetched)
     pending = remove_keys(pending, reviewed_keys)
     bj_keys, bj_diagnostics = repair_bj_payment_notices(
-        config, run_id, pending, all_actions=all_actions, metrics=metrics
+        config, run_id, pending, stage=write_fetched, all_actions=all_actions, metrics=metrics
     )
     diagnostics.extend(bj_diagnostics)
     bj_economic_blockers = [
@@ -184,7 +186,7 @@ def repair_payment_dates(config, trade_date: date, run_id: str, context: dict):
 
     cninfo_pending = pending.filter(serves_expr("cninfo_issuer_directory"))
     cninfo_keys, cninfo_diagnostics = repair_cninfo_payment_notices(
-        config, run_id, cninfo_pending, metrics=metrics
+        config, run_id, cninfo_pending, stage=write_fetched, metrics=metrics
     )
     diagnostics.extend(cninfo_diagnostics)
     pending = remove_keys(pending, cninfo_keys)
