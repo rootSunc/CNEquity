@@ -1233,6 +1233,83 @@ class RevisionStore:
                 }
             )
 
+    def sweep(self, *, apply: bool = False) -> dict[str, Any]:
+        """Find, and with *apply* clear, what interrupted commits leave behind.
+
+        * A ``.<revision_id>-*`` temporary directory: a copy cut off mid-way.
+        * The generation of a receipt numbered above the current pointer: a
+          publish that failed after its receipt was written. Nothing reads it
+          (the pointer never moved, and history follows ``base_revision_id``).
+          The receipt stays as the record of the failure; a held generation
+          stays too.
+        * A state file that disagrees with the pointer: rebuilt by
+          ``sync_state``.
+        * A generation directory with no receipt: reported only, since a lake
+          converted from the pre-revision layout keeps its baseline that way.
+
+        The commit's failure path used to say these are collected "by ``gc``";
+        there was no such command. ``cne run maintain`` runs this daily.
+        """
+        from cnequity.file_lock import lake_mutation_lock
+        from cnequity.storage.lifecycle import LifecycleStore
+
+        report: dict[str, Any] = {
+            "applied": apply,
+            "temporary": [],
+            "unpublished": [],
+            "unreceipted": [],
+            "state_synced": [],
+        }
+        root = self.root
+        if not root.is_dir():
+            return report
+        with lake_mutation_lock(self.meta_root, blocking=True):
+            registry = LifecycleStore(self.meta_root).registry() or {}
+            held = set(registry.get("holds") or {})
+            for dataset_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name != "data"):
+                dataset = dataset_dir.name
+                pointer = self._read_pointer(dataset)
+                if pointer is None:
+                    continue
+                current = int(pointer.get("revision", 0) or 0)
+                receipts: dict[str, dict] = {}
+                for path in dataset_dir.glob("[0-9]*.json"):
+                    try:
+                        record = json.loads(path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    receipts[str(record.get("revision_id"))] = record
+                generations = self.root / "data" / dataset
+                if generations.is_dir():
+                    for entry in sorted(generations.iterdir()):
+                        relative = entry.relative_to(self.meta_root).as_posix()
+                        if entry.name.startswith("."):
+                            report["temporary"].append(relative)
+                            if apply:
+                                shutil.rmtree(entry, ignore_errors=True)
+                            continue
+                        if not entry.is_dir() or entry.name == pointer.get("revision_id"):
+                            continue
+                        record = receipts.get(entry.name)
+                        if record is None:
+                            if entry.name != _LEGACY_REVISION_ID:
+                                report["unreceipted"].append(relative)
+                            continue
+                        if int(record.get("revision", 0)) <= current:
+                            continue
+                        if f"revision/{dataset}/{entry.name}" in held:
+                            continue
+                        report["unpublished"].append(relative)
+                        if apply:
+                            _reject_symlink_path(entry, label="generation")
+                            shutil.rmtree(entry)
+                state = self.state.get_payload(dataset)
+                if current and state.get("revision_id") != pointer.get("revision_id"):
+                    report["state_synced"].append(dataset)
+                    if apply:
+                        self.sync_state(dataset)
+        return report
+
 
 def resolve_committed_root(
     dataset_root: Path | str,

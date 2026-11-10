@@ -347,7 +347,7 @@ Success, a valid partial result, or `skipped_non_trading_day` exits 0; execution
 
 ## cne run maintain
 
-Maintenance after the daily update; the timer `cne schedule install` installs runs it once after each trading day's update: the run audit (the whole-lake audit on `[job.maintenance] full_audit_weekday`), the freshness gate, source probes and SLO, run evidence over the last 20 trading days, a metadata backup (manifest database, receipts, quality findings, never curated Parquet, rotated by the `[job.maintenance]` retention), and the preview of `cne run clean`. The timer has no terminal, so it never reaches the deletion prompt.
+Maintenance after the daily update; the timer `cne schedule install` installs runs it once after each trading day's update: the run audit (the whole-lake audit on `[job.maintenance] full_audit_weekday`), the freshness gate, source probes and SLO, run evidence over the last 20 trading days, a sweep of what interrupted commits left behind (temporary copies, generations the pointer never reached, a state file that disagrees with the pointer; a generation without a receipt is listed, not removed), a metadata backup (manifest database, receipts, quality findings, never curated Parquet, rotated by the `[job.maintenance]` retention), and the preview of `cne run clean`. The timer has no terminal, so it never reaches the deletion prompt.
 
 | Option | Description |
 |------|------|

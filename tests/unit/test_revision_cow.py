@@ -843,3 +843,47 @@ def test_a_removal_must_be_real(tmp_path, name):
             schema_version=1,
             contract_fingerprint="contract",
         )
+
+
+def test_the_sweep_clears_what_an_interrupted_commit_leaves(tmp_path):
+    """The commit's failure path said these were collected "by `gc`"; there
+    was no such command, so nothing ever collected them."""
+    cfg, store, first = _revision_lake(tmp_path, 10.0)
+    pointer = store.pointer_path("daily_bars")
+    published = pointer.read_bytes()
+    _bars(first, date(2026, 1, 1), 12.0)
+    failed = store.commit(
+        "daily_bars",
+        run_id="r-failed",
+        changed_files=[first],
+        schema_version=1,
+        contract_fingerprint="contract",
+    )
+    # As if the process died after the receipt and generation, before the
+    # pointer moved: the state cache already says revision 2.
+    pointer.write_bytes(published)
+    data = cfg.meta_root / "revisions/data/daily_bars"
+    temporary = data / ".deadbeef-tmp"
+    temporary.mkdir()
+    (temporary / "part.parquet").write_bytes(b"half")
+    stray = data / "0123456789abcdef0123456789abcdef"
+    stray.mkdir()
+
+    preview = store.sweep()
+    assert preview["applied"] is False
+    assert [Path(p).name for p in preview["temporary"]] == [".deadbeef-tmp"]
+    assert [Path(p).name for p in preview["unpublished"]] == [failed.revision_id]
+    assert [Path(p).name for p in preview["unreceipted"]] == [stray.name]
+    assert preview["state_synced"] == ["daily_bars"]
+    assert temporary.exists() and (data / failed.revision_id).exists()
+
+    store.sweep(apply=True)
+
+    assert not temporary.exists()
+    assert not (data / failed.revision_id).exists()
+    assert stray.exists(), "a generation without a receipt is only reported"
+    receipts = sorted(p.name for p in (cfg.meta_root / "revisions/daily_bars").glob("0*.json"))
+    assert any(failed.revision_id in name for name in receipts), "the receipt records the failure"
+    assert store.state.get_payload("daily_bars")["revision"] == 1
+    assert load("daily_bars", config=cfg)["close"].to_list() == [10.0]
+    assert store.sweep(apply=True)["unpublished"] == []

@@ -346,7 +346,7 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 
 ## cne run maintain
 
-日更之后的维护，`cne schedule install` 安装的定时任务每个交易日在日更后运行一次：运行审计（`[job.maintenance] full_audit_weekday` 那天改为全湖审计）、新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、元数据备份（manifest 数据库、收据、质量结论，不含 curated Parquet，按 `[job.maintenance]` 的保留期轮换），以及 `cne run clean` 的预览。定时任务没有终端，不会进入删除确认。
+日更之后的维护，`cne schedule install` 安装的定时任务每个交易日在日更后运行一次：运行审计（`[job.maintenance] full_audit_weekday` 那天改为全湖审计）、新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、清理中断的提交留下的东西（临时副本、指针从未指向的未发布代、与指针不符的状态文件；没有收据的代只列出不删）、元数据备份（manifest 数据库、收据、质量结论，不含 curated Parquet，按 `[job.maintenance]` 的保留期轮换），以及 `cne run clean` 的预览。定时任务没有终端，不会进入删除确认。
 
 | 选项 | 说明 |
 |------|------|

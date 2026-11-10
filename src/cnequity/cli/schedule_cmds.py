@@ -186,7 +186,8 @@ def maintain(config_path: str, groups: str | None, notify: bool):
     (`cne backfill <dataset> --outstanding`), the run audit (the whole lake on
     [job.maintenance].full_audit_weekday), the freshness gate,
     source probes and SLO, run evidence over 20 sessions, a merge of partitions that writes
-    left in several files, a metadata backup
+    left in several files, a sweep of what interrupted commits left behind (temporary
+    copies, unpublished generations, a stale state file), a metadata backup
     (manifest DB, receipts, quality findings; never curated Parquet), and a preview of `cne run clean`.
     The preview passes --dry-run, so this command never asks to delete.
     Exits 1 when a group run, the audit, the freshness gate or the backup fails; source,
@@ -238,6 +239,29 @@ def maintain(config_path: str, groups: str | None, notify: bool):
         _cne("storage", "merge-files", "--apply", "--config", path), check=False
     ).returncode:
         notes.append(_("Partition file merge"))
+
+    click.echo(f"--- {_('Revision sweep')} ---", err=True)
+    try:
+        from cnequity.storage.revisions import RevisionStore
+
+        swept = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).sweep(apply=True)
+        click.echo(
+            _(
+                "Removed {temporary} temporary cop(ies) and {unpublished} unpublished generation(s); "
+                "rebuilt {state} state file(s); {unreceipted} generation(s) without a receipt left in place."
+            ).format(
+                temporary=len(swept["temporary"]),
+                unpublished=len(swept["unpublished"]),
+                state=len(swept["state_synced"]),
+                unreceipted=len(swept["unreceipted"]),
+            ),
+            err=True,
+        )
+        for path in swept["unreceipted"]:
+            click.echo(f"  {path}", err=True)
+    except Exception as exc:  # noqa: BLE001 - reported; the lake reads stay correct
+        click.echo(_("Revision sweep failed: {exc}").format(exc=exc), err=True)
+        notes.append(_("Revision sweep"))
 
     click.echo(f"--- {_('Metadata backup')} ---", err=True)
     try:

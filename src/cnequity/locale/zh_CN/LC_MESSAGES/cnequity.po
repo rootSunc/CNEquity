@@ -1842,7 +1842,8 @@ msgid ""
 "(`cne backfill <dataset> --outstanding`), the run audit (the whole lake on\n"
 "[job.maintenance].full_audit_weekday), the freshness gate,\n"
 "source probes and SLO, run evidence over 20 sessions, a merge of partitions that writes\n"
-"left in several files, a metadata backup\n"
+"left in several files, a sweep of what interrupted commits left behind (temporary\n"
+"copies, unpublished generations, a stale state file), a metadata backup\n"
 "(manifest DB, receipts, quality findings; never curated Parquet), and a preview of `cne run clean`.\n"
 "The preview passes --dry-run, so this command never asks to delete.\n"
 "Exits 1 when a group run, the audit, the freshness gate or the backup fails; source,\n"
@@ -1854,7 +1855,7 @@ msgstr ""
 "定时任务在每个交易日的日更之后跑一次。顺序是：\n"
 "当天各调度组的运行（[job.maintenance].gate_groups 失败立即算，其余连续 soft_fail_max_days 个交易日才算）、\n"
 "补欠账台账里的键（`cne backfill <dataset> --outstanding`）、运行审计（[job.maintenance].full_audit_weekday 那天改为全湖）、\n"
-"新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、合并写入后分成多个文件的分区、元数据备份\n"
+"新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、合并写入后分成多个文件的分区、清理中断的提交留下的东西（临时副本、未发布的代、过期的状态文件）、元数据备份\n"
 "（manifest 数据库、收据、质量结论，不含 curated Parquet），以及 `cne run clean` 的预览。\n"
 "这次预览带 --dry-run，所以不会询问删除。\n"
 "调度组、审计、新鲜度门禁或备份失败时退出 1；源、欠账重试和运行证据只报告，不因此失败。"
@@ -4532,6 +4533,11 @@ msgid "Remove without asking for confirmation."
 msgstr "不询问确认直接移除。"
 
 #: cnequity/cli/schedule_cmds.py
+#, python-brace-format
+msgid "Removed {temporary} temporary cop(ies) and {unpublished} unpublished generation(s); rebuilt {state} state file(s); {unreceipted} generation(s) without a receipt left in place."
+msgstr "删除了 {temporary} 份临时副本和 {unpublished} 个未发布的代；重建了 {state} 个状态文件；{unreceipted} 个没有收据的代保留不动。"
+
+#: cnequity/cli/schedule_cmds.py
 msgid "Removed. Nothing runs on a schedule for this lake now."
 msgstr "已移除。这个湖现在没有任何定时任务。"
 
@@ -4803,6 +4809,15 @@ msgstr "用交易所历史价格、通达信和东财复查价格冲突；只有
 #, python-brace-format
 msgid "Revision retention did not finish: {error}. Published data is unchanged; the next backfill or daily run tries again."
 msgstr "旧版本清理没有完成：{error}。已经发布的数据没有改动，下一次回补或日更会再试。"
+
+#: cnequity/cli/schedule_cmds.py
+msgid "Revision sweep"
+msgstr "清理中断的提交"
+
+#: cnequity/cli/schedule_cmds.py
+#, python-brace-format
+msgid "Revision sweep failed: {exc}"
+msgstr "清理中断的提交失败：{exc}"
 
 #: cnequity/cli/repair_cmds.py
 msgid ""
