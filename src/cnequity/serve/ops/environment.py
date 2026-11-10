@@ -1,11 +1,7 @@
-"""The dashboard's UTF-8 log contract must not depend on the host locale."""
+"""Moved to ``cnequity.ops.environment``; this name stays importable."""
 
-from __future__ import annotations
+import sys
 
-import os
+from cnequity.ops import environment as _moved
 
-
-def command_environment() -> dict[str, str]:
-    env = os.environ.copy()
-    env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
-    return env
+sys.modules[__name__] = _moved

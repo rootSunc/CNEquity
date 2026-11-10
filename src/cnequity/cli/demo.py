@@ -676,7 +676,7 @@ def run_sample_demo(
         pl.col("trade_date").map_elements(spec.partition_for, return_dtype=pl.Utf8).alias("_p")
     )
     for (period,), frame in periods.partition_by("_p", as_dict=True).items():
-        out = cfg.curated_root / "daily_bars" / f"trade_date={period}"
+        out = cfg.curated_root / "daily_bars" / f"{spec.partition_col}={period}"
         write_parquet_atomic(out / "part-sample.parquet", frame.drop("_p"), compression="zstd")
     ensure_duckdb_views(cfg)
     _rebuild_demo_stats(cfg)

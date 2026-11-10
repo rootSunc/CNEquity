@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
+import polars as pl
+
 Granularity = Literal["day", "month", "quarter", "year"]
 
 GRANULARITIES: tuple[Granularity, ...] = ("day", "month", "quarter", "year")
@@ -65,6 +67,17 @@ def partition_value(d: date, granularity: Granularity) -> str:
     if granularity == "month":
         return f"{d.year:04d}-{d.month:02d}"
     return d.isoformat()
+
+
+def partition_value_expr(column: pl.Expr, granularity: Granularity) -> pl.Expr:
+    """:func:`partition_value` over a Date column, as a Utf8 expression."""
+    if granularity == "year":
+        return column.dt.strftime("%Y")
+    if granularity == "quarter":
+        return column.dt.strftime("%Y") + "Q" + ((column.dt.month() - 1) // 3 + 1).cast(pl.Utf8)
+    if granularity == "month":
+        return column.dt.strftime("%Y-%m")
+    return column.dt.strftime("%Y-%m-%d")
 
 
 def _parse_quarter(value: str) -> Partition | None:

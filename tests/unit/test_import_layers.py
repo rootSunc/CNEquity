@@ -91,6 +91,9 @@ _RANKS: dict[str, int] = {
     "cnequity.diagnostics": 90,
     # Entry points.
     "cnequity.cli": 100,
+    # The job runner, operations catalog and scheduler. They run CLI commands in
+    # process, so they sit beside the CLI; the dashboard (serve) calls them.
+    "cnequity.ops": 100,
     "cnequity.serve": 100,
     "cnequity.mcp_server": 100,
     "cnequity.__main__": 100,

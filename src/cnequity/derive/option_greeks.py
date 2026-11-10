@@ -34,6 +34,7 @@ from datetime import date
 import numpy as np
 import polars as pl
 
+from cnequity.domain.datasets import DATASETS
 from cnequity.domain.option_pricing import greeks, implied_vol
 
 FALLBACK_RATE = 0.02
@@ -352,19 +353,20 @@ def stale_sessions(config, context=None) -> list[date]:
         source = _newest_mtime(directory)
         if day is None or source is None:
             continue
-        month = day.strftime("%Y-%m")
+        month = DATASETS["futures_bars"].partition_dir_name(day)
         if month not in month_mtime:
-            month_mtime[month] = _newest_mtime(futures_root / f"trade_date={month}")
+            month_mtime[month] = _newest_mtime(futures_root / month)
         source = max(source, month_mtime[month] or 0.0)
-        derived = _newest_mtime(greeks_root / f"trade_date={day.isoformat()}")
+        derived = _newest_mtime(greeks_root / DATASETS["option_greeks"].partition_dir_name(day))
         if month not in month_identity:
-            month_identity[month] = fingerprint(futures_root / f"trade_date={month}")
+            month_identity[month] = fingerprint(futures_root / month)
         receipt = read_json(_receipt(config, day))
         matches = (
             receipt.get("dependencies") == dependencies.get(day)
             and receipt.get("options") == fingerprint(directory)
             and receipt.get("futures") == month_identity[month]
-            and receipt.get("output") == fingerprint(greeks_root / f"trade_date={day}")
+            and receipt.get("output")
+            == fingerprint(greeks_root / DATASETS["option_greeks"].partition_dir_name(day))
         )
         if derived is None or derived < source or not matches:
             stale.append(day)
@@ -448,13 +450,17 @@ def _derive_option_greeks(
                 {
                     "dependencies": dependencies.get(day),
                     "options": fingerprint(
-                        read_root(config, "option_bars", context) / f"trade_date={day}"
+                        read_root(config, "option_bars", context)
+                        / DATASETS["option_bars"].partition_dir_name(day)
                     ),
                     "futures": fingerprint(
-                        read_root(config, "futures_bars", context) / f"trade_date={day:%Y-%m}"
+                        read_root(config, "futures_bars", context)
+                        / DATASETS["futures_bars"].partition_dir_name(day)
                     ),
                     "output": fingerprint(
-                        config.derived_root / "option_greeks" / f"trade_date={day}"
+                        config.derived_root
+                        / "option_greeks"
+                        / DATASETS["option_greeks"].partition_dir_name(day)
                     ),
                 },
             )

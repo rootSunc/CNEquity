@@ -252,7 +252,7 @@ def derive_futures_continuous(config) -> dict:
     from each product's first session, so extending the tail alone would carry
     forward any history a backfill has since changed.
     """
-    from cnequity.domain.partitions import partition_value
+    from cnequity.domain.datasets import DATASETS
     from cnequity.domain.schemas import validate_dataframe, with_provenance
     from cnequity.file_lock import lake_mutation_lock
     from cnequity.storage.parquet import CuratedWriter
@@ -288,13 +288,13 @@ def derive_futures_continuous(config) -> dict:
         for (period,), group in (
             frame.with_columns(
                 pl.col("trade_date")
-                .map_elements(lambda d: partition_value(d, "month"), return_dtype=pl.Utf8)
+                .map_elements(DATASETS["futures_continuous"].partition_for, return_dtype=pl.Utf8)
                 .alias("_p")
             )
             .partition_by("_p", as_dict=True)
             .items()
         ):
-            keep.add(f"trade_date={period}")
+            keep.add(f"{DATASETS['futures_continuous'].partition_col}={period}")
             writer.write_partition(
                 "futures_continuous", "trade_date", period, group.drop("_p"), "part-000.parquet"
             )

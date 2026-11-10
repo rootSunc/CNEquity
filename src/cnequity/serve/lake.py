@@ -595,7 +595,7 @@ class LakeView:
     ) -> list[dict]:
         """What to run, and why. ``op`` is set only when the operations page can start it."""
         from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
-        from cnequity.serve.ops.catalog import DERIVE_NAMES, backfill_datasets
+        from cnequity.ops.catalog import DERIVE_NAMES, backfill_datasets
 
         name = spec.name
         out: list[dict] = []

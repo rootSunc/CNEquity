@@ -334,7 +334,7 @@ class StorageMaintenance:
                     _("First confirm that external queries, services and schedules have stopped.")
                 )
             if review["phase"] == "purge":
-                from cnequity.serve.ops.records import purge_blocked_reason
+                from cnequity.ops.records import purge_blocked_reason
 
                 reason = purge_blocked_reason(self.config)
                 if reason:

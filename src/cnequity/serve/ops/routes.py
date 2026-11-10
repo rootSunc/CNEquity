@@ -15,9 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from cnequity.i18n import _
+from cnequity.ops.catalog import OpsError, UnknownOp
+from cnequity.ops.runner import OpsRejected, OpsService, requested_by
 from cnequity.serve.guard import LOOPBACK_HOSTS, check_browser, client_host, ops_enabled
-from cnequity.serve.ops.catalog import OpsError, UnknownOp
-from cnequity.serve.ops.runner import OpsRejected, OpsService, requested_by
 
 _FRAME = 64 * 1024
 
@@ -99,7 +99,7 @@ def mode_payload(request: Request) -> dict:
 
 def config_drift(state) -> dict | None:
     """The page's view of :func:`preflight.config_drift`; none before setup."""
-    from cnequity.serve.ops.preflight import config_drift as drift
+    from cnequity.ops.preflight import config_drift as drift
 
     if state.setup or state.config is None:
         return None
@@ -111,7 +111,7 @@ def _service(request: Request) -> OpsService:
 
 
 def _settings_service(request: Request):
-    from cnequity.serve.ops.settings import SettingsService
+    from cnequity.ops.settings import SettingsService
 
     state = request.app.state
     config = state.config
@@ -125,7 +125,7 @@ def _settings_service(request: Request):
 
 
 def _schedule_service(request: Request):
-    from cnequity.serve.ops.scheduler import ScheduleService
+    from cnequity.ops.scheduler import ScheduleService
 
     state = request.app.state
     config = state.config
@@ -206,7 +206,7 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
     @app.get("/api/ops/backups")
     def ops_backups(request: Request, root: str | None = None) -> dict:
         check_browser(request, mutation=False, scope="ops")
-        from cnequity.serve.ops.backups import inventory
+        from cnequity.ops.backups import inventory
 
         try:
             if root is not None:
@@ -312,7 +312,7 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
     def source_check_key(source: str, request: Request) -> dict:
         """One small request with the paid source's key; the lake is not touched."""
         check_browser(request, mutation=True, scope="ops")
-        from cnequity.serve.ops.keys import PAID_SOURCES, check_key
+        from cnequity.ops.keys import PAID_SOURCES, check_key
 
         if source not in PAID_SOURCES:
             raise HTTPException(404, f"{source} is not a paid source")

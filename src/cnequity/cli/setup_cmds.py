@@ -576,9 +576,9 @@ def _init_preflight(cfg, *, skip: bool, config_arg: str) -> None:
 
 def _install_pack_schedule(cfg, packs: tuple[str, ...]) -> str:
     """Register the current-user timer for these packs. A failure leaves the lake."""
+    from cnequity.ops.catalog import OpsError
+    from cnequity.ops.scheduler import ScheduleService
     from cnequity.research.packs import SNAPSHOT_NOTE, groups_for
-    from cnequity.serve.ops.catalog import OpsError
-    from cnequity.serve.ops.scheduler import ScheduleService
 
     try:
         service = ScheduleService(cfg)

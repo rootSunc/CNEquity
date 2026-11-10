@@ -1,7 +1,7 @@
 """Scheduled operation: `run maintain` and `schedule install|status|remove`.
 
 One implementation of "keep this lake current" for every install. The timer is
-the packaged one the dashboard already used (`cnequity.serve.ops.scheduled`:
+the packaged one the dashboard already used (`cnequity.ops.scheduled`:
 launchd, cron or Task Scheduler for the current user, checked once a minute),
 and the work after the day's update — checking it, backing up the metadata,
 previewing expiry — is `cne run maintain` rather than a shell script only a
@@ -48,8 +48,8 @@ def _cne(*args: str) -> list[str]:
 def _scheduled_groups(cfg) -> list[str]:
     """The groups the scheduled update runs: its research packs', else all of them."""
     try:
+        from cnequity.ops.scheduler import settings
         from cnequity.research.packs import groups_for
-        from cnequity.serve.ops.scheduler import settings
 
         packs = settings(cfg).get("daily_packs") or []
     except Exception:  # noqa: BLE001 — no timer settings means the plain daily update
@@ -314,8 +314,8 @@ def schedule():
 
 
 def _service(config_path: str):
-    from cnequity.serve.ops.catalog import OpsError
-    from cnequity.serve.ops.scheduler import ScheduleService
+    from cnequity.ops.catalog import OpsError
+    from cnequity.ops.scheduler import ScheduleService
 
     try:
         return ScheduleService(_cfg(config_path))
@@ -348,7 +348,7 @@ def _legacy_jobs() -> list[str]:
 @click.option("--json", "as_json", is_flag=True, help=N_("Output machine-readable JSON."))
 def schedule_status(config_path: str, as_json: bool):
     """Show whether the timer is installed and active, what it runs, and when it last checked."""
-    from cnequity.serve.ops.catalog import OpsError
+    from cnequity.ops.catalog import OpsError
 
     try:
         home = _service(config_path).home()
@@ -471,8 +471,8 @@ def schedule_install(
     yes: bool,
 ):
     """Install (or update) the current user's timer for this lake."""
-    from cnequity.serve.ops.catalog import OpsError
-    from cnequity.serve.ops.scheduler import settings
+    from cnequity.ops.catalog import OpsError
+    from cnequity.ops.scheduler import settings
 
     service = _service(config_path)
     cfg = service.config
@@ -556,7 +556,7 @@ def schedule_install(
 @click.option("--yes", "-y", is_flag=True, help=N_("Remove without asking for confirmation."))
 def schedule_remove(config_path: str, yes: bool):
     """Stop scheduled runs for this lake and unregister its timer. Running jobs finish."""
-    from cnequity.serve.ops.catalog import OpsError
+    from cnequity.ops.catalog import OpsError
 
     service = _service(config_path)
     cfg = service.config

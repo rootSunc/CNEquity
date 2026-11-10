@@ -576,6 +576,16 @@ class DatasetSpec:
         """Directory value of the partition holding *d* for this dataset."""
         return partition_value(d, self.partition_granularity)
 
+    def partition_dir_name(self, d: date) -> str:
+        """``trade_date=2024-06``: the directory holding *d*, at this dataset's period.
+
+        Writing ``f"trade_date={day}"`` by hand assumes day directories; when a
+        dataset moved to monthly files such a path found nothing, silently.
+        """
+        if self.partition_col is None:
+            raise ValueError(f"{self.name} is not partitioned")
+        return f"{self.partition_col}={self.partition_for(d)}"
+
 
 # Coarser bars a user may store with `cne derive <name>`; see
 # derive/minute_resample.py. Defined here so the registry, reader and derive

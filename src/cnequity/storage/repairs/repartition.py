@@ -26,7 +26,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.datasets import DATASETS
-from cnequity.domain.partitions import partition_value
+from cnequity.domain.partitions import partition_value, partition_value_expr
 from cnequity.domain.schemas import PRIMARY_KEYS, sanitize_dataset_rows, validate_dataframe
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import list_partitions
@@ -311,18 +311,9 @@ def _repartition_dataset_locked(
             f"{dataset}.{spec.partition_col} is {col.dtype}, not a date; "
             "period partitioning applies to date keys only"
         )
-    granularity = spec.partition_granularity
-    if granularity == "day":
-        part_values = col.dt.strftime("%Y-%m-%d")
-    elif granularity == "month":
-        part_values = col.dt.strftime("%Y-%m")
-    elif granularity == "quarter":
-        # strftime has no quarter directive, so derive it from the month. Only
-        # reachable for a Date-keyed dataset: report_period is a String column
-        # and is rejected by the dtype check above.
-        part_values = col.dt.strftime("%Y") + "Q" + ((col.dt.month() - 1) // 3 + 1).cast(pl.String)
-    else:
-        part_values = col.dt.strftime("%Y")
+    part_values = combined.select(
+        partition_value_expr(pl.col(spec.partition_col), spec.partition_granularity)
+    ).to_series()
 
     tmp_root = root.parent / f"{dataset}{_TMP_SUFFIX}"
     if tmp_root.exists():

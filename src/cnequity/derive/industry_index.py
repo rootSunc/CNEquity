@@ -35,7 +35,9 @@ from typing import TYPE_CHECKING
 
 import polars as pl
 
+from cnequity.domain.datasets import DATASETS
 from cnequity.domain.market_time import shanghai_today
+from cnequity.domain.partitions import partition_value_expr
 from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 
 if TYPE_CHECKING:
@@ -367,7 +369,6 @@ def _derive_industry_index_locked(
     full: bool = False,
 ) -> dict:
     """Implementation of :func:`derive_industry_index` under the mutation lock."""
-    from cnequity.domain.datasets import DATASETS
     from cnequity.domain.schemas import with_provenance
     from cnequity.quality.verify import last_contiguous_dense_date
     from cnequity.storage.parquet import write_partition_rows
@@ -400,13 +401,16 @@ def _derive_industry_index_locked(
 
     root = config.derived_root / "industry_index"
     written = 0
-    for (year,), group in (
-        frame.with_columns(pl.col("trade_date").dt.year().alias("_y"))
-        .partition_by("_y", as_dict=True)
+    spec = DATASETS["industry_index"]
+    for (period,), group in (
+        frame.with_columns(
+            partition_value_expr(pl.col("trade_date"), spec.partition_granularity).alias("_p")
+        )
+        .partition_by("_p", as_dict=True)
         .items()
     ):
-        group = group.drop("_y")
-        out_dir = root / f"trade_date={year}"
+        group = group.drop("_p")
+        out_dir = root / f"{spec.partition_col}={period}"
         out_dir.mkdir(parents=True, exist_ok=True)
         stored = sorted(out_dir.glob("*.parquet"))
         if stored:

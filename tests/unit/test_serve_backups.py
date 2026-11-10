@@ -271,7 +271,7 @@ def freeze_children(monkeypatch):
     )
 
     def spawn(argv, **kwargs):
-        if argv[1:3] == ["-m", "cnequity.serve.ops.job"]:
+        if argv[1:3] == ["-m", "cnequity.ops.job"]:
             argv = [argv[0], "-c", script, argv[-1]]
         return real_popen(argv, **kwargs)
 

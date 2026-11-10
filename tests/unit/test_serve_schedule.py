@@ -333,7 +333,7 @@ def test_real_timer_child_logs_and_marks_once_without_web(scheduler, monkeypatch
     )
 
     def spawn(argv, **kwargs):
-        if argv[1:3] == ["-m", "cnequity.serve.ops.job"]:
+        if argv[1:3] == ["-m", "cnequity.ops.job"]:
             argv = [argv[0], "-c", script, argv[-1]]
         return real_popen(argv, **kwargs)
 

@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 
 import polars as pl
 
-from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
+from cnequity.domain.datasets import DATASETS, RESAMPLED_MINUTE_DATASETS
 from cnequity.query.resample import incomplete_symbol_days, resample_minute_history
 
 if TYPE_CHECKING:
@@ -162,7 +162,7 @@ def _session(config: Config, dataset: str, day: date) -> pl.DataFrame:
     from cnequity.storage.read_context import read_root
 
     files = sorted(
-        (read_root(config, dataset) / f"trade_date={day.isoformat()}").rglob("*.parquet")
+        (read_root(config, dataset) / DATASETS[dataset].partition_dir_name(day)).rglob("*.parquet")
     )
     if not files:
         return pl.DataFrame(schema=DATASET_SCHEMAS[dataset])

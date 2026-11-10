@@ -472,7 +472,7 @@ def activate_lake(app: FastAPI, config: Config) -> None:
 def reload_lake_config(app: FastAPI) -> Config:
     """Point the running server at the config file after a settings write."""
     from cnequity.config import load_config
-    from cnequity.serve.ops.catalog import OpsError
+    from cnequity.ops.catalog import OpsError
 
     path = app.state.config_path
     if path is None:
@@ -566,8 +566,8 @@ def create_app(
         app.state.config_path = Path(config_path).expanduser().resolve()
     else:
         app.state.config_path = None
+    from cnequity.ops.runner import OpsService
     from cnequity.serve.ops.routes import install_ops_routes
-    from cnequity.serve.ops.runner import OpsService
     from cnequity.serve.storage import StorageMaintenance
     from cnequity.serve.storage_routes import install_storage_routes
 

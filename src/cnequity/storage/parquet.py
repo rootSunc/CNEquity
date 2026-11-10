@@ -14,7 +14,7 @@ import polars as pl
 from cnequity.domain.action_evidence import clear_invalid_payment_evidence
 from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.datasets import PIT_DATASET_NAMES, granularity_for_dataset
-from cnequity.domain.partitions import Granularity
+from cnequity.domain.partitions import Granularity, partition_value_expr
 from cnequity.domain.pit import (
     PIT_STORAGE_COLUMNS,
     normalize_pit_storage_columns,
@@ -671,11 +671,7 @@ def _partition_values(df: pl.DataFrame, partition_col: str, granularity: Granula
     col = df.get_column(partition_col)
     if col.dtype != pl.Date:
         return col.cast(pl.Utf8)
-    if granularity == "year":
-        return col.dt.strftime("%Y")
-    if granularity == "month":
-        return col.dt.strftime("%Y-%m")
-    return col.dt.strftime("%Y-%m-%d")
+    return df.select(partition_value_expr(pl.col(partition_col), granularity)).to_series()
 
 
 def _clear_invalid_payments(curated_root: Path, frame: pl.DataFrame) -> pl.DataFrame:
