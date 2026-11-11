@@ -73,3 +73,55 @@ def test_profile_cli_is_machine_readable():
     result = CliRunner().invoke(cli, ["profile", "show", "cn_a_sh_sz_research_v1"])
     assert result.exit_code == 0
     assert '"scope_hash"' in result.output
+
+
+PROFILE_MODULE = "cnequity.domain.universe_profiles"
+
+
+@pytest.mark.parametrize("module", ["cnequity.domain", "cnequity.query", PROFILE_MODULE])
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [
+        ("get_universe_profile", "resolve_universe_profile"),
+        ("list_profiles", "list_universe_profiles"),
+        ("show_profile", "show_universe_profile"),
+    ],
+)
+def test_second_profile_names_warn_and_still_work(module, alias, canonical):
+    import importlib
+
+    mod = importlib.import_module(module)
+    with pytest.warns(DeprecationWarning, match=rf"{alias} is deprecated.*0\.25\.0.*{canonical}"):
+        function = getattr(mod, alias)
+    assert function is getattr(importlib.import_module(PROFILE_MODULE), canonical)
+    assert alias not in mod.__all__
+
+
+def test_profile_json_warns_and_still_serialises():
+    import json
+
+    from cnequity.domain import universe_profiles
+
+    with pytest.warns(DeprecationWarning, match="profile_json is deprecated"):
+        profile_json = universe_profiles.profile_json
+    payload = json.loads(profile_json("cn_a_sh_sz_research_v1"))
+    assert payload == universe_profiles.show_universe_profile("cn_a_sh_sz_research_v1")
+
+
+def test_universe_profile_argument_warns_and_resolves_like_profile():
+    from cnequity.query.reader import _resolve_reader_scope
+
+    with pytest.warns(DeprecationWarning, match=r"universe_profile=.*profile="):
+        old = _resolve_reader_scope(
+            universe=None,
+            profile=None,
+            universe_profile="cn_a_sh_sz_research_v1",
+            strict_universe=False,
+        )
+    new = _resolve_reader_scope(
+        universe=None,
+        profile="cn_a_sh_sz_research_v1",
+        universe_profile=None,
+        strict_universe=False,
+    )
+    assert old == new

@@ -163,11 +163,18 @@ def _resolve_reader_scope(
 
     The old ``universe`` argument remains a permissive compatibility path.  A
     named profile is an explicit research contract and enables its strict
-    evidence requirements automatically.  ``universe_profile`` is accepted as
-    a spelling used by integrations; supplying both profile spellings is only
-    valid when they resolve to the same registry record.
+    evidence requirements automatically.  ``universe_profile`` is a deprecated
+    second spelling of ``profile``; supplying both is only valid when they
+    resolve to the same registry record.
     """
 
+    if universe_profile is not None:
+        warnings.warn(
+            "load(universe_profile=...) is deprecated and will be removed in 0.25.0; "
+            "pass profile=... instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
     selected = profile
     if profile is not None and universe_profile is not None:
         try:
@@ -1105,8 +1112,8 @@ def load(
         object). Profiles bind exchange/board, CDR/ETF, ST/suspension,
         delisting and PIT-evidence rules and persist a stable ``scope_hash``.
         A strict profile enables strict evidence checks even when
-        ``strict_universe`` is omitted. ``universe_profile`` is a spelling
-        compatibility alias; pass only one of the two profile arguments.
+        ``strict_universe`` is omitted. ``universe_profile`` is a deprecated
+        second spelling (removed in 0.25.0); pass ``profile``.
     as_of:
         Point-in-time date for ``financial_statement_items``. Keeps only facts
         announced on or before this date, and — because a restatement stores a

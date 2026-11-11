@@ -48,7 +48,7 @@ def test_peer_review_corroborates_whole_bars_and_preserves_conflicts():
             _row("D", volume=5000, amount=95000.0, close=18.4, source="eastmoney"),
         ]
     )
-    bao, em = bars._peer_turnover_replacements(stored, fresh, peer)
+    bao, em = bars.turnover._peer_turnover_replacements(stored, fresh, peer)
     assert bao["symbol"].to_list() == ["A"]
     assert bao["volume"].to_list() == [5099]
     assert em["symbol"].to_list() == ["B"]
@@ -90,10 +90,10 @@ def test_exchange_prices_confirm_whole_bao_bar_without_exchange_turnover():
     stored = pl.DataFrame([_row("A", volume=100, amount=None)])
     fresh = pl.DataFrame([_row("A", volume=5099, amount=93000.0, close=18.4)])
     quotes = fresh.with_columns(pl.lit(999999999).alias("volume"), pl.lit(1.0).alias("amount"))
-    confirmed = bars._authority_turnover_replacements(stored, fresh, quotes)
+    confirmed = bars.turnover._authority_turnover_replacements(stored, fresh, quotes)
     assert confirmed["volume"].to_list() == [5099]
     assert confirmed["amount"].to_list() == [93000.0]
-    assert bars._authority_turnover_replacements(
+    assert bars.turnover._authority_turnover_replacements(
         stored, fresh, quotes.with_columns(pl.lit(18.5).alias("close"))
     ).is_empty()
 
@@ -229,7 +229,7 @@ def test_access_limit_keeps_fetched_rows_and_the_next_run_skips_them(lake, monke
             )
         raise SourceCoolingDown("今日请求已达 50000 次上限")
 
-    monkeypatch.setattr(bars, "_TURNOVER_REPAIR_BATCH", 1)
+    monkeypatch.setattr(bars.turnover, "_TURNOVER_REPAIR_BATCH", 1)
     monkeypatch.setattr(delisted, "fetch_delisted_bars", fake_fetch)
     result = bars.repair_daily_bar_turnover(lake, DAY, DAY, "repair", None)
     assert calls == [["600215.SH"], ["600216.SH"]]

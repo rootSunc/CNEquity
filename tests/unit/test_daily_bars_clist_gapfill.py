@@ -12,18 +12,21 @@ from cnequity.adapters.eastmoney.bars import fetch_daily_bars_clist
 from cnequity.config import Config, FailoverDatasetSpec
 from cnequity.domain.schemas import with_provenance
 from cnequity.orchestrator.manifest import Manifest
-from cnequity.steps.bars import (
+from cnequity.steps.bars.finish import (
     _finish_daily_bars,
+    _mark_unresolved_daily_bar_batches,
+    _resolve_recovered_daily_batches,
+)
+from cnequity.steps.bars.gapfill import (
     _gapfill_complete_symbols_via_exchange,
     _gapfill_missing_keys_via_ths,
-    _gapfill_multiday_via_kline,
     _gapfill_tip_via_clist,
-    _mark_unresolved_daily_bar_batches,
-    _reject_preopen_placeholder,
-    _resolve_recovered_daily_batches,
-    _staged_daily_bar_partial_symbols,
-    _staged_daily_bar_symbols,
 )
+from cnequity.steps.bars.gapfill_chain import (
+    _gapfill_multiday_via_kline,
+    _reject_preopen_placeholder,
+)
+from cnequity.steps.bars.staging import _staged_daily_bar_partial_symbols, _staged_daily_bar_symbols
 from cnequity.storage import StagingWriter
 from cnequity.storage.layout import init_data_layout
 from cnequity.storage.state import StateStore
@@ -194,7 +197,7 @@ def test_one_source_empty_is_not_enough_to_certify_no_data(tmp_path, monkeypatch
     run_id = Manifest(cfg.manifest_path).start_run("backfill")
     day = date(2026, 7, 21)
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -222,7 +225,7 @@ def test_sina_rate_limit_and_eastmoney_disconnect_fall_through_to_ths(tmp_path, 
     day = date(2026, 7, 21)
     symbol = "600519.SH"
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -678,7 +681,7 @@ def test_historical_tip_backfill_validates_staged_end_not_job_as_of(tmp_path, mo
         "daily_bars", run_id, "tdx-batch-0", _bar_frame(["600519.SH"], fetched)
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars._gapfill_tip_via_clist",
+        "cnequity.steps.bars.gapfill._gapfill_tip_via_clist",
         lambda *args, **kwargs: {"rows_read": 0, "rows_written": 0, "audit_findings": []},
     )
 
@@ -841,16 +844,19 @@ def test_retry_routes_non_tdx_symbols_to_fallback(tmp_path, monkeypatch):
         captured.update(kwargs)
         return {"rows_read": 0, "rows_written": 0}
 
-    monkeypatch.setattr("cnequity.steps.bars.fetch_bars_via_sina", fake_fallback)
+    monkeypatch.setattr("cnequity.steps.bars.sina_bars.fetch_bars_via_sina", fake_fallback)
     # Beijing history is asked of TDX first; here it answers nothing, so Sina
     # must still be handed the symbol rather than the session being dropped.
     monkeypatch.setattr(
-        "cnequity.steps.bars._fetch_bj_history_via_tdx",
+        "cnequity.steps.bars.tip_fetch._fetch_bj_history_via_tdx",
         lambda *a, **k: {"rows_read": 0, "rows_written": 0, "covered": set(), "requested": True},
     )
-    monkeypatch.setattr("cnequity.steps.bars.fetch_daily_bars_parallel", pytest.fail)
-    monkeypatch.setattr("cnequity.steps.bars._finish_daily_bars", fake_finish)
-    monkeypatch.setattr("cnequity.steps.bars._merge_ownership_result", lambda out, *args: out)
+    monkeypatch.setattr("cnequity.steps.bars.daily.fetch_daily_bars_parallel", pytest.fail)
+    monkeypatch.setattr("cnequity.steps.bars.tip_fetch.fetch_daily_bars_parallel", pytest.fail)
+    monkeypatch.setattr("cnequity.steps.bars.finish._finish_daily_bars", fake_finish)
+    monkeypatch.setattr(
+        "cnequity.steps.bars.bar_scope._merge_ownership_result", lambda out, *args: out
+    )
 
     from cnequity.steps.bars import step_daily_bars
 
@@ -874,11 +880,11 @@ def test_a_symbol_tdx_answered_is_not_asked_of_sina_again(tmp_path, monkeypatch)
     calls: list = []
 
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *a, **k: calls.append(a) or {"rows_read": 0, "rows_written": 0, "failed_symbols": 0},
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars._fetch_bj_history_via_tdx",
+        "cnequity.steps.bars.tip_fetch._fetch_bj_history_via_tdx",
         lambda *a, **k: {
             "rows_read": 4,
             "rows_written": 4,
@@ -886,12 +892,15 @@ def test_a_symbol_tdx_answered_is_not_asked_of_sina_again(tmp_path, monkeypatch)
             "requested": True,
         },
     )
-    monkeypatch.setattr("cnequity.steps.bars.fetch_daily_bars_parallel", pytest.fail)
+    monkeypatch.setattr("cnequity.steps.bars.daily.fetch_daily_bars_parallel", pytest.fail)
+    monkeypatch.setattr("cnequity.steps.bars.tip_fetch.fetch_daily_bars_parallel", pytest.fail)
     monkeypatch.setattr(
-        "cnequity.steps.bars._finish_daily_bars",
+        "cnequity.steps.bars.finish._finish_daily_bars",
         lambda *a, **k: {"rows_read": 0, "rows_written": 0},
     )
-    monkeypatch.setattr("cnequity.steps.bars._merge_ownership_result", lambda out, *args: out)
+    monkeypatch.setattr(
+        "cnequity.steps.bars.bar_scope._merge_ownership_result", lambda out, *args: out
+    )
 
     from cnequity.steps.bars import step_daily_bars
 
@@ -1076,7 +1085,7 @@ def test_multiday_uses_kline_not_clist(tmp_path, monkeypatch):
     monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars_clist", _clist)
     monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -1136,7 +1145,7 @@ def test_multiday_partial_miss_retains_unknown_keys_for_repair(tmp_path, monkeyp
 
     monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -1180,7 +1189,7 @@ def test_multiday_single_symbol_scope_still_raises(tmp_path, monkeypatch):
         lambda *args, **kwargs: pl.DataFrame(),
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -1235,7 +1244,7 @@ def test_multiday_large_partial_miss_publishes_and_records_gaps(tmp_path, monkey
 
     monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -1272,7 +1281,7 @@ def test_multiday_requires_two_independent_source_empty_observations(tmp_path, m
     start, end = date(2024, 6, 20), date(2024, 6, 28)
 
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -1360,7 +1369,7 @@ def test_multiday_partial_symbol_is_gapfilled_without_overwriting_primary_rows(
 
     monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -1441,7 +1450,7 @@ def test_multiday_fallback_failure_is_gapfilled_by_symbol(tmp_path, monkeypatch)
 
     monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", _kline)
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {
             "rows_read": 0,
             "rows_written": 0,
@@ -1618,14 +1627,14 @@ def test_the_slowest_link_refuses_a_residue_that_is_really_a_dead_primary(tmp_pa
     cfg.sources.update({"exchange": False, "ths": False, "eastmoney": False, "baostock": True})
     run_id = Manifest(cfg.manifest_path).start_run("backfill")
     day = date(2026, 9, 15)
-    symbols = [f"60{i:04d}.SH" for i in range(bars_mod._BAOSTOCK_GAPFILL_MAX_SYMBOLS + 1)]
+    symbols = [f"60{i:04d}.SH" for i in range(bars_mod.gapfill._BAOSTOCK_GAPFILL_MAX_SYMBOLS + 1)]
 
     def _never(*args, **kwargs):
         raise AssertionError("the bounded link must not reach the network")
 
     monkeypatch.setattr("cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars", _never)
 
-    result = bars_mod._gapfill_missing_keys_via_baostock(
+    result = bars_mod.gapfill._gapfill_missing_keys_via_baostock(
         cfg, run_id, missing_keys={(s, day) for s in symbols}, start=day, end=day
     )
 
@@ -1650,7 +1659,7 @@ def test_unsupported_keys_never_reach_baostock(tmp_path, monkeypatch):
 
     monkeypatch.setattr("cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars", _record)
 
-    result = bars_mod._gapfill_missing_keys_via_baostock(
+    result = bars_mod.gapfill._gapfill_missing_keys_via_baostock(
         cfg,
         run_id,
         missing_keys={
@@ -1679,7 +1688,7 @@ def test_an_all_beijing_residue_skips_the_link_entirely(tmp_path, monkeypatch):
 
     monkeypatch.setattr("cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars", _never)
 
-    result = bars_mod._gapfill_missing_keys_via_baostock(
+    result = bars_mod.gapfill._gapfill_missing_keys_via_baostock(
         cfg, run_id, missing_keys={("920002.BJ", day)}, start=day, end=day
     )
     assert result["source_outcomes"]["baostock"]["status"] == "skipped"
@@ -1700,13 +1709,13 @@ def test_a_satisfied_chain_does_not_report_the_last_link_as_disabled(tmp_path, m
 
     monkeypatch.setattr("cnequity.adapters.baostock.delisted_bars.fetch_delisted_bars", _never)
 
-    result = bars_mod._gapfill_missing_keys_via_baostock(
+    result = bars_mod.gapfill._gapfill_missing_keys_via_baostock(
         cfg, run_id, missing_keys=set(), start=date(2026, 9, 15), end=date(2026, 9, 15)
     )
     assert result["source_outcomes"]["baostock"]["status"] == "not_needed"
 
     cfg.sources.update({"baostock": False})
-    off = bars_mod._gapfill_missing_keys_via_baostock(
+    off = bars_mod.gapfill._gapfill_missing_keys_via_baostock(
         cfg,
         run_id,
         missing_keys={("600519.SH", date(2026, 9, 15))},
@@ -1729,14 +1738,59 @@ def test_completeness_excuses_days_the_lake_knows_were_suspended(tmp_path, monke
 
     cfg = _cfg(tmp_path)
     sessions = [dt.date(2026, 9, 14), dt.date(2026, 9, 15), dt.date(2026, 9, 16)]
-    monkeypatch.setattr(bars_mod, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.admission, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.bar_scope, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.daily, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.finish, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.gapfill, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.gapfill_chain, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.index_history, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.sina_bars, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.staging, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.tip_fetch, "list_trading_dates", lambda *a, **k: sessions)
     monkeypatch.setattr(
-        bars_mod,
+        bars_mod.bar_scope,
         "_instrument_spans",
         lambda config: {"600519.SH": (dt.date(2026, 9, 15), None, "stock")},
     )
     monkeypatch.setattr(
-        bars_mod,
+        bars_mod.admission,
+        "load_curated_trading_status",
+        lambda *a, **k: pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [dt.date(2026, 9, 16)],
+                "is_trading": [False],
+            },
+            schema_overrides={"trade_date": pl.Date},
+        ),
+    )
+    monkeypatch.setattr(
+        bars_mod.daily,
+        "load_curated_trading_status",
+        lambda *a, **k: pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [dt.date(2026, 9, 16)],
+                "is_trading": [False],
+            },
+            schema_overrides={"trade_date": pl.Date},
+        ),
+    )
+    monkeypatch.setattr(
+        bars_mod.gapfill,
+        "load_curated_trading_status",
+        lambda *a, **k: pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "trade_date": [dt.date(2026, 9, 16)],
+                "is_trading": [False],
+            },
+            schema_overrides={"trade_date": pl.Date},
+        ),
+    )
+    monkeypatch.setattr(
+        bars_mod.staging,
         "load_curated_trading_status",
         lambda *a, **k: pl.DataFrame(
             {
@@ -1748,7 +1802,9 @@ def test_completeness_excuses_days_the_lake_knows_were_suspended(tmp_path, monke
         ),
     )
 
-    keys = bars_mod._expected_session_keys(cfg, ["600519.SH"], sessions, sessions[0], sessions[-1])
+    keys = bars_mod.gapfill._expected_session_keys(
+        cfg, ["600519.SH"], sessions, sessions[0], sessions[-1]
+    )
 
     # 09-14 precedes the listing, 09-16 is a known suspension: one real key.
     assert keys == {("600519.SH", dt.date(2026, 9, 15))}
@@ -1761,11 +1817,25 @@ def test_completeness_still_expects_every_session_it_has_no_excuse_for(tmp_path,
 
     cfg = _cfg(tmp_path)
     sessions = [dt.date(2026, 9, 14), dt.date(2026, 9, 15)]
-    monkeypatch.setattr(bars_mod, "list_trading_dates", lambda *a, **k: sessions)
-    monkeypatch.setattr(bars_mod, "_instrument_spans", lambda config: {})
-    monkeypatch.setattr(bars_mod, "load_curated_trading_status", lambda *a, **k: None)
+    monkeypatch.setattr(bars_mod.admission, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.bar_scope, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.daily, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.finish, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.gapfill, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.gapfill_chain, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.index_history, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.sina_bars, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.staging, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.tip_fetch, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.bar_scope, "_instrument_spans", lambda config: {})
+    monkeypatch.setattr(bars_mod.admission, "load_curated_trading_status", lambda *a, **k: None)
+    monkeypatch.setattr(bars_mod.daily, "load_curated_trading_status", lambda *a, **k: None)
+    monkeypatch.setattr(bars_mod.gapfill, "load_curated_trading_status", lambda *a, **k: None)
+    monkeypatch.setattr(bars_mod.staging, "load_curated_trading_status", lambda *a, **k: None)
 
-    keys = bars_mod._expected_session_keys(cfg, ["600519.SH"], sessions, sessions[0], sessions[-1])
+    keys = bars_mod.gapfill._expected_session_keys(
+        cfg, ["600519.SH"], sessions, sessions[0], sessions[-1]
+    )
     assert keys == {("600519.SH", sessions[0]), ("600519.SH", sessions[1])}
 
 
@@ -1810,7 +1880,7 @@ def test_the_step_learns_suspensions_itself_instead_of_demanding_a_second_comman
 
     monkeypatch.setattr("cnequity.steps.http_common.write_fetched", _write_fetched)
 
-    suspended, outcome = bars_mod._learn_suspensions_from_baostock(
+    suspended, outcome = bars_mod.gapfill._learn_suspensions_from_baostock(
         cfg, run_id, {(symbol, day)}, day, day
     )
 
@@ -1834,7 +1904,7 @@ def test_learning_is_skipped_when_there_is_nothing_unexplained(tmp_path, monkeyp
         raise AssertionError("no unexplained key to ask about")
 
     monkeypatch.setattr("cnequity.adapters.baostock.st_history.fetch_st_history", _never)
-    suspended, outcome = bars_mod._learn_suspensions_from_baostock(
+    suspended, outcome = bars_mod.gapfill._learn_suspensions_from_baostock(
         cfg, "run-x", set(), date(2010, 1, 1), date(2010, 12, 31)
     )
     assert suspended == set()
@@ -1852,7 +1922,7 @@ def test_unsupported_keys_are_not_sent_for_suspension_evidence(tmp_path, monkeyp
         raise AssertionError("baostock has no coverage of this security")
 
     monkeypatch.setattr("cnequity.adapters.baostock.st_history.fetch_st_history", _never)
-    suspended, outcome = bars_mod._learn_suspensions_from_baostock(
+    suspended, outcome = bars_mod.gapfill._learn_suspensions_from_baostock(
         cfg, "run-x", {(symbol, date(2010, 3, 30))}, date(2010, 3, 30), date(2010, 3, 30)
     )
     assert suspended == set()
@@ -1878,9 +1948,18 @@ def test_a_window_spent_entirely_halted_is_certified_from_positive_evidence(tmp_
     sessions = [date(2010, 3, 29), date(2010, 3, 30)]
     symbol = "000156.SZ"
 
-    monkeypatch.setattr(bars_mod, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.admission, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.bar_scope, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.daily, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.finish, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.gapfill, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.gapfill_chain, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.index_history, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.sina_bars, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.staging, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.tip_fetch, "list_trading_dates", lambda *a, **k: sessions)
     monkeypatch.setattr(
-        bars_mod,
+        bars_mod.sina_bars,
         "fetch_bars_via_sina",
         lambda *a, **k: {"rows_read": 0, "rows_written": 0, "empty_symbol_names": []},
     )
@@ -1938,9 +2017,18 @@ def test_a_partly_halted_symbol_is_not_certified_as_having_no_data(tmp_path, mon
     sessions = [date(2010, 3, 29), date(2010, 3, 30)]
     symbol = "000156.SZ"
 
-    monkeypatch.setattr(bars_mod, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.admission, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.bar_scope, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.daily, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.finish, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.gapfill, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.gapfill_chain, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.index_history, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.sina_bars, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.staging, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars_mod.tip_fetch, "list_trading_dates", lambda *a, **k: sessions)
     monkeypatch.setattr(
-        bars_mod,
+        bars_mod.sina_bars,
         "fetch_bars_via_sina",
         lambda *a, **k: {"rows_read": 0, "rows_written": 0, "empty_symbol_names": []},
     )
@@ -1982,9 +2070,11 @@ def _probe_run(tmp_path, monkeypatch):
     StagingWriter(cfg.staging_root).write_batch(
         "daily_bars", run_id, "tdx-batch-0", _bar_frame(["600519.SH"], tip)
     )
-    monkeypatch.setattr(bars, "_gapfill_tip_via_clist", lambda *a, **k: {})
+    monkeypatch.setattr(bars.gapfill, "_gapfill_tip_via_clist", lambda *a, **k: {})
     monkeypatch.setattr(
-        bars, "_gapfill_multiday_via_kline", lambda *a, **k: {"rows_read": 0, "rows_written": 0}
+        bars.gapfill_chain,
+        "_gapfill_multiday_via_kline",
+        lambda *a, **k: {"rows_read": 0, "rows_written": 0},
     )
     return cfg, run_id, tip
 
@@ -2036,10 +2126,21 @@ def test_a_probe_answered_only_by_a_zero_volume_bar_has_not_listed(tmp_path, mon
     writer.write_batch("daily_bars", run_id, "tdx-probe", placeholder)
     from cnequity.steps import bars
 
-    monkeypatch.setattr(bars, "list_trading_dates", lambda *a, **k: sessions)
-    monkeypatch.setattr(bars, "_gapfill_tip_via_clist", lambda *a, **k: {})
+    monkeypatch.setattr(bars.admission, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.bar_scope, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.daily, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.finish, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.gapfill, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.gapfill_chain, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.index_history, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.sina_bars, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.staging, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.tip_fetch, "list_trading_dates", lambda *a, **k: sessions)
+    monkeypatch.setattr(bars.gapfill, "_gapfill_tip_via_clist", lambda *a, **k: {})
     monkeypatch.setattr(
-        bars, "_gapfill_multiday_via_kline", lambda *a, **k: {"rows_read": 0, "rows_written": 0}
+        bars.gapfill_chain,
+        "_gapfill_multiday_via_kline",
+        lambda *a, **k: {"rows_read": 0, "rows_written": 0},
     )
 
     result = _finish_daily_bars(
@@ -2078,7 +2179,7 @@ def test_a_probe_with_one_traded_row_keeps_its_zero_volume_rows(tmp_path, monkey
     writer.write_batch(
         "daily_bars", run_id, "tdx-probe-tip", _bar_frame(["001246.SZ"], tip, volume=0)
     )
-    from cnequity.steps.bars import _quarantine_probe_placeholders
+    from cnequity.steps.bars.gapfill_chain import _quarantine_probe_placeholders
 
     assert (
         _quarantine_probe_placeholders(cfg, run_id, {"001246.SZ"}, tip - timedelta(days=1), tip)

@@ -189,12 +189,12 @@ def _plan(tmp_path, rows, start=date(2001, 1, 1), end=date(2015, 12, 31), symbol
     syms = symbols or [r["symbol"] for r in rows]
     import cnequity.steps.bars as b
 
-    orig = b.load_symbols
-    b.load_symbols = lambda _c: syms
+    orig = b.index_history.load_symbols
+    b.index_history.load_symbols = lambda _c: syms
     try:
-        return mod._history_plan(cfg, start, end)
+        return mod.index_history._history_plan(cfg, start, end)
     finally:
-        b.load_symbols = orig
+        b.index_history.load_symbols = orig
 
 
 def test_plan_includes_etfs_and_skips_symbols_listed_after_the_window(tmp_path):

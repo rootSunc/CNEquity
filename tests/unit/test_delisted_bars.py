@@ -19,7 +19,7 @@ from cnequity.adapters.baostock.delisted_bars import (
 )
 from cnequity.config import Config
 from cnequity.domain.symbols import from_baostock_symbol
-from cnequity.steps.bars import _delisted_universe
+from cnequity.steps.bars.index_history import _delisted_universe
 
 
 class _Rs:

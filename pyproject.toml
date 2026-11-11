@@ -85,8 +85,12 @@ dependencies = [
   "baostock>=0.8",
   # SnowNLP: on-demand stock_news sentiment ([sentiment] use_snownlp).
   "snownlp>=0.12",
-  # Shenwan / CNI publish constituent history as XLS and XLSX only; polars cannot
-  # read either, so pandas is here as a parser, not as a dataframe layer.
+  # Shenwan / CNI / the exchanges publish constituent history and notices as XLS
+  # and XLSX; pandas is here as a parser, not as a dataframe layer (baostock
+  # needs it too). polars' own reader (calamine, via fastexcel) is not a drop-in
+  # replacement: it decodes some SSE .xls notices into garbage — every Chinese
+  # cell, no error — and drops blank rows inside a sheet, which shifts parsers
+  # that read by position. Re-test on archived payloads before switching.
   "pandas>=2.0",
   "openpyxl>=3.0",
   "xlrd>=2.0",

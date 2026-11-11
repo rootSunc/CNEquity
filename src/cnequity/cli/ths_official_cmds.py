@@ -158,7 +158,7 @@ def ths_snapshot(config_path: str, what: str, days: int, sample: int):
     import polars as pl
 
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
-    from cnequity.steps.bars import snapshot_daily_bars_ths_official
+    from cnequity.steps.bars.ths_official import snapshot_daily_bars_ths_official
     from cnequity.steps.capital import snapshot_valuations_ths_official
     from cnequity.steps.fundamentals import (
         snapshot_corporate_actions_ths_official,
@@ -330,7 +330,7 @@ def ths_repair_bars(
 
     import polars as pl
 
-    from cnequity.steps.bars import repair_deep_history_ths_official
+    from cnequity.steps.bars.ths_official import repair_deep_history_ths_official
 
     cfg = _cfg(config_path)
     problem = _require_key(cfg)

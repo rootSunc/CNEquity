@@ -8,7 +8,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.orchestrator.manifest import Manifest
-from cnequity.steps.bars import _learn_suspensions_from_baostock
+from cnequity.steps.bars.gapfill import _learn_suspensions_from_baostock
 from cnequity.storage.layout import init_data_layout
 
 START, END = date(2026, 9, 17), date(2026, 9, 18)

@@ -31,6 +31,7 @@ from cnequity.orchestrator.run_window import (
 )
 from cnequity.orchestrator.scheduler_lock import lock_directory, scheduler_lock_holder
 from cnequity.serve.display import en, local
+from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.key_checks import last_check
 
 ENGINE_TEXT = {
@@ -221,7 +222,7 @@ def _failures_today(config) -> dict[str, dict]:
         .isoformat()
     )
     try:
-        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+        with closing(connect_readonly(path)) as conn:
             rows = conn.execute(
                 "SELECT dataset, COUNT(*) FROM ingestion_batches WHERE status = 'failed' "
                 "AND COALESCE(finished_at, started_at) >= ? GROUP BY dataset",

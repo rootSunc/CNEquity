@@ -43,6 +43,7 @@ from cnequity.domain.partitions import parse_partition
 from cnequity.i18n import _, current_language
 from cnequity.orchestrator.run_window import current_anchor
 from cnequity.quality.freshness import dataset_freshness
+from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.stats import (
     load_partition_stats,
     load_provenance_stats,
@@ -796,7 +797,7 @@ class LakeView:
             return []
         conn = None
         try:
-            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            conn = connect_readonly(path)
             conn.row_factory = sqlite3.Row
             with conn:
                 return [dict(row) for row in conn.execute(sql, params).fetchall()]
@@ -823,7 +824,7 @@ class LakeView:
             return ()
         conn = None
         try:
-            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            conn = connect_readonly(path)
             conn.row_factory = sqlite3.Row
             orphans, _locked = Manifest.orphaned_running_runs(
                 conn,

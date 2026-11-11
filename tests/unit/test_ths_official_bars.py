@@ -202,7 +202,7 @@ def _joined(rows):
 
 
 def test_a_dispute_the_third_source_backs_is_switched():
-    from cnequity.steps.bars import _withhold_unbacked_disputes
+    from cnequity.steps.bars.index_history import _withhold_unbacked_disputes
 
     day = date(2010, 6, 1)
     joined = _joined(
@@ -219,7 +219,7 @@ def test_a_dispute_the_third_source_backs_is_switched():
 
 def test_a_dispute_the_third_source_contradicts_is_withheld():
     """Taking the peer blindly would import 178 known regressions."""
-    from cnequity.steps.bars import _withhold_unbacked_disputes
+    from cnequity.steps.bars.index_history import _withhold_unbacked_disputes
 
     day = date(2010, 6, 1)
     joined = _joined(
@@ -235,7 +235,7 @@ def test_a_dispute_the_third_source_contradicts_is_withheld():
 
 def test_a_dispute_with_no_third_opinion_keeps_the_existing_value():
     """Silence is not consent: an unjudged dispute is not worth a provenance win."""
-    from cnequity.steps.bars import _withhold_unbacked_disputes
+    from cnequity.steps.bars.index_history import _withhold_unbacked_disputes
 
     day = date(2010, 6, 1)
     joined = _joined(
@@ -253,7 +253,7 @@ def test_a_dispute_with_no_third_opinion_keeps_the_existing_value():
 
 
 def test_an_undisputed_row_switches_for_provenance_alone():
-    from cnequity.steps.bars import _withhold_unbacked_disputes
+    from cnequity.steps.bars.index_history import _withhold_unbacked_disputes
 
     day = date(2010, 6, 1)
     joined = _joined(

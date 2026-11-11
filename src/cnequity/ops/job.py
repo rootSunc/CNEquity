@@ -24,6 +24,7 @@ from cnequity.i18n import _
 from cnequity.ops.preflight import engine_blockers, mark_due_daily_session, scheduler_names
 from cnequity.ops.records import read_record, update_record
 from cnequity.orchestrator.scheduler_lock import SchedulerLockError, lock_directory, scheduler_lock
+from cnequity.sqlite_readonly import connect_readonly
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -172,7 +173,7 @@ def launch_runs(config, launch_id: str, target_run_id: str | None) -> list[dict]
         "FROM ingestion_runs WHERE json_extract(metadata_json, '$.launch.id') = ?"
     )
     try:
-        with closing(sqlite3.connect(f"file:{config.manifest_path}?mode=ro", uri=True)) as conn:
+        with closing(connect_readonly(config.manifest_path)) as conn:
             conn.row_factory = sqlite3.Row
             rows = [dict(row) for row in conn.execute(query, (launch_id,))]
             if target_run_id and all(row["run_id"] != target_run_id for row in rows):
@@ -202,7 +203,7 @@ def launch_stats(config, run_ids: list[str]) -> dict[str, dict]:
     stats: dict[str, dict] = {}
     unique = list(dict.fromkeys(run_ids))
     try:
-        with closing(sqlite3.connect(f"file:{config.manifest_path}?mode=ro", uri=True)) as conn:
+        with closing(connect_readonly(config.manifest_path)) as conn:
             for start in range(0, len(unique), 500):
                 chunk = unique[start : start + 500]
                 marks = ",".join("?" * len(chunk))

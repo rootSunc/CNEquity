@@ -9,7 +9,7 @@ them because they were never expected.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 import pytest
@@ -31,7 +31,50 @@ def lake(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "lake")
     init_data_layout(cfg)
     monkeypatch.setattr(
-        bars, "list_trading_dates", lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi]
+        bars.admission,
+        "list_trading_dates",
+        lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi],
+    )
+    monkeypatch.setattr(
+        bars.bar_scope,
+        "list_trading_dates",
+        lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi],
+    )
+    monkeypatch.setattr(
+        bars.daily, "list_trading_dates", lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi]
+    )
+    monkeypatch.setattr(
+        bars.finish, "list_trading_dates", lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi]
+    )
+    monkeypatch.setattr(
+        bars.gapfill,
+        "list_trading_dates",
+        lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi],
+    )
+    monkeypatch.setattr(
+        bars.gapfill_chain,
+        "list_trading_dates",
+        lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi],
+    )
+    monkeypatch.setattr(
+        bars.index_history,
+        "list_trading_dates",
+        lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi],
+    )
+    monkeypatch.setattr(
+        bars.sina_bars,
+        "list_trading_dates",
+        lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi],
+    )
+    monkeypatch.setattr(
+        bars.staging,
+        "list_trading_dates",
+        lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi],
+    )
+    monkeypatch.setattr(
+        bars.tip_fetch,
+        "list_trading_dates",
+        lambda _c, lo, hi: [d for d in SESSIONS if lo <= d <= hi],
     )
     return cfg
 
@@ -47,14 +90,14 @@ def _write_bars(cfg, rows: list[tuple[str, date]]) -> None:
 
 
 def _spans(monkeypatch, spans: dict):
-    monkeypatch.setattr(bars, "_instrument_spans", lambda _c: spans)
+    monkeypatch.setattr(bars.bar_scope, "_instrument_spans", lambda _c: spans)
 
 
 def test_the_sessions_before_admission_land_on_the_ledger(lake, monkeypatch):
     _spans(monkeypatch, {"920138.BJ": (LISTED, None, "stock")})
     _write_bars(lake, [("920138.BJ", ADMITTED), ("920138.BJ", END)])
 
-    assert bars._record_late_admissions(lake, "r1", ["920138.BJ"], END) == 3
+    assert bars.admission._record_late_admissions(lake, "r1", ["920138.BJ"], END) == 3
 
     owed = StateStore(lake.meta_root).get_outstanding_keys("daily_bars")
     assert [r["trade_date"] for r in owed] == ["2026-08-12", "2026-08-13", "2026-08-14"]
@@ -66,14 +109,14 @@ def test_a_security_with_no_bar_at_all_owes_from_its_listing(lake, monkeypatch):
     _spans(monkeypatch, {"601091.SH": (date(2026, 9, 8), None, "stock")})
     _write_bars(lake, [("000001.SZ", END)])
 
-    assert bars._record_late_admissions(lake, "r1", ["601091.SH"], END) == 2
+    assert bars.admission._record_late_admissions(lake, "r1", ["601091.SH"], END) == 2
 
 
 def test_a_security_carried_from_its_first_session_owes_nothing(lake, monkeypatch):
     _spans(monkeypatch, {"920138.BJ": (LISTED, None, "stock")})
     _write_bars(lake, [("920138.BJ", LISTED), ("920138.BJ", END)])
 
-    assert bars._record_late_admissions(lake, "r1", ["920138.BJ"], END) == 0
+    assert bars.admission._record_late_admissions(lake, "r1", ["920138.BJ"], END) == 0
 
 
 def test_a_quote_code_the_dataset_does_not_carry_is_not_a_debt(lake, monkeypatch):
@@ -82,21 +125,21 @@ def test_a_quote_code_the_dataset_does_not_carry_is_not_a_debt(lake, monkeypatch
     _spans(monkeypatch, {"530060.SH": (LISTED, None, "fund")})
     _write_bars(lake, [("000001.SZ", END)])
 
-    assert bars._record_late_admissions(lake, "r1", ["530060.SH"], END) == 0
+    assert bars.admission._record_late_admissions(lake, "r1", ["530060.SH"], END) == 0
 
 
 def test_a_listing_older_than_the_lookback_is_left_alone(lake, monkeypatch):
     """Otherwise every security predating the lake's horizon reads as owed."""
-    old = END - bars.timedelta(days=bars._LATE_ADMISSION_LOOKBACK_DAYS + 1)
+    old = END - timedelta(days=bars.admission._LATE_ADMISSION_LOOKBACK_DAYS + 1)
     _spans(monkeypatch, {"600000.SH": (old, None, "stock")})
     _write_bars(lake, [("600000.SH", END)])
 
-    assert bars._record_late_admissions(lake, "r1", ["600000.SH"], END) == 0
+    assert bars.admission._record_late_admissions(lake, "r1", ["600000.SH"], END) == 0
 
 
 def test_an_empty_dataset_is_not_a_universe_wide_debt(lake, monkeypatch):
     _spans(monkeypatch, {"920138.BJ": (LISTED, None, "stock")})
-    assert bars._record_late_admissions(lake, "r1", ["920138.BJ"], END) == 0
+    assert bars.admission._record_late_admissions(lake, "r1", ["920138.BJ"], END) == 0
 
 
 def test_a_scoped_repair_reaches_the_whole_window_it_asked_for(lake, monkeypatch):
@@ -106,7 +149,7 @@ def test_a_scoped_repair_reaches_the_whole_window_it_asked_for(lake, monkeypatch
     fetch."""
     lake.bj_history_lookback_days = 1
     set_backfill(lake, symbols=["920138.BJ"])
-    assert bars._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[0]
+    assert bars.tip_fetch._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[0]
 
 
 def test_a_board_wide_sweep_still_gets_the_lookback(lake, monkeypatch):
@@ -114,11 +157,13 @@ def test_a_board_wide_sweep_still_gets_the_lookback(lake, monkeypatch):
     lake.bj_history_lookback_days = 1
     set_backfill(
         lake,
-        symbols=[f"9200{i:02d}.BJ" for i in range(bars._BJ_SCOPED_WINDOW_MAX_SYMBOLS + 1)],
+        symbols=[
+            f"9200{i:02d}.BJ" for i in range(bars.tip_fetch._BJ_SCOPED_WINDOW_MAX_SYMBOLS + 1)
+        ],
     )
-    assert bars._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[-1]
+    assert bars.tip_fetch._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[-1]
 
 
 def test_an_unscoped_run_is_untouched(lake, monkeypatch):
     lake.bj_history_lookback_days = 1
-    assert bars._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[-1]
+    assert bars.tip_fetch._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[-1]

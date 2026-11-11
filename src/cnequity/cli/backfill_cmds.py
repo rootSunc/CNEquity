@@ -824,7 +824,7 @@ def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
     from collections import defaultdict
 
     from cnequity.orchestrator.manifest import Manifest
-    from cnequity.steps.bars import _last_final_session
+    from cnequity.steps.bars.bar_scope import _last_final_session
     from cnequity.storage.state import StateStore
 
     # A later ordinary run may already have published many owed keys. Reconcile

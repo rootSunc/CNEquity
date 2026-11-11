@@ -498,7 +498,7 @@ def test_an_unresolved_key_failure_says_what_to_do(tmp_path):
     """A count is not an action. The findings file, the source probe, the retry
     and a scoped repair are all known at the point of the raise."""
     from cnequity.config import Config
-    from cnequity.steps.bars import _unresolved_key_remedy
+    from cnequity.steps.bars.admission import _unresolved_key_remedy
 
     cfg = Config(data_root=tmp_path / "data")
     text = _unresolved_key_remedy(
@@ -601,7 +601,10 @@ def test_fetching_commands_persist_job_logs(tmp_path, monkeypatch, command):
             [],
             "cnequity.steps.fundamentals.backfill_statement_gap_ths_official",
         ),
-        "ths-official repair-bars": ([], "cnequity.steps.bars.repair_deep_history_ths_official"),
+        "ths-official repair-bars": (
+            [],
+            "cnequity.steps.bars.ths_official.repair_deep_history_ths_official",
+        ),
         "ths-official resource-sectors": (
             [],
             "cnequity.steps.rotation.resource_sector_bars_ths_official",
@@ -947,7 +950,7 @@ def test_the_interior_gap_message_says_what_to_do(tmp_path):
     the call moved into a local, which says nothing about what a user reads.
     """
     from cnequity.config import Config
-    from cnequity.steps.bars import _unresolved_key_remedy
+    from cnequity.steps.bars.admission import _unresolved_key_remedy
 
     cfg = Config(data_root=tmp_path / "lake")
     remedy = _unresolved_key_remedy(

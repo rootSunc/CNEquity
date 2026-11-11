@@ -61,6 +61,7 @@ from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.domain.partitions import granularity_of, parse_partition
 from cnequity.file_lock import LockUnavailable, exclusive_lock
 from cnequity.query.parquet_scan import list_partitions, partition_dir
+from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.atomic import write_json_atomic, write_parquet_atomic
 from cnequity.storage.locator import logical_root
 
@@ -533,7 +534,7 @@ def _changes_since(config: Config, since: datetime) -> tuple[set[str] | None, st
     if not path.exists():
         return set(), None
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        conn = connect_readonly(path, timeout=5)
     except sqlite3.Error:
         return None, None
     try:

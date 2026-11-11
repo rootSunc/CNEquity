@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.atomic import replace_with_retry
 
 #: Subtrees of ``meta/`` worth keeping. ``revisions/`` is kept for its receipts
@@ -110,7 +111,7 @@ def backup_meta(
                     # The backup API copies a consistent snapshot even while a
                     # run is writing; a file copy can catch a torn page.
                     with (
-                        closing(sqlite3.connect(f"file:{manifest}?mode=ro", uri=True)) as src,
+                        closing(connect_readonly(manifest)) as src,
                         closing(sqlite3.connect(copy)) as dst,
                     ):
                         src.backup(dst)

@@ -54,10 +54,10 @@ def test_gapfill_asks_only_exchange_funds_and_stages_their_keys(tmp_path, monkey
         return frame.height
 
     monkeypatch.setattr("cnequity.adapters.exchange.fund_volume.fetch_fund_dayk", fake_fetch)
-    monkeypatch.setattr(bars, "_stage_daily_gap_batch", fake_stage)
+    monkeypatch.setattr(bars.gapfill, "_stage_daily_gap_batch", fake_stage)
     day = date(2026, 10, 26)
 
-    result = bars._gapfill_fund_keys_via_exchange_dayk(
+    result = bars.gapfill._gapfill_fund_keys_via_exchange_dayk(
         cfg,
         "run-1",
         missing={("501217.SH", day), ("600519.SH", day)},
@@ -75,7 +75,7 @@ def test_gapfill_is_off_with_the_exchange_source(tmp_path):
     cfg.sources["exchange"] = False
     day = date(2026, 10, 26)
 
-    result = bars._gapfill_fund_keys_via_exchange_dayk(
+    result = bars.gapfill._gapfill_fund_keys_via_exchange_dayk(
         cfg, "run-1", missing={("501217.SH", day)}, start=day, end=day
     )
 

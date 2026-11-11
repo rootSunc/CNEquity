@@ -262,7 +262,7 @@ def _last_trading_day(cfg: Config, as_of: date) -> date:
     command in the README, and run during market hours it died on the finality
     guard while reporting a TDX connectivity problem that did not exist.
     """
-    from cnequity.steps.bars import _last_final_session
+    from cnequity.steps.bars.bar_scope import _last_final_session
     from cnequity.steps.common import list_trading_dates
 
     as_of = min(as_of, _last_final_session())

@@ -90,9 +90,23 @@ def test_index_bar_step_stages_valid_rows_and_records_interior_symbol_session_ga
         if not (symbol == "000300.SH" and day == date(2024, 6, 4))
     ]
     frame = pl.DataFrame(rows)
-    monkeypatch.setattr("cnequity.steps.bars.incremental_window", lambda *args: days[0])
-    monkeypatch.setattr("cnequity.steps.bars.list_trading_dates", lambda *args: days)
-    monkeypatch.setattr("cnequity.steps.bars.fetch_index_bars", lambda *args, **kwargs: frame)
+    monkeypatch.setattr("cnequity.steps.bars.daily.incremental_window", lambda *args: days[0])
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.incremental_window", lambda *args: days[0]
+    )
+    monkeypatch.setattr("cnequity.steps.bars.admission.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.bar_scope.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.daily.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.finish.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.gapfill.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.gapfill_chain.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.index_history.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.sina_bars.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.staging.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr("cnequity.steps.bars.tip_fetch.list_trading_dates", lambda *args: days)
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.fetch_index_bars", lambda *args, **kwargs: frame
+    )
 
     result = step_index_bars(cfg, days[-1], "index-gap", {})
 
@@ -120,15 +134,17 @@ def test_step_index_bars_applies_finality_guard_before_fetch(config, monkeypatch
         raise RuntimeError("stop before fetch")
 
     monkeypatch.setattr(
-        "cnequity.steps.bars._reject_unfinished_daily_bar_window",
-        stop_before_fetch,
+        "cnequity.steps.bars.bar_scope._reject_unfinished_daily_bar_window", stop_before_fetch
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars.incremental_window",
+        "cnequity.steps.bars.daily.incremental_window", lambda *args, **kwargs: date(2026, 8, 10)
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.incremental_window",
         lambda *args, **kwargs: date(2026, 8, 10),
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_index_bars",
+        "cnequity.steps.bars.index_history.fetch_index_bars",
         lambda *args, **kwargs: events.append("fetch"),
     )
 

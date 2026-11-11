@@ -54,7 +54,7 @@ def _tdx(monkeypatch, **over) -> None:
 
 
 def _run(cfg, frame):
-    return bars._supplement_bj_amounts_from_tdx(cfg, frame, start=DAY, end=DAY)
+    return bars.amounts._supplement_bj_amounts_from_tdx(cfg, frame, start=DAY, end=DAY)
 
 
 @pytest.fixture
@@ -243,7 +243,7 @@ def test_sina_history_repair_asks_tdx_only_for_null_sina_rows(tmp_path, monkeypa
 
 def test_the_window_is_walked_a_year_at_a_time():
     """Half a million rows is not one staging write."""
-    assert bars._yearly_slices(date(2024, 3, 1), date(2026, 2, 1)) == [
+    assert bars._base._yearly_slices(date(2024, 3, 1), date(2026, 2, 1)) == [
         (date(2024, 3, 1), date(2024, 12, 31)),
         (date(2025, 1, 1), date(2025, 12, 31)),
         (date(2026, 1, 1), date(2026, 2, 1)),

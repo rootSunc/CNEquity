@@ -197,8 +197,7 @@ def test_step_sector_bars_applies_finality_guard_before_sweep(config, monkeypatc
         raise RuntimeError("stop before sweep")
 
     monkeypatch.setattr(
-        "cnequity.steps.bars._reject_unfinished_daily_bar_window",
-        stop_before_sweep,
+        "cnequity.steps.bars.bar_scope._reject_unfinished_daily_bar_window", stop_before_sweep
     )
     monkeypatch.setattr(
         "cnequity.steps.rotation._sweep_sector_bars",

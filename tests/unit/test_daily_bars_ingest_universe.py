@@ -24,14 +24,13 @@ from cnequity.domain.schemas import with_provenance
 from cnequity.domain.symbols import filter_ingest_universe, in_ingest_universe
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.run_scope import set_backfill
-from cnequity.steps.bars import (
-    _daily_fund_bar_symbols,
-    _eligible_etf_bar_symbols,
-    _finish_daily_bars,
+from cnequity.steps.bars import step_daily_bars
+from cnequity.steps.bars.bar_scope import _daily_fund_bar_symbols, _eligible_etf_bar_symbols
+from cnequity.steps.bars.etf_debts import (
     _settle_official_etf_delisted_debts,
     _settle_official_etf_prelisting_debts,
-    step_daily_bars,
 )
+from cnequity.steps.bars.finish import _finish_daily_bars
 from cnequity.steps.common import load_negative_evidence
 from cnequity.steps.reference import _enrich_etf_list_dates_from_profiles
 from cnequity.storage import StagingWriter
@@ -154,7 +153,7 @@ def _capture_fetch_scope(monkeypatch) -> list[str]:
 
     # Scope tests exercise routing without consulting a live exchange snapshot.
     monkeypatch.setattr(
-        "cnequity.steps.bars._fetch_tip_via_exchange",
+        "cnequity.steps.bars.tip_fetch._fetch_tip_via_exchange",
         lambda *a, **k: {
             "rows_read": 0,
             "rows_written": 0,
@@ -162,9 +161,10 @@ def _capture_fetch_scope(monkeypatch) -> list[str]:
             "source_outcomes": {},
         },
     )
-    monkeypatch.setattr("cnequity.steps.bars.fetch_daily_bars_parallel", fake_fetch)
+    monkeypatch.setattr("cnequity.steps.bars.daily.fetch_daily_bars_parallel", fake_fetch)
+    monkeypatch.setattr("cnequity.steps.bars.tip_fetch.fetch_daily_bars_parallel", fake_fetch)
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *a, **k: {
             "rows_read": 0,
             "rows_written": 0,
@@ -490,27 +490,32 @@ def test_small_explicit_history_skips_whole_board_tip_snapshots(tmp_path, monkey
     set_backfill(cfg, active=True, start=D1, end=D3, symbols=[symbol])
     run_id = Manifest(cfg.manifest_path).start_run("backfill")
     monkeypatch.setattr(
-        "cnequity.steps.bars._fetch_tip_via_exchange",
+        "cnequity.steps.bars.tip_fetch._fetch_tip_via_exchange",
         lambda *args, **kwargs: pytest.fail("scoped history fetched the exchange board"),
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars._fetch_bj_tip_via_bse",
+        "cnequity.steps.bars.tip_fetch._fetch_bj_tip_via_bse",
         lambda *args, **kwargs: pytest.fail("scoped history fetched the BSE board"),
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_daily_bars_parallel",
+        "cnequity.steps.bars.daily.fetch_daily_bars_parallel",
         lambda *args, **kwargs: {"rows_read": 0, "rows_written": 0, "failed_symbols": []},
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars._fetch_bj_history_via_tdx",
+        "cnequity.steps.bars.tip_fetch.fetch_daily_bars_parallel",
+        lambda *args, **kwargs: {"rows_read": 0, "rows_written": 0, "failed_symbols": []},
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.tip_fetch._fetch_bj_history_via_tdx",
         lambda *args, **kwargs: {"rows_read": 0, "rows_written": 0, "covered": set()},
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_bars_via_sina",
+        "cnequity.steps.bars.sina_bars.fetch_bars_via_sina",
         lambda *args, **kwargs: {"rows_read": 0, "rows_written": 0},
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars._finish_daily_bars", lambda *args, **kwargs: {"status": "success"}
+        "cnequity.steps.bars.finish._finish_daily_bars",
+        lambda *args, **kwargs: {"status": "success"},
     )
     assert step_daily_bars(cfg, D3, run_id, {})["status"] == "success"
 
@@ -669,7 +674,7 @@ def test_fallback_queue_puts_research_symbols_ahead_of_quote_codes():
     opens, so an alphabetical queue spent the whole budget on 15xxxx/16xxxx
     before reaching 6xxxxx.
     """
-    from cnequity.steps.bars import _research_first
+    from cnequity.steps.bars.gapfill import _research_first
 
     queue = _research_first(
         {"158030.SZ", "600519.SH", "512740.SH", "000001.SZ", "920184.BJ", "junk"}
@@ -695,7 +700,7 @@ def test_bj_history_window_is_shorter_than_the_tdx_window(tmp_path):
     which is what earns HTTP 456 and a vendor-wide cooldown that then strands
     unrelated symbols.
     """
-    from cnequity.steps.bars import _bj_history_start
+    from cnequity.steps.bars.tip_fetch import _bj_history_start
 
     cfg = _cfg(tmp_path)
     assert cfg.bj_history_lookback_days == 1
@@ -707,7 +712,7 @@ def test_bj_history_window_is_shorter_than_the_tdx_window(tmp_path):
 
 
 def test_bj_tip_comes_from_one_exchange_snapshot_not_one_request_per_symbol(tmp_path, monkeypatch):
-    from cnequity.steps.bars import _fetch_bj_tip_via_bse
+    from cnequity.steps.bars.tip_fetch import _fetch_bj_tip_via_bse
 
     cfg = _cfg(tmp_path)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
@@ -744,7 +749,7 @@ def test_bj_tip_comes_from_one_exchange_snapshot_not_one_request_per_symbol(tmp_
 
 def test_a_failing_exchange_snapshot_leaves_sina_as_the_backstop(tmp_path, monkeypatch):
     """BSE is the cheaper route, not a new single point of failure."""
-    from cnequity.steps.bars import _fetch_bj_tip_via_bse
+    from cnequity.steps.bars.tip_fetch import _fetch_bj_tip_via_bse
 
     cfg = _cfg(tmp_path)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
@@ -808,7 +813,7 @@ def test_gapfill_uses_the_legs_own_window_not_the_tdx_one(tmp_path, monkeypatch)
         windows.append((tuple(sorted(symbols)), start, end))
         return {"rows_read": 0, "rows_written": 0, "filled": False, "complete": False}
 
-    monkeypatch.setattr(bars_mod, "_gapfill_multiday_via_kline", spy)
+    monkeypatch.setattr(bars_mod.gapfill_chain, "_gapfill_multiday_via_kline", spy)
 
     result = _finish_daily_bars(
         cfg,
@@ -849,7 +854,7 @@ def test_gapfill_keeps_the_full_window_when_the_legs_agree(tmp_path, monkeypatch
         windows.append((tuple(sorted(symbols)), start, end))
         return {"rows_read": 0, "rows_written": 0, "filled": False, "complete": False}
 
-    monkeypatch.setattr(bars_mod, "_gapfill_multiday_via_kline", spy)
+    monkeypatch.setattr(bars_mod.gapfill_chain, "_gapfill_multiday_via_kline", spy)
 
     with pytest.raises(RuntimeError):
         _finish_daily_bars(
@@ -882,7 +887,7 @@ def test_exchange_tip_covers_the_board_and_leaves_tdx_the_remainder(tmp_path, mo
     Routing it here is what prices the two separately.
     """
     from cnequity.adapters.exchange.daily_quotes import ExchangeQuotesResult
-    from cnequity.steps.bars import _fetch_tip_via_exchange
+    from cnequity.steps.bars.tip_fetch import _fetch_tip_via_exchange
 
     cfg = _cfg(tmp_path)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
@@ -914,7 +919,7 @@ def test_exchange_tip_covers_the_board_and_leaves_tdx_the_remainder(tmp_path, mo
 def test_one_exchange_failing_leaves_its_symbols_to_tdx(tmp_path, monkeypatch):
     """SZSE resets the connection often enough that this must never be a swap."""
     from cnequity.adapters.exchange.daily_quotes import ExchangeQuotesResult
-    from cnequity.steps.bars import _fetch_tip_via_exchange
+    from cnequity.steps.bars.tip_fetch import _fetch_tip_via_exchange
 
     cfg = _cfg(tmp_path)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
@@ -935,7 +940,7 @@ def test_one_exchange_failing_leaves_its_symbols_to_tdx(tmp_path, monkeypatch):
 
 
 def test_a_failing_snapshot_never_fails_the_step(tmp_path, monkeypatch):
-    from cnequity.steps.bars import _fetch_tip_via_exchange
+    from cnequity.steps.bars.tip_fetch import _fetch_tip_via_exchange
 
     cfg = _cfg(tmp_path)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
@@ -1056,14 +1061,14 @@ def test_fund_scope_failure_turns_the_step_into_a_warning(tmp_path, monkeypatch)
     )
 
     def fake_step(config, trade_date, run_id, context):
-        assert bars._daily_fund_bar_symbols(config, trade_date) is None
-        assert bars._daily_fund_bar_symbols(config, trade_date, retry=False) is None
+        assert bars.bar_scope._daily_fund_bar_symbols(config, trade_date) is None
+        assert bars.bar_scope._daily_fund_bar_symbols(config, trade_date, retry=False) is None
         return {"status": "success", "rows_written": 3}
 
-    monkeypatch.setattr(bars, "_step_daily_bars", fake_step)
+    monkeypatch.setattr(bars.daily, "_step_daily_bars", fake_step)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     result = step_daily_bars(cfg, D3, run_id, {})
     assert result["status"] == "warning"
     findings = result["context_updates"]["audit_findings"]
     assert [f["check"] for f in findings] == ["fund_bar_scope_unavailable"]
-    assert bars._FUND_SCOPE_ISSUES.get() is None
+    assert bars.bar_scope._FUND_SCOPE_ISSUES.get() is None

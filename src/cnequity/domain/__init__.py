@@ -30,15 +30,11 @@ from cnequity.domain.universe_profiles import (
     PROFILE_REGISTRY,
     UniverseProfile,
     UniverseProfileError,
-    get_universe_profile,
-    list_profiles,
     list_universe_profiles,
     profile_for_legacy_universe,
-    profile_json,
     profile_scope_hash,
     resolve_universe_profile,
     scope_hash,
-    show_profile,
     show_universe_profile,
     symbol_scope_hash,
 )
@@ -70,15 +66,20 @@ __all__ = [
     "PROFILE_REGISTRY",
     "UniverseProfile",
     "UniverseProfileError",
-    "get_universe_profile",
-    "list_profiles",
     "list_universe_profiles",
     "profile_for_legacy_universe",
-    "profile_json",
     "profile_scope_hash",
     "resolve_universe_profile",
     "scope_hash",
-    "show_profile",
     "show_universe_profile",
     "symbol_scope_hash",
 ]
+
+
+def __getattr__(name: str):
+    # Deprecated second names of the profile functions, removed in 0.25.0.
+    from cnequity.domain import universe_profiles
+
+    if name in universe_profiles.DEPRECATED_ALIASES:
+        return universe_profiles.deprecated_alias(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

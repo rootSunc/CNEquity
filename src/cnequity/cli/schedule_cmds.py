@@ -21,6 +21,7 @@ from cnequity.cli._root import cli, run
 from cnequity.cli._shared import _cfg, attach_log_file, config_option, resolve_config_path
 from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _
+from cnequity.sqlite_readonly import connect_readonly
 
 #: (label, `cne` arguments, whether a failure makes the day unhealthy).
 #: Probes, SLO and run evidence are observations about sources and history,
@@ -65,7 +66,6 @@ def _group_failures(cfg, session) -> tuple[dict[str, str], set[str]]:
     "Failed" is what fails the command (`orchestrator.outcomes.execution_exit_code`):
     ``degraded`` and ``warning`` runs delivered and are not counted.
     """
-    import sqlite3
     from contextlib import closing
 
     from cnequity.orchestrator.outcomes import execution_exit_code
@@ -79,7 +79,7 @@ def _group_failures(cfg, session) -> tuple[dict[str, str], set[str]]:
         "ORDER BY started_at"
     )
     latest: dict[str, str] = {}
-    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+    with closing(connect_readonly(path)) as conn:
         for job_name, status in conn.execute(query, (session.isoformat(),)):
             group = job_name.removeprefix("daily:")
             if group in cfg.schedule_groups:

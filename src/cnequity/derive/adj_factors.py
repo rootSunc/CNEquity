@@ -858,7 +858,7 @@ def init_prefetch_symbols(config: Config, trade_date: date) -> list[str]:
 
     symbols = filter_ingest_universe(load_symbols(config), config.ingest_universe)
     if config.ingest_listed_funds or config.ingest_eligible_etfs:
-        from cnequity.steps.bars import _daily_fund_bar_symbols
+        from cnequity.steps.bars.bar_scope import _daily_fund_bar_symbols
 
         symbols += _daily_fund_bar_symbols(config, trade_date) or []
     return symbols

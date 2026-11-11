@@ -963,18 +963,18 @@ def test_the_demo_window_stops_before_a_forming_bar(tmp_path, monkeypatch):
         "cnequity.steps.common.list_trading_dates",
         lambda c, s, e: [d for d in sessions if s <= d <= e],
     )
-    monkeypatch.setattr("cnequity.steps.bars.is_trading_day", lambda c, d: d in sessions)
+    monkeypatch.setattr("cnequity.steps.bars.bar_scope.is_trading_day", lambda c, d: d in sessions)
 
     # 06:59 UTC is 14:59 in Shanghai — the 2026-08-12 bar is still forming.
     monkeypatch.setattr(
-        "cnequity.steps.bars.shanghai_now",
+        "cnequity.steps.bars.bar_scope.shanghai_now",
         lambda now=None: shanghai_now(datetime(2026, 8, 12, 6, 59, tzinfo=timezone.utc)),
     )
     assert _last_trading_day(cfg, date(2026, 8, 12)) == date(2026, 8, 11)
 
     # 07:05 UTC is 15:05 — settled, so the demo may have today.
     monkeypatch.setattr(
-        "cnequity.steps.bars.shanghai_now",
+        "cnequity.steps.bars.bar_scope.shanghai_now",
         lambda now=None: shanghai_now(datetime(2026, 8, 12, 7, 5, tzinfo=timezone.utc)),
     )
     assert _last_trading_day(cfg, date(2026, 8, 12)) == date(2026, 8, 12)

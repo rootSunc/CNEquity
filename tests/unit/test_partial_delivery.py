@@ -329,7 +329,7 @@ def test_partial_index_bars_publish_without_advancing_complete_coverage(tmp_path
             "frequency": ["1d"],
         }
     )
-    monkeypatch.setattr("cnequity.steps.bars.fetch_index_bars", lambda *a, **k: frame)
+    monkeypatch.setattr("cnequity.steps.bars.index_history.fetch_index_bars", lambda *a, **k: frame)
     result = _backfill_once(cfg, "index_bars")
     assert result["status"] == "degraded"
     assert result["publication_status"] == "partial"

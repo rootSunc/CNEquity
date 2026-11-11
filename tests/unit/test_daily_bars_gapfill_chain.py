@@ -130,14 +130,35 @@ class Chain:
             self.calls.append({"stage": "suspensions", "missing": _keys(remaining)})
             return set(), {"status": "fake"}
 
-        monkeypatch.setattr(bars, "_gapfill_complete_symbols_via_exchange", exchange)
-        monkeypatch.setattr(bars, "_gapfill_fund_keys_via_exchange_dayk", dayk)
-        monkeypatch.setattr(bars, "fetch_bars_via_sina", sina)
+        monkeypatch.setattr(bars.gapfill, "_gapfill_complete_symbols_via_exchange", exchange)
+        monkeypatch.setattr(bars.gapfill, "_gapfill_fund_keys_via_exchange_dayk", dayk)
+        monkeypatch.setattr(bars.sina_bars, "fetch_bars_via_sina", sina)
         monkeypatch.setattr("cnequity.adapters.eastmoney.bars.fetch_daily_bars", eastmoney)
-        monkeypatch.setattr(bars, "_gapfill_missing_keys_via_ths", ths)
-        monkeypatch.setattr(bars, "_gapfill_missing_keys_via_baostock", baostock)
-        monkeypatch.setattr(bars, "_learn_suspensions_from_baostock", suspensions)
-        monkeypatch.setattr(bars, "list_trading_dates", lambda config, start, end: [D1, D2])
+        monkeypatch.setattr(bars.gapfill, "_gapfill_missing_keys_via_ths", ths)
+        monkeypatch.setattr(bars.gapfill, "_gapfill_missing_keys_via_baostock", baostock)
+        monkeypatch.setattr(bars.gapfill, "_learn_suspensions_from_baostock", suspensions)
+        monkeypatch.setattr(
+            bars.admission, "list_trading_dates", lambda config, start, end: [D1, D2]
+        )
+        monkeypatch.setattr(
+            bars.bar_scope, "list_trading_dates", lambda config, start, end: [D1, D2]
+        )
+        monkeypatch.setattr(bars.daily, "list_trading_dates", lambda config, start, end: [D1, D2])
+        monkeypatch.setattr(bars.finish, "list_trading_dates", lambda config, start, end: [D1, D2])
+        monkeypatch.setattr(bars.gapfill, "list_trading_dates", lambda config, start, end: [D1, D2])
+        monkeypatch.setattr(
+            bars.gapfill_chain, "list_trading_dates", lambda config, start, end: [D1, D2]
+        )
+        monkeypatch.setattr(
+            bars.index_history, "list_trading_dates", lambda config, start, end: [D1, D2]
+        )
+        monkeypatch.setattr(
+            bars.sina_bars, "list_trading_dates", lambda config, start, end: [D1, D2]
+        )
+        monkeypatch.setattr(bars.staging, "list_trading_dates", lambda config, start, end: [D1, D2])
+        monkeypatch.setattr(
+            bars.tip_fetch, "list_trading_dates", lambda config, start, end: [D1, D2]
+        )
 
 
 SCENARIOS = {
@@ -184,7 +205,7 @@ def _run(tmp_path, monkeypatch, name: str) -> dict:
         complete=scenario.get("complete", ()),
     )
     chain.install(monkeypatch)
-    result = bars._gapfill_multiday_via_kline(
+    result = bars.gapfill_chain._gapfill_multiday_via_kline(
         cfg,
         run_id,
         symbols=SYMBOLS,

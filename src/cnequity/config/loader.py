@@ -1200,7 +1200,7 @@ def load_config(path: str | Path) -> Config:
         # is not wrong about wanting it, only about it working.
         logger.warning(
             "[universe].default is not read by anything and has no effect; "
-            "pass universe= (or universe_profile=) to load() instead"
+            "pass profile= (or universe=) to load() instead"
         )
 
     ingest_eligible_etfs = raw.get("universe", {}).get("ingest_eligible_etfs", False)

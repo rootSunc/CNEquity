@@ -31,6 +31,7 @@ _RANKS: dict[str, int] = {
     # Standalone utilities with no lake knowledge.
     "cnequity": 0,
     "cnequity.i18n": 0,
+    "cnequity.sqlite_readonly": 0,
     "cnequity._lazy": 0,
     "cnequity.file_lock": 0,
     "cnequity.file_replace": 0,

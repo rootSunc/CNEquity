@@ -10,6 +10,7 @@ from pathlib import Path
 
 from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS
+from cnequity.sqlite_readonly import connect_readonly
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,7 @@ def dataset_attempt(
         return None
     if path.is_symlink():
         raise ValueError("manifest path must not be a symlink")
-    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
+    with closing(connect_readonly(path)) as connection:
         connection.row_factory = sqlite3.Row
         try:
             row = connection.execute(

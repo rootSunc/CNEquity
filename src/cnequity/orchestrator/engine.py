@@ -1052,7 +1052,7 @@ class JobEngine:
         has reached curated storage. Partial recovery remains durable, while
         unresolved targets remain durable coverage findings in the parent.
         """
-        from cnequity.steps.bars import in_ingest_universe_symbol
+        from cnequity.steps.bars.admission import in_ingest_universe_symbol
         from cnequity.steps.common import BACKFILL_START
         from cnequity.steps.delisted import (
             backfill_delisted_bars,

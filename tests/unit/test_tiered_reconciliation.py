@@ -222,27 +222,37 @@ def test_the_daily_bar_step_records_its_deep_sweep(tmp_path, monkeypatch):
 
     cfg = _cfg(tmp_path)
     monday = date(2026, 9, 21)
-    monkeypatch.setattr(bars, "incremental_window", lambda *_a: date(2026, 9, 15))
-    monkeypatch.setattr(bars, "reconciliation_depth", lambda *_a: "deep")
-    monkeypatch.setattr(bars, "_reject_unfinished_daily_bar_window", lambda *_a: None)
-    monkeypatch.setattr(bars, "_daily_fund_bar_symbols", lambda *_a, **_k: [])
-    monkeypatch.setattr(bars, "load_symbols", lambda _c: [])
+    monkeypatch.setattr(bars.daily, "incremental_window", lambda *_a: date(2026, 9, 15))
+    monkeypatch.setattr(bars.index_history, "incremental_window", lambda *_a: date(2026, 9, 15))
+    monkeypatch.setattr(bars.daily, "reconciliation_depth", lambda *_a: "deep")
+    monkeypatch.setattr(bars.bar_scope, "_reject_unfinished_daily_bar_window", lambda *_a: None)
+    monkeypatch.setattr(bars.bar_scope, "_daily_fund_bar_symbols", lambda *_a, **_k: [])
+    monkeypatch.setattr(bars.bar_scope, "load_symbols", lambda _c: [])
+    monkeypatch.setattr(bars.daily, "load_symbols", lambda _c: [])
+    monkeypatch.setattr(bars.index_history, "load_symbols", lambda _c: [])
     monkeypatch.setattr(
-        bars,
+        bars.tip_fetch,
         "_fetch_tip_via_exchange",
         lambda *_a: {"rows_read": 0, "rows_written": 0, "covered": set()},
     )
     monkeypatch.setattr(
-        bars, "fetch_daily_bars_parallel", lambda *_a, **_k: {"rows_read": 0, "rows_written": 0}
+        bars.daily,
+        "fetch_daily_bars_parallel",
+        lambda *_a, **_k: {"rows_read": 0, "rows_written": 0},
     )
-    monkeypatch.setattr(bars, "_finish_daily_bars", lambda *_a, **_k: {"status": "warning"})
-    monkeypatch.setattr(bars, "_merge_ownership_result", lambda out, *_a: out)
+    monkeypatch.setattr(
+        bars.tip_fetch,
+        "fetch_daily_bars_parallel",
+        lambda *_a, **_k: {"rows_read": 0, "rows_written": 0},
+    )
+    monkeypatch.setattr(bars.finish, "_finish_daily_bars", lambda *_a, **_k: {"status": "warning"})
+    monkeypatch.setattr(bars.bar_scope, "_merge_ownership_result", lambda out, *_a: out)
 
-    bars._step_daily_bars(cfg, monday, "run-1", {})
+    bars.daily._step_daily_bars(cfg, monday, "run-1", {})
     assert StateStore(cfg.meta_root).get_date("daily_bars", field=_DEEP_RECONCILED_FIELD) == monday
 
     # An execution failure leaves the deep sweep owed.
     later = date(2026, 9, 28)
-    monkeypatch.setattr(bars, "_finish_daily_bars", lambda *_a, **_k: {"status": "failed"})
-    bars._step_daily_bars(cfg, later, "run-2", {})
+    monkeypatch.setattr(bars.finish, "_finish_daily_bars", lambda *_a, **_k: {"status": "failed"})
+    bars.daily._step_daily_bars(cfg, later, "run-2", {})
     assert StateStore(cfg.meta_root).get_date("daily_bars", field=_DEEP_RECONCILED_FIELD) == monday

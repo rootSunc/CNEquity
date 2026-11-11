@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import datetime as dt
+import importlib.util
 import json
+from pathlib import Path
 
 from cnequity.diagnostics import source_health
-from cnequity.diagnostics.release_evidence import validate_release_evidence
 from cnequity.diagnostics.source_health import HealthReport, ProbeResult
 from cnequity.diagnostics.source_slo import (
     build_source_incidents,
     critical_probe_keys,
     evaluate_source_slo,
 )
+
+# Dev-only: the validator lives with its script, not in the installed package.
+_SCRIPT = Path(__file__).resolve().parents[2] / "scripts/dev/validate_release_evidence.py"
+_spec = importlib.util.spec_from_file_location("validate_release_evidence", _SCRIPT)
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+validate_release_evidence = _module.validate_release_evidence
 
 NOW = dt.datetime(2026, 8, 31, 12, tzinfo=dt.timezone.utc)
 

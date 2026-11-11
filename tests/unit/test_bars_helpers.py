@@ -25,25 +25,25 @@ def test_backfill_window_defaults_and_overrides(tmp_path, monkeypatch):
 
     # 06:00 UTC is 14:00 in Shanghai — 2025-01-10's bar is still forming.
     monkeypatch.setattr(
-        "cnequity.steps.bars.shanghai_now",
+        "cnequity.steps.bars.bar_scope.shanghai_now",
         lambda now=None: shanghai_now(datetime(2025, 1, 10, 6, 0, tzinfo=timezone.utc)),
     )
     cfg = Config(data_root=tmp_path / "data")
-    start, end = bars._backfill_window(cfg, date(2025, 1, 10))
+    start, end = bars.bar_scope._backfill_window(cfg, date(2025, 1, 10))
     assert end == date(2025, 1, 9)
     assert start.year <= 2016
 
     # 08:00 UTC is 16:00 — settled, so the default reaches today.
     monkeypatch.setattr(
-        "cnequity.steps.bars.shanghai_now",
+        "cnequity.steps.bars.bar_scope.shanghai_now",
         lambda now=None: shanghai_now(datetime(2025, 1, 10, 8, 0, tzinfo=timezone.utc)),
     )
-    _start, end = bars._backfill_window(cfg, date(2025, 1, 10))
+    _start, end = bars.bar_scope._backfill_window(cfg, date(2025, 1, 10))
     assert end == date(2025, 1, 10)
 
     cfg2 = Config(data_root=tmp_path / "data-2")
     set_backfill(cfg2, start=date(2024, 1, 1), end=date(2024, 6, 1))
-    assert bars._backfill_window(cfg2, date(2025, 1, 10)) == (
+    assert bars.bar_scope._backfill_window(cfg2, date(2025, 1, 10)) == (
         date(2024, 1, 1),
         date(2024, 5, 31),
     )
@@ -51,11 +51,11 @@ def test_backfill_window_defaults_and_overrides(tmp_path, monkeypatch):
 
 def test_backfill_window_ends_on_the_previous_session_over_a_weekend(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    monkeypatch.setattr(bars, "_last_final_session", lambda: date(2025, 1, 11))
+    monkeypatch.setattr(bars.bar_scope, "_last_final_session", lambda: date(2025, 1, 11))
 
-    start, end = bars._backfill_window(cfg, date(2025, 1, 12))
+    start, end = bars.bar_scope._backfill_window(cfg, date(2025, 1, 12))
 
-    assert start == bars.BACKFILL_START
+    assert start == bars.bar_scope.BACKFILL_START
     assert end == date(2025, 1, 10)
 
 
@@ -63,7 +63,7 @@ def test_explicit_non_trading_backfill_end_is_normalized(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     set_backfill(cfg, start=date(2025, 1, 1), end=date(2025, 1, 11))
 
-    assert bars._backfill_window(cfg, date(2025, 1, 12)) == (
+    assert bars.bar_scope._backfill_window(cfg, date(2025, 1, 12)) == (
         date(2025, 1, 1),
         date(2025, 1, 10),
     )
@@ -87,7 +87,7 @@ def test_history_plan_includes_etf_and_filters_future_or_undated_listings(tmp_pa
 
     cfg = Config(data_root=tmp_path)
     monkeypatch.setattr(
-        bars,
+        bars.bar_scope,
         "load_symbols",
         lambda config: [
             "600519.SH",
@@ -99,7 +99,33 @@ def test_history_plan_includes_etf_and_filters_future_or_undated_listings(tmp_pa
             "830001.BJ",
         ],
     )
-    plan = bars._history_plan(cfg, date(2020, 1, 1), date(2025, 1, 1))
+    monkeypatch.setattr(
+        bars.daily,
+        "load_symbols",
+        lambda config: [
+            "600519.SH",
+            "510300.SH",
+            "589430.SH",
+            "688001.SH",
+            "301001.SZ",
+            "920001.BJ",
+            "830001.BJ",
+        ],
+    )
+    monkeypatch.setattr(
+        bars.index_history,
+        "load_symbols",
+        lambda config: [
+            "600519.SH",
+            "510300.SH",
+            "589430.SH",
+            "688001.SH",
+            "301001.SZ",
+            "920001.BJ",
+            "830001.BJ",
+        ],
+    )
+    plan = bars.index_history._history_plan(cfg, date(2020, 1, 1), date(2025, 1, 1))
     by_sym = dict(plan)
     assert "600519.SH" in by_sym
     assert by_sym["600519.SH"] == date(2020, 1, 1)
@@ -115,8 +141,12 @@ def test_history_plan_includes_etf_and_filters_future_or_undated_listings(tmp_pa
 
 def test_history_plan_without_instruments_falls_back(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "missing")
-    monkeypatch.setattr(bars, "load_symbols", lambda config: ["600519.SH", "920001.BJ"])
-    plan = bars._history_plan(cfg, date(2020, 1, 1), date(2025, 1, 1))
+    monkeypatch.setattr(bars.bar_scope, "load_symbols", lambda config: ["600519.SH", "920001.BJ"])
+    monkeypatch.setattr(bars.daily, "load_symbols", lambda config: ["600519.SH", "920001.BJ"])
+    monkeypatch.setattr(
+        bars.index_history, "load_symbols", lambda config: ["600519.SH", "920001.BJ"]
+    )
+    plan = bars.index_history._history_plan(cfg, date(2020, 1, 1), date(2025, 1, 1))
     assert plan == [("600519.SH", date(2020, 1, 1))]
 
 
@@ -144,9 +174,11 @@ def test_history_plan_dedupes_nested_instrument_fragments(tmp_path, monkeypatch)
     ).write_parquet(nested / "part-old.parquet")
 
     cfg = Config(data_root=tmp_path)
-    monkeypatch.setattr(bars, "load_symbols", lambda config: ["688001.SH"])
+    monkeypatch.setattr(bars.bar_scope, "load_symbols", lambda config: ["688001.SH"])
+    monkeypatch.setattr(bars.daily, "load_symbols", lambda config: ["688001.SH"])
+    monkeypatch.setattr(bars.index_history, "load_symbols", lambda config: ["688001.SH"])
 
-    plan = bars._history_plan(cfg, date(2020, 1, 1), date(2025, 1, 1))
+    plan = bars.index_history._history_plan(cfg, date(2020, 1, 1), date(2025, 1, 1))
 
     assert plan == [("688001.SH", date(2024, 1, 1))]
 
@@ -357,19 +389,19 @@ def test_a_replayed_trade_date_bounds_the_backfill_window(tmp_path, monkeypatch)
     from cnequity.domain.market_time import shanghai_now
 
     monkeypatch.setattr(
-        "cnequity.steps.bars.shanghai_now",
+        "cnequity.steps.bars.bar_scope.shanghai_now",
         lambda now=None: shanghai_now(datetime(2026, 9, 17, 9, 0, tzinfo=timezone.utc)),
     )
     cfg = Config(data_root=tmp_path / "data")
 
     # A replay stops where it was told …
-    assert bars._backfill_window(cfg, date(2025, 1, 10))[1] == date(2025, 1, 10)
+    assert bars.bar_scope._backfill_window(cfg, date(2025, 1, 10))[1] == date(2025, 1, 10)
     # … and a date past the settled session is still clamped to it.
-    assert bars._backfill_window(cfg, date(2030, 1, 1))[1] == date(2026, 9, 17)
+    assert bars.bar_scope._backfill_window(cfg, date(2030, 1, 1))[1] == date(2026, 9, 17)
     # An explicit --end keeps overriding both.
     explicit = Config(data_root=tmp_path / "explicit-data")
     set_backfill(explicit, end=date(2026, 9, 18))
-    assert bars._backfill_window(explicit, date(2025, 1, 1))[1] == date(2026, 9, 18)
+    assert bars.bar_scope._backfill_window(explicit, date(2025, 1, 1))[1] == date(2026, 9, 18)
 
 
 def test_named_symbols_are_never_classified_as_pre_listing_placeholders(monkeypatch):
@@ -383,15 +415,14 @@ def test_named_symbols_are_never_classified_as_pre_listing_placeholders(monkeypa
     """
     spans = {"000001.SZ": (None, None, "stock")}
     monkeypatch.setattr(
-        "cnequity.steps.bars.load_bar_universe",
-        lambda config: {"600519.SH"},
+        "cnequity.steps.bars.bar_scope.load_bar_universe", lambda config: {"600519.SH"}
     )
 
     swept = SimpleNamespace(_backfill_symbols=None)
-    assert bars._placeholder_bar_universe(swept, spans) == {"600519.SH"}
+    assert bars.bar_scope._placeholder_bar_universe(swept, spans) == {"600519.SH"}
 
     named = SimpleNamespace(_backfill_symbols=["000001.SZ"])
-    assert bars._placeholder_bar_universe(named, spans) is None
+    assert bars.bar_scope._placeholder_bar_universe(named, spans) is None
 
 
 def test_every_backfill_end_reader_means_the_same_session(tmp_path, monkeypatch):
@@ -414,7 +445,7 @@ def test_every_backfill_end_reader_means_the_same_session(tmp_path, monkeypatch)
     assert friday == date(2026, 9, 18)
 
     set_backfill(cfg, end=saturday)
-    _, end = bars_mod._backfill_window(cfg, saturday)
+    _, end = bars_mod.bar_scope._backfill_window(cfg, saturday)
     assert end == friday, "the history sweep normalises its own end"
 
 

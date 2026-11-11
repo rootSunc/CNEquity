@@ -12,7 +12,7 @@ cnequity.config.loader -> cnequity.adapters.throttle
 cnequity.config.loader -> cnequity.diagnostics.source_health
 cnequity.config.loader -> cnequity.orchestrator.registry
 cnequity.config.loader -> cnequity.steps
-cnequity.derive.adj_factors -> cnequity.steps.bars
+cnequity.derive.adj_factors -> cnequity.steps.bars.bar_scope
 cnequity.derive.adj_factors -> cnequity.steps.common
 cnequity.orchestrator.source_gaps -> cnequity.storage.state
 cnequity.orchestrator.worker_pool -> cnequity.research.preview
@@ -23,7 +23,8 @@ cnequity.query.reader -> cnequity.research.packs
 cnequity.query.reader -> cnequity.research.preview
 cnequity.query.receipt -> cnequity.quality.factor_diagnostics
 cnequity.query.universe -> cnequity.quality.st_coverage
-cnequity.steps.bars -> cnequity.orchestrator.worker_pool
+cnequity.steps.bars.daily -> cnequity.orchestrator.worker_pool
+cnequity.steps.bars.tip_fetch -> cnequity.orchestrator.worker_pool
 cnequity.steps.compact_hooks -> cnequity.research.preview
 cnequity.steps.http_common -> cnequity.diagnostics.source_health
 cnequity.storage.coverage -> cnequity.quality.bar_coverage

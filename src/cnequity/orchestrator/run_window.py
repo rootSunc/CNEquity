@@ -21,6 +21,8 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from cnequity.sqlite_readonly import connect_readonly
+
 CST = ZoneInfo("Asia/Shanghai")
 OPEN = time(9, 15)
 JOBS = ("daily", "stale", "maintain")
@@ -88,7 +90,7 @@ def _ran_in_manifest(config, job: str, session: date) -> bool:
         + "LIMIT 1"
     )
     try:
-        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+        with closing(connect_readonly(path)) as conn:
             return conn.execute(query, (pattern, session.isoformat())).fetchone() is not None
     except sqlite3.Error:
         return False

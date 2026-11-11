@@ -19,6 +19,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from cnequity.config import Config
+from cnequity.sqlite_readonly import connect_readonly
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def _recent_runs(
     if not path.exists():
         return []
     try:
-        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        con = connect_readonly(path)
     except sqlite3.Error:  # pragma: no cover - unreadable manifest is not this check's job
         return []
     try:

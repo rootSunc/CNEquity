@@ -1458,7 +1458,7 @@ def step_ths_official_snapshot(
     source all return a skipped result — an absent second opinion is not a
     reason to fail a day's ingestion.
     """
-    from cnequity.steps.bars import snapshot_daily_bars_ths_official
+    from cnequity.steps.bars.ths_official import snapshot_daily_bars_ths_official
     from cnequity.steps.capital import snapshot_valuations_ths_official
     from cnequity.steps.fundamentals import snapshot_corporate_actions_ths_official
 

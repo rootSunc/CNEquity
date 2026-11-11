@@ -14,7 +14,7 @@ from datetime import date
 import polars as pl
 import pytest
 
-from cnequity.steps.bars import _reject_preopen_placeholder
+from cnequity.steps.bars.gapfill_chain import _reject_preopen_placeholder
 
 TD = date(2026, 7, 22)
 

@@ -1,6 +1,6 @@
 """Intraday steps: minute_bars.
 
-Kept out of ``steps/bars.py`` because it shares almost nothing with the daily
+Kept out of the ``steps.bars`` package because it shares almost nothing with the daily
 path — different horizon, different scope, different schedule — and because a
 reader looking for what runs on the daily waves should not have to skip past a
 step that never does.

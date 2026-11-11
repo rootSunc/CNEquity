@@ -116,7 +116,10 @@ def test_the_tip_is_only_taken_while_the_quotes_describe_it(tmp_path, monkeypatc
         "cnequity.adapters.tdx_protocol.client._connect_with_retry",
         lambda config=None: (_ for _ in ()).throw(AssertionError("must not connect")),
     )
-    assert bars._fetch_tip_via_tdx_quotes(cfg, ["600519.SH"], _D, "run-1")["covered"] == set()
+    assert (
+        bars.tip_fetch._fetch_tip_via_tdx_quotes(cfg, ["600519.SH"], _D, "run-1")["covered"]
+        == set()
+    )
 
 
 def test_the_tip_is_staged_under_its_own_label(tmp_path, monkeypatch):
@@ -146,7 +149,7 @@ def test_the_tip_is_staged_under_its_own_label(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "cnequity.adapters.tdx_protocol.client._connect_with_retry", lambda config=None: client
     )
-    out = bars._fetch_tip_via_tdx_quotes(cfg, ["600519.SH", "000001.SZ"], _D, "run-1")
+    out = bars.tip_fetch._fetch_tip_via_tdx_quotes(cfg, ["600519.SH", "000001.SZ"], _D, "run-1")
     assert out["covered"] == {"600519.SH"}
     staged = pl.read_parquet(next((cfg.staging_root / "daily_bars").rglob("*.parquet")))
     assert staged["source"].to_list() == ["tdx_protocol_quote"]

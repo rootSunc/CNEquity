@@ -14,6 +14,7 @@ from pathlib import Path
 
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.i18n import _
+from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.atomic import replace_with_retry, write_json_atomic
 from cnequity.storage.lifecycle import LifecycleError, _read, _tree_signature, digest
 from cnequity.storage.revisions import _reject_symlink_path, sha256_file
@@ -24,9 +25,7 @@ def check_idle(manifest: Path) -> None:
     if not manifest.exists():
         return
     try:
-        with closing(
-            sqlite3.connect(manifest.resolve().as_uri() + "?mode=ro", uri=True)
-        ) as connection:
+        with closing(connect_readonly(manifest)) as connection:
             active = connection.execute(
                 "SELECT run_id FROM ingestion_runs WHERE status = 'running' LIMIT 1"
             ).fetchone()

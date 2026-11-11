@@ -52,7 +52,7 @@ def test_a_peer_outage_is_reported_not_raised(tmp_path, monkeypatch):
 
     for module, name in (
         ("cnequity.steps.capital", "snapshot_valuations_ths_official"),
-        ("cnequity.steps.bars", "snapshot_daily_bars_ths_official"),
+        ("cnequity.steps.bars.ths_official", "snapshot_daily_bars_ths_official"),
         ("cnequity.steps.fundamentals", "snapshot_corporate_actions_ths_official"),
     ):
         monkeypatch.setattr(f"{module}.{name}", boom)
@@ -79,7 +79,7 @@ def test_statements_are_not_swept_daily(tmp_path, monkeypatch):
         "cnequity.steps.capital.snapshot_valuations_ths_official", record("valuations")
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars.snapshot_daily_bars_ths_official", record("daily_bars")
+        "cnequity.steps.bars.ths_official.snapshot_daily_bars_ths_official", record("daily_bars")
     )
     monkeypatch.setattr(
         "cnequity.steps.fundamentals.snapshot_corporate_actions_ths_official",

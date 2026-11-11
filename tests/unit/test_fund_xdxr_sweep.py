@@ -56,7 +56,8 @@ def test_enabling_fund_ingestion_sweeps_each_unswept_fund_once(cfg, monkeypatch)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     _receipt(cfg, run_id, ["510300.SH"])
     monkeypatch.setattr(
-        "cnequity.steps.bars._daily_fund_bar_symbols", lambda c, d: ["510300.SH", "159915.SZ"]
+        "cnequity.steps.bars.bar_scope._daily_fund_bar_symbols",
+        lambda c, d: ["510300.SH", "159915.SZ"],
     )
     asked: list[list[str]] = []
     staged: list[pl.DataFrame] = []
@@ -95,7 +96,9 @@ def test_enabling_fund_ingestion_sweeps_each_unswept_fund_once(cfg, monkeypatch)
 def test_a_failed_chunk_stays_owed_and_says_so(cfg, monkeypatch):
     cfg.ingest_listed_funds = True
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
-    monkeypatch.setattr("cnequity.steps.bars._daily_fund_bar_symbols", lambda c, d: ["510300.SH"])
+    monkeypatch.setattr(
+        "cnequity.steps.bars.bar_scope._daily_fund_bar_symbols", lambda c, d: ["510300.SH"]
+    )
 
     def down(*args, **kwargs):
         raise ConnectionError("tdx down")

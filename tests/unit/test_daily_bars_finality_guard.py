@@ -7,11 +7,8 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from cnequity.run_scope import set_backfill
-from cnequity.steps.bars import (
-    _backfill_window,
-    _reject_unfinished_daily_bar_window,
-    step_daily_bars,
-)
+from cnequity.steps.bars import step_daily_bars
+from cnequity.steps.bars.bar_scope import _backfill_window, _reject_unfinished_daily_bar_window
 
 TRADING_DAY = date(2026, 8, 10)
 
@@ -80,15 +77,26 @@ def test_step_applies_guard_before_loading_or_fetching(config, monkeypatch, cont
         raise RuntimeError("stop before fetch")
 
     monkeypatch.setattr(
-        "cnequity.steps.bars._reject_unfinished_daily_bar_window",
-        stop_before_fetch,
+        "cnequity.steps.bars.bar_scope._reject_unfinished_daily_bar_window", stop_before_fetch
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars.load_symbols",
+        "cnequity.steps.bars.bar_scope.load_symbols",
         lambda cfg: events.append("symbols") or ["600519.SH"],
     )
     monkeypatch.setattr(
-        "cnequity.steps.bars.fetch_daily_bars_parallel",
+        "cnequity.steps.bars.daily.load_symbols",
+        lambda cfg: events.append("symbols") or ["600519.SH"],
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.load_symbols",
+        lambda cfg: events.append("symbols") or ["600519.SH"],
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.daily.fetch_daily_bars_parallel",
+        lambda *args, **kwargs: events.append("fetch"),
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.tip_fetch.fetch_daily_bars_parallel",
         lambda *args, **kwargs: events.append("fetch"),
     )
 
@@ -107,7 +115,9 @@ _AFTER_CLOSE = datetime(2026, 8, 10, 7, 5, tzinfo=timezone.utc)
 def _freeze(monkeypatch, instant):
     from cnequity.domain.market_time import shanghai_now
 
-    monkeypatch.setattr("cnequity.steps.bars.shanghai_now", lambda now=None: shanghai_now(instant))
+    monkeypatch.setattr(
+        "cnequity.steps.bars.bar_scope.shanghai_now", lambda now=None: shanghai_now(instant)
+    )
 
 
 def test_an_unspecified_backfill_end_stops_at_the_last_settled_session(config, monkeypatch):
@@ -154,7 +164,7 @@ def test_a_small_residue_is_tolerated_rather_than_failing_the_run(config):
     stamped complete. A vendor's transient outage costing 0.25% is not that,
     and refusing there took phases 3 and 4 down with it.
     """
-    from cnequity.steps.bars import _unresolved_budget
+    from cnequity.steps.bars.admission import _unresolved_budget
 
     config.daily_bars_unresolved_tolerance = 0.01
     assert _unresolved_budget(config, 5500) == 55
@@ -162,7 +172,7 @@ def test_a_small_residue_is_tolerated_rather_than_failing_the_run(config):
 
 
 def test_a_real_slice_of_the_market_still_refuses(config):
-    from cnequity.steps.bars import _unresolved_budget
+    from cnequity.steps.bars.admission import _unresolved_budget
 
     config.daily_bars_unresolved_tolerance = 0.01
     assert 300 > _unresolved_budget(config, 5500), "5% is not a residue"
@@ -170,7 +180,7 @@ def test_a_real_slice_of_the_market_still_refuses(config):
 
 def test_a_tiny_universe_tolerates_nothing(config):
     """A fraction alone would let one symbol of five through as 'small'."""
-    from cnequity.steps.bars import _unresolved_budget
+    from cnequity.steps.bars.admission import _unresolved_budget
 
     config.daily_bars_unresolved_tolerance = 0.01
     assert _unresolved_budget(config, 5) == 0
@@ -178,7 +188,7 @@ def test_a_tiny_universe_tolerates_nothing(config):
 
 def test_the_tolerance_can_be_switched_off(config):
     """Fail-closed stays available for anyone who wants the old contract."""
-    from cnequity.steps.bars import _unresolved_budget
+    from cnequity.steps.bars.admission import _unresolved_budget
 
     config.daily_bars_unresolved_tolerance = 0.0
     assert _unresolved_budget(config, 5500) == 0
@@ -191,7 +201,7 @@ def test_an_interior_gap_within_tolerance_is_owed_rather_than_fatal(config, monk
     counted in symbol×session keys, so it needs the key count as its
     denominator rather than the symbol count.
     """
-    from cnequity.steps.bars import _unresolved_budget
+    from cnequity.steps.bars.admission import _unresolved_budget
 
     config.daily_bars_unresolved_tolerance = 0.01
     expected_keys = 750 * 5500  # three years of a whole-market sweep
@@ -199,7 +209,7 @@ def test_an_interior_gap_within_tolerance_is_owed_rather_than_fatal(config, monk
 
 
 def test_an_interior_gap_beyond_tolerance_still_refuses(config):
-    from cnequity.steps.bars import _unresolved_budget
+    from cnequity.steps.bars.admission import _unresolved_budget
 
     config.daily_bars_unresolved_tolerance = 0.01
     assert 100_000 > _unresolved_budget(config, 750 * 5500)
@@ -208,7 +218,7 @@ def test_an_interior_gap_beyond_tolerance_still_refuses(config):
 def test_the_tip_tolerance_is_tighter_than_the_backfill_one(config):
     """1% of three years is scatter; 1% of today is 55 names absent from the
     freshest bar anyone trades on. The daily job also reruns cheaply."""
-    from cnequity.steps.bars import _unresolved_budget
+    from cnequity.steps.bars.admission import _unresolved_budget
 
     config.daily_bars_unresolved_tolerance = 0.01
     config.daily_bars_tip_unresolved_tolerance = 0.002
@@ -221,7 +231,7 @@ def test_the_tip_tolerance_is_tighter_than_the_backfill_one(config):
 def test_a_tip_outage_is_not_a_residue(config):
     """Beyond the tip budget the refusal stands — 50 names missing today is an
     upstream failure, not a rounding error."""
-    from cnequity.steps.bars import _unresolved_budget
+    from cnequity.steps.bars.admission import _unresolved_budget
 
     config.daily_bars_tip_unresolved_tolerance = 0.002
     assert 50 > _unresolved_budget(config, 5500, tip=True)

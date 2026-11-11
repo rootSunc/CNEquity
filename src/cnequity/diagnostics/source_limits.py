@@ -7,7 +7,6 @@ import math
 import sqlite3
 import time
 from contextlib import closing
-from urllib.parse import quote
 
 from cnequity.adapters.eastmoney import host_guard, news_pause
 from cnequity.diagnostics.source_health import PROBES
@@ -21,6 +20,7 @@ from cnequity.domain.rate_limit import (
     _read_json,
     _safe_source_name,
 )
+from cnequity.sqlite_readonly import connect_readonly
 
 
 def effective_source_policy(config, source: str, aliases: set[str] | None = None) -> dict:
@@ -150,8 +150,7 @@ def _latest_run_metrics(config) -> dict | None:
     if not path.is_file():
         return None
     try:
-        uri = f"file:{quote(str(path), safe='/')}?mode=ro"
-        with closing(sqlite3.connect(uri, uri=True)) as conn:
+        with closing(connect_readonly(path)) as conn:
             row = conn.execute(
                 "SELECT run_id, metadata_json FROM ingestion_runs ORDER BY started_at DESC LIMIT 1"
             ).fetchone()

@@ -156,7 +156,7 @@ def step_sector_bars(config: Config, trade_date: date, run_id: str, context: dic
     # 同花顺's rolling ``last`` endpoint includes the current intraday board
     # value. Keep sector daily bars under the same final-session contract as
     # stock and index bars, otherwise a pre-close run publishes partial OHLC.
-    from cnequity.steps.bars import _reject_unfinished_daily_bar_window
+    from cnequity.steps.bars.bar_scope import _reject_unfinished_daily_bar_window
 
     endpoint = backfill_of(config).end or trade_date
     _reject_unfinished_daily_bar_window(config, endpoint)

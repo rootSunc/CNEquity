@@ -738,8 +738,13 @@ def test_retry_reruns_failed_symbol_batch_only(worker_config, monkeypatch):
 
     monkeypatch.setattr("cnequity.orchestrator.worker_pool.fetch_daily_bars", _fetch)
     monkeypatch.setattr(
-        "cnequity.steps.bars.load_symbols",
-        lambda _cfg: ["600519.SH", "000001.SZ"],
+        "cnequity.steps.bars.bar_scope.load_symbols", lambda _cfg: ["600519.SH", "000001.SZ"]
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.daily.load_symbols", lambda _cfg: ["600519.SH", "000001.SZ"]
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.load_symbols", lambda _cfg: ["600519.SH", "000001.SZ"]
     )
     # This test exercises retry of a failed primary batch.  Keep the backup
     # vendors disabled so the first failure remains deterministic and does not
@@ -793,7 +798,15 @@ def test_partial_batch_retry_scope_is_reduced_to_missing_symbols(worker_config, 
         return tdx._mock_bars(symbols, start, end)
 
     monkeypatch.setattr("cnequity.orchestrator.worker_pool.fetch_daily_bars", _fetch)
-    monkeypatch.setattr("cnequity.steps.bars.load_symbols", lambda _cfg: ["600519.SH", "000001.SZ"])
+    monkeypatch.setattr(
+        "cnequity.steps.bars.bar_scope.load_symbols", lambda _cfg: ["600519.SH", "000001.SZ"]
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.daily.load_symbols", lambda _cfg: ["600519.SH", "000001.SZ"]
+    )
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.load_symbols", lambda _cfg: ["600519.SH", "000001.SZ"]
+    )
     # This test targets daily-bar retry scope.  Keep finalize deterministic and
     # offline so a transient Sina factor response cannot mask that contract.
     monkeypatch.setattr(

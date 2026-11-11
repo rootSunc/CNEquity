@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -348,18 +349,41 @@ def symbol_scope_hash(symbols: Iterable[str]) -> str:
     return _hash_payload({"symbols": list(_normalise_symbols(symbols))})
 
 
-def profile_json(profile: str | UniverseProfile | None = None, *, indent: int = 2) -> str:
+def _profile_json(profile: str | UniverseProfile | None = None, *, indent: int = 2) -> str:
     """Serialize one profile (or the complete registry) as stable JSON."""
 
     payload: Any = list_universe_profiles() if profile is None else show_universe_profile(profile)
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=indent)
 
 
-# Friendly aliases used by integrations that call this a registry rather than
-# a profile catalog.  Keep the canonical names above in documentation.
-get_universe_profile = resolve_universe_profile
-list_profiles = list_universe_profiles
-show_profile = show_universe_profile
+#: Second names for the functions above, called by nothing; removed in 0.25.0.
+#: ``cnequity.domain`` and ``cnequity.query`` forward them through here.
+DEPRECATED_ALIASES: dict[str, tuple[Any, str]] = {
+    "get_universe_profile": (resolve_universe_profile, "resolve_universe_profile"),
+    "list_profiles": (list_universe_profiles, "list_universe_profiles"),
+    "show_profile": (show_universe_profile, "show_universe_profile"),
+    "profile_json": (
+        _profile_json,
+        "json.dumps(show_universe_profile(name)) or json.dumps(list_universe_profiles())",
+    ),
+}
+
+
+def deprecated_alias(name: str) -> Any:
+    """The function behind a deprecated alias, after warning its caller."""
+    value, replacement = DEPRECATED_ALIASES[name]
+    warnings.warn(
+        f"{name} is deprecated and will be removed in 0.25.0; use {replacement}",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return value
+
+
+def __getattr__(name: str) -> Any:
+    if name in DEPRECATED_ALIASES:
+        return deprecated_alias(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
@@ -369,15 +393,11 @@ __all__ = [
     "PROFILE_REGISTRY",
     "UniverseProfile",
     "UniverseProfileError",
-    "get_universe_profile",
-    "list_profiles",
     "list_universe_profiles",
     "profile_for_legacy_universe",
-    "profile_json",
     "profile_scope_hash",
     "resolve_universe_profile",
     "scope_hash",
-    "show_profile",
     "show_universe_profile",
     "symbol_scope_hash",
 ]

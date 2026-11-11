@@ -939,7 +939,7 @@ def _sweep_unswept_fund_history(
     if not _funds_ingested(config) or not config.sources.get("tdx_protocol", True):
         return 0, None
     try:
-        from cnequity.steps.bars import _daily_fund_bar_symbols
+        from cnequity.steps.bars.bar_scope import _daily_fund_bar_symbols
 
         scope = _daily_fund_bar_symbols(config, trade_date) or []
         owed = sorted(set(scope) - _swept_symbols(config))

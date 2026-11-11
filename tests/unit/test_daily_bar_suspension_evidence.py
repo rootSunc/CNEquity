@@ -52,10 +52,24 @@ def test_planner_and_interior_gate_require_same_independent_halt(
     path = cfg.staging_root / "daily_bars" / "run_id=run" / "batch.parquet"
     path.parent.mkdir(parents=True)
     pl.DataFrame({"symbol": [SYMBOL], "trade_date": DAYS[1:]}).write_parquet(path)
-    monkeypatch.setattr(bars, "list_trading_dates", lambda *a: DAYS)
-    monkeypatch.setattr(bars, "_instrument_spans", lambda *a: {SYMBOL: (DAYS[0], None, "stock")})
-    monkeypatch.setattr(bars, "load_curated_trading_status", lambda *a, **k: status)
-    missing = bars._staged_daily_bar_missing_keys(cfg, "run", [SYMBOL], *DAYS)
+    monkeypatch.setattr(bars.admission, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.bar_scope, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.daily, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.finish, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.gapfill, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.gapfill_chain, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.index_history, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.sina_bars, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.staging, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(bars.tip_fetch, "list_trading_dates", lambda *a: DAYS)
+    monkeypatch.setattr(
+        bars.bar_scope, "_instrument_spans", lambda *a: {SYMBOL: (DAYS[0], None, "stock")}
+    )
+    monkeypatch.setattr(bars.admission, "load_curated_trading_status", lambda *a, **k: status)
+    monkeypatch.setattr(bars.daily, "load_curated_trading_status", lambda *a, **k: status)
+    monkeypatch.setattr(bars.gapfill, "load_curated_trading_status", lambda *a, **k: status)
+    monkeypatch.setattr(bars.staging, "load_curated_trading_status", lambda *a, **k: status)
+    missing = bars.staging._staged_daily_bar_missing_keys(cfg, "run", [SYMBOL], *DAYS)
     assert missing == (set() if proved else {(SYMBOL, DAYS[0])})
 
 

@@ -19,6 +19,7 @@ from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS
 from cnequity.quality.factor_policy import advisory_factor_findings, factor_advisory
 from cnequity.quality.gate import contradictions
+from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.locator import layer_root, logical_root
 from cnequity.storage.read_context import read_root
@@ -364,9 +365,7 @@ def evaluate_publication(
                 # SQLite's context manager ends transactions but does not close
                 # connections. Windows needs both handles closed before cleanup.
                 with (
-                    closing(
-                        sqlite3.connect(f"{config.manifest_path.as_uri()}?mode=ro", uri=True)
-                    ) as original,
+                    closing(connect_readonly(config.manifest_path)) as original,
                     closing(sqlite3.connect(view.manifest_path)) as copied,
                 ):
                     original.backup(copied)

@@ -10,11 +10,8 @@ import pytest
 from cnequity.config import Config
 from cnequity.domain.schemas import DAILY_BARS_SCHEMA
 from cnequity.domain.symbols import is_tdx_servable, split_by_quote_source
-from cnequity.steps.bars import (
-    _resolve_daily_bar_scope,
-    fetch_bars_via_sina,
-    repair_bse_tip_amounts_from_curated,
-)
+from cnequity.steps.bars import fetch_bars_via_sina, repair_bse_tip_amounts_from_curated
+from cnequity.steps.bars.bar_scope import _resolve_daily_bar_scope
 from cnequity.steps.delisted import catalog_path
 from cnequity.steps.reference import _merge_untdxable_instruments
 from cnequity.storage.parquet import StagingWriter
@@ -98,7 +95,16 @@ def test_bse_is_primary_for_a_current_single_session(tmp_path, monkeypatch):
     )
     day = date(2026, 8, 21)
     bse = _bars("920000.BJ", [day]).with_columns(pl.lit(1234.5).alias("amount"))
-    monkeypatch.setattr("cnequity.steps.bars.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.admission.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.bar_scope.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.daily.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.finish.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.gapfill.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.gapfill_chain.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.index_history.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.sina_bars.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.staging.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.tip_fetch.list_trading_dates", lambda *args: [day])
     monkeypatch.setattr(
         "cnequity.adapters.bse.daily_quotes.fetch_daily_quotes", lambda *args, **kwargs: bse
     )
@@ -130,7 +136,16 @@ def test_bse_rows_are_counted_with_sina_residuals(tmp_path, monkeypatch):
     )
     day = date(2026, 8, 21)
     bse = _bars("920000.BJ", [day]).with_columns(pl.lit(1234.5).alias("amount"))
-    monkeypatch.setattr("cnequity.steps.bars.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.admission.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.bar_scope.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.daily.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.finish.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.gapfill.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.gapfill_chain.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.index_history.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.sina_bars.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.staging.list_trading_dates", lambda *args: [day])
+    monkeypatch.setattr("cnequity.steps.bars.tip_fetch.list_trading_dates", lambda *args: [day])
     monkeypatch.setattr(
         "cnequity.adapters.bse.daily_quotes.fetch_daily_quotes", lambda *args, **kwargs: bse
     )
@@ -215,7 +230,11 @@ def test_bse_tip_mismatch_keeps_sina_amount_null(tmp_path, monkeypatch):
 
 def test_scoped_daily_backfill_rejects_unknown_instrument(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    monkeypatch.setattr("cnequity.steps.bars.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr("cnequity.steps.bars.bar_scope.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr("cnequity.steps.bars.daily.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.load_symbols", lambda config: ["920000.BJ"]
+    )
 
     with pytest.raises(RuntimeError, match="not present in instruments"):
         _resolve_daily_bar_scope(cfg, ["920000.BJ", "999999.BJ"])
@@ -232,7 +251,11 @@ def test_bse_curated_repair_does_not_call_sina(tmp_path, monkeypatch):
     part.mkdir(parents=True)
     _bars("920000.BJ", [day]).write_parquet(part / "part-merged.parquet")
     bse = _bars("920000.BJ", [day]).with_columns(pl.lit(1234.5).alias("amount"))
-    monkeypatch.setattr("cnequity.steps.bars.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr("cnequity.steps.bars.bar_scope.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr("cnequity.steps.bars.daily.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.load_symbols", lambda config: ["920000.BJ"]
+    )
     monkeypatch.setattr(
         "cnequity.adapters.bse.daily_quotes.fetch_daily_quotes", lambda *a, **k: bse
     )
@@ -255,7 +278,11 @@ def test_bse_curated_repair_does_not_claim_success_when_bse_is_unavailable(tmp_p
     part = cfg.curated_root / "daily_bars" / f"trade_date={day.isoformat()}"
     part.mkdir(parents=True)
     _bars("920000.BJ", [day]).write_parquet(part / "part-merged.parquet")
-    monkeypatch.setattr("cnequity.steps.bars.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr("cnequity.steps.bars.bar_scope.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr("cnequity.steps.bars.daily.load_symbols", lambda config: ["920000.BJ"])
+    monkeypatch.setattr(
+        "cnequity.steps.bars.index_history.load_symbols", lambda config: ["920000.BJ"]
+    )
     monkeypatch.setattr(
         "cnequity.adapters.bse.daily_quotes.fetch_daily_quotes",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("BSE down")),
@@ -637,18 +664,72 @@ def test_the_tip_session_is_left_to_the_exchange_snapshot(tmp_path, monkeypatch)
     cfg = Config(data_root=tmp_path / "data")
     windows: list[tuple[date, date]] = []
     monkeypatch.setattr(
-        bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)]
+        bars.admission,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
     )
     monkeypatch.setattr(
-        bars,
+        bars.bar_scope,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.daily,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.finish,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.gapfill,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.gapfill_chain,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.index_history,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.sina_bars,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.staging,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.tip_fetch,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.daily,
         "fetch_daily_bars_parallel",
         lambda _c, _s, lo, hi, *a, **k: (
             windows.append((lo, hi)) or {"rows_read": 0, "rows_written": 0, "failed_symbols": []}
         ),
     )
-    monkeypatch.setattr(bars, "_bj_history_covered", lambda *a, **k: set())
+    monkeypatch.setattr(
+        bars.tip_fetch,
+        "fetch_daily_bars_parallel",
+        lambda _c, _s, lo, hi, *a, **k: (
+            windows.append((lo, hi)) or {"rows_read": 0, "rows_written": 0, "failed_symbols": []}
+        ),
+    )
+    monkeypatch.setattr(bars.tip_fetch, "_bj_history_covered", lambda *a, **k: set())
 
-    bars._fetch_bj_history_via_tdx(
+    bars.tip_fetch._fetch_bj_history_via_tdx(
         cfg, ["920001.BJ"], date(2026, 9, 15), date(2026, 9, 17), "r1", reserve_tip=True
     )
 
@@ -661,18 +742,72 @@ def test_a_chunked_backfill_has_no_tip_to_reserve(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     windows: list[tuple[date, date]] = []
     monkeypatch.setattr(
-        bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)]
+        bars.admission,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
     )
     monkeypatch.setattr(
-        bars,
+        bars.bar_scope,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.daily,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.finish,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.gapfill,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.gapfill_chain,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.index_history,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.sina_bars,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.staging,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.tip_fetch,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16, 17)],
+    )
+    monkeypatch.setattr(
+        bars.daily,
         "fetch_daily_bars_parallel",
         lambda _c, _s, lo, hi, *a, **k: (
             windows.append((lo, hi)) or {"rows_read": 0, "rows_written": 0, "failed_symbols": []}
         ),
     )
-    monkeypatch.setattr(bars, "_bj_history_covered", lambda *a, **k: set())
+    monkeypatch.setattr(
+        bars.tip_fetch,
+        "fetch_daily_bars_parallel",
+        lambda _c, _s, lo, hi, *a, **k: (
+            windows.append((lo, hi)) or {"rows_read": 0, "rows_written": 0, "failed_symbols": []}
+        ),
+    )
+    monkeypatch.setattr(bars.tip_fetch, "_bj_history_covered", lambda *a, **k: set())
 
-    bars._fetch_bj_history_via_tdx(
+    bars.tip_fetch._fetch_bj_history_via_tdx(
         cfg, ["920001.BJ"], date(2026, 9, 15), date(2026, 9, 17), "r1", reserve_tip=False
     )
 
@@ -683,10 +818,32 @@ def test_a_tip_only_window_asks_tdx_for_nothing(tmp_path, monkeypatch):
     from cnequity.steps import bars
 
     cfg = Config(data_root=tmp_path / "data")
-    monkeypatch.setattr(bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)])
-    monkeypatch.setattr(bars, "fetch_daily_bars_parallel", pytest.fail)
+    monkeypatch.setattr(
+        bars.admission, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)]
+    )
+    monkeypatch.setattr(
+        bars.bar_scope, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)]
+    )
+    monkeypatch.setattr(bars.daily, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)])
+    monkeypatch.setattr(bars.finish, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)])
+    monkeypatch.setattr(bars.gapfill, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)])
+    monkeypatch.setattr(
+        bars.gapfill_chain, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)]
+    )
+    monkeypatch.setattr(
+        bars.index_history, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)]
+    )
+    monkeypatch.setattr(
+        bars.sina_bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)]
+    )
+    monkeypatch.setattr(bars.staging, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)])
+    monkeypatch.setattr(
+        bars.tip_fetch, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, 17)]
+    )
+    monkeypatch.setattr(bars.daily, "fetch_daily_bars_parallel", pytest.fail)
+    monkeypatch.setattr(bars.tip_fetch, "fetch_daily_bars_parallel", pytest.fail)
 
-    out = bars._fetch_bj_history_via_tdx(
+    out = bars.tip_fetch._fetch_bj_history_via_tdx(
         cfg, ["920001.BJ"], date(2026, 9, 17), date(2026, 9, 17), "r1", reserve_tip=True
     )
 
@@ -699,16 +856,62 @@ def test_a_symbol_tdx_reported_failed_is_not_counted_as_covered(tmp_path, monkey
 
     cfg = Config(data_root=tmp_path / "data")
     monkeypatch.setattr(
-        bars, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)]
+        bars.admission,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)],
     )
     monkeypatch.setattr(
-        bars,
+        bars.bar_scope,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)],
+    )
+    monkeypatch.setattr(
+        bars.daily, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)]
+    )
+    monkeypatch.setattr(
+        bars.finish, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)]
+    )
+    monkeypatch.setattr(
+        bars.gapfill, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)]
+    )
+    monkeypatch.setattr(
+        bars.gapfill_chain,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)],
+    )
+    monkeypatch.setattr(
+        bars.index_history,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)],
+    )
+    monkeypatch.setattr(
+        bars.sina_bars,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)],
+    )
+    monkeypatch.setattr(
+        bars.staging, "list_trading_dates", lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)]
+    )
+    monkeypatch.setattr(
+        bars.tip_fetch,
+        "list_trading_dates",
+        lambda _c, lo, hi: [date(2026, 9, d) for d in (15, 16)],
+    )
+    monkeypatch.setattr(
+        bars.daily,
         "fetch_daily_bars_parallel",
         lambda *a, **k: {"rows_read": 0, "rows_written": 0, "failed_symbols": ["920001.BJ"]},
     )
-    monkeypatch.setattr(bars, "_bj_history_covered", lambda *a, **k: {"920001.BJ", "920002.BJ"})
+    monkeypatch.setattr(
+        bars.tip_fetch,
+        "fetch_daily_bars_parallel",
+        lambda *a, **k: {"rows_read": 0, "rows_written": 0, "failed_symbols": ["920001.BJ"]},
+    )
+    monkeypatch.setattr(
+        bars.tip_fetch, "_bj_history_covered", lambda *a, **k: {"920001.BJ", "920002.BJ"}
+    )
 
-    out = bars._fetch_bj_history_via_tdx(
+    out = bars.tip_fetch._fetch_bj_history_via_tdx(
         cfg,
         ["920001.BJ", "920002.BJ"],
         date(2026, 9, 15),
