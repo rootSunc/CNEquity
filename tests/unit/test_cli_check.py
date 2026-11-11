@@ -281,3 +281,42 @@ def test_advisory_factor_errors_fail_neither_gate(lake, monkeypatch):
 
     assert CliRunner().invoke(cli, ["audit", "--config", lake]).exit_code == 0
     assert CliRunner().invoke(cli, ["check", "--config", lake]).exit_code == 0
+
+
+def test_status_datasets_json_is_one_document_on_stdout(lake):
+    import polars as pl
+
+    root = load_config(lake).curated_root / "daily_bars" / "trade_date=2026-09"
+    root.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600519.SH"],
+            "trade_date": [__import__("datetime").date(2026, 9, 30)],
+            "close": [1.0],
+            "volume": [1],
+            "source": ["tdx_protocol"],
+        }
+    ).write_parquet(root / "part-0.parquet")
+
+    result = CliRunner().invoke(
+        cli, ["status", "--datasets", "--json", "--no-scope", "--hide-empty", "--config", lake]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert {"last_trading_day", "datasets", "folded"} <= set(payload)
+    rows = {row["dataset"]: row for row in payload["datasets"]}
+    assert "daily_bars" in rows and "valuation_metrics" in payload["folded"]
+    assert all(row["freshness"] == row["freshness"].lower() for row in rows.values())
+    without = CliRunner().invoke(cli, ["status", "--json", "--config", lake])
+    assert without.exit_code != 0 and "--datasets" in without.output
+
+
+def test_config_subcommands_take_only_their_own_options():
+    for name, own, foreign in (
+        ("create", "--data-root", "--minimize"),
+        ("upgrade", "--minimize", "--data-root"),
+        ("show", "--defaults", "--dry-run"),
+    ):
+        page = CliRunner().invoke(cli, ["config", name, "--help"]).output
+        assert own in page and foreign not in page, name

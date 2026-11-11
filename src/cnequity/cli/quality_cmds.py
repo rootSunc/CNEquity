@@ -7,6 +7,7 @@ have landed, landed. Different failures, so different commands.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import sys
@@ -24,6 +25,7 @@ from cnequity.cli._shared import (
     comma_option,
     comma_values,
     config_option,
+    emit_json,
     ingest_scope_label,
     parse_date_option,
     resolve_config_path,
@@ -1097,6 +1099,14 @@ def verify(
         "With --datasets --gate: only core datasets can fail the gate; the rest are still listed. `cne check` uses this."
     ),
 )
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help=N_(
+        "With --datasets: print the table as JSON on stdout (freshness in lower case); the checks that follow print to stderr. Exit codes are unchanged."
+    ),
+)
 def status(
     config_path: str,
     run_selector: str | None,
@@ -1107,6 +1117,7 @@ def status(
     scope: bool,
     gate: bool,
     core_only: bool = False,
+    as_json: bool = False,
 ):
     """Show the latest run's status; add --datasets for per-dataset freshness.
 
@@ -1125,286 +1136,309 @@ def status(
         raise click.UsageError(_("--groups only works with --datasets"))
     if not scope and not show_datasets:
         raise click.UsageError(_("--no-scope only works with --datasets"))
+    if as_json and not show_datasets:
+        raise click.UsageError(
+            _("--json only works with --datasets; without it the run summary is already JSON")
+        )
 
     if show_datasets:
-        import polars as pl_mod
+        with contextlib.ExitStack() as quiet_stdout:
+            import polars as pl_mod
 
-        from cnequity.domain.datasets import is_dataset_enabled
-        from cnequity.orchestrator.run_window import current_anchor
-        from cnequity.quality.freshness import dataset_freshness
-        from cnequity.query.reader import list_datasets
+            from cnequity.domain.datasets import is_dataset_enabled
+            from cnequity.orchestrator.run_window import current_anchor
+            from cnequity.quality.freshness import dataset_freshness
+            from cnequity.query.reader import list_datasets
 
-        anchor = current_anchor(cfg)
-        df = list_datasets(config=cfg)
-        lake_profile = getattr(cfg, "lake_profile", None)
+            anchor = current_anchor(cfg)
+            df = list_datasets(config=cfg)
+            lake_profile = getattr(cfg, "lake_profile", None)
 
-        def _freshness(row: dict) -> str:
-            # Upper-case so a lagging dataset stands out in the terminal table.
-            label = dataset_freshness(cfg, row, anchor)
-            return "STALE" if label == "stale" else label
+            def _freshness(row: dict) -> str:
+                # Upper-case so a lagging dataset stands out in the terminal table.
+                label = dataset_freshness(cfg, row, anchor)
+                return "STALE" if label == "stale" else label
 
-        df = df.with_columns(
-            pl_mod.Series("freshness", [_freshness(r) for r in df.iter_rows(named=True)])
-        )
-        click.echo(_("Last trading day: {value}").format(value=anchor.isoformat()))
-        # This flag is the freshness probe the runbooks reach for, but
-        # `list_datasets` has grown to twenty columns — contract fingerprints,
-        # revision ids, PIT storage lists — and forcing all of them into a
-        # terminal shredded every value into unreadable vertical slivers. Show
-        # the three things the flag promises; `--all-columns` still prints the
-        # whole inventory. Intersected with what is actually there, because the
-        # frame is narrower in tests and on older lakes.
-        freshness_columns = [
-            "dataset",
-            "layer",
-            "freshness",
-            "has_data",
-            "coverage_start",
-            "coverage_end",
-            "watermark",
-        ]
-        view = df if all_columns else df.select([c for c in freshness_columns if c in df.columns])
-        hidden: list[str] = []
-        if hide_empty:
-            # A first lake holds a handful of the registered datasets; forty
-            # rows of "empty" read as a broken install rather than as groups
-            # nobody has run yet. They are not judged here, so fold them.
-            listed = pl_mod.col("has_data") | (pl_mod.col("freshness") == "STALE")
-            hidden = view.filter(~listed)["dataset"].to_list()
-            view = view.filter(listed)
-        # Piped output has no terminal to measure, and polars then wraps at 100
-        # columns, splitting long dataset names mid-word.
-        width = max(shutil.get_terminal_size((120, 24)).columns, 112)
-        with pl_mod.Config(
-            tbl_rows=-1,
-            tbl_cols=-1,
-            fmt_str_lengths=32,
-            **({} if all_columns else {"tbl_width_chars": width}),
-        ):
-            click.echo(view)
-        if hidden:
-            click.echo(
-                _(
-                    "{value} more datasets have no data yet: their schedule groups are not enabled or have not run, which does not affect the conclusion here. Full list: cne status --datasets"
-                ).format(value=len(hidden))
+            df = df.with_columns(
+                pl_mod.Series("freshness", [_freshness(r) for r in df.iter_rows(named=True)])
             )
-        if lake_profile == "sample":
-            click.echo(
-                _(
-                    "\nSample lake: these are synthetic source=mock rows whose dates do not count toward the freshness gate; it only verifies the install, Parquet writes and the query path."
-                )
+            if not as_json:
+                click.echo(_("Last trading day: {value}").format(value=anchor.isoformat()))
+            # This flag is the freshness probe the runbooks reach for, but
+            # `list_datasets` has grown to twenty columns — contract fingerprints,
+            # revision ids, PIT storage lists — and forcing all of them into a
+            # terminal shredded every value into unreadable vertical slivers. Show
+            # the three things the flag promises; `--all-columns` still prints the
+            # whole inventory. Intersected with what is actually there, because the
+            # frame is narrower in tests and on older lakes.
+            freshness_columns = [
+                "dataset",
+                "layer",
+                "freshness",
+                "has_data",
+                "coverage_start",
+                "coverage_end",
+                "watermark",
+            ]
+            view = (
+                df if all_columns else df.select([c for c in freshness_columns if c in df.columns])
             )
-        wanted_groups = _gate_groups(gate_groups)
-        scopes = [
-            report
-            for dataset in (INSTRUMENT_SCOPED_DATASETS if scope else ())
-            if (report := _tip_scope(cfg, df, dataset)) is not None
-        ]
-        if scope:
-            from cnequity.quality.derivative_checks import (
-                DERIVATIVE_BAR_CONTRACTS,
-                derivative_tip_scope,
-            )
-
-            scopes.extend(
-                report
-                for dataset in DERIVATIVE_BAR_CONTRACTS
-                if (report := derivative_tip_scope(cfg, dataset)) is not None
-            )
-        gating_scopes = [
-            report
-            for report in scopes
-            if _gates_on_dataset(cfg, report["dataset"], wanted_groups, core_only=core_only)
-        ]
-        scope_incomplete = any(r["state"] == "incomplete" for r in gating_scopes)
-        scope_unverified = any(r["state"] == "unverified" for r in gating_scopes)
-        default_heading = _("Ingest cross-section ({value})").format(
-            value=ingest_scope_label(cfg.ingest_universe)
-        )
-        for report in scopes:
-            dataset = report["dataset"]
-            scope_heading = (
-                localize(report["heading"]) if report.get("heading") else default_heading
-            )
-            if report.get("missing_exchanges"):
-                click.echo(
-                    _("{dataset} is missing whole exchanges: {value}").format(
-                        dataset=dataset, value=", ".join(report["missing_exchanges"])
-                    ),
-                    err=True,
+            hidden: list[str] = []
+            if hide_empty:
+                # A first lake holds a handful of the registered datasets; forty
+                # rows of "empty" read as a broken install rather than as groups
+                # nobody has run yet. They are not judged here, so fold them.
+                listed = pl_mod.col("has_data") | (pl_mod.col("freshness") == "STALE")
+                hidden = view.filter(~listed)["dataset"].to_list()
+                view = view.filter(listed)
+            if as_json:
+                rows = view.to_dicts()
+                for row in rows:
+                    row["freshness"] = str(row["freshness"]).lower()
+                emit_json(
+                    {"last_trading_day": anchor.isoformat(), "datasets": rows, "folded": hidden},
+                    indent=2,
+                    default=str,
+                    ensure_ascii=False,
                 )
-            if report.get("owed_dates"):
-                click.echo(
-                    _("{dataset} sessions still owed: {owed} (e.g. {value})").format(
-                        dataset=dataset,
-                        owed=report["owed"],
-                        value=", ".join(report["owed_dates"][:5]),
-                    ),
-                    err=True,
-                )
-                if _gates_on_dataset(cfg, dataset, wanted_groups, core_only=core_only):
-                    scope_incomplete = True
-            if all_columns and report.get("coverage"):
-                click.echo(pl_mod.DataFrame(report["coverage"]))
-            if report["state"] == "complete":
-                owed_note = (
-                    _(", plus {owed} symbols already in the ledger to fill").format(
-                        owed=report["owed"]
-                    )
-                    if report.get("owed")
-                    else ""
-                )
-                if report.get("unverifiable_exchanges"):
-                    # A limitation of the route, stated beside the result; it does
-                    # not fail the gate (the data on it is not shown to be short).
-                    owed_note += _(
-                        "; limitation, not counted: {exchanges} — vendor route with no rows on "
-                        "days without trades, so it cannot be proven "
-                        '(an official route, [futures].dce_route = "official", can be)'
-                    ).format(exchanges=_(", ").join(report["unverifiable_exchanges"]))
-                click.echo(
-                    _(
-                        "\n{scope_heading}: OK: {dataset} {date} coverage evidence {covered}/{expected} ({ratio:.1%}){owed_note}"
-                    ).format(
-                        scope_heading=scope_heading,
-                        dataset=dataset,
-                        date=report["date"],
-                        covered=report["covered"],
-                        expected=report["expected"],
-                        ratio=report["ratio"],
-                        owed_note=owed_note,
-                    )
-                )
-            elif report["state"] == "incomplete":
-                sample = ", ".join(report["missing"][:5])
-                click.echo(
-                    _(
-                        "\n{scope_heading}: INCOMPLETE: on {date}, {count} {noun} of {dataset} "
-                        "have no data, no suspension evidence and no ledger entry (coverage "
-                        "{covered}/{expected}, {ratio:.1%}; e.g. {sample}). A fresh date does not "
-                        "mean symbol coverage is complete."
-                    ).format(
-                        scope_heading=scope_heading,
-                        date=report["date"],
-                        count=len(report["missing"]),
-                        noun=_(report.get("noun") or N_("active symbols")),
-                        dataset=dataset,
-                        covered=report["covered"],
-                        expected=report["expected"],
-                        ratio=report["ratio"],
-                        sample=sample,
-                    ),
-                    err=True,
-                )
+                # What follows is for a person; keep stdout one JSON document.
+                quiet_stdout.enter_context(contextlib.redirect_stdout(sys.stderr))
             else:
+                # Piped output has no terminal to measure, and polars then wraps at 100
+                # columns, splitting long dataset names mid-word.
+                width = max(shutil.get_terminal_size((120, 24)).columns, 112)
+                with pl_mod.Config(
+                    tbl_rows=-1,
+                    tbl_cols=-1,
+                    fmt_str_lengths=32,
+                    **({} if all_columns else {"tbl_width_chars": width}),
+                ):
+                    click.echo(view)
+            if hidden:
                 click.echo(
                     _(
-                        '\n{scope_heading}: UNVERIFIED: {message}. This means "cannot be proven", not "proven incomplete"; a fresh date still does not mean symbol coverage is complete.'
-                    ).format(scope_heading=scope_heading, message=report["message"]),
-                    err=True,
+                        "{value} more datasets have no data yet: their schedule groups are not enabled or have not run, which does not affect the conclusion here. Full list: cne status --datasets"
+                    ).format(value=len(hidden))
                 )
-        if scope and is_dataset_enabled("option_greeks", cfg):
-            from cnequity.derive.option_greeks import stale_sessions
+            if lake_profile == "sample":
+                click.echo(
+                    _(
+                        "\nSample lake: these are synthetic source=mock rows whose dates do not count toward the freshness gate; it only verifies the install, Parquet writes and the query path."
+                    )
+                )
+            wanted_groups = _gate_groups(gate_groups)
+            scopes = [
+                report
+                for dataset in (INSTRUMENT_SCOPED_DATASETS if scope else ())
+                if (report := _tip_scope(cfg, df, dataset)) is not None
+            ]
+            if scope:
+                from cnequity.quality.derivative_checks import (
+                    DERIVATIVE_BAR_CONTRACTS,
+                    derivative_tip_scope,
+                )
 
-            stale_greeks = stale_sessions(cfg)
-            if stale_greeks:
-                click.echo(
-                    _(
-                        "option_greeks: {value} sessions lack results or have changed dependencies; run cne derive option_greeks"
-                    ).format(value=len(stale_greeks)),
-                    err=True,
+                scopes.extend(
+                    report
+                    for dataset in DERIVATIVE_BAR_CONTRACTS
+                    if (report := derivative_tip_scope(cfg, dataset)) is not None
                 )
-                if _gates_on_dataset(cfg, "option_greeks", wanted_groups, core_only=core_only):
-                    scope_incomplete = True
-        incomplete_init = Manifest(cfg.manifest_path).latest_incomplete_init_run(
-            discharged_by_later_runs=True
-        )
-        if incomplete_init is not None:
-            click.echo(
-                _(
-                    '\nInit has not finished: run {run_id} is currently {status}. "fresh" above only means the dates of existing data are fresh, not that whole-market coverage is complete; running `cne init` continues from this run.'
-                ).format(run_id=incomplete_init["run_id"], status=incomplete_init["status"]),
-                err=True,
+            gating_scopes = [
+                report
+                for report in scopes
+                if _gates_on_dataset(cfg, report["dataset"], wanted_groups, core_only=core_only)
+            ]
+            scope_incomplete = any(r["state"] == "incomplete" for r in gating_scopes)
+            scope_unverified = any(r["state"] == "unverified" for r in gating_scopes)
+            default_heading = _("Ingest cross-section ({value})").format(
+                value=ingest_scope_label(cfg.ingest_universe)
             )
-        # A tolerated gap is invisible in freshness: the watermark moved over
-        # the hole, so the dataset reads FRESH while still owing keys. The
-        # ledger is the only place that knows, and nobody reads a json file
-        # they were not told about.
-        _report_outstanding_keys(cfg, df["dataset"].to_list())
-        stale_rows = df.filter(pl_mod.col("freshness") == "STALE")
-        if core_only:
-            reported = sorted(name for name in stale_rows["dataset"].to_list() if not is_core(name))
-            if reported:
-                click.echo(
-                    _("\nStale but not core, so not gating: {value}").format(
-                        value=", ".join(reported)
+            for report in scopes:
+                dataset = report["dataset"]
+                scope_heading = (
+                    localize(report["heading"]) if report.get("heading") else default_heading
+                )
+                if report.get("missing_exchanges"):
+                    click.echo(
+                        _("{dataset} is missing whole exchanges: {value}").format(
+                            dataset=dataset, value=", ".join(report["missing_exchanges"])
+                        ),
+                        err=True,
                     )
-                )
-            stale_rows = stale_rows.filter(~pl_mod.col("dataset").is_in(reported))
-        stale = stale_rows.height
-        if stale:
-            click.echo(
-                _(
-                    "\n{stale} datasets are STALE; look into the related runs with `cne status` / `cne run retry`."
-                ).format(stale=stale)
-            )
-            # Which schedule group each one belongs to. A lake where every
-            # stale dataset sits in groups this host never runs is a schedule
-            # gap, not a broken pipeline, and the flat count cannot tell those
-            # apart — it reads as a total outage either way.
-            by_group = stale_datasets_by_group(cfg, stale_rows["dataset"].to_list())
-            if by_group:
-                summary = ", ".join(
-                    f"{group} {len(names)}" for group, names in sorted(by_group.items())
-                )
-                click.echo(_("By schedule group: {summary}").format(summary=summary))
-                click.echo(
-                    _(
-                        "A schedule group you have not scheduled is a scheduling gap, not a failure; run it with `cne run daily --group <name>`."
+                if report.get("owed_dates"):
+                    click.echo(
+                        _("{dataset} sessions still owed: {owed} (e.g. {value})").format(
+                            dataset=dataset,
+                            owed=report["owed"],
+                            value=", ".join(report["owed_dates"][:5]),
+                        ),
+                        err=True,
                     )
-                )
-            # ...and until this flag existed, the gate said exactly that and then
-            # failed anyway. A host scheduling `core` alone has twenty-odd
-            # datasets no job ever fetches, so the freshness gate failed every
-            # single day — 21 to 25 stale on 2026-09-12/13/14 — and the daily
-            # "数据异常" notification became something to dismiss. Three real
-            # `UNHEALTHY` days sat inside that noise unread.
-            wanted = wanted_groups
-            if wanted is not None:
-                # Exempt only what a *known* group other than mine owns. A
-                # dataset nothing schedules — `(unscheduled)`, or a config with
-                # no groups at all — still fails: "I cannot tell who fetches
-                # this" is not the same claim as "another host fetches it", and
-                # reading it as one would let a malformed config silence the
-                # gate completely.
-                gating = sorted(
-                    name
-                    for group, names in by_group.items()
-                    if group in wanted or group == "(unscheduled)"
-                    for name in names
-                )
-                skipped = stale - len(gating)
-                if skipped:
+                    if _gates_on_dataset(cfg, dataset, wanted_groups, core_only=core_only):
+                        scope_incomplete = True
+                if all_columns and report.get("coverage"):
+                    click.echo(pl_mod.DataFrame(report["coverage"]))
+                if report["state"] == "complete":
+                    owed_note = (
+                        _(", plus {owed} symbols already in the ledger to fill").format(
+                            owed=report["owed"]
+                        )
+                        if report.get("owed")
+                        else ""
+                    )
+                    if report.get("unverifiable_exchanges"):
+                        # A limitation of the route, stated beside the result; it does
+                        # not fail the gate (the data on it is not shown to be short).
+                        owed_note += _(
+                            "; limitation, not counted: {exchanges} — vendor route with no rows on "
+                            "days without trades, so it cannot be proven "
+                            '(an official route, [futures].dce_route = "official", can be)'
+                        ).format(exchanges=_(", ").join(report["unverifiable_exchanges"]))
                     click.echo(
                         _(
-                            "The gate only looks at {value}: {value2} of them are stale, and {skipped} more belong to groups this machine does not run."
+                            "\n{scope_heading}: OK: {dataset} {date} coverage evidence {covered}/{expected} ({ratio:.1%}){owed_note}"
                         ).format(
-                            value=", ".join(sorted(wanted)), value2=len(gating), skipped=skipped
+                            scope_heading=scope_heading,
+                            dataset=dataset,
+                            date=report["date"],
+                            covered=report["covered"],
+                            expected=report["expected"],
+                            ratio=report["ratio"],
+                            owed_note=owed_note,
                         )
                     )
-                if gating and gate:
-                    raise SystemExit(1)
-            else:
-                if gate:
-                    raise SystemExit(1)
-        code = _scope_exit_code(
-            incomplete_init is not None,
-            scope_incomplete=scope_incomplete,
-            scope_unverified=scope_unverified,
-        )
-        if code and gate:
-            raise SystemExit(code)
-        return
+                elif report["state"] == "incomplete":
+                    sample = ", ".join(report["missing"][:5])
+                    click.echo(
+                        _(
+                            "\n{scope_heading}: INCOMPLETE: on {date}, {count} {noun} of {dataset} "
+                            "have no data, no suspension evidence and no ledger entry (coverage "
+                            "{covered}/{expected}, {ratio:.1%}; e.g. {sample}). A fresh date does not "
+                            "mean symbol coverage is complete."
+                        ).format(
+                            scope_heading=scope_heading,
+                            date=report["date"],
+                            count=len(report["missing"]),
+                            noun=_(report.get("noun") or N_("active symbols")),
+                            dataset=dataset,
+                            covered=report["covered"],
+                            expected=report["expected"],
+                            ratio=report["ratio"],
+                            sample=sample,
+                        ),
+                        err=True,
+                    )
+                else:
+                    click.echo(
+                        _(
+                            '\n{scope_heading}: UNVERIFIED: {message}. This means "cannot be proven", not "proven incomplete"; a fresh date still does not mean symbol coverage is complete.'
+                        ).format(scope_heading=scope_heading, message=report["message"]),
+                        err=True,
+                    )
+            if scope and is_dataset_enabled("option_greeks", cfg):
+                from cnequity.derive.option_greeks import stale_sessions
+
+                stale_greeks = stale_sessions(cfg)
+                if stale_greeks:
+                    click.echo(
+                        _(
+                            "option_greeks: {value} sessions lack results or have changed dependencies; run cne derive option_greeks"
+                        ).format(value=len(stale_greeks)),
+                        err=True,
+                    )
+                    if _gates_on_dataset(cfg, "option_greeks", wanted_groups, core_only=core_only):
+                        scope_incomplete = True
+            incomplete_init = Manifest(cfg.manifest_path).latest_incomplete_init_run(
+                discharged_by_later_runs=True
+            )
+            if incomplete_init is not None:
+                click.echo(
+                    _(
+                        '\nInit has not finished: run {run_id} is currently {status}. "fresh" above only means the dates of existing data are fresh, not that whole-market coverage is complete; running `cne init` continues from this run.'
+                    ).format(run_id=incomplete_init["run_id"], status=incomplete_init["status"]),
+                    err=True,
+                )
+            # A tolerated gap is invisible in freshness: the watermark moved over
+            # the hole, so the dataset reads FRESH while still owing keys. The
+            # ledger is the only place that knows, and nobody reads a json file
+            # they were not told about.
+            _report_outstanding_keys(cfg, df["dataset"].to_list())
+            stale_rows = df.filter(pl_mod.col("freshness") == "STALE")
+            if core_only:
+                reported = sorted(
+                    name for name in stale_rows["dataset"].to_list() if not is_core(name)
+                )
+                if reported:
+                    click.echo(
+                        _("\nStale but not core, so not gating: {value}").format(
+                            value=", ".join(reported)
+                        )
+                    )
+                stale_rows = stale_rows.filter(~pl_mod.col("dataset").is_in(reported))
+            stale = stale_rows.height
+            if stale:
+                click.echo(
+                    _(
+                        "\n{stale} datasets are STALE; look into the related runs with `cne status` / `cne run retry`."
+                    ).format(stale=stale)
+                )
+                # Which schedule group each one belongs to. A lake where every
+                # stale dataset sits in groups this host never runs is a schedule
+                # gap, not a broken pipeline, and the flat count cannot tell those
+                # apart — it reads as a total outage either way.
+                by_group = stale_datasets_by_group(cfg, stale_rows["dataset"].to_list())
+                if by_group:
+                    summary = ", ".join(
+                        f"{group} {len(names)}" for group, names in sorted(by_group.items())
+                    )
+                    click.echo(_("By schedule group: {summary}").format(summary=summary))
+                    click.echo(
+                        _(
+                            "A schedule group you have not scheduled is a scheduling gap, not a failure; run it with `cne run daily --group <name>`."
+                        )
+                    )
+                # ...and until this flag existed, the gate said exactly that and then
+                # failed anyway. A host scheduling `core` alone has twenty-odd
+                # datasets no job ever fetches, so the freshness gate failed every
+                # single day — 21 to 25 stale on 2026-09-12/13/14 — and the daily
+                # "数据异常" notification became something to dismiss. Three real
+                # `UNHEALTHY` days sat inside that noise unread.
+                wanted = wanted_groups
+                if wanted is not None:
+                    # Exempt only what a *known* group other than mine owns. A
+                    # dataset nothing schedules — `(unscheduled)`, or a config with
+                    # no groups at all — still fails: "I cannot tell who fetches
+                    # this" is not the same claim as "another host fetches it", and
+                    # reading it as one would let a malformed config silence the
+                    # gate completely.
+                    gating = sorted(
+                        name
+                        for group, names in by_group.items()
+                        if group in wanted or group == "(unscheduled)"
+                        for name in names
+                    )
+                    skipped = stale - len(gating)
+                    if skipped:
+                        click.echo(
+                            _(
+                                "The gate only looks at {value}: {value2} of them are stale, and {skipped} more belong to groups this machine does not run."
+                            ).format(
+                                value=", ".join(sorted(wanted)), value2=len(gating), skipped=skipped
+                            )
+                        )
+                    if gating and gate:
+                        raise SystemExit(1)
+                else:
+                    if gate:
+                        raise SystemExit(1)
+            code = _scope_exit_code(
+                incomplete_init is not None,
+                scope_incomplete=scope_incomplete,
+                scope_unverified=scope_unverified,
+            )
+            if code and gate:
+                raise SystemExit(code)
+            return
 
     manifest = Manifest(cfg.manifest_path)
     selected = run_selector

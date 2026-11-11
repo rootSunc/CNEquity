@@ -224,8 +224,34 @@ def launch_stats(config, run_ids: list[str]) -> dict[str, dict]:
     return stats
 
 
-def classify(result_kind: str, exit_code: int, runs: list[dict], stdout: str) -> tuple[str, str]:
-    """``(state, message)`` after a command returned. Exceptions are handled earlier."""
+def read_result(path: Path) -> dict | None:
+    """The result a command handed over through ``CNE_RESULT_PATH``, if any.
+
+    Commands print their JSON result through ``cli._shared.emit_json``, which
+    also writes it here. Reading it, rather than the last JSON object in the
+    captured output, means a later line of output cannot change the result.
+    """
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def classify(
+    result_kind: str,
+    exit_code: int,
+    runs: list[dict],
+    stdout: str,
+    payload: dict | None = None,
+) -> tuple[str, str]:
+    """``(state, message)`` after a command returned. Exceptions are handled earlier.
+
+    *payload* is the command's structured result; without it the last JSON
+    object of *stdout* stands in, for a command that does not hand one over.
+    """
+    if payload is None:
+        payload = last_json(stdout)
     if result_kind == "gate":
         if exit_code == 0:
             return "complete", _("The check passed.")
@@ -237,14 +263,12 @@ def classify(result_kind: str, exit_code: int, runs: list[dict], stdout: str) ->
     if result_kind == "run_json":
         state = aggregate([str(run["status"]) for run in runs if run.get("status")])
         if state is None:
-            payload = last_json(stdout)
             state = _stdout_state(payload) if payload else None
         if state is None:
             state = "complete" if exit_code == 0 else "failed"
         if state == "failed" and exit_code == 0:
             # An init whose bars published but which still owes a non-blocking
             # step (`lake_usable`) is a partial delivery, not a failed build.
-            payload = last_json(stdout)
             if payload and payload.get("lake_usable"):
                 state = "partial"
         message = {
@@ -289,8 +313,11 @@ def _read_log(path: str | None, limit: int = 200_000) -> str:
     return data.decode("utf-8", "replace")
 
 
-def _result(state: str, runs: list[dict], stdout: str) -> dict[str, Any]:
-    payload = last_json(stdout)
+def _result(
+    state: str, runs: list[dict], stdout: str, payload: dict | None = None
+) -> dict[str, Any]:
+    if payload is None:
+        payload = last_json(stdout)
     return {
         "status": state,
         "run_ids": [run["run_id"] for run in runs],
@@ -410,12 +437,18 @@ def execute(path: Path) -> None:
                 return
         elif config is not None:
             mark_due_daily_session(config, record["op"], record.get("params") or {})
+        result_path = path.with_suffix(".result")
+        result_path.unlink(missing_ok=True)
+        os.environ["CNE_RESULT_PATH"] = str(result_path)
         exit_code, forced, message = _run(record["argv"])
         runs = launch_runs(config, record["job_id"], record.get("target_run_id"))
         stdout = _read_log((record.get("logs") or {}).get("out"))
+        payload = read_result(result_path)
+        # The record keeps the payload as its result summary; the file is spent.
+        result_path.unlink(missing_ok=True)
         if forced is None:
             assert exit_code is not None
-            state, message = classify(record["result_kind"], exit_code, runs, stdout)
+            state, message = classify(record["result_kind"], exit_code, runs, stdout, payload)
         else:
             state = forced
         # Write the ending before the locks drop. A reader that sees the lock
@@ -425,7 +458,7 @@ def execute(path: Path) -> None:
             state=state,
             message=message,
             exit_code=exit_code,
-            result=_result(state, runs, stdout),
+            result=_result(state, runs, stdout, payload),
         )
 
 

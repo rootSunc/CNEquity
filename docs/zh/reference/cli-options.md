@@ -39,17 +39,46 @@
 | `--full` | `False` | 立即重跑全湖审计（读每个历史分区，大湖可能要数小时）；默认读最近一次的审计结果。 |
 | `--pack` | `—` | 按研究包给出窗口、缺口和下一步。可重复。指定后，缺数据或历史 ST 未覆盖会使退出码变差。 |
 
-## `cne config`
+## `cne config create`
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `action` | `—` | 必填；位置参数 |
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
-| `--force` | `False` | action=create 时覆盖已存在的配置文件。 |
-| `--data-root` | `—` | action=create 时设置 [data].root（默认把 ./data/cnequity 解析成绝对路径）。 |
-| `--dry-run` | `False` | action=upgrade 时只列出要补的 step 和调度组，不写文件。 |
-| `--minimize` | `False` | 用于 action=upgrade：把完整配置改写为继承内置默认值，只保留不同的设置；会列出每项行为会变化的设置。 |
-| `--defaults` | `False` | 用于 action=show：打印每项设置及其内置默认值和说明。 |
+| `--force` | `False` | 覆盖已有的配置文件。 |
+| `--data-root` | `—` | 设置 [data].root（默认 ./data/cnequity，解析为绝对路径）。 |
+
+## `cne config diff`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+
+## `cne config path`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+
+## `cne config show`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `--defaults` | `False` | 列出每一项设置及其内置默认值和说明。 |
+
+## `cne config upgrade`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `--dry-run` | `False` | 只列出要加的步骤和调度组，不写任何文件。 |
+| `--minimize` | `False` | 把完整配置改写为继承内置默认值，只保留不同的设置；列出行为会改变的每一项设置。 |
+
+## `cne config validate`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
 
 ## `cne contract diff`
 
@@ -667,6 +696,7 @@
 | `--scope, --no-scope` | `True` | 配合 --datasets：是否做最新交易日的标的截面校验。它要读 daily_bars 的 tip 分区、instruments 和 trading_status，比单纯看水位贵；--no-scope 让这条命令回到纯元数据。 |
 | `--gate` | `False` | 按所选范围和新鲜度执行门禁；默认只报告。 |
 | `--core-only` | `False` | 配合 --datasets --gate：只有核心档数据集会让门槛失败，其余照常列出。`cne check` 使用此项。 |
+| `--json` | `False` | 与 --datasets 一起用：把表格以 JSON 输出到 stdout（freshness 为小写）；之后的检查信息输出到 stderr。退出码不变。 |
 
 ## `cne storage apply`
 

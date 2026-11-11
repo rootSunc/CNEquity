@@ -7,7 +7,12 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne audit` | conditional | Reads the lake and prints the audit; accesses sources when external comparison is enabled |
 | `cne backfill` | when run | Backfills history, writing staging and published data; --plan only reads config and state |
 | `cne check` | none | Reads status, freshness, audit results and stats; recomputes stale stats, --full reruns the full-lake audit |
-| `cne config` | none | create writes a personal config that extends the built-in defaults; upgrade backs up and adds schedule steps, --minimize backs up and rewrites it to extend the defaults; validate/diff/show/path are read-only |
+| `cne config create` | none | Writes a personal config that extends the built-in defaults; needs --force if one exists |
+| `cne config diff` | none | Read-only: reports the steps and settings a config lacks against the built-in defaults |
+| `cne config path` | none | Read-only: shows the config in effect, where it came from and the lake it points to |
+| `cne config show` | none | Read-only: prints the effective config; --defaults lists every default |
+| `cne config upgrade` | none | Backs up, then adds this version's schedule steps; --minimize rewrites it to extend the defaults; --dry-run writes nothing |
+| `cne config validate` | none | Read-only: validates the config |
 | `cne contract diff` | none | Reads contracts and prints the diff |
 | `cne contract show` | none | Reads the contract; writes a file when an output path is given |
 | `cne contract validate` | none | Validates the contract |

@@ -371,3 +371,29 @@ def star_hint_once(cfg) -> None:
         ).format(STAR_URL=STAR_URL),
         err=True,
     )
+
+
+def emit_json(payload, **dumps_options) -> None:
+    """Print a command's JSON result, and hand it to the dashboard job too.
+
+    Prints ``json.dumps(payload, **dumps_options)`` exactly as the command did.
+    A dashboard job sets ``CNE_RESULT_PATH``; the same payload is then written
+    there, so the job reads the result instead of scraping the last JSON object
+    out of everything the command printed. The last call wins, as the last
+    printed object did.
+    """
+    import json
+    import os
+
+    click.echo(json.dumps(payload, **dumps_options))
+    target = os.environ.get("CNE_RESULT_PATH")
+    if target:
+        from cnequity.storage.atomic import write_json_atomic
+
+        write_json_atomic(Path(target), payload, default=str, ensure_ascii=False)
+
+
+#: ``--apply`` for commands that preview by default (the repairs, ``import``).
+apply_option = click.option(
+    "--apply", is_flag=True, help=N_("Run it; without this only the plan is printed.")
+)

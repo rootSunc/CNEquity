@@ -558,8 +558,8 @@ def _ops() -> tuple[OpSpec, ...]:
                 "List the steps and schedule groups this version would add to the config. Writes no files."
             ),
             group=N_("Inspection"),
-            command=("config",),
-            fixed=("upgrade", "--dry-run"),
+            command=("config", "upgrade"),
+            fixed=("--dry-run",),
             lock_class="read",
             confirm="none",
             result="report",

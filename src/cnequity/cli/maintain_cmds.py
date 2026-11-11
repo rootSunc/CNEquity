@@ -20,6 +20,7 @@ from cnequity.cli._shared import (
     _run_status_exit_code,
     attach_log_file,
     config_option,
+    emit_json,
     parse_date_option,
 )
 from cnequity.derive.adj_factors import compute_adj_factors
@@ -63,12 +64,10 @@ def compact(config_path: str, run_id: str | None):
     engine = JobEngine(cfg)
     if run_id:
         out = engine.run_step("compact", shanghai_today(), run_id)
-        click.echo(
-            json.dumps(
-                {"run_id": run_id, "rows_written": out.get("rows_written", 0), **out},
-                indent=2,
-                default=str,
-            )
+        emit_json(
+            {"run_id": run_id, "rows_written": out.get("rows_written", 0), **out},
+            indent=2,
+            default=str,
         )
         return
 
@@ -86,7 +85,7 @@ def compact(config_path: str, run_id: str | None):
         exit_code = _run_status_exit_code(status)
         if exit_code == 1 or worst == 0:
             worst = exit_code
-    click.echo(json.dumps({"runs": results}, indent=2, default=str))
+    emit_json({"runs": results}, indent=2, default=str)
     if worst:
         raise SystemExit(worst)
 
@@ -402,7 +401,7 @@ def derive(
                 ),
                 err=True,
             )
-            click.echo(json.dumps(outcome, indent=2, default=str, ensure_ascii=False))
+            emit_json(outcome, indent=2, default=str, ensure_ascii=False)
     elif name == "adj_factor_source":
         from cnequity.derive.factor_arbitration import arbitrate_factor_sources
         from cnequity.storage.repairs.adj_factors import repair_adj_factors
@@ -416,14 +415,14 @@ def derive(
         else:
             report["applied"] = False
         report.pop("switch_detail", None)
-        click.echo(json.dumps(report, indent=2, default=str, ensure_ascii=False))
+        emit_json(report, indent=2, default=str, ensure_ascii=False)
     elif name == "industry_index":
         from cnequity.derive.industry_index import derive_industry_index
 
         with _published_derive(cfg, name) as outcome:
             summary = derive_industry_index(cfg, start=start, end=end, full=full)
             outcome["rows_written"] = summary.get("rows", 0)
-        click.echo(json.dumps(summary, indent=2, default=str))
+        emit_json(summary, indent=2, default=str)
     elif name == "futures_continuous":
         if start or end:
             raise click.ClickException(
@@ -436,14 +435,14 @@ def derive(
         with _published_derive(cfg, name) as outcome:
             summary = derive_futures_continuous(cfg)
             outcome["rows_written"] = summary.get("rows", 0)
-        click.echo(json.dumps(summary, indent=2, default=str))
+        emit_json(summary, indent=2, default=str)
     elif name == "option_greeks":
         from cnequity.derive.option_greeks import derive_option_greeks
 
         with _published_derive(cfg, name) as outcome:
             summary = derive_option_greeks(cfg, start=start, end=end, full=full)
             outcome["rows_written"] = summary.get("rows", 0)
-        click.echo(json.dumps(summary, indent=2, default=str))
+        emit_json(summary, indent=2, default=str)
     elif name in RESAMPLED_MINUTE_DATASETS:
         from cnequity.derive.minute_resample import derive_minute_resample
 
@@ -458,10 +457,10 @@ def derive(
                 for key in ("skipped_incomplete_1m", "skipped_incomplete_5m", "skipped_invalid")
             ):
                 outcome["status"] = "degraded"
-        click.echo(json.dumps(summary, indent=2, default=str, ensure_ascii=False))
+        emit_json(summary, indent=2, default=str, ensure_ascii=False)
     elif name == "trading_status":
         summary = _derive_trading_status(cfg, start=start, end=end)
-        click.echo(json.dumps(summary, indent=2, default=str))
+        emit_json(summary, indent=2, default=str)
         exit_code = _run_status_exit_code(str(summary.get("status", "failed")))
         if exit_code:
             raise SystemExit(exit_code)
@@ -472,7 +471,7 @@ def derive(
             summary = derive_sector_routing(cfg)
         except RuntimeError as exc:  # missing input or source: the message says what to do
             raise click.ClickException(str(exc)) from exc
-        click.echo(json.dumps(summary, indent=2, default=str))
+        emit_json(summary, indent=2, default=str)
     elif name == "sector_code_map":
         from cnequity.derive.sector_code_map import derive_sector_code_map
 
@@ -480,7 +479,7 @@ def derive(
             summary = derive_sector_code_map(cfg)
         except RuntimeError as exc:  # missing input or source: the message says what to do
             raise click.ClickException(str(exc)) from exc
-        click.echo(json.dumps(summary, indent=2, default=str))
+        emit_json(summary, indent=2, default=str)
     elif name == "industry_taxonomy":
         from cnequity.derive.industry_taxonomy import derive_industry_taxonomy
 
@@ -488,7 +487,7 @@ def derive(
             summary = derive_industry_taxonomy(cfg)
         except RuntimeError as exc:  # missing input: the message says what to do
             raise click.ClickException(str(exc)) from exc
-        click.echo(json.dumps(summary, indent=2, default=str))
+        emit_json(summary, indent=2, default=str)
     elif name == "industry_crosswalk":
         from cnequity.derive.industry_crosswalk import derive_industry_crosswalk
 
@@ -496,7 +495,7 @@ def derive(
             summary = derive_industry_crosswalk(cfg, as_of=end)
         except RuntimeError as exc:  # no same-day evidence yet: the message says what to run
             raise click.ClickException(str(exc)) from exc
-        click.echo(json.dumps(summary, indent=2, default=str, ensure_ascii=False))
+        emit_json(summary, indent=2, default=str, ensure_ascii=False)
     else:
         raise click.ClickException(_("Unknown derive target: {name}").format(name=name))
 
@@ -684,7 +683,7 @@ def clean(
             for item in generations
         ],
     }
-    click.echo(json.dumps(payload, indent=2))
+    emit_json(payload, indent=2)
     if not will_ask:
         return
     _delete_preview_selection(
@@ -796,7 +795,7 @@ def _delete_preview_selection(
                 "logical_bytes_deleted": journal.get("logical_bytes_deleted", 0),
             }
     if deleted:
-        click.echo(json.dumps({"deleted": True, **deleted}, indent=2))
+        emit_json({"deleted": True, **deleted}, indent=2)
 
 
 @cli.group()
@@ -819,7 +818,7 @@ def _stats_rebuild_if_stale(cfg, *, as_json: bool) -> None:
         click.echo(json.dumps({"rebuilt": False, "reason": reason}) if as_json else reason)
         return
     if as_json:
-        click.echo(json.dumps({"rebuilt": True, **result.as_dict()}, indent=2, default=str))
+        emit_json({"rebuilt": True, **result.as_dict()}, indent=2, default=str)
         return
     click.echo(
         _(
@@ -883,7 +882,7 @@ def stats_rebuild(config_path: str, dataset_names: tuple[str, ...], if_stale: bo
         raise click.ClickException(str(exc)) from exc
 
     if as_json:
-        click.echo(json.dumps(result.as_dict(), indent=2, default=str))
+        emit_json(result.as_dict(), indent=2, default=str)
         return
     click.echo(
         _(
@@ -981,7 +980,7 @@ def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: 
             )
         entries = _scan_curated_datasets(cfg)
         if as_json:
-            click.echo(json.dumps(entries, indent=2))
+            emit_json(entries, indent=2)
             return
         click.echo(
             _(
@@ -1031,7 +1030,7 @@ def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: 
         )
     )
     if as_json:
-        click.echo(json.dumps(df.sort(df.columns[:2]).to_dicts(), indent=2, default=str))
+        emit_json(df.sort(df.columns[:2]).to_dicts(), indent=2, default=str)
         return
     with pl.Config(tbl_rows=-1, tbl_cols=-1, fmt_str_lengths=32):
         click.echo(df.sort(df.columns[:2]))

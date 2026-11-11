@@ -7,7 +7,12 @@
 | `cne audit` | 条件 | 读取湖、输出审计；启用外部对照时访问源 |
 | `cne backfill` | 执行时 | 补历史并写暂存与发布数据；--plan 仅读配置和状态 |
 | `cne check` | 无 | 读取状态、新鲜度、审计结果与统计；统计过期时重算，--full 重跑全湖审计 |
-| `cne config` | 无 | create 写继承内置默认值的个人配置；upgrade 备份后补调度 step，--minimize 备份后改写为继承默认值；validate/diff/show/path 仅读 |
+| `cne config create` | 无 | 写一个继承内置默认值的个人配置；已存在时需 --force |
+| `cne config diff` | 无 | 只读：报告配置相对内置默认值缺少的步骤和设置 |
+| `cne config path` | 无 | 只读：显示生效的配置、来源和指向的湖 |
+| `cne config show` | 无 | 只读：打印生效配置，--defaults 列出全部默认值 |
+| `cne config upgrade` | 无 | 先备份再加入新版本的调度步骤；--minimize 改写为继承默认值；--dry-run 不写文件 |
+| `cne config validate` | 无 | 只读：校验配置 |
 | `cne contract diff` | 无 | 读取契约并输出差异 |
 | `cne contract show` | 无 | 读取契约；指定输出路径时写文件 |
 | `cne contract validate` | 无 | 校验契约 |

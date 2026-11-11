@@ -244,7 +244,7 @@ msgstr ""
 "\n"
 "已按 {value}..{value2} 的日线重算停牌：{value3:,} 行（{value4}）"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid ""
 "\n"
 "Recomputes every file digest; the verification result is saved in the task output."
@@ -261,7 +261,7 @@ msgstr ""
 "\n"
 "修复 {value} 个缺口…"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 #, python-brace-format
 msgid ""
 "\n"
@@ -709,7 +709,7 @@ msgstr "（{blocked_by} 尚无覆盖当前股票池的回执{near}）"
 msgid " ({skipped})"
 msgstr "（{skipped}）"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid " The daily update only runs the schedule groups of research packs "
 msgstr " 日更只跑研究包 "
 
@@ -726,7 +726,7 @@ msgstr " 本次按显式 --since={value} 覆盖历史起点。"
 msgid " [explicit probe only]"
 msgstr " [仅显式探测]"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid " and others ({total} in all)"
 msgstr " 等 {total} 个"
@@ -944,9 +944,9 @@ msgstr "（全部）"
 
 #: cnequity/cli/init_summary.py cnequity/cli/quality_cmds.py
 #: cnequity/cli/run_cmds.py cnequity/cli/setup_cmds.py
-#: cnequity/diagnostics/health_page.py cnequity/research/packs.py
-#: cnequity/serve/ops/catalog.py cnequity/serve/ops/scheduler.py
-#: cnequity/serve/ops/settings.py
+#: cnequity/diagnostics/health_page.py cnequity/ops/catalog.py
+#: cnequity/ops/scheduler.py cnequity/ops/settings.py
+#: cnequity/research/packs.py
 msgid ", "
 msgstr "、"
 
@@ -965,7 +965,7 @@ msgstr "，北京时间 {hours} 点每 {minutes} 分钟"
 msgid ", plus {owed} symbols already in the ledger to fill"
 msgstr "，另有 {owed} 只已记账待补"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid ", symbols {symbols}"
 msgstr "，标的 {symbols}"
@@ -980,7 +980,7 @@ msgstr "，最接近的回执差 {short}/{total} 只"
 msgid ", up to {seconds}s later at random"
 msgstr "，随机延后至多 {seconds} 秒"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid ", without event streams. A snapshot missed for a day cannot be filled back by date."
 msgstr " 的调度组，不含事件流。快照漏一天无法按日期补回。"
 
@@ -1025,10 +1025,6 @@ msgstr "--dataset 和 --symbol 必须一起给"
 msgid "--days must be >= 1"
 msgstr "--days 必须 >= 1"
 
-#: cnequity/cli/setup_cmds.py
-msgid "--defaults only applies to `cne config show`"
-msgstr "--defaults 只适用于 `cne config show`"
-
 #: cnequity/cli/quality_cmds.py
 msgid "--derivatives does not support other modes, --repair, --kind or run-evidence options"
 msgstr "--derivatives 不支持其他模式、--repair、--kind 或运行证据参数"
@@ -1040,10 +1036,6 @@ msgstr "--derivatives 需要 --dataset futures_bars|option_bars、--start、--en
 #: cnequity/cli/maintain_cmds.py
 msgid "--dry-run cannot be combined with --reconcile-runs: reconciling changes run state. Drop --reconcile-runs to see the cleanup preview."
 msgstr "--dry-run 不能与 --reconcile-runs 同用：对账会修改运行状态。请先去掉 --reconcile-runs 查看清理预演。"
-
-#: cnequity/cli/setup_cmds.py
-msgid "--dry-run only applies to `cne config upgrade`"
-msgstr "--dry-run 只用于 `cne config upgrade`"
 
 #: cnequity/orchestrator/backfill_request.py
 msgid "--eastmoney-date-repair needs --ex-dates"
@@ -1095,9 +1087,9 @@ msgstr "--if-stale 会重算整个湖；请去掉 --dataset，或者去掉 --if-
 msgid "--industry takes only --start and --end"
 msgstr "--industry 只接受 --start 和 --end"
 
-#: cnequity/cli/setup_cmds.py
-msgid "--minimize only applies to `cne config upgrade`"
-msgstr "--minimize 只适用于 `cne config upgrade`"
+#: cnequity/cli/quality_cmds.py
+msgid "--json only works with --datasets; without it the run summary is already JSON"
+msgstr "--json 只能和 --datasets 一起用；不加 --datasets 时输出的运行摘要本来就是 JSON"
 
 #: cnequity/cli/run_cmds.py
 msgid "--no-events only applies to a full daily update without --group / --all-groups / --stale-only / --core-only."
@@ -1267,7 +1259,7 @@ msgstr "== 建湖结果 =="
 msgid "A 412 challenge was observed before, so the default route goes through Sina; explicit diagnosis only. Green proves only that the futures file is reachable, not that the official field mapping has been accepted."
 msgstr "此前观测到 412 挑战，默认路由走新浪；仅显式诊断，绿色只证明期货文件可达，不证明官方字段映射已验收。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "A backup name must be 1–80 letters, digits, dots, underscores or hyphens."
 msgstr "备份名称须为 1–80 个字母、数字、点、下划线或短横线。"
 
@@ -1289,11 +1281,11 @@ msgstr "`cne config create` 生成的配置两者都有。"
 msgid "A credential is written in the config file: %s"
 msgstr "凭证直接写在配置文件里：%s"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "A daily update is running (all schedule groups share one ingest lock)."
 msgstr "有日更正在运行（各调度组共用一把采集锁）。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "A dashboard task is running; wait for it to finish before confirming the deletion."
 msgstr "面板有任务正在执行，请等它结束后再确认删除。"
 
@@ -1309,11 +1301,11 @@ msgstr "相对路径按进程 CWD 解析。调度器（launchd/cron）的 CWD �
 msgid "A schedule group you have not scheduled is a scheduling gap, not a failure; run it with `cne run daily --group <name>`."
 msgstr "你没有排期的调度组，是调度缺口而不是失败 —— 用 `cne run daily --group <名字>` 跑它。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "A scheduled daily update or closing catch-up is running."
 msgstr "定时日更或收尾补抓正在运行。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "A scheduled event stream is running."
 msgstr "定时事件流正在运行。"
 
@@ -1337,7 +1329,7 @@ msgstr "已有存储检查或清理正在执行，请等待结束。"
 msgid "A storage operation is already running."
 msgstr "已有存储操作正在执行。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "A system task with the same name was modified; check it in the system scheduler first."
 msgstr "同名系统任务已被修改，请先在系统调度器中核对。"
 
@@ -1420,6 +1412,10 @@ msgstr ""
 "记录，若其条款能解释该台阶，就移到台阶日；其余按证券和年份向 Baostock 取分红，\n"
 "只收除权日正是台阶日、且条款能解释台阶的行。解释不了的保持缺口，不会凭空补。"
 
+#: cnequity/cli/setup_cmds.py
+msgid "Add the schedule steps and groups this version brings, backing the config up first."
+msgstr "把这个版本新增的调度步骤和调度组加进配置，先备份原文件。"
+
 #: cnequity/storage/migrations.py
 msgid "Add the share conversions ETF/LOF factors were missing"
 msgstr "补上 ETF/LOF 因子缺少的份额折算"
@@ -1432,7 +1428,7 @@ msgstr "影响的数据集"
 msgid "After init succeeds, install the scheduled daily update and closing catch-up for the selected research packs. Excludes announcements and news."
 msgstr "初始化成功结束后，为所选研究包安装定时日更和收尾补抓。不含公告和资讯。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "After the day's update: run audit, freshness gate, source probes, run evidence, metadata backup and expiry preview."
 msgstr "日更之后：运行审计、新鲜度门禁、源探针、运行证据、元数据备份和过期预览。"
 
@@ -1444,15 +1440,15 @@ msgstr "--new 的别名。"
 msgid "Alias for --old."
 msgstr "--old 的别名。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "All A-shares"
 msgstr "全部 A 股"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "All codes (incl. ETF/LOF)"
 msgstr "全部代码（含 ETF/LOF）"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "All market instruments. quick covers the last 3 years; full starts from each dataset's history start, with daily bars from 2016-01-01."
 msgstr "全市场标的。quick 是近 3 年，full 从各数据集的历史起点起，日线从 2016-01-01 起。"
 
@@ -1460,15 +1456,15 @@ msgstr "全市场标的。quick 是近 3 年，full 从各数据集的历史起�
 msgid "Allow starting fetches from the dashboard on non-loopback addresses too. By default remote clients can only browse and run storage cleanup; the token is in the URL and the LAN is plaintext."
 msgstr "非回环地址上也可以从面板发起取数。默认远程只能浏览和做存储清理；令牌在网址里，局域网又是明文。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Also fetch daily bars for ETFs that are recently replayable and qualify per the exchange directory. Off by default."
 msgstr "额外抓取最近可回放、且交易所目录判定合格的 ETF 日线。默认关闭。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Also fetch eligible ETF daily bars"
 msgstr "同时抓取符合条件的 ETF 日线"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Also fetch listed ETF/LOF daily bars"
 msgstr "同时抓取已上市 ETF/LOF 日线"
 
@@ -1480,11 +1476,11 @@ msgstr "将未完成或未 compact 的 staging 也列入预览，不删除文件
 msgid "Also run this event-stream group (announcements, news) on its own interval."
 msgstr "另按自己的间隔运行这个事件流组（公告、资讯）。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "An event stream is running."
 msgstr "有事件流正在运行。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 #, python-brace-format
 msgid "An init did not finish ({run_id}). Continuing init from the dashboard resumes it; this operation can still go ahead."
 msgstr "有一次初始化没跑完（{run_id}）。从面板继续初始化会续跑它；这次操作仍可进行。"
@@ -1494,27 +1490,27 @@ msgstr "有一次初始化没跑完（{run_id}）。从面板继续初始化会�
 msgid "An init is already running (run {run_id}). Wait for it to finish, or stop it before starting a new one."
 msgstr "已经有一个 init 在跑（run {run_id}）。等它跑完，或者先停掉它再开新的。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "An init is running."
 msgstr "有初始化正在运行。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Announcements and regulatory filings. When off, CNINFO is no longer requested."
 msgstr "公告和监管。关掉后不再请求巨潮。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Announcements, financials and fund flows. When off, EastMoney is no longer requested."
 msgstr "公告、财务和资金流。关掉后不再请求东财。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Announcements, regulatory events and news. Also runs on weekends and holidays."
 msgstr "公告、监管事件和资讯。周末和节假日也会跑。"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "Another lake of the current user is changing the system scheduler; try again shortly."
 msgstr "当前用户的其他数据湖正在修改系统调度器，请稍后重试。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Another page is changing the schedule settings; try again shortly."
 msgstr "另一个页面正在修改定时设置，请稍后重试。"
 
@@ -1562,7 +1558,7 @@ msgstr "init 各阶段的 as-of 交易日（YYYY-MM-DD）；默认今天。"
 msgid "As-of trading day YYYY-MM-DD (default today). Use for catch-up runs on weekends / holidays."
 msgstr "as-of 交易日 YYYY-MM-DD（默认今天）。周末 / 节假日补跑时用。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "At most 200 symbols at a time."
 msgstr "一次最多 200 个标的。"
 
@@ -1585,7 +1581,7 @@ msgstr "审计：{name}: {exc}"
 msgid "Audit: {status}"
 msgstr "审计：{status}"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 #, python-brace-format
 msgid "Automatic fetching is paused, but the system trigger was not removed: {exc}"
 msgstr "自动取数已暂停，但系统触发未移除：{exc}"
@@ -1594,11 +1590,11 @@ msgstr "自动取数已暂停，但系统触发未移除：{exc}"
 msgid "BSE official quote board (first page)"
 msgstr "北交所官方行情板（首分页）"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "BSE website"
 msgstr "北交所官网"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Backfill a dataset"
 msgstr "回填一个数据集"
 
@@ -1626,19 +1622,19 @@ msgstr "回填区间终点（YYYY-MM-DD，默认今天），与 --start 配合�
 msgid "Backfill start date (YYYY-MM-DD), covering daily_bars, minute_bars, derivatives daily bars, date/report-period advancement and sector_bars. sector_bars defaults to 400 days back; ranges beyond the source's history depth are kept as gaps, while the available range is delivered as usual with guidance for filling the rest."
 msgstr "回填区间起点（YYYY-MM-DD），包括 daily_bars、minute_bars、衍生品日线、日期/报告期推进及 sector_bars。sector_bars 默认往前 400 天；超过来源历史深度的范围保留为缺口，可取范围照常交付并提供补数指引。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Backup and restore"
 msgstr "备份与恢复"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Backup directory (optional, absolute path)"
 msgstr "备份存放目录（可选，绝对路径）"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Backup name"
 msgstr "备份名称"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 #, python-brace-format
 msgid ""
 "Backup: {name}\n"
@@ -1649,7 +1645,7 @@ msgstr ""
 "数据集：{value}\n"
 "文件：{value2}"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid "Backups inside the lake may only go under meta/snapshots or backups, so they never mix with business data; a directory outside the lake also works."
 msgstr "湖内备份只允许放在 meta/snapshots 或 backups，避免混入业务数据；也可选择湖外目录。"
 
@@ -1706,7 +1702,7 @@ msgstr "中金所官网（逐合约日行情）"
 msgid "CNI index historical constituent files"
 msgstr "国证指数历史成分文件"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "CNINFO"
 msgstr "巨潮"
 
@@ -1718,28 +1714,28 @@ msgstr "巨潮 cninfo（公告全文索引）"
 msgid "CZCE website (per-contract daily quotes)"
 msgstr "郑商所官网（逐合约日行情）"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Calendar day"
 msgstr "自然日"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "Cancelled."
 msgstr "已取消。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Cancelled. The process did not wind down on its own."
 msgstr "已取消。进程没有自行收尾。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Cannot be specified: "
 msgstr "不能指定："
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 #, python-brace-format
 msgid "Cannot call the system scheduler ({name})."
 msgstr "无法调用系统调度器（{name}）。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Cannot change this config's times automatically; put run_at inside the [job.daily] and [job.stale] tables."
 msgstr "无法自动修改这份配置的时间，请将 run_at 放在 [job.daily] 和 [job.stale] 表内。"
 
@@ -1762,7 +1758,7 @@ msgstr "不能删除 {oid}：它是当前版本，或仍被引用、保留、缺
 msgid "Cannot delete {oid}: its protection has changed."
 msgstr "不能删除 {oid}：保护条件已变化。"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "Cannot determine the current Windows user."
 msgstr "无法确认当前 Windows 用户。"
 
@@ -1771,11 +1767,11 @@ msgstr "无法确认当前 Windows 用户。"
 msgid "Cannot read existing config {path}: {exc}"
 msgstr "无法读取已有配置 {path}：{exc}"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "Cannot read the current user's crontab."
 msgstr "无法读取当前用户的 crontab。"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "Cannot read the current user's crontab; check permissions and the cron installation."
 msgstr "无法读取当前用户的 crontab，请检查权限和 cron 安装。"
 
@@ -1806,11 +1802,11 @@ msgstr ""
 "公司行动优先下载全历史文件，日线按 --sample 抽样。\n"
 "这些操作会访问配置的 keyed API；没有快照时，相应仲裁检查保持静默。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Catch up lagging datasets"
 msgstr "补抓落后的数据集"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Catch-up and recovery"
 msgstr "补抓与恢复"
 
@@ -1822,6 +1818,10 @@ msgstr "把配置里的 data.root 改成绝对路径，例如 %s"
 #: cnequity/cli/quality_cmds.py
 msgid "Check \"security × trading day\" instead, including securities with no rows at all in the window. Requires --start."
 msgstr "改为检查「证券 × 交易日」，含窗口内一行都没有的证券。需要 --start。"
+
+#: cnequity/cli/setup_cmds.py
+msgid "Check an existing config."
+msgstr "检查已有的配置。"
 
 #: cnequity/cli/repair_cmds.py
 msgid "Check debts against explicit fund auction daily-bar coverage evidence from the Shanghai and Shenzhen exchanges; being tradable does not mean there was an auction trade that day."
@@ -1878,7 +1878,7 @@ msgstr ""
 msgid "Check the lake"
 msgstr "检查数据湖"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Checked once a minute. The daily update and catch-up each try once per trading day; the catch-up only handles snapshots and waits for the daily update to have run. Backups try once per calendar day once their time comes, and event streams run at their own frequency, weekends and holidays included. When a task is busy it waits and the next check decides again. It keeps working after the web page or serve is closed. Windows and macOS need the current user logged in; Linux needs the cron service running. Nothing runs during sleep, and it decides again after waking; the daily update and catch-up go no later than 09:15 on the next trading day, backups only make up the same day, and event streams do not accumulate missed runs. Only tasks created from the web are managed here; check existing scripts and other system tasks first to avoid double scheduling."
 msgstr "每分钟检查一次。日更与补抓每个交易日各尝试一次；补抓只处理快照，并等待日更已执行。备份每个自然日到点后尝试一次，事件流按独立频率运行，含周末和节假日。任务占用时等待，下次检查再判断。关闭网页或 serve 后继续生效。Windows 和 macOS 需要当前用户已登录；Linux 需要 cron 服务运行。休眠期间不执行，恢复后再判断；日更与补抓最迟到下个交易日 09:15，备份只补当天，事件流不累积补跑。这里只管理 Web 创建的任务，已有的脚本和其他系统任务请先核对，避免重复调度。"
 
@@ -1894,11 +1894,11 @@ msgstr "请选择不重复的历史版本。"
 msgid "Choose the versions to delete."
 msgstr "请选择要删除的版本。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Choose which securities the daily update fetches. ST, suspended and delisted names are kept."
 msgstr "决定日更抓哪些证券。ST、停牌和已退市名称都会保留。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "Comma-separated ex-dates, YYYY-MM-DD."
 msgstr "逗号分隔的除权日，YYYY-MM-DD。"
 
@@ -1922,7 +1922,7 @@ msgstr "用逗号分隔的标的列表代替整个市场，定向重试失败证
 msgid "Comma-separated symbols to restrict the scope: for scoped backfills of intraday, trading_status and corporate_actions, and scoped repairs of financial_statement_items, daily_bars and share_structure. trading_status records the exact scope in its checkpoint and coverage evidence; daily_bars writes this explicit scope into the backfill metadata."
 msgstr "限定范围的标的列表，逗号分隔：用于 intraday、trading_status、corporate_actions 的限定回填，以及 financial_statement_items、daily_bars、share_structure 的限定修复。trading_status 的 checkpoint 与覆盖证据会记下确切范围；daily_bars 会把这个显式范围写进 backfill 元数据。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "Comma-separated symbols."
 msgstr "逗号分隔的证券代码。"
 
@@ -1930,7 +1930,7 @@ msgstr "逗号分隔的证券代码。"
 msgid "Comma-separated symbols; checks historical issues in bounded batches by default."
 msgstr "逗号分隔的证券代码；默认分批检查历史问题。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Comma-separated, e.g. 600519.SH,000001.SZ. Leave empty for the dataset's default range."
 msgstr "逗号分隔，如 600519.SH,000001.SZ。不填就是该数据集的默认范围。"
 
@@ -2000,11 +2000,11 @@ msgstr ""
 msgid "Compared with: {path}"
 msgstr "对照：{path}"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Complete"
 msgstr "完成"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "Completed."
 msgstr "执行完成。"
 
@@ -2035,7 +2035,7 @@ msgstr "接给 AI（只读 MCP，以 Claude Code 为例）："
 msgid "Connected and HTTP was fine, but no data — the most dangerous state: a backfill silently truncates."
 msgstr "连上了、HTTP 也正常，但没有数据——最危险的一档，回填会静默截断。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Continue after a stage fails"
 msgstr "某阶段失败后继续"
 
@@ -2043,7 +2043,7 @@ msgstr "某阶段失败后继续"
 msgid "Contract check passed"
 msgstr "契约检查通过"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Copy the selected datasets into a verifiable lake snapshot. Does not contact data sources."
 msgstr "把明确选择的数据集复制成可校验的湖快照，不请求数据源。"
 
@@ -2074,7 +2074,7 @@ msgstr "无法加载配置 {path}（{name}{where}）；请检查 TOML 语法、�
 msgid "Could not load config {path}: {reason}"
 msgstr "无法加载配置 {path}：{reason}"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 #, python-brace-format
 msgid "Could not load the config: {name}"
 msgstr "无法加载配置：{name}"
@@ -2083,25 +2083,25 @@ msgstr "无法加载配置：{name}"
 msgid "Could not place these automatically; add them by hand, following the example config: "
 msgstr "无法自动放置，请对照示例配置手动加入："
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "Could not read the source circuit-breaker state."
 msgstr "没能读来源熔断状态。"
 
-#: cnequity/serve/ops/plan.py
+#: cnequity/ops/plan.py
 #, python-brace-format
 msgid "Could not start the backfill preview ({exc})."
 msgstr "无法启动回填预览（{exc}）。"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 #, python-brace-format
 msgid "Could not start the task process ({exc})."
 msgstr "无法启动任务进程（{exc}）。"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "Could not verify the task process identity, so it did not start."
 msgstr "无法核对任务进程身份，没有开始执行。"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 msgid "Could not verify the task process identity, so no stop signal was sent. Check the system task manager."
 msgstr "无法核对任务进程身份，未发送终止信号。请检查系统任务管理器。"
 
@@ -2117,7 +2117,7 @@ msgstr "覆盖窗口终点；--bars 默认上一个完整交易日，--derivativ
 msgid "Create NAME as an immutable add/replace/delete package."
 msgstr "把 NAME 创建成一个不可变的 增加/替换/删除 包。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Create data backup"
 msgstr "创建数据备份"
 
@@ -2172,7 +2172,7 @@ msgstr "大商所官网（逐合约日行情，dce_route = official）"
 msgid "Daily availability probes of public A-share data sources: EastMoney, TDX, Sina, CNINFO, THS, baostock and the exchanges' official APIs, from mainland and overseas egress."
 msgstr "A 股公开数据源每日可用性探测：东财、通达信、新浪、巨潮、同花顺、baostock、交易所官方接口，分大陆 / 海外两个出口视角。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Daily bar fallback. When off, Sina is no longer used to fill daily bars."
 msgstr "日线兜底。关掉后不再用新浪补日线。"
 
@@ -2185,7 +2185,7 @@ msgstr "日线 run {value}：status={value2} rows_written≈{value3}"
 msgid "Daily group runs"
 msgstr "日更组运行"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Daily update"
 msgstr "日更"
 
@@ -2194,7 +2194,7 @@ msgstr "日更"
 msgid "Daily update after {at} Beijing time, then `cne run maintain`"
 msgstr "北京时间 {at} 之后日更，然后 `cne run maintain`"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Daily update coverage"
 msgstr "日更覆盖"
 
@@ -2217,7 +2217,7 @@ msgstr "面板：    {primary}/{suffix}"
 msgid "Dashboard: {url}"
 msgstr "面板：    {url}"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 #, python-brace-format
 msgid ""
 "Data backup: {value}\n"
@@ -2237,11 +2237,11 @@ msgstr "数据目录：{root}"
 msgid "Data source"
 msgstr "数据源"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Data sources"
 msgstr "数据源"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Dataset"
 msgstr "数据集"
 
@@ -2271,7 +2271,7 @@ msgstr "数据集 {dataset!r} 没有统计行"
 msgid "Datasets lagging as of {value}: {value2}"
 msgstr "截至 {value} 落后的数据集：{value2}"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Datasets to back up"
 msgstr "备份数据集"
 
@@ -2279,11 +2279,11 @@ msgstr "备份数据集"
 msgid "Deep history and sector quotes depend on this endpoint; the configured interval is client-side protection, not the source's quota."
 msgstr "深历史与板块行情依赖此端点；配置间隔是客户端保护值，不是源方配额。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Defaults to today, including weekends and holidays."
 msgstr "默认今天，含周末与节假日。"
 
-#: cnequity/cli/ths_official_cmds.py cnequity/serve/ops/catalog.py
+#: cnequity/cli/ths_official_cmds.py cnequity/ops/catalog.py
 msgid "Defaults to today."
 msgstr "默认今天。"
 
@@ -2338,7 +2338,7 @@ msgstr "demo 窗口：{value} → {value2}（目标 {window_days} 个交易日�
 msgid "Dependencies"
 msgstr "依赖"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Depth"
 msgstr "深度"
 
@@ -2398,7 +2398,7 @@ msgstr ""
 "`minute_bars_15m`、`minute_bars_30m`、`minute_bars_60m` 默认不计算，只在这里手动派生：\n"
 "某只股票某天有 1m 就用 1m，否则用 5m。不给窗口时只重算还没算过、或分钟线输入已更新的交易日。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Derived"
 msgstr "派生"
 
@@ -2411,11 +2411,11 @@ msgstr "已派生 {name}：{rows} 行"
 msgid "Deriving hfq adjustment factors for the demo symbols from Sina…"
 msgstr "正在用 Sina 为 demo 标的派生 hfq 复权因子…"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Desktop notification on problems (macOS)"
 msgstr "有问题时弹出桌面通知（macOS）"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Did not pass"
 msgstr "未通过"
 
@@ -2441,7 +2441,7 @@ msgstr "不在 [job.stale].run_at 之后重试缺失的快照。"
 msgid "Do nothing unless collection has run since the stats were built. Safe to put on a timer."
 msgstr "除非统计建好之后又跑过采集，否则什么都不做。可以安全地挂定时器。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Does not change what initialization downloads. market: quotes, fundamentals: fundamentals, universe: historical ST."
 msgstr "不改变初始化下载的内容。market 行情，fundamentals 基本面，universe 历史 ST。"
 
@@ -2482,7 +2482,7 @@ msgstr "删除落在证券上市窗口之外的 trading_status 行"
 msgid "Drop zero-volume daily bars dated after a security's delisting"
 msgstr "删除退市日之后的零成交量日线"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "EastMoney"
 msgstr "东财"
 
@@ -2510,15 +2510,15 @@ msgstr "东财 push2（实时快照 / clist）"
 msgid "EastMoney push2his (historical K-lines)"
 msgstr "东财 push2his（历史 K 线）"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Enable / update"
 msgstr "启用 / 更新"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Enabling the closing catch-up needs the daily update enabled too."
 msgstr "启用收尾补抓需要同时启用日更。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "End"
 msgstr "终点"
 
@@ -2546,7 +2546,7 @@ msgstr "按所选范围和新鲜度执行门禁；默认只报告。"
 msgid "Environment"
 msgstr "环境"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Environment health check"
 msgstr "环境体检"
 
@@ -2558,7 +2558,7 @@ msgstr "环境、依赖与配置正常。"
 msgid "Error: "
 msgstr "错误："
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Errored"
 msgstr "执行出错"
 
@@ -2571,7 +2571,7 @@ msgstr "评估历史源探测记录，并输出事件载荷。"
 msgid "Event group {group} every {minutes} minutes"
 msgstr "事件组 {group}，每 {minutes} 分钟"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Event groups"
 msgstr "事件组"
 
@@ -2603,7 +2603,7 @@ msgstr "每个被探测的端点都可用，没有需要替换的源。"
 msgid "Evidence window {window}. {detail}"
 msgstr "证据窗口 {window}。{detail}"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Excluding BSE"
 msgstr "不含北交所"
 
@@ -2615,7 +2615,7 @@ msgstr "核心数据集没有独立备份时退出 1。"
 msgid "Exit 1 when a critical source misses its SLO."
 msgstr "关键源的 SLO 未达标时退出 1。"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 #, python-brace-format
 msgid "Exit code {exit_code}."
 msgstr "退出码 {exit_code}。"
@@ -2640,7 +2640,7 @@ msgstr "导出已审核的、与当前公司行为修订版本绑定的持有人
 msgid "Extended"
 msgstr "扩展"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Failed"
 msgstr "失败"
 
@@ -2649,7 +2649,7 @@ msgstr "失败"
 msgid "Failed to load config: {path} ({name})"
 msgstr "配置加载失败：{path}（{name}）"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "Failed."
 msgstr "执行失败。"
 
@@ -2669,7 +2669,7 @@ msgstr "湖里没有的数据就按需向源头取，并且不落盘。只支持
 msgid "Fetch from Baostock and publish a new version; by default only prints the plan offline."
 msgstr "向 Baostock 补取并发布新版本；默认只离线输出计划。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Fetch fund quotes from the security master independently of research eligibility; unknown listing dates are reported separately. Off by default."
 msgstr "按证券目录采集基金行情，研究资格不影响采集；未知上市日期单独报告。默认关闭。"
 
@@ -2694,7 +2694,7 @@ msgstr "拉取完整标的清单，然后只保留 {value} 只 demo 标的…"
 msgid "Files the exchange publishes itself; a non-trading day returns a 302 rather than an empty file, so the probe walks back to the latest trading day."
 msgstr "交易所自己发布的文件；休市日返回 302 而不是空文件，探针会往前找最近的交易日。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid ""
 "Fill Beijing daily_bars turnover for the latest session from the BSE quote board.\n"
 "\n"
@@ -2706,7 +2706,7 @@ msgstr ""
 "用于日更时行情板不可用的情况。行情板是当前快照，\n"
 "所以只有最近一个交易日符合条件；不重抓新浪。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid ""
 "Fill daily_bars turnover of Sina-filled rows from TDX, after checking OHLC and volume.\n"
 "\n"
@@ -2722,11 +2722,11 @@ msgstr ""
 msgid "Fill fund listing dates from the exchanges' official lists"
 msgstr "按交易所官方列表补基金上市日"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "Fill historical dividends and ex-rights of delisted symbols from Baostock or THS."
 msgstr "从 Baostock 或同花顺补已退市证券的历史分红除权。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "Fill in {value}."
 msgstr "请填写{value}。"
@@ -2804,7 +2804,7 @@ msgstr ""
 "`Unknown thscode` 表示对端没有这只证券，而传输错误表示请求根本没送到。\n"
 "第二类请用 `--symbols` 单独重跑，不要整个市场再来一遍。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid ""
 "Fill valuation_metrics for an EastMoney snapshot outage from the datacenter report.\n"
 "\n"
@@ -2832,7 +2832,7 @@ msgstr "先完成首次配置，再修改取数设置。"
 msgid "Finish first-time setup before setting up scheduled tasks."
 msgstr "先完成首次配置，再设置定时任务。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Finish first-time setup first."
 msgstr "先完成首次配置。"
 
@@ -2844,11 +2844,11 @@ msgstr "先完成首次配置。"
 msgid "First confirm that external queries, services and schedules have stopped."
 msgstr "请先确认外部查询、服务和调度已停止。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "First confirm the scope the scheduled tasks will run."
 msgstr "请先确认定时任务的执行范围。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "First confirm these settings will be used for later fetches."
 msgstr "请先确认这些设置会用于之后的取数。"
 
@@ -2913,7 +2913,7 @@ msgstr ""
 "manifest 会记下每个 Parquet 文件的大小和 SHA-256，连同数据集状态、契约指纹和 run 血缘 ——\n"
 "足够让后来的人证明某个已发布的结果用的正是这些字节。命令会打印 manifest 路径。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Freshness"
 msgstr "新鲜度"
 
@@ -2921,11 +2921,11 @@ msgstr "新鲜度"
 msgid "Freshness gate"
 msgstr "新鲜度门禁"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Full lake audit"
 msgstr "全湖审计"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Full rewrite"
 msgstr "全量重写"
 
@@ -2933,11 +2933,11 @@ msgstr "全量重写"
 msgid "Fundamentals"
 msgstr "基本面"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Futures and options"
 msgstr "期货与期权"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Futures minute bars"
 msgstr "期货分钟线"
 
@@ -2945,11 +2945,11 @@ msgstr "期货分钟线"
 msgid "GFEX website (per-contract daily quotes)"
 msgstr "广期所官网（逐合约日行情）"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Generate the config before changing fetch settings."
 msgstr "先生成配置，再修改取数设置。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Generate the config before setting up scheduled tasks."
 msgstr "先生成配置，再设置定时任务。"
 
@@ -3020,7 +3020,7 @@ msgstr "历史 ST 证据。当前交易状态和窗口内退市日线已经在�
 msgid "Historical ST not covered yet: {reason}. Current trading status cannot stand in for it. {extra}"
 msgstr "历史 ST 尚未覆盖：{reason}。当前交易状态不能代替它。{extra}"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Historical quotes fallback."
 msgstr "历史行情兜底。"
 
@@ -3033,7 +3033,7 @@ msgstr "--full 检查的历史研究 universe。"
 msgid "Historical sample: {historical}"
 msgstr "历史抽样：{historical}"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "History start"
 msgstr "历史起点"
 
@@ -3050,27 +3050,27 @@ msgstr "建多大。demo = 用真实数据源抓几只票，sample = 同样的�
 msgid "How to read this table"
 msgstr "怎么读这张表"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "I confirm a full rebuild that rewrites partitions."
 msgstr "我确认全量重算并重写分区。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "I confirm saving these settings. Scheduled daily updates, closing catch-up and later commands will use the new values."
 msgstr "我确认保存这些设置。定时日更、收尾补抓和之后的命令都会按新值执行。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "I confirm starting this operation now."
 msgstr "我确认现在启动这一次操作。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "I confirm the backfill for the previewed range. No instrument limit or more than a year means heavy data source requests."
 msgstr "我确认按预览范围回填；不限标的或超过一年会大量请求数据源。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "I confirm the restore target is outside the current data lake and understand only the selected backup's contents are restored."
 msgstr "我确认恢复目标在当前数据湖之外，并了解仅恢复所选备份的内容。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "I understand initialization fetches from data sources at the selected depth and may take hours."
 msgstr "我知道初始化会按所选深度请求数据源，可能持续数小时。"
 
@@ -3135,7 +3135,7 @@ msgstr "取数截面（{value}）"
 msgid "Ingest validation passed: %s %s rows (%s)"
 msgstr "采集校验通过：%s %s 行 (%s)"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Init depth can only be quick or full."
 msgstr "初始化深度只能是 quick 或 full。"
 
@@ -3197,11 +3197,11 @@ msgstr "初始化范围：当前交易状态、日线停牌派生；窗口内退
 msgid "Init: recovering %d delisted symbols before daily bars"
 msgstr "初始化：抓日线前先恢复 %d 只退市证券"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Initialize"
 msgstr "初始化"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Initialize data lake"
 msgstr "初始化数据湖"
 
@@ -3276,7 +3276,7 @@ msgstr ""
 msgid "Inspect historical decision-data evidence and unresolved gaps."
 msgstr "查看历史决策数据的证据和未解决的缺口。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Inspection"
 msgstr "巡检"
 
@@ -3320,7 +3320,7 @@ msgstr "已安装定时日更和收尾补抓，调度组：{groups}。{SNAPSHOT_
 msgid "Installed. `cne schedule status` shows when it last checked."
 msgstr "已安装。`cne schedule status` 显示最近一次检查时间。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Instruments"
 msgstr "标的"
 
@@ -3328,7 +3328,7 @@ msgstr "标的"
 msgid "Instruments (demo symbol scope)"
 msgstr "Instruments（demo 标的范围）"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Interrupted"
 msgstr "已中断"
 
@@ -3337,15 +3337,15 @@ msgstr "已中断"
 msgid "Interrupted: letting %d %s batch(es) already in flight finish so nothing is half-written; this can take up to one batch's time."
 msgstr "已中断：正在等 %d 个已发出的 %s 批次完成，避免写入一半；最多需要一个批次的时间。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Invalid backup directory path."
 msgstr "备份目录路径无效。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Invalid backup name."
 msgstr "备份名称无效。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Invalid directory path."
 msgstr "目录路径无效。"
 
@@ -3354,7 +3354,7 @@ msgstr "目录路径无效。"
 msgid "Invalid futures contract {symbol}: {exc}"
 msgstr "非法期货合约 {symbol}: {exc}"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Invalid parameter format."
 msgstr "参数格式无效。"
 
@@ -3362,11 +3362,11 @@ msgstr "参数格式无效。"
 msgid "Invalid restore plan."
 msgstr "无效的恢复计划。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Invalid run id."
 msgstr "run id 无效。"
 
-#: cnequity/serve/ops/scheduled.py
+#: cnequity/ops/scheduled.py
 msgid "Invalid scheduled task type."
 msgstr "定时任务类型无效。"
 
@@ -3428,15 +3428,15 @@ msgstr "数据湖：  {data_root}"
 msgid "Last trading day: {value}"
 msgstr "最后交易日：{value}"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Leave empty for all enabled groups."
 msgstr "不选就是全部已启用的组。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Leave empty to run all in config order."
 msgstr "不选就按配置顺序跑全部。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Leave empty to run all schedule groups and event streams. If selected, only the matching schedule groups run."
 msgstr "不选则跑全部调度组和事件流。选择后只跑对应调度组。"
 
@@ -3455,7 +3455,7 @@ msgstr "还装着旧的 scripts/scheduler 任务：{names}。请卸载（scripts
 msgid "Legacy scripts/scheduler jobs are installed ({names}); remove them first (scripts/scheduler/uninstall_scheduler.sh) or the lake is updated twice."
 msgstr "已装有旧的 scripts/scheduler 任务（{names}）；请先卸载（scripts/scheduler/uninstall_scheduler.sh），否则同一个湖会更新两遍。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Limit to schedule groups"
 msgstr "限定调度组"
 
@@ -3467,7 +3467,7 @@ msgstr "离线列出探测源名称，不需要配置。"
 msgid "List profile registry records (machine-readable)."
 msgstr "列出 profile 注册表记录（机器可读）。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "List the steps and schedule groups this version would add to the config. Writes no files."
 msgstr "列出当前版本要补进配置的 step 和调度组，不写文件。"
 
@@ -3580,7 +3580,7 @@ msgstr "元数据备份"
 msgid "Metadata backup failed: {exc}"
 msgstr "元数据备份失败：{exc}"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Minute bars"
 msgstr "分钟线"
 
@@ -3629,7 +3629,7 @@ msgstr "需要 curated 里的 trading_calendar"
 msgid "Network preflight (at most {PREFLIGHT_BUDGET_SECONDS:g} seconds):"
 msgstr "网络预检（最多 {PREFLIGHT_BUDGET_SECONDS:g} 秒）："
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "New backup name"
 msgstr "新备份名称"
 
@@ -3645,7 +3645,7 @@ msgstr "最新发布列表里没有 PMI"
 msgid "No bars found for a known symbol"
 msgstr "已知标的查不到任何 bar"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "No changes to save."
 msgstr "没有需要保存的改动。"
 
@@ -3668,11 +3668,11 @@ msgstr "未找到配置，已按默认值生成 {config_path}（data.root = {dat
 msgid "No config loaded — only the environment was checked"
 msgstr "未加载配置——只做了环境体检"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "No config, so the schedule lock cannot be taken."
 msgstr "没有配置，不能获取调度锁。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "No datasets can be backfilled from the dashboard."
 msgstr "没有可从面板回填的数据集。"
 
@@ -3707,15 +3707,15 @@ msgstr "最近两个工作日都没有取到期货日行情文件"
 msgid "No probe report for vantage {vantage!r} under {path}. Run `cne sources probe` first, or add --probe to measure now."
 msgstr "{path} 下没有 vantage {vantage!r} 的探测报告。先跑 `cne sources probe`，或者加 --probe 现在实测。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "No published data yet."
 msgstr "还没有已发布的数据。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "No run records yet."
 msgstr "还没有运行记录。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "No run {value}."
 msgstr "没有 run {value}。"
@@ -3728,7 +3728,7 @@ msgstr "还没有任何 run。"
 msgid "No stats tables: scanned curated directly; adding --dataset or --by-source generates the stats automatically"
 msgstr "没有统计表 —— 已直接扫 curated；加 --dataset 或 --by-source 会自动生成统计表"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 msgid "No such task."
 msgstr "没有这个任务。"
 
@@ -3744,7 +3744,7 @@ msgstr "调查统计司索引页里找不到社会融资条目"
 msgid "No web confirmation matches this check."
 msgstr "缺少与本次检查匹配的网页确认。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "No {value} to choose from."
 msgstr "没有可选的{value}。"
@@ -3758,7 +3758,7 @@ msgstr "还没有这些数据：{datasets}"
 msgid "Not configured yet"
 msgstr "尚未配置"
 
-#: cnequity/serve/app.py cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py cnequity/serve/app.py
 msgid "Not configured yet."
 msgstr "尚未配置。"
 
@@ -3819,7 +3819,7 @@ msgstr "没有欠下的迁移：这个湖由 {version} 建立，或全部迁移�
 msgid "Nothing to execute this time."
 msgstr "本次没有可执行的对象。"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "Nothing to run, or the day is not a trading day."
 msgstr "没有要跑的内容，或当天不是交易日。"
 
@@ -3845,31 +3845,31 @@ msgstr "其中漏一天就补不回的数据集：{datasets}。"
 msgid "Of these, still unfilled after 3 or more repair attempts: {detail}. No configured source provides them; check `cne sources probe`, or accept the gap."
 msgstr "其中修复尝试 3 次以上仍未补上的：{detail} —— 没有任何已配置的源提供它们；查一下 `cne sources probe`，或者接受这个缺口。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Off"
 msgstr "关"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Off by default. A licensed API; the key stays in the config file. When off, no request is sent."
 msgstr "默认关闭。需授权的接口，密钥仍留在配置文件里。关闭后不发请求。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Off by default. Needs your own token; the token stays in the config file. When off, no Tushare request is sent, and its datasets are not listed as stale."
 msgstr "默认关闭。需要你自己的令牌，令牌仍留在配置文件里。关闭后不向 Tushare 发请求，它的数据集也不算落后。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Off by default. When on, the daily update fetches futures and options."
 msgstr "默认关闭。打开后日更会抓取期货和期权。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Off by default. When on, the daily update fetches futures minute bars."
 msgstr "默认关闭。打开后日更会抓取期货分钟线。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Off by default. When on, the daily update keeps fetching for the current scope."
 msgstr "默认关闭。打开后日更会按当前范围持续抓取。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Offline check of config, dependencies and silent failure points. No network access."
 msgstr "离线检查配置、依赖和会悄悄坏掉的地方。不访问网络。"
 
@@ -3877,7 +3877,7 @@ msgstr "离线检查配置、依赖和会悄悄坏掉的地方。不访问网络
 msgid "Offline sample: the prices are synthetic, not market data."
 msgstr "离线样例：生成的是合成价格，不是市场数据。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "On"
 msgstr "开"
 
@@ -3901,7 +3901,11 @@ msgstr "一次请求同时覆盖上期所与上期能源的品种；休市日返
 msgid "Only empty,stale,interior,shallow are supported"
 msgstr "只支持 empty,stale,interior,shallow"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/cli/setup_cmds.py
+msgid "Only list the steps and schedule groups to add; writes no files."
+msgstr "只列出要加的步骤和调度组，不写任何文件。"
+
+#: cnequity/ops/catalog.py
 msgid "Only the latest unfinished init can be resumed."
 msgstr "只能续跑最近一次没完成的初始化。"
 
@@ -3909,7 +3913,7 @@ msgstr "只能续跑最近一次没完成的初始化。"
 msgid "Only the same unfinished deletion record can be reviewed again."
 msgstr "只能重新审核同一未完成删除记录。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Only used during first-time setup."
 msgstr "只在首次配置时使用。"
 
@@ -3980,7 +3984,7 @@ msgstr ""
 msgid "Optional"
 msgstr "可选"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Optional collection"
 msgstr "可选采集"
 
@@ -4029,9 +4033,13 @@ msgstr "输出机器可读的 JSON。"
 msgid "Outstanding keys: {dataset}"
 msgstr "欠账重试：{dataset}"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Overrides the depth above when set."
 msgstr "填写后覆盖上面的深度。"
+
+#: cnequity/cli/setup_cmds.py
+msgid "Overwrite an existing config file."
+msgstr "覆盖已有的配置文件。"
 
 #: cnequity/diagnostics/source_health.py
 msgid "PBOC Survey and Statistics Department (total social financing)"
@@ -4050,7 +4058,7 @@ msgstr "页面生成于 {generated} · 数据由 <code>cne sources probe</code> 
 msgid "Paginated, and an empty page looks just like the last page — this project reconciles by pages/count."
 msgstr "分页返回，空页与结束页长得一样——本项目按 pages/count 对账。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Paid sources"
 msgstr "付费数据源"
 
@@ -4067,11 +4075,11 @@ msgstr "合并分区文件"
 msgid "Partitioned by {partition_granularity}: pick a period to get back all its rows."
 msgstr "按 {partition_granularity} 分区：选一个周期取回它整段的行。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Partly delivered"
 msgstr "部分交付"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "Partly delivered; gaps or degradation remain."
 msgstr "已交付一部分，仍有缺口或降级。"
 
@@ -4091,11 +4099,11 @@ msgstr "配置文件路径。"
 msgid "Path to the contract JSON (can also be passed as an argument)."
 msgstr "契约 JSON 路径（也可以直接作为参数传）。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Pause"
 msgstr "暂停"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Pause push2"
 msgstr "暂停 push2"
 
@@ -4135,7 +4143,7 @@ msgstr "在 {data_root} 准备离线样例湖"
 msgid "Preview `logs/cne-*.log` older than this many days, without deleting; 0 skips."
 msgstr "预览超过这么多天的 `logs/cne-*.log`，不删除；0 表示跳过。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Preview config upgrade"
 msgstr "预览配置升级"
 
@@ -4170,7 +4178,7 @@ msgstr "预览超过这么多天的 meta/source_snapshots run_id 目录（每个
 msgid "Preview only. Run `cne migrate --apply` to apply and record them."
 msgstr "仅预览。运行 `cne migrate --apply` 执行并记录。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/backfill_cmds.py cnequity/cli/repair_cmds.py
 msgid "Preview only; add --apply to run it."
 msgstr "仅预览；加 --apply 才运行。"
 
@@ -4206,13 +4214,21 @@ msgstr ""
 msgid "Prices"
 msgstr "行情"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Primary daily bar source. When off, daily bars are no longer fetched from TDX."
 msgstr "日线主源。关掉后日线不再向通达信取数。"
+
+#: cnequity/cli/setup_cmds.py
+msgid "Print every setting with its built-in default and explanation."
+msgstr "列出每一项设置及其内置默认值和说明。"
 
 #: cnequity/cli/backfill_cmds.py
 msgid "Print only sources, scope and fetch method, plus a request budget for derivatives. Fetches no data and does not write the lake."
 msgstr "只输出来源、范围和抓取方式；衍生品另给请求预算。不取数、不写湖。"
+
+#: cnequity/cli/setup_cmds.py
+msgid "Print the effective configuration and mark what the file sets."
+msgstr "打印生效的配置，并标出哪些是配置文件里设置的。"
 
 #: cnequity/cli/setup_cmds.py
 msgid "Print the full machine-readable result at the end instead of the summary; the full result is always saved to the log directory too."
@@ -4226,7 +4242,7 @@ msgstr "只打印预览，不询问是否删除。"
 msgid "Print the result as JSON."
 msgstr "以 JSON 打印结果。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Probe data sources"
 msgstr "探测数据源"
 
@@ -4300,7 +4316,7 @@ msgstr "核验后发布新版本；默认只输出计划。"
 msgid "Publish only this run; by default handles all runs pending publication."
 msgstr "只发布这一次 run；默认处理所有待发布的 run。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Publish staging"
 msgstr "发布 staging"
 
@@ -4312,7 +4328,7 @@ msgstr "发布官方 IPO 日历证实的股票上市日期；保留旧版本。"
 msgid "Publish supported factor corrections and retain old revisions; unresolved events remain advisory."
 msgstr "应用可确定的因子修正并保留旧版本；未解决项只作提示。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Publish the finished data this run left in staging to the lake."
 msgstr "把这次 run 留在 staging 里、已经结束的数据发布到湖里。"
 
@@ -4342,7 +4358,7 @@ msgstr "demo 写完之后查询失败：{exc}"
 msgid "Querying the sample through the public API"
 msgstr "通过公开 API 查询样例"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Re-fetch only datasets still behind the last trading day. Optionally limit to schedule groups or to snapshots."
 msgstr "只重抓仍然落后于最后交易日的数据集。可限定调度组，或只重抓快照。"
 
@@ -4362,7 +4378,7 @@ msgstr ""
 "在信任一份不是你刚刚创建的快照之前先跑它 ——\n"
 "位腐烂和被截断的拷贝，在哈希对不上之前长得一模一样。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Re-run a specific day instead of the incremental window."
 msgstr "补跑某一天，不走增量窗口。"
 
@@ -4431,7 +4447,7 @@ msgstr "只读 DuckDB SQL；每个数据集是一个视图，名称同 `cne stat
 msgid "Read-only acceptance check of a derivatives research window; requires --dataset, --start, --end."
 msgstr "只读验收衍生品研究窗口；需 --dataset、--start、--end。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Read-only check of lake coverage. Exit code 1 means findings, not a command error."
 msgstr "只读校验湖的覆盖。退出码 1 表示有发现，不是命令出错。"
 
@@ -4439,19 +4455,19 @@ msgstr "只读校验湖的覆盖。退出码 1 表示有发现，不是命令出
 msgid "Read-only completeness of industry_members by classification system, level and snapshot date; --start/--end narrow it."
 msgstr "只读检查 industry_members 按分类体系、层级、快照日的完整性；可用 --start/--end 缩小范围。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Rebuild derived data"
 msgstr "重算派生数据"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Rebuild metrics table"
 msgstr "重建度量表"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Recompute backup file digests and check for missing or corrupt files and manifest mismatches."
 msgstr "重新计算备份文件摘要，检查缺失、损坏与清单一致性。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Recompute from published data. Full mode rewrites partitions. 15 / 30 / 60-minute bars are skipped by default; select them to write them to the lake here."
 msgstr "从已发布的数据重算。全量会重写分区。15 / 30 / 60 分钟线默认不计算，选中后在这里入湖。"
 
@@ -4483,7 +4499,7 @@ msgstr ""
 "是否过期按 run id 判断，不看时钟。只有采集会改变这个湖，\n"
 "所以在最后一次 run 之后建的统计就是新的，无论看上去多旧。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Recompute row counts, sizes and source distribution. No fetching."
 msgstr "重算行数、体积和来源分布。不取数。"
 
@@ -4516,7 +4532,7 @@ msgstr "抓取前先刷新按需缓存（需要同时给 --dataset 和 --symbol�
 msgid "Register external payload storage; retains local sidecars and moves/deletes no files."
 msgstr "登记外置原文存储；本地保留来源记录，不移动或删除文件。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Rejected"
 msgstr "已拒绝"
 
@@ -4549,7 +4565,7 @@ msgstr "已移除：标记版本并等待观察期。"
 msgid "Repair Shanghai/Shenzhen exchange-traded funds with zero volume but positive turnover; must agree with official daily prices and amounts."
 msgstr "修复零成交量、正成交额的沪深场内基金；须与官方日线价格及金额一致。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid ""
 "Repair corporate_actions payment dates: reviewed issuer announcements first, then Baostock.\n"
 "\n"
@@ -4581,7 +4597,7 @@ msgstr "重新解析已有原文报告；内容未变的行保留原始观测时
 msgid "Replace COMEX gold bars stored before their session closed"
 msgstr "替换在交易时段结束前存入的 COMEX 黄金日线"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid ""
 "Replace Shanghai/Shenzhen daily_bars rows whose turnover is missing, zero or misaligned.\n"
 "\n"
@@ -4630,6 +4646,10 @@ msgstr "回放已核验的深证成指或科创50历史公告；每次生效日�
 msgid "Report period: Q2 is half-year and Q4 annual; income and cash flow use year-to-date figures only."
 msgstr "报告期；Q2 为半年报，Q4 为年报，利润和现金流只恢复年初至期末累计数。"
 
+#: cnequity/cli/setup_cmds.py
+msgid "Report what a full config lacks against the built-in defaults."
+msgstr "报告完整配置相对内置默认值缺了什么。"
+
 #: cnequity/cli/quality_cmds.py
 msgid "Report window, gaps and next steps per research pack. Repeatable. When given, missing data or uncovered historical ST worsens the exit code."
 msgstr "按研究包给出窗口、缺口和下一步。可重复。指定后，缺数据或历史 ST 未覆盖会使退出码变差。"
@@ -4639,7 +4659,7 @@ msgstr "按研究包给出窗口、缺口和下一步。可重复。指定后，
 msgid "Reported, not failing: {names}"
 msgstr "已报告、不判失败：{names}"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid ""
 "Request historical ex-rights rows from EastMoney for the given ex-dates, day by day.\n"
 "\n"
@@ -4676,7 +4696,7 @@ msgstr "research 模式把窗口从 {days} 个交易日扩到 {window_days} 个�
 msgid "Research pack: market (market data), fundamentals, universe (historical ST). Does not change what this init downloads. Decides which schedule groups stay updated afterward and the verdict of `cne check --pack`. Repeatable. If omitted, the saved selection is reused; the first time it is market."
 msgstr "研究包：market 行情、fundamentals 基本面、universe 历史 ST。不改变这次初始化下载的内容。决定结束后要保持更新的调度组，以及 `cne check --pack` 的结论。可重复。不写则沿用已保存的选择，第一次是 market。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Research packs"
 msgstr "研究包"
 
@@ -4706,11 +4726,11 @@ msgstr ""
 "在把任何东西指向它之前，先创建指向 TARGET 的独立配置，再用\n"
 "`cne status --datasets --config PATH` 检查恢复结果。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Restore data backup"
 msgstr "恢复数据备份"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Restore directory (absolute path)"
 msgstr "恢复目录（绝对路径）"
 
@@ -4722,7 +4742,7 @@ msgstr "把 --stale-only 限定在这些 daily 调度组内（逗号或空格分
 msgid "Resume from the previous next_cursor (YEAR:SYMBOL); retry failures without a cursor."
 msgstr "接续上一批 next_cursor（YEAR:SYMBOL）；失败项可不带游标重试。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Resume initialization"
 msgstr "继续初始化"
 
@@ -4735,7 +4755,7 @@ msgstr "续跑计划：保留成功批次，只处理失败/缺失阶段；剩�
 msgid "Resume the given init run_id (implies --resume)."
 msgstr "续跑指定的 init run_id（隐含 --resume）。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Resume the latest unfinished initialization, keeping batches that succeeded."
 msgstr "续跑最近一次没跑完的初始化，已成功的批次会保留。"
 
@@ -4752,11 +4772,11 @@ msgstr "续跑初始化 run %s"
 msgid "Retain a version or an existing cleanup resource; retention then never deletes it."
 msgstr "保留一个版本或已有的清理资源；自动清理不会再删除它。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Retry a run"
 msgstr "重试一次 run"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Retry failed daily-update groups"
 msgstr "重试失败的日更组"
 
@@ -4764,7 +4784,7 @@ msgstr "重试失败的日更组"
 msgid "Retry one run, or the latest failed run of each daily schedule group."
 msgstr "重试某一次 run，或每个 daily 调度组最近一次失败的 run。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Retry the failed batches in a run. Initialization runs resume as initialization."
 msgstr "重试指定 run 里失败的批次。初始化 run 会按初始化续跑。"
 
@@ -4772,7 +4792,7 @@ msgstr "重试指定 run 里失败的批次。初始化 run 会按初始化续�
 msgid "Retry the given run."
 msgstr "重试指定的一次 run。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Retry the latest failed run of each daily-update schedule group once."
 msgstr "每个日更调度组最近一次失败的 run 各重试一次。"
 
@@ -4797,11 +4817,11 @@ msgstr "返回了真实数据。"
 msgid "Reuse collection evidence verified within 12 hours; actively probe only endpoints lacking fresh evidence."
 msgstr "复用 12 小时内已校验的采集证据，只主动探测缺少新证据的端点。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Reuses collection evidence from the last 12 hours and probes only untouched sources. Contacts third-party hosts."
 msgstr "复用 12 小时内的采集证据，只补探没碰过的来源。会请求第三方主机。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "Review price conflicts against historical exchange prices, TDX and EastMoney; replace whole bars only with agreeing evidence."
 msgstr "用交易所历史价格、通达信和东财复查价格冲突；只有证据一致时才整行替换。"
 
@@ -4836,6 +4856,10 @@ msgstr ""
 "（文件、分区、体积）；--apply 在湖锁下改写并整体换上数据集根目录。\n"
 "读取不受目录跨度影响，所以这只回收空间和文件打开次数，不修正确性：\n"
 "粒度变更留下旧布局时，审计会指向这里。"
+
+#: cnequity/cli/setup_cmds.py
+msgid "Rewrite a full config to extend the built-in defaults, keeping only the settings that differ; lists every setting whose behaviour would change."
+msgstr "把完整配置改写为继承内置默认值，只保留不同的设置；列出行为会改变的每一项设置。"
 
 #: cnequity/storage/migrations.py
 msgid "Rewrite adj_factors history from one file per day into one file per month"
@@ -4885,15 +4909,15 @@ msgstr "跑 DuckDB SQL，或按需抓取单个数据集。"
 msgid "Run ID; repeat to merge evidence from these runs into one audit."
 msgstr "运行 ID；可重复指定，合并运行证据并审计一次。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Run a day's update"
 msgstr "跑一天的更新"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Run a full lake audit and save a snapshot."
 msgstr "跑一次全湖审计并写下快照。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Run a schedule group"
 msgstr "跑一个调度组"
 
@@ -4901,7 +4925,7 @@ msgstr "跑一个调度组"
 msgid "Run all schedule groups only, without the event streams. Kept for old schedules that run `cne run events` separately; `cne run daily` without arguments already includes all schedule groups and event streams."
 msgstr "只跑全部调度组，不含事件流。给已经单独调度 `cne run events` 的旧定时任务保留；不带参数的 `cne run daily` 已经包含全部调度组和事件流。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Run as catch-up"
 msgstr "按补跑语义"
 
@@ -4913,11 +4937,11 @@ msgstr "运行审计"
 msgid "Run backfill over fillable gaps, dataset by dataset from newest to oldest."
 msgstr "把能补的缺口跑一遍回填，按数据集从新到旧。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Run event streams"
 msgstr "跑事件流"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Run every daily-update schedule group in config order, then the event streams. Continues if a group fails."
 msgstr "按配置顺序跑全部日更调度组，再跑事件流。某组失败也继续。"
 
@@ -4929,11 +4953,11 @@ msgstr "运行证据（最近 20 个交易日）"
 msgid "Run id to show, or 'latest' (default). Includes stage results per dataset."
 msgstr "要看的 run id，或 'latest'（默认）。包含各数据集 stage 的结果。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/_shared.py
 msgid "Run it; without this only the plan is printed."
 msgstr "运行；不加只打印计划。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Run maintenance"
 msgstr "运行维护"
 
@@ -4962,7 +4986,7 @@ msgstr "只跑 [[job.daily.waves]] 核心骨架（旧版不带参数时的行为
 msgid "Run only the daily schedule groups for these research packs, without the event streams. If omitted, all schedule groups and event streams still run. Repeatable."
 msgstr "只跑这些研究包对应的日更调度组，不跑事件流。不写则仍跑全部调度组和事件流。可重复。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Run only the selected daily-update schedule group. Does not mark today as done, so the scheduled full run still happens."
 msgstr "只跑选定的日更调度组。不写“今天已跑过”的标记，定时全流程仍会执行。"
 
@@ -5049,16 +5073,16 @@ msgstr "运行 {run_id}（{job_name}）已成功，无需重试。"
 msgid "Run {run_id} ({job_name}): {status}"
 msgstr "运行 {run_id}（{job_name}）：{status}"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "Run {value} is still running."
 msgstr "run {value} 还在运行。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Running"
 msgstr "运行中"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 #, python-brace-format
 msgid "Running: {value}"
 msgstr "开始执行：{value}"
@@ -5083,7 +5107,7 @@ msgstr "深交所官方清单"
 msgid "Same as above."
 msgstr "同上。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Same-day BSE quotes. Not a historical source."
 msgstr "当日北交所行情。它不是历史源。"
 
@@ -5101,7 +5125,7 @@ msgstr "sample 湖：不对 {value} 个数据集判新鲜度 —— 这些行是
 msgid "Sample results"
 msgstr "结果样例"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Schedule group"
 msgstr "调度组"
 
@@ -5133,7 +5157,7 @@ msgstr "新鲜度门禁判失败的调度组（空格或逗号分隔）。默认
 msgid "Schedule groups: core, capital, signals, fundamentals, macro_risk, research, intraday, ticks"
 msgstr "调度组：core、capital、signals、fundamentals、macro_risk、research、intraday、ticks"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 #, python-brace-format
 msgid "Scheduled runs stay paused; the time settings were saved. {exc}"
 msgstr "定时执行保持暂停；时间设置已保存。{exc}"
@@ -5148,11 +5172,11 @@ msgstr "定时任务没有安装：{exc}"
 msgid "Scheduled update: {state} ({backend})"
 msgstr "定时更新：{state}（{backend}）"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Sector quotes. When off, THS public pages are no longer requested."
 msgstr "板块行情。关掉后不再请求同花顺公开页。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Securities in the daily update"
 msgstr "日更覆盖的证券"
 
@@ -5172,11 +5196,11 @@ msgstr "请选择 1 到 200 个 staging 运行。"
 msgid "Select a reviewed historical membership catalog."
 msgstr "选择已核验的历史成分目录。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Select at least one dataset to back up."
 msgstr "至少选择一个备份数据集。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Select valid event groups."
 msgstr "请选择有效的事件组。"
 
@@ -5187,6 +5211,10 @@ msgstr "舆情 / 轮动"
 #: cnequity/cli/ths_official_cmds.py
 msgid "Service start date."
 msgstr "服务起点。"
+
+#: cnequity/cli/setup_cmds.py
+msgid "Set [data].root (defaults to ./data/cnequity resolved to an absolute path)."
+msgstr "设置 [data].root（默认 ./data/cnequity，解析为绝对路径）。"
 
 #: cnequity/storage/migrations.py
 msgid "Settle Beijing whole-day and pre-listing daily-bar debts already proven"
@@ -5295,11 +5323,15 @@ msgstr "显示帮助并退出。"
 msgid "Show whether the timer is installed and active, what it runs, and when it last checked."
 msgstr "显示定时任务是否已安装并运行、运行什么，以及最近一次检查时间。"
 
+#: cnequity/cli/setup_cmds.py
+msgid "Show which config a command would use, why, and the lake it points to."
+msgstr "显示命令会用哪个配置、为什么用它，以及它指向的湖。"
+
 #: cnequity/cli/storage_cmds.py
 msgid "Show why one version is retained."
 msgstr "显示一个版本的保留依据。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Shows the source, range and fetch method first; fetching starts only after you confirm."
 msgstr "先给出来源、范围和抓取方式，确认后才取数。"
 
@@ -5311,7 +5343,7 @@ msgstr "新浪财经（日线 / 复权因子）"
 msgid "Sina adjustment factor check failed: "
 msgstr "Sina 复权因子校验失败："
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Sina daily bars"
 msgstr "新浪日线"
 
@@ -5327,7 +5359,7 @@ msgstr "新浪 COMEX 黄金日线"
 msgid "Single-file merge: only the current state, with no notion of fetching by date."
 msgstr "单文件 merge：只有当前状态，没有按日期取数的概念。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Skip event streams"
 msgstr "不跑事件流"
 
@@ -5335,7 +5367,7 @@ msgstr "不跑事件流"
 msgid "Skip the network preflight (TDX, exchanges, EastMoney) of up to 8 seconds before the run starts. Setting CNE_SKIP_PREFLIGHT=1 does the same."
 msgstr "跳过开跑前最多 8 秒的网络预检（通达信、交易所、东财）。也可设环境变量 CNE_SKIP_PREFLIGHT=1。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Skipped"
 msgstr "已跳过"
 
@@ -5354,11 +5386,11 @@ msgstr "{at} 之后快照备份"
 msgid "Snapshot catch-up after {at}"
 msgstr "{at} 之后补抓快照"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Snapshots only"
 msgstr "只重抓快照"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Some settings are not accepted by the page."
 msgstr "有页面不接受的设置。"
 
@@ -5379,7 +5411,7 @@ msgstr "源探针"
 msgid "Source to use for this backfill instead of the configured one, without editing the config. Supported for margin_trading (exchange or eastmoney), financial_statement_items (tdx_fin: fill only the items the lake lacks) and option_bars (tushare: SSE/SZSE ETF options)."
 msgstr "本次回填改用的来源，不修改配置。支持 margin_trading（exchange 或 eastmoney）、financial_statement_items（tdx_fin：只补湖中缺少的科目）和 option_bars（tushare：沪深 ETF 期权）。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Start"
 msgstr "起点"
 
@@ -5424,7 +5456,7 @@ msgstr ""
 "非回环地址必须带 ``--token``。远程默认不能发起取数，除非同时给 ``--allow-remote-ops``。\n"
 "回环地址同时接受 127.0.0.1 和 localhost。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Starting"
 msgstr "启动中"
 
@@ -5492,11 +5524,11 @@ msgstr "已停止。完成的批次会保留，本次运行记为中断；再运
 msgid "Stopped. Run `cne init` again to resume; finished batches are kept."
 msgstr "已停止。再次运行 `cne init` 即可续跑，完成的批次会保留。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "Stops future scheduled triggers; tasks already running continue."
 msgstr "停止后续定时触发，已在运行的任务继续执行。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Stops push2, push2his and push2delay; no requests are sent. datacenter and other EastMoney hosts continue. This is separate from the EastMoney master switch below."
 msgstr "停掉 push2、push2his 和 push2delay，请求不会发出。datacenter 和其他东财主机继续。这和下面的东财总闸是两个开关。"
 
@@ -5504,7 +5536,7 @@ msgstr "停掉 push2、push2his 和 push2delay，请求不会发出。datacenter
 msgid "Storage maintenance is running and reads are paused for now; refresh shortly."
 msgstr "存储维护正在执行，读取暂时暂停，请稍后刷新。"
 
-#: cnequity/serve/ops/preflight.py cnequity/serve/ops/runner.py
+#: cnequity/ops/preflight.py cnequity/ops/runner.py
 msgid "Storage maintenance is running; wait for it to finish before starting."
 msgstr "存储维护正在执行，请等它结束后再启动。"
 
@@ -5520,11 +5552,11 @@ msgstr "严格校验从这一天开始的研究窗口（需要 --full）。"
 msgid "Submissions are only accepted from the current operations page."
 msgstr "仅允许从当前运维网页提交。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Succeeded"
 msgstr "成功"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "Succeeded."
 msgstr "执行成功。"
 
@@ -5556,7 +5588,7 @@ msgstr ""
 msgid "Symbol to fetch on demand"
 msgstr "按需抓取的标的代码"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Symbols must be comma-separated codes."
 msgstr "标的须是逗号分隔的代码。"
 
@@ -5569,7 +5601,7 @@ msgstr "初始化期间阻止系统空闲睡眠（合盖或手动睡眠仍会生
 msgid "System scheduler: {backend}"
 msgstr "系统调度器：{backend}"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "TDX"
 msgstr "通达信"
 
@@ -5602,11 +5634,11 @@ msgstr "通达信证券列表"
 msgid "THS d.10jqka (K-lines)"
 msgstr "同花顺 d.10jqka（K 线）"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "THS official API"
 msgstr "同花顺官方接口"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "THS pages"
 msgstr "同花顺页面"
 
@@ -5618,11 +5650,11 @@ msgstr "同花顺 q.10jqka（板块目录页）"
 msgid "Target lake root; defaults to the currently active root in the config."
 msgstr "目标湖根目录；默认取配置里当前生效的根目录。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Targeted backfill"
 msgstr "定向补数"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "Terminated"
 msgstr "已终止"
 
@@ -5650,48 +5682,48 @@ msgstr "年度包有未验证成员或行；已保存有效切片与缺口"
 msgid "The annual package lacks daily-file fields; --archive-year and --accept-partial-fields are required"
 msgstr "年度包缺少日文件字段；必须指定 --archive-year 和 --accept-partial-fields"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The automatic backup settings are invalid; set them again."
 msgstr "自动备份设置无效，请重新设置。"
 
-#: cnequity/serve/ops/plan.py
+#: cnequity/ops/plan.py
 msgid "The backfill preview failed, so it did not start."
 msgstr "回填预览失败，没有启动。"
 
-#: cnequity/serve/ops/plan.py
+#: cnequity/ops/plan.py
 msgid "The backfill preview took over 60 seconds, so it did not start."
 msgstr "回填预览超过 60 秒，没有启动。"
 
-#: cnequity/serve/ops/backups.py cnequity/serve/ops/scheduler.py
+#: cnequity/ops/backups.py cnequity/ops/scheduler.py
 msgid "The backup directory is not a directory."
 msgstr "备份目录不是目录。"
 
-#: cnequity/serve/ops/catalog.py cnequity/serve/ops/routes.py
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/catalog.py cnequity/ops/scheduler.py
+#: cnequity/serve/ops/routes.py
 msgid "The backup directory must be an absolute path."
 msgstr "备份目录必须是绝对路径。"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid "The backup manifest cannot be read; preview again."
 msgstr "备份清单无法读取，请重新预览。"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid "The backup manifest changed after the preview; preview again."
 msgstr "备份清单在预览后发生变化，请重新预览。"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid "The backup manifest format is invalid."
 msgstr "备份清单格式无效。"
 
-#: cnequity/serve/ops/scheduled.py
+#: cnequity/ops/scheduled.py
 msgid "The backup scope changed before starting; wait for the next check."
 msgstr "备份范围在启动前已变化，请等待下一次检查。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "The backup storage directory is not a directory."
 msgstr "备份存放目录不是目录。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The backup time must be HH:MM, Beijing time."
 msgstr "备份时间必须为北京时间 HH:MM。"
 
@@ -5699,11 +5731,11 @@ msgstr "备份时间必须为北京时间 HH:MM。"
 msgid "The check did not pass, so nothing was deleted."
 msgstr "检查未通过，没有执行删除。"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "The check did not pass. These are findings, not a failed command."
 msgstr "检查未通过。这是发现的问题，不是命令执行失败。"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 #, python-brace-format
 msgid "The check exited with code {exit_code}."
 msgstr "检查退出码 {exit_code}。"
@@ -5712,7 +5744,7 @@ msgstr "检查退出码 {exit_code}。"
 msgid "The check has expired or was already confirmed; check again."
 msgstr "检查已失效或已经确认，请重新检查。"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "The check passed."
 msgstr "检查通过。"
 
@@ -5724,11 +5756,11 @@ msgstr "检查记录已过期，请重新检查。"
 msgid "The config file already exists."
 msgstr "配置文件已经存在。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The config file cannot be parsed; fix the TOML first."
 msgstr "配置文件无法解析，请先修正 TOML。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "The config file cannot be read right now, so a task would fail after starting. Fix the config file, then start it."
 msgstr "配置文件现在读不出来，任务启动后会失败。修好配置文件后再启动。"
 
@@ -5736,7 +5768,7 @@ msgstr "配置文件现在读不出来，任务启动后会失败。修好配置
 msgid "The config file gets copied, backed up and pasted into bug reports. An environment variable does not reach launchd/cron jobs, so a scheduled lake should read the credential from a file only you can read."
 msgstr "配置文件会被复制、备份，甚至贴进问题报告。环境变量到不了 launchd/cron 任务，所以定时运行的湖应从只有你能读的文件里读取凭证。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The config file has changed; preview again."
 msgstr "配置文件已经变了，请重新预览。"
 
@@ -5745,41 +5777,41 @@ msgstr "配置文件已经变了，请重新预览。"
 msgid "The config file holding a credential is readable by others: %s"
 msgstr "含凭证的配置文件其他用户可读：%s"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The config file is not UTF-8 and cannot be edited on the page."
 msgstr "配置文件不是 UTF-8，无法在页面上修改。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 #, python-brace-format
 msgid "The config file now points to another data directory {configured_data_root}, while the console still uses the lake it started with. Restart cne serve before starting tasks."
 msgstr "配置文件已指向另一个数据目录 {configured_data_root}，控制台仍在使用启动时的湖。重启 cne serve 后再启动任务。"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 msgid "The config has changed; preview again."
 msgstr "配置已经变了，请重新预览。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "The config has no such entry."
 msgstr "配置里没有这一项。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The config is being changed; try again shortly."
 msgstr "配置正在被修改，请稍后重试。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid "The config of {value} is not true or false."
 msgstr "{value} 的配置不是 true 或 false。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The config or system tasks have changed; preview again."
 msgstr "配置或系统任务已经变化，请重新预览。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The config structure does not support changing these switches automatically; use standard TOML tables."
 msgstr "配置结构不支持自动修改这些开关，请使用标准 TOML 表。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The config structure does not support changing times automatically; use standard TOML tables."
 msgstr "配置结构不支持自动修改时间，请使用标准 TOML 表。"
 
@@ -5787,15 +5819,15 @@ msgstr "配置结构不支持自动修改时间，请使用标准 TOML 表。"
 msgid "The config was written, but the service could not reload it; restart serve."
 msgstr "配置已写入，但服务没能重新加载，请重启 serve。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The configured data directory has changed; restart serve before changing fetch settings."
 msgstr "配置的数据目录已经变化，请重新启动 serve 后再改取数设置。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The configured data directory has changed; restart serve before setting up scheduled tasks."
 msgstr "配置的数据目录已经变化，请重新启动 serve 后设置定时任务。"
 
-#: cnequity/serve/ops/scheduled.py
+#: cnequity/ops/scheduled.py
 msgid "The configured scheduled event groups no longer exist; set them up again."
 msgstr "已配置的定时事件组不再存在，请重新设置。"
 
@@ -5803,11 +5835,11 @@ msgstr "已配置的定时事件组不再存在，请重新设置。"
 msgid "The confirmation has expired; check again."
 msgstr "确认已过期，请重新检查。"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 msgid "The confirmation is not ticked yet."
 msgstr "还没有勾选确认。"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 msgid "The confirmation token does not match; preview again."
 msgstr "确认凭据不匹配，请重新预览。"
 
@@ -5815,11 +5847,11 @@ msgstr "确认凭据不匹配，请重新预览。"
 msgid "The continuous contract returned no bars"
 msgstr "主连合约没有返回任何 bar"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "The current user cannot use the system scheduler."
 msgstr "当前用户无法使用系统调度器。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid "The current value of {value} is not among the choices."
 msgstr "{value} 的当前取值不在可选范围内。"
@@ -5828,16 +5860,16 @@ msgstr "{value} 的当前取值不在可选范围内。"
 msgid "The daily-bar source is limited; the sample symbol has no readable rows, and other available data was kept."
 msgstr "日线来源受限；样例标的没有可读行，已保留其他可用数据。"
 
-#: cnequity/serve/ops/job.py cnequity/serve/ops/preflight.py
+#: cnequity/ops/job.py cnequity/ops/preflight.py
 msgid "The dashboard is already running another task."
 msgstr "面板正在执行另一个任务。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 #, python-brace-format
 msgid "The dashboard is running \"{title}\"."
 msgstr "面板正在执行「{title}」。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 #, python-brace-format
 msgid "The dashboard is running \"{title}\"; wait for it to finish before confirming the deletion."
 msgstr "面板正在执行「{title}」，请等它结束后再确认删除。"
@@ -5866,23 +5898,23 @@ msgstr "数据目录的上级路径不是目录。"
 msgid "The directory page has returned 401 after consecutive requests; explicit diagnosis only, and daily runs prefer the directory cache."
 msgstr "目录页曾在连续请求后返回 401；仅显式诊断，日常优先复用目录缓存。"
 
-#: cnequity/serve/ops/scheduled.py
+#: cnequity/ops/scheduled.py
 msgid "The event-stream check record is invalid, so the run interval cannot be judged."
 msgstr "事件流检查记录无效，无法判断运行间隔。"
 
-#: cnequity/serve/ops/scheduled.py
+#: cnequity/ops/scheduled.py
 msgid "The event-stream check time has no time zone, so the run interval cannot be judged."
 msgstr "事件流检查时间无时区，无法判断运行间隔。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The event-stream interval must be 1–1440 minutes."
 msgstr "事件流间隔必须为 1–1440 分钟。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The event-stream run interval is invalid; set it again."
 msgstr "事件流运行间隔无效，请重新设置。"
 
-#: cnequity/serve/ops/scheduled.py
+#: cnequity/ops/scheduled.py
 msgid "The event-stream settings or run interval changed, so nothing was fetched twice."
 msgstr "事件流设置或运行间隔已变化，没有重复取数。"
 
@@ -5916,11 +5948,11 @@ msgstr "行业目录页返回的不是目录（多半是风控页）"
 msgid "The kline response has no data field"
 msgstr "kline 响应里没有 data 字段"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The local environment variable CNE_PUSH2_PAUSED is on, so turning off the pause in config has no effect; push2 still sends no requests."
 msgstr "本机环境变量 CNE_PUSH2_PAUSED 开着，关掉配置里的暂停无效，push2 仍然不会发出请求。"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "The lock path in the task record is invalid."
 msgstr "任务记录里的锁路径无效。"
 
@@ -5949,19 +5981,19 @@ msgstr "操作停止。执行失败时可能有部分内容已删除，请检查
 msgid "The page confirmation token has expired; refresh the page."
 msgstr "页面确认凭据已失效，请刷新页面。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The preview has expired; preview again."
 msgstr "预览已失效，请重新预览。"
 
-#: cnequity/serve/ops/records.py
+#: cnequity/ops/records.py
 msgid "The process is gone. If it was force-stopped, go by the state of the linked run."
 msgstr "进程已经不在。若是强制结束，以关联 run 的状态为准。"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "The program of the same-named system task does not match the current install; check it in the system scheduler first."
 msgstr "同名系统任务的程序与当前安装不符，请先在系统调度器中核对。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "The publish lock is held; the publish phase will queue and wait."
 msgstr "发布锁正被占用，发布阶段会排队等待。"
 
@@ -5977,23 +6009,23 @@ msgstr "research demo 没有取到任何日线"
 msgid "The research demo's starting close is not positive"
 msgstr "research demo 的起始收盘价不是正数"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The research pack settings are invalid; set them again."
 msgstr "研究包设置无效，请重新设置。"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid "The restore target must be an absolute path."
 msgstr "恢复目标必须是绝对路径。"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid "The restore target must be new or an empty directory."
 msgstr "恢复目标必须是新建的或空目录。"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid "The restore target must be outside the current lake and the backup directory."
 msgstr "恢复目标必须在当前数据湖和备份目录之外。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The run time must be HH:MM, Beijing time."
 msgstr "运行时间必须为北京时间 HH:MM。"
 
@@ -6007,89 +6039,89 @@ msgstr "样例目标目录里已经有 Parquet 文件：{data_root}。请换一�
 msgid "The schedule in {path} already includes every step of this version; nothing to upgrade."
 msgstr "{path} 的调度已包含当前版本的全部 step，无需升级。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The schedule settings preview has expired; preview again."
 msgstr "定时设置预览已失效，请重新预览。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The scheduled event groups are invalid; set them again."
 msgstr "定时事件组无效，请重新设置。"
 
-#: cnequity/serve/ops/scheduled.py
+#: cnequity/ops/scheduled.py
 msgid "The scheduled task is paused, so no fetch started."
 msgstr "定时任务已经暂停，没有开始取数。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The scheduled task settings are invalid; check settings.json."
 msgstr "定时任务设置无效，请核对 settings.json。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid "The scope stays in the config file: exchanges {exchanges}, {options}, DCE route {route}."
 msgstr "范围仍在配置文件里：交易所 {exchanges}，{options}，大商所路由 {route}。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid "The scope stays in the config file: products {products}, contracts {contracts}, limit {limit}."
 msgstr "范围仍在配置文件里：品种 {products}，合约 {contracts}，上限 {limit}。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid "The scope stays in the config file: {scope}, frequencies {freqs}{extra}."
 msgstr "范围仍在配置文件里：{scope}，频率 {freqs}{extra}。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid "The scope stays in the config file: {scope}, limit {limit}, symbols {symbols}."
 msgstr "范围仍在配置文件里：{scope}，上限 {limit}，标的 {symbols}。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "The session (YYYY-MM-DD)."
 msgstr "交易日（YYYY-MM-DD）。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The settings are incomplete."
 msgstr "设置不完整。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "The start cannot be after the end."
 msgstr "起点不能晚于终点。"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 #, python-brace-format
 msgid "The system scheduler refused the request ({name}, exit code {returncode})."
 msgstr "系统调度器拒绝请求（{name}，退出码 {returncode}）。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The system task was registered but could not be confirmed active."
 msgstr "系统任务注册后没有确认到活动状态。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "The system will fetch or copy backups automatically for the selected scope (backups keep using disk and are not deleted automatically); it keeps running after the web service is closed."
 msgstr "系统将按所选范围自动取数或复制备份（备份持续占用磁盘，不自动删除）；关闭 Web 服务后仍会运行。"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 msgid "The task has already finished."
 msgstr "任务已经结束。"
 
-#: cnequity/serve/ops/job.py
+#: cnequity/ops/job.py
 msgid "The task process exited abnormally."
 msgstr "任务进程异常退出。"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 msgid "The task was rejected."
 msgstr "任务被拒绝。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid "The value of {value} is invalid."
 msgstr "{value} 的取值无效。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "The written config does not match the preview."
 msgstr "写入后的配置和预览不一致。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 #, python-brace-format
 msgid "The {name} circuit breaker already tripped today; related requests will fail until tomorrow."
 msgstr "{name} 熔断今天已经触发，相关请求会失败到明天。"
@@ -6133,11 +6165,11 @@ msgstr "配置里没有这些调度组："
 msgid "These settings change: the old config left them to built-in fallbacks, and the defaults now supply them:"
 msgstr "以下设置会变化：旧配置把它们留给内置回退值，现在由默认值提供："
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "These switches affect all future fetching, including scheduled daily updates and closing catch-up. Saving does not start fetching. Instrument lists, frequencies and exchanges stay in the config file."
 msgstr "这些开关会改之后的每一次取数，包括定时日更和收尾补抓。保存设置不会启动取数。标的列表、频率和交易所仍在配置文件里。"
 
-#: cnequity/serve/ops/backups.py
+#: cnequity/ops/backups.py
 msgid "This backup name already exists; enter a new name."
 msgstr "这个备份名已存在，请填写新的名称。"
 
@@ -6153,15 +6185,15 @@ msgstr "这份配置定义了 [[job.events.schedules]]；请在配置里修改�
 msgid "This config has no [job.events.groups]; see configs/cnequity.example.toml"
 msgstr "这份配置里没有 [job.events.groups] —— 参考 configs/cnequity.example.toml"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "This config has no daily-update schedule groups."
 msgstr "这份配置没有日更调度组。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "This config has no event-stream schedule groups."
 msgstr "这份配置没有事件流调度组。"
 
-#: cnequity/serve/ops/runner.py
+#: cnequity/ops/runner.py
 msgid "This confirmation has expired; preview again."
 msgstr "这次确认已失效，请重新预览。"
 
@@ -6173,7 +6205,7 @@ msgstr "这个日更组还会带上指数成分、行业成分和股东人数。
 msgid "This directory already holds a lake; once the config is generated it takes it over without clearing it."
 msgstr "这个目录里已经有数据湖，生成配置后会接管它，不会清空。"
 
-#: cnequity/serve/ops/scheduler.py
+#: cnequity/ops/scheduler.py
 msgid "This lake's web schedule is bound to another config; manage it with the original config."
 msgstr "这个数据湖的 Web 调度绑定了另一份配置，请使用原配置管理。"
 
@@ -6185,11 +6217,11 @@ msgstr "这台机器没有可用的回环地址，面板没有启动。"
 msgid "This pack adds no daily-update requests. Historical ST is a separate one-off backfill."
 msgstr "这个包不增加日更请求。历史 ST 是单独一次补数。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "This service has no writable config file path, so it cannot be started from the dashboard."
 msgstr "这份服务没有可写入的配置文件路径，不能从面板启动。"
 
-#: cnequity/serve/ops/scheduled.py
+#: cnequity/ops/scheduled.py
 msgid "This trading day already ran or is outside the current run window, so nothing was fetched twice."
 msgstr "这个交易日已执行或不在当前运行窗口，没有重复取数。"
 
@@ -6203,12 +6235,12 @@ msgstr "当前用户无法使用系统调度器（{backend}）。"
 msgid "To see where it is, run `kill -USR1 %d`: every thread's stack goes to stderr."
 msgstr "想知道它停在哪里，可以运行 `kill -USR1 %d`：所有线程的调用栈会写到 stderr。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 #, python-brace-format
 msgid "Today's daily update time {daily_run_at} (Beijing time) has not come yet, and today's data may not be published."
 msgstr "还没到今天的日更时间 {daily_run_at}（北京时间），当天数据可能还没发布。"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 #, python-brace-format
 msgid "Today's daily update time {daily_run_at} (Beijing time) has not come yet, and today's data may not be published. This run will not count as the scheduled one, and the scheduled daily update still runs on time."
 msgstr "还没到今天的日更时间 {daily_run_at}（北京时间），当天数据可能还没发布。这次不会记成定时任务已跑，到点后定时日更仍会运行。"
@@ -6222,7 +6254,7 @@ msgstr "今天（{today}）的交易日要到北京时间 15:05 才收盘定稿�
 msgid "Too many check requests; try again shortly."
 msgstr "检查请求过多，请稍后重试。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Trade ticks"
 msgstr "分笔"
 
@@ -6230,7 +6262,7 @@ msgstr "分笔"
 msgid "Trading calendar"
 msgstr "交易日历"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Trading day"
 msgstr "交易日"
 
@@ -6250,7 +6282,7 @@ msgstr "把估值的零占位改为空值"
 msgid "Turn vendor zero placeholders into nulls, and convertible bond prices on sessions without a trade"
 msgstr "把供应商表示缺失的 0 改为空值，并把可转债无成交日的价格改为空值"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Tushare"
 msgstr "Tushare"
 
@@ -6291,12 +6323,12 @@ msgstr "未知的 derive 目标：{name}"
 msgid "Unknown events schedule group: {group_name} (the config has: {known})"
 msgstr "未知 events 调度组：{group_name}（配置里有：{known}）"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "Unknown operation {op_id}"
 msgstr "未知操作 {op_id}"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "Unknown parameter type {kind}"
 msgstr "未知参数类型 {kind}"
@@ -6341,7 +6373,7 @@ msgstr "未知的源政策 {source!r}"
 msgid "Unknown stale schedule groups: {value}"
 msgstr "未知的 stale 调度组：{value}"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "Unrecognized symbol {part}"
 msgstr "无法识别的标的 {part}"
@@ -6373,7 +6405,7 @@ msgstr "改用 Streamable HTTP，在 /mcp 上监听。给只接远程 URL 的客
 msgid "Use a standard futures contract code: {symbol}"
 msgstr "请使用标准期货合约代码：{symbol}"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "Use issuer implementation announcements only (reviewed list, CNINFO, BSE); unmatched events stay gaps and Baostock is not queried."
 msgstr "只用发行人实施公告（已审清单、巨潮、北交所）；匹配不到的事件保留为缺口，不请求 Baostock。"
 
@@ -6438,7 +6470,7 @@ msgstr ""
 "`cne config upgrade` 把这些 step 和缺少的调度组直接补进配置（先备份原文件），\n"
 "其余设置不动。`--minimize` 则把完整配置改写成继承内置默认值的形式。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Vantage label"
 msgstr "出口标签"
 
@@ -6451,11 +6483,11 @@ msgstr "校验 @ {value} —— {value2} 个缺口"
 msgid "Verify ARCHIVE and import it into the snapshot store atomically."
 msgstr "校验 ARCHIVE 并原子地导入快照库。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Verify coverage"
 msgstr "校验覆盖"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Verify data backup"
 msgstr "校验数据备份"
 
@@ -6463,7 +6495,7 @@ msgstr "校验数据备份"
 msgid "Verify the hashes and change semantics of every add/replace payload."
 msgstr "校验全部 增加/替换 载荷的哈希与变更语义。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "Verify, then restore into a new or empty directory. You can inspect the result afterward."
 msgstr "校验后恢复到新的或空目录，完成后可检查恢复结果。"
 
@@ -6486,7 +6518,7 @@ msgstr ""
 msgid "View and validate registered dataset data contracts."
 msgstr "查看并校验已注册的数据集数据契约。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "View coverage and freshness by dataset. Read-only."
 msgstr "按数据集查看覆盖和新鲜度，只读。"
 
@@ -6578,7 +6610,7 @@ msgstr "全市场日线、复权、日历、公司行为和当前交易状态。
 msgid "Why the protection is no longer needed."
 msgstr "为何不再需要这项保护。"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "Window end (YYYY-MM-DD)."
 msgstr "窗口终点（YYYY-MM-DD）。"
 
@@ -6587,11 +6619,11 @@ msgstr "窗口终点（YYYY-MM-DD）。"
 msgid "Window so far {window}. {detail}"
 msgstr "已有窗口 {window}。{detail}"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "Window start (YYYY-MM-DD)."
 msgstr "窗口起点（YYYY-MM-DD）。"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "Windows Task Scheduler"
 msgstr "Windows 任务计划程序"
 
@@ -6614,6 +6646,10 @@ msgstr "配合 --datasets：只列有数据或已陈旧的数据集，还没有�
 #: cnequity/cli/quality_cmds.py
 msgid "With --datasets: print all columns of the dataset inventory, not just freshness."
 msgstr "配合 --datasets：打印数据集清单的全部列，而不只是新鲜度。"
+
+#: cnequity/cli/quality_cmds.py
+msgid "With --datasets: print the table as JSON on stdout (freshness in lower case); the checks that follow print to stderr. Exit codes are unchanged."
+msgstr "与 --datasets 一起用：把表格以 JSON 输出到 stdout（freshness 为小写）；之后的检查信息输出到 stderr。退出码不变。"
 
 #: cnequity/cli/quality_cmds.py
 msgid "With --datasets: whether to run the cross-sectional symbol check for the latest trading day. It reads the daily_bars tip partition, instruments and trading_status, which costs more than checking watermarks alone; --no-scope returns this command to pure metadata."
@@ -6647,26 +6683,6 @@ msgstr "配合 --runs：要求连续多少个交易日（默认 20）。"
 msgid "With --stale-only: refetch only snapshot datasets; historical datasets are filled by date in the next daily update."
 msgstr "配合 --stale-only：只重抓 snapshot 类数据集；历史类留给下一次日更按日期补。"
 
-#: cnequity/cli/setup_cmds.py
-msgid "With action=create: overwrite an existing config file."
-msgstr "action=create 时覆盖已存在的配置文件。"
-
-#: cnequity/cli/setup_cmds.py
-msgid "With action=create: set [data].root (defaults to ./data/cnequity resolved to an absolute path)."
-msgstr "action=create 时设置 [data].root（默认把 ./data/cnequity 解析成绝对路径）。"
-
-#: cnequity/cli/setup_cmds.py
-msgid "With action=show: print every setting with its built-in default and explanation."
-msgstr "用于 action=show：打印每项设置及其内置默认值和说明。"
-
-#: cnequity/cli/setup_cmds.py
-msgid "With action=upgrade: only list the steps and schedule groups to add; writes no files."
-msgstr "action=upgrade 时只列出要补的 step 和调度组，不写文件。"
-
-#: cnequity/cli/setup_cmds.py
-msgid "With action=upgrade: rewrite a full config to extend the built-in defaults, keeping only the settings that differ; lists every setting whose behaviour would change."
-msgstr "用于 action=upgrade：把完整配置改写为继承内置默认值，只保留不同的设置；会列出每项行为会变化的设置。"
-
 #: cnequity/cli/consume_cmds.py
 #, python-brace-format
 msgid "With token:   {base}/{token} (once tunnelled, replace the host with the tunnel's HTTPS domain)"
@@ -6684,6 +6700,10 @@ msgstr "在 --year 之内：导入的最后一天。"
 msgid "Without a config, data.root cannot be checked."
 msgstr "没有配置就无法检查 data.root 是否可用。"
 
+#: cnequity/cli/setup_cmds.py
+msgid "Write a short config that extends the built-in defaults."
+msgstr "写一个继承内置默认值的简短配置。"
+
 #: cnequity/cli/repair_cmds.py
 msgid "Write and publish a new version; by default only prints the plan."
 msgstr "写入并发布新版本；默认只输出计划。"
@@ -6696,11 +6716,11 @@ msgstr "把有争议的行写到这里。"
 msgid "Write the JSON to this path instead of stdout; '-' means print."
 msgstr "把 JSON 写到这个路径而不是标准输出；'-' 表示打印。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Writes to the current config after backing up the original file. Does not start fetching."
 msgstr "将写入当前配置，并先备份原文件。这次不会启动取数。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "Writing the config failed; the original file was restored."
 msgstr "写入配置失败，已恢复原文件。"
 
@@ -6790,16 +6810,11 @@ msgstr "[{table}] enabled = false（这份配置目前不调度它）"
 msgid "[{table}] steps_add = {added}; steps_remove = {removed}"
 msgstr "[{table}] steps_add = {added}；steps_remove = {removed}"
 
-#: cnequity/cli/setup_cmds.py
-#, python-brace-format
-msgid "`cne config {action}` has been renamed; use `{moved}` instead."
-msgstr "`cne config {action}` 已改名，请改用 `{moved}`。"
-
 #: cnequity/cli/storage_cmds.py
 msgid "`cne storage apply` was removed with the mark-and-wait phase: backfill and the daily run already delete generations beyond [storage.retention].keep_generations. Keep a version with `cne storage hold`; delete chosen history earlier on the storage page of `cne serve`."
 msgstr "`cne storage apply` 已随标记观察期一起移除：回补和日更已经会删除超出 [storage.retention].keep_generations 的代。要留住某个版本用 `cne storage hold`；要提前删除选定的历史，在 `cne serve` 的存储页操作。"
 
-#: cnequity/cli/_root.py
+#: cnequity/cli/_root.py cnequity/cli/setup_cmds.py
 #, python-brace-format
 msgid "`{command_path} {name}` has been renamed; use `{value}` instead."
 msgstr "`{command_path} {name}` 已改名，请改用 `{value}`。"
@@ -6828,7 +6843,7 @@ msgstr "可用"
 msgid "baostock (valuation / ST / delisted-stock history)"
 msgstr "baostock（估值 / ST / 退市股历史）"
 
-#: cnequity/cli/backfill_cmds.py
+#: cnequity/cli/repair_cmds.py
 msgid "baostock for delisted Shanghai/Shenzhen symbols; ths for delisted Beijing symbols."
 msgstr "baostock 用于已退市的沪深证券；ths 用于已退市的北交所证券。"
 
@@ -6883,7 +6898,7 @@ msgstr "已与 1m / 5m 一致"
 msgid "corporate actions"
 msgstr "公司行为"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "cron paths cannot contain newlines or backslashes; use an ordinary path."
 msgstr "cron 的路径不能包含换行或反斜杠，请换用普通路径。"
 
@@ -6987,7 +7002,7 @@ msgstr "demo/sample：把那份小配置写到哪，供后续 `cne query` 使用
 msgid "doctor checks only the environment, dependencies and config; for the lake, use `cne status --datasets`."
 msgstr "doctor 只检查环境/依赖/配置；数据湖状态用 `cne status --datasets`。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "e.g. local, cn. Defaults to local."
 msgstr "如 local、cn。不填用 local。"
 
@@ -7011,7 +7026,7 @@ msgstr "已启用"
 msgid "every exchange-traded instrument in instruments (including ETF/LOF)"
 msgstr "instruments 全部场内标的（含 ETF/LOF）"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "every supported route"
 msgstr "全部已支持的路由"
 
@@ -7152,7 +7167,7 @@ msgstr "由 CNE_CONFIG 指定"
 msgid "no audit records, quality cannot be proven (add --full to audit now)"
 msgstr "没有审计记录，质量证明不了（加 --full 立即审计）"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "no contracts listed"
 msgstr "未列合约"
 
@@ -7160,7 +7175,7 @@ msgstr "未列合约"
 msgid "no daily bars"
 msgstr "无日线"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "no frequency set"
 msgstr "未指定频率"
 
@@ -7168,7 +7183,7 @@ msgstr "未指定频率"
 msgid "no historical ST receipt covering the whole universe"
 msgstr "没有覆盖整个股票池的历史 ST 收据"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "no products listed"
 msgstr "未列品种"
 
@@ -7181,7 +7196,7 @@ msgstr "%g 秒内没有响应"
 msgid "no substitute available"
 msgstr "无可用替代"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "no symbols listed"
 msgstr "未列标的"
 
@@ -7218,7 +7233,7 @@ msgstr "海外出口"
 msgid "publish to the lake"
 msgstr "入湖发布"
 
-#: cnequity/serve/ops/preflight.py
+#: cnequity/ops/preflight.py
 msgid "push2 is paused (config push2_paused); related datasets will degrade or be missing."
 msgstr "push2 已暂停（配置 push2_paused），相关数据集会降级或缺失。"
 
@@ -7226,7 +7241,7 @@ msgstr "push2 已暂停（配置 push2_paused），相关数据集会降级或�
 msgid "quality audit"
 msgstr "质量审计"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 msgid "quick is the last 3 years; full goes deeper."
 msgstr "quick 为近 3 年；full 更深。"
 
@@ -7373,7 +7388,7 @@ msgstr "未知迁移：{names}；已知：{known}"
 msgid "unreachable"
 msgstr "不可达"
 
-#: cnequity/serve/ops/scheduler_backend.py
+#: cnequity/ops/scheduler_backend.py
 msgid "unsupported"
 msgstr "不支持"
 
@@ -7399,15 +7414,15 @@ msgctxt "progress unit"
 msgid "windows"
 msgstr "个窗口"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "with options"
 msgstr "含期权"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 msgid "without options"
 msgstr "不含期权"
 
-#: cnequity/serve/ops/records.py cnequity/steps/reference.py
+#: cnequity/ops/records.py cnequity/steps/reference.py
 msgid "write"
 msgstr "写入"
 
@@ -7501,7 +7516,7 @@ msgstr "{flag} 对 --profile {profile} 不适用"
 msgid "{height} 1-minute bars covering {height2} symbol×session pairs; {full}/{height2} are complete at {expected} bars per day"
 msgstr "{height} 根 1 分钟线，覆盖 {height2} 个 标的×交易日；其中 {full}/{height2} 是完整的 {expected} 根/日"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "{label} cannot be later than today (Beijing time)."
 msgstr "{label}不能晚于今天（北京时间）。"
@@ -7511,7 +7526,7 @@ msgstr "{label}不能晚于今天（北京时间）。"
 msgid "{label} has {value} errors"
 msgstr "{label}有 {value} 条 error"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "{label} is invalid."
 msgstr "{label}无效。"
@@ -7529,12 +7544,12 @@ msgstr ""
 "  查看各数据源：cne sources probe{config_arg}\n"
 "  确认网络没问题、只是这次探测慢：加 --no-preflight 跳过预检。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "{label} may only contain letters, digits, underscores and hyphens."
 msgstr "{label}只能是字母、数字、下划线和短横线。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "{label} must be YYYY-MM-DD."
 msgstr "{label}须是 YYYY-MM-DD。"
@@ -7594,17 +7609,17 @@ msgstr "{value!r} 不是 ISO 日期（YYYY-MM-DD）"
 msgid "{value} datasets, {partitions} partitions, {rows:,} rows, {files} files, {value2:.1f}MB in {elapsed_seconds:.1f}s"
 msgstr "{value} 个数据集、{partitions} 个分区、{rows:,} 行、{files} 个文件、{value2:.1f}MB，耗时 {elapsed_seconds:.1f}s"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "{value} is invalid."
 msgstr "{value}无效。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "{value} is not among the choices."
 msgstr "{value}不在可选范围内。"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "{value} is not among the choices: {value2}"
 msgstr "{value}不在可选范围内：{value2}"
@@ -7614,12 +7629,12 @@ msgstr "{value}不在可选范围内：{value2}"
 msgid "{value} more datasets have no data yet: their schedule groups are not enabled or have not run, which does not affect the conclusion here. Full list: cne status --datasets"
 msgstr "另有 {value} 个数据集还没有数据：所属调度组未启用或还没运行，不影响这里的结论。完整清单：cne status --datasets"
 
-#: cnequity/serve/ops/catalog.py
+#: cnequity/ops/catalog.py
 #, python-brace-format
 msgid "{value} must be a boolean."
 msgstr "{value}须是布尔值。"
 
-#: cnequity/serve/ops/settings.py
+#: cnequity/ops/settings.py
 #, python-brace-format
 msgid "{value} must be a switch."
 msgstr "{value} 需要是开关。"

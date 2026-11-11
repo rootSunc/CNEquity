@@ -8,7 +8,6 @@ recovering staging an interrupted terminal run left behind).
 from __future__ import annotations
 
 import difflib
-import json
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -20,11 +19,13 @@ from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
     _run_status_exit_code,
+    apply_option,
     attach_log_file,
     attach_revision_retention,
     comma_option,
     comma_values,
     config_option,
+    emit_json,
     parse_date_option,
 )
 from cnequity.domain.datasets import get_dataset
@@ -32,7 +33,6 @@ from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _
 from cnequity.orchestrator.backfill_request import (
     DERIVATIVE_DATASETS,
-    REPAIRS,
     BackfillRequest,
     BackfillRequestError,
     plan_modes,
@@ -221,7 +221,7 @@ def run_backfill(config_path: str, request: BackfillRequest) -> None:
     if request.outstanding:
         attach_log_file(cfg, f"backfill-{dataset}")
         result = _repair_outstanding(cfg, dataset, request.workers)
-        click.echo(json.dumps(result, indent=2, default=str))
+        emit_json(result, indent=2, default=str)
         if _fetched_nothing(result):
             _explain_fetched_nothing()
             raise SystemExit(1)
@@ -254,7 +254,7 @@ def run_backfill(config_path: str, request: BackfillRequest) -> None:
                 cfg, dataset, start_d, end_d, symbols, request.workers, plan_modes(request)
             )
         )
-        click.echo(json.dumps(payload, indent=2, default=str, ensure_ascii=False))
+        emit_json(payload, indent=2, default=str, ensure_ascii=False)
         return
     attach_log_file(cfg, f"backfill-{dataset}")
     if dataset == "trading_status":
@@ -300,7 +300,7 @@ def run_backfill(config_path: str, request: BackfillRequest) -> None:
     if bars_before is not None and result.get("status") != "failed" and not fetched_nothing:
         _follow_lineage(result, lambda: _after_daily_bars(cfg, bars_before, bar_window, result))
     _explain_watermark_pullback(cfg, dataset, watermark_before, result)
-    click.echo(json.dumps(result, indent=2, default=str))
+    emit_json(result, indent=2, default=str)
     if fetched_nothing:
         _explain_fetched_nothing()
         raise SystemExit(1)
@@ -313,18 +313,16 @@ def _run_delisted_backfill(config_path: str, request: BackfillRequest) -> None:
     """`--profile delisted`: the confirmed delisting list, from independent evidence."""
     since = request.start or date(2016, 1, 1)
     if request.plan:
-        click.echo(
-            json.dumps(
-                {
-                    "dataset": request.dataset,
-                    "profile": request.profile,
-                    "since": since.isoformat(),
-                    "source": "sina",
-                    "mode": "confirmed_delisted_catalog",
-                    "note": "When run, resumes over the pending symbols of the delisted directory; the request count depends on the directory and completed receipts",
-                },
-                indent=2,
-            )
+        emit_json(
+            {
+                "dataset": request.dataset,
+                "profile": request.profile,
+                "since": since.isoformat(),
+                "source": "sina",
+                "mode": "confirmed_delisted_catalog",
+                "note": "When run, resumes over the pending symbols of the delisted directory; the request count depends on the directory and completed receipts",
+            },
+            indent=2,
         )
         return
     cfg = _cfg(config_path)
@@ -334,7 +332,7 @@ def _run_delisted_backfill(config_path: str, request: BackfillRequest) -> None:
     result = _run_delisted_profile(cfg, since)
     if result.get("status") != "failed":
         _follow_lineage(result, lambda: _after_daily_bars(cfg, bars_before, window_, result))
-    click.echo(json.dumps(result, indent=2, default=str))
+    emit_json(result, indent=2, default=str)
     if _run_status_exit_code(result["status"]):
         raise click.ClickException("delisted recovery execution or publication failed")
 
@@ -1628,229 +1626,6 @@ def _backfill_chunked(cfg, dataset: str, start: date, end: date, chunk_days: int
 
 # --- Repairs and imports that run on the backfill machinery -------------------
 #
-# Each of these used to be a mode flag on `cne backfill`, valid for one dataset,
-# which made its help a list of exceptions. Each builds a `BackfillRequest` with
-# its `REPAIRS` mode and runs it through `run_backfill`, so it keeps the same
-# machinery — the window, scope, lineage follow-up and `--plan` output — while
-# following the repair convention: a preview by default, `--apply` to run.
-
-
-def _repair_group():
-    from cnequity.cli.repair_cmds import repair
-
-    return repair
-
-
-def _run_repair(
-    repair: str,
-    config_path: str,
-    apply: bool,
-    *,
-    start_str: str | None = None,
-    end_str: str | None = None,
-    symbols_str: str | None = None,
-    **fields,
-) -> None:
-    """Run a ``REPAIRS`` mode on the backfill machinery; a preview unless *apply*."""
-    request = BackfillRequest(
-        dataset=REPAIRS[repair].dataset,
-        start=parse_date_option(start_str, "--start"),
-        end=parse_date_option(end_str, "--end"),
-        symbols=_symbol_tuple(symbols_str),
-        plan=not apply,
-        repair=repair,
-        **fields,
-    )
-    run_backfill(config_path, request)
-    if not apply:
-        click.echo(_("Preview only; add --apply to run it."), err=True)
-
-
-_apply_option = click.option(
-    "--apply", is_flag=True, help=N_("Run it; without this only the plan is printed.")
-)
-_window_options = (
-    click.option("--start", "start_str", required=True, help=N_("Window start (YYYY-MM-DD).")),
-    click.option("--end", "end_str", required=True, help=N_("Window end (YYYY-MM-DD).")),
-)
-
-
-def _with(*decorators):
-    def wrap(func):
-        for decorator in reversed(decorators):
-            func = decorator(func)
-        return func
-
-    return wrap
-
-
-@_repair_group().command("payment-dates")
-@config_option
-@comma_option("--symbols", "symbols_str", required=True, help=N_("Comma-separated symbols."))
-@_with(*_window_options)
-@click.option(
-    "--issuer-notices-only",
-    is_flag=True,
-    help=N_(
-        "Use issuer implementation announcements only (reviewed list, CNINFO, BSE); unmatched "
-        "events stay gaps and Baostock is not queried."
-    ),
-)
-@_apply_option
-def repair_payment_dates(config_path, symbols_str, start_str, end_str, issuer_notices_only, apply):
-    """Repair corporate_actions payment dates: reviewed issuer announcements first, then Baostock.
-
-    A payment date earlier than the ex-date is treated as unknown. With --issuer-notices-only,
-    reviewed bonus/transfer share terms are repaired too and Baostock is not queried.
-    """
-    _run_repair(
-        "issuer-notices" if issuer_notices_only else "payment-dates",
-        config_path,
-        apply,
-        symbols_str=symbols_str,
-        start_str=start_str,
-        end_str=end_str,
-    )
-
-
-@_repair_group().command("delisted-actions")
-@config_option
-@click.option(
-    "--source",
-    type=click.Choice(["baostock", "ths"]),
-    required=True,
-    help=N_("baostock for delisted Shanghai/Shenzhen symbols; ths for delisted Beijing symbols."),
-)
-@comma_option("--symbols", "symbols_str", help=N_("Comma-separated symbols."))
-@click.option("--start", "start_str", default=None, help=N_("Window start (YYYY-MM-DD)."))
-@click.option("--end", "end_str", default=None, help=N_("Window end (YYYY-MM-DD)."))
-@_apply_option
-def repair_delisted_actions(config_path, source, symbols_str, start_str, end_str, apply):
-    """Fill historical dividends and ex-rights of delisted symbols from Baostock or THS."""
-    _run_repair(
-        f"{source}-actions",
-        config_path,
-        apply,
-        symbols_str=symbols_str,
-        start_str=start_str,
-        end_str=end_str,
-    )
-
-
-@_repair_group().command("ex-dates")
-@config_option
-@click.option(
-    "--ex-dates", "ex_dates_str", required=True, help=N_("Comma-separated ex-dates, YYYY-MM-DD.")
-)
-@comma_option("--symbols", "symbols_str", help=N_("Comma-separated symbols."))
-@_apply_option
-def repair_ex_dates(config_path, ex_dates_str, symbols_str, apply):
-    """Request historical ex-rights rows from EastMoney for the given ex-dates, day by day.
-
-    The backfill path's primary source is TDX; only EastMoney's per-day filter reaches rows
-    before 2015-09-29.
-    """
-    raw_dates = [d.strip() for d in ex_dates_str.split(",") if d.strip()]
-    _run_repair(
-        "ex-dates",
-        config_path,
-        apply,
-        symbols_str=symbols_str,
-        ex_dates=tuple(parse_date_option(value, "--ex-dates") for value in raw_dates),
-    )
-
-
-@_repair_group().command("bar-amounts")
-@config_option
-@_with(*_window_options)
-@comma_option("--symbols", "symbols_str", help=N_("Comma-separated symbols."))
-@_apply_option
-def repair_bar_amounts(config_path, start_str, end_str, symbols_str, apply):
-    """Fill daily_bars turnover of Sina-filled rows from TDX, after checking OHLC and volume.
-
-    Turnover is filled only when open/high/low/close match and volume differs by under one lot;
-    codes TDX lacks keep their Sina rows. Stored prices and volumes are never touched.
-    """
-    _run_repair(
-        "bar-amounts",
-        config_path,
-        apply,
-        start_str=start_str,
-        end_str=end_str,
-        symbols_str=symbols_str,
-    )
-
-
-@_repair_group().command("bar-turnover")
-@config_option
-@_with(*_window_options)
-@comma_option("--symbols", "symbols_str", help=N_("Comma-separated symbols."))
-@click.option(
-    "--peer-review",
-    is_flag=True,
-    help=N_(
-        "Review price conflicts against historical exchange prices, TDX and EastMoney; replace "
-        "whole bars only with agreeing evidence."
-    ),
-)
-@_apply_option
-def repair_bar_turnover(config_path, start_str, end_str, symbols_str, peer_review, apply):
-    """Replace Shanghai/Shenzhen daily_bars rows whose turnover is missing, zero or misaligned.
-
-    The whole same-day Baostock row replaces it when OHLC agree within half a cent; otherwise,
-    or when Baostock has no row, the original values stay.
-    """
-    _run_repair(
-        "bar-turnover",
-        config_path,
-        apply,
-        start_str=start_str,
-        end_str=end_str,
-        symbols_str=symbols_str,
-        peer_review=peer_review,
-    )
-
-
-@_repair_group().command("bse-tip-turnover")
-@config_option
-@comma_option("--symbols", "symbols_str", required=True, help=N_("Comma-separated symbols."))
-@click.option("--date", "day", required=True, help=N_("The session (YYYY-MM-DD)."))
-@_apply_option
-def repair_bse_tip_turnover(config_path, symbols_str, day, apply):
-    """Fill Beijing daily_bars turnover for the latest session from the BSE quote board.
-
-    For when the board was unavailable during the daily update. The board is a current
-    snapshot, so only the latest session qualifies; Sina is not refetched.
-    """
-    _run_repair(
-        "bse-tip",
-        config_path,
-        apply,
-        symbols_str=symbols_str,
-        start_str=day,
-        end_str=day,
-    )
-
-
-@_repair_group().command("valuation-outage")
-@config_option
-@_with(*_window_options)
-@_apply_option
-def repair_valuation_outage(config_path, start_str, end_str, apply):
-    """Fill valuation_metrics for an EastMoney snapshot outage from the datacenter report.
-
-    Covers the window after EastMoney's last complete day and before today; writes only when the
-    whole market is retrieved.
-    """
-    _run_repair(
-        "valuation-outage",
-        config_path,
-        apply,
-        start_str=start_str,
-        end_str=end_str,
-    )
-
-
 @cli.group("import")
 def import_group():
     """Import data from local files into the lake (offline)."""
@@ -1884,7 +1659,7 @@ def import_group():
 )
 @click.option("--start", "start_str", default=None, help=N_("Within --year: first day to import."))
 @click.option("--end", "end_str", default=None, help=N_("Within --year: last day to import."))
-@_apply_option
+@apply_option
 def import_shfe_archive(
     archive,
     config_path,
@@ -1927,20 +1702,18 @@ def import_shfe_archive(
     if start and end and start > end:
         raise click.ClickException(_("--start must not be after --end"))
     if not apply:
-        click.echo(
-            json.dumps(
-                {
-                    "dataset": dataset,
-                    "archive": str(archive),
-                    "year": year,
-                    "start": str(start or first),
-                    "end": str(end or last),
-                    "mode": "offline_partial_fields",
-                    "existing_daily_rows": "protected",
-                    "network_requests": 0,
-                },
-                indent=2,
-            )
+        emit_json(
+            {
+                "dataset": dataset,
+                "archive": str(archive),
+                "year": year,
+                "start": str(start or first),
+                "end": str(end or last),
+                "mode": "offline_partial_fields",
+                "existing_daily_rows": "protected",
+                "network_requests": 0,
+            },
+            indent=2,
         )
         click.echo(_("Preview only; add --apply to run it."), err=True)
         return
@@ -1956,7 +1729,7 @@ def import_shfe_archive(
         source_url=url,
         downloaded_at=downloaded_at,
     )
-    click.echo(json.dumps(result, indent=2, default=str))
+    emit_json(result, indent=2, default=str)
     if result["status"] != "success":
         raise click.ClickException(
             _(
@@ -1980,18 +1753,16 @@ def _backfill_financials_tdx_fin(config_path: str, request: BackfillRequest):
     periods = sorted(p for p in periods if p >= f"{start.year}Q{(start.month - 1) // 3 + 1}")
     if request.plan:
         # It used to run here: `--source tdx_fin` was read before `--plan`.
-        click.echo(
-            json.dumps(
-                {
-                    "dataset": request.dataset,
-                    "source": "tdx_fin",
-                    "start": start.isoformat(),
-                    "end": end.isoformat(),
-                    "periods": periods,
-                    "mode": "fill_missing_items",
-                },
-                indent=2,
-            )
+        emit_json(
+            {
+                "dataset": request.dataset,
+                "source": "tdx_fin",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "periods": periods,
+                "mode": "fill_missing_items",
+            },
+            indent=2,
         )
         return
     cfg = _cfg(config_path)
@@ -2005,4 +1776,4 @@ def _backfill_financials_tdx_fin(config_path: str, request: BackfillRequest):
         result = stage_financials_tdx_fin(cfg, run_id, today, periods=periods, gap_only=True)
         outcome["result"] = result
     compact = _publish_staged(cfg, run_id, result)
-    click.echo(json.dumps({"run_id": run_id, **result, "compact": compact}, indent=2, default=str))
+    emit_json({"run_id": run_id, **result, "compact": compact}, indent=2, default=str)

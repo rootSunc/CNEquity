@@ -9,7 +9,6 @@ the late stale-only pass — still lives in `scripts/scheduler/daily_pipeline.sh
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from datetime import date
@@ -25,6 +24,7 @@ from cnequity.cli._shared import (
     attach_log_file,
     attach_revision_retention,
     config_option,
+    emit_json,
     parse_date_option,
 )
 from cnequity.config import WaveConfig
@@ -338,7 +338,7 @@ def _run_all_groups(
                 _("These schedule groups are not in the config: ") + _(", ").join(missing), err=True
             )
         if not selected:
-            click.echo(json.dumps({"groups": [], "repairs": repairs}, indent=2))
+            emit_json({"groups": [], "repairs": repairs}, indent=2)
             return
     for name, group in selected:
         if not _group_is_runnable(cfg, group):
@@ -437,7 +437,7 @@ def _run_all_groups(
         if exit_code == 1 or worst == 0:
             worst = exit_code
     attach_revision_retention(cfg, payload)
-    click.echo(json.dumps(payload, indent=2, default=str))
+    emit_json(payload, indent=2, default=str)
     if worst:
         raise SystemExit(worst)
 
@@ -507,11 +507,9 @@ def _run_stale_only(
     steps = [item["dataset"] for item in plan]
     if not plan:
         click.echo(_("No datasets lag as of {value}").format(value=anchor.isoformat()))
-        click.echo(
-            json.dumps(
-                {"anchor": anchor.isoformat(), "repairs": repairs, "status": "nothing_stale"},
-                indent=2,
-            )
+        emit_json(
+            {"anchor": anchor.isoformat(), "repairs": repairs, "status": "nothing_stale"},
+            indent=2,
         )
         return
     click.echo(
@@ -569,7 +567,7 @@ def _run_stale_only(
         "backfill_applied": effective_backfill,
     }
     attach_revision_retention(cfg, payload)
-    click.echo(json.dumps(payload, indent=2))
+    emit_json(payload, indent=2)
     exit_code = _run_status_exit_code(result["status"])
     if exit_code:
         raise SystemExit(exit_code)
@@ -816,7 +814,7 @@ def run_daily(
                 ),
                 err=True,
             )
-            click.echo(json.dumps({"groups": [], "repairs": repairs}, indent=2))
+            emit_json({"groups": [], "repairs": repairs}, indent=2)
             return
         _run_all_groups(
             cfg,
@@ -866,16 +864,14 @@ def run_daily(
                     group, session or last_trading_day(cfg, shanghai_today(), include_staging=True)
                 )
             if not steps:
-                click.echo(
-                    json.dumps(
-                        {
-                            "run_id": None,
-                            "status": "skipped_not_scheduled",
-                            "group": group_name,
-                            "cadence": group.cadence,
-                        },
-                        indent=2,
-                    )
+                emit_json(
+                    {
+                        "run_id": None,
+                        "status": "skipped_not_scheduled",
+                        "group": group_name,
+                        "cadence": group.cadence,
+                    },
+                    indent=2,
                 )
                 return
             result = engine.run_job(
@@ -935,7 +931,7 @@ def run_daily(
         raise click.ClickException(str(exc)) from exc
     result = {**result, "repairs": repairs}
     attach_revision_retention(cfg, result)
-    click.echo(json.dumps(result, indent=2, default=str))
+    emit_json(result, indent=2, default=str)
     # Exit non-zero on failure so schedulers (launchd/cron) and the daily
     # pipeline can detect it; a non-trading-day skip is a success (exit 0).
     exit_code = _run_status_exit_code(result["status"])
@@ -994,7 +990,7 @@ def run_events(config_path: str, group_name: str | None, trade_date_str: str | N
         result = _run_events_job(cfg, engine, td, group_name)
     except RunLockError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo(json.dumps(result, indent=2, default=str))
+    emit_json(result, indent=2, default=str)
     exit_code = _run_status_exit_code(result["status"])
     if exit_code:
         raise SystemExit(exit_code)
@@ -1042,7 +1038,7 @@ def _retry_single_run(engine: JobEngine, run_id: str) -> dict:
             result = engine.run_job("retry", retry_failed_only=True, run_id=run_id)
     except RunLockError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo(json.dumps(result, indent=2, default=str))
+    emit_json(result, indent=2, default=str)
     return result
 
 

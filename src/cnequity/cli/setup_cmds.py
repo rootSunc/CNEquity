@@ -6,7 +6,6 @@ quickstart walks through them.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import date
 from pathlib import Path
@@ -27,6 +26,7 @@ from cnequity.cli._shared import (
     comma_values,
     config_is_implicit,
     config_option,
+    emit_json,
     ingest_scope_label,
     parse_date_option,
     resolve_config_path,
@@ -514,7 +514,7 @@ def init(
         exit_code = 0
     click.echo(format_readiness(cfg, chosen_packs), err=True)
     if as_json:
-        click.echo(json.dumps(result, indent=2, default=str))
+        emit_json(result, indent=2, default=str)
     else:
         for line in render_init_summary(
             result,
@@ -605,56 +605,36 @@ CONFIG_ACTIONS: tuple[str, ...] = ("validate", "create", "show", "diff", "upgrad
 CONFIG_ACTIONS_MOVED: dict[str, str] = {"init": "cne config create"}
 
 
-@cli.command("config")
-# Free-form rather than a Choice, so the body can answer a moved spelling.
-# Click's own rejection — "'init' is not one of 'validate', 'create', 'diff'" —
-# names everything except what the caller needs, and `cne config init` is the
-# first command a new lake ever runs: the people most likely to type it are the
-# ones with the least context to decode that.
-@click.argument("action")
-@config_option
-@click.option(
-    "--force",
-    is_flag=True,
-    help=N_("With action=create: overwrite an existing config file."),
-)
-@click.option(
-    "--data-root",
-    default=None,
-    help=N_(
-        "With action=create: set [data].root (defaults to ./data/cnequity resolved to an absolute path)."
-    ),
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    help=N_(
-        "With action=upgrade: only list the steps and schedule groups to add; writes no files."
-    ),
-)
-@click.option(
-    "--minimize",
-    is_flag=True,
-    help=N_(
-        "With action=upgrade: rewrite a full config to extend the built-in defaults, keeping only "
-        "the settings that differ; lists every setting whose behaviour would change."
-    ),
-)
-@click.option(
-    "--defaults",
-    "show_defaults",
-    is_flag=True,
-    help=N_("With action=show: print every setting with its built-in default and explanation."),
-)
-def config_cmd(
-    action: str,
-    config_path: str,
-    force: bool,
-    data_root: str | None,
-    dry_run: bool = False,
-    minimize: bool = False,
-    show_defaults: bool = False,
-):
+class _ConfigGroup(click.Group):
+    """``cne config``: a moved action is named; an unknown one lists the valid ones.
+
+    `cne config init` is the first command a new lake ever runs, so the people
+    most likely to type it are the ones with the least context; Click's own
+    "No such command" names nothing they could use instead.
+    """
+
+    def resolve_command(self, ctx: click.Context, args: list[str]):
+        name = args[0] if args else ""
+        if name and ctx.token_normalize_func is not None:
+            name = ctx.token_normalize_func(name)
+        moved = CONFIG_ACTIONS_MOVED.get(name)
+        if moved:
+            ctx.fail(
+                _("`{command_path} {name}` has been renamed; use `{value}` instead.").format(
+                    command_path=ctx.command_path, name=name, value=moved
+                )
+            )
+        if name and self.get_command(ctx, name) is None:
+            ctx.fail(
+                _("{action!r} is not one of {value}").format(
+                    action=name, value=", ".join(repr(a) for a in CONFIG_ACTIONS)
+                )
+            )
+        return super().resolve_command(ctx, args)
+
+
+@cli.group("config", cls=_ConfigGroup)
+def config_cmd():
     """Validate, generate or compare configs.
 
     \b
@@ -670,87 +650,32 @@ def config_cmd(
     leaving every other setting alone. `--minimize` instead rewrites a full config to extend the built-in defaults.
 
     """
-    # A free-form argument bypasses `token_normalize_func`, which is what makes
-    # every other name in this CLI case-insensitive; normalise it here so
-    # `cne config CREATE` behaves like `cne run DAILY`.
-    action = action.lower()
-    moved = CONFIG_ACTIONS_MOVED.get(action)
-    if moved:
-        raise click.ClickException(
-            _("`cne config {action}` has been renamed; use `{moved}` instead.").format(
-                action=action, moved=moved
-            )
-        )
-    if action not in CONFIG_ACTIONS:
-        raise click.BadParameter(
-            _("{action!r} is not one of {value}").format(
-                action=action, value=", ".join(repr(a) for a in CONFIG_ACTIONS)
-            ),
-            param_hint="'{" + "|".join(CONFIG_ACTIONS) + "}'",
-        )
-    if dry_run and action != "upgrade":
-        raise click.UsageError(_("--dry-run only applies to `cne config upgrade`"))
-    if minimize and action != "upgrade":
-        raise click.UsageError(_("--minimize only applies to `cne config upgrade`"))
-    if show_defaults and action != "show":
-        raise click.UsageError(_("--defaults only applies to `cne config show`"))
-    if action == "show":
-        _config_show(config_path, defaults=show_defaults)
-        return
-    if action in {"upgrade", "diff"}:
-        # A demo or sample config deliberately schedules nothing; comparing it
-        # with the full example would list every step as missing, and
-        # upgrading it would turn five symbols into a whole-market schedule.
-        try:
-            profile = getattr(_cfg(config_path), "lake_profile", None)
-        except (click.ClickException, ValueError, OSError):
-            profile = None  # a config that does not load is the action's own error to report
-        if profile in {"demo", "sample"}:
-            click.echo(
-                _(
-                    "{path} belongs to a {profile} lake, which has no schedule to compare or upgrade; `cne init` builds a lake with a full config."
-                ).format(path=resolve_config_path(config_path), profile=profile)
-            )
-            return
-    if action == "upgrade":
-        if minimize:
-            _config_minimize(resolve_config_path(config_path), dry_run=dry_run)
-        else:
-            _config_upgrade(resolve_config_path(config_path), dry_run=dry_run)
-        return
-    if action == "diff":
-        from cnequity.config.drift import config_drift, render_drift
 
-        path = resolve_config_path(config_path)
-        drift = config_drift(path)
-        for line in render_drift(drift, path):
-            click.echo(line)
-        # Unscheduled steps are the case that silently loses data, so they are
-        # the only drift that fails: missing keys merely take their defaults.
-        if drift.unscheduled_steps:
-            raise SystemExit(1)
-        return
 
-    if action == "path":
-        _config_path_report(config_path)
-        return
+def _no_schedule_to_compare(config_path: str) -> bool:
+    """A demo or sample config deliberately schedules nothing; say so and stop.
 
-    if action == "create":
-        out = Path(config_path).expanduser()
-        try:
-            write_user_config(out, data_root=data_root, force=force)
-        except FileExistsError as exc:
-            raise click.ClickException(str(exc)) from exc
-        click.echo(_("Written to {out}").format(out=out))
-        click.echo(
-            _(
-                "It extends the built-in defaults and sets only data.root (an absolute path); "
-                "add only what you want to change. `cne config show --defaults` lists every setting. "
-                "Then run: cne init"
-            )
-        )
-        return
+    Comparing it with the full example would list every step as missing, and
+    upgrading it would turn five symbols into a whole-market schedule.
+    """
+    try:
+        profile = getattr(_cfg(config_path), "lake_profile", None)
+    except (click.ClickException, ValueError, OSError):
+        return False  # a config that does not load is the action's own error to report
+    if profile not in {"demo", "sample"}:
+        return False
+    click.echo(
+        _(
+            "{path} belongs to a {profile} lake, which has no schedule to compare or upgrade; `cne init` builds a lake with a full config."
+        ).format(path=resolve_config_path(config_path), profile=profile)
+    )
+    return True
 
+
+@config_cmd.command("validate")
+@config_option
+def config_validate(config_path: str):
+    """Check an existing config."""
     cfg = _cfg(config_path)
     errors = validate_config(cfg)
     if errors:
@@ -758,6 +683,94 @@ def config_cmd(
             click.echo(f"ERROR: {e}", err=True)
         raise SystemExit(1)
     click.echo(_("Config check passed"))
+
+
+@config_cmd.command("create")
+@config_option
+@click.option("--force", is_flag=True, help=N_("Overwrite an existing config file."))
+@click.option(
+    "--data-root",
+    default=None,
+    help=N_("Set [data].root (defaults to ./data/cnequity resolved to an absolute path)."),
+)
+def config_create(config_path: str, force: bool, data_root: str | None):
+    """Write a short config that extends the built-in defaults."""
+    out = Path(config_path).expanduser()
+    try:
+        write_user_config(out, data_root=data_root, force=force)
+    except FileExistsError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(_("Written to {out}").format(out=out))
+    click.echo(
+        _(
+            "It extends the built-in defaults and sets only data.root (an absolute path); "
+            "add only what you want to change. `cne config show --defaults` lists every setting. "
+            "Then run: cne init"
+        )
+    )
+
+
+@config_cmd.command("show")
+@config_option
+@click.option(
+    "--defaults",
+    "show_defaults",
+    is_flag=True,
+    help=N_("Print every setting with its built-in default and explanation."),
+)
+def config_show(config_path: str, show_defaults: bool):
+    """Print the effective configuration and mark what the file sets."""
+    _config_show(config_path, defaults=show_defaults)
+
+
+@config_cmd.command("diff")
+@config_option
+def config_diff(config_path: str):
+    """Report what a full config lacks against the built-in defaults."""
+    if _no_schedule_to_compare(config_path):
+        return
+    from cnequity.config.drift import config_drift, render_drift
+
+    path = resolve_config_path(config_path)
+    drift = config_drift(path)
+    for line in render_drift(drift, path):
+        click.echo(line)
+    # Unscheduled steps are the case that silently loses data, so they are
+    # the only drift that fails: missing keys merely take their defaults.
+    if drift.unscheduled_steps:
+        raise SystemExit(1)
+
+
+@config_cmd.command("upgrade")
+@config_option
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help=N_("Only list the steps and schedule groups to add; writes no files."),
+)
+@click.option(
+    "--minimize",
+    is_flag=True,
+    help=N_(
+        "Rewrite a full config to extend the built-in defaults, keeping only "
+        "the settings that differ; lists every setting whose behaviour would change."
+    ),
+)
+def config_upgrade(config_path: str, dry_run: bool, minimize: bool):
+    """Add the schedule steps and groups this version brings, backing the config up first."""
+    if _no_schedule_to_compare(config_path):
+        return
+    if minimize:
+        _config_minimize(resolve_config_path(config_path), dry_run=dry_run)
+    else:
+        _config_upgrade(resolve_config_path(config_path), dry_run=dry_run)
+
+
+@config_cmd.command("path")
+@config_option
+def config_path_cmd(config_path: str):
+    """Show which config a command would use, why, and the lake it points to."""
+    _config_path_report(config_path)
 
 
 def _config_path_report(config_path: str) -> None:
@@ -1024,7 +1037,7 @@ def doctor(config_path: str, as_json: bool):
         )
 
     if as_json:
-        click.echo(json.dumps(to_dict(report), indent=2, default=str))
+        emit_json(to_dict(report), indent=2, default=str)
     else:
         for line in render_text(report):
             click.echo(line)
