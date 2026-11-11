@@ -41,6 +41,7 @@
 - 复权因子的 `stock_event_factor` 和 `fund_share_factor` 发现项补上了说明文字（哪只证券、哪天、因子是保留、按比例修正还是核对无误），此前没有 `message`，在 `cne audit` 和网页控制台上显示为空行，而它们占了发现项的大多数。审计写入发现项前统一检查：严重级别只能是 error、warning、info，必须有检查名；缺说明的发现项改用检查名代替并记一条日志，不会让审计失败。
 - `cne run maintain` 每天清理中断的提交留下的东西：复制中途断掉留下的临时目录、写完收据却没来得及切换指针的未发布代（收据保留，作为失败记录；人工保留的不删），并按当前指针重建对不上的状态文件；没有收据的代只列出不删。此前代码注释说这些由 `gc` 回收，但并没有这个命令。
 - `cne status --datasets` 新增 `--json`：stdout 只输出一个 JSON（`last_trading_day`、各数据集的 freshness 等列，freshness 为小写，以及 `--hide-empty` 折叠掉的 `folded`），之后的截面核对与门禁说明改走 stderr，退出码不变，脚本不必再解析表格。
+- `cne audit --full` 新增 `--universe-profile <画像名>`，按 `cne profile list` 里的画像判定历史研究有效性，默认 `legacy_all_a`，结果与原来的 `all_a` 相同；健康快照多一个 `historical_universe_profile`。旧的 `--research-universe all_a|all_a_sh_sz` 仍可用，对应 `legacy_all_a` / `legacy_all_a_sh_sz`，会提示改用新选项。`load(universe="all_a")` 将在 0.25.0 移除，改用 `profile="legacy_all_a"` 可得到同样的行。
 - `cne config` 的 validate、create、show、diff、upgrade、path 改为真正的子命令，写法不变；`cne config <子命令> --help` 只列出该子命令自己的选项。把选项写在子命令前面（如 `cne config --config X validate`）不再有效，请写在子命令后面。
 - 网页控制台切换页面时，前一个页面晚到的请求不再覆盖当前页面：此前从概览打开操作页，地址栏停在操作页，内容却会被加载较慢的概览替换。
 - 期货和期权行情的成交量、持仓量、持仓变化、成交额单元格为空时，不再读成 0：各交易所文件和新浪接口都用 0 表示没有成交或持仓，空单元格是损坏的数据。此前空成交量会让一个有成交的合约被存成无成交行，价格被清空。现在空值保持为空，成交量或持仓量为空的行按行隔离并报 `futures_row_rejected` 警告，同一交易日的其他合约照常写入。已有数据不需要迁移：正常文件里不会出现空的计数单元格，郑商所、上期所、中金所和广期所文件还会按小计核对成交量和持仓量。

@@ -613,9 +613,9 @@ cne repair layout futures_bars --apply
 | `--quality-only` | 配合 `--full`：只对质量 error 设门禁；调度新鲜度另用 `cne status` 单独查 |
 | `--research-start YYYY-MM-DD` | 与 `--full` 合用；严格验证所选历史宇宙，未通过时退出 1 |
 | `--research-end YYYY-MM-DD` | 研究窗口末日；默认取 `daily_bars` 最新分区 |
-| `--research-universe all_a\|all_a_sh_sz` | 历史研究口径；默认 `all_a`，`all_a_sh_sz` 排除 BJ 的来源能力缺口 |
+| `--universe-profile <画像名>` | 判定哪个 universe 画像的历史有效性（`cne profile list`）；默认 `legacy_all_a`，即原来的 `all_a` 口径。`cn_a_sh_sz_research_v1` 或 `legacy_all_a_sh_sz` 排除 BJ 的来源能力缺口。旧写法 `--research-universe all_a\|all_a_sh_sz` 仍可用，对应 `legacy_all_a` / `legacy_all_a_sh_sz`，并提示已弃用 |
 
-`--full` 且 UNHEALTHY 退出 1。显式传 `--research-start` 后，研究宇宙未通过也退出 1；此时末行会显示 `HEALTHY (operational; research BLOCKED)`，表示湖的运营健康与研究可用性是两个独立门禁。未显式传 `--research-start` 时，历史宇宙状态仍写入 health 与 `historical-validity-latest.json`，但不会改变运维健康的退出码。快照同时记录 `historical_universe`，避免把 scoped 结果误读成全 A。
+`--full` 且 UNHEALTHY 退出 1。显式传 `--research-start` 后，研究宇宙未通过也退出 1；此时末行会显示 `HEALTHY (operational; research BLOCKED)`，表示湖的运营健康与研究可用性是两个独立门禁。未显式传 `--research-start` 时，历史宇宙状态仍写入 health 与 `historical-validity-latest.json`，但不会改变运维健康的退出码。快照同时记录 `historical_universe` 和 `historical_universe_profile`，避免把 scoped 结果误读成全 A。
 
 ## cne verify
 

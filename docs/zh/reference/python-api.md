@@ -40,7 +40,7 @@ def load(
 | `dataset` | 注册数据集名 |
 | `start`, `end` | 含边界日期窗口（数据集主日期列） |
 | `adjust` | `hfq` / `qfq`；适用于 `daily_bars`、`minute_bars`、`minute_bars_5m` 等价量数据集。`total_return` 仅用于 `daily_bars`：基金现金分配再投资，股票同 `hfq`，见[查询指南](../datasets/query-guide.md#总收益复权total_return) |
-| `universe` | 兼容参数：`"all_a"` 沪深北全 A（已弃用，发出警告）；`"all_a_sh_sz"` 沪深子集。新研究应选版本化 `profile` |
+| `universe` | 兼容参数：`"all_a"` 沪深北全 A（已弃用，发出警告，0.25.0 移除；`profile="legacy_all_a"` 返回同样的行）；`"all_a_sh_sz"` 沪深子集。新研究应选版本化 `profile` |
 | `as_of` | PIT 截止日；可见性规则由 `pit_mode` 决定。严格模式核验公告、可用/发布时间及观察时间，随后按事实键选有效版本 |
 | `items` | 财报科目 code 列表 |
 | `symbols` | symbol 白名单 |

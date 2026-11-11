@@ -1148,6 +1148,16 @@ msgstr "--research-start 必须早于或等于 --research-end"
 msgid "--research-start needs --full"
 msgstr "--research-start 需要配合 --full"
 
+#: cnequity/cli/quality_cmds.py
+#, python-brace-format
+msgid "--research-universe is deprecated; use --universe-profile {name}"
+msgstr "--research-universe 已弃用；请改用 --universe-profile {name}"
+
+#: cnequity/cli/quality_cmds.py
+#, python-brace-format
+msgid "--research-universe {old} conflicts with --universe-profile {new}"
+msgstr "--research-universe {old} 与 --universe-profile {new} 冲突"
+
 #: cnequity/cli/demo.py
 msgid "--sample cannot be combined with --intraday or --research"
 msgstr "--sample 不能和 --intraday 或 --research 一起用"
@@ -3023,10 +3033,6 @@ msgstr "历史 ST 尚未覆盖：{reason}。当前交易状态不能代替它。
 #: cnequity/ops/settings.py
 msgid "Historical quotes fallback."
 msgstr "历史行情兜底。"
-
-#: cnequity/cli/quality_cmds.py
-msgid "Historical research universe checked by --full."
-msgstr "--full 检查的历史研究 universe。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
@@ -6307,6 +6313,10 @@ msgstr "统一估值行的市盈率与市值口径"
 #: cnequity/research/packs.py
 msgid "Universe"
 msgstr "股票池"
+
+#: cnequity/cli/quality_cmds.py
+msgid "Universe profile whose historical validity --full checks (see `cne profile list`); default legacy_all_a."
+msgstr "--full 检查哪个 universe profile 的历史有效性（见 `cne profile list`）；默认 legacy_all_a。"
 
 #: cnequity/cli/backfill_cmds.py
 #, python-brace-format

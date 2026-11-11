@@ -1474,8 +1474,7 @@ def test_audit_full_research_window_is_a_strict_independent_gate(cfg_path, monke
     assert "HEALTHY（运维层面；研究层面 BLOCKED）" in result.output
 
 
-@pytest.mark.usefixtures("chinese_output")
-def test_audit_full_can_select_scoped_research_universe(cfg_path, monkeypatch):
+def _capture_lake_health(monkeypatch) -> dict[str, object]:
     observed: dict[str, object] = {}
 
     def _health(_cfg, _trade_date, **kwargs):
@@ -1497,6 +1496,43 @@ def test_audit_full_can_select_scoped_research_universe(cfg_path, monkeypatch):
         }
 
     monkeypatch.setattr("cnequity.quality.audit.lake_health", _health)
+    return observed
+
+
+@pytest.mark.usefixtures("chinese_output")
+def test_audit_full_can_select_a_universe_profile(cfg_path, monkeypatch):
+    observed = _capture_lake_health(monkeypatch)
+    result = CliRunner().invoke(
+        cli,
+        ["audit", "--full", "--config", cfg_path, "--universe-profile", "cn_a_sh_sz_research_v1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed["research_profile"] == "cn_a_sh_sz_research_v1"
+    assert "历史 all_a_sh_sz" in result.output
+
+
+def test_audit_full_defaults_to_the_legacy_all_a_profile(cfg_path, monkeypatch):
+    observed = _capture_lake_health(monkeypatch)
+    result = CliRunner().invoke(cli, ["audit", "--full", "--config", cfg_path])
+
+    assert result.exit_code == 0, result.output
+    assert observed["research_profile"] == "legacy_all_a"
+
+
+def test_audit_research_universe_maps_to_its_legacy_profile(cfg_path, monkeypatch):
+    observed = _capture_lake_health(monkeypatch)
+    result = CliRunner().invoke(
+        cli, ["audit", "--full", "--config", cfg_path, "--research-universe", "all_a_sh_sz"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed["research_profile"] == "legacy_all_a_sh_sz"
+    assert "--universe-profile legacy_all_a_sh_sz" in result.output
+
+
+def test_audit_research_universe_conflicting_with_profile_is_refused(cfg_path, monkeypatch):
+    _capture_lake_health(monkeypatch)
     result = CliRunner().invoke(
         cli,
         [
@@ -1505,13 +1541,14 @@ def test_audit_full_can_select_scoped_research_universe(cfg_path, monkeypatch):
             "--config",
             cfg_path,
             "--research-universe",
-            "all_a_sh_sz",
+            "all_a",
+            "--universe-profile",
+            "cn_a_sh_sz_research_v1",
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    assert observed["research_universe"] == "all_a_sh_sz"
-    assert "历史 all_a_sh_sz" in result.output
+    assert result.exit_code != 0
+    assert "conflicts" in result.output
 
 
 def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):

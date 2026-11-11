@@ -507,9 +507,10 @@ def test_lake_health_persists_selected_research_universe(tmp_path, monkeypatch):
     monkeypatch.setattr(audit_module, "run_source_diffs", lambda *args, **kwargs: [])
 
     def _validity(*args, **kwargs):
-        observed["universe"] = kwargs["universe"]
+        observed["profile"] = kwargs["profile"]
         return {
-            "universe": kwargs["universe"],
+            "universe": "all_a_sh_sz",
+            "profile_name": kwargs["profile"],
             "window": {"start": None, "end": None},
             "universe_ready": True,
             "blockers": [],
@@ -519,10 +520,13 @@ def test_lake_health_persists_selected_research_universe(tmp_path, monkeypatch):
         "cnequity.quality.historical_validity.historical_universe_validity", _validity
     )
 
-    health = audit_module.lake_health(cfg, date(2024, 6, 28), research_universe="all_a_sh_sz")
+    health = audit_module.lake_health(
+        cfg, date(2024, 6, 28), research_profile="cn_a_sh_sz_research_v1"
+    )
 
-    assert observed == {"universe": "all_a_sh_sz"}
+    assert observed == {"profile": "cn_a_sh_sz_research_v1"}
     assert health["historical_universe"] == "all_a_sh_sz"
+    assert health["historical_universe_profile"] == "cn_a_sh_sz_research_v1"
     assert health["historical_universe_validity"]["universe"] == "all_a_sh_sz"
 
 
@@ -549,14 +553,14 @@ def test_lake_health_keeps_all_a_st_baseline_when_research_is_scoped(tmp_path, m
     monkeypatch.setattr(
         "cnequity.quality.historical_validity.historical_universe_validity",
         lambda *args, **kwargs: {
-            "universe": kwargs["universe"],
+            "universe": "all_a_sh_sz",
             "window": {"start": None, "end": None},
             "universe_ready": True,
             "blockers": [],
         },
     )
 
-    health = audit_module.lake_health(cfg, date(2024, 6, 28), research_universe="all_a_sh_sz")
+    health = audit_module.lake_health(cfg, date(2024, 6, 28), research_profile="legacy_all_a_sh_sz")
 
     baseline = health["historical_all_a_st_evidence"]
     assert baseline["verified"] is False

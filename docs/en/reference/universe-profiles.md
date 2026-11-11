@@ -26,8 +26,9 @@ normal, tradable row. PIT fundamentals remain subject to the Reader's explicit
 `pit_mode` and `as_of` contract.
 
 The old `universe="all_a"` argument remains available for compatibility and
-keeps its permissive legacy semantics, but emits `DeprecationWarning`. It does
-not silently become either official profile. Use an explicit profile in new
+keeps its permissive legacy semantics, but emits `DeprecationWarning` and will
+be removed in 0.25.0; `profile="legacy_all_a"` returns the same rows without
+the warning. It does not silently become either official profile. Use an explicit profile in new
 research code:
 
 ```python

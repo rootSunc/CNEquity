@@ -616,9 +616,9 @@ cne repair layout futures_bars --apply
 | `--quality-only` | With `--full`: gate only on quality errors; check schedule freshness separately with `cne status` |
 | `--research-start YYYY-MM-DD` | Used with `--full`; strictly validates the selected historical universe and exits 1 if it fails |
 | `--research-end YYYY-MM-DD` | End of the research window; defaults to the latest `daily_bars` partition |
-| `--research-universe all_a\|all_a_sh_sz` | Historical research scope; default `all_a`, `all_a_sh_sz` excludes BJ's source capability gaps |
+| `--universe-profile <name>` | Universe profile whose historical validity is judged (`cne profile list`); default `legacy_all_a`, the old `all_a` scope. `cn_a_sh_sz_research_v1` or `legacy_all_a_sh_sz` excludes BJ's source capability gaps. The old `--research-universe all_a\|all_a_sh_sz` still works, maps to `legacy_all_a` / `legacy_all_a_sh_sz` and prints a deprecation note |
 
-`--full` with UNHEALTHY exits 1. When `--research-start` is passed explicitly, a failing research universe also exits 1; the last line then shows `HEALTHY (operational; research BLOCKED)`, meaning the lake's operational health and its research usability are two independent gates. When `--research-start` is not passed explicitly, the historical-universe status is still written to health and `historical-validity-latest.json`, but it does not change the operational-health exit code. The snapshot also records `historical_universe`, so a scoped result is not misread as all A-shares.
+`--full` with UNHEALTHY exits 1. When `--research-start` is passed explicitly, a failing research universe also exits 1; the last line then shows `HEALTHY (operational; research BLOCKED)`, meaning the lake's operational health and its research usability are two independent gates. When `--research-start` is not passed explicitly, the historical-universe status is still written to health and `historical-validity-latest.json`, but it does not change the operational-health exit code. The snapshot also records `historical_universe` and `historical_universe_profile`, so a scoped result is not misread as all A-shares.
 
 ## cne verify
 

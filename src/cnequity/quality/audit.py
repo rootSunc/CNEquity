@@ -829,9 +829,13 @@ def lake_health(
     *,
     research_start: date | None = None,
     research_end: date | None = None,
-    research_universe: str = "all_a",
+    research_profile: str = "legacy_all_a",
 ) -> dict:
-    """Lake health: findings + freshness → ``meta/quality/health-latest.json``."""
+    """Lake health: findings + freshness → ``meta/quality/health-latest.json``.
+
+    ``research_profile`` names the universe profile whose historical validity
+    is judged; the default reproduces the pre-profile ``all_a`` checks.
+    """
     from cnequity.domain.datasets import DATASETS, is_dataset_enabled
     from cnequity.quality.freshness import is_stale
     from cnequity.quality.gate import audit_verdict
@@ -882,7 +886,7 @@ def lake_health(
         config,
         start=research_start,
         end=research_end,
-        universe=research_universe,
+        profile=research_profile,
     )
     all_a_st_evidence = _all_a_st_evidence_summary(findings)
     health = {
@@ -903,7 +907,8 @@ def lake_health(
         # health. A fresh lake can still be unsafe for a long backtest, while a
         # stale optional dataset need not invalidate a closed historical study.
         "historical_universe_validity": historical_validity,
-        "historical_universe": historical_validity.get("universe", research_universe),
+        "historical_universe": historical_validity.get("universe"),
+        "historical_universe_profile": historical_validity.get("profile_name", research_profile),
         "historical_all_a_st_evidence": all_a_st_evidence,
         # The same verdict `cne audit` and `cne check` give (see `quality.gate`).
         "healthy": audit_verdict(findings).passed and not stale,

@@ -12,7 +12,8 @@
 | `--research-start` | `—` | 严格校验从这一天开始的研究窗口（需要 --full）。 |
 | `--quality-only` | `False` | 配合 --full：只按质量 error 判门禁；调度新鲜度请另外用 status 检查。 |
 | `--research-end` | `—` | 研究窗口终点（默认取最新的 daily_bars；需要 --research-start）。 |
-| `--research-universe` | `all_a` | --full 检查的历史研究 universe。 |
+| `--universe-profile` | `—` | --full 检查哪个 universe profile 的历史有效性（见 `cne profile list`）；默认 legacy_all_a。 |
+| `--research-universe` | `—` | — |
 
 ## `cne backfill`
 

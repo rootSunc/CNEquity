@@ -17,7 +17,7 @@ scope_hash = <注册表返回的完整 SHA-256>
 
 两个正式画像都按上市、退市日期做时点判断。对严格画像来说，缺少 `instruments`、缺少某个代码某天的 `trading_status` 行，或缺少完整的历史 ST 收据，都会抛出 `UniverseCoverageError`。这样，一条缺失的观测不会被当成一行正常、可交易的数据。PIT 财务数据仍然受读取接口显式的 `pit_mode` 和 `as_of` 约束。
 
-旧的 `universe="all_a"` 参数为了兼容仍然可用，保留原来宽松的语义，但会发出 `DeprecationWarning`。它不会悄悄变成任何一个正式画像。新的研究代码请显式指定画像：
+旧的 `universe="all_a"` 参数为了兼容仍然可用，保留原来宽松的语义，但会发出 `DeprecationWarning`，并将在 0.25.0 移除；`profile="legacy_all_a"` 返回同样的行且不告警。它不会悄悄变成任何一个正式画像。新的研究代码请显式指定画像：
 
 ```python
 from cnequity.query import load

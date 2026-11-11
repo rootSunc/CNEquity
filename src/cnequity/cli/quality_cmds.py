@@ -33,6 +33,7 @@ from cnequity.cli._shared import (
 from cnequity.cli.backfill_cmds import _require_known_dataset, _run_backfill
 from cnequity.domain.market_profile import BSE_FIRST_SESSION
 from cnequity.domain.market_time import shanghai_today
+from cnequity.domain.universe_profiles import PROFILE_REGISTRY, profile_for_legacy_universe
 from cnequity.i18n import N_, _, localize
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.quality.audit import run_audit
@@ -375,11 +376,18 @@ def _tip_scope(cfg, catalog: pl.DataFrame, dataset: str = "daily_bars") -> dict 
     ),
 )
 @click.option(
+    "--universe-profile",
+    type=click.Choice(sorted(PROFILE_REGISTRY)),
+    default=None,
+    help=N_(
+        "Universe profile whose historical validity --full checks (see `cne profile list`); default legacy_all_a."
+    ),
+)
+@click.option(
     "--research-universe",
     type=click.Choice(["all_a", "all_a_sh_sz"]),
-    default="all_a",
-    show_default=True,
-    help=N_("Historical research universe checked by --full."),
+    default=None,
+    hidden=True,
 )
 def audit(
     config_path: str,
@@ -387,7 +395,8 @@ def audit(
     full: bool,
     research_start: str | None,
     research_end: str | None,
-    research_universe: str,
+    universe_profile: str | None,
+    research_universe: str | None,
     quality_only: bool = False,
 ):
     """Run the quality audit; add --full for a health snapshot of the whole lake as it is now.
@@ -409,6 +418,22 @@ def audit(
         raise click.ClickException(_("--research-start needs --full"))
     if research_end and not research_start:
         raise click.ClickException(_("--research-end needs --research-start"))
+    if research_universe is not None:
+        legacy_profile = profile_for_legacy_universe(research_universe).name
+        if universe_profile is not None and universe_profile != legacy_profile:
+            raise click.ClickException(
+                _("--research-universe {old} conflicts with --universe-profile {new}").format(
+                    old=research_universe, new=universe_profile
+                )
+            )
+        click.echo(
+            _("--research-universe is deprecated; use --universe-profile {name}").format(
+                name=legacy_profile
+            ),
+            err=True,
+        )
+        universe_profile = legacy_profile
+    research_profile = universe_profile or profile_for_legacy_universe("all_a").name
 
     if full:
         from cnequity.quality.audit import lake_health
@@ -422,7 +447,7 @@ def audit(
             shanghai_today(),
             research_start=start_date,
             research_end=end_date,
-            research_universe=research_universe,
+            research_profile=research_profile,
         )
         sev = health["findings_by_severity"]
         click.echo(
@@ -488,11 +513,8 @@ def audit(
             )
         else:
             research_state = "READY" if validity["universe_ready"] else "BLOCKED"
-            universe_label = (
-                "all-A"
-                if validity.get("universe", research_universe) == "all_a"
-                else validity.get("universe", research_universe)
-            )
+            universe = validity.get("universe", PROFILE_REGISTRY[research_profile].legacy_universe)
+            universe_label = "all-A" if universe == "all_a" else universe
             click.echo(
                 _("  History {universe_label} {start}..{end}: {research_state}").format(
                     universe_label=universe_label,

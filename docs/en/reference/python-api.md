@@ -40,7 +40,7 @@ def load(
 | `dataset` | Registered dataset name |
 | `start`, `end` | Inclusive date window (on the dataset's primary date column) |
 | `adjust` | `hfq` / `qfq`; applies to price/volume datasets such as `daily_bars`, `minute_bars`, and `minute_bars_5m`. `total_return` applies only to `daily_bars`: fund cash distributions are reinvested, and stocks behave as `hfq`; see the [query guide](../datasets/query-guide.md#total-return-adjustment-total_return) |
-| `universe` | Compatibility parameter: `"all_a"` is all A-shares across Shanghai, Shenzhen and Beijing (deprecated, emits a warning); `"all_a_sh_sz"` is the Shanghai/Shenzhen subset. New research should choose a versioned `profile` |
+| `universe` | Compatibility parameter: `"all_a"` is all A-shares across Shanghai, Shenzhen and Beijing (deprecated, emits a warning, removed in 0.25.0; `profile="legacy_all_a"` returns the same rows); `"all_a_sh_sz"` is the Shanghai/Shenzhen subset. New research should choose a versioned `profile` |
 | `as_of` | PIT cutoff date; visibility rules are determined by `pit_mode`. Strict mode checks announcement, availability/publication time, and observation time, then selects the effective version by fact key |
 | `items` | List of financial statement item codes |
 | `symbols` | Symbol allowlist |

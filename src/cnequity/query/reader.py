@@ -192,9 +192,9 @@ def _resolve_reader_scope(
 
     if universe == "all_a":
         warnings.warn(
-            "universe='all_a' is a deprecated compatibility alias; choose an explicit "
-            "versioned profile such as 'cn_a_sh_sz_research_v1' or "
-            "'cn_a_all_experimental_v1'",
+            "universe='all_a' is a deprecated compatibility alias and will be removed in "
+            "0.25.0; pass profile='legacy_all_a' for the same rows, or choose a versioned "
+            "profile such as 'cn_a_sh_sz_research_v1' or 'cn_a_all_experimental_v1'",
             DeprecationWarning,
             stacklevel=3,
         )
