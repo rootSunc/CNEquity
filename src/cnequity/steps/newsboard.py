@@ -74,6 +74,20 @@ def step_economic_calendar(config: Config, trade_date: date, run_id: str, contex
     )
 
 
+def _scan_stored(files):
+    """Scan year files whose columns differ: a backfilled year predates `withdrawn`.
+
+    One scan over the list takes its schema from the first file and rejects a
+    later file's extra column, so each file is scanned on its own.
+    """
+    import polars as pl
+
+    return pl.concat(
+        [pl.scan_parquet(f, hive_partitioning=False) for f in sorted(files)],
+        how="diagonal_relaxed",
+    )
+
+
 def _with_withdrawn(config: Config, dataset: str, df, start: date, end: date):
     """Mark the window's stored events this capture no longer lists.
 
@@ -89,7 +103,7 @@ def _with_withdrawn(config: Config, dataset: str, df, start: date, end: date):
     files = list(root.glob("**/*.parquet")) if root.exists() else []
     if not files:
         return df
-    scan = pl.scan_parquet(files, missing_columns="insert")
+    scan = _scan_stored(files)
     names = scan.collect_schema().names()
     # Columns no stored file has yet (rows from before they existed).
     scan = scan.with_columns(
@@ -121,7 +135,7 @@ def _calendar_days_present(config: Config) -> set[date]:
     # A day written before indicator_code existed is not "present": the
     # backfill refetches it so every row names its series.
     days = (
-        pl.scan_parquet(files, missing_columns="insert")
+        _scan_stored(files)
         .group_by("event_date")
         .agg(pl.col("indicator_code").null_count().alias("uncoded"))
         .filter(pl.col("uncoded") == 0)

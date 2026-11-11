@@ -181,3 +181,42 @@ def test_an_event_dropped_from_a_later_capture_is_marked_withdrawn(tmp_path):
     # The reissued event is current; the one it replaced inside the window is
     # flagged; nothing outside the window is touched.
     assert flags == {"jin10:1189668": False, "jin10:1178833": True}
+
+
+def test_withdrawn_marking_reads_past_an_earlier_year_without_the_column(tmp_path):
+    import polars as pl
+
+    from cnequity.config import Config
+    from cnequity.steps.newsboard import _calendar_days_present, _with_withdrawn
+
+    cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
+    root = cfg.curated_root / "economic_calendar"
+
+    def day(data_id, pub_time, on):
+        return pl.DataFrame(
+            parse_day({"status": 200, "data": [_item(data_id=data_id, pub_time=pub_time)]}, on)
+        )
+
+    # A backfilled year sorts first and has no `withdrawn`; this year has it.
+    (root / "event_date=2025").mkdir(parents=True)
+    day(7, "2025-03-03 07:30", date(2025, 3, 3)).write_parquet(
+        root / "event_date=2025" / "part.parquet"
+    )
+    (root / "event_date=2026").mkdir()
+    pl.concat(
+        [
+            day(1178833, "2026-11-05 07:30", date(2026, 11, 5)),
+            day(2, "2026-11-04 07:30", date(2026, 11, 4)),
+        ]
+    ).with_columns(pl.Series("withdrawn", [False, True])).write_parquet(
+        root / "event_date=2026" / "part.parquet"
+    )
+    fresh = day(1189668, "2026-11-02 07:30", date(2026, 11, 2))
+
+    out = _with_withdrawn(cfg, "economic_calendar", fresh, date(2026, 10, 31), date(2026, 11, 14))
+    # The row already flagged is not flagged a second time.
+    assert dict(zip(out["event_id"], out["withdrawn"], strict=True)) == {
+        "jin10:1189668": False,
+        "jin10:1178833": True,
+    }
+    assert date(2025, 3, 3) in _calendar_days_present(cfg)
