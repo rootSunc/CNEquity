@@ -6,6 +6,7 @@ import pytest
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config, FailoverDatasetSpec
+from cnequity.run_scope import set_backfill
 from cnequity.steps.events import step_corporate_actions
 from cnequity.storage.raw_archive import RawArchiveError
 
@@ -164,9 +165,7 @@ def test_corporate_actions_backfill_rejects_source_rows_outside_requested_window
     cfg = Config(
         data_root=tmp_path / "data", sources={"eastmoney": True}, raw_archive_enabled=False
     )
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 6, 30)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 6, 30))
     rows = pl.DataFrame(
         {
             "symbol": ["600519.SH", "600519.SH", "600519.SH"],
@@ -189,7 +188,7 @@ def test_corporate_actions_backfill_rejects_source_rows_outside_requested_window
 
 def test_corporate_actions_backfill_default_reaches_research_floor(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     monkeypatch.setattr("cnequity.steps.events.load_symbols", lambda _cfg: ["600849.SH"])
     rows = pl.DataFrame(
         {
@@ -213,9 +212,7 @@ def test_corporate_actions_backfill_default_reaches_research_floor(tmp_path, mon
 
 def test_corporate_actions_captureless_backfill_fails_before_staging(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 6, 28)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 6, 28))
     monkeypatch.setattr("cnequity.steps.events.load_symbols", lambda _cfg: ["600519.SH"])
     monkeypatch.setattr(
         "cnequity.steps.events.fetch_corporate_actions",

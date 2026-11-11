@@ -10,6 +10,7 @@ import pytest
 from cnequity.adapters.tushare import sector_fund_flow as tsf
 from cnequity.config import Config
 from cnequity.orchestrator.outcomes import SourcePayloadError
+from cnequity.run_scope import set_backfill
 from cnequity.storage.parquet import StagingWriter
 
 FIELDS = tsf._FIELDS.split(",")
@@ -89,9 +90,7 @@ def test_backfill_adds_only_boards_the_day_lacks(tmp_path, monkeypatch):
     ).with_columns(
         pl.lit("2026-07-03T09:00:00+00:00").str.to_datetime(time_zone="UTC").alias("fetched_at")
     ).write_parquet(held / "part-merged.parquet")
-    cfg._backfill = True
-    cfg._backfill_start = date(2026, 7, 2)
-    cfg._backfill_end = date(2026, 7, 3)
+    set_backfill(cfg, active=True, start=date(2026, 7, 2), end=date(2026, 7, 3))
     monkeypatch.setattr(
         tsf, "fetch_sector_fund_flow", lambda d, *, config, client=None: _session(d, 2, 1)
     )

@@ -15,8 +15,8 @@ import re
 from datetime import date, timedelta
 
 import polars as pl
-from pypdf import PdfReader
 
+from cnequity._lazy import lazy_attribute
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 from cnequity.domain.bse_codes import current_to_legacy
 from cnequity.storage.raw_archive import (
@@ -25,6 +25,8 @@ from cnequity.storage.raw_archive import (
     begin_capture,
     verify_raw_archive,
 )
+
+PdfReader = lazy_attribute("pypdf", "PdfReader")
 
 _QUERY = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 _PDF = "https://pdf.dfcfw.com/pdf/H2_{art_code}_1.pdf"

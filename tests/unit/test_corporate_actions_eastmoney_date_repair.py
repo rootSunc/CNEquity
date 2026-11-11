@@ -14,6 +14,7 @@ import pytest
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps import events
 
 
@@ -39,14 +40,14 @@ def _config(tmp_path) -> Config:
         sources={"eastmoney": True},
         raw_archive_enabled=False,
     )
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     return cfg
 
 
 def test_named_ex_dates_are_fetched_and_no_symbol_sweep_runs(tmp_path, monkeypatch):
     """Asking for 18 dates must not cost a 5,500-symbol TDX walk."""
     cfg = _config(tmp_path)
-    cfg._corporate_actions_eastmoney_date_repair = [date(2001, 4, 6), date(2002, 5, 31)]
+    set_run_flags(cfg, ca_eastmoney_date_repair=[date(2001, 4, 6), date(2002, 5, 31)])
 
     monkeypatch.setattr(events, "load_symbols", lambda _cfg: ["600110.SH", "000755.SZ"])
 
@@ -76,9 +77,8 @@ def test_named_ex_dates_are_fetched_and_no_symbol_sweep_runs(tmp_path, monkeypat
 def test_a_date_outside_the_backfill_window_is_refused_before_any_request(tmp_path, monkeypatch):
     """The window guard downstream would reject the rows after paying for them."""
     cfg = _config(tmp_path)
-    cfg._backfill_start = date(2005, 1, 1)
-    cfg._backfill_end = date(2006, 12, 31)
-    cfg._corporate_actions_eastmoney_date_repair = [date(2001, 4, 6)]
+    set_backfill(cfg, start=date(2005, 1, 1), end=date(2006, 12, 31))
+    set_run_flags(cfg, ca_eastmoney_date_repair=[date(2001, 4, 6)])
 
     monkeypatch.setattr(events, "load_symbols", lambda _cfg: [])
     monkeypatch.setattr(events, "fetch_corporate_actions", lambda *a, **k: pl.DataFrame())

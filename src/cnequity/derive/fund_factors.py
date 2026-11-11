@@ -147,7 +147,7 @@ def apply_fund_share_factors(
 ) -> tuple[pl.DataFrame, list[dict]]:
     """Rebuild each touched fund from full raw history before selecting its slice."""
     from cnequity.derive.adj_factors import _action_terms
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
     from cnequity.storage.instrument_catalog import load_curated_instruments
     from cnequity.storage.read_context import read_root

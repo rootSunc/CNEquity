@@ -25,6 +25,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps.common import (
     fetch_incremental_daily,
     last_session_on_or_before,
@@ -59,7 +60,7 @@ def _lake(tmp_path, calendar: str) -> Config:
 @pytest.mark.parametrize("calendar", CALENDARS)
 def test_backfill_across_a_closure_never_requests_or_owes_a_closed_day(tmp_path, calendar):
     cfg = _lake(tmp_path, calendar)
-    cfg._backfill_start, cfg._backfill_end = WINDOW
+    set_backfill(cfg, start=WINDOW[0], end=WINDOW[1])
     fetched: list[date] = []
 
     def fetch_one(day: date) -> pl.DataFrame:

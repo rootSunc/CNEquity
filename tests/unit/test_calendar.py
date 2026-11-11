@@ -7,7 +7,7 @@ from cnequity.adapters.calendar.exchange_calendar import (
     calendar_forward_coverage_days,
     calendar_seed_end,
 )
-from cnequity.adapters.calendar.holidays_cn import EXTRA_TRADING_DATES
+from cnequity.domain.holidays_cn import EXTRA_TRADING_DATES
 
 
 def test_cny_holiday_not_trading():

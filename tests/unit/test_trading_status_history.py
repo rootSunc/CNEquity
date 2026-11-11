@@ -6,6 +6,7 @@ import pytest
 from cnequity.config import Config
 from cnequity.derive.trading_status_history import derive_suspension_history
 from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.run_scope import set_backfill
 from cnequity.storage.parquet import compact_dataset
 
 
@@ -679,7 +680,7 @@ def test_backfill_mode_drops_the_daily_tail_window(tmp_path, monkeypatch):
     step_trading_status_derive(cfg, trade_date, "run-daily", {})
     assert seen == {"start": date(2026, 2, 19), "end": trade_date}
 
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     step_trading_status_derive(cfg, trade_date, "run-init", {})
     assert seen == {"start": None, "end": None}
 

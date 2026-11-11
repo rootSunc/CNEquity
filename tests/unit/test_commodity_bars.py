@@ -14,6 +14,7 @@ from cnequity.adapters.eastmoney.commodity_bars import (
 )
 from cnequity.domain.datasets import get_dataset
 from cnequity.domain.schemas import DATASET_SCHEMAS, PRIMARY_KEYS, validate_dataframe
+from cnequity.run_scope import set_backfill
 
 
 def test_commodity_bars_registered():
@@ -491,9 +492,7 @@ def _backfill_config(tmp_path, start: date, end: date):
     from cnequity.config import Config
 
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
-    cfg._backfill_start = start
-    cfg._backfill_end = end
+    set_backfill(cfg, active=True, start=start, end=end)
     return cfg
 
 

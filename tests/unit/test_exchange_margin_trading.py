@@ -16,6 +16,7 @@ import pytest
 
 from cnequity.adapters.exchange import margin_trading as em
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps.capital import _fetch_margin_via_exchange, _margin_source
 
 TD = date(2026, 8, 27)
@@ -289,8 +290,7 @@ def test_partial_exchange_publishes_and_the_retry_fetches_the_missing_exchange(
 
     cfg = _cfg(tmp_path)
     cfg.margin_trading_source = source
-    cfg._backfill_start = cfg._backfill_end = TD
-    cfg._backfill_workers = workers
+    set_backfill(cfg, start=TD, end=TD, workers=workers)
     calls = []
 
     def fetch(day, **kwargs):
@@ -377,8 +377,7 @@ def test_the_backfill_stamps_the_selected_source(tmp_path, monkeypatch):
     from cnequity.steps.capital import _backfill_margin_trading
 
     cfg = _cfg(tmp_path)
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 2)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 2))
     monkeypatch.setattr(cfg, "rate_limit", lambda source: None)
     monkeypatch.setattr(
         adapter,

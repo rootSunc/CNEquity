@@ -21,11 +21,11 @@ from cnequity.adapters.sw.industry_history import (
     fetch_sw_industry_intervals,
 )
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.market_time import last_closed_session
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.run_scope import backfill_of
 from cnequity.steps.common import BACKFILL_START, list_trading_dates
 from cnequity.steps.http_common import (

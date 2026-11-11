@@ -655,17 +655,6 @@ class StateStore:
             payload["updated_at"] = clock.isoformat()
             self._write_payload(path, payload)
 
-    def clear_negative_evidence(self, dataset: str) -> None:
-        """Remove all negative evidence for *dataset* while preserving state."""
-        path = self._path(dataset)
-        with self._dataset_lock(dataset):
-            payload = self._read_payload(path)
-            if "negative_evidence" not in payload:
-                return
-            payload.pop("negative_evidence", None)
-            payload["updated_at"] = _utc_now().isoformat()
-            self._write_payload(path, payload)
-
 
 def _utc_now(value: datetime | None = None) -> datetime:
     """Return an aware UTC clock value suitable for state comparisons."""

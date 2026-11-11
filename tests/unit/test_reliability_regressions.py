@@ -26,6 +26,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.storage import atomic as atomic_mod
 from cnequity.storage.atomic import write_json_atomic, write_parquet_atomic
 from cnequity.storage.state import StateStore
@@ -133,7 +134,7 @@ def test_d2_a_dns_failure_mid_backfill_keeps_fetched_days_and_owes_only_that_day
     from cnequity.steps.common import walk_day_backfill
 
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start, cfg._backfill_end = date(2026, 6, 1), date(2026, 6, 5)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 5))
     poison = date(2026, 6, 3)
 
     def fetch_one(day: date) -> pl.DataFrame:

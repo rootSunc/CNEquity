@@ -9,6 +9,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import bars
 
 
@@ -41,8 +42,7 @@ def test_backfill_window_defaults_and_overrides(tmp_path, monkeypatch):
     assert end == date(2025, 1, 10)
 
     cfg2 = Config(data_root=tmp_path / "data-2")
-    cfg2._backfill_start = date(2024, 1, 1)
-    cfg2._backfill_end = date(2024, 6, 1)
+    set_backfill(cfg2, start=date(2024, 1, 1), end=date(2024, 6, 1))
     assert bars._backfill_window(cfg2, date(2025, 1, 10)) == (
         date(2024, 1, 1),
         date(2024, 5, 31),
@@ -61,8 +61,7 @@ def test_backfill_window_ends_on_the_previous_session_over_a_weekend(tmp_path, m
 
 def test_explicit_non_trading_backfill_end_is_normalized(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2025, 1, 1)
-    cfg._backfill_end = date(2025, 1, 11)
+    set_backfill(cfg, start=date(2025, 1, 1), end=date(2025, 1, 11))
 
     assert bars._backfill_window(cfg, date(2025, 1, 12)) == (
         date(2025, 1, 1),
@@ -369,7 +368,7 @@ def test_a_replayed_trade_date_bounds_the_backfill_window(tmp_path, monkeypatch)
     assert bars._backfill_window(cfg, date(2030, 1, 1))[1] == date(2026, 9, 17)
     # An explicit --end keeps overriding both.
     explicit = Config(data_root=tmp_path / "explicit-data")
-    explicit._backfill_end = date(2026, 9, 18)
+    set_backfill(explicit, end=date(2026, 9, 18))
     assert bars._backfill_window(explicit, date(2025, 1, 1))[1] == date(2026, 9, 18)
 
 
@@ -414,7 +413,7 @@ def test_every_backfill_end_reader_means_the_same_session(tmp_path, monkeypatch)
     friday = last_session_on_or_before(cfg, saturday)
     assert friday == date(2026, 9, 18)
 
-    cfg._backfill_end = saturday
+    set_backfill(cfg, end=saturday)
     _, end = bars_mod._backfill_window(cfg, saturday)
     assert end == friday, "the history sweep normalises its own end"
 

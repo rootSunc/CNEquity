@@ -14,6 +14,7 @@ from cnequity.adapters.futures_exchange.common import ExchangeDay, FuturesDayUna
 from cnequity.config import Config
 from cnequity.derive.derivative_contracts import build_futures_contracts, build_option_contracts
 from cnequity.domain.datasets import is_dataset_enabled
+from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps import derivatives
 from cnequity.storage.parquet import compact_dataset
 
@@ -116,9 +117,7 @@ def test_one_exchange_missing_leaves_the_others_written(cfg, monkeypatch, reader
 
 def test_backfill_walks_sessions_and_resumes_by_exchange(cfg, reader):
     calls, _missing = reader
-    cfg._backfill = True
-    cfg._backfill_start = date(2026, 9, 21)
-    cfg._backfill_end = date(2026, 9, 24)
+    set_backfill(cfg, active=True, start=date(2026, 9, 21), end=date(2026, 9, 24))
     result = derivatives.step_option_bars(cfg, date(2026, 9, 24), "bf", {})
     assert result["rows_written"] == 5 * 4
     compact_dataset(
@@ -137,9 +136,7 @@ def test_backfill_walks_sessions_and_resumes_by_exchange(cfg, reader):
 
 def test_backfill_never_asks_before_the_exchange_existed(cfg, reader):
     calls, _missing = reader
-    cfg._backfill = True
-    cfg._backfill_start = date(2019, 12, 19)
-    cfg._backfill_end = date(2019, 12, 24)
+    set_backfill(cfg, active=True, start=date(2019, 12, 19), end=date(2019, 12, 24))
     derivatives.step_option_bars(cfg, date(2019, 12, 24), "bf", {})
     assert min(calls) == date(2019, 12, 23)
 
@@ -367,7 +364,7 @@ def test_receipt_does_not_allow_a_partial_committed_session_to_be_skipped(cfg, r
     assert derivatives._completed_sessions(cfg, "futures", [day]) == set()
     frame.write_parquet(root / "part.parquet")
     assert derivatives._completed_sessions(cfg, "futures", [day]) == {day}
-    cfg._derivatives_refresh = True
+    set_run_flags(cfg, derivatives_refresh=True)
     assert derivatives._completed_sessions(cfg, "futures", [day]) == set()
 
 
@@ -561,7 +558,7 @@ def test_reference_backfill_replays_requested_observed_dates(cfg, monkeypatch):
         "CFE",
         dataclasses.replace(derivatives.READERS["CFE"], fetch_reference=fetch),
     )
-    cfg._backfill_start, cfg._backfill_end = date(2025, 3, 24), date(2025, 3, 25)
+    set_backfill(cfg, start=date(2025, 3, 24), end=date(2025, 3, 25))
     bars = _bars(
         [
             ("IF2506.CFE", "IF2506", d)
@@ -587,7 +584,7 @@ def test_reference_replay_stops_source_after_refusal(cfg, monkeypatch):
         "CFE",
         dataclasses.replace(derivatives.READERS["CFE"], fetch_reference=blocked),
     )
-    cfg._backfill_start, cfg._backfill_end = date(2025, 3, 24), date(2025, 3, 25)
+    set_backfill(cfg, start=date(2025, 3, 24), end=date(2025, 3, 25))
     bars = _bars([("IF2506.CFE", "IF2506", d) for d in [date(2025, 3, 24), date(2025, 3, 25)]])
     findings = []
     assert derivatives._reference(cfg, bars, findings, "futures_contracts") is None
@@ -619,7 +616,7 @@ def test_historical_reference_cannot_override_newer_archive(cfg, monkeypatch):
         "CFE",
         dataclasses.replace(derivatives.READERS["CFE"], fetch_reference=fetch),
     )
-    cfg._backfill_start = cfg._backfill_end = date(2025, 3, 24)
+    set_backfill(cfg, start=date(2025, 3, 24), end=date(2025, 3, 24))
     bars = _bars([("IF2506.CFE", "IF2506", date(2025, 3, 24))])
     ref = derivatives._reference(cfg, bars, [], "futures_contracts")
     rebuilt = build_futures_contracts(bars, ref)
@@ -637,7 +634,7 @@ def test_reference_replay_skips_snapshot_only_endpoint(cfg, monkeypatch):
             derivatives.READERS["CFE"], fetch_reference=forbidden, reference_history=False
         ),
     )
-    cfg._backfill_start = cfg._backfill_end = date(2025, 3, 24)
+    set_backfill(cfg, start=date(2025, 3, 24), end=date(2025, 3, 24))
     bars = _bars([("IF2506.CFE", "IF2506", date(2025, 3, 24))])
     findings = []
     assert derivatives._reference(cfg, bars, findings, "futures_contracts") is None

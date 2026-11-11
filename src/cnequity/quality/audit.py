@@ -13,6 +13,7 @@ from cnequity.adapters.calendar.exchange_calendar import (
     calendar_seed_end,
 )
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.datasets import PARTITION_COLS, curated_dataset_names, is_dataset_enabled
 from cnequity.domain.findings import checked_findings
 from cnequity.domain.holidays_cn import session_expr
@@ -64,7 +65,6 @@ from cnequity.quality.unit_checks import (
     valuation_ratio_unit_findings,
 )
 from cnequity.query.calendar import last_trading_day
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.query.universe import (
     coverage_end_date,

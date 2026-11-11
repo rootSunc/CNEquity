@@ -19,6 +19,7 @@ from cnequity.derive.adj_factors import AdjFactorsResult
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.run_lock import RunLockError
+from cnequity.run_scope import backfill_of
 from cnequity.storage import StagingWriter
 from cnequity.storage.source_snapshots import SnapshotCleanupResult
 from cnequity.storage.staging_cleanup import StagingCleanupResult
@@ -1839,8 +1840,8 @@ def test_backfill_success_compacts(cfg_path, monkeypatch):
             self.manifest = FakeManifest()
 
         def run_job(self, *a, **k):
-            assert getattr(self.cfg, "_backfill_start", None) == date(2024, 1, 1)
-            assert getattr(self.cfg, "_backfill_workers", None) == 2
+            assert backfill_of(self.cfg).start == date(2024, 1, 1)
+            assert backfill_of(self.cfg).workers == 2
             return {
                 "run_id": "bf-ok",
                 "status": "success",

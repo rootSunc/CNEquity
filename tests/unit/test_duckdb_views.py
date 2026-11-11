@@ -10,9 +10,9 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import DATASET_SCHEMAS
-from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import parquet_glob
 from cnequity.query.views import _view_glob, ensure_duckdb_views
 

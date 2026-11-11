@@ -6,6 +6,7 @@ import pytest
 from cnequity.config import Config
 from cnequity.domain.datasets import get_dataset
 from cnequity.domain.schemas import with_provenance
+from cnequity.run_scope import set_backfill
 from cnequity.steps import intraday
 from cnequity.steps.intraday import (
     MinuteBarsScopeError,
@@ -261,9 +262,7 @@ def test_backfill_window_is_clamped_to_the_source_horizon(cfg, monkeypatch):
     cfg.minute_bars_enabled = True
     cfg.minute_bars_scope = "watchlist"
     cfg.minute_bars_symbols = ["600519.SH"]
-    cfg._backfill = True
-    cfg._backfill_start = date(2016, 1, 1)
-    cfg._backfill_end = date(2026, 7, 31)
+    set_backfill(cfg, active=True, start=date(2016, 1, 1), end=date(2026, 7, 31))
 
     seen: dict = {}
 
@@ -324,9 +323,7 @@ def test_empty_window_is_reported_not_fetched(cfg, monkeypatch):
     cfg.minute_bars_enabled = True
     cfg.minute_bars_scope = "watchlist"
     cfg.minute_bars_symbols = ["600519.SH"]
-    cfg._backfill = True
-    cfg._backfill_start = date(2026, 8, 5)
-    cfg._backfill_end = date(2026, 8, 1)
+    set_backfill(cfg, active=True, start=date(2026, 8, 5), end=date(2026, 8, 1))
 
     called = []
     monkeypatch.setattr(intraday, "fetch_minute_bars", lambda *a, **k: called.append(1))
@@ -506,11 +503,10 @@ def test_max_pages_covers_the_walk_back_from_today_not_just_the_slice_width(cfg,
     cfg.minute_bars_enabled = True
     cfg.minute_bars_scope = "watchlist"
     cfg.minute_bars_symbols = ["600519.SH"]
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     # A 10-day-wide slice, but its END is ~140 days before trade_date -- the
     # shape of the oldest chunk in a `_backfill_chunked` sweep.
-    cfg._backfill_start = date(2026, 3, 11)
-    cfg._backfill_end = date(2026, 3, 20)
+    set_backfill(cfg, start=date(2026, 3, 11), end=date(2026, 3, 20))
     trade_date = date(2026, 8, 1)
 
     seen: dict = {}

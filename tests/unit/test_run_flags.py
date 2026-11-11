@@ -18,7 +18,7 @@ import pytest
 import cnequity
 from cnequity.config import Config
 from cnequity.orchestrator.backfill_scope import capture_backfill_scope, restore_backfill_scope
-from cnequity.run_scope import LEGACY_RUN_FLAG_ATTRS, RunFlags, run_flags_of, set_run_flags
+from cnequity.run_scope import RunFlags, run_flags_of, set_run_flags
 
 PACKAGE_ROOT = Path(cnequity.__file__).resolve().parent
 
@@ -54,21 +54,6 @@ def test_flags_survive_pickling(tmp_path):
     cfg = _config(tmp_path)
     set_run_flags(cfg, derivatives_refresh=True, derivative_batch="abc")
     assert run_flags_of(pickle.loads(pickle.dumps(cfg))) == run_flags_of(cfg)
-
-
-@pytest.mark.parametrize("attr", sorted(LEGACY_RUN_FLAG_ATTRS))
-def test_every_legacy_name_still_reads_and_writes_the_flag(tmp_path, attr):
-    cfg = _config(tmp_path)
-    field = LEGACY_RUN_FLAG_ATTRS[attr]
-    value = {
-        "ca_eastmoney_date_repair": [date(2024, 1, 2)],
-        "option_source": "tushare",
-        "derivative_batch": "batch-1",
-    }.get(field, True)
-    setattr(cfg, attr, value)
-    assert getattr(cfg, attr) == value
-    stored = getattr(run_flags_of(cfg), field)
-    assert (list(stored) if isinstance(stored, tuple) else stored) == value
 
 
 def test_config_shaped_doubles_with_legacy_flags_are_read():

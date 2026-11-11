@@ -43,6 +43,7 @@ from datetime import date
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.schemas import with_provenance
 from cnequity.domain.trading_status import (
     DERIVED_BAR_GAP_SOURCE,
@@ -52,7 +53,6 @@ from cnequity.domain.trading_status import (
     evidence_rank_expr,
     risk_warning_value_expr,
 )
-from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.parquet import StagingWriter
 

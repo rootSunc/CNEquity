@@ -4,6 +4,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps.ticks import (
     DATASET,
     TradeTicksScopeError,
@@ -71,9 +72,7 @@ def test_the_ceiling_stops_a_scope_before_a_single_request(tmp_path):
 
 def test_sessions_come_from_the_calendar_not_from_weekdays(tmp_path):
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2026, 7, 27)
-    config._backfill_end = date(2026, 7, 31)
+    set_backfill(config, active=True, start=date(2026, 7, 27), end=date(2026, 7, 31))
     # 2026-07-29 is marked non-trading; a weekday fallback would include it.
     trading = [date(2026, 7, 27), date(2026, 7, 28), date(2026, 7, 30), date(2026, 7, 31)]
     _write_calendar(config, trading, holidays=[date(2026, 7, 29)])
@@ -82,9 +81,9 @@ def test_sessions_come_from_the_calendar_not_from_weekdays(tmp_path):
 
 def test_sessions_clamp_to_the_history_floor(tmp_path, caplog):
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2020, 1, 1)  # long before the floor
-    config._backfill_end = date(2024, 1, 3)
+    set_backfill(config, active=True)
+    set_backfill(config, start=date(2020, 1, 1))  # long before the floor
+    set_backfill(config, end=date(2024, 1, 3))
     _write_calendar(config, [date(2024, 1, 2), date(2024, 1, 3)])
     sessions = _sessions(config, date(2026, 7, 31))
     assert sessions == [date(2024, 1, 2), date(2024, 1, 3)]
@@ -93,9 +92,7 @@ def test_sessions_clamp_to_the_history_floor(tmp_path, caplog):
 
 def test_sessions_use_seed_calendar_when_curated_calendar_is_missing(tmp_path):
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2024, 2, 8)
-    config._backfill_end = date(2024, 2, 19)
+    set_backfill(config, active=True, start=date(2024, 2, 8), end=date(2024, 2, 19))
 
     assert _sessions(config, date(2024, 2, 19)) == [
         date(2024, 2, 8),
@@ -105,9 +102,7 @@ def test_sessions_use_seed_calendar_when_curated_calendar_is_missing(tmp_path):
 
 def test_sessions_are_empty_when_the_window_inverts(tmp_path):
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2026, 7, 31)
-    config._backfill_end = date(2026, 7, 1)
+    set_backfill(config, active=True, start=date(2026, 7, 31), end=date(2026, 7, 1))
     assert _sessions(config, date(2026, 7, 31)) == []
 
 
@@ -120,9 +115,7 @@ def test_a_disabled_capture_does_nothing_and_says_so(tmp_path):
 
 def test_no_sessions_in_window_is_reported_not_raised(tmp_path):
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2026, 7, 31)
-    config._backfill_end = date(2026, 7, 1)
+    set_backfill(config, active=True, start=date(2026, 7, 31), end=date(2026, 7, 1))
     result = capture_trade_ticks(config, date(2026, 7, 31), "run-1")
     assert result["rows_written"] == 0
     assert "no trading sessions" in result["note"]
@@ -130,9 +123,7 @@ def test_no_sessions_in_window_is_reported_not_raised(tmp_path):
 
 def test_failed_symbol_days_become_an_audit_finding(tmp_path, monkeypatch):
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2026, 7, 30)
-    config._backfill_end = date(2026, 7, 31)
+    set_backfill(config, active=True, start=date(2026, 7, 30), end=date(2026, 7, 31))
     _write_calendar(config, [date(2026, 7, 30), date(2026, 7, 31)])
 
     rows = [
@@ -161,9 +152,7 @@ def test_failed_symbol_days_become_an_audit_finding(tmp_path, monkeypatch):
 
 def test_out_of_scope_tick_rows_are_rejected_before_staging(tmp_path, monkeypatch):
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2026, 7, 30)
-    config._backfill_end = date(2026, 7, 31)
+    set_backfill(config, active=True, start=date(2026, 7, 30), end=date(2026, 7, 31))
     _write_calendar(config, [date(2026, 7, 30), date(2026, 7, 31)])
     row = {
         "symbol": "600519.SH",
@@ -187,9 +176,7 @@ def test_a_sweep_that_returns_nothing_at_all_raises(tmp_path, monkeypatch):
     # Distinct from "some symbols were quiet": every symbol coming back empty
     # means the source or the window is wrong, not that nobody traded.
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2026, 7, 30)
-    config._backfill_end = date(2026, 7, 31)
+    set_backfill(config, active=True, start=date(2026, 7, 30), end=date(2026, 7, 31))
     _write_calendar(config, [date(2026, 7, 30), date(2026, 7, 31)])
     monkeypatch.setattr(
         "cnequity.steps.ticks.fetch_trade_ticks_batch",
@@ -201,9 +188,7 @@ def test_a_sweep_that_returns_nothing_at_all_raises(tmp_path, monkeypatch):
 
 def test_a_batch_failing_outright_costs_only_that_batch(tmp_path, monkeypatch):
     config = _config(tmp_path)
-    config._backfill = True
-    config._backfill_start = date(2026, 7, 30)
-    config._backfill_end = date(2026, 7, 30)
+    set_backfill(config, active=True, start=date(2026, 7, 30), end=date(2026, 7, 30))
     _write_calendar(config, [date(2026, 7, 30)])
     monkeypatch.setattr(
         "cnequity.steps.ticks.fetch_trade_ticks_batch",

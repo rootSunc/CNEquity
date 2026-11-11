@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps.capital import _backfill_margin_trading
 
 
@@ -62,8 +63,7 @@ def _setup(monkeypatch, cfg: Config, *, empty_days: set[date] = frozenset()):
 
 def test_walks_range_and_stages_rows(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 5)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 5))
     fetched = _setup(monkeypatch, cfg)
 
     out = _backfill_margin_trading(cfg, date(2026, 7, 1), "run-1")
@@ -83,7 +83,7 @@ def test_default_worker_budget_survives_persisted_scope(tmp_path, monkeypatch):
     from cnequity.orchestrator.backfill_scope import capture_backfill_scope, restore_backfill_scope
 
     cfg = Config(data_root=tmp_path / "data", margin_trading_source="eastmoney")
-    cfg._backfill_start = cfg._backfill_end = date(2026, 6, 1)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 1))
     fresh = Config(data_root=cfg.data_root)
     restore_backfill_scope(fresh, capture_backfill_scope(cfg))
     fetched = _setup(monkeypatch, fresh)
@@ -96,8 +96,7 @@ def test_default_worker_budget_survives_persisted_scope(tmp_path, monkeypatch):
 
 def test_skips_dates_already_curated(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 3)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 3))
     fetched = _setup(monkeypatch, cfg)
 
     curated = cfg.curated_root / "margin_trading" / "trade_date=2026-06-02"
@@ -116,8 +115,7 @@ def test_partial_existing_day_is_not_considered_complete(tmp_path, monkeypatch, 
     from cnequity.storage.state import StateStore
 
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 2)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 2))
     fetched = _setup(monkeypatch, cfg)
 
     curated = cfg.curated_root / "margin_trading" / "trade_date=2026-06-02"
@@ -136,8 +134,7 @@ def test_partial_existing_day_is_not_considered_complete(tmp_path, monkeypatch, 
 
 def test_empty_days_reported_not_fatal(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 2)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 2))
     _setup(monkeypatch, cfg, empty_days={date(2026, 6, 1)})
 
     out = _backfill_margin_trading(cfg, date(2026, 7, 1), "run-1")
@@ -155,8 +152,7 @@ def test_empty_days_reported_not_fatal(tmp_path, monkeypatch):
 
 def test_partial_response_is_staged_and_still_retryable(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 1)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 1))
     cfg.margin_trading_source = "eastmoney"
     monkeypatch.setattr(
         "cnequity.steps.capital.fetch_margin_trading",
@@ -183,8 +179,7 @@ def test_partial_response_is_staged_and_still_retryable(tmp_path, monkeypatch):
 
 def test_empty_day_does_not_settle_a_batch_with_an_incomplete_day(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 3)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 3))
     _setup(monkeypatch, cfg)
 
     def fetch(d: date, *, client=None) -> pl.DataFrame:
@@ -208,8 +203,7 @@ def test_empty_day_does_not_settle_a_batch_with_an_incomplete_day(tmp_path, monk
 
 def test_rejects_rows_from_a_different_requested_date(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 2)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 2))
     _setup(monkeypatch, cfg)
 
     def wrong_date_fetch(d: date, *, client=None) -> pl.DataFrame:
@@ -229,8 +223,7 @@ def test_rejects_rows_from_a_different_requested_date(tmp_path, monkeypatch):
 
 def test_end_clamped_to_trade_date(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 29)
-    cfg._backfill_end = date(2026, 7, 10)
+    set_backfill(cfg, start=date(2026, 6, 29), end=date(2026, 7, 10))
     fetched = _setup(monkeypatch, cfg)
 
     _backfill_margin_trading(cfg, date(2026, 6, 30), "run-1")
@@ -240,9 +233,7 @@ def test_end_clamped_to_trade_date(tmp_path, monkeypatch):
 
 def test_parallel_workers_fetch_all_days(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 12)
-    cfg._backfill_workers = 3
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 12), workers=3)
     fetched = _setup(monkeypatch, cfg)
 
     out = _backfill_margin_trading(cfg, date(2026, 7, 1), "run-1")

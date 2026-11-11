@@ -11,6 +11,7 @@ import pytest
 from cnequity.adapters.futures_exchange import common, shfe
 from cnequity.adapters.sina.dce_futures import SinaDceHistory
 from cnequity.config import Config
+from cnequity.run_scope import set_run_flags
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +60,7 @@ def test_cache_survives_process_cache_clear_and_simultaneous_misses_are_merged(t
         common.clear_cache()
         assert fetch() == b'{"data":[1]}'
         assert len(calls) == 1
-        cfg._derivatives_refresh = True
+        set_run_flags(cfg, derivatives_refresh=True)
         fetch()
         assert len(calls) == 2
 

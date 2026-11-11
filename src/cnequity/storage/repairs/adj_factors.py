@@ -25,12 +25,12 @@ from cnequity.derive.factor_arbitration import (
 )
 from cnequity.derive.fund_factors import apply_fund_share_factors
 from cnequity.derive.stock_factors import apply_stock_event_factors
+from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.schemas import with_provenance
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.cross_checks import factor_action_contradictions
 from cnequity.quality.publication import check_repair_publication
-from cnequity.query.canonical import dedupe_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.instrument_catalog import load_curated_instruments

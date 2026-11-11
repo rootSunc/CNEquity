@@ -381,7 +381,7 @@ def apply_stock_event_factors(
     """Rebuild full raw histories, then select the requested output slice."""
     from cnequity.derive.adj_factors import _action_terms
     from cnequity.derive.factor_arbitration import _cached_batches, baostock_factor_symbol
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
     from cnequity.storage.read_context import read_root
     from cnequity.storage.revisions import RevisionStore

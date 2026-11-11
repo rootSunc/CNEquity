@@ -7,6 +7,7 @@ from cnequity.config import Config
 from cnequity.domain.units import turnover_defect_expr
 from cnequity.quality.unit_checks import daily_bars_turnover_defect_findings
 from cnequity.query import load
+from cnequity.run_scope import set_run_flags
 from cnequity.steps import bars
 from cnequity.steps.finalize import step_compact
 from cnequity.storage.revisions import RevisionStore
@@ -65,7 +66,7 @@ def test_opted_in_peer_review_publishes_matching_source_whole_row(lake, monkeypa
     )
     monkeypatch.setattr(tdx, "fetch_daily_bars", lambda *a, **k: pl.DataFrame())
 
-    lake._turnover_peer_review = True
+    set_run_flags(lake, turnover_peer_review=True)
     fresh = _row("600217.SH", volume=500099, amount=9300000.0, close=18.4)
     plain = {k: v for k, v in fresh.items() if k not in {"source", "data_version", "fetched_at"}}
     monkeypatch.setattr(delisted, "fetch_delisted_bars", lambda *a, **k: ([plain], []))
@@ -101,7 +102,7 @@ def test_native_peer_confirms_bao_without_enabling_disabled_http_sources(lake, m
     import cnequity.adapters.baostock.delisted_bars as delisted
     import cnequity.adapters.tdx_protocol.client as tdx
 
-    lake._turnover_peer_review = True
+    set_run_flags(lake, turnover_peer_review=True)
     lake.sources = {"eastmoney": False, "exchange": False}
     fresh = _row("600217.SH", volume=500099, amount=9300000.0, close=18.4)
     plain = {k: v for k, v in fresh.items() if k not in {"source", "data_version", "fetched_at"}}

@@ -14,8 +14,8 @@ import re
 from datetime import date
 
 import polars as pl
-from pypdf import PdfReader
 
+from cnequity._lazy import lazy_attribute
 from cnequity.adapters.eastmoney.em_auth import EastMoneyClient
 from cnequity.domain.action_evidence import REVIEWED_BJ_CORRECTION_CHAIN, REVIEWED_BJ_TRANSFERS
 from cnequity.query.reader import load
@@ -25,6 +25,8 @@ from cnequity.storage.raw_archive import (
     begin_capture,
     verify_raw_archive,
 )
+
+PdfReader = lazy_attribute("pypdf", "PdfReader")
 
 # The reviewed events live in the domain registry, which the canonical merge
 # also reads so a later vendor sweep cannot undo them.  Each PDF must still

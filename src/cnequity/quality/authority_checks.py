@@ -38,8 +38,8 @@ from datetime import date
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.trading_status import STATUS_DELISTED, normalize_legacy
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
 

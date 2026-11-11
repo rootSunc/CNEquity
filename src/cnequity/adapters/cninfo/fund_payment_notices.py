@@ -15,8 +15,8 @@ from datetime import date, timedelta
 
 import httpx
 import polars as pl
-from pypdf import PdfReader
 
+from cnequity._lazy import lazy_attribute
 from cnequity.adapters.cninfo.announcements import post_with_retry
 from cnequity.adapters.cninfo.payment_notices import _get, _source_date
 from cnequity.storage.raw_archive import (
@@ -25,6 +25,8 @@ from cnequity.storage.raw_archive import (
     begin_capture,
     verify_raw_archive,
 )
+
+PdfReader = lazy_attribute("pypdf", "PdfReader")
 
 _DIRECTORY = "https://www.cninfo.com.cn/new/data/fund_stock.json"
 _QUERY = "https://www.cninfo.com.cn/new/hisAnnouncement/query"

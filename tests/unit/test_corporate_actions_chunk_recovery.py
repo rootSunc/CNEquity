@@ -6,6 +6,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
+from cnequity.run_scope import set_backfill
 from cnequity.steps import events
 
 
@@ -27,9 +28,7 @@ def _rows(symbol: str) -> pl.DataFrame:
 
 def test_corporate_actions_stages_successful_chunks_for_retry(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "lake", batch_size=2, raw_archive_enabled=False)
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 6, 28)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 6, 28))
     monkeypatch.setattr(
         events, "load_symbols", lambda _cfg: ["600519.SH", "000001.SZ", "300750.SZ"]
     )
@@ -71,9 +70,7 @@ def test_corporate_actions_stages_successful_chunks_for_retry(tmp_path, monkeypa
 
 def test_engine_retry_only_fetches_unreceipted_chunks(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "lake", batch_size=2, raw_archive_enabled=False)
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 6, 28)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 6, 28))
     monkeypatch.setattr(
         events,
         "load_symbols",
@@ -125,9 +122,7 @@ def test_a_sweep_spreads_chunks_over_lanes_and_keeps_every_receipt(tmp_path, mon
         raw_archive_enabled=False,
         source_concurrency={"tdx_protocol": 3},
     )
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 6, 28)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 6, 28))
     symbols = ["600519.SH", "000001.SZ", "300750.SZ", "601318.SH", "000858.SZ", "002594.SZ"]
     monkeypatch.setattr(events, "load_symbols", lambda _cfg: symbols)
     active = {"now": 0, "peak": 0}

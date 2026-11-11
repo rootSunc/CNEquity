@@ -18,14 +18,16 @@ from hashlib import sha256
 from typing import Any
 
 import httpx
-import pandas as pd
 import polars as pl
-from pypdf import PdfReader
 
+from cnequity._lazy import lazy_attribute, lazy_module
 from cnequity.config import Config
 from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import frame_from_rows
+
+pd = lazy_module("pandas")
+PdfReader = lazy_attribute("pypdf", "PdfReader")
 
 logger = logging.getLogger(__name__)
 

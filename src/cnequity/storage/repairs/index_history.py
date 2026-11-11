@@ -10,9 +10,9 @@ from io import BytesIO
 from uuid import uuid4
 
 import httpx
-import pandas as pd
 import polars as pl
 
+from cnequity._lazy import lazy_module
 from cnequity.adapters.cni.index_announcements import (
     parse_announcement,
     parse_change_workbook,
@@ -39,6 +39,8 @@ from cnequity.quality.publication import check_repair_publication
 from cnequity.storage.parquet import CuratedWriter
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.revisions import RevisionStore
+
+pd = lazy_module("pandas")
 
 DATASET = "index_constituents"
 

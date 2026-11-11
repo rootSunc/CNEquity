@@ -2716,24 +2716,6 @@ class SnapshotStore:
             for temporary in source_temporaries:
                 shutil.rmtree(temporary, ignore_errors=True)
 
-    # Friendly aliases used by integrations that spell the operation in the
-    # verb-first style of ``SnapshotStore.create``.
-    delta_create = create_delta
-    create_delta_package = create_delta
-    create_delta_from_lakes = create_delta
-    create_delta_from_states = create_delta
-
-    def create_delta_from_snapshots(
-        self,
-        name: str,
-        baseline: Path | str,
-        target: Path | str,
-        datasets: list[str] | tuple[str, ...] | None = None,
-    ) -> Path:
-        """Explicit alias for the snapshot-package/live-lake comparison path."""
-
-        return self.create_delta(name, baseline, target, datasets)
-
     def _revision_receipts(self, root: Path, dataset: str, after: int) -> list[dict[str, Any]]:
         directory = Path(root) / "meta" / "revisions" / dataset
         if not directory.is_dir():

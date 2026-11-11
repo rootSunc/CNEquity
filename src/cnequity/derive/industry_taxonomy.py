@@ -51,11 +51,6 @@ def _summary_path(config: Config) -> Path:
     return config.meta_root / f"{TAXONOMY}_summary.json"
 
 
-def load_industry_taxonomy(config: Config) -> pl.DataFrame:
-    path = _path(config)
-    return pl.read_parquet(path) if path.exists() else pl.DataFrame(schema=SCHEMA)
-
-
 def _version() -> pl.Expr:
     system = pl.col("classification_system")
     return (

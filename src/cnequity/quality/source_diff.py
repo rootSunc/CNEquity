@@ -9,8 +9,8 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.config import Config, FailoverDatasetSpec
+from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.schemas import PRIMARY_KEYS
-from cnequity.query.canonical import dedupe_by_primary_key
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.source_snapshots import SnapshotStore
 

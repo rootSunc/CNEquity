@@ -15,6 +15,7 @@ import polars as pl
 from cnequity.config import Config, load_config
 from cnequity.derive.adj_factors import STORED_ADJUST_TYPE
 from cnequity.domain.action_sessions import effective_session
+from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.datasets import (
     DATASETS,
     DERIVE_COMMAND_DATASETS,
@@ -36,7 +37,6 @@ from cnequity.domain.universe_profiles import (
     UniverseProfileError,
     resolve_universe_profile,
 )
-from cnequity.query.canonical import dedupe_by_primary_key
 from cnequity.query.parquet_scan import (
     collect_parquet_root,
     dataset_has_parquet,

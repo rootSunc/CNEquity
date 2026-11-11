@@ -4,10 +4,12 @@ import io
 import math
 from datetime import date
 
-import pandas as pd
 import polars as pl
 
+from cnequity._lazy import lazy_module
 from cnequity.domain.symbols import is_all_a_symbol
+
+pd = lazy_module("pandas")
 
 # None: membership varies (the SSE Composite holds every listed SH share, B
 # shares included), so only a floor is checked.

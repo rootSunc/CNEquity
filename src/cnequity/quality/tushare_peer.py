@@ -34,8 +34,8 @@ from cnequity.adapters.tushare.client import (
     tushare_enabled,
 )
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.http_policy import SourceCoolingDown
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
 

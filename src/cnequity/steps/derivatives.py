@@ -236,7 +236,7 @@ def _completed_sessions(config: Config, kind: Kind, days: list[date]) -> set[dat
     files = list(root.glob("**/*.parquet")) if root.exists() else []
     if not files:
         return set()
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import scan_parquet_files
     from cnequity.storage.derivative_evidence import session_matches
 
@@ -421,7 +421,7 @@ def _scan_bars(config: Config, dataset: str, run_id: str | None = None) -> pl.La
         files.extend(StagingWriter(config.staging_root).list_run_files(dataset, run_id))
     if not files:
         return None
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import scan_parquet_files
 
     return dedupe_lazy_by_primary_key(scan_parquet_files(files), dataset)

@@ -59,7 +59,7 @@ def _write_atomic(path: Path, content: bytes) -> None:
 
 def _lake_rows(config: Config, periods: list[str]) -> pl.DataFrame:
     """The latest stored reading per statement item for *periods*."""
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
     root = config.curated_root / "financial_statement_items"

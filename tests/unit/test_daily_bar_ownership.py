@@ -5,6 +5,7 @@ import pytest
 
 from cnequity.config import Config
 from cnequity.orchestrator.manifest import Manifest
+from cnequity.run_scope import set_backfill
 from cnequity.steps.bars import _record_delegated_ownership_batch, step_daily_bars
 from cnequity.steps.common import classify_daily_bar_ownership
 from cnequity.storage.layout import init_data_layout
@@ -191,8 +192,7 @@ def test_eligible_etf_retry_is_not_superseded_as_outside_ingest_scope(tmp_path, 
 
 def test_explicit_etf_backfill_retry_preserves_named_symbol(tmp_path, monkeypatch):
     cfg, run_id = _etf_retry_lake(tmp_path)
-    cfg._backfill = True
-    cfg._backfill_symbols = ["589430.SH"]
+    set_backfill(cfg, active=True, symbols=["589430.SH"])
 
     class ScopeCaptured(Exception):
         pass

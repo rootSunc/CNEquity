@@ -9,6 +9,7 @@ import pytest
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import commodity, macro_risk, newsboard, research, rotation
 from cnequity.steps.common import SnapshotBackfillError
 from cnequity.storage.state import StateStore
@@ -107,7 +108,7 @@ def test_institutional_holdings_rejects_partial_period(cfg, monkeypatch):
 
 
 def test_snapshot_steps_reject_backfill(cfg, monkeypatch):
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     calls = {"consensus": 0}
 
     def _consensus(*args, **kwargs):
@@ -130,9 +131,7 @@ def test_economic_calendar_does_not_use_a_future_event_watermark():
 
 
 def test_institutional_backfill_surfaces_missing_quarters(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2020, 1, 1)
-    cfg._backfill_end = date(2020, 6, 30)
+    set_backfill(cfg, active=True, start=date(2020, 1, 1), end=date(2020, 6, 30))
     monkeypatch.setattr(
         research,
         "fetch_institutional_holdings",

@@ -15,6 +15,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import bars
 from cnequity.storage.layout import init_data_layout
 from cnequity.storage.state import StateStore
@@ -104,16 +105,17 @@ def test_a_scoped_repair_reaches_the_whole_window_it_asked_for(lake, monkeypatch
     it left fourteen securities owing 225 sessions the repair kept declining to
     fetch."""
     lake.bj_history_lookback_days = 1
-    lake._backfill_symbols = ["920138.BJ"]
+    set_backfill(lake, symbols=["920138.BJ"])
     assert bars._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[0]
 
 
 def test_a_board_wide_sweep_still_gets_the_lookback(lake, monkeypatch):
     """The scope is what bounds the cost; past that the guard is the point."""
     lake.bj_history_lookback_days = 1
-    lake._backfill_symbols = [
-        f"9200{i:02d}.BJ" for i in range(bars._BJ_SCOPED_WINDOW_MAX_SYMBOLS + 1)
-    ]
+    set_backfill(
+        lake,
+        symbols=[f"9200{i:02d}.BJ" for i in range(bars._BJ_SCOPED_WINDOW_MAX_SYMBOLS + 1)],
+    )
     assert bars._bj_history_start(lake, SESSIONS[0], SESSIONS[-1]) == SESSIONS[-1]
 
 

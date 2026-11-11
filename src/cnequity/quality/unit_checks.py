@@ -34,8 +34,8 @@ from datetime import date, timedelta
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.market_profile import block_trade_bars_expr
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
 # Window scanned back from the audit date. Long enough that a quiet market or a

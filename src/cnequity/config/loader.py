@@ -14,12 +14,8 @@ from cnequity.config.errors import ConfigError
 from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.domain.symbols import INGEST_UNIVERSES
 from cnequity.run_scope import (
-    LEGACY_RUN_FLAG_ATTRS,
     BackfillWindow,
     RunFlags,
-    run_flags_of,
-    set_backfill,
-    set_run_flags,
 )
 
 logger = logging.getLogger(__name__)
@@ -574,12 +570,6 @@ class Config:
     # Public aliases used by callers that describe this setting as a worker
     # cap rather than a concurrency cap.  Keep one implementation so both
     # spellings have identical precedence and fallback behaviour.
-    def source_worker_count(self, source: str, default: int | None = None) -> int:
-        return self.source_concurrency_for(source, default)
-
-    def http_worker_count(self, source: str, default: int | None = None) -> int:
-        return self.source_concurrency_for(source, default)
-
     def should_archive_raw(self, dataset: str) -> bool:
         """Whether source payloads for *dataset* should be retained."""
         if not self.raw_archive_enabled:
@@ -651,58 +641,6 @@ class Config:
             self.tdx_lock_timeout_sec,
         )
 
-    # Compatibility for code written against the loose ``_backfill*``
-    # attributes (and for ``Config(_backfill=...)``-free tests that assign
-    # them). New code uses ``run_scope.backfill_of`` / ``set_backfill``;
-    # ``tests/unit/test_backfill_window.py`` keeps src from growing new uses.
-    @property
-    def _backfill(self) -> bool:
-        return self.backfill_window.active
-
-    @_backfill.setter
-    def _backfill(self, value: bool) -> None:
-        set_backfill(self, active=value)
-
-    @property
-    def _backfill_start(self) -> date | None:
-        return self.backfill_window.start
-
-    @_backfill_start.setter
-    def _backfill_start(self, value: date | None) -> None:
-        set_backfill(self, start=value)
-
-    @property
-    def _backfill_end(self) -> date | None:
-        return self.backfill_window.end
-
-    @_backfill_end.setter
-    def _backfill_end(self, value: date | None) -> None:
-        set_backfill(self, end=value)
-
-    @property
-    def _backfill_symbols(self) -> list[str] | None:
-        return self.backfill_window.symbol_list()
-
-    @_backfill_symbols.setter
-    def _backfill_symbols(self, value: list[str] | None) -> None:
-        set_backfill(self, symbols=value)
-
-    @property
-    def _backfill_workers(self) -> int:
-        return self.backfill_window.workers
-
-    @_backfill_workers.setter
-    def _backfill_workers(self, value: int) -> None:
-        set_backfill(self, workers=value)
-
-    @property
-    def _backfill_refetch(self) -> bool:
-        return self.backfill_window.refetch
-
-    @_backfill_refetch.setter
-    def _backfill_refetch(self, value: bool) -> None:
-        set_backfill(self, refetch=value)
-
     @property
     def rate_limit_root(self) -> Path:
         """One local ledger directory for HTTP and wire traffic on this egress."""
@@ -733,24 +671,6 @@ class Config:
     def backup_root(self) -> Path:
         """Where `cne run maintain` writes metadata archives."""
         return self.maintenance_backup_dir or self.data_root / "backups"
-
-
-def _run_flag_property(field_name: str) -> property:
-    def get(self: Config):
-        value = getattr(run_flags_of(self), field_name)
-        return list(value) if isinstance(value, tuple) else value
-
-    def set_(self: Config, value) -> None:
-        set_run_flags(self, **{field_name: value})
-
-    return property(get, set_, doc=f"Compatibility alias for ``run_flags.{field_name}``.")
-
-
-# The old private names stay readable and writable on Config so existing
-# callers keep working; src uses ``run_flags_of`` / ``set_run_flags``.
-for _attr, _field in LEGACY_RUN_FLAG_ATTRS.items():
-    setattr(Config, _attr, _run_flag_property(_field))
-del _attr, _field
 
 
 def _expand(path_str: str, data_root: Path, base: Path | None = None) -> Path:

@@ -4,6 +4,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import capital as cap
 from cnequity.steps import http_common
 from cnequity.steps.common import (
@@ -243,9 +244,7 @@ def test_market_breadth_backfill_does_not_skip_partial_existing_day(tmp_path, mo
     from cnequity.steps.macro_risk import step_market_breadth
 
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 6, 27)
-    cfg._backfill_end = date(2024, 6, 27)
+    set_backfill(cfg, active=True, start=date(2024, 6, 27), end=date(2024, 6, 27))
     partial = cfg.curated_root / "market_breadth" / "trade_date=2024"
     partial.mkdir(parents=True)
     pl.DataFrame(
@@ -285,9 +284,7 @@ def test_market_breadth_backfill_does_not_skip_duplicate_metric_day(tmp_path, mo
     from cnequity.steps.macro_risk import step_market_breadth
 
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 6, 27)
-    cfg._backfill_end = date(2024, 6, 27)
+    set_backfill(cfg, active=True, start=date(2024, 6, 27), end=date(2024, 6, 27))
     metrics = [
         "advance_count",
         "decline_count",
@@ -327,9 +324,7 @@ def test_market_breadth_backfill_retries_zero_count_snapshot(tmp_path, monkeypat
     from cnequity.steps.macro_risk import step_market_breadth
 
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 6, 27)
-    cfg._backfill_end = date(2024, 6, 27)
+    set_backfill(cfg, active=True, start=date(2024, 6, 27), end=date(2024, 6, 27))
     metrics = [
         "advance_count",
         "decline_count",
@@ -491,7 +486,7 @@ def test_rolling_snapshot_without_watermark_ignores_legacy_future_state(tmp_path
 
 def test_fetch_incremental_daily_snapshot_rejects_backfill(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
 
     with pytest.raises(SnapshotBackfillError, match="fund_flow"):
         fetch_incremental_daily(
@@ -504,7 +499,7 @@ def test_fetch_incremental_daily_snapshot_rejects_backfill(tmp_path):
 
 def test_fetch_incremental_daily_backfill_rejects_empty_when_not_allowed(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
 
     with pytest.raises(RuntimeError, match="margin_trading: no rows returned"):
         fetch_incremental_daily(
@@ -518,7 +513,7 @@ def test_fetch_incremental_daily_backfill_rejects_empty_when_not_allowed(tmp_pat
 
 def test_fetch_incremental_daily_backfill_rejects_wrong_trade_date(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
 
     with pytest.raises(RuntimeError, match="different or invalid trade_date"):
         fetch_incremental_daily(

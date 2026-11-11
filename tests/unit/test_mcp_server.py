@@ -11,6 +11,7 @@ import pytest
 from cnequity.config import Config
 from cnequity.mcp_server import protocol, tools
 from cnequity.mcp_server.catalog import DESCRIPTORS, HANDLERS
+from cnequity.run_scope import set_run_flags
 
 
 def _prov(source: str = "test") -> dict:
@@ -773,7 +774,7 @@ def test_live_is_off_unless_asked(empty):
 
 def test_live_serves_symbol_lookup(empty, monkeypatch):
     _fake_live(monkeypatch)
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     payload = tools.resolve_symbol(empty, query="茅台")
     assert payload["origin"] == "live"
     assert payload["rows"][0][0] == "600519.SH"
@@ -782,7 +783,7 @@ def test_live_serves_symbol_lookup(empty, monkeypatch):
 
 def test_live_bars_are_labelled_and_warned(empty, monkeypatch):
     _fake_live(monkeypatch)
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     payload = tools.query_bars(empty, symbols=["600519.SH"])
     assert payload["origin"] == "live"
     assert "No adjustment" in payload["warning"]
@@ -798,33 +799,33 @@ def test_live_refuses_adjustment(empty, monkeypatch):
     """A vendor's bar has no factor attached; serving it as adjusted would be
     wrong in a way the numbers do not show."""
     _fake_live(monkeypatch)
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     with pytest.raises(tools.ToolError, match="cannot honour adjust"):
         tools.query_bars(empty, symbols=["600519.SH"], adjust="hfq")
 
 
 def test_live_refuses_universe(empty, monkeypatch):
     _fake_live(monkeypatch)
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     with pytest.raises(tools.ToolError, match="cannot honour universe"):
         tools.query_bars(empty, symbols=["600519.SH"], universe="all_a")
 
 
 def test_live_refuses_point_in_time(empty, monkeypatch):
     """There is no honest as_of against a source that returns today's view."""
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     with pytest.raises(tools.ToolError, match="look-ahead"):
         tools.query_fundamentals(empty, as_of="2018-04-30")
 
 
 def test_live_refuses_sql(empty):
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     with pytest.raises(tools.ToolError, match="parquet on disk"):
         tools.run_sql(empty, sql="SELECT 1")
 
 
 def test_live_refuses_other_datasets_by_name(empty):
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     with pytest.raises(tools.ToolError, match="cne init"):
         tools.query_dataset(empty, dataset="fund_flow")
 
@@ -832,7 +833,7 @@ def test_live_refuses_other_datasets_by_name(empty):
 def test_live_will_not_sweep_the_market(empty):
     """An agent looping without symbols is how a user earns a rate-limit ban
     for a question they did not ask."""
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     with pytest.raises(tools.ToolError, match="explicit `symbols`"):
         tools.query_bars(empty)
 
@@ -845,14 +846,14 @@ def test_live_will_not_sweep_the_market(empty):
     ],
 )
 def test_live_caps_each_call(empty, kwargs, match):
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     with pytest.raises(tools.ToolError, match=match):
         tools.query_bars(empty, **kwargs)
 
 
 def test_live_writes_nothing(empty, monkeypatch):
     _fake_live(monkeypatch)
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     tools.query_bars(empty, symbols=["600519.SH"])
     tools.resolve_symbol(empty, query="茅台")
     assert not list(empty.data_root.rglob("*.parquet"))
@@ -861,7 +862,7 @@ def test_live_writes_nothing(empty, monkeypatch):
 def test_describe_lake_announces_live_mode(empty, monkeypatch):
     """It changes how every other line of the contract should be read, so it
     goes first."""
-    empty._mcp_live = True
+    set_run_flags(empty, mcp_live=True)
     payload = tools.describe_lake(empty)
     assert payload["live_mode"] is True
     assert "LIVE MODE IS ON" in payload["contract"][0]

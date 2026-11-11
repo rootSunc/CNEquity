@@ -5,10 +5,11 @@ import re
 from calendar import monthrange
 from datetime import date, datetime
 
-from pypdf import PdfReader
-from pypdf.errors import DependencyError, PdfReadError
-
+from cnequity._lazy import lazy_attribute, lazy_module
 from cnequity.domain.market_time import SHANGHAI_TZ
+
+PdfReader = lazy_attribute("pypdf", "PdfReader")
+_pypdf_errors = lazy_module("pypdf.errors")
 
 _SECTIONS = {
     "balance": (
@@ -466,9 +467,9 @@ def parse_report_pdf(payload: bytes, symbol: str, year: int, *, quarter=4) -> li
             for page in PdfReader(io.BytesIO(payload)).pages
             if page.get("/Contents") is not None
         )
-    except DependencyError as exc:
+    except _pypdf_errors.DependencyError as exc:
         raise ValueError("issuer PDF crypto dependency unavailable; install pypdf[crypto]") from exc
-    except (PdfReadError, KeyError, ZeroDivisionError) as exc:
+    except (_pypdf_errors.PdfReadError, KeyError, ZeroDivisionError) as exc:
         raise ValueError("issuer periodic PDF cannot be read") from exc
     return parse_report_text(text, symbol, year, quarter=quarter)
 

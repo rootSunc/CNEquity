@@ -1516,8 +1516,8 @@ def classify_ending(bars: pl.DataFrame) -> dict:
 
 def write_delisting_events(config: Config, events: list[dict]) -> int:
     """Merge *events* into ``derived/delisting_events`` (one row per symbol)."""
+    from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.domain.schemas import DELISTING_EVENTS_SCHEMA, with_provenance
-    from cnequity.query.canonical import dedupe_by_primary_key
     from cnequity.storage.atomic import write_parquet_atomic
 
     if not events:

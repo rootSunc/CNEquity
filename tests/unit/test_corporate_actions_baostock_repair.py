@@ -6,6 +6,7 @@ import polars as pl
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps import events
 
 
@@ -31,9 +32,7 @@ def test_baostock_repair_is_scoped_to_delisted_sh_sz_and_keeps_provenance(tmp_pa
         sources={"baostock": True},
         raw_archive_enabled=False,
     )
-    cfg._backfill = True
-    cfg._backfill_start = date(2020, 1, 1)
-    cfg._backfill_end = date(2020, 12, 31)
+    set_backfill(cfg, active=True, start=date(2020, 1, 1), end=date(2020, 12, 31))
 
     monkeypatch.setattr(
         events,
@@ -59,7 +58,7 @@ def test_baostock_repair_is_scoped_to_delisted_sh_sz_and_keeps_provenance(tmp_pa
         return _repair_rows(), []
 
     monkeypatch.setattr(events, "fetch_corporate_actions_baostock", fake_baostock)
-    cfg._corporate_actions_baostock_repair = True
+    set_run_flags(cfg, ca_baostock_repair=True)
 
     result = events.step_corporate_actions(cfg, date(2020, 12, 31), "run-1", {})
 

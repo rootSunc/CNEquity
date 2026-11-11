@@ -15,8 +15,8 @@ from decimal import Decimal
 from pathlib import Path
 
 import polars as pl
-from pypdf import PdfReader
 
+from cnequity._lazy import lazy_attribute
 from cnequity.adapters.cninfo.reviewed_holder_notices import _a_share_record_date
 from cnequity.domain.cash_entitlements import HOLDER_CLASSES
 from cnequity.quality.decision_gaps import (
@@ -27,6 +27,8 @@ from cnequity.quality.decision_gaps import (
 from cnequity.query.reader import ReaderError, load
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.revisions import committed_revision
+
+PdfReader = lazy_attribute("pypdf", "PdfReader")
 
 
 def _legacy_record_date(meta_root: Path, entry: dict) -> date:

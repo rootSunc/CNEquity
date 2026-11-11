@@ -10,6 +10,7 @@ import polars as pl
 import cnequity.steps  # noqa: F401
 from cnequity.adapters.ths import corporate_actions as ca
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps import events
 
 _PAGE = """
@@ -221,10 +222,8 @@ def test_step_ths_repair_is_scoped_to_delisted_bj_and_keeps_provenance(tmp_path,
         sources={"ths_bonus": True},
         raw_archive_enabled=False,
     )
-    cfg._backfill = True
-    cfg._backfill_start = date(2020, 1, 1)
-    cfg._backfill_end = date(2020, 12, 31)
-    cfg._corporate_actions_ths_repair = True
+    set_backfill(cfg, active=True, start=date(2020, 1, 1), end=date(2020, 12, 31))
+    set_run_flags(cfg, ca_ths_repair=True)
 
     monkeypatch.setattr(events, "load_symbols", lambda _cfg: ["430090.BJ", "600000.SH"])
     monkeypatch.setattr(

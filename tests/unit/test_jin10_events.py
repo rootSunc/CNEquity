@@ -16,6 +16,7 @@ from cnequity.adapters.jin10.events import (
     parse_holidays,
 )
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import newsboard
 from cnequity.steps.common import SnapshotBackfillError
 
@@ -164,10 +165,10 @@ def test_steps_write_and_refuse_backfill_or_a_disabled_source(cfg, monkeypatch):
     assert newsboard.step_economic_events(cfg, day, "r-events", {})["rows_written"] == 1
     assert newsboard.step_market_holidays(cfg, day, "r-holidays", {})["rows_written"] == 1
 
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     with pytest.raises(SnapshotBackfillError, match="market_holidays"):
         newsboard.step_market_holidays(cfg, day, "r", {})
-    cfg._backfill = False
+    set_backfill(cfg, active=False)
     cfg.sources["jin10"] = False
     with pytest.raises(RuntimeError, match="economic_events: jin10 source disabled"):
         newsboard.step_economic_events(cfg, day, "r", {})

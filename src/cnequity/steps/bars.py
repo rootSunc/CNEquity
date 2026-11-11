@@ -20,6 +20,7 @@ from cnequity.adapters.tdx_protocol.client import (
     normalize_with_source,
 )
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.frames import with_columns_unless_blank
 from cnequity.domain.market_time import A_SHARE_FINAL_AT, shanghai_now
 from cnequity.domain.rate_limit import (
@@ -38,7 +39,6 @@ from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.worker_pool import fetch_daily_bars_parallel
 from cnequity.quality.audit import persist_step_findings
-from cnequity.query.canonical import dedupe_by_primary_key
 from cnequity.run_scope import backfill_of, run_flags_of
 from cnequity.steps.common import (
     BACKFILL_START,
@@ -5765,7 +5765,7 @@ def repair_deep_history_ths_official(
     from cnequity.adapters.ths_official import SOURCE as THS_SOURCE
     from cnequity.adapters.ths_official import client_from_config
     from cnequity.adapters.ths_official.bars import HISTORY_FLOOR, fetch_daily_bars
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import scan_parquet_root
     from cnequity.steps.http_common import write_fetched
 

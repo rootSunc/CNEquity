@@ -12,6 +12,7 @@ from cnequity.quality.cross_checks import (
     last_dense_valuation_date,
     valuation_day_coverage_ratio,
 )
+from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps.finalize import _reconcile_watermarks, _watermark_date_for
 from cnequity.steps.fundamentals import _valuation_history_end
 from cnequity.storage.state import StateStore
@@ -282,9 +283,8 @@ def _outage_lake(tmp_path, symbols: list[str], sessions: list[date]):
         _write_day(
             cfg.curated_root, "daily_bars", d, symbols, source="tdx", schema=DAILY_BARS_SCHEMA
         )
-    cfg._backfill_start = sessions[0]
-    cfg._backfill_end = sessions[-1]
-    cfg._valuation_fill_em_outage = True
+    set_backfill(cfg, start=sessions[0], end=sessions[-1])
+    set_run_flags(cfg, valuation_fill_em_outage=True)
     return cfg
 
 
@@ -383,8 +383,7 @@ def test_the_ordinary_backfill_does_not_ask_baostock_for_beijing_names(tmp_path,
 
     symbols = ["600000.SH", "000001.SZ", "920229.BJ"]
     cfg = _em_tip_lake(tmp_path, date(2026, 9, 21), symbols)
-    cfg._backfill_start = date(2026, 9, 14)
-    cfg._backfill_end = date(2026, 9, 18)
+    set_backfill(cfg, start=date(2026, 9, 14), end=date(2026, 9, 18))
     monkeypatch.setattr(fundamentals, "load_symbols", lambda _cfg: symbols)
     monkeypatch.setattr(
         "cnequity.storage.repairs.valuation_orphans.purge_valuation_orphan_symbols", lambda _cfg: {}

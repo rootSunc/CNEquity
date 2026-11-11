@@ -12,6 +12,7 @@ from cnequity.adapters.jin10.economic_calendar import (
     fetch_economic_calendar_window,
     parse_day,
 )
+from cnequity.run_scope import set_backfill
 
 
 def _item(**overrides) -> dict:
@@ -125,9 +126,7 @@ def test_backfill_walks_by_month_and_fetches_only_missing_days(tmp_path, monkeyp
     from cnequity.steps import newsboard
 
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    cfg._backfill = True
-    cfg._backfill_start = date(2008, 1, 30)
-    cfg._backfill_end = date(2008, 3, 2)
+    set_backfill(cfg, active=True, start=date(2008, 1, 30), end=date(2008, 3, 2))
     present = {date(2008, 2, d) for d in range(1, 30)}
     monkeypatch.setattr(newsboard, "_calendar_days_present", lambda config: present)
     windows: list[tuple[date, date]] = []

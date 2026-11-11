@@ -18,7 +18,7 @@ def load_curated_instruments(
     root = read_root(config, "instruments", read_context)
     if not root.exists() or not any(root.rglob("*.parquet")):
         return None
-    from cnequity.query.canonical import dedupe_by_primary_key
+    from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.query.parquet_scan import collect_parquet_root
 
     try:
@@ -94,7 +94,7 @@ def load_curated_trading_status(
     if not root.exists() or not any(root.rglob("*.parquet")):
         return None
     try:
-        from cnequity.query.canonical import dedupe_by_primary_key
+        from cnequity.domain.canonical import dedupe_by_primary_key
         from cnequity.query.parquet_scan import collect_parquet_root
 
         frame = collect_parquet_root(

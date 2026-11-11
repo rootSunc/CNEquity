@@ -35,7 +35,7 @@ import polars as pl
 
 from cnequity.adapters.tdx_protocol.trade_ticks import AFTER_HOURS, SESSIONS, UNKNOWN_DIRECTION
 from cnequity.config import Config
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
 DATASET = "trade_ticks"

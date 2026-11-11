@@ -28,7 +28,7 @@ def _delisted(config: Config, context: ReadContext) -> pl.DataFrame:
     root = context.roots["instruments"]
     if not dataset_has_parquet(root, committed=False):
         return pl.DataFrame(schema={"symbol": pl.Utf8, "delist_date": pl.Date})
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 
     return (
         dedupe_lazy_by_primary_key(scan_parquet_root(root, committed=False), "instruments")

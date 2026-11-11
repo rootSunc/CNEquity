@@ -7,6 +7,7 @@ import pytest
 
 from cnequity.adapters.baostock.instruments import fetch_instrument_basics
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps.delisted import known_delisted_instruments
 from cnequity.steps.reference import _merge_delisted_instruments
 from cnequity.storage.instruments import compact_instruments
@@ -224,7 +225,7 @@ def test_a_backfill_instruments_step_asks_baostock_once(tmp_path, monkeypatch):
         tdx_allow_mock=True,
         sources={"baostock": True, "bse": False, "eastmoney": False, "exchange": False},
     )
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     real = bs_instruments.fetch_instrument_basics
     calls: list[int] = []
 

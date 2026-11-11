@@ -79,7 +79,7 @@ class BackfillWindow:
 
 
 #: Legacy attribute → field, for objects that predate :class:`BackfillWindow`
-#: (test doubles, pickled configs) and for Config's compatibility properties.
+#: (test doubles, pickled configs) and for recorded retry scopes.
 LEGACY_BACKFILL_ATTRS: dict[str, str] = {
     "_backfill": "active",
     "_backfill_start": "start",
@@ -98,7 +98,7 @@ def _declared(obj: Any, attr: str) -> Any:
 
     Plain ``getattr`` would ask a ``MagicMock`` config, which invents every
     attribute — and a made-up mock is truthy, switching every flag on.
-    Properties are skipped: they are Config's own compatibility aliases.
+    Properties are skipped: they compute a value, they do not hold one.
     """
     if attr in getattr(obj, "__dict__", {}):
         return obj.__dict__[attr]
@@ -198,8 +198,8 @@ class RunFlags:
     mcp_live: bool = False
 
 
-#: Legacy attribute → field, for Config's compatibility properties, older
-#: config-shaped objects, and recorded retry scopes that use the old names.
+#: Legacy attribute → field, for older config-shaped objects and recorded
+#: retry scopes that use the old names.
 LEGACY_RUN_FLAG_ATTRS: dict[str, str] = {
     "_corporate_actions_baostock_repair": "ca_baostock_repair",
     "_corporate_actions_ths_repair": "ca_ths_repair",

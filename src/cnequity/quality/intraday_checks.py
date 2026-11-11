@@ -35,8 +35,8 @@ import polars as pl
 
 from cnequity.adapters.tdx_protocol.minute_bars import SESSIONS, bars_per_session
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.datasets import intraday_dataset_names, intraday_datasets
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
 # Window scanned back from the audit date — a few sessions is enough to catch a

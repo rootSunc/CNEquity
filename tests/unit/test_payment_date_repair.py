@@ -12,6 +12,7 @@ from cnequity.adapters.cninfo.payment_notices import (
     parse_payment_notice_text,
 )
 from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.payment_dates import match_payment_dates, unique_payment_issues
 
 
@@ -438,9 +439,7 @@ def test_repair_step_stages_only_matched_cash_and_reports_missing(tmp_path, monk
     from cnequity.steps import payment_dates
 
     cfg = Config(data_root=tmp_path / "lake", sources={"baostock": True}, raw_archive_enabled=False)
-    cfg._backfill_symbols = ["600000.SH"]
-    cfg._backfill_start = date(2023, 1, 1)
-    cfg._backfill_end = date(2023, 12, 31)
+    set_backfill(cfg, symbols=["600000.SH"], start=date(2023, 1, 1), end=date(2023, 12, 31))
     old = event(
         source="tdx_protocol",
         data_version="v1",
@@ -470,9 +469,7 @@ def test_repair_treats_a_payment_before_ex_date_as_unknown(tmp_path, monkeypatch
     from cnequity.steps import payment_dates
 
     cfg = Config(data_root=tmp_path / "lake", sources={"baostock": True}, raw_archive_enabled=False)
-    cfg._backfill_symbols = ["600000.SH"]
-    cfg._backfill_start = date(2023, 1, 1)
-    cfg._backfill_end = date(2023, 12, 31)
+    set_backfill(cfg, symbols=["600000.SH"], start=date(2023, 1, 1), end=date(2023, 12, 31))
     typo = event(
         payment_date=date(2022, 7, 21),
         payment_source="issuer_notice:template-typo:A",
@@ -506,10 +503,11 @@ def test_repair_treats_a_payment_before_ex_date_as_unknown(tmp_path, monkeypatch
     cfg2 = Config(
         data_root=tmp_path / "lake2", sources={"baostock": True}, raw_archive_enabled=False
     )
-    cfg2._backfill_symbols, cfg2._backfill_start, cfg2._backfill_end = (
-        cfg._backfill_symbols,
-        cfg._backfill_start,
-        cfg._backfill_end,
+    set_backfill(
+        cfg2,
+        symbols=backfill_of(cfg).symbol_list(),
+        start=backfill_of(cfg).start,
+        end=backfill_of(cfg).end,
     )
     assert (
         payment_dates.repair_payment_dates(cfg2, date(2024, 1, 1), "fix-run", {})["rows_written"]
@@ -697,8 +695,7 @@ def test_fund_gap_retained_without_stock_endpoint_or_archive_claim(tmp_path, mon
     from cnequity.steps import payment_dates
 
     cfg = Config(data_root=tmp_path / "lake", sources={"baostock": True}, raw_archive_enabled=True)
-    cfg._backfill_symbols = ["161010.SZ"]
-    cfg._backfill_start, cfg._backfill_end = date(2023, 1, 1), date(2023, 12, 31)
+    set_backfill(cfg, symbols=["161010.SZ"], start=date(2023, 1, 1), end=date(2023, 12, 31))
     old = event()
     old["symbol"] = "161010.SZ"
     monkeypatch.setattr(payment_dates, "load", lambda *a, **kw: pl.DataFrame([old]))
@@ -720,8 +717,7 @@ def test_sse_fund_correction_does_not_fall_through_to_cninfo(tmp_path, monkeypat
         sources={"exchange": True, "cninfo": True},
         raw_archive_enabled=False,
     )
-    cfg._backfill_symbols = ["510720.SH"]
-    cfg._backfill_start, cfg._backfill_end = date(2024, 1, 1), date(2024, 12, 31)
+    set_backfill(cfg, symbols=["510720.SH"], start=date(2024, 1, 1), end=date(2024, 12, 31))
     old = event()
     old.update(symbol="510720.SH", ex_date=date(2024, 6, 13), payment_date=None)
     monkeypatch.setattr(payment_dates, "load", lambda *a, **kw: pl.DataFrame([old]))

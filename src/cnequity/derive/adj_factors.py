@@ -227,7 +227,7 @@ def _load_daily_bar_dates(
         # The same canonicalisation and print filter ``traded_only`` applies
         # to a scan, applied to the rows already in hand: reading the bar
         # history a second time cost ~6s per call, three calls per derive.
-        from cnequity.query.canonical import dedupe_lazy_by_primary_key
+        from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 
         traded = (
             dedupe_lazy_by_primary_key(bars.lazy(), "daily_bars")
@@ -1992,9 +1992,9 @@ def _write_adj_partitions(
     """Persist aligned factors. Append-only merges into existing partitions unless *replace*."""
     # query.__init__ imports this module for STORED_ADJUST_TYPE, so keep this
     # helper import lazy to avoid a derive↔query import cycle at module load.
+    from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.partitions import partition_value
-    from cnequity.query.canonical import dedupe_by_primary_key
     from cnequity.storage.parquet import write_partition_rows
 
     writer = CuratedWriter(config.derived_root)

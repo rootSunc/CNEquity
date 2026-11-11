@@ -22,9 +22,9 @@ from typing import Any
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.market_profile import unserved_exchanges
 from cnequity.domain.symbols import is_all_a_symbol, is_cdr_symbol, parse_symbol
-from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import (
     collect_parquet_root,
     dataset_has_parquet,

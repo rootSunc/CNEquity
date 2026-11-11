@@ -26,6 +26,7 @@ from cnequity.orchestrator.outcomes import (
     step_outcome,
 )
 from cnequity.orchestrator.registry import StepEntry
+from cnequity.run_scope import set_backfill
 from cnequity.storage.parquet import StagingWriter
 from cnequity.storage.revisions import RevisionStore
 from cnequity.storage.state import StateStore
@@ -128,8 +129,7 @@ def test_source_cooling_defers_unswept_days_without_failed_request_counts(tmp_pa
     from cnequity.steps.common import walk_day_backfill
 
     cfg = _config(tmp_path)
-    cfg._backfill_start = date(2024, 6, 24)
-    cfg._backfill_end = DAY
+    set_backfill(cfg, start=date(2024, 6, 24), end=DAY)
     calls = []
 
     def fetch(day):

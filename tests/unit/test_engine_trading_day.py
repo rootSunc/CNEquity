@@ -5,6 +5,7 @@ import polars as pl
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
 from cnequity.orchestrator.engine import JobEngine
+from cnequity.run_scope import set_backfill
 from cnequity.steps.common import is_trading_day
 from cnequity.storage.layout import init_data_layout
 
@@ -55,8 +56,7 @@ def test_run_job_backfill_does_not_skip_weekend(tmp_path, monkeypatch):
             {"trade_date": date(2024, 6, 29), "is_trading": False},
         ],
     )
-    cfg._backfill_start = date(2024, 6, 28)
-    cfg._backfill_end = date(2024, 6, 29)
+    set_backfill(cfg, start=date(2024, 6, 28), end=date(2024, 6, 29))
     calls: list[date] = []
 
     def fake_fetch(trade_date, **kwargs):

@@ -6,6 +6,7 @@ from cnequity.config import Config
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.registry import StepEntry
+from cnequity.run_scope import backfill_of
 from cnequity.storage.layout import init_data_layout
 
 
@@ -154,7 +155,7 @@ def test_init_retry_uses_current_status_in_the_historical_index_phase(tmp_path, 
 
     def get_step(name: str) -> StepEntry:
         def run(config, *args):
-            observed.append(bool(config._backfill))
+            observed.append(bool(backfill_of(config).active))
             return {"rows_read": 1, "rows_written": 1}
 
         return StepEntry(fn=run, group="test", requires_workers=False)

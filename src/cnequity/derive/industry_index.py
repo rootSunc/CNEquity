@@ -35,10 +35,10 @@ from typing import TYPE_CHECKING
 
 import polars as pl
 
+from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.market_time import shanghai_today
 from cnequity.domain.partitions import partition_value_expr
-from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 
 if TYPE_CHECKING:
     from cnequity.config import Config

@@ -31,6 +31,7 @@ _RANKS: dict[str, int] = {
     # Standalone utilities with no lake knowledge.
     "cnequity": 0,
     "cnequity.i18n": 0,
+    "cnequity._lazy": 0,
     "cnequity.file_lock": 0,
     "cnequity.file_replace": 0,
     "cnequity.fd_limit": 0,
@@ -73,7 +74,6 @@ _RANKS: dict[str, int] = {
     # order, the trading calendar). They sit beside storage, below the
     # load()/views read API that the rest of ``query`` provides.
     "cnequity.query.parquet_scan": 40,
-    "cnequity.query.canonical": 40,
     "cnequity.query.calendar": 40,
     "cnequity.query": 50,
     "cnequity.quality": 60,

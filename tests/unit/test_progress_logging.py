@@ -15,6 +15,7 @@ import polars as pl
 import pytest
 
 from cnequity.orchestrator.worker_pool import _hms
+from cnequity.run_scope import set_backfill
 
 
 def _one_bar() -> pl.DataFrame:
@@ -526,7 +527,7 @@ def test_a_one_session_backfill_is_told_the_window_is_free(caplog, config, monke
     monkeypatch.setattr(worker_pool.StagingWriter, "write_batch", lambda *a, **k: None)
 
     config.batch_size = 2
-    config._backfill = True
+    set_backfill(config, active=True)
     with caplog.at_level(logging.INFO, logger="cnequity.orchestrator.worker_pool"):
         worker_pool.fetch_daily_bars_parallel(
             config, ["600519.SH", "000001.SZ"], date(2026, 7, 31), date(2026, 7, 31), "run-8"
@@ -543,7 +544,7 @@ def test_the_daily_job_is_not_nagged_about_its_one_session(caplog, config, monke
     monkeypatch.setattr(worker_pool.StagingWriter, "write_batch", lambda *a, **k: None)
 
     config.batch_size = 2
-    config._backfill = False
+    set_backfill(config, active=False)
     with caplog.at_level(logging.INFO, logger="cnequity.orchestrator.worker_pool"):
         worker_pool.fetch_daily_bars_parallel(
             config, ["600519.SH", "000001.SZ"], date(2026, 7, 31), date(2026, 7, 31), "run-9"

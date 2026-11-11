@@ -11,9 +11,11 @@ from html.parser import HTMLParser
 from io import BytesIO
 
 import polars as pl
-from pypdf import PdfReader
 
+from cnequity._lazy import lazy_attribute
 from cnequity.domain.symbols import is_all_a_symbol
+
+PdfReader = lazy_attribute("pypdf", "PdfReader")
 
 _NAMES = {"399001.SZ": ("深证成份指数", "深证成指"), "399006.SZ": ("创业板指数", "创业板指")}
 _COUNTS = {"399001.SZ": 500, "399006.SZ": 100, "000688.SH": 50}

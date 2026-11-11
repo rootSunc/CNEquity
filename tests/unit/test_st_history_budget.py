@@ -14,6 +14,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import reference
 from cnequity.storage.parquet import StagingWriter
 
@@ -107,8 +108,7 @@ def test_tushare_cached_capture_time_survives_staging(tmp_path, monkeypatch):
     day = date(2016, 12, 30)
     captured_at = datetime(2016, 12, 30, 12, 0, tzinfo=timezone.utc)
     config = Config(data_root=tmp_path / "lake", raw_archive_enabled=False)
-    config._backfill_start = day
-    config._backfill_end = day
+    set_backfill(config, start=day, end=day)
     frame = pl.DataFrame(
         {
             "symbol": ["920001.BJ"],

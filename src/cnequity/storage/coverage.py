@@ -19,8 +19,8 @@ def resolved_bj_session_dates(config, payload: dict, *, read_context=None) -> se
     than retroactively making every past market session owed. An inferred
     suspension or unpublished repair cannot certify a missing session.
     """
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.quality.bar_coverage import KEYS, missing_bar_keys
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
     from cnequity.storage.instrument_catalog import (
         load_curated_instruments,
         load_curated_trading_status,

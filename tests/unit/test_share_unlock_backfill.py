@@ -14,6 +14,7 @@ from datetime import date, timedelta
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps.macro_risk import (
     _UNLOCK_STRIDE_DAYS,
     _backfill_share_unlock_schedule,
@@ -32,8 +33,8 @@ def _row(unlock_date: date, symbol: str = "600000.SH") -> dict:
 
 def test_strides_under_the_horizon_not_every_day(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 1, 1)
-    cfg._backfill_end = date(2026, 6, 30)  # ~181 days: exactly one full stride
+    set_backfill(cfg, start=date(2026, 1, 1))
+    set_backfill(cfg, end=date(2026, 6, 30))  # ~181 days: exactly one full stride
     calls: list[date] = []
 
     def fake_fetch(d: date, *, horizon_days: int = 180, **_kw) -> pl.DataFrame:
@@ -52,8 +53,7 @@ def test_strides_under_the_horizon_not_every_day(tmp_path, monkeypatch):
 
 def test_last_stride_does_not_fetch_past_backfill_end(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 1, 1)
-    cfg._backfill_end = date(2026, 6, 30)
+    set_backfill(cfg, start=date(2026, 1, 1), end=date(2026, 6, 30))
     horizons: list[tuple[date, int]] = []
 
     def fake_fetch(d: date, *, horizon_days: int = 180, **_kw) -> pl.DataFrame:
@@ -78,8 +78,9 @@ def test_walks_newest_stride_first(tmp_path, monkeypatch):
     means a failure anywhere still leaves the years most likely to be queried
     already landed."""
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2010, 1, 1)
-    cfg._backfill_end = date(2010, 1, 1) + timedelta(days=_UNLOCK_STRIDE_DAYS * 3)
+    set_backfill(
+        cfg, start=date(2010, 1, 1), end=date(2010, 1, 1) + timedelta(days=_UNLOCK_STRIDE_DAYS * 3)
+    )
     calls: list[date] = []
 
     def fake_fetch(d: date, *, horizon_days: int = 180, **_kw) -> pl.DataFrame:
@@ -105,8 +106,8 @@ def test_flushes_per_stride_not_once_at_the_end(tmp_path, monkeypatch):
     (symbol, unlock_date) overlap is a separate concern from this.
     """
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 1, 1)
-    cfg._backfill_end = date(2026, 6, 30)  # two strides: day 0 and day 150
+    set_backfill(cfg, start=date(2026, 1, 1))
+    set_backfill(cfg, end=date(2026, 6, 30))  # two strides: day 0 and day 150
 
     def fake_fetch(d: date, *, horizon_days: int = 180, **_kw) -> pl.DataFrame:
         return pl.DataFrame([_row(d + timedelta(days=30))])
@@ -123,8 +124,7 @@ def test_flushes_per_stride_not_once_at_the_end(tmp_path, monkeypatch):
 
 def test_dedupes_events_in_overlapping_stride_windows(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 1, 1)
-    cfg._backfill_end = date(2026, 6, 30)
+    set_backfill(cfg, start=date(2026, 1, 1), end=date(2026, 6, 30))
     repeated = _row(date(2026, 3, 15))
 
     def fake_fetch(d: date, *, horizon_days: int = 180, **_kw) -> pl.DataFrame:
@@ -152,8 +152,8 @@ def test_uses_the_patient_sweep_retry_budget_not_the_daily_default(tmp_path, mon
     )
 
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 1, 1)
-    cfg._backfill_end = date(2026, 1, 2)  # a single stride
+    set_backfill(cfg, start=date(2026, 1, 1))
+    set_backfill(cfg, end=date(2026, 1, 2))  # a single stride
     seen: dict = {}
 
     def fake_fetch(d: date, *, horizon_days: int = 180, **kw) -> pl.DataFrame:
@@ -171,8 +171,8 @@ def test_uses_the_patient_sweep_retry_budget_not_the_daily_default(tmp_path, mon
 
 def test_empty_range_writes_nothing(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 1, 1)
-    cfg._backfill_end = date(2026, 1, 2)  # under one stride — a single call
+    set_backfill(cfg, start=date(2026, 1, 1))
+    set_backfill(cfg, end=date(2026, 1, 2))  # under one stride — a single call
 
     monkeypatch.setattr(
         "cnequity.steps.macro_risk.fetch_share_unlock_schedule",

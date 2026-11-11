@@ -17,6 +17,7 @@ from cnequity.domain.schemas import with_provenance
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import StepEntry
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import walk_day_backfill
 from cnequity.storage.parquet import StagingWriter
 from cnequity.storage.revisions import RevisionStore
@@ -45,7 +46,7 @@ def test_date_walk_publishes_before_an_outage_and_clears_the_gap_after_repair(
 ):
     cfg = Config(data_root=tmp_path / "data")
     start, end = date(2024, 6, 27), DAY
-    cfg._backfill_start, cfg._backfill_end = start, end
+    set_backfill(cfg, start=start, end=end)
     calls = []
     recovering = False
 
@@ -141,10 +142,10 @@ def test_source_outage_keeps_existing_revision_available(tmp_path, monkeypatch):
 
 def test_valid_days_publish_when_remaining_days_are_unavailable(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start, cfg._backfill_end = date(2024, 6, 24), DAY
+    set_backfill(cfg, start=date(2024, 6, 24), end=DAY)
 
     def fetch(day):
-        return _breadth(day) if day == cfg._backfill_start else _outage()
+        return _breadth(day) if day == backfill_of(cfg).start else _outage()
 
     def step(config, day, run_id, context):
         return walk_day_backfill(config, day, run_id, "market_breadth", fetch, source="derived")
@@ -266,7 +267,7 @@ def test_snapshot_history_finishes_with_configured_collection_command(tmp_path, 
 
 def test_source_history_floor_delivers_available_scope(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start, cfg._backfill_end = date(2024, 6, 24), DAY
+    set_backfill(cfg, start=date(2024, 6, 24), end=DAY)
     monkeypatch.setitem(
         DATASETS,
         "market_breadth",
@@ -275,7 +276,7 @@ def test_source_history_floor_delivers_available_scope(tmp_path, monkeypatch):
     requested = []
 
     def step(config, day, run_id, context):
-        requested.append((config._backfill_start, config._backfill_end))
+        requested.append((backfill_of(config).start, backfill_of(config).end))
         return walk_day_backfill(config, day, run_id, "market_breadth", _breadth, source="derived")
 
     _entries(monkeypatch, {"market_breadth": StepEntry(fn=step, group="core")})
@@ -284,7 +285,7 @@ def test_source_history_floor_delivers_available_scope(tmp_path, monkeypatch):
     assert result["publication_status"] == "partial"
     assert result["rows_written"] == 3
     assert requested == [(date(2024, 6, 26), DAY)]
-    assert cfg._backfill_start == date(2024, 6, 24)
+    assert backfill_of(cfg).start == date(2024, 6, 24)
     assert result["results"][0]["requested_scope"]["start"] == "2024-06-24"
     assert result["results"][0]["effective_scope"]["start"] == "2024-06-26"
     assert result["fallback"][0]["scope"]["start"] == "2024-06-24"
@@ -292,8 +293,7 @@ def test_source_history_floor_delivers_available_scope(tmp_path, monkeypatch):
 
 def test_request_before_history_floor_finishes_without_source_requests(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2024, 6, 24)
-    cfg._backfill_end = date(2024, 6, 25)
+    set_backfill(cfg, start=date(2024, 6, 24), end=date(2024, 6, 25))
     monkeypatch.setitem(
         DATASETS,
         "market_breadth",
@@ -315,7 +315,7 @@ def test_partial_index_bars_publish_without_advancing_complete_coverage(tmp_path
     from cnequity.adapters.tdx_protocol.client import INDEX_SYMBOLS
 
     cfg = Config(data_root=tmp_path / "data", publication_gate="block")
-    cfg._backfill_start = cfg._backfill_end = DAY
+    set_backfill(cfg, start=DAY, end=DAY)
     frame = pl.DataFrame(
         {
             "symbol": ["000852.SH"],

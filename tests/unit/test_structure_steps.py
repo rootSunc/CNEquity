@@ -9,6 +9,7 @@ import pytest
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import structure as st
 from cnequity.storage.state import StateStore
 
@@ -211,9 +212,7 @@ def test_index_constituents_daily_rejects_partial_snapshot(cfg, monkeypatch):
 
 
 def test_index_constituents_backfill_already_present(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 1, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 1, 31))
     monkeypatch.setattr(st, "_month_end_trading_days", lambda *a, **k: [date(2024, 1, 31)])
     monkeypatch.setattr(st, "_existing_as_of_dates", lambda *a, **k: {date(2024, 1, 31)})
     result = st.step_index_constituents(cfg, date(2024, 1, 31), "run-bf", {})
@@ -222,9 +221,7 @@ def test_index_constituents_backfill_already_present(cfg, monkeypatch):
 
 
 def test_index_constituents_backfill_writes_cni(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 1, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 1, 31))
     todo = [date(2024, 1, 31)]
     monkeypatch.setattr(st, "_month_end_trading_days", lambda *a, **k: todo)
     monkeypatch.setattr(st, "_existing_as_of_dates", lambda *a, **k: set())
@@ -255,9 +252,7 @@ def test_index_constituents_backfill_writes_cni(cfg, monkeypatch):
 
 
 def test_index_constituents_backfill_empty_cni_is_retryable_warning(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 1, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 1, 31))
     monkeypatch.setattr(st, "_month_end_trading_days", lambda *a, **k: [date(2024, 1, 31)])
     monkeypatch.setattr(st, "_existing_as_of_dates", lambda *a, **k: set())
     monkeypatch.setattr(st, "fetch_cni_index_adjustments", lambda _: pl.DataFrame())
@@ -272,9 +267,7 @@ def test_index_constituents_backfill_empty_cni_is_retryable_warning(cfg, monkeyp
 
 
 def test_index_constituents_backfill_delivers_thin_nonempty_index(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 1, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 1, 31))
     monkeypatch.setattr(st, "_month_end_trading_days", lambda *a, **k: [date(2024, 1, 31)])
     monkeypatch.setattr(st, "_existing_as_of_dates", lambda *a, **k: set())
 
@@ -360,7 +353,7 @@ def test_industry_members_rejects_a_single_industry_with_enough_symbols(cfg, mon
 
 
 def test_industry_members_backfill_already_present(cfg, monkeypatch):
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     monkeypatch.setattr(st, "_month_end_trading_days", lambda *a, **k: [date(2024, 1, 31)])
     monkeypatch.setattr(st, "_existing_sw_as_of_dates", lambda *a, **k: {date(2024, 1, 31)})
     monkeypatch.setattr(st, "_existing_as_of_dates", lambda *a, **k: {date(2024, 1, 31)})
@@ -369,9 +362,7 @@ def test_industry_members_backfill_already_present(cfg, monkeypatch):
 
 
 def test_industry_members_backfill_delivers_thin_month(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 1, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 1, 31))
     monkeypatch.setattr(st, "_month_end_trading_days", lambda *a, **k: [date(2024, 1, 31)])
     monkeypatch.setattr(st, "_existing_sw_as_of_dates", lambda *a, **k: set())
     monkeypatch.setattr(st, "_existing_as_of_dates", lambda *a, **k: set())
@@ -398,9 +389,7 @@ def test_industry_members_backfill_delivers_thin_month(cfg, monkeypatch):
 
 
 def test_industry_members_backfill_keeps_both_thin_and_healthy_months(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 2, 29)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 2, 29))
     healthy_date = date(2024, 2, 29)
     thin_date = date(2024, 1, 31)
     missing_date = date(2024, 2, 28)

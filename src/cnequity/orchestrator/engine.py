@@ -631,25 +631,6 @@ class JobEngine:
             return fallback
         return fallback
 
-    def _finish_run_overall(
-        self,
-        run_id: str,
-        fallback: str,
-        *,
-        rows_read: int = 0,
-        rows_written: int = 0,
-        error_message: str | None = None,
-    ) -> str:
-        status = self._overall_status(run_id, fallback)
-        self.manifest.finish_run(
-            run_id,
-            status,
-            rows_read=rows_read,
-            rows_written=rows_written,
-            error_message=error_message if status == "failed" else None,
-        )
-        return status
-
     @contextlib.contextmanager
     def _optional_job_lock(self, lock_name: str | None):
         if lock_name is None:

@@ -17,6 +17,7 @@ from cnequity.adapters.eastmoney.earnings_disclosure import (
 from cnequity.config import Config
 from cnequity.domain.datasets import get_dataset
 from cnequity.domain.schemas import validate_dataframe
+from cnequity.run_scope import set_backfill
 
 
 def test_report_period_from_date():
@@ -166,9 +167,7 @@ def test_earnings_disclosure_uses_report_period_without_watermark():
 
 def test_earnings_disclosure_backfill_surfaces_missing_periods(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
-    cfg._backfill_start = date(2020, 1, 1)
-    cfg._backfill_end = date(2020, 6, 30)
+    set_backfill(cfg, active=True, start=date(2020, 1, 1), end=date(2020, 6, 30))
     monkeypatch.setattr(
         "cnequity.steps.events.fetch_earnings_disclosure_schedule",
         lambda *args, **kwargs: pl.DataFrame(),

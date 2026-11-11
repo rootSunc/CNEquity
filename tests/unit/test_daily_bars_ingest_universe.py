@@ -23,6 +23,7 @@ from cnequity.config import Config, load_config, validate_config
 from cnequity.domain.schemas import with_provenance
 from cnequity.domain.symbols import filter_ingest_universe, in_ingest_universe
 from cnequity.orchestrator.manifest import Manifest
+from cnequity.run_scope import set_backfill
 from cnequity.steps.bars import (
     _daily_fund_bar_symbols,
     _eligible_etf_bar_symbols,
@@ -473,10 +474,7 @@ def test_a_security_listing_today_is_fetched_the_same_day(tmp_path, monkeypatch)
 def test_explicit_backfill_scope_is_never_narrowed(tmp_path, monkeypatch):
     cfg = _instrument_lake(tmp_path)
     requested = _capture_fetch_scope(monkeypatch)
-    cfg._backfill = True
-    cfg._backfill_start = D1
-    cfg._backfill_end = D3
-    cfg._backfill_symbols = ["158030.SZ"]
+    set_backfill(cfg, active=True, start=D1, end=D3, symbols=["158030.SZ"])
     run_id = Manifest(cfg.manifest_path).start_run("backfill")
 
     with pytest.raises(RuntimeError):
@@ -489,10 +487,7 @@ def test_explicit_backfill_scope_is_never_narrowed(tmp_path, monkeypatch):
 @pytest.mark.parametrize("symbol", ["600519.SH", "920184.BJ"])
 def test_small_explicit_history_skips_whole_board_tip_snapshots(tmp_path, monkeypatch, symbol):
     cfg = _instrument_lake(tmp_path)
-    cfg._backfill = True
-    cfg._backfill_start = D1
-    cfg._backfill_end = D3
-    cfg._backfill_symbols = [symbol]
+    set_backfill(cfg, active=True, start=D1, end=D3, symbols=[symbol])
     run_id = Manifest(cfg.manifest_path).start_run("backfill")
     monkeypatch.setattr(
         "cnequity.steps.bars._fetch_tip_via_exchange",

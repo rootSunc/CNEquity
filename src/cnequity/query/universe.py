@@ -7,6 +7,7 @@ from datetime import date
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.market_profile import exchange_start
 from cnequity.domain.symbols import (
     CDR_PREFIXES,
@@ -15,7 +16,6 @@ from cnequity.domain.symbols import (
     PREFIX_WHITELIST,
 )
 from cnequity.domain.trading_status import risk_warning_expr
-from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import (
     collect_parquet_root,
     coverage_start_from_partitions,

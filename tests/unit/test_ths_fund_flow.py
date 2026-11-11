@@ -11,6 +11,7 @@ import pytest
 from cnequity.adapters.ths import fund_flow as ths
 from cnequity.adapters.ths import hexin
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 
 _STOCK_PAGE = """
 <table><thead><tr>
@@ -266,7 +267,7 @@ def test_no_fallback_on_a_backfill_or_when_push2_works(tmp_path, monkeypatch):
         raise RuntimeError("push2 502")
 
     monkeypatch.setattr(capital, "_run_capital_step", _push2)
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     with pytest.raises(RuntimeError, match="push2 502"):
         capital.step_fund_flow(cfg, _D, "run-1", {})
 

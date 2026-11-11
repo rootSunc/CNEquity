@@ -11,8 +11,8 @@ import polars as pl
 
 from cnequity.adapters.eastmoney.stock_news import fetch_stock_news
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.sentiment import score_text
-from cnequity.query.canonical import dedupe_by_primary_key
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ def _hot_rank_symbols(config: Config, trade_date: date, limit: int) -> list[str]
     root = config.curated_root / "hot_rank"
     if not root.exists() or limit <= 0:
         return []
-    from cnequity.query.canonical import dedupe_by_primary_key
+    from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.query.parquet_scan import collect_parquet_root
 
     try:
@@ -192,7 +192,7 @@ def _news_sentiment_symbols(config: Config, trade_date: date, limit: int) -> lis
 
     bars_root = config.curated_root / "daily_bars"
     if bars_root.exists():
-        from cnequity.query.canonical import dedupe_by_primary_key
+        from cnequity.domain.canonical import dedupe_by_primary_key
         from cnequity.query.parquet_scan import collect_parquet_root
 
         try:

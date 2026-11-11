@@ -17,6 +17,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps.common import walk_day_backfill
 
 
@@ -26,8 +27,7 @@ def _fake_row(d: date, date_col: str) -> dict:
 
 def test_walks_range_and_stages_rows(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 5)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 5))
     fetched: list[date] = []
 
     def fetch_one(d: date) -> pl.DataFrame:
@@ -51,8 +51,7 @@ def test_walks_range_and_stages_rows(tmp_path):
 
 def test_skips_dates_already_curated(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 3)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 3))
     fetched: list[date] = []
 
     def fetch_one(d: date) -> pl.DataFrame:
@@ -80,7 +79,7 @@ def test_existing_rows_do_not_hide_a_date_gap_or_clear_it_before_publication(tmp
 
     cfg = Config(data_root=tmp_path / "data")
     day = date(2026, 6, 2)
-    cfg._backfill_start = cfg._backfill_end = day
+    set_backfill(cfg, start=day, end=day)
     root = cfg.curated_root / "market_breadth" / f"trade_date={day}"
     root.mkdir(parents=True)
     pl.DataFrame([_fake_row(day, "trade_date")]).write_parquet(root / "part-0.parquet")
@@ -104,8 +103,7 @@ def test_resume_check_uses_the_configured_date_column(tmp_path):
     check has to read the same column the schema actually stores, or every
     rerun refetches everything the dataset already has."""
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 2)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 2))
     fetched: list[date] = []
 
     def _row(d: date) -> dict:
@@ -141,8 +139,7 @@ def test_resume_check_uses_the_configured_date_column(tmp_path):
 
 def test_empty_days_reported_not_fatal(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 2)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 2))
 
     def fetch_one(d: date) -> pl.DataFrame:
         return (
@@ -165,8 +162,7 @@ def test_empty_days_reported_not_fatal(tmp_path):
 
 def test_rejects_rows_from_a_different_requested_date(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 2)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 2))
 
     def fetch_one(d: date) -> pl.DataFrame:
         return pl.DataFrame(
@@ -186,8 +182,7 @@ def test_rejects_rows_from_a_different_requested_date(tmp_path):
 
 def test_rejects_rows_without_the_configured_date_column(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 1)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 1))
 
     def fetch_one(d: date) -> pl.DataFrame:
         return pl.DataFrame([_fake_row(d, "trade_date")])
@@ -206,8 +201,7 @@ def test_rejects_rows_without_the_configured_date_column(tmp_path):
 
 def test_end_clamped_to_trade_date(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 29)
-    cfg._backfill_end = date(2026, 7, 10)
+    set_backfill(cfg, start=date(2026, 6, 29), end=date(2026, 7, 10))
     fetched: list[date] = []
 
     def fetch_one(d: date) -> pl.DataFrame:
@@ -227,8 +221,8 @@ def test_flushes_already_fetched_days_before_reraising(tmp_path):
     since the last flush boundary was lost with the exception. A raise must
     honor the same "kill costs only the unflushed chunk" promise as a kill."""
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 10)  # under one 60-day flush window
+    set_backfill(cfg, start=date(2026, 6, 1))
+    set_backfill(cfg, end=date(2026, 6, 10))  # under one 60-day flush window
     poison = date(2026, 6, 5)
 
     def fetch_one(d: date) -> pl.DataFrame:
@@ -257,8 +251,7 @@ def test_flushes_already_fetched_days_before_reraising(tmp_path):
 def test_an_interrupt_stages_the_days_already_fetched(tmp_path, interrupt):
     """Ctrl-C is not an ``Exception``; it used to drop every unflushed day."""
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 10)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 10))
 
     def fetch_one(d: date) -> pl.DataFrame:
         if d == date(2026, 6, 5):
@@ -278,8 +271,7 @@ def test_an_interrupt_stages_the_days_already_fetched(tmp_path, interrupt):
 
 def test_an_interrupt_is_not_masked_by_a_failed_flush(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 10)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 10))
 
     def fetch_one(d: date) -> pl.DataFrame:
         if d == date(2026, 6, 3):
@@ -303,8 +295,7 @@ def test_an_interrupt_is_not_masked_by_a_failed_flush(tmp_path):
 
 def test_same_run_retry_keeps_earlier_successful_chunks(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 6, 1)
-    cfg._backfill_end = date(2026, 6, 5)
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 5))
     calls: list[date] = []
 
     def first(d: date) -> pl.DataFrame:
@@ -339,7 +330,7 @@ def test_same_run_retry_keeps_earlier_successful_chunks(tmp_path):
 def test_start_falls_back_to_the_floor_argument(tmp_path):
     """No --start given: use the caller's floor, not the generic BACKFILL_START."""
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_end = date(2007, 1, 8)
+    set_backfill(cfg, end=date(2007, 1, 8))
     fetched: list[date] = []
 
     def fetch_one(d: date) -> pl.DataFrame:
@@ -362,8 +353,8 @@ def test_start_falls_back_to_the_floor_argument(tmp_path):
 def test_flushes_in_chunks_not_one_giant_write(tmp_path):
     """A kill mid-sweep should cost only the unflushed chunk."""
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2026, 1, 1)
-    cfg._backfill_end = date(2026, 6, 30)  # well over 60 weekdays
+    set_backfill(cfg, start=date(2026, 1, 1))
+    set_backfill(cfg, end=date(2026, 6, 30))  # well over 60 weekdays
 
     def fetch_one(d: date) -> pl.DataFrame:
         return pl.DataFrame([_fake_row(d, "trade_date")])

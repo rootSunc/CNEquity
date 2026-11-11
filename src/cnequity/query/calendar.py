@@ -26,7 +26,7 @@ def _load_trading_calendar_df(
     """Load trading_calendar, preferring a lazy hive scan with optional date prune."""
     curated = read_root(config, "trading_calendar")
     if curated.exists() and any(curated.rglob("*.parquet")):
-        from cnequity.query.canonical import dedupe_by_primary_key
+        from cnequity.domain.canonical import dedupe_by_primary_key
 
         try:
             from cnequity.query.parquet_scan import collect_parquet_root
@@ -84,7 +84,7 @@ def _load_trading_calendar_df(
     staging_root = config.staging_root / "trading_calendar"
     staging = sorted(staging_root.rglob("*.parquet")) if staging_root.exists() else []
     if staging:
-        from cnequity.query.canonical import dedupe_by_primary_key
+        from cnequity.domain.canonical import dedupe_by_primary_key
 
         df = pl.concat([pl.read_parquet(path) for path in staging], how="diagonal_relaxed")
         if "trade_date" in df.columns:

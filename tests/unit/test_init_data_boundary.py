@@ -8,6 +8,7 @@ import pytest
 from cnequity.config import Config
 from cnequity.domain.schemas import with_provenance
 from cnequity.orchestrator.engine import JobEngine
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps import reference
 from cnequity.storage import StagingWriter
 
@@ -17,7 +18,7 @@ def _snapshot(monkeypatch):
 
     def fetch(config, dataset, trade_date, fetch_fn, **kwargs):
         assert kwargs["snapshot_only"] is True
-        seen.append((config._backfill, dataset, trade_date))
+        seen.append((backfill_of(config).active, dataset, trade_date))
         return pl.DataFrame(), []
 
     def reject_history(*args, **kwargs):
@@ -33,7 +34,7 @@ def _snapshot(monkeypatch):
 
 def test_init_status_uses_snapshot_without_mutating_parallel_index_config(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     seen = _snapshot(monkeypatch)
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("init", {})
@@ -42,12 +43,12 @@ def test_init_status_uses_snapshot_without_mutating_parallel_index_config(tmp_pa
 
     assert result["status"] == "success"
     assert seen == [(False, "trading_status", date(2026, 9, 30))]
-    assert cfg._backfill is True
+    assert backfill_of(cfg).active is True
 
 
 def test_explicit_backfill_still_uses_historical_st(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     monkeypatch.setattr(
         reference, "_backfill_trading_status_st", lambda *a, **k: {"completed_symbols": 5560}
     )
@@ -58,7 +59,7 @@ def test_explicit_backfill_still_uses_historical_st(tmp_path, monkeypatch):
 
 def test_legacy_init_st_warning_is_superseded_and_staging_preserved(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     seen = _snapshot(monkeypatch)
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("init", {})
@@ -137,7 +138,7 @@ def test_default_init_completes_with_current_status_and_index_history(tmp_path, 
     from cnequity.orchestrator.registry import StepEntry
 
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill_start = date(2023, 9, 30)
+    set_backfill(cfg, start=date(2023, 9, 30))
     engine = JobEngine(cfg)
     seen = _snapshot(monkeypatch)
     index_flags = []
@@ -149,7 +150,7 @@ def test_default_init_completes_with_current_status_and_index_history(tmp_path, 
 
             def fn(config, trade_date, run_id, context):
                 if name == "index_bars":
-                    index_flags.append(config._backfill)
+                    index_flags.append(backfill_of(config).active)
                 return {"rows_written": 0}
 
         return StepEntry(fn=fn, group="core", requires_workers=False)

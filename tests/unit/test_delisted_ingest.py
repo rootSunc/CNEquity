@@ -11,6 +11,7 @@ import pytest
 from cnequity.config import Config
 from cnequity.domain.schemas import DAILY_BARS_SCHEMA, with_provenance
 from cnequity.orchestrator.engine import JobEngine
+from cnequity.run_scope import set_backfill
 from cnequity.steps.delisted import (
     _ingested_symbols,
     backfill_delisted_bars,
@@ -319,7 +320,7 @@ def test_init_recovers_and_publishes_delisted_bars_before_legacy_ownership_retry
     start, end = date(2023, 9, 30), date(2025, 4, 10)
     cfg = _cfg(tmp_path, {"600070.SH": end.isoformat(), "430001.BJ": end.isoformat()})
     cfg.ingest_universe = "all_a_sh_sz"
-    cfg._backfill_start = start
+    set_backfill(cfg, start=start)
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("init", {})
     engine.manifest.start_batch(
@@ -355,7 +356,7 @@ def test_init_partial_recovery_publishes_progress_and_retries_only_missing_targe
 
     start, end = date(2024, 6, 27), date(2025, 4, 10)
     cfg = _cfg(tmp_path, {"600070.SH": end.isoformat(), "600083.SH": end.isoformat()})
-    cfg._backfill_start = start
+    set_backfill(cfg, start=start)
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("init", {})
     calls = []
@@ -381,7 +382,7 @@ def test_init_accepts_published_pre_window_no_data_evidence(tmp_path, monkeypatc
 
     start, end = date(2024, 6, 27), date(2025, 4, 10)
     cfg = _cfg(tmp_path, {"600070.SH": end.isoformat()})
-    cfg._backfill_start = start
+    set_backfill(cfg, start=start)
     engine = JobEngine(cfg)
     run_id = engine.manifest.start_run("init", {})
     calls = []

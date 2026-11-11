@@ -19,6 +19,7 @@ from cnequity.derive.regulatory_events import (
     derive_regulatory_events,
     regulatory_events_from_announcements,
 )
+from cnequity.run_scope import set_backfill
 from cnequity.steps.macro_risk import step_regulatory_events
 from cnequity.storage.state import StateStore
 
@@ -154,9 +155,7 @@ def test_without_any_announcement_coverage_the_step_says_so(tmp_path):
 
 def _backfill_slice(cfg: Config, start: date, end: date) -> None:
     """Configure the step exactly as `_backfill_chunked` configures one slice."""
-    cfg._backfill = True
-    cfg._backfill_start = start
-    cfg._backfill_end = end
+    set_backfill(cfg, active=True, start=start, end=end)
 
 
 def test_a_backfill_slice_before_the_first_indexed_day_does_not_kill_the_sweep(tmp_path):

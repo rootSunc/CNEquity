@@ -17,6 +17,7 @@ from click.testing import CliRunner
 from cnequity.cli.main import cli
 from cnequity.config import load_config
 from cnequity.config.bootstrap import path_for_toml
+from cnequity.run_scope import backfill_of
 from cnequity.steps import events
 from cnequity.storage.state import StateStore
 
@@ -51,8 +52,8 @@ def demo_lake(tmp_path, monkeypatch):
 
     def fake_tdx(trade_date, *, symbols, config, **_kwargs):
         # Same window contract as the TDX adapter: rows outside it are dropped.
-        start = getattr(config, "_backfill_start", None) or date(1990, 1, 1)
-        end = getattr(config, "_backfill_end", None) or trade_date
+        start = backfill_of(config).start or date(1990, 1, 1)
+        end = backfill_of(config).end or trade_date
         calls.append((start, end, list(symbols)))
         rows = [r for r in history if r["symbol"] in symbols and start <= r["ex_date"] <= end]
         if not rows:

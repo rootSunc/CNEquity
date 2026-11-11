@@ -18,13 +18,13 @@ from cnequity.adapters.eastmoney.fundamentals import (
 from cnequity.adapters.eastmoney.shareholders import CHANGE_DATE, NOTICE_DATE
 from cnequity.adapters.eastmoney.valuation import fetch_valuation_metrics
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.http_policy import SourceCoolingDown
 from cnequity.domain.symbols import is_all_a_symbol, parse_symbol
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
 from cnequity.progress import sweep_progress
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.run_scope import backfill_of, run_flags_of
 from cnequity.steps.common import instrument_metadata, load_bar_universe, load_symbols
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
@@ -1266,7 +1266,7 @@ def _borrowable_announce_dates(
     single date. ``income`` is preferred because it is the statement with full
     coverage over the gap years; ``indicator`` fills in behind it.
     """
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
     root = config.curated_root / "financial_statement_items"
@@ -1557,7 +1557,7 @@ def _tdx_fin_revenue_rows(
     revenue; everyone else is left without one rather than understated.
     """
     from cnequity.adapters.tdx_fin.packages import operating_income, previous_period
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
     from cnequity.steps.fsi_peer import _cached_package
 

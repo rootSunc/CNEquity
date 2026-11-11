@@ -6,6 +6,7 @@ import pytest
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config, ScheduleGroup, WaveConfig, validate_config
 from cnequity.domain.schemas import validate_dataframe
+from cnequity.run_scope import set_backfill
 
 
 def test_fund_flow_schema_normalization():
@@ -124,9 +125,7 @@ def test_northbound_holdings_rejects_empty_daily_feed(cfg, monkeypatch):
 def test_northbound_holdings_backfill_surfaces_missing_quarters(cfg, monkeypatch):
     from cnequity.steps import capital as cap
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2020, 1, 1)
-    cfg._backfill_end = date(2020, 6, 30)
+    set_backfill(cfg, active=True, start=date(2020, 1, 1), end=date(2020, 6, 30))
     monkeypatch.setattr(cap, "fetch_northbound_holdings", lambda *_args, **_kwargs: pl.DataFrame())
 
     result = cap.step_northbound_holdings(cfg, date(2026, 6, 30), "run-backfill", {})
@@ -186,9 +185,7 @@ def test_northbound_holdings_rejects_missing_exchange_channel(cfg, monkeypatch):
 def test_northbound_flows_skips_retired_window_without_source_request(cfg, monkeypatch):
     from cnequity.steps import capital as cap
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2025, 1, 1)
-    cfg._backfill_end = date(2026, 1, 1)
+    set_backfill(cfg, active=True, start=date(2025, 1, 1), end=date(2026, 1, 1))
 
     def unexpected_fetch(*args, **kwargs):
         raise AssertionError("retired northbound window should not hit EastMoney")
@@ -204,9 +201,7 @@ def test_northbound_flows_skips_retired_window_without_source_request(cfg, monke
 def test_northbound_flows_clips_backfill_to_published_range(cfg, monkeypatch):
     from cnequity.steps import capital as cap
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2010, 1, 1)
-    cfg._backfill_end = date(2026, 1, 1)
+    set_backfill(cfg, active=True, start=date(2010, 1, 1), end=date(2026, 1, 1))
     seen = {}
 
     def fake_fetch(start, end, **kwargs):
@@ -645,7 +640,7 @@ def test_backup_snapshot_failure_does_not_abort_the_ca_backfill(tmp_path, monkey
         failover_backfill_snapshots=True,
         raw_archive_enabled=False,
     )
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     out = events.step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
 
     assert fetched.get("called") is True, "TDX must still be contacted"
@@ -668,7 +663,7 @@ def test_ca_backfill_skips_optional_backup_snapshot_by_default(tmp_path, monkeyp
     monkeypatch.setattr(events, "snapshot_corporate_actions_backup", _unexpected)
     monkeypatch.setattr(events, "fetch_corporate_actions", lambda *a, **k: pl.DataFrame())
     cfg = Config(data_root=tmp_path / "lake", raw_archive_enabled=False)
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     out = events.step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
 
     assert out["rows_written"] == 0

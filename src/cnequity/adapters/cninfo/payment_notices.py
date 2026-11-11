@@ -18,8 +18,8 @@ from typing import Any
 
 import httpx
 import polars as pl
-from pypdf import PdfReader
 
+from cnequity._lazy import lazy_attribute
 from cnequity.adapters.cninfo.announcements import post_with_retry
 from cnequity.adapters.cninfo.reviewed_cash_corrections import reviewed_cash_correction
 from cnequity.adapters.cninfo.reviewed_holder_notices import reviewed_holder_notice
@@ -32,6 +32,8 @@ from cnequity.storage.raw_archive import (
     begin_capture,
     verify_raw_archive,
 )
+
+PdfReader = lazy_attribute("pypdf", "PdfReader")
 
 _DIRECTORY_URL = "https://www.cninfo.com.cn/new/data/szse_stock.json"
 _QUERY_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"

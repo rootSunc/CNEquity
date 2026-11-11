@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from cnequity.run_scope import set_backfill
 from cnequity.steps.bars import (
     _backfill_window,
     _reject_unfinished_daily_bar_window,
@@ -129,7 +130,7 @@ def test_an_explicit_backfill_end_is_passed_through_untouched(config, monkeypatc
     """Repairing today's truncated bar is a real request, and before the close
     it has to fail loudly rather than quietly fetch a different day."""
     _freeze(monkeypatch, _MID_SESSION)
-    config._backfill_end = TRADING_DAY
+    set_backfill(config, end=TRADING_DAY)
 
     _start, end = _backfill_window(config, TRADING_DAY)
 

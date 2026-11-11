@@ -47,7 +47,7 @@ def test_silent_while_inside_the_holiday_table(tmp_path):
 def test_sessions_after_the_last_holiday_are_not_beyond_the_table(tmp_path):
     """The last closure of the table is 2027-10-07, but the seed covers the
     rest of that year: the weekdays after it are real sessions."""
-    from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
+    from cnequity.domain.holidays_cn import CLOSED_DATES
 
     after_last_closure = date.fromisoformat(max(CLOSED_DATES)) + timedelta(days=11)
     cfg = _calendar(tmp_path, after_last_closure)
@@ -74,7 +74,7 @@ def test_holidays_past_the_table_really_are_marked_as_sessions():
         build_trading_calendar,
         ensure_seed_csv,
     )
-    from cnequity.adapters.calendar.holidays_cn import CLOSED_DATES
+    from cnequity.domain.holidays_cn import CLOSED_DATES
 
     spring_festival = date(2028, 1, 26)
     assert spring_festival > date.fromisoformat(max(CLOSED_DATES))

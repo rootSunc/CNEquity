@@ -413,7 +413,7 @@ def test_a_failed_request_is_not_counted_as_the_peer_lacking_the_rows(tmp_path, 
         return curated.with_columns(pl.lit("ths").alias("source")).lazy()
 
     monkeypatch.setattr("cnequity.query.parquet_scan.scan_parquet_root", _scan)
-    monkeypatch.setattr("cnequity.query.canonical.dedupe_lazy_by_primary_key", lambda lf, ds: lf)
+    monkeypatch.setattr("cnequity.domain.canonical.dedupe_lazy_by_primary_key", lambda lf, ds: lf)
 
     out = bars_mod.repair_deep_history_ths_official(cfg, "run-1", start=day, end=day, dry_run=True)
 

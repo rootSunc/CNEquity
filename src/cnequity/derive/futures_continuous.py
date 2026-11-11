@@ -239,7 +239,7 @@ def _curated(config, dataset: str) -> pl.DataFrame | None:
     files = list(root.glob("**/*.parquet")) if root.exists() else []
     if not files:
         return None
-    from cnequity.query.canonical import dedupe_by_primary_key
+    from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.query.parquet_scan import scan_parquet_files
 
     return dedupe_by_primary_key(scan_parquet_files(files).collect(), dataset)

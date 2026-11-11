@@ -245,7 +245,7 @@ def _load_staged_instruments(config: Config) -> pl.DataFrame | None:
     files = sorted(root.rglob("*.parquet")) if root.exists() else []
     if not files:
         return None
-    from cnequity.query.canonical import dedupe_by_primary_key
+    from cnequity.domain.canonical import dedupe_by_primary_key
 
     frame = pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
     return dedupe_by_primary_key(frame, "instruments")
@@ -620,7 +620,7 @@ def fetch_incremental_daily(
     # Rolling reconciliation windows intentionally overlap the watermark. The
     # canonical PK collapse keeps a revised row once while preserving the
     # source/provenance precedence used by lake reads.
-    from cnequity.query.canonical import dedupe_by_primary_key
+    from cnequity.domain.canonical import dedupe_by_primary_key
 
     return dedupe_by_primary_key(combined, dataset), findings
 

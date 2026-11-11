@@ -20,6 +20,7 @@ from cnequity.config.bootstrap import path_for_toml
 from cnequity.domain.market_time import shanghai_today
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.worker_pool import _window_backfill
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import BACKFILL_START
 
 
@@ -104,7 +105,7 @@ def _capture_backfill_start(tmp_path, monkeypatch, args: list[str]):
     seen: dict = {}
 
     def fake_run_init_phases(self, trade_date=None, **kwargs):
-        seen["start"] = getattr(self.config, "_backfill_start", None)
+        seen["start"] = backfill_of(self.config).start
         return {"run_id": "init-run", "status": "success", "phases": []}
 
     monkeypatch.setattr(JobEngine, "run_init_phases", fake_run_init_phases)
@@ -216,7 +217,7 @@ def test_shallow_window_stays_strict_about_pagination_failures(tmp_path):
     quick init does not match — inferring it would make the shallow path the
     lenient one, and lose a symbol's older years without saying so."""
     cfg = Config(data_root=tmp_path / "data")
-    cfg._backfill = True
+    set_backfill(cfg, active=True)
     assert _window_backfill(cfg, date(2023, 8, 2)) is True
 
 
@@ -255,7 +256,7 @@ def test_resume_reuses_the_original_window(tmp_path, monkeypatch):
     monkeypatch.setattr(JobEngine, "_finalize_init_run", lambda self, *a, **k: "success")
 
     engine.resume_init(date(2026, 8, 5), run_id=run_id)
-    assert engine.config._backfill_start == date(2023, 8, 2)
+    assert backfill_of(engine.config).start == date(2023, 8, 2)
 
 
 def test_resume_does_not_override_an_explicit_window(tmp_path, monkeypatch):
@@ -266,7 +267,7 @@ def test_resume_does_not_override_an_explicit_window(tmp_path, monkeypatch):
     run_id = Manifest(cfg.manifest_path).start_run(
         "init", {"phases": ["phase1_reference"], "history_start": "2023-08-02"}
     )
-    cfg._backfill_start = date(2016, 1, 1)
+    set_backfill(cfg, start=date(2016, 1, 1))
 
     engine = JobEngine(cfg)
     monkeypatch.setattr(
@@ -278,18 +279,18 @@ def test_resume_does_not_override_an_explicit_window(tmp_path, monkeypatch):
     monkeypatch.setattr(JobEngine, "_finalize_init_run", lambda self, *a, **k: "success")
 
     engine.resume_init(date(2026, 8, 5), run_id=run_id)
-    assert engine.config._backfill_start == date(2016, 1, 1)
+    assert backfill_of(engine.config).start == date(2016, 1, 1)
     assert engine.manifest.get_run_metadata(run_id)["history_start"] == "2016-01-01"
 
     next_engine = JobEngine(Config(data_root=tmp_path / "data"))
     next_engine.resume_init(date(2026, 8, 6), run_id=run_id)
-    assert next_engine.config._backfill_start == date(2016, 1, 1)
+    assert backfill_of(next_engine.config).start == date(2016, 1, 1)
 
 
 def test_init_records_the_window_on_the_run(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     cfg.manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg._backfill_start = date(2023, 8, 2)
+    set_backfill(cfg, start=date(2023, 8, 2))
     engine = JobEngine(cfg)
 
     captured: dict = {}
@@ -310,9 +311,9 @@ def test_every_profile_keeps_the_full_cross_section(profile, tmp_path, monkeypat
     start, _ = _capture_backfill_start(tmp_path, monkeypatch, ["--profile", profile])
     cfg = Config(data_root=tmp_path / "data")
     if start:
-        cfg._backfill_start = start
+        set_backfill(cfg, start=start)
     assert getattr(cfg, "_scope_symbols", None) is None
-    assert getattr(cfg, "_backfill_symbols", None) is None
+    assert backfill_of(cfg).symbol_list() is None
 
 
 # --- the tiny-lake end of the same axis ------------------------------------

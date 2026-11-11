@@ -543,8 +543,8 @@ def resource_sector_bars_ths_official(
         fetch_sector_bars,
         fetch_sector_catalog,
     )
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.domain.market_time import shanghai_today
-    from cnequity.query.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
     from cnequity.steps.http_common import write_fetched
 

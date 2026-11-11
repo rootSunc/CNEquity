@@ -13,6 +13,7 @@ from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError
 from cnequity.adapters.macro import indicators
 from cnequity.adapters.macro.indicators import DAILY_SERIES_FIRST_OBS, fetch_daily_rates_range
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import macro_risk
 from cnequity.steps.common import BACKFILL_START
 
@@ -75,9 +76,7 @@ def cfg(tmp_path):
 
 
 def _backfill(cfg: Config, start: date | None, end: date | None) -> Config:
-    cfg._backfill = True
-    cfg._backfill_start = start
-    cfg._backfill_end = end
+    set_backfill(cfg, active=True, start=start, end=end)
     return cfg
 
 

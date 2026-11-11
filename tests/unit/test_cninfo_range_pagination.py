@@ -16,6 +16,7 @@ from cnequity.adapters.cninfo.announcements import (
 )
 from cnequity.config import Config
 from cnequity.orchestrator.manifest import Manifest
+from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps import events
 
 
@@ -742,8 +743,7 @@ def test_flipping_views_that_are_not_nested_still_fail():
 def test_cninfo_step_uses_registry_date_chunks_for_default_backfill(tmp_path, monkeypatch):
     """The step must bound a direct/default backfill, not just CLI ranges."""
     config = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    config._backfill_start = date(2024, 1, 1)
-    config._backfill_end = date(2024, 2, 10)
+    set_backfill(config, start=date(2024, 1, 1), end=date(2024, 2, 10))
     calls: list[tuple[date, date]] = []
 
     def fetch_range(start, end, **_kwargs):
@@ -785,8 +785,8 @@ def test_cninfo_step_uses_registry_date_chunks_for_default_backfill(tmp_path, mo
     assert pl.concat([pl.read_parquet(path) for path in staged]).height == 41
     # The helper temporarily narrows the private bounds and must not leak its
     # final slice into a caller that reuses the Config object.
-    assert config._backfill_start == date(2024, 1, 1)
-    assert config._backfill_end == date(2024, 2, 10)
+    assert backfill_of(config).start == date(2024, 1, 1)
+    assert backfill_of(config).end == date(2024, 2, 10)
 
 
 def test_failed_contract_checkpoint_restarts_at_page_one(tmp_path):
@@ -928,8 +928,7 @@ def test_range_scoped_checkpoint_paths_do_not_overwrite_other_dates(tmp_path):
 
 def test_sparse_cninfo_range_treats_empty_dates_as_confirmed_observations(tmp_path, monkeypatch):
     config = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    config._backfill_start = date(2024, 6, 8)
-    config._backfill_end = date(2024, 6, 10)
+    set_backfill(config, start=date(2024, 6, 8), end=date(2024, 6, 10))
 
     def fetch_range(_start, _end, **_kwargs):
         return pl.DataFrame(
@@ -965,8 +964,7 @@ def test_sparse_cninfo_range_treats_empty_dates_as_confirmed_observations(tmp_pa
 
 def test_failed_later_cninfo_slice_persists_cumulative_request_retries(tmp_path):
     config = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    config._backfill_start = date(2024, 1, 1)
-    config._backfill_end = date(2024, 2, 10)
+    set_backfill(config, start=date(2024, 1, 1), end=date(2024, 2, 10))
     manifest = Manifest(config.manifest_path)
     run_id = manifest.start_run("backfill:announcement_index")
     batch_id = "cninfo-range-batch"
@@ -1178,8 +1176,7 @@ def test_interrupted_cninfo_backfill_keeps_every_day_already_fetched(tmp_path, m
     """A stop mid-window loses only the day in flight, each day under its own receipt."""
     config = Config(data_root=tmp_path / "data")
     assert config.should_archive_raw("announcement_index")
-    config._backfill_start = date(2024, 1, 1)
-    config._backfill_end = date(2024, 1, 31)
+    set_backfill(config, start=date(2024, 1, 1), end=date(2024, 1, 31))
 
     class _DayClient:
         def post(self, _url, data):
@@ -1211,14 +1208,13 @@ def test_interrupted_cninfo_backfill_keeps_every_day_already_fetched(tmp_path, m
         pl.read_parquet(path).get_column("announce_date").unique().to_list() for path in staged
     ]
     assert sorted(staged_days) == [[date(2024, 1, 1)], [date(2024, 1, 2)]]
-    assert config._backfill_start == date(2024, 1, 1)
-    assert config._backfill_end == date(2024, 1, 31)
+    assert backfill_of(config).start == date(2024, 1, 1)
+    assert backfill_of(config).end == date(2024, 1, 31)
 
 
 def test_a_failed_cninfo_day_does_not_refetch_its_neighbours(tmp_path, monkeypatch):
     config = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    config._backfill_start = date(2024, 1, 1)
-    config._backfill_end = date(2024, 1, 4)
+    set_backfill(config, start=date(2024, 1, 1), end=date(2024, 1, 4))
     calls: list[date] = []
 
     def fetch_range(start, end, **_kwargs):

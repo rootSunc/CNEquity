@@ -8,6 +8,7 @@ import polars as pl
 
 from cnequity.adapters.tushare import fund_flow as tff
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.storage.parquet import StagingWriter
 
 FIELDS = tff._FIELDS.split(",")
@@ -96,9 +97,7 @@ def test_backfill_adds_only_missing_stocks_and_never_replaces_eastmoney(tmp_path
     from cnequity.steps import capital
 
     cfg = _lake(tmp_path)
-    cfg._backfill = True
-    cfg._backfill_start = date(2026, 7, 2)
-    cfg._backfill_end = date(2026, 7, 3)
+    set_backfill(cfg, active=True, start=date(2026, 7, 2), end=date(2026, 7, 3))
     asked: list[date] = []
 
     def fake(day, *, config, client=None):

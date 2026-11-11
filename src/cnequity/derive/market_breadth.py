@@ -8,10 +8,10 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.market_profile import BJ
 from cnequity.domain.symbols import filter_ingest_universe, is_cdr_symbol
 from cnequity.domain.trading_status import risk_warning_expr
-from cnequity.query.canonical import dedupe_by_primary_key
 from cnequity.query.parquet_scan import collect_parquet_root
 
 MARKET_BREADTH_METRICS = (

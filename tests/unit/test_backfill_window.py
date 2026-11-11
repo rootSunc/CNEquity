@@ -23,6 +23,7 @@ from cnequity.config import Config
 from cnequity.orchestrator.backfill_scope import capture_backfill_scope, restore_backfill_scope
 from cnequity.run_scope import (
     LEGACY_BACKFILL_ATTRS,
+    LEGACY_RUN_FLAG_ATTRS,
     BackfillWindow,
     backfill_of,
     backfill_override,
@@ -94,24 +95,25 @@ def test_the_window_survives_pickling_to_worker_processes(tmp_path):
     assert backfill_of(pickle.loads(pickle.dumps(cfg))) == backfill_of(cfg)
 
 
-@pytest.mark.parametrize(
-    ("attr", "value", "expected"),
-    [
-        ("_backfill", True, True),
-        ("_backfill_start", date(2020, 1, 1), date(2020, 1, 1)),
-        ("_backfill_end", date(2020, 2, 1), date(2020, 2, 1)),
-        ("_backfill_symbols", ["600000.SH"], ["600000.SH"]),
-        ("_backfill_workers", 4, 4),
-        ("_backfill_refetch", True, True),
-    ],
-)
-def test_legacy_attributes_still_read_and_write_the_window(tmp_path, attr, value, expected):
-    cfg = _config(tmp_path)
-    setattr(cfg, attr, value)
-    assert getattr(cfg, attr) == expected
-    field = LEGACY_BACKFILL_ATTRS[attr]
-    stored = getattr(backfill_of(cfg), field)
-    assert (list(stored) if field == "symbols" else stored) == expected
+def test_config_no_longer_carries_the_legacy_names():
+    legacy = set(LEGACY_BACKFILL_ATTRS) | set(LEGACY_RUN_FLAG_ATTRS)
+    assert not sorted(name for name in legacy if hasattr(Config, name))
+
+
+def test_tests_do_not_use_the_legacy_names_as_attributes():
+    """On a real Config such an assignment would now be a silent no-op."""
+    legacy = set(LEGACY_BACKFILL_ATTRS) | set(LEGACY_RUN_FLAG_ATTRS)
+    found = []
+    for path in sorted(Path(__file__).parent.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        found += [
+            f"{path.name}:{node.lineno} .{node.attr}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr in legacy
+        ]
+    assert not found, "use backfill_of / set_backfill / run_flags_of / set_run_flags:\n" + (
+        "\n".join(found)
+    )
 
 
 def test_config_shaped_doubles_with_legacy_attributes_are_read(tmp_path):
@@ -164,9 +166,9 @@ def test_a_scope_recorded_before_workers_existed_keeps_the_default(tmp_path):
 
 # ------------------------------------------------------------------ guard
 
-#: The compatibility layer and the two places that keep the old names on
-#: purpose (the fingerprint and the recorded retry-scope key).
-_ALLOWED = {"config/loader.py", "run_scope.py", "storage/provenance.py"}
+#: The double reader and the two places that keep the old names on purpose
+#: (the fingerprint and the recorded retry-scope key).
+_ALLOWED = {"run_scope.py", "storage/provenance.py"}
 _ALLOWED_STRINGS = {"orchestrator/backfill_scope.py": {"_backfill_workers"}}
 
 

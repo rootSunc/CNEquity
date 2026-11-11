@@ -10,6 +10,7 @@ import pytest
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill
 from cnequity.steps import fundamentals as fund
 from cnequity.steps.common import load_bar_universe
 
@@ -41,9 +42,7 @@ def test_financial_statement_items_empty(cfg, monkeypatch):
 
 
 def test_financial_statement_items_backfill_surfaces_missing_periods(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 6, 30)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 6, 30))
     monkeypatch.setattr(fund, "fetch_financial_statement_items", lambda *a, **k: pl.DataFrame())
 
     result = fund.step_financial_statement_items(cfg, date(2026, 6, 30), "run-fsi-gap", {})
@@ -72,9 +71,7 @@ def test_financial_statement_items_writes_staging(cfg, monkeypatch):
         )
 
     monkeypatch.setattr(fund, "fetch_financial_statement_items", fake_fetch)
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 3, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
     result = fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-fsi", {})
     assert seen["backfill"] is True
     assert result["rows_written"] == 4
@@ -85,9 +82,7 @@ def test_financial_statement_items_writes_staging(cfg, monkeypatch):
 
 
 def test_financial_report_failure_keeps_valid_unit_for_same_run_retry(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 3, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
     unit = "2024-03-31|RPT_LICO_FN_CPD"
     calls = []
 
@@ -128,9 +123,7 @@ def test_financial_backfill_stages_a_unit_from_every_report(cfg, monkeypatch):
     """Issue #57: the F10 cash-flow units aborted the backfill as invalid."""
     from cnequity.adapters.eastmoney.fundamentals import _REPORTS, _parse_rows
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 3, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
 
     def fake_fetch(_day, *, on_unit, skip_units, failures, **_kwargs):
         for report in _REPORTS:
@@ -151,9 +144,7 @@ def test_financial_backfill_stages_a_unit_from_every_report(cfg, monkeypatch):
 
 
 def test_financial_statement_items_backfill_surfaces_partial_report_families(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 3, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
     monkeypatch.setattr(
         fund,
         "fetch_financial_statement_items",
@@ -187,9 +178,7 @@ def test_financial_statement_items_backfill_surfaces_missing_income_statement(cf
     income, indicator, balance, cashflow - so a period with only
     balance/cashflow present is still incomplete.
     """
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 3, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
     monkeypatch.setattr(
         fund,
         "fetch_financial_statement_items",
@@ -397,8 +386,7 @@ def test_backfill_valuation_locked_writes_chunks(cfg, monkeypatch):
 
 
 def test_backfill_valuation_locked_honors_requested_window(cfg, monkeypatch):
-    cfg._backfill_start = date(2024, 5, 1)
-    cfg._backfill_end = date(2024, 6, 1)
+    set_backfill(cfg, start=date(2024, 5, 1), end=date(2024, 6, 1))
     monkeypatch.setattr(
         "cnequity.storage.repairs.valuation_orphans.purge_valuation_orphan_symbols",
         lambda config: {"purged": 0},
@@ -515,9 +503,7 @@ def test_backfill_valuation_locked_aborts_on_runtime_error(cfg, monkeypatch):
 
 
 def test_shareholder_backfill_surfaces_empty_windows(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 12, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 12, 31))
     monkeypatch.setattr(
         "cnequity.adapters.eastmoney.shareholders.fetch_share_structure",
         lambda *args, **kwargs: pl.DataFrame(),
@@ -531,9 +517,7 @@ def test_shareholder_backfill_surfaces_empty_windows(cfg, monkeypatch):
 
 
 def test_shareholder_backfill_rows_are_marked_reconstructed(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 12, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 12, 31))
     monkeypatch.setattr(
         "cnequity.adapters.eastmoney.shareholders.fetch_share_structure",
         lambda *args, **kwargs: pl.DataFrame({"symbol": ["600519.SH"]}),
@@ -555,9 +539,7 @@ def test_shareholder_backfill_rows_are_marked_reconstructed(cfg, monkeypatch):
 def test_share_structure_later_window_failure_keeps_earlier_valid_year(cfg, monkeypatch):
     from cnequity.storage.state import StateStore
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2023, 1, 1)
-    cfg._backfill_end = date(2024, 12, 31)
+    set_backfill(cfg, active=True, start=date(2023, 1, 1), end=date(2024, 12, 31))
 
     def fetch(start, end, **_kwargs):
         if start.year == 2024:
@@ -600,9 +582,7 @@ def test_shareholder_programming_error_is_not_a_retryable_source_gap(cfg):
 
 
 def test_top_holders_quarter_slices_resume_without_reasking_completed_windows(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 12, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 12, 31))
     calls = []
 
     def fetch(start, end, **_kwargs):
@@ -641,9 +621,7 @@ def test_top_holders_quarter_slices_resume_without_reasking_completed_windows(cf
 def test_top_holders_failure_keeps_complete_windows_and_retries_only_missing(cfg, monkeypatch):
     from cnequity.storage.state import StateStore
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 12, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 12, 31))
     calls = []
     fail_once = {"value": True}
 
@@ -686,9 +664,7 @@ def test_top_holders_failure_keeps_complete_windows_and_retries_only_missing(cfg
 
 
 def test_top_holders_partial_page_rows_publish_without_claiming_window_complete(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 3, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
     calls = []
 
     def fetch(start, end, **kwargs):
@@ -730,9 +706,7 @@ def test_top_holders_real_archive_partial_page_reaches_curated_with_gap(tmp_path
     from cnequity.storage.state import StateStore
 
     config = Config(data_root=tmp_path / "isolated-lake", raw_archive_enabled=True)
-    config._backfill = True
-    config._backfill_start = date(2024, 1, 1)
-    config._backfill_end = date(2024, 3, 31)
+    set_backfill(config, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
     row = {
         "SECUCODE": "600519.SH",
         "END_DATE": "2024-03-31",
@@ -801,10 +775,9 @@ def test_top_holders_real_archive_partial_page_reaches_curated_with_gap(tmp_path
 
 
 def test_share_structure_symbol_refresh_is_one_window_scoped_to_the_names(cfg, monkeypatch):
-    cfg._backfill = True
-    cfg._backfill_start = date(1990, 1, 1)
-    cfg._backfill_end = date(2026, 9, 29)
-    cfg._backfill_symbols = ["603014.SH"]
+    set_backfill(
+        cfg, active=True, start=date(1990, 1, 1), end=date(2026, 9, 29), symbols=["603014.SH"]
+    )
     calls = []
 
     def fetch(start, end, **kwargs):
@@ -831,9 +804,7 @@ def test_financial_backfill_resumes_after_units_an_interrupted_run_published(cfg
     """A new run skips units an earlier run published; ``--refetch`` does not."""
     from cnequity.storage.state import StateStore
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 3, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
     unit = "2024-03-31|RPT_LICO_FN_CPD"
     calls: list[set[str]] = []
 
@@ -859,7 +830,7 @@ def test_financial_backfill_resumes_after_units_an_interrupted_run_published(cfg
     assert resumed.get("missing_periods") is None
     assert resumed.get("missing_statement_periods") is None
 
-    cfg._backfill_refetch = True
+    set_backfill(cfg, refetch=True)
     fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-refetch", {})
     assert calls[2] == set()
 
@@ -867,10 +838,9 @@ def test_financial_backfill_resumes_after_units_an_interrupted_run_published(cfg
 def test_scoped_financial_repair_does_not_stand_in_for_the_market(cfg, monkeypatch):
     from cnequity.storage.state import StateStore
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 3, 31)
-    cfg._backfill_symbols = ["600519.SH"]
+    set_backfill(
+        cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31), symbols=["600519.SH"]
+    )
     unit = "2024-03-31|RPT_LICO_FN_CPD"
     calls: list[set[str]] = []
 
@@ -884,7 +854,7 @@ def test_scoped_financial_repair_does_not_stand_in_for_the_market(cfg, monkeypat
     fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-scoped", {})
     StateStore(cfg.meta_root).commit_staged_units("financial_statement_items", "run-scoped")
 
-    cfg._backfill_symbols = None
+    set_backfill(cfg, symbols=None)
     fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-market", {})
     assert calls[1] == set()
 
@@ -892,9 +862,7 @@ def test_scoped_financial_repair_does_not_stand_in_for_the_market(cfg, monkeypat
 def test_shareholder_backfill_resumes_after_windows_an_interrupted_run_published(cfg, monkeypatch):
     from cnequity.storage.state import StateStore
 
-    cfg._backfill = True
-    cfg._backfill_start = date(2024, 1, 1)
-    cfg._backfill_end = date(2024, 12, 31)
+    set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 12, 31))
     calls = []
     fail = {"value": True}
 
@@ -923,6 +891,6 @@ def test_shareholder_backfill_resumes_after_windows_an_interrupted_run_published
     assert resumed["windows_reused"] == 2
     assert "missing_units" not in resumed
 
-    cfg._backfill_refetch = True
+    set_backfill(cfg, refetch=True)
     fund._run_shareholder_step(cfg, date(2024, 12, 31), "run-c", "top_holders", fetch, **kwargs)
     assert calls[5:] == [1, 4, 7, 10]

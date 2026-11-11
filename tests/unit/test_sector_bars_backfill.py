@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps import rotation as rot
 from cnequity.steps.rotation import (
     _backfill_sector_bars,
@@ -117,7 +118,7 @@ def test_failed_boards_not_marked_and_emit_warning(tmp_path, monkeypatch):
 
 def test_force_clears_checkpoint(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    cfg._sector_bars_force = True
+    set_run_flags(cfg, sector_bars_force=True)
     df = pl.DataFrame(
         [
             {
@@ -165,8 +166,7 @@ def test_narrow_gap_fill_does_not_satisfy_the_full_window(tmp_path, monkeypatch)
         ]
     )
     _patch_history(monkeypatch, returns=(df, [], ["885611"]))
-    cfg._backfill_start = date(2026, 7, 15)
-    cfg._backfill_end = date(2026, 7, 21)
+    set_backfill(cfg, start=date(2026, 7, 15), end=date(2026, 7, 21))
     _backfill_sector_bars(cfg, date(2026, 7, 21), "run1")
     commit_sector_bars_staged(cfg, "run1")
 
@@ -184,8 +184,7 @@ def test_narrow_gap_fill_does_not_satisfy_the_full_window(tmp_path, monkeypatch)
         return [], [], [], []
 
     monkeypatch.setattr("cnequity.adapters.ths.boards.sweep_board_bars", fake_sweep)
-    cfg._backfill_start = None
-    cfg._backfill_end = None
+    set_backfill(cfg, start=None, end=None)
     _backfill_sector_bars(cfg, date(2026, 7, 21), "run2")
     assert captured["skip"] == set()
 

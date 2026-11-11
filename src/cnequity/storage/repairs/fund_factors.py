@@ -10,11 +10,11 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.derive.fund_factors import SOURCE, apply_fund_share_factors
+from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.schemas import with_provenance
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.publication import check_repair_publication
-from cnequity.query.canonical import dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.instrument_catalog import load_curated_instruments
 from cnequity.storage.parquet import StagingWriter, compact_dataset

@@ -8,8 +8,33 @@ from cnequity.config import Config
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import StepEntry
+from cnequity.run_scope import (
+    LEGACY_BACKFILL_ATTRS,
+    LEGACY_RUN_FLAG_ATTRS,
+    backfill_of,
+    run_flags_of,
+    set_backfill,
+    set_run_flags,
+)
 
 DAY = date(2024, 6, 28)
+
+
+def _set(config, name, value):
+    if name in LEGACY_BACKFILL_ATTRS:
+        set_backfill(config, **{LEGACY_BACKFILL_ATTRS[name]: value})
+    elif name in LEGACY_RUN_FLAG_ATTRS:
+        set_run_flags(config, **{LEGACY_RUN_FLAG_ATTRS[name]: value})
+    else:
+        setattr(config, name, value)
+
+
+def _setting(config, name):
+    if name in LEGACY_BACKFILL_ATTRS:
+        return getattr(backfill_of(config), LEGACY_BACKFILL_ATTRS[name])
+    if name in LEGACY_RUN_FLAG_ATTRS:
+        return getattr(run_flags_of(config), LEGACY_RUN_FLAG_ATTRS[name])
+    return getattr(config, name, None)
 
 
 @pytest.mark.parametrize(
@@ -66,20 +91,19 @@ def test_retry_from_fresh_config_replays_one_off_scope(tmp_path, monkeypatch, da
     from cnequity.orchestrator import engine as module
 
     cfg = Config(data_root=tmp_path / "lake", retry_backoff_seconds=0)
-    cfg._backfill_start = cfg._backfill_end = DAY
-    cfg._backfill_symbols = ["600519.SH"]
+    set_backfill(cfg, start=DAY, end=DAY, symbols=["600519.SH"])
     for name, value in overrides.items():
-        setattr(cfg, name, value)
+        _set(cfg, name, value)
     requests = []
 
     def fetch(config, day, run_id, context):
         requests.append(
             {
                 "date": day,
-                "start": config._backfill_start,
-                "end": config._backfill_end,
-                "symbols": config._backfill_symbols,
-                **{name: getattr(config, name, None) for name in overrides},
+                "start": backfill_of(config).start,
+                "end": backfill_of(config).end,
+                "symbols": backfill_of(config).symbol_list(),
+                **{name: _setting(config, name) for name in overrides},
             }
         )
         if len(requests) == 1:
@@ -125,8 +149,8 @@ def test_legacy_scope_restores_dates_without_overwriting_unrecorded_settings(tmp
         },
     )
     engine.run_job("retry", run_id=run_id, retry_failed_only=True)
-    assert cfg._backfill_start == cfg._backfill_end == DAY
-    assert cfg._backfill_symbols == ["600519.SH"]
+    assert backfill_of(cfg).start == backfill_of(cfg).end == DAY
+    assert backfill_of(cfg).symbol_list() == ["600519.SH"]
     assert cfg.minute_bars_symbols == ["600519.SH"]
     assert cfg.margin_trading_source == "eastmoney"
 
@@ -135,11 +159,10 @@ def test_scope_is_a_snapshot_and_only_restores_whitelisted_settings(tmp_path):
     from cnequity.orchestrator.backfill_scope import capture_backfill_scope, restore_backfill_scope
 
     cfg = Config(data_root=tmp_path / "lake", minute_bars_symbols=["600519.SH"])
-    cfg._corporate_actions_eastmoney_date_repair = [DAY]
-    cfg._sector_bars_force = True
+    set_run_flags(cfg, ca_eastmoney_date_repair=[DAY], sector_bars_force=True)
     scope = capture_backfill_scope(cfg)
     cfg.minute_bars_symbols.append("000001.SZ")
-    cfg._corporate_actions_eastmoney_date_repair.clear()
+    set_run_flags(cfg, ca_eastmoney_date_repair=[])
     assert scope["minute_bars_symbols"] == ["600519.SH"]
     assert scope["settings"]["_corporate_actions_eastmoney_date_repair"] == [DAY.isoformat()]
     assert "_sector_bars_force" not in scope["settings"]
@@ -148,7 +171,7 @@ def test_scope_is_a_snapshot_and_only_restores_whitelisted_settings(tmp_path):
     fresh = Config(data_root=cfg.data_root)
     restore_backfill_scope(fresh, scope)
     assert fresh.data_root == cfg.data_root
-    assert fresh._corporate_actions_eastmoney_date_repair == [DAY]
-    assert fresh._sector_bars_force is False
+    assert run_flags_of(fresh).ca_eastmoney_date_repair == (DAY,)
+    assert run_flags_of(fresh).sector_bars_force is False
     restore_backfill_scope(cfg, scope)
-    assert cfg._sector_bars_force is False
+    assert run_flags_of(cfg).sector_bars_force is False

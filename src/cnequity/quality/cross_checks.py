@@ -23,6 +23,7 @@ from cnequity.adapters.eastmoney.corporate_actions import EASTMONEY_BACKFILL_FLO
 from cnequity.adapters.exchange.st_lists import is_st_name
 from cnequity.config import Config
 from cnequity.domain.action_sessions import effective_session
+from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.holidays_cn import session_expr
 from cnequity.domain.symbols import parse_symbol
 from cnequity.domain.trading_status import not_trading_expr, risk_warning_expr
@@ -31,7 +32,6 @@ from cnequity.quality.ex_events import (
     recent_sessions,
     unexplained_factor_steps,
 )
-from cnequity.query.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.query.parquet_scan import (
     dataset_has_parquet,
     list_partitions,

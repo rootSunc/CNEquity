@@ -12,6 +12,7 @@ from cnequity.orchestrator.init_phases import (
     pending_phases,
 )
 from cnequity.orchestrator.manifest import Manifest
+from cnequity.run_scope import backfill_of
 from cnequity.storage.layout import init_data_layout
 
 
@@ -463,7 +464,7 @@ def test_a_killed_init_is_resumed_not_refused(tmp_path, monkeypatch):
         seen.update(
             resume=resume,
             resume_run_id=resume_run_id,
-            backfill_start=getattr(self.config, "_backfill_start", None),
+            backfill_start=backfill_of(self.config).start,
         )
         return {"run_id": resume_run_id, "status": "success", "phases": []}
 
