@@ -19,6 +19,14 @@ from cnequity.orchestrator.manifest import Manifest
 from cnequity.steps import events
 
 
+@pytest.fixture(autouse=True)
+def _empty_stock_directory(monkeypatch):
+    """No test reaches CNINFO's stock directory unless it provides one."""
+    from cnequity.adapters.cninfo import payment_notices
+
+    monkeypatch.setattr(payment_notices, "_stock_directory", lambda *_a, **_k: ({}, b""))
+
+
 class _Response:
     def __init__(self, payload):
         self.payload = payload
@@ -648,7 +656,7 @@ def test_dense_single_day_fills_rows_outside_every_bucket_from_sorted_walks(monk
     assert metrics["residual_splits"] == 1
     assert {
         (call["sortName"], call["sortType"]) for call in client.calls if call.get("sortName")
-    } == {("code", "asc"), ("code", "desc"), ("time", "asc"), ("time", "desc")}
+    } == {("code", "asc")}
 
 
 def test_dense_single_day_still_fails_when_sorted_walks_leave_a_gap(monkeypatch):
@@ -1244,3 +1252,197 @@ def test_a_failed_cninfo_day_does_not_refetch_its_neighbours(tmp_path, monkeypat
 
     assert calls == [date(2024, 1, day) for day in range(1, 5)]
     assert result["rows_written"] == 3
+
+
+class _CappedLeafClient:
+    """A leaf no filter narrows: the default walk caps and misses rows mid-result.
+
+    Measured 2026-04-29 (sz main board x manufacturing x daily operations): 3,024
+    rows, the default walk read 3,000, and the 24 it missed sat in the middle of
+    the code order, hidden in ties on one timestamp.
+    """
+
+    def __init__(
+        self,
+        target: date,
+        *,
+        total: int,
+        hidden: set[int],
+        flip_once: bool = False,
+        stock_limit: int = 50,
+    ):
+        self.day = target.isoformat()
+        self.rows = [f"r{index:03d}" for index in range(total)]
+        # Five rows per stock; CNINFO drops a stock filter past its limit.
+        self.codes = {key: f"{index // 5:06d}" for index, key in enumerate(self.rows)}
+        self.stock_limit = stock_limit
+        self.hidden = {self.rows[index] for index in hidden}
+        self.flip_once = flip_once
+        self.calls: list[dict] = []
+
+    def post(self, _url, data):
+        self.calls.append(dict(data))
+        page = int(data["pageNum"])
+        total = len(self.rows)
+        stocks = {pair.split(",")[0] for pair in data.get("stock", "").split(";") if pair}
+        if stocks and len(stocks) <= self.stock_limit:
+            ordered = [key for key in self.rows if self.codes[key] in stocks]
+            total = len(ordered)
+        elif data.get("sortName") == "code":
+            ordered = self.rows if data["sortType"] == "asc" else self.rows[::-1]
+            if self.flip_once:
+                # Another server's view answers once with a different total.
+                self.flip_once = False
+                total += 1
+        elif data.get("sortName"):
+            ordered = self.rows
+        else:
+            ordered = [key for key in self.rows if key not in self.hidden] + sorted(self.hidden)
+        batch = ordered[(page - 1) * 30 : page * 30]
+        return _Response(
+            {
+                "announcements": [
+                    {**_row(key, self.day), "secCode": self.codes[key]} for key in batch
+                ],
+                "totalRecordNum": total,
+                "totalpages": total // 30,
+                "hasMore": True,
+            }
+        )
+
+
+def _no_partitions(monkeypatch):
+    _only_plate_partitions(monkeypatch, values=())
+
+
+def test_capped_leaf_completes_from_the_first_sorted_walk_and_stops(monkeypatch, tmp_path):
+    _no_partitions(monkeypatch)
+    target = date(2026, 4, 29)
+    client = _CappedLeafClient(target, total=64, hidden={10, 20, 35, 50})
+    checkpoint = tmp_path / "cninfo.json"
+    metrics: dict = {}
+
+    frame = fetch_announcement_index_range(
+        target, client=client, max_pages_per_slice=2, metrics=metrics, checkpoint_path=checkpoint
+    )
+
+    assert frame.height == 64
+    assert metrics["residual_leaf"] == 1
+    sorted_calls = [
+        (c["sortName"], c["sortType"], c["pageNum"]) for c in client.calls if c.get("sortName")
+    ]
+    assert sorted_calls == [("code", "asc", 1), ("code", "asc", 2)]
+    record = json_codec.read_json(checkpoint)["slices"][f"szse:{target}:{target}"]
+    assert record["status"] == "complete"
+    assert record["partition_strategy"] == "order"
+
+
+def test_capped_leaf_uses_the_opposite_order_for_the_far_end(monkeypatch):
+    _no_partitions(monkeypatch)
+    target = date(2026, 4, 29)
+    client = _CappedLeafClient(target, total=62, hidden={10, 61})
+
+    frame = fetch_announcement_index_range(target, client=client, max_pages_per_slice=2)
+
+    assert frame.height == 62
+    assert ("code", "desc") in {
+        (c["sortName"], c["sortType"]) for c in client.calls if c.get("sortName")
+    }
+
+
+def test_capped_leaf_sorted_walk_retries_another_servers_view(monkeypatch):
+    _no_partitions(monkeypatch)
+    target = date(2026, 4, 29)
+    client = _CappedLeafClient(target, total=61, hidden={10}, flip_once=True)
+
+    frame = fetch_announcement_index_range(target, client=client, max_pages_per_slice=2)
+
+    assert frame.height == 61
+    first_pages = [c for c in client.calls if c.get("sortName") == "code" and c["pageNum"] == 1]
+    assert len(first_pages) == 2
+
+
+def test_capped_leaf_still_fails_when_sorted_walks_leave_a_gap(monkeypatch):
+    _no_partitions(monkeypatch)
+    target = date(2026, 4, 29)
+    client = _CappedLeafClient(target, total=61, hidden={10})
+    original = client.post
+
+    def post(url, data):
+        response = original(url, data)
+        if data.get("sortName"):
+            response.payload["announcements"] = [
+                row for row in response.payload["announcements"] if row["announcementId"] != "r010"
+            ]
+        return response
+
+    client.post = post
+    with pytest.raises(RuntimeError, match="order coverage.*60 unique rows"):
+        fetch_announcement_index_range(target, client=client, max_pages_per_slice=2)
+
+
+def _stock_directory_of(monkeypatch, client: _CappedLeafClient, *, drop: str | None = None):
+    from cnequity.adapters.cninfo import payment_notices
+
+    directory = {code: f"org{code}" for code in client.codes.values() if code != drop}
+    monkeypatch.setattr(payment_notices, "_stock_directory", lambda *_a, **_k: (directory, b""))
+
+
+def test_leaf_too_dense_for_two_walks_reads_by_stock_groups(monkeypatch, tmp_path):
+    _no_partitions(monkeypatch)
+    monkeypatch.setattr(announcements, "_STOCK_GROUP_SIZE", 4)
+    target = date(2026, 4, 29)
+    client = _CappedLeafClient(target, total=150, hidden={10, 120})
+    _stock_directory_of(monkeypatch, client)
+    metrics: dict = {}
+
+    frame = fetch_announcement_index_range(
+        target, client=client, max_pages_per_slice=2, metrics=metrics
+    )
+
+    assert frame.height == 150
+    assert metrics["stock_covers"] == 1
+    assert not [c for c in client.calls if c.get("sortName")]
+    assert max(len(c["stock"].split(";")) for c in client.calls if c.get("stock")) == 4
+
+
+def test_stock_groups_cover_what_sorted_walks_cannot(monkeypatch):
+    """Measured 2026-04-29: the hidden rows' stocks never appeared in the default walk."""
+    _no_partitions(monkeypatch)
+    target = date(2026, 4, 29)
+    client = _CappedLeafClient(target, total=61, hidden={10})
+    _stock_directory_of(monkeypatch, client)
+    original = client.post
+
+    def post(url, data):
+        response = original(url, data)
+        if data.get("sortName"):
+            response.payload["announcements"] = [
+                row for row in response.payload["announcements"] if row["announcementId"] != "r010"
+            ]
+        return response
+
+    client.post = post
+    frame = fetch_announcement_index_range(target, client=client, max_pages_per_slice=2)
+
+    assert frame.height == 61
+
+
+def test_a_group_past_the_stock_limit_fails_instead_of_publishing(monkeypatch):
+    _no_partitions(monkeypatch)
+    target = date(2026, 4, 29)
+    client = _CappedLeafClient(target, total=150, hidden={10}, stock_limit=3)
+    _stock_directory_of(monkeypatch, client)
+
+    with pytest.raises(RuntimeError, match="ignored the stock filter"):
+        fetch_announcement_index_range(target, client=client, max_pages_per_slice=2)
+
+
+def test_a_stock_missing_from_the_directory_still_fails(monkeypatch):
+    _no_partitions(monkeypatch)
+    target = date(2026, 4, 29)
+    client = _CappedLeafClient(target, total=150, hidden={10})
+    _stock_directory_of(monkeypatch, client, drop="000002")
+
+    with pytest.raises(RuntimeError, match="order coverage.*149 unique rows"):
+        fetch_announcement_index_range(target, client=client, max_pages_per_slice=2)

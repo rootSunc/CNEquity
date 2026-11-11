@@ -19,6 +19,14 @@ from cnequity.adapters.cninfo.announcements import (
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
 
 
+@pytest.fixture(autouse=True)
+def _empty_stock_directory(monkeypatch):
+    """No test reaches CNINFO's stock directory unless it provides one."""
+    from cnequity.adapters.cninfo import payment_notices
+
+    monkeypatch.setattr(payment_notices, "_stock_directory", lambda *_a, **_k: ({}, b""))
+
+
 class _Response:
     status_code = 200
     url = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
@@ -1116,3 +1124,74 @@ def test_raw_archive_rejects_symlinked_roots_and_payload_boundaries(tmp_path):
             captured_at=datetime.fromisoformat(record.captured_at),
         )
     assert external_sidecar.read_text(encoding="utf-8") == "{}"
+
+
+def test_capped_leaf_completion_replays_from_its_sorted_walk(monkeypatch, tmp_path):
+    for name in ("_CNINFO_MARKET_PLATES", "_CNINFO_TRADES", "_CNINFO_CATEGORIES"):
+        monkeypatch.setattr(announcements, name, ())
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {})
+    target = date(2026, 4, 29)
+    day = target.isoformat()
+    keys = [f"r{index:03d}" for index in range(62)]
+    hidden = {"r010", "r035"}
+
+    class Client:
+        def post(self, _url, data):
+            page = int(data["pageNum"])
+            ordered = keys if data.get("sortName") else [k for k in keys if k not in hidden]
+            batch = ordered[(page - 1) * 30 : page * 30]
+            return _Response(
+                {
+                    "announcements": [_row(key, day=day) for key in batch],
+                    "totalRecordNum": 62,
+                    "totalpages": 2,
+                    "hasMore": True,
+                }
+            )
+
+    config = _config(tmp_path)
+    live = fetch_announcement_index_range(
+        target, client=Client(), config=config, max_pages_per_slice=2
+    )
+    archive = RawPayloadArchive(config.meta_root)
+    replayed = replay_announcement_index_range(archive, target, max_pages_per_slice=2)
+
+    assert live.height == 62
+    assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
+
+
+def test_stock_group_cover_replays_from_its_groups(monkeypatch, tmp_path):
+    from cnequity.adapters.cninfo import payment_notices
+
+    for name in ("_CNINFO_MARKET_PLATES", "_CNINFO_TRADES", "_CNINFO_CATEGORIES"):
+        monkeypatch.setattr(announcements, name, ())
+    monkeypatch.setattr(announcements, "_CNINFO_PLATE_BOARDS", {})
+    monkeypatch.setattr(announcements, "_STOCK_GROUP_SIZE", 4)
+    target = date(2026, 4, 29)
+    day = target.isoformat()
+    keys = [f"r{index:03d}" for index in range(150)]
+    codes = {key: f"{index // 5:06d}" for index, key in enumerate(keys)}
+    directory = {code: f"org{code}" for code in codes.values()}
+    monkeypatch.setattr(payment_notices, "_stock_directory", lambda *_a, **_k: (directory, b""))
+
+    class Client:
+        def post(self, _url, data):
+            page = int(data["pageNum"])
+            group = {pair.split(",")[0] for pair in data.get("stock", "").split(";") if pair}
+            ordered = [k for k in keys if codes[k] in group] if group else keys[:-1]
+            batch = ordered[(page - 1) * 30 : page * 30]
+            rows = [{**_row(key, day=day), "secCode": codes[key]} for key in batch]
+            total = len(ordered) if group else len(keys)
+            return _Response(
+                {"announcements": rows, "totalRecordNum": total, "totalpages": total // 30}
+            )
+
+    config = _config(tmp_path)
+    live = fetch_announcement_index_range(
+        target, client=Client(), config=config, max_pages_per_slice=2
+    )
+    archive = RawPayloadArchive(config.meta_root)
+    replayed = replay_announcement_index_range(archive, target, max_pages_per_slice=2)
+
+    assert live.height == 150
+    assert replayed.sort("announcement_id").equals(live.sort("announcement_id"))
