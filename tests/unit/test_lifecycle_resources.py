@@ -6,7 +6,7 @@ import pytest
 from cnequity.config import Config
 from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, reference_fingerprint
 from cnequity.storage.source_snapshots import clean_source_snapshots
-from cnequity.storage.staging_cleanup import clean_run_logs, clean_staging
+from cnequity.storage.staging_cleanup import clean_run_logs, preview_staging_cleanup
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def test_hold_protects_orphan_staging_even_with_force(protected):
     (path / "candidate.parquet").write_bytes(b"unique candidate")
     age(path)
     store.hold("staging/example", "repair input")
-    result = clean_staging(cfg, force=True)
+    result = preview_staging_cleanup(cfg, force=True)
     assert result.skipped_run_ids == ["example"]
     assert path.is_dir()
 
@@ -91,7 +91,7 @@ def test_new_evidence_blocks_each_cleaner(protected, kind):
     (evidence / "new.json").write_text("{}")
     with pytest.raises(LifecycleError, match="References changed"):
         if kind == "staging":
-            clean_staging(cfg)
+            preview_staging_cleanup(cfg)
         elif kind == "log":
             clean_run_logs(cfg.data_root)
         else:
@@ -129,11 +129,11 @@ def test_a_run_rewriting_lake_state_leaves_the_meta_import_valid(tmp_path):
         root = store.meta / directory
         root.mkdir(parents=True)
         (root / "run.json").write_text("{}")
-    clean_staging(cfg)
+    preview_staging_cleanup(cfg)
 
     (store.meta / "decisions/new.json").write_text("{}")
     with pytest.raises(LifecycleError, match="References changed"):
-        clean_staging(cfg)
+        preview_staging_cleanup(cfg)
 
 
 def test_hold_cannot_target_outside_owned_namespace(protected):

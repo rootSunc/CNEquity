@@ -3,11 +3,8 @@ from datetime import date, datetime, timedelta, timezone
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.derive import adj_factors as derive
 from cnequity.derive.factor_arbitration import (
     arbitrate_factor_sources,
-    record_source_overrides,
-    source_overrides,
 )
 
 FETCHED = datetime(2026, 9, 29, tzinfo=timezone.utc)
@@ -116,47 +113,6 @@ def _fake_baostock(symbols, start, end, *, config=None):
         ]
     )
     return frame, []
-
-
-def test_baostock_settles_each_contradiction_and_names_the_switches(tmp_path):
-    cfg = _lake(tmp_path)
-    report = arbitrate_factor_sources(cfg, fetch=_fake_baostock)
-    assert report["verdicts"] == {
-        "sina_missed_step": 1,
-        "action_missing": 1,
-        "action_unconfirmed": 1,
-    }
-    # Only the security whose Sina series is shown wrong switches; baostock
-    # also saw its agreed step at day 5.
-    assert report["switch"] == ["600001.SH"]
-
-    assert record_source_overrides(cfg, report) == ["600001.SH"]
-    assert source_overrides(cfg)["600001.SH"]["source"] == "baostock"
-
-
-def test_an_overridden_symbol_is_served_from_baostock_with_its_own_cache(tmp_path, monkeypatch):
-    cfg = _lake(tmp_path)
-    record_source_overrides(
-        cfg, {"switch": ["600001.SH"], "switch_detail": {}, "evidence": "e.json"}
-    )
-    series = pl.DataFrame({"trade_date": DAYS, "factor": _steps({5: 1.05, 20: 1.03})})
-    calls = []
-
-    def backup(config, symbol, adjust_type, sym_bars, *, overridden=False):
-        calls.append(symbol)
-        return series
-
-    monkeypatch.setattr(derive, "_resolve_factors_via_backup", backup)
-    bars = pl.DataFrame({"trade_date": DAYS})
-    factors, vendor = derive._resolve_factors(
-        cfg, "600001.SH", "hfq", bars, force=True, client=None
-    )
-    assert vendor == "baostock" and factors.equals(series)
-    # The next plain run reads baostock's cache, not Sina's.
-    factors, vendor = derive._resolve_factors(
-        cfg, "600001.SH", "hfq", bars, force=False, client=None
-    )
-    assert vendor == "baostock" and calls == ["600001.SH"]
 
 
 def test_an_interrupted_sweep_resumes_from_unanswered_symbols(tmp_path, monkeypatch):

@@ -1094,11 +1094,11 @@ def test_derive_unknown_target(cfg_path):
 
 def test_clean_dry_run(cfg_path, monkeypatch):
     monkeypatch.setattr(
-        "cnequity.cli.maintain_cmds.clean_staging",
+        "cnequity.cli.maintain_cmds.preview_staging_cleanup",
         lambda cfg, **kwargs: StagingCleanupResult(
-            removed_run_ids=["r1"],
+            candidate_run_ids=["r1"],
             orphan_run_ids=[],
-            bytes_freed=100,
+            bytes_selected=100,
             skipped_run_ids=[],
         ),
     )

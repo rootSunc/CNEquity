@@ -5,7 +5,7 @@ import pytest
 from cnequity.orchestrator.manifest import Manifest
 
 
-@pytest.mark.parametrize("write_path", ["start", "update", "mutate"])
+@pytest.mark.parametrize("write_path", ["start", "mutate"])
 def test_metadata_dates_are_encoded_only_at_storage_boundary(tmp_path, write_path):
     manifest = Manifest(tmp_path / "manifest.db")
     listed = date(2024, 6, 28)
@@ -20,11 +20,8 @@ def test_metadata_dates_are_encoded_only_at_storage_boundary(tmp_path, write_pat
         run_id = manifest.start_run("init", metadata)
     else:
         run_id = manifest.start_run("init")
-        if write_path == "update":
-            manifest.update_run_metadata(run_id, metadata)
-        else:
-            returned = manifest.mutate_run_metadata(run_id, lambda _: metadata)
-            assert returned is metadata
+        returned = manifest.mutate_run_metadata(run_id, lambda _: metadata)
+        assert returned is metadata
 
     saved = Manifest(manifest.db_path).get_run_metadata(run_id)
     assert saved == {
@@ -37,7 +34,7 @@ def test_metadata_dates_are_encoded_only_at_storage_boundary(tmp_path, write_pat
     assert metadata["observed_at"] is observed
 
 
-@pytest.mark.parametrize("write_path", ["start", "update", "mutate"])
+@pytest.mark.parametrize("write_path", ["start", "mutate"])
 def test_unsupported_metadata_does_not_commit(tmp_path, write_path):
     manifest = Manifest(tmp_path / "manifest.db")
     saved = {"existing": "keep"}
@@ -46,8 +43,6 @@ def test_unsupported_metadata_does_not_commit(tmp_path, write_path):
     with pytest.raises(TypeError, match="Object of type object is not JSON serializable"):
         if write_path == "start":
             manifest.start_run("init", metadata, run_id=run_id)
-        elif write_path == "update":
-            manifest.update_run_metadata(run_id, metadata)
         else:
             manifest.mutate_run_metadata(run_id, lambda current: current.update(metadata))
     if write_path == "start":

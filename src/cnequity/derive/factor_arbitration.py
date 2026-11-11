@@ -31,7 +31,6 @@ from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.symbols import is_baostock_stock
 from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -458,25 +457,6 @@ def arbitrate_factor_sources(
     )
     report["evidence"] = str(path)
     return report
-
-
-def record_source_overrides(config: Config, report: dict) -> list[str]:
-    """Persist the switches a report justified; returns the switched symbols."""
-    switched = list(report.get("switch") or [])
-    if not switched:
-        return []
-    decided = datetime.now(timezone.utc).isoformat()
-    with StateStore(config.meta_root).transaction("adj_factors") as state:
-        overrides = dict(state.get(SOURCE_OVERRIDES_FIELD) or {})
-        for symbol in switched:
-            overrides[symbol] = {
-                "source": "baostock",
-                "decided_at": decided,
-                "evidence": report.get("evidence"),
-                **report["switch_detail"].get(symbol, {}),
-            }
-        state[SOURCE_OVERRIDES_FIELD] = json.loads(json.dumps(overrides, default=str))
-    return switched
 
 
 def latest_factor_arbitration(config: Config) -> dict:

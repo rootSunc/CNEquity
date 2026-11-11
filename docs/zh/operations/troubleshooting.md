@@ -74,7 +74,7 @@ cne status --datasets
 
 | 可能原因 | 检查 | 处理 |
 |----------|------|------|
-| 数据仍在 staging | `ls staging/*/run_id=*` | `cne run compact` 发布所有已结束未发布的 run，或 `cne run retry`；**先 compact 再** `cne run clean`（勿 `--force`，否则 demote 后只能重抓） |
+| 数据仍在 staging | `ls staging/*/run_id=*` | `cne run compact` 发布所有已结束未发布的 run，或 `cne run retry`；**先 compact 再** `cne run clean`（未合并的 staging 不会被删，`--force` 只把它列进预览） |
 | 分组 run 未 compact | 组 steps 是否含 `compact` | 配置修正后重跑组 |
 | compact 被 gate 跳过 | `cne status` 看 failed batch | `cne run retry --run-id <id>` |
 | 路径错误 | `config.data_root` | `cne config path` 查看实际生效的配置和数据目录 |
@@ -226,7 +226,7 @@ Findings 文件：`meta/quality/findings/{run_id}.json`
 ## 症状：磁盘不足 / staging 膨胀
 
 1. `cne run compact`：自动找出并发布所有已结束、有 staging、还没有成功 compact 的 run
-2. `cne run clean` 先列出候选。交互终端里会分两次询问：第一次删超出保留数的历史版本，第二次删已经合并且不在使用中的 staging。正在使用的一代和任何仍在使用的 staging 不会自动删除。来源快照、日志、orphan 和未完成的 run 仍只列出。回补和日更默认只留每个数据集最近 5 代（[`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention)），不碰 staging，也不删当前正在读的一代。小磁盘把这个数改小；要全部留下则设为 `0`。最近 5 代里不是当前指针的版本，到 serve 存储运维页确认删除。`cne storage inspect` 的 `exclusive_bytes` 是删掉这一代实际能腾出的字节。磁盘不够写这次发布时，命令会直接说明还差多少，不会只退出 1。
+2. `cne run clean` 先列出候选。交互终端里按类别逐一询问：超出保留数的历史版本、已经合并且不在使用中的 staging、过期日志、过期来源快照、无人持有的过期运行锁。正在使用的一代和任何仍在使用的 staging 不会自动删除。orphan 和未完成的 run 仍只列出。回补和日更默认只留每个数据集最近 5 代（[`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention)），不碰 staging，也不删当前正在读的一代。小磁盘把这个数改小；要全部留下则设为 `0`。最近 5 代里不是当前指针的版本，到 serve 存储运维页确认删除。`cne storage inspect` 的 `exclusive_bytes` 是删掉这一代实际能腾出的字节。磁盘不够写这次发布时，命令会直接说明还差多少，不会只退出 1。
 3. incomplete / 未 compact 的失败 run 默认保留供 `cne run retry`；只有确认可丢弃时才 `--force`
 4. 压缩或归档旧 `meta/source_snapshots/`（长期会膨胀）
 5. curated 勿删；用 backfill 重采而非部分删除

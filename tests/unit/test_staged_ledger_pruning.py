@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from datetime import date
 
 import polars as pl
@@ -9,7 +10,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.storage import StagingWriter
-from cnequity.storage.staging_cleanup import clean_staging, prune_stale_staged_ledgers
+from cnequity.storage.staging_cleanup import preview_staging_cleanup, prune_stale_staged_ledgers
 from cnequity.storage.state import StateStore
 
 DAY = date(2024, 6, 28)
@@ -42,7 +43,7 @@ def _compacted_run(manifest: Manifest) -> str:
     return run_id
 
 
-def test_cleanup_drops_entries_of_removed_staging(tmp_path):
+def test_pruning_drops_entries_of_removed_staging(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     manifest = Manifest(cfg.manifest_path)
     run_id = _compacted_run(manifest)
@@ -56,10 +57,10 @@ def test_cleanup_drops_entries_of_removed_staging(tmp_path):
     state.mark_staged_request_days("daily_bars", run_id, [DAY])
     state.mark_staged_units("daily_bars", run_id, ["000001.SZ"])
 
-    result = clean_staging(cfg)
+    assert run_id in preview_staging_cleanup(cfg).candidate_run_ids
+    shutil.rmtree(cfg.staging_root / "daily_bars" / f"run_id={run_id}")
 
-    assert run_id in result.removed_run_ids
-    assert result.pruned_ledgers == {"daily_bars": [run_id]}
+    assert prune_stale_staged_ledgers(cfg) == {"daily_bars": [run_id]}
     payload = state.get_payload("daily_bars")
     assert "staged_request_days" not in payload
     assert "staged_units" not in payload

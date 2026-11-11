@@ -90,28 +90,6 @@ def _load_instruments(config: Config, read_context: ReadContext | None = None) -
         return pl.DataFrame()
 
 
-def _load_trading_status(
-    config: Config,
-    *,
-    trade_date: date | None = None,
-) -> pl.DataFrame:
-    root = config.curated_root / "trading_status"
-    try:
-        return dedupe_by_primary_key(
-            collect_parquet_root(
-                root,
-                partition_col="trade_date",
-                start=trade_date,
-                end=trade_date,
-                dataset="trading_status",
-                meta_root=config.meta_root,
-            ),
-            "trading_status",
-        )
-    except FileNotFoundError:
-        return pl.DataFrame()
-
-
 def coverage_start_date(
     config: Config,
     dataset: str,
@@ -280,64 +258,6 @@ def st_coverage_start(config: Config) -> date | None:
         )
     except FileNotFoundError:
         return None
-
-
-def tradable_symbols_on_date(
-    config: Config,
-    trade_date: date,
-    *,
-    universe: str = "all_a",
-    strict: bool = False,
-) -> pl.DataFrame | None:
-    """Return ``symbol`` rows tradable on *trade_date* for the given universe rule.
-
-    Applies list/delist dates from ``instruments``. ST/suspended filtering uses
-    ``trading_status`` only when rows exist for *trade_date*; strict historical
-    research additionally requires a complete ST evidence receipt.
-    """
-    if universe not in SUPPORTED_UNIVERSES:
-        raise ValueError(
-            f"unsupported universe: {universe!r} "
-            f"(supported: {', '.join(sorted(SUPPORTED_UNIVERSES))})"
-        )
-
-    instruments = _load_instruments(config)
-    if instruments.is_empty():
-        if strict:
-            raise UniverseCoverageError(f"{universe} universe requires curated instruments")
-        return None
-
-    out = (
-        instruments.filter(_all_a_symbol_expr(universe=universe))
-        .with_columns(_exchange_listing_expr().alias("list_date"))
-        .filter(pl.col("list_date").is_null() | (pl.col("list_date") <= trade_date))
-        .filter(pl.col("delist_date").is_null() | (pl.col("delist_date") >= trade_date))
-        .select("symbol")
-    )
-    if out.is_empty():
-        return pl.DataFrame(schema={"symbol": pl.Utf8})
-
-    status = _load_trading_status(config, trade_date=trade_date)
-    if status.is_empty():
-        if strict:
-            raise UniverseCoverageError(
-                f"{universe} universe has no trading_status coverage for {trade_date.isoformat()}"
-            )
-        return out
-
-    if strict:
-        covered_symbols = set(status.get_column("symbol").drop_nulls().to_list())
-        missing_symbols = sorted(set(out.get_column("symbol").to_list()) - covered_symbols)
-        if missing_symbols:
-            raise UniverseCoverageError(
-                f"{universe} universe trading_status is missing {len(missing_symbols)} "
-                f"symbol(s) for {trade_date.isoformat()}, first={missing_symbols[0]}"
-            )
-
-    bad = status.filter((~pl.col("is_trading")) | _excluded_status_expr(status.columns))["symbol"]
-    if not bad.is_empty():
-        out = out.filter(~pl.col("symbol").is_in(bad))
-    return out
 
 
 def _exchange_listing_expr() -> pl.Expr:

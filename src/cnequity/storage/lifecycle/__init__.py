@@ -247,15 +247,10 @@ class LifecycleStore:
             or not isinstance(value.get("lake_id"), str)
             or not isinstance(value.get("holds"), dict)
             or not isinstance(value.get("pending", {}), dict)
-            or not isinstance(value.get("experiments"), list)
             or not isinstance(value.get("reference_roots"), list)
             or not isinstance(value.get("reference_fingerprint"), str)
         ):
             raise LifecycleError("Invalid lifecycle registry or copied lake identity")
-        if not isinstance(value.get("artifacts", {}), dict) or not isinstance(
-            value.get("experiment_pending", {}), dict
-        ):
-            raise LifecycleError("Invalid artifact registry or experiment observation periods")
         for oid, reasons in value["holds"].items():
             if not isinstance(oid, str) or not isinstance(reasons, list) or not reasons:
                 raise LifecycleError("Invalid lifecycle hold")
@@ -265,8 +260,13 @@ class LifecycleStore:
         for oid, reasons in case_holds(cases).items():
             if any(reason not in value["holds"].get(oid, []) for reason in reasons):
                 raise LifecycleError("Case dependencies are missing registered holds")
-        # Marks of the retired mark-and-wait phase (see the module docstring).
-        value.pop("pending", None)
+        # Marks of the retired mark-and-wait phase (see the module docstring),
+        # and the experiment and artifact registries an older version kept:
+        # nothing acted on them, and their paths were temporary. The next
+        # save drops them. Holds a case placed on artifact/ ids stay, since
+        # case manifests are immutable and still name them.
+        for retired in ("pending", "experiments", "artifacts", "experiment_pending"):
+            value.pop(retired, None)
         return value
 
     def _save(self, value: dict) -> None:
@@ -279,7 +279,6 @@ class LifecycleStore:
             manifest.get("schema_version") != 1
             or manifest.get("meta_root") != str(self.meta)
             or not isinstance(manifest.get("holds"), dict)
-            or not isinstance(manifest.get("experiments", []), list)
             or not isinstance(manifest.get("reference_roots"), list)
         ):
             raise LifecycleError("Invalid reference import manifest")
@@ -297,7 +296,6 @@ class LifecycleStore:
                 "meta_root": str(self.meta),
                 "holds": inherited.get("holds", {}),
                 "cases": inherited.get("cases", []),
-                "experiments": [],
             }
             cases = {case["case_id"]: case for case in value.get("cases", [])}
             incoming_cases = manifest.get("cases", [])
@@ -325,17 +323,10 @@ class LifecycleStore:
                 for reason in reasons:
                     if reason not in value["holds"][oid]:
                         value["holds"][oid].append(reason)
-                value.get("experiment_pending", {}).pop(oid, None)
-            experiments = {item["object_id"]: item for item in value["experiments"]}
-            for item in manifest.get("experiments", []):
-                experiments[item["object_id"]] = item
-                if item.get("references") or item.get("status") == "active":
-                    value.get("experiment_pending", {}).pop(item["object_id"], None)
             value.update(
                 {
                     "reference_roots": manifest["reference_roots"],
                     "reference_fingerprint": fingerprint,
-                    "experiments": list(experiments.values()),
                     "cases": list(cases.values()),
                     "imported_at": datetime.now(timezone.utc).isoformat(),
                     "import_digest": digest(manifest),
@@ -396,7 +387,6 @@ class LifecycleStore:
                 "reference_roots": roots,
                 "reference_fingerprint": digest(fingerprints),
                 "holds": holds,
-                "experiments": [],
             }
         )
         return {
@@ -414,8 +404,6 @@ class LifecycleStore:
             known = {o["object_id"] for o in self.inventory()}
             from cnequity.storage.lifecycle.resources import resource_exists
 
-            known.update(item["object_id"] for item in value["experiments"])
-            known.update(value.get("artifacts", {}))
             if object_id not in known and not resource_exists(self.meta, object_id):
                 raise LifecycleError(f"Unknown retained object: {object_id}")
             value["holds"].setdefault(object_id, []).append(
@@ -424,7 +412,6 @@ class LifecycleStore:
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
-            value.get("experiment_pending", {}).pop(object_id, None)
             self._save(value)
 
     def release(self, object_id: str, note: str) -> dict:
@@ -518,7 +505,6 @@ class LifecycleStore:
             for oid, reasons in additions.items():
                 existing = value["holds"].setdefault(oid, [])
                 existing.extend(reason for reason in reasons if reason not in existing)
-                value.get("experiment_pending", {}).pop(oid, None)
             value["cases"] = list(cases.values())
             self._save(value)
 
@@ -639,8 +625,9 @@ class LifecycleStore:
             "lake_id": registry["lake_id"] if registry else None,
             "registry_digest": digest(registry),
             "objects": objects,
-            # Experiment and artifact entries an older version registered stay
-            # in the registry for compatibility, but nothing acts on them now.
+            # Only cleaner-owned kinds are resource holds. Revisions have their
+            # own retention, and experiment/ or artifact/ ids are names an
+            # older version's cases still hold; nothing here acts on them.
             "resource_holds": {
                 k: v
                 for k, v in registry["holds"].items()

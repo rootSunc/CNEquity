@@ -23,7 +23,7 @@ from cnequity.storage.lifecycle.purge import check_idle, unfinished
 from cnequity.storage.lifecycle.resources import resource_holds
 from cnequity.storage.revisions import _reject_symlink_path, sha256_file
 from cnequity.storage.staging_cleanup import (
-    clean_staging,
+    preview_staging_cleanup,
     prune_stale_staged_ledgers,
     run_ready_for_staging_cleanup,
     staging_run_paths,
@@ -43,7 +43,7 @@ class StagingRetirement:
     def inspect(self) -> list[dict]:
         if not self.staging.exists():
             return []
-        inventory = clean_staging(self.config, dry_run=True).inventory
+        inventory = preview_staging_cleanup(self.config).inventory
         return [
             {
                 "object_id": f"staging/{row['run_id']}",

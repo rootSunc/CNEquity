@@ -65,7 +65,13 @@ def test_late_batch_completion_cannot_resurrect_stale_batch(tmp_path):
     manifest = Manifest(Config(data_root=tmp_path / "data").manifest_path)
     run_id = "run-late-completion"
     manifest.start_batch(run_id, "batch-0", "daily_bars", "daily_bars", symbols=["600519.SH"])
-    manifest.mark_batch_stale(run_id, "batch-0", "heartbeat expired")
+    expired = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    with manifest._connect() as conn:
+        conn.execute(
+            "UPDATE ingestion_batches SET started_at = ?, heartbeat_at = ? WHERE batch_id = ?",
+            (expired, expired, "batch-0"),
+        )
+    assert manifest.promote_running_to_stale(run_id, stale_after_seconds=60) == 1
 
     manifest.finish_batch(run_id, "batch-0", "success", rows_written=1)
 
@@ -87,7 +93,6 @@ def test_retry_count_survives_batch_restart_and_finish(tmp_path):
     batch = manifest.get_batches_for_run(run_id)[0]
     assert batch["retry_count"] == 1
     assert manifest.get_retryable_batches(run_id, max_retries=1) == []
-    assert manifest.exhausted_retry_count(run_id, max_retries=1) == 1
 
 
 def test_compact_promotes_stale_running_batch(tmp_path):

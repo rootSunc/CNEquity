@@ -351,7 +351,9 @@ def test_northbound_flows_keeps_only_northbound_legs_and_scales_to_yuan(monkeypa
             _mutual_row("002", "2024-08-16", 2820.59, 9200.12, 6379.53),
         ],
     )
-    df = cap.fetch_northbound_flows(date(2024, 8, 16), client=_offline_client())
+    df = cap.fetch_northbound_flows_range(
+        date(2024, 8, 16), date(2024, 8, 16), client=_offline_client()
+    )
     assert df.height == 2
     assert set(df["channel"].to_list()) == {"SH", "SZ"}
     sh = df.filter(pl.col("channel") == "SH")
@@ -404,7 +406,9 @@ def test_northbound_flows_tolerates_unparseable_trade_date(monkeypatch):
             _mutual_row("001", "2024-08-16", 1.0, 2.0, 1.0),
         ],
     )
-    df = cap.fetch_northbound_flows(date(2024, 8, 16), client=_offline_client())
+    df = cap.fetch_northbound_flows_range(
+        date(2024, 8, 16), date(2024, 8, 16), client=_offline_client()
+    )
     assert df.height == 1
 
 
@@ -416,7 +420,9 @@ def test_northbound_flows_drops_scaled_overflow_rows(monkeypatch):
             _mutual_row("001", "2024-08-16", 1.0, 2.0, 1.0),
         ],
     )
-    df = cap.fetch_northbound_flows(date(2024, 8, 16), client=_offline_client())
+    df = cap.fetch_northbound_flows_range(
+        date(2024, 8, 16), date(2024, 8, 16), client=_offline_client()
+    )
     assert df.height == 1
     assert df["net_buy"][0] == 1_000_000.0
 

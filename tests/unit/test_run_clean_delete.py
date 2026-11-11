@@ -174,7 +174,7 @@ def test_confirming_deletes_old_generations_and_compacted_staging_only(tmp_path,
     result = CliRunner().invoke(
         cli,
         ["run", "clean", "--config", cfg_path, "--keep-revision-generations", "1"],
-        input="y\ny\n",
+        input="y\ny\nn\n",
     )
 
     assert result.exit_code == 0, result.output
@@ -231,7 +231,7 @@ def test_declining_staging_keeps_it_while_old_generations_can_go(tmp_path, monke
 
 
 def test_in_use_staging_is_kept_even_when_deletion_is_accepted(tmp_path, monkeypatch):
-    from cnequity.cli.maintain_cmds import _delete_preview_selection
+    from cnequity.cli.maintain_cmds import _delete_preview_selection, _Selection
 
     cfg = Config(data_root=tmp_path / "data")
     manifest = Manifest(cfg.manifest_path)
@@ -240,9 +240,17 @@ def test_in_use_staging_is_kept_even_when_deletion_is_accepted(tmp_path, monkeyp
 
     _delete_preview_selection(
         cfg,
-        keep_revision_generations=1,
-        generation_candidates=0,
-        staging_run_ids=[unfinished],
+        _Selection(
+            keep_revision_generations=1,
+            generations=0,
+            staging_run_ids=[unfinished],
+            log_retention_days=30,
+            logs=0,
+            snapshot_retention_days=14,
+            snapshot_run_dirs=0,
+            lock_retention_days=7,
+            stale_locks=0,
+        ),
     )
 
     assert unfinished in list_staging_run_ids(cfg.staging_root)
@@ -282,3 +290,60 @@ def test_dry_run_does_not_ask(tmp_path, monkeypatch):
     payloads = _objects(result.stdout)
     assert len(payloads) == 1
     assert payloads[0]["confirmation_required"] == "none"
+
+
+def _expired_logs_snapshots_and_locks(cfg: Config):
+    old = (datetime.now(timezone.utc) - timedelta(days=90)).timestamp()
+    log = cfg.data_root / "logs" / "cne-old.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("old")
+    other = log.with_name("notes.txt")
+    other.write_text("not ours")
+    snapshots = (
+        cfg.meta_root / "source_snapshots" / "daily_bars" / "source=mock" / "data_version=v1"
+    )
+    expired, newest = snapshots / "run_id=old", snapshots / "run_id=new"
+    for directory in (expired, newest):
+        directory.mkdir(parents=True)
+        (directory / "input.parquet").write_bytes(b"x")
+    lock = cfg.meta_root / "locks" / "old-run.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_bytes(b"")
+    for path in (log, other, expired, lock):
+        os.utime(path, (old, old))
+    # Also past retention, but newer: the cleaner keeps the newest run regardless.
+    os.utime(newest, (old + 86400, old + 86400))
+    return log, other, expired, newest, lock
+
+
+def test_confirming_deletes_expired_logs_snapshots_and_stale_locks(tmp_path, monkeypatch):
+    cfg_path = _config(tmp_path)
+    cfg = Config(data_root=tmp_path / "data")
+    log, other, expired, newest, lock = _expired_logs_snapshots_and_locks(cfg)
+    monkeypatch.setattr("cnequity.cli.maintain_cmds._stdin_is_tty", lambda: True)
+
+    result = CliRunner().invoke(cli, ["run", "clean", "--config", cfg_path], input="y\ny\ny\n")
+
+    assert result.exit_code == 0, result.output
+    preview, deleted = _objects(result.stdout)
+    assert preview["run_logs"]["candidates"] == 1
+    assert preview["stale_run_locks"]["candidates"] == 1
+    assert deleted["run_logs"]["removed"] == 1
+    assert deleted["source_snapshots"]["removed_run_dirs"]
+    assert deleted["stale_run_locks"]["removed"] == 1
+    assert not log.exists() and not expired.exists() and not lock.exists()
+    # Only cne-*.log is ours, and the newest snapshot per dataset/source stays.
+    assert other.exists() and newest.exists()
+
+
+def test_declining_keeps_logs_snapshots_and_locks(tmp_path, monkeypatch):
+    cfg_path = _config(tmp_path)
+    cfg = Config(data_root=tmp_path / "data")
+    paths = _expired_logs_snapshots_and_locks(cfg)
+    monkeypatch.setattr("cnequity.cli.maintain_cmds._stdin_is_tty", lambda: True)
+
+    result = CliRunner().invoke(cli, ["run", "clean", "--config", cfg_path], input="n\nn\nn\n")
+
+    assert result.exit_code == 0, result.output
+    assert len(_objects(result.stdout)) == 1  # the preview, and no deletion report
+    assert all(path.exists() for path in paths)

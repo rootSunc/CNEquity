@@ -815,18 +815,6 @@ class Manifest:
             )
             return cur.fetchall()
 
-    def exhausted_retry_count(self, run_id: str, *, max_retries: int) -> int:
-        with self._connect() as conn:
-            cur = conn.execute(
-                """
-                SELECT COUNT(*) AS cnt FROM ingestion_batches
-                WHERE run_id = ? AND status IN ('failed', 'warning')
-                  AND retry_count >= ?
-                """,
-                (run_id, max_retries),
-            )
-            return int(cur.fetchone()["cnt"])
-
     def get_failed_batches(self, run_id: str) -> list[sqlite3.Row]:
         """Backward-compatible alias for every immediately retryable batch."""
         return self.get_retryable_batches(run_id)
@@ -879,17 +867,6 @@ class Manifest:
                 (run_id,),
             )
             return {row["status"]: row["cnt"] for row in cur.fetchall()}
-
-    def mark_batch_stale(self, run_id: str, batch_id: str, error_message: str) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE ingestion_batches
-                SET status = 'stale', error_message = ?
-                WHERE run_id = ? AND batch_id = ?
-                """,
-                (error_message, run_id, batch_id),
-            )
 
     def promote_running_to_stale(self, run_id: str, *, stale_after_seconds: float) -> int:
         """Mark running batches with expired heartbeats as stale."""
@@ -1131,25 +1108,6 @@ class Manifest:
                 unlocked_grace_seconds=unlocked_grace_seconds,
             )
         return len(orphans)
-
-    def mark_stale_running_batches_failed(self, run_id: str, *, stale_after_seconds: float) -> int:
-        """Backward-compatible alias: full running→stale→failed promotion."""
-        result = self.advance_batch_timeouts(run_id, stale_after_seconds=stale_after_seconds)
-        return result["running_to_stale"] + result["stale_to_failed"]
-
-    def demote_success_batches(self, run_id: str, *, reason: str) -> int:
-        """Mark fetch batches failed (e.g. staging evicted) so retry refetches them."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                """
-                UPDATE ingestion_batches
-                SET status = 'failed', error_message = ?
-                WHERE run_id = ? AND status = 'success' AND dataset NOT IN
-                    ('compact', 'derive_adj_factors', 'derive_industry_index', 'audit')
-                """,
-                (reason, run_id),
-            )
-            return cur.rowcount
 
     def get_batches_for_run(self, run_id: str) -> list[sqlite3.Row]:
         with self._connect() as conn:
@@ -1540,14 +1498,6 @@ class Manifest:
             "dataset_result_counts": dataset_status["counts"],
             "retry_telemetry": self.get_retry_telemetry(run_id),
         }
-
-    def update_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
-        """Replace metadata, encoding dates as ISO strings only on disk."""
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE ingestion_runs SET metadata_json = ? WHERE run_id = ?",
-                (_encode_run_metadata(metadata), run_id),
-            )
 
     def _mutate_run_metadata(
         self,

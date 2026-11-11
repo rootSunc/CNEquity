@@ -1,5 +1,6 @@
 """Browser approvals and deletion safety on isolated, tiny local lakes."""
 
+import json
 import time
 
 import polars as pl
@@ -474,6 +475,11 @@ def test_registered_experiments_from_older_versions_are_left_alone(web, tmp_path
     )
     assert response.status_code == 422
     assert source.exists()
+    # The next registry write drops the retired entries; the hold stays.
+    store.hold(scheduled(client)[0], "keep it")
+    saved = json.loads(store.registry_path.read_text(encoding="utf-8"))
+    assert "experiments" not in saved
+    assert "experiment/test" in saved["holds"]
 
 
 def test_failed_review_does_not_leave_service_busy(web, monkeypatch):
@@ -494,7 +500,7 @@ def test_clean_without_dry_run_never_requests_deletion(web, monkeypatch):
 
     monkeypatch.setattr(commands, "_cfg", lambda _: cfg)
     for name in [
-        "clean_staging",
+        "clean_stale_lock_files",
         "clean_source_snapshots",
         "clean_run_logs",
     ]:

@@ -105,7 +105,7 @@ Error: `cne retry` 已改名，请改用 `cne run retry`。
 
 **命令名不区分大小写**：`cne STATUS`、`cne run DAILY`、`cne config CREATE` 与小写等价（Click 的 `token_normalize_func`）。`-h` 是 `--help` 的短写法。**不做前缀匹配**——`cne stat` 会被拒绝并提示 `stats` / `status`，而不是猜一个执行。
 
-**每个命令都有过程日志。** 管线自己的 INFO 记录统一在命令树根部接到 stderr，所以 stdout 上的 JSON 契约不受影响。耗时的采集和维护命令另外把日志 tee 进 `{data.root}/logs/cne-<命令>-<时间戳>.log`（`cne run clean --log-retention-days` 可预览过期日志）。`cne mcp` 与 `cne serve` 自管日志——前者 stdout 是 JSON-RPC 线路，stderr 必须压在 WARNING；后者交给 uvicorn。交互终端上显示的是简短视图：只留时分秒，警告和错误前加标记，不带日志器名，步骤、心跳和进度按显示语言输出；输出被重定向（管道、调度器捕获、CI）时仍是完整格式，日志文件始终是完整的英文格式，方便检索和贴进 issue。
+**每个命令都有过程日志。** 管线自己的 INFO 记录统一在命令树根部接到 stderr，所以 stdout 上的 JSON 契约不受影响。耗时的采集和维护命令另外把日志 tee 进 `{data.root}/logs/cne-<命令>-<时间戳>.log`（过期日志由 `cne run clean --log-retention-days` 预览，交互终端确认后删除）。`cne mcp` 与 `cne serve` 自管日志——前者 stdout 是 JSON-RPC 线路，stderr 必须压在 WARNING；后者交给 uvicorn。交互终端上显示的是简短视图：只留时分秒，警告和错误前加标记，不带日志器名，步骤、心跳和进度按显示语言输出；输出被重定向（管道、调度器捕获、CI）时仍是完整格式，日志文件始终是完整的英文格式，方便检索和贴进 issue。
 
 **显示语言。** 帮助、提示、报错和结束摘要支持中文和英文，依次取环境变量 `CNE_LANG`（`en` 或 `zh_CN`，也接受 `zh-CN` 等写法）、系统语言（`LC_ALL` / `LC_MESSAGES` / `LANG`，Windows 读界面语言），都没有时用英文；繁体中文系统落到英文。系统是英文、想看中文时：`export CNE_LANG=zh_CN`（PowerShell：`$env:CNE_LANG = "zh_CN"`）。不随语言变化的：`--json` 等 JSON 输出（其中的说明文字一律英文）、`HEALTHY` / `STALE` 等标记词、退出码、数据文件和日志文件。`cne serve` 控制台按页面所选语言显示，没选过时跟随浏览器；定时任务沿用安装时的语言。
 
@@ -758,22 +758,22 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 
 ## cne run clean
 
-预览已 compact 的终态 run staging、超龄 orphan、来源快照、日志和历史版本。交互终端在预览后分两次确认：先是历史版本，再是已合并且不在使用中的 staging。正在使用的数据和 staging 不会自动删除。定时脚本没有终端，仍然只预览。
+预览已 compact 的终态 run staging、超龄 orphan、来源快照、日志、过期运行锁和历史版本。交互终端在预览后按类别逐一确认：历史版本、已合并且不在使用中的 staging、运行日志、来源快照、无人持有的过期运行锁。正在使用的数据和 staging 不会自动删除。定时脚本没有终端，仍然只预览。
 
 回补和日更结束时会按 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) 丢掉更老的代，默认 5。这个命令在确认后按 `--keep-revision-generations` 删，默认也是 5。设为 `0` 则不处理版本。
 
 | 选项 | 说明 |
 |------|------|
 | `--dry-run` | 只打印预览，不提问；不能与会修改运行状态的 `--reconcile-runs` 同用 |
-| `--orphan-retention-days` | 无 manifest 的 orphan staging 保留天数（默认 7） |
+| `--orphan-retention-days` | 无 manifest 的 orphan staging 与运行锁文件的保留天数（默认 7） |
 | `--snapshot-retention-days` | 来源快照保留天数（默认 14）；每个 dataset/source 的最新一份保留 |
 | `--keep-revision-generations` | 确认删除时每个数据集保留最近 5 代，另保护 current 和 hold；`0` 跳过版本 |
-| `--log-retention-days` | 预览超过指定天数的 `logs/cne-*.log`（默认 30）；`0` 跳过 |
+| `--log-retention-days` | 超过指定天数的 `logs/cne-*.log` 列入预览并在确认后删除（默认 30）；`0` 跳过 |
 | `--reconcile-runs` | 显式把符合静默条件的孤儿 running 跑次标记为 failed，仍会修改运行状态 |
 | `--reconcile-after-seconds` | 覆盖对账静默窗口，默认取 `[orchestrator].batch_stale_seconds` |
-| `--force` | 将未 cleanup-ready 的 staging 也列入预览，不删除、不降级批次 |
+| `--force` | 将未 cleanup-ready 的 staging 也列入预览；它们不会被询问删除 |
 
-先输出预览：`dry_run: true`。实际删除字段仍为空或 0，`bytes_freed` 为 0；候选见 `candidate_run_ids`、`candidate_run_dirs`、`candidates`，账面大小见 `logical_bytes_selected`。交互终端在预览后会分两次提问，默认都不删。第一次只针对超出 `--keep-revision-generations` 的历史版本；正在使用的一代、hold 和收据不能用的代不删。第二次只针对已经成功 compact、没有未完成批次、也没有被锁住或保留的 staging。正在运行、被锁住、未合并、orphan 或 hold 的 staging 即使回答是也不删。来源快照和日志不删。回补和日更不会删 staging，也不会删当前正在使用的一代。`--dry-run`、管道和定时任务不提问。`confirmation_required` 为 `interactive` 或 `none`。删除前重新核验运行锁、引用保留、运行状态和逐文件指纹，并保留可恢复的删除收据。存储页仍可勾选最近 5 代里不是当前指针的版本。
+先输出预览：`dry_run: true`。实际删除字段仍为空或 0，`bytes_freed` 为 0；候选见 `candidate_run_ids`、`candidate_run_dirs`、`candidates`，账面大小见 `logical_bytes_selected`。交互终端在预览后按类别提问，没有候选的类别不问，默认都不删。历史版本只针对超出 `--keep-revision-generations` 的历史版本；正在使用的一代、hold 和收据不能用的代不删。staging 只针对已经成功 compact、没有未完成批次、也没有被锁住或保留的运行。正在运行、被锁住、未合并、orphan 或 hold 的 staging 即使回答是也不删。日志只删超过 `--log-retention-days` 的 `cne-*.log`；来源快照每个数据集和来源的最新一份及 hold 的不删；运行锁只删超过 `--orphan-retention-days` 且没有进程持有的。预览新增 `stale_run_locks.candidates`。回补和日更不会删 staging，也不会删当前正在使用的一代。`--dry-run`、管道和定时任务不提问。`confirmation_required` 为 `interactive` 或 `none`。删除前重新核验运行锁、引用保留、运行状态和逐文件指纹，并保留可恢复的删除收据。存储页仍可勾选最近 5 代里不是当前指针的版本。
 
 预览另返回 `staging_inventory`、`staging_run_count` 和 `skipped_reasons`，逐运行列出状态、大小、年龄、未完成批次和候选/保留原因。正在重试的运行由运行锁保护；`--force` 不绕过运行锁或 hold。未完成批次不会仅因年老或存在更新的成功运行而自动淘汰。
 
@@ -792,7 +792,7 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 
 每个子命令接受 `--config`。版本 `OBJECT_ID` 为当前湖内的 `revision/<dataset>/<revision_id>`；计划另外绑定湖身份及 metadata 根，不能直接在另一个湖使用。被引用但暂时缺失的版本也可通过清单登记保护，以便恢复后继续受到保护。
 
-引用清单 schema 为 `schema_version: 1`，包含绝对 `meta_root`、`holds`（对象 ID 到非空理由列表）、`reference_roots`（绝对目录及可选的相对 `exclude` 列表）、`reference_fingerprint` 和可选 `experiments`。集成程序可用 `cnequity.storage.lifecycle.reference_files()` 枚举引用源，分类后生成 holds，并用 `reference_fingerprint()` 计算文件集合及 SHA-256 的指纹；两者都传 `meta_root=` 湖的 `meta` 目录。以该目录为根时，湖每次运行都会改写的内容（来源缓存、`state`、`checkpoints`、`quality`、`source_snapshots`、衍生品抓取记录等，完整列表见 `RUNTIME_META_PATHS`）不计入引用，否则任何一次运行都会让导入失效，清理随即拒绝执行。导入只校验清单是否仍对应这些文件，不代替引用语义审核；排除项和外部未登记消费者需由操作者核实。
+引用清单 schema 为 `schema_version: 1`，包含绝对 `meta_root`、`holds`（对象 ID 到非空理由列表）、`reference_roots`（绝对目录及可选的相对 `exclude` 列表） 和 `reference_fingerprint`。集成程序可用 `cnequity.storage.lifecycle.reference_files()` 枚举引用源，分类后生成 holds，并用 `reference_fingerprint()` 计算文件集合及 SHA-256 的指纹；两者都传 `meta_root=` 湖的 `meta` 目录。以该目录为根时，湖每次运行都会改写的内容（来源缓存、`state`、`checkpoints`、`quality`、`source_snapshots`、衍生品抓取记录等，完整列表见 `RUNTIME_META_PATHS`）不计入引用，否则任何一次运行都会让导入失效，清理随即拒绝执行。导入只校验清单是否仍对应这些文件，不代替引用语义审核；排除项和外部未登记消费者需由操作者核实。
 
 新增、删除或修改引用文件后，回补和日更会先重新扫描引用、补上保留再清理；网页上的旧删除计划失效，须重新审核。重复导入保留已有 hold。当前没有自动解除 hold 的命令；改变保留承诺需要单独审核。无收据、缺少完整文件清单或缺少当前指针的目录不会成为清理候选。
 

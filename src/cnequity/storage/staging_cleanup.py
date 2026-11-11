@@ -1,9 +1,8 @@
-"""Remove compacted or stale staging run directories."""
+"""Find staging, run logs and run locks that are safe to delete, and delete them on request."""
 
 from __future__ import annotations
 
-import shutil
-from contextlib import nullcontext, suppress
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,20 +35,15 @@ _RUN_KEYED_STATE_FIELDS = (
 
 @dataclass
 class StagingCleanupResult:
-    removed_run_ids: list[str]
+    """What ``preview_staging_cleanup`` found; nothing has been deleted."""
+
+    candidate_run_ids: list[str]
     orphan_run_ids: list[str]
-    bytes_freed: int
+    bytes_selected: int
     skipped_run_ids: list[str]
-    force_removed_run_ids: list[str] = None  # type: ignore[assignment]
+    force_candidate_run_ids: list[str] = field(default_factory=list)
     skipped_reasons: dict[str, str] = field(default_factory=dict)
     inventory: list[dict] = field(default_factory=list)
-    # dataset -> run ids whose staged-ledger entries were (or, in a dry run,
-    # would be) dropped because their staging no longer exists.
-    pruned_ledgers: dict[str, list[str]] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.force_removed_run_ids is None:
-            self.force_removed_run_ids = []
 
 
 def prune_stale_staged_ledgers(
@@ -144,14 +138,6 @@ def _dir_size(paths: list[Path]) -> int:
     return sum(f.stat().st_size for path in paths for f in path.rglob("*") if f.is_file())
 
 
-def _delete_paths(paths: list[Path], *, dry_run: bool) -> int:
-    size = _dir_size(paths)
-    if not dry_run:
-        for path in paths:
-            shutil.rmtree(path)
-    return size
-
-
 def _staging_age_days(paths: list[Path], now: datetime) -> float:
     mtime = max(p.stat().st_mtime for p in paths)
     return (now.timestamp() - mtime) / 86400.0
@@ -242,52 +228,44 @@ def clean_stale_lock_files(
     return removed
 
 
-def clean_staging(
+def preview_staging_cleanup(
     config: Config,
     *,
-    dry_run: bool = False,
     orphan_retention_days: int = 7,
     force: bool = False,
 ) -> StagingCleanupResult:
-    """Remove staging that is safe to delete.
+    """List the staging that is safe to delete; deletes nothing.
 
     Safe means: the run is terminal and compact merged its staging into curated,
     or the staging belongs to no manifest run (orphan) and is old enough.
 
     Staging of failed/incomplete runs is resumable state — its successful
-    batches may exist *only* in staging (compact was gated off). It is never
-    deleted unless ``force=True``, and then the run's success batches are
-    demoted to failed in the manifest so a later ``cne run retry`` refetches them
-    instead of silently losing their rows.
+    batches may exist *only* in staging (compact was gated off) — so it is
+    listed only with ``force``, and never offered for deletion. ``cne run
+    clean`` deletes what a person confirms through ``StagingRetirement``.
     """
-    with resource_holds(config.meta_root, dry_run=dry_run) as holds:
-        return _clean_staging(
-            config,
-            dry_run=dry_run,
-            orphan_retention_days=orphan_retention_days,
-            force=force,
-            holds=holds,
+    with resource_holds(config.meta_root, dry_run=True) as holds:
+        return _preview_staging(
+            config, orphan_retention_days=orphan_retention_days, force=force, holds=holds
         )
 
 
-def _clean_staging(
-    config: Config, *, dry_run: bool, orphan_retention_days: int, force: bool, holds: set[str]
+def _preview_staging(
+    config: Config, *, orphan_retention_days: int, force: bool, holds: set[str]
 ) -> StagingCleanupResult:
     manifest = Manifest(config.manifest_path)
     staging_root = config.staging_root
     now = datetime.now(timezone.utc)
 
-    staging_run_ids = list_staging_run_ids(staging_root)
-
-    removed: list[str] = []
+    candidates: list[str] = []
     orphans: list[str] = []
-    force_removed: list[str] = []
+    force_candidates: list[str] = []
     skipped: list[str] = []
-    bytes_freed = 0
+    bytes_selected = 0
     skipped_reasons: dict[str, str] = {}
     inventory: list[dict] = []
 
-    for run_id in sorted(staging_run_ids):
+    for run_id in sorted(list_staging_run_ids(staging_root)):
         paths = staging_run_paths(staging_root, run_id)
         if not paths:
             continue
@@ -300,71 +278,46 @@ def _clean_staging(
             "age_days": _run_age_days(run, now) if run else _staging_age_days(paths, now),
         }
         inventory.append(entry)
-        lock_path = config.meta_root / "locks" / f"{run_id}.lock"
-        try:
-            # The executor holds the run lock until deletion finishes. Merely
-            # probing then deleting lets a retry start in between those actions.
-            if dry_run and is_locked(lock_path):
-                raise LockUnavailable(str(lock_path))
-            with nullcontext() if dry_run else exclusive_lock(lock_path, blocking=False):
-                run = manifest.get_run(run_id)
-                entry["status"] = run["status"] if run else "orphan"
-                entry["incomplete_batches"] = manifest.incomplete_batch_count(run_id) if run else 0
-                reason = None
-                if f"staging/{run_id}" in holds:
-                    reason = "lifecycle_hold"
-                elif run is None:
-                    if _staging_age_days(paths, now) < orphan_retention_days:
-                        reason = "young_orphan"
-                    else:
-                        orphans.append(run_id)
-                        entry["decision"] = "orphan_candidate"
-                elif run_ready_for_staging_cleanup(manifest, run_id):
-                    removed.append(run_id)
-                    entry["decision"] = "compacted_candidate"
-                elif force and run is not None and run["status"] != "running":
-                    if not dry_run:
-                        manifest.demote_success_batches(
-                            run_id,
-                            reason="staging evicted by cne run clean --force; refetch on retry",
-                        )
-                    force_removed.append(run_id)
-                    entry["decision"] = "force_candidate"
-                else:
-                    reason = (
-                        "running"
-                        if run is not None and run["status"] == "running"
-                        else "incomplete_batches"
-                        if entry["incomplete_batches"]
-                        else "not_compacted"
-                    )
-                if reason:
-                    skipped.append(run_id)
-                    skipped_reasons[run_id] = reason
-                    entry["decision"] = reason
-                else:
-                    bytes_freed += _delete_paths(paths, dry_run=dry_run)
-        except LockUnavailable:
+        reason = None
+        if is_locked(config.meta_root / "locks" / f"{run_id}.lock"):
+            reason = "active_run_lock"
+        elif f"staging/{run_id}" in holds:
+            reason = "lifecycle_hold"
+        elif run is None:
+            if _staging_age_days(paths, now) < orphan_retention_days:
+                reason = "young_orphan"
+            else:
+                orphans.append(run_id)
+                entry["decision"] = "orphan_candidate"
+        elif run_ready_for_staging_cleanup(manifest, run_id):
+            candidates.append(run_id)
+            entry["decision"] = "compacted_candidate"
+        elif force and run["status"] != "running":
+            force_candidates.append(run_id)
+            entry["decision"] = "force_candidate"
+        else:
+            reason = (
+                "running"
+                if run["status"] == "running"
+                else "incomplete_batches"
+                if entry["incomplete_batches"]
+                else "not_compacted"
+            )
+        if reason:
             skipped.append(run_id)
-            skipped_reasons[run_id] = "active_run_lock"
-            entry["decision"] = "active_run_lock"
-
-    clean_stale_lock_files(
-        config.meta_root,
-        retention_days=orphan_retention_days,
-        dry_run=dry_run,
-    )
-    pruned_ledgers = prune_stale_staged_ledgers(config, manifest=manifest, dry_run=dry_run)
+            skipped_reasons[run_id] = reason
+            entry["decision"] = reason
+        else:
+            bytes_selected += entry["bytes"]
 
     return StagingCleanupResult(
-        removed_run_ids=removed,
+        candidate_run_ids=candidates,
         orphan_run_ids=orphans,
-        bytes_freed=bytes_freed,
+        bytes_selected=bytes_selected,
         skipped_run_ids=skipped,
-        force_removed_run_ids=force_removed,
+        force_candidate_run_ids=force_candidates,
         skipped_reasons=skipped_reasons,
         inventory=inventory,
-        pruned_ledgers=pruned_ledgers,
     )
 
 

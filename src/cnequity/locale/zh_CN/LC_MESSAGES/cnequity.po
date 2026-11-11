@@ -1479,8 +1479,8 @@ msgid "Also fetch listed ETF/LOF daily bars"
 msgstr "同时抓取已上市 ETF/LOF 日线"
 
 #: cnequity/cli/maintain_cmds.py
-msgid "Also include unfinished or uncompacted staging in the preview; deletes no files and does not downgrade batches."
-msgstr "将未完成或未 compact 的 staging 也列入预览，不删除文件、不降级批次。"
+msgid "Also list unfinished or uncompacted staging in the preview; it is never offered for deletion."
+msgstr "把未完成或未合并的 staging 也列入预览；它们不会被询问删除。"
 
 #: cnequity/cli/schedule_cmds.py
 msgid "Also run this event-stream group (announcements, news) on its own interval."
@@ -2323,6 +2323,21 @@ msgstr "永久删除快照 %s？"
 #: cnequity/cli/govern_cmds.py
 msgid "Delete without asking for confirmation."
 msgstr "不询问确认，直接删除。"
+
+#: cnequity/cli/maintain_cmds.py
+#, python-brace-format
+msgid "Delete {count} run lock files older than {days} days that no process holds?"
+msgstr "删除 {count} 个超过 {days} 天、没有进程持有的运行锁文件？"
+
+#: cnequity/cli/maintain_cmds.py
+#, python-brace-format
+msgid "Delete {count} run logs older than {days} days? Held logs and files that are not cne-*.log stay."
+msgstr "删除 {count} 个超过 {days} 天的运行日志？被保留的日志和不是 cne-*.log 的文件不删。"
+
+#: cnequity/cli/maintain_cmds.py
+#, python-brace-format
+msgid "Delete {count} source snapshot runs older than {days} days? The newest run per dataset and source, and held runs, stay."
+msgstr "删除 {count} 个超过 {days} 天的来源快照运行？每个数据集和来源最新的一份，以及被保留的，不删。"
 
 #: cnequity/cli/maintain_cmds.py
 #, python-brace-format
@@ -3875,6 +3890,14 @@ msgstr "默认关闭。打开后日更会抓取期货分钟线。"
 msgid "Off by default. When on, the daily update keeps fetching for the current scope."
 msgstr "默认关闭。打开后日更会按当前范围持续抓取。"
 
+#: cnequity/cli/maintain_cmds.py
+msgid "Offer `logs/cne-*.log` older than this many days; 0 skips."
+msgstr "列出超过这个天数的 `logs/cne-*.log` 供确认删除；0 跳过。"
+
+#: cnequity/cli/maintain_cmds.py
+msgid "Offer meta/source_snapshots run_id directories older than this many days (the latest one per dataset / source is always kept)."
+msgstr "列出超过这个天数的 meta/source_snapshots run_id 目录供确认删除（每个数据集 / 来源最新的一份始终保留）。"
+
 #: cnequity/ops/catalog.py
 msgid "Offline check of config, dependencies and silent failure points. No network access."
 msgstr "离线检查配置、依赖和会悄悄坏掉的地方。不访问网络。"
@@ -4145,40 +4168,32 @@ msgstr "在 {data_root} 准备 demo 湖"
 msgid "Preparing an offline sample lake at {data_root}"
 msgstr "在 {data_root} 准备离线样例湖"
 
-#: cnequity/cli/maintain_cmds.py
-msgid "Preview `logs/cne-*.log` older than this many days, without deleting; 0 skips."
-msgstr "预览超过这么多天的 `logs/cne-*.log`，不删除；0 表示跳过。"
-
 #: cnequity/ops/catalog.py
 msgid "Preview config upgrade"
 msgstr "预览配置升级"
 
 #: cnequity/cli/maintain_cmds.py
 msgid ""
-"Preview expired data, then ask before deleting historical generations or compacted staging.\n"
+"Preview expired data, then ask before deleting each kind of it.\n"
 "\n"
 "\n"
 "A terminal and a scheduler see the same preview. Only an interactive terminal is asked,\n"
-"and the default answer is no. Historical generations and staging are separate questions.\n"
-"--dry-run never asks. Scheduled runs therefore stay preview-only.\n"
+"and the default answer is no. Historical generations, staging, run logs, source snapshots\n"
+"and stale run locks are separate questions. --dry-run never asks, so scheduled runs stay\n"
+"preview-only.\n"
 "Staging that is running, locked, unfinished, uncompacted, orphaned or held is never\n"
-"deleted, even when the answer is yes. Source snapshots and logs are never deleted either.\n"
-"Current versions, holds and generations without a usable receipt are kept.\n"
+"deleted, even when the answer is yes. The newest source snapshot per dataset and source,\n"
+"held items, current versions and generations without a usable receipt are kept.\n"
 "Backfill and the daily run never delete staging or the generation currently in use."
 msgstr ""
-"先预览过期数据，再询问是否删除历史版本或已合并的 staging。\n"
+"先预览过期数据，再按类别逐一询问是否删除。\n"
 "\n"
 "\n"
 "终端和定时任务看到的预览相同。只有交互终端会被询问，默认不删。\n"
-"历史版本和 staging 是两个问题。--dry-run 从不询问。因此定时运行仍然只预览。\n"
-"正在运行、被锁住、未完成、未合并、orphan 或 hold 的 staging 不会删除，\n"
-"即使回答是也不会。来源快照和日志也不会删除。\n"
-"当前版本、hold 和收据不能用的代会保留。\n"
+"历史版本、staging、运行日志、来源快照和过期运行锁各问一次。--dry-run 从不询问，因此定时运行仍然只预览。\n"
+"正在运行、被锁住、未完成、未合并、orphan 或 hold 的 staging 不会删除，即使回答是也不会。\n"
+"每个数据集和来源最新的来源快照、hold 的项目、当前版本和收据不能用的代会保留。\n"
 "回补和日更不会删除 staging，也不会删除当前正在使用的一代。"
-
-#: cnequity/cli/maintain_cmds.py
-msgid "Preview meta/source_snapshots run_id directories older than this many days (the latest one per dataset / source is always kept)."
-msgstr "预览超过这么多天的 meta/source_snapshots run_id 目录（每个数据集 / 源的最新一份始终保留）。"
 
 #: cnequity/cli/repair_cmds.py
 msgid "Preview only. Run `cne migrate --apply` to apply and record them."
@@ -4189,8 +4204,8 @@ msgid "Preview only; add --apply to run it."
 msgstr "仅预览；加 --apply 才运行。"
 
 #: cnequity/cli/maintain_cmds.py
-msgid "Preview orphan staging older than this many days that is not recorded in the manifest."
-msgstr "预览超过这么多天、且 manifest 里没有记录的孤儿 staging。"
+msgid "Preview orphan staging, and offer run lock files, older than this many days."
+msgstr "预览超过这个天数的孤儿 staging，并列出同样超龄的运行锁文件供确认删除。"
 
 #: cnequity/cli/storage_cmds.py
 msgid "Preview which generations retention would delete now; deletes nothing."

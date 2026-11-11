@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from cnequity.domain.decision_evidence import DecisionEvidence
@@ -40,20 +40,3 @@ class CashEntitlement:
             raise ValueError("repurchase account cannot receive cash if marked excluded")
         if self.record_date > self.ex_date:
             raise ValueError("record date cannot follow ex-date")
-
-
-def tradable_a_cash(
-    entitlements: list[CashEntitlement], *, symbol: str, ex_date: date, decision_at: datetime
-) -> CashEntitlement:
-    """Return one proved A-share right; ambiguous or unpublished rights block."""
-    matches = [
-        row
-        for row in entitlements
-        if row.symbol == symbol
-        and row.ex_date == ex_date
-        and row.holder_class == "tradable_a"
-        and row.evidence.published_by(decision_at)
-    ]
-    if len(matches) != 1 or matches[0].payment_date is None:
-        raise ValueError("tradable A-share cash right is not uniquely verified")
-    return matches[0]

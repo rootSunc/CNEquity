@@ -527,15 +527,6 @@ def fetch_northbound_flows_range(
     return pl.DataFrame(rows).unique(subset=["trade_date", "channel"], keep="last")
 
 
-def fetch_northbound_flows(
-    trade_date: date,
-    *,
-    client: EastMoneyClient | None = None,
-    config: Config | None = None,
-) -> pl.DataFrame:
-    return fetch_northbound_flows_range(trade_date, trade_date, client=client, config=config)
-
-
 def fetch_dragon_tiger(
     trade_date: date,
     *,

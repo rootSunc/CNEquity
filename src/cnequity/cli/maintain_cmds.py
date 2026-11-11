@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date
 
 import click
@@ -38,7 +39,8 @@ from cnequity.storage.source_snapshots import (
 from cnequity.storage.staging_cleanup import (
     DEFAULT_LOG_RETENTION_DAYS,
     clean_run_logs,
-    clean_staging,
+    clean_stale_lock_files,
+    preview_staging_cleanup,
 )
 
 
@@ -511,9 +513,7 @@ def derive(
     "--orphan-retention-days",
     default=7,
     show_default=True,
-    help=N_(
-        "Preview orphan staging older than this many days that is not recorded in the manifest."
-    ),
+    help=N_("Preview orphan staging, and offer run lock files, older than this many days."),
 )
 @click.option(
     "--snapshot-retention-days",
@@ -521,7 +521,7 @@ def derive(
     show_default=True,
     help=(
         N_(
-            "Preview meta/source_snapshots run_id directories older than this many days (the latest one per dataset / source is always kept)."
+            "Offer meta/source_snapshots run_id directories older than this many days (the latest one per dataset / source is always kept)."
         )
     ),
 )
@@ -529,7 +529,7 @@ def derive(
     "--force",
     is_flag=True,
     help=N_(
-        "Also include unfinished or uncompacted staging in the preview; deletes no files and does not downgrade batches."
+        "Also list unfinished or uncompacted staging in the preview; it is never offered for deletion."
     ),
 )
 @click.option(
@@ -548,7 +548,7 @@ def derive(
     default=DEFAULT_LOG_RETENTION_DAYS,
     show_default=True,
     type=int,
-    help=N_("Preview `logs/cne-*.log` older than this many days, without deleting; 0 skips."),
+    help=N_("Offer `logs/cne-*.log` older than this many days; 0 skips."),
 )
 @click.option(
     "--reconcile-runs",
@@ -576,15 +576,16 @@ def clean(
     reconcile_runs: bool,
     reconcile_after_seconds: float | None,
 ):
-    """Preview expired data, then ask before deleting historical generations or compacted staging.
+    """Preview expired data, then ask before deleting each kind of it.
 
     \b
     A terminal and a scheduler see the same preview. Only an interactive terminal is asked,
-    and the default answer is no. Historical generations and staging are separate questions.
-    --dry-run never asks. Scheduled runs therefore stay preview-only.
+    and the default answer is no. Historical generations, staging, run logs, source snapshots
+    and stale run locks are separate questions. --dry-run never asks, so scheduled runs stay
+    preview-only.
     Staging that is running, locked, unfinished, uncompacted, orphaned or held is never
-    deleted, even when the answer is yes. Source snapshots and logs are never deleted either.
-    Current versions, holds and generations without a usable receipt are kept.
+    deleted, even when the answer is yes. The newest source snapshot per dataset and source,
+    held items, current versions and generations without a usable receipt are kept.
     Backfill and the daily run never delete staging or the generation currently in use.
 
     """
@@ -594,13 +595,10 @@ def clean(
                 "--dry-run cannot be combined with --reconcile-runs: reconciling changes run state. Drop --reconcile-runs to see the cleanup preview."
             )
         )
-    # The preview executors never delete. A person at a terminal may confirm
-    # afterwards; a scheduler has no terminal and is not asked.
-    preview_only = dry_run
-    dry_run = True
+    # Everything below previews. A person at a terminal may confirm deletion
+    # afterwards, one kind at a time; a scheduler has no terminal and is not asked.
     cfg = _cfg(config_path)
     attach_log_file(cfg, "run-clean")
-    # Preview the candidate inventory; no cleanup executor receives write authority.
     generations = (
         preview_revision_retention(cfg.meta_root, keep=keep_revision_generations)
         if keep_revision_generations > 0
@@ -618,41 +616,42 @@ def clean(
             stale_after_seconds=stale_after,
             locks_root=cfg.meta_root,
         )
-    result = clean_staging(
-        cfg,
-        dry_run=dry_run,
-        orphan_retention_days=orphan_retention_days,
-        force=force,
-    )
+    result = preview_staging_cleanup(cfg, orphan_retention_days=orphan_retention_days, force=force)
     snaps = clean_source_snapshots(
-        cfg.meta_root,
-        retention_days=snapshot_retention_days,
-        dry_run=dry_run,
+        cfg.meta_root, retention_days=snapshot_retention_days, dry_run=True
     )
-    logs = clean_run_logs(cfg.data_root, retention_days=log_retention_days, dry_run=dry_run)
-    generation_candidates = sum(len(item.candidate_revision_ids) for item in generations)
-    staging_run_ids = list(result.removed_run_ids)
-    will_ask = (
-        not preview_only
-        and _stdin_is_tty()
-        and (generation_candidates > 0 or bool(staging_run_ids))
+    logs = clean_run_logs(cfg.data_root, retention_days=log_retention_days, dry_run=True)
+    stale_locks = clean_stale_lock_files(
+        cfg.meta_root, retention_days=orphan_retention_days, dry_run=True
     )
+    selection = _Selection(
+        keep_revision_generations=keep_revision_generations,
+        generations=sum(len(item.candidate_revision_ids) for item in generations),
+        staging_run_ids=list(result.candidate_run_ids),
+        log_retention_days=log_retention_days,
+        logs=len(logs.removed),
+        snapshot_retention_days=snapshot_retention_days,
+        snapshot_run_dirs=len(snaps.removed_run_dirs),
+        lock_retention_days=orphan_retention_days,
+        stale_locks=stale_locks,
+    )
+    will_ask = not dry_run and _stdin_is_tty() and selection.any()
     payload = {
         "dry_run": True,
         "confirmation_required": "interactive" if will_ask else "none",
         "reconciled": reconciled,
         "removed_run_ids": [],
-        "candidate_run_ids": result.removed_run_ids,
+        "candidate_run_ids": result.candidate_run_ids,
         "orphan_run_ids": result.orphan_run_ids,
         "force_removed_run_ids": [],
-        "force_candidate_run_ids": result.force_removed_run_ids,
+        "force_candidate_run_ids": result.force_candidate_run_ids,
         "skipped_run_ids": result.skipped_run_ids,
         "skipped_reasons": result.skipped_reasons,
         "staging_inventory": result.inventory,
         "staging_run_count": len(result.inventory),
         "bytes_freed": 0,
         "logical_bytes_selected": (
-            result.bytes_freed
+            result.bytes_selected
             + snaps.bytes_freed
             + logs.bytes_freed
             + sum(item.logical_bytes_selected for item in generations)
@@ -671,6 +670,7 @@ def clean(
             "bytes_freed": 0,
             "logical_bytes_selected": logs.bytes_freed,
         },
+        "stale_run_locks": {"removed": 0, "candidates": stale_locks},
         "revision_generations": [
             {
                 "dataset": item.dataset,
@@ -684,14 +684,32 @@ def clean(
         ],
     }
     emit_json(payload, indent=2)
-    if not will_ask:
-        return
-    _delete_preview_selection(
-        cfg,
-        keep_revision_generations=keep_revision_generations,
-        generation_candidates=generation_candidates,
-        staging_run_ids=staging_run_ids,
-    )
+    if will_ask:
+        _delete_preview_selection(cfg, selection)
+
+
+@dataclass(frozen=True)
+class _Selection:
+    """How much of each kind the preview offered, and the retention it used."""
+
+    keep_revision_generations: int
+    generations: int
+    staging_run_ids: list[str]
+    log_retention_days: int
+    logs: int
+    snapshot_retention_days: int
+    snapshot_run_dirs: int
+    lock_retention_days: int
+    stale_locks: int
+
+    def any(self) -> bool:
+        return bool(
+            self.generations
+            or self.staging_run_ids
+            or self.logs
+            or self.snapshot_run_dirs
+            or self.stale_locks
+        )
 
 
 def _stdin_is_tty() -> bool:
@@ -726,25 +744,20 @@ def _staging_in_use_reason(cfg, run_id: str, holds: set[str]) -> str | None:
     return None
 
 
-def _delete_preview_selection(
-    cfg,
-    *,
-    keep_revision_generations: int,
-    generation_candidates: int,
-    staging_run_ids: list[str],
-) -> None:
-    """Ask separately, then delete only what the person accepted.
+def _delete_preview_selection(cfg, selection: _Selection) -> None:
+    """Ask once per kind, then delete only what the person accepted.
 
-    The preview is already on stdout. Questions go to stderr. Staging that is
-    still in use is left even when the staging answer is yes. Declining either
-    question deletes nothing from that group.
+    The preview is already on stdout. Questions go to stderr and default to no;
+    declining one deletes nothing of that kind. Each deletion re-applies the
+    same rule as its preview, so anything that became in use or held since is
+    still left alone. Staging that is in use stays even when the answer is yes.
     """
     from cnequity.storage.lifecycle.resources import resource_holds
 
     deleted: dict = {}
     with resource_holds(cfg.meta_root, dry_run=True) as holds:
         idle = []
-        for run_id in staging_run_ids:
+        for run_id in selection.staging_run_ids:
             reason = _staging_in_use_reason(cfg, run_id, holds)
             if reason is None:
                 idle.append(run_id)
@@ -755,16 +768,18 @@ def _delete_preview_selection(
                 ).format(run_id=run_id, reason=reason),
                 err=True,
             )
-    if generation_candidates and keep_revision_generations > 0:
+    if selection.generations and selection.keep_revision_generations > 0:
         agreed = _confirm(
             _(
                 "Delete {generations} historical generations from this preview? The generation "
                 "currently in use, holds, generations with an unusable receipt, and all staging "
                 "stay."
-            ).format(generations=generation_candidates)
+            ).format(generations=selection.generations)
         )
         if agreed:
-            removed = retain_revision_generations(cfg.meta_root, keep=keep_revision_generations)
+            removed = retain_revision_generations(
+                cfg.meta_root, keep=selection.keep_revision_generations
+            )
             deleted["revision_generations"] = [
                 {
                     "dataset": item.dataset,
@@ -794,6 +809,37 @@ def _delete_preview_selection(
                 "removed_run_ids": idle,
                 "logical_bytes_deleted": journal.get("logical_bytes_deleted", 0),
             }
+    if selection.logs and _confirm(
+        _(
+            "Delete {count} run logs older than {days} days? Held logs and files that are not "
+            "cne-*.log stay."
+        ).format(count=selection.logs, days=selection.log_retention_days)
+    ):
+        logs = clean_run_logs(cfg.data_root, retention_days=selection.log_retention_days)
+        deleted["run_logs"] = {"removed": len(logs.removed), "bytes_freed": logs.bytes_freed}
+    if selection.snapshot_run_dirs and _confirm(
+        _(
+            "Delete {count} source snapshot runs older than {days} days? The newest run per "
+            "dataset and source, and held runs, stay."
+        ).format(count=selection.snapshot_run_dirs, days=selection.snapshot_retention_days)
+    ):
+        snaps = clean_source_snapshots(
+            cfg.meta_root, retention_days=selection.snapshot_retention_days
+        )
+        deleted["source_snapshots"] = {
+            "removed_run_dirs": snaps.removed_run_dirs,
+            "bytes_freed": snaps.bytes_freed,
+        }
+    if selection.stale_locks and _confirm(
+        _("Delete {count} run lock files older than {days} days that no process holds?").format(
+            count=selection.stale_locks, days=selection.lock_retention_days
+        )
+    ):
+        deleted["stale_run_locks"] = {
+            "removed": clean_stale_lock_files(
+                cfg.meta_root, retention_days=selection.lock_retention_days
+            )
+        }
     if deleted:
         emit_json({"deleted": True, **deleted}, indent=2)
 

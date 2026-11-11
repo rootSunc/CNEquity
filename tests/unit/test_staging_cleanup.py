@@ -11,9 +11,9 @@ from cnequity.file_lock import exclusive_lock
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.storage import StagingWriter
 from cnequity.storage.staging_cleanup import (
-    clean_staging,
     clean_stale_lock_files,
     list_staging_run_ids,
+    preview_staging_cleanup,
     run_ready_for_staging_cleanup,
 )
 
@@ -34,7 +34,7 @@ def _bar_row(symbol: str, trade_date: date) -> dict:
     }
 
 
-def test_clean_removes_staging_for_successful_compacted_run(tmp_path):
+def test_preview_offers_staging_of_a_successful_compacted_run(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     manifest = Manifest(cfg.manifest_path)
     run_id = manifest.start_run("daily", {"trade_date": "2024-06-28"})
@@ -53,9 +53,9 @@ def test_clean_removes_staging_for_successful_compacted_run(tmp_path):
     )
     assert run_id in list_staging_run_ids(cfg.staging_root)
 
-    result = clean_staging(cfg)
-    assert run_id in result.removed_run_ids
-    assert run_id not in list_staging_run_ids(cfg.staging_root)
+    result = preview_staging_cleanup(cfg)
+    assert run_id in result.candidate_run_ids
+    assert run_id in list_staging_run_ids(cfg.staging_root)  # a preview deletes nothing
 
 
 def test_clean_skips_incomplete_run(tmp_path):
@@ -74,7 +74,7 @@ def test_clean_skips_incomplete_run(tmp_path):
         pl.DataFrame([_bar_row("000001.SZ", date(2024, 6, 28))]),
     )
 
-    result = clean_staging(cfg, orphan_retention_days=999)
+    result = preview_staging_cleanup(cfg, orphan_retention_days=999)
     assert run_id in result.skipped_run_ids
     assert run_id in list_staging_run_ids(cfg.staging_root)
     assert result.skipped_reasons[run_id] == "incomplete_batches"
@@ -95,12 +95,11 @@ def test_clean_preserves_a_locked_terminal_run_even_with_force(tmp_path):
         pl.DataFrame([_bar_row("000001.SZ", date(2024, 6, 28))]),
     )
     with exclusive_lock(cfg.meta_root / "locks" / f"{run_id}.lock"):
-        for dry_run in (True, False):
-            result = clean_staging(cfg, dry_run=dry_run, force=True)
-            assert result.skipped_reasons == {run_id: "active_run_lock"}
-            assert not result.removed_run_ids
-            assert not result.force_removed_run_ids
-            assert run_id in list_staging_run_ids(cfg.staging_root)
+        result = preview_staging_cleanup(cfg, force=True)
+    assert result.skipped_reasons == {run_id: "active_run_lock"}
+    assert not result.candidate_run_ids
+    assert not result.force_candidate_run_ids
+    assert run_id in list_staging_run_ids(cfg.staging_root)
 
 
 def test_clean_never_deletes_failed_run_staging_without_force(tmp_path):
@@ -127,39 +126,12 @@ def test_clean_never_deletes_failed_run_staging_without_force(tmp_path):
     old = datetime.now(timezone.utc) - timedelta(days=30)
     os.utime(run_dir, (old.timestamp(), old.timestamp()))
 
-    result = clean_staging(cfg, orphan_retention_days=7)
+    result = preview_staging_cleanup(cfg, orphan_retention_days=7)
     assert run_id in result.skipped_run_ids
     assert run_id in list_staging_run_ids(cfg.staging_root)
 
 
-def test_clean_force_deletes_failed_run_and_demotes_success_batches(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    manifest = Manifest(cfg.manifest_path)
-    run_id = manifest.start_run("daily", {})
-    manifest.start_batch(run_id, "batch-0", "daily_bars", "daily_bars")
-    manifest.finish_batch(run_id, "batch-0", "success", rows_written=1)
-    manifest.start_batch(run_id, "batch-1", "daily_bars", "daily_bars")
-    manifest.finish_batch(run_id, "batch-1", "failed", error_message="err")
-    manifest.finish_run(run_id, "failed")
-
-    writer = StagingWriter(cfg.staging_root)
-    writer.write_batch(
-        "daily_bars",
-        run_id,
-        "batch-0",
-        pl.DataFrame([_bar_row("000001.SZ", date(2024, 6, 28))]),
-    )
-
-    result = clean_staging(cfg, force=True)
-    assert run_id in result.force_removed_run_ids
-    assert run_id not in list_staging_run_ids(cfg.staging_root)
-    # success batch demoted so retry refetches it instead of losing rows
-    statuses = {b["batch_id"]: b["status"] for b in manifest.get_batches_for_run(run_id)}
-    assert statuses["batch-0"] == "failed"
-    assert statuses["batch-1"] == "failed"
-
-
-def test_clean_force_dry_run_keeps_manifest_untouched(tmp_path):
+def test_force_lists_unfinished_staging_and_changes_nothing(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     manifest = Manifest(cfg.manifest_path)
     run_id = manifest.start_run("daily", {})
@@ -175,14 +147,14 @@ def test_clean_force_dry_run_keeps_manifest_untouched(tmp_path):
         pl.DataFrame([_bar_row("000001.SZ", date(2024, 6, 28))]),
     )
 
-    result = clean_staging(cfg, force=True, dry_run=True)
-    assert run_id in result.force_removed_run_ids
+    result = preview_staging_cleanup(cfg, force=True)
+    assert run_id in result.force_candidate_run_ids
     assert run_id in list_staging_run_ids(cfg.staging_root)
     statuses = {b["batch_id"]: b["status"] for b in manifest.get_batches_for_run(run_id)}
     assert statuses["batch-0"] == "success"
 
 
-def test_clean_removes_orphan_staging_without_manifest(tmp_path):
+def test_preview_lists_old_orphan_staging(tmp_path):
     import os
 
     cfg = Config(data_root=tmp_path / "data")
@@ -198,12 +170,12 @@ def test_clean_removes_orphan_staging_without_manifest(tmp_path):
     old = datetime.now(timezone.utc) - timedelta(days=10)
     os.utime(run_dir, (old.timestamp(), old.timestamp()))
 
-    result = clean_staging(cfg, orphan_retention_days=7)
+    result = preview_staging_cleanup(cfg, orphan_retention_days=7)
     assert run_id in result.orphan_run_ids
-    assert run_id not in list_staging_run_ids(cfg.staging_root)
+    assert run_id in list_staging_run_ids(cfg.staging_root)  # a preview deletes nothing
 
 
-def test_clean_removes_failed_run_when_compacted_and_settled(tmp_path):
+def test_preview_offers_a_failed_run_once_compacted_and_settled(tmp_path):
     """Failed/warning terminal runs with compact + no incomplete batches are ready."""
     cfg = Config(data_root=tmp_path / "data")
     manifest = Manifest(cfg.manifest_path)
@@ -224,9 +196,9 @@ def test_clean_removes_failed_run_when_compacted_and_settled(tmp_path):
     )
 
     assert run_ready_for_staging_cleanup(manifest, run_id) is True
-    result = clean_staging(cfg)
-    assert run_id in result.removed_run_ids
-    assert run_id not in list_staging_run_ids(cfg.staging_root)
+    result = preview_staging_cleanup(cfg)
+    assert run_id in result.candidate_run_ids
+    assert run_id in list_staging_run_ids(cfg.staging_root)  # a preview deletes nothing
 
 
 def test_a_degraded_run_is_cleaned_once_its_batches_settled(tmp_path):
@@ -268,7 +240,7 @@ def test_clean_skips_warning_run_without_compact(tmp_path):
     )
 
     assert run_ready_for_staging_cleanup(manifest, run_id) is False
-    result = clean_staging(cfg, orphan_retention_days=999)
+    result = preview_staging_cleanup(cfg, orphan_retention_days=999)
     assert run_id in result.skipped_run_ids
 
 

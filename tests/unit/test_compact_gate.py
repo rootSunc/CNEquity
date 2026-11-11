@@ -369,7 +369,7 @@ def test_compact_allowed_without_liveness_refresh(tmp_path):
     assert count_ok == 0
 
 
-def test_mark_stale_running_batches_failed(tmp_path):
+def test_batch_timeouts_promote_a_stuck_batch_to_failed(tmp_path):
     cfg = Config(data_root=tmp_path / "data", batch_stale_seconds=60)
     manifest = Manifest(cfg.manifest_path)
     run_id = "run-stale"
@@ -385,8 +385,8 @@ def test_mark_stale_running_batches_failed(tmp_path):
             (old_start, old_start, run_id, "batch-stuck"),
         )
 
-    marked = manifest.mark_stale_running_batches_failed(run_id, stale_after_seconds=60)
-    assert marked == 2
+    result = manifest.advance_batch_timeouts(run_id, stale_after_seconds=60)
+    assert result["running_to_stale"] + result["stale_to_failed"] == 2
     batches = manifest.get_batches_for_run(run_id)
     assert batches[0]["status"] == "failed"
     assert "heartbeat" in (batches[0]["error_message"] or "").lower()

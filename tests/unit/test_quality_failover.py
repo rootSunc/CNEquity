@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import date
 
 import polars as pl
-import pytest
 
 from cnequity.config import Config, FailoverDatasetSpec
 from cnequity.quality import failover as fo
@@ -124,69 +123,6 @@ def test_snapshot_daily_bars_clist_empty_fetch_returns_empty(tmp_path, monkeypat
     )
     out = fo.snapshot_daily_bars_clist(cfg, trade_date=date(2024, 6, 28), run_id="run-1")
     assert out.is_empty()
-
-
-def test_snapshot_daily_bars_backup_noop_when_spec_missing(tmp_path):
-    cfg = _cfg(tmp_path, failover_enabled=False)
-    fo.snapshot_daily_bars_backup(
-        cfg,
-        symbols=["600519.SH"],
-        start=date(2024, 6, 1),
-        end=date(2024, 6, 28),
-        run_id="run-1",
-        batch_id="batch-1",
-    )
-    assert not (cfg.meta_root / "source_snapshots").exists()
-
-
-def test_snapshot_daily_bars_backup_noop_for_single_day_window(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path)
-    monkeypatch.setattr(
-        "cnequity.quality.failover.fetch_em_daily_bars",
-        lambda *a, **k: pytest.fail("must not fetch a single-day tip window"),
-    )
-    fo.snapshot_daily_bars_backup(
-        cfg,
-        symbols=["600519.SH"],
-        start=date(2024, 6, 28),
-        end=date(2024, 6, 28),
-        run_id="run-1",
-        batch_id="batch-1",
-    )
-
-
-def test_snapshot_daily_bars_backup_noop_when_fetch_empty(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path)
-    monkeypatch.setattr(
-        "cnequity.quality.failover.fetch_em_daily_bars",
-        lambda *a, **k: pl.DataFrame(),
-    )
-    fo.snapshot_daily_bars_backup(
-        cfg,
-        symbols=["600519.SH"],
-        start=date(2024, 6, 1),
-        end=date(2024, 6, 28),
-        run_id="run-1",
-        batch_id="batch-1",
-    )
-    assert not (cfg.meta_root / "source_snapshots").exists()
-
-
-def test_snapshot_daily_bars_backup_writes_snapshot(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path)
-    monkeypatch.setattr(
-        "cnequity.quality.failover.fetch_em_daily_bars",
-        lambda symbols, start, end, config=None: _bars_df(trade_date=end),
-    )
-    fo.snapshot_daily_bars_backup(
-        cfg,
-        symbols=["600519.SH"],
-        start=date(2024, 6, 1),
-        end=date(2024, 6, 28),
-        run_id="run-1",
-        batch_id="batch-1",
-    )
-    assert (cfg.meta_root / "source_snapshots" / "daily_bars").exists()
 
 
 def test_snapshot_corporate_actions_backup_noop_when_not_backfill(tmp_path):

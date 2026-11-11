@@ -7,7 +7,6 @@ import pytest
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
-from cnequity.query.universe import UniverseCoverageError, tradable_symbols_on_date
 from cnequity.steps.common import instrument_metadata, load_symbols
 from cnequity.steps.finalize import step_compact
 from cnequity.storage import StagingWriter
@@ -410,90 +409,6 @@ def test_audit_emits_instruments_delist_suppressed_error(tmp_path):
     assert suppressed[0]["severity"] == "error"
 
 
-def test_tradable_universe_excludes_delisted_symbol(tmp_path):
-    root = tmp_path / "data"
-    cfg = Config(data_root=root)
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
-    pl.DataFrame(
-        [
-            _instrument("600519.SH", list_date=date(2001, 8, 27)),
-            _instrument(
-                "600000.SH",
-                list_date=date(1999, 11, 10),
-                delist_date=date(2024, 6, 27),
-            ),
-        ]
-    ).write_parquet(curated_path)
-
-    out = tradable_symbols_on_date(cfg, date(2024, 6, 28))
-    assert out is not None
-    assert set(out["symbol"].to_list()) == {"600519.SH"}
-
-
-def test_tradable_universe_uses_latest_status_fragment(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    instruments = cfg.curated_root / "instruments"
-    instruments.mkdir(parents=True)
-    pl.DataFrame([_instrument("600519.SH", list_date=date(2001, 8, 27))]).write_parquet(
-        instruments / "part-merged.parquet"
-    )
-    status = cfg.curated_root / "trading_status" / "trade_date=2024-06"
-    status.mkdir(parents=True)
-    base = {
-        "symbol": "600519.SH",
-        "trade_date": date(2024, 6, 28),
-        "source": "eastmoney",
-        "data_version": "v1",
-    }
-    pl.DataFrame(
-        [
-            {
-                **base,
-                "is_trading": False,
-                "status": "suspended",
-                "fetched_at": "2024-06-28T00:00:00+00:00",
-            }
-        ]
-    ).write_parquet(status / "part-old.parquet")
-    nested = status / ".fragments"
-    nested.mkdir()
-    pl.DataFrame(
-        [
-            {
-                **base,
-                "is_trading": True,
-                "status": "normal",
-                "fetched_at": "2024-06-28T01:00:00+00:00",
-            }
-        ]
-    ).write_parquet(nested / "part-new.parquet")
-
-    out = tradable_symbols_on_date(cfg, date(2024, 6, 28))
-
-    assert out is not None
-    assert out["symbol"].to_list() == ["600519.SH"]
-
-
-def test_tradable_universe_dedupes_nested_instrument_fragments(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    root = cfg.curated_root / "instruments"
-    root.mkdir(parents=True)
-    pl.DataFrame([_instrument("600519.SH", list_date=date(2001, 8, 27))]).write_parquet(
-        root / "part-merged.parquet"
-    )
-    nested = root / ".old-fragments"
-    nested.mkdir()
-    pl.DataFrame([_instrument("600519.SH", list_date=date(2001, 8, 27))]).write_parquet(
-        nested / "part-old.parquet"
-    )
-
-    out = tradable_symbols_on_date(cfg, date(2024, 6, 28))
-
-    assert out is not None
-    assert out["symbol"].to_list() == ["600519.SH"]
-
-
 def test_step_instrument_reads_preserve_nested_catalog_rows(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     root = cfg.curated_root / "instruments"
@@ -537,82 +452,6 @@ def test_symbol_universe_ignores_padded_subscription_placeholders(tmp_path):
 
     assert load_symbols(cfg) == ["600519.SH"]
     assert instrument_metadata(cfg)["symbol"].to_list() == ["600519.SH"]
-
-
-def test_tradable_universe_excludes_cdr(tmp_path):
-    root = tmp_path / "data"
-    cfg = Config(data_root=root)
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
-    # exclusion is prefix-based, so even a stale asset_type="stock" row is dropped
-    pl.DataFrame(
-        [
-            _instrument("600519.SH", list_date=date(2001, 8, 27)),
-            _instrument("689009.SH", list_date=date(2020, 10, 29)),
-        ]
-    ).write_parquet(curated_path)
-
-    out = tradable_symbols_on_date(cfg, date(2024, 6, 28))
-    assert out is not None
-    assert set(out["symbol"].to_list()) == {"600519.SH"}
-
-
-def test_tradable_universe_excludes_etf(tmp_path):
-    root = tmp_path / "data"
-    cfg = Config(data_root=root)
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
-    pl.DataFrame(
-        [
-            _instrument("600519.SH", list_date=date(2001, 8, 27)),
-            _instrument("510300.SH", list_date=date(2012, 5, 28)),
-            _instrument("159915.SZ", list_date=date(2011, 12, 9)),
-        ]
-    ).write_parquet(curated_path)
-
-    out = tradable_symbols_on_date(cfg, date(2024, 6, 28))
-    assert out is not None
-    assert set(out["symbol"].to_list()) == {"600519.SH"}
-
-
-def test_strict_tradable_universe_requires_status_coverage(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
-    pl.DataFrame([_instrument("600519.SH", list_date=date(2001, 8, 27))]).write_parquet(
-        curated_path
-    )
-
-    with pytest.raises(UniverseCoverageError, match="trading_status coverage"):
-        tradable_symbols_on_date(cfg, date(2024, 6, 28), strict=True)
-
-
-def test_strict_tradable_universe_rejects_partial_status_coverage(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
-    pl.DataFrame(
-        [
-            _instrument("600519.SH", list_date=date(2001, 8, 27)),
-            _instrument("600000.SH", list_date=date(1999, 11, 10)),
-        ]
-    ).write_parquet(curated_path)
-    status_path = cfg.curated_root / "trading_status" / "trade_date=2024-06-28" / "part-0.parquet"
-    status_path.parent.mkdir(parents=True)
-    pl.DataFrame(
-        {
-            "symbol": ["600519.SH"],
-            "trade_date": [date(2024, 6, 28)],
-            "is_trading": [True],
-            "status": ["normal"],
-            "source": ["eastmoney"],
-            "data_version": ["v1"],
-            "fetched_at": [date(2024, 6, 28)],
-        }
-    ).write_parquet(status_path)
-
-    with pytest.raises(UniverseCoverageError, match=r"missing 1 symbol\(s\)"):
-        tradable_symbols_on_date(cfg, date(2024, 6, 28), strict=True)
 
 
 def test_tdx_instrument_frame_marks_cdr_asset_type():

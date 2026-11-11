@@ -8,7 +8,6 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.eastmoney.rotation import fetch_news_headlines
 from cnequity.domain.schemas import frame_from_rows
 
 logger = logging.getLogger(__name__)
@@ -17,27 +16,6 @@ logger = logging.getLogger(__name__)
 def _item_hash(title: str, wire_source: str, published_at: str) -> str:
     raw = f"{wire_source}|{published_at}|{title}".encode()
     return hashlib.sha256(raw).hexdigest()[:16]
-
-
-def fetch_flash_news_wire(
-    trade_date: date,
-    *,
-    page_size: int = 200,
-    config=None,
-    run_id: str | None = None,
-) -> pl.DataFrame:
-    """EastMoney 7×24 fast news with wire_id / item_hash for cross-source dedupe."""
-    if config is None:
-        base = fetch_news_headlines(trade_date, page_size=page_size)
-    else:
-        base = fetch_news_headlines(
-            trade_date,
-            page_size=page_size,
-            config=config,
-            run_id=run_id,
-            archive_dataset="flash_news_wire",
-        )
-    return flash_rows_from_news(base, trade_date)
 
 
 def flash_rows_from_news(base: pl.DataFrame, trade_date: date | None = None) -> pl.DataFrame:

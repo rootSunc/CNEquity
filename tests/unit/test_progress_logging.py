@@ -591,7 +591,7 @@ def test_fetching_commands_persist_job_logs(tmp_path, monkeypatch, command):
         "run events": ([], "cnequity.orchestrator.engine.JobEngine.run_job"),
         "run retry": (["--run-id", "offline"], "cnequity.cli.run_cmds._retry_single_run"),
         "run compact": (["--run-id", "offline"], "cnequity.orchestrator.engine.JobEngine.run_step"),
-        "run clean": (["--dry-run"], "cnequity.cli.maintain_cmds.clean_staging"),
+        "run clean": (["--dry-run"], "cnequity.cli.maintain_cmds.preview_staging_cleanup"),
         "run maintain": ([], "cnequity.cli.schedule_cmds.subprocess.run"),
         "ths-official capture": (
             ["--what", "corporate-actions"],

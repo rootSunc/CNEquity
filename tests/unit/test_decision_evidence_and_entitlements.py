@@ -7,7 +7,7 @@ import pytest
 
 from cnequity.adapters.cninfo.payment_notices import parse_payment_notice_text
 from cnequity.adapters.cninfo.reviewed_cash_corrections import reviewed_cash_correction
-from cnequity.domain.cash_entitlements import CashEntitlement, tradable_a_cash
+from cnequity.domain.cash_entitlements import CashEntitlement
 from cnequity.domain.decision_evidence import DecisionEvidence
 
 
@@ -27,40 +27,6 @@ def test_observed_time_cannot_replace_unknown_publication():
     assert not item.published_by(datetime(2026, 9, 26, tzinfo=timezone.utc))
     with pytest.raises(ValueError, match="document id"):
         DecisionEvidence(None, None, None, None, None, evidence_status="verified_repaired")
-
-
-def test_cash_right_uses_actual_holder_class_and_payment_date():
-    ex = date(2020, 6, 10)
-    published = datetime(2020, 6, 8, tzinfo=timezone.utc)
-    common = dict(
-        symbol="600001.SH",
-        ex_date=ex,
-        record_date=date(2020, 6, 9),
-        payment_date=date(2020, 6, 12),
-        evidence=evidence(published=published),
-    )
-    tradable = CashEntitlement(
-        **common, holder_class="tradable_a", pretax_cash_per_share=Decimal("0.125")
-    )
-    restricted = CashEntitlement(
-        **common, holder_class="restricted_a", pretax_cash_per_share=Decimal("0.100")
-    )
-    as_of = datetime(2020, 6, 9, tzinfo=timezone.utc)
-    assert (
-        tradable_a_cash([restricted, tradable], symbol="600001.SH", ex_date=ex, decision_at=as_of)
-        == tradable
-    )
-    with pytest.raises(ValueError, match="not uniquely verified"):
-        tradable_a_cash([restricted], symbol="600001.SH", ex_date=ex, decision_at=as_of)
-    with pytest.raises(ValueError, match="not uniquely verified"):
-        tradable_a_cash([tradable, tradable], symbol="600001.SH", ex_date=ex, decision_at=as_of)
-    with pytest.raises(ValueError, match="not uniquely verified"):
-        tradable_a_cash(
-            [tradable],
-            symbol="600001.SH",
-            ex_date=ex,
-            decision_at=datetime(2020, 6, 7, tzinfo=timezone.utc),
-        )
 
 
 def test_zero_entitlement_for_excluded_repurchase_account():

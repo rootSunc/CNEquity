@@ -7,7 +7,6 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.eastmoney.bars import fetch_daily_bars as fetch_em_daily_bars
 from cnequity.adapters.eastmoney.bars import fetch_daily_bars_clist
 from cnequity.adapters.eastmoney.corporate_actions import fetch_corporate_actions_eastmoney
 from cnequity.config import Config, FailoverDatasetSpec
@@ -85,37 +84,6 @@ def snapshot_daily_bars_clist(
         trade_date=trade_date,
     )
     return stamped
-
-
-def snapshot_daily_bars_backup(
-    config: Config,
-    *,
-    symbols: list[str],
-    start: date,
-    end: date,
-    run_id: str,
-    batch_id: str,
-) -> None:
-    """Multi-day / history failover via per-symbol kline (slow — not for tip)."""
-    spec = failover_spec(config, "daily_bars")
-    if spec is None or not config.sources.get(spec.backup, True):
-        return
-    # Tip windows use clist once at the step level; avoid N×kline here.
-    if start == end:
-        return
-    df = fetch_em_daily_bars(symbols, start, end, config=config)
-    if df.is_empty():
-        return
-    df = with_provenance(df, source=spec.backup, data_version=data_version_for("daily_bars"))
-    write_backup_snapshot(
-        config,
-        "daily_bars",
-        df,
-        run_id=run_id,
-        batch_id=batch_id,
-        source=spec.backup,
-        trade_date=end,
-    )
 
 
 def snapshot_corporate_actions_backup(

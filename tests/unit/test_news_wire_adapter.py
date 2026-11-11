@@ -6,10 +6,10 @@ from datetime import date
 
 import polars as pl
 
-from cnequity.adapters.eastmoney.news_wire import fetch_flash_news_wire
+from cnequity.adapters.eastmoney.news_wire import flash_rows_from_news
 
 
-def test_fetch_flash_news_wire_adds_wire_fields(monkeypatch):
+def test_flash_rows_add_wire_fields():
     base = pl.DataFrame(
         [
             {
@@ -24,11 +24,7 @@ def test_fetch_flash_news_wire_adds_wire_fields(monkeypatch):
         ]
     )
 
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.news_wire.fetch_news_headlines",
-        lambda _d, page_size=200: base,
-    )
-    df = fetch_flash_news_wire(date(2026, 7, 14))
+    df = flash_rows_from_news(base, date(2026, 7, 14))
     assert df.height == 1
     row = df.row(0, named=True)
     assert row["wire_id"] == "eastmoney:n1"
@@ -36,7 +32,7 @@ def test_fetch_flash_news_wire_adds_wire_fields(monkeypatch):
     assert len(row["item_hash"]) == 16
 
 
-def test_fetch_flash_news_wire_dedupes_duplicate_source_rows(monkeypatch):
+def test_flash_rows_dedupe_duplicate_source_rows():
     base = pl.DataFrame(
         [
             {
@@ -59,11 +55,6 @@ def test_fetch_flash_news_wire_dedupes_duplicate_source_rows(monkeypatch):
             },
         ]
     )
-    monkeypatch.setattr(
-        "cnequity.adapters.eastmoney.news_wire.fetch_news_headlines",
-        lambda _d, page_size=200: base,
-    )
-
-    df = fetch_flash_news_wire(date(2026, 7, 14))
+    df = flash_rows_from_news(base, date(2026, 7, 14))
     assert df.height == 1
     assert df["title"][0] == "新标题"

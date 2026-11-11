@@ -130,7 +130,7 @@ TDX 线协议客户端随包内置，无需安装通达信桌面软件。依赖�
 
 ### 存储清理
 
-`cne run clean` 先预览 staging、来源快照、日志与历史版本。交互终端接着分两次确认：历史版本，以及已合并且不在使用中的 staging。正在使用的一代和仍在使用的 staging 不会自动删除。`--dry-run`、管道和定时脚本不提问，所以现有定时任务仍然不释放空间。预览里的实际删除字段和 `bytes_freed` 为空或 0，候选大小见 `logical_bytes_selected`。`--force` 只扩大预览范围，显式 `--reconcile-runs` 仍会修改运行状态。
+`cne run clean` 先预览 staging、来源快照、日志、过期运行锁与历史版本。交互终端接着按类别逐一确认：历史版本、已合并且不在使用中的 staging、日志、来源快照和运行锁。正在使用的一代和仍在使用的 staging 不会自动删除。`--dry-run`、管道和定时脚本不提问，所以现有定时任务仍然不释放空间。预览里的实际删除字段和 `bytes_freed` 为空或 0，候选大小见 `logical_bytes_selected`。`--force` 只扩大预览范围，显式 `--reconcile-runs` 仍会修改运行状态。
 
 升级后，`cne backfill` 和 `cne run daily` 结束时每个数据集只留最近 5 代（[`[storage.retention].keep_generations`](configuration.md#storage-retention)），更早且没有保留的代目录会被删除，不经过网页确认。只合并文件、行内容不变的版本不占这 5 个名额。要留住更老的代，先 `cne storage hold`，或把该值设为 `0`。交互终端里的 `cne run clean` 确认后也会按它自己的 `--keep-revision-generations` 删除。
 
