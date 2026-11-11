@@ -77,7 +77,7 @@ cne run daily --group derivatives --config configs/cnequity.futures.toml
 
 A normal daily update fills the recent lookback window and a limited amount of older backlog; it does not replace the initial historical backfill. Within the group, the default order is guaranteed by dependencies: collect daily bars and fill contract metadata first, then compact and derive continuous futures and Greeks. A failure in any source keeps a failed or degraded status; existing derived rows do not mean this run is complete.
 
-Once `[futures]` is enabled in a production lake, `cne run daily` and `daily_pipeline.sh` (when groups are not restricted with `CNE_GROUPS`) automatically include `derivatives`. If an older launchd install kept an explicit `CNE_GROUPS`, add `derivatives` to that list; if the configuration has no `derivatives` group, run `cne config upgrade` to add it; `cne run daily --core-only` runs only the core skeleton and does not collect futures. A standalone futures lake uses the single-group command above, to avoid also collecting the other A-share groups.
+Once `[futures]` is enabled in a production lake, `cne run daily` and the scheduled daily update automatically include `derivatives`; if the configuration has no `derivatives` group, run `cne config upgrade` to add it; `cne run daily --core-only` runs only the core skeleton and does not collect futures. A standalone futures lake uses the single-group command above, to avoid also collecting the other A-share groups.
 
 ## Evidence and failure recovery
 

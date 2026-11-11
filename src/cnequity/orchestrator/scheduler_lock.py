@@ -1,20 +1,17 @@
-"""The mkdir lock the shell pipelines use, as a Python context manager.
+"""The scheduler's mkdir lock, as a Python context manager.
 
-``scripts/scheduler/scheduler_lock.sh`` cannot call ``flock`` — macOS does not
-ship it — so a scheduled run is a directory with an owner marker. The marker
-records host, PID, process start and a release token. The dashboard's
-daily and events jobs take the same directory. Two different lock files would
+macOS does not ship ``flock``, so a scheduled run holds a directory with an
+owner marker. The marker records host, PID, process start and a release
+token. The dashboard's daily and events jobs take the same directory. Two different lock files would
 let a panel run and a launchd run both believe they own the session.
 
 ``CNE_SCHEDULER_LOCK_DIR`` and the older ``CNE_LOCK_DIR`` still win. Otherwise
 the directory is ``{data.root}/locks``, which is where a ``cne serve`` process
-can see it. The shell used to fall back to ``$REPO_ROOT/data/cnequity/locks``
-and missed every lake whose root was not that default.
+can see it.
 """
 
 from __future__ import annotations
 
-import argparse
 import functools
 import json
 import os
@@ -269,49 +266,3 @@ def scheduler_lock(root: Path, name: str) -> Iterator[None]:
         yield
     finally:
         release_scheduler_lock(root, name, owner)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Resolve directories or perform marker transitions for a shell owner."""
-    parser = argparse.ArgumentParser(description="Shared scheduler lock.")
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--config")
-    mode.add_argument("--acquire", nargs=2, metavar=("ROOT", "NAME"))
-    mode.add_argument("--release", nargs=2, metavar=("ROOT", "NAME"))
-    parser.add_argument("--pid", type=int)
-    parser.add_argument("--token")
-    args = parser.parse_args(argv)
-    if args.config:
-        from cnequity.config import load_config
-
-        print(lock_directory(load_config(args.config)))
-        return 0
-    if not args.pid or args.pid <= 0:
-        parser.error("marker operations require --pid")
-    try:
-        if args.acquire:
-            owner = acquire_scheduler_lock(Path(args.acquire[0]), args.acquire[1], pid=args.pid)
-            print(owner["token"])
-        else:
-            root, name = Path(args.release[0]), args.release[1]
-            _, marker = _paths(root, name)
-            owner = _read_owner(marker)
-            if (
-                owner
-                and owner.get("token") == args.token
-                and owner.get("host") == host_identity()
-                and owner["pid"] == args.pid
-                and owner.get("start") == process_start(args.pid)
-            ):
-                release_scheduler_lock(root, name, owner)
-    except SchedulerLockError as exc:
-        print(str(exc), file=sys.stderr)
-        return exc.code
-    except (OSError, LockUnavailable) as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

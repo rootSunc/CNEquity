@@ -31,7 +31,7 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-          shellcheck scripts/scheduler/*.sh
+          shellcheck scripts/dev/*.sh
 
       - name: Offline benchmark check
         # Synthetic fixture only: this guards limiter/telemetry regressions and

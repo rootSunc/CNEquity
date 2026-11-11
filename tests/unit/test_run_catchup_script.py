@@ -2,8 +2,7 @@
 
 It moved out of the CLI because it is composition, not capability: every step is
 `cne run daily` against one schedule group, plus opinions about which groups to
-run and which failures are advisory. Those opinions belong beside
-`daily_pipeline.sh`, which makes the same kind of call for the normal path.
+run and which failures are advisory, and those opinions belong in a script.
 
 Moving it must not have cost it its behaviour, so these are the four cases that
 guarded it as a command, driving the script's `main()` instead.

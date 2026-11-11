@@ -3,10 +3,9 @@
 The timer checks once a minute; a schedule is due once its spacing has passed
 since its last attempt started. Inside the entry's quiet hours the spacing is
 ``quiet_every_minutes``, with five minutes of slack so timer drift does not
-push every other check out (the rule `scripts/scheduler/events_pipeline.sh`
-applied). Each attempt draws a random 0..``jitter_seconds`` and adds it to the
-next due time, spreading requests the way the shell script's start delay did
-without holding the timer in a sleep.
+push every other check out. Each attempt draws a random 0..``jitter_seconds``
+and adds it to the next due time, spreading requests without holding the timer
+in a sleep.
 
 State lives in ``events_schedules_last.json`` beside the single-schedule
 ``events_last.json``, which stays for settings that predate config schedules.

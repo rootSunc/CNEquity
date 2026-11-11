@@ -3,8 +3,7 @@
 
 This is composition, not a new capability: everything below is `cne run daily`
 against one schedule group at a time, plus the rules for which groups to run and
-which failures are allowed to be advisory. That is the same job
-`daily_pipeline.sh` does for the normal path, and it belongs beside it rather
+which failures are allowed to be advisory. It belongs in a script rather
 than in the published CLI — a composition is opinionated, changes with how one
 lake happens to be operated, and should not be something users depend on the
 exact behaviour of.

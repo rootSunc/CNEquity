@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
-import sys
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -127,96 +125,3 @@ run_at = "22:00"
     assert not [e for e in validate_config(cfg) if "run_at" in e]
     cfg.daily_run_at = "25:00"
     assert any("job.daily.run_at" in e for e in validate_config(cfg))
-
-
-def test_the_gate_script_checks_and_marks(tmp_path):
-    path = tmp_path / "cnequity.toml"
-    path.write_text(f'[data]\nroot = "{path_for_toml(tmp_path / "data")}"\n', encoding="utf-8")
-    gate = ROOT / "scripts" / "scheduler" / "scheduler_gate.py"
-    mark = subprocess.run(
-        [sys.executable, str(gate), "mark", "daily", "2026-09-24", "--config", str(path)],
-        capture_output=True,
-        text=True,
-    )
-    assert mark.returncode == 0, mark.stderr
-    assert (tmp_path / "data" / "meta" / "state" / "scheduler" / "daily-2026-09-24.done").exists()
-    check = subprocess.run(
-        [sys.executable, str(gate), "check", "nope", "--config", str(path)],
-        capture_output=True,
-        text=True,
-    )
-    assert check.returncode == 2  # argparse rejects an unknown job
-
-
-# ---- the pipelines honour the gate --------------------------------------------------
-
-
-def _fake_python(tmp_path: Path, check_rc: int, session: str = "2026-09-24") -> Path:
-    """A stand-in interpreter that answers scheduler_gate.py and logs marks."""
-    path = tmp_path / "python"
-    path.write_text(
-        f"""#!/bin/sh
-case "$2" in
-  check) [ {check_rc} -eq 0 ] && echo {session}; exit {check_rc} ;;
-  mark) echo "mark $3 $4" >> "{tmp_path}/marks"; exit 0 ;;
-esac
-""",
-        encoding="utf-8",
-    )
-    path.chmod(0o755)
-    return path
-
-
-def _env(tmp_path, python: Path) -> dict[str, str]:
-    import os
-
-    cne = tmp_path / "cne"
-    cne.write_text(
-        '#!/bin/sh\nfor arg in "$@"; do printf \'<%s>\\n\' "$arg" >> "$CNE_CALL_LOG"; done\n',
-        encoding="utf-8",
-    )
-    cne.chmod(0o755)
-    env = os.environ.copy()
-    env.update(
-        {
-            "CNE_BIN": str(cne),
-            "CNE_CALL_LOG": str(tmp_path / "calls"),
-            "CNE_CONFIG": str(tmp_path / "cnequity.toml"),
-            "CNE_LOG_DIR": str(tmp_path / "logs"),
-            "CNE_SCHEDULER_LOCK_DIR": str(tmp_path / "locks"),
-            "CNE_DATA_ROOT": str(tmp_path / "lake"),
-            "CNE_BACKUP_DIR": str(tmp_path / "backups"),
-            "CNE_NOTIFY": "0",
-            "CNE_SOURCE_HEALTH": "0",
-            "CNE_SCHEDULED": "1",
-            "CNE_PYTHON": str(python),
-            "CNE_GROUPS": "core",
-        }
-    )
-    return env
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell scripts")
-@pytest.mark.parametrize("script", ["daily_pipeline.sh", "stale_pipeline.sh"])
-def test_a_wake_up_that_is_not_due_does_nothing(tmp_path, script):
-    env = _env(tmp_path, _fake_python(tmp_path, check_rc=3))
-    done = subprocess.run(
-        [str(ROOT / "scripts" / "scheduler" / script)], env=env, capture_output=True, text=True
-    )
-    assert done.returncode == 0, done.stderr
-    assert not (tmp_path / "calls").exists()
-    assert not (tmp_path / "marks").exists()
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell scripts")
-@pytest.mark.parametrize(
-    ("script", "job"), [("daily_pipeline.sh", "daily"), ("stale_pipeline.sh", "stale")]
-)
-def test_a_due_wake_up_runs_that_session_once(tmp_path, script, job):
-    env = _env(tmp_path, _fake_python(tmp_path, check_rc=0))
-    subprocess.run(
-        [str(ROOT / "scripts" / "scheduler" / script)], env=env, capture_output=True, text=True
-    )
-    calls = (tmp_path / "calls").read_text(encoding="utf-8")
-    assert "<--trade-date>\n<2026-09-24>" in calls
-    assert (tmp_path / "marks").read_text().split() == ["mark", job, "2026-09-24"]

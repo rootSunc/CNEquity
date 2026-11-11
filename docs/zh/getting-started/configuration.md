@@ -345,8 +345,8 @@ weekday = 5          # 每周组在哪天之前的最后一个交易日跑，ISO
 | `news_wire` | 21:00 | `news_headlines`、`flash_news_wire` | 单张实时页，想要日内新鲜度就单独高频跑这一组 |
 
 `cne run events` 按配置文件里的先后顺序依次跑每个组（各自 `compact` 发布），
-`--group <name>` 只跑一个。不带参数的 `cne run daily` 在日更组之后也会跑一遍全部事件流组。定时器见
-[`scripts/scheduler/events_pipeline.sh`](../operations/scripts.md) 与 `com.cnequity.events` agent。
+`--group <name>` 只跑一个。不带参数的 `cne run daily` 在日更组之后也会跑一遍全部事件流组。定时运行见
+[`[[job.events.schedules]]`](#event-schedules) 与 `cne schedule install --events`。
 
 `validate_config` 在这里守两条：组里只能放**自然日**数据集
 （`DatasetSpec.session_scope = "calendar"`），且同一个 step 不能同时出现在 `[job.daily]`

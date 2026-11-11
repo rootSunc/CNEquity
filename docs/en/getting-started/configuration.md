@@ -345,8 +345,8 @@ a different task family — `cne run events`. There are only two differences, bo
 | `news_wire` | 21:00 | `news_headlines`, `flash_news_wire` | A single real-time page; for intraday freshness, run this group alone at high frequency |
 
 `cne run events` runs each group in the order listed in the config file (each publishing with its own `compact`),
-and `--group <name>` runs just one. `cne run daily` without arguments also runs all event-stream groups after the daily update groups. For the timer, see
-[`scripts/scheduler/events_pipeline.sh`](../operations/scripts.md) and the `com.cnequity.events` agent.
+and `--group <name>` runs just one. `cne run daily` without arguments also runs all event-stream groups after the daily update groups. For scheduled runs, see
+[`[[job.events.schedules]]`](#event-schedules) and `cne schedule install --events`.
 
 `validate_config` enforces two rules here: a group may only contain **calendar-day** datasets
 (`DatasetSpec.session_scope = "calendar"`), and the same step must not appear in both `[job.daily]`

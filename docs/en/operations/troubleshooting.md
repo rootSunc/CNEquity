@@ -65,7 +65,7 @@ Long tasks (baostock backfill) are kept alive by a **batch heartbeat** and are n
 | Log line `worker pool broke (likely OOM under load); retrying … serially` | One child process exited, making the worker pool unusable | Unfinished batches are retried serially; keep the logs to check for OOM and the ranges that still fail, and do not delete successful batches by hand |
 | Log line `no batch finished and no worker reported progress for …; killing the worker pool` | A worker hung without exiting: no batch finished and no heartbeat arrived within `[orchestrator].batch_stall_seconds` (600 by default) | Unfinished batches have been retried in-process; the log names the stuck batches. If it recurs, set `tdx_daily_backend = "thread"` under `[orchestrator]` and open an issue |
 | `daily_bars` shows only `still working` for a long time, with no `N/M batches` | A batch has stopped moving | Read the line after `still working`: which batch has been quiet for how long, and which symbols it holds. For stacks, run `kill -USR1 <pid>` as the log suggests (Linux/macOS); every thread's stack goes to stderr. It works on worker processes too (`ps -ef --forest` for their pids) |
-| Frequent OOM / pool crashes on macOS | The TDX client is not fork-safe + `workers>1` | `cne config validate` **rejects** `workers>1` on Darwin; use `workers = 1` in production (see runbook / `daily_pipeline.sh`) |
+| Frequent OOM / pool crashes on macOS | The TDX client is not fork-safe + `workers>1` | `cne config validate` **rejects** `workers>1` on Darwin; use `workers = 1` in production (see runbook) |
 | `import fcntl` / file lock fails on Windows | Old versions used the Unix-only `fcntl.flock` | Upgrade to a version that includes `cnequity.file_lock`; locks have the same semantics on Win/POSIX |
 | DuckDB views empty / wrong paths on Windows | Backslashes ended up in the `read_parquet` SQL | New versions use `as_posix()`; confirm `data.root` is readable and writable, then rerun `cne init` / refresh the views |
 | PowerShell `&&` syntax error on Windows | PS 5.1 does not support `&&` | Run the commands on separate lines, or use PowerShell 7+ / cmd |
@@ -143,7 +143,7 @@ and are not requested again within the TTL; the gate only errors on keys still m
   uv run cne run daily --group core --trade-date 2026-07-17
   ```
 
-  To catch up all groups: `scripts/scheduler/daily_pipeline.sh 2026-07-17` (or `CNE_TRADE_DATE=...`).
+  To catch up all groups: `cne run daily --trade-date 2026-07-17`.
   **Do not** casually add `--backfill` for a missed day: the EastMoney CA full scan often fails outright from overseas.
   Choose the schedule groups to run based on reachability from the current egress; data that was not collected successfully keeps its gap, and lag cannot be marked normal on the basis of geography alone.
 

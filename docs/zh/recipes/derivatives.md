@@ -77,7 +77,7 @@ cne run daily --group derivatives --config configs/cnequity.futures.toml
 
 普通日更补最近的回看窗口和有限旧欠账，不会替代首次历史回填。默认组内顺序通过依赖保证先采集日线、补合约元数据，再 compact、派生连续期货及 Greeks；任一来源失败会保留失败或降级状态，不能凭已有派生行判定本轮完整。
 
-正式湖启用 `[futures]` 后，`cne run daily` 和未用 `CNE_GROUPS` 限定组别的 `daily_pipeline.sh` 会自动包含 `derivatives`。旧 launchd 安装保留了显式 `CNE_GROUPS` 时，须把 `derivatives` 加入该列表；配置里没有 `derivatives` 组时运行 `cne config upgrade` 补上；`cne run daily --core-only` 只执行核心骨架，不会采集期货。独立期货湖使用上面的单组命令，避免同时采集 A 股其他组。
+正式湖启用 `[futures]` 后，`cne run daily` 和定时日更会自动包含 `derivatives`；配置里没有 `derivatives` 组时运行 `cne config upgrade` 补上；`cne run daily --core-only` 只执行核心骨架，不会采集期货。独立期货湖使用上面的单组命令，避免同时采集 A 股其他组。
 
 ## 证据和故障恢复
 

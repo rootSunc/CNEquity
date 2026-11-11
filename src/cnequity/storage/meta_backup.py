@@ -6,18 +6,13 @@ generations (``meta/revisions/data``), caches and runtime locks stay out: they
 are large or reproducible, and portable snapshots (`cne snapshot`) cover
 curated data.
 
-This used to be ``scripts/scheduler/backup_meta.sh``, which only a repository
-checkout had, so a lake scheduled from a pip install — `cne init --schedule`,
-the dashboard, `cne schedule install` — never had its manifest backed up. It
-also needed the ``sqlite3`` CLI for a consistent copy and fell back to a plain
-file copy, torn under a concurrent write; the standard library's backup API
-needs neither.
+`cne run maintain` runs it. The standard library's SQLite backup API gives a
+consistent copy of the manifest DB even under a concurrent write.
 """
 
 from __future__ import annotations
 
 import sqlite3
-import sys
 import tarfile
 import tempfile
 import time
@@ -134,38 +129,3 @@ def backup_meta(
     return BackupResult(
         archive=archive, size_bytes=archive.stat().st_size, kept=kept, removed=removed
     )
-
-
-def main(argv: list[str] | None = None) -> int:
-    """``python -m cnequity.storage.meta_backup DATA_ROOT [BACKUP_DIR] [DAYS] [COUNT]``.
-
-    The calling convention of the old ``scripts/scheduler/backup_meta.sh``,
-    which now delegates here.
-    """
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Back up a lake's non-rebuildable metadata.")
-    parser.add_argument("data_root", type=Path)
-    parser.add_argument("backup_dir", type=Path, nargs="?")
-    parser.add_argument("retention_days", type=int, nargs="?", default=14)
-    parser.add_argument("retention_count", type=int, nargs="?", default=30)
-    args = parser.parse_args(argv)
-    try:
-        result = backup_meta(
-            args.data_root / "meta",
-            args.backup_dir or args.data_root / "backups",
-            retention_days=args.retention_days,
-            retention_count=args.retention_count,
-        )
-    except (OSError, ValueError) as exc:
-        print(f"backup_meta: {exc}", file=sys.stderr)
-        return 1
-    print(
-        f"backup_meta: wrote {result.archive} ({result.size_bytes} bytes); retention "
-        f"{args.retention_days}d/{args.retention_count} archives; {result.kept} kept"
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

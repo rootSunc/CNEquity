@@ -32,7 +32,7 @@ _CHECKS: tuple[tuple[str, tuple[str, ...], bool], ...] = (
     (N_("Run evidence, last 20 sessions"), ("verify", "--runs", "--days", "20"), False),
 )
 
-# Legacy launchd jobs from scripts/scheduler; running both doubles every fetch.
+# launchd jobs of the removed scripts/scheduler; running both doubles every fetch.
 _LEGACY_LAUNCHD = (
     "com.cnequity.daily",
     "com.cnequity.stale",
@@ -418,8 +418,9 @@ def schedule_status(config_path: str, as_json: bool):
     if legacy:
         click.echo(
             _(
-                "Legacy scripts/scheduler jobs are also installed: {names}. Remove them "
-                "(scripts/scheduler/uninstall_scheduler.sh) so the lake is not updated twice."
+                "Legacy scripts/scheduler jobs are also installed: {names}. Unload them "
+                "(launchctl bootout gui/$(id -u)/<name>) and delete their plists in "
+                "~/Library/LaunchAgents so the lake is not updated twice."
             ).format(names=", ".join(legacy))
         )
 
@@ -537,8 +538,9 @@ def schedule_install(
     if legacy:
         click.echo(
             _(
-                "Legacy scripts/scheduler jobs are installed ({names}); remove them first "
-                "(scripts/scheduler/uninstall_scheduler.sh) or the lake is updated twice."
+                "Legacy scripts/scheduler jobs are installed ({names}); unload them first "
+                "(launchctl bootout gui/$(id -u)/<name>) and delete their plists in "
+                "~/Library/LaunchAgents, or the lake is updated twice."
             ).format(names=", ".join(legacy)),
             err=True,
         )

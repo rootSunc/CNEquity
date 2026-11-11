@@ -65,7 +65,7 @@ cne status --datasets
 | 日志 `worker pool broke (likely OOM under load); retrying … serially` | 一个子进程退出导致 worker 池不可用 | 未完成批次会串行重试；保留日志检查 OOM 和仍失败的范围，不要手工删除成功批次 |
 | 日志 `no batch finished and no worker reported progress for …; killing the worker pool` | worker 挂住但没有退出，`[orchestrator].batch_stall_seconds`（默认 600 秒）内既没有批次完成也没有心跳 | 未完成批次已在当前进程内重跑；日志里写着卡住的批次号。反复出现时在 `[orchestrator]` 设 `tdx_daily_backend = "thread"` 并提交 issue |
 | `daily_bars` 长时间只有 `still working`，没有 `N/M batches` | 某个批次停住了 | 看 `still working` 下一行：哪个批次多久没报告进度、是哪些代码。要看调用栈，按日志提示运行 `kill -USR1 <pid>`（Linux/macOS），所有线程的栈写到 stderr；对 worker 子进程（`ps -ef --forest` 查 pid）同样有效 |
-| macOS 上频繁 OOM / 池崩溃 | TDX 客户端非 fork-safe + `workers>1` | `cne config validate` **拒绝** Darwin 上 `workers>1`；生产用 `workers = 1`（见 runbook / `daily_pipeline.sh`） |
+| macOS 上频繁 OOM / 池崩溃 | TDX 客户端非 fork-safe + `workers>1` | `cne config validate` **拒绝** Darwin 上 `workers>1`；生产用 `workers = 1`（见 runbook） |
 | Windows 上 `import fcntl` / 文件锁失败 | 旧版用 Unix-only `fcntl.flock` | 升级到含 `cnequity.file_lock` 的版本；锁在 Win/POSIX 上语义一致 |
 | Windows 上 DuckDB 视图空 / 路径错 | 反斜杠进了 `read_parquet` SQL | 新版本用 `as_posix()`；确认 `data.root` 可读写后重跑 `cne init` / 刷新视图 |
 | Windows 上 PowerShell `&&` 语法错误 | PS 5.1 不支持 `&&` | 分行执行，或用 PowerShell 7+ / cmd |
@@ -143,7 +143,7 @@ EOF
   uv run cne run daily --group core --trade-date 2026-07-17
   ```
 
-  全组补跑：`scripts/scheduler/daily_pipeline.sh 2026-07-17`（或 `CNE_TRADE_DATE=...`）。
+  全组补跑：`cne run daily --trade-date 2026-07-17`。
   **不要**对漏跑日随便加 `--backfill`：东财 CA 全量扫描在海外常直接失败。
   实际调度组应依据当前出口的可达性选择；未成功采集的数据保留缺口，不能仅凭地域将滞后标为正常。
 

@@ -4,135 +4,15 @@ Path: `scripts/`
 
 | Directory | Contents |
 |---|---|
-| `scripts/scheduler/` | Scheduling: daily / event stream / catch-up pipelines, health notifications, metadata backup, launchd templates and installation (rerun `install_scheduler.sh` after changing paths, since installed jobs reference absolute paths) |
 | `scripts/` | Operations tools: backfill acceptance, delisted catalog rebuild, catch-up runs, survivorship bias measurement |
 | `scripts/dev/` | Repository maintenance: docs sync (`sync_*`), release checks, offline benchmarks and end-to-end checks, probes |
 
-These scripts need a source checkout and are not installed with the PyPI package. For scheduled updates use `cne schedule install` (it ships with the package and works on every platform); `scripts/scheduler/` is deprecated and will be removed once the packaged timer covers what it does.
+These scripts need a source checkout and are not installed with the PyPI package. For scheduled updates use `cne schedule install` (it ships with the package and works on every platform); the old `scripts/scheduler/` has been removed, see the [runbook](runbook.md#legacy-scripts) for migrating.
 
-> The scripts below target **self-hosted machines/VPS** (including macOS launchd and server backfills). Open-source contributors only need
+> The scripts below target **self-hosted machines/VPS** (including server backfills). Open-source contributors only need
 > the CLI (`cne init` / `run`); scheduling and alerting are optional and not the only way to deploy.
 
 ## Production scripts
-
-### daily_pipeline.sh
-
-**Purpose**: on trading days, run all schedule groups serially, ending with a health check and a backup.
-
-**Flow**:
-
-```
-for group in $(python -m cnequity.orchestrator.schedule_groups --config "$CNE_CONFIG"); do
-  cne run daily --group $group
-done
-health_notify.sh
-cne sources probe --stale-only --vantage $CNE_SOURCE_VANTAGE
-cne sources slo             # cumulative report, not enforced by the daily update
-cne verify --runs --days 20 # cumulative report, not enforced by the daily update
-backup_meta.sh
-cne run clean
-```
-
-In a later window, the separate `stale_pipeline.sh` catches up only the snapshot datasets that are still behind, sharing the scheduler lock with the main daily update. The lock lives in `{data.root}/locks` and is the same lock used by the `cne serve` operations page; `CNE_SCHEDULER_LOCK_DIR` or `CNE_LOCK_DIR` changes the directory. The lock records the host, PID and process start identity. Verified dead local owners are reclaimed automatically; a legacy PID-only marker is reclaimed once that process has exited, and a lock directory with no marker after 60 seconds. Remote owners require maintainer verification before removal. The main script keeps the old in-process wait switch for compatibility, but it is off by default. See [runbook · closing catch-up](runbook.md#closing-catch-up).
-
-**Environment variables** (`CNE_CONFIG` / `CNE_LOG_DIR` are also read by `cne` itself; the rest are read only by this script): `CNE_CONFIG`, `CNE_LOG_DIR` (long-running commands also write their own log here), `CNE_GROUPS`,
-`CNE_GATE_GROUPS` (default `core`; failures are marked gate, other groups are marked soft),
-`CNE_SOFT_FAIL_OK` (default `1`: soft failures exit 0 when the gate is OK; `0` = still exit 1),
-`CNE_STALE_RETRY` (default `0`; `1` enables the old compatibility catch-up),
-`CNE_STALE_RETRY_DELAY_SEC` (default `1800`),
-`CNE_SOURCE_HEALTH` (default `1`; `0` turns off the daily stale-evidence probe),
-`CNE_SOURCE_VANTAGE` (default `local`; set it to a stable, truthful egress label such as `cn` or
-`overseas`),
-`CNE_TRADE_DATE`,
-`CNE_BIN` (overrides the `cne` path; used by tests that exercise the control flow with a stub),
-`CNE_PYTHON` (interpreter for the gate and the scheduler lock; defaults to the repository's `.venv/bin/python`, or the `python3` on PATH when there is no `.venv`; it must be able to import cnequity).
-
-At the end it prints a per-group summary (`group: OK|FAILED [gate|soft]`) plus `stale-retry: OK|FAILED|not needed|skipped`, making it easy to tell "the gate broke" from "EastMoney broke". A catch-up failure counts as soft.
-
-### events_pipeline.sh
-
-**Purpose**: the 24/7 event stream (announcements, regulatory events, news). `cne run events` runs all groups in
-`[job.events.groups]` at once, or a single one set with `CNE_EVENTS_GROUP`.
-
-**Why it is separate from `daily_pipeline.sh`:**
-
-- The repository's daily script calls `cne run daily --group` per group, which does not include the event stream. `cne run daily` without arguments runs the event stream itself after the schedule groups; on non-trading days the schedule groups are skipped and the event stream still runs.
-- The event stream uses a separate shell lock (`events`) and the `events_ingestion` lock, so it can overlap with the per-group daily update. The datasets the two write are disjoint, which config validation guarantees.
-- Announcements and news are also published on weekends and holidays, so this job is scheduled by calendar day and ignores the trading calendar.
-
-**Environment variables**: `CNE_CONFIG`, `CNE_LOG_DIR`, `CNE_BIN`, `CNE_TRADE_DATE`,
-`CNE_EVENTS_GROUP` (default all groups), `CNE_SCHEDULER_LOCK_DIR`.
-
-If the previous run is still going, it skips and exits 0: every group rereads its own window next time, so skipping once loses no data.
-
-### stale_pipeline.sh
-
-**Purpose**: a later stale-only catch-up, `cne run daily --stale-only`.
-
-**Why it is a separate job**: the normal six-group daily update must **finish and report on time** even when a source is down; stuffing a 30-minute wait into that process would make a source outage look like a scheduler timeout of several hours. A second, later window can still fill the snapshot-only datasets without holding up the normal run.
-
-**Mutually exclusive with the daily update**: it shares the same lock from `scheduler_lock.sh` with `daily_pipeline.sh`. launchd may trigger it while the main pipeline is still running — in that case it **skips** (exit 0) rather than queueing, because the next window can try again, and duplicate runs must never pile up behind ingestion.
-
-Environment variables: `CNE_BIN` / `CNE_CONFIG` / `CNE_LOG_DIR`, optionally `CNE_STALE_GROUPS`, `CNE_TRADE_DATE`, `CNE_PYTHON` (as above).
-
-### scheduler_lock.sh
-
-The launchd/cron-level mutex shared by the three shell jobs: daily, event stream and stale.
-
-macOS does not ship `flock`, and the Python run lock only covers a single `cne` invocation — the daily script runs several commands, so it needs a lock that covers the whole script. It is sourced by `daily_pipeline.sh` and `stale_pipeline.sh`.
-
-### scheduler_config.py
-
-Renders and diffs launchd jobs, **preserving the scheduling choices already on this machine**. `install_scheduler.sh` uses it to generate the three plists from one config instead of hand-writing each.
-
-### install_scheduler.sh / uninstall_scheduler.sh
-
-Generates the user launchd plist from `scripts/scheduler/launchd/com.cnequity.daily.plist.template` and loads `daily_pipeline.sh`.
-It also installs `com.cnequity.stale` (closing catch-up) and `com.cnequity.events` (event stream, 14:00 every calendar day in the machine's local time zone, not Beijing time; adjust to your own disclosure cadence).
-At install time, use `CNE_SOURCE_VANTAGE=cn scripts/scheduler/install_scheduler.sh` to pin a truthful egress label; when omitted,
-`local` is used. The label may only contain letters, digits, dots, underscores and hyphens, to avoid generating an invalid plist.
-
-### health_notify.sh
-
-```bash
-# Weekdays
-cne audit                 # only the active partitions of this run
-cne status --datasets --gate --groups "$CNE_GROUPS"
-# Once a week (Saturday by default)
-cne audit --full          # full-lake structural scan + refresh health-latest.json
-```
-
-On failure it sends a macOS `osascript` notification and exits non-zero. The notification title depends on what failed:
-the audit/health branch is "数据异常" (data anomaly), and a pure freshness lag is "数据滞后" (data lagging).
-
-**Why they are split**: `cne audit --full` scans the whole lake, and its I/O cost grows with the number of files. Day to day, audit per run first and check the whole lake weekly; record actual run times in your own operations log.
-
-**Environment variables**: `CNE_FULL_AUDIT_DOW` (default `6` = Saturday, `1-7` map to Monday through Sunday;
-`0` turns off the full-lake audit entirely; `always` restores the old behavior of running it every day).
-
-**Why the freshness gate is narrowed by group**: `CNE_GROUPS` is passed as-is to `cne status --datasets --gate --groups`,
-i.e. the groups this host actually runs. Without narrowing, on a host that only schedules `core`, twenty-odd datasets
-**have no job fetching them** and would show STALE indefinitely, masking real anomalies.
-The gate and the scheduler share the same variable, so the two never disagree. Datasets nobody schedules still fail:
-"not knowing who fetches it" is not the same as "another host fetches it".
-
-> The partition fragmentation / mixed granularity checks in the full-lake audit only change after a repartition,
-> so they were moved to the weekly run as well. After running `cne repair repartition` manually,
-> run `cne audit --full` right away to double-check instead of waiting for Saturday.
-
-### backup_meta.sh
-
-Packs `meta/manifest.db`, `state/`, `quality/`, revision **receipts**,
-`source_snapshots/`, `source_health/` and `stability/` into
-`meta-YYYYMMDD-HHMMSS.tar.gz`. It does not include the data version files in `meta/revisions/data/` or
-`curated/`; it is a metadata backup and cannot restore the full data lake on its own.
-
-Arguments: `backup_meta.sh [DATA_ROOT] [BACKUP_DIR] [RETENTION_DAYS] [RETENTION_COUNT]`.
-Without `DATA_ROOT` it uses `CNE_DATA_ROOT`, otherwise the repository's `data/cnequity`;
-it **does not** read the lake path from `CNE_CONFIG`. By default it keeps 14 days and at most 30 copies;
-the backup directory defaults to inside the lake, so set `CNE_BACKUP_DIR` outside the lake when you need disk-level disaster recovery.
-The runtime environment should have the `sqlite3` command installed so the script can copy the running manifest with the SQLite backup API;
-without it the script falls back to a file copy, and backups should be taken after ingestion has stopped.
 
 ### run_catchup.py
 
@@ -150,7 +30,7 @@ python scripts/run_catchup.py --trade-date 2026-07-17 --all-groups
 Parts whose watermark has already reached the target day are marked `skipped_already_fresh` and not rerun.
 
 Formerly `cne run catchup`. It is orchestration rather than a capability (each step is `cne run daily` on one schedule
-group), the same kind of thing as `daily_pipeline.sh`, so it lives here rather than in the published CLI.
+group), so it lives here rather than in the published CLI.
 
 ## Init and acceptance
 
@@ -260,28 +140,6 @@ python scripts/dev/doc_translations.py --mark reference/mcp.md
 ```
 
 Generated tables are left out of the digest, so regenerating a table never asks for a new translation.
-
-## launchd templates
-
-`scripts/scheduler/launchd/com.cnequity.daily.plist.template`
-
-- `ProgramArguments` points to `daily_pipeline.sh`
-- `StartCalendarInterval`: Minute=7 (wakes every hour); `CNE_SCHEDULED=1` makes `daily_pipeline.sh` ask `scheduler_gate.py` first, so it runs only once per trading day after `[job.daily] run_at` Beijing time
-- Standard output/error are redirected to `{data.root}/logs/launchd.*.log`
-
-`scripts/scheduler/launchd/com.cnequity.stale.plist.template`
-
-- `ProgramArguments` points to `stale_pipeline.sh`
-- `StartCalendarInterval`: Minute=37 (wakes every hour); runs once only after that day's daily update has run and `[job.stale] run_at` Beijing time has passed, catching up only snapshot datasets (`--stale-only --snapshots-only`)
-- Shares the `scheduler_lock.sh` lock with the daily update; skips while the main pipeline is still running
-
-`scripts/scheduler/launchd/com.cnequity.events.plist.template`
-
-- `ProgramArguments` points to `events_pipeline.sh`
-- `StartCalendarInterval`: Hour=14, Minute=0, **without `Weekday`** — the event stream is meant to run on
-  weekends and holidays (about 20:00 CST on a UTC+2/+3 machine)
-- For intraday news freshness, add another high-frequency agent/cron with `CNE_EVENTS_GROUP=news_wire`;
-  `disclosures` rereads a 30-day trailing window each time and is not suited to high frequency
 
 ## Related docs
 

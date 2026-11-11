@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from cnequity.config import Config
-from cnequity.config.bootstrap import path_for_toml
 from cnequity.orchestrator.scheduler_lock import (
     SchedulerLockError,
     _proc_state,
@@ -146,36 +145,6 @@ def test_another_process_blocks_until_it_exits(tmp_path):
     child.wait(timeout=5)
     with scheduler_lock(root, "events"):
         assert scheduler_lock_holder(root, "events") == os.getpid()
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Unix shell scripts")
-def test_the_shell_default_is_the_configured_data_root(tmp_path):
-    data = tmp_path / "lake"
-    path = tmp_path / "cnequity.toml"
-    path.write_text(f'[data]\nroot = "{path_for_toml(data)}"\n', encoding="utf-8")
-    script = tmp_path / "lock.sh"
-    script.write_text(
-        f"""#!/bin/bash
-set -u
-unset CNE_SCHEDULER_LOCK_DIR
-unset CNE_LOCK_DIR
-export CNE_CONFIG="{path}"
-export CNE_PYTHON="{sys.executable}"
-. "{ROOT / "scripts" / "scheduler" / "scheduler_lock.sh"}"
-scheduler_lock_acquire "{tmp_path}" daily
-printf '%s\\n' "$SCHEDULER_LOCK_DIR"
-scheduler_lock_release
-""",
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
-    env = os.environ.copy()
-    env.pop("CNE_SCHEDULER_LOCK_DIR", None)
-    env.pop("CNE_LOCK_DIR", None)
-    done = subprocess.run([str(script)], capture_output=True, text=True, env=env)
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.strip() == str((data / "locks" / "daily.lock").resolve())
-    assert not (data / "locks" / "daily.lock").exists()
 
 
 def test_a_mac_keeps_its_identity_when_the_hostname_changes(monkeypatch):

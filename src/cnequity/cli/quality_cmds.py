@@ -403,7 +403,7 @@ def audit(
 
     \b
     A bare `cne run daily` already audits once after all schedule groups (with `--core-only`, as the last step of the `finalize` wave),
-    so running it here re-audits data that has already been audited; the repository's health_notify.sh does not go through `run daily` and audits once itself.
+    so running it here re-audits data that has already been audited.
     What is not scheduled is `--full`: it judges the state of the lake right now rather than what one run wrote,
     and it is what the health check and the dashboard read.
 

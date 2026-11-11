@@ -35,85 +35,19 @@ cne schedule remove         # 停用并注销；正在运行的任务继续
 
 核心组失败、其他组连续失败达到上限、审计、新鲜度门禁或备份失败时退出 1；源探针和运行证据的问题只报告，不判失败。macOS 上定时任务加 `--notify`，有问题时弹出桌面通知。
 
-## 旧版仓库脚本（已弃用） {#legacy-scripts}
+## 旧版仓库脚本（已移除） {#legacy-scripts}
 
-`scripts/scheduler/` 只在源码 checkout 里有，已弃用；打包定时任务覆盖它的全部功能并在真实湖上验证之后才会移除，移除前在更新日志中预告。迁移：先运行 `scripts/scheduler/uninstall_scheduler.sh` 卸载 launchd 任务（cron 里的条目手工删掉），再运行 `cne schedule install`。`backup_meta.sh` 已改为调用与 `cne run maintain` 相同的备份代码。
-
-
-| 能力 | 脚本 | 作用 |
-|------|------|------|
-| 调度 | `cne serve` → 操作 → 定时任务 | 跨平台启用、暂停或改时间；日更和收尾补抓的结果统一在 Web 查看 |
-| 调度 | `scripts/scheduler/daily_pipeline.sh` | 按配置顺序串行跑已启用日更组 + 健康检查 + 备份 |
-| 调度 | `scripts/scheduler/install_scheduler.sh` | 安装 macOS launchd（每个交易日北京时间 `[job.daily] run_at` 之后跑一次，与本机时区无关） |
-| 调度 | `scripts/scheduler/uninstall_scheduler.sh` | 卸载 launchd |
-| 告警 | `scripts/scheduler/health_notify.sh` | 日常审计、每周全湖质量检查 + 分组 freshness + macOS 通知 |
-| 备份 | `scripts/scheduler/backup_meta.sh` | 元数据与修订收据的 tar 轮换；完整数据另用快照 |
-
-脚本使用仓库 `.venv/bin/cne`，路径相对仓库根目录自解析。
-
-### 安装 launchd 任务（旧版）
+`scripts/scheduler/`（`daily_pipeline.sh`、`install_scheduler.sh`、`health_notify.sh`、`backup_meta.sh` 等）已移除，它做的事由打包定时任务承担：日更、收尾补抓、事件流，以及 `cne run maintain` 的审计、门禁、源探针和元数据备份。机器上还装着旧 launchd 任务时，先卸载再装新任务：
 
 ```bash
-cd /path/to/cnequity
-scripts/scheduler/install_scheduler.sh
+for job in com.cnequity.daily com.cnequity.stale com.cnequity.events com.cnequity.events-news; do
+  launchctl bootout "gui/$(id -u)/$job" 2>/dev/null
+  rm -f ~/Library/LaunchAgents/$job.plist
+done
+cne schedule install
 ```
 
-安装器将主机选择与模板分开：新安装按配置选择已启用组；重装保留已安装 daily 的
-`CNE_GROUPS`、`CNE_SOURCE_VANTAGE`、自定义配置和各任务的执行时间。
-明确覆盖组别和出口时使用环境变量；海外主机首次安装例如：
-
-```bash
-CNE_GROUPS=core CNE_SOURCE_VANTAGE=overseas scripts/scheduler/install_scheduler.sh
-scripts/scheduler/install_scheduler.sh --check
-scripts/scheduler/install_scheduler.sh --dry-run /tmp/cnequity-scheduler-review
-scripts/scheduler/install_scheduler.sh --daily-only                  # 只同步现有日任务，不新增晚间任务
-scripts/scheduler/install_scheduler.sh --stale-only                  # 只同步补抓任务
-```
-
-**运行时间按北京时间配置，与本机时区无关。** 日更和补抓都每小时唤醒一次（日更每小时第 7 分钟、
-补抓第 37 分钟），由 `scripts/scheduler/scheduler_gate.py` 判断这次是不是「正式那一次」：
-
-```toml
-[job.daily]
-run_at = "17:30"   # 北京时间；每个交易日过了这个点跑一次（默认 17:30）
-[job.stale]
-run_at = "21:00"   # 北京时间；当天日更跑过之后，只重试失败的快照数据（默认 21:00）
-```
-
-- 每个交易日各跑一次：过了 `run_at` 就跑，直到下一个交易日 09:15 开盘前都算这一天的；
-  过了开盘还没跑（比如电脑一直关着），这一天就不补了——历史类数据下次日更按日期补齐，快照类缺这一天。
-- 本机是哪个时区、有没有夏令时都不用管，也不用重装；电脑在 `run_at` 时睡着，醒来后下一次唤醒就会跑。
-- 手工执行 `scripts/scheduler/daily_pipeline.sh` 不受这个判断限制，照常立即跑。
-- 已跑过的交易日记在 `meta/state/scheduler/`；manifest 里已有当天日更记录的也算跑过，
-  所以切换到这套机制或手工跑过之后，不会再重复跑一整遍。
-- 旧的 `--stale-at` 已停用，改用 `[job.stale] run_at`。
-
-`--check` 比较已安装文件与按主机选择生成的模板，存在差异或缺少任务时退出 1；
-它不启动任务，也不检查 launchd 是否已加载。`--dry-run` 只写预览目录。
-常规安装包含 daily、stale、events 三个任务；stale 继承 daily 组别并通过
-`cne run daily --stale-only --groups ...` 限定补抓范围。现有事件任务的间隔和组别保留；
-额外手工安装的事件任务不由此安装器删除。
-
-补抓只重试按快照调度的数据集（资金流、估值、人气榜等），历史类留给下一次日更按日期补；
-补抓与主任务遵循同一 push2 配置、预算与熔断策略。是否另有历史来源，以数据集契约为准。
-
-日任务的质量错误和实际调度的 `CNE_GATE_GROUPS`（默认 core）滞后会让任务退出 1。
-soft 组仍按失败次数升级，但同一日期重试不会重复计为多天。
-每周使用 `audit --full --quality-only` 检查质量，freshness 由分组 `status` 单独门禁，
-因此未调度的分钟线不会仅因滞后而触发「数据异常」。全湖健康报告仍显示这些滞后。
-
-- 生成 `~/Library/LaunchAgents/com.cnequity.daily.plist`
-- 每小时唤醒，**每个交易日北京时间 `[job.daily] run_at`（默认 17:30）之后跑一次**；
-  与本机时区、夏令时无关，重装不保留旧的本机时间。
-- 非交易日自动跳过（退出 0）
-- **漏跑 / 周末补数**：`python scripts/run_catchup.py` 补最近一个交易日的 core 与 breadth；水位已到目标日的部分记为 `skipped_already_fresh`。要按日重跑全部调度组，用 `scripts/scheduler/daily_pipeline.sh YYYY-MM-DD` 或 `CNE_TRADE_DATE=...`。
-- **按当前出口选择调度组**：先检查源健康，再启用实际能够维护的组。一个出口的失败不能推出某个地域都不可用；出现拒绝先冷却，不通过换出口继续同一轮抓取。见[取数与源保护](fetch-policy.md)。
-
-```bash
-launchctl list | grep cnequity
-launchctl start com.cnequity.daily   # 手动触发
-scripts/scheduler/uninstall_scheduler.sh
-```
+cron 里调用这些脚本的条目手工删掉。`cne schedule status` 检测到旧 launchd 任务时会提示。旧脚本的环境变量改写成配置：`CNE_GATE_GROUPS` → `[job.maintenance] gate_groups`，`CNE_BACKUP_DIR`、`CNE_BACKUP_RETENTION_DAYS`、`CNE_BACKUP_RETENTION_COUNT` → `[job.maintenance] backup_dir`、`backup_retention_days`、`backup_retention_count`。要按日重跑全部调度组，用 `cne run daily --trade-date YYYY-MM-DD`。
 
 <a id="web-schedule"></a>
 
@@ -127,17 +61,7 @@ macOS 使用当前用户的 launchd，Windows 使用当前登录用户的任务�
 
 Web 只管理自己创建的系统任务，不接管已有 launchd 脚本或其他 cron / Windows 任务。迁移前核对并停用重复入口。Web 日更执行 `cne run daily`，之后执行 `cne run maintain`（审计、门禁、元数据备份），每日备份执行所选数据集的 `cne snapshot create`，独立事件流执行所选组的 `cne run events`。命令行用 `cne schedule install|status|remove` 管理的是同一个任务。系统任务固定使用创建时的 Python 环境、工作目录及配置路径；移动环境后重新设置，数据源所需配置也须在无人值守环境中可用。
 
-**Linux cron（手动配置方案）**：
-
-```cron
-# 每小时唤醒；CNE_SCHEDULED=1 让脚本自己按北京时间 run_at 判断每个交易日只跑一次
-7 * * * * CNE_SCHEDULED=1 /path/to/cnequity/scripts/scheduler/daily_pipeline.sh
-37 * * * * CNE_SCHEDULED=1 /path/to/cnequity/scripts/scheduler/stale_pipeline.sh
-# 事件流独立运行，包含周末；按所需频率调整
-20 20 * * * /path/to/cnequity/scripts/scheduler/events_pipeline.sh
-```
-
-**Windows 任务计划程序**（原生 Win10/11；`daily_pipeline.sh` 不适用于 PowerShell）：
+**Windows 任务计划程序**（原生 Win10/11，手工配置方案）：
 
 1. 先确认 `cne doctor` 与 `cne config validate` 通过，`data.root` 用短绝对路径（如 `D:\lake`）。
 2. 打开「任务计划程序」→ 创建基本任务 → 每天 16:05（或收盘后任一时刻，周末也触发）。
@@ -149,7 +73,7 @@ Web 只管理自己创建的系统任务，不接管已有 launchd 脚本或其�
 | 添加参数 | `run daily --config C:\path\to\configs\cnequity.toml` |
 | 起始于 | `C:\path\to`（仓库或配置所在目录） |
 
-这一条已包含事件流（公告、监管事件、资讯），不需要再为 `run events` 另建任务；非交易日日更组自动跳过，事件流照常运行。Windows 任务计划程序和普通 cron 的时间是本机时间；只有使用仓库 scheduler gate 的任务才按配置的北京时间判断。想让事件流更频繁时，可以另外调度 `cne run events --group news_wire`；它与日更同时运行时，日更里的事件流段记为 `skipped_locked`，不算失败。
+这一条已包含事件流（公告、监管事件、资讯），不需要再为 `run events` 另建任务；非交易日日更组自动跳过，事件流照常运行。手工配置的任务计划程序和 cron 用本机时间；只有打包定时任务（`cne schedule install`）按配置的北京时间判断。想让事件流更频繁时，可以另外调度 `cne run events --group news_wire`；它与日更同时运行时，日更里的事件流段记为 `skipped_locked`，不算失败。
 
 > 控制台中文乱码时：`chcp 65001`，或设置用户环境变量 `PYTHONUTF8=1`。
 
@@ -157,17 +81,13 @@ Web 只管理自己创建的系统任务，不接管已有 launchd 脚本或其�
 
 ```
 core → capital → signals → fundamentals → macro_risk → research
-  → health_notify.sh
-  → backup_meta.sh
-  → group summary（gate vs soft）
+  → cne run maintain（审计、门禁、源探针、元数据备份）
 ```
 
 - 单组失败不中断后续组（尽量多采数据）
-- 结尾摘要区分 **gate**（默认 `CNE_GATE_GROUPS=core`）与 **soft**（东财等）
-- 默认 `CNE_SOFT_FAIL_OK=1`：gate OK 时 soft 失败 **warn-only、exit 0**（只宽容短暂失败，持续失败会升级）；
-  需要任一组失败都阻断时可设 `CNE_SOFT_FAIL_OK=0` 让 soft 失败仍 exit 1
+- `[job.maintenance] gate_groups`（默认 `core`）失败判当天失败；其他组失败只告警，连续失败 `soft_fail_max_days` 个交易日后判失败，见[日更之后的维护](#maintain)
 - 东财超时/连接失败不重试（`[sources.eastmoney] timeout_sec`，默认 15s）
-- 生产 `daily_pipeline.sh` 常设 `workers=1`（TDX 客户端与多进程兼容性）
+- macOS 上 `workers` 须为 1（TDX 客户端与多进程兼容性）
 
 组与 step 映射见 [配置 — 调度组](../getting-started/configuration.md#调度组)。
 
@@ -226,18 +146,13 @@ cne verify --runs --days 20 --enforce # 连续交易日运行证据
 
 Web 备份复用可移植湖快照，包含所选数据及对应状态、契约、修订与血缘信息，不包含原 TOML 配置、凭据或完整运行数据库；它不等于整个系统的容灾镜像。恢复先展示备份范围和目标，确认后完整校验文件摘要，再复制到当前数据湖和备份目录之外的新目录或空目录。清单在预览后变化须重新预览，校验失败不恢复。恢复后 serve 仍使用原数据湖；用独立配置验收恢复目标，确认后再切换。备份不会自动删除旧副本；磁盘级容灾需选用外部存储并另行保存配置和凭据。
 
-`backup_meta.sh` 只备份 manifest、state、quality、revision 收据、来源快照和运行证据；
+`cne run maintain` 的元数据备份只包含 manifest、state、quality、revision 收据、来源快照和运行证据；
 **不包含** `curated/`、`derived/` 或 `meta/revisions/data/` 中的数据版本文件。
 有些历史可重采，有些快照型数据错过窗口后无法从原源补回，因此不能把元数据归档当作
 完整湖备份。需要恢复研究数据时，另建并校验可移植快照，或对整个湖做一致性备份。
 
-```bash
-scripts/scheduler/backup_meta.sh /abs/path/to/lake /path/to/offsite/cne-meta 30 30
-```
-
-`DATA_ROOT` 是湖目录，不是 TOML 配置路径；省略时脚本使用 `CNE_DATA_ROOT`，
-否则使用仓库的 `data/cnequity`。默认归档保存在湖内；磁盘级容灾要指定湖外目录。
-归档按天数和份数中更严格的限制轮换，见[脚本参数](scripts.md#backup_metash)。
+归档默认在湖内 `{data.root}/backups`；磁盘级容灾把 `[job.maintenance] backup_dir` 设为湖外目录。
+归档按 `backup_retention_days` 和 `backup_retention_count` 中更严格的限制轮换。
 
 恢复前先停采集，解包到隔离目录检查内容，并确认有与收据匹配的数据文件；
 不要将旧元数据直接覆盖到仍在运行或数据版本不匹配的湖：
@@ -276,19 +191,12 @@ cne status --datasets --gate --config configs/cnequity.restore.toml
 
 ## 环境变量
 
-`CNE_CONFIG` 与 `CNE_LOG_DIR` 由 `cne` 本身读取，其余由 [scripts.md](scripts.md) 中的 shell 脚本读取。
+这些变量由 `cne` 本身读取。
 
 | 变量 | 默认 | 作用 |
 |------|------|------|
 | `CNE_CONFIG` | `configs/cnequity.toml` | 所有命令 `--config` 的默认值（显式 `--config` 优先）；调度器中请设绝对路径，不能仅靠相对路径免除 `cd` |
-| `CNE_DATA_ROOT` | 仓库的 `data/cnequity` | `backup_meta.sh` 的默认湖目录；自定义 `data.root` 时需显式设置或传第一个参数 |
 | `CNE_LOG_DIR` | `{data.root}/logs` | 日志；长跑的 `cne` 命令也会在这里留一份 |
-| `CNE_GROUPS` | 按配置选择已启用组 | 覆盖 pipeline 组列表；公共配置默认运行 6 个常规组，可选组随开关加入 |
-| `CNE_PYTHON` | 仓库 `.venv/bin/python`，没有时用 PATH 上的 `python3` | 调度脚本的门控与调度锁使用的解释器，须能导入 cnequity |
-| `CNE_NOTIFY` | `1` | `0` 关闭通知 |
-| `CNE_BACKUP_DIR` | 湖内 backups | 备份目录 |
-| `CNE_BACKUP_RETENTION_DAYS` | 14 | 保留天数 |
-| `CNE_BACKUP_RETENTION_COUNT` | 30 | 最多保留份数；`0` 关闭份数上限 |
 
 ## 数据湖目录（init 后）
 
@@ -337,20 +245,13 @@ cne status --datasets --gate --config configs/cnequity.restore.toml
 5 17 * * 1-5 cd /path/to/cnequity && cne run daily --group signals --config configs/cnequity.toml
 ```
 
-生产更推荐用 `scripts/scheduler/daily_pipeline.sh`（见上文），它会串行跑完全部组并做健康检查与备份。
+生产更推荐用 `cne schedule install`（见上文）：它每个交易日串行跑完全部组，再用 `cne run maintain` 做审计、门禁与备份。
 
 ## 收尾补抓
 
-正常补抓使用独立调度的 `scripts/scheduler/stale_pipeline.sh`。它在较晚的窗口只处理仍落后的 snapshot 数据集，避免主日更任务内等待造成调度超时；与主任务共享锁，重叠时跳过。`daily_pipeline.sh` 保留 `CNE_STALE_RETRY=1` 兼容开关，但默认关闭。
+打包定时任务在 `[job.stale] run_at`（默认北京时间 21:00）之后跑一次 `cne run daily --stale-only`，只处理仍落后的 snapshot 数据集，避免主日更任务内等待造成调度超时；与主任务共用调度锁，重叠时跳过。`cne schedule install --no-stale` 不装这一步。
 
-补抓遵循与主任务相同的 push2 配置，不额外关闭该来源。被封出口可在个人配置中设置 `[sources.eastmoney] push2_paused=true`，或显式传 `CNE_PUSH2_PAUSED=1`；已触发的共享熔断和预算仍会阻止请求。
-
-| 环境变量 | 默认 | 说明 |
-|---|---|---|
-| `CNE_STALE_RETRY` | `0` | 旧的进程内等待补抓，仅兼容需要时设 `1` |
-| `CNE_STALE_RETRY_DELAY_SEC` | `1800` | 仅旧兼容路径生效 |
-| `CNE_SOURCE_HEALTH` | `1` | 每日日更后复用真实采集证据，仅主动探测过期或未触达端点；设 `0` 关闭 |
-| `CNE_SOURCE_VANTAGE` | `local` | 当前出口的稳定标签；不要把海外样本标成 `cn` |
+补抓遵循与主任务相同的 push2 配置，不额外关闭该来源。被封出口可在个人配置中设置 `[sources.eastmoney] push2_paused=true`；已触发的共享熔断和预算仍会阻止请求。`CNE_SOURCE_VANTAGE` 是当前出口的稳定标签（默认 `local`），不要把海外样本标成 `cn`。
 
 **为什么需要它。** 快照型日更只抓运行当天；同日第二个窗口可以补当天失败的采集。
 错过后不能重放旧 `--trade-date` 来伪造当时观察。部分数据集有独立历史回补源，
@@ -359,14 +260,14 @@ cne status --datasets --gate --config configs/cnequity.restore.toml
 
 **错开窗口是重点。** 立刻重试大概率撞上同一场中断，因此补抓由独立任务在较晚时间发起。
 
-默认 `CNE_SOFT_FAIL_OK=1` 时 soft 组当日失败只告警；连续失败会按配置升级。独立补抓有自己的退出码与日志。旧兼容补抓失败会出现在主任务的 `stale-retry:` 摘要中。
+非门禁组当日失败只告警；连续失败会按配置升级。补抓有自己的退出码与日志。
 
 ### 中断持续几小时怎么办
 
-独立任务可设置更晚的调度窗口：
+把 `[job.stale] run_at` 设得更晚，或在恢复后手工运行一次：
 
-```cron
-5 20 * * 1-5 cd /path/to/cnequity && scripts/scheduler/stale_pipeline.sh
+```bash
+cne run daily --stale-only
 ```
 
 `--stale-only` 没有落后的数据集时不建 run、直接退出 0，重复挂无害。

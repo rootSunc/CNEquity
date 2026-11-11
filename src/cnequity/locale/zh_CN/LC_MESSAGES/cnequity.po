@@ -3453,13 +3453,13 @@ msgstr "staging run {run_id} 仍在使用（{reason}），已留下。"
 
 #: cnequity/cli/schedule_cmds.py
 #, python-brace-format
-msgid "Legacy scripts/scheduler jobs are also installed: {names}. Remove them (scripts/scheduler/uninstall_scheduler.sh) so the lake is not updated twice."
-msgstr "还装着旧的 scripts/scheduler 任务：{names}。请卸载（scripts/scheduler/uninstall_scheduler.sh），以免同一个湖更新两遍。"
+msgid "Legacy scripts/scheduler jobs are also installed: {names}. Unload them (launchctl bootout gui/$(id -u)/<name>) and delete their plists in ~/Library/LaunchAgents so the lake is not updated twice."
+msgstr "还装着旧的 scripts/scheduler 任务：{names}。请卸载它们（launchctl bootout gui/$(id -u)/<任务名>）并删掉 ~/Library/LaunchAgents 里对应的 plist，免得湖被更新两遍。"
 
 #: cnequity/cli/schedule_cmds.py
 #, python-brace-format
-msgid "Legacy scripts/scheduler jobs are installed ({names}); remove them first (scripts/scheduler/uninstall_scheduler.sh) or the lake is updated twice."
-msgstr "已装有旧的 scripts/scheduler 任务（{names}）；请先卸载（scripts/scheduler/uninstall_scheduler.sh），否则同一个湖会更新两遍。"
+msgid "Legacy scripts/scheduler jobs are installed ({names}); unload them first (launchctl bootout gui/$(id -u)/<name>) and delete their plists in ~/Library/LaunchAgents, or the lake is updated twice."
+msgstr "装着旧的 scripts/scheduler 任务（{names}）；请先卸载（launchctl bootout gui/$(id -u)/<任务名>）并删掉 ~/Library/LaunchAgents 里对应的 plist，否则湖会被更新两遍。"
 
 #: cnequity/ops/catalog.py
 msgid "Limit to schedule groups"
@@ -5048,15 +5048,15 @@ msgid ""
 "\n"
 "\n"
 "A bare `cne run daily` already audits once after all schedule groups (with `--core-only`, as the last step of the `finalize` wave),\n"
-"so running it here re-audits data that has already been audited; the repository's health_notify.sh does not go through `run daily` and audits once itself.\n"
+"so running it here re-audits data that has already been audited.\n"
 "What is not scheduled is `--full`: it judges the state of the lake right now rather than what one run wrote,\n"
 "and it is what the health check and the dashboard read."
 msgstr ""
 "跑质量审计；加 --full 则给出当前整个湖的健康快照。\n"
 "\n"
-"\n"
+"\n"
 "不带参数的 `cne run daily` 在全部调度组之后已经审计一次（`--core-only` 则是 `finalize` wave 的最后一步），\n"
-"所以在这里跑等于把已经审过的数据再审一遍；仓库的 health_notify.sh 不经 `run daily`，由它自己审计一次。\n"
+"所以在这里跑等于把已经审过的数据再审一遍。\n"
 "没有被调度的是 `--full`：它判的是此刻这个湖的状态，而不是某一次 run 写了什么，\n"
 "健康检查和面板读的也是它。"
 

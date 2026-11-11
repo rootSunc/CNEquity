@@ -67,9 +67,8 @@ def marker_path(meta_root: Path, job: str, session: date) -> Path:
 def _ran_in_manifest(config, job: str, session: date) -> bool:
     """Whether the manifest already holds a run of *job* for *session*.
 
-    Covers sessions from before the markers existed and runs started by hand
-    (``scripts/scheduler/daily_pipeline.sh``), so switching to the gate — or a manual
-    run — never triggers a second full pipeline for the same session.
+    Covers sessions from before the markers existed and runs started by hand,
+    so a manual run never triggers a second full pipeline for the same session.
 
     A run tagged ``metadata.launch`` was started from the dashboard. One group
     from that page must not cancel the day's scheduled pipeline; the full daily

@@ -4,135 +4,15 @@
 
 | 目录 | 内容 |
 |---|---|
-| `scripts/scheduler/` | 调度：日更 / 事件流 / 补抓管线、健康通知、元数据备份、launchd 模板与安装（改动路径后重跑 `install_scheduler.sh`，已安装任务引用的是绝对路径） |
 | `scripts/` | 运维工具：回填验收、退市名录重建、补跑追赶、幸存者偏差测量 |
 | `scripts/dev/` | 仓库维护：文档同步（`sync_*`）、发布检查、离线基准与端到端检查、探针 |
 
-这些脚本需要源码 checkout，不随 PyPI 包安装。定时更新用 `cne schedule install`（安装包自带，跨平台）；`scripts/scheduler/` 已弃用，打包定时任务功能对齐后移除。
+这些脚本需要源码 checkout，不随 PyPI 包安装。定时更新用 `cne schedule install`（安装包自带，跨平台）；原来的 `scripts/scheduler/` 已移除，迁移见 [Runbook](runbook.md#legacy-scripts)。
 
-> 以下脚本面向 **自托管本机/VPS**（含 macOS launchd 与服务器回填）。开源贡献者只需
+> 以下脚本面向 **自托管本机/VPS**（含服务器回填）。开源贡献者只需
 > CLI（`cne init` / `run`）即可；调度与告警按需选用，并非唯一部署方式。
 
 ## 生产脚本
-
-### daily_pipeline.sh
-
-**用途**：交易日串行执行全部 schedule groups，末尾健康检查与备份。
-
-**流程**：
-
-```
-for group in $(python -m cnequity.orchestrator.schedule_groups --config "$CNE_CONFIG"); do
-  cne run daily --group $group
-done
-health_notify.sh
-cne sources probe --stale-only --vantage $CNE_SOURCE_VANTAGE
-cne sources slo             # 累积报告，日更不 enforce
-cne verify --runs --days 20 # 累积报告，日更不 enforce
-backup_meta.sh
-cne run clean
-```
-
-较晚窗口由独立的 `stale_pipeline.sh` 只补仍落后的 snapshot 数据集，与主日更共用调度锁。这把锁在 `{data.root}/locks`，和 `cne serve` 操作页是同一把；`CNE_SCHEDULER_LOCK_DIR` 或 `CNE_LOCK_DIR` 可改目录。锁记录主机、PID 和进程启动身份，自动回收已确认退出的本机进程；只有 PID 的旧格式锁在该进程退出后也会回收，没有标记的锁目录超过 60 秒后回收。远程主机的锁须由维护者核验后移除。主脚本保留旧的进程内等待开关供兼容，但默认关闭。详见 [runbook · 收尾补抓](runbook.md#收尾补抓)。
-
-**环境变量**（`CNE_CONFIG` / `CNE_LOG_DIR` 同时被 `cne` 本身读取，其余仅本脚本读取）：`CNE_CONFIG`, `CNE_LOG_DIR`（长跑命令自己也往这里写一份日志）, `CNE_GROUPS`,
-`CNE_GATE_GROUPS`（默认 `core`，失败标为 gate；其余组标 soft）、
-`CNE_SOFT_FAIL_OK`（默认 `1`：gate OK 时 soft 失败 exit 0；`0`=仍 exit 1）、
-`CNE_STALE_RETRY`（默认 `0`；`1` 开启旧兼容补抓）、
-`CNE_STALE_RETRY_DELAY_SEC`（默认 `1800`）、
-`CNE_SOURCE_HEALTH`（默认 `1`；`0` 关闭每日过期证据探测）、
-`CNE_SOURCE_VANTAGE`（默认 `local`；应设为稳定且真实的出口标签，如 `cn` 或
-`overseas`）、
-`CNE_TRADE_DATE`、
-`CNE_BIN`（覆盖 `cne` 路径；供用 stub 跑通控制流的测试用）、
-`CNE_PYTHON`（门控与调度锁使用的解释器；默认仓库 `.venv/bin/python`，没有 `.venv` 时用 PATH 上的 `python3`，须能导入 cnequity）。
-
-结束时打印分组摘要（`group: OK|FAILED [gate|soft]`）外加 `stale-retry: OK|FAILED|not needed|skipped`，便于区分「门禁挂了」与「东财挂了」。补抓失败算 soft。
-
-### events_pipeline.sh
-
-**用途**：7x24 事件流（公告、监管事件、资讯）。`cne run events` 一次跑完
-`[job.events.groups]` 里的所有组，或用 `CNE_EVENTS_GROUP` 指定一个。
-
-**和 `daily_pipeline.sh` 分开的原因：**
-
-- 仓库日更脚本按组调用 `cne run daily --group`，这一条不包含事件流。不带参数的 `cne run daily` 会在调度组之后自己跑事件流；非交易日跳过调度组，事件流仍然运行。
-- 事件流使用单独的 shell 锁（`events`）和 `events_ingestion` 锁，可以和按组日更重叠。两边写入的数据集不相交，由配置校验保证。
-- 公告和资讯在周末、节假日也会发布，所以这个任务按自然日调度，不看交易日历。
-
-**环境变量**：`CNE_CONFIG`、`CNE_LOG_DIR`、`CNE_BIN`、`CNE_TRADE_DATE`、
-`CNE_EVENTS_GROUP`（默认全部组）、`CNE_SCHEDULER_LOCK_DIR`。
-
-上一次还在跑时直接跳过并 exit 0：每组下次都会重读自己的窗口，跳过一次不丢数据。
-
-### stale_pipeline.sh
-
-**用途**：晚一档的 stale-only 补抓，`cne run daily --stale-only`。
-
-**为什么是独立任务**：正常的六组日更即使某个源挂了也必须**及时跑完并上报**；把 30 分钟的等待塞进那个进程里，会让一次源故障看起来像调度器超时了几小时。晚一点的第二个窗口照样能补上 snapshot-only 数据集，又不拖住正常那次。
-
-**与日更互斥**：和 `daily_pipeline.sh` 共用 `scheduler_lock.sh` 的同一把锁。launchd 可能在主 pipeline 还没跑完时触发它——这时它**直接跳过**（退出 0）而不是排队，因为下一个窗口还能再试，而重复的 run 绝不该堆在采集后面。
-
-环境变量：`CNE_BIN` / `CNE_CONFIG` / `CNE_LOG_DIR`，可选 `CNE_STALE_GROUPS`、`CNE_TRADE_DATE`、`CNE_PYTHON`（同上）。
-
-### scheduler_lock.sh
-
-日更、事件流、stale 三个 shell 任务共用的 launchd/cron 级互斥锁。
-
-macOS 不带 `flock`，而 Python 那把 run lock 的作用域只有一次 `cne` 调用——日更脚本要跑好几条命令，所以需要一把覆盖整个脚本的锁。被 `daily_pipeline.sh` 与 `stale_pipeline.sh` source 进去用。
-
-### scheduler_config.py
-
-渲染并比对 launchd 任务，**保留本机已有的调度选择**。`install_scheduler.sh` 用它从一份配置生成三个 plist，而不是各自手写。
-
-### install_scheduler.sh / uninstall_scheduler.sh
-
-从 `scripts/scheduler/launchd/com.cnequity.daily.plist.template` 生成用户 launchd plist，加载 `daily_pipeline.sh`。
-同时安装 `com.cnequity.stale`（收尾补抓）与 `com.cnequity.events`（事件流，每个自然日 14:00，按本机时区，不是北京时间；可按自己的披露节奏改）。
-安装时用 `CNE_SOURCE_VANTAGE=cn scripts/scheduler/install_scheduler.sh` 固化真实出口标签；省略时
-使用 `local`。标签仅允许字母、数字、点、下划线和连字符，防止生成无效 plist。
-
-### health_notify.sh
-
-```bash
-# 平日
-cne audit                 # 只看本次 run 的活跃分区
-cne status --datasets --gate --groups "$CNE_GROUPS"
-# 每周一次（默认周六）
-cne audit --full          # 整湖结构扫描 + 刷新 health-latest.json
-```
-
-失败时 macOS `osascript` 通知，退出码非零。通知标题按失败的那一项分：
-审计/健康那一支是「数据异常」，纯新鲜度落后是「数据滞后」。
-
-**为什么分开**：`cne audit --full` 会扫描整个湖，I/O 成本随文件数量增长。日常优先按 run 审计，每周再检查整湖；实际耗时应记录在自己的运维日志中。
-
-**环境变量**：`CNE_FULL_AUDIT_DOW`（默认 `6` = 周六，`1-7` 对应周一到周日；
-`0` 完全关闭整湖审计；`always` 恢复每天都跑的旧行为）。
-
-**为什么新鲜度门禁要按组收窄**：`CNE_GROUPS` 会原样传给 `cne status --datasets --gate --groups`，
-也就是这台主机真正在跑的那些组。不收窄的话，只调度 `core` 的主机上有二十多个数据集
-**没有任何任务去抓**，会持续显示 STALE，掩盖真正的异常。
-门禁与调度共用同一个变量，两者就不会各说各话。无人调度的数据集仍然判失败：
-"不知道谁抓"和"别的主机在抓"不是同一件事。
-
-> 整湖审计里的分区碎片化 / 粒度混用检查只在 repartition 之后才会变化，
-> 所以它们也一并移到了每周那次。手动 `cne repair repartition` 之后，
-> 请直接跑一次 `cne audit --full` 复核，不要等到周六。
-
-### backup_meta.sh
-
-打包 `meta/manifest.db`、`state/`、`quality/`、revision **收据**、
-`source_snapshots/`、`source_health/` 和 `stability/` 为
-`meta-YYYYMMDD-HHMMSS.tar.gz`。不含 `meta/revisions/data/` 中的数据版本文件或
-`curated/`；它是元数据备份，不能单独恢复完整数据湖。
-
-参数：`backup_meta.sh [DATA_ROOT] [BACKUP_DIR] [RETENTION_DAYS] [RETENTION_COUNT]`。
-不传 `DATA_ROOT` 时使用 `CNE_DATA_ROOT`，否则使用仓库的 `data/cnequity`，
-**不会**从 `CNE_CONFIG` 读取湖路径。默认保留 14 天且最多 30 份；
-备份目录默认在湖内，需要磁盘级容灾时设置湖外的 `CNE_BACKUP_DIR`。
-运行环境宜安装 `sqlite3` 命令，以便脚本用 SQLite 备份 API 复制运行中的 manifest；
-缺少它时脚本退回文件复制，应在采集停止后备份。
 
 ### run_catchup.py
 
@@ -150,7 +30,7 @@ python scripts/run_catchup.py --trade-date 2026-07-17 --all-groups
 水位已经到目标日的部分直接 `skipped_already_fresh`，不重跑。
 
 原为 `cne run catchup`。它是编排而非能力（每一步都是 `cne run daily` 打一个 schedule
-group），和 `daily_pipeline.sh` 是同一类东西，所以放在这里而不是发布的 CLI 里。
+group），所以放在这里而不是发布的 CLI 里。
 
 ## Init 与验收
 
@@ -260,28 +140,6 @@ python scripts/dev/doc_translations.py --mark reference/mcp.md
 ```
 
 代码生成的表格不计入摘要，重新生成表格不会要求重译。
-
-## launchd 模板
-
-`scripts/scheduler/launchd/com.cnequity.daily.plist.template`
-
-- `ProgramArguments` 指向 `daily_pipeline.sh`
-- `StartCalendarInterval`：Minute=7（每小时唤醒）；`CNE_SCHEDULED=1` 让 `daily_pipeline.sh` 先问 `scheduler_gate.py`，每个交易日北京时间 `[job.daily] run_at` 之后只跑一次
-- 标准输出/错误重定向到 `{data.root}/logs/launchd.*.log`
-
-`scripts/scheduler/launchd/com.cnequity.stale.plist.template`
-
-- `ProgramArguments` 指向 `stale_pipeline.sh`
-- `StartCalendarInterval`：Minute=37（每小时唤醒）；当天日更跑过、且过了北京时间 `[job.stale] run_at` 才跑一次，只补快照类（`--stale-only --snapshots-only`）
-- 与日更共用 `scheduler_lock.sh` 的锁；主 pipeline 还在跑时直接跳过
-
-`scripts/scheduler/launchd/com.cnequity.events.plist.template`
-
-- `ProgramArguments` 指向 `events_pipeline.sh`
-- `StartCalendarInterval`：Hour=14, Minute=0，**不带 `Weekday`**——事件流本来就要在
-  周末和节假日跑（UTC+2/+3 机器约合 20:00 CST）
-- 想要资讯的日内新鲜度就再加一个 `CNE_EVENTS_GROUP=news_wire` 的高频 agent/cron；
-  `disclosures` 每次重读 30 天尾窗，不适合高频
 
 ## 相关文档
 

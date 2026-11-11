@@ -35,85 +35,19 @@ The timer runs `cne run maintain` once after each trading day's update; you can 
 
 It exits 1 when a gate group failed, another group reached its consecutive-failure limit, or the audit, the freshness gate or the backup fails; source probe and run evidence problems are reported without failing. On macOS the timer adds `--notify` for a desktop notification on problems.
 
-## Legacy repository scripts (deprecated) {#legacy-scripts}
+## Legacy repository scripts (removed) {#legacy-scripts}
 
-`scripts/scheduler/` exists only in a source checkout and is deprecated; it is removed only after the packaged timer covers everything it does and has been verified on a real lake, announced in the changelog beforehand. To migrate, run `scripts/scheduler/uninstall_scheduler.sh` to remove the launchd jobs (delete cron entries by hand), then run `cne schedule install`. `backup_meta.sh` now calls the same backup code as `cne run maintain`.
-
-
-| Capability | Script | Purpose |
-|------|------|------|
-| Scheduling | `cne serve` → Operations → Scheduled tasks | Enable, pause or retime across platforms; daily update and closing catch-up results are all viewed in the web UI |
-| Scheduling | `scripts/scheduler/daily_pipeline.sh` | Runs the enabled daily-update groups serially in configured order + health check + backup |
-| Scheduling | `scripts/scheduler/install_scheduler.sh` | Installs macOS launchd (runs once per trading day after `[job.daily] run_at` Beijing time, independent of the local time zone) |
-| Scheduling | `scripts/scheduler/uninstall_scheduler.sh` | Uninstalls launchd |
-| Alerting | `scripts/scheduler/health_notify.sh` | Daily audit, weekly whole-lake quality check + per-group freshness + macOS notifications |
-| Backup | `scripts/scheduler/backup_meta.sh` | Rotating tar archives of metadata and revision receipts; use snapshots for full data |
-
-The scripts use the repository's `.venv/bin/cne`, and resolve paths relative to the repository root on their own.
-
-### Installing the launchd jobs (legacy)
+`scripts/scheduler/` (`daily_pipeline.sh`, `install_scheduler.sh`, `health_notify.sh`, `backup_meta.sh` and the rest) has been removed; the packaged timer does its work: the daily update, the closing catch-up, event streams, and the audit, gates, source probes and metadata backup of `cne run maintain`. If the old launchd jobs are still installed, unload them before installing the new timer:
 
 ```bash
-cd /path/to/cnequity
-scripts/scheduler/install_scheduler.sh
+for job in com.cnequity.daily com.cnequity.stale com.cnequity.events com.cnequity.events-news; do
+  launchctl bootout "gui/$(id -u)/$job" 2>/dev/null
+  rm -f ~/Library/LaunchAgents/$job.plist
+done
+cne schedule install
 ```
 
-The installer keeps host selection separate from the templates: a new install selects the enabled groups from the configuration; a reinstall keeps the installed daily job's
-`CNE_GROUPS`, `CNE_SOURCE_VANTAGE`, custom configuration and each job's run time.
-Use environment variables to override groups and the network vantage explicitly; for example, a first install on an overseas host:
-
-```bash
-CNE_GROUPS=core CNE_SOURCE_VANTAGE=overseas scripts/scheduler/install_scheduler.sh
-scripts/scheduler/install_scheduler.sh --check
-scripts/scheduler/install_scheduler.sh --dry-run /tmp/cnequity-scheduler-review
-scripts/scheduler/install_scheduler.sh --daily-only                  # sync only the existing daily job, do not add the evening job
-scripts/scheduler/install_scheduler.sh --stale-only                  # sync only the catch-up job
-```
-
-**Run times are configured in Beijing time, independent of the local time zone.** Both the daily update and the catch-up wake up once an hour (the daily update at minute 7 of each hour,
-the catch-up at minute 37), and `scripts/scheduler/scheduler_gate.py` decides whether this wake-up is "the real one":
-
-```toml
-[job.daily]
-run_at = "17:30"   # Beijing time; runs once per trading day after this time (default 17:30)
-[job.stale]
-run_at = "21:00"   # Beijing time; after that day's daily update has run, retries only the failed snapshot data (default 21:00)
-```
-
-- Each runs once per trading day: it runs once `run_at` has passed, and everything up to the 09:15 open of the next trading day counts as that day;
-  if it still has not run by the open (for example, the computer stayed off), that day is not made up — historical data is filled by date in the next daily update, and snapshot data misses that day.
-- You do not need to care which time zone the machine is in or whether it observes daylight saving time, and you do not need to reinstall; if the computer is asleep at `run_at`, it runs at the next wake-up after it resumes.
-- Running `scripts/scheduler/daily_pipeline.sh` by hand is not subject to this check and runs immediately as usual.
-- Trading days that have already run are recorded in `meta/state/scheduler/`; a day that already has a daily-update record in the manifest also counts as run,
-  so after switching to this mechanism or running by hand, a full pass is not repeated.
-- The old `--stale-at` is retired; use `[job.stale] run_at` instead.
-
-`--check` compares the installed files with the templates generated from the host selection and exits 1 if they differ or a job is missing;
-it does not start jobs and does not check whether launchd has loaded them. `--dry-run` only writes the preview directory.
-A regular install includes three jobs: daily, stale and events; stale inherits the daily groups and limits the catch-up scope through
-`cne run daily --stale-only --groups ...`. The interval and groups of an existing events job are kept;
-additional manually installed events jobs are not removed by this installer.
-
-The catch-up retries only datasets scheduled as snapshots (fund flow, valuation, popularity ranking, etc.); historical data is left for the next daily update to fill by date.
-The catch-up follows the same push2 configuration, budget and circuit-breaker policy as the main job. Whether a separate historical source exists is defined by the dataset contract.
-
-Quality errors in the daily job and lag in the actually scheduled `CNE_GATE_GROUPS` (default core) make the job exit 1.
-Soft groups still escalate by failure count, but retries for the same date are not counted as multiple days.
-Each week, quality is checked with `audit --full --quality-only`, and freshness is gated separately by per-group `status`,
-so unscheduled minute bars do not trigger "数据异常" (data anomaly) merely because they lag. The whole-lake health report still shows this lag.
-
-- Generates `~/Library/LaunchAgents/com.cnequity.daily.plist`
-- Wakes up every hour and **runs once per trading day after `[job.daily] run_at` Beijing time (default 17:30)**;
-  independent of the local time zone and daylight saving time; a reinstall does not keep an old local time.
-- Non-trading days are skipped automatically (exit 0)
-- **Missed runs / weekend catch-up**: `python scripts/run_catchup.py` fills core and breadth for the most recent trading day; parts whose watermark has already reached the target date are recorded as `skipped_already_fresh`. To rerun all schedule groups for a given day, use `scripts/scheduler/daily_pipeline.sh YYYY-MM-DD` or `CNE_TRADE_DATE=...`.
-- **Choose schedule groups by the current network vantage**: check source health first, then enable the groups that can actually be maintained. A failure from one vantage does not prove that a whole region is unusable; when refused, cool down first instead of switching vantage to continue the same round of fetching. See [Fetch policy and source protection](fetch-policy.md).
-
-```bash
-launchctl list | grep cnequity
-launchctl start com.cnequity.daily   # trigger manually
-scripts/scheduler/uninstall_scheduler.sh
-```
+Delete cron entries that call these scripts by hand. `cne schedule status` points out old launchd jobs it finds. The old scripts' environment variables become configuration: `CNE_GATE_GROUPS` → `[job.maintenance] gate_groups`; `CNE_BACKUP_DIR`, `CNE_BACKUP_RETENTION_DAYS`, `CNE_BACKUP_RETENTION_COUNT` → `[job.maintenance] backup_dir`, `backup_retention_days`, `backup_retention_count`. To rerun every schedule group for one date, use `cne run daily --trade-date YYYY-MM-DD`.
 
 <a id="web-schedule"></a>
 
@@ -127,17 +61,7 @@ Daily update and catch-up times are saved in the original configuration's `[job.
 
 The web UI manages only the system tasks it created itself and does not take over existing launchd scripts or other cron / Windows tasks. Check for and disable duplicate entry points before migrating. The web daily update runs `cne run daily` and then `cne run maintain` (audit, gates, metadata backup), the daily backup runs `cne snapshot create` for the selected datasets, and the standalone event stream runs `cne run events` for the selected groups. `cne schedule install|status|remove` manages the same task from the command line. System tasks are pinned to the Python environment, working directory and configuration path in effect when they were created; set them up again after moving the environment, and the configuration that data sources require must also be available in the unattended environment.
 
-**Linux cron (manual setup)**:
-
-```cron
-# Wake up every hour; CNE_SCHEDULED=1 makes the script itself use the Beijing-time run_at to run only once per trading day
-7 * * * * CNE_SCHEDULED=1 /path/to/cnequity/scripts/scheduler/daily_pipeline.sh
-37 * * * * CNE_SCHEDULED=1 /path/to/cnequity/scripts/scheduler/stale_pipeline.sh
-# The event stream runs independently, including weekends; adjust to the frequency you need
-20 20 * * * /path/to/cnequity/scripts/scheduler/events_pipeline.sh
-```
-
-**Windows Task Scheduler** (native Win10/11; `daily_pipeline.sh` does not work in PowerShell):
+**Windows Task Scheduler** (native Win10/11, manual setup):
 
 1. First make sure `cne doctor` and `cne config validate` pass, and use a short absolute path for `data.root` (such as `D:\lake`).
 2. Open Task Scheduler → Create Basic Task → daily at 16:05 (or any time after the close; it also triggers on weekends).
@@ -149,7 +73,7 @@ The web UI manages only the system tasks it created itself and does not take ove
 | Add arguments | `run daily --config C:\path\to\configs\cnequity.toml` |
 | Start in | `C:\path\to` (the directory containing the repository or configuration) |
 
-This one task already includes the event stream (announcements, regulatory events, news), so there is no need to create a separate task for `run events`; on non-trading days the daily-update groups are skipped automatically while the event stream runs as usual. Times in Windows Task Scheduler and plain cron are local time; only jobs that use the repository's scheduler gate are judged by the configured Beijing time. To run the event stream more often, schedule `cne run events --group news_wire` separately; when it runs at the same time as the daily update, the event-stream segment of the daily update is recorded as `skipped_locked` and does not count as a failure.
+This one task already includes the event stream (announcements, regulatory events, news), so there is no need to create a separate task for `run events`; on non-trading days the daily-update groups are skipped automatically while the event stream runs as usual. Hand-made Task Scheduler and cron entries use local time; only the packaged timer (`cne schedule install`) goes by the configured Beijing time. To run the event stream more often, schedule `cne run events --group news_wire` separately; when it runs at the same time as the daily update, the event-stream segment of the daily update is recorded as `skipped_locked` and does not count as a failure.
 
 > If Chinese text is garbled in the console: run `chcp 65001`, or set the user environment variable `PYTHONUTF8=1`.
 
@@ -157,17 +81,13 @@ This one task already includes the event stream (announcements, regulatory event
 
 ```
 core → capital → signals → fundamentals → macro_risk → research
-  → health_notify.sh
-  → backup_meta.sh
-  → group summary (gate vs soft)
+  → cne run maintain (audit, gates, source probes, metadata backup)
 ```
 
 - A failure in one group does not stop the following groups (collect as much data as possible)
-- The final summary distinguishes **gate** (default `CNE_GATE_GROUPS=core`) from **soft** (EastMoney, etc.)
-- Default `CNE_SOFT_FAIL_OK=1`: when gate is OK, soft failures are **warn-only, exit 0** (only transient failures are tolerated; persistent failures escalate);
-  if any group failure should block, set `CNE_SOFT_FAIL_OK=0` so that soft failures still exit 1
+- A failure in `[job.maintenance] gate_groups` (default `core`) fails the day; other groups only warn until they have failed `soft_fail_max_days` trading days in a row; see [maintenance after the daily update](#maintain)
 - EastMoney timeouts/connection failures are not retried (`[sources.eastmoney] timeout_sec`, default 15s)
-- The production `daily_pipeline.sh` usually sets `workers=1` (compatibility of the TDX client with multiprocessing)
+- On macOS `workers` must be 1 (compatibility of the TDX client with multiprocessing)
 
 For the mapping of groups to steps, see [Configuration — schedule groups](../getting-started/configuration.md#schedule-groups).
 
@@ -226,18 +146,13 @@ The operations page provides "创建数据备份" (Create data backup), the back
 
 Web backups reuse portable lake snapshots: they contain the selected data and the corresponding state, contract, revision and lineage information, but not the original TOML configuration, credentials or the full run database; they are not a disaster-recovery image of the whole system. A restore first shows the backup scope and target; after confirmation it fully verifies the file digests, then copies into a new or empty directory outside the current data lake and the backup directory. If the manifest changes after the preview, preview again; a restore does not proceed if verification fails. After a restore, serve still uses the original data lake; accept the restore target with a separate configuration, and switch only after confirming. Backups never delete old copies automatically; for disk-level disaster recovery, choose external storage and save the configuration and credentials separately.
 
-`backup_meta.sh` backs up only the manifest, state, quality, revision receipts, source snapshots and run evidence;
+The metadata backup of `cne run maintain` covers only the manifest, state, quality, revision receipts, source snapshots and run evidence;
 it **does not include** the data version files in `curated/`, `derived/` or `meta/revisions/data/`.
 Some history can be refetched, but some snapshot data cannot be recovered from the original source once its window is missed, so a metadata archive must not be treated as
 a full lake backup. To be able to restore research data, create and verify a separate portable snapshot, or take a consistent backup of the whole lake.
 
-```bash
-scripts/scheduler/backup_meta.sh /abs/path/to/lake /path/to/offsite/cne-meta 30 30
-```
-
-`DATA_ROOT` is the lake directory, not the TOML configuration path; when omitted, the script uses `CNE_DATA_ROOT`,
-otherwise the repository's `data/cnequity`. By default archives are stored inside the lake; for disk-level disaster recovery, specify a directory outside the lake.
-Archives are rotated by whichever of the day and count limits is stricter; see [script parameters](scripts.md#backup_metash).
+Archives go to `{data.root}/backups` inside the lake by default; for disk-level disaster recovery, set `[job.maintenance] backup_dir` to a directory outside the lake.
+Archives are rotated by whichever of `backup_retention_days` and `backup_retention_count` is stricter.
 
 Before restoring, stop collection, unpack into an isolated directory to inspect the contents, and make sure you have data files that match the receipts;
 do not overwrite a lake that is still running or whose data versions do not match with old metadata:
@@ -276,19 +191,12 @@ all fail; a non-core dataset that degrades or fails does not. Levels come from t
 
 ## Environment variables
 
-`CNE_CONFIG` and `CNE_LOG_DIR` are read by `cne` itself; the rest are read by the shell scripts in [scripts.md](scripts.md).
+These variables are read by `cne` itself.
 
 | Variable | Default | Purpose |
 |------|------|------|
 | `CNE_CONFIG` | `configs/cnequity.toml` | Default for `--config` in all commands (an explicit `--config` takes precedence); set an absolute path in schedulers — a relative path alone does not let you skip the `cd` |
-| `CNE_DATA_ROOT` | the repository's `data/cnequity` | Default lake directory for `backup_meta.sh`; with a custom `data.root`, set it explicitly or pass the first argument |
 | `CNE_LOG_DIR` | `{data.root}/logs` | Logs; long-running `cne` commands also leave a copy here |
-| `CNE_GROUPS` | Enabled groups selected from the configuration | Overrides the pipeline group list; the public configuration runs 6 regular groups by default, and optional groups join as their switches are enabled |
-| `CNE_PYTHON` | the repository's `.venv/bin/python`, else the `python3` on PATH | Interpreter the scheduler scripts use for the gate and the scheduler lock; it must be able to import cnequity |
-| `CNE_NOTIFY` | `1` | `0` turns notifications off |
-| `CNE_BACKUP_DIR` | backups inside the lake | Backup directory |
-| `CNE_BACKUP_RETENTION_DAYS` | 14 | Days to keep |
-| `CNE_BACKUP_RETENTION_COUNT` | 30 | Maximum number of copies to keep; `0` disables the count limit |
 
 ## Data lake directory (after init)
 
@@ -337,20 +245,13 @@ Top-10 shareholders are not in the default daily-update groups; use `cne backfil
 5 17 * * 1-5 cd /path/to/cnequity && cne run daily --group signals --config configs/cnequity.toml
 ```
 
-For production, `scripts/scheduler/daily_pipeline.sh` (see above) is recommended instead: it runs all groups serially and does the health check and backup.
+For production, `cne schedule install` (see above) is recommended instead: each trading day it runs all groups serially, then `cne run maintain` for the audit, gates and backup.
 
 ## Closing catch-up {#closing-catch-up}
 
-Regular catch-up uses the separately scheduled `scripts/scheduler/stale_pipeline.sh`. In a later window it handles only snapshot datasets that are still behind, which avoids scheduling timeouts caused by waiting inside the main daily-update job; it shares the lock with the main job and skips if they overlap. `daily_pipeline.sh` keeps the `CNE_STALE_RETRY=1` compatibility switch, but it is off by default.
+After `[job.stale] run_at` (default 21:00 Beijing time) the packaged timer runs `cne run daily --stale-only` once. It handles only snapshot datasets that are still behind, which avoids scheduling timeouts caused by waiting inside the main daily-update job; it shares the scheduler lock with the main job and skips if they overlap. `cne schedule install --no-stale` leaves this step out.
 
-The catch-up follows the same push2 configuration as the main job and does not additionally turn that source off. A banned vantage can set `[sources.eastmoney] push2_paused=true` in its personal configuration, or pass `CNE_PUSH2_PAUSED=1` explicitly; a shared circuit breaker or budget that has already tripped still blocks requests.
-
-| Environment variable | Default | Description |
-|---|---|---|
-| `CNE_STALE_RETRY` | `0` | Old in-process wait-and-catch-up; set to `1` only when needed for compatibility |
-| `CNE_STALE_RETRY_DELAY_SEC` | `1800` | Takes effect only on the old compatibility path |
-| `CNE_SOURCE_HEALTH` | `1` | After each daily update, reuses real collection evidence and actively probes only endpoints that are stale or were not reached; set `0` to turn off |
-| `CNE_SOURCE_VANTAGE` | `local` | Stable label for the current vantage; do not label overseas samples as `cn` |
+The catch-up follows the same push2 configuration as the main job and does not additionally turn that source off. A banned vantage can set `[sources.eastmoney] push2_paused=true` in its personal configuration; a shared circuit breaker or budget that has already tripped still blocks requests. `CNE_SOURCE_VANTAGE` is the stable label for the current vantage (default `local`); do not label overseas samples as `cn`.
 
 **Why it is needed.** Snapshot daily updates fetch only the day of the run; a second window on the same day can make up that day's failed collection.
 Once missed, replaying an old `--trade-date` must not be used to fake an observation from that time. Some datasets have a separate historical backfill source,
@@ -359,14 +260,14 @@ but its origin, coverage and PIT semantics may differ from the same-day snapshot
 
 **Staggering the window is the point.** An immediate retry is very likely to hit the same outage, so the catch-up is launched by a separate job at a later time.
 
-With the default `CNE_SOFT_FAIL_OK=1`, a soft group failing on a given day only raises a warning; consecutive failures escalate as configured. The standalone catch-up has its own exit code and log. Failures of the old compatibility catch-up appear in the main job's `stale-retry:` summary.
+A group outside the gate failing on a given day only raises a warning; consecutive failures escalate as configured. The catch-up has its own exit code and log.
 
 ### What to do if an outage lasts several hours
 
-The standalone job can be given a later scheduling window:
+Set `[job.stale] run_at` later, or run it once by hand after the outage:
 
-```cron
-5 20 * * 1-5 cd /path/to/cnequity && scripts/scheduler/stale_pipeline.sh
+```bash
+cne run daily --stale-only
 ```
 
 When there are no lagging datasets, `--stale-only` creates no run and exits 0 directly, so scheduling it repeatedly is harmless.
