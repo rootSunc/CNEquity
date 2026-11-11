@@ -248,6 +248,7 @@ cne config upgrade
 - Steps that the example configuration's group of the same name has, and none of your groups has, are appended to your group of the same name;
 - Daily / event-stream schedule groups you do not have are appended, comments and all, to the end of the file;
 - Steps that are only in an example wave are appended to your wave of the same name.
+- Renamed configuration keys get their current name: `[orchestrator] tdx_daily_executor` → `tdx_daily_backend`, `[derive] workers` → `[orchestrator] derive_workers`, and `concurrency` / `max_in_flight` / `workers` in a `[sources.<name>]` table → `max_concurrency`. When the current name is already set, the old one had no effect and is deleted. Old names still load, with a warning to run this command.
 
 Before making changes, the original file is backed up as `cnequity.toml.bak-<timestamp>`, and the configuration is validated after writing. Other settings (times, concurrency, credentials, switches) are untouched; missing configuration keys already use built-in defaults and are not written to the file, so that current defaults are not pinned. `--dry-run` only lists the changes. Groups written as inline tables or dotted keys cannot be edited automatically; the command lists the steps to add by hand and returns 1.
 

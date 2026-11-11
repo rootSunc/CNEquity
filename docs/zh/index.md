@@ -42,7 +42,7 @@ hide:
   </section>
 
   <section class="cne-metrics" aria-label="覆盖范围">
-    <div><strong>55</strong><span>登记数据集，47 个采集 + 8 个派生</span></div>
+    <div><strong>86</strong><span>登记数据集，78 个采集 + 8 个派生</span></div>
     <div><strong>沪深京</strong><span>股票、指数、ETF / LOF，可选商品期货与期权</span></div>
     <div><strong>Parquet</strong><span>开放文件；Python、DuckDB、Polars 和只读 MCP 读同一份</span></div>
     <a href="datasets/catalog/">看完整目录 →</a>

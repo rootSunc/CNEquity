@@ -165,8 +165,9 @@ def test_current_release_contract_is_versioned_and_packaged():
     assert validate_contract(contract_path, against_registry=True) == []
     assert document["fingerprint"] == contract_fingerprint(document)
 
+    # The wheel carries this release's contract only; history stays in the repo.
     data_files = project["tool"]["setuptools"]["data-files"]
-    assert f"contracts/v{version}.json" in data_files["share/cnequity/contracts"]
+    assert data_files["share/cnequity/contracts"] == [f"contracts/v{version}.json"]
 
 
 def test_data_contract_fingerprint_ignores_source_order_but_not_columns():

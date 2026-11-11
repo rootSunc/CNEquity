@@ -42,7 +42,7 @@ hide:
   </section>
 
   <section class="cne-metrics" aria-label="Coverage">
-    <div><strong>55</strong><span>registered datasets: 47 collected + 8 derived</span></div>
+    <div><strong>86</strong><span>registered datasets: 78 collected + 8 derived</span></div>
     <div><strong>SH · SZ · BJ</strong><span>stocks, indices, ETFs / LOFs; optional commodity futures and options</span></div>
     <div><strong>Parquet</strong><span>open files; Python, DuckDB, Polars and read-only MCP read the same copy</span></div>
     <a href="datasets/catalog/">Full catalog →</a>

@@ -17,6 +17,8 @@ Targets:
 * ``cli-options`` — ``docs/zh/reference/cli-options.md`` from Click's registry;
 * ``cli-surface`` — ``docs/zh/reference/cli-surface.md``, the reviewed side-effect
   inventory; a new command fails until its row is written below;
+* ``counts:<file>`` — the dataset counts quoted in the README pair, the home
+  pages, the guides and the runbooks (patterns in ``doc_counts.py``);
 * ``pypi-readme`` — ``README.pypi.md`` is ``README.md`` with every relative link
   made absolute, since PyPI resolves none of them.
 
@@ -55,6 +57,9 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import doc_counts  # noqa: E402
 
 from cnequity.adapters.futures_exchange.registry import capabilities  # noqa: E402
 from cnequity.cli.main import cli  # noqa: E402
@@ -624,6 +629,25 @@ def _cli_surface(lang: str = "zh") -> tuple[Path, str, list[str]]:
     return REPO_ROOT / f"docs/{lang}/reference/cli-surface.md", render_cli_surface(lang), []
 
 
+def dataset_counts() -> dict[str, int]:
+    from cnequity.domain.datasets import DATASETS, datasets_by_support
+
+    return {
+        "total": len(DATASETS),
+        "curated": sum(spec.layer == "curated" for spec in DATASETS.values()),
+        "derived": sum(spec.layer == "derived" for spec in DATASETS.values()),
+        "core": len(datasets_by_support()["core"]),
+    }
+
+
+def _counts(name: str) -> tuple[Path, str, list[str]]:
+    path = REPO_ROOT / name
+    text, found = doc_counts.render(path.read_text(encoding="utf-8"), dataset_counts())
+    if not found:
+        raise SystemExit(f"{name} quotes no dataset count any more; update doc_counts.FILES")
+    return path, text, []
+
+
 def _pypi_readme() -> tuple[Path, str, list[str]]:
     return REPO_ROOT / "README.pypi.md", render_pypi_readme(), []
 
@@ -638,6 +662,8 @@ TARGETS: dict[str, Callable[[], tuple[Path, str, list[str]]]] = {
     "cli-options-en": lambda: _cli_options("en"),
     "cli-surface": _cli_surface,
     "cli-surface-en": lambda: _cli_surface("en"),
+    # Before pypi-readme, which renders from README.md as written.
+    **{f"counts:{name}": (lambda name=name: _counts(name)) for name in doc_counts.FILES},
     "pypi-readme": _pypi_readme,
 }
 

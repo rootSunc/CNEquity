@@ -145,3 +145,82 @@ def test_explicit_dry_run_is_only_for_upgrade(tmp_path):
     path.write_text(example_toml_text(), encoding="utf-8")
     result = CliRunner().invoke(cli, ["config", "validate", "--dry-run", "--config", str(path)])
     assert result.exit_code != 0
+
+
+def _with_old_names(tmp_path):
+    """Old spellings in place of the current ones, each still taking effect."""
+    text = example_toml_text()
+    text = re.sub(r"(?m)^tdx_daily_backend = .*$", 'tdx_daily_executor = "thread"  # pinned', text)
+    text = re.sub(r"(?m)^derive_workers = \d+\n", "", text)
+    text = text.replace("[sources.cninfo]\n", "[sources.cninfo]\nconcurrency = 2\nworker_cap\n", 1)
+    # After _old_config, whose macOS rewrite would turn these into workers = 1.
+    path = _old_config(tmp_path, text + "\n[derive]\nworker_cap\n")
+    text = path.read_text(encoding="utf-8").replace("worker_cap\n", "workers = 5\n", 1)
+    path.write_text(text.replace("worker_cap\n", "workers = 3\n", 1), encoding="utf-8")
+    return path
+
+
+def test_old_key_names_are_rewritten_without_changing_the_settings(tmp_path):
+    from cnequity.config import load_config
+
+    path = _with_old_names(tmp_path)
+    before = load_config(path)
+
+    plan = plan_upgrade(path)
+    written = {(i.old_table, i.old_key, i.shadowed) for i in plan.renamed_keys}
+    assert written == {
+        ("orchestrator", "tdx_daily_executor", False),
+        ("derive", "workers", False),
+        ("sources.cninfo", "concurrency", False),
+        ("sources.cninfo", "workers", True),
+    }
+    result = CliRunner().invoke(cli, ["config", "upgrade", "--config", str(path)])
+
+    assert result.exit_code == 0, result.output
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert raw["orchestrator"]["tdx_daily_backend"] == "thread"
+    assert raw["orchestrator"]["derive_workers"] == 3
+    assert raw["sources"]["cninfo"]["max_concurrency"] == 2
+    assert "tdx_daily_executor" not in raw["orchestrator"]
+    assert "workers" not in raw["derive"]
+    assert {"concurrency", "workers"}.isdisjoint(raw["sources"]["cninfo"])
+    assert "# pinned" in path.read_text(encoding="utf-8")
+    after = load_config(path)
+    assert (
+        (after.tdx_daily_backend, after.derive_workers)
+        == (
+            before.tdx_daily_backend,
+            before.derive_workers,
+        )
+        == ("thread", 3)
+    )
+    assert after.source_concurrency["cninfo"] == before.source_concurrency["cninfo"] == 2
+    assert plan_upgrade(path).renamed_keys == []
+
+
+def test_an_old_key_the_new_name_overrides_is_only_deleted(tmp_path):
+    text = example_toml_text().replace(
+        "[orchestrator]\n", '[orchestrator]\ntdx_daily_executor = "process"\n', 1
+    )
+    path = _old_config(tmp_path, text)
+
+    plan = plan_upgrade(path)
+
+    [item] = plan.renamed_keys
+    assert (item.old_key, item.shadowed) == ("tdx_daily_executor", True)
+    raw = tomllib.loads(plan.text)
+    assert "tdx_daily_executor" not in raw["orchestrator"]
+    assert raw["orchestrator"]["tdx_daily_backend"] == "auto"
+
+
+def test_loading_an_old_key_name_warns_once(tmp_path, caplog):
+    from cnequity.config import load_config, loader
+
+    path = _with_old_names(tmp_path)
+    loader._WARNED_RENAMES.clear()
+    with caplog.at_level("WARNING", logger="cnequity.config.loader"):
+        load_config(path)
+        load_config(path)
+    warned = [r.getMessage() for r in caplog.records if "old name" in r.getMessage()]
+    assert len(warned) == 4
+    assert any("[derive] workers" in m and "derive_workers" in m for m in warned)

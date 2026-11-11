@@ -4546,6 +4546,11 @@ msgstr "已拒绝"
 msgid "Remote access cannot start operations from the dashboard by default. Start serve with --allow-remote-ops to enable it."
 msgstr "远程访问默认不能从面板发起操作。启动时加上 --allow-remote-ops 才能开启。"
 
+#: cnequity/cli/setup_cmds.py
+#, python-brace-format
+msgid "Remove [{table}] {key} (ignored: [{new_table}] {new_key} is set)"
+msgstr "删除 [{table}] {key}（不起作用：已写了 [{new_table}] {new_key}）"
+
 #: cnequity/cli/schedule_cmds.py
 msgid "Remove the scheduled update for this lake?"
 msgstr "移除这个湖的定时更新吗？"
@@ -4566,6 +4571,11 @@ msgstr "已移除。这个湖现在没有任何定时任务。"
 #: cnequity/cli/storage_cmds.py
 msgid "Removed: marking versions for a waiting period."
 msgstr "已移除：标记版本并等待观察期。"
+
+#: cnequity/cli/setup_cmds.py
+#, python-brace-format
+msgid "Rename [{table}] {key} → [{new_table}] {new_key}"
+msgstr "改名 [{table}] {key} → [{new_table}] {new_key}"
 
 #: cnequity/cli/repair_cmds.py
 msgid "Repair Shanghai/Shenzhen exchange-traded funds with zero volume but positive turnover; must agree with official daily prices and amounts."

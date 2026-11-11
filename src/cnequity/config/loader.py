@@ -804,6 +804,88 @@ def configured_data_root(path: str | Path) -> Path:
         return _data_root(tomllib.load(f), config_path.parent)
 
 
+#: Old key spellings the loader still reads, as ``(table, old key, table, new
+#: key)``; ``sources.*`` stands for every ``[sources.<name>]`` table. Within a
+#: table the new key wins, so an old key next to it is ignored.
+#: ``cne config upgrade`` rewrites them; loading one logs a warning.
+RENAMED_KEYS: tuple[tuple[str, str, str, str], ...] = (
+    ("orchestrator", "tdx_daily_executor", "orchestrator", "tdx_daily_backend"),
+    ("derive", "workers", "orchestrator", "derive_workers"),
+    # A source's in-flight cap; the loader takes the first spelling present.
+    ("sources.*", "concurrency", "sources.*", "max_concurrency"),
+    ("sources.*", "max_in_flight", "sources.*", "max_concurrency"),
+    ("sources.*", "workers", "sources.*", "max_concurrency"),
+)
+
+
+@dataclass(frozen=True)
+class RenamedKey:
+    """An old key found in a config, and the key that replaces it."""
+
+    old_table: str
+    old_key: str
+    new_table: str
+    new_key: str
+    #: The new key, or an earlier old spelling, already sets the value: the
+    #: old key is ignored and only needs deleting.
+    shadowed: bool
+
+
+def renamed_keys(raw: Mapping) -> list[RenamedKey]:
+    """Each old key spelling *raw* uses, in ``RENAMED_KEYS`` order."""
+    found: list[RenamedKey] = []
+    claimed: set[tuple[str, str]] = set()
+    sources = raw.get("sources")
+    source_tables = (
+        [f"sources.{name}" for name, val in sources.items() if isinstance(val, Mapping)]
+        if isinstance(sources, Mapping)
+        else []
+    )
+    for old_table, old_key, new_table, new_key in RENAMED_KEYS:
+        tables = (
+            [(t, t) for t in source_tables]
+            if old_table == "sources.*"
+            else [(old_table, new_table)]
+        )
+        for old, new in tables:
+            table = _dotted_table(raw, old)
+            if not isinstance(table, Mapping) or old_key not in table:
+                continue
+            target = _dotted_table(raw, new)
+            shadowed = (new, new_key) in claimed or (
+                isinstance(target, Mapping) and new_key in target
+            )
+            claimed.add((new, new_key))
+            found.append(RenamedKey(old, old_key, new, new_key, shadowed))
+    return found
+
+
+def _dotted_table(raw: Mapping, dotted: str):
+    node = raw
+    for part in dotted.split("."):
+        node = node.get(part) if isinstance(node, Mapping) else None
+    return node
+
+
+_WARNED_RENAMES: set[tuple[str, str]] = set()
+
+
+def _warn_renamed_keys(raw: Mapping) -> None:
+    for item in renamed_keys(raw):
+        if (item.old_table, item.old_key) in _WARNED_RENAMES:
+            continue
+        # Once per process: `cne serve` re-reads the config on every poll.
+        _WARNED_RENAMES.add((item.old_table, item.old_key))
+        logger.warning(
+            "[%s] %s is an old name for [%s] %s%s; run `cne config upgrade` to rewrite it.",
+            item.old_table,
+            item.old_key,
+            item.new_table,
+            item.new_key,
+            " (ignored: the new name is already set)" if item.shadowed else "",
+        )
+
+
 def load_config(path: str | Path) -> Config:
     from cnequity.config.layers import BEST_EFFORT_KEY, OPTED_OUT_KEY, effective_raw
 
@@ -813,6 +895,7 @@ def load_config(path: str | Path) -> Config:
     opted_out_steps = frozenset(raw.pop(OPTED_OUT_KEY, ()))
     best_effort_enabled = frozenset(raw.pop(BEST_EFFORT_KEY, ()))
     raw.pop("datasets", None)
+    _warn_renamed_keys(raw)
 
     data_root = _data_root(raw, config_path.parent)
     lake_profile = raw.get("data", {}).get("profile") or None

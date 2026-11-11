@@ -10,8 +10,9 @@ someone updates the translation and marks it:
 
 The digest skips what code generates on both sides, so a code change that
 re-renders a table does not ask for a translation: the CLI option and
-side-effect pages entirely, the derivative capability table in sources.md, and
-the column names and types in schema.md (its hand-written descriptions count).
+side-effect pages entirely, the derivative capability table in sources.md, the
+column names and types in schema.md (its hand-written descriptions count), and
+the dataset counts ``sync_docs.py`` keeps in step with the registry.
 ``tests/unit/test_docs_i18n.py`` runs the check.
 """
 
@@ -21,7 +22,12 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import doc_counts  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ZH = REPO_ROOT / "docs" / "zh"
@@ -38,6 +44,7 @@ _DERIVATIVES = re.compile(
 
 
 def _translatable(page: str, text: str) -> str:
+    text = doc_counts.mask(text)
     if page == "datasets/sources.md":
         text = _DERIVATIVES.sub("", text)
     if page == "datasets/schema.md":

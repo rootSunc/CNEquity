@@ -5,7 +5,7 @@
 ## 发布前
 
 1. 收口变更并审阅差异。确认 `CHANGELOG.md` 写明用户可见变化、来源限制和迁移事项；私有湖测量与运行日志留在 `private/`，不要放入包或公开文档。
-2. 同步 `pyproject.toml`、`src/cnequity/__init__.py`、`CITATION.cff` 和 `server.json`（顶层与 `packages[0]` 两处）的正式版本。用 `cne contract show --out contracts/v<版本>.json` 生成契约；如有不兼容变化，在 `contracts/migrations/<版本>/` 写明变更、迁移和回退，并更新包内契约清单及相应测试。完成版本变更前不要创建正式标签。
+2. 同步 `pyproject.toml`、`src/cnequity/__init__.py`、`CITATION.cff` 和 `server.json`（顶层与 `packages[0]` 两处）的正式版本。用 `cne contract show --out contracts/v<版本>.json` 生成契约；把 `pyproject.toml` 里 `share/cnequity/contracts` 的唯一一项改成这份契约（wheel 只带当前版本的契约，历史契约留在仓库和 sdist）。如有不兼容变化，在 `contracts/migrations/<版本>/` 写明变更、迁移和回退，并更新相应测试。完成版本变更前不要创建正式标签。
 3. 在隔离的临时湖验证 `cne init --profile sample`、`cne query --sql "SELECT 1"`、`cne status --datasets` 等常用命令。真实来源可达性和本地湖覆盖单独记录；某个来源限流或拒绝访问，不应以重试风暴掩盖，也不能据此宣称全市场数据已齐。
 4. 本地运行 CI 的质量、离线测试、前端和文档检查，以及 Release 工作流中的契约比较、恢复演练、源码包/轮子检查和干净环境轮子冒烟。网络依赖安全审计由工作流执行；检查结果应针对同一待发布提交。
 5. 将待发布提交合入 `main`，确认 CI 与安全工作流通过。核对 GitHub `pypi` environment 只允许正式版本标签部署；若希望人工复核，配置 required reviewer。PyPI Trusted Publisher 应只信任本仓库的 Release 工作流与该 environment。

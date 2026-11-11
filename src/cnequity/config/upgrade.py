@@ -12,14 +12,17 @@ loses data — what the schedule runs:
 * a step the example schedules only in a wave goes into the same-named wave;
 * a relative ``[data].root`` that only resolves the old way — against the
   working directory rather than the config's own directory — is replaced by
-  the absolute path it has been naming, so the lake does not move.
+  the absolute path it has been naming, so the lake does not move;
+* a key under an old name (``loader.RENAMED_KEYS``) gets its current name, or
+  is deleted when the current name is already set and the old one was ignored.
 
 Missing keys are left alone on purpose: they already take the built-in
 default, and writing that default into the file would pin it against later
 releases.
 
 There is no TOML writer in the dependency set, so the edits are textual and
-narrow — they touch only ``steps`` arrays and append whole tables — and every
+narrow — they touch only ``steps`` arrays, single-line renamed keys and
+``[data].root``, and append whole tables — and every
 result is parsed back and compared with the intended change before anything
 is written. A config laid out in a way the edits do not recognise (inline
 tables, dotted keys) is reported for a manual edit instead.
@@ -32,6 +35,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -41,6 +45,9 @@ else:  # pragma: no cover - Python 3.10
 from cnequity.config.bootstrap import _toml_escape, example_toml_text
 from cnequity.config.drift import _group_tables, _scheduled_steps, missing_group_steps
 from cnequity.config.layers import effective_raw
+
+if TYPE_CHECKING:
+    from cnequity.config.loader import RenamedKey
 
 _HEADER = re.compile(r"^\s*\[")
 
@@ -54,11 +61,12 @@ class UpgradePlan:
     manual_steps: list[str] = field(default_factory=list)
     #: ``(written, absolute)`` when a relative ``[data].root`` is pinned.
     pinned_root: tuple[str, str] | None = None
+    renamed_keys: list[RenamedKey] = field(default_factory=list)
     text: str = ""
 
     @property
     def changed(self) -> bool:
-        return bool(self.added_steps or self.added_groups or self.pinned_root)
+        return bool(self.added_steps or self.added_groups or self.pinned_root or self.renamed_keys)
 
 
 def _key_pattern(path: str) -> str:
@@ -167,6 +175,40 @@ def _pin_root(text: str, absolute: str) -> str | None:
     return None
 
 
+def _rename_key(text: str, item: RenamedKey) -> str | None:
+    """Rename, move or delete one old single-line key; None when it cannot be found."""
+    lines = text.splitlines(keepends=True)
+    span = _table_span(lines, item.old_table)
+    if span is None:
+        return None
+    key = re.compile(r"^(\s*)" + _key_pattern(item.old_key) + r"\s*=(.*)$", re.S)
+    for i in range(span[0] + 1, span[1]):
+        match = key.match(lines[i])
+        if match:
+            break
+    else:
+        return None
+    indent, value = match.groups()
+    if not value.endswith("\n"):
+        value += "\n"
+    try:
+        tomllib.loads(f"v ={value}")
+    except tomllib.TOMLDecodeError:
+        return None  # a value spread over several lines
+    del lines[i]
+    if item.shadowed:
+        return "".join(lines)
+    if item.new_table == item.old_table:
+        lines.insert(i, f"{indent}{item.new_key} ={value}")
+        return "".join(lines)
+    target = _table_span(lines, item.new_table)
+    if target is None:
+        text = "".join(lines).rstrip("\n")
+        return f"{text}\n\n[{item.new_table}]\n{item.new_key} ={value}"
+    lines.insert(target[0] + 1, f"{item.new_key} ={value}")
+    return "".join(lines)
+
+
 def _legacy_root(config_path: Path, mine: dict) -> tuple[str, str] | None:
     from cnequity.config.loader import legacy_relative_root
 
@@ -208,7 +250,18 @@ def _expected(mine: dict, theirs: dict, plan: UpgradePlan) -> dict:
         groups[name] = copy.deepcopy(theirs["job"][scope]["groups"][name])
     if plan.pinned_root is not None:
         out["data"]["root"] = Path(plan.pinned_root[1]).as_posix()
+    for item in plan.renamed_keys:
+        value = _table(out, item.old_table).pop(item.old_key)
+        if not item.shadowed:
+            _table(out, item.new_table)[item.new_key] = value
     return out
+
+
+def _table(raw: dict, dotted: str) -> dict:
+    node = raw
+    for part in dotted.split("."):
+        node = node.setdefault(part, {})
+    return node
 
 
 def plan_upgrade(config_path: Path | str) -> UpgradePlan:
@@ -272,12 +325,24 @@ def plan_upgrade(config_path: Path | str) -> UpgradePlan:
         else:
             plan.text, plan.pinned_root = pinned, legacy
 
+    from cnequity.config.loader import renamed_keys
+
+    for item in renamed_keys(mine):
+        renamed = _rename_key(plan.text, item)
+        if renamed is None:
+            plan.manual_steps.append(f"[{item.old_table}] {item.old_key}")
+        else:
+            plan.text = renamed
+            plan.renamed_keys.append(item)
+
     if plan.changed and tomllib.loads(plan.text) != _expected(mine, theirs, plan):
         # The text edit did not mean what the plan says; never write it.
         plan.manual_steps.extend(step for steps in plan.added_steps.values() for step in steps)
         plan.manual_steps.extend(plan.added_groups)
         if plan.pinned_root is not None:
             plan.manual_steps.append("[data].root")
+        plan.manual_steps.extend(f"[{i.old_table}] {i.old_key}" for i in plan.renamed_keys)
         plan.added_steps, plan.added_groups, plan.pinned_root, plan.text = {}, [], None, text
+        plan.renamed_keys = []
     plan.manual_steps = sorted(set(plan.manual_steps))
     return plan

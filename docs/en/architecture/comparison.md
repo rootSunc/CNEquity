@@ -25,7 +25,7 @@ So the question is not which replaces which, but which stage your work is missin
 | Research semantics | Depends on the specific interface | Depends on the specific interface | Adjusted prices and factors provided; ST is a yes/no flag only | Raw prices and adjustment factors stored separately; delisted stocks kept; financial statements distinguish strict PIT from reconstructed after the fact |
 | Provenance | No row-level record | No row-level record | No row-level record | Every row carries `source`, `data_version`, `fetched_at` |
 | Use by AI agents | You wrap it yourself | You wrap it yourself | You wrap it yourself | `cne mcp` provides read-only tools, over both stdio and HTTP |
-| Coverage | Very broad: beyond A-shares, also Hong Kong and US stocks, funds, macro, global markets, etc. | Broad, unlocked by points | Shanghai and Shenzhen A-share history: prices, valuation and financials; no Beijing exchange | Focused on China markets: A-shares and their fundamentals, fund flows, and events, plus domestic futures and options, 55 datasets in total |
+| Coverage | Very broad: beyond A-shares, also Hong Kong and US stocks, funds, macro, global markets, etc. | Broad, unlocked by points | Shanghai and Shenzhen A-share history: prices, valuation and financials; no Beijing exchange | Focused on China markets: A-shares and their fundamentals, fund flows, and events, plus domestic futures and options, 86 datasets in total |
 
 ## When to use which
 

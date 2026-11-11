@@ -42,7 +42,6 @@ _RANKS: dict[str, int] = {
     "cnequity.run_scope": 0,
     # Registry, schemas, contracts, reference data: pure policy.
     "cnequity.domain": 10,
-    "cnequity.universe_profiles": 10,  # compatibility re-export of domain
     "cnequity.config": 20,
     "cnequity.compliance": 20,
     # Write primitives every layer persists through: atomic replace and the

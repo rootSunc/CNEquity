@@ -173,3 +173,55 @@ def test_catalog_support_table_matches_the_registry(catalog):
             documented[row.group(1)] = sorted(re.findall(r"`([a-z0-9_]+)`", row.group(2)))
     registered = {level: sorted(names) for level, names in datasets_by_support().items()}
     assert documented == registered
+
+
+# --- dataset counts in prose --------------------------------------------------
+# README, home pages, guides, comparison and runbooks quote how many datasets
+# there are. Two pages still said 55 at 86; sync_docs.py now writes them.
+
+
+def _sync_docs():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "sync_docs", Path(__file__).resolve().parents[2] / "scripts/dev/sync_docs.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_quoted_dataset_counts_follow_the_registry():
+    sync_docs = _sync_docs()
+    counts = sync_docs.dataset_counts()
+    assert counts["total"] == len(DATASETS) == counts["curated"] + counts["derived"]
+    stale = [
+        name
+        for name, render in sync_docs.TARGETS.items()
+        if name.startswith("counts:")
+        and (lambda path, text, _: path.read_text(encoding="utf-8") != text)(*render())
+    ]
+    assert not stale, f"run python scripts/dev/sync_docs.py: {stale}"
+
+
+def test_count_patterns_rewrite_the_number_only():
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/dev"))
+    import doc_counts
+
+    text = (
+        "支持 **86 个数据集**（78 个 curated、8 个 derived），只判 12 个核心档数据集。"
+        " 86 datasets (78 curated, 8 derived); the 12 core datasets."
+        " <strong>55</strong><span>registered datasets: 47 collected + 8 derived</span>"
+        " 86 industry boards; 2.86 datasets"
+    )
+    counts = {"total": 90, "curated": 81, "derived": 9, "core": 13}
+    out, found = doc_counts.render(text, counts)
+    assert found == 11
+    assert out == (
+        "支持 **90 个数据集**（81 个 curated、9 个 derived），只判 13 个核心档数据集。"
+        " 90 datasets (81 curated, 9 derived); the 13 core datasets."
+        " <strong>90</strong><span>registered datasets: 81 collected + 9 derived</span>"
+        " 86 industry boards; 2.86 datasets"
+    )

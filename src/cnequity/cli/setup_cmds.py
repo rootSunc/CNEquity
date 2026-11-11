@@ -956,6 +956,25 @@ def _config_upgrade(path: Path, *, dry_run: bool) -> None:
             ).format(path=path)
         )
         return
+    for item in plan.renamed_keys:
+        if item.shadowed:
+            click.echo(
+                _("Remove [{table}] {key} (ignored: [{new_table}] {new_key} is set)").format(
+                    table=item.old_table,
+                    key=item.old_key,
+                    new_table=item.new_table,
+                    new_key=item.new_key,
+                )
+            )
+        else:
+            click.echo(
+                _("Rename [{table}] {key} → [{new_table}] {new_key}").format(
+                    table=item.old_table,
+                    key=item.old_key,
+                    new_table=item.new_table,
+                    new_key=item.new_key,
+                )
+            )
     for table, steps in plan.added_steps.items():
         label = (
             f"[[job.daily.waves]] {table.removeprefix('wave:')}"

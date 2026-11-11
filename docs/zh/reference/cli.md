@@ -246,6 +246,7 @@ cne config upgrade
 - 示例配置同名组里有、你的任何组都没有的 step，追加到你的同名组；
 - 你没有的日更 / 事件流调度组，连同注释整段追加到文件末尾；
 - 只在示例 wave 里的 step，追加到你的同名 wave。
+- 改了名的配置项改成现名：`[orchestrator] tdx_daily_executor` → `tdx_daily_backend`，`[derive] workers` → `[orchestrator] derive_workers`，`[sources.<名>]` 里的 `concurrency` / `max_in_flight` / `workers` → `max_concurrency`。现名已经写了时，旧名本来就不起作用，直接删掉。旧名仍能读取，加载时会提示运行这条命令。
 
 改动前把原文件备份为 `cnequity.toml.bak-时间戳`，写完后校验配置。其余设置（时间、并发、凭证、开关）不动；缺少的配置项本来就用内置默认值，不写入文件，以免把当前默认值固定下来。`--dry-run` 只列出改动。内联表或点号键写法的组无法自动编辑，命令会列出需要手动加入的 step 并返回 1。
 
