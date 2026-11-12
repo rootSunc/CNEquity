@@ -1,0 +1,78 @@
+cnequity.domain.canonical -> imports cnequity.domain.action_evidence
+cnequity.domain.canonical -> imports cnequity.domain.trading_status
+cnequity.domain.canonical -> names dataset corporate_actions
+cnequity.domain.canonical -> names dataset daily_bars
+cnequity.domain.canonical -> names dataset financial_statement_items
+cnequity.domain.canonical -> names dataset index_constituents
+cnequity.domain.canonical -> names dataset instruments
+cnequity.domain.canonical -> names dataset trading_status
+cnequity.domain.canonical -> names vendor cni
+cnequity.domain.canonical -> names vendor cninfo
+cnequity.domain.http_policy -> names vendor cninfo
+cnequity.domain.http_policy -> names vendor eastmoney
+cnequity.domain.http_policy -> names vendor sina
+cnequity.domain.http_policy -> names vendor tdx
+cnequity.domain.http_policy -> names vendor ths
+cnequity.domain.rate_limit -> names vendor baostock
+cnequity.domain.rate_limit -> names vendor bse
+cnequity.domain.rate_limit -> names vendor cni
+cnequity.domain.rate_limit -> names vendor cninfo
+cnequity.domain.rate_limit -> names vendor eastmoney
+cnequity.domain.rate_limit -> names vendor jin10
+cnequity.domain.rate_limit -> names vendor nbs
+cnequity.domain.rate_limit -> names vendor pboc
+cnequity.domain.rate_limit -> names vendor sina
+cnequity.domain.rate_limit -> names vendor sw
+cnequity.domain.rate_limit -> names vendor tdx
+cnequity.domain.rate_limit -> names vendor ths
+cnequity.domain.rate_limit -> names vendor tushare
+cnequity.orchestrator.engine -> imports cnequity.derive
+cnequity.orchestrator.engine -> imports cnequity.domain.market_time
+cnequity.orchestrator.engine -> imports cnequity.steps
+cnequity.orchestrator.engine -> names dataset corporate_actions
+cnequity.orchestrator.engine -> names dataset daily_bars
+cnequity.orchestrator.worker_pool -> imports cnequity.adapters
+cnequity.orchestrator.worker_pool -> imports cnequity.steps
+cnequity.orchestrator.worker_pool -> names dataset daily_bars
+cnequity.orchestrator.worker_pool -> names vendor tdx
+cnequity.query.parquet_scan -> names dataset daily_bars
+cnequity.query.reader -> imports cnequity.adapters
+cnequity.query.reader -> imports cnequity.derive
+cnequity.query.reader -> imports cnequity.domain.action_sessions
+cnequity.query.reader -> imports cnequity.domain.market_profile
+cnequity.query.reader -> imports cnequity.domain.membership
+cnequity.query.reader -> imports cnequity.domain.universe_profiles
+cnequity.query.reader -> names dataset adj_factors
+cnequity.query.reader -> names dataset corporate_actions
+cnequity.query.reader -> names dataset daily_bars
+cnequity.query.reader -> names dataset financial_statement_items
+cnequity.query.reader -> names dataset flash_news_wire
+cnequity.query.reader -> names dataset index_bars
+cnequity.query.reader -> names dataset index_constituents
+cnequity.query.reader -> names dataset instruments
+cnequity.query.reader -> names dataset news_headlines
+cnequity.query.reader -> names dataset trading_calendar
+cnequity.query.reader -> names dataset trading_status
+cnequity.query.views -> imports cnequity.domain.central_banks
+cnequity.query.views -> imports cnequity.domain.market_profile
+cnequity.query.views -> names dataset adj_factors
+cnequity.query.views -> names dataset corporate_actions
+cnequity.query.views -> names dataset daily_bars
+cnequity.query.views -> names dataset economic_calendar
+cnequity.query.views -> names dataset flash_news_wire
+cnequity.query.views -> names dataset index_constituents
+cnequity.query.views -> names dataset instruments
+cnequity.query.views -> names dataset news_headlines
+cnequity.storage.merge_files -> names dataset adj_factors
+cnequity.storage.merge_files -> names dataset industry_index
+cnequity.storage.parquet -> imports cnequity.domain.action_evidence
+cnequity.storage.parquet -> imports cnequity.domain.trading_status
+cnequity.storage.parquet -> names dataset corporate_actions
+cnequity.storage.parquet -> names dataset daily_bars
+cnequity.storage.parquet -> names dataset index_constituents
+cnequity.storage.parquet -> names dataset instruments
+cnequity.storage.parquet -> names dataset trading_status
+cnequity.storage.provenance -> names vendor eastmoney
+cnequity.storage.provenance -> names vendor tushare
+cnequity.storage.revisions -> names dataset adj_factors
+cnequity.storage.snapshots -> names dataset adj_factors
