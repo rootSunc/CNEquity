@@ -130,6 +130,30 @@ def refresh_references(config_path: str):
     _emit(summary)
 
 
+@storage.command("sync-catalog")
+@config_option
+@click.option(
+    "--create",
+    is_flag=True,
+    help=N_(
+        "Create the lake catalog when it does not exist yet; the first run copies every dataset."
+    ),
+)
+def sync_catalog(config_path: str, create: bool):
+    """Bring the lake catalog to the committed revision of every dataset; reads the revision store only."""
+    from cnequity.storage.catalog_bridge import lake_root, sync_all, sync_summary
+    from equitylake_core.catalog import CATALOG_FILE, Catalog
+
+    config = _cfg(config_path)
+    root = lake_root(config)
+    if not create and not (root / CATALOG_FILE).exists():
+        raise click.ClickException(
+            _("No lake catalog at {root}; run again with --create to build it.").format(root=root)
+        )
+    with Catalog(root, create=create, memory_limit="8GB", temp_directory=root / "tmp") as catalog:
+        _emit(sync_summary(sync_all(config, catalog)))
+
+
 @storage.command("hold")
 @config_option
 @click.argument("object_id")

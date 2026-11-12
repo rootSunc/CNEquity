@@ -263,6 +263,18 @@ def maintain(config_path: str, groups: str | None, notify: bool):
         click.echo(_("Revision sweep failed: {exc}").format(exc=exc), err=True)
         notes.append(_("Revision sweep"))
 
+    # Only a lake that already has a catalog is kept in step; building one is
+    # a deliberate `cne storage sync-catalog --create`.
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import CATALOG_FILE
+
+    if (lake_root(cfg) / CATALOG_FILE).exists():
+        click.echo(f"--- {_('Lake catalog sync')} ---", err=True)
+        if subprocess.run(
+            _cne("storage", "sync-catalog", "--config", path), check=False
+        ).returncode:
+            notes.append(_("Lake catalog sync"))
+
     click.echo(f"--- {_('Metadata backup')} ---", err=True)
     try:
         result = backup_meta(

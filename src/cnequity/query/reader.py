@@ -532,7 +532,24 @@ def _read_dataset(
 
     partition_col = DATE_COLUMNS.get(dataset) or partition_col_for_dataset(dataset)
     df = pl.DataFrame()
-    if published:
+    from_catalog = None
+    if published and revision is None:
+        from cnequity.query.catalog_read import read_published
+
+        # A read context pins one generation per dataset; its directory is
+        # named after the revision, and the catalog answers only for that one.
+        from_catalog = read_published(
+            config,
+            dataset,
+            partition_col=partition_col,
+            start=start,
+            end=end,
+            symbols=symbols,
+            revision_id=root.name if read_context else None,
+        )
+    if from_catalog is not None:
+        df = from_catalog
+    elif published:
         try:
             df = collect_parquet_root(
                 root,

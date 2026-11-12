@@ -1120,7 +1120,22 @@ class RevisionStore:
                     "updated_at": committed_at,
                 }
             )
+        self._sync_lake_catalog(dataset)
         return receipt
+
+    def _sync_lake_catalog(self, dataset: str) -> None:
+        """Carry the revision just published into the lake catalog, when the lake has one.
+
+        The revision store is still the source of truth, so this never fails a
+        publish: if the catalog cannot be updated it stays one revision behind,
+        readers keep scanning this store, and the next sync catches up.
+        """
+        from cnequity.storage.catalog_bridge import sync_published
+
+        try:
+            sync_published(self, dataset)
+        except Exception as exc:  # noqa: BLE001 - the publish already succeeded
+            logger.warning("lake catalog not updated for %s: %s", dataset, exc)
 
     def latest(self, dataset: str) -> DatasetRevision | None:
         """Read the receipt referenced by the current committed pointer."""

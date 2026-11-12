@@ -85,6 +85,7 @@
 | `cne storage raw-external` | 无 | 登记外置原文目录；本地保留来源记录，不移动或删除文件 |
 | `cne storage refresh` | 无 | 重新扫描引用目录，为其中提到的版本增加保留；不会解除保留 |
 | `cne storage release` | 无 | 解除指定版本的手动保留与失效引用；案例依赖和仍有效的引用保留 |
+| `cne storage sync-catalog` | 无 | 把湖目录同步到已发布版本；只读版本库，只写 lake/ 目录 |
 | `cne ths-official backfill` | 执行时 | 调用凭证源并补缺 |
 | `cne ths-official capture` | 执行时 | 调用凭证源并写对照证据 |
 | `cne ths-official repair-bars` | 执行时 | 预演也取数；--apply 写修复 |

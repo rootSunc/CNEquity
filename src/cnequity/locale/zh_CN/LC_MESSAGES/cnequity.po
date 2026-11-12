@@ -1695,6 +1695,10 @@ msgstr "二进制 TCP 协议，与所有 HTTP 源不共享风控面。海外直�
 msgid "Bind the profile to concrete symbols and include concrete_scope_hash."
 msgstr "把 profile 绑定到具体标的，并附带 concrete_scope_hash。"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Bring the lake catalog to the committed revision of every dataset; reads the revision store only."
+msgstr "把湖目录同步到每个数据集的已发布版本；只读取版本库，不写入。"
+
 #: cnequity/cli/consume_cmds.py
 msgid "Browse only. Do not register the write endpoints of the operations page and storage cleanup."
 msgstr "只浏览。不注册操作页和存储清理的写入口。"
@@ -2134,6 +2138,10 @@ msgstr "创建数据备份"
 #: cnequity/cli/setup_cmds.py
 msgid "Create only directories, the manifest and DuckDB views; skip the init stages."
 msgstr "只建目录、manifest 和 DuckDB 视图，跳过 init 各阶段。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Create the lake catalog when it does not exist yet; the first run copies every dataset."
+msgstr "湖目录不存在时先创建；首次运行会复制全部数据集。"
 
 #: cnequity/cli/govern_cmds.py
 msgid "Create, verify and apply portable delta packages."
@@ -3425,6 +3433,10 @@ msgstr "每个数据集保留最近 {keep} 代，删掉更早的 {removed} 代�
 msgid "Keys to probe, comma-separated; costly/challenged endpoints are probed only when listed explicitly."
 msgstr "要探测的 key，逗号分隔；高成本/已受挑战的端点仅在显式列出时探测。"
 
+#: cnequity/cli/schedule_cmds.py
+msgid "Lake catalog sync"
+msgstr "同步湖目录"
+
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
 msgid "Lake health @ last trading day {last_trading_day}"
@@ -3722,6 +3734,11 @@ msgstr "没有致命问题，{warnings} 个警告。"
 #: cnequity/diagnostics/source_health.py
 msgid "No futures daily quote file was fetched for either of the last two weekdays"
 msgstr "最近两个工作日都没有取到期货日行情文件"
+
+#: cnequity/cli/storage_cmds.py
+#, python-brace-format
+msgid "No lake catalog at {root}; run again with --create to build it."
+msgstr "{root} 下没有湖目录；加 --create 重新运行来创建。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
