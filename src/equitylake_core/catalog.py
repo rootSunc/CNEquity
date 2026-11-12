@@ -122,6 +122,15 @@ class Catalog:
     def execute(self, query: str, parameters: Sequence[Any] | None = None):
         return self.con.execute(query, parameters) if parameters else self.con.execute(query)
 
+    def relation(self, query: str, parameters: Sequence[Any] | None = None):
+        """A lazy DuckDB relation for *query*, convertible to Arrow, Polars or pandas.
+
+        A row fetched with ``fetchone`` leaves its result open, and DuckDB
+        refuses a new relation until that result is finished; drop it first.
+        """
+        self.con.abort()
+        return self.con.sql(query, params=parameters) if parameters else self.con.sql(query)
+
     def snapshot(self) -> int:
         """The number of the latest committed snapshot."""
         return self.con.execute(

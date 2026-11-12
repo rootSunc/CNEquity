@@ -1,9 +1,9 @@
 """Read a dataset's committed rows from the lake catalog instead of scanning its generation.
 
-Off unless ``CNE_READ_CATALOG`` is set. Even then the catalog answers only
-when its table holds exactly the committed revision; in every other case the
-caller gets ``None`` and scans the revision store as before, so turning this
-on can never return older data than turning it off.
+On when the lake has a catalog; ``CNE_READ_CATALOG=0`` turns it off. The
+catalog answers only when its table holds exactly the revision the read is
+pinned to; in every other case the caller gets ``None`` and scans the
+revision store, so the catalog can never return older data than the scan.
 """
 
 from __future__ import annotations
@@ -13,12 +13,18 @@ import os
 import threading
 from datetime import date
 from pathlib import Path
+from typing import NamedTuple
 
 import polars as pl
 
 from cnequity.domain.datasets import granularity_for_dataset
 from cnequity.domain.partitions import partition_value
-from cnequity.storage.catalog_bridge import catalog_is_current, lake_root, synced_revision
+from cnequity.storage.catalog_bridge import (
+    catalog_is_current,
+    keys_unique,
+    lake_root,
+    synced_revision,
+)
 from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog, quote_identifier
 
 logger = logging.getLogger(__name__)
@@ -29,8 +35,14 @@ _lock = threading.Lock()
 _open: dict[Path, Catalog] = {}
 
 
+class CatalogRows(NamedTuple):
+    frame: pl.DataFrame
+    # One row per primary key: nothing left to dedupe.
+    unique_keys: bool
+
+
 def enabled() -> bool:
-    return os.environ.get(ENV_SWITCH, "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.environ.get(ENV_SWITCH, "").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _catalog(config) -> Catalog | None:
@@ -62,7 +74,7 @@ def read_published(
     end: date | None = None,
     symbols: list[str] | None = None,
     revision_id: str | None = None,
-) -> pl.DataFrame | None:
+) -> CatalogRows | None:
     """The committed rows of *dataset* in the requested range, or ``None`` to scan instead.
 
     Filters mean what they mean in ``scan_parquet_root``: inclusive bounds on
@@ -105,10 +117,9 @@ def read_published(
                 clauses.append("symbol IN (" + ", ".join("?" for _ in symbols) + ")")
                 values.extend(symbols)
             where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-            # The lock makes this the connection's only statement, so no cursor is needed.
-            query = f"SELECT * FROM {ALIAS}.{table}{where}"
-            relation = catalog.con.sql(query, params=values) if values else catalog.con.sql(query)
-            return relation.pl()
+            unique = bool(keys_unique(catalog, dataset))
+            relation = catalog.relation(f"SELECT * FROM {ALIAS}.{table}{where}", values)
+            return CatalogRows(relation.pl(), unique)
     except Exception as exc:  # noqa: BLE001 - the scan is always a correct answer
         logger.warning("catalog read of %s failed, scanning instead: %s", dataset, exc)
         return None

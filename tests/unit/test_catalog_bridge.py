@@ -175,17 +175,22 @@ def catalog_reads(monkeypatch):
     catalog_read.close_all()
 
 
-def test_the_reader_uses_the_catalog_only_when_it_is_switched_on(cfg, lake, monkeypatch):
+def test_the_catalog_answers_unless_switched_off(cfg, lake, monkeypatch):
     from cnequity.query import catalog_read
 
     sync_dataset(cfg, lake, "daily_bars")
-    monkeypatch.delenv(catalog_read.ENV_SWITCH, raising=False)
+    monkeypatch.setenv(catalog_read.ENV_SWITCH, "0")
     assert catalog_read.read_published(cfg, "daily_bars", partition_col="trade_date") is None
+    monkeypatch.delenv(catalog_read.ENV_SWITCH)
+    rows = catalog_read.read_published(cfg, "daily_bars", partition_col="trade_date")
+    catalog_read.close_all()
+    # One row per key: the reader has nothing left to dedupe.
+    assert rows.unique_keys and rows.frame.height == 3
 
 
 def test_catalog_reads_filter_like_the_partition_scan(cfg, lake, catalog_reads):
     sync_dataset(cfg, lake, "daily_bars")
-    everything = catalog_reads.read_published(cfg, "daily_bars", partition_col="trade_date")
+    everything = catalog_reads.read_published(cfg, "daily_bars", partition_col="trade_date").frame
     assert everything.height == 3
     assert everything.schema["fetched_at"] == pl.Datetime("us", "UTC")
     ranged = catalog_reads.read_published(
@@ -195,7 +200,7 @@ def test_catalog_reads_filter_like_the_partition_scan(cfg, lake, catalog_reads):
         start=date(2024, 1, 2),
         end=date(2024, 1, 31),
         symbols=["600000.SH"],
-    )
+    ).frame
     assert ranged.select("symbol", "trade_date").rows() == [("600000.SH", date(2024, 1, 2))]
 
 
@@ -204,7 +209,10 @@ def test_a_catalog_behind_the_revision_store_is_not_read(cfg, lake, catalog_read
     _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
     assert catalog_reads.read_published(cfg, "daily_bars", partition_col="trade_date") is None
     sync_dataset(cfg, lake, "daily_bars")
-    assert catalog_reads.read_published(cfg, "daily_bars", partition_col="trade_date").height == 4
+    assert (
+        catalog_reads.read_published(cfg, "daily_bars", partition_col="trade_date").frame.height
+        == 4
+    )
 
 
 @pytest.fixture(autouse=True)

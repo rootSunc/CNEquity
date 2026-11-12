@@ -197,6 +197,11 @@ def otc_quote_expr(
     )
 
 
+def otc_candidate_expr(symbol: str = "symbol") -> pl.Expr:
+    """Polars predicate: the only rows :func:`otc_quote_expr` can ever select."""
+    return pl.col(symbol).str.ends_with(f".{BJ.exchange}")
+
+
 def otc_quote_sql(symbol: str, day: str, list_date: str) -> str:
     """The same predicate in DuckDB SQL, for the views."""
     floor = BJ.era("neeq_select").start.isoformat()

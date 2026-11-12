@@ -15,7 +15,10 @@ import polars as pl
 from cnequity.config import Config, load_config
 from cnequity.derive.adj_factors import STORED_ADJUST_TYPE
 from cnequity.domain.action_sessions import effective_session
-from cnequity.domain.canonical import dedupe_by_primary_key
+from cnequity.domain.canonical import (
+    dedupe_by_primary_key,
+    one_book_per_index_date,
+)
 from cnequity.domain.datasets import (
     DATASETS,
     DERIVE_COMMAND_DATASETS,
@@ -23,7 +26,11 @@ from cnequity.domain.datasets import (
     derived_dataset_names,
     pit_dataset_names,
 )
-from cnequity.domain.market_profile import OTC_SCOPED_DATASETS, otc_quote_expr
+from cnequity.domain.market_profile import (
+    OTC_SCOPED_DATASETS,
+    otc_candidate_expr,
+    otc_quote_expr,
+)
 from cnequity.domain.pit import (
     PIT_STORAGE_COLUMNS,
     PitMode,
@@ -454,11 +461,20 @@ def _drop_otc_quotes(
         if not instruments.is_empty() and "list_date" in instruments.columns
         else pl.DataFrame(schema={"symbol": pl.Utf8, "list_date": pl.Date})
     )
-    return (
-        df.join(listing.rename({"list_date": "_list_date"}), on="symbol", how="left")
-        .filter(~otc_quote_expr(day=date_col, list_date="_list_date").fill_null(False))
-        .drop("_list_date")
+    listing = listing.rename({"list_date": "_list_date"})
+    early = otc_quote_expr(day=date_col, list_date="_list_date").fill_null(False)
+    # Only Beijing rows can be early, and most reads hold none: look at those
+    # few rows first and leave the frame untouched when nothing is dropped.
+    candidates = df.lazy().filter(otc_candidate_expr())
+    drop = (
+        candidates.join(listing.lazy(), on="symbol", how="left")
+        .filter(early)
+        .select("symbol", date_col)
+        .collect()
     )
+    if drop.is_empty():
+        return df
+    return df.join(drop, on=["symbol", date_col], how="anti", maintain_order="left")
 
 
 def _preview_can_answer(dataset: str, symbols, revision, read_context) -> bool:
@@ -548,7 +564,7 @@ def _read_dataset(
             revision_id=root.name if read_context else None,
         )
     if from_catalog is not None:
-        df = from_catalog
+        df = from_catalog.frame
     elif published:
         try:
             df = collect_parquet_root(
@@ -564,6 +580,7 @@ def _read_dataset(
             )
         except FileNotFoundError as exc:
             raise ReaderError(_missing_dataset_message(dataset, root, config)) from exc
+    before_preview = df
     df = _with_daily_bar_preview(
         config,
         df,
@@ -574,6 +591,7 @@ def _read_dataset(
         revision=revision,
         read_context=read_context,
     )
+    previewed = df is not before_preview
     if df.is_empty() and not published:
         raise ReaderError(_missing_dataset_message(dataset, root, config))
     if not include_otc and dataset in OTC_SCOPED_DATASETS and not df.is_empty():
@@ -615,6 +633,9 @@ def _read_dataset(
         df = validate_dataframe(df, dataset)
         if dataset in PIT_DATASETS:
             return retain_pit_vintages(df, dataset)
+        if from_catalog is not None and from_catalog.unique_keys and not previewed:
+            # The catalog already holds one row per key: nothing to dedupe.
+            return one_book_per_index_date(df, dataset)
         return dedupe_by_primary_key(df, dataset)
     return df
 
@@ -1362,7 +1383,12 @@ def load(
         order = (DATE_COLUMNS.get(dataset), "symbol")
     sort_cols = [c for c in order if c and c in df.columns]
     if sort_cols:
-        df = df.sort(sort_cols)
+        # The rest of the key breaks ties, so the order does not depend on
+        # which files the rows came from or how they were scanned.
+        sort_cols += [
+            c for c in PRIMARY_KEYS.get(dataset, []) if c in df.columns and c not in sort_cols
+        ]
+        df = df.sort(sort_cols, nulls_last=True)
     return df
 
 

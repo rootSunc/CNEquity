@@ -132,8 +132,11 @@ class SyncResult:
 def _ensure_sync_table(catalog: Catalog) -> None:
     catalog.execute(
         f"CREATE TABLE IF NOT EXISTS {SYNC_TABLE} "
-        "(dataset VARCHAR, revision_id VARCHAR, files VARCHAR)"
+        "(dataset VARCHAR, revision_id VARCHAR, files VARCHAR, unique_keys BOOLEAN)"
     )
+    columns = {row[0] for row in catalog.execute(f"DESCRIBE {SYNC_TABLE}").fetchall()}
+    if "unique_keys" not in columns:  # a catalog synced before the flag existed
+        catalog.execute(f"ALTER TABLE {SYNC_TABLE} ADD COLUMN unique_keys BOOLEAN")
 
 
 def synced_revision(catalog: Catalog, dataset: str) -> tuple[str, dict[str, str]] | None:
@@ -146,11 +149,81 @@ def synced_revision(catalog: Catalog, dataset: str) -> tuple[str, dict[str, str]
     return (row[0], json.loads(row[1])) if row else None
 
 
-def _record_sync(catalog: Catalog, dataset: str, revision_id: str, files: dict[str, str]) -> None:
+def keys_unique(catalog: Catalog, dataset: str) -> bool | None:
+    """Whether the catalog table has one row per primary key; ``None`` when not yet checked."""
+    if not catalog.has_table(SYNC_TABLE):
+        return None
+    columns = {row[0] for row in catalog.execute(f"DESCRIBE {SYNC_TABLE}").fetchall()}
+    if "unique_keys" not in columns:
+        return None
+    row = catalog.execute(
+        f"SELECT unique_keys FROM {SYNC_TABLE} WHERE dataset = ?", [dataset]
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _record_sync(
+    catalog: Catalog,
+    dataset: str,
+    revision_id: str,
+    files: dict[str, str],
+    unique: bool | None = None,
+) -> None:
     catalog.execute(f"DELETE FROM {SYNC_TABLE} WHERE dataset = ?", [dataset])
     catalog.execute(
-        f"INSERT INTO {SYNC_TABLE} VALUES (?, ?, ?)",
-        [dataset, revision_id, json.dumps(files, sort_keys=True)],
+        f"INSERT INTO {SYNC_TABLE} VALUES (?, ?, ?, ?)",
+        [dataset, revision_id, json.dumps(files, sort_keys=True), unique],
+    )
+
+
+# A whole-table key check groups every row; past this size it does not fit in
+# memory, and the table is checked one partition at a time instead.
+WHOLE_TABLE_CHECK_MAX_ROWS = 100_000_000
+
+
+def _has_duplicate_keys(catalog: Catalog, dataset: str, where: str | None = None) -> bool:
+    keys = ", ".join(quote_identifier(key) for key in PRIMARY_KEYS[dataset])
+    scope = f" WHERE {where}" if where else ""
+    return (
+        catalog.execute(
+            f"SELECT 1 FROM {quote_identifier(dataset)}{scope} "
+            f"GROUP BY {keys} HAVING count(*) > 1 LIMIT 1"
+        ).fetchone()
+        is not None
+    )
+
+
+def _partition_key_column(catalog: Catalog, dataset: str) -> str | None:
+    """The date partition column, when it is part of the key: partitions then cannot share a key."""
+    column = DATASETS[dataset].partition_col
+    if not column or column not in PRIMARY_KEYS.get(dataset, ()):
+        return None
+    types = {
+        row[0]: row[1]
+        for row in catalog.execute(f"DESCRIBE {quote_identifier(dataset)}").fetchall()
+    }
+    return column if types.get(column, "").startswith(("DATE", "TIMESTAMP")) else None
+
+
+def _table_keys_unique(catalog: Catalog, dataset: str) -> bool:
+    """One row per primary key in the whole table. PIT datasets keep vintages, so never."""
+    keys = PRIMARY_KEYS.get(dataset) or []
+    table = quote_identifier(dataset)
+    columns = {row[0] for row in catalog.execute(f"DESCRIBE {table}").fetchall()}
+    if DATASETS[dataset].pit or not keys or not set(keys) <= columns:
+        return False
+    rows = catalog.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+    if rows <= WHOLE_TABLE_CHECK_MAX_ROWS:
+        return not _has_duplicate_keys(catalog, dataset)
+    column = _partition_key_column(catalog, dataset)
+    if column is None:
+        return False
+    name = quote_identifier(column)
+    months = catalog.execute(f"SELECT DISTINCT year({name}), month({name}) FROM {table}").fetchall()
+    return not any(
+        _has_duplicate_keys(catalog, dataset, f"year({name}) = {year} AND month({name}) = {month}")
+        for year, month in months
+        if year is not None
     )
 
 
@@ -229,7 +302,7 @@ def _order_by(dataset: str) -> str:
 
 def _replace_partitions(
     catalog: Catalog, dataset: str, root: Path, new: dict[str, str], changed: list[str]
-) -> None:
+) -> str:
     table = quote_identifier(dataset)
     spec = DATASETS[dataset]
     types = {row[0]: row[1] for row in catalog.execute(f"DESCRIBE {table}").fetchall()}
@@ -248,7 +321,7 @@ def _replace_partitions(
     relatives = [relative for relative in new if _partition_of(relative) in set(changed)]
     catalog.execute(f"DELETE FROM {table} WHERE {where}")
     if not relatives:
-        return
+        return where
     scan = _file_list(root, relatives)
     _add_missing_columns(catalog, table, scan)
     inserted = catalog.execute(
@@ -259,6 +332,7 @@ def _replace_partitions(
         raise _PartitionSyncMismatch(
             f"{dataset}: predicate selects {selected} rows, partition files hold {inserted}"
         )
+    return where
 
 
 def _replace_table(catalog: Catalog, dataset: str, root: Path, new: dict[str, str]) -> None:
@@ -285,10 +359,13 @@ def sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
     _ensure_sync_table(catalog)
     if not catalog.has_table(dataset):
         import_dataset(config, catalog, dataset)
-        _record_sync(catalog, dataset, revision_id, new)
+        _record_sync(catalog, dataset, revision_id, new, _table_keys_unique(catalog, dataset))
         return SyncResult(dataset, "imported", revision_id)
     previous = synced_revision(catalog, dataset)
+    was_unique = keys_unique(catalog, dataset)
     if previous is not None and previous[0] == revision_id:
+        if was_unique is None:  # synced before the flag existed: check once
+            _record_sync(catalog, dataset, revision_id, new, _table_keys_unique(catalog, dataset))
         return SyncResult(dataset, "current", revision_id)
 
     changed: list[str] | None = None
@@ -306,15 +383,23 @@ def sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
     if changed is not None:
         try:
             with catalog.transaction(message=message):
+                unique = was_unique
                 if changed:
-                    _replace_partitions(catalog, dataset, root, new, changed)
-                _record_sync(catalog, dataset, revision_id, new)
+                    where = _replace_partitions(catalog, dataset, root, new, changed)
+                    if was_unique and _partition_key_column(catalog, dataset):
+                        # Other partitions cannot hold these keys: check the new rows only.
+                        unique = not _has_duplicate_keys(catalog, dataset, where)
+                    else:
+                        unique = _table_keys_unique(catalog, dataset)
+                elif unique is None:
+                    unique = _table_keys_unique(catalog, dataset)
+                _record_sync(catalog, dataset, revision_id, new, unique)
             return SyncResult(dataset, "partitions", revision_id, len(changed))
         except _PartitionSyncMismatch:
             pass
     with catalog.transaction(message=message):
         _replace_table(catalog, dataset, root, new)
-        _record_sync(catalog, dataset, revision_id, new)
+        _record_sync(catalog, dataset, revision_id, new, _table_keys_unique(catalog, dataset))
     return SyncResult(dataset, "replaced", revision_id)
 
 
