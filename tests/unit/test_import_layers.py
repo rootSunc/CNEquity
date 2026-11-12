@@ -74,6 +74,9 @@ _RANKS: dict[str, int] = {
     # order, the trading calendar). They sit beside storage, below the
     # load()/views read API that the rest of ``query`` provides.
     "cnequity.query.parquet_scan": 40,
+    # The partition scan asks the lake catalog for a generation's files; the
+    # catalog reader needs only storage and domain.
+    "cnequity.query.catalog_read": 40,
     "cnequity.query.calendar": 40,
     "cnequity.query": 50,
     "cnequity.quality": 60,

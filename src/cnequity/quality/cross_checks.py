@@ -3013,7 +3013,7 @@ def untraded_instrument_findings(config: Config, trade_date: date) -> list[dict]
     if untraded.is_empty():
         return []
 
-    sample = untraded.sort("rows", descending=True).head(5)
+    sample = untraded.sort(["rows", "symbol"], descending=[True, False]).head(5)
     return [
         {
             "dataset": "daily_bars",

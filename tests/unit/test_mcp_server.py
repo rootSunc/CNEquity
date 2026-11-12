@@ -1015,7 +1015,7 @@ def _fund_flow_days(lake, days: list[date]) -> list[int]:
                 **_prov("eastmoney"),
             }
         ).write_parquet(path)
-        sizes.append(path.stat().st_size)
+        sizes.append(pl.read_parquet(path).height)
     return sizes
 
 
@@ -1025,7 +1025,7 @@ _FLOW_DAYS = [date(2024, 6, 24), date(2024, 6, 25), date(2024, 6, 26), date(2024
 def test_query_dataset_refuses_an_oversized_read_before_loading(lake, monkeypatch):
     sizes = _fund_flow_days(lake, _FLOW_DAYS)
     # Room for the newest two days, not all four.
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", sizes[-1] + sizes[-2])
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", sizes[-1] + sizes[-2])
 
     def _must_not_load(*_args, **_kwargs):
         raise AssertionError("an oversized read must be refused before load()")
@@ -1042,7 +1042,7 @@ def test_query_dataset_refuses_an_oversized_read_before_loading(lake, monkeypatc
 
 def test_query_dataset_serves_the_window_it_suggested(lake, monkeypatch):
     sizes = _fund_flow_days(lake, _FLOW_DAYS)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", sizes[-1] + sizes[-2])
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", sizes[-1] + sizes[-2])
     payload = tools.query_dataset(lake, dataset="fund_flow", start="2024-06-26", end="2024-06-27")
     assert payload["total"] == 4
     assert {row[1] for row in payload["rows"]} == {"2024-06-26", "2024-06-27"}
@@ -1050,14 +1050,14 @@ def test_query_dataset_serves_the_window_it_suggested(lake, monkeypatch):
 
 def test_query_dataset_suggestion_stays_inside_the_requested_window(lake, monkeypatch):
     sizes = _fund_flow_days(lake, _FLOW_DAYS)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", sizes[0] + sizes[1])
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", sizes[0] + sizes[1])
     with pytest.raises(tools.ToolError, match="start=2024-06-25 end=2024-06-26 fits"):
         tools.query_dataset(lake, dataset="fund_flow", start="2024-06-24", end="2024-06-26")
 
 
 def test_query_dataset_short_symbol_lists_are_not_budgeted(lake, monkeypatch):
     _fund_flow_days(lake, _FLOW_DAYS)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", 1)
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", 1)
     payload = tools.query_dataset(lake, dataset="fund_flow", symbols="600519.SH")
     assert payload["total"] == 4
     many = [f"{n:06d}.SZ" for n in range(tools._SYMBOL_SCAN_EXEMPT)] + ["600519.SH"]
@@ -1067,7 +1067,7 @@ def test_query_dataset_short_symbol_lists_are_not_budgeted(lake, monkeypatch):
 
 def test_query_dataset_leaves_bad_dates_to_the_reader(lake, monkeypatch):
     _fund_flow_days(lake, _FLOW_DAYS)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", 1)
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", 1)
     with pytest.raises(ValueError, match="isoformat|Invalid"):
         tools.query_dataset(lake, dataset="fund_flow", start="last tuesday")
 
@@ -1091,8 +1091,8 @@ def test_read_budget_prunes_derived_datasets_by_partition(tmp_path, monkeypatch)
     for day in ("2024-06-26", "2024-06-27"):
         part = config.derived_root / name / f"{DATASETS[name].partition_col}={day}"
         part.mkdir(parents=True)
-        (part / "part-0.parquet").write_bytes(b"x" * 1000)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_BYTES", 1500)
+        pl.DataFrame({"n": range(1000)}).write_parquet(part / "part-0.parquet")
+    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", 1500)
     tools._refuse_oversized_read(config, name, start="2024-06-27", end=None, symbols=None)
     with pytest.raises(tools.ToolError, match="budget"):
         tools._refuse_oversized_read(config, name, start=None, end=None, symbols=None)

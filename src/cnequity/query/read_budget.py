@@ -1,10 +1,10 @@
-"""How much Parquet one paged read would load, sized before anything is read.
+"""How many rows one paged read would load, sized before anything is read.
 
-``load()`` canonicalises the whole selection before a page is cut, so memory
-follows what is read, not what is returned. Measured on a real lake, an
-unwindowed read held 2.6 GB for ``margin_trading`` (142 MiB on disk) and 4.8 GB
-for ``option_greeks`` (567 MiB) to return 200 rows; one ``trade_ticks`` day
-(145 MiB) peaked at 5.2 GB, and all of ``trade_ticks`` (5.7 GiB) would not fit
+``load()`` holds the whole selection before a page is cut, so memory follows
+what is read, not what is returned. Measured on a real lake, reading all of
+``margin_trading`` (7.0M rows) peaked at 2.5 GB and all of ``option_greeks``
+(14.5M rows) at 10.8 GB to return 200 rows; one ``trade_ticks`` day (14.7M
+rows) peaked at 5.5 GB, and all of ``trade_ticks`` (633M rows) would not fit
 in memory at all. MCP ``query_dataset`` and the dashboard's row viewer both
 refuse a selection over the budget instead of reading it.
 """
@@ -12,14 +12,19 @@ refuse a selection over the budget instead of reading it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
-from pathlib import Path
+from datetime import date, timedelta
 
 from cnequity.config import Config
-from cnequity.domain.datasets import DATASETS
 
-#: Compressed Parquet one paged read may select when nothing narrows it by symbol.
-SCAN_BUDGET_BYTES = 64 * 2**20
+#: Rows one paged read may select when nothing narrows it by symbol.
+#:
+#: Rows, not bytes: peak memory follows the rows a read decodes, while the
+#: same rows take very different space on disk depending on compression and
+#: sort order (the lake catalog stores ``trade_ticks`` in 40% of the bytes the
+#: revision store did, and reading a day of it still peaks at 5.5 GB). The
+#: earlier 64 MiB of compressed Parquet came to 3-7 million rows on a real
+#: lake, a 1.5-3 GB peak.
+SCAN_BUDGET_ROWS = 4_000_000
 
 #: A short symbol list is pushed into the scan and keeps the read small (one
 #: symbol over all of ``margin_trading`` peaked at 0.3 GB), so it is not
@@ -31,32 +36,14 @@ SYMBOL_SCAN_EXEMPT = 20
 class OversizedRead:
     """A selection over the budget, with what a caller needs to suggest a smaller one."""
 
-    selected_bytes: int
-    budget_bytes: int
+    selected_rows: int
+    budget_rows: int
     #: First and last day the dataset's partitions cover.
     covers: tuple[date, date] | None
     #: The newest window inside the request that fits the budget.
     fits: tuple[date, date] | None
     #: Set when even the newest period in the request is over the budget.
     newest_over: str | None
-
-
-def committed_partitions(config: Config, dataset: str) -> tuple[Path, str | None]:
-    """The committed generation's root and partition column for *dataset*."""
-    from cnequity.storage.locator import logical_root
-    from cnequity.storage.revisions import resolve_committed_root
-
-    root = resolve_committed_root(
-        logical_root(config, dataset), dataset=dataset, meta_root=config.meta_root
-    )
-    # The registry, not the legacy PARTITION_COLS table: that one has no
-    # derived datasets, which would size a windowed option_greeks read as the
-    # whole dataset and refuse it.
-    return root, DATASETS[dataset].partition_col
-
-
-def _files_bytes(files: list) -> int:
-    return sum(path.stat().st_size for path in files)
 
 
 def oversized_read(
@@ -77,47 +64,72 @@ def oversized_read(
     """
     if symbols and len(symbols) <= SYMBOL_SCAN_EXEMPT:
         return None
-    budget = SCAN_BUDGET_BYTES if budget is None else budget
-    from cnequity.query.parquet_scan import list_partitions, partition_dir, partition_files_in_range
+    budget = SCAN_BUDGET_ROWS if budget is None else budget
+    from cnequity.storage.published import published
 
     names = [dataset, "news_headlines"] if dataset == "flash_news_wire" else [dataset]
-    selected = 0
     try:
-        for name in names:
-            root, column = committed_partitions(config, name)
-            if not root.is_dir():
-                continue
-            if column:
-                files = partition_files_in_range(root, column, start=start, end=end, resolve=False)
-            else:
-                files = sorted(root.rglob("*.parquet"))
-            selected += _files_bytes(files)
-        if selected <= budget:
-            return None
-        root, column = committed_partitions(config, dataset)
-        parts = list_partitions(root, column, resolve=False) if column else []
+        stores = {name: published(config, name) for name in names}
     except (OSError, ValueError, RuntimeError):
+        return None
+    selected = sum(
+        _range_rows(group, start, end)
+        for store in stores.values()
+        for group in store.in_range(start, end)
+    )
+    if selected <= budget:
         return None
 
     covers = fits = newest_over = None
-    in_window = [p for p in parts if p.overlaps(start, end)]
+    groups = sorted(
+        (g for g in stores[dataset].groups if g.low is not None and g.high is not None),
+        key=lambda g: (g.low, g.high),
+    )
+    in_window = [g for g in groups if g.overlaps(start, end)]
     if in_window:
-        covers = (parts[0].start, parts[-1].end)
+        covers = (groups[0].low, max(g.high for g in groups))
         # Newest first: the recent end of a series is what a page is usually for.
-        used, first = 0, None
-        for part in reversed(in_window):
-            part_bytes = _files_bytes(
-                sorted(partition_dir(root, column, part.value).glob("**/*.parquet"))
-            )
-            if first is not None and used + part_bytes > budget:
-                break
-            used += part_bytes
-            first = part
-        if first is in_window[-1] and used > budget:
-            newest_over = first.value
+        last = min(in_window[-1].high, end) if end else in_window[-1].high
+        used, earliest = 0, None
+        for group in reversed(in_window):
+            low = max(group.low, start) if start else group.low
+            high = min(group.high, end) if end else group.high
+            group_rows = _range_rows(group, start, end)
+            if used + group_rows <= budget:
+                used += group_rows
+                earliest = low
+                continue
+            # Only part of this group fits: take its newest days, at its
+            # average size per day. One catalog file can hold a whole table.
+            per_day = group.rows / ((group.high - group.low).days + 1)
+            days = int((budget - used) // per_day) if per_day else 0
+            if days >= 1:
+                earliest = max(low, high - timedelta(days=days - 1))
+            break
+        if earliest is None:
+            newest_over = _period_label(in_window[-1])
         else:
-            fits = (
-                max(first.start, start) if start else first.start,
-                min(in_window[-1].end, end) if end else in_window[-1].end,
-            )
+            fits = (earliest, last)
     return OversizedRead(selected, budget, covers, fits, newest_over)
+
+
+def _range_rows(group, start: date | None, end: date | None) -> int:
+    """The share of a group's rows that ``start..end`` covers, by days.
+
+    A catalog file can span a month while a request ends mid-month; counting
+    the whole file would refuse a read that selects a fraction of it.
+    """
+    if group.low is None or group.high is None:
+        return group.rows
+    low = max(group.low, start) if start else group.low
+    high = min(group.high, end) if end else group.high
+    if high < low:
+        return 0
+    days = (group.high - group.low).days + 1
+    return group.rows * ((high - low).days + 1) // days
+
+
+def _period_label(group) -> str:
+    if group.low == group.high:
+        return group.low.isoformat()
+    return f"{group.low.isoformat()}..{group.high.isoformat()}"

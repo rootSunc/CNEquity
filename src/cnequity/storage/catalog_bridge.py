@@ -344,6 +344,14 @@ def _replace_table(catalog: Catalog, dataset: str, root: Path, new: dict[str, st
 
 
 def sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
+    """Sync *dataset*, then leave its table file-complete (see ``equitylake_core.catalog``)."""
+    result = _sync_dataset(config, catalog, dataset)
+    if result is not None and result.action != "current":
+        catalog.fold_deletes(dataset)
+    return result
+
+
+def _sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
     """Bring the catalog table to the committed revision, replacing only what changed.
 
     The change is found by comparing the committed file list with the one
@@ -417,11 +425,14 @@ def catalog_is_current(config, catalog: Catalog, dataset: str) -> bool:
 
 def sync_all(config, catalog: Catalog) -> list[SyncResult]:
     """Bring every dataset with a committed generation to its committed revision."""
+    catalog.keep_rows_in_files()
     results = []
     for dataset in sorted(DATASETS):
         result = sync_dataset(config, catalog, dataset)
         if result is not None:
             results.append(result)
+        if catalog.has_table(dataset) and catalog.data_files(dataset) is None:
+            catalog.fold_deletes(dataset)
     return results
 
 

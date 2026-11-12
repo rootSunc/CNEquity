@@ -54,6 +54,7 @@ from cnequity.query.parquet_scan import (
 )
 from cnequity.storage.locator import logical_root
 from cnequity.storage.observation import freshness_mark
+from cnequity.storage.published import catalog_published, published
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +183,7 @@ def _covered_days(config: Config, spec: DatasetSpec) -> list[date]:
     if (
         spec.name != "daily_bars"
         and spec.partition_granularity == "day"
+        and catalog_published(config, spec.name) is None
         and uses_hive_partitions(root, spec.partition_col)
         and not list(root.glob("*.parquet"))
     ):
@@ -200,17 +202,16 @@ def _scanned_covered_days(config: Config, spec: DatasetSpec, root) -> list[date]
     is therefore the same answer as decoding only the partitions whose files
     changed; see ``storage.partition_cache``.
     """
-    from pathlib import Path
 
     from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.query.parquet_scan import _scan_parquet_paths
     from cnequity.storage.partition_cache import cached_partition_values
-    from cnequity.storage.revisions import _partition_of, resolve_committed_root
 
-    committed = Path(resolve_committed_root(root, dataset=spec.name, meta_root=config.meta_root))
-    partitions: dict[str, list] = {}
-    for path in sorted(committed.rglob("*.parquet")):
-        partitions.setdefault(_partition_of(path.relative_to(committed)), []).append(path)
+    store = published(config, spec.name)
+    partitions = {group.key: list(group.files) for group in store.groups}
+    if store.from_catalog and not store.unique_keys:
+        # A key's rows can sit in several catalog files; dedupe needs them together.
+        partitions = {"": store.files}
     column = spec.partition_col
     traded_only = spec.name == "daily_bars"
 
@@ -228,55 +229,9 @@ def _scanned_covered_days(config: Config, spec: DatasetSpec, root) -> list[date]
         return sorted(value.isoformat() for value in values)
 
     answers = cached_partition_values(
-        config.meta_root, committed, f"covered_days-{spec.name}", partitions, dates_in
+        config.meta_root, store.root, f"covered_days-{spec.name}", partitions, dates_in
     )
     return sorted({date.fromisoformat(day) for days in answers.values() for day in days})
-
-
-def traded_daily_bar_symbols(
-    config: Config, root, start: date | None, end: date | None
-) -> set[str]:
-    """Symbols with a traded canonical daily bar in [start, end], from cached day answers.
-
-    The ST coverage receipt asked this of every daily bar on every compact
-    (~4.6 s). A day's answer depends only on that day's partition, as for
-    `_scanned_covered_days`, so only partitions whose files changed are read.
-    """
-    from pathlib import Path
-
-    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
-    from cnequity.domain.partitions import parse_partition
-    from cnequity.query.parquet_scan import _scan_parquet_paths
-    from cnequity.storage.partition_cache import cached_partition_values
-    from cnequity.storage.revisions import _partition_of
-
-    root = Path(root)
-    partitions: dict[str, list] = {}
-    for path in sorted(root.rglob("*.parquet")):
-        part = _partition_of(path.relative_to(root))
-        _, _, value = part.partition("=")
-        period = parse_partition(value) if value else None
-        if period is None or period.start != period.end:
-            raise ValueError(f"daily_bars partition {part!r} is not one day")
-        if (start is not None and period.end < start) or (end is not None and period.start > end):
-            continue
-        partitions.setdefault(part, []).append(path)
-
-    def traded(files: list) -> list[str]:
-        lf = _scan_parquet_paths(files, hive=False)
-        names = set(lf.collect_schema().names())
-        if "symbol" not in names:
-            return []
-        if {"symbol", "trade_date"} <= names:
-            lf = dedupe_lazy_by_primary_key(lf, "daily_bars")
-        if "volume" in names:
-            lf = lf.filter((pl.col("volume") > 0) | pl.col("volume").is_null())
-        return sorted(lf.select("symbol").unique().collect()["symbol"].drop_nulls().to_list())
-
-    answers = cached_partition_values(
-        config.meta_root, root, "traded_symbols-daily_bars", partitions, traded
-    )
-    return {symbol for symbols in answers.values() for symbol in symbols}
 
 
 def _complete_derived_days(config: Config, spec: DatasetSpec) -> list[date]:

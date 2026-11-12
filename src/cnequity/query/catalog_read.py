@@ -123,3 +123,114 @@ def read_published(
     except Exception as exc:  # noqa: BLE001 - the scan is always a correct answer
         logger.warning("catalog read of %s failed, scanning instead: %s", dataset, exc)
         return None
+
+
+def generation_identity(root: Path) -> tuple[str, str] | None:
+    """``(dataset, revision_id)`` when *root* is a committed generation directory.
+
+    Generations live at ``<meta>/revisions/data/<dataset>/<revision_id>``.
+    """
+    root = Path(root)
+    parts = root.parts
+    if len(parts) >= 4 and parts[-3] == "data" and parts[-4] == "revisions":
+        return parts[-2], parts[-1]
+    return None
+
+
+class PublishedTable(NamedTuple):
+    files: list[str]
+    # Column name -> DuckDB type, in table order.
+    columns: dict[str, str]
+    unique_keys: bool
+
+
+def published_table(config, dataset: str, revision_id: str) -> PublishedTable | None:
+    """The catalog's data files for exactly that revision of *dataset*.
+
+    ``None`` when the catalog does not hold that revision, or the table is not
+    file-complete; the caller then reads the generation.
+    """
+    if not enabled():
+        return None
+    try:
+        with _lock:
+            catalog = _catalog(config)
+            if catalog is None:
+                return None
+            synced = synced_revision(catalog, dataset)
+            if synced is None or synced[0] != revision_id:
+                return None
+            files = catalog.data_files(dataset)
+            if not files:
+                return None
+            described = catalog.execute(f"DESCRIBE {ALIAS}.{quote_identifier(dataset)}").fetchall()
+            columns = {row[0]: row[1] for row in described}
+            return PublishedTable(files, columns, bool(keys_unique(catalog, dataset)))
+    except Exception as exc:  # noqa: BLE001 - the generation is always a correct answer
+        logger.warning("catalog files of %s unavailable, reading the generation: %s", dataset, exc)
+        return None
+
+
+def published_files(config, dataset: str, revision_id: str) -> tuple[list[str], pl.Schema] | None:
+    """The catalog's data files for that revision, with the table's Polars schema."""
+    table = published_table(config, dataset, revision_id)
+    if table is None:
+        return None
+    try:
+        with _lock:
+            relation = _catalog(config).relation(
+                f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)} LIMIT 0"
+            )
+            schema = relation.pl().schema
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("catalog schema of %s unavailable, scanning instead: %s", dataset, exc)
+        return None
+    return table.files, schema
+
+
+def files_sql(table: PublishedTable, con) -> str:
+    """A DuckDB relation over the table's files with exactly the table's columns.
+
+    Files can carry the catalog's internal row-lineage columns, and a column
+    added after a file was written is absent from that file; both are
+    normalised here. *con* is used only to look at the files' columns.
+    """
+    paths = ", ".join("'" + path.replace("'", "''") + "'" for path in table.files)
+    scan = f"read_parquet([{paths}], union_by_name = true, hive_partitioning = false)"
+    present = {row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {scan}").fetchall()}
+    select = ", ".join(
+        f"CAST({quote_identifier(name) if name in present else 'NULL'} AS {kind}) "
+        f"AS {quote_identifier(name)}"
+        for name, kind in table.columns.items()
+    )
+    return f"(SELECT {select} FROM {scan})"
+
+
+def published_stats(config, dataset: str, revision_id: str, *, column: str | None):
+    """Per-file statistics for exactly that revision of *dataset*, with its unique-keys flag.
+
+    ``None`` under the same conditions as :func:`published_table`.
+    """
+    if not enabled():
+        return None
+    try:
+        with _lock:
+            catalog = _catalog(config)
+            if catalog is None:
+                return None
+            synced = synced_revision(catalog, dataset)
+            if synced is None or synced[0] != revision_id:
+                return None
+            if column is not None:
+                described = catalog.execute(f"DESCRIBE {ALIAS}.{quote_identifier(dataset)}")
+                if column not in {row[0] for row in described.fetchall()}:
+                    column = None
+            stats = catalog.file_stats(dataset, column)
+            if stats is None:
+                return None
+            return stats, bool(keys_unique(catalog, dataset))
+    except Exception as exc:  # noqa: BLE001 - the generation is always a correct answer
+        logger.warning(
+            "catalog statistics of %s unavailable, reading the generation: %s", dataset, exc
+        )
+        return None

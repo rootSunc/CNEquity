@@ -352,6 +352,18 @@ def scan_parquet_root(
         msg = f"no parquet data under {root}"
         raise FileNotFoundError(msg)
 
+    lf = _scan_catalog_files(root, config_root=meta_root)
+    if lf is not None:
+        return _filter_scan(
+            lf,
+            partition_col=partition_col,
+            start=start,
+            end=end,
+            symbols=symbols,
+            traded_only=traded_only,
+            logical_dataset=logical_dataset,
+        )
+
     partitioned = uses_hive_partitions(root, partition_col, resolve=False)
     use_hive = (
         (partitioned and _all_day_partitions(root, partition_col, resolve=False))
@@ -397,6 +409,27 @@ def scan_parquet_root(
 
     # Still filter on the column: a coarse partition covers days outside the
     # window, and pruning alone would over-return at the period edges.
+    return _filter_scan(
+        lf,
+        partition_col=partition_col,
+        start=start,
+        end=end,
+        symbols=symbols,
+        traded_only=traded_only,
+        logical_dataset=logical_dataset,
+    )
+
+
+def _filter_scan(
+    lf: pl.LazyFrame,
+    *,
+    partition_col: str | None,
+    start: date | None,
+    end: date | None,
+    symbols: list[str] | None,
+    traded_only: bool,
+    logical_dataset: str,
+) -> pl.LazyFrame:
     if partition_col and (start is not None or end is not None):
         schema = lf.collect_schema()
         if partition_col in schema.names():
@@ -425,6 +458,45 @@ def scan_parquet_root(
         if "volume" in columns:
             lf = lf.filter((pl.col("volume") > 0) | pl.col("volume").is_null())
     return lf
+
+
+def _scan_catalog_files(root: Path, *, config_root: Path | None) -> pl.LazyFrame | None:
+    """Scan the lake catalog's files for this generation, when the catalog holds it.
+
+    The catalog's files carry exactly the generation's rows (checked by the
+    sync and by ``Catalog.data_files``), sorted by key, so a filtered scan
+    skips row groups the generation's per-partition files could not.
+    """
+    from cnequity.query.catalog_read import generation_identity, published_files
+
+    identity = generation_identity(Path(root))
+    meta = Path(config_root) if config_root is not None else None
+    if identity is None:
+        return None
+    if meta is None:
+        # ``<data>/meta/revisions/data/<dataset>/<revision>``
+        meta = Path(root).parents[3]
+    found = published_files(_ConfigRoots(meta), *identity)
+    if found is None:
+        return None
+    files, schema = found
+    return pl.scan_parquet(
+        files,
+        schema=schema,
+        hive_partitioning=False,
+        missing_columns="insert",
+        extra_columns="ignore",
+    )
+
+
+class _ConfigRoots:
+    """The roots the catalog reader needs, derived from a metadata root."""
+
+    def __init__(self, meta_root: Path):
+        self.meta_root = meta_root
+        self.data_root = meta_root.parent
+        self.curated_root = self.data_root / "curated"
+        self.derived_root = self.data_root / "derived"
 
 
 def scan_parquet_files(

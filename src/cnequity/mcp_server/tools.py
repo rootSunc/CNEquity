@@ -34,7 +34,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS, RESAMPLED_MINUTE_DATASETS, TIER_LABELS
 from cnequity.mcp_server import live
-from cnequity.query.read_budget import SCAN_BUDGET_BYTES, SYMBOL_SCAN_EXEMPT, oversized_read
+from cnequity.query.read_budget import SCAN_BUDGET_ROWS, SYMBOL_SCAN_EXEMPT, oversized_read
 from cnequity.query.reader import ReaderError, load
 from cnequity.query.universe import UniverseCoverageError
 
@@ -583,7 +583,7 @@ def query_dataset(
 
 #: The shared read budget (``query/read_budget.py``), kept here so a test can
 #: shrink it for this tool alone.
-QUERY_SCAN_BUDGET_BYTES = SCAN_BUDGET_BYTES
+QUERY_SCAN_BUDGET_ROWS = SCAN_BUDGET_ROWS
 _SYMBOL_SCAN_EXEMPT = SYMBOL_SCAN_EXEMPT
 
 
@@ -611,12 +611,12 @@ def _refuse_oversized_read(
     except ValueError:
         return  # load() reports the bad date in its own words
     over = oversized_read(
-        config, dataset, start=start_d, end=end_d, symbols=symbols, budget=QUERY_SCAN_BUDGET_BYTES
+        config, dataset, start=start_d, end=end_d, symbols=symbols, budget=QUERY_SCAN_BUDGET_ROWS
     )
     if over is None:
         return
-    size = f"{over.selected_bytes / 2**20:,.0f} MiB"
-    budget = f"{over.budget_bytes / 2**20:,.0f} MiB"
+    size = f"{over.selected_rows:,} rows"
+    budget = f"{over.budget_rows:,} rows"
     hint = ""
     if over.covers:
         covers = f"{over.covers[0]}..{over.covers[1]}"
@@ -628,7 +628,7 @@ def _refuse_oversized_read(
         elif over.fits:
             hint = f" It covers {covers}; start={over.fits[0]} end={over.fits[1]} fits."
     raise ToolError(
-        f"{dataset} would read {size} of Parquet for this call (budget {budget}), and "
+        f"{dataset} would read {size} for this call (budget {budget}), and "
         "every row is held in memory before the page is cut." + hint + " Narrow it with "
         f"start/end, pass up to {_SYMBOL_SCAN_EXEMPT} symbols, or use run_sql, which "
         "pages inside DuckDB."

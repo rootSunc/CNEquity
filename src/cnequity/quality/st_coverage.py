@@ -157,15 +157,6 @@ def current_st_universe(
 
     bars_root = read_root(config, "daily_bars", read_context)
     if bars_root.exists() and any(bars_root.rglob("*.parquet")):
-        from cnequity.quality.verify import traded_daily_bar_symbols
-
-        try:
-            bars = traded_daily_bar_symbols(config, bars_root, start, end)
-        except (FileNotFoundError, OSError, pl.exceptions.PolarsError, ValueError):
-            bars = None
-        if bars is not None:
-            resolved_symbols = [symbol for symbol in resolved_symbols if symbol in bars]
-            return sorted(set(resolved_symbols))
         try:
             # Let the partition-aware scanner prune the requested bar window
             # and build one schema-aware lazy plan. The previous per-file

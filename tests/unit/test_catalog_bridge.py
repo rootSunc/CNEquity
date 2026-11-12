@@ -29,7 +29,12 @@ def _rows(day: date, closes: dict[str, float], **extra) -> pl.DataFrame:
             {
                 "symbol": symbol,
                 "trade_date": day,
+                "open": close,
+                "high": close,
+                "low": close,
                 "close": close,
+                "volume": 100,
+                "amount": close * 100,
                 "source": "test",
                 "data_version": "v1",
                 "fetched_at": FETCHED,
@@ -254,3 +259,67 @@ def test_a_catalog_that_cannot_be_updated_does_not_fail_the_publish(
     monkeypatch.undo()
     assert not catalog_is_current(cfg, lake, "daily_bars")
     assert sync_dataset(cfg, lake, "daily_bars").action == "partitions"
+
+
+def test_a_synced_table_is_file_complete(cfg, lake):
+    sync_dataset(cfg, lake, "daily_bars")
+    _commit_month(
+        cfg, "2024-01", _rows(date(2024, 1, 2), {"600000.SH": 10.5}, pre_close=None)
+    )  # January loses a symbol: a partial delete in a small, unpartitioned table
+    sync_dataset(cfg, lake, "daily_bars")
+    files = lake.data_files("daily_bars")
+    assert files
+    scanned = pl.scan_parquet(
+        files, hive_partitioning=False, extra_columns="ignore", missing_columns="insert"
+    ).collect()
+    assert scanned.height == lake.execute('SELECT count(*) FROM "daily_bars"').fetchone()[0] == 2
+
+
+def test_the_generation_scan_reads_the_catalog_files(cfg, lake, catalog_reads, monkeypatch):
+    from cnequity.query import parquet_scan
+    from cnequity.storage.read_context import read_root
+
+    sync_dataset(cfg, lake, "daily_bars")
+    root = read_root(cfg, "daily_bars")
+    used = []
+    real = parquet_scan._scan_catalog_files
+    monkeypatch.setattr(
+        parquet_scan,
+        "_scan_catalog_files",
+        lambda *a, **k: used.append(1) or real(*a, **k),
+    )
+    via_catalog = parquet_scan.scan_parquet_root(
+        root, partition_col="trade_date", start=date(2024, 2, 1), committed=False
+    ).collect()
+    assert used and via_catalog.select("symbol", "trade_date").rows() == [
+        ("600000.SH", date(2024, 2, 1))
+    ]
+    monkeypatch.setenv(catalog_reads.ENV_SWITCH, "0")
+    via_files = parquet_scan.scan_parquet_root(
+        root, partition_col="trade_date", start=date(2024, 2, 1), committed=False
+    ).collect()
+    assert via_files.equals(via_catalog.select(via_files.columns))
+
+
+def test_sql_views_read_the_catalog_files_and_stay_inside_the_sandbox(cfg, lake, catalog_reads):
+    from cnequity.mcp_server.tools import _configure_sql_connection
+    from cnequity.query.views import views_connection
+
+    sync_dataset(cfg, lake, "daily_bars")
+    con = views_connection(cfg)
+    try:
+        sql = con.execute(
+            "SELECT sql FROM duckdb_views() WHERE view_name = 'daily_bars_including_otc'"
+        ).fetchone()[0]
+        assert (lake_root(cfg) / "data").as_posix() in sql
+        _configure_sql_connection(con, cfg)
+        rows = con.execute(
+            "SELECT symbol, trade_date, pre_close FROM daily_bars ORDER BY trade_date, symbol"
+        ).fetchall()
+    finally:
+        con.close()
+    assert rows == [
+        ("000001.SZ", date(2024, 1, 2), None),
+        ("600000.SH", date(2024, 1, 2), None),
+        ("600000.SH", date(2024, 2, 1), 10.0),
+    ]

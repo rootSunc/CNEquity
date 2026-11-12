@@ -44,7 +44,7 @@ def _fund_flow(config) -> list[int]:
                 "fetched_at": [datetime(2024, 6, 27, tzinfo=timezone.utc)] * 2,
             }
         ).write_parquet(path)
-        sizes.append(path.stat().st_size)
+        sizes.append(pl.read_parquet(path).height)
     return sizes
 
 
@@ -55,7 +55,7 @@ def _rows(config, dataset, **params):
 
 def test_a_page_without_a_period_is_refused_before_reading(config, monkeypatch):
     sizes = _fund_flow(config)
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_BYTES", sizes[-1] + 1)
+    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", sizes[-1] + 1)
     import cnequity.query.reader as reader
 
     def _must_not_load(*_args, **_kwargs):
@@ -72,7 +72,7 @@ def test_a_page_without_a_period_is_refused_before_reading(config, monkeypatch):
 
 def test_one_period_or_one_symbol_fits(config, monkeypatch):
     sizes = _fund_flow(config)
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_BYTES", sizes[-1] + 1)
+    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", sizes[-1] + 1)
 
     by_period = _rows(config, "fund_flow", period="2024-06-26")
     by_symbol = _rows(config, "fund_flow", symbol="600519.SH")
@@ -86,8 +86,8 @@ def _two_quarters_of_statements(config, monkeypatch) -> list[dict]:
     for quarter in ("2024Q3", "2024Q4"):
         part = root / f"report_period={quarter}"
         part.mkdir(parents=True)
-        (part / "part-0.parquet").write_bytes(b"x" * 1000)
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_BYTES", 1500)
+        pl.DataFrame({"n": range(1000)}).write_parquet(part / "part-0.parquet")
+    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", 1500)
     import cnequity.query.reader as reader
 
     calls: list[dict] = []
@@ -127,8 +127,8 @@ def test_an_announcement_page_is_sized_up_to_its_as_of(config, monkeypatch):
     for day in ("2024-06-10", "2024-06-11", "2024-06-12"):
         part = root / f"announce_date={day}"
         part.mkdir(parents=True)
-        (part / "part-0.parquet").write_bytes(b"x" * 1000)
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_BYTES", 1500)
+        pl.DataFrame({"n": range(1000)}).write_parquet(part / "part-0.parquet")
+    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", 1500)
     import cnequity.query.reader as reader
 
     monkeypatch.setattr(reader, "load", lambda *_a, **_k: pl.DataFrame({"announcement_id": ["A"]}))
@@ -145,7 +145,7 @@ def test_the_refusal_is_translated(config, monkeypatch, language):
     from cnequity.i18n import use_language
 
     sizes = _fund_flow(config)
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_BYTES", sizes[-1] + 1)
+    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", sizes[-1] + 1)
     from cnequity.serve.lake import LakeView
 
     with use_language(language), pytest.raises(ValueError, match="请选择一个时段或输入标的"):

@@ -1508,20 +1508,20 @@ class LakeView:
             return
         values = {
             "dataset": dataset,
-            "size": f"{over.selected_bytes / 2**20:,.0f} MiB",
-            "budget": f"{over.budget_bytes / 2**20:,.0f} MiB",
+            "size": f"{over.selected_rows:,}",
+            "budget": f"{over.budget_rows:,}",
         }
         if not whole and not period and over.fits:
             raise ValueError(
                 _(
-                    "{dataset} would read {size} of Parquet for this page (budget {budget}), "
+                    "{dataset} would read {size} rows for this page (budget {budget}), "
                     "and every row is held in memory before the page is cut. "
                     "Pick a period or enter a symbol."
                 ).format(**values)
             )
         raise ValueError(
             _(
-                "{dataset} would read {size} of Parquet for this page (budget {budget}), "
+                "{dataset} would read {size} rows for this page (budget {budget}), "
                 "and every row is held in memory before the page is cut. Enter a symbol."
             ).format(**values)
         )

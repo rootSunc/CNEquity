@@ -5,6 +5,13 @@ snapshot) and ``data/`` (the files). Every committed write is one snapshot,
 and the snapshot number is the version of the whole lake: a reader pins one
 integer and gets a consistent set of tables.
 
+Every table is kept *file-complete*: its rows are exactly the rows of the
+data files the catalog lists for it. Small writes are not inlined into the
+catalog database, and deletions are folded back into rewritten files right
+after the write. A reader can then hand the file list to any Parquet engine
+(Polars here) and get the table, with that engine's own predicate pushdown.
+``data_files`` checks the property before returning a list.
+
 The catalog database is SQLite in WAL mode. In the default journal mode a
 reader that holds a result open blocks the writer's commit; a DuckDB-file
 catalog cannot be read by another process while a writer has it attached.
@@ -26,10 +33,24 @@ from equitylake_core.extensions import ensure_extensions
 CATALOG_FILE = "catalog.sqlite"
 DATA_DIR = "data"
 ALIAS = "lake"
+METADATA = f"__ducklake_metadata_{ALIAS}"
 
 
 class CatalogError(RuntimeError):
     """The lake directory is missing, or is not a lake."""
+
+
+@dataclass(frozen=True)
+class DataFile:
+    """One data file of a file-complete table, with the range of one column in it."""
+
+    path: str
+    rows: int
+    bytes: int
+    # Smallest and largest value of the column asked about, as the catalog
+    # records them (text); ``None`` when the file has no statistics for it.
+    low: str | None = None
+    high: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,7 +103,8 @@ class Catalog:
         self.root = Path(root).expanduser().resolve()
         self.read_only = read_only
         catalog_path = self.root / CATALOG_FILE
-        if not catalog_path.exists():
+        created = not catalog_path.exists()
+        if created:
             if not create:
                 raise CatalogError(f"no lake catalog at {catalog_path}")
             (self.root / DATA_DIR).mkdir(parents=True, exist_ok=True)
@@ -106,6 +128,8 @@ class Catalog:
                 f"AS {ALIAS} ({options})"
             )
             self.con.execute(f"USE {ALIAS}")
+            if created:
+                self.keep_rows_in_files()
         except Exception:
             self.con.close()
             raise
@@ -164,6 +188,87 @@ class Catalog:
             self.con.execute("ROLLBACK")
             raise
         self.con.execute("COMMIT")
+
+    def keep_rows_in_files(self) -> None:
+        """Stop inlining small writes into the catalog database, and move any inlined rows to files."""
+        self.con.execute(
+            f"CALL ducklake_set_option({quote_literal(ALIAS)}, 'data_inlining_row_limit', 0)"
+        )
+        self.con.execute(f"CALL ducklake_flush_inlined_data({quote_literal(ALIAS)})")
+
+    def fold_deletes(self, table: str) -> None:
+        """Rewrite every data file of *table* that has deletions, so its files hold exactly its rows."""
+        self.con.execute(
+            f"CALL ducklake_rewrite_data_files({quote_literal(ALIAS)}, {quote_literal(table)}, "
+            "delete_threshold => 0)"
+        )
+
+    def data_files(self, table: str) -> list[str] | None:
+        """The data files whose rows are exactly *table*'s current rows, or ``None``.
+
+        ``None`` means the table is not file-complete right now (a deletion
+        not yet folded, or rows inlined in the catalog database); read it
+        through DuckDB instead.
+        """
+        listed = self.con.execute(
+            f"SELECT data_file, delete_file FROM ducklake_list_files({quote_literal(ALIAS)}, ?)",
+            [table],
+        ).fetchall()
+        if any(delete is not None for _, delete in listed):
+            return None
+        rows = self.con.execute(
+            f"SELECT count(*) FROM {ALIAS}.{quote_identifier(table)}"
+        ).fetchone()[0]
+        in_files = self.con.execute(
+            f"SELECT coalesce(sum(f.record_count), 0) FROM {METADATA}.ducklake_data_file f "
+            f"JOIN {METADATA}.ducklake_table t USING (table_id) "
+            "WHERE t.table_name = ? AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL",
+            [table],
+        ).fetchone()[0]
+        if rows != in_files:
+            return None
+        return [path for path, _ in listed]
+
+    def file_stats(self, table: str, column: str | None = None) -> list[DataFile] | None:
+        """The data files of *table* with their row counts and sizes, or ``None``.
+
+        With *column*, each file also carries that column's smallest and
+        largest value, from the statistics the catalog keeps per file, so a
+        caller can tell which files can hold a given range without opening
+        them. ``None`` under the same condition as ``data_files``.
+        """
+        paths = self.data_files(table)
+        if paths is None:
+            return None
+        by_name = {Path(path).name: path for path in paths}
+        if column is None:
+            stats = self.con.execute(
+                f"SELECT f.path, f.record_count, f.file_size_bytes, NULL, NULL "
+                f"FROM {METADATA}.ducklake_data_file f "
+                f"JOIN {METADATA}.ducklake_table t USING (table_id) "
+                "WHERE t.table_name = ? AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL",
+                [table],
+            ).fetchall()
+        else:
+            stats = self.con.execute(
+                f"SELECT f.path, f.record_count, f.file_size_bytes, s.min_value, s.max_value "
+                f"FROM {METADATA}.ducklake_data_file f "
+                f"JOIN {METADATA}.ducklake_table t USING (table_id) "
+                f"JOIN {METADATA}.ducklake_column c ON c.table_id = t.table_id "
+                "AND c.column_name = ? AND c.end_snapshot IS NULL "
+                f"LEFT JOIN {METADATA}.ducklake_file_column_stats s "
+                "ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id "
+                "WHERE t.table_name = ? AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL",
+                [column, table],
+            ).fetchall()
+        files = [
+            DataFile(by_name[Path(path).name], int(rows), int(size), low, high)
+            for path, rows, size, low, high in stats
+            if Path(path).name in by_name
+        ]
+        if len(files) != len(paths):
+            return None
+        return sorted(files, key=lambda f: (f.low or "", f.path))
 
     def set_compression(self, codec: str = "zstd") -> None:
         self.con.execute(

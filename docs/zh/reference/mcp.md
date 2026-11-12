@@ -133,7 +133,7 @@ agent 每轮都要从一个平铺列表里选工具。按数据集给工具会�
 | `resolve_symbol` | 「茅台」→ `600519.SH`。含退市股，带 `delist_date` 标记 |
 | `query_bars` | 日线 / 指数 / 分钟线，带 `adjust` 与 `universe` |
 | `query_fundamentals` | 财报科目，**必须**给 `as_of`（PIT） |
-| `query_dataset` | 其余任意数据集，按日期与 symbol 过滤。一次要读超过 64 MiB Parquet、又没给 20 个以内 symbol 的调用会被拒绝，并告诉 agent 能装下的最近日期窗口 |
+| `query_dataset` | 其余任意数据集，按日期与 symbol 过滤。一次要读超过 400 万行、又没给 20 个以内 symbol 的调用会被拒绝，并告诉 agent 能装下的最近日期窗口 |
 | `run_sql` | 单条只读 DuckDB SELECT，跨数据集聚合 / 排名 / 分位数 |
 
 ### 口径写在响应里，不是写在文档里

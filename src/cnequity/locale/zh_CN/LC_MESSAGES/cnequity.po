@@ -7525,13 +7525,13 @@ msgstr "{dataset} 的来源只能是 {sources}"
 
 #: cnequity/serve/lake.py
 #, python-brace-format
-msgid "{dataset} would read {size} of Parquet for this page (budget {budget}), and every row is held in memory before the page is cut. Enter a symbol."
-msgstr "{dataset} 这一页要读取 {size} 的 Parquet（预算 {budget}），分页前每一行都要先载入内存。请输入标的。"
+msgid "{dataset} would read {size} rows for this page (budget {budget}), and every row is held in memory before the page is cut. Enter a symbol."
+msgstr "{dataset} 这一页要读取 {size} 行（预算 {budget} 行），分页前每一行都要先载入内存。请输入标的。"
 
 #: cnequity/serve/lake.py
 #, python-brace-format
-msgid "{dataset} would read {size} of Parquet for this page (budget {budget}), and every row is held in memory before the page is cut. Pick a period or enter a symbol."
-msgstr "{dataset} 这一页要读取 {size} 的 Parquet（预算 {budget}），分页前每一行都要先载入内存。请选择一个时段或输入标的。"
+msgid "{dataset} would read {size} rows for this page (budget {budget}), and every row is held in memory before the page is cut. Pick a period or enter a symbol."
+msgstr "{dataset} 这一页要读取 {size} 行（预算 {budget} 行），分页前每一行都要先载入内存。请选择一个时段或输入标的。"
 
 #: cnequity/serve/storage.py
 #, python-brace-format

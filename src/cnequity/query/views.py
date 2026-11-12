@@ -86,6 +86,24 @@ def _view_glob(data_root: str, spec: DatasetSpec) -> tuple[str, bool]:
     )
 
 
+def _committed_revision_id(config: Config, dataset: str) -> str | None:
+    pointer = config.data_root / "meta" / "revisions" / dataset / "current.json"
+    try:
+        return str(json.loads(pointer.read_text("utf-8")).get("revision_id") or "") or None
+    except (OSError, ValueError):
+        return None
+
+
+def _catalog_table(config: Config, dataset: str):
+    """The lake catalog's files for the committed revision, when the catalog holds it."""
+    revision_id = _committed_revision_id(config, dataset)
+    if revision_id is None:
+        return None
+    from cnequity.query.catalog_read import published_table
+
+    return published_table(config, dataset, revision_id)
+
+
 def view_read_roots(config: Config) -> list[Path]:
     """Every directory a lake view can read, and nothing broader.
 
@@ -100,7 +118,9 @@ def view_read_roots(config: Config) -> list[Path]:
     """
     root = config.data_root.resolve()
     meta = root / "meta" / "revisions"
-    roots = [meta / "data"]
+    # The lake catalog's data directory holds published rows only; its
+    # catalog database beside it is not readable from SQL.
+    roots = [meta / "data", root / "lake" / "data"]
     for name, spec in sorted(DATASETS.items()):
         if (meta / name / "current.json").is_file():
             continue
@@ -149,6 +169,8 @@ def _view_select_sql(
     hive: bool,
     *,
     columns: set[str] | dict[str, str] | None = None,
+    source: str | None = None,
+    unique_keys: bool = False,
 ) -> str:
     """Build a canonical dataset view over all parquet fragments.
 
@@ -158,7 +180,11 @@ def _view_select_sql(
     Python API returns one canonical observation.
     """
     primary_key = PRIMARY_KEYS.get(name, [])
-    source = f"read_parquet({_sql_literal(glob_path)}, hive_partitioning={str(hive).lower()}, union_by_name=true)"
+    if source is None:
+        source = (
+            f"read_parquet({_sql_literal(glob_path)}, "
+            f"hive_partitioning={str(hive).lower()}, union_by_name=true)"
+        )
     if columns is not None:
         # An optional column no fragment carries yet reads as null, as it does
         # through the Python reader, rather than failing the query that names it.
@@ -172,6 +198,10 @@ def _view_select_sql(
     # available, keep the raw view readable and let the schema/quality checks
     # report the malformed fragment. A source/version without fetched_at is
     # still enough to apply the same deterministic fallback as Python.
+    if unique_keys:
+        # One row per key already: the carry-forward rules below only ever
+        # move values between rows that share a key, so they have no work.
+        return _one_book_per_index_date_sql(name, f"SELECT * FROM {source}", columns)
     if not primary_key or (
         columns is not None
         and (
@@ -235,18 +265,22 @@ def _view_select_sql(
             f"PARTITION BY {partition_by} ORDER BY {order_by}"
             ") = 1"
         )
-    if name == "index_constituents" and {"source", "index_symbol", "as_of_date"} <= set(
+    return _one_book_per_index_date_sql(name, canonical, columns)
+
+
+def _one_book_per_index_date_sql(name: str, canonical: str, columns) -> str:
+    """Mirrors domain/canonical.one_book_per_index_date: an official book
+    replaces, rather than merges with, a vendor's on the same index-date."""
+    if name != "index_constituents" or not {"source", "index_symbol", "as_of_date"} <= set(
         columns or ()
     ):
-        # Mirrors domain/canonical.one_book_per_index_date: an official book
-        # replaces, rather than merges with, a vendor's on the same index-date.
-        official = ", ".join(_sql_literal(item) for item in OFFICIAL_INDEX_SOURCES)
-        return (
-            f"SELECT * FROM ({canonical}) "
-            f"QUALIFY source IN ({official}) OR NOT bool_or(source IN ({official})) "
-            "OVER (PARTITION BY index_symbol, as_of_date)"
-        )
-    return canonical
+        return canonical
+    official = ", ".join(_sql_literal(item) for item in OFFICIAL_INDEX_SOURCES)
+    return (
+        f"SELECT * FROM ({canonical}) "
+        f"QUALIFY source IN ({official}) OR NOT bool_or(source IN ({official})) "
+        "OVER (PARTITION BY index_symbol, as_of_date)"
+    )
 
 
 def views_connection(config: Config, *, require_data: bool = False) -> duckdb.DuckDBPyConnection:
@@ -304,6 +338,9 @@ def _views_inputs(config: Config, *, require_data: bool) -> dict:
         pointer = meta / name / "current.json"
         if pointer.is_file():
             digest.update(pointer.read_bytes())
+            published = _catalog_table(config, name)
+            if published is not None:
+                digest.update(repr((published.files, published.unique_keys)).encode())
         else:
             root = logical_root(config, spec)
             if root.is_dir():
@@ -428,7 +465,26 @@ def _define_views(
             # it is defined below, once instruments exists to bind against.
             view_name = f"{name}_including_otc"
         glob_path, hive = _view_glob(root, spec)
-        if _glob_has_files(glob_path) or require_data:
+        published = _catalog_table(config, name)
+        if published is not None:
+            from cnequity.query.catalog_read import files_sql
+
+            con.execute(
+                f"""
+                CREATE OR REPLACE VIEW {view_name} AS
+                {
+                    _view_select_sql(
+                        name,
+                        glob_path,
+                        hive,
+                        columns=published.columns,
+                        source=files_sql(published, con),
+                        unique_keys=published.unique_keys,
+                    )
+                }
+                """
+            )
+        elif _glob_has_files(glob_path) or require_data:
             source = (
                 f"read_parquet({_sql_literal(glob_path)}, "
                 f"hive_partitioning={str(hive).lower()}, union_by_name=true)"
