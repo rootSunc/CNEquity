@@ -7,7 +7,7 @@ CNEquity is an open-source local data lake for China A-share stock market data: 
 
 [![CI](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/cnequity?logo=pypi&logoColor=white)](https://pypi.org/project/cnequity/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](docs/en/getting-started/installation.md)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](docs/en/getting-started/installation.md)
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![PyPI downloads](https://img.shields.io/pypi/dm/cnequity?label=downloads)](https://pypistats.org/packages/cnequity)
 [![GitHub stars](https://img.shields.io/github/stars/rootSunc/CNEquity?style=flat)](https://github.com/rootSunc/CNEquity/stargazers)
@@ -34,7 +34,7 @@ How it differs from common data tools (full write-up in the [comparison](docs/en
 
 ## Quick start
 
-Requires Python 3.10+ on macOS, Linux or Windows. No account or token needed.
+Requires Python 3.11+ on macOS, Linux or Windows. No account or token needed.
 
 **① Try it in a minute.** Fetch the last 30 trading days for 5 stocks from live sources into a separate directory that never touches your real lake:
 

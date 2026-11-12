@@ -6,7 +6,7 @@ Most users can install from PyPI; clone the source only to modify code, use the 
 
 | Item | Requirement |
 |---|---|
-| Python | 3.10 or later; for versions covered by CI, see [Upgrades and feedback](#upgrades-and-compatibility) |
+| Python | 3.11 or later; for versions covered by CI, see [Upgrades and feedback](#upgrades-and-compatibility) |
 | OS | macOS, Linux, Windows; native x86-64 Windows paths and file locks are covered by CI, 32-bit and ARM64 Windows are not verified |
 | Network | Real ingestion needs access to TDX and the relevant HTTP sources; after installation, sample can be used to verify offline |
 | Disk | Grows with security scope, history depth, frequency, raw archive and retained versions; leave extra room for staging / snapshots |

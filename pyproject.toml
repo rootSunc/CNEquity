@@ -8,7 +8,7 @@ version = "0.23.0"
 description = "开源 A 股本地数据湖，用于量化研究、回测与 AI Agent | Open-source, self-hosted China A-share data lake for quant research, backtesting and AI agents"
 # Short PyPI page (absolute links only). GitHub keeps README.md / README.en.md.
 readme = "README.pypi.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE*", "NOTICE"]
 authors = [{ name = "CNEquity Contributors" }]
@@ -45,7 +45,6 @@ classifiers = [
   "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -58,7 +57,7 @@ classifiers = [
 # in config with no package behind it, degrading silently on a scheduled run.
 dependencies = [
   "click>=8.1",
-  "duckdb>=1.5",
+  "duckdb>=2.0",
   # The 0.25 floor existed only so mootdx (httpx>=0.25,<0.26) could co-resolve.
   # mootdx is gone — the TDX client is vendored — so nothing caps httpx now and
   # the floor just marks the oldest release with the Client() options we use.

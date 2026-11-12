@@ -4,7 +4,7 @@ Instructions for an AI agent setting up CNEquity for a user. CNEquity is a local
 
 ## 1. Install
 
-Requires Python 3.10+. Either install the package:
+Requires Python 3.11+. Either install the package:
 
 ```bash
 pip install cnequity

@@ -7,7 +7,7 @@ CNEquity 是开源的中国 A股本地数据湖：整理沪深股票行情、股
 
 [![CI](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rootSunc/CNEquity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/cnequity?logo=pypi&logoColor=white)](https://pypi.org/project/cnequity/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](docs/zh/getting-started/installation.md)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](docs/zh/getting-started/installation.md)
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/rootSunc/CNEquity?style=flat)](https://github.com/rootSunc/CNEquity/stargazers)
 [![Glama MCP score](https://glama.ai/mcp/servers/rootSunc/CNEquity/badges/score.svg)](https://glama.ai/mcp/servers/rootSunc/CNEquity)
@@ -33,7 +33,7 @@ CNEquity 是开源的中国 A股本地数据湖：整理沪深股票行情、股
 
 ## 快速开始
 
-需要 Python 3.10+（macOS / Linux / Windows），不需要账号或 token。
+需要 Python 3.11+（macOS / Linux / Windows），不需要账号或 token。
 
 **① 一分钟试用。** 用真实数据源抓 5 只股票最近 30 个交易日，建在独立目录里，不影响以后的正式湖：
 
