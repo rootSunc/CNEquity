@@ -400,6 +400,9 @@ class Config:
     # Generations kept after ``cne backfill`` and ``cne run daily``. Matches
     # the existing retention count of 5. 0 keeps every generation.
     revision_keep_generations: int = 5
+    # Hosts that use ``eastmoney_proxy`` (a name also covers its subdomains);
+    # the others connect directly. Empty sends every EastMoney host through it.
+    eastmoney_proxy_hosts: tuple[str, ...] = ()
     # The run's backfill window: one frozen value instead of loose
     # ``_backfill*`` attributes. Read it with ``run_scope.backfill_of`` and
     # change it with ``run_scope.set_backfill``. Last, so positional callers
@@ -714,6 +717,17 @@ def _absolute(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path)))
 
 
+def _parse_proxy_hosts(raw: object) -> tuple[str, ...]:
+    """``[sources.eastmoney].proxy_hosts``: a list of bare host names."""
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ConfigError("[sources.eastmoney].proxy_hosts must be a list of host names")
+    hosts = tuple(item.strip().lower().rstrip(".") for item in raw)
+    bad = [host for host in hosts if not host or "/" in host or ":" in host]
+    if bad:
+        raise ConfigError(f"[sources.eastmoney].proxy_hosts: {bad!r} — give host names, not URLs")
+    return hosts
+
+
 def _parse_tdx_host_pool(hosts_raw: object) -> list[str]:
     """Parse ``[tdx_protocol.hosts]``: a flat list, or {standard, extended}.
 
@@ -943,6 +957,7 @@ def load_config(path: str | Path) -> Config:
     source_intervals: dict[str, float] = {}
     eastmoney_proxy: str | None = None
     eastmoney_direct_fallback = False
+    eastmoney_proxy_hosts: tuple[str, ...] = ()
     eastmoney_push2_paused = False
     eastmoney_push2_breaker = True
     eastmoney_push2_daily_budget = 150
@@ -1002,6 +1017,8 @@ def load_config(path: str | Path) -> Config:
                     break
             if name == "eastmoney" and val.get("proxy"):
                 eastmoney_proxy = str(val["proxy"]).strip() or None
+            if name == "eastmoney" and val.get("proxy_hosts") is not None:
+                eastmoney_proxy_hosts = _parse_proxy_hosts(val["proxy_hosts"])
             if name == "eastmoney" and val.get("direct_fallback") is not None:
                 eastmoney_direct_fallback = bool(val["direct_fallback"])
             if name == "eastmoney" and val.get("push2_paused") is not None:
@@ -1251,6 +1268,7 @@ def load_config(path: str | Path) -> Config:
         source_intervals=source_intervals,
         eastmoney_proxy=eastmoney_proxy,
         eastmoney_direct_fallback=eastmoney_direct_fallback,
+        eastmoney_proxy_hosts=eastmoney_proxy_hosts,
         eastmoney_push2_paused=eastmoney_push2_paused,
         eastmoney_push2_breaker=eastmoney_push2_breaker,
         eastmoney_push2_daily_budget=eastmoney_push2_daily_budget,

@@ -7,7 +7,10 @@ quote page sends, and the ``nid`` cookie the datacenter endpoints want.
 
 Users without a mainland route (overseas, some cloud egress) set
 ``[sources.eastmoney].proxy`` to an HTTP(S) proxy that has one. It applies to
-every EastMoney host. Deployments where the proxy itself is less reliable for
+every EastMoney host unless ``proxy_hosts`` names the ones that need it; the
+others then connect directly (environment proxies ignored), so a datacenter
+that answers directly does not fail with a proxy that is down. Deployments
+where the proxy itself is less reliable for
 historical K-lines may explicitly enable ``direct_fallback``; that retries only
 ``push2his`` once, and stays off by default so mandatory proxy policy is never
 silently bypassed. What used to live here instead — Chrome JA3 impersonation via
@@ -88,6 +91,9 @@ _CHROME_UA = (
 _DIRECT_FALLBACK_STATUS_CODES = frozenset({502, 503, 504})
 
 
+NID_URL = "https://anonflow2.eastmoney.com/backend/api/webreport"
+
+
 def fetch_nid(client: httpx.Client | None = None, *, config: Config | None = None) -> str:
     """Handshake for the ``nid`` cookie the datacenter endpoints like to see.
 
@@ -95,7 +101,7 @@ def fetch_nid(client: httpx.Client | None = None, *, config: Config | None = Non
     host like any other, so a bare client here would leave the proxy that makes
     the rest of the traffic reachable and get refused on its own.
     """
-    url = "https://anonflow2.eastmoney.com/backend/api/webreport"
+    url = NID_URL
     payload = {
         "deviceType": "web",
         "browser": "Chrome",
@@ -306,10 +312,12 @@ class EastMoneyClient:
             self.min_interval = float(min_interval)
         self._last_request = 0.0
         self._proxy = None
+        self._proxy_hosts: tuple[str, ...] = ()
         timeout = 15.0 if timeout_sec is None else float(timeout_sec)
         if config is not None:
             if getattr(config, "eastmoney_proxy", None):
                 self._proxy = config.eastmoney_proxy
+                self._proxy_hosts = tuple(getattr(config, "eastmoney_proxy_hosts", ()) or ())
             if timeout_sec is None:
                 timeout = float(getattr(config, "eastmoney_timeout_sec", 15.0) or 15.0)
         self._timeout = timeout
@@ -336,10 +344,29 @@ class EastMoneyClient:
                 client_kwargs["proxies"] = proxy
             return httpx.Client(**client_kwargs)
 
+    def _proxied(self, url: str) -> bool:
+        """Whether *url* goes through the configured proxy."""
+        if self._proxy is None:
+            return False
+        if not self._proxy_hosts:
+            return True
+        host = (httpx.URL(url).host or "").lower()
+        return any(host == name or host.endswith("." + name) for name in self._proxy_hosts)
+
+    def _route(self, url: str) -> httpx.Client:
+        """The proxy client, or a direct one for a host left off ``proxy_hosts``.
+
+        Without any proxy the main client keeps honouring HTTPS_PROXY; a host
+        the configuration sends direct ignores it, as the fallback route does.
+        """
+        if self._proxy is not None and not self._proxied(url):
+            return self._get_direct_client()
+        return self._client
+
     def _can_fallback_direct(self, url: str) -> bool:
         host = (httpx.URL(url).host or "").lower()
         return bool(
-            self._proxy
+            self._proxied(url)
             and getattr(self.config, "eastmoney_direct_fallback", False)
             and (host == "push2his.eastmoney.com" or host.endswith(".push2his.eastmoney.com"))
         )
@@ -371,7 +398,7 @@ class EastMoneyClient:
         self._note_outcome(url, status_code=response.status_code)
         return response
 
-    def _proxy_failure(self, exc: BaseException) -> BaseException:
+    def _proxy_failure(self, exc: BaseException, url: str) -> BaseException:
         """Name a refused connection to the proxy itself.
 
         A proxy that is not running (Clash gone after a logout) raises a plain
@@ -381,7 +408,7 @@ class EastMoneyClient:
         failed probe is remembered briefly (see ``_proxy_is_dead``).
         """
         if (
-            self._proxy is None
+            not self._proxied(url)
             or not isinstance(exc, httpx.ConnectError)
             or isinstance(exc, host_guard.EastMoneyHostBlockedError)
             or not _proxy_is_dead(self._proxy)
@@ -420,7 +447,7 @@ class EastMoneyClient:
             # every slot twice.
             self._throttle()
         headers = kwargs.pop("headers", {})
-        headers.update(build_eastmoney_headers(url, self._client, config=self.config))
+        headers.update(build_eastmoney_headers(url, self._route(NID_URL), config=self.config))
         params = apply_push2_token(url, kwargs.pop("params", None))
         if params is not None:
             # Merge into the URL ourselves rather than handing `params` to httpx.
@@ -434,7 +461,7 @@ class EastMoneyClient:
             # copy_merge_params behaves identically on both versions.
             url = str(httpx.URL(url).copy_merge_params(params))
         self.last_route_outcome = {
-            "primary_route": "proxy" if self._proxy else "direct",
+            "primary_route": "proxy" if self._proxied(url) else "direct",
             "proxy_failed": False,
             "direct_failed": False,
             "direct_succeeded": False,
@@ -445,7 +472,7 @@ class EastMoneyClient:
                 if request_event is not None:
                     record_request_event(self.config, _request_source(url), request_event)
                 count_request(retry=request_event == "retry")
-                response = self._client.get(url, headers=headers, **kwargs)
+                response = self._route(url).get(url, headers=headers, **kwargs)
                 record_http_response(
                     self.config, _request_source(url), response, expected_json=True
                 )
@@ -455,7 +482,7 @@ class EastMoneyClient:
             httpx.ProxyError,
             httpx.RemoteProtocolError,
         ) as exc:
-            failure = self._proxy_failure(exc)
+            failure = self._proxy_failure(exc, url)
             self.last_route_outcome["primary_error"] = type(failure).__name__
             self._note_outcome(url, exc=failure)
             if not self._can_fallback_direct(url):
@@ -477,7 +504,8 @@ class EastMoneyClient:
             self._note_outcome(url, exc=exc)
             raise
         self._note_outcome(url, status_code=response.status_code)
-        _proxy_answered(self._proxy)
+        if self._proxied(url):
+            _proxy_answered(self._proxy)
         if response.status_code in _DIRECT_FALLBACK_STATUS_CODES and self._can_fallback_direct(url):
             self.last_route_outcome["proxy_failed"] = True
             self.last_route_outcome["primary_status_code"] = response.status_code
@@ -498,22 +526,23 @@ class EastMoneyClient:
         if self.config is None:
             self._throttle()
         headers = kwargs.pop("headers", {})
-        headers.update(build_eastmoney_headers(url, self._client, config=self.config))
+        headers.update(build_eastmoney_headers(url, self._route(NID_URL), config=self.config))
         try:
             with source_request(self.config, _request_source(url)):
                 host_guard.admit(self.config, url)
-                response = self._client.post(url, headers=headers, **kwargs)
+                response = self._route(url).post(url, headers=headers, **kwargs)
                 record_http_response(
                     self.config, _request_source(url), response, expected_json=True
                 )
         except Exception as exc:
-            failure = self._proxy_failure(exc)
+            failure = self._proxy_failure(exc, url)
             self._note_outcome(url, exc=failure)
             if failure is exc:
                 raise
             raise failure from exc
         self._note_outcome(url, status_code=response.status_code)
-        _proxy_answered(self._proxy)
+        if self._proxied(url):
+            _proxy_answered(self._proxy)
         return response
 
     def close(self) -> None:

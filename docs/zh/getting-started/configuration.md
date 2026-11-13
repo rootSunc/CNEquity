@@ -121,6 +121,7 @@ enabled = false
 | `js_runtime`（ths） | 可选。生成同花顺 `hexin-v` 令牌用的 Deno 路径；不填就在 `PATH` 和常见安装位置里找。令牌脚本在 Deno 里**不给任何权限**运行（不能读写文件、联网、读环境变量）。没有 Deno 时同花顺资金流兜底会失败并记日志，不影响其他数据 |
 | `ths_data`（限速通道） | 同花顺数据中心页面（资金流兜底）默认 3 秒一页，与同花顺其他页面共用 1 个并发；可用 `[sources.ths_data] min_interval_seconds` 调整 |
 | `proxy`（eastmoney） | 可选 HTTP(S) 代理 URL，对所有东财主机生效。按自身网络条件设置；未设时仍可用 `HTTPS_PROXY`。不能用轮换代理代替冷却 |
+| `proxy_hosts`（eastmoney） | 可选，只让这些主机走 `proxy`（一个主机名也包括它的子域名），其余东财主机直连，且不读 `HTTPS_PROXY`。例如 `["push2.eastmoney.com", "push2his.eastmoney.com", "push2delay.eastmoney.com"]`：数据中心、公告等直连可达时，代理停了也不影响它们。未设时所有东财主机都走代理 |
 | `push2_paused`（eastmoney） | 默认关，即允许请求。开启后 push2 / push2his / push2delay 请求在本地直接失败、不发出，用于出口 IP 被封时停请求冷却；datacenter 等其他东财主机不受影响。环境变量 `CNE_PUSH2_PAUSED=1` 效果相同；日更和晚间补跑均遵循本机配置及该环境变量，补跑不会自行关闭 push2 |
 | `push2_breaker`（eastmoney） | 默认开。push2 系第一次拒绝（403 / 429 / 5xx、连接被断、超时）后，所有 push2 主机当天（本地时间，到午夜）一律不再请求，也不切备用主机 |
 | `push2_daily_budget`（eastmoney） | 默认 150。push2 系每天（本地时间）请求上限，跨进程累计，用完即停；0 表示不限。上限按本机账本调整，不借用别的湖的次数 |

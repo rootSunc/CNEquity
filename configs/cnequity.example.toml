@@ -148,6 +148,9 @@ datacenter_max_concurrency = 2
 # retry once with trust_env=false, and never after the push2 breaker trips. Keep false where policy requires all traffic
 # to use the proxy.
 direct_fallback = false
+# Optional: only these hosts (and their subdomains) use `proxy`; the other
+# EastMoney hosts connect directly. Unset = every host uses the proxy.
+# proxy_hosts = ["push2.eastmoney.com", "push2his.eastmoney.com", "push2delay.eastmoney.com"]
 
 [sources.ths]
 # 同花顺 — primary source for sector_bars (board index OHLC), history and daily.

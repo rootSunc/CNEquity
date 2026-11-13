@@ -33,7 +33,13 @@ _FINGERPRINTED_FLAGS = (
     "_sector_bars_force",
 )
 _NOT_DATA_FIELDS = frozenset(
-    {"_rate_limiters", "inline_credentials", "backfill_window", "run_flags"}
+    {
+        "_rate_limiters",
+        "inline_credentials",
+        "backfill_window",
+        "run_flags",
+        "eastmoney_proxy_hosts",
+    }
 )
 
 
