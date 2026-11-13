@@ -2470,6 +2470,10 @@ msgstr "是不是想找：{value}？"
 msgid "Directory layout created at {data_root}"
 msgstr "已在 {data_root} 建好目录结构"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Directory to write to; each dataset goes into its own empty subdirectory."
+msgstr "写入的目录；每个数据集写进各自的空子目录。"
+
 #: cnequity/diagnostics/source_health.py
 msgid "Disabled in the config"
 msgstr "配置里已关闭"
@@ -2676,6 +2680,10 @@ msgstr "过期预览"
 #: cnequity/cli/setup_cmds.py
 msgid "Explicit history start (YYYY-MM-DD); overrides --profile."
 msgstr "显式指定历史起点（YYYY-MM-DD）；覆盖 --profile。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Export published datasets from the lake catalog to plain Parquet for tools that read files directly."
+msgstr "把湖目录里已发布的数据集导出成普通 Parquet，供直接读文件的工具使用。"
 
 #: cnequity/cli/decision_data_cmds.py
 msgid "Export reviewed holder-specific rights tied to the current action revision."
@@ -2896,6 +2904,10 @@ msgstr "请先确认定时任务的执行范围。"
 #: cnequity/ops/settings.py
 msgid "First confirm these settings will be used for later fetches."
 msgstr "请先确认这些设置会用于之后的取数。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "First date to export (inclusive), by the dataset's date column."
+msgstr "导出的起始日期（含），按数据集的日期列。"
 
 #: cnequity/serve/guard.py
 msgid "First-time setup can only be done on this machine."
@@ -3475,6 +3487,10 @@ msgstr "数据湖：  {data_root}"
 #, python-brace-format
 msgid "Lake:      {data_root}"
 msgstr "数据湖：  {data_root}"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Last date to export (inclusive), by the dataset's date column."
+msgstr "导出的结束日期（含），按数据集的日期列。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format

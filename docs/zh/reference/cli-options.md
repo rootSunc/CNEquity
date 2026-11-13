@@ -719,6 +719,16 @@
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
 | `object_id` | `—` | 必填；位置参数 |
 
+## `cne storage export`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `datasets` | `—` | 必填；位置参数 |
+| `--out` | `—` | 必填；写入的目录；每个数据集写进各自的空子目录。 |
+| `--start` | `—` | 导出的起始日期（含），按数据集的日期列。 |
+| `--end` | `—` | 导出的结束日期（含），按数据集的日期列。 |
+
 ## `cne storage hold`
 
 | 参数 | 默认值 | 说明 |

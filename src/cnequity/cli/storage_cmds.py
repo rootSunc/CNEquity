@@ -173,6 +173,53 @@ def catalog_retention_cmd(config_path: str, apply: bool):
     _emit(result)
 
 
+@storage.command("export")
+@config_option
+@click.argument("datasets", nargs=-1, required=True)
+@click.option(
+    "--out",
+    "out",
+    required=True,
+    type=click.Path(file_okay=False),
+    help=N_("Directory to write to; each dataset goes into its own empty subdirectory."),
+)
+@click.option(
+    "--start",
+    type=click.DateTime(["%Y-%m-%d"]),
+    default=None,
+    help=N_("First date to export (inclusive), by the dataset's date column."),
+)
+@click.option(
+    "--end",
+    type=click.DateTime(["%Y-%m-%d"]),
+    default=None,
+    help=N_("Last date to export (inclusive), by the dataset's date column."),
+)
+def export_cmd(config_path: str, datasets: tuple[str, ...], out: str, start, end):
+    """Export published datasets from the lake catalog to plain Parquet for tools that read files directly."""
+    from pathlib import Path
+
+    from cnequity.storage.catalog_bridge import ExportRefused, export_dataset
+
+    config = _cfg(config_path)
+    exported = []
+    for dataset in datasets:
+        try:
+            exported.append(
+                export_dataset(
+                    config,
+                    dataset.lower(),
+                    Path(out),
+                    start=start.date() if start else None,
+                    end=end.date() if end else None,
+                )
+            )
+        except ExportRefused as exc:
+            _emit({"exported": exported})
+            raise click.ClickException(str(exc)) from exc
+    _emit({"exported": exported})
+
+
 @storage.command("verify-catalog")
 @config_option
 @click.option("--dataset", default=None, help=N_("Check only this dataset's revisions."))

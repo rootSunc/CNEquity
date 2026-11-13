@@ -78,6 +78,7 @@
 | `cne storage apply` | 无 | 已移除（随标记观察期一起）；只报错并说明替代做法 |
 | `cne storage catalog-retention` | 无 | 预演只读；--apply 让湖目录过期旧快照，并删除超过宽限期的文件 |
 | `cne storage explain` | 无 | 读取版本保留依据 |
+| `cne storage export` | 无 | 只读湖；把湖目录里已发布的数据集导出成普通 Parquet，只写 --out 指定的目录 |
 | `cne storage hold` | 无 | 增加对象保护；自动清理不再删除它 |
 | `cne storage import` | 无 | 校验并登记引用清单；只增加保护 |
 | `cne storage inspect` | 无 | 读取版本与保留原因 |

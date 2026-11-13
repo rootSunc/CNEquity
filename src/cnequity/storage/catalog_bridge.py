@@ -561,6 +561,75 @@ def sync_published(store: RevisionStore, dataset: str) -> SyncResult | None:
         return sync_dataset(roots, catalog, dataset)
 
 
+# --- export -------------------------------------------------------------------------
+
+
+class ExportRefused(RuntimeError):
+    """The dataset cannot be exported as asked; nothing was written."""
+
+
+def export_dataset(
+    config, dataset: str, destination: Path, *, start=None, end=None
+) -> dict[str, object]:
+    """Export *dataset*'s published rows to plain Parquet under ``destination/<dataset>``.
+
+    Only a dataset whose published revision the catalog holds is exported, so
+    the files are what readers of the lake see. *start* and *end* (dates,
+    inclusive) select rows by the dataset's partition column.
+    """
+    from equitylake_core.catalog import CATALOG_FILE
+
+    if dataset not in DATASETS:
+        raise ExportRefused(f"unknown dataset: {dataset}")
+    root = lake_root(config)
+    if not (root / CATALOG_FILE).exists():
+        raise ExportRefused("this lake has no lake catalog")
+    target = Path(destination) / dataset
+    if target.exists() and any(target.iterdir()):
+        raise ExportRefused(f"{target} is not empty")
+    with Catalog(root, read_only=True, memory_limit="4GB") as catalog:
+        if not catalog_is_current(config, catalog, dataset):
+            raise ExportRefused(
+                f"the lake catalog does not hold the published revision of {dataset}; "
+                "run cne storage sync-catalog first"
+            )
+        types = {
+            row[0]: row[1]
+            for row in catalog.execute(f"DESCRIBE {quote_identifier(dataset)}").fetchall()
+        }
+        column = DATASETS[dataset].partition_col
+        dated = bool(column) and types.get(column, "").startswith(("DATE", "TIMESTAMP"))
+        clauses = []
+        if start is not None or end is not None:
+            if not dated:
+                raise ExportRefused(f"{dataset} has no date column to select a range by")
+            name = quote_identifier(column)
+            if start is not None:
+                clauses.append(f"CAST({name} AS DATE) >= DATE {quote_literal(str(start))}")
+            if end is not None:
+                clauses.append(f"CAST({name} AS DATE) <= DATE {quote_literal(str(end))}")
+        revision = synced_revision(catalog, dataset)
+        with catalog.transaction():
+            # One snapshot for the count and the copy.
+            rows = catalog.export_parquet(
+                dataset,
+                target,
+                partition_by=column if dated else None,
+                where=" AND ".join(clauses) or None,
+            )
+            snapshot = catalog.snapshot()
+    files = sorted(target.rglob("*.parquet"))
+    return {
+        "dataset": dataset,
+        "rows": rows,
+        "files": len(files),
+        "bytes": sum(path.stat().st_size for path in files),
+        "revision_id": revision[0] if revision else None,
+        "snapshot": snapshot,
+        "path": str(target),
+    }
+
+
 # --- retention ---------------------------------------------------------------------
 
 #: Files an expired snapshot no longer needs are deleted only after this long, so

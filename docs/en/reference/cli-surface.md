@@ -78,6 +78,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne storage apply` | none | Removed with the mark-and-wait phase; only reports the error and what to use instead |
 | `cne storage catalog-retention` | none | Read-only preview; --apply expires old lake catalog snapshots and deletes files past the grace period |
 | `cne storage explain` | none | Reads the retention reasons for versions |
+| `cne storage export` | none | Reads the lake only; exports published datasets from the lake catalog to plain Parquet and writes only under --out |
 | `cne storage hold` | none | Adds object protection; automatic retention no longer deletes it |
 | `cne storage import` | none | Validates and registers a reference manifest; only adds protection |
 | `cne storage inspect` | none | Reads versions and retention reasons |

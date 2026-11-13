@@ -352,3 +352,30 @@ def test_a_published_revision_records_a_digest_of_the_rows_the_catalog_holds(cfg
         # Rows that differ from what was published are reported.
         lake.execute(f"UPDATE {REVISIONS_TABLE} SET rows_digest = '2:0:0'")
         assert [c.status for c in verify_revisions(lake, "daily_bars")] == ["mismatch"]
+
+
+def test_export_writes_plain_parquet_a_hive_reader_cannot_misread(cfg, tmp_path):
+    import duckdb
+
+    from cnequity.storage.catalog_bridge import ExportRefused, export_dataset
+
+    out = tmp_path / "export"
+    result = export_dataset(cfg, "daily_bars", out)
+    assert (result["rows"], result["path"]) == (3, str(out / "daily_bars"))
+    files = (out / "daily_bars" / "**" / "*.parquet").as_posix()
+    # With or without directory names read as columns, the dates are the rows' own.
+    for hive in ("true", "false"):
+        rows = duckdb.sql(
+            f"SELECT symbol, trade_date, close FROM read_parquet('{files}', "
+            f"hive_partitioning = {hive}) ORDER BY trade_date, symbol"
+        ).fetchall()
+        assert rows == [
+            ("000001.SZ", date(2024, 1, 2), 9.0),
+            ("600000.SH", date(2024, 1, 2), 10.0),
+            ("600000.SH", date(2024, 2, 1), 11.0),
+        ]
+    # A second export never overwrites the first.
+    with pytest.raises(ExportRefused, match="not empty"):
+        export_dataset(cfg, "daily_bars", out)
+    ranged = export_dataset(cfg, "daily_bars", tmp_path / "feb", start=date(2024, 2, 1))
+    assert ranged["rows"] == 1

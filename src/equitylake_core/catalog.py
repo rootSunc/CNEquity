@@ -347,5 +347,46 @@ class Catalog:
             ).fetchone()[0]
         return ImportResult(table=table, rows=rows, snapshot=self.snapshot())
 
+    def export_parquet(
+        self,
+        table: str,
+        destination: str | Path,
+        *,
+        partition_by: str | None = None,
+        where: str | None = None,
+    ) -> int:
+        """Write *table*'s rows to plain Parquet under *destination*; returns the row count.
+
+        For tools that read Parquet directly: the lake's own data files belong
+        to the catalog, which rewrites and removes them. The export is one
+        statement, so it is one snapshot of the table. With *partition_by* (a
+        date or timestamp column) the files go into ``year=YYYY/month=M/``
+        directories; those names are not columns of the table, so a reader
+        that takes directory names as values adds two columns and overwrites
+        none. Without it the table is one file, ``<table>.parquet``.
+        """
+        target = Path(destination)
+        name = quote_identifier(table)
+        scope = f" WHERE {where}" if where else ""
+        rows = self.con.execute(f"SELECT count(*) FROM {name}{scope}").fetchone()[0]
+        target.mkdir(parents=True, exist_ok=True)
+        if partition_by is None:
+            self.con.execute(
+                f"COPY (SELECT * FROM {name}{scope}) TO "
+                f"{quote_literal((target / f'{table}.parquet').as_posix())} "
+                "(FORMAT parquet, COMPRESSION zstd)"
+            )
+            return rows
+        if not rows:
+            return 0
+        column = quote_identifier(partition_by)
+        self.con.execute(
+            f'COPY (SELECT *, year({column}) AS "year", month({column}) AS "month" '
+            f"FROM {name}{scope}) TO {quote_literal(target.as_posix())} "
+            '(FORMAT parquet, COMPRESSION zstd, PARTITION_BY ("year", "month"), '
+            "OVERWRITE_OR_IGNORE)"
+        )
+        return rows
+
     def merge_small_files(self) -> None:
         self.con.execute(f"CALL ducklake_merge_adjacent_files({quote_literal(ALIAS)})")
