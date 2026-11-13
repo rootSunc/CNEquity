@@ -847,8 +847,16 @@ def _compact_datasets(
         config,
         run_id,
         trade_date,
-        {item[0]: config.curated_root / item[0] for item in pending},
+        {
+            item[0]: (
+                lake_write.checkout(item[0]).root
+                if lake_write is not None and lake_write.has(item[0])
+                else config.curated_root / item[0]
+            )
+            for item in pending
+        },
         {item[0]: item[3] for item in pending},
+        lake_write=lake_write,
     )
     blocked_datasets = set(publication.get("blocked_datasets") or [])
     if publication["blocked"]:

@@ -2,6 +2,10 @@
 
 这里记录面向用户的主要功能、修复与兼容性变化。历史版本中的命令名反映当时的接口；当前用法以 [CLI 参考](docs/zh/reference/cli.md)为准。升级前阅读[升级与兼容性](docs/zh/getting-started/installation.md#升级与兼容性)。
 
+## [Unreleased]
+
+- `[storage].publish = "catalog"` 现在可以和发布门（`[quality].publication_gate`）一起用。发布前先建一份湖目录的克隆（数据文件用硬链接，目录库复制一份），把这次运行要改的分区照正式发布的方式发布进克隆，审计读克隆；出现新增或加重的错误时，再逐个去掉候选数据集重新预演，只拦下造成错误的那个，其余照常发布。真正的湖目录在审计通过前不会被写入。此前两者不能同时打开。`revision_gate` 仍不支持。
+
 ## [0.24.0] — 2026-11-13 · 最低要求升到 Python 3.11 与 DuckDB 2.0，新增实验性的湖目录
 
 - **升级步骤：** 先确认环境是 Python 3.11 或更高，再 `pip install -U cnequity`，然后重启 `cne serve` 和已在运行的 `cne mcp`。数据集的列、主键和分区都没有变，本版没有迁移要跑。`extends = "builtin"` 的配置不用改；完整展开的旧配置运行 `cne config upgrade` 改写改过名的键，并手动把 `name_history` 从 core 组里去掉，否则日更仍会读 Tushare。升级后第一次日更会把 `option_greeks` 和 `minute_bars_15m/30m/60m` 的全部历史重算一遍，之后只重算内容变了的交易日。湖目录（`lake/`）是实验性的：不建它，读写与以前完全一样；`[storage].publish = "catalog"` 对每个数据集单向生效，打开前先做快照，暂不建议用在不能重建的湖上。

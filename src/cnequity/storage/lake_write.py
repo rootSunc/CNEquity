@@ -297,6 +297,32 @@ class LakeWrite:
         :class:`~equitylake_core.write.WriteRejected` and publishes nothing when a
         check refuses or a dataset moved since its checkout.
         """
+        changes = self._changes(datasets)
+        if not changes:
+            return {}
+        with lake_mutation_lock(self.config.meta_root, blocking=True):
+            return self._commit(self.catalog, self.store, changes, datasets, message, advance=True)
+
+    def rehearse(
+        self, config, datasets: dict[str, DatasetPublish], *, message: str | None = None
+    ) -> dict[str, DatasetRevision]:
+        """Publish *datasets* into another lake: a clone of this one, under *config*.
+
+        The clone then holds exactly what :meth:`publish` would commit here,
+        and can be read like any lake. Uncommitted rows of an open catalog
+        transaction are visible only to the connection that wrote them, so a
+        check that reads data files cannot run inside the transaction; it
+        runs on the clone instead. This lake and the checkouts are untouched.
+        """
+        changes = self._changes(datasets)
+        if not changes:
+            return {}
+        store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
+        root = lake_root(config)
+        with Catalog(root, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
+            return self._commit(catalog, store, changes, datasets, message, advance=False)
+
+    def _changes(self, datasets) -> dict[str, dict[str, list[Path]]]:
         changes: dict[str, dict[str, list[Path]]] = {}
         for dataset in datasets:
             if dataset in self._trees:
@@ -313,51 +339,64 @@ class LakeWrite:
                 continue
             if changed:
                 changes[dataset] = changed
-        if not changes:
-            return {}
-        with lake_mutation_lock(self.config.meta_root, blocking=True):
-            for dataset in changes:
-                checkout = self._checkouts[dataset]
-                if _catalog_revision(self.catalog, dataset) != checkout.base_revision:
-                    raise WriteRejected(f"{dataset} was published by another write since checkout")
-            receipts = {
-                dataset: self._prepare(dataset, changed, datasets[dataset])
-                for dataset, changed in changes.items()
-            }
-            write = Write(self.catalog)
-            for dataset, changed in changes.items():
-                checkout = self._checkouts[dataset]
-                for label, files in changed.items():
-                    write.replace(
-                        dataset,
-                        files,
-                        where=checkout.where(label),
-                        order_by=PRIMARY_KEYS.get(dataset, ()),
-                    )
-            for name, check in self._checks:
-                write.check(name, check)
-            for dataset, receipt in receipts.items():
-                where = " OR ".join(
-                    f"({clause})"
-                    for label in changes[dataset]
-                    if (clause := self._checkouts[dataset].where(label))
+        return changes
+
+    def _commit(
+        self,
+        catalog: Catalog,
+        store: RevisionStore,
+        changes: dict[str, dict[str, list[Path]]],
+        datasets: dict[str, DatasetPublish],
+        message: str | None,
+        *,
+        advance: bool,
+    ) -> dict[str, DatasetRevision]:
+        for dataset in changes:
+            checkout = self._checkouts[dataset]
+            if _catalog_revision(catalog, dataset) != checkout.base_revision:
+                raise WriteRejected(f"{dataset} was published by another write since checkout")
+        receipts = {
+            dataset: self._prepare(store, dataset, changed, datasets[dataset])
+            for dataset, changed in changes.items()
+        }
+        write = Write(catalog)
+        for dataset, changed in changes.items():
+            checkout = self._checkouts[dataset]
+            for label, files in changed.items():
+                write.replace(
+                    dataset,
+                    files,
+                    where=checkout.where(label),
+                    order_by=PRIMARY_KEYS.get(dataset, ()),
                 )
-                write.check(f"{dataset} sync state", _sync_recorder(dataset, receipt, where))
-                write.record(REVISIONS_TABLE, _revision_recorder(receipt, where))
-            # One snapshot holds the rows, the sync state and the revision rows,
-            # and it is file-complete: a pinned read needs nothing recorded later.
-            write.commit(message=message or f"run {self.run_id}")
-            for dataset, receipt in receipts.items():
-                self.store.finish_catalog_revision(receipt)
-                if dataset not in self._trees:
-                    # Keep the working tree a valid cache of what was published.
-                    self.store.advance_working_tree(
-                        dataset, self._checkouts[dataset].base_revision, changes[dataset]
-                    )
+        for name, check in self._checks:
+            write.check(name, check)
+        for dataset, receipt in receipts.items():
+            where = " OR ".join(
+                f"({clause})"
+                for label in changes[dataset]
+                if (clause := self._checkouts[dataset].where(label))
+            )
+            write.check(f"{dataset} sync state", _sync_recorder(dataset, receipt, where))
+            write.record(REVISIONS_TABLE, _revision_recorder(receipt, where))
+        # One snapshot holds the rows, the sync state and the revision rows,
+        # and it is file-complete: a pinned read needs nothing recorded later.
+        write.commit(message=message or f"run {self.run_id}")
+        for dataset, receipt in receipts.items():
+            store.finish_catalog_revision(receipt)
+            if advance and dataset not in self._trees:
+                # Keep the working tree a valid cache of what was published.
+                store.advance_working_tree(
+                    dataset, self._checkouts[dataset].base_revision, changes[dataset]
+                )
         return receipts
 
     def _prepare(
-        self, dataset: str, changed: dict[str, list[Path]], publish: DatasetPublish
+        self,
+        store: RevisionStore,
+        dataset: str,
+        changed: dict[str, list[Path]],
+        publish: DatasetPublish,
     ) -> DatasetRevision:
         base = self._trees[dataset][0] if dataset in self._trees else self._checkouts[dataset].root
         records = tuple(
@@ -371,7 +410,7 @@ class LakeWrite:
         )
         partitions = tuple(f"{dataset}/{label}" if label else dataset for label in changed)
         removed = [f"{dataset}/{label}" for label, files in changed.items() if not files]
-        return self.store.prepare_catalog_revision(
+        return store.prepare_catalog_revision(
             dataset,
             run_id=self.run_id,
             files=records,

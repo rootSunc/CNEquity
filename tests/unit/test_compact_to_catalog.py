@@ -116,3 +116,83 @@ def test_a_catalog_compaction_publishes_what_a_generation_compaction_does(tmp_pa
     assert len(snapshots) == 1, "both datasets of the run publish in one snapshot"
     # The run's checkout is gone once it published.
     assert not (catalog.staging_root / "_checkout" / "r2").exists()
+
+
+def _gated_lake(root) -> Config:
+    """A catalog lake holding the first run, with the publication gate blocking."""
+    cfg = Config(data_root=root / "gated")
+    _run(
+        cfg,
+        "r1",
+        FIRST,
+        _flows(FIRST, {"600519.SH": 1.0, "000001.SZ": 2.0}),
+        _margins(FIRST, {"600519.SH": 10.0}),
+    )
+    try:
+        with Catalog(lake_root(cfg), create=True) as lake:
+            sync_all(cfg, lake)
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    return replace(cfg, storage_publish="catalog", publication_gate="block")
+
+
+def test_the_publication_gate_audits_a_rehearsed_catalog_publish(tmp_path, monkeypatch):
+    from cnequity.query import catalog_read, load
+
+    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
+    cfg = _gated_lake(tmp_path)
+    audited = []
+
+    def errors(view, day, scope=None):
+        # The audit reads the view like any lake: no special path for candidates.
+        flows = load("fund_flow", config=view)
+        margins = load("margin_trading", config=view)
+        audited.append((flows.height, margins.height))
+        if (flows["main_net_inflow"] == -999.0).any():
+            return [{"dataset": "fund_flow", "severity": "error", "check": "bad_flow"}]
+        return []
+
+    monkeypatch.setattr("cnequity.quality.publication._errors", errors)
+    with Catalog(lake_root(cfg), read_only=True) as lake:
+        before = lake.snapshot()
+    result = _run(
+        cfg,
+        "r2",
+        SECOND,
+        _flows(SECOND, {"600519.SH": -999.0}),
+        _margins(SECOND, {"600519.SH": 11.0}),
+    )
+    catalog_read.close_all()
+
+    # Baseline, both candidates, then each candidate removed in turn.
+    assert audited == [(2, 1), (3, 2), (2, 2), (3, 1)]
+    skipped = result["context_updates"]["compact_skipped_datasets"]
+    assert [item["dataset"] for item in skipped] == ["fund_flow"]
+    # The blocked dataset is as it was; the other one published.
+    assert load("fund_flow", config=cfg).height == 2
+    assert load("margin_trading", config=cfg).height == 2
+    store = RevisionStore(cfg.meta_root, cfg.curated_root)
+    assert store.current_pointer("fund_flow").get("storage") != "catalog"
+    assert store.current_pointer("margin_trading")["storage"] == "catalog"
+    # The rehearsals left nothing in the real catalog: one publish, one snapshot.
+    with Catalog(lake_root(cfg), read_only=True) as lake:
+        assert lake.snapshot() == before + 1
+        assert lake.execute("SELECT dataset FROM _revisions").fetchall() == [("margin_trading",)]
+
+
+def test_a_clean_rehearsal_lets_the_catalog_publish_through(tmp_path, monkeypatch):
+    from cnequity.query import catalog_read, load
+
+    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
+    cfg = _gated_lake(tmp_path)
+    _run(
+        cfg,
+        "r2",
+        SECOND,
+        _flows(SECOND, {"600519.SH": 3.0}),
+        _margins(SECOND, {"600519.SH": 11.0}),
+    )
+    catalog_read.close_all()
+    assert load("fund_flow", config=cfg).height == 3
+    report = next((cfg.meta_root / "quality" / "publication").glob("r2.json")).read_text()
+    assert '"blocked": false' in report and "candidate_audit_failed" not in report

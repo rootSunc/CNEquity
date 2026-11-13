@@ -40,6 +40,89 @@ def _link_read_only(source: str, target: str) -> str:
     return target
 
 
+def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> None:
+    """Give *view* a lake catalog of its own that holds what *config*'s publishes.
+
+    Data files are immutable, so they are hard links; the catalog database is
+    copied. Datasets published only into the catalog are found through their
+    pointer and receipt, which are copied too. Calling it again resets the
+    view's lake, undoing a rehearsed publish.
+    """
+    from cnequity.query import catalog_read
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import CATALOG_FILE, DATA_DIR
+
+    source, target = lake_root(config), lake_root(view)
+    catalog_read.close(view)
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    shutil.copytree(source / DATA_DIR, target / DATA_DIR, copy_function=_link_read_only)
+    with (
+        closing(connect_readonly(source / CATALOG_FILE)) as original,
+        closing(sqlite3.connect(target / CATALOG_FILE)) as copied,
+    ):
+        original.backup(copied)
+        copied.execute("PRAGMA journal_mode=WAL")
+    # A rehearsed publish leaves its pointer and state in the view; drop them,
+    # so a dataset the real lake keeps as a generation is read as one again.
+    for stale in (view.meta_root / "revisions").glob("*/current.json"):
+        stale.unlink()
+        real_state = config.meta_root / "state" / f"{stale.parent.name}.json"
+        view_state = view.meta_root / "state" / real_state.name
+        if real_state.is_file():
+            shutil.copy2(real_state, view_state)
+        else:
+            view_state.unlink(missing_ok=True)
+    for name in sorted(catalog_datasets):
+        pointer = config.meta_root / "revisions" / name / "current.json"
+        if not pointer.is_file():
+            continue
+        payload = json.loads(pointer.read_text(encoding="utf-8"))
+        for relative in (pointer.relative_to(config.meta_root), Path(payload.get("receipt", ""))):
+            if relative.name and (config.meta_root / relative).is_file():
+                stored = view.meta_root / relative
+                stored.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(config.meta_root / relative, stored)
+        state = config.meta_root / "state" / f"{name}.json"
+        if state.is_file():
+            (view.meta_root / "state").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(state, view.meta_root / "state" / state.name)
+
+
+def _catalog_datasets(config: Config) -> set[str]:
+    """Datasets whose published revision lives only in the lake catalog."""
+    names = set()
+    for name in DATASETS:
+        pointer = config.meta_root / "revisions" / name / "current.json"
+        try:
+            if json.loads(pointer.read_text(encoding="utf-8")).get("storage") == "catalog":
+                names.add(name)
+        except (OSError, ValueError):
+            continue
+    return names
+
+
+def _rehearse(lake_write, view: Config, names) -> None:
+    """Publish the checkouts of *names* into *view*'s lake, as the run would into the real one."""
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.query import catalog_read
+    from cnequity.storage.lake_write import DatasetPublish
+
+    catalog_read.close(view)
+    lake_write.rehearse(
+        view,
+        {
+            name: DatasetPublish(
+                schema_version=int(dataset_contract(name)["schema_version"]),
+                contract_fingerprint=contract_fingerprint(dataset_contract(name)),
+            )
+            for name in names
+        },
+        message="publication rehearsal",
+    )
+
+
 def _errors(
     config: Config, day: date, scope: dict[str, frozenset[str] | None] | None = None
 ) -> list[dict]:
@@ -317,12 +400,18 @@ def evaluate_publication(
     changed: dict[str, list[Path]] | None = None,
     *,
     repair_symbols: frozenset[str] = frozenset(),
+    lake_write=None,
 ) -> dict:
     """Audit the candidates against the committed lake; block new or worse errors.
 
     Structural checks run only for the candidate datasets, limited to the
     partitions in ``changed`` when given; the deep historical sweep of every
     dataset belongs to ``cne audit --full``.
+
+    A candidate that *lake_write* holds as a checkout is a set of changed
+    partitions, not a whole dataset tree. The audit view then gets a clone of
+    the lake catalog, the checkouts are published into the clone as the run
+    would publish them, and the audit reads the clone.
     """
     mode = config.publication_gate
     if mode == "off" or not candidates:
@@ -369,16 +458,26 @@ def evaluate_publication(
                     closing(sqlite3.connect(view.manifest_path)) as copied,
                 ):
                     original.backup(copied)
+            rehearsed = sorted(
+                name for name in candidates if lake_write is not None and lake_write.has(name)
+            )
+            catalog_only = _catalog_datasets(config) if lake_write is not None else set()
+            if lake_write is not None:
+                _clone_lake(config, view, catalog_only)
             baseline = [item for item in _errors(view, day, scope) if not factor_advisory(item)]
             factor_baseline = advisory_factor_findings(_factor_action_errors(view, repair_symbols))
             guard_actions = "corporate_actions" in candidates and bool(repair_symbols)
             actions_before = _repair_actions(view, repair_symbols) if guard_actions else None
             for name, source in candidates.items():
+                if name in rehearsed:
+                    continue
                 layer = layer_root(view, name)
                 target = layer / name
                 if target.exists():
                     shutil.rmtree(target)
                 shutil.copytree(source, target, copy_function=_link_read_only)
+            if rehearsed:
+                _rehearse(lake_write, view, rehearsed)
             candidate_errors = [
                 item for item in _errors(view, day, scope) if not factor_advisory(item)
             ]
@@ -411,6 +510,19 @@ def evaluate_publication(
                 # removal resolves the finding, both sides are held together.
                 introduced_keys = Counter(issue_key(item) for item in introduced)
                 for name, source in candidates.items():
+                    if name in rehearsed:
+                        # Rehearse the publish again without this candidate.
+                        _clone_lake(config, view, catalog_only)
+                        others = [other for other in rehearsed if other != name]
+                        if others:
+                            _rehearse(lake_write, view, others)
+                        remaining = Counter(
+                            issue_key(item)
+                            for item in _new_errors(baseline, _errors(view, day, scope))
+                        )
+                        if any(remaining[key] < count for key, count in introduced_keys.items()):
+                            blocked_datasets.add(name)
+                        continue
                     layer = (
                         view.derived_root
                         if DATASETS[name].layer == "derived"
@@ -436,6 +548,11 @@ def evaluate_publication(
                     # A check with no attributable input is unsafe to publish.
                     blocked_datasets.update(candidates)
             report["blocked_datasets"] = sorted(blocked_datasets)
+            if lake_write is not None:
+                # Release the clone's catalog before its directory is removed.
+                from cnequity.query import catalog_read
+
+                catalog_read.close(view)
     except Exception as exc:
         # In block mode an audit that could not inspect the candidate is not a
         # successful publication check. Preserve the reason for a safe retry.
@@ -448,6 +565,11 @@ def evaluate_publication(
             }
         ]
         report["blocked_datasets"] = sorted(candidates) if mode == "block" else []
+    finally:
+        if lake_write is not None:
+            from cnequity.query import catalog_read
+
+            catalog_read.close_all()
     report["blocked"] = bool(report.get("blocked_datasets"))
     path = config.meta_root / "quality" / "publication" / f"{run_id}.json"
     write_json_atomic(path, report, indent=2, default=str)

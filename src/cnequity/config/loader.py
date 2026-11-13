@@ -1541,12 +1541,8 @@ def validate_config(cfg: Config) -> list[str]:
     if cfg.publication_gate not in {"off", "shadow", "block"}:
         errors.append("[quality].publication_gate must be one of: off, shadow, block")
     if cfg.storage_publish == "catalog":
-        # Both gates audit a full copy of the lake built from generations; a
-        # catalog write is gated inside its transaction instead (not yet built).
-        if cfg.publication_gate != "off":
-            errors.append(
-                '[storage].publish = "catalog" needs [quality].publication_gate = "off" for now'
-            )
+        # The publication gate rehearses a catalog write on a clone of the lake.
+        # The source-diff gate still compares a whole candidate tree.
         if any(spec.revision_gate for spec in cfg.failover_datasets):
             errors.append('[storage].publish = "catalog" does not support revision_gate yet')
     if cfg.raw_archive_compression not in {"gzip", "none"}:

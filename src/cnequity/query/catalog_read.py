@@ -59,6 +59,15 @@ def _catalog(config) -> Catalog | None:
     return catalog
 
 
+def close(config) -> None:
+    """Close the cached connection to *config*'s lake, so the next read sees it as it is now."""
+    root = lake_root(config).resolve()
+    with _lock:
+        catalog = _open.pop(root, None)
+        if catalog is not None:
+            catalog.close()
+
+
 def close_all() -> None:
     with _lock:
         for catalog in _open.values():
