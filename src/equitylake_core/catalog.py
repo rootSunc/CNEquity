@@ -204,6 +204,17 @@ class Catalog:
             "delete_threshold => 0)"
         )
 
+    def has_deletes(self, table: str) -> bool:
+        """Whether a data file of *table* has deletions not yet folded into it."""
+        return (
+            self.con.execute(
+                f"SELECT 1 FROM ducklake_list_files({quote_literal(ALIAS)}, ?) "
+                "WHERE delete_file IS NOT NULL LIMIT 1",
+                [table],
+            ).fetchone()
+            is not None
+        )
+
     def _alive(self, alias: str, snapshot: int | None) -> str:
         """SQL: a metadata row of *alias* is part of the table at *snapshot* (latest if None)."""
         if snapshot is None:

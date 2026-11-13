@@ -10,6 +10,13 @@ A partition is named by a SQL predicate over the table's columns, not by a
 directory: the catalog lays its files out by its own rules. Files whose rows
 fall outside their predicate are refused, so a replacement can never touch a
 partition it did not name.
+
+A replacement never leaves a delete file. The data files that hold the
+replaced rows are dropped whole, and the rows of those files the predicate
+does not select are written again beside the new ones. The snapshot the
+commit makes is therefore file-complete as it stands (see
+``equitylake_core.catalog``); a catalog transaction cannot both write and
+compact, so folding deletions afterwards would take a second snapshot.
 """
 
 from __future__ import annotations
@@ -38,6 +45,8 @@ class Replacement:
 
 #: A check gets the catalog inside the open transaction and returns a refusal, or ``None``.
 Check = Callable[[Catalog], "str | None"]
+#: A record is a row, or a function that builds it inside the open transaction.
+Record = "dict[str, object] | Callable[[Catalog], dict[str, object]]"
 
 
 @dataclass(frozen=True)
@@ -52,7 +61,7 @@ class Write:
     catalog: Catalog
     replacements: list[Replacement] = field(default_factory=list)
     checks: list[tuple[str, Check]] = field(default_factory=list)
-    records: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+    records: list[tuple[str, Record]] = field(default_factory=list)
 
     def replace(
         self,
@@ -77,9 +86,13 @@ class Write:
     def check(self, name: str, check: Check) -> None:
         self.checks.append((name, check))
 
-    def record(self, table: str, row: dict[str, object]) -> None:
-        """Append *row* to the metadata table *table* in the same snapshot."""
-        self.records.append((table, dict(row)))
+    def record(self, table: str, row: Record) -> None:
+        """Append *row* to the metadata table *table* in the same snapshot.
+
+        A function is called after the replacements and the checks, inside the
+        transaction, so a row can describe the rows that are about to commit.
+        """
+        self.records.append((table, row if callable(row) else dict(row)))
 
     def commit(self, *, message: str | None = None) -> WriteResult:
         if not self.replacements and not self.records:
@@ -93,12 +106,13 @@ class Write:
                 if refusal:
                     raise WriteRejected(f"{name}: {refusal}")
             for table, row in self.records:
-                _append(self.catalog, table, row)
+                _append(self.catalog, table, row(self.catalog) if callable(row) else row)
         snapshot = self.catalog.snapshot()
-        # Keep every table file-complete: a replacement leaves delete files
-        # behind, which a direct file scan would read as live rows.
+        # A replacement leaves no delete file. A table that already carried
+        # one (written by something else) is folded here, in a later snapshot.
         for table in dict.fromkeys(item.table for item in self.replacements):
-            self.catalog.fold_deletes(table)
+            if self.catalog.has_deletes(table):
+                self.catalog.fold_deletes(table)
         return WriteResult(snapshot, rows)
 
 
@@ -123,22 +137,47 @@ def _apply(catalog: Catalog, item: Replacement) -> int:
                 f"ALTER TABLE {table} SET PARTITIONED BY ({', '.join(item.partitioned_by)})"
             )
         return catalog.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-    where = f" WHERE {item.where}" if item.where else ""
-    catalog.execute(f"DELETE FROM {table}{where}")
-    if not item.files:
-        return 0
-    _add_missing_columns(catalog, item.table, item.files)
-    inserted = catalog.execute(
-        f"INSERT INTO {table} BY NAME SELECT * FROM {_scan(item.files)}{order}"
-    ).fetchone()[0]
-    if item.where:
-        selected = catalog.execute(f"SELECT count(*) FROM {table}{where}").fetchone()[0]
-        if selected != inserted:
-            raise WriteRejected(
-                f"{item.table}: {inserted - selected} of {inserted} row(s) fall outside "
-                f"the partition they replace ({item.where})"
-            )
-    return inserted
+    incoming = (
+        catalog.execute(f"SELECT count(*) FROM {_scan(item.files)}").fetchone()[0]
+        if item.files
+        else 0
+    )
+    if item.files:
+        _add_missing_columns(catalog, item.table, item.files)
+    if item.where is None:
+        catalog.execute(f"DELETE FROM {table}")
+        if item.files:
+            catalog.execute(f"INSERT INTO {table} BY NAME SELECT * FROM {_scan(item.files)}{order}")
+        return incoming
+    # The files holding rows of this partition, as they were before this write.
+    held = [
+        row[0]
+        for row in catalog.execute(
+            f"SELECT DISTINCT filename FROM {table} WHERE {item.where}"
+        ).fetchall()
+    ]
+    listed = ", ".join(quote_literal(path) for path in held)
+    if held:
+        # Rows of those files outside the partition are written again, in the
+        # order they already have (sorting them with the new rows would cost a
+        # sort of every file touched). A row the predicate cannot decide (NULL)
+        # was never selected, so it stays.
+        catalog.execute(
+            f"INSERT INTO {table} SELECT * FROM {table} "
+            f"WHERE filename IN ({listed}) AND ({item.where}) IS NOT TRUE"
+        )
+    if item.files:
+        catalog.execute(f"INSERT INTO {table} BY NAME SELECT * FROM {_scan(item.files)}{order}")
+    if held:
+        # Every row of a file: the catalog drops the file, with no delete file.
+        catalog.execute(f"DELETE FROM {table} WHERE filename IN ({listed})")
+    selected = catalog.execute(f"SELECT count(*) FROM {table} WHERE {item.where}").fetchone()[0]
+    if selected != incoming:
+        raise WriteRejected(
+            f"{item.table}: {incoming - selected} of {incoming} row(s) fall outside "
+            f"the partition they replace ({item.where})"
+        )
+    return incoming
 
 
 def _add_missing_columns(catalog: Catalog, table: str, files: tuple[str, ...]) -> None:

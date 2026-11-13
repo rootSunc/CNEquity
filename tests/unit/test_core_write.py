@@ -158,3 +158,71 @@ def test_a_column_new_to_the_files_is_added(lake, tmp_path):
         (None,),
         (100,),
     ]
+
+
+DAY = "trade_date = DATE '2024-01-03'"
+
+
+def test_replacing_part_of_a_file_is_one_file_complete_snapshot(lake, tmp_path):
+    # One unpartitioned file holds three days; only one of them is replaced.
+    write = Write(lake)
+    write.replace(
+        "bars",
+        [
+            _file(
+                tmp_path / "all.parquet",
+                [
+                    ("'A'", "DATE '2024-01-02'", 1.0),
+                    ("'A'", "DATE '2024-01-03'", 2.0),
+                    ("'A'", "NULL::DATE", 4.0),
+                ],
+            )
+        ],
+    )
+    created = write.commit().snapshot
+    write = Write(lake)
+    write.replace(
+        "bars", [_file(tmp_path / "day.parquet", [("'B'", "DATE '2024-01-03'", 3.0)])], where=DAY
+    )
+    result = write.commit()
+    assert result.snapshot == created + 1 == lake.snapshot()
+    # The commit's own snapshot can be read from its files, with no fold after it.
+    assert lake.data_files("bars", result.snapshot) is not None
+    assert not lake.has_deletes("bars")
+    # The other day stays, and so does the row the predicate cannot decide.
+    assert lake.execute("SELECT symbol, close FROM bars ORDER BY close").fetchall() == [
+        ("A", 1.0),
+        ("B", 3.0),
+        ("A", 4.0),
+    ]
+
+
+def test_removing_part_of_a_file_keeps_the_rest(lake, tmp_path):
+    write = Write(lake)
+    write.replace(
+        "bars",
+        [
+            _file(
+                tmp_path / "all.parquet",
+                [("'A'", "DATE '2024-01-02'", 1.0), ("'A'", "DATE '2024-01-03'", 2.0)],
+            )
+        ],
+    )
+    write.commit()
+    write = Write(lake)
+    write.replace("bars", [], where=DAY)
+    result = write.commit()
+    assert lake.data_files("bars", result.snapshot) is not None
+    assert _rows(lake) == [("A", date(2024, 1, 2), 1.0)]
+
+
+def test_a_record_can_be_built_inside_the_write(lake, tmp_path):
+    _bars(lake, tmp_path)
+    write = Write(lake)
+    write.replace("bars", [], where=FEB)
+    write.record(
+        "_writes",
+        lambda catalog: {"rows": catalog.execute("SELECT count(*) FROM bars").fetchone()[0]},
+    )
+    write.commit()
+    assert lake.execute("SELECT rows FROM _writes").fetchall() == [(1,)]

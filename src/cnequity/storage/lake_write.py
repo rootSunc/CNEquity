@@ -31,11 +31,11 @@ from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.catalog_bridge import (
+    REVISIONS_TABLE,
     _ensure_sync_table,
     _has_duplicate_keys,
     _partition_key_column,
     _partition_predicate,
-    _record_history,
     _record_sync,
     _table_keys_unique,
     keys_unique,
@@ -49,8 +49,6 @@ from equitylake_core.catalog import Catalog, quote_identifier
 from equitylake_core.write import Write, WriteRejected
 
 CHECKOUT_DIR = "_checkout"
-#: One row per published revision, written in the same snapshot as its rows.
-REVISIONS_TABLE = "_revisions"
 
 Stamps = dict[str, tuple[int, int]]
 
@@ -345,13 +343,10 @@ class LakeWrite:
                     if (clause := self._checkouts[dataset].where(label))
                 )
                 write.check(f"{dataset} sync state", _sync_recorder(dataset, receipt, where))
-                write.record(REVISIONS_TABLE, _revision_row(receipt))
+                write.record(REVISIONS_TABLE, _revision_recorder(receipt))
+            # One snapshot holds the rows, the sync state and the revision rows,
+            # and it is file-complete: a pinned read needs nothing recorded later.
             write.commit(message=message or f"run {self.run_id}")
-            # The snapshot after the delete folds: same rows, and file-complete.
-            snapshot = self.catalog.snapshot()
-            with self.catalog.transaction(message=f"history of run {self.run_id}"):
-                for dataset, receipt in receipts.items():
-                    _record_history(self.catalog, dataset, receipt.revision_id, snapshot=snapshot)
             for dataset, receipt in receipts.items():
                 self.store.finish_catalog_revision(receipt)
                 if dataset not in self._trees:
@@ -459,6 +454,19 @@ def _sync_recorder(dataset: str, receipt: DatasetRevision, where: str):
         return None
 
     return record
+
+
+def _revision_recorder(receipt: DatasetRevision):
+    """The ``_revisions`` row of *receipt*, built inside the write that publishes it."""
+
+    def row(catalog: Catalog) -> dict[str, object]:
+        return {
+            **_revision_row(receipt),
+            # Set by the sync recorder earlier in the same transaction.
+            "unique_keys": bool(keys_unique(catalog, receipt.dataset)),
+        }
+
+    return row
 
 
 def _revision_row(receipt: DatasetRevision) -> dict[str, object]:

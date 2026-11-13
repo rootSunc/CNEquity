@@ -112,10 +112,7 @@ def test_a_catalog_compaction_publishes_what_a_generation_compaction_does(tmp_pa
         # Nothing was written to the working tree or a generation.
         assert not (catalog.meta_root / pointer["generation_path"]).exists()
     with Catalog(lake_root(catalog), read_only=True) as lake:
-        snapshots = lake.execute(
-            "SELECT DISTINCT snapshot FROM _revision_history h "
-            "JOIN _revisions r USING (revision_id)"
-        ).fetchall()
+        snapshots = lake.execute("SELECT DISTINCT snapshot_id FROM _revisions").fetchall()
     assert len(snapshots) == 1, "both datasets of the run publish in one snapshot"
     # The run's checkout is gone once it published.
     assert not (catalog.staging_root / "_checkout" / "r2").exists()

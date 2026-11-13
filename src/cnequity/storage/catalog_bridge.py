@@ -344,6 +344,11 @@ def _replace_table(catalog: Catalog, dataset: str, root: Path, new: dict[str, st
 
 
 HISTORY_TABLE = "_revision_history"
+#: One row per revision published into the catalog, written in the snapshot that
+#: holds its rows. The catalog stamps every row with the snapshot that wrote it
+#: (the ``snapshot_id`` virtual column), so the row is also the revision's
+#: history entry: there is nothing to record afterwards, and nothing to lose.
+REVISIONS_TABLE = "_revisions"
 
 
 def _ensure_history_table(catalog: Catalog) -> None:
@@ -353,12 +358,38 @@ def _ensure_history_table(catalog: Catalog) -> None:
     )
 
 
+def revision_snapshots(catalog: Catalog) -> list[tuple[str, str, int, bool]]:
+    """``(dataset, revision_id, snapshot, unique_keys)`` of every revision the catalog can name.
+
+    Revisions published into the catalog come from ``_revisions``; revisions
+    synced in from a generation come from the history table.
+    """
+    rows: list[tuple[str, str, int, bool]] = []
+    if catalog.has_table(REVISIONS_TABLE):
+        rows += catalog.execute(
+            f"SELECT dataset, revision_id, snapshot_id, unique_keys FROM {REVISIONS_TABLE}"
+        ).fetchall()
+    if catalog.has_table(HISTORY_TABLE):
+        rows += catalog.execute(
+            f"SELECT dataset, revision_id, snapshot, unique_keys FROM {HISTORY_TABLE}"
+        ).fetchall()
+    return [(d, r, int(s), bool(u)) for d, r, s, u in rows]
+
+
 def revision_snapshot(catalog: Catalog, dataset: str, revision_id: str) -> tuple[int, bool] | None:
     """The catalog snapshot that holds *dataset* at *revision_id*, with its unique-keys flag.
 
     A read pinned to an earlier revision is served from that snapshot's files
     for as long as the catalog keeps them.
     """
+    if catalog.has_table(REVISIONS_TABLE):
+        row = catalog.execute(
+            f"SELECT snapshot_id, unique_keys FROM {REVISIONS_TABLE} "
+            "WHERE dataset = ? AND revision_id = ? ORDER BY snapshot_id DESC LIMIT 1",
+            [dataset, revision_id],
+        ).fetchone()
+        if row:
+            return int(row[0]), bool(row[1])
     if not catalog.has_table(HISTORY_TABLE):
         return None
     row = catalog.execute(
@@ -374,9 +405,11 @@ def _record_history(
 ) -> None:
     """Remember which snapshot now holds *dataset* at *revision_id*.
 
-    Recorded after the data commit (and the delete fold), in a commit of its
-    own, so the snapshot named is a file-complete one. A crash in between only
-    loses the entry; that revision is then read from its generation.
+    Only for a revision synced in from a generation: recorded after the data
+    commit and the delete fold, in a commit of its own, so the snapshot named
+    is a file-complete one. A crash in between only loses the entry; that
+    revision is then read from its generation. A revision published into the
+    catalog needs no entry (see ``REVISIONS_TABLE``).
     """
     _ensure_history_table(catalog)
     if revision_snapshot(catalog, dataset, revision_id) is not None:
@@ -550,11 +583,9 @@ def retained_snapshots(catalog: Catalog, *, keep: int, held: set[str]) -> set[in
     ``held`` are lifecycle object ids (``revision/<dataset>/<revision_id>``).
     """
     keep_ids = {catalog.snapshot()}
-    if not catalog.has_table(HISTORY_TABLE):
-        return keep_ids
-    rows = catalog.execute(
-        f"SELECT dataset, revision_id, snapshot FROM {HISTORY_TABLE} ORDER BY snapshot DESC"
-    ).fetchall()
+    rows = sorted(
+        ((d, r, s) for d, r, s, _ in revision_snapshots(catalog)), key=lambda row: -row[2]
+    )
     per_dataset: dict[str, int] = {}
     for dataset, revision_id, snapshot in rows:
         newest = per_dataset.get(dataset, 0)

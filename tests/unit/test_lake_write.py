@@ -8,8 +8,15 @@ import polars as pl
 import pytest
 
 from cnequity.config.loader import Config
-from cnequity.storage.catalog_bridge import catalog_is_current, lake_root, sync_dataset
-from cnequity.storage.lake_write import REVISIONS_TABLE, DatasetPublish, LakeWrite
+from cnequity.storage.catalog_bridge import (
+    REVISIONS_TABLE,
+    catalog_is_current,
+    lake_root,
+    retained_snapshots,
+    revision_snapshot,
+    sync_dataset,
+)
+from cnequity.storage.lake_write import DatasetPublish, LakeWrite
 from cnequity.storage.revisions import RevisionStore
 from equitylake_core.catalog import Catalog
 from equitylake_core.extensions import ExtensionUnavailableError
@@ -129,6 +136,12 @@ def test_a_changed_partition_publishes_into_the_catalog_and_nothing_else_moves(c
         assert lake.execute(f"SELECT revision_id FROM {REVISIONS_TABLE}").fetchall() == [
             (receipt.revision_id,)
         ]
+        # The publish is one snapshot: it holds the rows and names the revision,
+        # it can be read from its files, and retention keeps it.
+        snapshot = lake.snapshot()
+        assert revision_snapshot(lake, "daily_bars", receipt.revision_id) == (snapshot, True)
+        assert lake.data_files("daily_bars", snapshot) is not None
+        assert snapshot in retained_snapshots(lake, keep=1, held=set())
 
 
 def test_a_refused_check_publishes_nothing_and_keeps_the_checkout(cfg):
@@ -180,7 +193,7 @@ def test_two_datasets_publish_in_one_snapshot(cfg):
     assert set(published) == {"daily_bars", "instruments"}
     with Catalog(lake_root(cfg), read_only=True) as lake:
         snapshots = lake.execute(
-            "SELECT DISTINCT snapshot FROM _revision_history WHERE revision_id IN (?, ?)",
+            "SELECT DISTINCT snapshot_id FROM _revisions WHERE revision_id IN (?, ?)",
             [published["daily_bars"].revision_id, published["instruments"].revision_id],
         ).fetchall()
     assert len(snapshots) == 1
