@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 日更不再读 Tushare：`name_history` 移出默认 core 组，`sector_fund_flow` 在 push2 暂停时也不再改从 Tushare 取当日数据。Tushare 只用于按需补全历史（`cne backfill <数据集>`），令牌过期不会再让日更失败；所有以 Tushare 为主来源的数据集都不计入新鲜度。
 - 新增 `cne storage catalog-retention`：湖目录为每个数据集保留最近的修订（`[storage.retention].keep_generations`，默认 5 个）和被 `cne storage hold` 保护的修订，其余快照过期，不再引用的文件等 24 小时后才删除；`cne run maintain` 每天执行。湖目录保存了创建时的绝对数据路径，搬迁、恢复或复制过的湖会去读原湖的文件，现在总是读湖目录自身目录下的文件。
 - `option_greeks` 与 `minute_bars_15m/30m/60m` 判断哪些交易日要重算时，改为比较当天数据的内容摘要，不再比较分区文件和修改时间；只挪动文件、合并文件不会再触发重算。计算规则改用显式版本号，代码重构不再让全部历史重算。升级后第一次运行会重算一遍全部历史（期权希腊值约 50 分钟），之后只重算内容变了的交易日。
 - MCP `query_dataset` 和控制台行查看器的读取预算从「64 MiB Parquet」改为「400 万行」。内存随读取的行数增长，同样的行在湖目录里占的字节可以少 60%，按字节算会放过实际很大的读取。拒绝信息里的大小也改为行数。

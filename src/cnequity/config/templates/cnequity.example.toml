@@ -599,7 +599,8 @@ soft_fail_max_days = 3
 # `cne run daily` runs it once after every group has landed, and suspensions
 # come from the `trading_status` snapshot each day — the bar-gap derivation
 # runs where bar history changes (`cne init`, `cne backfill daily_bars`).
-# `name_history` needs a Tushare token and is skipped, sending nothing, without one.
+# Nothing here reads Tushare: it is a temporary source for filling history
+# (`cne backfill <dataset>`), never a daily route. `name_history` is one of them.
 [job.daily.groups.core]
 at = "16:00"
 parallel = true
@@ -609,7 +610,7 @@ parallel = true
 steps = [
   "instruments", "trading_calendar", "trading_status",
   "corporate_actions", "daily_bars", "index_bars", "financial_statement_items",
-  "share_structure", "financial_statement_tdx_peer", "name_history",
+  "share_structure", "financial_statement_tdx_peer",
   "compact", "derive_adj_factors", "derive_industry_index",
   "ths_official_snapshot",
 ]

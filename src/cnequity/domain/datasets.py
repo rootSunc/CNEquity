@@ -627,7 +627,8 @@ _SPECS = [
         backfill_source="baostock",
     ),
     # Every name a security has carried, with its dates (Tushare namechange,
-    # optional token). The names are the exchange's ST labels and, unlike a
+    # filled by `cne backfill name_history`, never daily). The names are the
+    # exchange's ST labels and, unlike a
     # daily feed, also cover halted sessions; the suspension derive reads
     # trading_status.risk_warning from here. Small enough to re-read whole.
     DatasetSpec(
@@ -2640,14 +2641,15 @@ def removed_from_schedule(config, dataset: str) -> bool:
 
 
 def tushare_backfill_dataset(dataset: str) -> bool:
-    """A Tushare-primary best-effort dataset, filled by ``cne backfill``.
+    """A Tushare-primary dataset, filled by ``cne backfill`` and never by a daily run.
 
-    These need the user's own token and are not on the default daily schedule.
-    ``name_history`` is not one of them: it is an extended dataset the core
-    group already runs, and without a token that step sends nothing.
+    Tushare is a temporary source for improving history, not a route the lake
+    updates from: a token is short-lived, so a daily step that depends on one
+    fails every day once it lapses. None is on the default daily schedule, and
+    none is owed freshness unless a config's own schedule lists its step.
     """
     spec = DATASETS.get(dataset)
-    return spec is not None and spec.primary_source == "tushare" and spec.support == "best_effort"
+    return spec is not None and spec.primary_source == "tushare"
 
 
 def daily_freshness_owed(config, dataset: str) -> bool:

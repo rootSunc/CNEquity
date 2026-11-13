@@ -5,11 +5,9 @@ from __future__ import annotations
 from datetime import date
 
 import polars as pl
-import pytest
 
 from cnequity.adapters.tushare import sector_fund_flow as tsf
 from cnequity.config import Config
-from cnequity.orchestrator.outcomes import SourcePayloadError
 from cnequity.run_scope import set_backfill
 from cnequity.storage.parquet import StagingWriter
 
@@ -109,25 +107,15 @@ def test_backfill_adds_only_boards_the_day_lacks(tmp_path, monkeypatch):
     assert set(staged["source"]) == {"tushare"}
 
 
-def test_paused_push2_takes_the_session_from_tushare(tmp_path, monkeypatch):
+def test_a_daily_run_never_reads_tushare_even_with_push2_paused(tmp_path, monkeypatch):
+    """Tushare fills history on request only; a lapsed token must not fail a daily run."""
     from cnequity.steps import rotation
 
     cfg = _cfg(tmp_path, eastmoney_push2_paused=True)
-    monkeypatch.setattr(
-        tsf, "fetch_sector_fund_flow", lambda d, *, config, client=None: _session(d)
-    )
-    result = rotation.step_sector_fund_flow(cfg, date(2026, 7, 3), "run-d", {})
-    assert result["rows_written"] == 1000
 
+    def tushare(*_args, **_kwargs):
+        raise AssertionError("a daily run asked Tushare")
 
-def test_a_session_tushare_has_not_finished_is_not_written(tmp_path, monkeypatch):
-    from cnequity.steps import rotation
-
-    cfg = _cfg(tmp_path, eastmoney_push2_paused=True)
-    monkeypatch.setattr(
-        tsf, "fetch_sector_fund_flow", lambda d, *, config, client=None: _session(d, 86, 0)
-    )
-    monkeypatch.setattr("cnequity.steps.ths_fallback.stage_ths_fallback", lambda *a, **k: None)
-    with pytest.raises((SourcePayloadError, RuntimeError)):
-        rotation.step_sector_fund_flow(cfg, date(2026, 7, 3), "run-d", {})
-    assert not StagingWriter(cfg.staging_root).list_run_files("sector_fund_flow", "run-d")
+    monkeypatch.setattr(tsf, "fetch_sector_fund_flow", tushare)
+    monkeypatch.setattr(rotation, "_step_sector_fund_flow", lambda *a: {"rows_written": 0})
+    assert rotation.step_sector_fund_flow(cfg, date(2026, 7, 3), "run-d", {}) == {"rows_written": 0}

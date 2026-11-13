@@ -419,13 +419,10 @@ def _backfill_sector_bars(config: Config, trade_date: date, run_id: str) -> dict
 def step_sector_fund_flow(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     from cnequity.adapters.tushare.client import tushare_enabled
 
-    if tushare_enabled(config):
-        if backfill_of(config).active:
-            return _backfill_sector_fund_flow_tushare(config, trade_date, run_id)
-        if getattr(config, "eastmoney_push2_paused", False):
-            # push2 is the only EastMoney route for boards; Tushare serves the
-            # same boards by date, so the session is not lost while it is out.
-            return _sector_fund_flow_tushare_day(config, trade_date, run_id)
+    # Tushare fills history on request (`cne backfill sector_fund_flow`); it is
+    # never a daily route, so a lapsed token cannot fail the daily run.
+    if tushare_enabled(config) and backfill_of(config).active:
+        return _backfill_sector_fund_flow_tushare(config, trade_date, run_id)
     try:
         return _step_sector_fund_flow(config, trade_date, run_id)
     except Exception:
@@ -434,25 +431,6 @@ def step_sector_fund_flow(config: Config, trade_date: date, run_id: str, context
 
         stage_ths_fallback(config, trade_date, run_id, "sector_fund_flow_ths")
         raise
-
-
-def _sector_fund_flow_tushare_day(config: Config, trade_date: date, run_id: str) -> dict:
-    """The run's session from Tushare ``moneyflow_ind_dc``.
-
-    Tushare publishes a session in the evening; before that the response is
-    empty or thin and the validator rejects it, so the step fails and the stale
-    job asks again later instead of recording a partial day.
-    """
-    from cnequity.adapters.tushare.sector_fund_flow import SOURCE, fetch_sector_fund_flow
-
-    return run_incremental_fetched(
-        config,
-        trade_date,
-        run_id,
-        "sector_fund_flow",
-        lambda d: _validate_sector_fund_flow_snapshot(fetch_sector_fund_flow(d, config=config)),
-        source=SOURCE,
-    )
 
 
 def _backfill_sector_fund_flow_tushare(config: Config, trade_date: date, run_id: str) -> dict:
