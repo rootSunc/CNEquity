@@ -38,7 +38,6 @@ from cnequity.storage.state import StateStore
 logger = logging.getLogger(__name__)
 
 #: ``storage`` of a revision published into the lake catalog instead of a generation.
-STORAGE_CATALOG = "catalog"
 
 
 class DiskSpaceError(RuntimeError):
@@ -425,7 +424,7 @@ class RevisionStore:
             raise RevisionConsistencyError(
                 f"revision generation escapes meta root: {path}"
             ) from exc
-        if not generation.is_dir() and payload.get("storage") != STORAGE_CATALOG:
+        if not generation.is_dir():
             raise RevisionConsistencyError(f"revision generation is missing: {generation}")
 
         receipt_raw = payload.get("receipt")
@@ -558,10 +557,7 @@ class RevisionStore:
             if not isinstance(raw, str) or not raw:
                 raise RevisionConsistencyError(f"receipt {receipt_path} has no retained generation")
             generation = self._safe_meta_path(self._safe_relative(raw), label="generation")
-            if (
-                not generation.is_dir()
-                and payload.get("metadata", {}).get("storage") != STORAGE_CATALOG
-            ):
+            if not generation.is_dir():
                 raise RevisionConsistencyError(f"revision generation is missing: {generation}")
             return generation
         raise RevisionConsistencyError(f"unknown retained revision {revision!r} for {dataset}")
@@ -1028,16 +1024,9 @@ class RevisionStore:
         revision = max(current, self._highest_receipt_number(dataset)) + 1
         committed_at = datetime.now(timezone.utc).isoformat()
         revision_id = uuid.uuid4().hex
-        from cnequity.storage.catalog_bridge import can_publish
-
-        to_catalog = can_publish(self, dataset, pointer)
-        if to_catalog:
-            # Named, never created: readers map this path to the catalog snapshot.
-            generation, generation_files = self.generation_root(dataset, revision_id), ()
-        else:
-            generation, generation_files = self._copy_generation(
-                dataset, revision_id, changed_files=changed_files
-            )
+        generation, generation_files = self._copy_generation(
+            dataset, revision_id, changed_files=changed_files
+        )
         # File records are already POSIX; Path(str).parent would re-inject
         # Windows separators into the published partition identity.
         partitions = tuple(
@@ -1062,7 +1051,6 @@ class RevisionStore:
             metadata={
                 **dict(metadata or {}),
                 **({"removed_partitions": list(removed)} if removed else {}),
-                **({"storage": STORAGE_CATALOG} if to_catalog else {}),
                 "base_revision_id": pointer.get("revision_id"),
             },
             generation_path=generation_relative,
@@ -1081,13 +1069,6 @@ class RevisionStore:
             # Receipt first makes an interrupted copy/publish recoverable but
             # never makes it visible: current.json remains on the old root.
             write_json_atomic(receipt_path, receipt.to_dict(), indent=2)
-            if to_catalog:
-                from cnequity.storage.catalog_bridge import publish_revision
-
-                # The catalog commit is the publication. A crash after it and
-                # before the pointer leaves readers on the previous snapshot;
-                # ``sweep`` moves the pointer to what the catalog published.
-                publish_revision(self, dataset, revision_id, changed_partitions=partitions)
             pointer_payload = {
                 "schema_version": _POINTER_SCHEMA_VERSION,
                 "dataset": dataset,
@@ -1097,7 +1078,6 @@ class RevisionStore:
                 "receipt": receipt_relative,
                 "content_digest": receipt.content_digest,
                 "committed_at": committed_at,
-                **({"storage": STORAGE_CATALOG} if to_catalog else {}),
             }
             # current.json is the commit marker. It is replaced as one inode,
             # so readers that already opened the old pointer finish on the old
@@ -1107,8 +1087,7 @@ class RevisionStore:
             # The pointer is still the previous generation. An out-of-space
             # failure must not leave the new generation behind on a full disk.
             if exc.errno == errno.ENOSPC:
-                if not to_catalog:
-                    shutil.rmtree(generation, ignore_errors=True)
+                shutil.rmtree(generation, ignore_errors=True)
                 if receipt_path.is_file():
                     receipt_path.unlink()
                 raise DiskSpaceError(
@@ -1143,8 +1122,7 @@ class RevisionStore:
                     "updated_at": committed_at,
                 }
             )
-        if not to_catalog:
-            self._sync_lake_catalog(dataset)
+        self._sync_lake_catalog(dataset)
         return receipt
 
     def _sync_lake_catalog(self, dataset: str) -> None:
@@ -1272,26 +1250,6 @@ class RevisionStore:
                 }
             )
 
-    def _restore_catalog_pointer(
-        self, dataset: str, pointer: dict, receipts: dict[str, dict], files: dict[str, Path]
-    ) -> dict[str, Any] | None:
-        """The pointer for a revision the catalog published past *pointer*, if there is one."""
-        newer = [
-            record
-            for record in receipts.values()
-            if int(record.get("revision", 0) or 0) > int(pointer.get("revision", 0) or 0)
-            and (record.get("metadata") or {}).get("storage") == STORAGE_CATALOG
-        ]
-        if not newer:
-            return None
-        from cnequity.storage.catalog_bridge import catalog_revision
-
-        published = catalog_revision(self, dataset)
-        for record in sorted(newer, key=lambda r: int(r.get("revision", 0)), reverse=True):
-            if record.get("revision_id") == published:
-                return _pointer_for(self, record, files[str(record["revision_id"])])
-        return None
-
     def sweep(self, *, apply: bool = False) -> dict[str, Any]:
         """Find, and with *apply* clear, what interrupted commits leave behind.
 
@@ -1305,9 +1263,6 @@ class RevisionStore:
           ``sync_state``.
         * A generation directory with no receipt: reported only, since a lake
           converted from the pre-revision layout keeps its baseline that way.
-        * A revision the lake catalog published whose pointer was never
-          written (a crash between the two): the pointer is moved to it,
-          because the catalog commit is that revision's publication.
 
         The commit's failure path used to say these are collected "by ``gc``";
         there was no such command. ``cne run maintain`` runs this daily.
@@ -1321,7 +1276,6 @@ class RevisionStore:
             "unpublished": [],
             "unreceipted": [],
             "state_synced": [],
-            "pointer_restored": [],
         }
         root = self.root
         if not root.is_dir():
@@ -1344,13 +1298,6 @@ class RevisionStore:
                         continue
                     receipts[str(record.get("revision_id"))] = record
                     receipt_files[str(record.get("revision_id"))] = path
-                restored = self._restore_catalog_pointer(dataset, pointer, receipts, receipt_files)
-                if restored is not None:
-                    report["pointer_restored"].append(dataset)
-                    if apply:
-                        write_json_atomic(self.pointer_path(dataset), restored, indent=2)
-                        pointer = self._read_pointer(dataset) or pointer
-                        current = int(pointer.get("revision", 0) or 0)
                 generations = self.root / "data" / dataset
                 if generations.is_dir():
                     for entry in sorted(generations.iterdir()):
@@ -1381,20 +1328,6 @@ class RevisionStore:
                     if apply:
                         self.sync_state(dataset)
         return report
-
-
-def _pointer_for(store: RevisionStore, record: dict, receipt_path: Path) -> dict[str, Any]:
-    return {
-        "schema_version": _POINTER_SCHEMA_VERSION,
-        "dataset": record["dataset"],
-        "revision": record["revision"],
-        "revision_id": record["revision_id"],
-        "generation_path": record["generation_path"],
-        "receipt": receipt_path.relative_to(store.meta_root).as_posix(),
-        "content_digest": record.get("content_digest"),
-        "committed_at": record.get("committed_at"),
-        "storage": STORAGE_CATALOG,
-    }
 
 
 def resolve_committed_root(
