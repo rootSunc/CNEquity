@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import polars as pl
 
+#: Bump when the bars built from the same minute input change. Stored
+#: ``minute_bars_{15,30,60}m`` record it, so a bump rebuilds every session.
+RESAMPLE_VERSION = 1
+
 _COLUMNS = [
     "symbol",
     "trade_date",

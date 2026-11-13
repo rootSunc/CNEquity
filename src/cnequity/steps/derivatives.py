@@ -230,20 +230,18 @@ def fetch_session(
 
 def _completed_sessions(config: Config, kind: Kind, days: list[date]) -> set[date]:
     """Sessions where every exchange expected that day already has rows."""
-    from cnequity.storage.read_context import read_root
+    from cnequity.storage.published import published
 
-    root = read_root(config, _BARS_DATASET[kind])
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
+    bars = published(config, _BARS_DATASET[kind]).scan()
+    if bars is None:
         return set()
     from cnequity.domain.canonical import dedupe_lazy_by_primary_key
-    from cnequity.query.parquet_scan import scan_parquet_files
     from cnequity.storage.derivative_evidence import session_matches
 
     if run_flags_of(config).derivatives_refresh:
         return set()
     frame = dedupe_lazy_by_primary_key(
-        scan_parquet_files(files).filter(pl.col("trade_date").is_in(days)), _BARS_DATASET[kind]
+        bars.filter(pl.col("trade_date").is_in(days)), _BARS_DATASET[kind]
     ).collect()
     return {
         day
@@ -411,20 +409,21 @@ def _etf_option_days(config: Config, days: list[date]) -> set[date]:
 
 
 def _scan_bars(config: Config, dataset: str, run_id: str | None = None) -> pl.LazyFrame | None:
-    from cnequity.storage.read_context import read_root
+    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
+    from cnequity.query.parquet_scan import scan_parquet_files
+    from cnequity.storage.published import published
 
-    root = read_root(config, dataset)
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
+    scans = [published(config, dataset).scan()]
     if run_id is not None:
         from cnequity.storage.parquet import StagingWriter
 
-        files.extend(StagingWriter(config.staging_root).list_run_files(dataset, run_id))
-    if not files:
+        staged = StagingWriter(config.staging_root).list_run_files(dataset, run_id)
+        scans.append(scan_parquet_files(staged) if staged else None)
+    scans = [scan for scan in scans if scan is not None]
+    if not scans:
         return None
-    from cnequity.domain.canonical import dedupe_lazy_by_primary_key
-    from cnequity.query.parquet_scan import scan_parquet_files
-
-    return dedupe_lazy_by_primary_key(scan_parquet_files(files), dataset)
+    frame = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
+    return dedupe_lazy_by_primary_key(frame, dataset)
 
 
 def _reference(config: Config, bars: pl.LazyFrame, findings: list[dict], dataset: str):

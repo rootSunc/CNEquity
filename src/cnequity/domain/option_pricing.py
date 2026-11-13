@@ -26,6 +26,11 @@ from __future__ import annotations
 
 import numpy as np
 
+#: Bump when a price, implied volatility or Greek this module returns changes
+#: for the same inputs. Stored Greeks record it, so a bump recomputes them all;
+#: a refactor that returns the same numbers must leave it alone.
+MODEL_VERSION = 1
+
 __all__ = [
     "baw",
     "black76",

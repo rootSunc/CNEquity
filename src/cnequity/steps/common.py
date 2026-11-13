@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import uuid
 from collections.abc import Callable, Iterable
@@ -688,15 +687,9 @@ def _status_files_identity(config: Config) -> str:
     row was ~85s per call; paths, sizes and modification times change whenever
     any row does, for a few stat calls.
     """
-    from cnequity.storage.read_context import read_root
+    from cnequity.storage.published import published
 
-    root = read_root(config, "trading_status", None)
-    digest = hashlib.sha256()
-    if root.exists():
-        for path in sorted(root.rglob("*.parquet")):
-            stat = path.stat()
-            digest.update(f"{path.relative_to(root)}|{stat.st_size}|{stat.st_mtime_ns}\n".encode())
-    return digest.hexdigest()
+    return published(config, "trading_status").identity()
 
 
 def negative_evidence_ttl_days(config: Config, dataset: str) -> int:

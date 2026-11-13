@@ -77,24 +77,11 @@ def symbol_scope_hash(symbols: list[str]) -> str:
 
 
 def _trading_status_fingerprint(config: Config, read_context: ReadContext | None = None) -> str:
-    """Fingerprint Parquet layout metadata for receipt-cache invalidation."""
-    root = read_root(config, "trading_status", read_context)
-    if not root.exists():
-        return "missing"
-    entries: list[tuple[str, int, int]] = []
-    for path in sorted(root.rglob("*.parquet")):
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        entries.append(
-            (
-                path.relative_to(root).as_posix(),
-                int(stat.st_size),
-                int(stat.st_mtime_ns),
-            )
-        )
-    return _canonical_hash({"root": str(root.resolve()), "files": entries})
+    """Identity of the published trading_status files, for receipt-cache invalidation."""
+    from cnequity.storage.published import published
+
+    store = published(config, "trading_status", read_context)
+    return store.identity() if store.groups else "missing"
 
 
 def current_st_universe(

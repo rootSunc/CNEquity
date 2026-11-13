@@ -233,16 +233,13 @@ def compute_futures_continuous(
 
 
 def _curated(config, dataset: str) -> pl.DataFrame | None:
-    from cnequity.storage.read_context import read_root
-
-    root = read_root(config, dataset)
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
-        return None
     from cnequity.domain.canonical import dedupe_by_primary_key
-    from cnequity.query.parquet_scan import scan_parquet_files
+    from cnequity.storage.published import published
 
-    return dedupe_by_primary_key(scan_parquet_files(files).collect(), dataset)
+    scan = published(config, dataset).scan()
+    if scan is None:
+        return None
+    return dedupe_by_primary_key(scan.collect(), dataset)
 
 
 def derive_futures_continuous(config) -> dict:

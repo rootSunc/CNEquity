@@ -228,7 +228,12 @@ def published_stats(config, dataset: str, revision_id: str, *, column: str | Non
             stats = catalog.file_stats(dataset, column)
             if stats is None:
                 return None
-            return stats, bool(keys_unique(catalog, dataset))
+            schema = (
+                catalog.relation(f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)} LIMIT 0")
+                .pl()
+                .schema
+            )
+            return stats, bool(keys_unique(catalog, dataset)), schema
     except Exception as exc:  # noqa: BLE001 - the generation is always a correct answer
         logger.warning(
             "catalog statistics of %s unavailable, reading the generation: %s", dataset, exc

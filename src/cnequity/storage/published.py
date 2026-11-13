@@ -18,10 +18,12 @@ partition directory and its range is the directory's period.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+import polars as pl
 import pyarrow.parquet as pq
 
 from cnequity.domain.datasets import DATASETS
@@ -54,6 +56,8 @@ class Published:
     from_catalog: bool
     # One row per primary key across the whole dataset.
     unique_keys: bool
+    # The catalog table's schema; ``None`` for a generation, whose files say.
+    schema: pl.Schema | None = None
 
     @property
     def files(self) -> list[Path]:
@@ -61,6 +65,50 @@ class Published:
 
     def in_range(self, start: date | None, end: date | None) -> list[FileGroup]:
         return [group for group in self.groups if group.overlaps(start, end)]
+
+    def identity(self) -> str:
+        """Changes whenever a published row may have: a cache key, not a content digest.
+
+        Catalog files are never rewritten in place, so their names suffice; a
+        generation's files are named by partition, so their sizes and times
+        are added. A merge that only moves rows still changes it, which costs
+        one recomputation and never hides a change.
+        """
+        entries = []
+        for group in self.groups:
+            for path in group.files:
+                relative = Path(path).relative_to(self.root).as_posix()
+                if self.from_catalog:
+                    entries.append(relative)
+                else:
+                    info = Path(path).stat()
+                    entries.append(f"{relative}|{info.st_size}|{info.st_mtime_ns}")
+        source = "catalog" if self.from_catalog else "generation"
+        return hashlib.sha256("\n".join([source, *sorted(entries)]).encode()).hexdigest()
+
+    def scan(self, groups: list[FileGroup] | None = None) -> pl.LazyFrame | None:
+        """A lazy scan of the published rows (of *groups*, if given), or ``None`` if empty.
+
+        Catalog files are read against the table's schema: a file can carry the
+        catalog's internal row-lineage columns, which are left out, and lack a
+        column added after it was written, which reads as null.
+        """
+        files = [
+            path for group in (self.groups if groups is None else groups) for path in group.files
+        ]
+        if not files:
+            return None
+        if self.schema is not None:
+            return pl.scan_parquet(
+                [str(path) for path in files],
+                schema=self.schema,
+                hive_partitioning=False,
+                missing_columns="insert",
+                extra_columns="ignore",
+            )
+        from cnequity.query.parquet_scan import scan_parquet_files
+
+        return scan_parquet_files(files)
 
 
 def _as_date(value: str | None, *, upper: bool) -> date | None:
@@ -85,7 +133,7 @@ def _from_catalog(config, dataset: str, generation: Path) -> Published | None:
     found = published_stats(config, *identity, column=DATASETS[dataset].partition_col)
     if found is None:
         return None
-    stats, unique = found
+    stats, unique, schema = found
     if not stats:
         return None
     root = Path(stats[0].path).parent
@@ -102,7 +150,7 @@ def _from_catalog(config, dataset: str, generation: Path) -> Published | None:
         )
         for item in stats
     )
-    return Published(dataset, root, groups, True, unique)
+    return Published(dataset, root, groups, True, unique, schema)
 
 
 def _footer_rows(path: Path) -> int:
@@ -153,3 +201,113 @@ def published(config, dataset: str, read_context=None) -> Published:
 
     root = Path(read_root(config, dataset, read_context))
     return _from_catalog(config, dataset, root) or _from_generation(dataset, root)
+
+
+#: Bump when the digest computation changes; every cached answer is then recomputed.
+_DIGEST_VERSION = 2
+
+
+def _digest_columns(dataset: str) -> list[str]:
+    """The columns a row hash covers: the registry's, in name order.
+
+    Not the files' columns: catalog files can carry internal columns, and an
+    optional column a file predates must hash the same as a stored null.
+    """
+    from cnequity.domain.schemas import DATASET_SCHEMAS
+
+    return sorted(DATASET_SCHEMAS[dataset])
+
+
+def _day_rows_sql(scan: str, present: set[str], dataset: str, column: str) -> str:
+    values = ", ".join(
+        f'"{name}"' if name in present else "NULL" for name in _digest_columns(dataset)
+    )
+    return (
+        f'SELECT CAST("{column}" AS DATE) AS day, count(*), '
+        "bit_xor(h)::VARCHAR, sum(h::HUGEINT)::VARCHAR "
+        f'FROM (SELECT "{column}", hash({values}) AS h FROM {scan}) GROUP BY 1'
+    )
+
+
+def _digest(count: int, xor: int, total: int) -> str:
+    return hashlib.sha256(f"{count}:{xor}:{total}".encode()).hexdigest()
+
+
+def frame_day_digests(frame: pl.DataFrame, dataset: str) -> dict[date, str]:
+    """:func:`day_digests` of rows not yet published, e.g. a derivation's output."""
+    import duckdb
+
+    column = DATASETS[dataset].partition_col
+    con = duckdb.connect()
+    try:
+        con.register("frame_rows", frame)
+        rows = con.execute(
+            _day_rows_sql("frame_rows", set(frame.columns), dataset, column)
+        ).fetchall()
+    finally:
+        con.close()
+    return {day: _digest(c, int(x), int(t)) for day, c, x, t in rows if day}
+
+
+def day_digests(config, dataset: str, read_context=None) -> dict[date, str]:
+    """A content digest of *dataset*'s published rows on each day of its partition column.
+
+    A day's digest changes exactly when that day's rows do, whatever files
+    hold them: moving rows between files (a merge, the catalog's own layout)
+    leaves it unchanged. It is the order-independent combination of one
+    hash per row over the registry's columns, so it is computed per file
+    group and cached under the group's stamp (``storage.partition_cache``),
+    and only groups whose files changed are read again.
+    """
+    import duckdb
+
+    from cnequity.storage.partition_cache import cached_partition_values
+
+    column = DATASETS[dataset].partition_col
+    if column is None:
+        raise ValueError(f"{dataset} has no partition column to digest by")
+    store = published(config, dataset, read_context)
+    if not store.groups:
+        return {}
+
+    def compute(files: list[Path]) -> list:
+        paths = ", ".join("'" + Path(path).as_posix().replace("'", "''") + "'" for path in files)
+        scan = f"read_parquet([{paths}], union_by_name = true, hive_partitioning = false)"
+        con = duckdb.connect()
+        try:
+            present = {row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {scan}").fetchall()}
+            rows = con.execute(_day_rows_sql(scan, present, dataset, column)).fetchall()
+        finally:
+            con.close()
+        return [[day.isoformat(), count, xor, total] for day, count, xor, total in rows if day]
+
+    answers = cached_partition_values(
+        config.meta_root,
+        store.root,
+        f"day_digests-{dataset}",
+        {group.key: list(group.files) for group in store.groups},
+        compute,
+        version=_DIGEST_VERSION * 1000 + _duckdb_major_minor(),
+    )
+    combined: dict[str, list[int]] = {}
+    for parts in answers.values():
+        for day, count, xor, total in parts:
+            entry = combined.setdefault(day, [0, 0, 0])
+            entry[0] += int(count)
+            entry[1] ^= int(xor)
+            entry[2] += int(total)
+    return {date.fromisoformat(day): _digest(*entry) for day, entry in combined.items()}
+
+
+def period_digest(days: dict[date, str], period_days) -> str | None:
+    """One digest for several days (a month of futures bars), or ``None`` if none has rows."""
+    found = sorted(f"{day.isoformat()}:{days[day]}" for day in period_days if day in days)
+    return hashlib.sha256("\n".join(found).encode()).hexdigest() if found else None
+
+
+def _duckdb_major_minor() -> int:
+    """Row hashes are DuckDB's; a new DuckDB may hash differently."""
+    import duckdb
+
+    major, minor, *_ = (int(part) for part in duckdb.__version__.split(".")[:2] + ["0"])
+    return major * 100 + minor

@@ -227,44 +227,30 @@ def _pin_inputs(config):
 
 
 def _curated(config, dataset: str, context=None, **filters) -> pl.DataFrame | None:
-    from cnequity.storage.read_context import read_root
-
-    root = read_root(config, dataset, context)
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
-        return None
     from cnequity.domain.canonical import dedupe_by_primary_key
-    from cnequity.query.parquet_scan import scan_parquet_files
+    from cnequity.storage.published import published
 
-    scan = scan_parquet_files(files)
+    scan = published(config, dataset, context).scan()
+    if scan is None:
+        return None
     for column, (lo, hi) in filters.items():
         scan = scan.filter(pl.col(column).is_between(lo, hi))
     return dedupe_by_primary_key(scan.collect(), dataset)
 
 
-def _newest_mtime(directory) -> float | None:
-    times = [p.stat().st_mtime for p in directory.glob("*.parquet")] if directory.is_dir() else []
-    return max(times) if times else None
-
-
-def _partition_day(directory) -> date | None:
-    try:
-        return date.fromisoformat(directory.name.split("=", 1)[1])
-    except (IndexError, ValueError):
-        return None
+#: Bump when the Greeks written for the same inputs change (which bars,
+#: contracts or rates a session uses, or how they combine). Every session
+#: records it, so a bump recomputes the full history (~50 minutes). A
+#: refactor that writes the same rows must leave it alone: hashing this file
+#: instead made every edit cost a full recompute.
+DERIVATION_VERSION = 1
 
 
 def _dependency_identity(config) -> dict:
-    """The code every session's Greeks come from."""
-    from pathlib import Path
+    """The versions of the code every session's Greeks come from."""
+    from cnequity.domain.option_pricing import MODEL_VERSION
 
-    from cnequity.domain import option_pricing
-    from cnequity.storage.derivative_evidence import fingerprint
-
-    return {
-        "model": fingerprint(Path(option_pricing.__file__)),
-        "derivation": fingerprint(Path(__file__)),
-    }
+    return {"model": MODEL_VERSION, "derivation": DERIVATION_VERSION}
 
 
 def _session_dependencies(config, context) -> dict[date, dict]:
@@ -276,14 +262,12 @@ def _session_dependencies(config, context) -> dict[date, dict]:
     Greeks read only its own contracts' terms and the last rate on or before
     it, so those are what its receipt records.
     """
-    from cnequity.query.parquet_scan import scan_parquet_files
-    from cnequity.storage.read_context import read_root
+    from cnequity.storage.published import published
 
-    options_root = read_root(config, "option_bars", context)
-    files = list(options_root.glob("**/*.parquet")) if options_root.exists() else []
-    if not files:
+    options = published(config, "option_bars", context).scan()
+    if options is None:
         return {}
-    traded = scan_parquet_files(files).select("symbol", "trade_date").unique().collect()
+    traded = options.select("symbol", "trade_date").unique().collect()
     contracts = _curated(config, "option_contracts", context)
     columns = [c for c in _TERM_COLUMNS if contracts is not None and c in contracts.columns]
     if contracts is not None and columns:
@@ -325,50 +309,60 @@ def _receipt(config, day):
     return config.meta_root / "derivatives" / "greeks_dependencies" / f"{day}.json"
 
 
+#: Receipts carrying content digests. Older ones lack the key.
+RECEIPT_FORMAT = 2
+
+
+def _input_digests(config, context=None) -> dict:
+    """Per-day content digests of the inputs and the output (``storage.published``)."""
+    from cnequity.storage.published import day_digests
+
+    return {
+        "options": day_digests(config, "option_bars", context),
+        "futures": day_digests(config, "futures_bars", context),
+        "output": day_digests(config, "option_greeks"),
+    }
+
+
+def _futures_month(digests: dict, day: date) -> str | None:
+    """The digest of the futures bars a session prices against: its whole month's."""
+    from cnequity.storage.published import period_digest
+
+    month = DATASETS["futures_bars"].partition_dir_name(day)
+    days = [
+        d for d in digests["futures"] if DATASETS["futures_bars"].partition_dir_name(d) == month
+    ]
+    return period_digest(digests["futures"], days)
+
+
+def _receipt_for(dependencies: dict, digests: dict, day: date, output: str | None) -> dict:
+    return {
+        "format": RECEIPT_FORMAT,
+        "dependencies": dependencies.get(day),
+        "options": digests["options"].get(day),
+        "futures": _futures_month(digests, day),
+        "output": output,
+    }
+
+
 def stale_sessions(config, context=None) -> list[date]:
-    """Sessions whose Greeks are missing or older than the bars they come from.
+    """Sessions whose Greeks are missing or were built from other rows than the lake holds.
 
-    An option session reads its own ``option_bars`` partition and the month's
-    ``futures_bars`` partition (futures are stored by month). Either being
-    rewritten after the Greeks were — a backfill of an earlier window, a
-    refilled exchange day — makes the session stale. A watermark alone misses
-    exactly those: it only ever moves forward.
+    An option session reads its own ``option_bars`` day and the month's
+    ``futures_bars`` (futures are stored by month). Either changing after
+    the Greeks were built — a backfill of an earlier window, a refilled
+    exchange day — makes the session stale, and so does a model change. A
+    watermark alone misses exactly those: it only ever moves forward.
     """
-    from cnequity.storage.read_context import read_root
+    from cnequity.storage.derivative_evidence import read_json
 
-    context = context or _pin_inputs(config)
-    options_root = read_root(config, "option_bars", context)
-    futures_root = read_root(config, "futures_bars", context)
-    greeks_root = read_root(config, "option_greeks")
-    if not options_root.is_dir():
-        return []
-    from cnequity.storage.derivative_evidence import fingerprint, read_json
-
+    digests = _input_digests(config, context)
     dependencies = _session_dependencies(config, context)
-    month_identity: dict[str, str] = {}
-    month_mtime: dict[str, float | None] = {}
     stale: list[date] = []
-    for directory in options_root.glob("trade_date=*"):
-        day = _partition_day(directory)
-        source = _newest_mtime(directory)
-        if day is None or source is None:
-            continue
-        month = DATASETS["futures_bars"].partition_dir_name(day)
-        if month not in month_mtime:
-            month_mtime[month] = _newest_mtime(futures_root / month)
-        source = max(source, month_mtime[month] or 0.0)
-        derived = _newest_mtime(greeks_root / DATASETS["option_greeks"].partition_dir_name(day))
-        if month not in month_identity:
-            month_identity[month] = fingerprint(futures_root / month)
+    for day in digests["options"]:
         receipt = read_json(_receipt(config, day))
-        matches = (
-            receipt.get("dependencies") == dependencies.get(day)
-            and receipt.get("options") == fingerprint(directory)
-            and receipt.get("futures") == month_identity[month]
-            and receipt.get("output")
-            == fingerprint(greeks_root / DATASETS["option_greeks"].partition_dir_name(day))
-        )
-        if derived is None or derived < source or not matches:
+        expected = _receipt_for(dependencies, digests, day, digests["output"].get(day))
+        if digests["output"].get(day) is None or receipt != expected:
             stale.append(day)
     return sorted(stale)
 
@@ -424,6 +418,7 @@ def _derive_option_greeks(
     if rates is not None:
         rates = rates.filter(pl.col("indicator_id") == RATE_INDICATOR)
     dependencies = _session_dependencies(config, context)
+    digests = _input_digests(config, context)
     frame = compute_option_greeks(
         options,
         contracts=contracts,
@@ -435,34 +430,20 @@ def _derive_option_greeks(
     frame = validate_dataframe(
         with_provenance(frame, source="derived", data_version="v1"), "option_greeks"
     )
+    from cnequity.storage.atomic import write_json_atomic
+    from cnequity.storage.published import frame_day_digests
+
     writer = CuratedWriter(config.derived_root)
     with lake_mutation_lock(config.meta_root, blocking=True):
         for (day,), group in frame.partition_by("trade_date", as_dict=True).items():
             writer.write_partition(
                 "option_greeks", "trade_date", day.isoformat(), group, "part-000.parquet"
             )
-            from cnequity.storage.atomic import write_json_atomic
-            from cnequity.storage.derivative_evidence import fingerprint
-            from cnequity.storage.read_context import read_root
-
             write_json_atomic(
                 _receipt(config, day),
-                {
-                    "dependencies": dependencies.get(day),
-                    "options": fingerprint(
-                        read_root(config, "option_bars", context)
-                        / DATASETS["option_bars"].partition_dir_name(day)
-                    ),
-                    "futures": fingerprint(
-                        read_root(config, "futures_bars", context)
-                        / DATASETS["futures_bars"].partition_dir_name(day)
-                    ),
-                    "output": fingerprint(
-                        config.derived_root
-                        / "option_greeks"
-                        / DATASETS["option_greeks"].partition_dir_name(day)
-                    ),
-                },
+                _receipt_for(
+                    dependencies, digests, day, frame_day_digests(group, "option_greeks").get(day)
+                ),
             )
         # Rewriting an earlier window must not pull the watermark back.
         latest = frame["trade_date"].max()

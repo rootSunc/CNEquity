@@ -25,13 +25,13 @@ Staleness is decided by content, not file times. Each written session leaves a
 receipt naming the digests of its 1m and 5m partitions, of the code that built
 it and of the output; a session is rebuilt when any of them differ. File times
 alone would miss a rollback or a restore, both of which bring back older
-content under preserved mtimes. Digests come from the revision receipts the
-lake already keeps, so checking costs no rereading of the minute data.
+content under preserved mtimes. A digest is the content of one day's rows
+(``storage.published.day_digests``), whatever files hold them, cached per file
+so checking rereads only files that changed.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from datetime import date
 from pathlib import Path
@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 
 import polars as pl
 
-from cnequity.domain.datasets import DATASETS, RESAMPLED_MINUTE_DATASETS
+from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
 from cnequity.query.resample import incomplete_symbol_days, resample_minute_history
 
 if TYPE_CHECKING:
@@ -61,51 +61,29 @@ def _partition_day(directory: Path) -> date | None:
         return None
 
 
+#: Receipts carrying content digests. Older ones lack the key.
+RECEIPT_FORMAT = 2
+
+
 def _partition_digests(config: Config, dataset: str) -> dict[date, str]:
-    """Content identity of each committed partition of *dataset*.
+    """Content digest of each day of *dataset*'s published rows."""
+    from cnequity.storage.published import day_digests
 
-    Read from the current revision receipt, which already records a sha256 for
-    every file of the generation. A lake without one (a legacy layout, or a
-    dataset not yet published) hashes the files instead.
-    """
-    from cnequity.storage.read_context import read_root
-    from cnequity.storage.revisions import RevisionStore, sha256_file
+    return day_digests(config, dataset)
 
-    files: dict[date, list[str]] = {}
-    revision = RevisionStore(
-        config.meta_root, config.curated_root, config.derived_root, create=False
-    ).latest(dataset)
-    if revision is not None and revision.generation_files:
-        for item in revision.generation_files:
-            parts = Path(item.path).parts
-            partition = next(
-                (i for i, part in enumerate(parts) if part.startswith("trade_date=")), None
-            )
-            day = None if partition is None else _partition_day(Path(parts[partition]))
-            if day is not None:
-                inner = "/".join(parts[partition + 1 :])
-                files.setdefault(day, []).append(f"{inner}:{item.sha256}")
-    else:
-        root = read_root(config, dataset)
-        for directory in root.glob("trade_date=*") if root.is_dir() else []:
-            day = _partition_day(directory)
-            for file in sorted(directory.rglob("*.parquet")) if day is not None else []:
-                inner = file.relative_to(directory).as_posix()
-                files.setdefault(day, []).append(f"{inner}:{sha256_file(file)}")
-    return {
-        day: hashlib.sha256("\n".join(sorted(entries)).encode()).hexdigest()
-        for day, entries in files.items()
-    }
+
+#: Bump when the stored bars written for the same input change (how a
+#: symbol-day picks 1m or 5m, what is set aside). With ``RESAMPLE_VERSION``
+#: it decides whether old sessions are rebuilt; a refactor that writes the
+#: same rows must leave both alone.
+DERIVATION_VERSION = 1
 
 
 def _derivation_identity() -> str:
     """Changing how bars are built must rebuild what the old code wrote."""
-    from cnequity.query import resample
-    from cnequity.storage.derivative_evidence import fingerprint
+    from cnequity.query.resample import RESAMPLE_VERSION
 
-    return hashlib.sha256(
-        (fingerprint(Path(__file__)) + fingerprint(Path(resample.__file__))).encode()
-    ).hexdigest()
+    return f"resample-v{RESAMPLE_VERSION}/derive-v{DERIVATION_VERSION}"
 
 
 def _receipt_path(config: Config, dataset: str, day: date) -> Path:
@@ -133,7 +111,8 @@ def stale_sessions(config: Config, dataset: str) -> list[date]:
     for day, inputs in _input_days(config).items():
         receipt = read_json(_receipt_path(config, dataset, day))
         if (
-            receipt.get("inputs") != inputs
+            receipt.get("format") != RECEIPT_FORMAT
+            or receipt.get("inputs") != inputs
             or receipt.get("derivation") != derivation
             or receipt.get("output") != outputs.get(day)
         ):
@@ -158,15 +137,13 @@ def resample_backlog(config: Config, dataset: str) -> dict:
 def _session(config: Config, dataset: str, day: date) -> pl.DataFrame:
     from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.domain.schemas import DATASET_SCHEMAS
-    from cnequity.query.parquet_scan import scan_parquet_files
-    from cnequity.storage.read_context import read_root
+    from cnequity.storage.published import published
 
-    files = sorted(
-        (read_root(config, dataset) / DATASETS[dataset].partition_dir_name(day)).rglob("*.parquet")
-    )
-    if not files:
+    store = published(config, dataset)
+    scan = store.scan(store.in_range(day, day))
+    if scan is None:
         return pl.DataFrame(schema=DATASET_SCHEMAS[dataset])
-    return dedupe_by_primary_key(scan_parquet_files(files).collect(), dataset)
+    return dedupe_by_primary_key(scan.filter(pl.col("trade_date") == day).collect(), dataset)
 
 
 def _day_shape(frame: pl.DataFrame, step: int) -> pl.DataFrame:
@@ -293,7 +270,7 @@ def derive_minute_resample(
     from cnequity.file_lock import lake_mutation_lock
     from cnequity.storage.atomic import write_json_atomic
     from cnequity.storage.parquet import CuratedWriter
-    from cnequity.storage.revisions import sha256_file
+    from cnequity.storage.published import frame_day_digests
 
     frequency = FREQUENCY_BY_DATASET[dataset]
     inputs = _input_days(config)
@@ -351,15 +328,18 @@ def derive_minute_resample(
                 frame = validate_dataframe(
                     with_provenance(bars, source="derived", data_version="v1"), dataset
                 )
-                path = writer.write_partition(
+                writer.write_partition(
                     dataset, "trade_date", day.isoformat(), frame, "part-000.parquet"
                 )
-                output = hashlib.sha256(
-                    f"{path.relative_to(partition).as_posix()}:{sha256_file(path)}".encode()
-                ).hexdigest()
+                output = frame_day_digests(frame, dataset).get(day)
             write_json_atomic(
                 _receipt_path(config, dataset, day),
-                {"inputs": inputs.get(day), "derivation": derivation, "output": output},
+                {
+                    "format": RECEIPT_FORMAT,
+                    "inputs": inputs.get(day),
+                    "derivation": derivation,
+                    "output": output,
+                },
             )
     for item in (*invalid, *holes):
         item["trade_date"] = str(item["trade_date"])

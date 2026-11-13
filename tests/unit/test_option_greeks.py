@@ -158,10 +158,20 @@ def test_sessions_recompute_when_their_bars_are_rewritten(tmp_path):
     assert derive_option_greeks(config)["sessions"] == 2
     assert stale_sessions(config) == []
     assert derive_option_greeks(config)["rows"] == 0
-    # A backfill rewrites the month's futures: both sessions read it.
+    # Touching files without changing rows is not a reason to recompute.
     greeks = config.derived_root / "option_greeks"
     for day in (date(2026, 9, 23), DAY):
         _age(greeks / f"trade_date={day.isoformat()}", 60)
+    assert stale_sessions(config) == []
+    # A backfill rewrites the month's futures: both sessions read it.
+    month = config.curated_root / "futures_bars" / "trade_date=2026-09"
+    pl.DataFrame(
+        {
+            "symbol": ["M2612.DCE"] * 2,
+            "trade_date": [date(2026, 9, 23), DAY],
+            "settle": [3001.0, 3010.0],
+        }
+    ).write_parquet(month / "part-000.parquet")
     assert stale_sessions(config) == [date(2026, 9, 23), DAY]
 
 

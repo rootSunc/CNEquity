@@ -40,15 +40,9 @@ DERIVATIVE_BAR_CONTRACTS = {
 
 
 def _scan(config: Config, dataset: str) -> pl.LazyFrame | None:
-    from cnequity.storage.read_context import read_root
+    from cnequity.storage.published import published
 
-    root = read_root(config, dataset)
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
-        return None
-    from cnequity.query.parquet_scan import scan_parquet_files
-
-    return scan_parquet_files(files)
+    return published(config, dataset).scan()
 
 
 def _last_trade_dates(config: Config, bars_dataset: str) -> dict[str, date]:
