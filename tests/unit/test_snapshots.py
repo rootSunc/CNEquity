@@ -419,3 +419,60 @@ def test_restore_rejects_targets_inside_source_snapshot_package(tmp_path):
         store.restore("nested-target", snapshot / "nested")
     with pytest.raises(ValueError, match="inside the source snapshot/package"):
         store.restore("nested-target", store.root / "outside-snapshot")
+
+
+def test_snapshot_copies_files_without_holding_the_lake_lock(tmp_path, monkeypatch):
+    """A slow copy (a raw archive on a network drive) must not make every run wait."""
+    import shutil
+    import threading
+
+    from cnequity.file_lock import lake_mutation_lock
+    from cnequity.storage import snapshots
+
+    cfg = Config(data_root=tmp_path / "lake")
+    _write_bars(cfg)
+    StateStore(cfg.meta_root).set_date("daily_bars", date(2024, 6, 18))
+    copied = []
+    copy2 = shutil.copy2
+
+    def take_the_lock(source):
+        with lake_mutation_lock(cfg.meta_root, blocking=False):
+            copied.append(source)
+
+    def copy_while_another_run_takes_the_lock(source, target):
+        if str(source).endswith(".parquet"):
+            # Another thread stands in for another run: the lock is re-entrant
+            # only within the thread that holds it.
+            other = threading.Thread(target=take_the_lock, args=(source,))
+            other.start()
+            other.join()
+        return copy2(source, target)
+
+    monkeypatch.setattr(snapshots.shutil, "copy2", copy_while_another_run_takes_the_lock)
+    store = SnapshotStore(cfg)
+    store.create("unlocked", ["daily_bars"])
+
+    assert copied
+    assert store.verify("unlocked").passed
+
+
+def test_snapshot_fails_when_a_listed_file_changes_before_it_is_copied(tmp_path, monkeypatch):
+    import shutil
+
+    from cnequity.storage import snapshots
+
+    cfg = Config(data_root=tmp_path / "lake")
+    _write_bars(cfg)
+    store = SnapshotStore(cfg)
+    copy2 = shutil.copy2
+
+    def rewrite_then_copy(source, target):
+        if str(source).endswith(".parquet"):
+            Path(source).write_bytes(b"rewritten by another writer")
+        return copy2(source, target)
+
+    monkeypatch.setattr(snapshots.shutil, "copy2", rewrite_then_copy)
+    with pytest.raises(RuntimeError, match="changed during snapshot"):
+        store.create("torn", ["daily_bars"])
+    assert not store.path("torn").exists()
+    assert not list(store.root.glob(".torn-*"))

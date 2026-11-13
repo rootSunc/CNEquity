@@ -991,6 +991,39 @@ class SnapshotFile:
 
 
 @dataclass(frozen=True)
+class _PlannedCopy:
+    """An immutable lake file to copy into a snapshot once the lake lock is released."""
+
+    source: Path
+    stored: Path
+    dataset: str
+    layer: str
+    #: Size and modification time when the lake's view was read under the lock.
+    stamp: tuple[int, int]
+
+
+def _planned_copy(source: Path, stored: Path, dataset: str, layer: str) -> _PlannedCopy:
+    status = source.stat()
+    return _PlannedCopy(source, stored, dataset, layer, (status.st_size, status.st_mtime_ns))
+
+
+@dataclass
+class _SnapshotPlan:
+    """What :meth:`SnapshotStore.create` read under the lake lock, and what is left to copy."""
+
+    name: str
+    selected: list[str]
+    temp: Path
+    destination: Path
+    dataset_states: dict[str, dict]
+    records: list[SnapshotFile]
+    runtime_state: dict[str, Any]
+    research_inputs: dict[str, Any]
+    lifecycle_dependencies: Any
+    copies: list[_PlannedCopy]
+
+
+@dataclass(frozen=True)
 class SnapshotVerification:
     snapshot: str
     passed: bool
@@ -1077,13 +1110,17 @@ class SnapshotStore:
     def create(self, name: str, datasets: list[str], *, research: bool = False) -> Path:
         """Copy selected datasets into a new immutable snapshot directory.
 
-        Snapshot creation is a lake read transaction, not just a collection of
-        independent file copies.  Compaction/revision publication uses the
-        same mutation lock, so holding it from the state read through the
-        final directory rename keeps the state, receipt, pointer and generation
-        bytes in one view.  In particular, a snapshot cannot capture the old
-        state alongside the new pointer (or vice versa) while a commit is in
-        flight.
+        The lake's view is read as one transaction: compaction and revision
+        publication use the same mutation lock, so the state, receipt and
+        pointer of every dataset are read, and the files they name are listed,
+        while it is held. A snapshot cannot capture the old state beside the
+        new pointer while a commit is in flight.
+
+        The bytes are copied after the lock is released. Generations and raw
+        payloads are immutable once written, so the files listed still hold
+        what the view named, and a copy that takes hours (a raw archive on a
+        network drive) does not keep every other run waiting. A file that
+        retention removed, or that changed, in the meantime fails the snapshot.
         """
         # Validate before acquiring the lock because lock acquisition creates
         # ``meta/locks``.  A user-controlled symlinked metadata root must not
@@ -1095,10 +1132,11 @@ class SnapshotStore:
 
             datasets = sorted(set(datasets) | RESEARCH_DATASETS)
         with lake_mutation_lock(self.config.meta_root, blocking=True):
-            return self._create_locked(name, datasets)
+            plan = self._plan_locked(name, datasets)
+        return self._copy_and_publish(plan)
 
-    def _create_locked(self, name: str, datasets: list[str]) -> Path:
-        """Implementation of :meth:`create`; caller owns the lake lock."""
+    def _plan_locked(self, name: str, datasets: list[str]) -> _SnapshotPlan:
+        """Read the lake's view and copy its small mutable files; caller owns the lake lock."""
         selected = sorted(set(datasets))
         if not selected:
             raise ValueError("at least one dataset is required")
@@ -1124,6 +1162,7 @@ class SnapshotStore:
         state = StateStore(self.config.meta_root)
         dataset_states: dict[str, dict] = {}
         records: list[SnapshotFile] = []
+        copies: list[_PlannedCopy] = []
         runtime_state: dict[str, Any] = {}
         # Datasets whose revision lives only in the lake catalog, by export dir.
         exported: dict[str, Path] = {}
@@ -1181,17 +1220,7 @@ class SnapshotStore:
                     _reject_link_or_non_regular(source_file)
                     relative = source_file.relative_to(source)
                     stored = temp / "data" / layer / dataset / relative
-                    stored.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source_file, stored)
-                    records.append(
-                        SnapshotFile(
-                            dataset=dataset,
-                            layer=layer,
-                            path=(Path("data") / layer / dataset / relative).as_posix(),
-                            size_bytes=stored.stat().st_size,
-                            sha256=_sha256(stored),
-                        )
-                    )
+                    copies.append(_planned_copy(source_file, stored, dataset, layer))
 
             _reject_symlink_path(self.config.meta_root, label="metadata root")
             meta_root = self.config.meta_root.resolve(strict=False)
@@ -1293,17 +1322,7 @@ class SnapshotStore:
                             generation_target / generation_file.relative_to(generation_source)
                         ).relative_to(meta_root)
                         stored = temp / "meta" / relative
-                        stored.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(generation_file, stored)
-                        records.append(
-                            SnapshotFile(
-                                dataset=dataset,
-                                layer="meta",
-                                path=(Path("meta") / relative).as_posix(),
-                                size_bytes=stored.stat().st_size,
-                                sha256=_sha256(stored),
-                            )
-                        )
+                        copies.append(_planned_copy(generation_file, stored, dataset, "meta"))
 
             # Adjustment-factor HTTP responses are a hot, sparse cache rather
             # than the query-facing derived table.  It is cheap to include it
@@ -1365,27 +1384,62 @@ class SnapshotStore:
                     # extension; only directories are absent from the
                     # non-following file set.
                     _reject_link_or_non_regular(source_file, hardlink=True)
-                    relative = Path("meta") / relative_source
-                    stored = temp / relative
-                    stored.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source_file, stored)
-                    records.append(
-                        SnapshotFile(
-                            dataset=dataset,
-                            layer="meta",
-                            path=relative.as_posix(),
-                            size_bytes=stored.stat().st_size,
-                            sha256=_sha256(stored),
-                        )
-                    )
+                    stored = temp / "meta" / relative_source
+                    copies.append(_planned_copy(source_file, stored, dataset, "meta"))
 
+            # Evidence publishers can run independently of the compact lock.
+            # Reject a changing set instead of shipping a silently mixed read.
+            if research_inputs["source_fingerprint"] != self._research_evidence_identity():
+                raise RuntimeError("research evidence changed during snapshot; retry creation")
+        except Exception:
+            shutil.rmtree(temp, ignore_errors=True)
+            raise
+        return _SnapshotPlan(
+            name=name,
+            selected=selected,
+            temp=temp,
+            destination=destination,
+            dataset_states=dataset_states,
+            records=records,
+            runtime_state=runtime_state,
+            research_inputs=research_inputs,
+            lifecycle_dependencies=lifecycle_dependencies,
+            copies=copies,
+        )
+
+    def _copy_and_publish(self, plan: _SnapshotPlan) -> Path:
+        """Copy the planned files, then verify and publish the snapshot. Needs no lock."""
+        name, selected, temp, records = plan.name, plan.selected, plan.temp, plan.records
+        try:
+            for item in plan.copies:
+                item.stored.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(item.source, item.stored)
+                    status = item.source.stat()
+                except FileNotFoundError as exc:
+                    raise RuntimeError(
+                        f"lake file was removed during snapshot; retry creation: {item.source}"
+                    ) from exc
+                if (status.st_size, status.st_mtime_ns) != item.stamp:
+                    raise RuntimeError(
+                        f"lake file changed during snapshot; retry creation: {item.source}"
+                    )
+                records.append(
+                    SnapshotFile(
+                        dataset=item.dataset,
+                        layer=item.layer,
+                        path=item.stored.relative_to(temp).as_posix(),
+                        size_bytes=item.stored.stat().st_size,
+                        sha256=_sha256(item.stored),
+                    )
+                )
             manifest = {
                 "format": "cnequity.lake-snapshot",
                 "format_version": 1,
                 "name": name,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "datasets": selected,
-                "dataset_states": dataset_states,
+                "dataset_states": plan.dataset_states,
                 "contracts": {
                     dataset: {
                         "schema_version": dataset_contract(dataset)["schema_version"],
@@ -1401,21 +1455,17 @@ class SnapshotStore:
                     dataset: contract_fingerprint(dataset) for dataset in selected
                 },
                 "lineage": runtime_lineage(self.config),
-                "runtime_state": runtime_state,
-                "research_inputs": research_inputs,
+                "runtime_state": plan.runtime_state,
+                "research_inputs": plan.research_inputs,
                 "lifecycle_dependencies": {
                     "path": "meta/lifecycle/snapshot-dependencies.json",
                     "external_bytes_materialized": False,
                     "requires_rebinding": True,
                 }
-                if lifecycle_dependencies is not None
+                if plan.lifecycle_dependencies is not None
                 else None,
                 "files": [asdict(item) for item in records],
             }
-            # Evidence publishers can run independently of the compact lock.
-            # Reject a changing set instead of shipping a silently mixed read.
-            if research_inputs["source_fingerprint"] != self._research_evidence_identity():
-                raise RuntimeError("research evidence changed during snapshot; retry creation")
             write_json_atomic(temp / "manifest.json", manifest, indent=2, ensure_ascii=False)
             # Do not publish a package whose denormalised state disagrees with
             # its pointer/receipt, even if all copied bytes are individually
@@ -1431,11 +1481,13 @@ class SnapshotStore:
                     f"snapshot consistency check failed: missing={verification.missing}, "
                     f"mismatched={verification.mismatched}"
                 )
-            replace_with_retry(temp, destination)
+            if plan.destination.exists():
+                raise FileExistsError(f"snapshot already exists: {plan.destination}")
+            replace_with_retry(temp, plan.destination)
         except Exception:
             shutil.rmtree(temp, ignore_errors=True)
             raise
-        return destination / "manifest.json"
+        return plan.destination / "manifest.json"
 
     def _research_evidence_identity(self) -> dict[str, str]:
         from cnequity.storage.research_inputs import CONTEXT_PATH, RESEARCH_METADATA
