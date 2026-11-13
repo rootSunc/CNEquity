@@ -466,6 +466,12 @@ By default only new PDF payloads go to the external folder; other responses stay
 
 Replay requires the external folder to be available; cloud files may need downloading first. An unavailable folder fails explicitly rather than being recreated empty or fetching the provider again. Portable snapshots materialize external payloads without machine-specific locations, which may download cloud files. macOS manages iCloud synchronization and Remove Download; registration alone does not confirm upload.
 
+## `[storage]` {#storage}
+
+| Key | Default | Description |
+|----|------|------|
+| `publish` | `"generation"` | Experimental. With `"catalog"`, compaction checks out of the lake catalog (`lake/`) only the partitions a run changes, merges into them, and replaces them in one catalog transaction together with the revision records; every dataset of the run publishes in one snapshot and no generation directory is written. A dataset whose published revision the catalog is behind on still publishes as a generation. For now this needs `[quality].publication_gate = "off"` and no `revision_gate`; the first run with it records in `meta/storage.json` that the lake publishes to its catalog, and from then on derivations and repairs publish there too: they still write into the working tree, but publish only from a tree verified at the current revision (rebuilt from the catalog otherwise), and only the partitions they declare. Setting it back to `"generation"` does not move datasets already in the catalog back to generations |
+
 ## `[storage.retention]` {#storage-retention}
 
 Every backfill and daily publish leaves an immutable generation. At the end of `cne backfill` and `cne run daily`, each dataset keeps the newest 5 generations and the older generation directories are removed. That is the same count the storage page uses for a recent generation. The generation currently being read, a generation registered with `cne storage hold`, a generation whose receipt is missing or unusable, and all staging are never removed by this automatic cleanup. Receipts stay under `meta/revisions/` as the record of what was published; reading a removed generation fails explicitly and does not follow a newer one. An interactive `cne run clean` can confirm deletion after the preview. Deleting a generation inside the newest 5 that is not the current pointer is still confirmed on the storage page of `cne serve`.

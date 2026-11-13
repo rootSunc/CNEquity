@@ -39,6 +39,7 @@ _NOT_DATA_FIELDS = frozenset(
         "backfill_window",
         "run_flags",
         "eastmoney_proxy_hosts",
+        "storage_publish",
     }
 )
 

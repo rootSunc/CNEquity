@@ -59,6 +59,8 @@ class RevisionConsistencyError(RuntimeError):
 
 
 _POINTER_SCHEMA_VERSION = 1
+#: A revision whose rows only the lake catalog holds: its generation path is never created.
+STORAGE_CATALOG = "catalog"
 _LEGACY_REVISION_ID = "legacy"
 # Room for the receipt and the directory entries around the new files. The
 # receipt no longer carries the whole gap index, so this is a bound, not a
@@ -261,6 +263,15 @@ def layout_violations(dataset: str, relatives: list[Path]) -> list[str]:
     return problems
 
 
+class CatalogOnlyDatasetError(RevisionConsistencyError):
+    """A generation-based writer met a dataset only the lake catalog holds.
+
+    Its revisions have no generation directory, so a generation built from
+    "the current one" would silently drop every partition the writer did not
+    touch. The writer must move to ``storage.lake_write`` first.
+    """
+
+
 class RevisionStore:
     """Publish revision receipts and advance dataset state under one lock."""
 
@@ -424,7 +435,7 @@ class RevisionStore:
             raise RevisionConsistencyError(
                 f"revision generation escapes meta root: {path}"
             ) from exc
-        if not generation.is_dir():
+        if not generation.is_dir() and payload.get("storage") != STORAGE_CATALOG:
             raise RevisionConsistencyError(f"revision generation is missing: {generation}")
 
         receipt_raw = payload.get("receipt")
@@ -557,7 +568,10 @@ class RevisionStore:
             if not isinstance(raw, str) or not raw:
                 raise RevisionConsistencyError(f"receipt {receipt_path} has no retained generation")
             generation = self._safe_meta_path(self._safe_relative(raw), label="generation")
-            if not generation.is_dir():
+            if (
+                not generation.is_dir()
+                and payload.get("metadata", {}).get("storage") != STORAGE_CATALOG
+            ):
                 raise RevisionConsistencyError(f"revision generation is missing: {generation}")
             return generation
         raise RevisionConsistencyError(f"unknown retained revision {revision!r} for {dataset}")
@@ -746,6 +760,11 @@ class RevisionStore:
         repair. A legacy lake that has data is registered only with
         ``register=True``; a preview reads its mutable tree as it stands.
         """
+        pointer = self._read_pointer(dataset)
+        if pointer is not None and pointer.get("storage") == STORAGE_CATALOG:
+            self._materialize_from_catalog(dataset, pointer)
+            tree = self._layer_root(dataset) / dataset
+            return tree if any(tree.rglob("*.parquet")) else None
         current = self.current_root(dataset)
         if current is None:
             mutable = self._layer_root(dataset) / dataset
@@ -763,12 +782,16 @@ class RevisionStore:
         append-only derive would write only its new partition and the next COW
         generation would silently lose the retained history.
         """
+        pointer = self._read_pointer(dataset)
+        if pointer is not None and pointer.get("storage") == STORAGE_CATALOG:
+            return self._materialize_from_catalog(dataset, pointer)
 
         current = self.current_root(dataset)
         if current is None:
             return None
         target = self._layer_root(dataset) / dataset
         if self._sync_mutable(current, target):
+            self.record_working_tree(dataset)
             return current
         target_parent = target.parent
         target_parent.mkdir(parents=True, exist_ok=True)
@@ -791,9 +814,203 @@ class RevisionStore:
                 shutil.rmtree(backup, ignore_errors=True)
             else:
                 replace_with_retry(staged, target)
+            self.record_working_tree(dataset)
             return current
         finally:
             shutil.rmtree(temporary, ignore_errors=True)
+
+    # --- the working tree of a catalog revision: a cache the store verifies ----
+
+    def publishes_to_catalog(self) -> bool:
+        """Whether this lake publishes new revisions into its catalog (``meta/storage.json``)."""
+        try:
+            setting = json.loads((self.meta_root / "storage.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return isinstance(setting, dict) and setting.get("publish") == STORAGE_CATALOG
+
+    def _working_record_path(self, dataset: str) -> Path:
+        return self.meta_root / "working_trees" / f"{dataset}.json"
+
+    def _working_stamps(self, dataset: str) -> dict[str, list[int]]:
+        target = self._layer_root(dataset) / dataset
+        return {
+            path.relative_to(target).as_posix(): [path.stat().st_size, path.stat().st_mtime_ns]
+            for path in self._walk_files(target)
+        }
+
+    def record_working_tree(self, dataset: str) -> None:
+        """Remember that the working tree now holds *dataset*'s published revision, file by file."""
+        pointer = self._read_pointer(dataset)
+        if pointer is None:
+            return
+        write_json_atomic(
+            self._working_record_path(dataset),
+            {"revision_id": pointer.get("revision_id"), "files": self._working_stamps(dataset)},
+            indent=2,
+        )
+
+    def _working_tree_is_current(self, dataset: str, pointer: dict) -> bool:
+        try:
+            record = json.loads(self._working_record_path(dataset).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return record.get("revision_id") == pointer.get("revision_id") and record.get(
+            "files"
+        ) == self._working_stamps(dataset)
+
+    def _tree_matches(self, dataset: str, revision_id: str | None) -> bool:
+        """Whether the working tree holds exactly revision *revision_id*, file by file."""
+        if not revision_id:
+            return False
+        try:
+            record = json.loads(self._working_record_path(dataset).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            record = None
+        stamps = self._working_stamps(dataset)
+        if record is not None and record.get("revision_id") == revision_id:
+            return record.get("files") == stamps
+        generation = self.generation_root(dataset, revision_id)
+        if not generation.is_dir():
+            return False
+        # A generation-backed tree is synced by size and modification time.
+        published = {
+            path.relative_to(generation).as_posix(): [path.stat().st_size, path.stat().st_mtime_ns]
+            for path in self._walk_files(generation)
+        }
+        return published == stamps
+
+    def advance_working_tree(
+        self, dataset: str, base_revision_id: str | None, partitions: dict[str, list[Path]]
+    ) -> None:
+        """Carry a catalog publish of *partitions* into the working tree, if it held the base.
+
+        Keeps the tree a valid cache without rebuilding it; a tree that did not
+        hold the base revision is left to be rebuilt the next time it is needed.
+        """
+        if not self._tree_matches(dataset, base_revision_id):
+            self._working_record_path(dataset).unlink(missing_ok=True)
+            return
+        tree = self._layer_root(dataset) / dataset
+        for label, files in partitions.items():
+            target = tree / label if label else tree
+            if label:
+                shutil.rmtree(target, ignore_errors=True)
+            else:
+                for old in self._walk_files(target):
+                    old.unlink()
+            if files:
+                target.mkdir(parents=True, exist_ok=True)
+                for source in files:
+                    copy2_isolated(source, target / Path(source).name)
+        self.record_working_tree(dataset)
+
+    def _catalog_holds(self, dataset: str, pointer: dict) -> bool:
+        from cnequity.storage.lake_write import catalog_revision
+
+        return catalog_revision(self, dataset) == pointer.get("revision_id")
+
+    def _commit_to_catalog(
+        self,
+        dataset: str,
+        pointer: dict,
+        *,
+        run_id: str,
+        changed_files: list[Path],
+        removed_partitions: Iterable[str],
+        schema_version: int,
+        contract_fingerprint: str,
+        metadata: dict[str, Any] | None,
+    ) -> DatasetRevision | None:
+        """Publish the declared partitions of the working tree into the lake catalog.
+
+        The same contract as a generation commit: only the partitions this
+        commit names are taken from the working tree, every other one stays as
+        published. It holds only if the writer started from the published
+        revision, so the tree must have been verified at it
+        (``materialize_current``) before the writer changed it.
+        """
+        tree = self._layer_root(dataset) / dataset
+        try:
+            record = json.loads(self._working_record_path(dataset).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            record = {}
+        if record.get("revision_id") != pointer.get("revision_id"):
+            raise CatalogOnlyDatasetError(
+                f"{dataset}: the working tree was not verified at the published revision; "
+                "call materialize_current before writing into it"
+            )
+        labels: set[str] = set()
+        for path in changed_files:
+            relative = Path(path).resolve().relative_to(tree.resolve())
+            labels.add(_partition_of(relative))
+        for name in dict.fromkeys(str(name) for name in removed_partitions):
+            if "/" in name or "\\" in name or "=" not in name:
+                raise RevisionConsistencyError(f"{dataset}: not a partition directory: {name!r}")
+            if (tree / name).exists():
+                raise RevisionConsistencyError(f"{dataset}: {name} is still in the mutable tree")
+            labels.add(name)
+        if not labels:
+            return None
+        from cnequity.storage.lake_write import DatasetPublish, LakeWrite
+
+        with LakeWrite.for_store(self, run_id) as write:
+            if not write.can_write(dataset):
+                raise CatalogOnlyDatasetError(
+                    f"{dataset}: the lake catalog does not hold its published revision"
+                )
+            write.stage_tree(dataset, tree, sorted(labels))
+            published = write.publish(
+                {dataset: DatasetPublish(schema_version, contract_fingerprint, metadata)},
+                message=f"{dataset} revision from {run_id}",
+            )
+        receipt = published.get(dataset)
+
+        # Bless the tree as the new revision only if nothing outside the
+        # declared partitions changed since it was verified.
+        def outside(files: dict) -> dict:
+            return {
+                key: value for key, value in files.items() if _partition_of(Path(key)) not in labels
+            }
+
+        if receipt is not None and outside(record.get("files") or {}) == outside(
+            self._working_stamps(dataset)
+        ):
+            self.record_working_tree(dataset)
+        else:
+            self._working_record_path(dataset).unlink(missing_ok=True)
+        return receipt
+
+    def _materialize_from_catalog(self, dataset: str, pointer: dict) -> Path:
+        """Make the working tree hold the catalog's published rows of *dataset*.
+
+        Kept when the store recorded it as exactly the published revision and
+        no file changed since; rebuilt from the catalog otherwise, so it can
+        never stand in for rows it lacks.
+        """
+        generation = self._safe_meta_path(
+            self._safe_relative(str(pointer["generation_path"])), label="generation"
+        )
+        if self._working_tree_is_current(dataset, pointer):
+            return generation
+        from cnequity.storage.lake_write import export_tree
+
+        target = self._layer_root(dataset) / dataset
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix=f".{dataset}-materialize-", dir=target.parent))
+        staged = temporary / dataset
+        try:
+            export_tree(self.meta_root.parent, dataset, staged)
+            if target.exists():
+                backup = target.parent / f".{dataset}-stale-{uuid.uuid4().hex}"
+                swap_with_backup(staged, target, backup)
+                shutil.rmtree(backup, ignore_errors=True)
+            else:
+                replace_with_retry(staged, target)
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
+        self.record_working_tree(dataset)
+        return generation
 
     def _sync_mutable(self, current: Path, target: Path) -> bool:
         """Bring an existing mutable tree back to *current*, file by file.
@@ -861,6 +1078,12 @@ class RevisionStore:
         retained below ``_quarantine`` for inspection, while the active path
         is reconstructed from the immutable pointer generation.
         """
+        pointer = self._read_pointer(dataset)
+        if pointer is not None and pointer.get("storage") == STORAGE_CATALOG:
+            quarantine = self._quarantine_tree(dataset, run_id, reason)
+            self._working_record_path(dataset).unlink(missing_ok=True)
+            self._materialize_from_catalog(dataset, pointer)
+            return quarantine
 
         target = self._layer_root(dataset) / dataset
         try:
@@ -890,6 +1113,17 @@ class RevisionStore:
                 replace_with_retry(staged, target)
             finally:
                 shutil.rmtree(temporary, ignore_errors=True)
+        return quarantine
+
+    def _quarantine_tree(self, dataset: str, run_id: str, reason: str) -> Path | None:
+        target = self._layer_root(dataset) / dataset
+        if not target.exists():
+            return None
+        quarantine_root = self.curated_root.parent / "_quarantine"
+        quarantine_root.mkdir(parents=True, exist_ok=True)
+        safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in f"{run_id}-{reason}")[:120]
+        quarantine = quarantine_root / f"{dataset}-{safe}-{uuid.uuid4().hex}"
+        replace_with_retry(target, quarantine)
         return quarantine
 
     def _relative_file(self, path: Path, dataset: str) -> Path:
@@ -1001,6 +1235,21 @@ class RevisionStore:
             raise ValueError("schema_version must be a positive integer")
         if not contract_fingerprint:
             raise ValueError("contract_fingerprint must not be empty")
+        catalog_pointer = self._read_pointer(dataset)
+        if catalog_pointer is not None and (
+            catalog_pointer.get("storage") == STORAGE_CATALOG
+            or (self.publishes_to_catalog() and self._catalog_holds(dataset, catalog_pointer))
+        ):
+            return self._commit_to_catalog(
+                dataset,
+                catalog_pointer,
+                run_id=run_id,
+                changed_files=changed_files,
+                removed_partitions=removed_partitions,
+                schema_version=schema_version,
+                contract_fingerprint=contract_fingerprint,
+                metadata=metadata,
+            )
         files = self._file_records(changed_files, dataset)
         removed = self._removed_partitions(dataset, removed_partitions)
         if not files and not removed:
@@ -1124,6 +1373,96 @@ class RevisionStore:
             )
         self._sync_lake_catalog(dataset)
         return receipt
+
+    def prepare_catalog_revision(
+        self,
+        dataset: str,
+        *,
+        run_id: str,
+        files: tuple[RevisionFile, ...],
+        changed_partitions: tuple[str, ...],
+        schema_version: int,
+        contract_fingerprint: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> DatasetRevision:
+        """Write the receipt of a revision the lake catalog is about to publish.
+
+        The caller holds ``lake_mutation_lock``, commits the catalog, then calls
+        :meth:`finish_catalog_revision`. A crash after the receipt leaves an
+        unpublished receipt (harmless); one after the catalog commit leaves the
+        pointer behind, which ``sweep`` moves to what the catalog published.
+        """
+        if schema_version < 1:
+            raise ValueError("schema_version must be a positive integer")
+        if not contract_fingerprint:
+            raise ValueError("contract_fingerprint must not be empty")
+        pointer = self._read_pointer(dataset)
+        current = pointer.get("revision", 0) if pointer else 0
+        revision = max(current, self._highest_receipt_number(dataset)) + 1
+        revision_id = uuid.uuid4().hex
+        receipt_path = self.root / dataset / f"{revision:08d}-{revision_id}.json"
+        receipt = DatasetRevision(
+            dataset=dataset,
+            revision=revision,
+            revision_id=revision_id,
+            committed_at=datetime.now(timezone.utc).isoformat(),
+            run_id=run_id,
+            schema_version=schema_version,
+            contract_fingerprint=contract_fingerprint,
+            content_digest=self._content_digest(
+                dataset, schema_version, contract_fingerprint, files
+            ),
+            changed_partitions=tuple(sorted(changed_partitions)),
+            files=files,
+            metadata={
+                **dict(metadata or {}),
+                "storage": STORAGE_CATALOG,
+                "base_revision_id": pointer.get("revision_id") if pointer else None,
+            },
+            generation_path=self.generation_root(dataset, revision_id)
+            .relative_to(self.meta_root)
+            .as_posix(),
+            pointer_path=self.pointer_path(dataset).relative_to(self.meta_root).as_posix(),
+        )
+        carried = _CARRIED_RECEIPT_METADATA.get(dataset, ())
+        if carried and pointer is not None:
+            previous = self.latest(dataset)
+            if previous is not None:
+                for key in carried:
+                    if key not in receipt.metadata and key in previous.metadata:
+                        receipt.metadata[key] = previous.metadata[key]
+        write_json_atomic(receipt_path, receipt.to_dict(), indent=2)
+        return receipt
+
+    def finish_catalog_revision(self, receipt: DatasetRevision) -> None:
+        """Point *receipt*'s dataset at it, once the catalog has published it."""
+        receipt_path = (
+            self.root / receipt.dataset / f"{receipt.revision:08d}-{receipt.revision_id}.json"
+        )
+        write_json_atomic(
+            self.pointer_path(receipt.dataset),
+            _pointer_for(self, receipt.to_dict(), receipt_path),
+            indent=2,
+        )
+        self._index_state(receipt, receipt_path.relative_to(self.meta_root).as_posix())
+
+    def _index_state(self, receipt: DatasetRevision, receipt_relative: str) -> None:
+        with self.state.transaction(receipt.dataset) as state:
+            state.update(
+                {
+                    "revision": receipt.revision,
+                    "revision_id": receipt.revision_id,
+                    "revision_at": receipt.committed_at,
+                    "revision_run_id": receipt.run_id,
+                    "schema_version": receipt.schema_version,
+                    "contract_fingerprint": receipt.contract_fingerprint,
+                    "content_digest": receipt.content_digest,
+                    "revision_receipt": receipt_relative,
+                    "revision_pointer": receipt.pointer_path,
+                    "changed_partitions": list(receipt.changed_partitions),
+                    "updated_at": receipt.committed_at,
+                }
+            )
 
     def _sync_lake_catalog(self, dataset: str) -> None:
         """Carry the revision just published into the lake catalog, when the lake has one.
@@ -1250,6 +1589,26 @@ class RevisionStore:
                 }
             )
 
+    def _restore_catalog_pointer(
+        self, dataset: str, pointer: dict, receipts: dict[str, dict], files: dict[str, Path]
+    ) -> dict[str, Any] | None:
+        """The pointer for a revision the catalog published past *pointer*, if there is one."""
+        newer = [
+            record
+            for record in receipts.values()
+            if int(record.get("revision", 0) or 0) > int(pointer.get("revision", 0) or 0)
+            and (record.get("metadata") or {}).get("storage") == STORAGE_CATALOG
+        ]
+        if not newer:
+            return None
+        from cnequity.storage.lake_write import catalog_revision
+
+        published = catalog_revision(self, dataset)
+        for record in sorted(newer, key=lambda r: int(r.get("revision", 0)), reverse=True):
+            if record.get("revision_id") == published:
+                return _pointer_for(self, record, files[str(record["revision_id"])])
+        return None
+
     def sweep(self, *, apply: bool = False) -> dict[str, Any]:
         """Find, and with *apply* clear, what interrupted commits leave behind.
 
@@ -1263,6 +1622,9 @@ class RevisionStore:
           ``sync_state``.
         * A generation directory with no receipt: reported only, since a lake
           converted from the pre-revision layout keeps its baseline that way.
+        * A revision the lake catalog published whose pointer was never
+          written (a crash between the two): the pointer is moved to it,
+          because the catalog commit is that revision's publication.
 
         The commit's failure path used to say these are collected "by ``gc``";
         there was no such command. ``cne run maintain`` runs this daily.
@@ -1276,6 +1638,7 @@ class RevisionStore:
             "unpublished": [],
             "unreceipted": [],
             "state_synced": [],
+            "pointer_restored": [],
         }
         root = self.root
         if not root.is_dir():
@@ -1298,6 +1661,13 @@ class RevisionStore:
                         continue
                     receipts[str(record.get("revision_id"))] = record
                     receipt_files[str(record.get("revision_id"))] = path
+                restored = self._restore_catalog_pointer(dataset, pointer, receipts, receipt_files)
+                if restored is not None:
+                    report["pointer_restored"].append(dataset)
+                    if apply:
+                        write_json_atomic(self.pointer_path(dataset), restored, indent=2)
+                        pointer = self._read_pointer(dataset) or pointer
+                        current = int(pointer.get("revision", 0) or 0)
                 generations = self.root / "data" / dataset
                 if generations.is_dir():
                     for entry in sorted(generations.iterdir()):
@@ -1328,6 +1698,20 @@ class RevisionStore:
                     if apply:
                         self.sync_state(dataset)
         return report
+
+
+def _pointer_for(store: RevisionStore, record: dict, receipt_path: Path) -> dict[str, Any]:
+    return {
+        "schema_version": _POINTER_SCHEMA_VERSION,
+        "dataset": record["dataset"],
+        "revision": record["revision"],
+        "revision_id": record["revision_id"],
+        "generation_path": record["generation_path"],
+        "receipt": receipt_path.relative_to(store.meta_root).as_posix(),
+        "content_digest": record.get("content_digest"),
+        "committed_at": record.get("committed_at"),
+        "storage": STORAGE_CATALOG,
+    }
 
 
 def resolve_committed_root(

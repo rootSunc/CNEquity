@@ -403,6 +403,10 @@ class Config:
     # Hosts that use ``eastmoney_proxy`` (a name also covers its subdomains);
     # the others connect directly. Empty sends every EastMoney host through it.
     eastmoney_proxy_hosts: tuple[str, ...] = ()
+    # ``[storage].publish``: "generation" publishes revision generations (and
+    # syncs the lake catalog); "catalog" has migrated writers publish into the
+    # lake catalog only, through ``storage.lake_write``.
+    storage_publish: str = "generation"
     # The run's backfill window: one frozen value instead of loose
     # ``_backfill*`` attributes. Read it with ``run_scope.backfill_of`` and
     # change it with ``run_scope.set_backfill``. Last, so positional callers
@@ -1209,6 +1213,9 @@ def load_config(path: str | Path) -> Config:
         or revision_keep_generations < 0
     ):
         raise ValueError("[storage.retention].keep_generations must be an integer >= 0")
+    storage_publish = storage_raw.get("publish", "generation")
+    if storage_publish not in ("generation", "catalog"):
+        raise ValueError('[storage].publish must be "generation" or "catalog"')
 
     if "default" in raw.get("universe", {}):
         # Parsed into `universe_default` for a long time and read by nothing:
@@ -1281,6 +1288,7 @@ def load_config(path: str | Path) -> Config:
         eastmoney_daily_budget=eastmoney_daily_budget,
         ths_js_runtime=ths_js_runtime,
         revision_keep_generations=revision_keep_generations,
+        storage_publish=storage_publish,
         eastmoney_timeout_sec=eastmoney_timeout_sec,
         baostock_batch_size=baostock_batch_size,
         baostock_batch_rest_seconds=baostock_batch_rest_seconds,
@@ -1532,6 +1540,15 @@ def validate_config(cfg: Config) -> list[str]:
         errors.append("[quality].audit_gate must be one of: off, shadow, block")
     if cfg.publication_gate not in {"off", "shadow", "block"}:
         errors.append("[quality].publication_gate must be one of: off, shadow, block")
+    if cfg.storage_publish == "catalog":
+        # Both gates audit a full copy of the lake built from generations; a
+        # catalog write is gated inside its transaction instead (not yet built).
+        if cfg.publication_gate != "off":
+            errors.append(
+                '[storage].publish = "catalog" needs [quality].publication_gate = "off" for now'
+            )
+        if any(spec.revision_gate for spec in cfg.failover_datasets):
+            errors.append('[storage].publish = "catalog" does not support revision_gate yet')
     if cfg.raw_archive_compression not in {"gzip", "none"}:
         errors.append("[raw_archive].compression must be 'gzip' or 'none'")
     if cfg.raw_archive_max_payload_bytes is not None and cfg.raw_archive_max_payload_bytes < 1:

@@ -369,7 +369,9 @@ def revision_snapshot(catalog: Catalog, dataset: str, revision_id: str) -> tuple
     return (int(row[0]), bool(row[1])) if row else None
 
 
-def _record_history(catalog: Catalog, dataset: str, revision_id: str) -> None:
+def _record_history(
+    catalog: Catalog, dataset: str, revision_id: str, *, snapshot: int | None = None
+) -> None:
     """Remember which snapshot now holds *dataset* at *revision_id*.
 
     Recorded after the data commit (and the delete fold), in a commit of its
@@ -379,7 +381,8 @@ def _record_history(catalog: Catalog, dataset: str, revision_id: str) -> None:
     _ensure_history_table(catalog)
     if revision_snapshot(catalog, dataset, revision_id) is not None:
         return
-    snapshot = catalog.snapshot()
+    if snapshot is None:
+        snapshot = catalog.snapshot()
     catalog.execute(
         f"INSERT INTO {HISTORY_TABLE} VALUES (?, ?, ?, ?)",
         [dataset, revision_id, snapshot, bool(keys_unique(catalog, dataset))],

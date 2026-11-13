@@ -13,7 +13,7 @@ from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.schemas import INSTRUMENTS_SCHEMA, validate_dataframe
 from cnequity.domain.symbols import is_subscription_placeholder
 from cnequity.storage.atomic import replace_with_retry, write_parquet_atomic
-from cnequity.storage.parquet import StagingWriter
+from cnequity.storage.parquet import StagingWriter, resolve_merge_base
 
 # Refuse delist inference when too many symbols vanish from a snapshot — usually
 # a partial TDX fetch, not a mass delisting event.
@@ -134,6 +134,7 @@ def compact_instruments(
     base_root: Path | None = None,
     staging_files: list[Path] | None = None,
     allow_delist_inference: bool = True,
+    out_root: Path | None = None,
 ) -> tuple[int, list[dict]]:
     """Merge staging instruments into curated, retaining symbols missing from TDX."""
     staging = StagingWriter(staging_root)
@@ -150,7 +151,10 @@ def compact_instruments(
     incoming = _strip_subscription_placeholders(incoming)
     incoming = dedupe_by_primary_key(incoming, "instruments")
 
-    out_path = curated_root / "instruments" / "part-merged.parquet"
+    out_path = (
+        (out_root if out_root is not None else curated_root) / "instruments" / "part-merged.parquet"
+    )
+    base_root = resolve_merge_base(base_root, "instruments")
     read_dir = Path(base_root) if base_root is not None else out_path.parent
     curated_files = sorted(read_dir.rglob("*.parquet")) if read_dir.exists() else []
     # ``base_root`` is an immutable revision generation used as the merge

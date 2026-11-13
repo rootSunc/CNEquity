@@ -26,7 +26,7 @@ _BRANCH = re.compile(r"\bds\s*(==|in)\s*[\"'{(]")
 
 def test_the_publish_loop_names_no_dataset_but_instruments():
     """instruments has its own compactor; every other special case is a hook."""
-    source = inspect.getsource(finalize._compact_locked)
+    source = inspect.getsource(finalize._compact_datasets)
     branches = [line.strip() for line in source.splitlines() if _BRANCH.search(line)]
     assert branches == ['if ds == "instruments":']
 

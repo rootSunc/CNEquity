@@ -541,6 +541,41 @@ def step_compact(config: Config, trade_date: date, run_id: str, context: dict) -
 
 
 def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+    lake_write = _open_lake_write(config, run_id)
+    if lake_write is None:
+        return _compact_datasets(config, trade_date, run_id, context, None)
+    try:
+        result = _compact_datasets(config, trade_date, run_id, context, lake_write)
+    except BaseException:
+        lake_write.close(keep=True)
+        raise
+    lake_write.close()
+    return result
+
+
+def _open_lake_write(config: Config, run_id: str):
+    """The run's catalog write when ``[storage].publish = "catalog"`` and the lake has a catalog."""
+    if getattr(config, "storage_publish", "generation") != "catalog":
+        return None
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import CATALOG_FILE
+
+    if not (lake_root(config) / CATALOG_FILE).exists():
+        return None
+    from cnequity.storage.atomic import write_json_atomic
+    from cnequity.storage.lake_write import LakeWrite
+
+    # How the lake stores revisions belongs to the lake, so every writer (also
+    # derivations and repairs, through RevisionStore.commit) follows it.
+    setting = config.meta_root / "storage.json"
+    if not setting.exists():
+        write_json_atomic(setting, {"publish": "catalog"}, indent=2)
+    return LakeWrite(config, run_id)
+
+
+def _compact_datasets(
+    config: Config, trade_date: date, run_id: str, context: dict, lake_write
+) -> dict:
     from cnequity.domain.canonical import canonical_policy
     from cnequity.domain.contracts import contract_fingerprint, dataset_contract
     from cnequity.orchestrator.compact_gate import compact_allowed, publication_files
@@ -627,10 +662,22 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
         # generation. A previous process may have died after replacing only
         # some mutable partitions; it must never become the next compact's
         # implicit base.
-        committed_root = revisions.ensure_current(ds)
-        # Candidate audits must see the same base that commit will publish.
-        # Discard only the disposable compatibility copy of an interrupted run.
-        revisions.materialize_current(ds)
+        checkout = (
+            lake_write.checkout_staged(ds, selected_files) if lake_write is not None else None
+        )
+        if checkout is None:
+            committed_root = revisions.ensure_current(ds)
+            # Candidate audits must see the same base that commit will publish.
+            # Discard only the disposable compatibility copy of an interrupted run.
+            revisions.materialize_current(ds)
+            merge_base, out_root, candidate_root = committed_root, None, config.curated_root / ds
+        else:
+            # The partitions this run changes, checked out of the catalog: the
+            # merge reads and writes them in place, and only they publish.
+            from cnequity.storage.read_context import read_root
+
+            committed_root = read_root(config, ds)
+            merge_base, out_root, candidate_root = checkout.root, checkout.layer_root, checkout.root
         if ds == "instruments":
             rows, inst_findings = compact_instruments(
                 config.staging_root,
@@ -638,9 +685,10 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
                 run_id,
                 trade_date,
                 changed_files=changed_files,
-                base_root=committed_root,
+                base_root=merge_base,
                 staging_files=selected_files,
                 allow_delist_inference="partial" not in dataset_coverage,
+                out_root=out_root,
             )
             if rows:
                 compacted.add(ds)
@@ -655,9 +703,7 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
                     previous = collect_parquet_root(committed_root, hive=False, committed=False)
                 except FileNotFoundError:
                     previous = pl.DataFrame()
-                current = collect_parquet_root(
-                    config.curated_root / ds, hive=False, committed=False
-                )
+                current = collect_parquet_root(candidate_root, hive=False, committed=False)
                 change_log.append({"partition": None, **summarize_changes(previous, current, ds)})
         else:
             hooks = hooks_for(ds)
@@ -683,9 +729,10 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
                 run_id,
                 partition_col=pcol,
                 changed_files=changed_files,
-                base_root=committed_root,
+                base_root=merge_base,
                 change_log=change_log,
                 staging_files=selected_files,
+                out_root=out_root,
             )
             if rows:
                 compacted.add(ds)
@@ -705,7 +752,7 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
 
         payload = StateStore(config.meta_root).get_payload(ds)
         resolved_keys[ds] = resolved_outstanding_keys(
-            ds, config.curated_root / ds, payload.get("outstanding_keys", []), committed=False
+            ds, candidate_root, payload.get("outstanding_keys", []), committed=False
         )
         remaining = candidate_gaps(payload, run_id, resolved_keys[ds], full_staging=full_staging)
         is_partial = (
@@ -760,14 +807,16 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
                     config,
                     gate_spec,
                     trade_date=trade_date,
-                    candidate_root=config.curated_root / ds,
+                    candidate_root=candidate_root,
                 )
                 audit_findings.extend(gate_findings)
                 if source_diff_blocks_revision(gate_findings):
-                    quarantine = revisions.quarantine_candidate(
-                        ds,
-                        run_id=run_id,
-                        reason="source_diff_gate",
+                    quarantine = (
+                        lake_write.discard(ds)
+                        if checkout is not None
+                        else revisions.quarantine_candidate(
+                            ds, run_id=run_id, reason="source_diff_gate"
+                        )
                     )
                     compacted.discard(ds)
                     skipped.append(
@@ -806,8 +855,10 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
         for ds, _pcol, rows, *_ in pending:
             if ds not in blocked_datasets:
                 continue
-            quarantine = revisions.quarantine_candidate(
-                ds, run_id=run_id, reason="publication_gate"
+            quarantine = (
+                lake_write.discard(ds)
+                if lake_write is not None and lake_write.has(ds)
+                else revisions.quarantine_candidate(ds, run_id=run_id, reason="publication_gate")
             )
             compacted.discard(ds)
             skipped.append(
@@ -830,47 +881,88 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
             )
         audit_findings.extend(publication["new_errors"])
         pending = [item for item in pending if item[0] not in blocked_datasets]
+
+    def _revision_metadata(ds, pcol, rows, change_log, gate_spec) -> dict:
+        return {
+            "trade_date": trade_date.isoformat(),
+            "partition_col": pcol,
+            "rows_written": rows,
+            "canonical_policy": canonical_policy(ds),
+            "changes": change_log,
+            "publication_audit": {
+                "mode": publication.get("mode"),
+                "blocked": False,
+                "report_path": publication.get("report_path"),
+            },
+            "validation": {
+                "schema": "passed",
+                "staging_seals": "passed"
+                if all(
+                    writer.is_sealed(f, ds, run_id)
+                    for f in publication_files(manifest, run_id, ds, config.staging_root)
+                )
+                else "legacy_batch_gate",
+                "batch_completeness": "partial" if ds in partial_datasets else "passed",
+                "source_diff_gate": "passed" if gate_spec is not None else "not_configured",
+            },
+            "coverage": coverage_by_dataset[ds],
+            **lineage,
+        }
+
+    catalog_revisions: dict = {}
+    catalog_pending = [
+        item for item in pending if lake_write is not None and lake_write.has(item[0])
+    ]
+    if catalog_pending:
+        from cnequity.storage.lake_write import DatasetPublish
+
+        try:
+            catalog_revisions = lake_write.publish(
+                {
+                    ds: DatasetPublish(
+                        schema_version=int(dataset_contract(ds)["schema_version"]),
+                        contract_fingerprint=contract_fingerprint(dataset_contract(ds)),
+                        metadata=_revision_metadata(ds, pcol, rows, change_log, gate_spec),
+                    )
+                    for ds, pcol, rows, _files, change_log, gate_spec in catalog_pending
+                },
+                message=f"compact run {run_id}",
+            )
+        except Exception as exc:
+            # One catalog transaction: none of these datasets was published.
+            for ds, _pcol, rows, *_ in catalog_pending:
+                _record_dataset_result(
+                    config,
+                    run_id,
+                    ds,
+                    "publish_revision",
+                    "failed",
+                    criticality=_dataset_criticality(ds),
+                    rows_written=rows,
+                    error_code=type(exc).__name__,
+                    error_message=str(exc),
+                )
+            raise
     for index, (ds, pcol, rows, changed_files, change_log, gate_spec) in enumerate(pending):
         try:
             contract = dataset_contract(ds)
-            revision = revisions.commit(
-                ds,
-                run_id=run_id,
-                changed_files=changed_files,
-                schema_version=int(contract["schema_version"]),
-                contract_fingerprint=contract_fingerprint(contract),
-                metadata={
-                    "trade_date": trade_date.isoformat(),
-                    "partition_col": pcol,
-                    "rows_written": rows,
-                    "canonical_policy": canonical_policy(ds),
-                    "changes": change_log,
-                    "publication_audit": {
-                        "mode": publication.get("mode"),
-                        "blocked": False,
-                        "report_path": publication.get("report_path"),
-                    },
-                    "validation": {
-                        "schema": "passed",
-                        "staging_seals": "passed"
-                        if all(
-                            writer.is_sealed(f, ds, run_id)
-                            for f in publication_files(manifest, run_id, ds, config.staging_root)
-                        )
-                        else "legacy_batch_gate",
-                        "batch_completeness": "partial" if ds in partial_datasets else "passed",
-                        "source_diff_gate": "passed" if gate_spec is not None else "not_configured",
-                    },
-                    "coverage": coverage_by_dataset[ds],
-                    **lineage,
-                },
-                # ``_compact_locked`` already holds the shared compact
-                # run lock, whose path is intentionally the same as the
-                # low-level lake mutation lock.  Re-entering it would
-                # deadlock on POSIX; direct RevisionStore callers still
-                # acquire the lock through the default path.
-                _locked=True,
-            )
+            if lake_write is not None and lake_write.has(ds):
+                revision = catalog_revisions.get(ds)
+            else:
+                revision = revisions.commit(
+                    ds,
+                    run_id=run_id,
+                    changed_files=changed_files,
+                    schema_version=int(contract["schema_version"]),
+                    contract_fingerprint=contract_fingerprint(contract),
+                    metadata=_revision_metadata(ds, pcol, rows, change_log, gate_spec),
+                    # ``_compact_locked`` already holds the shared compact
+                    # run lock, whose path is intentionally the same as the
+                    # low-level lake mutation lock.  Re-entering it would
+                    # deadlock on POSIX; direct RevisionStore callers still
+                    # acquire the lock through the default path.
+                    _locked=True,
+                )
         except Exception as exc:
             _record_dataset_result(
                 config,

@@ -718,6 +718,34 @@ def _partitionwise_eligible(dataset: str, partition_col: str | None) -> bool:
     return partition_col in PRIMARY_KEYS.get(dataset, [])
 
 
+def resolve_merge_base(base_root: Path | None, dataset: str) -> Path | None:
+    """The directory to merge against for the published revision *base_root* names.
+
+    A revision only the lake catalog holds names a generation path that is
+    never created. Merging against nothing would publish the staged rows
+    alone and drop the rest of each partition, so such a base resolves to the
+    working tree, but only when the store verified the tree at exactly that
+    revision and nothing changed it since; otherwise the merge is refused.
+    """
+    if base_root is None or Path(base_root).exists():
+        return base_root
+    from cnequity.query.parquet_scan import dataset_has_parquet
+
+    base = Path(base_root)
+    if not dataset_has_parquet(base, committed=False):
+        return base_root
+    from cnequity.storage.revisions import RevisionStore
+
+    meta = base.parents[3]  # <meta>/revisions/data/<dataset>/<revision id>
+    store = RevisionStore(meta, meta.parent / "curated", meta.parent / "derived", create=False)
+    if store._tree_matches(dataset, base.name):
+        return store._layer_root(dataset) / dataset
+    raise RuntimeError(
+        f"{dataset}: the merge base is a catalog revision and the working tree is not "
+        "verified at it; call materialize_current before merging"
+    )
+
+
 def compact_dataset(
     staging_root: Path,
     curated_root: Path,
@@ -730,8 +758,12 @@ def compact_dataset(
     change_log: list[dict] | None = None,
     staging_files: list[Path] | None = None,
     partitionwise_min_bytes: int | None = -1,
+    out_root: Path | None = None,
 ) -> int:
     """Merge staging batches into curated partitions, dedupe by PK.
+
+    *curated_root* is the lake the staged rows are checked against; the merged
+    partitions are written below *out_root* (a run's checkout) when given.
 
     Granularity decides how many dates share one partition directory; it comes
     from the dataset's registry entry unless overridden. See
@@ -745,11 +777,12 @@ def compact_dataset(
     if granularity is None:
         granularity = granularity_for_dataset(dataset)
     staging = StagingWriter(staging_root)
-    curated = CuratedWriter(curated_root)
+    curated = CuratedWriter(out_root if out_root is not None else curated_root)
     # ``base_root`` is the immutable committed generation selected before the
     # write.  It is optional for backwards compatibility with direct callers;
     # finalize passes it so a retry after a crash cannot merge from a half-
     # rewritten mutable compatibility directory.
+    base_root = resolve_merge_base(base_root, dataset)
     read_root = Path(base_root) if base_root is not None else curated_root / dataset
     files = staging.list_run_files(dataset, run_id) if staging_files is None else staging_files
     if not files:
