@@ -789,6 +789,13 @@
 | `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
 | `--create` | `False` | 湖目录不存在时先创建；首次运行会复制全部数据集。 |
 
+## `cne storage verify-catalog`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `--dataset` | `—` | 只核对这个数据集的修订。 |
+
 ## `cne ths-official backfill`
 
 | 参数 | 默认值 | 说明 |

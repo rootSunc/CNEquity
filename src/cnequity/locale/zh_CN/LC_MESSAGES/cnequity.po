@@ -1841,9 +1841,17 @@ msgstr "检查已有的配置。"
 msgid "Check debts against explicit fund auction daily-bar coverage evidence from the Shanghai and Shenzhen exchanges; being tradable does not mean there was an auction trade that day."
 msgstr "用沪深交易所明确的基金竞价日线覆盖证据核对欠账；正常可交易不等于当日有竞价成交。"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Check only this dataset's revisions."
+msgstr "只核对这个数据集的修订。"
+
 #: cnequity/cli/quality_cmds.py
 msgid "Check run evidence over consecutive trading days instead; fills no gaps."
 msgstr "改为检查连续交易日的运行证据，不补任何缺口。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Check that each revision published into the lake catalog still holds the rows recorded for it."
+msgstr "核对发布进湖目录的每个修订是否仍保存着发布时记录的行。"
 
 #: cnequity/cli/schedule_cmds.py
 msgid ""

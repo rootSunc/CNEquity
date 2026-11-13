@@ -46,7 +46,7 @@ from cnequity.storage.locator import layer_name
 from cnequity.storage.parquet import emit_partition, merge_group_keys
 from cnequity.storage.revisions import DatasetRevision, RevisionFile, RevisionStore, sha256_file
 from equitylake_core.catalog import Catalog, quote_identifier
-from equitylake_core.write import Write, WriteRejected
+from equitylake_core.write import Write, WriteRejected, digest_algorithm, rows_digest
 
 CHECKOUT_DIR = "_checkout"
 
@@ -343,7 +343,7 @@ class LakeWrite:
                     if (clause := self._checkouts[dataset].where(label))
                 )
                 write.check(f"{dataset} sync state", _sync_recorder(dataset, receipt, where))
-                write.record(REVISIONS_TABLE, _revision_recorder(receipt))
+                write.record(REVISIONS_TABLE, _revision_recorder(receipt, where))
             # One snapshot holds the rows, the sync state and the revision rows,
             # and it is file-complete: a pinned read needs nothing recorded later.
             write.commit(message=message or f"run {self.run_id}")
@@ -456,17 +456,71 @@ def _sync_recorder(dataset: str, receipt: DatasetRevision, where: str):
     return record
 
 
-def _revision_recorder(receipt: DatasetRevision):
-    """The ``_revisions`` row of *receipt*, built inside the write that publishes it."""
+def _revision_recorder(receipt: DatasetRevision, where: str):
+    """The ``_revisions`` row of *receipt*, built inside the write that publishes it.
+
+    The receipt's file hashes describe the checkout the run staged, and the
+    catalog writes those rows into files of its own. So the row also records
+    a digest of the published rows as the catalog holds them (the changed
+    partitions; the whole table when it has none), which
+    :func:`verify_revision` computes again at the revision's snapshot.
+    """
 
     def row(catalog: Catalog) -> dict[str, object]:
+        digest = rows_digest(catalog, receipt.dataset, where=where or None)
         return {
             **_revision_row(receipt),
             # Set by the sync recorder earlier in the same transaction.
             "unique_keys": bool(keys_unique(catalog, receipt.dataset)),
+            "rows": digest.rows,
+            "rows_digest": digest.digest,
+            "digest_algorithm": digest.algorithm,
+            "digest_where": where,
         }
 
     return row
+
+
+@dataclass(frozen=True)
+class RevisionCheck:
+    dataset: str
+    revision_id: str
+    snapshot: int
+    #: "match"; "mismatch"; "expired" (the snapshot or its files are gone);
+    #: "other_algorithm" (recorded by a DuckDB whose row hash may differ).
+    status: str
+    rows: int
+
+
+def verify_revisions(catalog: Catalog, dataset: str | None = None) -> list[RevisionCheck]:
+    """Compare each published revision's recorded row digest with the rows its snapshot holds."""
+    if not catalog.has_table(REVISIONS_TABLE):
+        return []
+    recorded = catalog.execute(
+        f"SELECT dataset, revision_id, snapshot_id, rows, rows_digest, digest_algorithm, "
+        f"digest_where FROM {REVISIONS_TABLE} ORDER BY snapshot_id, dataset"
+    ).fetchall()
+    kept = {
+        int(row[0])
+        for row in catalog.execute("SELECT snapshot_id FROM ducklake_snapshots('lake')").fetchall()
+    }
+    checks = []
+    for name, revision_id, snapshot, rows, digest, algorithm, where in recorded:
+        if dataset is not None and name != dataset:
+            continue
+        if int(snapshot) not in kept:
+            status = "expired"
+        elif algorithm != digest_algorithm():
+            status = "other_algorithm"
+        else:
+            try:
+                now = rows_digest(catalog, name, where=where or None, snapshot=int(snapshot))
+            except Exception:  # the snapshot's files were already cleaned up
+                status = "expired"
+            else:
+                status = "match" if now.digest == digest else "mismatch"
+        checks.append(RevisionCheck(name, revision_id, int(snapshot), status, int(rows)))
+    return checks
 
 
 def _revision_row(receipt: DatasetRevision) -> dict[str, object]:

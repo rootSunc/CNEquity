@@ -332,3 +332,23 @@ def test_a_lake_switched_to_the_catalog_publishes_every_writer_there(cfg):
     assert not (cfg.meta_root / pointer["generation_path"]).exists()
     closes = _load(cfg).sort("trade_date", "symbol")["close"].to_list()
     assert closes == [9.0, 10.0, 11.5]
+
+
+def test_a_published_revision_records_a_digest_of_the_rows_the_catalog_holds(cfg):
+    from cnequity.storage.lake_write import verify_revisions
+
+    with LakeWrite(cfg, "r7") as write:
+        january = write.checkout("daily_bars").partition("trade_date=2024-01")
+        _replace(january, _bars(date(2024, 1, 2), {"600000.SH": 10.5, "000001.SZ": 9.0}))
+        (receipt,) = write.publish({"daily_bars": PUBLISH}).values()
+
+    with Catalog(lake_root(cfg)) as lake:
+        (check,) = verify_revisions(lake)
+        assert (check.revision_id, check.status, check.rows) == (receipt.revision_id, "match", 2)
+        # A later publish does not disturb the earlier revision's proof: it is
+        # checked at its own snapshot.
+        lake.execute("UPDATE daily_bars SET close = 99 WHERE symbol = '000001.SZ'")
+        assert [c.status for c in verify_revisions(lake)] == ["match"]
+        # Rows that differ from what was published are reported.
+        lake.execute(f"UPDATE {REVISIONS_TABLE} SET rows_digest = '2:0:0'")
+        assert [c.status for c in verify_revisions(lake, "daily_bars")] == ["mismatch"]

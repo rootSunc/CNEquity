@@ -468,6 +468,10 @@ EFFECTS: dict[str, tuple[str, str]] = {
         "预演只读；--apply 让湖目录过期旧快照，并删除超过宽限期的文件",
     ),
     "storage sync-catalog": ("无", "把湖目录同步到已发布版本；只读版本库，只写 lake/ 目录"),
+    "storage verify-catalog": (
+        "无",
+        "只读；核对发布进湖目录的每个修订，其快照里的行与发布时记录的摘要是否一致",
+    ),
     "ths-official backfill": ("执行时", "调用凭证源并补缺"),
     "ths-official capture": ("执行时", "调用凭证源并写对照证据"),
     "ths-official repair-bars": ("执行时", "预演也取数；--apply 写修复"),

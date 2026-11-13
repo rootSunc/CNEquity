@@ -87,6 +87,7 @@
 | `cne storage refresh` | 无 | 重新扫描引用目录，为其中提到的版本增加保留；不会解除保留 |
 | `cne storage release` | 无 | 解除指定版本的手动保留与失效引用；案例依赖和仍有效的引用保留 |
 | `cne storage sync-catalog` | 无 | 把湖目录同步到已发布版本；只读版本库，只写 lake/ 目录 |
+| `cne storage verify-catalog` | 无 | 只读；核对发布进湖目录的每个修订，其快照里的行与发布时记录的摘要是否一致 |
 | `cne ths-official backfill` | 执行时 | 调用凭证源并补缺 |
 | `cne ths-official capture` | 执行时 | 调用凭证源并写对照证据 |
 | `cne ths-official repair-bars` | 执行时 | 预演也取数；--apply 写修复 |

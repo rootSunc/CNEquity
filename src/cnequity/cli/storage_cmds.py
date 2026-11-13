@@ -173,6 +173,33 @@ def catalog_retention_cmd(config_path: str, apply: bool):
     _emit(result)
 
 
+@storage.command("verify-catalog")
+@config_option
+@click.option("--dataset", default=None, help=N_("Check only this dataset's revisions."))
+def verify_catalog(config_path: str, dataset: str | None):
+    """Check that each revision published into the lake catalog still holds the rows recorded for it."""
+    from cnequity.storage.catalog_bridge import lake_root
+    from cnequity.storage.lake_write import verify_revisions
+    from equitylake_core.catalog import CATALOG_FILE, Catalog
+
+    root = lake_root(_cfg(config_path))
+    if not (root / CATALOG_FILE).exists():
+        raise click.ClickException(_("This lake has no lake catalog."))
+    with Catalog(root, read_only=True, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
+        checks = verify_revisions(catalog, dataset)
+    counts: dict[str, int] = {}
+    for check in checks:
+        counts[check.status] = counts.get(check.status, 0) + 1
+    mismatched = [
+        {"dataset": c.dataset, "revision_id": c.revision_id, "snapshot": c.snapshot}
+        for c in checks
+        if c.status == "mismatch"
+    ]
+    _emit({"revisions": len(checks), "status": counts, "mismatched": mismatched})
+    if mismatched:
+        raise SystemExit(1)
+
+
 @storage.command("hold")
 @config_option
 @click.argument("object_id")

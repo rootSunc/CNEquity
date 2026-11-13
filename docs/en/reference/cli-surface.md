@@ -87,6 +87,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne storage refresh` | none | Re-scans the reference roots and adds holds for the versions they cite; never releases a hold |
 | `cne storage release` | none | Drops manual holds and stale references on the named versions; case dependencies and live references stay |
 | `cne storage sync-catalog` | none | Brings the lake catalog to the committed revisions; reads the revision store only and writes only under lake/ |
+| `cne storage verify-catalog` | none | Read-only; checks that each revision published into the lake catalog still holds, at its snapshot, the rows whose digest was recorded at publish |
 | `cne ths-official backfill` | when run | Calls the credentialed source and fills gaps |
 | `cne ths-official capture` | when run | Calls the credentialed source and writes comparison evidence |
 | `cne ths-official repair-bars` | when run | Fetches even in a dry run; --apply writes repairs |

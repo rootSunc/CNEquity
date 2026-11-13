@@ -56,6 +56,48 @@ class WriteResult:
     rows: dict[str, int]
 
 
+@dataclass(frozen=True)
+class RowsDigest:
+    """What a set of rows holds, whatever files hold them and in whatever order."""
+
+    rows: int
+    digest: str
+    #: Row hashes are DuckDB's, and a new DuckDB may hash differently: a digest
+    #: is comparable only with one computed by the same algorithm.
+    algorithm: str
+
+
+def digest_algorithm() -> str:
+    import duckdb
+
+    return "duckdb-" + ".".join(duckdb.__version__.split(".")[:2]) + "/count+xor+sum"
+
+
+def rows_digest(
+    catalog: Catalog, table: str, *, where: str | None = None, snapshot: int | None = None
+) -> RowsDigest:
+    """The digest of *table*'s rows selected by *where*, now or at *snapshot*.
+
+    One hash per row over every column in name order, combined by XOR and by
+    sum with the row count, so file layout and row order do not matter and a
+    pair of duplicated rows cannot cancel out. A write records it for the
+    partitions it replaces; computing it again at the write's snapshot proves
+    the stored rows are still the ones that were published.
+    """
+    name = quote_identifier(table)
+    at = "" if snapshot is None else f" AT (VERSION => {int(snapshot)})"
+    columns = sorted(
+        row[0] for row in catalog.execute(f"DESCRIBE SELECT * FROM {name}{at}").fetchall()
+    )
+    row = "hash(" + ", ".join(quote_identifier(column) for column in columns) + ")"
+    scope = f" WHERE {where}" if where else ""
+    count, xor, total = catalog.execute(
+        f"SELECT count(*), bit_xor({row})::VARCHAR, sum({row}::HUGEINT)::VARCHAR "
+        f"FROM {name}{at}{scope}"
+    ).fetchone()
+    return RowsDigest(int(count), f"{count}:{xor or 0}:{total or 0}", digest_algorithm())
+
+
 @dataclass
 class Write:
     catalog: Catalog
