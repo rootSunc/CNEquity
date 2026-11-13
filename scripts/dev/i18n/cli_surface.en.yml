@@ -78,6 +78,7 @@ storage plan: ["none", "Previews which generations retention would delete now; d
 storage release: ["none", "Drops manual holds and stale references on the named versions; case dependencies and live references stay"]
 storage refresh: ["none", "Re-scans the reference roots and adds holds for the versions they cite; never releases a hold"]
 storage raw-external: ["none", "Registers external payload storage; retains local source sidecars and does not move or delete files"]
+storage catalog-retention: ["none", "Read-only preview; --apply expires old lake catalog snapshots and deletes files past the grace period"]
 storage sync-catalog: ["none", "Brings the lake catalog to the committed revisions; reads the revision store only and writes only under lake/"]
 ths-official backfill: ["when run", "Calls the credentialed source and fills gaps"]
 ths-official capture: ["when run", "Calls the credentialed source and writes comparison evidence"]

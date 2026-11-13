@@ -154,6 +154,25 @@ def sync_catalog(config_path: str, create: bool):
         _emit(sync_summary(sync_all(config, catalog)))
 
 
+@storage.command("catalog-retention")
+@config_option
+@click.option(
+    "--apply",
+    is_flag=True,
+    help=N_(
+        "Expire old catalog snapshots and delete files past the grace period; without it, only report."
+    ),
+)
+def catalog_retention_cmd(config_path: str, apply: bool):
+    """Keep each dataset's recent and held revisions in the lake catalog; expire the rest."""
+    from cnequity.storage.catalog_bridge import catalog_retention
+
+    result = catalog_retention(_cfg(config_path), apply=apply)
+    if result is None:
+        raise click.ClickException(_("This lake has no lake catalog."))
+    _emit(result)
+
+
 @storage.command("hold")
 @config_option
 @click.argument("object_id")

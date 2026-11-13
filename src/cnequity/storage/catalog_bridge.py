@@ -18,7 +18,7 @@ import duckdb
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.storage.revisions import RevisionStore
-from equitylake_core.catalog import Catalog, ImportResult, quote_identifier, quote_literal
+from equitylake_core.catalog import METADATA, Catalog, ImportResult, quote_identifier, quote_literal
 
 LAKE_DIR = "lake"
 
@@ -343,11 +343,57 @@ def _replace_table(catalog: Catalog, dataset: str, root: Path, new: dict[str, st
     catalog.execute(f"INSERT INTO {table} BY NAME SELECT * FROM {scan}{_order_by(dataset)}")
 
 
+HISTORY_TABLE = "_revision_history"
+
+
+def _ensure_history_table(catalog: Catalog) -> None:
+    catalog.execute(
+        f"CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} "
+        "(dataset VARCHAR, revision_id VARCHAR, snapshot BIGINT, unique_keys BOOLEAN)"
+    )
+
+
+def revision_snapshot(catalog: Catalog, dataset: str, revision_id: str) -> tuple[int, bool] | None:
+    """The catalog snapshot that holds *dataset* at *revision_id*, with its unique-keys flag.
+
+    A read pinned to an earlier revision is served from that snapshot's files
+    for as long as the catalog keeps them.
+    """
+    if not catalog.has_table(HISTORY_TABLE):
+        return None
+    row = catalog.execute(
+        f"SELECT snapshot, unique_keys FROM {HISTORY_TABLE} "
+        "WHERE dataset = ? AND revision_id = ? ORDER BY snapshot DESC LIMIT 1",
+        [dataset, revision_id],
+    ).fetchone()
+    return (int(row[0]), bool(row[1])) if row else None
+
+
+def _record_history(catalog: Catalog, dataset: str, revision_id: str) -> None:
+    """Remember which snapshot now holds *dataset* at *revision_id*.
+
+    Recorded after the data commit (and the delete fold), in a commit of its
+    own, so the snapshot named is a file-complete one. A crash in between only
+    loses the entry; that revision is then read from its generation.
+    """
+    _ensure_history_table(catalog)
+    if revision_snapshot(catalog, dataset, revision_id) is not None:
+        return
+    snapshot = catalog.snapshot()
+    catalog.execute(
+        f"INSERT INTO {HISTORY_TABLE} VALUES (?, ?, ?, ?)",
+        [dataset, revision_id, snapshot, bool(keys_unique(catalog, dataset))],
+    )
+
+
 def sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
     """Sync *dataset*, then leave its table file-complete (see ``equitylake_core.catalog``)."""
     result = _sync_dataset(config, catalog, dataset)
-    if result is not None and result.action != "current":
+    if result is None:
+        return None
+    if result.action != "current":
         catalog.fold_deletes(dataset)
+    _record_history(catalog, dataset, result.revision_id)
     return result
 
 
@@ -477,3 +523,252 @@ def sync_published(store: RevisionStore, dataset: str) -> SyncResult | None:
         return None
     with Catalog(root, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
         return sync_dataset(roots, catalog, dataset)
+
+
+# --- publishing straight into the catalog ---------------------------------------
+
+#: ``CNE_PUBLISH_CATALOG`` names the datasets whose commits write the catalog
+#: instead of a generation: ``all``, or a comma-separated list. Unset, nothing does.
+PUBLISH_SWITCH = "CNE_PUBLISH_CATALOG"
+
+
+class CatalogPublishError(RuntimeError):
+    """The catalog refused a publish; nothing became visible."""
+
+
+def publish_requested(dataset: str) -> bool:
+    import os
+
+    raw = os.environ.get(PUBLISH_SWITCH, "").strip()
+    if not raw:
+        return False
+    names = {name.strip() for name in raw.split(",") if name.strip()}
+    return "all" in names or dataset in names
+
+
+def can_publish(store: RevisionStore, dataset: str, pointer: dict | None) -> bool:
+    """Whether this commit of *dataset* may go straight into the catalog.
+
+    Only when it was asked for, the lake has a catalog, and the catalog
+    already holds exactly the revision this commit builds on: partitions the
+    commit does not declare are kept as the catalog has them, so the catalog
+    must be the published base.
+    """
+    from equitylake_core.catalog import CATALOG_FILE
+
+    if not publish_requested(dataset) or pointer is None:
+        return False
+    root = lake_root(_roots(store))
+    if not (root / CATALOG_FILE).exists():
+        return False
+    with Catalog(root, read_only=True) as catalog:
+        synced = synced_revision(catalog, dataset)
+        if synced is None or synced[0] != str(pointer.get("revision_id", "")):
+            return False
+        if not _publishable_partitions(catalog, dataset):
+            return False
+    return True
+
+
+def _roots(store: RevisionStore) -> _StoreRoots:
+    return _StoreRoots(
+        meta_root=store.meta_root,
+        curated_root=store.curated_root,
+        derived_root=store.derived_root,
+        data_root=store.meta_root.parent,
+    )
+
+
+def _publishable_partitions(catalog: Catalog, dataset: str) -> bool:
+    """A partitioned dataset needs a row predicate for its partition directories."""
+    spec = DATASETS[dataset]
+    if not spec.partition_col:
+        return True
+    types = {
+        row[0]: row[1]
+        for row in catalog.execute(f"DESCRIBE {quote_identifier(dataset)}").fetchall()
+    }
+    sample = "2024-01-01" if spec.partition_granularity == "day" else "2024"
+    if spec.partition_granularity == "month":
+        sample = "2024-01"
+    if spec.partition_granularity == "quarter":
+        sample = "2024Q1"
+    return (
+        _partition_predicate(
+            spec.partition_col,
+            types.get(spec.partition_col, ""),
+            spec.partition_granularity,
+            sample,
+        )
+        is not None
+    )
+
+
+def publish_revision(
+    store: RevisionStore,
+    dataset: str,
+    revision_id: str,
+    *,
+    changed_partitions: tuple[str, ...],
+) -> None:
+    """Make *revision_id* of *dataset* the catalog's published state, in one transaction.
+
+    *changed_partitions* are the partition directories this commit wrote or
+    removed, as the receipt names them (``<dataset>/<column>=<value>``, or
+    ``<dataset>`` for an unpartitioned dataset). Their rows are replaced with
+    the mutable tree's files for them; every other partition stays as the
+    catalog has it, so bytes an interrupted run left in an undeclared
+    partition never reach a publication.
+    """
+    roots = _roots(store)
+    source = store._layer_root(dataset) / dataset
+    prefix = f"{dataset}/"
+    partitions = sorted(
+        {"" if name == dataset else name[len(prefix) :] for name in changed_partitions}
+    )
+    present = sorted(path.relative_to(source).as_posix() for path in source.rglob("*.parquet"))
+    root = lake_root(roots)
+    with Catalog(root, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
+        was_unique = keys_unique(catalog, dataset)
+        try:
+            with catalog.transaction(message=f"publish {dataset} revision {revision_id}"):
+                if "" in partitions:
+                    _replace_table(catalog, dataset, source, dict.fromkeys(present, ""))
+                    unique = _table_keys_unique(catalog, dataset)
+                else:
+                    where = _replace_partitions(
+                        catalog, dataset, source, dict.fromkeys(present, ""), partitions
+                    )
+                    if was_unique and _partition_key_column(catalog, dataset):
+                        unique = not _has_duplicate_keys(catalog, dataset, where)
+                    else:
+                        unique = _table_keys_unique(catalog, dataset)
+                _ensure_sync_table(catalog)
+                _record_sync(catalog, dataset, revision_id, {}, unique)
+        except _PartitionSyncMismatch as exc:
+            raise CatalogPublishError(str(exc)) from exc
+        catalog.fold_deletes(dataset)
+        _record_history(catalog, dataset, revision_id)
+
+
+def catalog_revision(store: RevisionStore, dataset: str) -> str | None:
+    """The revision id the catalog holds for *dataset*, or ``None`` without a catalog."""
+    from equitylake_core.catalog import CATALOG_FILE
+
+    root = lake_root(_roots(store))
+    if not (root / CATALOG_FILE).exists():
+        return None
+    with Catalog(root, read_only=True) as catalog:
+        synced = synced_revision(catalog, dataset)
+    return synced[0] if synced else None
+
+
+# --- retention ---------------------------------------------------------------------
+
+#: Files an expired snapshot no longer needs are deleted only after this long, so
+#: a read that started before the expiry finishes on files that still exist.
+FILE_GRACE_HOURS = 24
+
+
+@dataclass(frozen=True)
+class RetentionResult:
+    snapshots_kept: int
+    snapshots_expired: int
+    files_deleted: int
+    applied: bool
+
+
+def retained_snapshots(catalog: Catalog, *, keep: int, held: set[str]) -> set[int]:
+    """Snapshots to keep: each dataset's ``keep`` newest revisions, held ones, and the latest.
+
+    A snapshot is lake-wide, so keeping one keeps every table's files as of it.
+    ``held`` are lifecycle object ids (``revision/<dataset>/<revision_id>``).
+    """
+    keep_ids = {catalog.snapshot()}
+    if not catalog.has_table(HISTORY_TABLE):
+        return keep_ids
+    rows = catalog.execute(
+        f"SELECT dataset, revision_id, snapshot FROM {HISTORY_TABLE} ORDER BY snapshot DESC"
+    ).fetchall()
+    per_dataset: dict[str, int] = {}
+    for dataset, revision_id, snapshot in rows:
+        newest = per_dataset.get(dataset, 0)
+        if newest < keep:
+            keep_ids.add(int(snapshot))
+            per_dataset[dataset] = newest + 1
+        elif f"revision/{dataset}/{revision_id}" in held:
+            keep_ids.add(int(snapshot))
+    return keep_ids
+
+
+def apply_retention(
+    catalog: Catalog,
+    *,
+    keep: int,
+    held: set[str] = frozenset(),
+    apply: bool = False,
+    grace_hours: int = FILE_GRACE_HOURS,
+) -> RetentionResult:
+    """Expire every snapshot :func:`retained_snapshots` does not keep, then delete their files.
+
+    Files are deleted only once they have waited ``grace_hours`` since the
+    snapshot that last used them expired. Without *apply* nothing changes.
+
+    The DuckLake maintenance functions apply only as ``CALL``; inside a
+    ``SELECT`` they report what they would do and change nothing. Their result
+    rows carry timestamps with a time zone, which DuckDB hands to Python only
+    through ``pytz`` (not a dependency), so the rows are dropped unread and the
+    effect is counted from the catalog's own tables.
+    """
+    keep_ids = retained_snapshots(catalog, keep=keep, held=held)
+    every = {
+        int(row[0])
+        for row in catalog.execute(
+            f"SELECT snapshot_id FROM {METADATA}.ducklake_snapshot"
+        ).fetchall()
+    }
+    expire = sorted(every - keep_ids)
+    if not apply:
+        return RetentionResult(len(every & keep_ids), len(expire), 0, False)
+    if expire:
+        versions = "[" + ", ".join(str(snapshot) for snapshot in expire) + "]"
+        catalog.execute(f"CALL ducklake_expire_snapshots('lake', versions => {versions})")
+        catalog.con.abort()
+    remaining = catalog.execute(f"SELECT count(*) FROM {METADATA}.ducklake_snapshot").fetchone()[0]
+    scheduled = f"SELECT count(*) FROM {METADATA}.ducklake_files_scheduled_for_deletion"
+    before = catalog.execute(scheduled).fetchone()[0]
+    catalog.execute(
+        "CALL ducklake_cleanup_old_files('lake', "
+        f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
+    )
+    catalog.con.abort()
+    after = catalog.execute(scheduled).fetchone()[0]
+    return RetentionResult(len(every & keep_ids), len(every) - int(remaining), before - after, True)
+
+
+def catalog_retention(config, *, apply: bool) -> dict | None:
+    """Apply revision retention to the lake catalog; ``None`` for a lake without one.
+
+    Keeps ``[storage.retention].keep_generations`` revisions of every dataset,
+    like the revision store, and every revision a lifecycle hold protects.
+    """
+    from cnequity.storage.lifecycle import LifecycleStore
+    from equitylake_core.catalog import CATALOG_FILE
+
+    root = lake_root(config)
+    if not (root / CATALOG_FILE).exists():
+        return None
+    keep = getattr(config, "revision_keep_generations", 5)
+    keep = keep if isinstance(keep, int) and not isinstance(keep, bool) and keep >= 1 else 5
+    registry = LifecycleStore(config.meta_root).registry() or {}
+    held = set(registry.get("holds") or {})
+    with Catalog(root) as catalog:
+        result = apply_retention(catalog, keep=keep, held=held, apply=apply)
+    return {
+        "keep_revisions": keep,
+        "snapshots_kept": result.snapshots_kept,
+        "snapshots_expired": result.snapshots_expired,
+        "files_deleted": result.files_deleted,
+        "applied": result.applied,
+        "file_grace_hours": FILE_GRACE_HOURS,
+    }

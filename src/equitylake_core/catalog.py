@@ -118,11 +118,12 @@ class Catalog:
                     f"SET temp_directory = {quote_literal(Path(temp_directory).as_posix())}"
                 )
             ensure_extensions(self.con, local_dir=extension_dir, mirror=extension_mirror)
-            options = (
-                "READ_ONLY"
-                if read_only
-                else (f"DATA_PATH {quote_literal((self.root / DATA_DIR).as_posix() + '/')}")
-            )
+            # The catalog stores the absolute data path it was created with.
+            # Always resolve files under this catalog's own directory instead,
+            # so a lake that was moved, restored or cloned reads its own files
+            # and never the original's.
+            data_path = f"DATA_PATH {quote_literal((self.root / DATA_DIR).as_posix() + '/')}"
+            options = ("READ_ONLY, " if read_only else "") + f"{data_path}, OVERRIDE_DATA_PATH true"
             self.con.execute(
                 f"ATTACH {quote_literal('ducklake:sqlite:' + catalog_path.as_posix())} "
                 f"AS {ALIAS} ({options})"
@@ -203,50 +204,71 @@ class Catalog:
             "delete_threshold => 0)"
         )
 
-    def data_files(self, table: str) -> list[str] | None:
-        """The data files whose rows are exactly *table*'s current rows, or ``None``.
+    def _alive(self, alias: str, snapshot: int | None) -> str:
+        """SQL: a metadata row of *alias* is part of the table at *snapshot* (latest if None)."""
+        if snapshot is None:
+            return f"{alias}.end_snapshot IS NULL"
+        return (
+            f"{alias}.begin_snapshot <= {int(snapshot)} AND "
+            f"({alias}.end_snapshot IS NULL OR {alias}.end_snapshot > {int(snapshot)})"
+        )
 
-        ``None`` means the table is not file-complete right now (a deletion
-        not yet folded, or rows inlined in the catalog database); read it
+    def data_files(self, table: str, snapshot: int | None = None) -> list[str] | None:
+        """The data files whose rows are exactly *table*'s rows, or ``None``.
+
+        At the latest snapshot, or at *snapshot* (an earlier one stays readable
+        until its files are cleaned up). ``None`` means the table is not
+        file-complete there (a deletion not yet folded, or rows inlined in the
+        catalog database), or an older snapshot's files are gone; read it
         through DuckDB instead.
         """
+        version = "" if snapshot is None else f", snapshot_version => {int(snapshot)}"
         listed = self.con.execute(
-            f"SELECT data_file, delete_file FROM ducklake_list_files({quote_literal(ALIAS)}, ?)",
+            f"SELECT data_file, delete_file FROM "
+            f"ducklake_list_files({quote_literal(ALIAS)}, ?{version})",
             [table],
         ).fetchall()
         if any(delete is not None for _, delete in listed):
             return None
+        at = "" if snapshot is None else f" AT (VERSION => {int(snapshot)})"
         rows = self.con.execute(
-            f"SELECT count(*) FROM {ALIAS}.{quote_identifier(table)}"
+            f"SELECT count(*) FROM {ALIAS}.{quote_identifier(table)}{at}"
         ).fetchone()[0]
         in_files = self.con.execute(
             f"SELECT coalesce(sum(f.record_count), 0) FROM {METADATA}.ducklake_data_file f "
             f"JOIN {METADATA}.ducklake_table t USING (table_id) "
-            "WHERE t.table_name = ? AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL",
+            f"WHERE t.table_name = ? AND {self._alive('t', snapshot)} "
+            f"AND {self._alive('f', snapshot)}",
             [table],
         ).fetchone()[0]
         if rows != in_files:
             return None
-        return [path for path, _ in listed]
+        paths = [path for path, _ in listed]
+        if snapshot is not None and not all(Path(path).is_file() for path in paths):
+            return None
+        return paths
 
-    def file_stats(self, table: str, column: str | None = None) -> list[DataFile] | None:
+    def file_stats(
+        self, table: str, column: str | None = None, snapshot: int | None = None
+    ) -> list[DataFile] | None:
         """The data files of *table* with their row counts and sizes, or ``None``.
 
         With *column*, each file also carries that column's smallest and
         largest value, from the statistics the catalog keeps per file, so a
         caller can tell which files can hold a given range without opening
-        them. ``None`` under the same condition as ``data_files``.
+        them. *snapshot* and ``None`` as for ``data_files``.
         """
-        paths = self.data_files(table)
+        paths = self.data_files(table, snapshot)
         if paths is None:
             return None
         by_name = {Path(path).name: path for path in paths}
+        alive = f"{self._alive('t', snapshot)} AND {self._alive('f', snapshot)}"
         if column is None:
             stats = self.con.execute(
                 f"SELECT f.path, f.record_count, f.file_size_bytes, NULL, NULL "
                 f"FROM {METADATA}.ducklake_data_file f "
                 f"JOIN {METADATA}.ducklake_table t USING (table_id) "
-                "WHERE t.table_name = ? AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL",
+                f"WHERE t.table_name = ? AND {alive}",
                 [table],
             ).fetchall()
         else:
@@ -255,10 +277,10 @@ class Catalog:
                 f"FROM {METADATA}.ducklake_data_file f "
                 f"JOIN {METADATA}.ducklake_table t USING (table_id) "
                 f"JOIN {METADATA}.ducklake_column c ON c.table_id = t.table_id "
-                "AND c.column_name = ? AND c.end_snapshot IS NULL "
+                f"AND c.column_name = ? AND {self._alive('c', snapshot)} "
                 f"LEFT JOIN {METADATA}.ducklake_file_column_stats s "
                 "ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id "
-                "WHERE t.table_name = ? AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL",
+                f"WHERE t.table_name = ? AND {alive}",
                 [column, table],
             ).fetchall()
         files = [

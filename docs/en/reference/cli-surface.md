@@ -76,6 +76,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne stats show` | none | Reads local stats; recomputes automatically when stale or when a detail view needs it |
 | `cne status` | none | Reads run state and dataset coverage |
 | `cne storage apply` | none | Removed with the mark-and-wait phase; only reports the error and what to use instead |
+| `cne storage catalog-retention` | none | Read-only preview; --apply expires old lake catalog snapshots and deletes files past the grace period |
 | `cne storage explain` | none | Reads the retention reasons for versions |
 | `cne storage hold` | none | Adds object protection; automatic retention no longer deletes it |
 | `cne storage import` | none | Validates and registers a reference manifest; only adds protection |

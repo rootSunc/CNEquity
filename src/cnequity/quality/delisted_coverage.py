@@ -11,6 +11,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.symbols import is_all_a_symbol, is_cdr_symbol, issued_code_space, parse_symbol
+from cnequity.query.parquet_scan import dataset_has_parquet
 from cnequity.query.universe import coverage_end_date
 from cnequity.storage.instrument_catalog import load_curated_instruments
 from cnequity.storage.read_context import ReadContext, read_root
@@ -187,7 +188,7 @@ def _verified_suspended_windows(
     roots = [
         read_root(config, name, read_context) for name in ("trading_calendar", "trading_status")
     ]
-    if any(not root.exists() or not any(root.rglob("*.parquet")) for root in roots):
+    if any(not dataset_has_parquet(root, committed=False) for root in roots):
         return {}
     calendar = scan_parquet_root(
         roots[0], partition_col="trade_date", start=start, end=end, committed=False
@@ -272,7 +273,7 @@ def _bar_spans(
     if not symbols:
         return {}
     root = read_root(config, "daily_bars", read_context)
-    if not root.exists() or not any(root.rglob("*.parquet")):
+    if not dataset_has_parquet(root, committed=False):
         return {}
     from cnequity.query.parquet_scan import scan_parquet_root
 
@@ -356,7 +357,7 @@ def delisted_coverage_report(
 
     spans: dict[str, tuple[date, date]] = {}
     bars_root = read_root(config, "daily_bars", read_context)
-    if symbols and bars_root.exists() and any(bars_root.rglob("*.parquet")):
+    if symbols and dataset_has_parquet(bars_root, committed=False):
         from cnequity.query.parquet_scan import scan_parquet_root
 
         bars = scan_parquet_root(

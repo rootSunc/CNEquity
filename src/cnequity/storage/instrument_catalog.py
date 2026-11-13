@@ -8,6 +8,7 @@ from datetime import date
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.query.parquet_scan import dataset_has_parquet
 from cnequity.storage.read_context import ReadContext, read_root
 
 
@@ -16,7 +17,7 @@ def load_curated_instruments(
 ) -> pl.DataFrame | None:
     """Read the merge-style instrument catalog across all surviving shards."""
     root = read_root(config, "instruments", read_context)
-    if not root.exists() or not any(root.rglob("*.parquet")):
+    if not dataset_has_parquet(root, committed=False):
         return None
     from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.query.parquet_scan import collect_parquet_root
@@ -91,7 +92,7 @@ def load_curated_trading_status(
     and leaves the symbol in the strict unknown bucket.
     """
     root = read_root(config, "trading_status", read_context)
-    if not root.exists() or not any(root.rglob("*.parquet")):
+    if not dataset_has_parquet(root, committed=False):
         return None
     try:
         from cnequity.domain.canonical import dedupe_by_primary_key
@@ -159,7 +160,7 @@ def _with_announced_halts(
         # would break the consistency the pin exists for.
         return status
     root = read_root(config, "announcement_index", read_context)
-    if not root.exists() or not any(root.rglob("*.parquet")):
+    if not dataset_has_parquet(root, committed=False):
         return status
     try:
         notices = collect_parquet_root(

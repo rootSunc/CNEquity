@@ -1125,6 +1125,8 @@ class SnapshotStore:
         dataset_states: dict[str, dict] = {}
         records: list[SnapshotFile] = []
         runtime_state: dict[str, Any] = {}
+        # Datasets whose revision lives only in the lake catalog, by export dir.
+        exported: dict[str, Path] = {}
         try:
             research_inputs = self._capture_research_inputs(temp, selected, records)
             from cnequity.storage.lifecycle import LifecycleStore
@@ -1147,7 +1149,17 @@ class SnapshotStore:
             for dataset in selected:
                 layer, source = self._source_root(dataset)
                 if not source.is_dir():
-                    raise FileNotFoundError(f"dataset has no stored files: {dataset}")
+                    # A revision published only into the lake catalog has no
+                    # generation directory: export its rows in the dataset's
+                    # own partition layout, which restores as any other.
+                    from cnequity.storage.published import catalog_published, export_partitioned
+
+                    if catalog_published(self.config, dataset) is None:
+                        raise FileNotFoundError(f"dataset has no stored files: {dataset}")
+                    source = temp / ".export" / layer / dataset
+                    if not export_partitioned(self.config, dataset, source):
+                        raise FileNotFoundError(f"dataset has no parquet files: {dataset}")
+                    exported[dataset] = source
                 # The source is the committed generation, whose unchanged
                 # files are hard links shared with older generations.  They
                 # are regular files read once and copied into independent
@@ -1226,6 +1238,12 @@ class SnapshotStore:
                     stored_pointer = temp / "meta" / pointer_relative
                     stored_pointer.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(pointer_source, stored_pointer)
+                    if dataset in exported:
+                        # The snapshot carries this revision as a generation;
+                        # its pointer says so, so a restore reads it from there.
+                        stored_payload = _read_json_object(stored_pointer)
+                        stored_payload.pop("storage", None)
+                        write_json_atomic(stored_pointer, stored_payload, indent=2)
                     records.append(
                         SnapshotFile(
                             dataset=dataset,
@@ -1248,10 +1266,15 @@ class SnapshotStore:
                         raise ValueError(
                             f"invalid current revision pointer for {dataset}: {pointer_source}"
                         ) from exc
-                    if not generation_source.is_dir():
+                    if not generation_source.is_dir() and dataset in exported:
+                        generation_source = exported[dataset]
+                        generation_target = meta_root / generation_relative
+                    elif not generation_source.is_dir():
                         raise FileNotFoundError(
                             f"current revision generation is missing: {generation_source}"
                         )
+                    else:
+                        generation_target = generation_source
                     # Generations share unchanged files by hard link; each
                     # is copied into the snapshot as an independent file.
                     generation_entries, unsafe = _tree_files_no_follow(generation_source)
@@ -1266,7 +1289,9 @@ class SnapshotStore:
                         if relative.suffix == ".parquet"
                     ):
                         _reject_link_or_non_regular(generation_file)
-                        relative = generation_file.relative_to(meta_root)
+                        relative = (
+                            generation_target / generation_file.relative_to(generation_source)
+                        ).relative_to(meta_root)
                         stored = temp / "meta" / relative
                         stored.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(generation_file, stored)
@@ -1397,6 +1422,9 @@ class SnapshotStore:
             # valid.  The same semantic verifier is used by ``verify`` and
             # ``restore``; running it before the final rename makes snapshot
             # creation itself a consistent transaction boundary.
+            # Exported catalog rows were copied into the snapshot like any
+            # other source; their staging copy is not part of it.
+            shutil.rmtree(temp / ".export", ignore_errors=True)
             verification = self._verify_directory(name, temp, manifest)
             if not verification.passed:
                 raise ValueError(

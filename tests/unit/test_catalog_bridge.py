@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import polars as pl
 import pytest
 
 from cnequity.config.loader import Config
+from cnequity.domain.datasets import DATASETS
 from cnequity.storage.catalog_bridge import (
     catalog_is_current,
     committed_source,
@@ -323,3 +325,247 @@ def test_sql_views_read_the_catalog_files_and_stay_inside_the_sandbox(cfg, lake,
         ("600000.SH", date(2024, 1, 2), None),
         ("600000.SH", date(2024, 2, 1), 10.0),
     ]
+
+
+def test_a_read_pinned_to_an_earlier_revision_uses_that_snapshot(cfg, lake, catalog_reads):
+    from cnequity.storage.revisions import RevisionStore
+
+    sync_dataset(cfg, lake, "daily_bars")
+    first = RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars")[
+        "revision_id"
+    ]
+    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
+    sync_dataset(cfg, lake, "daily_bars")
+
+    earlier = catalog_reads.published_files(cfg, "daily_bars", first)
+    assert earlier is not None
+    files, schema = earlier
+    rows = pl.scan_parquet(files, schema=schema, extra_columns="ignore", missing_columns="insert")
+    assert rows.collect().height == 3  # March is not in the first revision
+
+    # Once the catalog has let that snapshot's files go, it no longer answers for it.
+    lake.execute("CALL ducklake_expire_snapshots('lake', older_than => now() + INTERVAL 1 DAY)")
+    lake.execute("CALL ducklake_cleanup_old_files('lake', cleanup_all => true)")
+    catalog_reads.close_all()
+    assert catalog_reads.published_files(cfg, "daily_bars", first) is None
+
+
+def test_every_read_path_serves_a_revision_published_only_into_the_catalog(
+    cfg, lake, catalog_reads, publish_to_catalog
+):
+    from cnequity.mcp_server.tools import _configure_sql_connection
+    from cnequity.quality.verify import _covered_days
+    from cnequity.query import load
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+    from cnequity.query.read_budget import oversized_read
+    from cnequity.query.views import views_connection
+    from cnequity.storage.published import day_digests, published
+    from cnequity.storage.read_context import read_root
+
+    sync_dataset(cfg, lake, "daily_bars")
+    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
+    catalog_reads.close_all()
+    root = read_root(cfg, "daily_bars")
+    assert not root.exists()
+
+    assert dataset_has_parquet(root, committed=False)
+    assert published(cfg, "daily_bars").from_catalog
+    assert load("daily_bars", config=cfg).height == 4
+    assert (
+        scan_parquet_root(root, partition_col="trade_date", committed=False).collect().height == 4
+    )
+    assert len(day_digests(cfg, "daily_bars")) == 3
+    assert oversized_read(cfg, "daily_bars", start=None, end=None, symbols=None) is None
+    assert _covered_days(cfg, DATASETS["daily_bars"]) == [
+        date(2024, 1, 2),
+        date(2024, 2, 1),
+        date(2024, 3, 1),
+    ]
+    con = views_connection(cfg)
+    try:
+        _configure_sql_connection(con, cfg)
+        assert con.execute("SELECT count(*) FROM daily_bars").fetchone()[0] == 4
+    finally:
+        con.close()
+
+
+@pytest.fixture
+def publish_to_catalog(monkeypatch):
+    from cnequity.storage.catalog_bridge import PUBLISH_SWITCH
+
+    monkeypatch.setenv(PUBLISH_SWITCH, "daily_bars")
+
+
+def _pointer(cfg):
+    return RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars")
+
+
+def test_a_commit_publishes_into_the_catalog_without_a_generation(
+    cfg, lake, catalog_reads, publish_to_catalog
+):
+    from cnequity.query import load
+
+    sync_dataset(cfg, lake, "daily_bars")
+    first = _pointer(cfg)["revision_id"]
+    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
+
+    pointer = _pointer(cfg)
+    assert pointer["storage"] == "catalog" and pointer["revision_id"] != first
+    assert not (cfg.meta_root / pointer["generation_path"]).exists()
+    catalog_reads.close_all()
+    assert catalog_is_current(cfg, lake, "daily_bars")
+    rows = load("daily_bars", config=cfg)
+    assert rows.height == 4 and rows["trade_date"].max() == date(2024, 3, 1)
+    # The revision it was built on stays readable from its snapshot.
+    assert catalog_reads.published_files(cfg, "daily_bars", first) is not None
+
+
+def test_a_catalog_commit_never_publishes_an_undeclared_partition(
+    cfg, lake, catalog_reads, publish_to_catalog
+):
+    sync_dataset(cfg, lake, "daily_bars")
+    # Bytes an interrupted run left in January, which this commit does not declare.
+    stray = cfg.curated_root / "daily_bars/trade_date=2024-01/part-stray.parquet"
+    _rows(date(2024, 1, 3), {"300750.SZ": 99.0}).write_parquet(stray)
+    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
+    symbols = {r[0] for r in lake.execute('SELECT symbol FROM "daily_bars"').fetchall()}
+    assert "300750.SZ" not in symbols
+
+
+def test_a_commit_falls_back_to_a_generation_when_the_catalog_is_behind(
+    cfg, lake, publish_to_catalog
+):
+    # No sync: the catalog does not hold the revision this commit builds on.
+    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
+    pointer = _pointer(cfg)
+    assert "storage" not in pointer
+    assert (cfg.meta_root / pointer["generation_path"]).is_dir()
+
+
+def test_sweep_moves_the_pointer_to_what_the_catalog_published(
+    cfg, lake, catalog_reads, publish_to_catalog, monkeypatch
+):
+    from cnequity.storage import revisions
+
+    sync_dataset(cfg, lake, "daily_bars")
+    before = _pointer(cfg)
+    real = revisions.write_json_atomic
+
+    def lose_the_pointer(path, *args, **kwargs):
+        if Path(path).name == "current.json":
+            raise RuntimeError("crash after the catalog commit")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(revisions, "write_json_atomic", lose_the_pointer)
+    with pytest.raises(RuntimeError, match="crash"):
+        _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
+    monkeypatch.setattr(revisions, "write_json_atomic", real)
+    assert _pointer(cfg)["revision_id"] == before["revision_id"]
+
+    report = RevisionStore(cfg.meta_root, cfg.curated_root).sweep(apply=True)
+    assert report["pointer_restored"] == ["daily_bars"]
+    after = _pointer(cfg)
+    assert after["revision"] == before["revision"] + 1 and after["storage"] == "catalog"
+    catalog_reads.close_all()
+    assert catalog_is_current(cfg, lake, "daily_bars")
+
+
+def test_retention_keeps_recent_and_held_revisions_and_deletes_after_the_grace(
+    cfg, lake, catalog_reads, publish_to_catalog
+):
+    from cnequity.storage.catalog_bridge import apply_retention
+
+    sync_dataset(cfg, lake, "daily_bars")
+    revisions = [_pointer(cfg)["revision_id"]]
+    for month in range(3, 9):
+        _commit_month(
+            cfg, f"2024-{month:02d}", _rows(date(2024, month, 1), {"600000.SH": 1.0 * month})
+        )
+        revisions.append(_pointer(cfg)["revision_id"])
+    catalog_reads.close_all()
+    oldest, held, recent = revisions[0], revisions[1], revisions[-2]
+
+    preview = apply_retention(lake, keep=2, held={f"revision/daily_bars/{held}"}, apply=False)
+    assert preview.snapshots_expired > 0 and preview.files_deleted == 0
+    assert (
+        catalog_reads.published_files(cfg, "daily_bars", oldest) is not None
+    )  # nothing changed yet
+
+    # Expired, but their files wait out the grace period.
+    kept = apply_retention(lake, keep=2, held={f"revision/daily_bars/{held}"}, apply=True)
+    assert kept.files_deleted == 0
+    gone = apply_retention(
+        lake, keep=2, held={f"revision/daily_bars/{held}"}, apply=True, grace_hours=-1
+    )
+    assert gone.files_deleted > 0
+    catalog_reads.close_all()
+    assert catalog_reads.published_files(cfg, "daily_bars", oldest) is None
+    assert catalog_reads.published_files(cfg, "daily_bars", held) is not None
+    assert catalog_reads.published_files(cfg, "daily_bars", recent) is not None
+    assert catalog_reads.published_files(cfg, "daily_bars", revisions[-1]) is not None
+
+
+def test_a_snapshot_of_a_catalog_only_revision_restores_as_a_generation(
+    cfg, lake, catalog_reads, publish_to_catalog, tmp_path, monkeypatch
+):
+    from cnequity.query import load
+    from cnequity.storage.catalog_bridge import PUBLISH_SWITCH
+    from cnequity.storage.snapshots import SnapshotStore
+
+    sync_dataset(cfg, lake, "daily_bars")
+    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
+    catalog_reads.close_all()
+    expected = load("daily_bars", config=cfg)
+
+    store = SnapshotStore(cfg)
+    store.create("native", ["daily_bars"])
+    assert store.verify("native").passed
+    assert not (store.path("native") / ".export").exists()
+
+    monkeypatch.delenv(PUBLISH_SWITCH)
+    restored = Config(data_root=store.restore("native", tmp_path / "restored"))
+    pointer = RevisionStore(restored.meta_root, restored.curated_root).current_pointer("daily_bars")
+    assert "storage" not in pointer and pointer["revision"] == _pointer(cfg)["revision"]
+    assert load("daily_bars", config=restored).equals(expected)
+
+
+def test_a_catalog_only_revision_can_be_held_and_retention_keeps_it(
+    cfg, lake, catalog_reads, publish_to_catalog
+):
+    from cnequity.storage.catalog_bridge import apply_retention
+    from cnequity.storage.lifecycle import LifecycleStore
+    from cnequity.storage.lifecycle.resources import resource_exists
+
+    sync_dataset(cfg, lake, "daily_bars")
+    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
+    held = _pointer(cfg)["revision_id"]
+    for month in range(4, 8):
+        _commit_month(
+            cfg, f"2024-{month:02d}", _rows(date(2024, month, 1), {"600000.SH": 1.0 * month})
+        )
+    assert resource_exists(cfg.meta_root, f"revision/daily_bars/{held}")
+    assert not resource_exists(cfg.meta_root, "revision/daily_bars/" + "0" * 32)
+    from cnequity.storage.lifecycle import reference_fingerprint
+
+    store = LifecycleStore(cfg.meta_root)
+    evidence = cfg.data_root.parent / "evidence"
+    evidence.mkdir()
+    roots = [{"path": str(evidence)}]
+    store.import_manifest(
+        {
+            "schema_version": 1,
+            "meta_root": str(store.meta),
+            "holds": {},
+            "reference_roots": roots,
+            "reference_fingerprint": reference_fingerprint(roots),
+        }
+    )
+    store.hold(f"revision/daily_bars/{held}", "paper figures")
+
+    from cnequity.storage.catalog_bridge import catalog_retention
+
+    result = catalog_retention(cfg, apply=True)
+    assert result["snapshots_expired"] > 0
+    apply_retention(lake, keep=1, held={f"revision/daily_bars/{held}"}, apply=True, grace_hours=-1)
+    catalog_reads.close_all()
+    assert catalog_reads.published_files(cfg, "daily_bars", held) is not None

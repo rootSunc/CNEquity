@@ -463,6 +463,10 @@ EFFECTS: dict[str, tuple[str, str]] = {
     "storage merge-files": ("无", "预演只读；--apply 合并多文件分区并发布新版本，行内容不变"),
     "storage plan": ("无", "预览自动清理现在会删除哪些代；不删除数据"),
     "storage raw-external": ("无", "登记外置原文目录；本地保留来源记录，不移动或删除文件"),
+    "storage catalog-retention": (
+        "无",
+        "预演只读；--apply 让湖目录过期旧快照，并删除超过宽限期的文件",
+    ),
     "storage sync-catalog": ("无", "把湖目录同步到已发布版本；只读版本库，只写 lake/ 目录"),
     "ths-official backfill": ("执行时", "调用凭证源并补缺"),
     "ths-official capture": ("执行时", "调用凭证源并写对照证据"),

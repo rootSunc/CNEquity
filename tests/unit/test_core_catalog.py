@@ -129,3 +129,16 @@ def test_a_read_only_catalog_refuses_writes(lake):
     lake.execute("CREATE TABLE t AS SELECT 1 AS x")
     with Catalog(lake.root, read_only=True) as reader, pytest.raises(duckdb.Error):
         reader.execute("INSERT INTO t VALUES (2)")
+
+
+def test_a_moved_lake_reads_its_own_files(lake, tmp_path):
+    lake.execute("CREATE TABLE t AS SELECT 1 AS x")
+    root = lake.root
+    lake.close()
+    moved = tmp_path / "moved"
+    root.rename(moved)
+    for read_only in (True, False):
+        with Catalog(moved, read_only=read_only) as again:
+            files = again.data_files("t")
+            assert files and all(str(moved) in path for path in files)
+            assert again.execute("SELECT count(*) FROM t").fetchone()[0] == 1

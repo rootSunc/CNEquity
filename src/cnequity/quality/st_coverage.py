@@ -143,7 +143,7 @@ def current_st_universe(
         ]
 
     bars_root = read_root(config, "daily_bars", read_context)
-    if bars_root.exists() and any(bars_root.rglob("*.parquet")):
+    if dataset_has_parquet(bars_root, committed=False):
         try:
             # Let the partition-aware scanner prune the requested bar window
             # and build one schema-aware lazy plan. The previous per-file
@@ -542,16 +542,21 @@ def _st_row_counts(
     """Count persisted Baostock facts in curated plus one resumable run."""
     if not symbols:
         return {}
-    files = list(read_root(config, "trading_status", read_context).rglob("*.parquet"))
+    from cnequity.storage.published import published
+
+    scans = [published(config, "trading_status", read_context).scan()]
     if staging_run_id:
         from cnequity.storage import StagingWriter
 
-        files.extend(
-            StagingWriter(config.staging_root).list_run_files("trading_status", staging_run_id)
-        )
-    if not files:
+        staged = StagingWriter(config.staging_root).list_run_files("trading_status", staging_run_id)
+        if staged:
+            scans.append(
+                scan_parquet_files(staged, missing_columns="insert", extra_columns="ignore")
+            )
+    scans = [scan for scan in scans if scan is not None]
+    if not scans:
         return {}
-    frame = scan_parquet_files(files, missing_columns="insert", extra_columns="ignore")
+    frame = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
     schema = frame.collect_schema().names()
     frame = frame.filter(
         pl.col("symbol").is_in(sorted(symbols)),

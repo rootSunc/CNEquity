@@ -76,6 +76,7 @@
 | `cne stats show` | 无 | 读取本地统计；过期或明细视图需要时自动重算 |
 | `cne status` | 无 | 读取运行状态与数据集覆盖 |
 | `cne storage apply` | 无 | 已移除（随标记观察期一起）；只报错并说明替代做法 |
+| `cne storage catalog-retention` | 无 | 预演只读；--apply 让湖目录过期旧快照，并删除超过宽限期的文件 |
 | `cne storage explain` | 无 | 读取版本保留依据 |
 | `cne storage hold` | 无 | 增加对象保护；自动清理不再删除它 |
 | `cne storage import` | 无 | 校验并登记引用清单；只增加保护 |

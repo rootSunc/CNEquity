@@ -177,14 +177,13 @@ def _pending(config, dataset: str, through: date):
 
 def _committed_frames(config, dataset: str, dates: list[date]) -> dict:
     from cnequity.domain.canonical import dedupe_lazy_by_primary_key
-    from cnequity.query.parquet_scan import scan_parquet_files
-    from cnequity.storage.read_context import read_root
+    from cnequity.storage.published import published
 
-    files = list(read_root(config, dataset).glob("**/*.parquet"))
-    if not files or not dates:
+    scan = published(config, dataset).scan()
+    if scan is None or not dates:
         return {}
     frame = dedupe_lazy_by_primary_key(
-        scan_parquet_files(files).filter(pl.col("trade_date").is_in(dates)), dataset
+        scan.filter(pl.col("trade_date").is_in(dates)), dataset
     ).collect()
     # The SHF route publishes both SHF and INE, so its existing receipt
     # describes the combined rows. An INE-only historical import can also

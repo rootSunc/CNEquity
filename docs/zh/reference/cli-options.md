@@ -705,6 +705,13 @@
 |---|---|---|
 | `args` | `—` | 位置参数 |
 
+## `cne storage catalog-retention`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `--apply` | `False` | 让湖目录过期旧快照，并删除超过宽限期的文件；不加时只报告。 |
+
 ## `cne storage explain`
 
 | 参数 | 默认值 | 说明 |

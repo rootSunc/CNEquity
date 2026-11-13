@@ -2657,6 +2657,10 @@ msgstr "退出码 {exit_code}。"
 msgid "Exit with code 0 even when breaking changes are found."
 msgstr "即使发现破坏性变更也返回退出码 0。"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Expire old catalog snapshots and delete files past the grace period; without it, only report."
+msgstr "让湖目录过期旧快照，并删除超过宽限期的文件；不加时只报告。"
+
 #: cnequity/cli/schedule_cmds.py
 msgid "Expiry preview"
 msgstr "过期预览"
@@ -3407,6 +3411,10 @@ msgstr "版本编号无效。"
 msgid "It extends the built-in defaults and sets only data.root (an absolute path); add only what you want to change. `cne config show --defaults` lists every setting. Then run: cne init"
 msgstr "它继承内置默认值，只设置了 data.root（绝对路径）；只需加上想改的设置，`cne config show --defaults` 列出全部设置。然后运行：cne init"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Keep each dataset's recent and held revisions in the lake catalog; expire the rest."
+msgstr "在湖目录中保留每个数据集最近的和被保留的修订，其余过期。"
+
 #: cnequity/cli/setup_cmds.py
 msgid "Keep going after a stage fails instead of stopping."
 msgstr "某个阶段失败后继续往下跑，而不是停下来。"
@@ -3432,6 +3440,10 @@ msgstr "每个数据集保留最近 {keep} 代，删掉更早的 {removed} 代�
 #: cnequity/cli/quality_cmds.py
 msgid "Keys to probe, comma-separated; costly/challenged endpoints are probed only when listed explicitly."
 msgstr "要探测的 key，逗号分隔；高成本/已受挑战的端点仅在显式列出时探测。"
+
+#: cnequity/cli/schedule_cmds.py
+msgid "Lake catalog retention"
+msgstr "湖目录保留"
 
 #: cnequity/cli/schedule_cmds.py
 msgid "Lake catalog sync"
@@ -6252,6 +6264,10 @@ msgstr "这个日更组还会带上指数成分、行业成分和股东人数。
 #: cnequity/serve/ops/routes.py
 msgid "This directory already holds a lake; once the config is generated it takes it over without clearing it."
 msgstr "这个目录里已经有数据湖，生成配置后会接管它，不会清空。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "This lake has no lake catalog."
+msgstr "这个湖没有湖目录。"
 
 #: cnequity/ops/scheduler.py
 msgid "This lake's web schedule is bound to another config; manage it with the original config."

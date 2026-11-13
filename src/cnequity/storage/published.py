@@ -311,3 +311,49 @@ def _duckdb_major_minor() -> int:
 
     major, minor, *_ = (int(part) for part in duckdb.__version__.split(".")[:2] + ["0"])
     return major * 100 + minor
+
+
+def export_partitioned(config, dataset: str, destination: Path, read_context=None) -> list[Path]:
+    """Write *dataset*'s published rows under *destination* in its own partition layout.
+
+    One file per partition, ``<column>=<value>/part-merged.parquet`` (or one
+    ``part-merged.parquet`` for an unpartitioned dataset), holding exactly the
+    table's columns: what a generation of this dataset looks like after a
+    file merge. Snapshots of a revision published only into the lake catalog
+    are taken this way, so verifying and restoring them works as for any other.
+    """
+    from cnequity.domain.partitions import partition_value
+
+    store = published(config, dataset, read_context)
+    scan = store.scan()
+    if scan is None:
+        return []
+    spec = DATASETS[dataset]
+    column = spec.partition_col
+    frame = scan.collect()
+    if column is None or column not in frame.columns:
+        target = destination / "part-merged.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        frame.write_parquet(target)
+        return [target]
+    dtype = frame.schema[column]
+    if dtype == pl.String:
+        labels = frame[column]
+    else:
+        granularity = spec.partition_granularity
+        labels = pl.Series(
+            [
+                None if day is None else partition_value(day, granularity)
+                for day in frame[column].cast(pl.Date)
+            ]
+        )
+    written: list[Path] = []
+    frame = frame.with_columns(labels.alias("__partition"))
+    for (label,), group in frame.partition_by("__partition", as_dict=True).items():
+        if label is None:
+            continue
+        target = destination / f"{column}={label}" / "part-merged.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        group.drop("__partition").write_parquet(target)
+        written.append(target)
+    return sorted(written)

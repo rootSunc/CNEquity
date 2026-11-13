@@ -11,6 +11,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.holidays_cn import exchange_may_open, session_expr
 from cnequity.domain.market_time import is_session_final
+from cnequity.query.parquet_scan import dataset_has_parquet
 from cnequity.storage.read_context import read_root
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ def _load_trading_calendar_df(
 ) -> pl.DataFrame | None:
     """Load trading_calendar, preferring a lazy hive scan with optional date prune."""
     curated = read_root(config, "trading_calendar")
-    if curated.exists() and any(curated.rglob("*.parquet")):
+    if dataset_has_parquet(curated, committed=False):
         from cnequity.domain.canonical import dedupe_by_primary_key
 
         try:

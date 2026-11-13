@@ -23,6 +23,7 @@ from cnequity.storage.catalog_bridge import (
     catalog_is_current,
     keys_unique,
     lake_root,
+    revision_snapshot,
     synced_revision,
 )
 from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog, quote_identifier
@@ -137,6 +138,18 @@ def generation_identity(root: Path) -> tuple[str, str] | None:
     return None
 
 
+def _resolve_revision(catalog, dataset: str, revision_id: str) -> tuple[int | None, bool] | None:
+    """``(snapshot, unique_keys)`` holding *dataset* at *revision_id*; snapshot None = latest."""
+    synced = synced_revision(catalog, dataset)
+    if synced is not None and synced[0] == revision_id:
+        return None, bool(keys_unique(catalog, dataset))
+    return revision_snapshot(catalog, dataset, revision_id)
+
+
+def _at(snapshot: int | None) -> str:
+    return "" if snapshot is None else f" AT (VERSION => {int(snapshot)})"
+
+
 class PublishedTable(NamedTuple):
     files: list[str]
     # Column name -> DuckDB type, in table order.
@@ -157,15 +170,18 @@ def published_table(config, dataset: str, revision_id: str) -> PublishedTable | 
             catalog = _catalog(config)
             if catalog is None:
                 return None
-            synced = synced_revision(catalog, dataset)
-            if synced is None or synced[0] != revision_id:
+            resolved = _resolve_revision(catalog, dataset, revision_id)
+            if resolved is None:
                 return None
-            files = catalog.data_files(dataset)
+            snapshot, unique = resolved
+            files = catalog.data_files(dataset, snapshot)
             if not files:
                 return None
-            described = catalog.execute(f"DESCRIBE {ALIAS}.{quote_identifier(dataset)}").fetchall()
+            described = catalog.execute(
+                f"DESCRIBE SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)}"
+            ).fetchall()
             columns = {row[0]: row[1] for row in described}
-            return PublishedTable(files, columns, bool(keys_unique(catalog, dataset)))
+            return PublishedTable(files, columns, unique)
     except Exception as exc:  # noqa: BLE001 - the generation is always a correct answer
         logger.warning("catalog files of %s unavailable, reading the generation: %s", dataset, exc)
         return None
@@ -178,8 +194,10 @@ def published_files(config, dataset: str, revision_id: str) -> tuple[list[str], 
         return None
     try:
         with _lock:
-            relation = _catalog(config).relation(
-                f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)} LIMIT 0"
+            catalog = _catalog(config)
+            snapshot, _ = _resolve_revision(catalog, dataset, revision_id) or (None, False)
+            relation = catalog.relation(
+                f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)} LIMIT 0"
             )
             schema = relation.pl().schema
     except Exception as exc:  # noqa: BLE001
@@ -218,24 +236,63 @@ def published_stats(config, dataset: str, revision_id: str, *, column: str | Non
             catalog = _catalog(config)
             if catalog is None:
                 return None
-            synced = synced_revision(catalog, dataset)
-            if synced is None or synced[0] != revision_id:
+            resolved = _resolve_revision(catalog, dataset, revision_id)
+            if resolved is None:
                 return None
-            if column is not None:
-                described = catalog.execute(f"DESCRIBE {ALIAS}.{quote_identifier(dataset)}")
-                if column not in {row[0] for row in described.fetchall()}:
-                    column = None
-            stats = catalog.file_stats(dataset, column)
+            snapshot, unique = resolved
+            relation = catalog.relation(
+                f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)} LIMIT 0"
+            )
+            schema = relation.pl().schema
+            if column is not None and column not in schema.names():
+                column = None
+            stats = catalog.file_stats(dataset, column, snapshot)
             if stats is None:
                 return None
-            schema = (
-                catalog.relation(f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)} LIMIT 0")
-                .pl()
-                .schema
-            )
-            return stats, bool(keys_unique(catalog, dataset)), schema
+            return stats, unique, schema
     except Exception as exc:  # noqa: BLE001 - the generation is always a correct answer
         logger.warning(
             "catalog statistics of %s unavailable, reading the generation: %s", dataset, exc
         )
         return None
+
+
+def catalog_partition_values(
+    config, dataset: str, revision_id: str, *, column: str
+) -> list[str] | None:
+    """The partition labels (``2024-06``, ``2024Q2``) that hold rows in that revision.
+
+    Labelled at the dataset's granularity, as its partition directories were.
+    ``None`` when the catalog does not hold that revision.
+    """
+    from cnequity.domain.datasets import DATASETS
+
+    table = published_table(config, dataset, revision_id)
+    spec = DATASETS.get(dataset)
+    if table is None or spec is None or column not in table.columns:
+        return None
+    name = quote_identifier(column)
+    kind = table.columns[column]
+    granularity = spec.partition_granularity
+    if kind.startswith(("DATE", "TIMESTAMP")):
+        label = {
+            "day": f"strftime({name}, '%Y-%m-%d')",
+            "month": f"strftime({name}, '%Y-%m')",
+            "year": f"strftime({name}, '%Y')",
+            "quarter": f"(year({name})::VARCHAR || 'Q' || quarter({name})::VARCHAR)",
+        }.get(granularity)
+        if label is None:
+            return None
+    else:
+        label = f"CAST({name} AS VARCHAR)"
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        source = files_sql(table, con)
+        rows = con.execute(
+            f"SELECT DISTINCT {label} FROM {source} WHERE {name} IS NOT NULL"
+        ).fetchall()
+    finally:
+        con.close()
+    return sorted(str(row[0]) for row in rows if row[0] is not None)

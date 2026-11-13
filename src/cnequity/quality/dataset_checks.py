@@ -15,7 +15,7 @@ from cnequity.domain.datasets import (
     ROW_COUNT_MUTATION_MIN_BASELINE_ROWS,
     ROW_COUNT_MUTATION_MIN_RATIO,
 )
-from cnequity.domain.partitions import granularity_of
+from cnequity.domain.partitions import granularity_of, parse_partition
 from cnequity.domain.pit import normalize_pit_storage_columns
 from cnequity.domain.schemas import (
     DATASET_SCHEMAS,
@@ -272,6 +272,22 @@ def partition_row_stats(files: list[Path]) -> dict[str, int | None]:
         "rows": lazy_row_count(lf),
         "symbols": lazy_n_unique_symbol(lf),
     }
+
+
+def _partition_stats(root: Path, partition_col: str, value: str) -> dict[str, int | None]:
+    """Rows and symbols in one partition: its files, or its period's rows when it has none.
+
+    A revision published only into the lake catalog has no partition
+    directories; the date-aware scan reads that period from the catalog.
+    """
+    files = partition_parquet_files(root, partition_col, value)
+    if files:
+        return partition_row_stats(files)
+    period = parse_partition(value)
+    if period is None or not dataset_has_parquet(root):
+        return {"rows": 0, "symbols": None}
+    lf = scan_parquet_root(root, partition_col=partition_col, start=period.start, end=period.end)
+    return {"rows": lazy_row_count(lf), "symbols": lazy_n_unique_symbol(lf)}
 
 
 # Duplicate keys named individually in one pk_unique finding.
@@ -909,12 +925,8 @@ def audit_curated_dataset(
 
     if partition_col is not None and partition_value is not None and previous_value is not None:
         try:
-            current_stats = partition_row_stats(
-                partition_parquet_files(root, partition_col, partition_value)
-            )
-            previous_stats = partition_row_stats(
-                partition_parquet_files(root, partition_col, previous_value)
-            )
+            current_stats = _partition_stats(root, partition_col, partition_value)
+            previous_stats = _partition_stats(root, partition_col, previous_value)
         except (OSError, pl.exceptions.PolarsError, ValueError):
             # The contract finding above is the actionable result for a bad
             # file. Do not let the secondary period-over-period sentinel hide

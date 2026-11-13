@@ -274,6 +274,11 @@ def maintain(config_path: str, groups: str | None, notify: bool):
             _cne("storage", "sync-catalog", "--config", path), check=False
         ).returncode:
             notes.append(_("Lake catalog sync"))
+        click.echo(f"--- {_('Lake catalog retention')} ---", err=True)
+        if subprocess.run(
+            _cne("storage", "catalog-retention", "--apply", "--config", path), check=False
+        ).returncode:
+            notes.append(_("Lake catalog retention"))
 
     click.echo(f"--- {_('Metadata backup')} ---", err=True)
     try:

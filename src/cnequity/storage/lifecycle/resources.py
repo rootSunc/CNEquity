@@ -55,8 +55,35 @@ def resource_exists(meta_root: Path, object_id: str) -> bool:
         and relative[0].endswith(".log")
     ):
         paths = [meta_root.parent / "logs" / relative[0]]
+    elif kind == "revision" and len(relative) == 2:
+        return _catalog_revision_exists(meta_root, *relative)
     else:
         return False
     for path in paths:
         _reject_symlink_path(path)
     return any(p.is_file() if kind == "log" else p.is_dir() for p in paths)
+
+
+def _catalog_revision_exists(meta_root: Path, dataset: str, revision_id: str) -> bool:
+    """A revision published only into the lake catalog: a receipt, and no generation.
+
+    Its bytes are the catalog's, so the generation inventory does not list it;
+    catalog retention keeps the snapshot of a held revision.
+    """
+    import json
+
+    receipts = meta_root / "revisions" / dataset
+    _reject_symlink_path(receipts)
+    for path in receipts.glob(f"*-{revision_id}.json"):
+        _reject_symlink_path(path)
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (
+            record.get("dataset") == dataset
+            and record.get("revision_id") == revision_id
+            and (record.get("metadata") or {}).get("storage") == "catalog"
+        ):
+            return True
+    return False

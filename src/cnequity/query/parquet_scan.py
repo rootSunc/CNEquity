@@ -63,7 +63,11 @@ def dataset_has_parquet(
         if committed
         else Path(root)
     )
-    return resolved.exists() and any(resolved.rglob("*.parquet"))
+    if resolved.exists() and any(resolved.rglob("*.parquet")):
+        return True
+    # A published revision the lake catalog holds has data whether or not its
+    # generation directory is on disk.
+    return _scan_catalog_files(resolved, config_root=meta_root) is not None
 
 
 def parquet_glob(root: Path) -> str:
@@ -112,8 +116,22 @@ def list_partitions(
     try:
         mtime_ns = os.stat(root).st_mtime_ns
     except FileNotFoundError:
-        return []
+        # A revision published only into the lake catalog has no directories;
+        # its partitions are the dataset's own periods that hold rows.
+        return _catalog_partitions(Path(root), partition_col)
     return list(_cached_partitions(str(root), partition_col, mtime_ns))
+
+
+def _catalog_partitions(root: Path, partition_col: str) -> list[Partition]:
+    from cnequity.query.catalog_read import catalog_partition_values, generation_identity
+
+    identity = generation_identity(root)
+    if identity is None:
+        return []
+    meta = root.parents[3]
+    values = catalog_partition_values(_ConfigRoots(meta), *identity, column=partition_col)
+    parts = [part for part in map(parse_partition, values or []) if part is not None]
+    return sorted(parts, key=lambda p: p.start)
 
 
 # A directory's mtime changes whenever an entry is added, removed or renamed,
