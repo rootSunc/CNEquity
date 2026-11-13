@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 修复北交所涨跌幅越限检查自 11-05 起失效：`daily_bars` 改按月分区后，检查从分区目录名推算市场交易日，结果总是空，单日日更里每一行都被当成「前一交易日不明」而不判断。现在交易日取自交易日历。
 - 新增 `[sources.eastmoney].proxy_hosts`：只让列出的主机（含子域名）走 `proxy`，其余东财主机直连。可以只把 push2 留在代理上，数据中心、公告等直连可达的主机不再因代理停掉而失败。未设时与以前一样，所有东财主机都走代理。
 - 日更不再读 Tushare：`name_history` 移出默认 core 组，`sector_fund_flow` 在 push2 暂停时也不再改从 Tushare 取当日数据。Tushare 只用于按需补全历史（`cne backfill <数据集>`），令牌过期不会再让日更失败；所有以 Tushare 为主来源的数据集都不计入新鲜度。
 - 新增 `cne storage catalog-retention`：湖目录为每个数据集保留最近的修订（`[storage.retention].keep_generations`，默认 5 个）和被 `cne storage hold` 保护的修订，其余快照过期，不再引用的文件等 24 小时后才删除；`cne run maintain` 每天执行。湖目录保存了创建时的绝对数据路径，搬迁、恢复或复制过的湖会去读原湖的文件，现在总是读湖目录自身目录下的文件。

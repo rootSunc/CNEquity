@@ -96,14 +96,16 @@ def test_exchange_rows_without_turnover_are_reported():
 def test_enforcement_quarantines_the_row_and_keeps_the_rest(tmp_path):
     cfg = Config(data_root=tmp_path)
     committed = cfg.curated_root / "daily_bars"
-    for day in DAYS[:5]:
-        part = committed / f"trade_date={day}"
-        part.mkdir(parents=True)
+    # Monthly partitions, as daily_bars is stored: the market's sessions must
+    # come from the calendar, not from day-named directories.
+    for index, day in enumerate(DAYS[:5]):
+        part = committed / f"trade_date={day:%Y-%m}"
+        part.mkdir(parents=True, exist_ok=True)
         _bars("920001.BJ", [day], [10.0]).with_columns(
             pl.lit("tdx_protocol").alias("source"),
             pl.lit("v1").alias("data_version"),
             pl.lit(FETCHED).alias("fetched_at"),
-        ).write_parquet(part / "part-0.parquet")
+        ).write_parquet(part / f"part-{index}.parquet")
     instruments = cfg.curated_root / "instruments"
     instruments.mkdir(parents=True)
     pl.DataFrame(

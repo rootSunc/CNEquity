@@ -18,12 +18,9 @@ from cnequity.domain.symbols import (
 from cnequity.domain.trading_status import risk_warning_expr
 from cnequity.query.parquet_scan import (
     collect_parquet_root,
-    coverage_start_from_partitions,
-    list_partitions,
     scan_parquet_root,
 )
 from cnequity.storage.read_context import ReadContext, read_root
-from cnequity.storage.revisions import resolve_committed_root
 
 # Statuses a tradable-universe query drops. ST no longer lives in `status`, so
 # the risk-warning test is a separate predicate (`_excluded_status_expr`) that
@@ -90,70 +87,68 @@ def _load_instruments(config: Config, read_context: ReadContext | None = None) -
         return pl.DataFrame()
 
 
+def _date_bound(
+    config: Config,
+    dataset: str,
+    date_col: str,
+    *,
+    latest: bool,
+    read_context: ReadContext | None = None,
+) -> date | None:
+    """The earliest (or latest) *date_col* in the published rows of *dataset*.
+
+    Walks the published file groups from the matching end and scans one group's
+    window at a time, so the common answer reads one partition, from the catalog
+    or a generation alike. A daily bar counts only when traded: an edge partition
+    can hold nothing but zero-volume suspension placeholders.
+    """
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.storage.published import published
+
+    found = published(config, dataset, read_context)
+    if not found.groups:
+        return None
+    root = read_root(config, dataset, read_context)
+    traded = dataset == "daily_bars" and date_col == "trade_date"
+    pick = pl.col(date_col).max() if latest else pl.col(date_col).min()
+
+    def scan(start: date | None = None, end: date | None = None) -> date | None:
+        frame = scan_parquet_root(
+            root,
+            partition_col=DATASETS[dataset].partition_col,
+            start=start,
+            end=end,
+            traded_only=traded,
+            dataset=dataset,
+            meta_root=config.meta_root,
+            committed=False,
+        )
+        return frame.select(pick).collect().item()
+
+    bounded = DATASETS[dataset].partition_col == date_col and all(
+        group.low is not None and group.high is not None for group in found.groups
+    )
+    if not bounded:
+        return scan()
+    if found.from_catalog and not traded:
+        # Catalog statistics are the stored values themselves, not a period.
+        return max(g.high for g in found.groups) if latest else min(g.low for g in found.groups)
+    groups = sorted(found.groups, key=lambda group: group.high if latest else group.low)
+    for group in reversed(groups) if latest else groups:
+        value = scan(group.low, group.high)
+        if value is not None:
+            return value
+    return None
+
+
 def coverage_start_date(
     config: Config,
     dataset: str,
     *,
     date_col: str = "trade_date",
 ) -> date | None:
-    """Earliest *date_col* present in curated *dataset*, if any."""
-    root = resolve_committed_root(
-        config.curated_root / dataset,
-        dataset=dataset,
-        meta_root=config.meta_root,
-    )
-    if not root.exists():
-        return None
-
-    # A day partition's directory value is the exact date it can contain. A
-    # month/year/quarter directory is only a container, though: using its
-    # theoretical start would claim coverage before the first real row. Mixed
-    # layouts and loose root-level files need the same exact scan.
-    parts = list_partitions(root, date_col, resolve=False)
-    if (
-        dataset != "daily_bars"
-        and parts
-        and all(part.start == part.end for part in parts)
-        and not list(root.glob("*.parquet"))
-    ):
-        return coverage_start_from_partitions(root, date_col)
-    if (
-        dataset == "daily_bars"
-        and date_col == "trade_date"
-        and parts
-        and all(part.start == part.end for part in parts)
-        and not list(root.glob("*.parquet"))
-    ):
-        # Day partitions bound the scan exactly. Keep walking from the front
-        # because the earliest partition can contain only zero-volume
-        # suspension placeholders, which do not establish traded coverage.
-        for part in parts:
-            scan = scan_parquet_root(
-                root,
-                partition_col=date_col,
-                start=part.start,
-                end=part.end,
-                traded_only=True,
-                dataset=dataset,
-                meta_root=config.meta_root,
-                committed=False,
-            )
-            value = scan.select(pl.col(date_col).min()).collect().item()
-            if value is not None:
-                return value
-        return None
-    try:
-        scan = scan_parquet_root(
-            root,
-            partition_col=date_col,
-            traded_only=dataset == "daily_bars" and date_col == "trade_date",
-            dataset=dataset,
-            meta_root=config.meta_root,
-            committed=False,
-        )
-        return scan.select(pl.col(date_col).min()).collect().item()
-    except FileNotFoundError:
-        return None
+    """Earliest *date_col* present in published *dataset*, if any."""
+    return _date_bound(config, dataset, date_col, latest=False)
 
 
 def coverage_end_date(
@@ -163,61 +158,12 @@ def coverage_end_date(
     date_col: str = "trade_date",
     read_context: ReadContext | None = None,
 ) -> date | None:
-    """Latest *date_col* present in curated *dataset*, if any.
+    """Latest *date_col* present in published *dataset*, if any.
 
-    Partition directory bounds are exact only for day partitions. Coarser or
-    mixed layouts must use the date stored in the row; otherwise a partial
-    current month/year can make an incomplete research window look complete.
+    A partial current month or year never stands in for its last day: the bound
+    is the date stored in the rows.
     """
-    root = read_root(config, dataset, read_context)
-    if not root.exists():
-        return None
-    parts = list_partitions(root, date_col, resolve=False)
-    if (
-        dataset != "daily_bars"
-        and parts
-        and all(part.start == part.end for part in parts)
-        and not list(root.glob("*.parquet"))
-    ):
-        return parts[-1].end
-    if (
-        dataset == "daily_bars"
-        and date_col == "trade_date"
-        and parts
-        and all(part.start == part.end for part in parts)
-        and not list(root.glob("*.parquet"))
-    ):
-        # As above, do not trust a final placeholder-only partition. In the
-        # normal lake this reads one Parquet partition instead of every
-        # historical file; the fallback remains fully row-based for mixed or
-        # loose layouts.
-        for part in reversed(parts):
-            scan = scan_parquet_root(
-                root,
-                partition_col=date_col,
-                start=part.start,
-                end=part.end,
-                traded_only=True,
-                dataset=dataset,
-                meta_root=config.meta_root,
-                committed=False,
-            )
-            value = scan.select(pl.col(date_col).max()).collect().item()
-            if value is not None:
-                return value
-        return None
-    try:
-        scan = scan_parquet_root(
-            root,
-            partition_col=date_col,
-            traded_only=dataset == "daily_bars" and date_col == "trade_date",
-            dataset=dataset,
-            meta_root=config.meta_root,
-            committed=False,
-        )
-        return scan.select(pl.col(date_col).max()).collect().item()
-    except FileNotFoundError:
-        return None
+    return _date_bound(config, dataset, date_col, latest=True, read_context=read_context)
 
 
 def trading_status_coverage_start(config: Config) -> date | None:
@@ -232,13 +178,7 @@ def st_coverage_start(config: Config) -> date | None:
     descriptive positive-label boundary; strict historical research must use a
     complete versioned ST evidence receipt instead of this minimum date.
     """
-    root = resolve_committed_root(
-        config.curated_root / "trading_status",
-        dataset="trading_status",
-        meta_root=config.meta_root,
-    )
-    if not root.exists():
-        return None
+    root = read_root(config, "trading_status", None)
     try:
         status = dedupe_lazy_by_primary_key(
             scan_parquet_root(

@@ -43,7 +43,8 @@ def create_root(config, root: str | None = None) -> Path:
 
 
 def stored_datasets(config) -> list[str]:
-    """Use publication pointers, not a scan of parquet contents."""
+    """Datasets with published rows, from the catalog or a generation alike."""
+    from cnequity.query.parquet_scan import dataset_has_parquet
     from cnequity.storage.revisions import resolve_committed_root
 
     result = []
@@ -53,7 +54,7 @@ def stored_datasets(config) -> list[str]:
             path = resolve_committed_root(base / name, dataset=name, meta_root=config.meta_root)
         except (OSError, ValueError, RuntimeError):
             continue
-        if path.is_dir():
+        if dataset_has_parquet(path, committed=False):
             result.append(name)
     return sorted(result)
 

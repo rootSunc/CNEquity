@@ -223,21 +223,6 @@ def bj_session_shortfall(
     return counts.select("trade_date", "expected", "missing", "sample") if counts.height else empty
 
 
-def _market_sessions(bars_root: Path | None) -> set[date]:
-    """Trading days the committed bars hold: one partition per market session."""
-    if bars_root is None or not bars_root.is_dir():
-        return set()
-    days: set[date] = set()
-    for entry in bars_root.iterdir():
-        name, _, value = entry.name.partition("=")
-        if name == "trade_date" and entry.is_dir():
-            try:
-                days.add(date.fromisoformat(value))
-            except ValueError:
-                continue
-    return days
-
-
 def _committed(root: Path | None, dataset: str, **scan) -> pl.DataFrame | None:
     """The committed generation of ``dataset``, one row per primary key."""
     if root is None or not dataset_has_parquet(root):
@@ -409,7 +394,13 @@ def _quarantine_limit_breaches(
         if parts
         else pl.DataFrame(schema={"symbol": pl.Utf8, "ex_date": pl.Date})
     )
-    sessions = _market_sessions(committed_root) | set(staged.get_column("trade_date").to_list())
+    from cnequity.query.calendar import list_trading_dates
+
+    # The market's sessions come from the calendar, not from the bars' partition
+    # directories: those are months since daily_bars moved to monthly partitions.
+    sessions = set(list_trading_dates(config, first, last)) | set(
+        staged.get_column("trade_date").to_list()
+    )
     breaches = bj_price_limit_breaches(
         staged, committed, all_actions, instruments, market_sessions=sorted(sessions)
     )
