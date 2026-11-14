@@ -298,7 +298,7 @@ def test_a_derive_target_resolves_whatever_its_case(tmp_path, monkeypatch):
     monkeypatch.setattr(
         maintain_cmds,
         "compute_adj_factors",
-        lambda cfg, full=False: (
+        lambda cfg, full=False, output=None: (
             seen.append("called") or type("R", (), {"rows": 0, "failed": [], "fail_ratio": 0.0})()
         ),
     )

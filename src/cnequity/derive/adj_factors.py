@@ -24,7 +24,6 @@ from cnequity.domain.symbols import is_cdr_symbol, parse_symbol
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.progress import sweep_progress
 from cnequity.storage.atomic import write_parquet_atomic
-from cnequity.storage.parquet import CuratedWriter
 from cnequity.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
@@ -336,6 +335,22 @@ def _factor_partition_symbols(config: Config, day: date) -> set[str]:
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
     root = config.derived_root / "adj_factors"
+    from cnequity.storage.revisions import RevisionStore
+
+    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
+    if store.commits_to_catalog("adj_factors"):
+        # No working tree is kept for a dataset the lake catalog holds: the
+        # published rows are what the derive starts from.
+        if not dataset_has_parquet(root):
+            return set()
+        return set(
+            scan_parquet_root(root, partition_col="trade_date", start=day, end=day)
+            .filter(pl.col("trade_date") == day)
+            .select("symbol")
+            .unique()
+            .collect()["symbol"]
+            .to_list()
+        )
     part = root / f"trade_date={day.isoformat()}"
     if dataset_has_parquet(part):
         return {
@@ -1988,6 +2003,7 @@ def _write_adj_partitions(
     out: pl.DataFrame,
     *,
     replace: bool,
+    output=None,
 ) -> int:
     """Persist aligned factors. Append-only merges into existing partitions unless *replace*."""
     # query.__init__ imports this module for STORED_ADJUST_TYPE, so keep this
@@ -1995,9 +2011,10 @@ def _write_adj_partitions(
     from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.partitions import partition_value
+    from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.parquet import write_partition_rows
 
-    writer = CuratedWriter(config.derived_root)
+    output = output or DerivedOutput(config, "adj_factors")
     total = 0
     # One group per partition in the registry's period: a day directory per
     # session, or a month file holding every session of the month. Replace
@@ -2011,17 +2028,14 @@ def _write_adj_partitions(
     for key, group in periods.partition_by("_period", as_dict=True).items():
         td_str = str(key[0] if isinstance(key, tuple) else key)
         group = group.drop("_period")
-        out_dir = config.derived_root / "adj_factors" / f"trade_date={td_str}"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        label = f"trade_date={td_str}"
         if replace:
             merged = group
         else:
-            existing_files = sorted(out_dir.rglob("*.parquet"))
-            if existing_files:
-                existing = pl.concat(
-                    [pl.read_parquet(path) for path in existing_files],
-                    how="diagonal_relaxed",
-                )
+            # Read for the comparison only: most partitions hold every row
+            # already, and they must not be checked out to find that out.
+            existing = output.rows(label)
+            if existing is not None:
                 fresh = _rows_not_already_stored(group, existing)
                 total += group.height
                 if fresh.is_empty():
@@ -2032,6 +2046,7 @@ def _write_adj_partitions(
                     continue
                 # Rows for symbols the partition lacks go into a file of their
                 # own; only a file holding a changed symbol is rewritten.
+                out_dir = output.partition(label)
                 write_partition_rows(
                     fresh,
                     "adj_factors",
@@ -2045,7 +2060,7 @@ def _write_adj_partitions(
                 continue
             merged = group
         merged = dedupe_by_primary_key(merged, "adj_factors")
-        writer.write_partition("adj_factors", "trade_date", td_str, merged, "part-0.parquet")
+        output.write(label, merged, "part-0.parquet")
         total += group.height
     return total
 
@@ -2057,6 +2072,7 @@ def compute_adj_factors(
     refresh_symbols: list[str] | None = None,
     realign_symbols: list[str] | None = None,
     full: bool = False,
+    output=None,
 ) -> AdjFactorsResult:
     """Derive hfq adj_factors (ADR-0004).
 
@@ -2077,6 +2093,7 @@ def compute_adj_factors(
             refresh_symbols=refresh_symbols,
             realign_symbols=realign_symbols,
             full=full,
+            output=output,
         )
 
 
@@ -2087,6 +2104,7 @@ def _compute_adj_factors_locked(
     refresh_symbols: list[str] | None = None,
     realign_symbols: list[str] | None = None,
     full: bool = False,
+    output=None,
 ) -> AdjFactorsResult:
     """Implementation of :func:`compute_adj_factors` under the mutation lock."""
     adjust_types = [adjust_type] if adjust_type else list(config.adj_factors_types)
@@ -2353,7 +2371,7 @@ def _compute_adj_factors_locked(
         # a frame can hold two. Keep what each row actually came from.
         out = out.with_columns(vendors.alias("source"))
 
-    total = _write_adj_partitions(config, out, replace=replace)
+    total = _write_adj_partitions(config, out, replace=replace, output=output)
     _update_retry_symbols(
         config,
         previous=retry_symbols,

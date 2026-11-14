@@ -99,7 +99,7 @@ def _stub_corporate_actions_backfill(monkeypatch, *, factor_dates: dict[str, dat
 
     @contextmanager
     def published(cfg, dataset):
-        yield {"status": "success", "rows_written": 0}
+        yield {"status": "success", "rows_written": 0}, None
 
     monkeypatch.setattr("cnequity.cli.maintain_cmds._published_derive", published)
     calls: list[list[str]] = []
@@ -180,12 +180,12 @@ def _stub_daily_bars_backfill(monkeypatch, *, after: pl.DataFrame, suspend=None)
 
     @contextmanager
     def published(cfg, dataset):
-        yield {"status": "success", "rows_written": 0}
+        yield {"status": "success", "rows_written": 0}, None
 
     monkeypatch.setattr("cnequity.cli.maintain_cmds._published_derive", published)
     derive_calls: list[dict] = []
 
-    def derive(cfg, **kwargs):
+    def derive(cfg, output=None, **kwargs):
         derive_calls.append(kwargs)
         return AdjFactorsResult(5, 1, [], [])
 

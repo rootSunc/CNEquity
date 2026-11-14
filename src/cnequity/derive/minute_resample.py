@@ -258,6 +258,7 @@ def derive_minute_resample(
     start: date | None = None,
     end: date | None = None,
     full: bool = False,
+    output=None,
 ) -> dict:
     """Compute and write one of the ``minute_bars_{15,30,60}m`` datasets.
 
@@ -269,7 +270,7 @@ def derive_minute_resample(
     from cnequity.domain.schemas import validate_dataframe, with_provenance
     from cnequity.file_lock import lake_mutation_lock
     from cnequity.storage.atomic import write_json_atomic
-    from cnequity.storage.parquet import CuratedWriter
+    from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.published import frame_day_digests
 
     frequency = FREQUENCY_BY_DATASET[dataset]
@@ -285,7 +286,7 @@ def derive_minute_resample(
         if not sessions:
             return {"rows": 0, "note": f"{dataset}：所选窗口内没有 1m 或 5m 数据"}
     derivation = _derivation_identity()
-    writer = CuratedWriter(config.derived_root)
+    out = output or DerivedOutput(config, dataset)
     rows = 0
     built = {"1m": 0, "5m": 0}
     skipped = {(reason, source): 0 for reason in GAP_REASONS for source in ("1m", "5m")}
@@ -305,15 +306,15 @@ def derive_minute_resample(
                 skipped[(reason, source)] += count
             holes.extend(gaps.filter(pl.col("reason") == "incomplete").head(5).to_dicts())
             invalid.extend(rejected.filter(~pl.col("reason").is_in(GAP_REASONS)).to_dicts())
-            partition = writer.partition_path(dataset, "trade_date", day.isoformat())
-            if bars.is_empty() and not partition.exists():
-                output = None
+            label = f"trade_date={day.isoformat()}"
+            if bars.is_empty() and not out.exists(label):
+                digest = None
             else:
                 if bars.is_empty():
                     # A rebuild with nothing left must not leave the old bars
-                    # published. An empty file, not a deletion: a revision
-                    # commit is a set of written files, so a removal alone
-                    # would never reach readers.
+                    # published. In a working tree that is an empty file, not
+                    # a deletion: a generation commit is a set of written
+                    # files, so a removal alone would never reach readers.
                     cleared.append(day)
                 else:
                     for source, count in (
@@ -328,17 +329,15 @@ def derive_minute_resample(
                 frame = validate_dataframe(
                     with_provenance(bars, source="derived", data_version="v1"), dataset
                 )
-                writer.write_partition(
-                    dataset, "trade_date", day.isoformat(), frame, "part-000.parquet"
-                )
-                output = frame_day_digests(frame, dataset).get(day)
+                out.write(label, frame, "part-000.parquet")
+                digest = frame_day_digests(frame, dataset).get(day)
             write_json_atomic(
                 _receipt_path(config, dataset, day),
                 {
                     "format": RECEIPT_FORMAT,
                     "inputs": inputs.get(day),
                     "derivation": derivation,
-                    "output": output,
+                    "output": digest,
                 },
             )
     for item in (*invalid, *holes):

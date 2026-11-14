@@ -123,18 +123,6 @@ def _watermarked_datasets() -> list[tuple[str, str]]:
     ]
 
 
-def _layer_file_identity(root: Path) -> dict[str, tuple[int, str]]:
-    """Capture parquet bytes without following links for a derive COW diff."""
-    from cnequity.storage.revisions import RevisionStore, sha256_file
-
-    if not root.exists():
-        return {}
-    return {
-        path.relative_to(root).as_posix(): (path.stat().st_size, sha256_file(path))
-        for path in RevisionStore._walk_files(root)
-    }
-
-
 DERIVE_INPUTS = {
     "adj_factors": ADJ_FACTOR_INPUTS,
     "industry_index": ("daily_bars", "industry_members", "adj_factors", "trading_calendar"),
@@ -178,27 +166,37 @@ def _publish_derived_revision(
     dataset: str,
     run_id: str,
     trade_date: date,
-    before: dict[str, tuple[int, str]],
+    output,
     *,
     input_revisions: dict | None = None,
     coverage_status: str = "unknown",
     factor_findings: list[dict] | None = None,
 ) -> dict | None:
-    """Publish one immutable COW generation for a derived dataset."""
+    """Publish what a derivation wrote into *output* as one gated revision.
+
+    *output* is the ``DerivedOutput`` the derivation wrote: the dataset's
+    working tree, or on a lake that publishes into its catalog a checkout of
+    the partitions it changed.
+    """
     from cnequity.domain.contracts import contract_fingerprint, dataset_contract
     from cnequity.storage.revisions import RevisionStore
 
-    root = config.derived_root / dataset
-    after = _layer_file_identity(root)
-    changed = [
-        root / relative for relative, identity in after.items() if before.get(relative) != identity
-    ]
-    if not changed:
+    if not output.changed():
         return None
+    changed = output.changed_files()
     from cnequity.file_lock import lake_mutation_lock
     from cnequity.quality.publication import evaluate_publication
 
     revisions = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
+    lake_write = output.lake_write
+
+    def reject(reason: str) -> None:
+        # Published data is untouched either way; the candidate is kept aside.
+        if lake_write is not None:
+            lake_write.discard(dataset)
+        else:
+            revisions.quarantine_candidate(dataset, run_id=run_id, reason=reason)
+
     with lake_mutation_lock(config.meta_root, blocking=True):
         for name, identity in (input_revisions or {}).items():
             current = revisions.current_pointer(name) or {}
@@ -208,19 +206,22 @@ def _publish_derived_revision(
             ):
                 from cnequity.orchestrator.outcomes import InputUnavailableError
 
-                revisions.quarantine_candidate(
-                    dataset, run_id=run_id, reason="input_revision_changed"
-                )
+                reject("input_revision_changed")
                 raise InputUnavailableError(
                     f"{dataset}: input {name} changed during calculation; re-run derive"
                 )
         if any(row.get("coverage_status") == "partial" for row in (input_revisions or {}).values()):
             coverage_status = "partial"
         publication = evaluate_publication(
-            config, f"{run_id}-{dataset}", trade_date, {dataset: root}, {dataset: changed}
+            config,
+            f"{run_id}-{dataset}",
+            trade_date,
+            {dataset: output.root},
+            {dataset: changed},
+            lake_write=lake_write,
         )
         if publication["blocked"]:
-            revisions.quarantine_candidate(dataset, run_id=run_id, reason="publication_gate")
+            reject("publication_gate")
             raise RuntimeError(
                 f"publication gate blocked {dataset}: {publication.get('report_path')}"
             )
@@ -233,25 +234,36 @@ def _publish_derived_revision(
                     proofs[f"{item['symbol']}|{item['trade_date']}"] = item
             factor_metadata["factor_event_proofs"] = proofs
         contract = dataset_contract(dataset)
-        revision = revisions.commit(
-            dataset,
-            run_id=run_id,
-            changed_files=changed,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
-            metadata={
-                "trade_date": trade_date.isoformat(),
-                "layer": "derived",
-                "input_revisions": input_revisions or {},
-                "coverage_status": coverage_status,
-                "publication_audit": {
-                    key: publication.get(key) for key in ("mode", "blocked", "report_path")
-                },
-                "changed_files_count": len(changed),
-                **factor_metadata,
+        schema_version = int(contract["schema_version"])
+        fingerprint = contract_fingerprint(contract)
+        metadata = {
+            "trade_date": trade_date.isoformat(),
+            "layer": "derived",
+            "input_revisions": input_revisions or {},
+            "coverage_status": coverage_status,
+            "publication_audit": {
+                key: publication.get(key) for key in ("mode", "blocked", "report_path")
             },
-            _locked=True,
-        )
+            "changed_files_count": len(changed),
+            **factor_metadata,
+        }
+        if lake_write is not None:
+            from cnequity.storage.lake_write import DatasetPublish
+
+            revision = lake_write.publish(
+                {dataset: DatasetPublish(schema_version, fingerprint, metadata)},
+                message=f"{dataset} revision from {run_id}",
+            ).get(dataset)
+        else:
+            revision = revisions.commit(
+                dataset,
+                run_id=run_id,
+                changed_files=changed,
+                schema_version=schema_version,
+                contract_fingerprint=fingerprint,
+                metadata=metadata,
+                _locked=True,
+            )
     if revision is None:
         return None
     _record_dataset_result(
@@ -1140,33 +1152,22 @@ def step_derive_adj_factors(config: Config, trade_date: date, run_id: str, conte
     switched = settle_recent_unstepped_factors(config, trade_date)
     if switched:
         rebackfill = sorted(set(rebackfill) | set(switched))
-    from cnequity.storage.revisions import RevisionStore
+    from cnequity.storage.derived_output import DerivedOutput
 
-    derived_revisions = RevisionStore(
-        config.meta_root,
-        config.curated_root,
-        config.derived_root,
-    )
     try:
-        # Keep the mutable writer tree seeded from the last committed
-        # generation.  This is especially important after an operator removes
-        # the legacy derived path: an append-only derive must not publish only
-        # its new tip and lose retained history.
-        derived_revisions.ensure_current("adj_factors")
-        derived_revisions.materialize_current("adj_factors")
-        before_files = _layer_file_identity(config.derived_root / "adj_factors")
-        input_revisions = _capture_derive_inputs(config, "adj_factors")
-        result = compute_adj_factors(config, refresh_symbols=rebackfill)
-        published_revision = _publish_derived_revision(
-            config,
-            "adj_factors",
-            run_id,
-            trade_date,
-            before_files,
-            input_revisions=input_revisions,
-            coverage_status="partial" if result.failed else "unknown",
-            factor_findings=result.findings,
-        )
+        with DerivedOutput(config, "adj_factors", run_id) as output:
+            input_revisions = _capture_derive_inputs(config, "adj_factors")
+            result = compute_adj_factors(config, refresh_symbols=rebackfill, output=output)
+            published_revision = _publish_derived_revision(
+                config,
+                "adj_factors",
+                run_id,
+                trade_date,
+                output,
+                input_revisions=input_revisions,
+                coverage_status="partial" if result.failed else "unknown",
+                factor_findings=result.findings,
+            )
     except Exception as exc:
         _record_dataset_result(
             config,
@@ -1303,7 +1304,7 @@ def step_derive_futures_continuous(
     """Main and second-month continuous futures from curated futures_bars."""
     from cnequity.derive.futures_continuous import derive_futures_continuous
     from cnequity.domain.datasets import is_dataset_enabled
-    from cnequity.storage.revisions import RevisionStore
+    from cnequity.storage.derived_output import DerivedOutput
 
     if not is_dataset_enabled("futures_continuous", config):
         return {
@@ -1311,15 +1312,12 @@ def step_derive_futures_continuous(
             "rows_written": 0,
             "note": "futures_continuous disabled ([futures].enabled = false)",
         }
-    revisions = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    revisions.ensure_current("futures_continuous")
-    revisions.materialize_current("futures_continuous")
-    before = _layer_file_identity(config.derived_root / "futures_continuous")
-    inputs = _capture_derive_inputs(config, "futures_continuous")
-    summary = derive_futures_continuous(config)
-    published = _publish_derived_revision(
-        config, "futures_continuous", run_id, trade_date, before, input_revisions=inputs
-    )
+    with DerivedOutput(config, "futures_continuous", run_id) as output:
+        inputs = _capture_derive_inputs(config, "futures_continuous")
+        summary = derive_futures_continuous(config, output=output)
+        published = _publish_derived_revision(
+            config, "futures_continuous", run_id, trade_date, output, input_revisions=inputs
+        )
     rows = int(summary.get("rows") or 0)
     out: dict = {"rows_read": rows, "rows_written": rows}
     if published is not None:
@@ -1340,7 +1338,7 @@ def step_derive_option_greeks(config: Config, trade_date: date, run_id: str, con
     """The lake's own IV and Greeks for new option settlements."""
     from cnequity.derive.option_greeks import derive_option_greeks
     from cnequity.domain.datasets import is_dataset_enabled
-    from cnequity.storage.revisions import RevisionStore
+    from cnequity.storage.derived_output import DerivedOutput
 
     if not is_dataset_enabled("option_greeks", config):
         return {
@@ -1348,15 +1346,12 @@ def step_derive_option_greeks(config: Config, trade_date: date, run_id: str, con
             "rows_written": 0,
             "note": "option_greeks disabled ([futures].enabled / options = false)",
         }
-    revisions = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    revisions.ensure_current("option_greeks")
-    revisions.materialize_current("option_greeks")
-    before = _layer_file_identity(config.derived_root / "option_greeks")
-    inputs = _capture_derive_inputs(config, "option_greeks")
-    summary = derive_option_greeks(config)
-    published = _publish_derived_revision(
-        config, "option_greeks", run_id, trade_date, before, input_revisions=inputs
-    )
+    with DerivedOutput(config, "option_greeks", run_id) as output:
+        inputs = _capture_derive_inputs(config, "option_greeks")
+        summary = derive_option_greeks(config, output=output)
+        published = _publish_derived_revision(
+            config, "option_greeks", run_id, trade_date, output, input_revisions=inputs
+        )
     rows = int(summary.get("rows") or 0)
     out: dict = {"rows_read": rows, "rows_written": rows}
     if published is not None:
@@ -1378,27 +1373,20 @@ def step_derive_industry_index(
     config: Config, trade_date: date, run_id: str, context: dict
 ) -> dict:
     from cnequity.derive.industry_index import derive_industry_index
-    from cnequity.storage.revisions import RevisionStore
+    from cnequity.storage.derived_output import DerivedOutput
 
-    derived_revisions = RevisionStore(
-        config.meta_root,
-        config.curated_root,
-        config.derived_root,
-    )
     try:
-        derived_revisions.ensure_current("industry_index")
-        derived_revisions.materialize_current("industry_index")
-        before_files = _layer_file_identity(config.derived_root / "industry_index")
-        inputs = _capture_derive_inputs(config, "industry_index")
-        summary = derive_industry_index(config)
-        published_revision = _publish_derived_revision(
-            config,
-            "industry_index",
-            run_id,
-            trade_date,
-            before_files,
-            input_revisions=inputs,
-        )
+        with DerivedOutput(config, "industry_index", run_id) as output:
+            inputs = _capture_derive_inputs(config, "industry_index")
+            summary = derive_industry_index(config, output=output)
+            published_revision = _publish_derived_revision(
+                config,
+                "industry_index",
+                run_id,
+                trade_date,
+                output,
+                input_revisions=inputs,
+            )
     except Exception as exc:
         _record_dataset_result(
             config,

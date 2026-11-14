@@ -537,11 +537,11 @@ def _sync_adj_factors(
     from cnequity.derive.lineage import verify_factor_sync
 
     click.echo(_("\nDeriving adjustment factors…"), err=True)
-    with _published_derive(cfg, "adj_factors") as outcome:
+    with _published_derive(cfg, "adj_factors") as (outcome, output):
         derived = (
-            compute_adj_factors(cfg, realign_symbols=affected)
+            compute_adj_factors(cfg, realign_symbols=affected, output=output)
             if realign
-            else compute_adj_factors(cfg, refresh_symbols=affected)
+            else compute_adj_factors(cfg, refresh_symbols=affected, output=output)
         )
         outcome["rows_written"] = derived.rows
         if derived.failed:

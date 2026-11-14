@@ -200,21 +200,22 @@ def _published_derive(cfg, dataset: str):
     from cnequity.query.parquet_scan import dataset_has_parquet
     from cnequity.steps.finalize import (
         _capture_derive_inputs,
-        _layer_file_identity,
         _publish_derived_revision,
         _record_dataset_result,
     )
+    from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.revisions import RevisionStore
 
     manifest = Manifest(cfg.manifest_path)
     run_id = manifest.start_run(f"derive:{dataset}", {"dataset": dataset})
     outcome = {"status": "success", "rows_written": 0}
     try:
-        with run_lock(cfg.meta_root, run_id), lake_mutation_lock(cfg.meta_root):
+        with (
+            run_lock(cfg.meta_root, run_id),
+            lake_mutation_lock(cfg.meta_root),
+            DerivedOutput(cfg, dataset, run_id) as output,
+        ):
             store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-            store.ensure_current(dataset)
-            store.materialize_current(dataset)
-            before = _layer_file_identity(cfg.derived_root / dataset)
             inputs = _capture_derive_inputs(cfg, dataset)
             required = {
                 "adj_factors": ("daily_bars",),
@@ -237,13 +238,13 @@ def _published_derive(cfg, dataset: str):
                 raise InputUnavailableError(
                     f"{dataset}: missing input {', '.join(missing)}; build it first with {remedies}"
                 )
-            yield outcome
+            yield outcome, output
             revision = _publish_derived_revision(
                 cfg,
                 dataset,
                 run_id,
                 shanghai_today(),
-                before,
+                output,
                 input_revisions=inputs,
                 coverage_status="partial"
                 if outcome["status"] in {"warning", "degraded"}
@@ -390,8 +391,8 @@ def derive(
     if start and end and start > end:
         raise click.ClickException(_("--start must be on or before --end"))
     if name == "adj_factors":
-        with _published_derive(cfg, name) as outcome:
-            result = compute_adj_factors(cfg, full=full)
+        with _published_derive(cfg, name) as (outcome, output):
+            result = compute_adj_factors(cfg, full=full, output=output)
             outcome["rows_written"] = result.rows
             if result.failed:
                 outcome["status"] = "degraded"
@@ -421,8 +422,8 @@ def derive(
     elif name == "industry_index":
         from cnequity.derive.industry_index import derive_industry_index
 
-        with _published_derive(cfg, name) as outcome:
-            summary = derive_industry_index(cfg, start=start, end=end, full=full)
+        with _published_derive(cfg, name) as (outcome, output):
+            summary = derive_industry_index(cfg, start=start, end=end, full=full, output=output)
             outcome["rows_written"] = summary.get("rows", 0)
         emit_json(summary, indent=2, default=str)
     elif name == "futures_continuous":
@@ -434,23 +435,25 @@ def derive(
             )
         from cnequity.derive.futures_continuous import derive_futures_continuous
 
-        with _published_derive(cfg, name) as outcome:
-            summary = derive_futures_continuous(cfg)
+        with _published_derive(cfg, name) as (outcome, output):
+            summary = derive_futures_continuous(cfg, output=output)
             outcome["rows_written"] = summary.get("rows", 0)
         emit_json(summary, indent=2, default=str)
     elif name == "option_greeks":
         from cnequity.derive.option_greeks import derive_option_greeks
 
-        with _published_derive(cfg, name) as outcome:
-            summary = derive_option_greeks(cfg, start=start, end=end, full=full)
+        with _published_derive(cfg, name) as (outcome, output):
+            summary = derive_option_greeks(cfg, start=start, end=end, full=full, output=output)
             outcome["rows_written"] = summary.get("rows", 0)
         emit_json(summary, indent=2, default=str)
     elif name in RESAMPLED_MINUTE_DATASETS:
         from cnequity.derive.minute_resample import derive_minute_resample
 
-        with _published_derive(cfg, name) as outcome:
+        with _published_derive(cfg, name) as (outcome, output):
             _require_minute_input(cfg, name)
-            summary = derive_minute_resample(cfg, name, start=start, end=end, full=full)
+            summary = derive_minute_resample(
+                cfg, name, start=start, end=end, full=full, output=output
+            )
             outcome["rows_written"] = summary.get("rows", 0)
             # Halts are expected gaps; a gap in a traded day, or input the
             # resampler rejects, is a data problem.

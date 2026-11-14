@@ -1065,7 +1065,9 @@ def test_derive_adj_factors(cfg_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cnequity.cli.maintain_cmds.compute_adj_factors",
-        lambda cfg, full=False: AdjFactorsResult(rows=12, task_count=12, failed=[], findings=[]),
+        lambda cfg, full=False, output=None: AdjFactorsResult(
+            rows=12, task_count=12, failed=[], findings=[]
+        ),
     )
     result = CliRunner().invoke(cli, ["derive", "adj_factors", "--config", cfg_path])
     assert result.exit_code == 0, result.output
@@ -1078,7 +1080,7 @@ def test_derive_industry_index(cfg_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cnequity.derive.industry_index.derive_industry_index",
-        lambda cfg, full=False, start=None, end=None: {"rows": 3, "note": "ok"},
+        lambda cfg, full=False, start=None, end=None, output=None: {"rows": 3, "note": "ok"},
     )
     result = CliRunner().invoke(cli, ["derive", "industry_index", "--config", cfg_path])
     assert result.exit_code == 0, result.output
@@ -2149,7 +2151,7 @@ def test_cli_derive_publishes_new_revision_and_preserves_old_reader(cfg_path, mo
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
     before = store.ensure_current("adj_factors")
 
-    def compute(config, full=False):
+    def compute(config, full=False, output=None):
         frame.with_columns(pl.lit(2.0).alias("factor")).write_parquet(path)
         return AdjFactorsResult(1, 1, [], [])
 
@@ -2169,7 +2171,7 @@ def test_cli_derive_source_limit_finishes_with_fallback(cfg_path, monkeypatch):
     )
     monkeypatch.setattr(
         "cnequity.cli.maintain_cmds.compute_adj_factors",
-        lambda cfg, full=False: AdjFactorsResult(0, 1, ["920001.BJ:hfq"], []),
+        lambda cfg, full=False, output=None: AdjFactorsResult(0, 1, ["920001.BJ:hfq"], []),
     )
     result = CliRunner().invoke(cli, ["derive", "adj_factors", "--config", cfg_path])
     assert result.exit_code == 0, result.output

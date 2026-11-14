@@ -242,7 +242,7 @@ def _curated(config, dataset: str) -> pl.DataFrame | None:
     return dedupe_by_primary_key(scan.collect(), dataset)
 
 
-def derive_futures_continuous(config) -> dict:
+def derive_futures_continuous(config, *, output=None) -> dict:
     """Rebuild ``futures_continuous`` from curated bars and contracts.
 
     A full rebuild, not an increment: the adjustment factors are cumulative
@@ -252,7 +252,7 @@ def derive_futures_continuous(config) -> dict:
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.schemas import validate_dataframe, with_provenance
     from cnequity.file_lock import lake_mutation_lock
-    from cnequity.storage.parquet import CuratedWriter
+    from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.state import StateStore
 
     bars = _curated(config, "futures_bars")
@@ -278,8 +278,7 @@ def derive_futures_continuous(config) -> dict:
     frame = validate_dataframe(
         with_provenance(frame, source="derived", data_version="v1"), "futures_continuous"
     )
-    root = config.derived_root / "futures_continuous"
-    writer = CuratedWriter(config.derived_root)
+    output = output or DerivedOutput(config, "futures_continuous")
     with lake_mutation_lock(config.meta_root, blocking=True):
         keep: set[str] = set()
         for (period,), group in (
@@ -291,16 +290,13 @@ def derive_futures_continuous(config) -> dict:
             .partition_by("_p", as_dict=True)
             .items()
         ):
-            keep.add(f"{DATASETS['futures_continuous'].partition_col}={period}")
-            writer.write_partition(
-                "futures_continuous", "trade_date", period, group.drop("_p"), "part-000.parquet"
-            )
+            label = f"{DATASETS['futures_continuous'].partition_col}={period}"
+            keep.add(label)
+            output.write(label, group.drop("_p"), "part-000.parquet")
         # A product that lost history in a rebuild must not keep stale months.
-        if root.exists():
-            for stale in root.iterdir():
-                if stale.is_dir() and stale.name not in keep:
-                    for path in stale.rglob("*.parquet"):
-                        path.unlink()
+        for stale in output.labels():
+            if stale not in keep:
+                output.remove(stale)
         StateStore(config.meta_root).set_date("futures_continuous", frame["trade_date"].max())
     return {
         "rows": frame.height,

@@ -42,6 +42,7 @@ def settle(request, tmp_path):
     if request.param == "generation":
         keep = lambda cfg: cfg  # noqa: E731
         keep.on_working_tree = lambda: None
+        keep.kind = "generation"
         yield keep
         return
     from cnequity.storage.catalog_migration import migrate_to_catalog
@@ -82,6 +83,7 @@ def settle(request, tmp_path):
         pytest.skip("the test goes on to write the working tree by hand")
 
     move.on_working_tree = on_working_tree
+    move.kind = "catalog"
     yield move
     catalog_read.close_all()
     # The writer read and published through the catalog alone.

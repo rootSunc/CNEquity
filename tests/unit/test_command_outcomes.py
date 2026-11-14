@@ -27,6 +27,7 @@ from cnequity.orchestrator.outcomes import (
 )
 from cnequity.orchestrator.registry import StepEntry
 from cnequity.run_scope import set_backfill
+from cnequity.storage.derived_output import DerivedOutput
 from cnequity.storage.parquet import StagingWriter
 from cnequity.storage.revisions import RevisionStore
 from cnequity.storage.state import StateStore
@@ -451,7 +452,7 @@ def test_derived_publication_records_partial_input_identity(tmp_path):
     target.mkdir(parents=True)
     _factor_frame().write_parquet(target / "part.parquet")
     result = _publish_derived_revision(
-        cfg, "adj_factors", "derive", DAY, {}, input_revisions=inputs
+        cfg, "adj_factors", "derive", DAY, DerivedOutput(cfg, "adj_factors"), input_revisions=inputs
     )
     assert result["coverage_status"] == "partial"
     assert result["publication_status"] == "partial"
@@ -486,7 +487,14 @@ def test_changed_input_revision_cannot_publish_derived_candidate(tmp_path):
     target.mkdir(parents=True)
     _factor_frame().write_parquet(target / "part.parquet")
     with pytest.raises(InputUnavailableError, match="changed during calculation"):
-        _publish_derived_revision(cfg, "adj_factors", "derive", DAY, {}, input_revisions=inputs)
+        _publish_derived_revision(
+            cfg,
+            "adj_factors",
+            "derive",
+            DAY,
+            DerivedOutput(cfg, "adj_factors"),
+            input_revisions=inputs,
+        )
     assert store.current_pointer("adj_factors") is None
 
 
@@ -612,7 +620,14 @@ def test_share_structure_change_blocks_adj_factors_publication(tmp_path):
     target.mkdir(parents=True)
     _factor_frame().write_parquet(target / "part.parquet")
     with pytest.raises(InputUnavailableError, match="share_structure changed"):
-        _publish_derived_revision(cfg, "adj_factors", "derive", DAY, {}, input_revisions=inputs)
+        _publish_derived_revision(
+            cfg,
+            "adj_factors",
+            "derive",
+            DAY,
+            DerivedOutput(cfg, "adj_factors"),
+            input_revisions=inputs,
+        )
     assert store.current_pointer("adj_factors") is None
 
 

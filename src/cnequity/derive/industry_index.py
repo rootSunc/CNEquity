@@ -345,6 +345,7 @@ def derive_industry_index(
     start: date | None = None,
     end: date | None = None,
     full: bool = False,
+    output=None,
 ) -> dict:
     """Compute and write ``industry_index``, partitioned by year.
 
@@ -358,7 +359,7 @@ def derive_industry_index(
     # This derive merges existing yearly partitions and must share compact's
     # mutation lock with other curated/derived writers.
     with lake_mutation_lock(config.meta_root, blocking=True):
-        return _derive_industry_index_locked(config, start=start, end=end, full=full)
+        return _derive_industry_index_locked(config, start=start, end=end, full=full, output=output)
 
 
 def _derive_industry_index_locked(
@@ -367,6 +368,7 @@ def _derive_industry_index_locked(
     start: date | None = None,
     end: date | None = None,
     full: bool = False,
+    output=None,
 ) -> dict:
     """Implementation of :func:`derive_industry_index` under the mutation lock."""
     from cnequity.domain.schemas import with_provenance
@@ -399,7 +401,9 @@ def _derive_industry_index_locked(
     frame = with_provenance(frame, source="derived", data_version="v1")
     frame = dedupe_by_primary_key(frame, "industry_index")
 
-    root = config.derived_root / "industry_index"
+    from cnequity.storage.derived_output import DerivedOutput
+
+    output = output or DerivedOutput(config, "industry_index")
     written = 0
     spec = DATASETS["industry_index"]
     for (period,), group in (
@@ -410,8 +414,7 @@ def _derive_industry_index_locked(
         .items()
     ):
         group = group.drop("_p")
-        out_dir = root / f"{spec.partition_col}={period}"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = output.partition(f"{spec.partition_col}={period}")
         stored = sorted(out_dir.glob("*.parquet"))
         if stored:
             # Keep one type per column across the partition's files: a rerun

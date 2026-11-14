@@ -368,16 +368,26 @@ def stale_sessions(config, context=None) -> list[date]:
 
 
 def derive_option_greeks(
-    config, *, start: date | None = None, end: date | None = None, full: bool = False
+    config,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+    full: bool = False,
+    output=None,
 ) -> dict:
     # Not under the lake lock: the inputs are pinned generations, and only the
     # write section mutates the lake. Holding the lock for the whole compute
     # stalled every other job's compact for ~50 minutes a day.
-    return _derive_option_greeks(config, start=start, end=end, full=full)
+    return _derive_option_greeks(config, start=start, end=end, full=full, output=output)
 
 
 def _derive_option_greeks(
-    config, *, start: date | None = None, end: date | None = None, full: bool = False
+    config,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+    full: bool = False,
+    output=None,
 ) -> dict:
     """Compute and write ``option_greeks``.
 
@@ -389,7 +399,7 @@ def _derive_option_greeks(
     from cnequity.domain.market_time import shanghai_today
     from cnequity.domain.schemas import validate_dataframe, with_provenance
     from cnequity.file_lock import lake_mutation_lock
-    from cnequity.storage.parquet import CuratedWriter
+    from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.state import StateStore
 
     state = StateStore(config.meta_root)
@@ -433,12 +443,10 @@ def _derive_option_greeks(
     from cnequity.storage.atomic import write_json_atomic
     from cnequity.storage.published import frame_day_digests
 
-    writer = CuratedWriter(config.derived_root)
+    output = output or DerivedOutput(config, "option_greeks")
     with lake_mutation_lock(config.meta_root, blocking=True):
         for (day,), group in frame.partition_by("trade_date", as_dict=True).items():
-            writer.write_partition(
-                "option_greeks", "trade_date", day.isoformat(), group, "part-000.parquet"
-            )
+            output.write(f"trade_date={day.isoformat()}", group, "part-000.parquet")
             write_json_atomic(
                 _receipt(config, day),
                 _receipt_for(
