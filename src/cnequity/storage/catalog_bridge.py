@@ -658,7 +658,11 @@ def sync_all(config, catalog: Catalog, progress=None) -> list[SyncResult]:
     prepare_record_tables(catalog)
     results = []
     for dataset in sorted(DATASETS):
-        if progress is not None and committed_source(config, dataset) is not None:
+        if (
+            progress is not None
+            and committed_source(config, dataset) is not None
+            and not catalog_is_current(config, catalog, dataset)
+        ):
             progress(dataset)
         result = sync_dataset(config, catalog, dataset)
         if result is not None:

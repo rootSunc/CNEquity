@@ -326,6 +326,36 @@ def test_one_command_shows_then_does_the_whole_upgrade(lake, monkeypatch):
     assert len(list((lake.data_root / "backups").glob("upgrade-*"))) == 1
 
 
+def test_a_stopped_upgrade_continues_with_what_it_had_not_done(lake, monkeypatch):
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+    from cnequity.query import catalog_read
+    from cnequity.storage import catalog_bridge
+
+    config = _built_by(lake, "0.24.0")
+    real_sync = catalog_bridge.sync_dataset
+
+    def stop_at_margins(cfg, catalog, dataset):
+        if dataset == "margin_trading":
+            raise KeyboardInterrupt
+        return real_sync(cfg, catalog, dataset)
+
+    monkeypatch.setattr(catalog_bridge, "sync_dataset", stop_at_margins)
+    CliRunner().invoke(cli, ["upgrade", "--apply", "--config", config])
+    monkeypatch.setattr(catalog_bridge, "sync_dataset", real_sync)
+    catalog_read.close_all()
+    assert not (lake.meta_root / "storage.json").exists()
+
+    done = CliRunner().invoke(cli, ["upgrade", "--apply", "--config", config])
+    catalog_read.close_all()
+    assert done.exit_code == 0, done.output
+    # Only what the stopped run had not registered is registered, and counted.
+    assert "registering 1/1 margin_trading" in done.output
+    assert "fund_flow" not in done.output.split("registering", 1)[1].split("verifying", 1)[0]
+    assert (lake.meta_root / "storage.json").exists()
+
+
 def test_an_upgrade_this_machine_cannot_do_changes_nothing(lake, monkeypatch):
     from click.testing import CliRunner
 
