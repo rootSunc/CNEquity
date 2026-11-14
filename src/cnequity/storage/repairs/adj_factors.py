@@ -25,11 +25,11 @@ from cnequity.derive.fund_factors import apply_fund_share_factors
 from cnequity.derive.stock_factors import apply_stock_event_factors
 from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.schemas import with_provenance
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.cross_checks import factor_action_contradictions
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.instrument_catalog import load_curated_instruments
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore, sha256_file
@@ -267,7 +267,7 @@ def repair_adj_factors(
                     logging.getLogger(__name__).warning(
                         "independent factor refresh unavailable", exc_info=True
                     )
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )

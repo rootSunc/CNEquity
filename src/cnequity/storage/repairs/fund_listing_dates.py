@@ -10,8 +10,8 @@ from cnequity.adapters.eastmoney.instruments import _fill_list_dates
 from cnequity.adapters.exchange.fund_listings import fetch_exchange_fund_listings
 from cnequity.config import Config
 from cnequity.domain.market_time import shanghai_today
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
@@ -24,7 +24,7 @@ def repair_fund_listing_dates(config: Config, *, apply: bool = False) -> dict:
     # Fetch before taking the publication lock; re-read the live generation
     # below, so another writer's dates cannot be overwritten by this repair.
     dates, wire = fetch_exchange_fund_listings(config, exchanges={"SH", "SZ"})
-    with lake_mutation_lock(config.meta_root, blocking=True) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )

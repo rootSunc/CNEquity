@@ -21,8 +21,8 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.schemas import data_version_for, with_provenance
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
@@ -66,7 +66,7 @@ def repair_offshore_final(
     fetch: Callable[[Config, date, date], pl.DataFrame] = fetch_final_offshore,
 ) -> dict:
     """Preview, or publish one gated revision with the offshore rows made final."""
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )

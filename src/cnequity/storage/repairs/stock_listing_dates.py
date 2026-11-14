@@ -12,9 +12,9 @@ from cnequity.adapters.cninfo.listings import IPO_CALENDAR_URL, parse_listing_ca
 from cnequity.adapters.eastmoney.instruments import _fill_list_dates
 from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.rate_limit import source_request
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
@@ -99,7 +99,7 @@ def repair_stock_listing_dates(
     # Re-read inside the lock: do not overwrite dates or contradict new bars
     # from a concurrent writer. The first bar only selects the request day;
     # the independently dated 'listed' event supplies the fact.
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         context = ReadContext.capture(config, ("instruments", "daily_bars"), {})
         missing, first = _unknown_traded(context)
         missing_symbols = set(missing["symbol"].to_list())

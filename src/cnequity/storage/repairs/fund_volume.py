@@ -18,9 +18,9 @@ from cnequity.adapters.exchange.fund_volume import (
 )
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.schemas import data_version_for, with_provenance
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
@@ -262,7 +262,7 @@ def repair_fund_volume(config, *, apply=False, refresh_sources=False, max_symbol
     }
     if not apply or matching.is_empty():
         return report
-    with lake_mutation_lock(config.meta_root):
+    with planned_on(config):
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         store.ensure_current(DATASET)
         live = ReadContext.capture(config, (DATASET, "instruments"), {})

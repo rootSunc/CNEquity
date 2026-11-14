@@ -398,7 +398,6 @@ def _derive_option_greeks(
     """
     from cnequity.domain.market_time import shanghai_today
     from cnequity.domain.schemas import validate_dataframe, with_provenance
-    from cnequity.file_lock import lake_mutation_lock
     from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.state import StateStore
 
@@ -444,19 +443,18 @@ def _derive_option_greeks(
     from cnequity.storage.published import frame_day_digests
 
     output = output or DerivedOutput(config, "option_greeks")
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        for (day,), group in frame.partition_by("trade_date", as_dict=True).items():
-            output.write(f"trade_date={day.isoformat()}", group, "part-000.parquet")
-            write_json_atomic(
-                _receipt(config, day),
-                _receipt_for(
-                    dependencies, digests, day, frame_day_digests(group, "option_greeks").get(day)
-                ),
-            )
-        # Rewriting an earlier window must not pull the watermark back.
-        latest = frame["trade_date"].max()
-        previous = state.get_date("option_greeks")
-        state.set_date("option_greeks", latest if previous is None else max(previous, latest))
+    for (day,), group in frame.partition_by("trade_date", as_dict=True).items():
+        output.write(f"trade_date={day.isoformat()}", group, "part-000.parquet")
+        write_json_atomic(
+            _receipt(config, day),
+            _receipt_for(
+                dependencies, digests, day, frame_day_digests(group, "option_greeks").get(day)
+            ),
+        )
+    # Rewriting an earlier window must not pull the watermark back.
+    latest = frame["trade_date"].max()
+    previous = state.get_date("option_greeks")
+    state.set_date("option_greeks", latest if previous is None else max(previous, latest))
     counts = frame["status"].value_counts().sort("status")
     return {
         "rows": frame.height,

@@ -19,8 +19,8 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.repairs.publish import publish_repair, repair_root
 from cnequity.storage.revisions import RevisionStore
 
@@ -42,11 +42,11 @@ def _symbols(root: Path, partition_col: str) -> set[str]:
 
 def repair_orphan_symbols(config: Config, *, apply: bool = False) -> dict:
     """Plan (default) or publish removal of rows for securities with no bars."""
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _repair_locked(config, apply=apply)
+    with planned_on(config):
+        return _repair_planned(config, apply=apply)
 
 
-def _repair_locked(config: Config, *, apply: bool) -> dict:
+def _repair_planned(config: Config, *, apply: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
     bars = repair_root(config, store, "daily_bars", register=False)
     priced = _symbols(bars, "trade_date") if bars is not None else set()
@@ -100,11 +100,11 @@ def repair_stale_derived_suspensions(config: Config, *, apply: bool = False) -> 
     the bar is fetched it is wrong: 223 Beijing rows for 2026-08-07 were
     inferred from a run that lost the Beijing leg, not from a halt.
     """
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _repair_stale_locked(config, apply=apply)
+    with planned_on(config):
+        return _repair_stale_planned(config, apply=apply)
 
 
-def _repair_stale_locked(config: Config, *, apply: bool) -> dict:
+def _repair_stale_planned(config: Config, *, apply: bool) -> dict:
     from cnequity.domain.canonical import dedupe_lazy_by_primary_key
     from cnequity.domain.trading_status import DERIVED_BAR_GAP_SOURCE
 

@@ -33,7 +33,7 @@ from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.partitions import partition_value
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import data_version_for, with_provenance
-from cnequity.file_lock import lake_mutation_lock
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.repairs.publish import PartitionRewrite
 from cnequity.storage.revisions import RevisionStore
@@ -307,7 +307,7 @@ def repair_index_history(config, *, index_symbol="399001.SZ", apply=False, refre
         "source_receipts": receipts,
         "failures": [],
     }
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         if apply:
             store.ensure_current(DATASET)

@@ -31,8 +31,8 @@ from cnequity.domain.trading_status import (
     last_first_hand_status,
     split_before_listing,
 )
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.repairs.publish import publish_repair, repair_root, scan_published
 from cnequity.storage.repairs.status_listing_window import listing_spans
 from cnequity.storage.revisions import RevisionStore
@@ -52,8 +52,8 @@ def repair_status_outages(config: Config, *, start: date, end: date, apply: bool
     """Plan (default) or publish the replayed fallback for ``[start, end]``."""
     if end < start:
         raise ValueError("end must not be before start")
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _repair_locked(config, start=start, end=end, apply=apply)
+    with planned_on(config):
+        return _repair_planned(config, start=start, end=end, apply=apply)
 
 
 def _delist_dates(store: RevisionStore, config: Config) -> dict[str, date]:
@@ -137,7 +137,7 @@ def plan_status_outages(
     return dropped, rows
 
 
-def _repair_locked(config: Config, *, start: date, end: date, apply: bool) -> dict:
+def _repair_planned(config: Config, *, start: date, end: date, apply: bool) -> dict:
     from cnequity.query.calendar import list_trading_dates
 
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)

@@ -16,8 +16,8 @@ from cnequity.domain.value_rules import (
     placeholder_counts,
     placeholder_predicates,
 )
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
@@ -35,7 +35,7 @@ def rewritable_datasets() -> list[str]:
 def repair_missing_values(config: Config, dataset: str, *, apply: bool = False) -> dict:
     if dataset not in rewritable_datasets():
         raise ValueError(f"unsupported missing-value repair: {dataset}")
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )

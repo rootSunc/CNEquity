@@ -13,8 +13,8 @@ from __future__ import annotations
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.repairs.publish import publish_repair, repair_root
 from cnequity.storage.repairs.status_listing_window import instrument_spans
 from cnequity.storage.revisions import RevisionStore
@@ -33,11 +33,11 @@ def plan_bar_listing_window(rows: pl.DataFrame, spans: pl.DataFrame) -> pl.DataF
 
 def repair_bar_listing_window(config: Config, *, apply: bool = False) -> dict:
     """Plan (default) or publish the removal of placeholder bars after delisting."""
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _repair_locked(config, apply=apply)
+    with planned_on(config):
+        return _repair_planned(config, apply=apply)
 
 
-def _repair_locked(config: Config, *, apply: bool) -> dict:
+def _repair_planned(config: Config, *, apply: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
     base = repair_root(config, store, DATASET, register=apply)
     report: dict = {"applied": False, "rows": 0}

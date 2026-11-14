@@ -21,7 +21,6 @@ from cnequity.domain.findings import finding
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import with_provenance
 from cnequity.domain.symbols import is_cdr_symbol, parse_symbol
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.progress import sweep_progress
 from cnequity.storage.atomic import write_parquet_atomic
 from cnequity.storage.state import StateStore
@@ -2084,29 +2083,6 @@ def compute_adj_factors(
     only re-aligns their cached factors onto their full bar history — what a
     bar backfill needs, since it changes dates, not the factors themselves.
     """
-    # The derive reads existing partitions and then merges/replaces them.  It
-    # must not overlap compact, repartition, or another derive invocation.
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _compute_adj_factors_locked(
-            config,
-            adjust_type,
-            refresh_symbols=refresh_symbols,
-            realign_symbols=realign_symbols,
-            full=full,
-            output=output,
-        )
-
-
-def _compute_adj_factors_locked(
-    config: Config,
-    adjust_type: str | None = None,
-    *,
-    refresh_symbols: list[str] | None = None,
-    realign_symbols: list[str] | None = None,
-    full: bool = False,
-    output=None,
-) -> AdjFactorsResult:
-    """Implementation of :func:`compute_adj_factors` under the mutation lock."""
     adjust_types = [adjust_type] if adjust_type else list(config.adj_factors_types)
     skipped = [t for t in adjust_types if t != STORED_ADJUST_TYPE]
     if skipped:

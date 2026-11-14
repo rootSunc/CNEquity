@@ -14,15 +14,15 @@ from cnequity.domain.financial_statements import (
     reconstruct_disclosures,
 )
 from cnequity.domain.schemas import PRIMARY_KEYS
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
 
 
 def repair_financial_announcements(config: Config, *, apply: bool = False) -> dict:
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )

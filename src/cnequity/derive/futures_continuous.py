@@ -251,7 +251,6 @@ def derive_futures_continuous(config, *, output=None) -> dict:
     """
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.schemas import validate_dataframe, with_provenance
-    from cnequity.file_lock import lake_mutation_lock
     from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.state import StateStore
 
@@ -279,25 +278,24 @@ def derive_futures_continuous(config, *, output=None) -> dict:
         with_provenance(frame, source="derived", data_version="v1"), "futures_continuous"
     )
     output = output or DerivedOutput(config, "futures_continuous")
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        keep: set[str] = set()
-        for (period,), group in (
-            frame.with_columns(
-                pl.col("trade_date")
-                .map_elements(DATASETS["futures_continuous"].partition_for, return_dtype=pl.Utf8)
-                .alias("_p")
-            )
-            .partition_by("_p", as_dict=True)
-            .items()
-        ):
-            label = f"{DATASETS['futures_continuous'].partition_col}={period}"
-            keep.add(label)
-            output.write(label, group.drop("_p"), "part-000.parquet")
-        # A product that lost history in a rebuild must not keep stale months.
-        for stale in output.labels():
-            if stale not in keep:
-                output.remove(stale)
-        StateStore(config.meta_root).set_date("futures_continuous", frame["trade_date"].max())
+    keep: set[str] = set()
+    for (period,), group in (
+        frame.with_columns(
+            pl.col("trade_date")
+            .map_elements(DATASETS["futures_continuous"].partition_for, return_dtype=pl.Utf8)
+            .alias("_p")
+        )
+        .partition_by("_p", as_dict=True)
+        .items()
+    ):
+        label = f"{DATASETS['futures_continuous'].partition_col}={period}"
+        keep.add(label)
+        output.write(label, group.drop("_p"), "part-000.parquet")
+    # A product that lost history in a rebuild must not keep stale months.
+    for stale in output.labels():
+        if stale not in keep:
+            output.remove(stale)
+    StateStore(config.meta_root).set_date("futures_continuous", frame["trade_date"].max())
     return {
         "rows": frame.height,
         "products": frame["symbol"].n_unique(),

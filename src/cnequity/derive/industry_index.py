@@ -354,23 +354,6 @@ def derive_industry_index(
     written days do not change — ``full`` is for a weighting or definition
     change, not for routine catch-up.
     """
-    from cnequity.file_lock import lake_mutation_lock
-
-    # This derive merges existing yearly partitions and must share compact's
-    # mutation lock with other curated/derived writers.
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _derive_industry_index_locked(config, start=start, end=end, full=full, output=output)
-
-
-def _derive_industry_index_locked(
-    config: Config,
-    *,
-    start: date | None = None,
-    end: date | None = None,
-    full: bool = False,
-    output=None,
-) -> dict:
-    """Implementation of :func:`derive_industry_index` under the mutation lock."""
     from cnequity.domain.schemas import with_provenance
     from cnequity.quality.verify import last_contiguous_dense_date
     from cnequity.storage.parquet import write_partition_rows

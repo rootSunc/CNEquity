@@ -222,6 +222,63 @@ def test_a_dataset_published_since_the_checkout_is_refused(cfg):
     assert _load(cfg).filter(pl.col("trade_date") == date(2024, 1, 2)).height == 2
 
 
+def _publish_elsewhere(cfg, run_id: str, close: float) -> None:
+    """Another writer, outside any scope this test opened, publishes February."""
+    import contextvars
+
+    def publish():
+        with LakeWrite(cfg, run_id) as write:
+            february = write.checkout("daily_bars").partition("trade_date=2024-02")
+            _replace(february, _bars(date(2024, 2, 1), {"600000.SH": close}))
+            write.publish({"daily_bars": PUBLISH})
+
+    contextvars.Context().run(publish)
+
+
+def test_a_write_planned_before_another_publish_is_refused_though_its_checkout_is_later(cfg):
+    from cnequity.storage.lake_write import InputChanged, planned_on
+
+    with planned_on(cfg):
+        planned = _load(cfg)  # what a repair decides from
+        _publish_elsewhere(cfg, "meanwhile", 11.5)
+        with LakeWrite(cfg, "repair") as write:
+            january = write.checkout("daily_bars").partition("trade_date=2024-01")
+            _replace(january, planned.filter(pl.col("trade_date") == date(2024, 1, 2)).head(1))
+            with pytest.raises(InputChanged, match="daily_bars was published by another write"):
+                write.publish({"daily_bars": PUBLISH})
+    assert _load(cfg).filter(pl.col("trade_date") == date(2024, 1, 2)).height == 2
+
+
+def test_a_scope_may_publish_a_dataset_twice_and_takes_no_lock_while_it_reads(cfg):
+    from cnequity.file_lock import lake_mutation_lock
+    from cnequity.storage.lake_write import planned_on
+
+    with planned_on(cfg):
+        # Nothing holds the lake lock while the writer reads and computes.
+        with lake_mutation_lock(cfg.meta_root, blocking=False):
+            pass
+        for run_id, close in (("one", 1.0), ("two", 2.0)):
+            with LakeWrite(cfg, run_id) as write:
+                january = write.checkout("daily_bars").partition("trade_date=2024-01")
+                _replace(january, _bars(date(2024, 1, 2), {"600000.SH": close}))
+                write.publish({"daily_bars": PUBLISH})
+    assert _load(cfg).filter(pl.col("trade_date") == date(2024, 1, 2))["close"].to_list() == [2.0]
+
+
+def test_an_input_published_since_it_was_read_refuses_the_commit(cfg):
+    from cnequity.storage.lake_write import InputChanged
+
+    read = _pointer(cfg)["revision_id"]
+    _publish_elsewhere(cfg, "meanwhile", 11.5)
+    with LakeWrite(cfg, "derive") as write:
+        write.expect("daily_bars", read)
+        january = write.checkout("daily_bars").partition("trade_date=2024-01")
+        _replace(january, _bars(date(2024, 1, 2), {"600000.SH": 3.0}))
+        with pytest.raises(InputChanged) as refused:
+            write.publish({"daily_bars": PUBLISH})
+    assert refused.value.dataset == "daily_bars"
+
+
 def test_sweep_moves_the_pointer_to_what_the_catalog_published(cfg, monkeypatch):
     before = _pointer(cfg)
     monkeypatch.setattr(

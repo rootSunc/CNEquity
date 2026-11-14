@@ -13,9 +13,9 @@ from uuid import uuid4
 
 import polars as pl
 
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.calendar import last_listed_sessions
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
@@ -45,7 +45,7 @@ def repair_delist_dates(config, *, apply: bool = False, sample: int = 15) -> dic
     from cnequity.quality.delisted_coverage import known_delisted_instruments
 
     removals = known_delisted_instruments(config, date.today())
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         context = ReadContext.capture(config, ("instruments", "daily_bars"), {})
         if not dataset_has_parquet(context.roots["instruments"], committed=False):
             return {"applied": False, "rows": 0}

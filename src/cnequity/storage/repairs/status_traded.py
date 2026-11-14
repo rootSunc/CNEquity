@@ -15,8 +15,8 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.schemas import with_provenance
 from cnequity.domain.trading_status import DERIVED_TRADED_SOURCE, STATUS_NORMAL
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.trading_status_coverage import KEY, traded_status_evidence
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
@@ -32,7 +32,7 @@ def repair_status_traded(config: Config, *, start: date, end: date, apply: bool 
     """
     if end < start:
         raise ValueError("end must not be before start")
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )

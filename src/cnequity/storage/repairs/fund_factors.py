@@ -10,16 +10,16 @@ from cnequity.config import Config
 from cnequity.derive.fund_factors import SOURCE, apply_fund_share_factors
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.schemas import with_provenance
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.instrument_catalog import load_curated_instruments
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
 
 
 def repair_fund_factors(config: Config, *, apply: bool = False) -> dict:
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )

@@ -12,6 +12,13 @@ A run that dies leaves only its checkout folder; the catalog is untouched. A
 dataset whose catalog revision moved after its checkout is refused, so two
 writers can never silently overwrite each other's partition.
 
+Only the commit holds the lake lock. Reading, merging and the publication
+gate run without it, so a long repair or derivation never keeps another
+run waiting; what they computed is protected instead by the checks the
+commit makes under the lock: the checkout's base, the inputs a writer names
+(:meth:`LakeWrite.expect`) and the revisions its :func:`planned_on` scope
+read. A refused write publishes nothing and is run again.
+
 During the move to the catalog the revision store still keeps a receipt and a
 pointer per revision (marked ``storage: catalog``, with no generation), so
 every reader keyed on them keeps working.
@@ -19,11 +26,13 @@ every reader keyed on them keeps working.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
 import re
 import shutil
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,11 +52,12 @@ from cnequity.storage.catalog_bridge import (
     lake_root,
     prepare_record_tables,
     synced_revision_id,
+    synced_revision_ids,
 )
 from cnequity.storage.locator import layer_name
 from cnequity.storage.parquet import emit_partition, merge_group_keys
 from cnequity.storage.revisions import DatasetRevision, RevisionFile, RevisionStore, sha256_file
-from equitylake_core.catalog import Catalog, quote_identifier, quote_literal
+from equitylake_core.catalog import CATALOG_FILE, Catalog, quote_identifier, quote_literal
 from equitylake_core.write import (
     Write,
     WriteRejected,
@@ -98,6 +108,63 @@ def _protect(path: Path) -> None:
     """A published file is never written again; make an attempt fail instead of corrupt it."""
     if os.name != "nt":  # a read-only file cannot be deleted on Windows, and the catalog must
         path.chmod(0o444)
+
+
+class InputChanged(WriteRejected):
+    """A dataset the write read, or publishes, was published by another write meanwhile."""
+
+    def __init__(self, dataset: str, since: str = "this one read it"):
+        super().__init__(f"{dataset} was published by another write since {since}; run it again")
+        self.dataset = dataset
+
+
+class PlanScope:
+    """The catalog revision of every dataset when a writer started reading.
+
+    A writer that plans from the published rows (a repair, a derivation)
+    does not hold the lake lock while it reads, merges and runs the gate;
+    only its commit does. Each :class:`LakeWrite` opened inside the scope
+    then refuses to publish a dataset another write has published since the
+    scope opened: what it computed may rest on rows that are gone. Its own
+    commits move the scope along, so a writer may publish a dataset twice.
+    """
+
+    def __init__(self, revisions: dict[str, str]):
+        self.revisions = revisions
+
+    def check(self, catalog: Catalog, datasets) -> None:
+        for dataset in datasets:
+            if _catalog_revision(catalog, dataset) != self.revisions.get(dataset):
+                raise InputChanged(dataset)
+
+
+_SCOPE: contextvars.ContextVar[PlanScope | None] = contextvars.ContextVar(
+    "plan_scope", default=None
+)
+
+
+@contextlib.contextmanager
+def planned_on(config) -> Iterator[PlanScope | None]:
+    """Pin what the block reads to the lake's current revisions; see :class:`PlanScope`.
+
+    Use it where the block starts reading. Nested, the outer scope holds. A
+    lake without a catalog yet has nothing to pin, and gets ``None``.
+    """
+    outer = _SCOPE.get()
+    if outer is not None:
+        yield outer
+        return
+    root = lake_root(config)
+    if not (root / CATALOG_FILE).exists():
+        yield None
+        return
+    with Catalog(root, read_only=True) as catalog:
+        scope = PlanScope(synced_revision_ids(catalog))
+    token = _SCOPE.set(scope)
+    try:
+        yield scope
+    finally:
+        _SCOPE.reset(token)
 
 
 @dataclass(frozen=True)
@@ -498,6 +565,9 @@ class LakeWrite:
         # Files placed in the lake for a rehearsal on a copy of its catalog.
         self._rehearsed: list[Path] = []
         self._checks: list[tuple[str, Callable[[Catalog], str | None]]] = []
+        self._scope = _SCOPE.get()
+        #: Revisions of datasets the write read but does not publish, checked at commit.
+        self._expected: dict[str, str | None] = {}
 
     @classmethod
     def for_store(cls, store: RevisionStore, run_id: str) -> LakeWrite:
@@ -591,6 +661,14 @@ class LakeWrite:
             self._checkouts[dataset] = Checkout(self, dataset)
         return self._checkouts[dataset]
 
+    def expect(self, dataset: str, revision_id: str | None) -> None:
+        """Refuse the commit unless *dataset* is still at *revision_id* (an input it read).
+
+        The revision is the one the revision store's pointer named when the
+        input was read, which an input the catalog does not hold also has.
+        """
+        self._expected[dataset] = revision_id
+
     def check(self, name: str, check: Callable[[Catalog], str | None]) -> None:
         """Run *check* on the written rows before they commit; a refusal commits nothing."""
         self._checks.append((name, check))
@@ -662,7 +740,12 @@ class LakeWrite:
         for dataset in changes:
             checkout = self._checkouts[dataset]
             if _catalog_revision(catalog, dataset) != checkout.base_revision:
-                raise WriteRejected(f"{dataset} was published by another write since checkout")
+                raise InputChanged(dataset, "checkout")
+        for dataset, revision_id in self._expected.items() if advance else ():
+            if (store.current_pointer(dataset) or {}).get("revision_id") != revision_id:
+                raise InputChanged(dataset)
+        if self._scope is not None:
+            self._scope.check(catalog, changes)
         self._drop_rehearsed()
         swaps = {dataset: self._checkouts[dataset].swaps() for dataset in changes}
         receipts = {
@@ -706,6 +789,8 @@ class LakeWrite:
             if advance:
                 # The working tree, where one is left, no longer holds what is published.
                 store.forget_working_tree(dataset)
+                if self._scope is not None:
+                    self._scope.revisions[dataset] = receipt.revision_id
         return receipts
 
     def _place_files(

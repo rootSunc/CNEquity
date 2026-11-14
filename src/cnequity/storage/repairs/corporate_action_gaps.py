@@ -29,8 +29,8 @@ from cnequity.config import Config
 from cnequity.domain.action_sessions import effective_session
 from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.schemas import sanitize_dataset_rows, validate_dataframe, with_provenance
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.repairs.publish import PartitionRewrite, scan_published
 from cnequity.storage.revisions import RevisionStore
 
@@ -334,7 +334,7 @@ def repair_corporate_action_gaps(
     notices, notice_diagnostics = reorg_fetch(
         config, run_id, list(remaining.select("symbol", "step_date").iter_rows())
     )
-    with lake_mutation_lock(config.meta_root, blocking=True):
+    with planned_on(config):
         fresh = _plan(config, evidence, ensure=True)
         fresh["report"]["notice_diagnostics"] = notice_diagnostics[:50]
         return _publish(config, fresh, fetched, failed, notices, run_id=run_id, evidence=evidence)

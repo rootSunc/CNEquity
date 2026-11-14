@@ -22,8 +22,8 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.market_time import last_closed_session
 from cnequity.domain.schemas import data_version_for, with_provenance
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.repairs.publish import publish_repair, repair_root
 from cnequity.storage.revisions import RevisionStore
 
@@ -38,8 +38,8 @@ def repair_misdated_valuation(
     config: Config, *, apply: bool = False, fetch: Fetch | None = None
 ) -> dict:
     """Plan (default) or publish the replacement of misdated push2 rows."""
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _repair_locked(config, apply=apply, fetch=fetch)
+    with planned_on(config):
+        return _repair_planned(config, apply=apply, fetch=fetch)
 
 
 def misdated_snapshot_keys(rows: pl.DataFrame) -> pl.DataFrame:
@@ -67,7 +67,7 @@ def _datacenter(config: Config) -> Fetch:
     return lambda start, end: fetch_valuation_datacenter(start, end, config=config)
 
 
-def _repair_locked(config: Config, *, apply: bool, fetch: Fetch | None) -> dict:
+def _repair_planned(config: Config, *, apply: bool, fetch: Fetch | None) -> dict:
     from cnequity.adapters.eastmoney.valuation_datacenter import SOURCE as DATACENTER
 
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)

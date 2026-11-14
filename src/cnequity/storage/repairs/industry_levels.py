@@ -17,8 +17,8 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.industry_levels import LEVEL_COLUMNS, board_ancestry, sw_level_columns
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_repair
 from cnequity.storage.revisions import RevisionStore
@@ -105,7 +105,7 @@ def repair_industry_levels(
     hierarchy: Callable[[Config], pl.DataFrame] = fetch_em_board_hierarchy,
 ) -> dict:
     """Preview, or publish one gated revision that fills the level columns."""
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )

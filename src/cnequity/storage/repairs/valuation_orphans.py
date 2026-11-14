@@ -13,9 +13,9 @@ import logging
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.storage.instrument_catalog import load_bar_universe
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.repairs.publish import publish_repair, repair_root
 from cnequity.storage.revisions import RevisionStore
 
@@ -34,11 +34,11 @@ def purge_valuation_orphan_symbols(config: Config) -> dict:
     """
     # This is a read-modify-write over curated partitions and must not race
     # compact, repartition, or another maintenance operation.
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _purge_valuation_orphan_symbols_locked(config)
+    with planned_on(config):
+        return _purge_valuation_orphan_symbols_planned(config)
 
 
-def _purge_valuation_orphan_symbols_locked(config: Config) -> dict:
+def _purge_valuation_orphan_symbols_planned(config: Config) -> dict:
     """Implementation of :func:`purge_valuation_orphan_symbols` under lock."""
     nothing = {"orphan_symbols": [], "partitions_rewritten": 0, "rows_removed": 0}
     bar_universe = load_bar_universe(config)

@@ -184,6 +184,8 @@ def _publish_derived_revision(
     if not output.changed():
         return None
     changed = output.changed_files()
+    from contextlib import nullcontext
+
     from cnequity.file_lock import lake_mutation_lock
     from cnequity.quality.publication import evaluate_publication
 
@@ -197,19 +199,28 @@ def _publish_derived_revision(
         else:
             revisions.quarantine_candidate(dataset, run_id=run_id, reason=reason)
 
-    with lake_mutation_lock(config.meta_root, blocking=True):
+    def input_changed(name: str):
+        from cnequity.orchestrator.outcomes import InputUnavailableError
+
+        reject("input_revision_changed")
+        return InputUnavailableError(
+            f"{dataset}: input {name} changed during calculation; re-run derive"
+        )
+
+    # A catalog write holds the lake lock only while it commits, and checks the
+    # inputs again there; a working tree is published under the lock throughout.
+    with (
+        lake_mutation_lock(config.meta_root, blocking=True) if lake_write is None else nullcontext()
+    ):
         for name, identity in (input_revisions or {}).items():
             current = revisions.current_pointer(name) or {}
             if any(
                 current.get(key) != identity.get(key)
                 for key in ("revision", "revision_id", "content_digest")
             ):
-                from cnequity.orchestrator.outcomes import InputUnavailableError
-
-                reject("input_revision_changed")
-                raise InputUnavailableError(
-                    f"{dataset}: input {name} changed during calculation; re-run derive"
-                )
+                raise input_changed(name)
+            if lake_write is not None:
+                lake_write.expect(name, identity.get("revision_id"))
         if any(row.get("coverage_status") == "partial" for row in (input_revisions or {}).values()):
             coverage_status = "partial"
         publication = evaluate_publication(
@@ -248,12 +259,15 @@ def _publish_derived_revision(
             **factor_metadata,
         }
         if lake_write is not None:
-            from cnequity.storage.lake_write import DatasetPublish
+            from cnequity.storage.lake_write import DatasetPublish, InputChanged
 
-            revision = lake_write.publish(
-                {dataset: DatasetPublish(schema_version, fingerprint, metadata)},
-                message=f"{dataset} revision from {run_id}",
-            ).get(dataset)
+            try:
+                revision = lake_write.publish(
+                    {dataset: DatasetPublish(schema_version, fingerprint, metadata)},
+                    message=f"{dataset} revision from {run_id}",
+                ).get(dataset)
+            except InputChanged as exc:
+                raise input_changed(exc.dataset) from exc
         else:
             revision = revisions.commit(
                 dataset,

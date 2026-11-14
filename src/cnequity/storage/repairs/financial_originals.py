@@ -23,9 +23,9 @@ from cnequity.adapters.cninfo.payment_notices import _get, _stock_directory
 from cnequity.domain.market_time import SHANGHAI_TZ
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.domain.symbols import is_all_a_symbol
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.read_context import ReadContext
 from cnequity.storage.repairs.publish import publish_staged
@@ -324,7 +324,7 @@ def repair_financial_originals(
     }
     if not apply or incoming is None or incoming.is_empty():
         return report
-    with lake_mutation_lock(config.meta_root):
+    with planned_on(config):
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         store.ensure_current(DATASET)
         context = ReadContext.capture(config, (DATASET,), {})

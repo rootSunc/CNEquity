@@ -19,8 +19,8 @@ from cnequity.domain.market_time import last_closed_session, shanghai_now
 from cnequity.domain.partitions import partition_value
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import data_version_for, with_provenance
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.atomic import write_json_atomic
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.repairs.publish import PartitionRewrite
 from cnequity.storage.revisions import RevisionStore
@@ -111,7 +111,7 @@ def repair_index_snapshots(config, *, indices=None, apply=False, refresh_sources
     }
     if not apply:
         return report
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         store.ensure_current(dataset)
         with PartitionRewrite(config, store, dataset, run_id=run_id, apply=True) as rewrite:

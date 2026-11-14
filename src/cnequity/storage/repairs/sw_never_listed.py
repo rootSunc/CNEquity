@@ -21,6 +21,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.never_listed import (  # noqa: F401 — re-exported
     EVIDENCE,
     RECORD,
@@ -37,7 +38,7 @@ DATASET = "industry_members"
 
 def repair_sw_never_listed(config: Config, *, apply: bool = False) -> dict:
     """Preview, or publish one gated revision without never-listed Shenwan rows."""
-    with lake_mutation_lock(config.meta_root) if apply else nullcontext():
+    with planned_on(config) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )
@@ -81,6 +82,8 @@ def repair_sw_never_listed(config: Config, *, apply: bool = False) -> dict:
                 metadata={"symbols": sorted(drop)},
             )
         )
-        record_never_listed(config, hits.select("symbol", "first_class_date", "industry_code"))
+        with lake_mutation_lock(config.meta_root, blocking=True):
+            # A read-modify-write of one meta record that other writers also extend.
+            record_never_listed(config, hits.select("symbol", "first_class_date", "industry_code"))
         report["applied"] = True
         return report

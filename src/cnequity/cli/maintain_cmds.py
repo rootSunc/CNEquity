@@ -190,8 +190,7 @@ def _require_minute_input(cfg, dataset: str) -> None:
 
 @contextmanager
 def _published_derive(cfg, dataset: str):
-    """Make CLI derives visible to revision-aware readers under the writer lock."""
-    from cnequity.file_lock import lake_mutation_lock
+    """Publish a CLI derive as one gated revision; only its commit takes the lake lock."""
     from cnequity.orchestrator.outcomes import (
         InputUnavailableError,
         step_outcome,
@@ -212,7 +211,6 @@ def _published_derive(cfg, dataset: str):
     try:
         with (
             run_lock(cfg.meta_root, run_id),
-            lake_mutation_lock(cfg.meta_root),
             DerivedOutput(cfg, dataset, run_id) as output,
         ):
             store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)

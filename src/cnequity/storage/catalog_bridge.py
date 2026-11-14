@@ -184,6 +184,14 @@ def synced_revision_id(catalog: Catalog, dataset: str) -> str | None:
     return row[0] if row else None
 
 
+def synced_revision_ids(catalog: Catalog) -> dict[str, str]:
+    """The revision every catalog table was last brought to, by dataset."""
+    table = _state_table(catalog)
+    if table is None:
+        return {}
+    return dict(catalog.execute(f"SELECT dataset, revision_id FROM {table}").fetchall())
+
+
 def synced_revision(catalog: Catalog, dataset: str) -> tuple[str, dict[str, str]] | None:
     """The revision the catalog table was last brought to, with that revision's files."""
     revision_id = synced_revision_id(catalog, dataset)
@@ -873,10 +881,11 @@ def delete_orphans(catalog: Catalog, *, grace_hours: int = FILE_GRACE_HOURS) -> 
     only. A process that dies in between leaves them behind, registered
     nowhere. The age is the file's modification time, which a hard-linked
     file shares with its source: a file linked from a generation keeps that
-    generation's age. The caller holds the lake lock, which every placement
-    of such a file happens under, and runs this only on a lake that has
-    switched to its catalog: before that, the migration places generation
-    files without the lock.
+    generation's age. A commit places its files under the lake lock, which
+    the caller holds; a rehearsal places them without it, but only files the
+    run itself just wrote, younger than any grace. The caller runs this only
+    on a lake that has switched to its catalog: before that, the migration
+    places generation files without the lock.
     """
     if catalog.borrows_data:
         raise RuntimeError("a copy of a lake's catalog never deletes the lake's files")

@@ -34,8 +34,8 @@ from cnequity.domain.valuation import (
     repair_legacy_float_mv,
     split_dynamic_pe,
 )
-from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.share_counts import load_share_counts
+from cnequity.storage.lake_write import planned_on
 from cnequity.storage.parquet import _business_equal
 from cnequity.storage.repairs.publish import PartitionRewrite
 from cnequity.storage.revisions import RevisionStore
@@ -115,11 +115,11 @@ def _rows_changed(original: pl.DataFrame, repaired: pl.DataFrame) -> int:
 
 def repair_valuation_basis(config: Config, *, apply: bool = False) -> dict:
     """Plan (default) or publish the basis repair of ``valuation_metrics``."""
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _repair_locked(config, apply=apply)
+    with planned_on(config):
+        return _repair_planned(config, apply=apply)
 
 
-def _repair_locked(config: Config, *, apply: bool) -> dict:
+def _repair_planned(config: Config, *, apply: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
     # ``rows`` is every row the repair read; ``rows_changed`` is how many of them it rewrites.
     report: dict = {

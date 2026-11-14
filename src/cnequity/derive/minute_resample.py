@@ -268,7 +268,6 @@ def derive_minute_resample(
     ever read as stale.
     """
     from cnequity.domain.schemas import validate_dataframe, with_provenance
-    from cnequity.file_lock import lake_mutation_lock
     from cnequity.storage.atomic import write_json_atomic
     from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.published import frame_day_digests
@@ -294,52 +293,51 @@ def derive_minute_resample(
     holes: list[dict] = []
     written: list[date] = []
     cleared: list[date] = []
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        for day in sessions:
-            bars, rejected = resample_session(
-                _session(config, "minute_bars", day),
-                _session(config, "minute_bars_5m", day),
-                frequency,
-            )
-            gaps = rejected.filter(pl.col("reason").is_in(GAP_REASONS))
-            for reason, source, count in gaps.group_by("reason", "input").len().iter_rows():
-                skipped[(reason, source)] += count
-            holes.extend(gaps.filter(pl.col("reason") == "incomplete").head(5).to_dicts())
-            invalid.extend(rejected.filter(~pl.col("reason").is_in(GAP_REASONS)).to_dicts())
-            label = f"trade_date={day.isoformat()}"
-            if bars.is_empty() and not out.exists(label):
-                digest = None
+    for day in sessions:
+        bars, rejected = resample_session(
+            _session(config, "minute_bars", day),
+            _session(config, "minute_bars_5m", day),
+            frequency,
+        )
+        gaps = rejected.filter(pl.col("reason").is_in(GAP_REASONS))
+        for reason, source, count in gaps.group_by("reason", "input").len().iter_rows():
+            skipped[(reason, source)] += count
+        holes.extend(gaps.filter(pl.col("reason") == "incomplete").head(5).to_dicts())
+        invalid.extend(rejected.filter(~pl.col("reason").is_in(GAP_REASONS)).to_dicts())
+        label = f"trade_date={day.isoformat()}"
+        if bars.is_empty() and not out.exists(label):
+            digest = None
+        else:
+            if bars.is_empty():
+                # A rebuild with nothing left must not leave the old bars
+                # published. In a working tree that is an empty file, not
+                # a deletion: a generation commit is a set of written
+                # files, so a removal alone would never reach readers.
+                cleared.append(day)
             else:
-                if bars.is_empty():
-                    # A rebuild with nothing left must not leave the old bars
-                    # published. In a working tree that is an empty file, not
-                    # a deletion: a generation commit is a set of written
-                    # files, so a removal alone would never reach readers.
-                    cleared.append(day)
-                else:
-                    for source, count in (
-                        bars.select("symbol", "resampled_from")
-                        .unique()
-                        .group_by("resampled_from")
-                        .len()
-                    ).iter_rows():
-                        built[source] += count
-                    rows += bars.height
-                    written.append(day)
-                frame = validate_dataframe(
-                    with_provenance(bars, source="derived", data_version="v1"), dataset
-                )
-                out.write(label, frame, "part-000.parquet")
-                digest = frame_day_digests(frame, dataset).get(day)
-            write_json_atomic(
-                _receipt_path(config, dataset, day),
-                {
-                    "format": RECEIPT_FORMAT,
-                    "inputs": inputs.get(day),
-                    "derivation": derivation,
-                    "output": digest,
-                },
+                for source, count in (
+                    bars.select("symbol", "resampled_from")
+                    .unique()
+                    .group_by("resampled_from")
+                    .len()
+                ).iter_rows():
+                    built[source] += count
+                rows += bars.height
+                written.append(day)
+            frame = validate_dataframe(
+                with_provenance(bars, source="derived", data_version="v1"), dataset
             )
+            out.write(label, frame, "part-000.parquet")
+            digest = frame_day_digests(frame, dataset).get(day)
+        write_json_atomic(
+            _receipt_path(config, dataset, day),
+            {
+                "format": RECEIPT_FORMAT,
+                "inputs": inputs.get(day),
+                "derivation": derivation,
+                "output": digest,
+            },
+        )
     for item in (*invalid, *holes):
         item["trade_date"] = str(item["trade_date"])
     return {
