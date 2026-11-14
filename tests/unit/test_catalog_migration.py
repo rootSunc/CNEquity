@@ -82,3 +82,80 @@ def test_a_copy_that_differs_leaves_the_lake_unswitched(lake, monkeypatch):
     # The generations are untouched and still what readers get.
     pointer = RevisionStore(lake.meta_root, lake.curated_root).current_pointer("fund_flow")
     assert pointer.get("storage") != "catalog"
+
+
+def test_the_repair_gate_audits_a_lake_whose_datasets_live_only_in_the_catalog(lake, monkeypatch):
+    import polars as pl
+
+    from cnequity.quality.publication import check_repair_publication
+    from cnequity.query import catalog_read, load
+
+    migrate_to_catalog(lake, apply=True)
+    _run(
+        lake,
+        "r2",
+        SECOND,
+        _flows(SECOND, {"600519.SH": 3.0}),
+        _margins(SECOND, {"600519.SH": 11.0}),
+    )
+    catalog_read.close_all()
+    store = RevisionStore(lake.meta_root, lake.curated_root)
+    assert store.current_pointer("margin_trading")["storage"] == "catalog"
+
+    # A repair rewrites one partition of the verified working tree.
+    store.materialize_current("fund_flow")
+    target = sorted((lake.curated_root / "fund_flow").rglob("trade_date=2024-07*/*.parquet"))[-1]
+    pl.read_parquet(target).with_columns(pl.lit(7.0).alias("main_net_inflow")).write_parquet(target)
+    audited = []
+
+    def errors(view, day, scope=None):
+        flows = load("fund_flow", config=view).sort("trade_date")
+        audited.append(
+            (flows["main_net_inflow"].to_list()[-1], load("margin_trading", config=view).height)
+        )
+        return []
+
+    monkeypatch.setattr("cnequity.quality.publication._errors", errors)
+    report = check_repair_publication(lake, "fund_flow", "repair-1", [target])
+
+    # The published rows first, then the candidate; the other dataset, which
+    # exists only in the catalog, is readable in both.
+    assert audited == [(3.0, 2), (7.0, 2)]
+    assert report["blocked"] is False
+
+
+def test_a_repair_publishes_into_the_catalog_on_a_lake_that_lives_there(lake):
+    from cnequity.query import catalog_read, load
+    from cnequity.storage.repairs.publish import publish_repair
+
+    migrate_to_catalog(lake, apply=True)
+    _run(
+        lake,
+        "r2",
+        SECOND,
+        _flows(SECOND, {"600519.SH": 3.0}),
+        _margins(SECOND, {"600519.SH": 11.0}),
+    )
+    catalog_read.close_all()
+    store = RevisionStore(lake.meta_root, lake.curated_root)
+    base = store.repair_base("fund_flow", register=True)
+    assert base is not None
+
+    result = publish_repair(
+        lake,
+        store,
+        "fund_flow",
+        "trade_date",
+        base,
+        keep=lambda frame: frame.filter(frame["symbol"] != "000001.SZ"),
+        reason="drop_symbol",
+        metadata={},
+    )
+    catalog_read.close_all()
+
+    assert result["revision"] == 3
+    pointer = store.current_pointer("fund_flow")
+    assert pointer["storage"] == "catalog"
+    assert sorted(load("fund_flow", config=lake)["symbol"].unique()) == ["600519.SH"]
+    # The dataset the repair did not touch is as it was.
+    assert load("margin_trading", config=lake).height == 2

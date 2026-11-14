@@ -90,6 +90,32 @@ def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> Non
             shutil.copy2(state, view.meta_root / "state" / state.name)
 
 
+def _read_candidate_tree(view: Config, names) -> None:
+    """Make *view* read each of *names* from its dataset tree, not from the catalog.
+
+    A candidate handed over as a whole tree replaces the dataset in the view.
+    A pointer left there would send readers to the catalog's published rows
+    and the candidate would never be audited.
+    """
+    for name in names:
+        (view.meta_root / "revisions" / name / "current.json").unlink(missing_ok=True)
+
+
+def _read_published(config: Config, view: Config, name: str) -> None:
+    """Make *view* read *name* as the lake publishes it from its catalog again."""
+    pointer = config.meta_root / "revisions" / name / "current.json"
+    stored = view.meta_root / "revisions" / name / "current.json"
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(pointer, stored)
+
+
+def _has_catalog(config: Config) -> bool:
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import CATALOG_FILE
+
+    return (lake_root(config) / CATALOG_FILE).exists()
+
+
 def _catalog_datasets(config: Config) -> set[str]:
     """Datasets whose published revision lives only in the lake catalog."""
     names = set()
@@ -408,10 +434,12 @@ def evaluate_publication(
     partitions in ``changed`` when given; the deep historical sweep of every
     dataset belongs to ``cne audit --full``.
 
-    A candidate that *lake_write* holds as a checkout is a set of changed
-    partitions, not a whole dataset tree. The audit view then gets a clone of
-    the lake catalog, the checkouts are published into the clone as the run
-    would publish them, and the audit reads the clone.
+    A lake that publishes into its catalog gets a clone of the catalog in the
+    audit view, so datasets that exist only there are read as published. A
+    candidate that *lake_write* holds as a checkout is a set of changed
+    partitions, not a whole dataset tree: the checkouts are published into the
+    clone as the run would publish them. A candidate given as a whole tree (a
+    repair's working tree) replaces the dataset in the view.
     """
     mode = config.publication_gate
     if mode == "off" or not candidates:
@@ -461,8 +489,10 @@ def evaluate_publication(
             rehearsed = sorted(
                 name for name in candidates if lake_write is not None and lake_write.has(name)
             )
-            catalog_only = _catalog_datasets(config) if lake_write is not None else set()
-            if lake_write is not None:
+            trees = sorted(name for name in candidates if name not in rehearsed)
+            catalog_only = _catalog_datasets(config) if _has_catalog(config) else set()
+            cloned = lake_write is not None or bool(catalog_only)
+            if cloned:
                 _clone_lake(config, view, catalog_only)
             baseline = [item for item in _errors(view, day, scope) if not factor_advisory(item)]
             factor_baseline = advisory_factor_findings(_factor_action_errors(view, repair_symbols))
@@ -476,6 +506,7 @@ def evaluate_publication(
                 if target.exists():
                     shutil.rmtree(target)
                 shutil.copytree(source, target, copy_function=_link_read_only)
+            _read_candidate_tree(view, trees)
             if rehearsed:
                 _rehearse(lake_write, view, rehearsed)
             candidate_errors = [
@@ -513,6 +544,7 @@ def evaluate_publication(
                     if name in rehearsed:
                         # Rehearse the publish again without this candidate.
                         _clone_lake(config, view, catalog_only)
+                        _read_candidate_tree(view, trees)
                         others = [other for other in rehearsed if other != name]
                         if others:
                             _rehearse(lake_write, view, others)
@@ -533,6 +565,8 @@ def evaluate_publication(
                     original = read_root(config, name)
                     if original.is_dir():
                         shutil.copytree(original, target, copy_function=_link_read_only)
+                    elif name in catalog_only:
+                        _read_published(config, view, name)
                     try:
                         remaining = Counter(
                             issue_key(item)
@@ -542,13 +576,14 @@ def evaluate_publication(
                         if target.exists():
                             shutil.rmtree(target)
                         shutil.copytree(source, target, copy_function=_link_read_only)
+                        _read_candidate_tree(view, [name])
                     if any(remaining[key] < count for key, count in introduced_keys.items()):
                         blocked_datasets.add(name)
                 if not blocked_datasets:
                     # A check with no attributable input is unsafe to publish.
                     blocked_datasets.update(candidates)
             report["blocked_datasets"] = sorted(blocked_datasets)
-            if lake_write is not None:
+            if cloned:
                 # Release the clone's catalog before its directory is removed.
                 from cnequity.query import catalog_read
 
@@ -566,7 +601,7 @@ def evaluate_publication(
         ]
         report["blocked_datasets"] = sorted(candidates) if mode == "block" else []
     finally:
-        if lake_write is not None:
+        if lake_write is not None or _has_catalog(config):
             from cnequity.query import catalog_read
 
             catalog_read.close_all()

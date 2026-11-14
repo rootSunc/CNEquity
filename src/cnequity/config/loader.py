@@ -1540,11 +1540,6 @@ def validate_config(cfg: Config) -> list[str]:
         errors.append("[quality].audit_gate must be one of: off, shadow, block")
     if cfg.publication_gate not in {"off", "shadow", "block"}:
         errors.append("[quality].publication_gate must be one of: off, shadow, block")
-    if cfg.storage_publish == "catalog":
-        # The publication gate rehearses a catalog write on a clone of the lake.
-        # The source-diff gate still compares a whole candidate tree.
-        if any(spec.revision_gate for spec in cfg.failover_datasets):
-            errors.append('[storage].publish = "catalog" does not support revision_gate yet')
     if cfg.raw_archive_compression not in {"gzip", "none"}:
         errors.append("[raw_archive].compression must be 'gzip' or 'none'")
     if cfg.raw_archive_max_payload_bytes is not None and cfg.raw_archive_max_payload_bytes < 1:

@@ -815,6 +815,14 @@ def _compact_datasets(
                     source_diff_blocks_revision,
                 )
 
+                if checkout is not None and pcol == checkout.spec.partition_col:
+                    # A checkout holds only the partitions this run changes;
+                    # the comparison needs the session's rows even when the
+                    # run staged other days. An unchanged partition is not
+                    # published.
+                    checkout.partition(
+                        f"{pcol}={checkout.spec.partition_for(trade_date)}" if pcol else ""
+                    )
                 gate_findings = diff_dataset(
                     config,
                     gate_spec,

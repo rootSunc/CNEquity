@@ -441,3 +441,84 @@ def test_a_warning_without_that_signal_still_blocks(tmp_path):
     )
 
     assert manifest.incomplete_batch_counts_by_dataset(run_id) == {"instruments": 1}
+
+
+def test_source_diff_gate_blocks_a_catalog_publish_and_judges_the_session_from_its_checkout(
+    tmp_path, monkeypatch
+):
+    from dataclasses import replace
+
+    import pytest
+
+    from cnequity.query import catalog_read, load
+    from cnequity.storage.catalog_bridge import lake_root, sync_all
+    from equitylake_core.catalog import Catalog
+    from equitylake_core.extensions import ExtensionUnavailableError
+
+    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
+    cfg = Config(
+        data_root=tmp_path / "data",
+        failover_enabled=True,
+        failover_datasets=[
+            FailoverDatasetSpec(
+                name="daily_bars",
+                primary="tdx_protocol",
+                backup="eastmoney",
+                compare_fields=["close"],
+                price_tolerance_bps=10.0,
+                snapshot_cadence="daily",
+                revision_gate=True,
+            )
+        ],
+    )
+    manifest = Manifest(cfg.manifest_path)
+    writer = StagingWriter(cfg.staging_root)
+    backup = SnapshotStore(cfg.meta_root)
+
+    def stage(run_id: str, day: date, close: float) -> None:
+        frame = _gate_bar_frame(day, close, "tdx_protocol")
+        manifest.start_batch(run_id, run_id, "daily_bars", "daily_bars", symbols=["600519.SH"])
+        manifest.finish_batch(run_id, run_id, "success", rows_written=frame.height)
+        writer.write_batch("daily_bars", run_id, run_id, frame)
+
+    def backup_day(run_id: str, day: date, close: float) -> None:
+        backup.write(
+            "daily_bars",
+            _gate_bar_frame(day, close, "eastmoney"),
+            source="eastmoney",
+            data_version="v1",
+            run_id=run_id,
+            trade_date=day,
+        )
+
+    june, bad, good = date(2024, 6, 28), date(2024, 7, 1), date(2024, 7, 2)
+    stage("first", june, 1800.0)
+    backup_day("backup-first", june, 1800.0)
+    step_compact(cfg, june, "first", {})
+    try:
+        with Catalog(lake_root(cfg), create=True) as lake:
+            sync_all(cfg, lake)
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    cfg = replace(cfg, storage_publish="catalog")
+    revisions = RevisionStore(cfg.meta_root, cfg.curated_root)
+
+    # A session that drifts from the backup source is not published.
+    stage("drift", bad, 1800.0)
+    backup_day("backup-drift", bad, 1802.0)
+    blocked = step_compact(cfg, bad, "drift", {})
+    skipped = blocked["context_updates"]["compact_skipped_datasets"]
+    assert skipped[0]["reason"] == "source_diff_gate"
+    assert revisions.current_pointer("daily_bars")["revision"] == 1
+
+    # A run that stages only another month still judges its session, June,
+    # from the published rows: June is checked out for the comparison, passes,
+    # and is not republished.
+    stage("other-month", good, 1805.0)
+    passed = step_compact(cfg, june, "other-month", {})
+    catalog_read.close_all()
+    assert not passed["context_updates"].get("compact_skipped_datasets")
+    pointer = revisions.current_pointer("daily_bars")
+    assert pointer["storage"] == "catalog" and pointer["revision"] == 2
+    assert revisions.latest("daily_bars").changed_partitions == ("daily_bars/trade_date=2024-07",)
+    assert load("daily_bars", config=cfg)["trade_date"].to_list() == [june, good]

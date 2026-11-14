@@ -60,12 +60,6 @@ def _mismatched(config, catalog: Catalog, datasets: list[str]) -> list[str]:
 def migrate_to_catalog(config, *, apply: bool) -> dict:
     """Preview, or with *apply* perform, the move of *config*'s lake onto its catalog."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    gated = sorted(spec.name for spec in config.failover_datasets if spec.revision_gate)
-    if gated:
-        raise CatalogMigrationError(
-            "catalog publishing does not support revision_gate yet; "
-            f"remove it from: {', '.join(gated)}"
-        )
     datasets = _published(config)
     behind = _behind(config, datasets)
     switched = store.publishes_to_catalog()
