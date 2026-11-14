@@ -251,3 +251,32 @@ def test_a_generation_file_with_rows_of_another_partition_is_not_filed_under_its
         "2024-02": ["part-merged.parquet"],
     }
     assert _load(config).sort("trade_date")["close"].to_list() == [10.0, 11.5]
+
+
+def test_many_small_day_partitions_are_laid_out_a_month_at_a_time(tmp_path):
+    from datetime import timedelta
+
+    from tests.unit.test_compact_to_catalog import _flows
+
+    from cnequity.config.loader import Config
+    from cnequity.storage.catalog_layout import lay_out_dataset
+    from equitylake_core.extensions import ExtensionUnavailableError
+
+    config = Config(data_root=tmp_path / "data")
+    days = [date(2024, 1, 20) + timedelta(days=offset) for offset in range(40)]
+    source = tmp_path / "all.parquet"
+    pl.concat([_flows(day, {"600519.SH": float(day.day)}) for day in days]).write_parquet(source)
+    try:
+        lake = Catalog(lake_root(config), create=True)
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    with lake:
+        write = Write(lake)
+        write.replace("fund_flow", [source])
+        write.commit()
+        before = rows_digest(lake, "fund_flow")
+        report = lay_out_dataset(config, lake, "fund_flow")
+        assert (report["rows"], report["files_before"], report["files"]) == (40, 1, 40)
+        assert rows_digest(lake, "fund_flow").digest == before.digest
+        folders = {path.split("/")[-2] for path in lake.data_files("fund_flow")}
+    assert folders == {day.isoformat() for day in days}

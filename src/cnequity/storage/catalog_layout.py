@@ -63,8 +63,7 @@ def lay_out_dataset(config, catalog: Catalog, dataset: str, *, attempts: int = 3
             shutil.rmtree(scratch, ignore_errors=True)
             checkout = Checkout(_Reader(catalog, scratch), dataset, root=scratch / dataset)
             written: list[tuple[str, Path]] = []
-            for label in checkout.labels():
-                checkout._write_out(label)
+            for label in _write_out_all(catalog, checkout):
                 folder = checkout._target(label)
                 written.extend((label, path) for path in sorted(folder.rglob("*.parquet")))
             with lake_mutation_lock(config.meta_root, blocking=True):
@@ -74,6 +73,65 @@ def lay_out_dataset(config, catalog: Catalog, dataset: str, *, attempts: int = 3
         raise LayoutError(f"{dataset}: kept being published while it was laid out; run again")
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+#: Day partitions smaller than this on average are read a month at a time.
+_MONTHLY_BELOW_ROWS = 500_000
+
+
+def _write_out_all(catalog: Catalog, checkout: Checkout) -> list[str]:
+    """Write every partition of the checkout's dataset out; returns their labels.
+
+    A partition at a time, which keeps one partition in memory. Asking the
+    catalog for each of a few thousand small day partitions costs more than
+    reading them, so those are read a month at a time and split here.
+    """
+    from cnequity.domain.datasets import granularity_for_dataset
+    from cnequity.storage.parquet import _partition_values, emit_partition, merge_group_keys
+    from equitylake_core.catalog import quote_identifier
+
+    dataset = checkout.dataset
+    column = checkout.spec.partition_col
+    labels = checkout.labels()
+    name = quote_identifier(dataset)
+    rows = catalog.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
+    monthly = (
+        bool(column)
+        and granularity_for_dataset(dataset) == "day"
+        and catalog.column_types(dataset).get(column) == "DATE"
+        and len(labels) > 31
+        and rows / len(labels) < _MONTHLY_BELOW_ROWS
+    )
+    if not monthly:
+        for label in labels:
+            checkout._write_out(label)
+        return labels
+    col = quote_identifier(column)
+    keys = merge_group_keys(dataset)
+    order = (" ORDER BY " + ", ".join(quote_identifier(key) for key in keys)) if keys else ""
+    months = sorted({label.partition("=")[2][:7] for label in labels})
+    for month in months:
+        frame = catalog.relation(
+            f"SELECT * FROM {name} WHERE {col} >= CAST('{month}-01' AS DATE) "
+            f"AND {col} < CAST('{month}-01' AS DATE) + INTERVAL 1 MONTH{order}"
+        ).pl()
+        values = _partition_values(frame, column, "day")
+        for (value,), group in (
+            frame.with_columns(values.alias("__label__"))
+            .partition_by("__label__", as_dict=True, maintain_order=True)
+            .items()
+        ):
+            target = checkout._target(f"{column}={value}")
+            target.mkdir(parents=True, exist_ok=True)
+            emit_partition(
+                group.drop("__label__"),
+                dataset,
+                affected=[],
+                existing=[],
+                read_dir=None,
+                out_dir=target,
+            )
+    return labels
 
 
 def _swap_in(
