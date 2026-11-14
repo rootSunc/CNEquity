@@ -861,6 +861,31 @@ def apply_retention(
     return RetentionResult(len(every & keep_ids), len(every) - int(remaining), before - after, True)
 
 
+def delete_orphans(catalog: Catalog, *, grace_hours: int = FILE_GRACE_HOURS) -> int:
+    """Delete data files no snapshot registers, once older than *grace_hours*; returns how many.
+
+    A write places its files in the lake before the transaction that
+    registers them, and a rehearsal places them for a copy of the catalog
+    only. A process that dies in between leaves them behind, registered
+    nowhere. The age is the file's modification time, which a hard-linked
+    file shares with its source: a file linked from a generation keeps that
+    generation's age. The caller holds the lake lock, which every placement
+    of such a file happens under, and runs this only on a lake that has
+    switched to its catalog: before that, the migration places generation
+    files without the lock.
+    """
+    if catalog.borrows_data:
+        raise RuntimeError("a copy of a lake's catalog never deletes the lake's files")
+    data = catalog.data_root
+    before = sum(1 for _ in data.rglob("*.parquet"))
+    catalog.execute(
+        "CALL ducklake_delete_orphaned_files('lake', "
+        f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
+    )
+    catalog.con.abort()
+    return before - sum(1 for _ in data.rglob("*.parquet"))
+
+
 def catalog_retention(config, *, apply: bool) -> dict | None:
     """Apply revision retention to the lake catalog; ``None`` for a lake without one.
 
@@ -877,13 +902,23 @@ def catalog_retention(config, *, apply: bool) -> dict | None:
     keep = keep if isinstance(keep, int) and not isinstance(keep, bool) and keep >= 1 else 5
     registry = LifecycleStore(config.meta_root).registry() or {}
     held = set(registry.get("holds") or {})
+    orphans = 0
     with Catalog(root) as catalog:
         result = apply_retention(catalog, keep=keep, held=held, apply=apply)
+        switched = RevisionStore(
+            config.meta_root, config.curated_root, config.derived_root, create=False
+        ).publishes_to_catalog()
+        if apply and switched:
+            from cnequity.file_lock import lake_mutation_lock
+
+            with lake_mutation_lock(config.meta_root, blocking=True):
+                orphans = delete_orphans(catalog)
     return {
         "keep_revisions": keep,
         "snapshots_kept": result.snapshots_kept,
         "snapshots_expired": result.snapshots_expired,
         "files_deleted": result.files_deleted,
+        "orphans_deleted": orphans,
         "applied": result.applied,
         "file_grace_hours": FILE_GRACE_HOURS,
     }

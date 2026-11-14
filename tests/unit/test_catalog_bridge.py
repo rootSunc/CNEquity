@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import polars as pl
 import pytest
@@ -387,3 +388,41 @@ def test_retention_keeps_recent_and_held_revisions_and_deletes_after_the_grace(
     assert catalog_reads.published_files(cfg, "daily_bars", held) is not None
     assert catalog_reads.published_files(cfg, "daily_bars", recent) is not None
     assert catalog_reads.published_files(cfg, "daily_bars", revisions[-1]) is not None
+
+
+def _stray(lake, name: str, *, days_old: float) -> Path:
+    import os
+    import time
+
+    path = lake.table_dir("daily_bars") / "2024-01" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _rows(date(2024, 1, 2), {"600000.SH": 99.0}).write_parquet(path)
+    stamp = time.time() - days_old * 86400
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_retention_deletes_files_no_snapshot_registers_once_past_the_grace(cfg, lake):
+    from cnequity.storage.catalog_bridge import catalog_retention
+
+    sync_dataset(cfg, lake, "daily_bars")
+    registered = {
+        Path(row[0])
+        for row in lake.execute(
+            "SELECT data_file FROM ducklake_list_files('lake', 'daily_bars')"
+        ).fetchall()
+    }
+    old = _stray(lake, "left-by-a-crash.parquet", days_old=3)
+    fresh = _stray(lake, "placed-just-now.parquet", days_old=0)
+    lake.close()
+
+    # Before the lake switches, the migration links old files in without the lock.
+    assert catalog_retention(cfg, apply=True)["orphans_deleted"] == 0
+    assert old.exists()
+
+    (cfg.meta_root / "storage.json").write_text('{"publish": "catalog"}', encoding="utf-8")
+    assert catalog_retention(cfg, apply=False)["orphans_deleted"] == 0
+    result = catalog_retention(cfg, apply=True)
+    assert result["orphans_deleted"] == 1
+    assert not old.exists() and fresh.exists()
+    assert all(path.exists() for path in registered)
