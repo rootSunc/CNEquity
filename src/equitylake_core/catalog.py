@@ -111,6 +111,9 @@ class Catalog:
             _enable_wal(catalog_path)
         self.con = duckdb.connect()
         try:
+            # Instants read back in UTC whatever zone this machine is in, and a
+            # date taken from one (a partition, a filter) is the same everywhere.
+            self.con.execute("SET TimeZone = 'UTC'")
             if memory_limit:
                 self.con.execute(f"SET memory_limit = {quote_literal(memory_limit)}")
             if temp_directory:

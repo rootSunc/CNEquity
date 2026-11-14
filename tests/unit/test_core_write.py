@@ -226,3 +226,19 @@ def test_a_record_can_be_built_inside_the_write(lake, tmp_path):
     )
     write.commit()
     assert lake.execute("SELECT rows FROM _writes").fetchall() == [(1,)]
+
+
+def test_instants_read_back_in_utc_whatever_the_machine_zone(lake, tmp_path, monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    path = tmp_path / "t.parquet"
+    duckdb.sql(
+        "COPY (SELECT 'A' AS symbol, TIMESTAMPTZ '2024-01-02 03:04:05+00' AS fetched_at) "
+        f"TO '{path.as_posix()}' (FORMAT parquet)"
+    )
+    write = Write(lake)
+    write.replace("stamps", [path])
+    write.commit()
+
+    frame = lake.relation("SELECT * FROM stamps").pl()
+    assert str(frame.schema["fetched_at"].time_zone) == "UTC"
+    assert lake.execute("SELECT current_setting('TimeZone')").fetchone()[0] == "UTC"
