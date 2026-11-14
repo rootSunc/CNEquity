@@ -287,6 +287,7 @@ def maintain(config_path: str, groups: str | None, notify: bool):
             cfg.backup_root,
             retention_days=cfg.maintenance_backup_retention_days,
             retention_count=cfg.maintenance_backup_retention_count,
+            catalog=lake_root(cfg) / CATALOG_FILE,
         )
         click.echo(
             _("Wrote {archive} ({size:,} bytes); {kept} archives kept, {removed} removed.").format(

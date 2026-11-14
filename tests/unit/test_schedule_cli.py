@@ -50,6 +50,33 @@ def test_backup_keeps_receipts_and_a_readable_manifest_but_not_generations(tmp_p
     assert not list((tmp_path / "backups").glob(".*partial"))
 
 
+def test_backup_carries_the_lake_catalog_including_what_is_still_in_its_wal(tmp_path):
+    catalog = tmp_path / "lake" / "catalog.sqlite"
+    catalog.parent.mkdir()
+    with closing(sqlite3.connect(catalog)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE _revisions (revision_id TEXT)")
+        writer.execute("INSERT INTO _revisions VALUES ('r1')")
+        writer.commit()
+        # The writer stays open: the row is in the WAL, not yet in the file.
+        assert (tmp_path / "lake" / "catalog.sqlite-wal").stat().st_size > 0
+        result = backup_meta(_meta(tmp_path), tmp_path / "backups", catalog=catalog)
+
+    with tarfile.open(result.archive) as tar:
+        tar.extract("lake/catalog.sqlite", tmp_path / "out", filter="data")
+    with closing(sqlite3.connect(tmp_path / "out" / "lake" / "catalog.sqlite")) as copy:
+        assert copy.execute("SELECT revision_id FROM _revisions").fetchall() == [("r1",)]
+
+
+def test_backup_of_a_lake_without_a_catalog_has_none(tmp_path):
+    result = backup_meta(
+        _meta(tmp_path), tmp_path / "backups", catalog=tmp_path / "lake" / "catalog.sqlite"
+    )
+    with tarfile.open(result.archive) as tar:
+        assert not any(name.startswith("lake/") for name in tar.getnames())
+
+
 def test_backup_refuses_a_missing_or_empty_meta(tmp_path):
     with pytest.raises(FileNotFoundError):
         backup_meta(tmp_path / "nope", tmp_path / "b")

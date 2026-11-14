@@ -1,13 +1,15 @@
 """Daily copy of the metadata the curated lake cannot rebuild.
 
-The manifest DB, incremental state, revision and source receipts, quality
+The manifest DB, the lake catalog's database (which records every revision
+published into it), incremental state, revision and source receipts, quality
 findings and the operational acceptance evidence. Curated Parquet, revision
 generations (``meta/revisions/data``), caches and runtime locks stay out: they
 are large or reproducible, and portable snapshots (`cne snapshot`) cover
 curated data.
 
 `cne run maintain` runs it. The standard library's SQLite backup API gives a
-consistent copy of the manifest DB even under a concurrent write.
+consistent copy of both databases even under a concurrent write. The catalog
+database is archived as ``lake/catalog.sqlite``; its data files are not.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ from cnequity.storage.atomic import replace_with_retry
 #: (``{dataset}/*.json``), which name the generation a dataset points at.
 INCLUDED = ("state", "quality", "revisions", "source_snapshots", "source_health", "stability")
 EXCLUDED = ("revisions/data",)
+#: Where the lake catalog's database goes in the archive.
+CATALOG_ARCNAME = "lake/catalog.sqlite"
 PREFIX = "meta-"
 SUFFIX = ".tar.gz"
 
@@ -38,6 +42,19 @@ class BackupResult:
     size_bytes: int
     kept: int
     removed: list[Path] = field(default_factory=list)
+
+
+def _add_database(tar: tarfile.TarFile, source: Path, arcname: str, scratch: Path) -> None:
+    """Archive a consistent copy of the SQLite database *source* as *arcname*.
+
+    The backup API copies a consistent snapshot even while a run is writing;
+    a file copy can catch a torn page, or miss what is still in the WAL.
+    """
+    copy = scratch / arcname
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    with closing(connect_readonly(source)) as src, closing(sqlite3.connect(copy)) as dst:
+        src.backup(dst)
+    tar.add(copy, arcname=arcname)
 
 
 def _excluded(name: str) -> bool:
@@ -84,8 +101,11 @@ def backup_meta(
     retention_days: int = 14,
     retention_count: int = 30,
     now: datetime | None = None,
+    catalog: Path | None = None,
 ) -> BackupResult:
     """Write one ``meta-<stamp>.tar.gz`` under *backup_dir* and rotate the old ones.
+
+    *catalog* is the lake catalog's database file, archived when it exists.
 
     Raises:
         FileNotFoundError: *meta_root* does not exist.
@@ -107,15 +127,9 @@ def backup_meta(
         try:
             with tarfile.open(partial, "w:gz") as tar:
                 if manifest.is_file():
-                    copy = Path(scratch) / "manifest.db"
-                    # The backup API copies a consistent snapshot even while a
-                    # run is writing; a file copy can catch a torn page.
-                    with (
-                        closing(connect_readonly(manifest)) as src,
-                        closing(sqlite3.connect(copy)) as dst,
-                    ):
-                        src.backup(dst)
-                    tar.add(copy, arcname="manifest.db")
+                    _add_database(tar, manifest, "manifest.db", Path(scratch))
+                if catalog is not None and Path(catalog).is_file():
+                    _add_database(tar, Path(catalog), CATALOG_ARCNAME, Path(scratch))
                 for sub in members:
                     tar.add(
                         meta_root / sub,
