@@ -36,6 +36,23 @@ ALIAS = "lake"
 METADATA = f"__ducklake_metadata_{ALIAS}"
 
 
+_INTEGERS = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT")
+
+
+def _widens(found: str, wanted: str) -> bool:
+    """Whether a file column of type *found* is read exactly as a table column of type *wanted*."""
+    if found == wanted:
+        return True
+    if found in _INTEGERS and wanted in _INTEGERS:
+        return _INTEGERS.index(found) < _INTEGERS.index(wanted)
+    return found == "FLOAT" and wanted == "DOUBLE"
+
+
+#: Layouts of the catalog database whose per-file statistics this code reads
+#: directly. Anything else is read through the files' footers instead.
+KNOWN_METADATA_FORMATS = frozenset({"1.1"})
+
+
 class CatalogError(RuntimeError):
     """The lake directory is missing, or is not a lake."""
 
@@ -102,6 +119,8 @@ class Catalog:
             raise ValueError("a read-only catalog cannot be created")
         self.root = Path(root).expanduser().resolve()
         self.read_only = read_only
+        self._rows_in_files: bool | None = None
+        self._format: str | None = None
         catalog_path = self.root / CATALOG_FILE
         created = not catalog_path.exists()
         if created:
@@ -199,6 +218,98 @@ class Catalog:
             f"CALL ducklake_set_option({quote_literal(ALIAS)}, 'data_inlining_row_limit', 0)"
         )
         self.con.execute(f"CALL ducklake_flush_inlined_data({quote_literal(ALIAS)})")
+        self._rows_in_files = None
+
+    def table_dir(self, table: str) -> Path:
+        """Where a writer places the data files it will register for *table*."""
+        return self.root / DATA_DIR / "main" / table
+
+    def register_file(self, table: str, path: str | Path) -> None:
+        """Make the Parquet file *path* a data file of *table*, as it is.
+
+        The file must already be under this lake's data path and fit the
+        table (:meth:`file_fits`); from here on the catalog owns it. Columns
+        are matched by name, a column the file lacks reads as NULL, and
+        directory names are never read as column values.
+        """
+        target = Path(path).resolve()
+        if (self.root / DATA_DIR).resolve() not in target.parents:
+            raise CatalogError(f"{target} is not under this lake's data path")
+        self.con.execute(
+            f"CALL ducklake_add_data_files({quote_literal(ALIAS)}, {quote_literal(table)}, "
+            f"{quote_literal(target.as_posix())}, hive_partitioning => false, "
+            "allow_missing => true)"
+        )
+
+    def column_types(self, table: str) -> dict[str, str]:
+        return {
+            row[0]: row[1]
+            for row in self.con.execute(f"DESCRIBE {ALIAS}.{quote_identifier(table)}").fetchall()
+        }
+
+    def file_types(self, paths: Sequence[str | Path]) -> dict[str, str]:
+        """The column types a table made from the Parquet files *paths* has, read by name."""
+        listed = ", ".join(quote_literal(Path(path).as_posix()) for path in paths)
+        return {
+            row[0]: row[1]
+            for row in self.con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet([{listed}], union_by_name => true, "
+                "hive_partitioning => false)"
+            ).fetchall()
+        }
+
+    def file_fits(
+        self, table: str, path: str | Path, *, types: dict[str, str] | None = None
+    ) -> bool:
+        """Whether *path* can be registered for *table* as it is.
+
+        Every column the file shares with the table must have the table's
+        type or one it widens from without loss (a smaller signed integer, a
+        single float for a double): the catalog refuses anything else (a
+        wider type, an untyped all-null column, a timestamp without a zone),
+        and a refusal inside a transaction aborts it. A column only the file
+        has is the caller's to add first. *types* stands for a table that
+        does not exist yet.
+        """
+        if types is None:
+            if not self.has_table(table):
+                return True
+            types = self.column_types(table)
+        found = self.file_types([path])
+        return all(_widens(kind, types[name]) for name, kind in found.items() if name in types)
+
+    def conform_file(
+        self,
+        table: str,
+        source: str | Path,
+        target: str | Path,
+        *,
+        types: dict[str, str] | None = None,
+    ) -> None:
+        """Write *source* again at *target* with *table*'s column types, in the same row order."""
+        wanted = self.column_types(table) if types is None else types
+        columns = ", ".join(
+            f"CAST({quote_identifier(name)} AS {wanted[name]}) AS {quote_identifier(name)}"
+            if name in wanted
+            else quote_identifier(name)
+            for name in self.file_types([source])
+        )
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        self.con.execute(
+            f"COPY (SELECT {columns} FROM read_parquet({quote_literal(Path(source).as_posix())}, "
+            f"hive_partitioning => false)) TO {quote_literal(Path(target).as_posix())} "
+            "(FORMAT parquet, COMPRESSION zstd)"
+        )
+
+    def unpartition(self, table: str) -> None:
+        """Stop the catalog from partitioning *table*; its files stay as they are.
+
+        A table whose writer registers files keeps one file set per
+        partition of its own, so the catalog's partitioning adds nothing, and
+        it refuses a registered file that is not laid out its way. A snapshot
+        of its own: the catalog cannot commit this with a registered file.
+        """
+        self.con.execute(f"ALTER TABLE {ALIAS}.{quote_identifier(table)} RESET PARTITIONED BY")
 
     def fold_deletes(self, table: str) -> None:
         """Rewrite every data file of *table* that has deletions, so its files hold exactly its rows."""
@@ -227,15 +338,27 @@ class Catalog:
             f"({alias}.end_snapshot IS NULL OR {alias}.end_snapshot > {int(snapshot)})"
         )
 
+    def rows_in_files(self) -> bool:
+        """Whether small writes go to data files rather than into the catalog database."""
+        if self._rows_in_files is None:
+            row = self.con.execute(
+                f"SELECT value FROM ducklake_options({quote_literal(ALIAS)}) "
+                "WHERE option_name = 'data_inlining_row_limit' AND scope = 'GLOBAL'"
+            ).fetchone()
+            self._rows_in_files = row is not None and str(row[0]) == "0"
+        return self._rows_in_files
+
     def data_files(self, table: str, snapshot: int | None = None) -> list[str] | None:
         """The data files whose rows are exactly *table*'s rows, or ``None``.
 
         At the latest snapshot, or at *snapshot* (an earlier one stays readable
         until its files are cleaned up). ``None`` means the table is not
-        file-complete there (a deletion not yet folded, or rows inlined in the
-        catalog database), or an older snapshot's files are gone; read it
+        file-complete there (a deletion not yet folded, or a catalog that
+        inlines small writes), or an older snapshot's files are gone; read it
         through DuckDB instead.
         """
+        if not self.rows_in_files():
+            return None
         version = "" if snapshot is None else f", snapshot_version => {int(snapshot)}"
         listed = self.con.execute(
             f"SELECT data_file, delete_file FROM "
@@ -244,23 +367,20 @@ class Catalog:
         ).fetchall()
         if any(delete is not None for _, delete in listed):
             return None
-        at = "" if snapshot is None else f" AT (VERSION => {int(snapshot)})"
-        rows = self.con.execute(
-            f"SELECT count(*) FROM {ALIAS}.{quote_identifier(table)}{at}"
-        ).fetchone()[0]
-        in_files = self.con.execute(
-            f"SELECT coalesce(sum(f.record_count), 0) FROM {METADATA}.ducklake_data_file f "
-            f"JOIN {METADATA}.ducklake_table t USING (table_id) "
-            f"WHERE t.table_name = ? AND {self._alive('t', snapshot)} "
-            f"AND {self._alive('f', snapshot)}",
-            [table],
-        ).fetchone()[0]
-        if rows != in_files:
-            return None
         paths = [path for path, _ in listed]
         if snapshot is not None and not all(Path(path).is_file() for path in paths):
             return None
         return paths
+
+    def metadata_format(self) -> str | None:
+        """The DuckLake format version of this catalog, or ``None`` if it does not say."""
+        if self._format is None:
+            row = self.con.execute(
+                f"SELECT value FROM ducklake_options({quote_literal(ALIAS)}) "
+                "WHERE option_name = 'version' AND scope = 'GLOBAL'"
+            ).fetchone()
+            self._format = str(row[0]) if row else ""
+        return self._format or None
 
     def file_stats(
         self, table: str, column: str | None = None, snapshot: int | None = None
@@ -268,17 +388,38 @@ class Catalog:
         """The data files of *table* with their row counts and sizes, or ``None``.
 
         With *column*, each file also carries that column's smallest and
-        largest value, from the statistics the catalog keeps per file, so a
-        caller can tell which files can hold a given range without opening
-        them. *snapshot* and ``None`` as for ``data_files``.
+        largest value, so a caller can tell which files can hold a given
+        range without opening them. *snapshot* and ``None`` as for
+        ``data_files``.
+
+        The numbers come from the statistics the catalog keeps per file when
+        its database has a layout this code knows (``KNOWN_METADATA_FORMATS``).
+        Those tables are the catalog's own and not a public interface, so
+        under any other layout the same numbers are read from the files'
+        footers instead: slower, and never wrong.
         """
         paths = self.data_files(table, snapshot)
         if paths is None:
             return None
+        if not paths:
+            return []
+        stats = None
+        if self.metadata_format() in KNOWN_METADATA_FORMATS:
+            try:
+                stats = self._catalog_stats(table, column, snapshot, paths)
+            except duckdb.Error:
+                stats = None
+        if stats is None:
+            stats = self._footer_stats(column, paths)
+        return sorted(stats, key=lambda f: (f.low or "", f.path))
+
+    def _catalog_stats(
+        self, table: str, column: str | None, snapshot: int | None, paths: list[str]
+    ) -> list[DataFile] | None:
         by_name = {Path(path).name: path for path in paths}
         alive = f"{self._alive('t', snapshot)} AND {self._alive('f', snapshot)}"
         if column is None:
-            stats = self.con.execute(
+            found = self.con.execute(
                 f"SELECT f.path, f.record_count, f.file_size_bytes, NULL, NULL "
                 f"FROM {METADATA}.ducklake_data_file f "
                 f"JOIN {METADATA}.ducklake_table t USING (table_id) "
@@ -286,7 +427,7 @@ class Catalog:
                 [table],
             ).fetchall()
         else:
-            stats = self.con.execute(
+            found = self.con.execute(
                 f"SELECT f.path, f.record_count, f.file_size_bytes, s.min_value, s.max_value "
                 f"FROM {METADATA}.ducklake_data_file f "
                 f"JOIN {METADATA}.ducklake_table t USING (table_id) "
@@ -299,12 +440,35 @@ class Catalog:
             ).fetchall()
         files = [
             DataFile(by_name[Path(path).name], int(rows), int(size), low, high)
-            for path, rows, size, low, high in stats
+            for path, rows, size, low, high in found
             if Path(path).name in by_name
         ]
-        if len(files) != len(paths):
-            return None
-        return sorted(files, key=lambda f: (f.low or "", f.path))
+        return files if len(files) == len(paths) else None
+
+    def _footer_stats(self, column: str | None, paths: list[str]) -> list[DataFile]:
+        listed = "[" + ", ".join(quote_literal(path) for path in paths) + "]"
+        rows = dict(
+            self.con.execute(
+                f"SELECT file_name, num_rows FROM parquet_file_metadata({listed})"
+            ).fetchall()
+        )
+        bounds: dict[str, tuple[str | None, str | None]] = {}
+        if column is not None:
+            for name, low, high in self.con.execute(
+                f"SELECT file_name, min(stats_min_value), max(stats_max_value) "
+                f"FROM parquet_metadata({listed}) WHERE path_in_schema = ? GROUP BY 1",
+                [column],
+            ).fetchall():
+                bounds[name] = (low, high)
+        return [
+            DataFile(
+                path,
+                int(rows.get(path, 0)),
+                Path(path).stat().st_size,
+                *bounds.get(path, (None, None)),
+            )
+            for path in paths
+        ]
 
     def set_compression(self, codec: str = "zstd") -> None:
         self.con.execute(

@@ -242,3 +242,91 @@ def test_instants_read_back_in_utc_whatever_the_machine_zone(lake, tmp_path, mon
     frame = lake.relation("SELECT * FROM stamps").pl()
     assert str(frame.schema["fetched_at"].time_zone) == "UTC"
     assert lake.execute("SELECT current_setting('TimeZone')").fetchone()[0] == "UTC"
+
+
+def _placed(lake, table, name, rows, columns="symbol, trade_date, close"):
+    return _file(lake.table_dir(table) / name, rows, columns)
+
+
+def test_a_swap_registers_files_as_they_are_and_drops_files_whole(lake, tmp_path):
+    jan = _placed(
+        lake, "bars", "2024-01/part.aaaaaaaa.parquet", [("'A'", "DATE '2024-01-02'", 1.0)]
+    )
+    feb = _placed(
+        lake, "bars", "2024-02/part.bbbbbbbb.parquet", [("'A'", "DATE '2024-02-01'", 2.0)]
+    )
+    write = Write(lake)
+    write.swap("bars", add=[jan, feb])
+    assert write.commit(message="create").rows == {"bars": 2}
+    first = lake.snapshot()
+    # The files are the table's data files themselves: nothing was written again.
+    assert sorted(lake.data_files("bars")) == sorted([jan.as_posix(), feb.as_posix()])
+
+    again = _placed(
+        lake, "bars", "2024-02/part.cccccccc.parquet", [("'A'", "DATE '2024-02-01'", 2.5)]
+    )
+    write = Write(lake)
+    write.swap("bars", add=[again], remove=[feb])
+    write.commit(message="restate february")
+
+    assert _rows(lake) == [("A", date(2024, 1, 2), 1.0), ("A", date(2024, 2, 1), 2.5)]
+    assert lake.snapshot() == first + 1 and not lake.has_deletes("bars")
+    assert sorted(lake.data_files("bars")) == sorted([jan.as_posix(), again.as_posix()])
+    # The earlier snapshot still reads the file it had.
+    old = lake.execute(f"SELECT close FROM bars AT (VERSION => {first}) ORDER BY 1").fetchall()
+    assert old == [(1.0,), (2.0,)]
+
+
+def test_a_swap_refuses_a_file_that_is_no_longer_the_tables(lake, tmp_path):
+    jan = _placed(
+        lake, "bars", "2024-01/part.aaaaaaaa.parquet", [("'A'", "DATE '2024-01-02'", 1.0)]
+    )
+    write = Write(lake)
+    write.swap("bars", add=[jan])
+    write.commit()
+    write = Write(lake)
+    write.swap("bars", remove=[lake.table_dir("bars") / "2024-01" / "gone.parquet"])
+    with pytest.raises(WriteRejected, match="not data files of the table"):
+        write.commit()
+    assert _rows(lake) == [("A", date(2024, 1, 2), 1.0)]
+
+
+def test_a_directory_name_is_never_read_as_a_column_value(lake, tmp_path):
+    odd = _placed(
+        lake,
+        "bars",
+        "trade_date=1999-01/part.aaaaaaaa.parquet",
+        [("'A'", "DATE '2024-01-02'", 1.0)],
+    )
+    write = Write(lake)
+    write.swap("bars", add=[odd])
+    write.commit()
+    assert _rows(lake) == [("A", date(2024, 1, 2), 1.0)]
+
+
+def test_a_file_that_does_not_fit_is_found_before_the_write_and_conformed(lake, tmp_path):
+    jan = _placed(
+        lake, "bars", "2024-01/part.aaaaaaaa.parquet", [("'A'", "DATE '2024-01-02'", 1.0)]
+    )
+    write = Write(lake)
+    write.swap("bars", add=[jan])
+    write.commit()
+    # A wider type than the table's column: the catalog would refuse it mid-transaction.
+    wide = _file(tmp_path / "wide.parquet", [("'B'", "DATE '2024-01-03'", "CAST(7 AS HUGEINT)")])
+    assert lake.file_fits("bars", jan) and not lake.file_fits("bars", wide)
+    target = lake.table_dir("bars") / "2024-01" / "part.dddddddd.parquet"
+    lake.conform_file("bars", wide, target)
+    assert lake.file_fits("bars", target)
+    write = Write(lake)
+    write.swap("bars", add=[target])
+    write.commit()
+    assert _rows(lake)[-1] == ("B", date(2024, 1, 3), 7.0)
+
+
+def test_a_file_outside_the_lake_is_not_registered(lake, tmp_path):
+    stray = _file(tmp_path / "stray.parquet", [("'A'", "DATE '2024-01-02'", 1.0)])
+    write = Write(lake)
+    write.swap("bars", add=[stray])
+    with pytest.raises(Exception, match="not under this lake's data path"):
+        write.commit()
+    assert not lake.has_table("bars")

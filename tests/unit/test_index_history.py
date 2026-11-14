@@ -379,7 +379,8 @@ def test_star50_apply_complete_books_after_close_preserve_other_indices(
     assert result["applied"] and result["rows"] == 100 and result["snapshots"] == 2
     assert result["retained_weighted_rows"] == 50 and len(result["source_receipts"]) == 4
     frame = current(store)
-    assert frame.filter(pl.col("index_symbol") == "399001.SZ").equals(other)
+    kept = frame.filter(pl.col("index_symbol") == "399001.SZ")
+    assert kept.sort(kept.columns).equals(other.sort(other.columns))
     event = frame.filter(
         (pl.col("index_symbol") == "000688.SH") & (pl.col("as_of_date") == date(2024, 9, 18))
     )
@@ -387,7 +388,8 @@ def test_star50_apply_complete_books_after_close_preserve_other_indices(
         event.height == 50 and "688001.SH" not in event["symbol"] and "688051.SH" in event["symbol"]
     )
     assert event["weight"].null_count() == 50 and event["source"].unique().to_list() == ["exchange"]
-    assert frame.filter(pl.col("as_of_date") == date(2024, 12, 31)).equals(weighted)
+    held = frame.filter(pl.col("as_of_date") == date(2024, 12, 31))
+    assert held.sort(held.columns).equals(weighted.sort(weighted.columns))
     assert frame.filter(pl.col("as_of_date") == date(2024, 12, 16)).is_empty()
     assert _published(old).height == 52
     assert not history.repair_index_history(cfg, index_symbol="000688.SH", apply=True)["applied"]

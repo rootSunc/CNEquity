@@ -126,19 +126,61 @@ def _as_date(value: str | None, *, upper: bool) -> date | None:
 
 def _from_catalog(config, dataset: str, generation: Path) -> Published | None:
     from cnequity.query.catalog_read import generation_identity, published_stats
+    from cnequity.storage.catalog_bridge import lake_root
+    from cnequity.storage.lake_write import _LAID_OUT
+    from equitylake_core.catalog import DATA_DIR
 
     identity = generation_identity(generation)
     if identity is None:
         return None
-    found = published_stats(config, *identity, column=DATASETS[dataset].partition_col)
+    table = lake_root(config).resolve() / DATA_DIR / "main" / dataset
+    column = DATASETS[dataset].partition_col
+    found = published_stats(config, *identity, column=None)
     if found is None:
         return None
     stats, unique, schema = found
     if not stats:
         return None
+
+    def folder(path: str) -> str | None:
+        """The partition folder of a file the lake's writers laid out, else ``None``."""
+        relative = Path(path)
+        if table not in relative.parents or not _LAID_OUT.match(relative.name):
+            return None
+        parts = relative.relative_to(table).parts
+        return parts[0] if len(parts) == 2 else "" if len(parts) == 1 else None
+
+    folders = [folder(item.path) for item in stats]
+    if None not in folders:
+        # One group per partition: its range is the partition's period, as in
+        # a generation, so nothing is read from the catalog's statistics.
+        grouped: dict[str, list] = {}
+        for name, item in zip(folders, stats, strict=True):
+            grouped.setdefault(name, []).append(item)
+        groups = []
+        for name, items in sorted(grouped.items()):
+            period = parse_partition(name) if name and column else None
+            groups.append(
+                FileGroup(
+                    key=name,
+                    files=tuple(Path(item.path) for item in sorted(items, key=lambda i: i.path)),
+                    low=period.start if period else None,
+                    high=period.end if period else None,
+                    bytes=sum(item.bytes for item in items),
+                    rows=sum(item.rows for item in items),
+                )
+            )
+        return Published(dataset, table, tuple(groups), True, unique, schema)
+    # Files the catalog laid out itself: every file is a group, bounded by its statistics.
+    found = published_stats(config, *identity, column=column)
+    if found is None:
+        return None
+    stats, unique, schema = found
     root = Path(stats[0].path).parent
     while root.name.startswith(("year=", "month=")):
         root = root.parent
+    if any(root not in Path(item.path).parents for item in stats):
+        root = table
     groups = tuple(
         FileGroup(
             key=Path(item.path).relative_to(root).as_posix(),

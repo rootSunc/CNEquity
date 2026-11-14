@@ -17,6 +17,13 @@ does not select are written again beside the new ones. The snapshot the
 commit makes is therefore file-complete as it stands (see
 ``equitylake_core.catalog``); a catalog transaction cannot both write and
 compact, so folding deletions afterwards would take a second snapshot.
+
+A :class:`Swap` is the cheaper form, for a writer that produces the table's
+data files itself: files it has placed under the lake's data path are
+registered as they are, and the files they replace are dropped whole. Nothing
+is rewritten, so a row is written once, by the writer. The catalog checks
+only that a file's columns fit the table (:meth:`Catalog.file_fits`); that a
+file's rows belong where the writer says is the writer's to check.
 """
 
 from __future__ import annotations
@@ -41,6 +48,15 @@ class Replacement:
     order_by: tuple[str, ...] = ()
     #: Partition expressions for a table this write creates, e.g. ``year(trade_date)``.
     partitioned_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Swap:
+    table: str
+    #: Parquet files under the lake's data path, registered as data files of the table.
+    add: tuple[str, ...] = ()
+    #: Data files of the table (as ``filename`` reports them), dropped whole.
+    remove: tuple[str, ...] = ()
 
 
 #: A check gets the catalog inside the open transaction and returns a refusal, or ``None``.
@@ -102,6 +118,7 @@ def rows_digest(
 class Write:
     catalog: Catalog
     replacements: list[Replacement] = field(default_factory=list)
+    swaps: list[Swap] = field(default_factory=list)
     checks: list[tuple[str, Check]] = field(default_factory=list)
     records: list[tuple[str, Record]] = field(default_factory=list)
 
@@ -125,6 +142,18 @@ class Write:
             )
         )
 
+    def swap(
+        self, table: str, *, add: Sequence[str | Path] = (), remove: Sequence[str | Path] = ()
+    ) -> None:
+        """Register the files *add* as data files of *table* and drop the files *remove* whole."""
+        self.swaps.append(
+            Swap(
+                table,
+                tuple(Path(path).as_posix() for path in add),
+                tuple(Path(path).as_posix() for path in remove),
+            )
+        )
+
     def check(self, name: str, check: Check) -> None:
         self.checks.append((name, check))
 
@@ -137,12 +166,14 @@ class Write:
         self.records.append((table, row if callable(row) else dict(row)))
 
     def commit(self, *, message: str | None = None) -> WriteResult:
-        if not self.replacements and not self.records:
+        if not self.replacements and not self.swaps and not self.records:
             raise ValueError("nothing to write")
         rows: dict[str, int] = {}
         with self.catalog.transaction(message=message):
             for item in self.replacements:
                 rows[item.table] = rows.get(item.table, 0) + _apply(self.catalog, item)
+            for swap in self.swaps:
+                rows[swap.table] = rows.get(swap.table, 0) + apply_swap(self.catalog, swap)
             for name, check in self.checks:
                 refusal = check(self.catalog)
                 if refusal:
@@ -220,6 +251,40 @@ def _apply(catalog: Catalog, item: Replacement) -> int:
             f"the partition they replace ({item.where})"
         )
     return incoming
+
+
+def apply_swap(catalog: Catalog, item: Swap) -> int:
+    """Inside an open transaction: drop *item.remove* whole and register *item.add*.
+
+    Returns the rows registered.
+    """
+    table = quote_identifier(item.table)
+    added = (
+        catalog.execute(f"SELECT count(*) FROM {_scan(item.add)}").fetchone()[0] if item.add else 0
+    )
+    if not catalog.has_table(item.table):
+        if item.remove:
+            raise WriteRejected(f"{item.table}: no such table to drop files from")
+        if not item.add:
+            return 0
+        catalog.execute(f"CREATE TABLE {table} AS SELECT * FROM {_scan(item.add)} LIMIT 0")
+    elif item.add:
+        _add_missing_columns(catalog, item.table, item.add)
+    if item.remove:
+        listed = ", ".join(quote_literal(path) for path in item.remove)
+        known = catalog.execute(
+            f"SELECT count(DISTINCT filename) FROM {table} WHERE filename IN ({listed})"
+        ).fetchone()[0]
+        if known != len(set(item.remove)):
+            raise WriteRejected(
+                f"{item.table}: {len(set(item.remove)) - known} file(s) to drop are not "
+                "data files of the table any more"
+            )
+        # Every row of a file: the catalog drops the file, with no delete file.
+        catalog.execute(f"DELETE FROM {table} WHERE filename IN ({listed})")
+    for path in item.add:
+        catalog.register_file(item.table, path)
+    return added
 
 
 def _add_missing_columns(catalog: Catalog, table: str, files: tuple[str, ...]) -> None:

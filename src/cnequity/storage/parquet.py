@@ -401,6 +401,19 @@ def _with_bucket_ids(frame: pl.DataFrame, column: str, count: int) -> pl.DataFra
     return frame.join(mapping, on=column, how="left", nulls_equal=True, maintain_order="left")
 
 
+def key_ordered(frame: pl.DataFrame, dataset: str) -> pl.DataFrame:
+    """*frame* in primary-key order, rows of one key staying in the order they came.
+
+    A partition file is a data file of the lake as it is written, so the
+    order that lets a scan filtered on the leading key skip row groups is
+    given here, once, rather than by rewriting the file on publish.
+    """
+    keys = [key for key in PRIMARY_KEYS.get(dataset, []) if key in frame.columns]
+    if not keys or len(keys) != len(PRIMARY_KEYS.get(dataset, [])) or frame.height < 2:
+        return frame
+    return frame.sort(keys, maintain_order=True)
+
+
 def emit_partition(
     merged: pl.DataFrame,
     dataset: str,
@@ -418,6 +431,7 @@ def emit_partition(
     partition each row goes to its bucket unless that bucket exists and was
     not loaded, in which case it joins one new appended file instead.
     """
+    merged = key_ordered(merged, dataset)
     names = {path.name for path in affected}
     buckets = {parsed: path for path in existing if (parsed := parse_bucket(path.name)) is not None}
     counts = {count for _, count in buckets}

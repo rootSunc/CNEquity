@@ -3,7 +3,10 @@
 The migration ``lake-catalog`` (``cne migrate``), owed by every lake built
 before 0.25.0. It copies every published dataset into the catalog, proves each copy holds
 the same rows as the generation it came from, and then records in
-``meta/storage.json`` that the lake publishes into its catalog. From then on
+``meta/storage.json`` that the lake publishes into its catalog. The copy is
+the generation's own files, linked into the lake and registered: nothing is
+written again. A lake already on a catalog an earlier release wrote gets its
+tables laid out the same way (``storage.catalog_layout``). From then on
 each dataset moves over at its next publish; the generations already written
 stay where they are, readable, until the old publishing layer is removed.
 
@@ -103,16 +106,25 @@ def migrate_to_catalog(config, *, apply: bool) -> dict:
     """Preview, or with *apply* perform, the move of *config*'s lake onto its catalog."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     datasets = _published(config)
+    from cnequity.storage.catalog_layout import datasets_to_lay_out, lay_out_all
+
     behind = _behind(config, datasets)
     switched = store.publishes_to_catalog()
+    # Tables an earlier release had the catalog write itself: laid out once,
+    # so that a publish never has to write a partition it did not change.
+    to_lay_out = datasets_to_lay_out(config)
     report: dict = {
         "datasets": len(datasets),
         "to_copy": behind,
+        "to_lay_out": to_lay_out,
         "switched": switched,
-        # What `cne migrate` counts: datasets still to copy, and the switch itself.
-        "rows_changed": len(behind) + (0 if switched else 1),
+        # What `cne migrate` counts: datasets to copy or lay out, and the switch itself.
+        "rows_changed": len(behind) + len(to_lay_out) + (0 if switched else 1),
     }
     if not apply or not report["rows_changed"]:
+        return report
+    if switched and not behind:
+        report["laid_out"] = [item["dataset"] for item in lay_out_all(config)]
         return report
 
     root = lake_root(config)
@@ -139,4 +151,5 @@ def migrate_to_catalog(config, *, apply: bool) -> dict:
                 Path(config.meta_root) / "storage.json", {"publish": STORAGE_CATALOG}, indent=2
             )
     report.update(copied=sorted(set(copied) | set(late)), verified=len(current), switched=True)
+    report["laid_out"] = [item["dataset"] for item in lay_out_all(config)]
     return report

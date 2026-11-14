@@ -880,6 +880,10 @@ class RevisionStore:
         }
         return published == stamps
 
+    def forget_working_tree(self, dataset: str) -> None:
+        """Stop trusting the working tree of *dataset*; it is rebuilt if a writer needs it."""
+        self._working_record_path(dataset).unlink(missing_ok=True)
+
     def advance_working_tree(
         self, dataset: str, base_revision_id: str | None, partitions: dict[str, list[Path]]
     ) -> None:

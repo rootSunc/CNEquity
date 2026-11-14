@@ -13,17 +13,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import duckdb
-
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.storage.revisions import RevisionStore
-from equitylake_core.catalog import METADATA, Catalog, ImportResult, quote_identifier, quote_literal
+from equitylake_core.catalog import Catalog, ImportResult, quote_identifier, quote_literal
 
 LAKE_DIR = "lake"
-
-# Below this many rows a table is one file; partitioning it would only add tiny files.
-PARTITION_MIN_ROWS = 5_000_000
 
 
 @dataclass(frozen=True)
@@ -56,37 +51,15 @@ def _scan(glob: str) -> str:
     return f"read_parquet({quote_literal(glob)}, union_by_name = true, hive_partitioning = false)"
 
 
-def _partition_column(dataset: str, glob: str) -> str | None:
-    column = DATASETS[dataset].partition_col
-    if not column:
-        return None
-    probe = duckdb.connect()
-    try:
-        described = {
-            row[0]: row[1]
-            for row in probe.execute(f"DESCRIBE SELECT * FROM {_scan(glob)}").fetchall()
-        }
-        if not described.get(column, "").startswith(("DATE", "TIMESTAMP")):
-            return None
-        rows = probe.execute(f"SELECT count(*) FROM {_scan(glob)}").fetchone()[0]
-    finally:
-        probe.close()
-    return column if rows >= PARTITION_MIN_ROWS else None
-
-
 def import_dataset(config, catalog: Catalog, dataset: str) -> ImportResult | None:
-    """Copy *dataset*'s committed generation into the catalog as one snapshot."""
-    source = committed_source(config, dataset)
-    if source is None:
+    """Register *dataset*'s committed generation in the catalog as one snapshot."""
+    committed = _committed_files(config, dataset)
+    if committed is None:
         return None
-    glob, revision_id = source
-    return catalog.import_parquet(
-        dataset,
-        glob,
-        partition_by=_partition_column(dataset, glob),
-        sort_by=tuple(PRIMARY_KEYS.get(dataset, ())),
-        message=f"import {dataset} from revision {revision_id}",
-    )
+    revision_id, root, files = committed
+    with catalog.transaction(message=f"import {dataset} from revision {revision_id}"):
+        rows = _register(catalog, dataset, root, add=sorted(files), remove=[])
+    return ImportResult(dataset, rows, catalog.snapshot())
 
 
 def compare_dataset(config, catalog: Catalog, dataset: str) -> Comparison | None:
@@ -279,68 +252,77 @@ def _partition_predicate(column: str, column_type: str, granularity: str, value:
     return None
 
 
-def _file_list(root: Path, relatives: list[str]) -> str:
-    paths = ", ".join(quote_literal((root / relative).as_posix()) for relative in sorted(relatives))
-    return f"read_parquet([{paths}], union_by_name = true, hive_partitioning = false)"
+def _lake_key(relative: str) -> tuple[str, str]:
+    """The lake folder and partition-file name a generation file goes by."""
+    head, _, rest = relative.partition("/")
+    if "=" in head and rest:
+        return head.partition("=")[2], Path(rest).name
+    return "", Path(relative).name
 
 
-def _add_missing_columns(catalog: Catalog, table: str, scan: str) -> None:
-    have = {row[0] for row in catalog.execute(f"DESCRIBE {table}").fetchall()}
-    for row in catalog.execute(f"DESCRIBE SELECT * FROM {scan}").fetchall():
-        if row[0] not in have:
-            catalog.execute(f"ALTER TABLE {table} ADD COLUMN {quote_identifier(row[0])} {row[1]}")
+def _laid_out_files(catalog: Catalog, dataset: str) -> dict[tuple[str, str] | None, list[str]]:
+    """The table's data files by lake folder and name; ``None`` collects files not laid out so."""
+    from cnequity.storage.lake_write import _LAID_OUT, logical_name
+
+    table = catalog.table_dir(dataset)
+    found: dict[tuple[str, str] | None, list[str]] = {}
+    for path in _listed_files(catalog, dataset):
+        relative = Path(path).relative_to(table) if table in Path(path).parents else None
+        key = None
+        if relative is not None and len(relative.parts) <= 2 and _LAID_OUT.match(relative.name):
+            key = (relative.parts[0] if len(relative.parts) == 2 else "", logical_name(path))
+        found.setdefault(key, []).append(path)
+    return found
 
 
-class _PartitionSyncMismatch(RuntimeError):
-    """The partition predicate did not select exactly the rows of the partition's files."""
+def _listed_files(catalog: Catalog, dataset: str) -> list[str]:
+    return [
+        row[0]
+        for row in catalog.execute(
+            "SELECT data_file FROM ducklake_list_files('lake', ?)", [dataset]
+        ).fetchall()
+    ]
 
 
-def _order_by(dataset: str) -> str:
-    keys = PRIMARY_KEYS.get(dataset, ())
-    return (" ORDER BY " + ", ".join(quote_identifier(key) for key in keys)) if keys else ""
+def _register(
+    catalog: Catalog, dataset: str, root: Path, *, add: list[str], remove: list[str]
+) -> int:
+    """Inside an open transaction: make the generation files *add* data files of the table.
 
+    Each is linked into the lake under ``<table>/<partition value>/`` and
+    registered as it is; a file whose column types the table cannot read is
+    written once more with the table's types. *remove* are the lake files
+    they replace. Returns the rows registered.
+    """
+    from cnequity.storage.lake_write import _place, _protect, lake_file_name
+    from equitylake_core.write import Swap, apply_swap
 
-def _replace_partitions(
-    catalog: Catalog, dataset: str, root: Path, new: dict[str, str], changed: list[str]
-) -> str:
-    table = quote_identifier(dataset)
-    spec = DATASETS[dataset]
-    types = {row[0]: row[1] for row in catalog.execute(f"DESCRIBE {table}").fetchall()}
-    predicates = []
-    for partition in changed:
-        column, _, value = partition.partition("=")
-        predicate = (
-            _partition_predicate(column, types.get(column, ""), spec.partition_granularity, value)
-            if column == spec.partition_col
-            else None
+    sources = [root / relative for relative in add]
+    types = None
+    if sources:
+        types = catalog.file_types(sources)
+        if catalog.has_table(dataset):
+            types = {**types, **catalog.column_types(dataset)}
+    table = catalog.table_dir(dataset)
+    placed: list[Path] = []
+    try:
+        for relative, source in zip(add, sources, strict=True):
+            folder, name = _lake_key(relative)
+            target = (table / folder if folder else table) / lake_file_name(name)
+            placed.append(target)
+            if catalog.file_fits(dataset, source, types=types):
+                _place(source, target)
+            else:
+                catalog.conform_file(dataset, source, target, types=types)
+            _protect(target)
+        return apply_swap(
+            catalog,
+            Swap(dataset, tuple(path.as_posix() for path in placed), tuple(remove)),
         )
-        if predicate is None:
-            raise _PartitionSyncMismatch(f"no row predicate for partition {partition}")
-        predicates.append(predicate)
-    where = " OR ".join(f"({predicate})" for predicate in predicates)
-    relatives = [relative for relative in new if _partition_of(relative) in set(changed)]
-    catalog.execute(f"DELETE FROM {table} WHERE {where}")
-    if not relatives:
-        return where
-    scan = _file_list(root, relatives)
-    _add_missing_columns(catalog, table, scan)
-    inserted = catalog.execute(
-        f"INSERT INTO {table} BY NAME SELECT * FROM {scan}{_order_by(dataset)}"
-    ).fetchone()[0]
-    selected = catalog.execute(f"SELECT count(*) FROM {table} WHERE {where}").fetchone()[0]
-    if selected != inserted:
-        raise _PartitionSyncMismatch(
-            f"{dataset}: predicate selects {selected} rows, partition files hold {inserted}"
-        )
-    return where
-
-
-def _replace_table(catalog: Catalog, dataset: str, root: Path, new: dict[str, str]) -> None:
-    table = quote_identifier(dataset)
-    scan = _file_list(root, list(new))
-    _add_missing_columns(catalog, table, scan)
-    catalog.execute(f"DELETE FROM {table}")
-    catalog.execute(f"INSERT INTO {table} BY NAME SELECT * FROM {scan}{_order_by(dataset)}")
+    except BaseException:
+        for path in placed:
+            path.unlink(missing_ok=True)
+        raise
 
 
 HISTORY_TABLE = "_revision_history"
@@ -434,63 +416,66 @@ def sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
 
 
 def _sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
-    """Bring the catalog table to the committed revision, replacing only what changed.
+    """Bring the catalog table to the committed revision, replacing only the files that changed.
 
-    The change is found by comparing the committed file list with the one
-    recorded at the last sync. Changed partitions are replaced inside one
-    transaction together with the sync record; if the rows a partition
-    predicate selects are not exactly the rows its files hold, that
-    transaction is rolled back and the whole table is replaced instead.
+    The generation's files become the table's data files as they are: each is
+    linked into the lake and registered, and the lake file it replaces is
+    dropped whole, in one transaction with the sync record. The change is
+    found by comparing the committed file list with the one recorded at the
+    last sync. A table whose files are not laid out this way (the catalog
+    wrote them itself) is replaced whole, once.
     """
     committed = _committed_files(config, dataset)
     if committed is None:
         return None
     revision_id, root, new = committed
     _ensure_sync_table(catalog)
-    if not catalog.has_table(dataset):
-        import_dataset(config, catalog, dataset)
-        _record_sync(catalog, dataset, revision_id, new, _table_keys_unique(catalog, dataset))
-        return SyncResult(dataset, "imported", revision_id)
-    previous = synced_revision(catalog, dataset)
-    was_unique = keys_unique(catalog, dataset)
+    existed = catalog.has_table(dataset)
+    previous = synced_revision(catalog, dataset) if existed else None
+    was_unique = keys_unique(catalog, dataset) if existed else None
     if previous is not None and previous[0] == revision_id:
         if was_unique is None:  # synced before the flag existed: check once
             _record_sync(catalog, dataset, revision_id, new, _table_keys_unique(catalog, dataset))
         return SyncResult(dataset, "current", revision_id)
 
-    changed: list[str] | None = None
-    if previous is not None:
+    held = _laid_out_files(catalog, dataset) if existed else {}
+    wanted: dict[tuple[str, str], str] = {}
+    for relative in new:
+        wanted.setdefault(_lake_key(relative), relative)
+    whole = (
+        not existed
+        or previous is None
+        or None in held
+        or len(wanted) != len(new)
+        or any(len(paths) > 1 for paths in held.values())
+    )
+    if whole:
+        add = sorted(new)
+        remove = sorted(path for paths in held.values() for path in paths)
+    else:
         old = previous[1]
-        partitions = {_partition_of(relative) for relative in set(old) | set(new)}
-        if None not in partitions:
-            changed = sorted(
-                partition
-                for partition in partitions
-                if {r: d for r, d in old.items() if _partition_of(r) == partition}
-                != {r: d for r, d in new.items() if _partition_of(r) == partition}
-            )
-    message = f"sync {dataset} to revision {revision_id}"
-    if changed is not None:
-        try:
-            with catalog.transaction(message=message):
-                unique = was_unique
-                if changed:
-                    where = _replace_partitions(catalog, dataset, root, new, changed)
-                    if was_unique and _partition_key_column(catalog, dataset):
-                        # Other partitions cannot hold these keys: check the new rows only.
-                        unique = not _has_duplicate_keys(catalog, dataset, where)
-                    else:
-                        unique = _table_keys_unique(catalog, dataset)
-                elif unique is None:
-                    unique = _table_keys_unique(catalog, dataset)
-                _record_sync(catalog, dataset, revision_id, new, unique)
-            return SyncResult(dataset, "partitions", revision_id, len(changed))
-        except _PartitionSyncMismatch:
-            pass
-    with catalog.transaction(message=message):
-        _replace_table(catalog, dataset, root, new)
+        add, remove = [], []
+        for key, relative in sorted(wanted.items()):
+            if key in held and old.get(relative) == new[relative]:
+                continue
+            add.append(relative)
+            remove.extend(held.get(key, []))
+        remove.extend(path for key, paths in held.items() if key not in wanted for path in paths)
+    if existed and None in held:
+        # Registered files are refused by a table the catalog partitions itself.
+        catalog.unpartition(dataset)
+    with catalog.transaction(message=f"sync {dataset} to revision {revision_id}"):
+        if add or remove:
+            _register(catalog, dataset, root, add=add, remove=remove)
         _record_sync(catalog, dataset, revision_id, new, _table_keys_unique(catalog, dataset))
-    return SyncResult(dataset, "replaced", revision_id)
+    if not existed:
+        return SyncResult(dataset, "imported", revision_id)
+    if whole:
+        return SyncResult(dataset, "replaced", revision_id)
+    folders = {_lake_key(relative)[0] for relative in add} | {
+        Path(path).parent.name for path in remove
+    }
+    return SyncResult(dataset, "partitions", revision_id, len(folders))
 
 
 def catalog_is_current(config, catalog: Catalog, dataset: str) -> bool:
@@ -683,14 +668,12 @@ def apply_retention(
     ``SELECT`` they report what they would do and change nothing. Their result
     rows carry timestamps with a time zone, which DuckDB hands to Python only
     through ``pytz`` (not a dependency), so the rows are dropped unread and the
-    effect is counted from the catalog's own tables.
+    effect is counted beforehand, from what the functions report they would do.
     """
     keep_ids = retained_snapshots(catalog, keep=keep, held=held)
     every = {
         int(row[0])
-        for row in catalog.execute(
-            f"SELECT snapshot_id FROM {METADATA}.ducklake_snapshot"
-        ).fetchall()
+        for row in catalog.execute("SELECT snapshot_id FROM ducklake_snapshots('lake')").fetchall()
     }
     expire = sorted(every - keep_ids)
     if not apply:
@@ -699,16 +682,13 @@ def apply_retention(
         versions = "[" + ", ".join(str(snapshot) for snapshot in expire) + "]"
         catalog.execute(f"CALL ducklake_expire_snapshots('lake', versions => {versions})")
         catalog.con.abort()
-    remaining = catalog.execute(f"SELECT count(*) FROM {METADATA}.ducklake_snapshot").fetchone()[0]
-    scheduled = f"SELECT count(*) FROM {METADATA}.ducklake_files_scheduled_for_deletion"
-    before = catalog.execute(scheduled).fetchone()[0]
-    catalog.execute(
-        "CALL ducklake_cleanup_old_files('lake', "
-        f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
-    )
+    remaining = catalog.execute("SELECT count(*) FROM ducklake_snapshots('lake')").fetchone()[0]
+    cleanup = f"ducklake_cleanup_old_files('lake', older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
+    # Inside a SELECT the function only reports the files it would delete.
+    due = catalog.execute(f"SELECT count(*) FROM {cleanup}").fetchone()[0]
+    catalog.execute(f"CALL {cleanup}")
     catalog.con.abort()
-    after = catalog.execute(scheduled).fetchone()[0]
-    return RetentionResult(len(every & keep_ids), len(every) - int(remaining), before - after, True)
+    return RetentionResult(len(every & keep_ids), len(every) - int(remaining), int(due), True)
 
 
 def catalog_retention(config, *, apply: bool) -> dict | None:

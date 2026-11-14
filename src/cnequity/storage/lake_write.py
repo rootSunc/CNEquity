@@ -19,6 +19,8 @@ every reader keyed on them keeps working.
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import uuid
 from collections.abc import Callable
@@ -28,7 +30,6 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.domain.datasets import DATASETS
-from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.catalog_bridge import (
     REVISIONS_TABLE,
@@ -45,7 +46,7 @@ from cnequity.storage.catalog_bridge import (
 from cnequity.storage.locator import layer_name
 from cnequity.storage.parquet import emit_partition, merge_group_keys
 from cnequity.storage.revisions import DatasetRevision, RevisionFile, RevisionStore, sha256_file
-from equitylake_core.catalog import Catalog, quote_identifier
+from equitylake_core.catalog import Catalog, quote_identifier, quote_literal
 from equitylake_core.write import Write, WriteRejected, digest_algorithm, rows_digest
 
 CHECKOUT_DIR = "_checkout"
@@ -62,54 +63,177 @@ def _stamps(directory: Path) -> Stamps:
     }
 
 
-class Checkout:
-    """The partitions of one dataset that a write changes, checked out of the catalog."""
+#: A data file this module placed in the lake: ``<logical stem>.<8 hex>.parquet``.
+_LAID_OUT = re.compile(r"^(?P<stem>.+)\.[0-9a-f]{8}\.parquet$")
 
-    def __init__(self, write, dataset: str, *, root: Path | None = None):
+
+def lake_file_name(logical: str) -> str:
+    """A fresh name in the lake for the partition file *logical* (``part-merged.parquet``)."""
+    return f"{Path(logical).stem}.{uuid.uuid4().hex[:8]}.parquet"
+
+
+def logical_name(path: str | Path) -> str:
+    """The partition file a lake data file is (its name without the random part)."""
+    found = _LAID_OUT.match(Path(path).name)
+    return f"{found['stem']}.parquet" if found else Path(path).name
+
+
+def _place(source: Path, target: Path) -> None:
+    """Make *target* the same file as *source*: a hard link, or a copy across volumes."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+
+
+def _protect(path: Path) -> None:
+    """A published file is never written again; make an attempt fail instead of corrupt it."""
+    if os.name != "nt":  # a read-only file cannot be deleted on Windows, and the catalog must
+        path.chmod(0o444)
+
+
+@dataclass(frozen=True)
+class PartitionSwap:
+    """What publishing one changed partition does to the dataset's files."""
+
+    label: str
+    #: Files in the checkout to register, by their name there.
+    add: tuple[Path, ...]
+    #: Data files of the lake this write was checked out of, dropped whole.
+    remove: tuple[str, ...]
+
+
+class Checkout:
+    """The partitions of one dataset that a write changes, checked out of the catalog.
+
+    The lake keeps a dataset as the files its writers produce: every data file
+    holds rows of one partition, under ``<table>/<partition value>/``. Checking
+    a partition out links those files into the run's folder under the names
+    the writers know (``part-merged.parquet``, buckets), so nothing is copied
+    and the merge code works on them as it does on a partition directory:
+    it rewrites only the files it must. Publishing then registers the new and
+    rewritten files and drops the ones they replace.
+
+    A partition whose rows sit in files not laid out that way (written by the
+    catalog itself, possibly holding several partitions) is checked out by
+    its rows instead. If it changes, every partition sharing those files is
+    written out with it, so each file is split once, the first time it is
+    touched.
+    """
+
+    def __init__(self, write, dataset: str, *, root: Path | None = None, link: bool = True):
         self.dataset = dataset
         self.spec = DATASETS[dataset]
         #: Pass this where a writer expects ``curated_root`` or ``derived_root``.
         self.layer_root = write.root / layer_name(dataset) if root is None else root.parent
         self.root = self.layer_root / dataset if root is None else root
         self._write = write
+        self._link = link
         self._checked: dict[str, Stamps] = {}
         self._removed: set[str] = set()
+        # The lake's files that held each touched partition when it was first touched.
+        self._files: dict[str, list[str]] = {}
+        # Partitions checked out as links: the lake file behind each name.
+        self._linked: dict[str, dict[str, str]] = {}
+        # Untouched partitions written out because they share a file with a changed one.
+        self._split: set[str] = set()
         self._types: dict[str, str] | None = None
         self.base_revision = _catalog_revision(write.catalog, dataset)
 
-    def partition(self, label: str = "") -> Path:
-        """Check out ``<column>=<value>`` (``""`` for an unpartitioned dataset) and return it.
-
-        It holds the partition's published rows, written as the partition's
-        merged file or buckets; checking it out again returns it as it is.
-        """
+    def _target(self, label: str) -> Path:
         if bool(label) != bool(self.spec.partition_col):
             raise ValueError(f"{self.dataset}: partition label {label!r} does not fit its layout")
-        target = self.root / label if label else self.root
-        if label in self._checked:
-            return target
+        return self.root / label if label else self.root
+
+    def layout_dir(self, label: str, catalog: Catalog | None = None) -> Path:
+        """Where the lake keeps the files of partition *label*."""
+        table = (catalog or self._write.catalog).table_dir(self.dataset)
+        return table / label.partition("=")[2] if label else table
+
+    def _laid_out(self, path: str, label: str) -> bool:
+        found = Path(path)
+        return found.parent == self.layout_dir(label) and bool(_LAID_OUT.match(found.name))
+
+    def _files_of(self, label: str) -> list[str]:
+        """The lake's data files that hold rows of *label* now."""
+        catalog = self._write.catalog
+        if not catalog.has_table(self.dataset):
+            return []
+        where = self.where(label)
+        scope = f" WHERE {where}" if where else ""
+        return sorted(
+            row[0]
+            for row in catalog.execute(
+                f"SELECT DISTINCT filename FROM {quote_identifier(self.dataset)}{scope}"
+            ).fetchall()
+        )
+
+    def _touch(self, label: str) -> list[str]:
+        if label not in self._files:
+            self._files[label] = self._files_of(label)
+        return self._files[label]
+
+    def _write_out(self, label: str) -> None:
+        """Fill *label*'s folder from its published rows, as the writers lay a partition out."""
+        target = self._target(label)
         target.mkdir(parents=True, exist_ok=True)
         rows = self._published_rows(label)
         if rows.height:
             emit_partition(
                 rows, self.dataset, affected=[], existing=[], read_dir=None, out_dir=target
             )
+
+    def partition(self, label: str = "") -> Path:
+        """Check out ``<column>=<value>`` (``""`` for an unpartitioned dataset) and return it.
+
+        It holds the partition's published files under the writers' names;
+        checking it out again returns it as it is.
+        """
+        target = self._target(label)
+        if label in self._checked:
+            return target
+        files = self._touch(label)
+        if files and all(self._laid_out(path, label) for path in files):
+            target.mkdir(parents=True, exist_ok=True)
+            linked = {}
+            for path in files:
+                name = logical_name(path)
+                if name in linked:
+                    raise WriteRejected(
+                        f"{self.dataset}: {label or 'the table'} holds two files named {name}"
+                    )
+                # Windows cannot protect a linked file from being written in place.
+                if self._link and os.name != "nt":
+                    _place(Path(path), target / name)
+                else:
+                    shutil.copy2(path, target / name)
+                    (target / name).chmod(0o644)
+                linked[name] = path
+            self._linked[label] = linked
+        else:
+            self._write_out(label)
         self._checked[label] = _stamps(target)
         return target
 
     def labels(self) -> list[str]:
         """Every published partition of the dataset (``[""]`` when it has none)."""
-        from cnequity.domain.datasets import granularity_for_dataset
-        from cnequity.storage.parquet import _partition_values
-
         column = self.spec.partition_col
         if not column:
             return [""]
         catalog = self._write.catalog
         if not catalog.has_table(self.dataset):
             return []
-        values = catalog.relation(
-            f"SELECT DISTINCT {quote_identifier(column)} FROM {quote_identifier(self.dataset)}"
+        return self._labels_where("")
+
+    def _labels_where(self, scope: str) -> list[str]:
+        from cnequity.domain.datasets import granularity_for_dataset
+        from cnequity.storage.parquet import _partition_values
+
+        column = self.spec.partition_col
+        values = self._write.catalog.relation(
+            f"SELECT DISTINCT {quote_identifier(column)} "
+            f"FROM {quote_identifier(self.dataset)}{scope}"
         ).pl()
         return sorted(
             {
@@ -132,9 +256,9 @@ class Checkout:
         For a writer that read the partition through :meth:`rows` and decided
         its new content: the partition is not written to disk first.
         """
-        if bool(label) != bool(self.spec.partition_col):
-            raise ValueError(f"{self.dataset}: partition label {label!r} does not fit its layout")
-        target = self.root / label if label else self.root
+        target = self._target(label)
+        self._touch(label)
+        self._linked.pop(label, None)
         if target.exists():
             shutil.rmtree(target)
         self._checked.setdefault(label, {})
@@ -145,6 +269,23 @@ class Checkout:
         target.mkdir(parents=True)
         emit_partition(rows, self.dataset, affected=[], existing=[], read_dir=None, out_dir=target)
 
+    def replace_with(self, label: str, files: list[Path]) -> None:
+        """Make *files* (a partition's files from elsewhere) the whole of *label*; none removes it."""
+        target = self._target(label)
+        self._touch(label)
+        self._linked.pop(label, None)
+        if target.exists():
+            shutil.rmtree(target)
+        self._checked[label] = {}
+        self._removed.discard(label)
+        if not files:
+            self._removed.add(label)
+            return
+        target.mkdir(parents=True)
+        for path in files:
+            # A copy: the source is a tree its writer may still change.
+            shutil.copy2(path, target / Path(path).name)
+
     def remove(self, label: str) -> None:
         """Delete the partition *label* from the dataset."""
         target = self.partition(label)
@@ -152,7 +293,11 @@ class Checkout:
         self._removed.add(label)
 
     def changed(self) -> dict[str, list[Path]]:
-        """Each checked-out partition a writer changed, with its files (none: removed)."""
+        """Each partition this write changes, with every file it now holds (none: removed).
+
+        That includes a partition nobody edited but which shares a lake file
+        with an edited one: the file is dropped, so its rows are written out.
+        """
         if self.spec.partition_col and self.root.is_dir():
             strays = sorted(
                 path.name
@@ -172,9 +317,62 @@ class Checkout:
                 out[label] = []
                 continue
             after = _stamps(directory)
-            if after != before:
+            if after != before or label in self._split:
                 out[label] = [directory / relative for relative in sorted(after)]
+        self._split_shared(out)
         return out
+
+    def _split_shared(self, out: dict[str, list[Path]]) -> None:
+        """Write out the partitions that share a not-laid-out file with a changed one."""
+        if not self.spec.partition_col:
+            return
+        pending = list(out)
+        while pending:
+            label = pending.pop()
+            shared = [
+                path for path in self._files.get(label, []) if not self._laid_out(path, label)
+            ]
+            if not shared:
+                continue
+            listed = ", ".join(quote_literal(path) for path in shared)
+            for other in self._labels_where(f" WHERE filename IN ({listed})"):
+                if other in self._checked:
+                    continue
+                self._touch(other)
+                self._write_out(other)
+                self._checked[other] = {}
+                self._split.add(other)
+                directory = self.root / other
+                out[other] = [directory / name for name in sorted(_stamps(directory))]
+                pending.append(other)
+
+    def swaps(self) -> list[PartitionSwap]:
+        """For each changed partition, the files to register and the lake files to drop."""
+        swaps = []
+        for label, files in self.changed().items():
+            held = self._files.get(label, [])
+            linked = self._linked.get(label)
+            if linked is None:
+                swaps.append(PartitionSwap(label, tuple(files), tuple(held)))
+                continue
+            directory = self.root / label if label else self.root
+            before, after = self._checked[label], _stamps(directory)
+            add = [directory / name for name in sorted(after) if before.get(name) != after[name]]
+            remove = [
+                path
+                for name, path in sorted(linked.items())
+                if name not in after or before.get(name) != after[name]
+            ]
+            swaps.append(PartitionSwap(label, tuple(add), tuple(remove)))
+        return swaps
+
+    def has_foreign_files(self) -> bool:
+        """Whether a touched partition's rows sit in files the catalog laid out itself."""
+        return any(
+            not self._laid_out(path, label)
+            for label, files in self._files.items()
+            for path in files
+        )
 
     def where(self, label: str) -> str | None:
         """The SQL predicate selecting *label*'s rows; ``None`` for the whole table."""
@@ -245,6 +443,7 @@ class LakeWrite:
         self._checkouts: dict[str, Checkout] = {}
         # Datasets published from a whole working tree: root, and changed partitions.
         self._trees: dict[str, tuple[Path, list[str]]] = {}
+        self._from_tree: set[str] = set()
         self._checks: list[tuple[str, Callable[[Catalog], str | None]]] = []
 
     @classmethod
@@ -375,17 +574,18 @@ class LakeWrite:
         changes: dict[str, dict[str, list[Path]]] = {}
         for dataset in datasets:
             if dataset in self._trees:
-                root, labels = self._trees[dataset]
-                changed = {
-                    label: sorted((root / label if label else root).rglob("*.parquet"))
-                    if (root / label if label else root).is_dir()
-                    else []
-                    for label in labels
-                }
-            elif dataset in self._checkouts:
-                changed = self._checkouts[dataset].changed()
-            else:
+                # A working tree's partitions become the checkout's, whole.
+                root, labels = self._trees.pop(dataset)
+                checkout = self.checkout(dataset)
+                for label in labels:
+                    directory = root / label if label else root
+                    checkout.replace_with(
+                        label, sorted(directory.rglob("*.parquet")) if directory.is_dir() else []
+                    )
+                self._from_tree.add(dataset)
+            if dataset not in self._checkouts:
                 continue
+            changed = self._checkouts[dataset].changed()
             if changed:
                 changes[dataset] = changed
         return changes
@@ -404,58 +604,101 @@ class LakeWrite:
             checkout = self._checkouts[dataset]
             if _catalog_revision(catalog, dataset) != checkout.base_revision:
                 raise WriteRejected(f"{dataset} was published by another write since checkout")
+        swaps = {dataset: self._checkouts[dataset].swaps() for dataset in changes}
         receipts = {
-            dataset: self._prepare(store, dataset, changed, datasets[dataset])
-            for dataset, changed in changes.items()
+            dataset: self._prepare(
+                store, dataset, changes[dataset], swaps[dataset], datasets[dataset]
+            )
+            for dataset in changes
         }
         write = Write(catalog)
-        for dataset, changed in changes.items():
-            checkout = self._checkouts[dataset]
-            for label, files in changed.items():
-                write.replace(
-                    dataset,
-                    files,
-                    where=checkout.where(label),
-                    order_by=PRIMARY_KEYS.get(dataset, ()),
+        placed: list[Path] = []
+        try:
+            for dataset, found in swaps.items():
+                add, remove = self._place_files(catalog, dataset, found, placed)
+                write.swap(dataset, add=add, remove=remove)
+            for name, check in self._checks:
+                write.check(name, check)
+            for dataset, receipt in receipts.items():
+                where = " OR ".join(
+                    f"({clause})"
+                    for label in changes[dataset]
+                    if (clause := self._checkouts[dataset].where(label))
                 )
-        for name, check in self._checks:
-            write.check(name, check)
-        for dataset, receipt in receipts.items():
-            where = " OR ".join(
-                f"({clause})"
-                for label in changes[dataset]
-                if (clause := self._checkouts[dataset].where(label))
-            )
-            write.check(f"{dataset} sync state", _sync_recorder(dataset, receipt, where))
-            write.record(REVISIONS_TABLE, _revision_recorder(receipt, where))
-        # One snapshot holds the rows, the sync state and the revision rows,
-        # and it is file-complete: a pinned read needs nothing recorded later.
-        write.commit(message=message or f"run {self.run_id}")
+                write.check(f"{dataset} sync state", _sync_recorder(dataset, receipt, where))
+                write.record(REVISIONS_TABLE, _revision_recorder(receipt, where))
+            # One snapshot holds the files, the sync state and the revision
+            # rows, and it is file-complete: a pinned read needs nothing more.
+            write.commit(message=message or f"run {self.run_id}")
+        except BaseException:
+            # Nothing was registered: the files placed for it belong to no snapshot.
+            for path in placed:
+                path.unlink(missing_ok=True)
+            raise
         for dataset, receipt in receipts.items():
             store.finish_catalog_revision(receipt)
-            if advance and dataset not in self._trees:
-                # Keep the working tree a valid cache of what was published.
-                store.advance_working_tree(
-                    dataset, self._checkouts[dataset].base_revision, changes[dataset]
-                )
+            if advance:
+                # The working tree, where one is left, no longer holds what is published.
+                store.forget_working_tree(dataset)
         return receipts
+
+    def _place_files(
+        self, catalog: Catalog, dataset: str, swaps: list[PartitionSwap], placed: list[Path]
+    ) -> tuple[list[Path], list[str]]:
+        """Put each partition's new files in *catalog*'s lake; returns them and the files to drop."""
+        checkout = self._checkouts[dataset]
+        ours, theirs = self.catalog.root, catalog.root
+        add: list[Path] = []
+        remove: list[str] = []
+        if checkout.has_foreign_files() and catalog.has_table(dataset):
+            # Registered files are refused by a table the catalog partitions itself.
+            catalog.unpartition(dataset)
+        for swap in swaps:
+            where = checkout.where(swap.label)
+            if where and swap.add:
+                listed = ", ".join(quote_literal(path.as_posix()) for path in swap.add)
+                outside = catalog.execute(
+                    f"SELECT count(*) FROM read_parquet([{listed}], union_by_name => true, "
+                    f"hive_partitioning => false) WHERE ({where}) IS NOT TRUE"
+                ).fetchone()[0]
+                if outside:
+                    raise WriteRejected(
+                        f"{dataset}: {outside} row(s) written to {swap.label} do not belong to it"
+                    )
+            directory = checkout.layout_dir(swap.label, catalog)
+            for source in swap.add:
+                target = directory / lake_file_name(source.name)
+                placed.append(target)
+                if catalog.file_fits(dataset, source):
+                    _place(source, target)
+                else:
+                    catalog.conform_file(dataset, source, target)
+                _protect(target)
+                add.append(target)
+            # The clone of a lake keeps every file at the same place under its own root.
+            remove.extend(
+                (theirs / Path(path).relative_to(ours)).as_posix() for path in swap.remove
+            )
+        return add, remove
 
     def _prepare(
         self,
         store: RevisionStore,
         dataset: str,
         changed: dict[str, list[Path]],
+        swaps: list[PartitionSwap],
         publish: DatasetPublish,
     ) -> DatasetRevision:
-        base = self._trees[dataset][0] if dataset in self._trees else self._checkouts[dataset].root
+        base = self._checkouts[dataset].root
+        # The files this revision wrote: a file a partition keeps is not hashed again.
         records = tuple(
             RevisionFile(
                 path=(Path(dataset) / path.relative_to(base)).as_posix(),
                 size_bytes=path.stat().st_size,
                 sha256=sha256_file(path),
             )
-            for files in changed.values()
-            for path in files
+            for swap in swaps
+            for path in swap.add
         )
         partitions = tuple(f"{dataset}/{label}" if label else dataset for label in changed)
         removed = [f"{dataset}/{label}" for label, files in changed.items() if not files]
@@ -485,7 +728,9 @@ def export_tree(data_root: Path, dataset: str, destination: Path) -> None:
     """Write *dataset*'s published catalog rows to *destination* in its partition layout."""
     destination.mkdir(parents=True, exist_ok=True)
     with Catalog(Path(data_root) / "lake", read_only=True) as catalog:
-        checkout = Checkout(_Reader(catalog, destination.parent), dataset, root=destination)
+        checkout = Checkout(
+            _Reader(catalog, destination.parent), dataset, root=destination, link=False
+        )
         for label in checkout.labels():
             checkout.partition(label)
 

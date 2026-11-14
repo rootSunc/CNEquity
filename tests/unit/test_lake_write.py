@@ -266,13 +266,9 @@ def test_a_generation_writer_publishes_into_the_catalog_only_from_a_verified_tre
             contract_fingerprint="contract",
         )
 
-    # The publish carried January into the working tree and kept it verified.
-    tree_january = pl.read_parquet(
-        list((cfg.curated_root / "daily_bars/trade_date=2024-01").glob("*.parquet"))
-    )
-    assert tree_january["close"].to_list() == [10.5]
-    # A tree the store can no longer vouch for is never committed from.
-    (cfg.meta_root / "working_trees" / "daily_bars.json").unlink()
+    # A publish does not touch the working tree: the store no longer vouches
+    # for it, and a tree it cannot vouch for is never committed from.
+    assert not (cfg.meta_root / "working_trees" / "daily_bars.json").exists()
     with pytest.raises(CatalogOnlyDatasetError, match="not verified"):
         commit()
     assert _load(cfg)["trade_date"].max() == date(2024, 2, 1)
