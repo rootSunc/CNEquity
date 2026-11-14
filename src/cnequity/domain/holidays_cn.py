@@ -226,8 +226,14 @@ CLOSED_DATES: frozenset[str] = frozenset(
         "2026-10-05",
         "2026-10-06",
         "2026-10-07",
-        # 2027 (provisional)
+        # 2027 — 国务院办公厅关于2027年部分节假日安排的通知
+        # (国办发明电〔2026〕10 号, published 2026-11-05). Replaces the
+        # provisional table, which missed 2/5 (除夕), 5/4, 5/5, 6/9 and 9/15
+        # and wrongly closed 6/14 and 9/20. The announced 调休 make-up
+        # workdays (1/31, 2/14, 5/8, 9/26, 10/9) are weekends, so they stay
+        # out of this table — see EXTRA_TRADING_DATES below.
         "2027-01-01",
+        "2027-02-05",
         "2027-02-08",
         "2027-02-09",
         "2027-02-10",
@@ -235,8 +241,10 @@ CLOSED_DATES: frozenset[str] = frozenset(
         "2027-02-12",
         "2027-04-05",
         "2027-05-03",
-        "2027-06-14",
-        "2027-09-20",
+        "2027-05-04",
+        "2027-05-05",
+        "2027-06-09",
+        "2027-09-15",
         "2027-10-01",
         "2027-10-04",
         "2027-10-05",

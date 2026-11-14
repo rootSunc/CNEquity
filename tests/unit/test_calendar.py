@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 
@@ -7,7 +7,7 @@ from cnequity.adapters.calendar.exchange_calendar import (
     calendar_forward_coverage_days,
     calendar_seed_end,
 )
-from cnequity.domain.holidays_cn import EXTRA_TRADING_DATES
+from cnequity.domain.holidays_cn import EXTRA_TRADING_DATES, exchange_may_open
 
 
 def test_cny_holiday_not_trading():
@@ -57,6 +57,35 @@ def test_new_year_holiday_not_trading():
         assert cal["is_trading"][0] is False, d
 
     assert build_trading_calendar(date(2001, 1, 1), date(2001, 1, 1))["is_trading"][0] is False
+
+
+def test_2027_follows_the_state_council_notice():
+    """国办发明电〔2026〕10 号 (published 2026-11-05) set the 2027 holidays.
+
+    The provisional table missed 除夕 and four other single-day closures, and
+    closed two ordinary Mondays instead. Both errors corrupt the lake: a real
+    session marked closed silently drops a trading day, while a closed day
+    marked open files a gap no refetch can fill. 2027 has 261 weekdays and 18
+    weekday closures, hence 243 sessions.
+    """
+    newly_closed = (
+        date(2027, 2, 5),  # 春节 (除夕, 周五)
+        date(2027, 5, 4),  # 劳动节 (周二)
+        date(2027, 5, 5),  # 劳动节 (周三)
+        date(2027, 6, 9),  # 端午 (周三)
+        date(2027, 9, 15),  # 中秋 (周三)
+    )
+    newly_open = (date(2027, 6, 14), date(2027, 9, 20))
+    # A weekend would pass either assertion for the wrong reason.
+    for day in newly_closed + newly_open:
+        assert day.weekday() < 5, day
+    for day in newly_closed:
+        assert build_trading_calendar(day, day)["is_trading"][0] is False, day
+    for day in newly_open:
+        assert build_trading_calendar(day, day)["is_trading"][0] is True, day
+
+    sessions = sum(exchange_may_open(date(2027, 1, 1) + timedelta(days=i)) for i in range(365))
+    assert sessions == 243
 
 
 def test_seed_is_authoritative_over_index_bars(tmp_path):
