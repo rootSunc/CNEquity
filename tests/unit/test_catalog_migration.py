@@ -38,9 +38,75 @@ def lake(tmp_path, monkeypatch):
     catalog_read.close_all()
 
 
-def test_the_migration_is_never_owed(lake):
-    assert "lake-catalog" in {migration.id for migration in MIGRATIONS}
-    assert "lake-catalog" not in {migration.id for migration in owed(lake)}
+def test_a_lake_built_before_owes_the_migration_first(lake):
+    assert [migration.id for migration in owed(lake)][0] == "lake-catalog"
+    assert MIGRATIONS[0].id == "lake-catalog" and not MIGRATIONS[0].optional
+
+
+def test_nothing_writes_a_lake_that_has_not_moved(lake, monkeypatch):
+    from cnequity.orchestrator.engine import JobEngine
+    from cnequity.query import catalog_read
+    from cnequity.storage.catalog_migration import GENERATION_LAKE_SWITCH, require_catalog_lake
+    from cnequity.storage.lake_record import LakeMigrationRequired
+    from cnequity.storage.repairs.publish import publish_repair
+
+    monkeypatch.delenv(GENERATION_LAKE_SWITCH)
+    store = RevisionStore(lake.meta_root, lake.curated_root)
+    before = store.current_pointer("fund_flow")
+
+    with pytest.raises(LakeMigrationRequired, match="cne migrate --apply"):
+        require_catalog_lake(lake)
+    with pytest.raises(LakeMigrationRequired):
+        JobEngine(lake).run_job("daily", SECOND)
+    with pytest.raises(LakeMigrationRequired):
+        publish_repair(
+            lake, store, "fund_flow", keep=lambda frame: frame.head(0), reason="x", metadata={}
+        )
+    assert store.current_pointer("fund_flow") == before
+    assert not (lake.meta_root / "storage.json").exists()
+
+    migrate_to_catalog(lake, apply=True)
+    catalog_read.close_all()
+    require_catalog_lake(lake)
+
+
+def test_a_lake_that_holds_nothing_starts_on_the_catalog(tmp_path, monkeypatch):
+    from cnequity.query import catalog_read, load
+    from cnequity.storage.catalog_migration import GENERATION_LAKE_SWITCH, require_catalog_lake
+
+    monkeypatch.delenv(GENERATION_LAKE_SWITCH)
+    cfg = Config(data_root=tmp_path / "new")
+    try:
+        Catalog(tmp_path / "probe", create=True).close()
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+
+    require_catalog_lake(cfg)
+    assert json.loads((cfg.meta_root / "storage.json").read_text()) == {"publish": "catalog"}
+    _run(
+        cfg,
+        "r1",
+        FIRST,
+        _flows(FIRST, {"600519.SH": 1.0}),
+        _margins(FIRST, {"600519.SH": 10.0}),
+    )
+    catalog_read.close_all()
+
+    store = RevisionStore(cfg.meta_root, cfg.curated_root)
+    pointer = store.current_pointer("fund_flow")
+    # Its first revision is already the catalog's: no generation was written.
+    assert pointer["storage"] == "catalog" and pointer["revision"] == 1
+    assert not (cfg.meta_root / "revisions" / "data" / "fund_flow").exists()
+    assert load("fund_flow", config=cfg).height == 1
+    catalog_read.close_all()
+
+
+def test_creating_a_lake_records_that_it_publishes_into_its_catalog(tmp_path):
+    from cnequity.storage.layout import init_data_layout
+
+    cfg = Config(data_root=tmp_path / "fresh")
+    init_data_layout(cfg)
+    assert json.loads((cfg.meta_root / "storage.json").read_text()) == {"publish": "catalog"}
 
 
 def test_a_preview_reports_and_creates_nothing(lake):

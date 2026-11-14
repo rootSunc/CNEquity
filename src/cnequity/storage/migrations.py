@@ -109,6 +109,17 @@ def _missing_values(dataset: str) -> Callable[..., dict]:
 #: by 0.17 or earlier; `status-outages` stays a manual repair, since only the
 #: operator knows the outage window it rebuilds.
 MIGRATIONS: tuple[Migration, ...] = (
+    # First: the migrations after it are repairs, and nothing writes to a lake
+    # that has not moved onto its catalog.
+    Migration(
+        "lake-catalog",
+        N_(
+            "Copy every published dataset into the lake catalog, verify it row for row, "
+            "and switch the lake to publishing there (one-way)"
+        ),
+        "0.25.0",
+        _lake_catalog,
+    ),
     Migration(
         "orphan-symbols",
         N_("Drop factor and action rows for securities the lake holds no prices for"),
@@ -271,16 +282,6 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         "0.23.0",
         _repair("missing_values", "repair_all_missing_values"),
-    ),
-    Migration(
-        "lake-catalog",
-        N_(
-            "Copy every published dataset into the lake catalog, verify it row for row, "
-            "and switch the lake to publishing there (experimental, one-way per dataset)"
-        ),
-        "0.25.0",
-        _lake_catalog,
-        optional=True,
     ),
 )
 

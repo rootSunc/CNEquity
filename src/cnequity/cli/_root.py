@@ -277,14 +277,23 @@ def _expected_failure(exc: Exception) -> str | None:
     from cnequity.orchestrator.outcomes import InputUnavailableError
     from cnequity.orchestrator.run_lock import RunLockError
     from cnequity.query.reader import ReaderError
+    from cnequity.storage.lake_record import LakeMigrationRequired
     from cnequity.storage.lifecycle import LifecycleError
     from cnequity.storage.revisions import DiskSpaceError
+    from equitylake_core.extensions import ExtensionUnavailableError
 
     # Another job holding the lake is the lake's state too: `cne backfill`
     # beside a running init printed the refusal under a traceback. A full disk
     # is the same kind of failure: the message says what to do.
     if isinstance(
-        exc, ReaderError | InputUnavailableError | RunLockError | LifecycleError | DiskSpaceError
+        exc,
+        ReaderError
+        | InputUnavailableError
+        | RunLockError
+        | LifecycleError
+        | DiskSpaceError
+        | LakeMigrationRequired
+        | ExtensionUnavailableError,
     ):
         return str(exc)
     return None

@@ -1,7 +1,7 @@
 """Move an existing lake onto the lake catalog.
 
-The opt-in migration ``lake-catalog`` (``cne migrate --only lake-catalog``).
-It copies every published dataset into the catalog, proves each copy holds
+The migration ``lake-catalog`` (``cne migrate``), owed by every lake built
+before 0.25.0. It copies every published dataset into the catalog, proves each copy holds
 the same rows as the generation it came from, and then records in
 ``meta/storage.json`` that the lake publishes into its catalog. From then on
 each dataset moves over at its next publish; the generations already written
@@ -27,12 +27,54 @@ from cnequity.storage.catalog_bridge import (
     lake_root,
     sync_all,
 )
+from cnequity.storage.lake_record import LakeMigrationRequired
 from cnequity.storage.revisions import STORAGE_CATALOG, RevisionStore
 from equitylake_core.catalog import CATALOG_FILE, Catalog
 
 
 class CatalogMigrationError(RuntimeError):
     """The lake was not switched; the catalog may hold copies, which a rerun reuses."""
+
+
+#: Set by the test suite while tests of the generation layer remain; never by users.
+GENERATION_LAKE_SWITCH = "CNE_TEST_GENERATION_LAKE"
+
+
+def require_catalog_lake(config) -> None:
+    """Refuse to write a lake that still publishes generations.
+
+    Every writer publishes into the lake catalog. A lake built by an earlier
+    release has to be moved there once, by the ``lake-catalog`` migration,
+    which copies and verifies what it has published; until then nothing
+    writes to it. A lake that holds nothing yet simply starts on the catalog.
+    """
+    import os
+
+    if os.environ.get(GENERATION_LAKE_SWITCH):
+        return
+    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
+    if store.publishes_to_catalog():
+        return
+    if not _holds_data(config):
+        from cnequity.storage.lake_record import start_on_catalog
+
+        Path(config.meta_root).mkdir(parents=True, exist_ok=True)
+        start_on_catalog(config)
+        return
+    raise LakeMigrationRequired(
+        "this lake was built before 0.25.0 and has not been moved onto the lake catalog; "
+        "run `cne migrate` to preview and `cne migrate --apply` to move it, then run this again"
+    )
+
+
+def _holds_data(config) -> bool:
+    if any((Path(config.meta_root) / "revisions").glob("*/current.json")):
+        return True
+    return any(
+        next(Path(layer).rglob("*.parquet"), None) is not None
+        for layer in (config.curated_root, config.derived_root)
+        if Path(layer).is_dir()
+    )
 
 
 def _published(config) -> list[str]:

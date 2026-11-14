@@ -581,11 +581,6 @@ def _open_lake_write(config: Config, run_id: str):
     ).publishes_to_catalog()
     if getattr(config, "storage_publish", "generation") != "catalog" and not recorded:
         return None
-    from cnequity.storage.catalog_bridge import lake_root
-    from equitylake_core.catalog import CATALOG_FILE
-
-    if not (lake_root(config) / CATALOG_FILE).exists():
-        return None
     from cnequity.storage.atomic import write_json_atomic
     from cnequity.storage.lake_write import LakeWrite
 

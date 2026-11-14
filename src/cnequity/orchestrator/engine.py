@@ -216,6 +216,12 @@ class JobEngine:
 
         raise_open_file_limit()
 
+        # Before anything is fetched: a lake that has not moved onto its
+        # catalog cannot publish what this run would bring in.
+        from cnequity.storage.catalog_migration import require_catalog_lake
+
+        require_catalog_lake(self.config)
+
         if run_id and retry_failed_only:
             return self._retry_run(run_id, trade_date)
 

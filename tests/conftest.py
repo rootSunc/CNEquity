@@ -37,6 +37,10 @@ def _arm_subprocess_network_guard() -> None:
     if guard_dir not in parts:
         os.environ["PYTHONPATH"] = os.pathsep.join([guard_dir, *parts])
     os.environ["CNE_TEST_NO_NETWORK"] = "1"
+    # Most tests still build a lake the way releases before 0.25.0 did: files
+    # and a generation commit. Until the generation layer is removed they are
+    # let through the check that refuses to write such a lake.
+    os.environ["CNE_TEST_GENERATION_LAKE"] = "1"
     # `cne init` tests must not hold the developer's machine awake.
     os.environ["CNE_ALLOW_SLEEP"] = "1"
 

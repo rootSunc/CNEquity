@@ -16,6 +16,10 @@ LAKE_FILE = Path("state") / "lake.json"
 FORMAT = 1
 
 
+class LakeMigrationRequired(RuntimeError):
+    """A writer was asked to publish on a lake that has not moved onto its catalog."""
+
+
 def package_version() -> str:
     try:
         return version("cnequity")
@@ -68,3 +72,19 @@ def stamp_new_lake(config) -> None:
     if curated.is_dir() and any(dataset_has_parquet(p) for p in curated.iterdir() if p.is_dir()):
         return
     _write_lake(config, {"created_with": package_version(), "migrations": {}})
+    start_on_catalog(config)
+
+
+STORAGE_FILE = "storage.json"
+
+
+def start_on_catalog(config) -> None:
+    """Record that this lake publishes into its catalog (``meta/storage.json``).
+
+    A new lake starts there: the catalog itself is created by its first
+    publish. An existing lake gets here through the ``lake-catalog`` migration,
+    which copies and verifies its published data first.
+    """
+    path = Path(config.meta_root) / STORAGE_FILE
+    if not path.exists():
+        write_json_atomic(path, {"publish": "catalog"}, indent=2)

@@ -721,6 +721,17 @@ def test_wrong_date_tdx_batch_is_not_staged_as_success(worker_config, monkeypatc
     assert not list(worker_config.staging_root.glob("daily_bars/**/*.parquet"))
 
 
+def _published_symbols(config) -> set[str]:
+    """The symbols daily_bars publishes; a new lake keeps them in its catalog."""
+    from cnequity.query import catalog_read
+    from cnequity.storage.repairs.publish import scan_published
+
+    scan = scan_published(config, "daily_bars")
+    symbols = set() if scan is None else set(scan.select("symbol").collect()["symbol"])
+    catalog_read.close_all()
+    return symbols
+
+
 def test_retry_reruns_failed_symbol_batch_only(worker_config, monkeypatch):
     from cnequity.adapters.tdx_protocol import client as tdx
 
@@ -768,10 +779,7 @@ def test_retry_reruns_failed_symbol_batch_only(worker_config, monkeypatch):
     assert retry["retried"] >= 1
     assert retry["status"] == "success"
     assert calls[-1] == ["600519.SH"]
-    curated = (
-        worker_config.curated_root / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet"
-    )
-    assert curated.exists()
+    assert _published_symbols(worker_config)
     steps_run = {r.get("step") for r in retry["results"]}
     assert "compact" in steps_run
     assert not steps_run & {"derive_adj_factors", "derive_industry_index", "audit"}
@@ -831,11 +839,7 @@ def test_partial_batch_retry_scope_is_reduced_to_missing_symbols(worker_config, 
     )
     assert retry["status"] == "success"
     assert calls == [["600519.SH", "000001.SZ"], ["600519.SH"]]
-    import polars as pl
-
-    curated = worker_config.curated_root / "daily_bars" / "trade_date=2024-06"
-    rows = pl.concat([pl.read_parquet(path) for path in curated.glob("*.parquet")])
-    assert set(rows["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
+    assert _published_symbols(worker_config) == {"600519.SH", "000001.SZ"}
 
 
 def test_retry_requeues_stale_running_batch(worker_config, monkeypatch):
@@ -897,10 +901,7 @@ def test_retry_requeues_stale_running_batch(worker_config, monkeypatch):
     skipped = next(r for r in retry["results"] if r["step"] == "derive_industry_index")
     assert skipped["reason_code"] == "input_unavailable"
     assert calls == [["600519.SH"]]
-    curated = (
-        worker_config.curated_root / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet"
-    )
-    assert curated.exists()
+    assert _published_symbols(worker_config)
 
 
 def test_the_plan_is_written_down_before_any_worker_starts(worker_config, monkeypatch):

@@ -573,14 +573,14 @@ cne migrate --apply     # 按顺序运行并记录结果
 
 每个迁移都持有湖的变更锁，经修复门禁发布，旧版本保留可读。一个迁移失败时停止，后面的不运行，也不记录。`fund-listing-dates` 会读取交易所官方基金列表，`misdated-valuation` 在有需要替换的行时读取东财数据中心，其余只读湖。`cne doctor` 会提示还没检查的迁移。0.12 及更早版本写入的湖请先用 0.19 或更早版本迁移再升级。
 
-**可选迁移。** 有的迁移不会出现在预览里，也从不算「还欠」，只有用 `--only` 点名才运行。目前只有一个：
+**升级到 0.25.0 必须先迁移。** 从 0.25.0 起，所有写入都发布进湖目录（`lake/`）。0.24.0 及更早版本建的湖要先跑一次 `lake-catalog` 迁移，它排在所有迁移的最前面；没迁移之前，`cne run`、`cne backfill`、`cne derive` 和 `cne repair --apply` 都会拒绝写入并提示运行 `cne migrate`，读取不受影响。新建的湖直接从湖目录开始，不需要迁移。
 
 ```bash
-cne migrate --only lake-catalog            # 预览：还有几个数据集要复制，湖是否已切换
-cne migrate --only lake-catalog --apply    # 复制、逐行核对，然后切换
+cne migrate            # 预览：还有几个数据集要复制，湖是否已切换
+cne migrate --apply    # 复制、逐行核对，然后切换；再运行其余还欠的迁移
 ```
 
-`lake-catalog` 把现有的湖搬到实验性的湖目录（`lake/`）上：把每个已发布的数据集复制进湖目录，逐个核对目录里的行与已发布的行完全一致，全部一致后在 `meta/storage.json` 记下这个湖改为发布进湖目录。此后每个数据集在下一次发布时转为只存在湖目录里，这一步对每个数据集单向生效；已有的代目录原样保留、仍可读取。有任何一个数据集核对不一致时不切换，已复制的部分留在湖目录里，重跑时直接复用。复制和核对期间不持湖锁，其他运行照常发布；只在最后补齐期间新发布的内容并切换时持锁。运行前建议先做一次快照（`cne snapshot create`）。
+`lake-catalog` 把每个已发布的数据集复制进湖目录，逐个核对目录里的行与已发布的行完全一致，全部一致后在 `meta/storage.json` 记下这个湖发布进湖目录。有任何一个数据集核对不一致就不切换，湖保持原样，可以重跑。切换是单向的：此后每个数据集在下一次发布时转为只存在湖目录里。迁移需要 DuckDB 的 `ducklake` 和 `sqlite` 扩展，首次使用时自动下载；官方扩展站点连不上时，把对应 DuckDB 版本和平台的扩展文件放进一个目录并设置环境变量 `EQUITYLAKE_EXTENSION_DIR`，或把 `EQUITYLAKE_EXTENSION_MIRROR` 设为可达的扩展仓库。迁移前建议先 `cne snapshot create` 留一份快照。直接读 `curated/`、`derived/` 目录的外部工具改用 `cne storage export`。
 
 ## cne repair
 

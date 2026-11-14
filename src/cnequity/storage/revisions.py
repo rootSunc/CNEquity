@@ -909,12 +909,14 @@ class RevisionStore:
         """Whether the next revision of *dataset* is published into the lake catalog.
 
         True once its published revision lives there, or the lake publishes
-        into its catalog and the catalog holds the published revision.
+        into its catalog and the catalog holds the published revision. A
+        dataset with no revision yet follows the lake.
         """
         pointer = self._read_pointer(dataset)
-        return pointer is not None and (
-            pointer.get("storage") == STORAGE_CATALOG
-            or (self.publishes_to_catalog() and self._catalog_holds(dataset, pointer))
+        if pointer is None:
+            return self.publishes_to_catalog()
+        return pointer.get("storage") == STORAGE_CATALOG or (
+            self.publishes_to_catalog() and self._catalog_holds(dataset, pointer)
         )
 
     def _catalog_holds(self, dataset: str, pointer: dict) -> bool:
@@ -947,7 +949,8 @@ class RevisionStore:
             record = json.loads(self._working_record_path(dataset).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             record = {}
-        if record.get("revision_id") != pointer.get("revision_id"):
+        # A dataset's first revision has no published base to verify against.
+        if pointer and record.get("revision_id") != pointer.get("revision_id"):
             raise CatalogOnlyDatasetError(
                 f"{dataset}: the working tree was not verified at the published revision; "
                 "call materialize_current before writing into it"
@@ -1248,10 +1251,10 @@ class RevisionStore:
         if not contract_fingerprint:
             raise ValueError("contract_fingerprint must not be empty")
         catalog_pointer = self._read_pointer(dataset)
-        if catalog_pointer is not None and self.commits_to_catalog(dataset):
+        if self.commits_to_catalog(dataset):
             return self._commit_to_catalog(
                 dataset,
-                catalog_pointer,
+                catalog_pointer or {},
                 run_id=run_id,
                 changed_files=changed_files,
                 removed_partitions=removed_partitions,

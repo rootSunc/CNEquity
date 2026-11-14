@@ -96,6 +96,11 @@ class PartitionRewrite:
         self._removed: list[str] = []
 
     def __enter__(self) -> PartitionRewrite:
+        if self.apply:
+            from cnequity.storage.catalog_migration import require_catalog_lake
+
+            require_catalog_lake(self.config)
+            self._catalog = self.store.commits_to_catalog(self.dataset)
         if not self._catalog:
             self._base = self.store.repair_base(self.dataset, register=self.apply)
             return self
@@ -313,8 +318,10 @@ def publish_staged(
 
     from cnequity.domain.contracts import contract_fingerprint, dataset_contract
     from cnequity.quality.publication import check_repair_publication
+    from cnequity.storage.catalog_migration import require_catalog_lake
     from cnequity.storage.parquet import StagingWriter, compact_dataset
 
+    require_catalog_lake(config)
     contract = dataset_contract(dataset)
     schema_version = int(contract["schema_version"])
     fingerprint = contract_fingerprint(contract)

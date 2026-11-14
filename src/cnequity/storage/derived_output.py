@@ -70,6 +70,10 @@ class DerivedOutput:
         store = RevisionStore(
             self.config.meta_root, self.config.curated_root, self.config.derived_root
         )
+        if self.run_id is not None:
+            from cnequity.storage.catalog_migration import require_catalog_lake
+
+            require_catalog_lake(self.config)
         if self.run_id is not None and store.commits_to_catalog(self.dataset):
             from cnequity.storage.lake_write import LakeWrite
 

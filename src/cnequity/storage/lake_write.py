@@ -240,7 +240,8 @@ class LakeWrite:
         self.root = Path(config.staging_root) / CHECKOUT_DIR / run_id
         self.store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         root = lake_root(config)
-        self.catalog = Catalog(root, memory_limit="4GB", temp_directory=root / "tmp")
+        # The first write to a lake that publishes into its catalog creates it.
+        self.catalog = Catalog(root, create=True, memory_limit="4GB", temp_directory=root / "tmp")
         self._checkouts: dict[str, Checkout] = {}
         # Datasets published from a whole working tree: root, and changed partitions.
         self._trees: dict[str, tuple[Path, list[str]]] = {}

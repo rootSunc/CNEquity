@@ -576,14 +576,14 @@ cne migrate --apply     # runs them in order and records the results
 
 Each migration holds the lake mutation lock, publishes through the repair gate, and keeps the previous revision readable. When one fails, the run stops; later ones neither run nor get recorded. `fund-listing-dates` reads the exchanges' official fund lists and `misdated-valuation` reads the EastMoney datacenter when it has rows to replace; the rest read only the lake. `cne doctor` reports migrations not yet checked. Migrate a lake written by 0.12 or earlier with 0.19 or earlier before upgrading.
 
-**Optional migrations.** Some migrations never appear in the preview and are never owed; they run only when named with `--only`. There is one today:
+**Upgrading to 0.25.0 requires a migration.** From 0.25.0 every write publishes into the lake catalog (`lake/`). A lake built by 0.24.0 or earlier has to run the `lake-catalog` migration once; it comes first among the migrations. Until then `cne run`, `cne backfill`, `cne derive` and `cne repair --apply` refuse to write and point at `cne migrate`; reads are unaffected. A new lake starts on the catalog and owes nothing.
 
 ```bash
-cne migrate --only lake-catalog            # preview: how many datasets are left to copy, and whether the lake has switched
-cne migrate --only lake-catalog --apply    # copy, verify row for row, then switch
+cne migrate            # preview: how many datasets are left to copy, and whether the lake has switched
+cne migrate --apply    # copy, verify row for row, then switch; then run the other owed migrations
 ```
 
-`lake-catalog` moves an existing lake onto the experimental lake catalog (`lake/`). It copies every published dataset into the catalog, checks that each copy holds exactly the published rows, and, once all of them match, records in `meta/storage.json` that the lake publishes into its catalog. From then on each dataset lives only in the catalog after its next publish, which is one-way per dataset; the generations already written stay as they are and remain readable. If any dataset fails the comparison the lake is not switched; what was copied stays in the catalog and a rerun reuses it. The copy and the comparison do not hold the lake lock, so other runs keep publishing; the lock is held only at the end, to catch up on what they published and to switch. Take a snapshot first (`cne snapshot create`).
+`lake-catalog` copies every published dataset into the catalog, checks that each copy holds exactly the published rows, and only then records in `meta/storage.json` that the lake publishes into its catalog. If any dataset differs the lake is not switched and stays as it was; the migration can be run again. The switch is one-way: from then on each dataset lives only in the catalog after its next publish. The migration needs DuckDB's `ducklake` and `sqlite` extensions, downloaded on first use; if the official extension site is unreachable, put the extension files for your DuckDB version and platform in a directory and set `EQUITYLAKE_EXTENSION_DIR`, or set `EQUITYLAKE_EXTENSION_MIRROR` to a reachable extension repository. Take a snapshot first with `cne snapshot create`. External tools that read `curated/` or `derived/` directly should use `cne storage export` instead.
 
 ## cne repair
 

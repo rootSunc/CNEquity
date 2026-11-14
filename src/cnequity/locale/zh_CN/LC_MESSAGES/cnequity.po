@@ -2066,8 +2066,8 @@ msgid "Contract check passed"
 msgstr "契约检查通过"
 
 #: cnequity/storage/migrations.py
-msgid "Copy every published dataset into the lake catalog, verify it row for row, and switch the lake to publishing there (experimental, one-way per dataset)"
-msgstr "把每个已发布的数据集复制进湖目录并逐行核对，然后把湖切换为发布进湖目录（实验性，每个数据集单向生效）"
+msgid "Copy every published dataset into the lake catalog, verify it row for row, and switch the lake to publishing there (one-way)"
+msgstr "把每个已发布的数据集复制进湖目录并逐行核对，然后把湖切换为发布进湖目录（单向）"
 
 #: cnequity/ops/catalog.py
 msgid "Copy the selected datasets into a verifiable lake snapshot. Does not contact data sources."
