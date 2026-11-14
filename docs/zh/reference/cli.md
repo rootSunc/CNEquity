@@ -32,6 +32,7 @@
 | [`cne backfill`](#cne-backfill-dataset) | 回填一个数据集 |
 | [`cne derive`](#cne-derive-name) | 派生计算数据集 |
 | [`cne import shfe-archive`](#cne-import-shfe-archive) | 离线导入上期所官方年度包 |
+| [`cne upgrade`](#cne-upgrade) | 把较早版本建的湖一步升级到当前版本：检查、备份、运行全部还欠的迁移 |
 | [`cne migrate`](#cne-migrate) | 预览或运行这个湖还欠的一次性迁移，并记录结果 |
 | [`cne repair`](#cne-repair) | 离线修复已存数据的布局或字段口径；默认只预览，`--apply` 发布新版本 |
 
@@ -556,6 +557,26 @@ cne derive trading_status --start 2001-01-01 --end 2001-12-31
 ```
 
 
+## cne upgrade
+
+把较早版本建的湖一步升级到当前版本。升级 CNEquity 之后只需要这一条命令：
+
+```bash
+cne upgrade             # 预览：这个版本要对湖做什么，这台机器能不能完成；不写任何东西
+cne upgrade --apply     # 备份湖的记录，然后按顺序全部做完
+```
+
+预览列出还欠的步骤（每一步就是一个迁移，见 [`cne migrate`](#cne-migrate)），并做两项检查：湖目录需要的 DuckDB 扩展能否取得、磁盘空间够不够。任何一项不通过就什么都不做，并说明怎么解决。`--apply` 先把湖的记录（各数据集的当前版本指针、湖目录库、`meta/state/lake.json`、`meta/storage.json`，几 MB）备份到 `backups/upgrade-<时间>/`，再逐步执行并显示进度；数据文件只做链接，不复制，所以耗时与数据量关系不大。
+
+升级期间读取不受影响，`cne serve` 可以开着；写入的任务（定时日更、回填、派生、修复）会被拒绝并提示先升级，升级完成后下次运行自动恢复。中途停下可以重新运行，已完成的步骤不会重做。
+
+| 选项 | 说明 |
+|---|---|
+| `--apply` | 执行升级；不加时只预览 |
+| `--no-backup` | 升级前不备份湖的记录 |
+| `--json` | 机器可读输出 |
+
+
 ## cne migrate
 
 升级后修复旧版本写下的数据。新版本修好写入逻辑后，旧版本存下的行仍需一次性修正；每个修正是一个迁移。`meta/state/lake.json` 记录建湖的版本（早于它引入的迁移不需要运行）和这个湖已经运行过、或检查后无需运行的迁移。
@@ -573,7 +594,7 @@ cne migrate --apply     # 按顺序运行并记录结果
 
 每个迁移都持有湖的变更锁，经修复门禁发布，旧版本保留可读。一个迁移失败时停止，后面的不运行，也不记录。`fund-listing-dates` 会读取交易所官方基金列表，`misdated-valuation` 在有需要替换的行时读取东财数据中心，其余只读湖。`cne doctor` 会提示还没检查的迁移。0.12 及更早版本写入的湖请先用 0.19 或更早版本迁移再升级。
 
-**升级到 0.25.0 必须先迁移。** 从 0.25.0 起，所有写入都发布进湖目录（`lake/`）。0.24.0 及更早版本建的湖要先跑一次 `lake-catalog` 迁移，它排在所有迁移的最前面；没迁移之前，`cne run`、`cne backfill`、`cne derive` 和 `cne repair --apply` 都会拒绝写入并提示运行 `cne migrate`，读取不受影响。新建的湖直接从湖目录开始，不需要迁移。
+**升级到 0.25.0 必须先迁移。** 从 0.25.0 起，所有写入都发布进湖目录（`lake/`）。0.24.0 及更早版本建的湖要先跑一次 `lake-catalog` 迁移，它排在所有迁移的最前面；没迁移之前，`cne run`、`cne backfill`、`cne derive` 和 `cne repair --apply` 都会拒绝写入并提示运行 `cne upgrade`，读取不受影响。用 [`cne upgrade --apply`](#cne-upgrade) 一步完成，它会先做检查和备份。新建的湖直接从湖目录开始，不需要迁移。
 
 ```bash
 cne migrate            # 预览：还有几个数据集要复制，湖是否已切换

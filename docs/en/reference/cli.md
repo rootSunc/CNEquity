@@ -32,6 +32,7 @@ The sections are defined by `SECTIONS` in `cnequity/cli/_root.py`; leaving any c
 | [`cne backfill`](#cne-backfill-dataset) | Backfill one dataset |
 | [`cne derive`](#cne-derive-name) | Compute derived datasets |
 | [`cne import shfe-archive`](#cne-import-shfe-archive) | Import an official SHFE annual package offline |
+| [`cne upgrade`](#cne-upgrade) | Bring a lake built by an earlier version up to this one in one step: check, back up, run every owed migration |
 | [`cne migrate`](#cne-migrate) | Preview or run the one-off migrations this lake still owes, and record the results |
 | [`cne repair`](#cne-repair) | Offline repair of stored data layout or field semantics; previews by default, `--apply` publishes a new version |
 
@@ -559,6 +560,26 @@ cne derive trading_status --start 2001-01-01 --end 2001-12-31
 ```
 
 
+## cne upgrade
+
+Brings a lake built by an earlier version up to this one in one step. After upgrading CNEquity this is the only command you need:
+
+```bash
+cne upgrade             # preview: what this version does to the lake and whether this machine can do it; writes nothing
+cne upgrade --apply     # back up the lake's records, then do all of it in order
+```
+
+The preview lists the steps still owed (each is a migration, see [`cne migrate`](#cne-migrate)) and runs two checks: whether the DuckDB extensions the lake catalog needs are available, and whether there is enough disk space. If either fails nothing is changed and the output says how to fix it. `--apply` first copies the lake's records (each dataset's current revision pointer, the catalog database, `meta/state/lake.json`, `meta/storage.json`; a few MB) to `backups/upgrade-<time>/`, then runs each step and reports progress. Data files are linked, not copied, so the time taken depends little on the size of the lake.
+
+Reading the lake keeps working during the upgrade and `cne serve` can stay up. Jobs that write (the scheduled daily run, backfills, derives, repairs) are refused with a pointer to the upgrade, and resume on their next run once it is done. A run that stops can be started again; finished steps are not repeated.
+
+| Option | Description |
+|---|---|
+| `--apply` | Upgrade; without it only preview |
+| `--no-backup` | Do not back up the lake's records first |
+| `--json` | Machine-readable output |
+
+
 ## cne migrate
 
 Fixes data that older versions wrote, after an upgrade. When a release fixes a writer, rows the old writer stored still need a one-off correction; each such correction is a migration. `meta/state/lake.json` records the version that built the lake (migrations introduced earlier do not apply) and every migration this lake has run or checked and found nothing to do.
@@ -576,7 +597,7 @@ cne migrate --apply     # runs them in order and records the results
 
 Each migration holds the lake mutation lock, publishes through the repair gate, and keeps the previous revision readable. When one fails, the run stops; later ones neither run nor get recorded. `fund-listing-dates` reads the exchanges' official fund lists and `misdated-valuation` reads the EastMoney datacenter when it has rows to replace; the rest read only the lake. `cne doctor` reports migrations not yet checked. Migrate a lake written by 0.12 or earlier with 0.19 or earlier before upgrading.
 
-**Upgrading to 0.25.0 requires a migration.** From 0.25.0 every write publishes into the lake catalog (`lake/`). A lake built by 0.24.0 or earlier has to run the `lake-catalog` migration once; it comes first among the migrations. Until then `cne run`, `cne backfill`, `cne derive` and `cne repair --apply` refuse to write and point at `cne migrate`; reads are unaffected. A new lake starts on the catalog and owes nothing.
+**Upgrading to 0.25.0 requires a migration.** From 0.25.0 every write publishes into the lake catalog (`lake/`). A lake built by 0.24.0 or earlier has to run the `lake-catalog` migration once; it comes first among the migrations. Until then `cne run`, `cne backfill`, `cne derive` and `cne repair --apply` refuse to write and point at `cne upgrade`; reads are unaffected. [`cne upgrade --apply`](#cne-upgrade) does it in one step, with the checks and the backup first. A new lake starts on the catalog and owes nothing.
 
 ```bash
 cne migrate            # preview: how many datasets are left to copy, and whether the lake has switched

@@ -349,6 +349,10 @@ EFFECTS: dict[str, tuple[str, str]] = {
         "无",
         "默认只读预览；--apply 校验本地上期所年度包后写入缺字段的日线行，不覆盖已有主键，保存原包证据",
     ),
+    "upgrade": (
+        "条件",
+        "默认只读预览并检查扩展与磁盘；--apply 先备份湖的记录，再按顺序运行还欠的全部迁移（含搬到湖目录），数据文件只链接不复制；所含迁移读取的数据源同 migrate",
+    ),
     "migrate": (
         "条件",
         "默认只读预览；--apply 按顺序运行还欠的迁移，经修复门禁发布并保留旧版本，结果写入 meta/state/lake.json；fund-listing-dates 读交易所基金列表，misdated-valuation 有待替换行时读东财数据中心",

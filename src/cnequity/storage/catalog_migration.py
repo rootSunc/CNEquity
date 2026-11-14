@@ -65,8 +65,9 @@ def require_catalog_lake(config) -> None:
         start_on_catalog(config)
         return
     raise LakeMigrationRequired(
-        "this lake was built before 0.25.0 and has not been moved onto the lake catalog; "
-        "run `cne migrate` to preview and `cne migrate --apply` to move it, then run this again"
+        "this lake was built before 0.25.0 and has to be upgraded once before anything "
+        "writes to it; run `cne upgrade` to see what that does and `cne upgrade --apply` "
+        "to do it, then run this again (reading the lake needs no upgrade)"
     )
 
 
@@ -93,17 +94,27 @@ def _behind(config, datasets: list[str]) -> list[str]:
         return [name for name in datasets if not catalog_is_current(config, catalog, name)]
 
 
-def _mismatched(config, catalog: Catalog, datasets: list[str]) -> list[str]:
+def _mismatched(config, catalog: Catalog, datasets: list[str], progress=None) -> list[str]:
     bad = []
     for name in datasets:
+        if progress is not None:
+            progress(name)
         comparison = compare_dataset(config, catalog, name)
         if comparison is None or not comparison.matches:
             bad.append(name)
     return bad
 
 
-def migrate_to_catalog(config, *, apply: bool) -> dict:
-    """Preview, or with *apply* perform, the move of *config*'s lake onto its catalog."""
+def migrate_to_catalog(config, *, apply: bool, progress=None) -> dict:
+    """Preview, or with *apply* perform, the move of *config*'s lake onto its catalog.
+
+    *progress*, when given, is called with a stage (``copy``, ``verify``,
+    ``lay_out``) and a dataset name as the work reaches each one.
+    """
+
+    def tell(stage: str):
+        return None if progress is None else (lambda dataset: progress(stage, dataset))
+
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     datasets = _published(config)
     from cnequity.storage.catalog_layout import datasets_to_lay_out, lay_out_all
@@ -124,15 +135,17 @@ def migrate_to_catalog(config, *, apply: bool) -> dict:
     if not apply or not report["rows_changed"]:
         return report
     if switched and not behind:
-        report["laid_out"] = [item["dataset"] for item in lay_out_all(config)]
+        report["laid_out"] = [item["dataset"] for item in lay_out_all(config, tell("lay_out"))]
         return report
 
     root = lake_root(config)
     with Catalog(root, create=True, memory_limit="8GB", temp_directory=root / "tmp") as catalog:
-        copied = [r.dataset for r in sync_all(config, catalog) if r.action != "current"]
+        copied = [
+            r.dataset for r in sync_all(config, catalog, tell("copy")) if r.action != "current"
+        ]
         # Every dataset is compared, not only the ones just copied: a catalog
         # built earlier is trusted with the lake's publishes from here on.
-        bad = _mismatched(config, catalog, _published(config))
+        bad = _mismatched(config, catalog, _published(config), tell("verify"))
         if bad:
             raise CatalogMigrationError(
                 f"the catalog copy differs from the published rows of: {', '.join(bad)}"
@@ -151,5 +164,5 @@ def migrate_to_catalog(config, *, apply: bool) -> dict:
                 Path(config.meta_root) / "storage.json", {"publish": STORAGE_CATALOG}, indent=2
             )
     report.update(copied=sorted(set(copied) | set(late)), verified=len(current), switched=True)
-    report["laid_out"] = [item["dataset"] for item in lay_out_all(config)]
+    report["laid_out"] = [item["dataset"] for item in lay_out_all(config, tell("lay_out"))]
     return report

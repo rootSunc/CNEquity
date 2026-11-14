@@ -1596,6 +1596,10 @@ msgstr "审计：{status}"
 msgid "Automatic fetching is paused, but the system trigger was not removed: {exc}"
 msgstr "自动取数已暂停，但系统触发未移除：{exc}"
 
+#: cnequity/cli/repair_cmds.py
+msgid "BLOCKED"
+msgstr "被拦下"
+
 #: cnequity/diagnostics/source_health.py
 msgid "BSE official quote board (first page)"
 msgstr "北交所官方行情板（首分页）"
@@ -1603,6 +1607,11 @@ msgstr "北交所官方行情板（首分页）"
 #: cnequity/ops/settings.py
 msgid "BSE website"
 msgstr "北交所官网"
+
+#: cnequity/cli/repair_cmds.py
+#, python-brace-format
+msgid "Backed up the lake's records to {path}"
+msgstr "已把湖的记录备份到 {path}"
 
 #: cnequity/ops/catalog.py
 msgid "Backfill a dataset"
@@ -1694,6 +1703,26 @@ msgstr "二进制 TCP 协议，与所有 HTTP 源不共享风控面。海外直�
 #: cnequity/cli/govern_cmds.py
 msgid "Bind the profile to concrete symbols and include concrete_scope_hash."
 msgstr "把 profile 绑定到具体标的，并附带 concrete_scope_hash。"
+
+#: cnequity/cli/repair_cmds.py
+msgid ""
+"Bring a lake built by an earlier version up to this one, in one step.\n"
+"\n"
+"\n"
+"Shows what this version changes about the lake and checks that this machine can do it;\n"
+"--apply then does all of it in order: a backup of the lake's records, the move onto the\n"
+"lake catalog, and every other fix the lake still owes. Data files are linked, not copied.\n"
+"Reading the lake keeps working throughout; jobs that write wait until the upgrade is done.\n"
+"A run that stops can be started again and continues where it stopped."
+msgstr ""
+"把较早版本建的湖一步升级到当前版本。\n"
+"\n"
+"\n"
+"先显示这个版本对湖的改动，并检查这台机器能不能完成；\n"
+"加 --apply 后按顺序全部做完：备份湖的记录、把湖搬到湖目录、以及湖还欠的其他修复。\n"
+"数据文件只做链接，不复制。\n"
+"升级期间读取不受影响，写入的任务会等到升级完成。\n"
+"中途停下可以重新运行，从停下的地方继续。"
 
 #: cnequity/cli/storage_cmds.py
 msgid "Bring the lake catalog to the committed revision of every dataset; reads the revision store only."
@@ -2064,10 +2093,6 @@ msgstr "某阶段失败后继续"
 #: cnequity/cli/govern_cmds.py
 msgid "Contract check passed"
 msgstr "契约检查通过"
-
-#: cnequity/storage/migrations.py
-msgid "Copy every published dataset into the lake catalog, verify it row for row, and switch the lake to publishing there (one-way)"
-msgstr "把每个已发布的数据集复制进湖目录并逐行核对，然后把湖切换为发布进湖目录（单向）"
 
 #: cnequity/ops/catalog.py
 msgid "Copy the selected datasets into a verifiable lake snapshot. Does not contact data sources."
@@ -2921,10 +2946,6 @@ msgstr "首次配置只能在本机完成。"
 msgid "First-time setup can only be opened on this machine; keep --host at 127.0.0.1."
 msgstr "首次配置只能在本机打开，请把 --host 留在 127.0.0.1。"
 
-#: cnequity/diagnostics/report.py
-msgid "Fixes for rows that an older version wrote. `cne migrate` previews what each would change; `--apply` runs them and records the result."
-msgstr "针对旧版本写下的数据的修正。`cne migrate` 预览每个迁移会改动什么；`--apply` 运行并记录结果。"
-
 #: cnequity/cli/quality_cmds.py
 msgid ""
 "For each source that is down, who else can answer for its datasets.\n"
@@ -3710,6 +3731,10 @@ msgstr "新备份名称"
 msgid "Next steps:"
 msgstr "下一步："
 
+#: cnequity/cli/repair_cmds.py
+msgid "Next: restart `cne serve` and any running `cne mcp`. Scheduled jobs continue on their next run."
+msgstr "接下来：重启 `cne serve` 和正在运行的 `cne mcp`。定时任务下次运行时自动继续。"
+
 #: cnequity/diagnostics/source_health.py
 msgid "No PMI in the latest releases list"
 msgstr "最新发布列表里没有 PMI"
@@ -3900,6 +3925,14 @@ msgstr "本次没有可执行的对象。"
 #: cnequity/ops/job.py
 msgid "Nothing to run, or the day is not a trading day."
 msgstr "没有要跑的内容，或当天不是交易日。"
+
+#: cnequity/cli/repair_cmds.py
+msgid "Nothing was changed. Fix what is blocked above, then run this again."
+msgstr "没有做任何改动。先解决上面被拦下的项目，再运行一次。"
+
+#: cnequity/cli/repair_cmds.py
+msgid "Nothing was changed. Run `cne upgrade --apply` to upgrade. Reading the lake keeps working meanwhile; jobs that write wait until it is done."
+msgstr "没有做任何改动。运行 `cne upgrade --apply` 开始升级。升级期间读取不受影响，写入的任务会等到升级完成。"
 
 #: cnequity/cli/ths_official_cmds.py
 msgid "Number of concurrent requests."
@@ -4605,6 +4638,10 @@ msgstr "只重抓仍然落后于最后交易日的数据集。挂在主 pipeline
 #: cnequity/cli/consume_cmds.py
 msgid "Refresh the on-demand cache before fetching (requires both --dataset and --symbol)."
 msgstr "抓取前先刷新按需缓存（需要同时给 --dataset 和 --symbol）。"
+
+#: cnequity/storage/migrations.py
+msgid "Register every published dataset in the lake catalog, verify it row for row, and switch the lake to publishing there (one-way)"
+msgstr "把每个已发布的数据集登记进湖目录并逐行核对，然后把湖切换为发布进湖目录（单向）"
 
 #: cnequity/cli/storage_cmds.py
 msgid "Register external payload storage; retains local sidecars and moves/deletes no files."
@@ -5451,6 +5488,10 @@ msgstr "单文件 merge：只有当前状态，没有按日期取数的概念。
 msgid "Skip event streams"
 msgstr "不跑事件流"
 
+#: cnequity/cli/repair_cmds.py
+msgid "Skip the copy of the lake's records that is taken before upgrading."
+msgstr "升级前不备份湖的记录。"
+
 #: cnequity/cli/setup_cmds.py
 msgid "Skip the network preflight (TDX, exchanges, EastMoney) of up to 8 seconds before the run starts. Setting CNE_SKIP_PREFLIGHT=1 does the same."
 msgstr "跳过开跑前最多 8 秒的网络预检（通达信、交易所、东财）。也可设环境变量 CNE_SKIP_PREFLIGHT=1。"
@@ -5603,6 +5644,15 @@ msgstr "还缺：{datasets}"
 #: cnequity/cli/schedule_cmds.py
 msgid "Stop scheduled runs for this lake and unregister its timer. Running jobs finish."
 msgstr "停止这个湖的定时运行并注销系统任务；正在运行的任务会跑完。"
+
+#: cnequity/cli/repair_cmds.py
+#, python-brace-format
+msgid ""
+"Stopped at {name} after {took}: {error}\n"
+"The steps before it are done and recorded; what this step had not finished is unchanged. Fix the cause, then run `cne upgrade --apply` again."
+msgstr ""
+"在 {name} 停下（已用时 {took}）：{error}\n"
+"它之前的步骤已完成并记录；这一步没做完的部分保持原样。排除原因后再运行 `cne upgrade --apply`。"
 
 #: cnequity/cli/_root.py
 msgid "Stopped. Finished batches are kept and the run is recorded as interrupted; run the same command again to continue, and `cne status` shows what it finished."
@@ -6297,6 +6347,25 @@ msgstr "这个目录里已经有数据湖，生成配置后会接管它，不会
 msgid "This lake has no lake catalog."
 msgstr "这个湖没有湖目录。"
 
+#: cnequity/cli/repair_cmds.py
+#, python-brace-format
+msgid "This lake is up to date with cnequity {version}; nothing to upgrade."
+msgstr "这个湖已经是 cnequity {version} 的格式，不需要升级。"
+
+#: cnequity/diagnostics/report.py
+msgid "This lake was built by an earlier version. `cne upgrade` shows what it still needs; `cne upgrade --apply` does all of it in one step."
+msgstr "这个湖是较早的版本建的。`cne upgrade` 列出还需要做什么，`cne upgrade --apply` 一步做完。"
+
+#: cnequity/cli/repair_cmds.py
+#, python-brace-format
+msgid "This lake was built by an earlier version; cnequity {version} needs {count} step(s):"
+msgstr "这个湖建于较早的版本；升级到 cnequity {version} 需要 {count} 步："
+
+#: cnequity/cli/repair_cmds.py
+#, python-brace-format
+msgid "This lake was built by {built}; cnequity {version} needs {count} step(s):"
+msgstr "这个湖由 {built} 建立；升级到 cnequity {version} 需要 {count} 步："
+
 #: cnequity/ops/scheduler.py
 msgid "This lake's web schedule is bound to another config; manage it with the original config."
 msgstr "这个数据湖的 Web 调度绑定了另一份配置，请使用原配置管理。"
@@ -6487,6 +6556,15 @@ msgstr "只更新这些研究包的调度组，不含事件流。可重复。默
 #, python-brace-format
 msgid "Updated {path} (the original was backed up as {name})"
 msgstr "已更新 {path}（原文件备份为 {name}）"
+
+#: cnequity/cli/repair_cmds.py
+msgid "Upgrade the lake. Without it, only show what the upgrade would do."
+msgstr "执行升级。不加时只显示升级会做什么。"
+
+#: cnequity/cli/repair_cmds.py
+#, python-brace-format
+msgid "Upgraded in {took}."
+msgstr "升级完成，用时 {took}。"
 
 #: cnequity/cli/_root.py
 msgid "Usage: "
@@ -7225,6 +7303,10 @@ msgstr "最新 PMI 发布 %s"
 msgid "latest bar %s"
 msgstr "最新 bar %s"
 
+#: cnequity/cli/repair_cmds.py
+msgid "laying out"
+msgstr "按分区重排"
+
 #: cnequity/quality/derivative_checks.py
 msgid "listed contracts"
 msgstr "个在市合约"
@@ -7312,6 +7394,10 @@ msgstr "未启用"
 msgid "not probed"
 msgstr "未探测"
 
+#: cnequity/cli/repair_cmds.py
+msgid "ok"
+msgstr "通过"
+
 #: cnequity/diagnostics/packages.py
 msgid "on-demand stock_news sentiment ([sentiment] use_snownlp)"
 msgstr "on-demand stock_news 情绪（[sentiment] use_snownlp）"
@@ -7365,6 +7451,10 @@ msgstr "由 curated 重算"
 msgid "refused"
 msgstr "被拒"
 
+#: cnequity/cli/repair_cmds.py
+msgid "registering"
+msgstr "登记"
+
 #: cnequity/serve/ops/routes.py
 msgid "remote browsing"
 msgstr "远程浏览"
@@ -7376,6 +7466,10 @@ msgstr "远程浏览（取数未开启；存储清理仍可用）"
 #: cnequity/cli/quality_cmds.py
 msgid "repairable"
 msgstr "可修复"
+
+#: cnequity/cli/repair_cmds.py
+msgid "repairing"
+msgstr "修复"
 
 #: cnequity/cli/quality_cmds.py
 msgid "research packs cannot be proven"
@@ -7492,6 +7586,10 @@ msgstr "不支持"
 msgid "vantage must be 1–64 letters, digits, dots, underscores or hyphens, starting with a letter or digit"
 msgstr "vantage 必须是 1–64 位字母/数字/点/下划线/连字符，且以字母或数字开头"
 
+#: cnequity/cli/repair_cmds.py
+msgid "verifying"
+msgstr "核对"
+
 #: cnequity/orchestrator/engine.py
 msgctxt "step status"
 msgid "warning"
@@ -7541,6 +7639,11 @@ msgstr "{config_path} 里没有 [[job.daily.waves]]：没有调度组时 `cne ru
 #, python-brace-format
 msgid "{config} has no [job.daily.groups]; a config written by `cne config create` has these schedule groups."
 msgstr "{config} 里没有 [job.daily.groups] —— `cne config create` 生成的配置带有这些调度组。"
+
+#: cnequity/cli/repair_cmds.py
+#, python-brace-format
+msgid "{copy} dataset(s) to register in the lake catalog, {layout} table(s) to lay out by partition"
+msgstr "{copy} 个数据集要登记进湖目录，{layout} 张表要按分区重排"
 
 #: cnequity/cli/demo.py
 #, python-brace-format

@@ -10,7 +10,8 @@
 - 修复读取湖目录时每次都要读几百 KB 的问题：旧的同步记录表每行带着整个数据集的文件清单，任何读取要确认「目录里是哪个版本」都得读它。记录表改为存在目录库里按键读取，文件清单拆到只有迁移同步才读的表；第一次写入时自动迁移。
 - 分区文件一律按主键排序写出，按代码过滤的读取可以跳过行组。此前这个顺序是湖目录在重写时给的。
 - `cne storage catalog-retention` 报告的删除文件数改为清理前后实际减少的文件数。
-- **升级步骤（不兼容变更）：** 从本版起所有写入都发布进湖目录（`lake/`）。0.24.0 及更早版本建的湖升级后要先跑一次迁移：`cne migrate` 预览，`cne migrate --apply` 执行。`lake-catalog` 迁移排在最前面，它把每个已发布的数据集复制进湖目录、逐行核对，全部一致后才切换；有不一致就不切换，湖保持原样。没迁移之前 `cne run`、`cne backfill`、`cne derive`、`cne repair --apply` 都拒绝写入并提示运行 `cne migrate`，读取不受影响。迁移前建议先 `cne snapshot create`。迁移需要 DuckDB 的 `ducklake` 和 `sqlite` 扩展，首次使用自动下载；官方扩展站点连不上时设置 `EQUITYLAKE_EXTENSION_DIR` 或 `EQUITYLAKE_EXTENSION_MIRROR`。
+- **升级步骤（不兼容变更）：** 升级后运行一条命令：`cne upgrade --apply`（不加 `--apply` 先预览）。它先检查这台机器能不能完成升级（湖目录需要的 DuckDB 扩展、磁盘空间），不通过就什么都不做并说明原因；然后把湖的记录备份到 `backups/upgrade-<时间>/`，把每个已发布的数据集登记进湖目录、逐行核对，全部一致后才切换，再运行其余还欠的迁移，全程显示进度。数据文件只做链接、不复制；中途停下可以重跑，从停下的地方继续。升级完成前 `cne run`、`cne backfill`、`cne derive`、`cne repair --apply` 都拒绝写入并提示运行 `cne upgrade`，读取不受影响，定时任务在升级后的下一次运行自动恢复。扩展首次使用自动下载；官方扩展站点连不上时设置 `EQUITYLAKE_EXTENSION_DIR` 或 `EQUITYLAKE_EXTENSION_MIRROR`。
+- 新增 `cne upgrade`：把较早版本建的湖一步升级到当前版本，取代「读更新日志、按顺序跑若干命令」。`cne doctor` 发现湖还欠迁移时也指向它。`cne migrate` 保留，用于单独预览或重跑某一个迁移。
 - 新建的湖直接从湖目录开始：`cne init` 建湖时记下发布进湖目录，第一次发布时创建目录库，不再写代目录，也不需要迁移。`[storage].publish` 不再决定发布方式（由湖自己的 `meta/storage.json` 决定），配置里保留它不会报错。
 - 直接读 `curated/`、`derived/` 目录的外部工具请改用 `cne storage export`：数据集迁移后在下一次发布时转为只存在湖目录里，这两个目录不再更新。
 - 发布进湖目录的湖上，所有修复和派生都不再把整个数据集还原成工作目录：计划阶段直接读湖目录里的已发布行，发布时只取出要改的分区，过发布门后在一个目录事务里替换。涉及全部 `cne repair` 修复（过滤已存行的 11 个、补行再合并的 9 个、整分区改写的 4 个）和 `adj_factors`、`industry_index`、`futures_continuous`、`option_greeks`、`minute_bars_15m/30m/60m` 的派生（日更步骤和 `cne derive` 都是）。发布门拦下时已发布数据不变，取出的分区移到 `_quarantine/` 供检查。还在代目录上的湖行为不变。

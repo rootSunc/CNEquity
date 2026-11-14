@@ -54,7 +54,7 @@ def test_nothing_writes_a_lake_that_has_not_moved(lake, monkeypatch):
     store = RevisionStore(lake.meta_root, lake.curated_root)
     before = store.current_pointer("fund_flow")
 
-    with pytest.raises(LakeMigrationRequired, match="cne migrate --apply"):
+    with pytest.raises(LakeMigrationRequired, match="cne upgrade --apply"):
         require_catalog_lake(lake)
     with pytest.raises(LakeMigrationRequired):
         JobEngine(lake).run_job("daily", SECOND)
@@ -141,7 +141,9 @@ def test_applying_copies_verifies_and_switches_the_lake(lake):
 def test_a_copy_that_differs_leaves_the_lake_unswitched(lake, monkeypatch):
     monkeypatch.setattr(
         "cnequity.storage.catalog_migration._mismatched",
-        lambda config, catalog, datasets: ["fund_flow"] if "fund_flow" in datasets else [],
+        lambda config, catalog, datasets, progress=None: (
+            ["fund_flow"] if "fund_flow" in datasets else []
+        ),
     )
     with pytest.raises(CatalogMigrationError, match="differs.*fund_flow"):
         migrate_to_catalog(lake, apply=True)
@@ -280,3 +282,66 @@ def test_file_layout_tools_leave_a_catalog_dataset_alone(lake):
     assert repartition_dataset(lake, "fund_flow").changed is False
     store = RevisionStore(lake.meta_root, lake.curated_root)
     assert store.current_pointer("fund_flow")["revision"] == 1
+
+
+def _built_by(lake, version: str):
+    """Record that *lake* was built by *version*, and return a config file for it."""
+    from cnequity.storage.lake_record import _write_lake
+
+    _write_lake(lake, {"created_with": version, "migrations": {}})
+    path = lake.data_root.parent / "cnequity.toml"
+    path.write_text(f'[data]\nroot = "{lake.data_root.as_posix()}"\n', encoding="utf-8")
+    return str(path)
+
+
+def test_one_command_shows_then_does_the_whole_upgrade(lake, monkeypatch):
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+    from cnequity.query import catalog_read, load
+    from cnequity.storage.catalog_migration import GENERATION_LAKE_SWITCH, require_catalog_lake
+
+    monkeypatch.delenv(GENERATION_LAKE_SWITCH)
+    config = _built_by(lake, "0.24.0")
+
+    preview = CliRunner().invoke(cli, ["upgrade", "--config", config])
+    assert preview.exit_code == 0, preview.output
+    assert "lake-catalog" in preview.output and "cne upgrade --apply" in preview.output
+    assert not (lake.meta_root / "storage.json").exists()
+    assert not (lake.data_root / "backups").exists()
+
+    done = CliRunner().invoke(cli, ["upgrade", "--apply", "--config", config])
+    catalog_read.close_all()
+    assert done.exit_code == 0, done.output
+    # Each dataset is named as it is registered and verified.
+    assert "1/2 fund_flow" in done.output and "2/2 margin_trading" in done.output
+    backup = next((lake.data_root / "backups").glob("upgrade-*"))
+    assert (backup / "meta" / "revisions" / "fund_flow" / "current.json").is_file()
+    require_catalog_lake(lake)
+    assert load("fund_flow", config=lake).height == 2
+    catalog_read.close_all()
+
+    again = CliRunner().invoke(cli, ["upgrade", "--apply", "--config", config])
+    assert again.exit_code == 0 and "lake-catalog" not in again.output
+    assert len(list((lake.data_root / "backups").glob("upgrade-*"))) == 1
+
+
+def test_an_upgrade_this_machine_cannot_do_changes_nothing(lake, monkeypatch):
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+    from cnequity.ops import upgrade as upgrading
+
+    config = _built_by(lake, "0.24.0")
+    monkeypatch.setattr(
+        upgrading,
+        "_check_extensions",
+        lambda: upgrading.Check(
+            "extensions", False, "DuckDB extension 'ducklake' is not available"
+        ),
+    )
+    result = CliRunner().invoke(cli, ["upgrade", "--apply", "--config", config])
+    assert result.exit_code == 1
+    assert "ducklake" in result.output
+    assert not (lake.meta_root / "storage.json").exists()
+    assert not (lake.data_root / "backups").exists()

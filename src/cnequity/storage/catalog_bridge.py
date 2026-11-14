@@ -649,12 +649,17 @@ def catalog_is_current(config, catalog: Catalog, dataset: str) -> bool:
     )
 
 
-def sync_all(config, catalog: Catalog) -> list[SyncResult]:
-    """Bring every dataset with a committed generation to its committed revision."""
+def sync_all(config, catalog: Catalog, progress=None) -> list[SyncResult]:
+    """Bring every dataset with a committed generation to its committed revision.
+
+    *progress* is called with each dataset's name before it is synced.
+    """
     catalog.keep_rows_in_files()
     prepare_record_tables(catalog)
     results = []
     for dataset in sorted(DATASETS):
+        if progress is not None and committed_source(config, dataset) is not None:
+            progress(dataset)
         result = sync_dataset(config, catalog, dataset)
         if result is not None:
             results.append(result)

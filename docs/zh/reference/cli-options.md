@@ -848,6 +848,15 @@
 | `--apply` | `False` | 真正写入。不加它只抓取并报告，不改任何东西。 |
 | `--workers` | `4` | — |
 
+## `cne upgrade`
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--config` | `configs/cnequity.toml, else ~/.config/cnequity/config.toml` | 配置文件路径。 |
+| `--apply` | `False` | 执行升级。不加时只显示升级会做什么。 |
+| `--no-backup` | `False` | 升级前不备份湖的记录。 |
+| `--json` | `False` | 输出机器可读的 JSON。 |
+
 ## `cne verify`
 
 | 参数 | 默认值 | 说明 |

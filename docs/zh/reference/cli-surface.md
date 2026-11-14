@@ -93,4 +93,5 @@
 | `cne ths-official capture` | 执行时 | 调用凭证源并写对照证据 |
 | `cne ths-official repair-bars` | 执行时 | 预演也取数；--apply 写修复 |
 | `cne ths-official resource-sectors` | 执行时 | 预演也取数；--apply 写暂存 |
+| `cne upgrade` | 条件 | 默认只读预览并检查扩展与磁盘；--apply 先备份湖的记录，再按顺序运行还欠的全部迁移（含搬到湖目录），数据文件只链接不复制；所含迁移读取的数据源同 migrate |
 | `cne verify` | 条件 | 默认本地校验；--repair 访问源并修复 |

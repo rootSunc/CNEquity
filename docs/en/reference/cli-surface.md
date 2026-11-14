@@ -93,4 +93,5 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne ths-official capture` | when run | Calls the credentialed source and writes comparison evidence |
 | `cne ths-official repair-bars` | when run | Fetches even in a dry run; --apply writes repairs |
 | `cne ths-official resource-sectors` | when run | Fetches even in a dry run; --apply writes staging |
+| `cne upgrade` | conditional | Read-only preview that also checks extensions and disk space by default; --apply backs up the lake's records, then runs every owed migration in order (including the move onto the lake catalog), linking data files instead of copying them; the migrations it runs read the same sources as migrate |
 | `cne verify` | conditional | Local validation by default; --repair accesses sources and repairs |

@@ -28,7 +28,7 @@ from cnequity.i18n import N_, _, translate_help
 LEFTOVER_SECTION = N_("Other")
 
 SECTIONS: list[tuple[str, tuple[str, ...]]] = [
-    (N_("Start here"), ("config", "doctor", "init")),
+    (N_("Start here"), ("config", "doctor", "init", "upgrade")),
     (
         N_("Run the pipeline"),
         ("run", "schedule", "backfill", "import", "derive", "repair", "migrate"),

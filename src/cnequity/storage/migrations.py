@@ -114,7 +114,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         "lake-catalog",
         N_(
-            "Copy every published dataset into the lake catalog, verify it row for row, "
+            "Register every published dataset in the lake catalog, verify it row for row, "
             "and switch the lake to publishing there (one-way)"
         ),
         "0.25.0",

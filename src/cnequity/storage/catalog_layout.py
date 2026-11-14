@@ -113,14 +113,19 @@ def _swap_in(
     return {"dataset": dataset, "rows": digest.rows, "files_before": len(old), "files": len(placed)}
 
 
-def lay_out_all(config) -> list[dict]:
-    """Lay out every table of *config*'s lake that needs it."""
+def lay_out_all(config, progress=None) -> list[dict]:
+    """Lay out every table of *config*'s lake that needs it.
+
+    *progress* is called with each such table's name before it is laid out.
+    """
     root = lake_root(config)
     done = []
     with Catalog(root, memory_limit="8GB", temp_directory=root / "tmp") as catalog:
         from cnequity.domain.datasets import DATASETS
 
         for dataset in sorted(DATASETS):
+            if progress is not None and needs_layout(catalog, dataset):
+                progress(dataset)
             report = lay_out_dataset(config, catalog, dataset)
             if report is not None:
                 done.append(report)

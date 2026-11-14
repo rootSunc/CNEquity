@@ -173,10 +173,10 @@ def _check_migrations(config, findings: list[Finding]) -> None:
                     N_("%s lake migration(s) not yet checked on this lake"), len(pending)
                 ),
                 detail=N_(
-                    "Fixes for rows that an older version wrote. `cne migrate` previews what each "
-                    "would change; `--apply` runs them and records the result."
+                    "This lake was built by an earlier version. `cne upgrade` shows what it "
+                    "still needs; `cne upgrade --apply` does all of it in one step."
                 ),
-                fix="cne migrate",
+                fix="cne upgrade",
             )
         )
 

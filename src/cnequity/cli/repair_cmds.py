@@ -110,6 +110,140 @@ def migrate(config_path: str, apply: bool, only: str | None, as_json: bool):
         raise SystemExit(1)
 
 
+_UPGRADE_STAGES = {
+    "copy": N_("registering"),
+    "verify": N_("verifying"),
+    "lay_out": N_("laying out"),
+    "repair": N_("repairing"),
+}
+
+
+@cli.command("upgrade")
+@config_option
+@click.option(
+    "--apply",
+    is_flag=True,
+    help=N_("Upgrade the lake. Without it, only show what the upgrade would do."),
+)
+@click.option(
+    "--no-backup",
+    is_flag=True,
+    help=N_("Skip the copy of the lake's records that is taken before upgrading."),
+)
+@click.option("--json", "as_json", is_flag=True, help=N_("Output machine-readable JSON."))
+def upgrade(config_path: str, apply: bool, no_backup: bool, as_json: bool):
+    """Bring a lake built by an earlier version up to this one, in one step.
+
+    
+    Shows what this version changes about the lake and checks that this machine can do it;
+    --apply then does all of it in order: a backup of the lake's records, the move onto the
+    lake catalog, and every other fix the lake still owes. Data files are linked, not copied.
+    Reading the lake keeps working throughout; jobs that write wait until the upgrade is done.
+    A run that stops can be started again and continues where it stopped.
+
+    """
+    import time
+
+    from cnequity.ops import upgrade as upgrading
+    from cnequity.storage.migrations import MIGRATIONS
+
+    cfg = _cfg(config_path)
+    plan = upgrading.plan(cfg)
+    titles = {migration.id: migration.title for migration in MIGRATIONS}
+    catalog = plan["catalog"]
+    if as_json and not apply:
+        _emit({**plan, "checks": [vars(check) for check in plan["checks"]], "applied": False})
+        return
+    if not plan["needed"]:
+        if as_json:
+            _emit({"needed": False, "applied": False, "version": plan["version"]})
+        else:
+            click.echo(
+                _("This lake is up to date with cnequity {version}; nothing to upgrade.").format(
+                    version=plan["version"]
+                )
+            )
+        return
+    say = (lambda *args, **kwargs: None) if as_json else click.echo
+    if plan["created_with"]:
+        say(
+            _("This lake was built by {built}; cnequity {version} needs {count} step(s):").format(
+                built=plan["created_with"], version=plan["version"], count=len(plan["migrations"])
+            )
+        )
+    else:
+        say(
+            _(
+                "This lake was built by an earlier version; cnequity {version} needs {count} step(s):"
+            ).format(version=plan["version"], count=len(plan["migrations"]))
+        )
+    for index, name in enumerate(plan["migrations"], 1):
+        say(f"  {index}. {name}: {_(titles[name])}")
+        if name == "lake-catalog":
+            say(
+                "     "
+                + _(
+                    "{copy} dataset(s) to register in the lake catalog, "
+                    "{layout} table(s) to lay out by partition"
+                ).format(copy=len(catalog["to_copy"]), layout=len(catalog["to_lay_out"]))
+            )
+    for check in plan["checks"]:
+        say(f"  [{_('ok') if check.ok else _('BLOCKED')}] {check.detail}")
+    if not plan["ready"]:
+        say(_("Nothing was changed. Fix what is blocked above, then run this again."))
+        if as_json:
+            _emit({**plan, "checks": [vars(check) for check in plan["checks"]], "applied": False})
+        raise SystemExit(1)
+    if not apply:
+        say(
+            _(
+                "Nothing was changed. Run `cne upgrade --apply` to upgrade. Reading the lake "
+                "keeps working meanwhile; jobs that write wait until it is done."
+            )
+        )
+        return
+
+    backup = None if no_backup else upgrading.back_up(cfg)
+    if backup is not None:
+        say(_("Backed up the lake's records to {path}").format(path=backup))
+    totals = {
+        "copy": len(catalog["to_copy"]),
+        "verify": int(catalog.get("datasets") or 0),
+        "lay_out": len(catalog["to_lay_out"]),
+    }
+    seen: dict[tuple[str, str], int] = {}
+
+    def progress(migration: str, stage: str, dataset: str) -> None:
+        count = seen[(migration, stage)] = seen.get((migration, stage), 0) + 1
+        total = totals.get(stage) if migration == "lake-catalog" else None
+        position = f" {count}/{total}" if total and count <= total else ""
+        say(f"  [{migration}] {_(_UPGRADE_STAGES.get(stage, stage))}{position} {dataset}".rstrip())
+
+    started = time.monotonic()
+    result = upgrading.run(cfg, progress)
+    elapsed = int(time.monotonic() - started)
+    took = f"{elapsed // 60}m {elapsed % 60}s" if elapsed >= 60 else f"{elapsed}s"
+    if as_json:
+        _emit({**result, "applied": True, "backup": backup, "seconds": elapsed})
+    failed = next((item for item in result["migrations"] if "error" in item), None)
+    if failed is not None:
+        say(
+            _(
+                "Stopped at {name} after {took}: {error}\nThe steps before it are done and "
+                "recorded; what this step had not finished is unchanged. Fix the cause, then "
+                "run `cne upgrade --apply` again."
+            ).format(name=failed["id"], took=took, error=failed["error"])
+        )
+        raise SystemExit(1)
+    say(_("Upgraded in {took}.").format(took=took))
+    say(
+        _(
+            "Next: restart `cne serve` and any running `cne mcp`. Scheduled jobs continue "
+            "on their next run."
+        )
+    )
+
+
 @cli.group()
 def repair():
     """Repair stored data: previews by default; --apply verifies, publishes, and keeps the old version."""
