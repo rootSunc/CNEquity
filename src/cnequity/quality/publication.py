@@ -43,27 +43,20 @@ def _link_read_only(source: str, target: str) -> str:
 def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> None:
     """Give *view* a lake catalog of its own that holds what *config*'s publishes.
 
-    Data files are immutable, so they are hard links; the catalog database is
-    copied. Datasets published only into the catalog are found through their
+    The catalog database is copied and reads the lake's own data files, which
+    are immutable; no file is copied. Datasets published only into the catalog are found through their
     pointer and receipt, which are copied too. Calling it again resets the
     view's lake, undoing a rehearsed publish.
     """
     from cnequity.query import catalog_read
     from cnequity.storage.catalog_bridge import lake_root
-    from equitylake_core.catalog import CATALOG_FILE, DATA_DIR
+    from equitylake_core.catalog import copy_catalog
 
     source, target = lake_root(config), lake_root(view)
     catalog_read.close(view)
     if target.exists():
         shutil.rmtree(target)
-    target.mkdir(parents=True)
-    shutil.copytree(source / DATA_DIR, target / DATA_DIR, copy_function=_link_read_only)
-    with (
-        closing(connect_readonly(source / CATALOG_FILE)) as original,
-        closing(sqlite3.connect(target / CATALOG_FILE)) as copied,
-    ):
-        original.backup(copied)
-        copied.execute("PRAGMA journal_mode=WAL")
+    copy_catalog(source, target)
     # A rehearsed publish leaves its pointer and state in the view; drop them,
     # so a dataset the real lake keeps as a generation is read as one again.
     for stale in (view.meta_root / "revisions").glob("*/current.json"):

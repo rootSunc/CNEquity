@@ -164,7 +164,7 @@ def test_a_refused_check_publishes_nothing_and_keeps_the_checkout(cfg):
     assert _pointer(cfg) == before
     assert _load(cfg).height == 3
     with Catalog(lake_root(cfg), read_only=True) as lake:
-        assert not lake.has_table(REVISIONS_TABLE)
+        assert lake.execute(f"SELECT count(*) FROM {REVISIONS_TABLE}").fetchone()[0] == 0
 
 
 def test_two_datasets_publish_in_one_snapshot(cfg):

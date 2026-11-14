@@ -89,7 +89,7 @@ def compare_dataset(config, catalog: Catalog, dataset: str) -> Comparison | None
 
 # --- keeping the catalog in step with the revision store ---------------------------
 
-SYNC_TABLE = "_revision_sync"
+SYNC_TABLE = "_sync_state"
 
 
 @dataclass(frozen=True)
@@ -102,36 +102,116 @@ class SyncResult:
     partitions: int = 0
 
 
+SYNC_FILES_TABLE = "_sync_files"
+#: The record an earlier release kept: the same rows, each carrying its file list.
+LEGACY_SYNC_TABLE = "_revision_sync"
+
+
 def _ensure_sync_table(catalog: Catalog) -> None:
+    if not catalog.has_table(SYNC_TABLE) and catalog.has_table(LEGACY_SYNC_TABLE):
+        # Writing a fresh record beside the old one would hide every dataset in it.
+        raise RuntimeError("the lake's sync records were not prepared before this write")
     catalog.execute(
         f"CREATE TABLE IF NOT EXISTS {SYNC_TABLE} "
-        "(dataset VARCHAR, revision_id VARCHAR, files VARCHAR, unique_keys BOOLEAN)"
+        "(dataset VARCHAR, revision_id VARCHAR, unique_keys BOOLEAN)"
     )
-    columns = {row[0] for row in catalog.execute(f"DESCRIBE {SYNC_TABLE}").fetchall()}
-    if "unique_keys" not in columns:  # a catalog synced before the flag existed
-        catalog.execute(f"ALTER TABLE {SYNC_TABLE} ADD COLUMN unique_keys BOOLEAN")
+    catalog.execute(
+        f"CREATE TABLE IF NOT EXISTS {SYNC_FILES_TABLE} (dataset VARCHAR, files VARCHAR)"
+    )
+
+
+def prepare_record_tables(catalog: Catalog) -> None:
+    """Make the tables of records and keep their rows in the catalog database.
+
+    A row per dataset or per publish, read by key: as data files they grow by
+    a tiny file per write, and every reader pays for all of them. Called
+    outside a transaction, once per writer: the catalog cannot set this for a
+    table the transaction made.
+
+    The sync record used to carry each generation's file list (hundreds of
+    kilobytes for a large dataset) in the row every reader looks up, in a
+    table of data files. Its rows are moved here once, in one transaction
+    with dropping it: the lists into a table only the sync from generations
+    reads.
+    """
+    legacy = catalog.has_table(LEGACY_SYNC_TABLE)
+    for table, columns in (
+        (SYNC_TABLE, "dataset VARCHAR, revision_id VARCHAR, unique_keys BOOLEAN"),
+        (SYNC_FILES_TABLE, "dataset VARCHAR, files VARCHAR"),
+        # The columns a reader looks a revision up by; a publish adds the rest.
+        (
+            REVISIONS_TABLE,
+            "dataset VARCHAR, revision BIGINT, revision_id VARCHAR, unique_keys BOOLEAN",
+        ),
+    ):
+        if not catalog.has_table(table):
+            catalog.execute(f"CREATE TABLE {table} ({columns})")
+        catalog.keep_rows_inline(table)
+    if not legacy:
+        return
+    described = {row[0] for row in catalog.execute(f"DESCRIBE {LEGACY_SYNC_TABLE}").fetchall()}
+    unique = "unique_keys" if "unique_keys" in described else "NULL"
+    rows = catalog.execute(
+        f"SELECT dataset, revision_id, files, {unique} FROM {LEGACY_SYNC_TABLE}"
+    ).fetchall()
+    with catalog.transaction(message="keep sync records in the catalog database"):
+        catalog.execute(f"DELETE FROM {SYNC_TABLE}")
+        catalog.execute(f"DELETE FROM {SYNC_FILES_TABLE}")
+        for dataset, revision_id, files, flag in rows:
+            catalog.execute(
+                f"INSERT INTO {SYNC_TABLE} VALUES (?, ?, ?)", [dataset, revision_id, flag]
+            )
+            if files and files != "{}":
+                catalog.execute(f"INSERT INTO {SYNC_FILES_TABLE} VALUES (?, ?)", [dataset, files])
+        catalog.execute(f"DROP TABLE {LEGACY_SYNC_TABLE}")
+
+
+def _state_table(catalog: Catalog) -> str | None:
+    """The table holding the sync record: the old one until a writer has moved it."""
+    if catalog.has_table(SYNC_TABLE):
+        return SYNC_TABLE
+    return LEGACY_SYNC_TABLE if catalog.has_table(LEGACY_SYNC_TABLE) else None
+
+
+def synced_revision_id(catalog: Catalog, dataset: str) -> str | None:
+    """The revision the catalog table was last brought to."""
+    table = _state_table(catalog)
+    if table is None:
+        return None
+    row = catalog.execute(
+        f"SELECT revision_id FROM {table} WHERE dataset = ?", [dataset]
+    ).fetchone()
+    return row[0] if row else None
 
 
 def synced_revision(catalog: Catalog, dataset: str) -> tuple[str, dict[str, str]] | None:
     """The revision the catalog table was last brought to, with that revision's files."""
-    if not catalog.has_table(SYNC_TABLE):
+    revision_id = synced_revision_id(catalog, dataset)
+    if revision_id is None:
         return None
-    row = catalog.execute(
-        f"SELECT revision_id, files FROM {SYNC_TABLE} WHERE dataset = ?", [dataset]
-    ).fetchone()
-    return (row[0], json.loads(row[1])) if row else None
+    if _state_table(catalog) == LEGACY_SYNC_TABLE:
+        source = LEGACY_SYNC_TABLE
+    else:
+        source = SYNC_FILES_TABLE if catalog.has_table(SYNC_FILES_TABLE) else None
+    files = (
+        catalog.execute(f"SELECT files FROM {source} WHERE dataset = ?", [dataset]).fetchone()
+        if source
+        else None
+    )
+    return revision_id, json.loads(files[0]) if files and files[0] else {}
 
 
 def keys_unique(catalog: Catalog, dataset: str) -> bool | None:
     """Whether the catalog table has one row per primary key; ``None`` when not yet checked."""
-    if not catalog.has_table(SYNC_TABLE):
+    table = _state_table(catalog)
+    if table is None:
         return None
-    columns = {row[0] for row in catalog.execute(f"DESCRIBE {SYNC_TABLE}").fetchall()}
-    if "unique_keys" not in columns:
+    try:
+        row = catalog.execute(
+            f"SELECT unique_keys FROM {table} WHERE dataset = ?", [dataset]
+        ).fetchone()
+    except Exception:  # a catalog synced before the flag existed
         return None
-    row = catalog.execute(
-        f"SELECT unique_keys FROM {SYNC_TABLE} WHERE dataset = ?", [dataset]
-    ).fetchone()
     return row[0] if row else None
 
 
@@ -143,10 +223,13 @@ def _record_sync(
     unique: bool | None = None,
 ) -> None:
     catalog.execute(f"DELETE FROM {SYNC_TABLE} WHERE dataset = ?", [dataset])
-    catalog.execute(
-        f"INSERT INTO {SYNC_TABLE} VALUES (?, ?, ?, ?)",
-        [dataset, revision_id, json.dumps(files, sort_keys=True), unique],
-    )
+    catalog.execute(f"INSERT INTO {SYNC_TABLE} VALUES (?, ?, ?)", [dataset, revision_id, unique])
+    catalog.execute(f"DELETE FROM {SYNC_FILES_TABLE} WHERE dataset = ?", [dataset])
+    if files:
+        catalog.execute(
+            f"INSERT INTO {SYNC_FILES_TABLE} VALUES (?, ?)",
+            [dataset, json.dumps(files, sort_keys=True)],
+        )
 
 
 # A whole-table key check groups every row; past this size it does not fit in
@@ -161,6 +244,21 @@ def _has_duplicate_keys(catalog: Catalog, dataset: str, where: str | None = None
         catalog.execute(
             f"SELECT 1 FROM {quote_identifier(dataset)}{scope} "
             f"GROUP BY {keys} HAVING count(*) > 1 LIMIT 1"
+        ).fetchone()
+        is not None
+    )
+
+
+def files_have_duplicate_keys(catalog: Catalog, dataset: str, files: list[str]) -> bool:
+    """Whether the data files *files* hold two rows with one primary key."""
+    if not files:
+        return False
+    keys = ", ".join(quote_identifier(key) for key in PRIMARY_KEYS[dataset])
+    listed = ", ".join(quote_literal(path) for path in files)
+    return (
+        catalog.execute(
+            f"SELECT 1 FROM read_parquet([{listed}], union_by_name => true, "
+            f"hive_partitioning => false) GROUP BY {keys} HAVING count(*) > 1 LIMIT 1"
         ).fetchone()
         is not None
     )
@@ -284,6 +382,66 @@ def _listed_files(catalog: Catalog, dataset: str) -> list[str]:
     ]
 
 
+#: Where a file goes whose rows are not all of the partition its directory names.
+MIXED_FOLDER = "_mixed"
+
+
+def _misfiled(catalog: Catalog, dataset: str, root: Path, relatives: list[str]) -> set[str]:
+    """The generation files holding a row outside the partition their directory names.
+
+    The lake reads a partition's range off its folder, so a file is filed
+    under a partition only if every row in it belongs there. An old writer
+    could leave a month's file with another month's rows in it; such a file
+    is kept apart, and split the first time a partition in it changes.
+    """
+    from cnequity.domain.partitions import parse_partition, partition_value
+
+    spec = DATASETS[dataset]
+    if not spec.partition_col or not relatives:
+        return set()
+    column = quote_identifier(spec.partition_col)
+    listed = ", ".join(quote_literal((root / relative).as_posix()) for relative in relatives)
+    try:
+        bounds = catalog.execute(
+            f"SELECT filename, min({column}), max({column}), count(*) - count({column}) "
+            f"FROM read_parquet([{listed}], union_by_name => true, hive_partitioning => false, "
+            "filename => true) GROUP BY filename"
+        ).fetchall()
+    except Exception:  # no such column in these files: nothing can be said of them
+        return set(relatives)
+    by_path = {Path(path).as_posix(): (low, high, nulls) for path, low, high, nulls in bounds}
+    out = set()
+    for relative in relatives:
+        folder = _lake_key(relative)[0]
+        low, high, nulls = by_path.get((root / relative).as_posix(), (None, None, 1))
+        period = parse_partition(folder) if folder else None
+        fits = period is not None and low is not None and not nulls
+        if fits:
+            try:
+                first, last = _as_day(low), _as_day(high)
+                fits = (
+                    partition_value(period.start, spec.partition_granularity) == folder
+                    and period.start <= first
+                    and last <= period.end
+                )
+            except (TypeError, ValueError):
+                # Not a date (a quarter label): the value itself names the partition.
+                fits = str(low) == folder and str(high) == folder
+        if not fits:
+            out.add(relative)
+    return out
+
+
+def _as_day(value):
+    from datetime import date, datetime
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
 def _register(
     catalog: Catalog, dataset: str, root: Path, *, add: list[str], remove: list[str]
 ) -> int:
@@ -304,10 +462,13 @@ def _register(
         if catalog.has_table(dataset):
             types = {**types, **catalog.column_types(dataset)}
     table = catalog.table_dir(dataset)
+    misfiled = _misfiled(catalog, dataset, root, add)
     placed: list[Path] = []
     try:
         for relative, source in zip(add, sources, strict=True):
             folder, name = _lake_key(relative)
+            if relative in misfiled:
+                folder = MIXED_FOLDER
             target = (table / folder if folder else table) / lake_file_name(name)
             placed.append(target)
             if catalog.file_fits(dataset, source, types=types):
@@ -406,6 +567,7 @@ def _record_history(
 
 def sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
     """Sync *dataset*, then leave its table file-complete (see ``equitylake_core.catalog``)."""
+    prepare_record_tables(catalog)
     result = _sync_dataset(config, catalog, dataset)
     if result is None:
         return None
@@ -482,17 +644,15 @@ def catalog_is_current(config, catalog: Catalog, dataset: str) -> bool:
     """True when the catalog table holds exactly the committed revision."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     pointer = store.current_pointer(dataset)
-    previous = synced_revision(catalog, dataset)
-    return (
-        pointer is not None
-        and previous is not None
-        and previous[0] == str(pointer.get("revision_id", ""))
+    return pointer is not None and synced_revision_id(catalog, dataset) == str(
+        pointer.get("revision_id", "")
     )
 
 
 def sync_all(config, catalog: Catalog) -> list[SyncResult]:
     """Bring every dataset with a committed generation to its committed revision."""
     catalog.keep_rows_in_files()
+    prepare_record_tables(catalog)
     results = []
     for dataset in sorted(DATASETS):
         result = sync_dataset(config, catalog, dataset)
@@ -668,7 +828,7 @@ def apply_retention(
     ``SELECT`` they report what they would do and change nothing. Their result
     rows carry timestamps with a time zone, which DuckDB hands to Python only
     through ``pytz`` (not a dependency), so the rows are dropped unread and the
-    effect is counted beforehand, from what the functions report they would do.
+    effect is counted from the files in the lake before and after.
     """
     keep_ids = retained_snapshots(catalog, keep=keep, held=held)
     every = {
@@ -683,12 +843,17 @@ def apply_retention(
         catalog.execute(f"CALL ducklake_expire_snapshots('lake', versions => {versions})")
         catalog.con.abort()
     remaining = catalog.execute("SELECT count(*) FROM ducklake_snapshots('lake')").fetchone()[0]
-    cleanup = f"ducklake_cleanup_old_files('lake', older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
-    # Inside a SELECT the function only reports the files it would delete.
-    due = catalog.execute(f"SELECT count(*) FROM {cleanup}").fetchone()[0]
-    catalog.execute(f"CALL {cleanup}")
+    if catalog.borrows_data:
+        raise RuntimeError("a copy of a lake's catalog never deletes the lake's files")
+    data = catalog.data_root
+    before = sum(1 for _ in data.rglob("*.parquet"))
+    catalog.execute(
+        "CALL ducklake_cleanup_old_files('lake', "
+        f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
+    )
     catalog.con.abort()
-    return RetentionResult(len(every & keep_ids), len(every) - int(remaining), int(due), True)
+    after = sum(1 for _ in data.rglob("*.parquet"))
+    return RetentionResult(len(every & keep_ids), len(every) - int(remaining), before - after, True)
 
 
 def catalog_retention(config, *, apply: bool) -> dict | None:

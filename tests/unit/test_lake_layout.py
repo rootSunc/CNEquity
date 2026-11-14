@@ -181,3 +181,73 @@ def test_laying_a_table_out_changes_its_files_and_none_of_its_rows(cfg):
         ("2024-02", date(2024, 2, 1), date(2024, 2, 29), 1),
     ]
     assert _load(cfg).height == 3
+
+
+def test_a_rehearsal_copies_no_data_and_leaves_nothing_in_the_lake(cfg, tmp_path):
+    from dataclasses import replace
+
+    from equitylake_core.catalog import copy_catalog
+
+    data = lake_root(cfg) / "data"
+    before = sorted(path for path in data.rglob("*.parquet"))
+    view = replace(cfg, data_root=tmp_path / "view")
+    copy_catalog(lake_root(cfg), lake_root(view))
+    with LakeWrite(cfg, "r1") as write:
+        _replace(
+            write.checkout("daily_bars").partition(JAN),
+            _bars(date(2024, 1, 2), {"600000.SH": 10.5}),
+        )
+        write.rehearse(view, {"daily_bars": PUBLISH})
+        # The copy holds the publish and has no data files of its own.
+        with Catalog(lake_root(view), read_only=True) as copy:
+            closes = copy.execute("SELECT close FROM daily_bars ORDER BY trade_date").fetchall()
+        assert closes == [(10.5,), (11.0,)]
+        assert not (lake_root(view) / "data").exists()
+        assert sorted(_load(cfg)["close"].to_list()) == [9.0, 10.0, 11.0]
+    # The file the rehearsal registered in the copy is gone with the write.
+    assert sorted(path for path in data.rglob("*.parquet")) == before
+
+
+def test_a_generation_file_with_rows_of_another_partition_is_not_filed_under_its_folder(tmp_path):
+    from cnequity.config.loader import Config
+    from cnequity.storage.catalog_bridge import sync_dataset
+    from cnequity.storage.revisions import RevisionStore
+    from equitylake_core.extensions import ExtensionUnavailableError
+
+    config = Config(data_root=tmp_path / "data")
+    # An old writer left a February row in January's file.
+    stray = pl.concat(
+        [
+            _bars(date(2024, 1, 2), {"600000.SH": 10.0}),
+            _bars(date(2024, 2, 1), {"600000.SH": 11.0}),
+        ]
+    )
+    path = config.curated_root / "daily_bars/trade_date=2024-01/part-merged.parquet"
+    path.parent.mkdir(parents=True)
+    stray.write_parquet(path)
+    RevisionStore(config.meta_root, config.curated_root).commit(
+        "daily_bars",
+        run_id="seed",
+        changed_files=[path],
+        schema_version=1,
+        contract_fingerprint="contract",
+    )
+    try:
+        with Catalog(lake_root(config), create=True) as lake:
+            sync_dataset(config, lake, "daily_bars")
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    assert list(_folders(config)) == ["_mixed"]
+
+    with LakeWrite(config, "r1") as write:
+        checkout = write.checkout("daily_bars")
+        _replace(checkout.partition(FEB), _bars(date(2024, 2, 1), {"600000.SH": 11.5}))
+        # January shares the file that is dropped, so it is written out too.
+        assert sorted(checkout.changed()) == [JAN, FEB]
+        write.publish({"daily_bars": PUBLISH})
+
+    assert _folders(config) == {
+        "2024-01": ["part-merged.parquet"],
+        "2024-02": ["part-merged.parquet"],
+    }
+    assert _load(config).sort("trade_date")["close"].to_list() == [10.0, 11.5]

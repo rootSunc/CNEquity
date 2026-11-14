@@ -379,7 +379,9 @@ def test_retention_keeps_recent_and_held_revisions_and_deletes_after_the_grace(
     gone = apply_retention(
         lake, keep=2, held={f"revision/daily_bars/{held}"}, apply=True, grace_hours=-1
     )
-    assert gone.files_deleted > 0
+    # Each revision here only added a month's file, so no file was replaced
+    # and expiring the old snapshots frees none.
+    assert gone.files_deleted == 0
     catalog_reads.close_all()
     assert catalog_reads.published_files(cfg, "daily_bars", oldest) is None
     assert catalog_reads.published_files(cfg, "daily_bars", held) is not None

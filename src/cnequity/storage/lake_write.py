@@ -34,20 +34,27 @@ from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.catalog_bridge import (
     REVISIONS_TABLE,
     _ensure_sync_table,
-    _has_duplicate_keys,
     _partition_key_column,
     _partition_predicate,
     _record_sync,
     _table_keys_unique,
+    files_have_duplicate_keys,
     keys_unique,
     lake_root,
-    synced_revision,
+    prepare_record_tables,
+    synced_revision_id,
 )
 from cnequity.storage.locator import layer_name
 from cnequity.storage.parquet import emit_partition, merge_group_keys
 from cnequity.storage.revisions import DatasetRevision, RevisionFile, RevisionStore, sha256_file
 from equitylake_core.catalog import Catalog, quote_identifier, quote_literal
-from equitylake_core.write import Write, WriteRejected, digest_algorithm, rows_digest
+from equitylake_core.write import (
+    Write,
+    WriteRejected,
+    digest_algorithm,
+    files_digest,
+    rows_digest,
+)
 
 CHECKOUT_DIR = "_checkout"
 
@@ -102,6 +109,8 @@ class PartitionSwap:
     add: tuple[Path, ...]
     #: Data files of the lake this write was checked out of, dropped whole.
     remove: tuple[str, ...]
+    #: Data files of that lake the partition keeps as they are.
+    keep: tuple[str, ...] = ()
 
 
 class Checkout:
@@ -139,6 +148,8 @@ class Checkout:
         # Untouched partitions written out because they share a file with a changed one.
         self._split: set[str] = set()
         self._types: dict[str, str] | None = None
+        # False: not looked at yet.
+        self._folders: dict[str, list[str]] | None | bool = False
         self.base_revision = _catalog_revision(write.catalog, dataset)
 
     def _target(self, label: str) -> Path:
@@ -155,11 +166,49 @@ class Checkout:
         found = Path(path)
         return found.parent == self.layout_dir(label) and bool(_LAID_OUT.match(found.name))
 
+    def _by_folder(self) -> dict[str, list[str]] | None:
+        """The lake's files by partition folder, or ``None`` if some file is not in one.
+
+        When every data file sits in the folder of exactly one partition, the
+        files of a partition are the files of its folder, and nothing has to
+        be asked of the rows.
+        """
+        if self._folders is not False:
+            return self._folders
+        from cnequity.domain.datasets import granularity_for_dataset
+        from cnequity.domain.partitions import parse_partition, partition_value
+
+        catalog = self._write.catalog
+        table = catalog.table_dir(self.dataset)
+        granularity = granularity_for_dataset(self.dataset)
+        folders: dict[str, list[str]] | None = {}
+        for (path,) in catalog.execute(
+            "SELECT data_file FROM ducklake_list_files('lake', ?)", [self.dataset]
+        ).fetchall():
+            found = Path(path)
+            parts = found.relative_to(table).parts if table in found.parents else ()
+            folder = parts[0] if len(parts) == 2 else "" if len(parts) == 1 else None
+            fits = folder is not None and bool(_LAID_OUT.match(found.name))
+            if fits and self.spec.partition_col:
+                period = parse_partition(folder) if folder else None
+                fits = period is not None and partition_value(period.start, granularity) == folder
+            elif fits:
+                fits = folder == ""
+            if not fits:
+                folders = None
+                break
+            folders.setdefault(folder, []).append(path)
+        self._folders = folders
+        return folders
+
     def _files_of(self, label: str) -> list[str]:
         """The lake's data files that hold rows of *label* now."""
         catalog = self._write.catalog
         if not catalog.has_table(self.dataset):
             return []
+        folders = self._by_folder()
+        if folders is not None:
+            return sorted(folders.get(label.partition("=")[2] if label else "", []))
         where = self.where(label)
         scope = f" WHERE {where}" if where else ""
         return sorted(
@@ -363,7 +412,8 @@ class Checkout:
                 for name, path in sorted(linked.items())
                 if name not in after or before.get(name) != after[name]
             ]
-            swaps.append(PartitionSwap(label, tuple(add), tuple(remove)))
+            keep = [path for path in sorted(linked.values()) if path not in remove]
+            swaps.append(PartitionSwap(label, tuple(add), tuple(remove), tuple(keep)))
         return swaps
 
     def has_foreign_files(self) -> bool:
@@ -440,10 +490,13 @@ class LakeWrite:
         root = lake_root(config)
         # The first write to a lake that publishes into its catalog creates it.
         self.catalog = Catalog(root, create=True, memory_limit="4GB", temp_directory=root / "tmp")
+        prepare_record_tables(self.catalog)
         self._checkouts: dict[str, Checkout] = {}
         # Datasets published from a whole working tree: root, and changed partitions.
         self._trees: dict[str, tuple[Path, list[str]]] = {}
         self._from_tree: set[str] = set()
+        # Files placed in the lake for a rehearsal on a copy of its catalog.
+        self._rehearsed: list[Path] = []
         self._checks: list[tuple[str, Callable[[Catalog], str | None]]] = []
 
     @classmethod
@@ -467,8 +520,14 @@ class LakeWrite:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close(keep=exc_type is not None)
 
+    def _drop_rehearsed(self) -> None:
+        for path in self._rehearsed:
+            path.unlink(missing_ok=True)
+        self._rehearsed.clear()
+
     def close(self, *, keep: bool = False) -> Path | None:
         """Release the catalog and the checkout; *keep* moves it aside for inspection."""
+        self._drop_rehearsed()
         self.catalog.close()
         if not self.root.exists():
             return None
@@ -604,6 +663,7 @@ class LakeWrite:
             checkout = self._checkouts[dataset]
             if _catalog_revision(catalog, dataset) != checkout.base_revision:
                 raise WriteRejected(f"{dataset} was published by another write since checkout")
+        self._drop_rehearsed()
         swaps = {dataset: self._checkouts[dataset].swaps() for dataset in changes}
         receipts = {
             dataset: self._prepare(
@@ -614,8 +674,9 @@ class LakeWrite:
         write = Write(catalog)
         placed: list[Path] = []
         try:
+            holding: dict[str, list[str]] = {}
             for dataset, found in swaps.items():
-                add, remove = self._place_files(catalog, dataset, found, placed)
+                add, remove, holding[dataset] = self._place_files(catalog, dataset, found, placed)
                 write.swap(dataset, add=add, remove=remove)
             for name, check in self._checks:
                 write.check(name, check)
@@ -625,8 +686,9 @@ class LakeWrite:
                     for label in changes[dataset]
                     if (clause := self._checkouts[dataset].where(label))
                 )
-                write.check(f"{dataset} sync state", _sync_recorder(dataset, receipt, where))
-                write.record(REVISIONS_TABLE, _revision_recorder(receipt, where))
+                files = holding[dataset]
+                write.check(f"{dataset} sync state", _sync_recorder(dataset, receipt, where, files))
+                write.record(REVISIONS_TABLE, _revision_recorder(receipt, where, files))
             # One snapshot holds the files, the sync state and the revision
             # rows, and it is file-complete: a pinned read needs nothing more.
             write.commit(message=message or f"run {self.run_id}")
@@ -635,6 +697,10 @@ class LakeWrite:
             for path in placed:
                 path.unlink(missing_ok=True)
             raise
+        if catalog.borrows_data:
+            # Placed in the lake's own data directory for a copy of its catalog:
+            # they belong to no snapshot of the lake, and go when the copy does.
+            self._rehearsed.extend(placed)
         for dataset, receipt in receipts.items():
             store.finish_catalog_revision(receipt)
             if advance:
@@ -644,12 +710,17 @@ class LakeWrite:
 
     def _place_files(
         self, catalog: Catalog, dataset: str, swaps: list[PartitionSwap], placed: list[Path]
-    ) -> tuple[list[Path], list[str]]:
-        """Put each partition's new files in *catalog*'s lake; returns them and the files to drop."""
+    ) -> tuple[list[Path], list[str], list[str]]:
+        """Put each partition's new files in *catalog*'s lake.
+
+        Returns the files placed, the lake files to drop, and every file that
+        holds a changed partition once both are done.
+        """
         checkout = self._checkouts[dataset]
-        ours, theirs = self.catalog.root, catalog.root
+        ours, theirs = self.catalog.data_root, catalog.data_root
         add: list[Path] = []
         remove: list[str] = []
+        holding: list[str] = []
         if checkout.has_foreign_files() and catalog.has_table(dataset):
             # Registered files are refused by a table the catalog partitions itself.
             catalog.unpartition(dataset)
@@ -675,11 +746,13 @@ class LakeWrite:
                     catalog.conform_file(dataset, source, target)
                 _protect(target)
                 add.append(target)
-            # The clone of a lake keeps every file at the same place under its own root.
+                holding.append(target.as_posix())
+            # A copy of the lake's catalog reads the same files at the same place.
             remove.extend(
                 (theirs / Path(path).relative_to(ours)).as_posix() for path in swap.remove
             )
-        return add, remove
+            holding.extend((theirs / Path(path).relative_to(ours)).as_posix() for path in swap.keep)
+        return add, remove, holding
 
     def _prepare(
         self,
@@ -753,13 +826,18 @@ def staged_partitions(dataset: str, files: list[Path]) -> list[str]:
     return sorted(labels)
 
 
-def _sync_recorder(dataset: str, receipt: DatasetRevision, where: str):
-    """Record, inside the write, which revision the table holds and whether keys are unique."""
+def _sync_recorder(dataset: str, receipt: DatasetRevision, where: str, files: list[str]):
+    """Record, inside the write, which revision the table holds and whether keys are unique.
+
+    *files* hold the changed partitions after the write. They are read as
+    files: the catalog would plan each query over every file of the table.
+    """
 
     def record(catalog: Catalog) -> None:
         was_unique = keys_unique(catalog, dataset)
-        if where and was_unique and _partition_key_column(catalog, dataset):
-            unique = not _has_duplicate_keys(catalog, dataset, where)
+        if was_unique and (not where or _partition_key_column(catalog, dataset)):
+            # Other partitions cannot hold these keys: check the changed ones only.
+            unique = not files_have_duplicate_keys(catalog, dataset, files)
         else:
             unique = _table_keys_unique(catalog, dataset)
         _ensure_sync_table(catalog)
@@ -769,18 +847,18 @@ def _sync_recorder(dataset: str, receipt: DatasetRevision, where: str):
     return record
 
 
-def _revision_recorder(receipt: DatasetRevision, where: str):
+def _revision_recorder(receipt: DatasetRevision, where: str, files: list[str]):
     """The ``_revisions`` row of *receipt*, built inside the write that publishes it.
 
-    The receipt's file hashes describe the checkout the run staged, and the
-    catalog writes those rows into files of its own. So the row also records
-    a digest of the published rows as the catalog holds them (the changed
-    partitions; the whole table when it has none), which
-    :func:`verify_revision` computes again at the revision's snapshot.
+    The row records a digest of the published rows of the changed partitions
+    (the whole table when it has none), computed from *files*, the data files
+    that hold them after the write. :func:`verify_revisions` computes it
+    again through the catalog at the revision's snapshot: the two agree only
+    if the catalog serves exactly the rows that were published.
     """
 
     def row(catalog: Catalog) -> dict[str, object]:
-        digest = rows_digest(catalog, receipt.dataset, where=where or None)
+        digest = files_digest(catalog, receipt.dataset, files)
         return {
             **_revision_row(receipt),
             # Set by the sync recorder earlier in the same transaction.
@@ -854,8 +932,7 @@ def _revision_row(receipt: DatasetRevision) -> dict[str, object]:
 
 
 def _catalog_revision(catalog: Catalog, dataset: str) -> str | None:
-    synced = synced_revision(catalog, dataset)
-    return synced[0] if synced else None
+    return synced_revision_id(catalog, dataset)
 
 
 def catalog_revision(store: RevisionStore, dataset: str) -> str | None:

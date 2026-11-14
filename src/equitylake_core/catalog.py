@@ -32,6 +32,8 @@ from equitylake_core.extensions import ensure_extensions
 
 CATALOG_FILE = "catalog.sqlite"
 DATA_DIR = "data"
+#: In a lake directory that has no data of its own: the data directory it reads.
+DATA_LINK = "data.at"
 ALIAS = "lake"
 METADATA = f"__ducklake_metadata_{ALIAS}"
 
@@ -51,6 +53,41 @@ def _widens(found: str, wanted: str) -> bool:
 #: Layouts of the catalog database whose per-file statistics this code reads
 #: directly. Anything else is read through the files' footers instead.
 KNOWN_METADATA_FORMATS = frozenset({"1.1"})
+
+
+def lake_data_root(root: str | Path) -> Path:
+    """The directory holding the data files of the lake at *root*."""
+    link = Path(root) / DATA_LINK
+    if link.is_file():
+        return Path(link.read_text(encoding="utf-8").strip())
+    return Path(root).expanduser().resolve() / DATA_DIR
+
+
+def copy_catalog(source: str | Path, target: str | Path) -> None:
+    """Make *target* a lake whose catalog is a copy of *source*'s and whose files are *source*'s.
+
+    What is written to the copy changes only the copy's catalog: a table
+    there can gain and drop files without *source* seeing any of it, and no
+    data file is copied. A file registered in the copy is placed in
+    *source*'s data directory, where it belongs to no snapshot of *source*;
+    the caller removes it when the copy is done with. Never expire snapshots
+    or clean up files through the copy: the files are not its own.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    source, target = Path(source), Path(target)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / CATALOG_FILE).unlink(missing_ok=True)
+    with (
+        closing(
+            sqlite3.connect(f"file:{(source / CATALOG_FILE).as_posix()}?mode=ro", uri=True)
+        ) as original,
+        closing(sqlite3.connect(target / CATALOG_FILE)) as copied,
+    ):
+        original.backup(copied)
+        copied.execute("PRAGMA journal_mode=WAL")
+    (target / DATA_LINK).write_text(lake_data_root(source).as_posix(), encoding="utf-8")
 
 
 class CatalogError(RuntimeError):
@@ -119,6 +156,14 @@ class Catalog:
             raise ValueError("a read-only catalog cannot be created")
         self.root = Path(root).expanduser().resolve()
         self.read_only = read_only
+        link = self.root / DATA_LINK
+        #: True for a copy of another lake's catalog that reads that lake's files.
+        self.borrows_data = link.is_file()
+        self.data_root = (
+            Path(link.read_text(encoding="utf-8").strip())
+            if self.borrows_data
+            else self.root / DATA_DIR
+        )
         self._rows_in_files: bool | None = None
         self._format: str | None = None
         catalog_path = self.root / CATALOG_FILE
@@ -144,7 +189,7 @@ class Catalog:
             # Always resolve files under this catalog's own directory instead,
             # so a lake that was moved, restored or cloned reads its own files
             # and never the original's.
-            data_path = f"DATA_PATH {quote_literal((self.root / DATA_DIR).as_posix() + '/')}"
+            data_path = f"DATA_PATH {quote_literal(self.data_root.as_posix() + '/')}"
             options = ("READ_ONLY, " if read_only else "") + f"{data_path}, OVERRIDE_DATA_PATH true"
             self.con.execute(
                 f"ATTACH {quote_literal('ducklake:sqlite:' + catalog_path.as_posix())} "
@@ -222,7 +267,7 @@ class Catalog:
 
     def table_dir(self, table: str) -> Path:
         """Where a writer places the data files it will register for *table*."""
-        return self.root / DATA_DIR / "main" / table
+        return self.data_root / "main" / table
 
     def register_file(self, table: str, path: str | Path) -> None:
         """Make the Parquet file *path* a data file of *table*, as it is.
@@ -233,7 +278,7 @@ class Catalog:
         directory names are never read as column values.
         """
         target = Path(path).resolve()
-        if (self.root / DATA_DIR).resolve() not in target.parents:
+        if self.data_root.resolve() not in target.parents:
             raise CatalogError(f"{target} is not under this lake's data path")
         self.con.execute(
             f"CALL ducklake_add_data_files({quote_literal(ALIAS)}, {quote_literal(table)}, "
@@ -310,6 +355,25 @@ class Catalog:
         of its own: the catalog cannot commit this with a registered file.
         """
         self.con.execute(f"ALTER TABLE {ALIAS}.{quote_identifier(table)} RESET PARTITIONED BY")
+
+    def keep_rows_inline(self, table: str, rows: int = 100) -> None:
+        """Keep small writes to *table* in the catalog database instead of one file each.
+
+        For a table of records (a row per publish): written a row at a time
+        and read by key, it would otherwise grow by a tiny file per write and
+        slow down with every one. Data tables stay in files (``keep_rows_in_files``).
+        """
+        name = f"main.{table}"
+        set_already = self.con.execute(
+            f"SELECT 1 FROM ducklake_options({quote_literal(ALIAS)}) WHERE option_name = "
+            "'data_inlining_row_limit' AND scope = 'TABLE' AND scope_entry = ? AND value = ?",
+            [name, str(int(rows))],
+        ).fetchone()
+        if set_already is None:
+            self.con.execute(
+                f"CALL ducklake_set_option({quote_literal(ALIAS)}, 'data_inlining_row_limit', "
+                f"{int(rows)}, table_name => {quote_literal(table)})"
+            )
 
     def fold_deletes(self, table: str) -> None:
         """Rewrite every data file of *table* that has deletions, so its files hold exactly its rows."""

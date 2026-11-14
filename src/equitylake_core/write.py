@@ -114,6 +114,36 @@ def rows_digest(
     return RowsDigest(int(count), f"{count}:{xor or 0}:{total or 0}", digest_algorithm())
 
 
+def files_digest(catalog: Catalog, table: str, files: Sequence[str | Path]) -> RowsDigest:
+    """The digest of the rows the data files *files* give *table*.
+
+    The same value :func:`rows_digest` computes for those rows through the
+    catalog: each file is read with the table's columns and types, a column a
+    file lacks being NULL. For a writer that registered the files itself and
+    knows which hold the rows it published, this reads only them; asking the
+    catalog would have it plan a scan over every file of the table.
+    """
+    if not files:
+        return RowsDigest(0, "0:0:0", digest_algorithm())
+    name = quote_identifier(table)
+    types = [(row[0], row[1]) for row in catalog.execute(f"DESCRIBE {name}").fetchall()]
+    listed = ", ".join(quote_literal(Path(path).as_posix()) for path in files)
+    scan = f"read_parquet([{listed}], union_by_name => true, hive_partitioning => false)"
+    present = {row[0] for row in catalog.execute(f"DESCRIBE SELECT * FROM {scan}").fetchall()}
+    row = (
+        "hash("
+        + ", ".join(
+            f"CAST({quote_identifier(column) if column in present else 'NULL'} AS {kind})"
+            for column, kind in sorted(types)
+        )
+        + ")"
+    )
+    count, xor, total = catalog.execute(
+        f"SELECT count(*), bit_xor({row})::VARCHAR, sum({row}::HUGEINT)::VARCHAR FROM {scan}"
+    ).fetchone()
+    return RowsDigest(int(count), f"{count}:{xor or 0}:{total or 0}", digest_algorithm())
+
+
 @dataclass
 class Write:
     catalog: Catalog

@@ -24,7 +24,7 @@ from cnequity.storage.catalog_bridge import (
     keys_unique,
     lake_root,
     revision_snapshot,
-    synced_revision,
+    synced_revision_id,
 )
 from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog, quote_identifier
 
@@ -103,8 +103,7 @@ def read_published(
                 if not catalog_is_current(config, catalog, dataset):
                     return None
             else:
-                synced = synced_revision(catalog, dataset)
-                if synced is None or synced[0] != revision_id:
+                if synced_revision_id(catalog, dataset) != revision_id:
                     return None
             table = quote_identifier(dataset)
             types = {row[0]: row[1] for row in catalog.execute(f"DESCRIBE {table}").fetchall()}
@@ -149,8 +148,7 @@ def generation_identity(root: Path) -> tuple[str, str] | None:
 
 def _resolve_revision(catalog, dataset: str, revision_id: str) -> tuple[int | None, bool] | None:
     """``(snapshot, unique_keys)`` holding *dataset* at *revision_id*; snapshot None = latest."""
-    synced = synced_revision(catalog, dataset)
-    if synced is not None and synced[0] == revision_id:
+    if synced_revision_id(catalog, dataset) == revision_id:
         return None, bool(keys_unique(catalog, dataset))
     return revision_snapshot(catalog, dataset, revision_id)
 

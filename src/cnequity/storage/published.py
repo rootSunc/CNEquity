@@ -128,12 +128,12 @@ def _from_catalog(config, dataset: str, generation: Path) -> Published | None:
     from cnequity.query.catalog_read import generation_identity, published_stats
     from cnequity.storage.catalog_bridge import lake_root
     from cnequity.storage.lake_write import _LAID_OUT
-    from equitylake_core.catalog import DATA_DIR
+    from equitylake_core.catalog import lake_data_root
 
     identity = generation_identity(generation)
     if identity is None:
         return None
-    table = lake_root(config).resolve() / DATA_DIR / "main" / dataset
+    table = lake_data_root(lake_root(config)) / "main" / dataset
     column = DATASETS[dataset].partition_col
     found = published_stats(config, *identity, column=None)
     if found is None:
