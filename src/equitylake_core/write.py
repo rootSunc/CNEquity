@@ -24,11 +24,15 @@ registered as they are, and the files they replace are dropped whole. Nothing
 is rewritten, so a row is written once, by the writer. The catalog checks
 only that a file's columns fit the table (:meth:`Catalog.file_fits`); that a
 file's rows belong where the writer says is the writer's to check.
+
+A table a write names with :meth:`Write.create` exists, with the declared
+column types, before anything else in the write runs. Without it a table is
+made from the first files written to it and takes their types.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -147,10 +151,15 @@ def files_digest(catalog: Catalog, table: str, files: Sequence[str | Path]) -> R
 @dataclass
 class Write:
     catalog: Catalog
+    creations: list[tuple[str, tuple[tuple[str, str], ...]]] = field(default_factory=list)
     replacements: list[Replacement] = field(default_factory=list)
     swaps: list[Swap] = field(default_factory=list)
     checks: list[tuple[str, Check]] = field(default_factory=list)
     records: list[tuple[str, Record]] = field(default_factory=list)
+
+    def create(self, table: str, columns: Mapping[str, str]) -> None:
+        """Make *table* with *columns* (name to SQL type) first in this write, unless it exists."""
+        self.creations.append((table, tuple(columns.items())))
 
     def replace(
         self,
@@ -200,6 +209,10 @@ class Write:
             raise ValueError("nothing to write")
         rows: dict[str, int] = {}
         with self.catalog.transaction(message=message):
+            for table, columns in self.creations:
+                if not self.catalog.has_table(table):
+                    listed = ", ".join(f"{quote_identifier(name)} {kind}" for name, kind in columns)
+                    self.catalog.execute(f"CREATE TABLE {quote_identifier(table)} ({listed})")
             for item in self.replacements:
                 rows[item.table] = rows.get(item.table, 0) + _apply(self.catalog, item)
             for swap in self.swaps:

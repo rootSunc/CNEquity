@@ -1,0 +1,24 @@
+# EquityLake Core on its own, for a market package that is not CNEquity.
+#
+# The core is incubated inside the CNEquity repository and ships inside the
+# `cnequity` wheel. A second market installs just this directory instead:
+#
+#     [tool.uv.sources]
+#     equitylake-core = { path = "../CNEquity/src/equitylake_core", editable = true }
+#
+# The version is not released anywhere; it moves when the core gets its own repository.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "equitylake-core"
+version = "0.0.1"
+description = "The market-neutral lake engine: a snapshot catalog over immutable Parquet partition files"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = ["duckdb>=2.0", "polars>=1.32", "pyarrow>=15.0"]
+
+[tool.setuptools]
+packages = ["equitylake_core"]
+package-dir = { equitylake_core = "." }

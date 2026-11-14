@@ -330,3 +330,25 @@ def test_a_file_outside_the_lake_is_not_registered(lake, tmp_path):
     with pytest.raises(Exception, match="not under this lake's data path"):
         write.commit()
     assert not lake.has_table("bars")
+
+
+def test_a_created_table_has_the_declared_types_before_its_first_file(lake, tmp_path):
+    write = Write(lake)
+    write.create("bars", {"symbol": "VARCHAR", "trade_date": "DATE", "close": "DOUBLE"})
+    target = _file(
+        lake.table_dir("bars") / "part.parquet", [("'A'", "DATE '2024-01-02'", "1::FLOAT")]
+    )
+    write.swap("bars", add=[target])
+    assert write.commit().rows == {"bars": 1}
+    # The file's single float is read as the table's double, not the other way round.
+    assert lake.column_types("bars") == {
+        "symbol": "VARCHAR",
+        "trade_date": "DATE",
+        "close": "DOUBLE",
+    }
+    # Naming a table that exists changes nothing about it.
+    again = Write(lake)
+    again.create("bars", {"symbol": "BIGINT"})
+    again.record("_notes", {"note": "x"})
+    again.commit()
+    assert lake.column_types("bars")["symbol"] == "VARCHAR"
