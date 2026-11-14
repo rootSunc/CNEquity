@@ -21,7 +21,6 @@ key either has another source's row already, or has no status.
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
 
 import polars as pl
 
@@ -33,7 +32,7 @@ from cnequity.domain.trading_status import (
 )
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.publish import publish_repair
+from cnequity.storage.repairs.publish import publish_repair, repair_root, scan_published
 from cnequity.storage.revisions import RevisionStore
 
 DATASET = "trading_status"
@@ -43,11 +42,10 @@ _KEY = ["symbol", "trade_date", "source"]
 def instrument_spans(store: RevisionStore, config: Config) -> pl.DataFrame:
     """``symbol / list_date / delist_date`` from the committed instruments."""
     schema = {"symbol": pl.Utf8, "list_date": pl.Date, "delist_date": pl.Date}
-    root = store.current_root("instruments") or config.curated_root / "instruments"
-    files = sorted(Path(root).rglob("*.parquet")) if Path(root).is_dir() else []
-    if not files:
+    scan = scan_published(config, "instruments")
+    if scan is None:
         return pl.DataFrame(schema=schema)
-    frame = pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
+    frame = scan.collect()
     for column in ("list_date", "delist_date"):
         if column not in frame.columns:
             frame = frame.with_columns(pl.lit(None, dtype=pl.Date).alias(column))
@@ -65,14 +63,21 @@ def instrument_spans(store: RevisionStore, config: Config) -> pl.DataFrame:
 def first_traded(store: RevisionStore, config: Config, symbols: list[str]) -> pl.DataFrame:
     """``symbol / first_traded`` from the committed ``daily_bars``."""
     schema = {"symbol": pl.Utf8, "first_traded": pl.Date}
-    root = store.current_root("daily_bars") or config.curated_root / "daily_bars"
-    if not symbols or not Path(root).is_dir():
+    scan = (
+        scan_published(
+            config,
+            "daily_bars",
+            partition_col="trade_date",
+            symbols=sorted(symbols),
+            traded_only=True,
+        )
+        if symbols
+        else None
+    )
+    if scan is None:
         return pl.DataFrame(schema=schema)
     return (
-        scan_parquet_root(
-            Path(root), partition_col="trade_date", symbols=sorted(symbols), traded_only=True
-        )
-        .group_by("symbol")
+        scan.group_by("symbol")
         .agg(pl.col("trade_date").min().alias("first_traded"))
         .collect()
         .cast(schema)
@@ -113,7 +118,7 @@ def repair_status_listing_window(config: Config, *, apply: bool = False) -> dict
 
 def _repair_locked(config: Config, *, apply: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    base = store.repair_base(DATASET, register=apply)
+    base = repair_root(config, store, DATASET, register=apply)
     report: dict = {"applied": False, "rows": 0}
     if base is None:
         report["note"] = "no trading_status data; nothing to repair"
@@ -156,8 +161,6 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
             config,
             store,
             DATASET,
-            "trade_date",
-            base,
             keep=rebuild,
             reason="status_listing_window",
             metadata={"rows": plan.height, "by_reason": report["by_reason"]},

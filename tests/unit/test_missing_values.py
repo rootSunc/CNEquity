@@ -10,6 +10,7 @@ from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import DATASET_SCHEMAS
 from cnequity.domain.value_rules import apply_value_rules
 from cnequity.query import load
+from cnequity.storage.published import published
 from cnequity.storage.repairs.missing_values import repair_missing_values
 from cnequity.storage.revisions import RevisionStore
 
@@ -23,8 +24,13 @@ def test_zero_valuations_are_missing_but_negative_ratios_are_valid():
         assert corrected[column].dtype == pl.Float64
 
 
+def _entries(cfg: Config) -> set:
+    """Everything in the lake but the catalog's journal, which a read opens."""
+    return {p for p in cfg.data_root.rglob("*") if not p.name.startswith("catalog.sqlite-")}
+
+
 @pytest.mark.parametrize("dataset", ["valuation_metrics", "index_constituents"])
-def test_missing_value_repair_is_gated_retained_and_idempotent(tmp_path, dataset):
+def test_missing_value_repair_is_gated_retained_and_idempotent(tmp_path, dataset, settle):
     cfg = Config(data_root=tmp_path / "lake")
     stamp = datetime(2026, 7, 7, tzinfo=timezone.utc)
     rows = []
@@ -44,14 +50,15 @@ def test_missing_value_repair_is_gated_retained_and_idempotent(tmp_path, dataset
     store.commit(
         dataset, run_id="seed", changed_files=[path], schema_version=1, contract_fingerprint="test"
     )
-    before = set(cfg.data_root.rglob("*"))
+    settle(cfg)
+    before = _entries(cfg)
     preview = repair_missing_values(cfg, dataset)
     assert preview["rows"] == (3 if dataset == "valuation_metrics" else 2)
-    assert set(cfg.data_root.rglob("*")) == before
+    assert _entries(cfg) == before
     result = repair_missing_values(cfg, dataset, apply=True)
     assert result["applied"] is True
     assert result["publication_audit"]
-    raw = pl.read_parquet(list(store.current_root(dataset).rglob("*.parquet")))
+    raw = published(cfg, dataset).scan().collect()
     if dataset == "valuation_metrics":
         assert raw["total_mv"].null_count() == 3
         assert raw["pb"].to_list() == [-2.0] * 3

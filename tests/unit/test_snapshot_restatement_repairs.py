@@ -49,7 +49,7 @@ def _status(symbol, day, source, status="normal", risk=False, fetched=OBSERVED):
 
 
 @pytest.fixture
-def status_lake(tmp_path) -> Config:
+def status_lake(tmp_path, settle) -> Config:
     cfg = Config(data_root=tmp_path / "data")
     _calendar(cfg)
     d1, d2, d3 = SESSIONS
@@ -74,7 +74,7 @@ def status_lake(tmp_path) -> Config:
         part / "part-0.parquet"
     )
     _commit(cfg, "trading_status", cfg.curated_root)
-    return cfg
+    return settle(cfg)
 
 
 def test_status_plan_changes_nothing(status_lake):
@@ -107,7 +107,8 @@ def test_status_outage_replays_the_first_hand_carry(status_lake):
     assert "000009.SZ" in old.get_column("symbol").to_list()
 
 
-def test_a_carried_row_yields_to_a_session_record(status_lake):
+def test_a_carried_row_yields_to_a_session_record(status_lake, settle):
+    settle.on_working_tree()
     repair_status_outages(status_lake, start=SESSIONS[1], end=SESSIONS[2], apply=True)
     part = status_lake.curated_root / "trading_status" / "trade_date=2026-09"
     later = datetime(2026, 10, 10, tzinfo=timezone.utc)
@@ -148,7 +149,7 @@ def _valuation(symbol, day, source, fetched, pe=None):
 
 
 @pytest.fixture
-def valuation_lake(tmp_path) -> Config:
+def valuation_lake(tmp_path, settle) -> Config:
     cfg = Config(data_root=tmp_path / "data")
     stamped, live = date(2026, 7, 16), date(2026, 7, 24)
     partitions = {
@@ -166,7 +167,7 @@ def valuation_lake(tmp_path) -> Config:
             part / "part-0.parquet"
         )
     _commit(cfg, "valuation_metrics", cfg.curated_root)
-    return cfg
+    return settle(cfg)
 
 
 def _datacenter(start, end):

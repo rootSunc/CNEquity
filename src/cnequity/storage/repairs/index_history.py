@@ -28,16 +28,14 @@ from cnequity.adapters.exchange.index_notices import (
     parse_star50_no_change_date,
     parse_star50_opening,
 )
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.datasets import granularity_for_dataset
 from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.partitions import partition_value
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.publication import check_repair_publication
-from cnequity.storage.parquet import CuratedWriter
 from cnequity.storage.raw_archive import RawPayloadArchive
+from cnequity.storage.repairs.publish import PartitionRewrite
 from cnequity.storage.revisions import RevisionStore
 
 pd = lazy_module("pandas")
@@ -313,76 +311,51 @@ def repair_index_history(config, *, index_symbol="399001.SZ", apply=False, refre
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         if apply:
             store.ensure_current(DATASET)
-        base = store.current_root(DATASET)
-        files = list(base.rglob("*.parquet")) if base is not None and base.exists() else []
-        before = (
-            pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
-            if files
-            else rows.clear()
-        )
-        try:
-            merged, removed, weighted = _replacement(
-                before, rows, symbol=catalog["index_symbol"], start=start, end=end
+        with PartitionRewrite(config, store, DATASET, run_id=run_id, apply=apply) as rewrite:
+            # Each partition as it is stored. An old generation file may hold
+            # rows of another month, so the stored content is compared, not
+            # the logical date slice: skipping its write would leave removed
+            # members behind and duplicate retained rows.
+            physical = {}
+            for label in rewrite.labels():
+                if not label.startswith("as_of_date="):
+                    raise ValueError("index history requires the registered partition layout")
+                stored = rewrite.rows(label)
+                if stored is not None:
+                    physical[label.removeprefix("as_of_date=")] = stored
+            before = (
+                pl.concat(list(physical.values()), how="diagonal_relaxed")
+                if physical
+                else rows.clear()
             )
-        except ValueError as exc:
-            report["failures"].append({"error": str(exc)})
-            return report
-        report.update(replaced_range_rows=removed, retained_weighted_rows=weighted)
-        fields = ["index_symbol", "symbol", "as_of_date", "weight", "source", "data_version"]
-        if before.select(fields).sort(fields).equals(merged.select(fields).sort(fields)):
-            report["note"] = "reviewed history already present"
-            return report
-        if not apply:
-            return report
-        store.materialize_current(DATASET)
-        writer = CuratedWriter(config.curated_root)
-        granularity = granularity_for_dataset(DATASET)
-        staged = merged.with_columns(
-            pl.col("as_of_date")
-            .map_elements(lambda day: partition_value(day, granularity), return_dtype=pl.String)
-            .alias("_partition")
-        )
-        physical = {}
-        for path in files:
-            directory = path.relative_to(base).parts[0]
-            if not directory.startswith("as_of_date="):
-                raise ValueError("index history requires the registered partition layout")
-            value = directory.removeprefix("as_of_date=")
-            physical.setdefault(value, []).append(pl.read_parquet(path))
-        # Compare physical contents, not just their logical date slice. An old
-        # file may contain rows belonging to another month; skipping its write
-        # would leave removed members behind and duplicate retained rows.
-        affected = sorted(set(physical) | set(staged["_partition"]))
-        changed = []
-        for value in affected:
-            partition = staged.filter(pl.col("_partition") == value).drop("_partition")
-            old = (
-                pl.concat(physical[value], how="diagonal_relaxed")
-                if value in physical
-                else before.clear()
-            )
-            if old.select(fields).sort(fields).equals(partition.select(fields).sort(fields)):
-                continue
-            changed.append(
-                writer.write_partition(
-                    DATASET, "as_of_date", value, partition, "part-merged.parquet"
+            try:
+                merged, removed, weighted = _replacement(
+                    before, rows, symbol=catalog["index_symbol"], start=start, end=end
                 )
+            except ValueError as exc:
+                report["failures"].append({"error": str(exc)})
+                return report
+            report.update(replaced_range_rows=removed, retained_weighted_rows=weighted)
+            fields = ["index_symbol", "symbol", "as_of_date", "weight", "source", "data_version"]
+            if before.select(fields).sort(fields).equals(merged.select(fields).sort(fields)):
+                report["note"] = "reviewed history already present"
+                return report
+            if not apply:
+                return report
+            granularity = granularity_for_dataset(DATASET)
+            staged = merged.with_columns(
+                pl.col("as_of_date")
+                .map_elements(lambda day: partition_value(day, granularity), return_dtype=pl.String)
+                .alias("_partition")
             )
-        publication = check_repair_publication(config, DATASET, run_id, changed)
-        contract = dataset_contract(DATASET)
-        revision = store.commit(
-            DATASET,
-            run_id=run_id,
-            changed_files=changed,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
-            metadata={
-                "reason": "reviewed_official_index_history",
-                **report,
-                "publication_audit": publication["report_path"],
-            },
-        )
-        if revision is None:
+            for value in sorted(set(physical) | set(staged["_partition"])):
+                partition = staged.filter(pl.col("_partition") == value).drop("_partition")
+                old = physical.get(value, before.clear())
+                if old.select(fields).sort(fields).equals(partition.select(fields).sort(fields)):
+                    continue
+                rewrite.replace(f"as_of_date={value}", partition)
+            published = rewrite.publish({"reason": "reviewed_official_index_history", **report})
+        if published is None:
             raise RuntimeError("index history repair produced no revision")
-        report.update(applied=True, revision=revision.revision)
+        report.update(applied=True, revision=published["revision"])
         return report

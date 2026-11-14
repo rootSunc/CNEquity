@@ -2,8 +2,6 @@
 
 from contextlib import nullcontext
 from datetime import datetime, timezone
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import polars as pl
@@ -11,14 +9,12 @@ import polars as pl
 from cnequity.adapters.eastmoney.instruments import _fill_list_dates
 from cnequity.adapters.exchange.fund_listings import fetch_exchange_fund_listings
 from cnequity.config import Config
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.market_time import shanghai_today
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.publication import check_repair_publication
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
-from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.read_context import ReadContext
+from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
 
 
@@ -73,36 +69,23 @@ def repair_fund_listing_dates(config: Config, *, apply: bool = False) -> dict:
             pl.lit(datetime.now(timezone.utc)).alias("fetched_at")
         )
         store.ensure_current("instruments")
-        store.materialize_current("instruments")
-        changed = []
-        with TemporaryDirectory(prefix="cne-fund-listings-") as directory:
-            staging = Path(directory)
-            StagingWriter(staging).write_batch("instruments", run_id, "repair-0", changed_rows)
-            compact_dataset(
-                staging,
-                config.curated_root,
-                "instruments",
-                run_id,
-                changed_files=changed,
-                base_root=root,
-            )
-        publication = check_repair_publication(config, "instruments", run_id, changed)
-        contract = dataset_contract("instruments")
-        revision = store.commit(
+        published = publish_staged(
+            config,
+            store,
             "instruments",
+            changed_rows,
             run_id=run_id,
-            changed_files=changed,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
+            base_root=root,
             metadata={
                 "reason": "official_fund_listing_dates",
                 **report,
-                "publication_audit": publication["report_path"],
             },
         )
-        if revision is None:
+        if published is None:
             raise RuntimeError("fund listing repair produced no revision")
         report.update(
-            applied=True, revision=revision.revision, publication_audit=publication["report_path"]
+            applied=True,
+            revision=published["revision"],
+            publication_audit=published["publication_audit"],
         )
         return report

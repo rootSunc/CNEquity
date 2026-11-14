@@ -119,8 +119,11 @@ def _repair_locked(config: Config, dataset: str, *, apply: bool) -> dict:
     assert partition_col is not None
     granularity = granularity_for_dataset(dataset)
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    base = store.repair_base(dataset, register=apply)
     report: dict = {"dataset": dataset, "applied": False, "misplaced_files": []}
+    if store.commits_to_catalog(dataset):
+        report["note"] = f"the lake catalog lays out {dataset}'s files; nothing to move"
+        return report
+    base = store.repair_base(dataset, register=apply)
     if base is None:
         report["note"] = f"no {dataset} data; nothing to repair"
         return report

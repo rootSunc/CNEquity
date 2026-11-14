@@ -13,7 +13,6 @@ from cnequity.adapters.exchange.index_snapshots import (
     parse_index_snapshot,
     snapshot_requests,
 )
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.datasets import granularity_for_dataset
 from cnequity.domain.http_policy import record_http_response
 from cnequity.domain.market_time import last_closed_session, shanghai_now
@@ -21,10 +20,9 @@ from cnequity.domain.partitions import partition_value
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.publication import check_repair_publication
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.parquet import CuratedWriter
 from cnequity.storage.raw_archive import RawPayloadArchive
+from cnequity.storage.repairs.publish import PartitionRewrite
 from cnequity.storage.revisions import RevisionStore
 
 
@@ -116,90 +114,78 @@ def repair_index_snapshots(config, *, indices=None, apply=False, refresh_sources
     with lake_mutation_lock(config.meta_root) if apply else nullcontext():
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         store.ensure_current(dataset)
-        base = store.current_root(dataset)
-        store.materialize_current(dataset)
-        changed = []
-        writer = CuratedWriter(config.curated_root)
-        partitioned = rows.with_columns(
-            pl.col("as_of_date")
-            .map_elements(
-                lambda day: partition_value(day, granularity_for_dataset(dataset)),
-                return_dtype=pl.String,
-            )
-            .alias("_partition")
-        )
-        for value in sorted(partitioned["_partition"].unique()):
-            additions = partitioned.filter(pl.col("_partition") == value).drop("_partition")
-            selected_pairs = additions.select("index_symbol", "as_of_date").unique()
-            directory = base / f"as_of_date={value}" if base is not None else None
-            files = (
-                list(directory.rglob("*.parquet"))
-                if directory is not None and directory.exists()
-                else []
-            )
-            before = (
-                pl.concat([pl.read_parquet(p) for p in files], how="diagonal_relaxed")
-                if files
-                else rows.clear()
-            )
-            retained = []
-            for book in additions.partition_by(["index_symbol", "as_of_date"], maintain_order=True):
-                index, day = book.select("index_symbol", "as_of_date").row(0)
-                existing = before.filter(
-                    (pl.col("index_symbol") == index) & (pl.col("as_of_date") == day)
+        with PartitionRewrite(config, store, dataset, run_id=run_id, apply=True) as rewrite:
+            partitioned = rows.with_columns(
+                pl.col("as_of_date")
+                .map_elements(
+                    lambda day: partition_value(day, granularity_for_dataset(dataset)),
+                    return_dtype=pl.String,
                 )
-                if (
-                    book["weight"].null_count() == book.height
-                    and not existing.is_empty()
-                    and existing["weight"].null_count() == 0
-                    and existing["source"].is_in(["exchange", "cni_weights"]).all()
-                ):
-                    same_members = set(book["symbol"]) == set(existing["symbol"])
-                    report.setdefault("snapshots_retained_weights", []).append(
-                        {"index_symbol": index, "as_of_date": str(day)}
-                    )
-                    if not same_members:
-                        failures.append(
-                            {
-                                "index_symbol": index,
-                                "error": "membership-only cohort conflicts with retained dated weight book",
-                            }
-                        )
-                    continue
-                retained.append(book)
-            if not retained:
-                continue
-            additions = pl.concat(retained)
-            selected_pairs = additions.select("index_symbol", "as_of_date").unique()
-            # Replace the whole official cohort. Per-member upserts retain
-            # removed members from an inaccurate earlier snapshot.
-            old_book = before.join(selected_pairs, on=["index_symbol", "as_of_date"], how="semi")
-            fields = ["index_symbol", "symbol", "as_of_date", "weight", "source", "data_version"]
-            if old_book.select(fields).sort(fields).equals(additions.select(fields).sort(fields)):
-                continue
-            kept = before.join(selected_pairs, on=["index_symbol", "as_of_date"], how="anti")
-            merged = pl.concat([kept, additions], how="diagonal_relaxed")
-            changed.append(
-                writer.write_partition(dataset, "as_of_date", value, merged, "part-merged.parquet")
+                .alias("_partition")
             )
-        if not changed:
-            report["note"] = "official snapshots already present"
-            return report
-        publication = check_repair_publication(config, dataset, run_id, changed)
-        contract = dataset_contract(dataset)
-        revision = store.commit(
-            dataset,
-            run_id=run_id,
-            changed_files=changed,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
-            metadata={
-                "reason": "official_dated_index_snapshots",
-                **report,
-                "publication_audit": publication["report_path"],
-            },
-        )
-        if revision is None:
+            for value in sorted(partitioned["_partition"].unique()):
+                additions = partitioned.filter(pl.col("_partition") == value).drop("_partition")
+                selected_pairs = additions.select("index_symbol", "as_of_date").unique()
+                stored = rewrite.rows(f"as_of_date={value}")
+                before = stored if stored is not None else rows.clear()
+                retained = []
+                for book in additions.partition_by(
+                    ["index_symbol", "as_of_date"], maintain_order=True
+                ):
+                    index, day = book.select("index_symbol", "as_of_date").row(0)
+                    existing = before.filter(
+                        (pl.col("index_symbol") == index) & (pl.col("as_of_date") == day)
+                    )
+                    if (
+                        book["weight"].null_count() == book.height
+                        and not existing.is_empty()
+                        and existing["weight"].null_count() == 0
+                        and existing["source"].is_in(["exchange", "cni_weights"]).all()
+                    ):
+                        same_members = set(book["symbol"]) == set(existing["symbol"])
+                        report.setdefault("snapshots_retained_weights", []).append(
+                            {"index_symbol": index, "as_of_date": str(day)}
+                        )
+                        if not same_members:
+                            failures.append(
+                                {
+                                    "index_symbol": index,
+                                    "error": "membership-only cohort conflicts with retained dated weight book",
+                                }
+                            )
+                        continue
+                    retained.append(book)
+                if not retained:
+                    continue
+                additions = pl.concat(retained)
+                selected_pairs = additions.select("index_symbol", "as_of_date").unique()
+                # Replace the whole official cohort. Per-member upserts retain
+                # removed members from an inaccurate earlier snapshot.
+                old_book = before.join(
+                    selected_pairs, on=["index_symbol", "as_of_date"], how="semi"
+                )
+                fields = [
+                    "index_symbol",
+                    "symbol",
+                    "as_of_date",
+                    "weight",
+                    "source",
+                    "data_version",
+                ]
+                if (
+                    old_book.select(fields)
+                    .sort(fields)
+                    .equals(additions.select(fields).sort(fields))
+                ):
+                    continue
+                kept = before.join(selected_pairs, on=["index_symbol", "as_of_date"], how="anti")
+                merged = pl.concat([kept, additions], how="diagonal_relaxed")
+                rewrite.replace(f"as_of_date={value}", merged)
+            if not rewrite.rewritten:
+                report["note"] = "official snapshots already present"
+                return report
+            published = rewrite.publish({"reason": "official_dated_index_snapshots", **report})
+        if published is None:
             raise RuntimeError("official index repair produced no revision")
-        report.update(applied=True, revision=revision.revision)
+        report.update(applied=True, revision=published["revision"])
         return report

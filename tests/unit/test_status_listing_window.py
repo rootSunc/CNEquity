@@ -43,7 +43,7 @@ def _commit(cfg: Config, dataset: str) -> None:
 
 
 @pytest.fixture
-def lake(tmp_path) -> Config:
+def lake(tmp_path, settle) -> Config:
     cfg = Config(data_root=tmp_path / "data")
     instruments = cfg.curated_root / "instruments"
     instruments.mkdir(parents=True)
@@ -90,7 +90,7 @@ def lake(tmp_path) -> Config:
         part / "part-0.parquet"
     )
     _commit(cfg, "trading_status")
-    return cfg
+    return settle(cfg)
 
 
 def test_plan_names_rows_outside_the_listed_life(lake):
@@ -123,9 +123,10 @@ def test_apply_keeps_session_records_and_real_delistings(lake):
     assert repair_status_listing_window(lake)["rows"] == 0
 
 
-def test_a_successful_old_staging_batch_cannot_resurrect_deleted_statuses(lake):
+def test_a_successful_old_staging_batch_cannot_resurrect_deleted_statuses(lake, settle):
     from cnequity.storage.parquet import StagingWriter, compact_dataset
 
+    settle.on_working_tree()
     repair_status_listing_window(lake, apply=True)
     rows = pl.DataFrame(
         [
@@ -157,10 +158,11 @@ def test_a_successful_old_staging_batch_cannot_resurrect_deleted_statuses(lake):
 
 @pytest.mark.parametrize("traded_after_retirement", [False, True])
 def test_staged_normal_status_after_retirement_requires_a_contradicting_quote(
-    lake, traded_after_retirement
+    lake, traded_after_retirement, settle
 ):
     from cnequity.storage.parquet import _guard_staged_status
 
+    settle.on_working_tree()
     if traded_after_retirement:
         part = lake.curated_root / "daily_bars" / f"trade_date={D3}"
         part.mkdir(parents=True)

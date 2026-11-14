@@ -35,7 +35,6 @@ def rewritable_datasets() -> list[str]:
 def repair_missing_values(config: Config, dataset: str, *, apply: bool = False) -> dict:
     if dataset not in rewritable_datasets():
         raise ValueError(f"unsupported missing-value repair: {dataset}")
-    partition_col = DATASETS[dataset].partition_col
     with lake_mutation_lock(config.meta_root) if apply else nullcontext():
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
@@ -63,8 +62,6 @@ def repair_missing_values(config: Config, dataset: str, *, apply: bool = False) 
                 config,
                 store,
                 dataset,
-                partition_col,
-                root,
                 keep=lambda part: apply_value_rules(part, dataset),
                 reason="missing_value_placeholders",
                 metadata={"fields": counts},

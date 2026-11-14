@@ -236,7 +236,7 @@ def test_publish_failure_preserves_source_and_generation(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("publication failed")
 
-    monkeypatch.setattr("cnequity.storage.repairs.adj_factors.check_repair_publication", fail)
+    monkeypatch.setattr("cnequity.quality.publication.check_repair_publication", fail)
     with pytest.raises(RuntimeError, match="publication failed"):
         repair_adj_factors(cfg, symbols=["600001.SH"], apply=True)
     assert store.current_root("adj_factors") == old

@@ -2,8 +2,6 @@
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import httpx
@@ -22,17 +20,15 @@ from cnequity.adapters.cninfo.financial_originals import (
     report_query,
 )
 from cnequity.adapters.cninfo.payment_notices import _get, _stock_directory
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.market_time import SHANGHAI_TZ
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.domain.symbols import is_all_a_symbol
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.publication import check_repair_publication
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.read_context import ReadContext
+from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
 
 QUERY_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
@@ -337,40 +333,21 @@ def repair_financial_originals(
         if incoming.is_empty():
             report["note"] = "original facts already present; observation times preserved"
             return report
-        store.materialize_current(DATASET)
-        changed = []
-        with TemporaryDirectory(prefix="cne-financial-originals-") as directory:
-            staging = Path(directory)
-            StagingWriter(staging).write_batch(DATASET, run_id, "original-0", incoming)
-            compact_dataset(
-                staging,
-                config.curated_root,
-                DATASET,
-                run_id,
-                partition_col="report_period",
-                changed_files=changed,
-                base_root=context.roots[DATASET],
-            )
-        if not changed:
+        published = publish_staged(
+            config,
+            store,
+            DATASET,
+            incoming,
+            run_id=run_id,
+            base_root=context.roots[DATASET],
+            metadata={"reason": "issuer_original_reports", **report},
+            batch="original-0",
+            partition_col="report_period",
+        )
+        if published is None:
             report["note"] = "original report figures already present"
             return report
-        publication = check_repair_publication(config, DATASET, run_id, changed)
-        contract = dataset_contract(DATASET)
-        revision = store.commit(
-            DATASET,
-            run_id=run_id,
-            changed_files=changed,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
-            metadata={
-                "reason": "issuer_original_reports",
-                **report,
-                "publication_audit": publication["report_path"],
-            },
-        )
-        if revision is None:
-            raise RuntimeError("original report repair produced no revision")
-        report.update(applied=True, revision=revision.revision)
+        report.update(applied=True, revision=published["revision"])
     return report
 
 

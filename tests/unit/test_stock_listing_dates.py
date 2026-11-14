@@ -64,7 +64,14 @@ def test_daily_calendar_reuses_verified_archive_and_refreshes_wrong_identity(tmp
         assert len(requests) == 2
 
 
-def test_offline_repair_is_retained_and_idempotent(tmp_path):
+def _rows(root):
+    """The rows of a published root, whether a directory or a catalog revision."""
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    return scan_parquet_root(root, committed=False).collect()
+
+
+def test_offline_repair_is_retained_and_idempotent(tmp_path, settle):
     cfg = Config(data_root=tmp_path / "lake")
     now = datetime(2026, 10, 12, tzinfo=timezone.utc)
     rows = [
@@ -144,13 +151,14 @@ def test_offline_repair_is_retained_and_idempotent(tmp_path):
     )
     cache = cfg.meta_root / "source_cache" / "stock_listing_dates" / "2026-09-23.json"
     write_json_atomic(cache, record.to_dict())
+    settle(cfg)
     assert repair_stock_listing_dates(cfg)["rows"] == 1
     result = repair_stock_listing_dates(cfg, apply=True)
     assert result["applied"] and result["revision"] == 2
-    current = pl.read_parquet(list(store.current_root("instruments").rglob("*.parquet")))
+    current = _rows(store.current_root("instruments"))
     assert current.filter(pl.col("symbol") == "920025.BJ")["list_date"][0] == date(2026, 9, 23)
     assert current.filter(pl.col("symbol") == "301660.SZ")["list_date"][0] is None
-    assert pl.read_parquet(list(old.rglob("*.parquet")))["list_date"].null_count() == 2
+    assert _rows(old)["list_date"].null_count() == 2
     assert repair_stock_listing_dates(cfg)["rows"] == 0
     cache.write_text("{}")
     # No unexplained row can be inferred from the bar when the proof is missing.
@@ -213,10 +221,10 @@ def test_explicit_event_can_fill_a_stock_without_any_bars_and_is_retained(tmp_pa
     assert repair_stock_listing_dates(cfg, event_dates=[day])["rows"] == 1
     result = repair_stock_listing_dates(cfg, event_dates=[day], apply=True)
     assert result["applied"] and result["rows"] == 1
-    current = pl.read_parquet(list(store.current_root("instruments").rglob("*.parquet")))
+    current = _rows(store.current_root("instruments"))
     assert current.filter(pl.col("symbol") == "920025.BJ")["list_date"][0] == day
     assert current.filter(pl.col("symbol") == "301660.SZ")["list_date"][0] is None
-    assert pl.read_parquet(list(old.rglob("*.parquet")))["list_date"].null_count() == 2
+    assert _rows(old)["list_date"].null_count() == 2
     assert repair_stock_listing_dates(cfg, event_dates=[day])["rows"] == 0
     assert not (cfg.curated_root / "daily_bars").exists()
 
@@ -314,6 +322,6 @@ def test_official_listing_clears_only_an_impossible_earlier_end_date(tmp_path, d
     assert preview["cleared_invalid_delist_dates"] == (expected is None)
     result = repair_stock_listing_dates(cfg, event_dates=[day], apply=True)
     assert result["cleared_invalid_delist_dates"] == (expected is None)
-    current = pl.read_parquet(list(store.current_root("instruments").rglob("*.parquet")))
+    current = _rows(store.current_root("instruments"))
     assert current.filter(pl.col("symbol") == "920025.BJ")["delist_date"][0] == expected
-    assert pl.read_parquet(list(old.rglob("*.parquet")))["delist_date"][0] == delisted
+    assert _rows(old)["delist_date"][0] == delisted

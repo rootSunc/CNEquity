@@ -19,7 +19,6 @@ suspension — still wins over it. A symbol with no such reading gets no row.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from pathlib import Path
 
 import polars as pl
 
@@ -34,7 +33,7 @@ from cnequity.domain.trading_status import (
 )
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.publish import publish_repair
+from cnequity.storage.repairs.publish import publish_repair, repair_root, scan_published
 from cnequity.storage.repairs.status_listing_window import listing_spans
 from cnequity.storage.revisions import RevisionStore
 
@@ -58,13 +57,10 @@ def repair_status_outages(config: Config, *, start: date, end: date, apply: bool
 
 
 def _delist_dates(store: RevisionStore, config: Config) -> dict[str, date]:
-    root = store.current_root("instruments") or config.curated_root / "instruments"
-    files = sorted(Path(root).rglob("*.parquet")) if Path(root).is_dir() else []
-    if not files:
+    scan = scan_published(config, "instruments")
+    if scan is None or "delist_date" not in scan.collect_schema().names():
         return {}
-    frame = pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
-    if "delist_date" not in frame.columns:
-        return {}
+    frame = scan.select("symbol", "delist_date").collect()
     rows = frame.select("symbol", pl.col("delist_date").cast(pl.Date, strict=False))
     return {symbol: day for symbol, day in rows.drop_nulls().unique("symbol").iter_rows()}
 
@@ -145,7 +141,7 @@ def _repair_locked(config: Config, *, start: date, end: date, apply: bool) -> di
     from cnequity.query.calendar import list_trading_dates
 
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    base = store.repair_base("trading_status", register=apply)
+    base = repair_root(config, store, "trading_status", register=apply)
     report: dict = {"applied": False, "start": start.isoformat(), "end": end.isoformat()}
     if base is None:
         report["note"] = "no trading_status data; nothing to repair"
@@ -199,8 +195,6 @@ def _repair_locked(config: Config, *, start: date, end: date, apply: bool) -> di
             config,
             store,
             "trading_status",
-            "trade_date",
-            base,
             keep=rebuild,
             reason="status_outage_replay",
             metadata={

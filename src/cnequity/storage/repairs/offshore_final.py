@@ -124,8 +124,6 @@ def repair_offshore_final(
                 config,
                 store,
                 DATASET,
-                "trade_date",
-                root,
                 keep=keep,
                 reason="offshore_final",
                 metadata={"replaced": report["replaced"], "added": report["added"]},

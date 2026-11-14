@@ -97,6 +97,54 @@ class Checkout:
         self._checked[label] = _stamps(target)
         return target
 
+    def labels(self) -> list[str]:
+        """Every published partition of the dataset (``[""]`` when it has none)."""
+        from cnequity.domain.datasets import granularity_for_dataset
+        from cnequity.storage.parquet import _partition_values
+
+        column = self.spec.partition_col
+        if not column:
+            return [""]
+        catalog = self._write.catalog
+        if not catalog.has_table(self.dataset):
+            return []
+        values = catalog.relation(
+            f"SELECT DISTINCT {quote_identifier(column)} FROM {quote_identifier(self.dataset)}"
+        ).pl()
+        return sorted(
+            {
+                f"{column}={value}"
+                for value in _partition_values(
+                    values, column, granularity_for_dataset(self.dataset)
+                )
+                .unique()
+                .to_list()
+            }
+        )
+
+    def rows(self, label: str = "") -> pl.DataFrame:
+        """The published rows of partition *label*, read without checking it out."""
+        return self._published_rows(label)
+
+    def rewrite(self, label: str, rows: pl.DataFrame) -> None:
+        """Make *rows* the whole of partition *label*; no rows removes it.
+
+        For a writer that read the partition through :meth:`rows` and decided
+        its new content: the partition is not written to disk first.
+        """
+        if bool(label) != bool(self.spec.partition_col):
+            raise ValueError(f"{self.dataset}: partition label {label!r} does not fit its layout")
+        target = self.root / label if label else self.root
+        if target.exists():
+            shutil.rmtree(target)
+        self._checked.setdefault(label, {})
+        self._removed.discard(label)
+        if rows.is_empty():
+            self._removed.add(label)
+            return
+        target.mkdir(parents=True)
+        emit_partition(rows, self.dataset, affected=[], existing=[], read_dir=None, out_dir=target)
+
     def remove(self, label: str) -> None:
         """Delete the partition *label* from the dataset."""
         target = self.partition(label)
@@ -434,30 +482,10 @@ class _Reader:
 
 def export_tree(data_root: Path, dataset: str, destination: Path) -> None:
     """Write *dataset*'s published catalog rows to *destination* in its partition layout."""
-    from cnequity.domain.datasets import granularity_for_dataset
-    from cnequity.storage.parquet import _partition_values
-
     destination.mkdir(parents=True, exist_ok=True)
     with Catalog(Path(data_root) / "lake", read_only=True) as catalog:
         checkout = Checkout(_Reader(catalog, destination.parent), dataset, root=destination)
-        column = checkout.spec.partition_col
-        if not column:
-            checkout.partition("")
-            return
-        if not catalog.has_table(dataset):
-            return
-        values = catalog.relation(
-            f"SELECT DISTINCT {quote_identifier(column)} FROM {quote_identifier(dataset)}"
-        ).pl()
-        labels = sorted(
-            {
-                f"{column}={value}"
-                for value in _partition_values(values, column, granularity_for_dataset(dataset))
-                .unique()
-                .to_list()
-            }
-        )
-        for label in labels:
+        for label in checkout.labels():
             checkout.partition(label)
 
 

@@ -56,7 +56,8 @@ def merge_candidates(
     """Partitions of the committed generation holding at least *min_files* files."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     base = store.current_root(dataset)
-    if base is None or not base.exists():
+    if base is None or not base.exists() or store.commits_to_catalog(dataset):
+        # The lake catalog lays out and merges the files of what it holds.
         return {}
     groups: dict[str, list[Path]] = {}
     for path in sorted(base.rglob("*.parquet")):

@@ -16,7 +16,7 @@ from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.storage.instrument_catalog import load_bar_universe
-from cnequity.storage.repairs.publish import publish_repair
+from cnequity.storage.repairs.publish import publish_repair, repair_root
 from cnequity.storage.revisions import RevisionStore
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def _purge_valuation_orphan_symbols_locked(config: Config) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
     # Read the published generation: editing the mutable tree in place is
     # invisible to readers and undone by the next compact's materialize.
-    base = store.repair_base(_DATASET, register=False)
+    base = repair_root(config, store, _DATASET, register=False)
     if base is None:
         return nothing
     scan = scan_parquet_root(base, partition_col=_PARTITION_COL)
@@ -58,13 +58,11 @@ def _purge_valuation_orphan_symbols_locked(config: Config) -> dict:
         return nothing
     removed = scan.filter(pl.col("symbol").is_in(orphans)).select(pl.len()).collect().item()
 
-    base = store.repair_base(_DATASET, register=True)
+    base = repair_root(config, store, _DATASET, register=True)
     published = publish_repair(
         config,
         store,
         _DATASET,
-        _PARTITION_COL,
-        base,
         keep=lambda frame: frame.filter(~pl.col("symbol").is_in(orphans)),
         reason="valuation_orphan_purge",
         metadata={"orphan_symbols": len(orphans)},

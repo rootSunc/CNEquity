@@ -489,7 +489,7 @@ def test_quarterly_archive_publication_is_separate_from_annual_batches(tmp_path,
     )
     assert result["applied"] and result["rows"] == 6
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    rows = pl.read_parquet(list(store.current_root(DATASET).rglob("*.parquet")))
+    rows = _rows(store.current_root(DATASET))
     assert rows["report_period"].unique().to_list() == ["2016Q3"]
     assert rows["announce_date"].unique().to_list() == [date(2016, 10, 29)]
     assert rows.filter(pl.col("item_code") == "revenue")["item_value"][0] == 20
@@ -555,7 +555,14 @@ def test_issuer_archive_reads_partial_last_page_and_rejects_false_coverage(tmp_p
         )
 
 
-def test_append_original_with_current_observation_and_archive_replay(tmp_path, monkeypatch):
+def _rows(root):
+    """The rows of a published root, whether a directory or a catalog revision."""
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    return scan_parquet_root(root, committed=False).collect()
+
+
+def test_append_original_with_current_observation_and_archive_replay(tmp_path, monkeypatch, settle):
     cfg = Config(data_root=tmp_path / "lake")
     root = cfg.curated_root / DATASET / "report_period=2016Q4"
     root.mkdir(parents=True)
@@ -618,13 +625,14 @@ def test_append_original_with_current_observation_and_archive_replay(tmp_path, m
         "cnequity.storage.repairs.financial_originals.parse_annual_pdf",
         lambda *a: parse_annual_text(TEXT, "600519.SH", 2016),
     )
+    settle(cfg)
     preview = repair_financial_originals(cfg, symbols=["600519.SH"], start_year=2016, end_year=2016)
     assert preview["rows"] == 6 and not preview["applied"]
     result = repair_financial_originals(
         cfg, symbols=["600519.SH"], start_year=2016, end_year=2016, apply=True
     )
     assert result["applied"] and result["revision"] == 2
-    current = pl.read_parquet(list(store.current_root(DATASET).rglob("*.parquet")))
+    current = _rows(store.current_root(DATASET))
     original = current.filter(pl.col("source") == "cninfo_original")
     assert original["observed_at"].min().year >= 2026
     assert original["announce_date"].unique().to_list() == [date(2017, 4, 15)]
@@ -633,12 +641,12 @@ def test_append_original_with_current_observation_and_archive_replay(tmp_path, m
     ).is_empty()
     best = classify_pit_rows(original, DATASET, as_of=date(2017, 4, 16), pit_mode="best_effort")
     assert best.height == 6 and not best["pit_is_exact"].any()
-    assert pl.read_parquet(list(previous.rglob("*.parquet")))["item_value"].to_list() == [110]
+    assert _rows(previous)["item_value"].to_list() == [110]
     replay = repair_financial_originals(
         cfg, symbols=["600519.SH"], start_year=2016, end_year=2016, reparse=True, apply=True
     )
     assert not replay["applied"] and replay["rows"] == 0 and replay["reports_parsed"] == 1
-    after = pl.read_parquet(list(store.current_root(DATASET).rglob("*.parquet")))
+    after = _rows(store.current_root(DATASET))
     assert after.equals(current)
     # Later reconstructed fetches cannot replace this original-date fact.
     later = old.with_columns(pl.lit(datetime(2027, 1, 1, tzinfo=timezone.utc)).alias("fetched_at"))

@@ -619,12 +619,19 @@ def check_repair_publication(
     changed_files: list[Path],
     *,
     symbols: frozenset[str] = frozenset(),
+    lake_write=None,
 ) -> dict:
-    """Require a clean candidate comparison before an offline repair commits."""
+    """Require a clean candidate comparison before an offline repair commits.
+
+    The candidate is the dataset's working tree, or, when *lake_write* holds
+    a checkout of it, the partitions that write would publish.
+    """
     from cnequity.storage.revisions import RevisionStore
 
-    layer = layer_root(config, dataset)
-    candidate = layer / dataset
+    checked_out = lake_write is not None and lake_write.has(dataset)
+    candidate = (
+        lake_write.checkout(dataset).root if checked_out else layer_root(config, dataset) / dataset
+    )
     report = evaluate_publication(
         replace(config, publication_gate="block"),
         run_id,
@@ -632,10 +639,15 @@ def check_repair_publication(
         {dataset: candidate},
         {dataset: changed_files},
         repair_symbols=symbols,
+        lake_write=lake_write if checked_out else None,
     )
     if report["blocked"]:
-        store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-        quarantine = store.quarantine_candidate(dataset, run_id=run_id, reason="repair_gate")
+        if checked_out:
+            # Published data was never touched; keep the checkout for inspection.
+            quarantine = lake_write.discard(dataset)
+        else:
+            store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
+            quarantine = store.quarantine_candidate(dataset, run_id=run_id, reason="repair_gate")
         raise RuntimeError(
             f"repair publication gate blocked {dataset}: {report.get('report_path')}"
             + (f"; candidate: {quarantine}" if quarantine else "")

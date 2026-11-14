@@ -8,8 +8,6 @@ import logging
 import sys
 from contextlib import nullcontext, redirect_stdout
 from datetime import date, datetime, timezone
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import polars as pl
@@ -26,16 +24,14 @@ from cnequity.derive.factor_arbitration import (
 from cnequity.derive.fund_factors import apply_fund_share_factors
 from cnequity.derive.stock_factors import apply_stock_event_factors
 from cnequity.domain.canonical import dedupe_by_primary_key
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.schemas import with_provenance
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.cross_checks import factor_action_contradictions
-from cnequity.quality.publication import check_repair_publication
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.instrument_catalog import load_curated_instruments
-from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.read_context import ReadContext
+from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore, sha256_file
 
 DEPENDENCIES = (*ADJ_FACTOR_INPUTS, "adj_factors")
@@ -420,7 +416,6 @@ def repair_adj_factors(
         ).with_columns(changed["source"])
         run_id = f"adj-factors-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
         store.ensure_current("adj_factors")
-        store.materialize_current("adj_factors")
         overrides = source_overrides(config)
         for item in replacements:
             symbol = item["symbol"][0]
@@ -449,48 +444,27 @@ def repair_adj_factors(
         for event in stock_events:
             if "correction" in event:
                 proofs[f"{event['symbol']}|{event['trade_date']}"] = event
-        changed_files = []
-        try:
-            with TemporaryDirectory(prefix="cne-adj-factors-") as directory:
-                staging = Path(directory)
-                StagingWriter(staging).write_batch("adj_factors", run_id, "repair-0", rows)
-                compact_dataset(
-                    staging,
-                    config.derived_root,
-                    "adj_factors",
-                    run_id,
-                    changed_files=changed_files,
-                    base_root=context.roots["adj_factors"],
-                )
-            publication = check_repair_publication(
-                config,
-                "adj_factors",
-                run_id,
-                changed_files,
-                symbols=frozenset(report["changed_symbols"]),
-            )
-            contract = dataset_contract("adj_factors")
-            revision = store.commit(
-                "adj_factors",
-                run_id=run_id,
-                changed_files=changed_files,
-                schema_version=int(contract["schema_version"]),
-                contract_fingerprint=contract_fingerprint(contract),
-                metadata={
-                    "reason": "factor_repair",
-                    "factor_repair": report,
-                    "publication_audit": publication["report_path"],
-                    "factor_source_overrides": overrides,
-                    "factor_event_proofs": proofs,
-                },
-            )
-            if revision is None:
-                raise RuntimeError("factor repair produced no revision")
-        except Exception:
-            store.materialize_current("adj_factors")
-            raise
+        published = publish_staged(
+            config,
+            store,
+            "adj_factors",
+            rows,
+            run_id=run_id,
+            base_root=context.roots["adj_factors"],
+            metadata={
+                "reason": "factor_repair",
+                "factor_repair": report,
+                "factor_source_overrides": overrides,
+                "factor_event_proofs": proofs,
+            },
+            symbols=frozenset(report["changed_symbols"]),
+        )
+        if published is None:
+            raise RuntimeError("factor repair produced no revision")
         report.update(
-            applied=True, revision=revision.revision, publication_audit=publication["report_path"]
+            applied=True,
+            revision=published["revision"],
+            publication_audit=published["publication_audit"],
         )
         report["diagnostics"] = _diagnose(config)
         write_json_atomic(folder / "applied" / f"{run_id}.json", report, indent=2, default=str)

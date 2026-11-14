@@ -99,6 +99,18 @@ def test_purge_publishes_a_revision_without_symbols_absent_from_bars(tmp_path):
     assert _published_symbols(cfg, revision=1) == ["600193.SH", "600193.SH", "600519.SH"]
 
 
+def test_purge_reads_and_publishes_through_the_catalog(tmp_path, settle):
+    from cnequity.query import load
+
+    cfg = settle(_lake(tmp_path, {DAYS[0]: ["600193.SH"], DAYS[1]: ["600519.SH", "600193.SH"]}))
+
+    summary = purge_valuation_orphan_symbols(cfg)
+    assert summary["rows_removed"] == 2
+    assert summary["revision"] == 2
+    assert load("valuation_metrics", config=cfg)["symbol"].to_list() == ["600519.SH"]
+    assert load("valuation_metrics", config=cfg, revision=1).height == 3
+
+
 def test_purge_noop_when_aligned(tmp_path):
     cfg = _lake(tmp_path, {DAYS[1]: ["600519.SH"]})
 

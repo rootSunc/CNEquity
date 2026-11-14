@@ -2,8 +2,6 @@
 
 from contextlib import nullcontext
 from datetime import datetime, timezone
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import polars as pl
@@ -11,14 +9,12 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.derive.fund_factors import SOURCE, apply_fund_share_factors
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.schemas import with_provenance
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.publication import check_repair_publication
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.instrument_catalog import load_curated_instruments
-from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.read_context import ReadContext
+from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
 
 
@@ -75,42 +71,24 @@ def repair_fund_factors(config: Config, *, apply: bool = False) -> dict:
             return report
         rows = with_provenance(changed.select(*keys, "factor"), source=SOURCE, data_version="v1")
         run_id = f"fund-factors-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
-        store.materialize_current("adj_factors")
-        changed_files = []
-        with TemporaryDirectory(prefix="cne-fund-factors-") as directory:
-            staging = Path(directory)
-            StagingWriter(staging).write_batch("adj_factors", run_id, "repair-0", rows)
-            compact_dataset(
-                staging,
-                config.derived_root,
-                "adj_factors",
-                run_id,
-                changed_files=changed_files,
-                base_root=root,
-            )
-        publication = check_repair_publication(
+        published = publish_staged(
             config,
+            store,
             "adj_factors",
-            run_id,
-            changed_files,
-            symbols=frozenset(report["changed_symbols"]),
-        )
-        contract = dataset_contract("adj_factors")
-        revision = store.commit(
-            "adj_factors",
+            rows,
             run_id=run_id,
-            changed_files=changed_files,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
+            base_root=root,
             metadata={
                 "reason": "fund_share_factors",
                 **report,
-                "publication_audit": publication["report_path"],
             },
+            symbols=frozenset(report["changed_symbols"]),
         )
-        if revision is None:
+        if published is None:
             raise RuntimeError("fund factor repair produced no revision")
         report.update(
-            applied=True, revision=revision.revision, publication_audit=publication["report_path"]
+            applied=True,
+            revision=published["revision"],
+            publication_audit=published["publication_audit"],
         )
         return report

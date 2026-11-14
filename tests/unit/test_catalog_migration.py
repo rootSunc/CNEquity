@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from tests.unit.test_compact_to_catalog import FIRST, SECOND, _flows, _margins, _run
@@ -126,7 +127,7 @@ def test_the_repair_gate_audits_a_lake_whose_datasets_live_only_in_the_catalog(l
 
 def test_a_repair_publishes_into_the_catalog_on_a_lake_that_lives_there(lake):
     from cnequity.query import catalog_read, load
-    from cnequity.storage.repairs.publish import publish_repair
+    from cnequity.storage.repairs.publish import publish_repair, repair_root
 
     migrate_to_catalog(lake, apply=True)
     _run(
@@ -138,15 +139,13 @@ def test_a_repair_publishes_into_the_catalog_on_a_lake_that_lives_there(lake):
     )
     catalog_read.close_all()
     store = RevisionStore(lake.meta_root, lake.curated_root)
-    base = store.repair_base("fund_flow", register=True)
+    base = repair_root(lake, store, "fund_flow", register=True)
     assert base is not None
 
     result = publish_repair(
         lake,
         store,
         "fund_flow",
-        "trade_date",
-        base,
         keep=lambda frame: frame.filter(frame["symbol"] != "000001.SZ"),
         reason="drop_symbol",
         metadata={},
@@ -159,3 +158,59 @@ def test_a_repair_publishes_into_the_catalog_on_a_lake_that_lives_there(lake):
     assert sorted(load("fund_flow", config=lake)["symbol"].unique()) == ["600519.SH"]
     # The dataset the repair did not touch is as it was.
     assert load("margin_trading", config=lake).height == 2
+
+
+def test_a_repair_the_gate_blocks_publishes_nothing_and_keeps_its_checkout(lake, monkeypatch):
+    from cnequity.quality import publication
+    from cnequity.query import catalog_read, load
+    from cnequity.storage.repairs.publish import publish_repair
+
+    migrate_to_catalog(lake, apply=True)
+    _run(
+        lake,
+        "r2",
+        SECOND,
+        _flows(SECOND, {"600519.SH": 3.0}),
+        _margins(SECOND, {"600519.SH": 11.0}),
+    )
+    catalog_read.close_all()
+    store = RevisionStore(lake.meta_root, lake.curated_root)
+    before = store.current_pointer("fund_flow")["revision_id"]
+    monkeypatch.setattr(
+        publication,
+        "evaluate_publication",
+        lambda *args, **kwargs: {"blocked": True, "report_path": "report.json"},
+    )
+
+    with pytest.raises(RuntimeError, match="repair publication gate blocked fund_flow") as raised:
+        publish_repair(
+            lake,
+            store,
+            "fund_flow",
+            keep=lambda frame: frame.filter(frame["symbol"] != "000001.SZ"),
+            reason="drop_symbol",
+            metadata={},
+        )
+    catalog_read.close_all()
+
+    assert store.current_pointer("fund_flow")["revision_id"] == before
+    assert "000001.SZ" in load("fund_flow", config=lake)["symbol"].to_list()
+    kept = raised.value.args[0].partition("candidate: ")[2]
+    # The partitions the repair would have published, kept for inspection.
+    assert list(Path(kept).rglob("*.parquet"))
+
+
+def test_file_layout_tools_leave_a_catalog_dataset_alone(lake):
+    from cnequity.storage.merge_files import merge_candidates
+    from cnequity.storage.repairs.layout import repair_layout
+    from cnequity.storage.repairs.repartition import repartition_dataset
+
+    migrate_to_catalog(lake, apply=True)
+
+    # The catalog lays out and merges its own files: none of these builds a
+    # working tree or publishes anything.
+    assert merge_candidates(lake, "fund_flow", min_files=1) == {}
+    assert repair_layout(lake, "fund_flow", apply=True)["applied"] is False
+    assert repartition_dataset(lake, "fund_flow").changed is False
+    store = RevisionStore(lake.meta_root, lake.curated_root)
+    assert store.current_pointer("fund_flow")["revision"] == 1

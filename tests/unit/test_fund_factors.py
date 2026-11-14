@@ -86,8 +86,15 @@ def test_invalid_vendor_levels_cannot_create_guessed_factors(factor):
         fund_share_series(_bars(), raw, _terms([DAYS[2]], splits=[2]))
 
 
+def _rows(root):
+    """The rows of a published root, whether a directory or a catalog revision."""
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    return scan_parquet_root(root, committed=False).collect()
+
+
 @pytest.mark.parametrize("halt_after_split", [False, True])
-def test_offline_repair_is_idempotent_and_keeps_old_revision(tmp_path, halt_after_split):
+def test_offline_repair_is_idempotent_and_keeps_old_revision(tmp_path, halt_after_split, settle):
     from cnequity.config import Config
     from cnequity.domain.schemas import with_provenance
     from cnequity.query import load
@@ -167,6 +174,7 @@ def test_offline_repair_is_idempotent_and_keeps_old_revision(tmp_path, halt_afte
     pl.DataFrame({"trade_date": [DAYS[0]], "factor": [1.0]}).write_parquet(
         cache / "510300_SH_hfq.parquet"
     )
+    settle(cfg)
     original = store.current_root("adj_factors")
     preview = repair_fund_factors(cfg)
     assert preview["rows"] == 3

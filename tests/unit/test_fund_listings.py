@@ -77,7 +77,14 @@ def test_exchange_dates_fill_only_null_funds_and_do_not_activate_future_listings
     assert findings == []
 
 
-def test_listing_repair_preserves_known_dates_and_old_revision(tmp_path, monkeypatch):
+def _rows(root):
+    """The rows of a published root, whether a directory or a catalog revision."""
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    return scan_parquet_root(root, committed=False).collect()
+
+
+def test_listing_repair_preserves_known_dates_and_old_revision(tmp_path, monkeypatch, settle):
     from datetime import datetime, timezone
 
     from cnequity.domain.schemas import DATASET_SCHEMAS
@@ -125,13 +132,12 @@ def test_listing_repair_preserves_known_dates_and_old_revision(tmp_path, monkeyp
         "cnequity.storage.repairs.fund_listing_dates.fetch_exchange_fund_listings",
         lambda *a, **k: ({"501001.SH": date(2015, 9, 25), "159920.SZ": date(2020, 1, 1)}, []),
     )
+    settle(cfg)
     preview = repair_fund_listing_dates(cfg)
     assert preview["rows"] == 1 and not preview["applied"]
     result = repair_fund_listing_dates(cfg, apply=True)
     assert result["applied"] and result["revision"] == 2
-    current = pl.read_parquet(list(store.current_root("instruments").rglob("*.parquet"))).sort(
-        "symbol"
-    )
+    current = _rows(store.current_root("instruments")).sort("symbol")
     assert current["list_date"].to_list() == [date(2012, 10, 22), date(2015, 9, 25)]
-    assert pl.read_parquet(list(old.rglob("*.parquet")))["list_date"].null_count() == 1
+    assert _rows(old)["list_date"].null_count() == 1
     assert repair_fund_listing_dates(cfg)["rows"] == 0

@@ -161,8 +161,6 @@ def repair_industry_levels(
                 config,
                 store,
                 DATASET,
-                "as_of_date",
-                root,
                 keep=lambda part: fill_levels(part, ancestry),
                 reason="industry_levels",
                 metadata={"by_system": counts},

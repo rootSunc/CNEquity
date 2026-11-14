@@ -122,8 +122,15 @@ def seed(cfg, frame):
     return store
 
 
+def _published(root):
+    """The rows of a published root, whether a directory or a catalog revision."""
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    return scan_parquet_root(root, committed=False).collect()
+
+
 def current(store):
-    return pl.read_parquet(list(store.current_root("index_constituents").rglob("*.parquet")))
+    return _published(store.current_root("index_constituents"))
 
 
 def no_requests(monkeypatch):
@@ -133,7 +140,9 @@ def no_requests(monkeypatch):
     monkeypatch.setattr(httpx.Client, "get", unexpected)
 
 
-def test_replace_range_keep_actual_weights_other_indices_and_old_revision(tmp_path, monkeypatch):
+def test_replace_range_keep_actual_weights_other_indices_and_old_revision(
+    tmp_path, monkeypatch, settle
+):
     cfg = Config(data_root=tmp_path / "lake")
     catalog, payloads = fixture_catalog()
     monkeypatch.setattr(history, "_catalog", lambda index_symbol="399001.SZ": catalog)
@@ -149,6 +158,7 @@ def test_replace_range_keep_actual_weights_other_indices_and_old_revision(tmp_pa
         ]
     )
     store = seed(cfg, before)
+    settle(cfg)
     old = store.current_root("index_constituents")
     preview = history.repair_index_history(cfg)
     assert (
@@ -174,7 +184,7 @@ def test_replace_range_keep_actual_weights_other_indices_and_old_revision(tmp_pa
     weighted = frame.filter(pl.col("as_of_date") == date(2015, 9, 30))
     assert weighted["weight"].sum() == pytest.approx(1)
     assert weighted["source"].unique().to_list() == ["cni_weights"]
-    assert pl.read_parquet(list(old.rglob("*.parquet"))).height == 504
+    assert _published(old).height == 504
     assert not history.repair_index_history(cfg, apply=True)["applied"]
     assert store.current_root("index_constituents") != old
     assert (
@@ -345,7 +355,9 @@ def archive_star(cfg, sources):
         )
 
 
-def test_star50_apply_complete_books_after_close_preserve_other_indices(tmp_path, monkeypatch):
+def test_star50_apply_complete_books_after_close_preserve_other_indices(
+    tmp_path, monkeypatch, settle
+):
     cfg = Config(data_root=tmp_path / "lake")
     catalog, sources = star_catalog()
     monkeypatch.setattr(history, "_catalog", lambda index_symbol: catalog)
@@ -361,6 +373,7 @@ def test_star50_apply_complete_books_after_close_preserve_other_indices(tmp_path
     store = seed(
         cfg, pl.concat([other, weighted, book(date(2024, 9, 30), ["688001.SH"], index="000688.SH")])
     )
+    settle(cfg)
     old = store.current_root("index_constituents")
     result = history.repair_index_history(cfg, index_symbol="000688.SH", apply=True)
     assert result["applied"] and result["rows"] == 100 and result["snapshots"] == 2
@@ -376,7 +389,7 @@ def test_star50_apply_complete_books_after_close_preserve_other_indices(tmp_path
     assert event["weight"].null_count() == 50 and event["source"].unique().to_list() == ["exchange"]
     assert frame.filter(pl.col("as_of_date") == date(2024, 12, 31)).equals(weighted)
     assert frame.filter(pl.col("as_of_date") == date(2024, 12, 16)).is_empty()
-    assert pl.read_parquet(list(old.rglob("*.parquet"))).height == 52
+    assert _published(old).height == 52
     assert not history.repair_index_history(cfg, index_symbol="000688.SH", apply=True)["applied"]
     assert store.current_root("index_constituents") != old
 

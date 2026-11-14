@@ -1,6 +1,6 @@
 """delist_date is the last listed session, not baostock's removal date."""
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import polars as pl
 
@@ -91,3 +91,62 @@ def test_only_rows_after_delisting_are_planned():
     plan = plan_bar_listing_window(rows, spans)
 
     assert plan.select("symbol", "trade_date").rows() == [("688287.SH", date(2026, 6, 10))]
+
+
+def test_placeholder_bars_after_delisting_are_removed_on_either_lake(tmp_path, settle):
+    from cnequity.query import load
+    from cnequity.storage.repairs.bar_listing_window import repair_bar_listing_window
+    from cnequity.storage.revisions import RevisionStore
+
+    cfg = Config(data_root=tmp_path / "data")
+    last, removal = date(2024, 1, 30), date(2024, 2, 1)
+    instruments = cfg.curated_root / "instruments"
+    instruments.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600001.SH", "600519.SH"],
+            "list_date": [date(2000, 1, 4)] * 2,
+            "delist_date": [last, None],
+        }
+    ).write_parquet(instruments / "part.parquet")
+    bars = [("600001.SH", last, 100.0), ("600001.SH", removal, 0.0), ("600519.SH", removal, 5.0)]
+    for month in ("2024-01", "2024-02"):
+        part = cfg.curated_root / "daily_bars" / f"trade_date={month}"
+        part.mkdir(parents=True)
+        rows = [row for row in bars if row[1].isoformat().startswith(month)]
+        pl.DataFrame(
+            {
+                "symbol": [row[0] for row in rows],
+                "trade_date": [row[1] for row in rows],
+                "open": [10.0] * len(rows),
+                "high": [10.0] * len(rows),
+                "low": [10.0] * len(rows),
+                "close": [10.0] * len(rows),
+                "volume": [row[2] for row in rows],
+                "amount": [row[2] * 10.0 for row in rows],
+                "source": ["baostock"] * len(rows),
+                "data_version": ["v1"] * len(rows),
+                "fetched_at": [datetime(2024, 3, 1, tzinfo=timezone.utc)] * len(rows),
+            }
+        ).write_parquet(part / "part-0.parquet")
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
+    for dataset in ("instruments", "daily_bars"):
+        store.commit(
+            dataset,
+            run_id="seed",
+            changed_files=sorted((cfg.curated_root / dataset).rglob("*.parquet")),
+            schema_version=1,
+            contract_fingerprint="contract",
+        )
+    settle(cfg)
+
+    assert repair_bar_listing_window(cfg)["rows"] == 1
+    report = repair_bar_listing_window(cfg, apply=True)
+
+    assert report["applied"] is True and report["partitions_rewritten"] == 1
+    kept = load("daily_bars", config=cfg).sort("symbol", "trade_date")
+    assert kept.select("symbol", "trade_date").rows() == [
+        ("600001.SH", last),
+        ("600519.SH", removal),
+    ]
+    assert repair_bar_listing_window(cfg)["rows"] == 0

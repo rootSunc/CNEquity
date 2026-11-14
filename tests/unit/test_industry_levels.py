@@ -98,7 +98,7 @@ def test_fill_levels_never_invents_a_level_below_the_stored_board():
 
 
 @pytest.fixture
-def lake(tmp_path):
+def lake(tmp_path, settle):
     cfg = Config(data_root=tmp_path / "lake")
     root = cfg.curated_root / "industry_members" / "as_of_date=2026-07-10"
     root.mkdir(parents=True)
@@ -113,7 +113,7 @@ def lake(tmp_path):
         schema_version=1,
         contract_fingerprint="contract",
     )
-    return cfg
+    return settle(cfg)
 
 
 def test_old_files_read_with_null_levels_and_the_migration_fills_them(lake):

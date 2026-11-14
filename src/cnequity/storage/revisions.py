@@ -905,6 +905,18 @@ class RevisionStore:
                     copy2_isolated(source, target / Path(source).name)
         self.record_working_tree(dataset)
 
+    def commits_to_catalog(self, dataset: str) -> bool:
+        """Whether the next revision of *dataset* is published into the lake catalog.
+
+        True once its published revision lives there, or the lake publishes
+        into its catalog and the catalog holds the published revision.
+        """
+        pointer = self._read_pointer(dataset)
+        return pointer is not None and (
+            pointer.get("storage") == STORAGE_CATALOG
+            or (self.publishes_to_catalog() and self._catalog_holds(dataset, pointer))
+        )
+
     def _catalog_holds(self, dataset: str, pointer: dict) -> bool:
         from cnequity.storage.lake_write import catalog_revision
 
@@ -1236,10 +1248,7 @@ class RevisionStore:
         if not contract_fingerprint:
             raise ValueError("contract_fingerprint must not be empty")
         catalog_pointer = self._read_pointer(dataset)
-        if catalog_pointer is not None and (
-            catalog_pointer.get("storage") == STORAGE_CATALOG
-            or (self.publishes_to_catalog() and self._catalog_holds(dataset, catalog_pointer))
-        ):
+        if catalog_pointer is not None and self.commits_to_catalog(dataset):
             return self._commit_to_catalog(
                 dataset,
                 catalog_pointer,

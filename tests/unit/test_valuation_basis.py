@@ -132,7 +132,8 @@ def lake(tmp_path, request):
     return cfg
 
 
-def test_repair_labels_every_value_and_rebuilds_only_what_evidence_supports(lake):
+def test_repair_labels_every_value_and_rebuilds_only_what_evidence_supports(lake, settle):
+    settle(lake)
     plan = repair_valuation_basis(lake)
     assert plan["applied"] is False
     assert plan["partitions_changed"] == 1

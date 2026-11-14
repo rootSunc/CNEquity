@@ -9,19 +9,15 @@ itself stays in the delisted identity evidence.
 
 from contextlib import nullcontext
 from datetime import date, datetime, timezone
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import polars as pl
 
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.publication import check_repair_publication
 from cnequity.query.calendar import last_listed_sessions
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
-from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.read_context import ReadContext
+from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
 
 
@@ -94,34 +90,19 @@ def repair_delist_dates(config, *, apply: bool = False, sample: int = 15) -> dic
         )
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         store.ensure_current("instruments")
-        store.materialize_current("instruments")
-        changed = []
-        with TemporaryDirectory(prefix="cne-delist-dates-") as directory:
-            staging = Path(directory)
-            StagingWriter(staging).write_batch("instruments", run_id, "repair-0", rows)
-            compact_dataset(
-                staging,
-                config.curated_root,
-                "instruments",
-                run_id,
-                changed_files=changed,
-                base_root=context.roots["instruments"],
-            )
-        publication = check_repair_publication(config, "instruments", run_id, changed)
-        contract = dataset_contract("instruments")
-        revision = store.commit(
+        published = publish_staged(
+            config,
+            store,
             "instruments",
+            rows,
             run_id=run_id,
-            changed_files=changed,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
+            base_root=context.roots["instruments"],
             metadata={
                 "reason": "delist_date_is_last_listed_session",
                 **report,
-                "publication_audit": publication["report_path"],
             },
         )
-        if revision is None:
+        if published is None:
             raise RuntimeError("delist date repair produced no revision")
-        report.update(applied=True, revision=revision.revision)
+        report.update(applied=True, revision=published["revision"])
         return report

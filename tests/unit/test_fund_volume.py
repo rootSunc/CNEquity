@@ -84,7 +84,7 @@ def test_invalid_identity_quantity_and_turnover_fail(change):
     ],
 )
 def test_offline_repair_is_retained_idempotent_and_requires_same_prices(
-    tmp_path, mismatch, wrong_market, symbol, payload, amount, peer, accepted
+    tmp_path, mismatch, wrong_market, symbol, payload, amount, peer, accepted, settle
 ):
     cfg = Config(data_root=tmp_path)
     now = datetime(2026, 10, 13, tzinfo=timezone.utc)
@@ -171,6 +171,7 @@ def test_offline_repair_is_retained_idempotent_and_requires_same_prices(
                 cfg.meta_root / f"source_cache/fund_volume/{symbol}-peer.json",
                 peer_receipt.to_dict(),
             )
+    settle(cfg)
     report = repair_fund_volume(cfg, apply=True)
     repaired = accepted and not mismatch and not wrong_market
     assert report["applied"] is repaired
@@ -183,5 +184,7 @@ def test_offline_repair_is_retained_idempotent_and_requires_same_prices(
         if peer == "raw_only":
             assert (cfg.meta_root / f"source_cache/fund_volume/{symbol}-peer.json").exists()
             assert len(report["source_receipts"]) == 2
-    assert list(old.rglob("*.parquet"))
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    assert scan_parquet_root(old, committed=False).collect().height == 1
     assert not repair_fund_volume(cfg, apply=True)["applied"]

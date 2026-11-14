@@ -158,7 +158,8 @@ def test_plan_is_offline_and_counts_both_paths(lake):
     assert plan["applied"] is False and asked == []
 
 
-def test_apply_moves_misdated_rows_and_adds_only_fitting_gaps(lake):
+def test_apply_moves_misdated_rows_and_adds_only_fitting_gaps(lake, settle):
+    settle(lake)
     asked: list = []
     report = repair_corporate_action_gaps(
         lake, apply=True, fetch=_baostock(asked), reorg_fetch=_no_notices
@@ -203,7 +204,8 @@ def test_a_row_dated_inside_a_halt_is_never_moved(lake):
     assert plan["moves"] == 1  # only 600001's traded-day misdate
 
 
-def test_a_restructuring_conversion_is_added_at_its_reference_price(lake):
+def test_a_restructuring_conversion_is_added_at_its_reference_price(lake, settle):
+    settle(lake)
     asked_notices: list = []
 
     def notices(config, run_id, gaps):
@@ -240,7 +242,8 @@ def test_a_restructuring_conversion_is_added_at_its_reference_price(lake):
     assert row["transfer_ratio"] == 0.5 and row["reference_price"] == 9.09
 
 
-def test_an_early_estimate_one_cent_off_does_not_block_the_final_price(lake):
+def test_an_early_estimate_one_cent_off_does_not_block_the_final_price(lake, settle):
+    settle(lake)
     # 600306.SH 2023 published 8.11 and then 8.14; only the final price
     # reproduces the step within cent rounding.
     step = STEPS["600003.SH"][1]

@@ -60,8 +60,8 @@ def _final(cfg, start, end):
     return pl.DataFrame(rows).drop("data_version", "fetched_at")
 
 
-def test_stale_rows_are_replaced_missing_ones_added_and_others_untouched(tmp_path):
-    cfg = _lake(tmp_path)
+def test_stale_rows_are_replaced_missing_ones_added_and_others_untouched(tmp_path, settle):
+    cfg = settle(_lake(tmp_path))
     plan = repair_offshore_final(cfg, fetch=_final)
     assert (plan["rows"], plan["replaced"], plan["added"]) == (2, 1, 1)
     repair_offshore_final(cfg, apply=True, fetch=_final)

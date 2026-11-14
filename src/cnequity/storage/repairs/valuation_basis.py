@@ -36,7 +36,8 @@ from cnequity.domain.valuation import (
 )
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.share_counts import load_share_counts
-from cnequity.storage.parquet import CuratedWriter, _business_equal
+from cnequity.storage.parquet import _business_equal
+from cnequity.storage.repairs.publish import PartitionRewrite
 from cnequity.storage.revisions import RevisionStore
 
 _DATASET = "valuation_metrics"
@@ -120,7 +121,6 @@ def repair_valuation_basis(config: Config, *, apply: bool = False) -> dict:
 
 def _repair_locked(config: Config, *, apply: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    base = store.repair_base(_DATASET, register=apply)
     # ``rows`` is every row the repair read; ``rows_changed`` is how many of them it rewrites.
     report: dict = {
         "dataset": _DATASET,
@@ -129,101 +129,63 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
         "rows_changed": 0,
         "partitions_changed": 0,
     }
-    if base is None:
-        report["note"] = f"no {_DATASET} data; nothing to repair"
-        return report
-    by_partition: dict[str, list[Path]] = {}
-    for path in sorted(base.rglob("*.parquet")):
-        by_partition.setdefault(path.relative_to(base).parts[0], []).append(path)
-    months: dict[str, list[str]] = {}
-    for name in sorted(by_partition):
-        start = _partition_start(name)
-        if start is None:
-            raise RuntimeError(f"{_DATASET}: unexpected partition {name!r}; repair layout first")
-        months.setdefault(start.strftime("%Y-%m"), []).append(name)
-
-    shares = load_share_counts(config)
-    bars_root = store.current_root("daily_bars")
-    if apply:
-        store.materialize_current(_DATASET)
-    writer = CuratedWriter(config.curated_root)
-    counts: Counter[str] = Counter()
-    changed: list[Path] = []
-    for names in months.values():
-        originals = {
-            name: pl.concat(
-                [
-                    sanitize_dataset_rows(
-                        validate_dataframe(pl.read_parquet(p), _DATASET), _DATASET
-                    )
-                    for p in by_partition[name]
-                ],
-                how="diagonal_relaxed",
-            )
-            for name in names
-        }
-        # The sessions present in the rows: a day directory holds one, a month
-        # file holds the month's, and the bars are read for exactly those.
-        days = sorted(
-            {day for frame in originals.values() for day in frame["trade_date"].drop_nulls()}
-        )
-        bars = _bars(bars_root, days)
-        for name in names:
-            original = originals[name]
-            repaired = validate_dataframe(repair_frame(original, bars, shares), _DATASET)
-            report["rows"] += repaired.height
-            before = original.select(
-                pl.col("pe_dynamic").is_not_null().sum().alias("pe_dynamic"),
-            ).row(0, named=True)
-            after = repaired.select(
-                pl.col("pe_dynamic").is_not_null().sum().alias("pe_dynamic"),
-            ).row(0, named=True)
-            counts["pe_moved_to_dynamic"] += after["pe_dynamic"] - before["pe_dynamic"]
-            for column in ("total_mv_basis", "float_mv_basis"):
-                for basis, count in repaired.group_by(column).agg(pl.len()).iter_rows():
-                    counts[f"{column}:{basis}"] += count
-            if _business_equal(original, repaired):
-                continue
-            report["partitions_changed"] += 1
-            report["rows_changed"] += _rows_changed(original, repaired)
-            if apply:
-                changed.append(
-                    writer.write_partition(
-                        _DATASET,
-                        "trade_date",
-                        name.partition("=")[2],
-                        repaired,
-                        "part-merged.parquet",
-                    )
-                )
-    report["counts"] = dict(sorted(counts.items()))
-    if not apply or not changed:
-        return report
-
-    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
-
-    contract = dataset_contract(_DATASET)
     run_id = f"valuation-basis-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
-    from cnequity.quality.publication import check_repair_publication
+    with PartitionRewrite(config, store, _DATASET, run_id=run_id, apply=apply) as rewrite:
+        labels = rewrite.labels()
+        if not labels:
+            report["note"] = f"no {_DATASET} data; nothing to repair"
+            return report
+        months: dict[str, list[str]] = {}
+        for name in labels:
+            start = _partition_start(name)
+            if start is None:
+                raise RuntimeError(
+                    f"{_DATASET}: unexpected partition {name!r}; repair layout first"
+                )
+            months.setdefault(start.strftime("%Y-%m"), []).append(name)
 
-    publication = check_repair_publication(config, _DATASET, run_id, changed)
-    revision = store.commit(
-        _DATASET,
-        run_id=run_id,
-        changed_files=changed,
-        schema_version=int(contract["schema_version"]),
-        contract_fingerprint=contract_fingerprint(contract),
-        metadata={
-            "reason": "valuation_basis_repair",
-            "counts": report["counts"],
-            "publication_audit": publication["report_path"],
-        },
-    )
-    report.update(
-        applied=True,
-        run_id=run_id,
-        revision=None if revision is None else revision.revision,
-        revision_id=None if revision is None else revision.revision_id,
-        publication_audit=publication["report_path"],
-    )
+        shares = load_share_counts(config)
+        bars_root = store.current_root("daily_bars")
+        counts: Counter[str] = Counter()
+        for names in months.values():
+            originals = {
+                name: sanitize_dataset_rows(validate_dataframe(stored, _DATASET), _DATASET)
+                for name in names
+                if (stored := rewrite.rows(name)) is not None
+            }
+            # The sessions present in the rows: a day directory holds one, a
+            # month partition holds the month's, and the bars are read for
+            # exactly those.
+            days = sorted(
+                {day for frame in originals.values() for day in frame["trade_date"].drop_nulls()}
+            )
+            bars = _bars(bars_root, days)
+            for name, original in originals.items():
+                repaired = validate_dataframe(repair_frame(original, bars, shares), _DATASET)
+                report["rows"] += repaired.height
+                before = original.select(
+                    pl.col("pe_dynamic").is_not_null().sum().alias("pe_dynamic"),
+                ).row(0, named=True)
+                after = repaired.select(
+                    pl.col("pe_dynamic").is_not_null().sum().alias("pe_dynamic"),
+                ).row(0, named=True)
+                counts["pe_moved_to_dynamic"] += after["pe_dynamic"] - before["pe_dynamic"]
+                for column in ("total_mv_basis", "float_mv_basis"):
+                    for basis, count in repaired.group_by(column).agg(pl.len()).iter_rows():
+                        counts[f"{column}:{basis}"] += count
+                if _business_equal(original, repaired):
+                    continue
+                report["partitions_changed"] += 1
+                report["rows_changed"] += _rows_changed(original, repaired)
+                if apply:
+                    rewrite.replace(name, repaired)
+        report["counts"] = dict(sorted(counts.items()))
+        if not apply or not rewrite.rewritten:
+            return report
+        published = rewrite.publish(
+            {"reason": "valuation_basis_repair", "counts": report["counts"]}
+        )
+    if published is None:
+        raise RuntimeError(f"{_DATASET}: basis repair produced no revision")
+    report.update(applied=True, run_id=run_id, **published)
     return report

@@ -8,21 +8,17 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import date, datetime, timezone
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.schemas import with_provenance
 from cnequity.domain.trading_status import DERIVED_TRADED_SOURCE, STATUS_NORMAL
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.publication import check_repair_publication
 from cnequity.quality.trading_status_coverage import KEY, traded_status_evidence
-from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.read_context import ReadContext
+from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
 
 
@@ -95,39 +91,25 @@ def repair_status_traded(config: Config, *, start: date, end: date, apply: bool 
             data_version="v1",
         )
         run_id = f"status-traded-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
-        store.materialize_current("trading_status")
-        changed: list[Path] = []
-        # Isolated staging cannot be swept into another ingestion or retry.
-        with TemporaryDirectory(prefix="cne-status-traded-") as directory:
-            staging = Path(directory)
-            StagingWriter(staging).write_batch("trading_status", run_id, "repair-0", rows)
-            compact_dataset(
-                staging,
-                config.curated_root,
-                "trading_status",
-                run_id,
-                changed_files=changed,
-                base_root=context.roots["trading_status"],
-            )
-        publication = check_repair_publication(config, "trading_status", run_id, changed)
-        contract = dataset_contract("trading_status")
-        revision = store.commit(
+        published = publish_staged(
+            config,
+            store,
             "trading_status",
+            rows,
             run_id=run_id,
-            changed_files=changed,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
+            base_root=context.roots["trading_status"],
             metadata={
                 "reason": "status_traded",
                 "rows_added": pairs.height,
                 "fund_rows_marked_not_st": funds.height,
                 "input_roots": report["input_roots"],
-                "publication_audit": publication["report_path"],
             },
         )
-        if revision is None:
+        if published is None:
             raise RuntimeError("status_traded produced no revision")
         report.update(
-            applied=True, revision=revision.revision, publication_audit=publication["report_path"]
+            applied=True,
+            revision=published["revision"],
+            publication_audit=published["publication_audit"],
         )
         return report

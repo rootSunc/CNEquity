@@ -156,7 +156,8 @@ def test_cli_previews_and_rejects_a_reversed_window(lake, monkeypatch):
     assert result.exit_code != 0
 
 
-def test_apply_publishes_missing_month_keys_preserves_conflicts_and_old_revision(lake):
+def test_apply_publishes_missing_month_keys_preserves_conflicts_and_old_revision(lake, settle):
+    settle(lake)
     store = RevisionStore(lake.meta_root, lake.curated_root, lake.derived_root)
     before = store.current_pointer("trading_status")["revision"]
     report = repair_status_traded(lake, start=D1, end=D2, apply=True)
@@ -172,8 +173,7 @@ def test_apply_publishes_missing_month_keys_preserves_conflicts_and_old_revision
         rows.filter((pl.col("symbol") == "000001.SZ") & (pl.col("trade_date") == D1))["status"][0]
         == "suspended"
     )
-    old = store.current_root("trading_status", revision=before)
-    assert sum(pl.read_parquet(p).height for p in old.rglob("*.parquet")) == 2
+    assert load("trading_status", config=lake, revision=before).height == 2
     assert repair_status_traded(lake, start=D1, end=D2, apply=True)["rows"] == 0
 
 
@@ -207,14 +207,15 @@ def test_apply_works_without_any_prior_status_partition(lake):
     assert load("trading_status", config=cfg).height == 6
 
 
-def test_a_blocked_publication_never_moves_the_committed_pointer(lake, monkeypatch):
+def test_a_blocked_publication_never_moves_the_committed_pointer(lake, monkeypatch, settle):
+    settle(lake)
     store = RevisionStore(lake.meta_root, lake.curated_root, lake.derived_root)
     pointer = store.current_pointer("trading_status")
 
     def block(*args, **kwargs):
         raise RuntimeError("repair publication blocked")
 
-    monkeypatch.setattr("cnequity.storage.repairs.status_traded.check_repair_publication", block)
+    monkeypatch.setattr("cnequity.quality.publication.check_repair_publication", block)
     with pytest.raises(RuntimeError, match="blocked"):
         repair_status_traded(lake, start=D1, end=D2, apply=True)
     assert store.current_pointer("trading_status") == pointer

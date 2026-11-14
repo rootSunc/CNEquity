@@ -31,7 +31,7 @@ from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_prim
 from cnequity.domain.schemas import sanitize_dataset_rows, validate_dataframe, with_provenance
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.parquet import CuratedWriter
+from cnequity.storage.repairs.publish import PartitionRewrite, scan_published
 from cnequity.storage.revisions import RevisionStore
 
 logger = logging.getLogger(__name__)
@@ -344,8 +344,8 @@ def _plan(config: Config, evidence: Path, *, ensure: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
     if ensure:
         store.ensure_current(_DATASET)
-    base = store.current_root(_DATASET)
-    if base is None:
+    scan = scan_published(config, _DATASET) if store.current_root(_DATASET) else None
+    if scan is None:
         raise RuntimeError(f"{_DATASET}: no committed generation to repair")
     missing = _missing_steps(evidence)
     report: dict = {"evidence": str(evidence), "missing": missing.height, "applied": False}
@@ -355,13 +355,7 @@ def _plan(config: Config, evidence: Path, *, ensure: bool) -> dict:
     symbols = sorted(missing.get_column("symbol").unique().to_list())
     current = dedupe_by_primary_key(
         sanitize_dataset_rows(
-            validate_dataframe(
-                pl.concat(
-                    [pl.read_parquet(p) for p in sorted(base.rglob("*.parquet"))],
-                    how="diagonal_relaxed",
-                ),
-                _DATASET,
-            ),
+            validate_dataframe(scan.collect(), _DATASET),
             _DATASET,
         ),
         _DATASET,
@@ -456,50 +450,32 @@ def _publish(
     )
     if not touched:
         return report
-    store.materialize_current(_DATASET)
-    writer = CuratedWriter(config.curated_root)
-    changed = [
-        writer.write_partition(
-            _DATASET,
-            "ex_date",
-            str(year),
-            repaired.filter(pl.col("ex_date").dt.year() == year).select(current.columns),
-            "part-merged.parquet",
-        )
-        for year in touched
-    ]
-
-    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
-
-    contract = dataset_contract(_DATASET)
-    from cnequity.quality.publication import check_repair_publication
-
     affected_symbols = frozenset(
         moves.get_column("symbol").to_list()
         + (added.get_column("symbol").to_list() if not added.is_empty() else [])
     )
-    publication = check_repair_publication(
-        config, _DATASET, run_id, changed, symbols=affected_symbols
-    )
-    revision = store.commit(
-        _DATASET,
-        run_id=run_id,
-        changed_files=changed,
-        schema_version=int(contract["schema_version"]),
-        contract_fingerprint=contract_fingerprint(contract),
-        metadata={
-            "reason": "corporate_action_gap_repair",
-            "evidence": str(evidence),
-            "moves": moves.height,
-            "added_rows": report["added_rows"],
-            "publication_audit": publication["report_path"],
-        },
-    )
+    with PartitionRewrite(config, store, _DATASET, run_id=run_id, apply=True) as rewrite:
+        for year in touched:
+            rewrite.replace(
+                f"ex_date={year}",
+                repaired.filter(pl.col("ex_date").dt.year() == year).select(current.columns),
+            )
+        published = rewrite.publish(
+            {
+                "reason": "corporate_action_gap_repair",
+                "evidence": str(evidence),
+                "moves": moves.height,
+                "added_rows": report["added_rows"],
+            },
+            symbols=affected_symbols,
+        )
+    if published is None:
+        raise RuntimeError(f"{_DATASET}: gap repair produced no revision")
     report.update(
         applied=True,
         run_id=run_id,
-        partitions_changed=len(changed),
-        revision=None if revision is None else revision.revision,
-        publication_audit=publication["report_path"],
+        partitions_changed=len(touched),
+        revision=published["revision"],
+        publication_audit=published["publication_audit"],
     )
     return report

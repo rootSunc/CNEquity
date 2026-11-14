@@ -15,7 +15,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.publish import publish_repair
+from cnequity.storage.repairs.publish import publish_repair, repair_root
 from cnequity.storage.repairs.status_listing_window import instrument_spans
 from cnequity.storage.revisions import RevisionStore
 
@@ -39,7 +39,7 @@ def repair_bar_listing_window(config: Config, *, apply: bool = False) -> dict:
 
 def _repair_locked(config: Config, *, apply: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    base = store.repair_base(DATASET, register=apply)
+    base = repair_root(config, store, DATASET, register=apply)
     report: dict = {"applied": False, "rows": 0}
     if base is None:
         report["note"] = "no daily_bars data; nothing to repair"
@@ -76,8 +76,6 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
             config,
             store,
             DATASET,
-            "trade_date",
-            base,
             keep=rebuild,
             reason="bar_listing_window",
             metadata={"rows": plan.height, "symbols": report["symbols"]},

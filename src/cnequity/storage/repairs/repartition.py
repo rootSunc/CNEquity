@@ -103,6 +103,10 @@ def repartition_dataset(
         from cnequity.storage.revisions import RevisionStore
 
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
+        if store.commits_to_catalog(dataset):
+            # The lake catalog partitions what it holds by its own rule; the
+            # dataset's period only names the partitions a write checks out.
+            return RepartitionResult(dataset, 0, 0, 0, 0, 0, 0, 0, changed=False)
         if store.current_pointer(dataset) is not None:
             # A published dataset is read through its committed generation;
             # swapping the mutable tree would change nothing a reader sees and

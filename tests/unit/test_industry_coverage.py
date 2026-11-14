@@ -141,7 +141,7 @@ def test_rows_outside_a_listed_life_are_unexpected_members(tmp_path):
     assert report["state"] == "gaps"
 
 
-def test_the_sw_delisted_migration_drops_only_shenwan_rows_after_delisting(tmp_path):
+def test_the_sw_delisted_migration_drops_only_shenwan_rows_after_delisting(tmp_path, settle):
     from cnequity.storage.repairs.sw_delisted import repair_sw_delisted
 
     rows = _snapshot(D1, system="sw") + _snapshot(D2, system="sw") + _snapshot(D2)
@@ -152,6 +152,7 @@ def test_the_sw_delisted_migration_drops_only_shenwan_rows_after_delisting(tmp_p
     )
     frame.write_parquet(inst)
     _commit(cfg, "instruments")
+    settle(cfg)
 
     assert repair_sw_delisted(cfg)["rows"] == 1
     repair_sw_delisted(cfg, apply=True)
@@ -164,13 +165,13 @@ def test_the_sw_delisted_migration_drops_only_shenwan_rows_after_delisting(tmp_p
     assert repair_sw_delisted(cfg)["rows"] == 0
 
 
-def test_never_listed_sw_securities_are_dropped_recorded_and_still_reported(tmp_path):
+def test_never_listed_sw_securities_are_dropped_recorded_and_still_reported(tmp_path, settle):
     from cnequity.query import load
     from cnequity.storage.repairs.sw_never_listed import load_never_listed, repair_sw_never_listed
 
     ghost = "002525.SZ"  # classed while its IPO was pending; never traded
     rows = _snapshot(D1, system="sw") + [_member(ghost, D1, "111", system="sw")]
-    cfg = _lake(tmp_path, rows)
+    cfg = settle(_lake(tmp_path, rows))
 
     plan = repair_sw_never_listed(cfg)
     assert (plan["rows"], plan["symbols"]) == (1, [ghost])

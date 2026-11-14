@@ -24,7 +24,7 @@ from cnequity.domain.market_time import last_closed_session
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.publish import publish_repair
+from cnequity.storage.repairs.publish import publish_repair, repair_root
 from cnequity.storage.revisions import RevisionStore
 
 DATASET = "valuation_metrics"
@@ -71,7 +71,7 @@ def _repair_locked(config: Config, *, apply: bool, fetch: Fetch | None) -> dict:
     from cnequity.adapters.eastmoney.valuation_datacenter import SOURCE as DATACENTER
 
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    base = store.repair_base(DATASET, register=apply)
+    base = repair_root(config, store, DATASET, register=apply)
     report: dict = {"applied": False, "rows": 0}
     if base is None:
         report["note"] = f"no {DATASET} data; nothing to repair"
@@ -127,8 +127,6 @@ def _repair_locked(config: Config, *, apply: bool, fetch: Fetch | None) -> dict:
             config,
             store,
             DATASET,
-            "trade_date",
-            base,
             keep=rebuild,
             reason="misdated_valuation_snapshot",
             metadata={

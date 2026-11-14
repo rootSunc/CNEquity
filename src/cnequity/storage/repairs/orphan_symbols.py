@@ -21,7 +21,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.query.parquet_scan import scan_parquet_root
-from cnequity.storage.repairs.publish import publish_repair
+from cnequity.storage.repairs.publish import publish_repair, repair_root
 from cnequity.storage.revisions import RevisionStore
 
 logger = logging.getLogger(__name__)
@@ -30,8 +30,6 @@ _DATASETS = {"adj_factors": "trade_date", "corporate_actions": "ex_date"}
 
 
 def _symbols(root: Path, partition_col: str) -> set[str]:
-    if not root.is_dir():
-        return set()
     return set(
         scan_parquet_root(root, partition_col=partition_col)
         .select("symbol")
@@ -50,14 +48,14 @@ def repair_orphan_symbols(config: Config, *, apply: bool = False) -> dict:
 
 def _repair_locked(config: Config, *, apply: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    bars = store.repair_base("daily_bars", register=False)
+    bars = repair_root(config, store, "daily_bars", register=False)
     priced = _symbols(bars, "trade_date") if bars is not None else set()
     report: dict = {"applied": False, "datasets": {}}
     if not priced:
         report["note"] = "no daily_bars data; nothing to repair"
         return report
     for dataset, partition_col in _DATASETS.items():
-        base = store.repair_base(dataset, register=apply)
+        base = repair_root(config, store, dataset, register=apply)
         if base is None:
             report["datasets"][dataset] = {
                 "orphan_symbols": 0,
@@ -86,8 +84,6 @@ def _repair_locked(config: Config, *, apply: bool) -> dict:
                     config,
                     store,
                     dataset,
-                    partition_col,
-                    base,
                     keep=lambda frame, d=dropped: frame.filter(~pl.col("symbol").is_in(d)),
                     reason="orphan_symbol_repair",
                     metadata={"orphan_symbols": len(orphans)},
@@ -113,8 +109,8 @@ def _repair_stale_locked(config: Config, *, apply: bool) -> dict:
     from cnequity.domain.trading_status import DERIVED_BAR_GAP_SOURCE
 
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    base = store.repair_base("trading_status", register=apply)
-    bars_root = store.repair_base("daily_bars", register=False)
+    base = repair_root(config, store, "trading_status", register=apply)
+    bars_root = repair_root(config, store, "daily_bars", register=False)
     report: dict = {"applied": False, "rows": 0}
     if base is None or bars_root is None:
         report["note"] = "no trading_status or daily_bars data; nothing to repair"
@@ -157,8 +153,6 @@ def _repair_stale_locked(config: Config, *, apply: bool) -> dict:
             config,
             store,
             "trading_status",
-            "trade_date",
-            base,
             keep=keep,
             reason="stale_derived_suspensions",
             metadata={"rows": stale.height},

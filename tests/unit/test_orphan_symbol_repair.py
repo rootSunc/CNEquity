@@ -88,8 +88,8 @@ def test_plan_counts_rows_without_touching_the_lake(tmp_path):
     assert "519019.SH" in load("adj_factors", config=cfg).get_column("symbol").to_list()
 
 
-def test_apply_removes_only_securities_without_bars(tmp_path):
-    cfg = _lake(tmp_path)
+def test_apply_removes_only_securities_without_bars(tmp_path, settle):
+    cfg = settle(_lake(tmp_path))
     report = repair_orphan_symbols(cfg, apply=True)
     assert report["datasets"]["adj_factors"]["partitions_rewritten"] == 1
     # The 2023 action partition held only the orphan and is gone.
@@ -103,7 +103,7 @@ def test_apply_removes_only_securities_without_bars(tmp_path):
     assert repair_orphan_symbols(cfg)["datasets"]["adj_factors"]["orphan_symbols"] == 0
 
 
-def test_an_inferred_suspension_a_traded_bar_contradicts_is_removed(tmp_path):
+def test_an_inferred_suspension_a_traded_bar_contradicts_is_removed(tmp_path, settle):
     from cnequity.storage.repairs.orphan_symbols import repair_stale_derived_suspensions
 
     cfg = _lake(tmp_path)
@@ -131,6 +131,7 @@ def test_an_inferred_suspension_a_traded_bar_contradicts_is_removed(tmp_path):
         schema_overrides={"risk_warning": pl.Boolean},
     ).write_parquet(part / "part-0.parquet")
     _commit(cfg, "trading_status", cfg.curated_root / "trading_status")
+    settle(cfg)
 
     assert repair_stale_derived_suspensions(cfg)["rows"] == 1
     report = repair_stale_derived_suspensions(cfg, apply=True)

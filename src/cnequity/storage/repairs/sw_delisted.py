@@ -81,8 +81,6 @@ def repair_sw_delisted(config: Config, *, apply: bool = False) -> dict:
                 config,
                 store,
                 DATASET,
-                "as_of_date",
-                root,
                 keep=lambda part: drop_after_delisting(part, delisted),
                 reason="sw_delisted",
                 metadata={"rows": hits.height, "symbols": report["symbols"]},

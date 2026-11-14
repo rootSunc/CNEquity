@@ -81,7 +81,19 @@ def test_an_old_backfill_can_reconstruct_a_subsequently_verified_earlier_date():
     ).is_empty()
 
 
-def test_late_value_is_visible_only_as_inexact_historical_reconstruction(tmp_path):
+def _published_rows(root):
+    """The rows of a published root, whether a directory or a catalog revision."""
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    return scan_parquet_root(root, committed=False).collect()
+
+
+def _entries(cfg) -> set:
+    """Everything in the lake but the catalog's journal, which a read opens."""
+    return {p for p in cfg.data_root.rglob("*") if not p.name.startswith("catalog.sqlite-")}
+
+
+def test_late_value_is_visible_only_as_inexact_historical_reconstruction(tmp_path, settle):
     cfg = Config(data_root=tmp_path / "lake")
     dataset = "financial_statement_items"
     path = cfg.curated_root / dataset / "report_period=2016Q4" / "part-merged.parquet"
@@ -91,9 +103,10 @@ def test_late_value_is_visible_only_as_inexact_historical_reconstruction(tmp_pat
     store.commit(
         dataset, run_id="seed", changed_files=[path], schema_version=1, contract_fingerprint="test"
     )
-    files = set(cfg.data_root.rglob("*"))
+    settle(cfg)
+    files = _entries(cfg)
     assert repair_financial_announcements(cfg)["rows"] == 1
-    assert set(cfg.data_root.rglob("*")) == files
+    assert _entries(cfg) == files
     result = repair_financial_announcements(cfg, apply=True)
     assert result["applied"] is True
     early = load(dataset, config=cfg, as_of=ORIGINAL).filter(pl.col("item_code") == "total_assets")
@@ -105,10 +118,7 @@ def test_late_value_is_visible_only_as_inexact_historical_reconstruction(tmp_pat
     assert early["fetched_at"].to_list() == [OBSERVED]
     assert load(dataset, config=cfg, as_of=ORIGINAL, pit_mode="strict").is_empty()
     # The late vintage is a new key, so it sits in a file beside the seed one.
-    raw = pl.concat(
-        [pl.read_parquet(p) for p in sorted(store.current_root(dataset).rglob("*.parquet"))],
-        how="diagonal_relaxed",
-    )
+    raw = _published_rows(store.current_root(dataset))
     assert raw.filter(pl.col("item_code") == "total_assets")["announce_date"].sort().to_list() == [
         ORIGINAL,
         LATE,

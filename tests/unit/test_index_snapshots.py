@@ -57,7 +57,14 @@ def test_incomplete_or_misidentified_books_rejected(args):
         parse_index_snapshot(workbook(**args), "000688.SH", weights=True)
 
 
-def test_replace_whole_book_and_keep_old_revision(tmp_path, monkeypatch):
+def _published(root):
+    """The rows of a published root, whether a directory or a catalog revision."""
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    return scan_parquet_root(root, committed=False).collect()
+
+
+def test_replace_whole_book_and_keep_old_revision(tmp_path, monkeypatch, settle):
     cfg = Config(data_root=tmp_path / "lake")
     monkeypatch.setattr(
         "cnequity.storage.repairs.index_snapshots.last_closed_session",
@@ -118,15 +125,15 @@ def test_replace_whole_book_and_keep_old_revision(tmp_path, monkeypatch):
             / f"000688.SH-{'weights' if weighted else 'members'}.json",
             record.to_dict(),
         )
+    settle(cfg)
     assert repair_index_snapshots(cfg, indices=["000688.SH"])["weighted_rows"] == 50
     result = repair_index_snapshots(cfg, indices=["000688.SH"], apply=True)
     assert result["applied"] and result["revision"] == 2
-    current = pl.read_parquet(list(store.current_root("index_constituents").rglob("*.parquet")))
+    current = _published(store.current_root("index_constituents"))
     assert current.height == 51
-    assert (store.current_root("index_constituents") / "as_of_date=2026-09").is_dir()
     assert "688999.SH" not in current["symbol"].to_list()
     assert current.filter(pl.col("index_symbol") == "000688.SH")["weight"].null_count() == 0
-    assert pl.read_parquet(list(old_root.rglob("*.parquet"))).height == 2
+    assert _published(old_root).height == 2
     assert not repair_index_snapshots(cfg, indices=["000688.SH"], apply=True)["applied"]
     # A subsequent failed weight download must not replace a validated book
     # with an unweighted cohort, even if that cohort differs on the same date.
@@ -135,6 +142,4 @@ def test_replace_whole_book_and_keep_old_revision(tmp_path, monkeypatch):
     result = repair_index_snapshots(cfg, indices=["000688.SH"], apply=True)
     assert not result["applied"] and result["snapshots_retained_weights"]
     assert any("conflicts" in f["error"] for f in result["failures"])
-    assert pl.read_parquet(
-        list(store.current_root("index_constituents").rglob("*.parquet"))
-    ).equals(current)
+    assert _published(store.current_root("index_constituents")).equals(current)

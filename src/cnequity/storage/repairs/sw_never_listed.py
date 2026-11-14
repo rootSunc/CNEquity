@@ -76,8 +76,6 @@ def repair_sw_never_listed(config: Config, *, apply: bool = False) -> dict:
                 config,
                 store,
                 DATASET,
-                "as_of_date",
-                root,
                 keep=keep,
                 reason="sw_never_listed",
                 metadata={"symbols": sorted(drop)},

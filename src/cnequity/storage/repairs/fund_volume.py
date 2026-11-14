@@ -2,8 +2,6 @@
 
 import json
 from datetime import datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import httpx
@@ -19,15 +17,13 @@ from cnequity.adapters.exchange.fund_volume import (
     parse_sse_fund_dayk,
 )
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
-from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.publication import check_repair_publication
 from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.parquet import StagingWriter, compact_dataset
 from cnequity.storage.raw_archive import RawPayloadArchive
 from cnequity.storage.read_context import ReadContext
+from cnequity.storage.repairs.publish import publish_staged
 from cnequity.storage.revisions import RevisionStore
 
 DATASET = "daily_bars"
@@ -280,35 +276,21 @@ def repair_fund_volume(config, *, apply=False, refresh_sources=False, max_symbol
         )
         if matching.is_empty():
             return report
-        store.materialize_current(DATASET)
-        changed = []
-        with TemporaryDirectory(prefix="cne-fund-volume-") as directory:
-            staging = Path(directory)
-            StagingWriter(staging).write_batch(DATASET, run_id, "official-0", matching)
-            compact_dataset(
-                staging,
-                config.curated_root,
-                DATASET,
-                run_id,
-                partition_col="trade_date",
-                changed_files=changed,
-                base_root=live.roots[DATASET],
-            )
-        publication = check_repair_publication(config, DATASET, run_id, changed)
-        contract = dataset_contract(DATASET)
-        revision = store.commit(
+        published = publish_staged(
+            config,
+            store,
             DATASET,
+            matching,
             run_id=run_id,
-            changed_files=changed,
-            schema_version=int(contract["schema_version"]),
-            contract_fingerprint=contract_fingerprint(contract),
+            base_root=live.roots[DATASET],
             metadata={
                 "reason": "official_fund_auction_quantity",
                 **report,
-                "publication_audit": publication["report_path"],
             },
+            batch="official-0",
+            partition_col="trade_date",
         )
-        if revision is None:
+        if published is None:
             raise RuntimeError("fund quantity repair produced no revision")
-        report.update(applied=True, revision=revision.revision)
+        report.update(applied=True, revision=published["revision"])
     return report
