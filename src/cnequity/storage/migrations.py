@@ -96,6 +96,12 @@ def _lake_catalog(config, *, apply: bool) -> dict:
     return migrate_to_catalog(config, apply=apply)
 
 
+def _revision_records(config, *, apply: bool) -> dict:
+    from cnequity.storage.revision_records import import_receipts
+
+    return import_receipts(config, apply=apply)
+
+
 def _missing_values(dataset: str) -> Callable[..., dict]:
     def run(config, *, apply: bool) -> dict:
         from cnequity.storage.repairs.missing_values import repair_missing_values
@@ -119,6 +125,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         "0.25.0",
         _lake_catalog,
+    ),
+    # Second: the revision records the catalog then reads from.
+    Migration(
+        "revision-records",
+        N_(
+            "Record every published revision's receipt in the lake catalog, "
+            "which revision reads then come from"
+        ),
+        "0.26.0",
+        _revision_records,
     ),
     Migration(
         "orphan-symbols",

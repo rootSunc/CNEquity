@@ -40,8 +40,8 @@ def lake_root(config) -> Path:
 def committed_source(config, dataset: str) -> tuple[str, str] | None:
     """The Parquet glob and revision id of *dataset*'s committed generation, if it has one."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    pointer = store.current_pointer(dataset)
-    root = store.current_root(dataset)
+    pointer = store.pointer_file(dataset)
+    root = store.current_root_file(dataset)
     if pointer is None or root is None or not any(root.rglob("*.parquet")):
         return None
     return (root / "**" / "*.parquet").as_posix(), str(pointer.get("revision_id", ""))
@@ -147,6 +147,13 @@ def prepare_record_tables(catalog: Catalog) -> None:
         if not catalog.has_table(table):
             catalog.execute(f"CREATE TABLE {table} ({columns})")
         catalog.keep_rows_inline(table)
+    # Both tables of revision records carry what a receipt says, so a reader
+    # can ask either before anything has been written to it.
+    _ensure_history_table(catalog)
+    have = set(catalog.column_types(REVISIONS_TABLE))
+    for name, kind in RECEIPT_COLUMNS:
+        if name not in have:
+            catalog.execute(f"ALTER TABLE {REVISIONS_TABLE} ADD COLUMN {name} {kind}")
     if not legacy:
         return
     described = {row[0] for row in catalog.execute(f"DESCRIBE {LEGACY_SYNC_TABLE}").fetchall()}
@@ -309,8 +316,8 @@ def _table_keys_unique(catalog: Catalog, dataset: str) -> bool:
 def _committed_files(config, dataset: str) -> tuple[str, Path, dict[str, str]] | None:
     """Revision id, generation root and ``relative path -> digest`` of the committed files."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    pointer = store.current_pointer(dataset)
-    root = store.current_root(dataset)
+    pointer = store.pointer_file(dataset)
+    root = store.current_root_file(dataset)
     if pointer is None or root is None:
         return None
     files: dict[str, str] = {}
@@ -502,11 +509,45 @@ HISTORY_TABLE = "_revision_history"
 REVISIONS_TABLE = "_revisions"
 
 
+#: What a revision's receipt records. A ``_revisions`` row carries these columns,
+#: and so does a history row: a revision synced in from a generation, or one
+#: imported from the receipts a lake kept before (``snapshot`` empty when the
+#: catalog no longer holds it).
+RECEIPT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("revision", "BIGINT"),
+    ("run_id", "VARCHAR"),
+    ("committed_at", "VARCHAR"),
+    ("schema_version", "BIGINT"),
+    ("contract_fingerprint", "VARCHAR"),
+    ("content_digest", "VARCHAR"),
+    ("changed_partitions", "VARCHAR"),
+    ("metadata", "VARCHAR"),
+)
+
+
+def receipt_columns(receipt: dict) -> dict[str, object]:
+    """The :data:`RECEIPT_COLUMNS` of a receipt (a ``DatasetRevision.to_dict()``)."""
+    return {
+        "revision": receipt["revision"],
+        "run_id": receipt.get("run_id"),
+        "committed_at": receipt.get("committed_at"),
+        "schema_version": receipt.get("schema_version"),
+        "contract_fingerprint": receipt.get("contract_fingerprint"),
+        "content_digest": receipt.get("content_digest"),
+        "changed_partitions": json.dumps(list(receipt.get("changed_partitions") or ())),
+        "metadata": json.dumps(receipt.get("metadata") or {}, sort_keys=True, default=str),
+    }
+
+
 def _ensure_history_table(catalog: Catalog) -> None:
     catalog.execute(
         f"CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} "
         "(dataset VARCHAR, revision_id VARCHAR, snapshot BIGINT, unique_keys BOOLEAN)"
     )
+    have = set(catalog.column_types(HISTORY_TABLE))
+    for name, kind in RECEIPT_COLUMNS:
+        if name not in have:
+            catalog.execute(f"ALTER TABLE {HISTORY_TABLE} ADD COLUMN {name} {kind}")
 
 
 def revision_snapshots(catalog: Catalog) -> list[tuple[str, str, int, bool]]:
@@ -522,7 +563,8 @@ def revision_snapshots(catalog: Catalog) -> list[tuple[str, str, int, bool]]:
         ).fetchall()
     if catalog.has_table(HISTORY_TABLE):
         rows += catalog.execute(
-            f"SELECT dataset, revision_id, snapshot, unique_keys FROM {HISTORY_TABLE}"
+            f"SELECT dataset, revision_id, snapshot, unique_keys FROM {HISTORY_TABLE} "
+            "WHERE snapshot IS NOT NULL"
         ).fetchall()
     return [(d, r, int(s), bool(u)) for d, r, s, u in rows]
 
@@ -545,14 +587,20 @@ def revision_snapshot(catalog: Catalog, dataset: str, revision_id: str) -> tuple
         return None
     row = catalog.execute(
         f"SELECT snapshot, unique_keys FROM {HISTORY_TABLE} "
-        "WHERE dataset = ? AND revision_id = ? ORDER BY snapshot DESC LIMIT 1",
+        "WHERE dataset = ? AND revision_id = ? AND snapshot IS NOT NULL "
+        "ORDER BY snapshot DESC LIMIT 1",
         [dataset, revision_id],
     ).fetchone()
     return (int(row[0]), bool(row[1])) if row else None
 
 
 def _record_history(
-    catalog: Catalog, dataset: str, revision_id: str, *, snapshot: int | None = None
+    catalog: Catalog,
+    dataset: str,
+    revision_id: str,
+    *,
+    snapshot: int | None = None,
+    receipt: dict | None = None,
 ) -> None:
     """Remember which snapshot now holds *dataset* at *revision_id*.
 
@@ -560,16 +608,25 @@ def _record_history(
     commit and the delete fold, in a commit of its own, so the snapshot named
     is a file-complete one. A crash in between only loses the entry; that
     revision is then read from its generation. A revision published into the
-    catalog needs no entry (see ``REVISIONS_TABLE``).
+    catalog needs no entry (see ``REVISIONS_TABLE``). *receipt* is the
+    revision's receipt; the entry keeps what it says (:data:`RECEIPT_COLUMNS`).
     """
     _ensure_history_table(catalog)
     if revision_snapshot(catalog, dataset, revision_id) is not None:
         return
     if snapshot is None:
         snapshot = catalog.snapshot()
+    values = {
+        "dataset": dataset,
+        "revision_id": revision_id,
+        "snapshot": snapshot,
+        "unique_keys": bool(keys_unique(catalog, dataset)),
+        **(receipt_columns(receipt) if receipt else {}),
+    }
+    names = ", ".join(values)
+    marks = ", ".join("?" for _ in values)
     catalog.execute(
-        f"INSERT INTO {HISTORY_TABLE} VALUES (?, ?, ?, ?)",
-        [dataset, revision_id, snapshot, bool(keys_unique(catalog, dataset))],
+        f"INSERT INTO {HISTORY_TABLE} ({names}) VALUES ({marks})", list(values.values())
     )
 
 
@@ -581,7 +638,13 @@ def sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
         return None
     if result.action != "current":
         catalog.fold_deletes(dataset)
-    _record_history(catalog, dataset, result.revision_id)
+    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
+    receipt = store.receipt_file(dataset)
+    if receipt is not None and receipt.revision_id != result.revision_id:
+        receipt = None
+    _record_history(
+        catalog, dataset, result.revision_id, receipt=receipt.to_dict() if receipt else None
+    )
     return result
 
 
@@ -649,9 +712,9 @@ def _sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
 
 
 def catalog_is_current(config, catalog: Catalog, dataset: str) -> bool:
-    """True when the catalog table holds exactly the committed revision."""
+    """True when the catalog table holds exactly the revision the revision store's files name."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    pointer = store.current_pointer(dataset)
+    pointer = store.pointer_file(dataset)
     return pointer is not None and synced_revision_id(catalog, dataset) == str(
         pointer.get("revision_id", "")
     )

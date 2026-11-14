@@ -506,12 +506,59 @@ class RevisionStore:
             raise RevisionConsistencyError(f"revision {label} escapes meta root: {cursor}") from exc
         return resolved
 
+    def _catalog_records(self):
+        """The catalog's record of this lake's revisions, or ``None`` while its files are read."""
+        from cnequity.storage.revision_records import records_for
+
+        return records_for(self.meta_root)
+
     def current_pointer(self, dataset: str) -> dict[str, Any] | None:
-        """Return and validate the current pointer, if this is a revision lake."""
+        """The current revision of *dataset*, in the shape of its ``current.json``.
+
+        From the lake catalog once it records every revision (see
+        :mod:`cnequity.storage.revision_records`); before that, the validated
+        pointer file.
+        """
+        records = self._catalog_records()
+        if records is None:
+            return self._read_pointer(dataset)
+        return records.pointer(dataset)
+
+    def pointer_file(self, dataset: str) -> dict[str, Any] | None:
+        """The validated ``current.json`` of *dataset*: what the revision store's files say."""
         return self._read_pointer(dataset)
 
     def current_root(self, dataset: str, *, revision: int | str | None = None) -> Path | None:
         """Resolve the immutable root selected for a query.
+
+        ``revision=None`` is the current revision; a revision number or id
+        pins an earlier one. Answered from the lake catalog once it records
+        every revision, and from the revision store's files before that.
+        """
+        records = self._catalog_records()
+        if records is None:
+            return self.current_root_file(dataset, revision=revision)
+        if revision is None:
+            pointer = records.pointer(dataset)
+            if pointer is None:
+                return None
+            return self._safe_meta_path(
+                self._safe_relative(pointer["generation_path"]), label="generation"
+            )
+        if isinstance(revision, bool):
+            raise ValueError("revision must be a non-negative integer or revision id")
+        record = records.find(dataset, revision)
+        if record is None:
+            raise RevisionConsistencyError(f"unknown retained revision {revision!r} for {dataset}")
+        generation = self._safe_meta_path(
+            self._safe_relative(record.generation_path), label="generation"
+        )
+        if not generation.is_dir() and record.metadata.get("storage") != STORAGE_CATALOG:
+            raise RevisionConsistencyError(f"revision generation is missing: {generation}")
+        return generation
+
+    def current_root_file(self, dataset: str, *, revision: int | str | None = None) -> Path | None:
+        """Resolve the immutable root selected for a query, from the revision store's files.
 
         ``revision=None`` resolves ``current.json``.  A historical integer or
         revision id resolves the matching receipt and generation, allowing a
@@ -620,7 +667,7 @@ class RevisionStore:
                     for path in changed_files
                 }
                 present = {_partition_of(relative) for relative in mutable}
-                base = self.current_root(dataset)
+                base = self.current_root_file(dataset)
                 committed = (
                     {path.relative_to(base): path for path in self._walk_files(base)}
                     if base is not None
@@ -716,7 +763,7 @@ class RevisionStore:
     def _generation_records(self, dataset: str, base: Path) -> dict[str, RevisionFile]:
         """Digests the current receipt recorded for *base*, keyed by path."""
         try:
-            receipt = self.latest(dataset)
+            receipt = self.receipt_file(dataset)
         except (OSError, ValueError, TypeError, RevisionConsistencyError):
             return {}
         if receipt is None or not receipt.generation_path:
@@ -736,7 +783,7 @@ class RevisionStore:
         if not _locked:
             with lake_mutation_lock(self.meta_root, blocking=True):
                 return self.ensure_current(dataset, _locked=True)
-        current = self.current_root(dataset)
+        current = self.current_root_file(dataset)
         if current is not None:
             return current
         generation, _files = self._copy_generation(dataset, _LEGACY_REVISION_ID)
@@ -765,7 +812,7 @@ class RevisionStore:
             self._materialize_from_catalog(dataset, pointer)
             tree = self._layer_root(dataset) / dataset
             return tree if any(tree.rglob("*.parquet")) else None
-        current = self.current_root(dataset)
+        current = self.current_root_file(dataset)
         if current is None:
             mutable = self._layer_root(dataset) / dataset
             if not (mutable.is_dir() and any(mutable.rglob("*.parquet"))):
@@ -786,7 +833,7 @@ class RevisionStore:
         if pointer is not None and pointer.get("storage") == STORAGE_CATALOG:
             return self._materialize_from_catalog(dataset, pointer)
 
-        current = self.current_root(dataset)
+        current = self.current_root_file(dataset)
         if current is None:
             return None
         target = self._layer_root(dataset) / dataset
@@ -1122,7 +1169,7 @@ class RevisionStore:
             quarantine = quarantine_root / f"{dataset}-{safe_run}-{safe_reason}-{uuid.uuid4().hex}"
             replace_with_retry(target, quarantine)
 
-        current = self.current_root(dataset)
+        current = self.current_root_file(dataset)
         if current is not None:
             target.parent.mkdir(parents=True, exist_ok=True)
             temporary = Path(tempfile.mkdtemp(prefix=f".{dataset}-rollback-", dir=target.parent))
@@ -1165,7 +1212,7 @@ class RevisionStore:
         if not names:
             return ()
         mutable = self._layer_root(dataset) / dataset
-        base = self.current_root(dataset)
+        base = self.current_root_file(dataset)
         out = []
         for name in names:
             if "/" in name or "\\" in name or "=" not in name:
@@ -1324,7 +1371,7 @@ class RevisionStore:
         )
         carried = _CARRIED_RECEIPT_METADATA.get(dataset, ())
         if carried:
-            previous = self.latest(dataset)
+            previous = self.receipt_file(dataset)
             if previous is not None:
                 for key in carried:
                     if key not in receipt.metadata and key in previous.metadata:
@@ -1442,7 +1489,7 @@ class RevisionStore:
         )
         carried = _CARRIED_RECEIPT_METADATA.get(dataset, ())
         if carried and pointer is not None:
-            previous = self.latest(dataset)
+            previous = self.receipt_file(dataset)
             if previous is not None:
                 for key in carried:
                     if key not in receipt.metadata and key in previous.metadata:
@@ -1495,7 +1542,36 @@ class RevisionStore:
             logger.warning("lake catalog not updated for %s: %s", dataset, exc)
 
     def latest(self, dataset: str) -> DatasetRevision | None:
-        """Read the receipt referenced by the current committed pointer."""
+        """The receipt of *dataset*'s current revision.
+
+        From the lake catalog once it records every revision: the receipt's
+        per-file lists are not kept there, and come back empty.
+        """
+        records = self._catalog_records()
+        if records is None:
+            return self.receipt_file(dataset)
+        record = records.current.get(dataset)
+        return None if record is None else self._revision_of(record)
+
+    def _revision_of(self, record) -> DatasetRevision:
+        return DatasetRevision(
+            dataset=record.dataset,
+            revision=record.revision,
+            revision_id=record.revision_id,
+            committed_at=record.committed_at or "",
+            run_id=record.run_id or "",
+            schema_version=record.schema_version or 0,
+            contract_fingerprint=record.contract_fingerprint or "",
+            content_digest=record.content_digest or "",
+            changed_partitions=record.changed_partitions,
+            files=(),
+            metadata=dict(record.metadata),
+            generation_path=record.generation_path,
+            pointer_path=self.pointer_path(record.dataset).relative_to(self.meta_root).as_posix(),
+        )
+
+    def receipt_file(self, dataset: str) -> DatasetRevision | None:
+        """Read the receipt file referenced by the current pointer file."""
         pointer = self._read_pointer(dataset)
         if pointer is None:
             state = self.state.get_payload(dataset)
@@ -1536,6 +1612,45 @@ class RevisionStore:
         return max((number for number, _, _ in self._receipt_paths(dataset)), default=0)
 
     def history_after(self, dataset: str, revision_id: str) -> tuple[DatasetRevision, ...]:
+        """Return every committed revision after *revision_id*, oldest first.
+
+        Raises :class:`RevisionConsistencyError` when *revision_id* is not
+        recorded, was never published, or the chain after it has a gap.
+        """
+        records = self._catalog_records()
+        if records is None:
+            return self._history_after_file(dataset, revision_id)
+        history = records.history(dataset)
+        by_id = {record.revision_id: record for record in history}
+        if revision_id not in by_id:
+            raise RevisionConsistencyError(
+                f"revision {revision_id} of {dataset} is not in the receipt history"
+            )
+        start = by_id[revision_id].revision
+        by_number: dict[int, list] = {}
+        for record in history:
+            by_number.setdefault(record.revision, []).append(record)
+        current = records.current.get(dataset)
+        out = []
+        while current is not None and current.revision_id != revision_id:
+            if current.revision <= start:
+                raise RevisionConsistencyError(
+                    f"revision {revision_id} of {dataset} was never published"
+                )
+            out.append(self._revision_of(current))
+            base = current.metadata.get("base_revision_id")
+            if base:
+                current = by_id.get(str(base))
+            else:
+                candidates = by_number.get(current.revision - 1, [])
+                current = candidates[0] if len(candidates) == 1 else None
+            if current is None:
+                raise RevisionConsistencyError(
+                    f"the revision before {out[-1].revision} of {dataset} is missing"
+                )
+        return tuple(reversed(out))
+
+    def _history_after_file(self, dataset: str, revision_id: str) -> tuple[DatasetRevision, ...]:
         """Return every committed receipt after *revision_id*, oldest first.
 
         Raises :class:`RevisionConsistencyError` when *revision_id* is not in
@@ -1553,7 +1668,7 @@ class RevisionStore:
                 f"revision {revision_id} of {dataset} is not in the receipt history"
             )
         start = by_id[revision_id][0]
-        current = self.latest(dataset)
+        current = self.receipt_file(dataset)
         out: list[DatasetRevision] = []
         # Walk back from the published revision along ``base_revision_id``, so
         # a receipt whose publish stopped short is never part of the history.
@@ -1583,7 +1698,7 @@ class RevisionStore:
         pointer = self._read_pointer(dataset)
         if pointer is None or pointer.get("revision", 0) == 0:
             return
-        receipt = self.latest(dataset)
+        receipt = self.receipt_file(dataset)
         if receipt is None:
             raise RevisionConsistencyError(f"current pointer has no receipt: {dataset}")
         with self.state.transaction(dataset) as state:

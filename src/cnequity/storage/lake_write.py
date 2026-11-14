@@ -1000,19 +1000,12 @@ def verify_revisions(catalog: Catalog, dataset: str | None = None) -> list[Revis
 
 
 def _revision_row(receipt: DatasetRevision) -> dict[str, object]:
-    import json
+    from cnequity.storage.catalog_bridge import receipt_columns
 
     return {
         "dataset": receipt.dataset,
-        "revision": receipt.revision,
         "revision_id": receipt.revision_id,
-        "run_id": receipt.run_id,
-        "committed_at": receipt.committed_at,
-        "schema_version": receipt.schema_version,
-        "contract_fingerprint": receipt.contract_fingerprint,
-        "content_digest": receipt.content_digest,
-        "changed_partitions": json.dumps(list(receipt.changed_partitions)),
-        "metadata": json.dumps(receipt.metadata, sort_keys=True, default=str),
+        **receipt_columns(receipt.to_dict()),
     }
 
 
