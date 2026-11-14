@@ -576,6 +576,15 @@ cne migrate --apply     # runs them in order and records the results
 
 Each migration holds the lake mutation lock, publishes through the repair gate, and keeps the previous revision readable. When one fails, the run stops; later ones neither run nor get recorded. `fund-listing-dates` reads the exchanges' official fund lists and `misdated-valuation` reads the EastMoney datacenter when it has rows to replace; the rest read only the lake. `cne doctor` reports migrations not yet checked. Migrate a lake written by 0.12 or earlier with 0.19 or earlier before upgrading.
 
+**Optional migrations.** Some migrations never appear in the preview and are never owed; they run only when named with `--only`. There is one today:
+
+```bash
+cne migrate --only lake-catalog            # preview: how many datasets are left to copy, and whether the lake has switched
+cne migrate --only lake-catalog --apply    # copy, verify row for row, then switch
+```
+
+`lake-catalog` moves an existing lake onto the experimental lake catalog (`lake/`). It copies every published dataset into the catalog, checks that each copy holds exactly the published rows, and, once all of them match, records in `meta/storage.json` that the lake publishes into its catalog. From then on each dataset lives only in the catalog after its next publish, which is one-way per dataset; the generations already written stay as they are and remain readable. If any dataset fails the comparison the lake is not switched; what was copied stays in the catalog and a rerun reuses it. The copy and the comparison do not hold the lake lock, so other runs keep publishing; the lock is held only at the end, to catch up on what they published and to switch. It refuses to run when a `revision_gate` is configured. Take a snapshot first (`cne snapshot create`).
+
 ## cne repair
 
 By default it outputs a plan based on data already in the lake; with `--apply` it publishes as a new version, the old version is kept, and both can be read by version. `corporate-action-gaps --apply` fetches evidence from data sources for each gap.

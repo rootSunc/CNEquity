@@ -554,8 +554,20 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
 
 
 def _open_lake_write(config: Config, run_id: str):
-    """The run's catalog write when ``[storage].publish = "catalog"`` and the lake has a catalog."""
-    if getattr(config, "storage_publish", "generation") != "catalog":
+    """The run's catalog write when the lake publishes into its catalog and has one.
+
+    Either the config asks for it (``[storage].publish = "catalog"``) or the
+    lake already recorded the switch (``meta/storage.json``, written here or by
+    the ``lake-catalog`` migration): how a lake stores revisions belongs to
+    the lake, and a config that never mentions it must not send compaction
+    back to generations while every other writer publishes into the catalog.
+    """
+    from cnequity.storage.revisions import RevisionStore
+
+    recorded = RevisionStore(
+        config.meta_root, config.curated_root, config.derived_root, create=False
+    ).publishes_to_catalog()
+    if getattr(config, "storage_publish", "generation") != "catalog" and not recorded:
         return None
     from cnequity.storage.catalog_bridge import lake_root
     from equitylake_core.catalog import CATALOG_FILE

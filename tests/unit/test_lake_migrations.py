@@ -43,7 +43,8 @@ def test_a_new_lake_is_stamped_and_owes_nothing(config):
     assert owed(config) == [
         m
         for m in MIGRATIONS
-        if migrations._parse(m.introduced_in) > migrations._parse(record["created_with"])
+        if not m.optional
+        and migrations._parse(m.introduced_in) > migrations._parse(record["created_with"])
     ]
 
 
@@ -58,7 +59,7 @@ def test_an_old_lake_re_running_init_is_not_stamped(config):
     init_data_layout(config)
 
     assert not lake_path(config).exists()
-    assert owed(config) == list(MIGRATIONS)
+    assert owed(config) == [m for m in MIGRATIONS if not m.optional]
 
 
 def test_preview_changes_nothing_and_apply_records(config, fake_registry):

@@ -53,6 +53,8 @@ class Migration:
     run: Callable[..., dict]
     #: Catalog message (`N_`) naming the source it reads, or "" when it reads only the lake.
     reads: str = ""
+    #: An optional migration is never owed: it runs only when named with ``--only``.
+    optional: bool = False
 
     def apply(self, config, *, apply: bool) -> dict:
         return self.run(config, apply=apply)
@@ -86,6 +88,12 @@ def _repartition(dataset: str) -> Callable[..., dict]:
         }
 
     return run
+
+
+def _lake_catalog(config, *, apply: bool) -> dict:
+    from cnequity.storage.catalog_migration import migrate_to_catalog
+
+    return migrate_to_catalog(config, apply=apply)
 
 
 def _missing_values(dataset: str) -> Callable[..., dict]:
@@ -264,6 +272,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         "0.23.0",
         _repair("missing_values", "repair_all_missing_values"),
     ),
+    Migration(
+        "lake-catalog",
+        N_(
+            "Copy every published dataset into the lake catalog, verify it row for row, "
+            "and switch the lake to publishing there (experimental, one-way per dataset)"
+        ),
+        "0.25.0",
+        _lake_catalog,
+        optional=True,
+    ),
 )
 
 
@@ -276,6 +294,7 @@ def owed(config) -> list[Migration]:
         migration
         for migration in MIGRATIONS
         if migration.id not in done
+        and not migration.optional
         and (created is None or _parse(created) < _parse(migration.introduced_in))
     ]
 
