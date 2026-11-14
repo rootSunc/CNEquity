@@ -358,6 +358,9 @@ def test_a_read_takes_a_date_range_columns_and_a_snapshot(lake):
     assert lake.load("bars", start="2024-02-02", end="2024-02-28").is_empty()
     assert lake.load("bars", columns=["code", "day"]).columns == ["code", "day"]
     assert lake.load("bars", snapshot=first.snapshot).height == 3
+    assert lake.load("bars", where=pl.col("day").dt.month() == 3)["day"].to_list() == [
+        date(2024, 3, 1)
+    ]
     assert lake.load("bars").height == 4
     with pytest.raises(ValueError, match="no column"):
         lake.load("bars", columns=["volume"])

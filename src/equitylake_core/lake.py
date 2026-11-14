@@ -178,6 +178,7 @@ class Lake:
         end: date | str | None = None,
         columns: Sequence[str] | None = None,
         snapshot: int | None = None,
+        where=None,
     ):
         """The rows of *dataset* as a Polars frame; see :func:`equitylake_core.read.load`."""
         with self.catalog() as catalog:
@@ -188,6 +189,7 @@ class Lake:
                 end=end,
                 columns=columns,
                 snapshot=snapshot,
+                where=where,
             )
 
     def snapshot(self) -> int:

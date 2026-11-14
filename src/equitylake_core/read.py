@@ -54,10 +54,14 @@ def load(
     end: date | str | None = None,
     columns: Sequence[str] | None = None,
     snapshot: int | None = None,
+    where: pl.Expr | None = None,
 ) -> pl.DataFrame:
     """The rows of *spec*'s dataset, in its declared order.
 
     *start* and *end* bound the time column, both inclusive, as dates.
+    *where* keeps the rows a Polars expression over the dataset's columns
+    is true for; it is pushed into the scan, so a filter on the leading
+    sort column skips most of each file.
     *columns* picks and orders the columns returned. *snapshot* reads the
     lake as it was at that version; it stays readable until its files are
     cleaned up.
@@ -104,6 +108,8 @@ def load(
             frame = frame.filter(moment >= low)
         if high is not None:
             frame = frame.filter(moment < high)
+    if where is not None:
+        frame = frame.filter(where)
     return frame.sort(list(spec.order), maintain_order=True).select(wanted).collect()
 
 
