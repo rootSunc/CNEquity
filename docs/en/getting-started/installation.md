@@ -88,10 +88,12 @@ Copying the template directly skips path resolution and platform adjustments, so
 ```bash
 pip install --upgrade cnequity
 cne config upgrade
-cne migrate            # preview owed data migrations; then cne migrate --apply
+cne upgrade            # preview what this version does to the lake; then cne upgrade --apply
 ```
 
-A config that extends the built-in defaults (`extends = "builtin"`) needs no change, and this command reports nothing to do. For an older full config, `cne config upgrade` adds the schedule steps and schedule groups introduced by the new version, backs up the original file first, and validates after writing; `--minimize` instead rewrites it to extend the defaults. First read the target version's [changelog](../changelog.md) and [Upgrades and feedback](#upgrades-and-compatibility) to confirm whether a data migration is needed. Do not use `config create --force` in place of a config upgrade.
+`cne upgrade` brings a lake built by an earlier version up to this one in one step: it checks extensions and disk space, backs up the lake's records, then runs every owed migration in order; see the [CLI reference](../reference/cli.md#cne-upgrade). Upgrading to 0.25.0 requires it: until it has run, commands that write are refused; reads are unaffected.
+
+A config that extends the built-in defaults (`extends = "builtin"`) needs no change, and `cne config upgrade` reports nothing to do. For an older full config, `cne config upgrade` adds the schedule steps and schedule groups introduced by the new version, backs up the original file first, and validates after writing; `--minimize` instead rewrites it to extend the defaults. First read the target version's [changelog](../changelog.md) and [Upgrades and feedback](#upgrades-and-compatibility) to confirm whether a data migration is needed. Do not use `config create --force` in place of a config upgrade.
 
 The old `tdx` / `macro` / `nlp` and other extras have been removed. Unit or schema migrations for past versions should be run according to the corresponding release notes; scripts meant for an old lake must not be reapplied to a new lake. The current `httpx` constraint is `>=0.25`; the actual installed version is resolved by the environment and cannot be inferred as a fixed version from the install command.
 

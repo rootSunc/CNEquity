@@ -12,7 +12,7 @@
   "datasets/sources.md": "a06f0ed304e36bea868001a94093aad3b9dd100b46075fdebe3de5386210cc5c",
   "getting-started/configuration.md": "47fc97d0e4c3b5bc081a9f0c5df3521d569f8582f6aa6afdb0f9862663046d26",
   "getting-started/initialization.md": "06bdd6b1ccdc7870b6f1082af03a33d1c6bf5f77716d7361adb325137a6863ec",
-  "getting-started/installation.md": "d69e8fde2c1128244c6381f2b8a1413657dedadb18fd05004bde7c12f03cd8b7",
+  "getting-started/installation.md": "38c1dd1bc9f3a1dba6e0929606c3f7804251352704e7657cc42646e7a8d63a59",
   "getting-started/quickstart.md": "cf3303233dd22ef626d17cc0fec90deb32f70346b433f9ecf2004a9d3498042d",
   "guides/ai-query-a-shares.md": "99f236131bd3db321042baa4b2b7aecd10ddf9604aa922b6b0dc6a4443e368bd",
   "guides/avoid-look-ahead-bias.md": "f4aae999e335e0a89b5a9f11730dadba69bb4af559465918483a5b77f2a8ede6",
@@ -31,7 +31,7 @@
   "recipes/minute-bars-15-30-60.md": "3b002e5395d81d280b89e75966ef795dd53211fe047eb5aaa4aaaf328631b5fa",
   "recipes/pit-rebalance.md": "96fd34f95329bda75af0892ee176f3bc37af76cbafb5ca0241ca33920aca40a5",
   "recipes/research-baseline.md": "be42f53bbeaaef11808ab47f2c8ca9b9e06b3cd7256f2d23145dc37982cc29ac",
-  "reference/cli.md": "a0af8425fedfdf3bbfdf6f9cf76e2b2b1ff8af337230a04d4439b31c36f2aee6",
+  "reference/cli.md": "ce95c9625545e9c19ac2596529aca799a281df32d9f9977a64355f6aa4bbabe7",
   "reference/mcp.md": "39758d499b4ff2adf88c7daa9fc057611e7294a7fdd6cbc2036a81583fc92f4d",
   "reference/python-api.md": "4bca949cf63a0ee72e793c7850d44d8b545da4fec54688ffb6a97855de89b0b2",
   "reference/universe-profiles.md": "f2780873ec7e142a17df62b79451c42d193a0dffc57191da23bbdb5e1a71f24e"

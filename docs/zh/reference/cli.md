@@ -601,7 +601,7 @@ cne migrate            # 预览：还有几个数据集要复制，湖是否已�
 cne migrate --apply    # 复制、逐行核对，然后切换；再运行其余还欠的迁移
 ```
 
-`lake-catalog` 把每个已发布的数据集登记进湖目录（直接用原文件，不重写数据），逐个核对目录里的行与已发布的行完全一致，全部一致后在 `meta/storage.json` 记下这个湖发布进湖目录。有任何一个数据集核对不一致就不切换，湖保持原样，可以重跑。0.24.0 就开启过实验性湖目录的湖，迁移会把表重排成按分区存放的文件（预览里的 `to_lay_out`），真实规模约 40 分钟，期间其他任务照常运行。切换是单向的：此后每个数据集在下一次发布时转为只存在湖目录里。迁移需要 DuckDB 的 `ducklake` 和 `sqlite` 扩展，首次使用时自动下载；官方扩展站点连不上时，把对应 DuckDB 版本和平台的扩展文件放进一个目录并设置环境变量 `EQUITYLAKE_EXTENSION_DIR`，或把 `EQUITYLAKE_EXTENSION_MIRROR` 设为可达的扩展仓库。迁移前建议先 `cne snapshot create` 留一份快照。直接读 `curated/`、`derived/` 目录的外部工具改用 `cne storage export`。
+`lake-catalog` 把每个已发布的数据集登记进湖目录（直接用原文件，不重写数据），逐个核对目录里的行与已发布的行完全一致，全部一致后在 `meta/storage.json` 记下这个湖发布进湖目录。有任何一个数据集核对不一致就不切换，湖保持原样，可以重跑。0.24.0 就开启过实验性湖目录的湖，迁移会把表重排成按分区存放的文件（预览里的 `to_lay_out`），真实规模约 16 分钟，期间其他任务照常运行。切换是单向的：此后每个数据集在下一次发布时转为只存在湖目录里。迁移需要 DuckDB 的 `ducklake` 和 `sqlite` 扩展，首次使用时自动下载；官方扩展站点连不上时，把对应 DuckDB 版本和平台的扩展文件放进一个目录并设置环境变量 `EQUITYLAKE_EXTENSION_DIR`，或把 `EQUITYLAKE_EXTENSION_MIRROR` 设为可达的扩展仓库。迁移前建议先 `cne snapshot create` 留一份快照。直接读 `curated/`、`derived/` 目录的外部工具改用 `cne storage export`。
 
 ## cne repair
 

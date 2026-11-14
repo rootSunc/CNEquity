@@ -88,10 +88,12 @@ cne config create
 ```bash
 pip install --upgrade cnequity
 cne config upgrade
-cne migrate            # 预览还欠的数据迁移；确认后 cne migrate --apply
+cne upgrade            # 预览这个版本要对湖做什么；确认后 cne upgrade --apply
 ```
 
-继承内置默认值（`extends = "builtin"`）的配置不需要改动，这条命令只会报告无事可做。旧的完整配置由 `cne config upgrade` 把新版本加入的调度 step 和调度组补进去，先备份原文件，写完后校验；`--minimize` 则把它改写成继承默认值的形式。先阅读目标版本的[更新日志](../changelog.md)和[升级与反馈](#升级与兼容性)，确认是否需要数据迁移。不要用 `config create --force` 代替配置升级。
+`cne upgrade` 把旧版本建的湖一步升级到当前版本：先检查扩展和磁盘空间，备份湖的记录，再按顺序运行还欠的全部迁移，详见 [CLI 参考](../reference/cli.md#cne-upgrade)。升级到 0.25.0 必须运行它，之前写入类命令会拒绝执行；读取不受影响。
+
+继承内置默认值（`extends = "builtin"`）的配置不需要改动，`cne config upgrade` 只会报告无事可做。旧的完整配置由 `cne config upgrade` 把新版本加入的调度 step 和调度组补进去，先备份原文件，写完后校验；`--minimize` 则把它改写成继承默认值的形式。先阅读目标版本的[更新日志](../changelog.md)和[升级与反馈](#升级与兼容性)，确认是否需要数据迁移。不要用 `config create --force` 代替配置升级。
 
 旧版本的 `tdx` / `macro` / `nlp` 等 extras 已移除。历史版本的单位或 schema 迁移应按对应发布说明执行，不能把针对旧湖的脚本重复应用到新湖。当前 `httpx` 约束为 `>=0.25`；实际安装版本由环境解析，不能从安装命令推定一个固定版本。
 
