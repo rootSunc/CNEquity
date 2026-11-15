@@ -32,7 +32,7 @@ from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog
 #: The migration that imports the receipts; until a lake has had it, its files are read.
 MIGRATION_ID = "revision-records"
 #: Lakes built by this release or later never wrote a receipt the catalog lacks.
-INTRODUCED_IN = "0.26.0"
+INTRODUCED_IN = "0.25.0"
 
 _POINTER_SCHEMA_VERSION = 1
 STORAGE_CATALOG = "catalog"

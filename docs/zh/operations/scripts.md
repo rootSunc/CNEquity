@@ -92,7 +92,7 @@ python scripts/delisted_ops.py coverage --start 2016-01-01 --universe all_a_sh_s
 
 ## 分区重写（`cne repair repartition`）
 
-已不做任何事：湖目录发布时就按分区安排好文件，没有需要改写的布局。命令只输出说明，0.27.0 删除。旧版本湖的一次性数据迁移由 `cne upgrade` 负责。
+已不做任何事：湖目录发布时就按分区安排好文件，没有需要改写的布局。命令只输出说明，0.26.0 删除。旧版本湖的一次性数据迁移由 `cne upgrade` 负责。
 
 ## 测试与冒烟
 

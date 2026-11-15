@@ -92,7 +92,7 @@ Formerly `cne delisted discover / reconcile / repair / coverage`.
 
 ## Partition rewrites (`cne repair repartition`)
 
-No longer does anything: the lake catalog lays out each partition's files when it publishes them, so there is nothing to rewrite. The command only prints a note and is removed in 0.27.0. One-off data migrations for lakes written by older versions are `cne upgrade`'s job.
+No longer does anything: the lake catalog lays out each partition's files when it publishes them, so there is nothing to rewrite. The command only prints a note and is removed in 0.26.0. One-off data migrations for lakes written by older versions are `cne upgrade`'s job.
 
 ## Tests and smoke runs
 

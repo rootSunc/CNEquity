@@ -585,14 +585,14 @@ def stock_listing_dates(
     help=N_("Write and publish a new version; by default only prints the plan."),
 )
 def layout(dataset: str, config_path: str, apply: bool):
-    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0."""
+    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.26.0."""
     _emit(
         {
             "dataset": dataset.lower(),
             "applied": False,
             "note": _(
                 "Nothing to repair: the lake catalog lays out each partition's files. "
-                "This command is removed in 0.27.0."
+                "This command is removed in 0.26.0."
             ),
         }
     )
@@ -668,7 +668,7 @@ def status_traded(config_path: str, start, end, apply: bool):
     "--apply", is_flag=True, help=N_("Rewrite and swap the partitions; by default only previews.")
 )
 def repartition(dataset: str | None, config_path: str, do_all: bool, apply: bool):
-    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0."""
+    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.26.0."""
     if dataset and do_all:
         raise click.UsageError(_("Give a dataset or --all, not both."))
     _emit(
@@ -677,7 +677,7 @@ def repartition(dataset: str | None, config_path: str, do_all: bool, apply: bool
             "applied": False,
             "note": _(
                 "Nothing to repartition: the lake catalog lays out each partition's files. "
-                "This command is removed in 0.27.0."
+                "This command is removed in 0.26.0."
             ),
         }
     )

@@ -603,9 +603,9 @@ cne migrate --apply    # 复制、逐行核对，然后切换；再运行其余�
 
 `lake-catalog` 把每个已发布的数据集登记进湖目录（直接用原文件，不重写数据），逐个核对目录里的行与已发布的行完全一致，全部一致后在 `meta/storage.json` 记下这个湖发布进湖目录。有任何一个数据集核对不一致就不切换，湖保持原样，可以重跑。0.24.0 就开启过实验性湖目录的湖，迁移会把表重排成按分区存放的文件（预览里的 `to_lay_out`），真实规模约 16 分钟，期间其他任务照常运行。切换是单向的：此后每个数据集在下一次发布时转为只存在湖目录里。迁移需要 DuckDB 的 `ducklake` 和 `sqlite` 扩展，首次使用时自动下载；官方扩展站点连不上时，把对应 DuckDB 版本和平台的扩展文件放进一个目录并设置环境变量 `EQUITYLAKE_EXTENSION_DIR`，或把 `EQUITYLAKE_EXTENSION_MIRROR` 设为可达的扩展仓库。迁移前建议先 `cne snapshot create` 留一份快照。直接读 `curated/`、`derived/` 目录的外部工具改用 `cne storage export`。
 
-`revision-records`（0.26.0 起）把每个已发布修订的回执记进湖目录：从当前修订往回沿发布链找到的回执才算，中途停下的发布留下的回执不导入。导入后逐个数据集核对湖目录记下的当前修订与 `meta/revisions` 里的指针一致，一致才记为完成；此后读取修订以湖目录为准，此前照读指针和回执文件。真实规模约 7,800 个回执，几秒完成。
+`revision-records`（0.25.0 起）把每个已发布修订的回执记进湖目录：从当前修订往回沿发布链找到的回执才算，中途停下的发布留下的回执不导入。导入后逐个数据集核对湖目录记下的当前修订与 `meta/revisions` 里的指针一致，一致才记为完成；此后读取修订以湖目录为准，此前照读指针和回执文件。真实规模约 7,800 个回执，几秒完成。
 
-`drop-generations`（0.26.0 起，排在最后）删除旧发布方式留下、湖目录已经取代的文件：`curated/` 和 `derived/` 下各数据集的目录，`meta/revisions/data` 下的代目录，以及 `meta/revisions/<数据集>/` 下的指针和回执。预览列出要删的目录、文件数和释放的字节数，`--apply` 才删除，删除后不能恢复。被持有的修订（`cne storage hold`、案例依赖、引用文件里提到的修订号）连同回执保留，仍可按修订号读取；没有回执的代目录、`curated/` 下不是数据集的目录、湖目录没有记录当前修订的数据集都原样留下并在输出里列出。`--apply` 时先核对湖目录里每个修订的行与发布时记下的摘要一致，不一致的数据集跳过。
+`drop-generations`（0.25.0 起，排在最后）删除旧发布方式留下、湖目录已经取代的文件：`curated/` 和 `derived/` 下各数据集的目录，`meta/revisions/data` 下的代目录，以及 `meta/revisions/<数据集>/` 下的指针和回执。预览列出要删的目录、文件数和释放的字节数，`--apply` 才删除，删除后不能恢复。被持有的修订（`cne storage hold`、案例依赖、引用文件里提到的修订号）连同回执保留，仍可按修订号读取；没有回执的代目录、`curated/` 下不是数据集的目录、湖目录没有记录当前修订的数据集都原样留下并在输出里列出。`--apply` 时先核对湖目录里每个修订的行与发布时记下的摘要一致，不一致的数据集跳过。
 
 ## cne repair
 
@@ -616,8 +616,8 @@ cne migrate --apply    # 复制、逐行核对，然后切换；再运行其余�
 
 | 子命令 | 说明 |
 |------|------|
-| `layout DATASET` | 已不做任何事：每个分区的文件由湖目录安排。0.27.0 删除 |
-| `repartition [DATASET] [--all]` | 已不做任何事：每个分区的文件由湖目录安排。0.27.0 删除 |
+| `layout DATASET` | 已不做任何事：每个分区的文件由湖目录安排。0.26.0 删除 |
+| `repartition [DATASET] [--all]` | 已不做任何事：每个分区的文件由湖目录安排。0.26.0 删除 |
 | `payment-dates` | `corporate_actions` 现金到账日：先用已审发行人公告，再用 Baostock 匹配；`--issuer-notices-only` 只用发行人公告并应用已审送转条款。需要 `--symbols`/`--start`/`--end` |
 | `delisted-actions --source baostock\|ths` | 补已退市证券的历史分红除权：`baostock` 用于沪深，`ths` 用于北交所 |
 | `ex-dates --ex-dates ...` | 按给定除权日逐日向东财请求历史除权行；只有它能取到 2015-09-29 之前的行 |
@@ -817,7 +817,7 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 | `import --manifest FILE` | 校验并合并已审核的本地引用清单；不会自动解除已有保护 |
 | `hold OBJECT_ID --reason TEXT` | 新增版本或清理资源的保留理由；自动清理不再删除它 |
 | `plan [--keep N]` | 只读预览：按当前保护，自动清理现在会删除哪些代，输出 `candidate_ids` 和 `logical_bytes_selected` |
-| `merge-files [DATASET...] [--min-files N] [--apply]` | 已不做任何事：每个分区的文件由湖目录安排。0.27.0 删除 |
+| `merge-files [DATASET...] [--min-files N] [--apply]` | 已不做任何事：每个分区的文件由湖目录安排。0.26.0 删除 |
 
 每个子命令接受 `--config`。版本 `OBJECT_ID` 为当前湖内的 `revision/<dataset>/<revision_id>`；计划另外绑定湖身份及 metadata 根，不能直接在另一个湖使用。被引用但暂时缺失的版本也可通过清单登记保护，以便恢复后继续受到保护。
 

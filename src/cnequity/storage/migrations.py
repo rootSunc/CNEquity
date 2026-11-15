@@ -120,7 +120,7 @@ MIGRATIONS: tuple[Migration, ...] = (
             "Record every published revision's receipt in the lake catalog, "
             "which revision reads then come from"
         ),
-        "0.26.0",
+        "0.25.0",
         _revision_records,
     ),
     Migration(
@@ -251,7 +251,7 @@ MIGRATIONS: tuple[Migration, ...] = (
             "Delete the curated/ and derived/ directories and the generations, pointers and "
             "receipts under meta/revisions that the lake catalog replaced; held revisions stay"
         ),
-        "0.26.0",
+        "0.25.0",
         _drop_generations,
     ),
 )

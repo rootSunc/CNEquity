@@ -3768,12 +3768,12 @@ msgid "No futures daily quote file was fetched for either of the last two weekda
 msgstr "最近两个工作日都没有取到期货日行情文件"
 
 #: cnequity/cli/storage_cmds.py
-msgid "No longer does anything: every write publishes into the lake catalog. Removed in 0.27.0."
-msgstr "已不做任何事：每次写入都直接发布到湖目录。0.27.0 删除。"
+msgid "No longer does anything: every write publishes into the lake catalog. Removed in 0.26.0."
+msgstr "已不做任何事：每次写入都直接发布到湖目录。0.26.0 删除。"
 
 #: cnequity/cli/repair_cmds.py cnequity/cli/storage_cmds.py
-msgid "No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0."
-msgstr "已不做任何事：每个分区的文件由湖目录安排。0.27.0 删除。"
+msgid "No longer does anything: the lake catalog lays out each partition's files. Removed in 0.26.0."
+msgstr "已不做任何事：每个分区的文件由湖目录安排。0.26.0 删除。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
@@ -3893,24 +3893,24 @@ msgid "Nothing to execute this time."
 msgstr "本次没有可执行的对象。"
 
 #: cnequity/cli/storage_cmds.py
-msgid "Nothing to merge: the lake catalog lays out each partition's files. This command is removed in 0.27.0."
-msgstr "无需合并：每个分区的文件由湖目录安排。此命令在 0.27.0 删除。"
+msgid "Nothing to merge: the lake catalog lays out each partition's files. This command is removed in 0.26.0."
+msgstr "无需合并：每个分区的文件由湖目录安排。此命令在 0.26.0 删除。"
 
 #: cnequity/cli/repair_cmds.py
-msgid "Nothing to repair: the lake catalog lays out each partition's files. This command is removed in 0.27.0."
-msgstr "无需修复：每个分区的文件由湖目录安排。此命令在 0.27.0 删除。"
+msgid "Nothing to repair: the lake catalog lays out each partition's files. This command is removed in 0.26.0."
+msgstr "无需修复：每个分区的文件由湖目录安排。此命令在 0.26.0 删除。"
 
 #: cnequity/cli/repair_cmds.py
-msgid "Nothing to repartition: the lake catalog lays out each partition's files. This command is removed in 0.27.0."
-msgstr "无需重新分区：每个分区的文件由湖目录安排。此命令在 0.27.0 删除。"
+msgid "Nothing to repartition: the lake catalog lays out each partition's files. This command is removed in 0.26.0."
+msgstr "无需重新分区：每个分区的文件由湖目录安排。此命令在 0.26.0 删除。"
 
 #: cnequity/ops/job.py
 msgid "Nothing to run, or the day is not a trading day."
 msgstr "没有要跑的内容，或当天不是交易日。"
 
 #: cnequity/cli/storage_cmds.py
-msgid "Nothing to sync: every write publishes into the lake catalog. This command is removed in 0.27.0."
-msgstr "无需同步：每次写入都直接发布到湖目录。此命令在 0.27.0 删除。"
+msgid "Nothing to sync: every write publishes into the lake catalog. This command is removed in 0.26.0."
+msgstr "无需同步：每次写入都直接发布到湖目录。此命令在 0.26.0 删除。"
 
 #: cnequity/cli/repair_cmds.py
 msgid "Nothing was changed. Fix what is blocked above, then run this again."

@@ -140,13 +140,13 @@ def refresh_references(config_path: str):
     ),
 )
 def sync_catalog(config_path: str, create: bool):
-    """No longer does anything: every write publishes into the lake catalog. Removed in 0.27.0."""
+    """No longer does anything: every write publishes into the lake catalog. Removed in 0.26.0."""
     _emit(
         {
             "applied": False,
             "note": _(
                 "Nothing to sync: every write publishes into the lake catalog. "
-                "This command is removed in 0.27.0."
+                "This command is removed in 0.26.0."
             ),
         }
     )
@@ -317,13 +317,13 @@ def apply(args: tuple[str, ...]):
     "--apply", is_flag=True, help=N_("Publish the merge; without it, only report what would merge.")
 )
 def merge_files(config_path: str, datasets: tuple[str, ...], min_files: int | None, apply: bool):
-    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0."""
+    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.26.0."""
     _emit(
         {
             "applied": False,
             "note": _(
                 "Nothing to merge: the lake catalog lays out each partition's files. "
-                "This command is removed in 0.27.0."
+                "This command is removed in 0.26.0."
             ),
         }
     )
