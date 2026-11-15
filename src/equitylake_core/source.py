@@ -49,10 +49,14 @@ class Request:
     key: str
     url: str
     params: tuple[tuple[str, str], ...] = ()
+    #: Whether the answer goes into the raw archive. Leave it out only for an
+    #: answer that is large, asked for often, and can be asked for again with
+    #: the same result (an official publisher's current view of filed documents).
+    archive: bool = True
 
     def with_params(self, **changes: str) -> Request:
         merged = {**dict(self.params), **changes}
-        return Request(self.source, self.key, self.url, tuple(merged.items()))
+        return Request(self.source, self.key, self.url, tuple(merged.items()), self.archive)
 
 
 @dataclass(frozen=True)
@@ -141,7 +145,7 @@ class Fetcher:
             finally:
                 self._last[policy.name] = self._clock()
             self.bytes[policy.name] = self.bytes.get(policy.name, 0) + len(response.body)
-            if self.archive is not None:
+            if self.archive is not None and request.archive:
                 self.archive.put(
                     request.source,
                     request.key,

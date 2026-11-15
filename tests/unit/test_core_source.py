@@ -135,3 +135,20 @@ def test_every_answer_is_archived_without_its_credentials(tmp_path):
     assert list(archive.entries("nobody")) == []
     kept = b"".join(path.read_bytes() for path in (tmp_path / "raw").rglob("*") if path.is_file())
     assert b"secret" not in kept
+
+
+def test_a_request_can_keep_its_answer_out_of_the_archive(tmp_path):
+    archive = RawArchive(tmp_path / "raw")
+    wire = Wire(Response(200, b"large"), Response(200, b"small"))
+    fetcher = wire.fetcher(Policy("vendor"), archive)
+    assert (
+        fetcher.fetch(Request("vendor", "big", "https://example.test/big", archive=False))
+        == b"large"
+    )
+    kept = Request("vendor", "small", "https://example.test/small", archive=False).with_params(
+        a="1"
+    )
+    assert kept.archive is False
+    assert fetcher.fetch(Request("vendor", "small", "https://example.test/small")) == b"small"
+    assert [entry["key"] for entry in archive.entries("vendor")] == ["small"]
+    assert fetcher.requests == {"vendor": 2}
