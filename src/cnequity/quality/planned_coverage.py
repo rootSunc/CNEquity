@@ -1,10 +1,14 @@
 """What the planner would say about this lake, beside what the state files say.
 
-Read-only. The daily run still decides what to fetch from watermarks, the
-missing-date ledger and ``observed_through`` (``meta/state``). This module
-derives each dataset's cells from what its spec already declares, asks the
-core planner which of them are gaps, and sets the answer beside that state,
-so the two can be compared on a real lake before the planner drives anything.
+The daily run still decides what to fetch from watermarks, the missing-date
+ledger and ``observed_through`` (``meta/state``). This module derives each
+dataset's cells from what its spec already declares, asks the core planner
+which of them are gaps, and sets the answer beside that state, so the two can
+be compared on a real lake before the planner drives anything.
+
+The planner knows a cell was asked about and found empty only from
+``_attempts``. :func:`seeds` reads what the state files and the run manifest
+already say about that, and :func:`record_seeds` writes it there once.
 """
 
 from __future__ import annotations
@@ -12,7 +16,9 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
+
+import polars as pl
 
 from cnequity.domain.datasets import (
     DATASETS,
@@ -21,12 +27,15 @@ from cnequity.domain.datasets import (
     is_dataset_enabled,
     removed_from_schedule,
 )
+from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.freshness import freshness_owed
 from cnequity.query.calendar import list_trading_dates
-from cnequity.storage.catalog_bridge import lake_root
+from cnequity.sqlite_readonly import connect_readonly
+from cnequity.storage.catalog_bridge import lake_root, revision_snapshots
 from cnequity.storage.observation import freshness_mark
 from cnequity.storage.state import StateStore
-from equitylake_core.catalog import Catalog
+from equitylake_core import coverage as cov
+from equitylake_core.catalog import ALIAS, Catalog, quote_literal
 from equitylake_core.coverage import Coverage
 from equitylake_core.plan import Scope, plan_dataset
 
@@ -108,10 +117,13 @@ def compare(
     scope = Scope(start, end)
     found = []
     with Catalog(lake_root(config), read_only=True) as catalog:
+        written = last_written(catalog)
         for name in datasets if datasets is not None else DATASETS:
             spec = DATASETS[name]
             coverage = coverage_of(spec, end, config)
-            cells = plan_dataset(catalog, name, coverage, scope, calendar=calendar).cells
+            cells = plan_dataset(
+                catalog, name, coverage, scope, calendar=calendar, written=written.get(name)
+            ).cells
             states = dict(cells.select("period", "state").iter_rows())
             gaps = tuple(period for period, value in states.items() if value == "gap")
             mark = freshness_mark(config, name, state.get_date(name))
@@ -149,3 +161,179 @@ def compare(
                 )
             )
     return found
+
+
+def last_written(catalog: Catalog) -> dict[str, datetime]:
+    """When each dataset was last published, by the catalog snapshot of its latest revision.
+
+    The lake keeps its revisions in two tables (see ``revision_snapshots``),
+    not in the core's record table, so the planner is told rather than reads.
+    """
+    newest: dict[str, int] = {}
+    for dataset, _revision, snapshot, _unique in revision_snapshots(catalog):
+        newest[dataset] = max(snapshot, newest.get(dataset, snapshot))
+    if not newest:
+        return {}
+    times = dict(
+        catalog.execute(
+            "SELECT snapshot_id, snapshot_time AT TIME ZONE 'UTC' "
+            f"FROM ducklake_snapshots({quote_literal(ALIAS)})"
+        ).fetchall()
+    )
+    return {
+        dataset: times[snapshot].replace(tzinfo=UTC)
+        for dataset, snapshot in newest.items()
+        if snapshot in times
+    }
+
+
+def refreshes(manifest_path) -> dict[str, datetime]:
+    """When each dataset was last fetched without failing, from the run manifest.
+
+    A refresh that found nothing new publishes nothing, so the manifest is the
+    only place it shows.
+    """
+    try:
+        connection = connect_readonly(manifest_path)
+    except Exception:  # no manifest yet: no runs to tell of
+        return {}
+    try:
+        rows = connection.execute(
+            "SELECT d.dataset, max(COALESCE(r.finished_at, r.started_at)) "
+            "FROM dataset_results d JOIN ingestion_runs r USING (run_id) "
+            "WHERE d.stage = 'fetch' AND d.status IN ('success', 'warning') GROUP BY d.dataset"
+        ).fetchall()
+    finally:
+        connection.close()
+    found = {}
+    for dataset, moment in rows:
+        if moment:
+            stamp = datetime.fromisoformat(moment)
+            found[dataset] = stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+    return found
+
+
+@dataclass(frozen=True)
+class Seed:
+    """What the old ledgers say was asked of one dataset's source and found empty."""
+
+    dataset: str
+    #: ``state``: cells the state files hold done that have no rows.
+    #: ``refresh``: a refresh the manifest records that published nothing new.
+    reason: str
+    periods: tuple[str, ...]
+    asked_at: datetime
+
+
+#: A dataset with rows in this share of the cells of its stored span is dense in
+#: practice: a cell without rows there is more likely missed than empty.
+DENSE_SHARE = 0.95
+#: This many empty cells in a row, in a feed that has rows around them, is a
+#: stretch that was never fetched rather than a run of empty answers.
+LONG_RUN = {"session": 20, "day": 20, "week": 4}
+
+
+def settled_empty(
+    cells: pl.DataFrame,
+    *,
+    mark: str | None,
+    first: str | None,
+    owed: set[str],
+    long_run: int,
+) -> list[str]:
+    """The gaps the state files hold done and that read as answers rather than misses.
+
+    From the first covered cell through *mark*, not owed by the missing-date
+    ledger. Left a gap, because a gap costs one more request and a wrong
+    empty hides a hole for good:
+
+    * anything before the first stored row, where the old ledgers never looked;
+    * every gap of a dataset dense in practice (``DENSE_SHARE``);
+    * a run of *long_run* or more consecutive gaps.
+    """
+    if mark is None or first is None:
+        return []
+    span = cells.filter((pl.col("period") >= first) & (pl.col("period") <= mark))
+    if span.is_empty() or (span["state"] == "covered").mean() >= DENSE_SHARE:
+        return []
+    found, run = [], []
+    for period, state in span.select("period", "state").iter_rows():
+        if state == "gap":
+            run.append(period)
+            continue
+        if len(run) < long_run:
+            found.extend(run)
+        run = []
+    if len(run) < long_run:
+        found.extend(run)
+    return [period for period in found if period not in owed]
+
+
+def _dense(spec: DatasetSpec) -> bool:
+    """Whether the dataset promises a row every session, so a session without one is a hole."""
+    return spec.coverage_mode == "session_dense" or spec.session_rows
+
+
+def seeds(config, end: date, *, start: date = date(1990, 1, 1)) -> list[Seed]:
+    """What ``meta/state`` and the run manifest say was asked and found empty, up to *end*.
+
+    A dataset that promises a row every session gets nothing: an empty
+    session there is a hole the old ledgers missed, not an answer. Cells
+    split by entity (``negative_evidence``, ``outstanding_keys``) are not
+    read yet.
+    """
+    calendar, state = LakeCalendar(config), StateStore(config.meta_root)
+    refreshed = refreshes(config.manifest_path)
+    found: list[Seed] = []
+    now = datetime.now(UTC)
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        written = last_written(catalog)
+        for name, spec in DATASETS.items():
+            coverage = coverage_of(spec, end, config)
+            if coverage.by == "write":
+                asked = refreshed.get(name)
+                if asked is not None and asked > written.get(
+                    name, datetime.min.replace(tzinfo=UTC)
+                ):
+                    period = cov.label(coverage.grain, asked.date())
+                    found.append(Seed(name, "refresh", (period,), asked))
+                continue
+            if coverage.grain not in ("session", "day", "week") or _dense(spec):
+                continue
+            cells = plan_dataset(
+                catalog, name, coverage, Scope(start, end), calendar=calendar
+            ).cells
+            covered = cells.filter(pl.col("state") == "covered")["period"]
+            mark = freshness_mark(config, name, state.get_date(name))
+            snapshot = state.get_date(name, field="last_snapshot_date")
+            mark = max((day for day in (mark, snapshot) if day is not None), default=None)
+            periods = settled_empty(
+                cells,
+                mark=None if mark is None else cov.label(coverage.grain, min(mark, end)),
+                first=covered.min() if len(covered) else None,
+                owed={cov.label(coverage.grain, day) for day in state.get_missing_dates(name)},
+                long_run=LONG_RUN[coverage.grain],
+            )
+            if periods:
+                found.append(Seed(name, "state", tuple(periods), now))
+    return found
+
+
+def record_seeds(config, found: Iterable[Seed], *, run: str = "seed:meta-state") -> int | None:
+    """Write *found* to the lake's ``_attempts`` in one snapshot, under the lake lock."""
+    rows = [
+        {
+            "dataset": seed.dataset,
+            "period": period,
+            "entity": "",
+            "run": f"{run}:{seed.reason}",
+            "asked_at": seed.asked_at,
+        }
+        for seed in found
+        for period in seed.periods
+    ]
+    if not rows:
+        return None
+    with lake_mutation_lock(config.meta_root, blocking=True):
+        with Catalog(lake_root(config)) as catalog:
+            return cov.record(catalog, pl.DataFrame(rows), message=run)

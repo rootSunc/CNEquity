@@ -30,6 +30,9 @@ STATES: tuple[State, ...] = ("covered", "empty", "gap", "not_due")
 
 Redo = Literal["gaps", "empty", "all"]
 
+#: Read when a refreshed dataset was last written from the lake's own record table.
+_READ = object()
+
 _PLAN_SCHEMA = {"period": pl.String, "entity": pl.String, "state": pl.String}
 
 
@@ -157,10 +160,13 @@ def plan_dataset(
     calendar: Calendar | None = None,
     universe: Universe | None = None,
     revisions: str = "_revisions",
+    written: datetime | None | object = _READ,
 ) -> DatasetPlan:
     """The state of every cell of *dataset* in *scope*.
 
     *column* places a row in a cell when the declaration does not name one.
+    *written* is when a refreshed dataset was last written, for a lake that
+    keeps its revisions elsewhere than in the record table *revisions*.
     """
     moment = now or datetime.now(timezone.utc)
     cells = owed(dataset, coverage, scope, calendar=calendar, universe=universe)
@@ -168,7 +174,9 @@ def plan_dataset(
         return DatasetPlan(dataset, pl.DataFrame(schema=_PLAN_SCHEMA))
     attempts = cov.attempted(catalog, dataset)
     if coverage.by == "write":
-        return _plan_refresh(catalog, dataset, coverage, scope, cells, attempts, revisions)
+        if written is _READ:
+            written = cov.refreshed(catalog, dataset, revisions=revisions)
+        return DatasetPlan(dataset, _plan_refresh(coverage, scope, cells, attempts, written))
     first = cov.span(coverage.grain, cells["period"].min())[0]
     last = cov.span(coverage.grain, cells["period"].max())[1]
     have = cov.stored(catalog, dataset, coverage, column=column, start=first, end=last)
@@ -195,13 +203,11 @@ def plan_dataset(
 
 
 def _plan_refresh(
-    catalog: Catalog,
-    dataset: str,
     coverage: Coverage,
     scope: Scope,
     cells: pl.DataFrame,
     attempts: pl.DataFrame,
-    revisions: str,
+    written: datetime | None,
 ) -> DatasetPlan:
     """The one cell a refreshed dataset owes: the latest that is due.
 
@@ -210,20 +216,17 @@ def _plan_refresh(
     """
     due = cells.filter(pl.col("due"))
     if due.is_empty():
-        return DatasetPlan(dataset, pl.DataFrame(schema=_PLAN_SCHEMA))
+        return pl.DataFrame(schema=_PLAN_SCHEMA)
     period = due["period"].max()
     opens = datetime.combine(cov.span(coverage.grain, period)[0], time.min, timezone.utc)
-    seen = [cov.refreshed(catalog, dataset, revisions=revisions)]
+    seen = [written]
     if not attempts.is_empty():
         seen.append(attempts["at"].max())
     latest = max((moment for moment in seen if moment is not None), default=None)
     fresh = latest is not None and latest >= opens and scope.redo != "all"
-    return DatasetPlan(
-        dataset,
-        pl.DataFrame(
-            {"period": [period], "entity": [""], "state": ["covered" if fresh else "gap"]},
-            schema=_PLAN_SCHEMA,
-        ),
+    return pl.DataFrame(
+        {"period": [period], "entity": [""], "state": ["covered" if fresh else "gap"]},
+        schema=_PLAN_SCHEMA,
     )
 
 

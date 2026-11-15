@@ -82,3 +82,33 @@ def test_the_calendar_is_read_once_and_widened(monkeypatch):
     assert len(asked) == 1
     calendar.sessions(date(2026, 11, 1), date(2026, 11, 10))
     assert asked[-1] == (date(2026, 11, 1), date(2026, 11, 13))
+
+
+def _cells(states):
+    import polars as pl
+
+    return pl.DataFrame(
+        {"period": [f"2026-01-{day:02d}" for day in range(1, len(states) + 1)], "state": states}
+    )
+
+
+def test_only_short_holes_inside_the_stored_span_read_as_empty_answers():
+    from cnequity.quality.planned_coverage import settled_empty
+
+    # c = covered, g = gap: day 1 is before the first row, days 4 and 9 are short holes,
+    # days 11-13 a run of three, day 16 is after the mark.
+    states = ["gap" if mark == "g" else "covered" for mark in "gccgccccgcgggccg"]
+    found = settled_empty(
+        _cells(states), mark="2026-01-15", first="2026-01-02", owed={"2026-01-09"}, long_run=3
+    )
+    assert found == ["2026-01-04"]
+
+
+def test_a_dataset_dense_in_practice_keeps_its_holes_as_gaps():
+    from cnequity.quality.planned_coverage import settled_empty
+
+    states = ["covered"] * 20 + ["gap"] + ["covered"] * 7
+    found = settled_empty(
+        _cells(states), mark="2026-01-28", first="2026-01-01", owed=set(), long_run=20
+    )
+    assert found == []

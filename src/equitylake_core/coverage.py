@@ -344,6 +344,47 @@ def standing(attempts: pl.DataFrame, coverage: Coverage, now: datetime) -> pl.Da
     )
 
 
+def prepare(catalog: Catalog) -> None:
+    """Make ``_attempts`` and keep its rows in the catalog database; outside a transaction."""
+    if not catalog.has_table(ATTEMPTS):
+        catalog.execute(f"CREATE TABLE {ATTEMPTS} ({ATTEMPT_COLUMNS})")
+    catalog.keep_rows_inline(ATTEMPTS)
+
+
+def record(catalog: Catalog, rows: pl.DataFrame, *, message: str | None = None) -> int | None:
+    """Append *rows* to ``_attempts`` in one snapshot; returns it, or ``None`` for no rows.
+
+    *rows* has the columns ``dataset``, ``period``, ``entity``, ``run`` and
+    ``asked_at``. For a writer that publishes its own way: one that writes
+    through :class:`~equitylake_core.lake.LakeWrite` says ``empty`` instead,
+    and its attempts commit with its rows.
+    """
+    if rows.is_empty():
+        return None
+    columns = ["dataset", "period", "entity", "run", "asked_at"]
+    frame = rows.select(columns).cast(
+        {
+            "dataset": pl.String,
+            "period": pl.String,
+            "entity": pl.String,
+            "run": pl.String,
+            "asked_at": pl.Datetime("us", "UTC"),
+        }
+    )
+    prepare(catalog)
+    catalog.con.abort()
+    catalog.con.register("_el_attempts", frame.to_arrow())
+    try:
+        with catalog.transaction(message=message):
+            catalog.execute(
+                f"INSERT INTO {ATTEMPTS} ({', '.join(columns)}) "
+                f"SELECT {', '.join(columns)} FROM _el_attempts"
+            )
+    finally:
+        catalog.con.unregister("_el_attempts")
+    return catalog.snapshot()
+
+
 def cell_keys(dataset: str, cells: Iterable[str | tuple[str, str] | Cell]) -> list[tuple[str, str]]:
     """Each of *cells* as its period and entity; a bare label is a cell without an entity."""
     keys = []

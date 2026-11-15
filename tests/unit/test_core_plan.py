@@ -11,7 +11,7 @@ from equitylake_core import coverage as cov
 from equitylake_core.coverage import Cell, Coverage, CoverageError
 from equitylake_core.extensions import ExtensionUnavailableError
 from equitylake_core.lake import Lake
-from equitylake_core.plan import Scope, owed, plan
+from equitylake_core.plan import Scope, owed, plan, plan_dataset
 from equitylake_core.spec import DatasetSpec, Registry, SpecError
 
 UTC = timezone.utc
@@ -334,3 +334,39 @@ def test_cells_proved_by_file_statistics_agree_with_the_rows(lake):
         by_day = cov.stored(catalog, "bars", Coverage("day"), column="day", start=days[1])
         assert sorted(by_day["period"]) == ["2026-11-02", "2026-11-03"]
         assert cov._split_by_statistics(catalog, "bars", "day", "month", None, None)[1] == []
+
+
+def test_attempts_recorded_by_another_writer_count_like_its_own(lake):
+    asked = datetime(2026, 11, 13, 12, tzinfo=UTC)
+    rows = pl.DataFrame(
+        {
+            "dataset": ["bars", "bars"],
+            "period": ["2026-11-10", "2026-11-11"],
+            "entity": ["", ""],
+            "run": ["seed", "seed"],
+            "asked_at": [asked, asked],
+        }
+    )
+    with lake.catalog(read_only=False) as catalog:
+        assert cov.record(catalog, rows.clear()) is None
+        assert cov.record(catalog, rows, message="seed") == catalog.snapshot()
+        assert cov.attempted(catalog, "bars")["period"].sort().to_list() == [
+            "2026-11-10",
+            "2026-11-11",
+        ]
+    scope = Scope(date(2026, 11, 10), date(2026, 11, 12), datasets=("bars",))
+    assert _states(plan(lake, scope, calendar=Weekdays()), "bars") == {
+        "2026-11-10": "empty",
+        "2026-11-11": "empty",
+        "2026-11-12": "gap",
+    }
+
+
+def test_a_refreshed_dataset_can_be_told_when_it_was_written(lake):
+    today = datetime.now(UTC).date()
+    scope = Scope(today, today + timedelta(days=6), datasets=("codes",))
+    with lake.catalog() as catalog:
+        told = plan_dataset(catalog, "codes", CODES.coverage, scope, written=datetime.now(UTC))
+        unknown = plan_dataset(catalog, "codes", CODES.coverage, scope, written=None)
+    assert set(told.cells["state"]) == {"covered"}
+    assert set(unknown.cells["state"]) == {"gap"}
