@@ -302,11 +302,11 @@ def last_written(catalog: Catalog) -> dict[str, datetime]:
     }
 
 
-def refreshes(manifest_path) -> dict[str, datetime]:
+def refreshes(manifest_path, *, run_id: str | None = None) -> dict[str, datetime]:
     """When each dataset was last fetched without failing, from the run manifest.
 
     A refresh that found nothing new publishes nothing, so the manifest is the
-    only place it shows.
+    only place it shows. With *run_id*, only that run's fetches count.
     """
     try:
         connection = connect_readonly(manifest_path)
@@ -316,7 +316,10 @@ def refreshes(manifest_path) -> dict[str, datetime]:
         rows = connection.execute(
             "SELECT d.dataset, max(COALESCE(r.finished_at, r.started_at)) "
             "FROM dataset_results d JOIN ingestion_runs r USING (run_id) "
-            "WHERE d.stage = 'fetch' AND d.status IN ('success', 'warning') GROUP BY d.dataset"
+            "WHERE d.stage = 'fetch' AND d.status IN ('success', 'warning') "
+            + ("AND d.run_id = ? " if run_id else "")
+            + "GROUP BY d.dataset",
+            [run_id] if run_id else [],
         ).fetchall()
     finally:
         connection.close()
@@ -391,59 +394,162 @@ def _dense(spec: DatasetSpec) -> bool:
     return spec.coverage_mode == "session_dense" or spec.session_rows
 
 
+def _answers(
+    catalog: Catalog,
+    config,
+    name: str,
+    coverage: Coverage,
+    cells: pl.DataFrame,
+    *,
+    state: StateStore,
+    end: date,
+    now: datetime,
+    asked: datetime | None,
+    written: datetime | None,
+) -> list[Seed]:
+    """What the old ledgers say about *name*'s *cells* that ``_attempts`` does not hold yet."""
+    attempts = cov.attempted(catalog, name)
+    if coverage.by == "write":
+        known = [written] + attempts["at"].to_list()
+        latest = max((moment for moment in known if moment is not None), default=None)
+        if asked is not None and (latest is None or asked > latest):
+            return [Seed(name, "refresh", (cov.label(coverage.grain, asked.date()),), asked)]
+        return []
+    if coverage.grain not in ("session", "day", "week") or cells.is_empty():
+        return []
+    found = []
+    owed = {cov.label(coverage.grain, day) for day in state.get_missing_dates(name)}
+    covered = set(cells.filter(pl.col("state") == "covered")["period"].to_list())
+    short = sorted(owed & covered)
+    if short:
+        found.append(Seed(name, "short", tuple(short), now, "partial"))
+    pending = set(cov.partial(attempts)["period"].to_list()) & set(cells["period"].to_list())
+    if pending:
+        first = cov.span(coverage.grain, min(pending))[0]
+        last = cov.span(coverage.grain, max(pending))[1]
+        rowed = set(
+            cov.stored(
+                catalog,
+                name,
+                coverage,
+                column=DATASETS[name].query_date_col,
+                start=first,
+                end=last,
+            )["period"].to_list()
+        )
+        whole = sorted((pending & rowed) - owed)
+        if whole:
+            found.append(Seed(name, "whole", tuple(whole), now, "complete"))
+    if _dense(DATASETS[name]):
+        return found
+    mark = freshness_mark(config, name, state.get_date(name))
+    snapshot = state.get_date(name, field="last_snapshot_date")
+    mark = max((day for day in (mark, snapshot) if day is not None), default=None)
+    periods = settled_empty(
+        cells,
+        mark=None if mark is None else cov.label(coverage.grain, min(mark, end)),
+        first=min(covered) if covered else None,
+        owed=owed,
+        long_run=LONG_RUN[coverage.grain],
+    )
+    if periods:
+        found.append(Seed(name, "state", tuple(periods), now))
+    return found
+
+
 def seeds(config, end: date, *, start: date = date(1990, 1, 1)) -> list[Seed]:
-    """What ``meta/state`` and the run manifest say was asked and found empty, up to *end*.
+    """What ``meta/state`` and the run manifest say was asked and how it was answered, to *end*.
 
     A dataset that promises a row every session gets no empty answers: an
     empty session there is a hole the old ledgers missed, not an answer. A
     day the missing-date ledger owes but that holds rows was answered in
-    part: it is recorded so, and stays owed. Cells owed per entity are left
-    to the planner: their rows say which entities are missing.
+    part: it is recorded so, and stays owed; once the ledger no longer owes
+    it, it is recorded whole. Cells owed per entity are left to the planner:
+    their rows say which entities are missing. Running it again adds only
+    what changed.
     """
+    return _collect(config, Scope(start, end), DATASETS, refreshes(config.manifest_path))
+
+
+def _collect(config, scope: Scope, names: Iterable[str], asked: dict[str, datetime]) -> list[Seed]:
     state = StateStore(config.meta_root)
-    refreshed = refreshes(config.manifest_path)
-    found: list[Seed] = []
     now = datetime.now(UTC)
+    found: list[Seed] = []
+    wanted = [
+        name for name in names if coverage_of(DATASETS[name], scope.end, config).entity is None
+    ]
     with Catalog(lake_root(config), read_only=True) as catalog:
         written = last_written(catalog)
-        plans = planned(config, catalog, Scope(start, end))
-        for name, spec in DATASETS.items():
-            coverage = coverage_of(spec, end, config)
-            if coverage.entity is not None:
-                continue
-            if coverage.by == "write":
-                asked = refreshed.get(name)
-                known = [written.get(name)] + cov.attempted(catalog, name)["at"].to_list()
-                latest = max((moment for moment in known if moment is not None), default=None)
-                if asked is not None and (latest is None or asked > latest):
-                    period = cov.label(coverage.grain, asked.date())
-                    found.append(Seed(name, "refresh", (period,), asked))
-                continue
-            if coverage.grain not in ("session", "day", "week"):
-                continue
-            cells = plans[name].cells
-            owed = {cov.label(coverage.grain, day) for day in state.get_missing_dates(name)}
-            short = sorted(
-                owed & set(cells.filter(pl.col("state") == "covered")["period"].to_list())
+        plans = planned(config, catalog, scope, wanted)
+        for name in wanted:
+            found.extend(
+                _answers(
+                    catalog,
+                    config,
+                    name,
+                    coverage_of(DATASETS[name], scope.end, config),
+                    plans[name].cells,
+                    state=state,
+                    end=scope.end,
+                    now=now,
+                    asked=asked.get(name),
+                    written=written.get(name),
+                )
             )
-            if short:
-                found.append(Seed(name, "short", tuple(short), now, "partial"))
-            if _dense(spec):
-                continue
-            covered = cells.filter(pl.col("state") == "covered")["period"]
-            mark = freshness_mark(config, name, state.get_date(name))
-            snapshot = state.get_date(name, field="last_snapshot_date")
-            mark = max((day for day in (mark, snapshot) if day is not None), default=None)
-            periods = settled_empty(
-                cells,
-                mark=None if mark is None else cov.label(coverage.grain, min(mark, end)),
-                first=covered.min() if len(covered) else None,
-                owed=owed,
-                long_run=LONG_RUN[coverage.grain],
-            )
-            if periods:
-                found.append(Seed(name, "state", tuple(periods), now))
     return found
+
+
+#: How far back a run's answers are read off the old ledgers after it publishes.
+SYNC_DAYS = 45
+
+
+def sync_attempts(config, run_id: str, trade_date: date, datasets: Iterable[str]) -> dict:
+    """Bring ``_attempts`` up to what the old ledgers say after run *run_id* settled.
+
+    While the daily run still decides from ``meta/state``, this keeps the
+    planner's ledger beside it: the same rules as :func:`seeds`, over the
+    last ``SYNC_DAYS`` (and a backfill's whole window), for the datasets the
+    run touched. Returns what it recorded and, per dataset, the gaps the
+    planner sees that the state files hold done.
+    """
+    from cnequity.run_scope import backfill_of
+
+    window = backfill_of(config)
+    start = trade_date - timedelta(days=SYNC_DAYS)
+    if window.active and window.start is not None:
+        start = min(start, window.start)
+    end = max(trade_date, window.end) if window.active and window.end else trade_date
+    asked = refreshes(config.manifest_path, run_id=run_id)
+    names = sorted((set(datasets) | set(asked)) & set(DATASETS))
+    scope = Scope(start, end)
+    found = _collect(config, scope, names, asked)
+    snapshot = record_seeds(config, found, run=f"run:{run_id}") if found else None
+    state = StateStore(config.meta_root)
+    disagree: dict[str, list[str]] = {}
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        plans = planned(config, catalog, scope, [n for n in names if _by_day(config, n, end)])
+        for name, item in plans.items():
+            mark = freshness_mark(config, name, state.get_date(name))
+            owed = {day.isoformat() for day in state.get_missing_dates(name)}
+            gaps = [
+                period
+                for period in item.cells.filter(pl.col("state") == "gap")["period"].to_list()
+                if mark is not None and period <= mark.isoformat() and period not in owed
+            ]
+            if gaps:
+                disagree[name] = gaps
+    return {
+        "snapshot": snapshot,
+        "recorded": sum(len(seed.periods) for seed in found),
+        "disagreements": disagree,
+    }
+
+
+def _by_day(config, name: str, end: date) -> bool:
+    coverage = coverage_of(DATASETS[name], end, config)
+    return (
+        coverage.by == "rows" and coverage.entity is None and coverage.grain in ("session", "day")
+    )
 
 
 def record_seeds(config, found: Iterable[Seed], *, run: str = "seed:meta-state") -> int | None:

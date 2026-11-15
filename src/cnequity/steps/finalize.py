@@ -515,6 +515,43 @@ def _settle_published_datasets(
         )
 
 
+def _sync_attempts(config: Config, run_id: str, trade_date: date, datasets: set[str]) -> list[dict]:
+    """Keep the planner's ledger beside ``meta/state``; never fails a compact.
+
+    Info findings name the gaps the planner sees that the state files hold
+    done, so the two can be watched agreeing before the planner decides.
+    """
+    from cnequity.domain.findings import finding
+    from cnequity.quality.planned_coverage import sync_attempts
+
+    try:
+        report = sync_attempts(config, run_id, trade_date, datasets)
+    except Exception as exc:  # the ledger is a shadow while meta/state decides
+        logger.warning("attempts ledger not synced for %s: %s", run_id, exc)
+        return [
+            finding(
+                dataset="",
+                check="attempts_ledger_sync",
+                severity="warning",
+                message=f"the planner's ledger was not brought up to date: {exc}",
+            )
+        ]
+    return [
+        finding(
+            dataset=dataset,
+            check="planner_state_disagreement",
+            severity="info",
+            message=(
+                f"{len(gaps)} period(s) the state files hold done have no rows and no "
+                "recorded empty answer"
+            ),
+            periods=gaps[:20],
+            count=len(gaps),
+        )
+        for dataset, gaps in sorted(report["disagreements"].items())
+    ]
+
+
 @register_step("compact", group="finalize", parallelizable=False)
 def step_compact(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     from cnequity.orchestrator.run_lock import run_lock
@@ -944,6 +981,7 @@ def _compact_datasets(
         reconcile_no_print=bool({"daily_bars", "instruments"} & published),
     )
     audit_findings.extend(_reconcile_watermarks(config))
+    audit_findings.extend(_sync_attempts(config, run_id, trade_date, set(staged) | compacted))
 
     from cnequity.query.views import ensure_duckdb_views
 

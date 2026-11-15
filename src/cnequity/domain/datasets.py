@@ -2319,7 +2319,7 @@ _SPECS = [
     # for, so these carry the tier of the question they answer, not "derived".
     DatasetSpec(
         "adj_factors",
-        derived_from=("daily_bars", "corporate_actions"),
+        derived_from=("daily_bars", "corporate_actions", "instruments", "share_structure"),
         support="core",
         # v2 records month partitions. Columns and the primary key are unchanged.
         schema_version=2,
@@ -2395,7 +2395,7 @@ _SPECS = [
     # exchange, beside the exchanges' own delta/IV in option_bars.
     DatasetSpec(
         "option_greeks",
-        derived_from=("option_bars", "futures_bars", "option_contracts"),
+        derived_from=("option_bars", "futures_bars", "option_contracts", "macro_indicators"),
         enable_switch="futures_options",
         support="optional",
         unit_contract={
@@ -2442,6 +2442,8 @@ _SPECS = [
             watermark=False,
             required=False,
             row_grain=frequency,
+            # Resampled from 5m; 1m only refines the days it reaches (95 sessions),
+            # so it does not bound which days are owed.
             derived_from=("minute_bars_5m",),
         )
         for name, frequency in RESAMPLED_MINUTE_DATASETS.items()

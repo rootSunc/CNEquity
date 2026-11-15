@@ -4572,6 +4572,10 @@ msgstr "已重算（{value}）：{value2} 个数据集、{rows:,} 行，耗时 {
 msgid "Record every published revision's receipt in the lake catalog, which revision reads then come from"
 msgstr "把每个已发布修订的回执记进湖目录，此后读取修订都以湖目录为准"
 
+#: cnequity/storage/migrations.py
+msgid "Record in the lake catalog what meta/state and the run manifest say was asked of each source and found empty or incomplete, for the coverage planner"
+msgstr "把 meta/state 和运行清单里记下的“问过、为空或不全”的答复记进湖目录，供覆盖规划器使用"
+
 #: cnequity/cli/repair_cmds.py
 msgid "Recover consolidated statement items from original periodic reports; does not use comparative-period figures, and does not pass off today's collection as a historical observation."
 msgstr "从原始定期报告恢复合并报表科目；不使用比较期数，不把今天采集伪装成历史观测。"

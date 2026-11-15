@@ -129,3 +129,39 @@ def test_a_derived_dataset_names_inputs_that_exist_and_never_itself():
         for source in spec.derived_from:
             assert source in DATASETS, (name, source)
             assert name not in DATASETS[source].derived_from, (name, source)
+
+
+def test_a_derivation_is_owed_only_on_inputs_it_actually_reads():
+    from cnequity.derive.adj_factors import INPUTS as ADJ
+    from cnequity.derive.minute_resample import INPUTS as MINUTE
+    from cnequity.derive.option_greeks import INPUTS as GREEKS
+    from cnequity.domain.datasets import DATASETS, RESAMPLED_MINUTE_DATASETS
+
+    assert set(DATASETS["adj_factors"].derived_from) == set(ADJ)
+    assert set(DATASETS["option_greeks"].derived_from) == set(GREEKS)
+    for name in RESAMPLED_MINUTE_DATASETS:
+        assert set(DATASETS[name].derived_from) <= set(MINUTE)
+
+
+def test_compact_reports_disagreements_and_never_fails_on_the_ledger(monkeypatch):
+    from cnequity.quality import planned_coverage
+    from cnequity.steps.finalize import _sync_attempts
+
+    monkeypatch.setattr(
+        planned_coverage,
+        "sync_attempts",
+        lambda *args: {"snapshot": 7, "recorded": 3, "disagreements": {"news": ["2026-11-10"]}},
+    )
+    (only,) = _sync_attempts(None, "run", TODAY, {"news"})
+    assert (only["check"], only["severity"], only["count"]) == (
+        "planner_state_disagreement",
+        "info",
+        1,
+    )
+
+    def broken(*args):
+        raise OSError("catalog busy")
+
+    monkeypatch.setattr(planned_coverage, "sync_attempts", broken)
+    (warning,) = _sync_attempts(None, "run", TODAY, {"news"})
+    assert (warning["check"], warning["severity"]) == ("attempts_ledger_sync", "warning")

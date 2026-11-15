@@ -84,6 +84,28 @@ def _revision_records(config, *, apply: bool) -> dict:
     return import_receipts(config, apply=apply)
 
 
+def _attempts_ledger(config, *, apply: bool) -> dict:
+    from datetime import date
+
+    from cnequity.quality.planned_coverage import record_seeds, seeds
+
+    found = seeds(config, date.today())
+    report = {
+        "applied": apply,
+        "datasets": len({seed.dataset for seed in found}),
+        "cells": sum(len(seed.periods) for seed in found),
+        # Ledger rows it adds: what `cne migrate` counts as affected.
+        "rows_changed": sum(len(seed.periods) for seed in found),
+        "by_reason": {
+            reason: sum(len(seed.periods) for seed in found if seed.reason == reason)
+            for reason in sorted({seed.reason for seed in found})
+        },
+    }
+    if apply and found:
+        report["snapshot"] = record_seeds(config, found)
+    return report
+
+
 def _drop_generations(config, *, apply: bool) -> dict:
     from cnequity.storage.drop_generations import drop_generations
 
@@ -244,6 +266,15 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         "0.23.0",
         _repair("missing_values", "repair_all_missing_values"),
+    ),
+    Migration(
+        "attempts-ledger",
+        N_(
+            "Record in the lake catalog what meta/state and the run manifest say was asked "
+            "of each source and found empty or incomplete, for the coverage planner"
+        ),
+        "0.25.0",
+        _attempts_ledger,
     ),
     # Last: nothing above reads the directories it deletes, and it cannot be undone.
     Migration(
