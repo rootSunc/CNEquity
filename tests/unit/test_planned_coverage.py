@@ -105,13 +105,27 @@ def test_only_short_holes_inside_the_stored_span_read_as_empty_answers():
 
 
 def test_a_dataset_dense_in_practice_keeps_its_holes_as_gaps():
-    from cnequity.quality.planned_coverage import settled_empty
+    from cnequity.quality.planned_coverage import dense_in_practice, settled_empty
 
-    states = ["covered"] * 20 + ["gap"] + ["covered"] * 7
-    found = settled_empty(
-        _cells(states), mark="2026-01-28", first="2026-01-01", owed=set(), long_run=20
+    history = _cells(["covered"] * 20 + ["gap"] + ["covered"] * 7)
+    assert dense_in_practice(history)
+    # Over the last few days alone the same hole would look like an answer.
+    recent = history.tail(10)
+    assert not dense_in_practice(recent)
+    assert settled_empty(
+        recent, mark="2026-01-28", first="2026-01-19", owed=set(), long_run=20
+    ) == ["2026-01-21"]
+    assert (
+        settled_empty(
+            recent,
+            mark="2026-01-28",
+            first="2026-01-19",
+            owed=set(),
+            long_run=20,
+            dense=dense_in_practice(history),
+        )
+        == []
     )
-    assert found == []
 
 
 def test_daily_bars_are_owed_per_symbol_and_only_a_print_covers_a_cell():

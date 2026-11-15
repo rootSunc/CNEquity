@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
@@ -45,7 +45,7 @@ from cnequity.storage.state import StateStore
 from equitylake_core import coverage as cov
 from equitylake_core.catalog import ALIAS, Catalog, quote_literal
 from equitylake_core.coverage import Coverage
-from equitylake_core.plan import Declared, Scope, plan_all
+from equitylake_core.plan import Declared, Scope, plan_all, plan_dataset
 
 
 def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
@@ -353,6 +353,19 @@ DENSE_SHARE = 0.95
 LONG_RUN = {"session": 20, "day": 20, "week": 4}
 
 
+def dense_in_practice(cells: pl.DataFrame) -> bool:
+    """Whether rows fill ``DENSE_SHARE`` of the cells from the first stored one to the last.
+
+    Judge it on a dataset's whole history: over a few weeks a feed that lost
+    a week to an outage looks sparse, and its lost days would read as empty.
+    """
+    covered = cells.filter(pl.col("state") == "covered")["period"]
+    if covered.is_empty():
+        return False
+    span = cells.filter(pl.col("period").is_between(pl.lit(covered.min()), pl.lit(covered.max())))
+    return (span["state"] == "covered").mean() >= DENSE_SHARE
+
+
 def settled_empty(
     cells: pl.DataFrame,
     *,
@@ -360,6 +373,7 @@ def settled_empty(
     first: str | None,
     owed: set[str],
     long_run: int,
+    dense: bool = False,
 ) -> list[str]:
     """The gaps the state files hold done and that read as answers rather than misses.
 
@@ -368,13 +382,13 @@ def settled_empty(
     empty hides a hole for good:
 
     * anything before the first stored row, where the old ledgers never looked;
-    * every gap of a dataset dense in practice (``DENSE_SHARE``);
+    * every gap of a *dense* dataset (see :func:`dense_in_practice`);
     * a run of *long_run* or more consecutive gaps.
     """
-    if mark is None or first is None:
+    if mark is None or first is None or dense:
         return []
     span = cells.filter((pl.col("period") >= first) & (pl.col("period") <= mark))
-    if span.is_empty() or (span["state"] == "covered").mean() >= DENSE_SHARE:
+    if span.is_empty():
         return []
     found, run = [], []
     for period, state in span.select("period", "state").iter_rows():
@@ -406,8 +420,13 @@ def _answers(
     now: datetime,
     asked: datetime | None,
     written: datetime | None,
+    history: pl.DataFrame | None = None,
 ) -> list[Seed]:
-    """What the old ledgers say about *name*'s *cells* that ``_attempts`` does not hold yet."""
+    """What the old ledgers say about *name*'s *cells* that ``_attempts`` does not hold yet.
+
+    *history* is the dataset's plan over all its time, when *cells* covers
+    only part of it; density is judged on that.
+    """
     attempts = cov.attempted(catalog, name)
     if coverage.by == "write":
         known = [written] + attempts["at"].to_list()
@@ -451,13 +470,18 @@ def _answers(
         first=min(covered) if covered else None,
         owed=owed,
         long_run=LONG_RUN[coverage.grain],
+        dense=dense_in_practice(cells if history is None else history),
     )
     if periods:
         found.append(Seed(name, "state", tuple(periods), now))
     return found
 
 
-def seeds(config, end: date, *, start: date = date(1990, 1, 1)) -> list[Seed]:
+#: Earlier than any market data this lake holds: a scope from here is a dataset's whole history.
+HISTORY_START = date(1990, 1, 1)
+
+
+def seeds(config, end: date, *, start: date = HISTORY_START) -> list[Seed]:
     """What ``meta/state`` and the run manifest say was asked and how it was answered, to *end*.
 
     A dataset that promises a row every session gets no empty answers: an
@@ -481,7 +505,21 @@ def _collect(config, scope: Scope, names: Iterable[str], asked: dict[str, dateti
     with Catalog(lake_root(config), read_only=True) as catalog:
         written = last_written(catalog)
         plans = planned(config, catalog, scope, wanted)
+        whole = scope.start <= HISTORY_START
+        calendar = LakeCalendar(config)
         for name in wanted:
+            coverage = coverage_of(DATASETS[name], scope.end, config)
+            history = None
+            if not whole and coverage.by == "rows":
+                # Its inputs do not change which cells hold rows: plan it alone.
+                history = plan_dataset(
+                    catalog,
+                    name,
+                    replace(coverage, inputs=()),
+                    Scope(HISTORY_START, scope.end),
+                    calendar=calendar,
+                    column=DATASETS[name].query_date_col,
+                ).cells
             found.extend(
                 _answers(
                     catalog,
@@ -494,6 +532,7 @@ def _collect(config, scope: Scope, names: Iterable[str], asked: dict[str, dateti
                     now=now,
                     asked=asked.get(name),
                     written=written.get(name),
+                    history=history,
                 )
             )
     return found
