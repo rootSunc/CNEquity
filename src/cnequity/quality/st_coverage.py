@@ -681,12 +681,23 @@ def publish_bse_st_observation_receipt(config: Config) -> Path | None:
             receipt = previous.get("receipt")
             if receipt is None:
                 return None
-            if Path(receipt).is_file():
-                return Path(receipt)
+            # Kept relative to meta/, so a lake that was copied or restored finds
+            # its own receipt. An absolute path from before names another lake's
+            # file once the lake has moved; then the receipt is built again.
+            path = Path(receipt)
+            path = path if path.is_absolute() else config.meta_root / path
+            if path.is_file() and path.is_relative_to(config.meta_root):
+                return path
     published = _publish_bse_st_observation_receipt(config, universe)
     if inputs is not None:
         _atomic_json(
-            marker, {"inputs": inputs, "receipt": None if published is None else str(published)}
+            marker,
+            {
+                "inputs": inputs,
+                "receipt": None
+                if published is None
+                else Path(published).relative_to(config.meta_root).as_posix(),
+            },
         )
     return published
 

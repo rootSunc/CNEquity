@@ -10,6 +10,7 @@ extra files back in.
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import polars as pl
 from tests.catalog_seed import commit_tree
@@ -243,7 +244,8 @@ def test_the_bj_observation_receipt_is_rebuilt_only_when_its_inputs_move(tmp_pat
     import cnequity.quality.st_coverage as st
 
     cfg = Config(data_root=tmp_path / "data")
-    receipt = tmp_path / "receipt.json"
+    receipt = cfg.meta_root / "quality" / "coverage" / "receipt.json"
+    receipt.parent.mkdir(parents=True)
     receipt.write_text("{}")
     inputs = {"instruments": "a", "daily_bars": "b", "trading_status": "c"}
     built: list[int] = []
@@ -258,4 +260,46 @@ def test_the_bj_observation_receipt_is_rebuilt_only_when_its_inputs_move(tmp_pat
     assert st.publish_bse_st_observation_receipt(cfg) == receipt
     inputs["trading_status"] = "d"
     st.publish_bse_st_observation_receipt(cfg)
+    assert len(built) == 2
+
+
+def test_a_copied_lake_reads_its_own_bj_observation_receipt(tmp_path, monkeypatch):
+    import json
+    import shutil
+
+    import cnequity.quality.st_coverage as st
+
+    inputs = {"instruments": "a", "daily_bars": "b", "trading_status": "c"}
+    built: list[Path] = []
+    monkeypatch.setattr(st, "_bse_observation_inputs", lambda config, universe: dict(inputs))
+
+    def publish(config, universe):
+        path = config.meta_root / "quality" / "coverage" / "receipt.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
+        built.append(path)
+        return path
+
+    monkeypatch.setattr(st, "_publish_bse_st_observation_receipt", publish)
+    original = Config(data_root=tmp_path / "original")
+    st.publish_bse_st_observation_receipt(original)
+    marker = original.meta_root / "state" / st.ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
+    assert json.loads(marker.read_text())["receipt"] == "quality/coverage/receipt.json"
+
+    shutil.copytree(original.data_root, tmp_path / "copy")
+    copy = Config(data_root=tmp_path / "copy")
+    assert (
+        st.publish_bse_st_observation_receipt(copy)
+        == copy.meta_root / "quality/coverage/receipt.json"
+    )
+    assert len(built) == 1
+
+    # A marker written before paths were relative names the original lake's file:
+    # the copy builds its own instead of pointing there.
+    copy_marker = copy.meta_root / "state" / st.ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
+    copy_marker.write_text(json.dumps({"inputs": inputs, "receipt": str(built[0])}))
+    assert (
+        st.publish_bse_st_observation_receipt(copy)
+        == copy.meta_root / "quality/coverage/receipt.json"
+    )
     assert len(built) == 2
