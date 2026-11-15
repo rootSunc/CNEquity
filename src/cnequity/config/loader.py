@@ -213,6 +213,10 @@ class Config:
     #: ``best_effort`` datasets this config turned on (see config/layers.py).
     #: None on a hand-built Config: every dataset stays on, as before.
     best_effort_enabled: frozenset[str] | None = None
+    #: ``[datasets.history_from]``: where this lake's history of a dataset begins.
+    #: Days before it are not owed, though the source may serve them; a fact
+    #: about this lake, so it lives here rather than in the dataset spec.
+    history_from: dict[str, date] = field(default_factory=dict)
     init_phases: list[str] = field(default_factory=list)
     on_demand_enabled: bool = True
     on_demand_datasets: list[str] = field(default_factory=list)
@@ -904,6 +908,29 @@ def _warn_renamed_keys(raw: Mapping) -> None:
         )
 
 
+def _history_from(section) -> dict[str, date]:
+    """``[datasets.history_from]``: dataset name to the first day this lake holds it from."""
+    from cnequity.domain.datasets import DATASETS
+
+    if not isinstance(section, dict):
+        raise ConfigError("datasets.history_from must be a table of dataset = date")
+    out: dict[str, date] = {}
+    for name, value in section.items():
+        if name not in DATASETS:
+            raise ConfigError(f"datasets.history_from names an unknown dataset: {name}")
+        if isinstance(value, str):
+            try:
+                value = date.fromisoformat(value)
+            except ValueError:
+                raise ConfigError(
+                    f"datasets.history_from.{name} must be a date, not {value!r}"
+                ) from None
+        if type(value) is not date:
+            raise ConfigError(f"datasets.history_from.{name} must be a date, not {value!r}")
+        out[name] = value
+    return out
+
+
 def load_config(path: str | Path) -> Config:
     from cnequity.config.layers import BEST_EFFORT_KEY, OPTED_OUT_KEY, effective_raw
 
@@ -912,7 +939,7 @@ def load_config(path: str | Path) -> Config:
         raw = effective_raw(tomllib.load(f))
     opted_out_steps = frozenset(raw.pop(OPTED_OUT_KEY, ()))
     best_effort_enabled = frozenset(raw.pop(BEST_EFFORT_KEY, ()))
-    raw.pop("datasets", None)
+    history_from = _history_from((raw.pop("datasets", None) or {}).get("history_from", {}))
     _warn_renamed_keys(raw)
 
     data_root = _data_root(raw, config_path.parent)
@@ -1323,6 +1350,7 @@ def load_config(path: str | Path) -> Config:
         event_schedules=event_schedules,
         opted_out_steps=opted_out_steps,
         best_effort_enabled=best_effort_enabled,
+        history_from=history_from,
         init_phases=init_phases,
         on_demand_enabled=bool(on_demand.get("enabled", True)),
         on_demand_datasets=list(on_demand.get("datasets", [])),

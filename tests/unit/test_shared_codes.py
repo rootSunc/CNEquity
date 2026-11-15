@@ -60,3 +60,10 @@ def test_session_rules_agree_scalar_and_vectorised():
     assert vector == [exchange_may_open(day) for day in days] == [False, True, False, False]
     # A vendor's is_trading row on a closed day is still not a session.
     assert frame.filter(session_expr())["trade_date"].to_list() == [date(2024, 10, 8)]
+
+
+def test_no_day_before_the_market_opened_is_a_session():
+    days = [date(1990, 12, 18), date(1990, 12, 19), date(1990, 3, 1)]
+    frame = pl.DataFrame({"trade_date": days})
+    vector = frame.select(exchange_may_open_expr())["trade_date"].to_list()
+    assert vector == [exchange_may_open(day) for day in days] == [False, True, False]

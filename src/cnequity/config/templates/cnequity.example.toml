@@ -519,6 +519,12 @@ ingest_listed_funds = false
 # A group's own steps_add naming one also turns it on.
 best_effort = []
 
+# Where this lake's history of a dataset begins, when it starts later than the
+# source does. The planner does not owe earlier days; move a date earlier to
+# backfill further back.
+# [datasets.history_from]
+# fund_flow = 2023-09-11
+
 # Wave DAG for daily job (see docs/zh/datasets/catalog.md)
 [[job.daily.waves]]
 name = "reference"

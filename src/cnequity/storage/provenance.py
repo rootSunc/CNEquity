@@ -38,6 +38,8 @@ _NOT_DATA_FIELDS = frozenset(
         "inline_credentials",
         "backfill_window",
         "run_flags",
+        # Where the planner starts owing cells; it changes no fetched row.
+        "history_from",
         "eastmoney_proxy_hosts",
         "storage_publish",
     }

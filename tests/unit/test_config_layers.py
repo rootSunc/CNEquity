@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from cnequity.cli.main import cli
 from cnequity.config import load_config
 from cnequity.config.bootstrap import example_toml_text, path_for_toml, write_user_config
 from cnequity.config.drift import config_drift
+from cnequity.config.errors import ConfigError
 from cnequity.config.layers import ConfigLayerError, builtin_defaults, effective_raw, merge
 from cnequity.config.minimize import plan_minimize
 from cnequity.config.toml_out import dumps
@@ -99,6 +101,21 @@ def test_best_effort_datasets_are_off_unless_named(tmp_path):
 def test_best_effort_rejects_a_dataset_it_does_not_cover(tmp_path):
     with pytest.raises(ConfigLayerError, match="not best-effort"):
         load_config(_layered(tmp_path, '[datasets]\nbest_effort = ["daily_bars"]\n'))
+
+
+def test_history_from_names_where_this_lake_begins(tmp_path):
+    cfg = load_config(
+        _layered(
+            tmp_path,
+            '[datasets.history_from]\nfund_flow = 2023-09-11\nsector_bars = "2018-12-04"\n',
+        )
+    )
+    assert cfg.history_from == {"fund_flow": date(2023, 9, 11), "sector_bars": date(2018, 12, 4)}
+    assert load_config(_layered(tmp_path, "")).history_from == {}
+    with pytest.raises(ConfigError, match="unknown dataset"):
+        load_config(_layered(tmp_path, "[datasets.history_from]\nno_such = 2020-01-01\n"))
+    with pytest.raises(ConfigError, match="must be a date"):
+        load_config(_layered(tmp_path, '[datasets.history_from]\nfund_flow = "soon"\n'))
 
 
 def test_a_group_can_be_disabled(tmp_path):

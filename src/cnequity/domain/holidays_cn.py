@@ -255,14 +255,22 @@ CLOSED_DATES: frozenset[str] = frozenset(
 # trades. Do not repopulate this with make-up weekends.
 EXTRA_TRADING_DATES: frozenset[str] = frozenset()
 
+#: The first session of the SSE, and of this lake's index history. No day before
+#: it is a session: the calendar used to call every earlier weekday one, so a
+#: plan from 1990-01-01 owed 252 sessions before the market existed.
+FIRST_SESSION = date(1990, 12, 19)
+
 
 def exchange_may_open(day: date) -> bool:
-    """Whether SSE/SZSE can hold a session on *day*: a weekday not on the closure list.
+    """Whether SSE/SZSE can hold a session on *day*: a weekday not on the closure list,
+    on or after :data:`FIRST_SESSION`.
 
     A listed make-up session counts too, though there are none (see above).
     This is the calendar-free rule; a stored ``trading_calendar`` row is a
     session when it also says ``is_trading`` (:func:`session_expr`).
     """
+    if day < FIRST_SESSION:
+        return False
     iso = day.isoformat()
     if iso in EXTRA_TRADING_DATES:
         return True
@@ -273,9 +281,10 @@ def exchange_may_open_expr(column: str = "trade_date") -> pl.Expr:
     """:func:`exchange_may_open` over a date column."""
     iso = pl.col(column).dt.strftime("%Y-%m-%d")
     weekday = (pl.col(column).dt.weekday() <= 5) & ~iso.is_in(sorted(CLOSED_DATES))
+    opened = pl.col(column) >= pl.lit(FIRST_SESSION)
     if not EXTRA_TRADING_DATES:
-        return weekday
-    return iso.is_in(sorted(EXTRA_TRADING_DATES)) | weekday
+        return weekday & opened
+    return (iso.is_in(sorted(EXTRA_TRADING_DATES)) | weekday) & opened
 
 
 def session_expr(column: str = "trade_date") -> pl.Expr:

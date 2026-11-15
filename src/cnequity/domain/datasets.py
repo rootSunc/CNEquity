@@ -470,6 +470,10 @@ class DatasetSpec:
     # once each of them has answered it, so a derivation is not asked for days
     # its inputs do not reach (5m bars before their source horizon).
     derived_from: tuple[str, ...] = ()
+    # Days after a cell's last day before an empty answer for it is final.
+    # One given sooner stands only until the next ask, so the cell is asked
+    # again on every run until then.
+    cells_settle_days: int = 0
 
     @property
     def pit(self) -> bool:
@@ -1257,6 +1261,9 @@ _SPECS = [
         "daily_bars",
         cells_by="symbol",
         cells_count="volume > 0 OR volume IS NULL",
+        # No stock bar has been seen arriving days late (2026-09..11), but the
+        # old ledger re-checked empty answers; three days spans a weekend.
+        cells_settle_days=3,
         adjustable=True,
         universe_filter=True,
         total_return=True,
@@ -1909,6 +1916,8 @@ _SPECS = [
         },
         backfill_source_overrides=("exchange", "eastmoney"),
         backfill_parallel_dates=True,
+        # Margin trading opened on 2010-03-31; no source has a day before it.
+        history_floor_date=date(2010, 3, 31),
         # v2 records month partitions. Columns and the primary key are unchanged.
         schema_version=2,
         session_rows=True,

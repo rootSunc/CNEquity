@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 from cnequity.domain.datasets import DATASETS
 from cnequity.quality.planned_coverage import LakeCalendar, coverage_of
@@ -53,6 +54,27 @@ def test_what_the_source_serves_bounds_the_cells():
     assert _of("northbound_flows").end == date(2024, 8, 16)
     horizon = _of("minute_bars").start
     assert horizon is not None and date(2026, 5, 1) < horizon < TODAY
+
+
+def test_an_empty_daily_bar_answer_is_final_only_after_three_days():
+    from datetime import timedelta
+
+    assert _of("daily_bars").settle == timedelta(days=3)
+    assert _of("announcement_index").settle == timedelta(0)
+
+
+def test_a_market_fact_bounds_margin_trading():
+    assert _of("margin_trading").start == date(2010, 3, 31)
+
+
+def test_where_this_lake_begins_bounds_the_cells_too():
+    lake = SimpleNamespace(
+        history_from={"fund_flow": date(2023, 9, 11), "trade_ticks": date(2020, 1, 1)}
+    )
+    assert coverage_of(DATASETS["fund_flow"], TODAY, lake).start == date(2023, 9, 11)
+    # The later of the two wins: the source serves trade ticks only from 2024.
+    assert coverage_of(DATASETS["trade_ticks"], TODAY, lake).start == date(2024, 1, 2)
+    assert coverage_of(DATASETS["block_trades"], TODAY, lake).start is None
 
 
 def test_every_registered_dataset_gets_a_declaration():

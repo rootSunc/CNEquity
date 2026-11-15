@@ -57,10 +57,14 @@ def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
     weekends. One keyed by reporting period owes a cell per quarter. Anything
     else is refreshed as a whole and owes its latest session; so does a live
     snapshot no source can replay, since a day it missed cannot be had any
-    more. What the source serves bounds all of them. A spec that names its
+    more. What the source serves bounds all of them, and so does where this
+    lake's history begins (``[datasets.history_from]``). A spec that names its
     ``cells`` overrides the rule.
     """
     start, end = spec.earliest_available(today), spec.source_retired_date
+    begins = getattr(config, "history_from", {}).get(spec.name) if config is not None else None
+    if begins is not None:
+        start = begins if start is None else max(start, begins)
     if spec.cells == "latest" or (
         spec.cells is None and history_mode_for(spec, config) == "snapshot_only"
     ):
@@ -71,6 +75,7 @@ def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
         "entity": spec.cells_by,
         "inputs": spec.derived_from,
         "counts": spec.cells_count,
+        "settle": timedelta(days=spec.cells_settle_days),
     }
     if spec.cells is not None:
         return Coverage(spec.cells, column=spec.query_date_col, **shared)
