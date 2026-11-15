@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Literal
 
 import polars as pl
@@ -165,6 +165,7 @@ def plan_dataset(
     revisions: str = "_revisions",
     written: datetime | None | object = _READ,
     ready: pl.DataFrame | None = None,
+    zone: tzinfo = timezone.utc,
 ) -> DatasetPlan:
     """The state of every cell of *dataset* in *scope*.
 
@@ -174,6 +175,7 @@ def plan_dataset(
     *ready* lists the periods every input has answered (``period``); a due
     cell outside it that holds no rows is ``blocked``. Cells the universe
     excuses (``Universe.excused``, where it has one) are not owed at all.
+    *zone* is the market's time zone: a day ends at its midnight.
     """
     moment = now or datetime.now(timezone.utc)
     cells = owed(dataset, coverage, scope, calendar=calendar, universe=universe)
@@ -191,11 +193,11 @@ def plan_dataset(
     if coverage.by == "write":
         if written is _READ:
             written = cov.refreshed(catalog, dataset, revisions=revisions)
-        return DatasetPlan(dataset, _plan_refresh(coverage, scope, cells, attempts, written))
+        return DatasetPlan(dataset, _plan_refresh(coverage, scope, cells, attempts, written, zone))
     first = cov.span(coverage.grain, cells["period"].min())[0]
     last = cov.span(coverage.grain, cells["period"].max())[1]
     have = cov.stored(catalog, dataset, coverage, column=column, start=first, end=last)
-    empty = cov.standing(attempts, coverage, moment)
+    empty = cov.standing(attempts, coverage, moment, zone)
     short = cov.partial(attempts)
     keys = ["period", "entity"]
     marked = (
@@ -250,6 +252,7 @@ def _plan_refresh(
     cells: pl.DataFrame,
     attempts: pl.DataFrame,
     written: datetime | None,
+    zone: tzinfo,
 ) -> DatasetPlan:
     """The one cell a refreshed dataset owes: the latest that is due.
 
@@ -260,7 +263,7 @@ def _plan_refresh(
     if due.is_empty():
         return pl.DataFrame(schema=_PLAN_SCHEMA)
     period = due["period"].max()
-    opens = datetime.combine(cov.span(coverage.grain, period)[0], time.min, timezone.utc)
+    opens = cov.day_start(cov.span(coverage.grain, period)[0], zone)
     seen = [written]
     if not attempts.is_empty():
         seen.append(attempts["at"].max())
@@ -313,6 +316,7 @@ def plan_all(
     calendar: Calendar | None = None,
     universe: Universe | None = None,
     written: Mapping[str, datetime | None] | None = None,
+    zone: tzinfo = timezone.utc,
 ) -> dict[str, DatasetPlan]:
     """Plans for *wanted* (default: every declared dataset), inputs planned first.
 
@@ -365,6 +369,7 @@ def plan_all(
             calendar=calendar,
             universe=universe,
             ready=ready,
+            zone=zone,
             **extra,
         )
         visiting.discard(name)
@@ -383,6 +388,7 @@ def plan(
     now: datetime | None = None,
     calendar: Calendar | None = None,
     universe: Universe | None = None,
+    zone: tzinfo = timezone.utc,
 ) -> Plan:
     """The state of every cell in *scope*, for each dataset of *lake* that declares coverage."""
     moment = now or datetime.now(timezone.utc)
@@ -403,5 +409,6 @@ def plan(
             now=moment,
             calendar=calendar,
             universe=universe,
+            zone=zone,
         )
     return Plan(scope, moment, found)

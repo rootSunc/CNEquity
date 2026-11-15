@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
@@ -11,7 +12,7 @@ from equitylake_core import coverage as cov
 from equitylake_core.coverage import Cell, Coverage, CoverageError
 from equitylake_core.extensions import ExtensionUnavailableError
 from equitylake_core.lake import Lake
-from equitylake_core.plan import Scope, owed, plan, plan_dataset
+from equitylake_core.plan import Declared, Scope, owed, plan, plan_all, plan_dataset
 from equitylake_core.spec import DatasetSpec, Registry, SpecError
 
 UTC = timezone.utc
@@ -207,6 +208,36 @@ def test_an_early_empty_answer_stands_for_a_while_and_a_late_one_for_good():
 
     assert standing(asked + timedelta(hours=1)) == {("2026Q1", "C"), ("2025Q4", "A")}
     assert standing(asked + timedelta(days=2)) == {("2025Q4", "A")}
+
+
+def test_a_day_ends_at_the_market_midnight_not_utc():
+    # 2026-11-17 19:27 UTC is already 03:27 on 11-18 in Shanghai: the 17th is over there.
+    shanghai = ZoneInfo("Asia/Shanghai")
+    asked = datetime(2026, 11, 17, 19, 27, tzinfo=UTC)
+    attempts = pl.DataFrame(
+        {"period": ["2026-11-17"], "entity": [""], "at": [asked]},
+        schema={"period": pl.String, "entity": pl.String, "at": pl.Datetime("us", "UTC")},
+    )
+    later = asked + timedelta(minutes=1)
+    assert cov.standing(attempts, Coverage("day"), later).is_empty()
+    assert cov.standing(attempts, Coverage("day"), later, shanghai)["period"].to_list() == [
+        "2026-11-17"
+    ]
+    assert cov.day_start(date(2026, 11, 18), shanghai) == datetime(2026, 11, 17, 16, tzinfo=UTC)
+
+
+def test_a_refresh_after_the_market_midnight_counts_for_the_new_day(lake):
+    shanghai = ZoneInfo("Asia/Shanghai")
+    day = date(2026, 11, 18)
+    scope = Scope(day - timedelta(days=6), day, datasets=("codes",))
+    # 01:00 on the 18th in Shanghai; the 17th still in UTC, the week (11-16..22) the same.
+    written = {"codes": datetime(2026, 11, 17, 17, tzinfo=UTC)}
+    declared = {"codes": Declared(Coverage("day", by="write"))}
+    with lake.catalog() as catalog:
+        found = plan_all(catalog, declared, scope, written=written, zone=shanghai)
+        utc = plan_all(catalog, declared, scope, written=written)
+    assert found["codes"].cells["state"].to_list() == ["covered"]
+    assert utc["codes"].cells["state"].to_list() == ["gap"]
 
 
 def test_a_final_empty_answer_is_not_asked_again(lake):

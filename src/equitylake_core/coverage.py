@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Literal
 
 import polars as pl
@@ -361,8 +361,23 @@ def first_stored(catalog: Catalog, table: str, column: str) -> date | None:
     return found
 
 
-def standing(attempts: pl.DataFrame, coverage: Coverage, now: datetime) -> pl.DataFrame:
-    """The cells whose empty answer still stands at *now*: ``period``, ``entity``."""
+def day_start(day: date, zone: tzinfo = timezone.utc) -> datetime:
+    """When *day* begins in the market's time *zone*, in UTC.
+
+    A day ends at the market's midnight, not UTC's: for a market eight hours
+    ahead of UTC an answer given at 01:00 local belongs after the day it was
+    asked about, though in UTC that day has not yet ended.
+    """
+    return datetime.combine(day, time.min, zone).astimezone(timezone.utc)
+
+
+def standing(
+    attempts: pl.DataFrame, coverage: Coverage, now: datetime, zone: tzinfo = timezone.utc
+) -> pl.DataFrame:
+    """The cells whose empty answer still stands at *now*: ``period``, ``entity``.
+
+    A cell's last day ends at midnight in the market's time *zone*.
+    """
     if attempts.is_empty():
         return no_cells()
     if "outcome" in attempts.columns:
@@ -373,9 +388,7 @@ def standing(attempts: pl.DataFrame, coverage: Coverage, now: datetime) -> pl.Da
             last = span(coverage.grain, period)[1]
         except CoverageError:
             continue  # recorded under another grain: it says nothing about these cells
-        final[period] = (
-            datetime.combine(last + timedelta(days=1), time.min, timezone.utc) + coverage.settle
-        )
+        final[period] = day_start(last + timedelta(days=1), zone) + coverage.settle
     if not final:
         return no_cells()
     cutoffs = pl.DataFrame(

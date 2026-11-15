@@ -17,6 +17,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -175,6 +176,10 @@ class BarUniverse:
         ).unique()
 
 
+#: The market's time zone: a day, and whether an answer came after it, ends at its midnight.
+MARKET_ZONE = ZoneInfo("Asia/Shanghai")
+
+
 def declared(config, end: date) -> dict[str, Declared]:
     """Every dataset's cells as the planner takes them."""
     return {
@@ -193,6 +198,7 @@ def planned(config, catalog: Catalog, scope: Scope, wanted: Iterable[str] | None
         calendar=LakeCalendar(config),
         universe=BarUniverse(config),
         written=last_written(catalog),
+        zone=MARKET_ZONE,
     )
 
 
@@ -432,7 +438,8 @@ def _answers(
         known = [written] + attempts["at"].to_list()
         latest = max((moment for moment in known if moment is not None), default=None)
         if asked is not None and (latest is None or asked > latest):
-            return [Seed(name, "refresh", (cov.label(coverage.grain, asked.date()),), asked)]
+            day = asked.astimezone(MARKET_ZONE).date()
+            return [Seed(name, "refresh", (cov.label(coverage.grain, day),), asked)]
         return []
     if coverage.grain not in ("session", "day", "week") or cells.is_empty():
         return []
@@ -519,6 +526,7 @@ def _collect(config, scope: Scope, names: Iterable[str], asked: dict[str, dateti
                     Scope(HISTORY_START, scope.end),
                     calendar=calendar,
                     column=DATASETS[name].query_date_col,
+                    zone=MARKET_ZONE,
                 ).cells
             found.extend(
                 _answers(
