@@ -26,5 +26,10 @@ class Universe(Protocol):
 
         A frame with ``entity`` and the days it is owed from and to, ``first``
         and ``last``; a null ``first`` or ``last`` leaves that side open.
+        An entity may have several such rows.
+
+        A universe may also have ``excused(dataset, start, end)``: the cells
+        (``period``, ``entity``) inside a membership that are not owed, such
+        as a day a security was suspended.
         """
         ...

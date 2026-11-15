@@ -255,7 +255,7 @@ class LakeWrite:
         self.run = run or f"run-{datetime.now():%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
         self.catalog = Catalog(lake.root)
         self._pending: dict[str, _Pending] = {}
-        self._empty: list[tuple[str, str, str]] = []
+        self._empty: list[tuple[str, str, str, str]] = []
         self._types: dict[str, dict[str, str]] = {}
         self._staging = (
             lake.root / STAGING_DIR / f"{_UNSAFE.sub('_', self.run)}.{uuid.uuid4().hex[:8]}"
@@ -295,9 +295,20 @@ class LakeWrite:
         A cell is a period label, or a period and an entity. For a dataset
         covered by write, any one period says the refresh found nothing new.
         """
+        self._answer(dataset, cells, "empty")
+
+    def partial(self, dataset: str, cells: Iterable[str | tuple[str, str] | Cell]) -> None:
+        """Record that *cells* were answered only in part: they stay owed though they hold rows."""
+        self._answer(dataset, cells, "partial")
+
+    def complete(self, dataset: str, cells: Iterable[str | tuple[str, str] | Cell]) -> None:
+        """Record that *cells* were answered whole, settling an earlier :meth:`partial`."""
+        self._answer(dataset, cells, "complete")
+
+    def _answer(self, dataset: str, cells, outcome: str) -> None:
         self.lake.registry[dataset]  # an unknown dataset is a programming error
         self._empty.extend(
-            (dataset, period, entity) for period, entity in cell_keys(dataset, cells)
+            (dataset, period, entity, outcome) for period, entity in cell_keys(dataset, cells)
         )
 
     def _spec_types(self, spec: DatasetSpec) -> dict[str, str]:
@@ -623,7 +634,7 @@ class LakeWrite:
                             },
                         )
                 moment = datetime.now(timezone.utc)
-                for dataset, period, entity in dict.fromkeys(self._empty):
+                for dataset, period, entity, outcome in dict.fromkeys(self._empty):
                     write.record(
                         ATTEMPTS,
                         {
@@ -632,6 +643,7 @@ class LakeWrite:
                             "entity": entity,
                             "run": self.run,
                             "asked_at": moment,
+                            "outcome": outcome,
                         },
                     )
                 result = write.commit(message=message or self.run)

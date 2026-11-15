@@ -16,7 +16,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
 
@@ -27,17 +27,25 @@ from cnequity.domain.datasets import (
     is_dataset_enabled,
     removed_from_schedule,
 )
+from cnequity.domain.symbols import filter_ingest_universe, is_subscription_placeholder
+from cnequity.domain.trading_status import independent_suspension_keys
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.quality.freshness import freshness_owed
 from cnequity.query.calendar import list_trading_dates
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.catalog_bridge import lake_root, revision_snapshots
+from cnequity.storage.fund_no_print import approved_no_print_keys
+from cnequity.storage.instrument_catalog import (
+    listed_fund_symbols,
+    load_curated_instruments,
+    load_curated_trading_status,
+)
 from cnequity.storage.observation import freshness_mark
 from cnequity.storage.state import StateStore
 from equitylake_core import coverage as cov
 from equitylake_core.catalog import ALIAS, Catalog, quote_literal
 from equitylake_core.coverage import Coverage
-from equitylake_core.plan import Scope, plan_dataset
+from equitylake_core.plan import Declared, Scope, plan_all
 
 
 def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
@@ -56,12 +64,19 @@ def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
         spec.cells is None and history_mode_for(spec, config) == "snapshot_only"
     ):
         return Coverage("session", by="write", start=start, end=end)
+    shared = {
+        "start": start,
+        "end": end,
+        "entity": spec.cells_by,
+        "inputs": spec.derived_from,
+        "counts": spec.cells_count,
+    }
     if spec.cells is not None:
-        return Coverage(spec.cells, column=spec.query_date_col, start=start, end=end)
+        return Coverage(spec.cells, column=spec.query_date_col, **shared)
     by_date = spec.watermark or (spec.layer == "derived" and spec.query_date_col == "trade_date")
     if spec.partition_col is not None and by_date:
         grain = "day" if spec.session_scope == "calendar" else "session"
-        return Coverage(grain, column=spec.query_date_col, start=start, end=end)
+        return Coverage(grain, column=spec.query_date_col, **shared)
     if spec.partition_col is not None and spec.partition_granularity == "quarter":
         return Coverage("quarter", column=spec.partition_col, labelled=True, start=start, end=end)
     return Coverage("session", by="write", start=start, end=end)
@@ -89,11 +104,106 @@ class LakeCalendar:
         return self._days[first:after]
 
 
+class BarUniverse:
+    """The securities owed a daily bar, and the days they are excused one.
+
+    The same scope ``quality.bar_coverage`` checks: listed securities in the
+    configured ingest universe (and listed funds when they are ingested),
+    from the listing date up to the day before delisting. A session is not
+    owed a bar when the security was independently shown suspended or a fund
+    was verified not to have printed.
+    """
+
+    def __init__(self, config):
+        self._config = config
+        self._members: pl.DataFrame | None = None
+
+    def members(self, dataset: str, start: date, end: date) -> pl.DataFrame:
+        if dataset != "daily_bars":
+            raise ValueError(f"no universe is declared for {dataset}")
+        if self._members is None:
+            self._members = self._load(end)
+        return self._members
+
+    def _load(self, end: date) -> pl.DataFrame:
+        schema = {"entity": pl.String, "first": pl.Date, "last": pl.Date}
+        instruments = load_curated_instruments(self._config)
+        if instruments is None or instruments.is_empty():
+            return pl.DataFrame(schema=schema)
+        instruments = instruments.filter(
+            pl.Series(
+                [
+                    not is_subscription_placeholder(row.get("name"), row.get("symbol"))
+                    for row in instruments.select("name", "symbol").iter_rows(named=True)
+                ]
+            )
+        )
+        scope = set(
+            filter_ingest_universe(instruments["symbol"].to_list(), self._config.ingest_universe)
+        )
+        if self._config.ingest_listed_funds:
+            scope |= set(listed_fund_symbols(instruments, end, start=date(1990, 1, 1)))
+        return (
+            instruments.filter(
+                pl.col("symbol").is_in(sorted(scope)) & pl.col("list_date").is_not_null()
+            )
+            .select(
+                pl.col("symbol").alias("entity"),
+                pl.col("list_date").alias("first"),
+                (pl.col("delist_date") - timedelta(days=1)).alias("last"),
+            )
+            .cast(schema)
+            .unique()
+        )
+
+    def excused(self, dataset: str, start: date, end: date) -> pl.DataFrame:
+        keys = {"symbol": pl.String, "trade_date": pl.Date}
+        status = load_curated_trading_status(self._config, start=start, end=end)
+        halted = (
+            independent_suspension_keys(status)
+            if status is not None and not status.is_empty()
+            else pl.DataFrame(schema=keys)
+        )
+        quiet = approved_no_print_keys(self._config, start=start, end=end)
+        if quiet:
+            halted = pl.concat(
+                [halted.select(*keys), pl.DataFrame(sorted(quiet), schema=keys, orient="row")]
+            )
+        return halted.select(
+            pl.col("trade_date").cast(pl.String).alias("period"),
+            pl.col("symbol").alias("entity"),
+        ).unique()
+
+
+def declared(config, end: date) -> dict[str, Declared]:
+    """Every dataset's cells as the planner takes them."""
+    return {
+        name: Declared(coverage_of(spec, end, config), spec.query_date_col)
+        for name, spec in DATASETS.items()
+    }
+
+
+def planned(config, catalog: Catalog, scope: Scope, wanted: Iterable[str] | None = None):
+    """The plan of *wanted* (default: every dataset) over *scope*, inputs planned first."""
+    return plan_all(
+        catalog,
+        declared(config, scope.end),
+        scope,
+        wanted=None if wanted is None else list(wanted),
+        calendar=LakeCalendar(config),
+        universe=BarUniverse(config),
+        written=last_written(catalog),
+    )
+
+
 @dataclass(frozen=True)
 class Comparison:
     dataset: str
     basis: str
     covered: int
+    #: Cells waiting for an input of a derived dataset.
+    blocked: int
+    #: Periods with a gap; ``period:entity`` for a dataset owed per entity.
     gaps: tuple[str, ...]
     #: Whether the dataset is supposed to keep up: enabled, scheduled, and its source usable.
     scheduled: bool
@@ -113,26 +223,30 @@ def compare(
     config, start: date, end: date, *, datasets: Iterable[str] | None = None
 ) -> list[Comparison]:
     """The planner's gaps from *start* to *end* beside the state files', dataset by dataset."""
-    calendar, state = LakeCalendar(config), StateStore(config.meta_root)
+    state = StateStore(config.meta_root)
     scope = Scope(start, end)
     found = []
     with Catalog(lake_root(config), read_only=True) as catalog:
-        written = last_written(catalog)
-        for name in datasets if datasets is not None else DATASETS:
-            spec = DATASETS[name]
-            coverage = coverage_of(spec, end, config)
-            cells = plan_dataset(
-                catalog, name, coverage, scope, calendar=calendar, written=written.get(name)
-            ).cells
-            states = dict(cells.select("period", "state").iter_rows())
-            gaps = tuple(period for period, value in states.items() if value == "gap")
+        plans = planned(config, catalog, scope, datasets)
+        for name, item in plans.items():
+            coverage = coverage_of(DATASETS[name], end, config)
+            cells = item.cells
+            gap_cells = cells.filter(pl.col("state") == "gap")
+            if coverage.entity is not None:
+                states = {}
+                gaps = tuple(
+                    f"{p}:{e}" for p, e in gap_cells.select("period", "entity").iter_rows()
+                )
+            else:
+                states = dict(cells.select("period", "state").iter_rows())
+                gaps = tuple(gap_cells["period"].to_list())
             mark = freshness_mark(config, name, state.get_date(name))
             snapshot = state.get_date(name, field="last_snapshot_date")
             mark = max((day for day in (mark, snapshot) if day is not None), default=None)
             owed = tuple(
                 sorted(day for day in state.get_missing_dates(name) if start <= day <= end)
             )
-            by_day = coverage.grain in ("session", "day")
+            by_day = coverage.grain in ("session", "day") and coverage.entity is None
             owed_labels = {day.isoformat() for day in owed}
             asked = tuple(
                 period
@@ -149,7 +263,8 @@ def compare(
                     scheduled=is_dataset_enabled(name, config)
                     and not removed_from_schedule(config, name)
                     and freshness_owed(config, name),
-                    covered=sum(value == "covered" for value in states.values()),
+                    covered=int((cells["state"] == "covered").sum()),
+                    blocked=int((cells["state"] == "blocked").sum()),
                     gaps=gaps,
                     mark=mark,
                     owed=owed,
@@ -215,14 +330,16 @@ def refreshes(manifest_path) -> dict[str, datetime]:
 
 @dataclass(frozen=True)
 class Seed:
-    """What the old ledgers say was asked of one dataset's source and found empty."""
+    """What the old ledgers say was asked of one dataset's source and how it answered."""
 
     dataset: str
     #: ``state``: cells the state files hold done that have no rows.
     #: ``refresh``: a refresh the manifest records that published nothing new.
+    #: ``short``: days the missing-date ledger owes that hold rows anyway.
     reason: str
     periods: tuple[str, ...]
     asked_at: datetime
+    outcome: str = "empty"
 
 
 #: A dataset with rows in this share of the cells of its stored span is dense in
@@ -277,32 +394,42 @@ def _dense(spec: DatasetSpec) -> bool:
 def seeds(config, end: date, *, start: date = date(1990, 1, 1)) -> list[Seed]:
     """What ``meta/state`` and the run manifest say was asked and found empty, up to *end*.
 
-    A dataset that promises a row every session gets nothing: an empty
-    session there is a hole the old ledgers missed, not an answer. Cells
-    split by entity (``negative_evidence``, ``outstanding_keys``) are not
-    read yet.
+    A dataset that promises a row every session gets no empty answers: an
+    empty session there is a hole the old ledgers missed, not an answer. A
+    day the missing-date ledger owes but that holds rows was answered in
+    part: it is recorded so, and stays owed. Cells owed per entity are left
+    to the planner: their rows say which entities are missing.
     """
-    calendar, state = LakeCalendar(config), StateStore(config.meta_root)
+    state = StateStore(config.meta_root)
     refreshed = refreshes(config.manifest_path)
     found: list[Seed] = []
     now = datetime.now(UTC)
     with Catalog(lake_root(config), read_only=True) as catalog:
         written = last_written(catalog)
+        plans = planned(config, catalog, Scope(start, end))
         for name, spec in DATASETS.items():
             coverage = coverage_of(spec, end, config)
+            if coverage.entity is not None:
+                continue
             if coverage.by == "write":
                 asked = refreshed.get(name)
-                if asked is not None and asked > written.get(
-                    name, datetime.min.replace(tzinfo=UTC)
-                ):
+                known = [written.get(name)] + cov.attempted(catalog, name)["at"].to_list()
+                latest = max((moment for moment in known if moment is not None), default=None)
+                if asked is not None and (latest is None or asked > latest):
                     period = cov.label(coverage.grain, asked.date())
                     found.append(Seed(name, "refresh", (period,), asked))
                 continue
-            if coverage.grain not in ("session", "day", "week") or _dense(spec):
+            if coverage.grain not in ("session", "day", "week"):
                 continue
-            cells = plan_dataset(
-                catalog, name, coverage, Scope(start, end), calendar=calendar
-            ).cells
+            cells = plans[name].cells
+            owed = {cov.label(coverage.grain, day) for day in state.get_missing_dates(name)}
+            short = sorted(
+                owed & set(cells.filter(pl.col("state") == "covered")["period"].to_list())
+            )
+            if short:
+                found.append(Seed(name, "short", tuple(short), now, "partial"))
+            if _dense(spec):
+                continue
             covered = cells.filter(pl.col("state") == "covered")["period"]
             mark = freshness_mark(config, name, state.get_date(name))
             snapshot = state.get_date(name, field="last_snapshot_date")
@@ -311,7 +438,7 @@ def seeds(config, end: date, *, start: date = date(1990, 1, 1)) -> list[Seed]:
                 cells,
                 mark=None if mark is None else cov.label(coverage.grain, min(mark, end)),
                 first=covered.min() if len(covered) else None,
-                owed={cov.label(coverage.grain, day) for day in state.get_missing_dates(name)},
+                owed=owed,
                 long_run=LONG_RUN[coverage.grain],
             )
             if periods:
@@ -328,6 +455,7 @@ def record_seeds(config, found: Iterable[Seed], *, run: str = "seed:meta-state")
             "entity": "",
             "run": f"{run}:{seed.reason}",
             "asked_at": seed.asked_at,
+            "outcome": seed.outcome,
         }
         for seed in found
         for period in seed.periods

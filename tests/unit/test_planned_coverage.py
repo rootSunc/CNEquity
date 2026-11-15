@@ -112,3 +112,20 @@ def test_a_dataset_dense_in_practice_keeps_its_holes_as_gaps():
         _cells(states), mark="2026-01-28", first="2026-01-01", owed=set(), long_run=20
     )
     assert found == []
+
+
+def test_daily_bars_are_owed_per_symbol_and_only_a_print_covers_a_cell():
+    bars = _of("daily_bars")
+    assert (bars.grain, bars.entity) == ("session", "symbol")
+    assert bars.counts == "volume > 0 OR volume IS NULL"
+
+
+def test_a_derived_dataset_names_inputs_that_exist_and_never_itself():
+    from cnequity.domain.datasets import DATASETS
+
+    assert _of("minute_bars_15m").inputs == ("minute_bars_5m",)
+    assert "daily_bars" in _of("industry_index").inputs
+    for name, spec in DATASETS.items():
+        for source in spec.derived_from:
+            assert source in DATASETS, (name, source)
+            assert name not in DATASETS[source].derived_from, (name, source)

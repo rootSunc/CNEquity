@@ -11,7 +11,10 @@ cell, and only the last of them is stored:
   off the dataset's revisions for one that is refreshed rather than extended
   (:func:`refreshed`). Nothing keeps a second copy that could disagree.
 * **Asked and empty** cannot be read off rows that do not exist, so it is
-  recorded, append-only, in ``_attempts`` (:func:`attempted`).
+  recorded, append-only, in ``_attempts`` (:func:`attempted`). So is
+  **asked and answered in part**: a cell whose rows came from a fetch the
+  writer knows fell short (a source failed for some of it) holds rows and is
+  still owed, until a later attempt answers it whole.
 
 An empty answer about a period that has barely ended may only mean "not
 yet". :func:`standing` says which empty answers still stand at a given time.
@@ -33,11 +36,16 @@ By = Literal["rows", "write"]
 
 GRAINS: tuple[Grain, ...] = ("session", "day", "week", "month", "quarter", "year")
 
-#: One row per cell a write asked a source for and got nothing to store.
+#: One row per cell a write asked a source about and did not get in full.
 ATTEMPTS = "_attempts"
 ATTEMPT_COLUMNS = (
-    "dataset VARCHAR, period VARCHAR, entity VARCHAR, run VARCHAR, asked_at TIMESTAMPTZ"
+    "dataset VARCHAR, period VARCHAR, entity VARCHAR, run VARCHAR, asked_at TIMESTAMPTZ, "
+    "outcome VARCHAR"
 )
+Outcome = Literal["empty", "partial", "complete"]
+#: ``empty``: nothing to store. ``partial``: some of it, and the cell is still owed.
+#: ``complete``: all of it; recorded only to settle an earlier ``partial``.
+OUTCOMES: tuple[Outcome, ...] = ("empty", "partial", "complete")
 
 CELLS_SCHEMA = {"period": pl.String, "entity": pl.String}
 _NO_TIME = timedelta(0)
@@ -74,6 +82,9 @@ class Coverage:
     ``column``
         The date or timestamp column that places a row in a cell (default:
         the dataset's time column). A timestamp's date is its UTC date.
+    ``counts``
+        A SQL condition a row must meet to cover its cell, for a dataset that
+        stores rows which do not count (a bar with no trades). Default: any row.
     ``labelled``
         The column holds the cell's label itself (``2026Q3``) instead of a date.
     ``entity``
@@ -82,6 +93,11 @@ class Coverage:
     ``start``, ``end``
         The first and the last day a cell is owed for: what the source
         serves, where that has an edge.
+    ``inputs``
+        The datasets a derived dataset is computed from. A cell is owed only
+        once each input has answered its period (rows, or a standing empty
+        answer); until then it is ``blocked``. An input refreshed as a whole
+        bounds nothing but where its rows begin.
     ``lag``
         How long after its last day a cell becomes owed.
     ``settle``
@@ -94,9 +110,11 @@ class Coverage:
     by: By = "rows"
     column: str | None = None
     labelled: bool = False
+    counts: str | None = None
     entity: str | None = None
     start: date | None = None
     end: date | None = None
+    inputs: tuple[str, ...] = ()
     lag: timedelta = _NO_TIME
     settle: timedelta = _NO_TIME
     recheck: timedelta = _NO_TIME
@@ -238,7 +256,9 @@ def stored(
             where.append(f"{bounded} < DATE {quote_literal(after.isoformat())}")
     known: set[str] = set()
     source = q(table)
-    if kind == "DATE" and not coverage.labelled and coverage.entity is None:
+    if coverage.counts is not None:
+        where.append(f"({coverage.counts})")
+    elif kind == "DATE" and not coverage.labelled and coverage.entity is None:
         # A file whose smallest and largest date fall in one cell says so in its
         # statistics; only a file spanning several cells has to be opened.
         split = _split_by_statistics(catalog, table, column, coverage.grain, first, last)
@@ -304,13 +324,18 @@ def refreshed(catalog: Catalog, dataset: str, *, revisions: str) -> datetime | N
 
 
 def attempted(catalog: Catalog, dataset: str) -> pl.DataFrame:
-    """Each cell of *dataset* asked for and found empty, with when it was last asked: ``at``."""
-    schema = {**CELLS_SCHEMA, "at": pl.Datetime("us", "UTC")}
+    """Each cell of *dataset* asked about, with its latest attempt: ``at`` and ``outcome``."""
+    schema = {**CELLS_SCHEMA, "at": pl.Datetime("us", "UTC"), "outcome": pl.String}
     if not catalog.has_table(ATTEMPTS):
         return pl.DataFrame(schema=schema)
+    # A row written before attempts carried an outcome said "empty".
+    outcome = (
+        "COALESCE(outcome, 'empty')" if "outcome" in catalog.column_types(ATTEMPTS) else "'empty'"
+    )
     return (
         catalog.relation(
-            f"SELECT period, entity, max(asked_at) AS at FROM {ATTEMPTS} WHERE dataset = ? GROUP BY ALL",
+            f"SELECT period, entity, max(asked_at) AS at, arg_max({outcome}, asked_at) AS outcome "
+            f"FROM {ATTEMPTS} WHERE dataset = ? GROUP BY ALL",
             [dataset],
         )
         .pl()
@@ -318,10 +343,29 @@ def attempted(catalog: Catalog, dataset: str) -> pl.DataFrame:
     )
 
 
+def partial(attempts: pl.DataFrame) -> pl.DataFrame:
+    """The cells whose latest attempt was answered only in part: ``period``, ``entity``."""
+    if attempts.is_empty() or "outcome" not in attempts.columns:
+        return no_cells()
+    return attempts.filter(pl.col("outcome") == "partial").select("period", "entity")
+
+
+def first_stored(catalog: Catalog, table: str, column: str) -> date | None:
+    """The earliest date in *table*'s *column*, or ``None`` when it holds none."""
+    if not catalog.has_table(table) or column not in catalog.column_types(table):
+        return None
+    found = catalog.execute(
+        f"SELECT min(TRY_CAST({quote_identifier(column)} AS DATE)) FROM {quote_identifier(table)}"
+    ).fetchone()[0]
+    return found
+
+
 def standing(attempts: pl.DataFrame, coverage: Coverage, now: datetime) -> pl.DataFrame:
     """The cells whose empty answer still stands at *now*: ``period``, ``entity``."""
     if attempts.is_empty():
         return no_cells()
+    if "outcome" in attempts.columns:
+        attempts = attempts.filter(pl.col("outcome") == "empty")
     final = {}
     for period in attempts["period"].unique():
         try:
@@ -348,6 +392,8 @@ def prepare(catalog: Catalog) -> None:
     """Make ``_attempts`` and keep its rows in the catalog database; outside a transaction."""
     if not catalog.has_table(ATTEMPTS):
         catalog.execute(f"CREATE TABLE {ATTEMPTS} ({ATTEMPT_COLUMNS})")
+    elif "outcome" not in catalog.column_types(ATTEMPTS):
+        catalog.execute(f"ALTER TABLE {ATTEMPTS} ADD COLUMN outcome VARCHAR")
     catalog.keep_rows_inline(ATTEMPTS)
 
 
@@ -355,13 +401,18 @@ def record(catalog: Catalog, rows: pl.DataFrame, *, message: str | None = None) 
     """Append *rows* to ``_attempts`` in one snapshot; returns it, or ``None`` for no rows.
 
     *rows* has the columns ``dataset``, ``period``, ``entity``, ``run`` and
-    ``asked_at``. For a writer that publishes its own way: one that writes
+    ``asked_at``, and may have ``outcome`` (default ``empty``). For a writer that publishes its own way: one that writes
     through :class:`~equitylake_core.lake.LakeWrite` says ``empty`` instead,
     and its attempts commit with its rows.
     """
     if rows.is_empty():
         return None
-    columns = ["dataset", "period", "entity", "run", "asked_at"]
+    if "outcome" not in rows.columns:
+        rows = rows.with_columns(outcome=pl.lit("empty"))
+    unknown = set(rows["outcome"].unique().to_list()) - set(OUTCOMES)
+    if unknown:
+        raise CoverageError(f"unknown attempt outcome(s): {', '.join(sorted(map(str, unknown)))}")
+    columns = ["dataset", "period", "entity", "run", "asked_at", "outcome"]
     frame = rows.select(columns).cast(
         {
             "dataset": pl.String,
@@ -369,6 +420,7 @@ def record(catalog: Catalog, rows: pl.DataFrame, *, message: str | None = None) 
             "entity": pl.String,
             "run": pl.String,
             "asked_at": pl.Datetime("us", "UTC"),
+            "outcome": pl.String,
         }
     )
     prepare(catalog)

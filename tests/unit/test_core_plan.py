@@ -147,7 +147,13 @@ def test_a_session_without_rows_is_a_gap_and_one_asked_about_is_empty(lake):
         "2026-11-12": "gap",
     }
     assert found.gaps() == [Cell("bars", "2026-11-12")]
-    assert found.counts()["bars"] == {"covered": 2, "empty": 1, "gap": 1, "not_due": 0}
+    assert found.counts()["bars"] == {
+        "covered": 2,
+        "empty": 1,
+        "gap": 1,
+        "blocked": 0,
+        "not_due": 0,
+    }
 
 
 def test_redo_widens_what_is_asked_again(lake):
@@ -370,3 +376,81 @@ def test_a_refreshed_dataset_can_be_told_when_it_was_written(lake):
         unknown = plan_dataset(catalog, "codes", CODES.coverage, scope, written=None)
     assert set(told.cells["state"]) == {"covered"}
     assert set(unknown.cells["state"]) == {"gap"}
+
+
+def test_a_cell_answered_in_part_stays_owed_until_answered_whole(lake):
+    with lake.write("short") as write:
+        write.put("bars", _bars(date(2026, 11, 9), date(2026, 11, 10)))
+        write.partial("bars", ["2026-11-10"])
+        write.commit()
+    scope = Scope(date(2026, 11, 9), date(2026, 11, 10), datasets=("bars",))
+    assert _states(plan(lake, scope, calendar=Weekdays()), "bars") == {
+        "2026-11-09": "covered",
+        "2026-11-10": "gap",
+    }
+    with lake.write("whole") as write:
+        write.complete("bars", ["2026-11-10"])
+        write.commit()
+    assert _states(plan(lake, scope, calendar=Weekdays()), "bars") == {
+        "2026-11-09": "covered",
+        "2026-11-10": "covered",
+    }
+
+
+DERIVED = DatasetSpec(
+    name="derived",
+    columns={"day": "DATE", "value": "DOUBLE"},
+    key=("day",),
+    time="day",
+    partition="year",
+    coverage=Coverage("session", inputs=("bars", "codes")),
+)
+
+
+def test_a_derived_cell_is_blocked_until_its_inputs_have_answered(tmp_path):
+    try:
+        lake = Lake.init(tmp_path / "lake", Registry([BARS, CODES, DERIVED]))
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    with lake.write("inputs") as write:
+        write.put("bars", _bars(date(2026, 11, 10)))
+        write.empty("bars", ["2026-11-11"])
+        write.put("derived", pl.DataFrame({"day": [date(2026, 11, 9)], "value": [1.0]}))
+        write.commit()
+    scope = Scope(date(2026, 11, 9), date(2026, 11, 12), datasets=("derived",))
+    # codes keeps only its latest state and has no time column: it bounds nothing.
+    assert _states(plan(lake, scope, calendar=Weekdays()), "derived") == {
+        "2026-11-09": "covered",  # rows win, whatever the inputs say
+        "2026-11-10": "gap",
+        "2026-11-11": "gap",  # an empty input is an answer too
+        "2026-11-12": "blocked",
+    }
+
+
+class Suspending(Listed):
+    """``A`` is not owed a report for 2026Q2."""
+
+    def excused(self, dataset, start, end):
+        return pl.DataFrame({"period": ["2026Q2"], "entity": ["A"]})
+
+
+def test_cells_the_universe_excuses_are_not_owed(lake):
+    scope = Scope(date(2026, 4, 1), date(2026, 9, 30), datasets=("reports",))
+    found = plan(lake, scope, universe=Suspending())
+    assert ("2026Q2", "A") not in _states(found, "reports")
+    assert _states(found, "reports")[("2026Q2", "B")] == "gap"
+
+
+def test_an_attempt_with_an_unknown_outcome_is_refused(lake):
+    rows = pl.DataFrame(
+        {
+            "dataset": ["bars"],
+            "period": ["2026-11-10"],
+            "entity": [""],
+            "run": ["x"],
+            "asked_at": [datetime.now(UTC)],
+            "outcome": ["maybe"],
+        }
+    )
+    with lake.catalog(read_only=False) as catalog, pytest.raises(CoverageError):
+        cov.record(catalog, rows)

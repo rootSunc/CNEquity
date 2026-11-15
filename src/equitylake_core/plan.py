@@ -10,7 +10,7 @@ Every cell in a scope is in exactly one :data:`State`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
@@ -22,11 +22,14 @@ from equitylake_core.catalog import Catalog
 from equitylake_core.coverage import Cell, Coverage
 from equitylake_core.market import Calendar, Universe
 
-State = Literal["covered", "empty", "gap", "not_due"]
+State = Literal["covered", "empty", "gap", "blocked", "not_due"]
 
-#: ``covered``: rows are stored. ``empty``: asked, nothing there, and the answer stands.
-#: ``gap``: owed and neither. ``not_due``: its period is not over, or not long enough.
-STATES: tuple[State, ...] = ("covered", "empty", "gap", "not_due")
+#: ``covered``: rows are stored, and no later attempt said they fell short.
+#: ``empty``: asked, nothing there, and the answer stands.
+#: ``gap``: owed and neither. ``blocked``: owed, but an input of a derived
+#: dataset has not answered the period yet. ``not_due``: its period is not
+#: over, or not long enough.
+STATES: tuple[State, ...] = ("covered", "empty", "gap", "blocked", "not_due")
 
 Redo = Literal["gaps", "empty", "all"]
 
@@ -161,15 +164,27 @@ def plan_dataset(
     universe: Universe | None = None,
     revisions: str = "_revisions",
     written: datetime | None | object = _READ,
+    ready: pl.DataFrame | None = None,
 ) -> DatasetPlan:
     """The state of every cell of *dataset* in *scope*.
 
     *column* places a row in a cell when the declaration does not name one.
     *written* is when a refreshed dataset was last written, for a lake that
     keeps its revisions elsewhere than in the record table *revisions*.
+    *ready* lists the periods every input has answered (``period``); a due
+    cell outside it that holds no rows is ``blocked``. Cells the universe
+    excuses (``Universe.excused``, where it has one) are not owed at all.
     """
     moment = now or datetime.now(timezone.utc)
     cells = owed(dataset, coverage, scope, calendar=calendar, universe=universe)
+    excuse = getattr(universe, "excused", None)
+    if coverage.entity is not None and excuse is not None and not cells.is_empty():
+        first = cov.span(coverage.grain, cells["period"].min())[0]
+        last = cov.span(coverage.grain, cells["period"].max())[1]
+        excused = excuse(dataset, first, last).select(
+            pl.col("period").cast(pl.String), pl.col("entity").cast(pl.String)
+        )
+        cells = cells.join(excused, on=["period", "entity"], how="anti")
     if cells.is_empty():
         return DatasetPlan(dataset, pl.DataFrame(schema=_PLAN_SCHEMA))
     attempts = cov.attempted(catalog, dataset)
@@ -181,19 +196,46 @@ def plan_dataset(
     last = cov.span(coverage.grain, cells["period"].max())[1]
     have = cov.stored(catalog, dataset, coverage, column=column, start=first, end=last)
     empty = cov.standing(attempts, coverage, moment)
+    short = cov.partial(attempts)
     keys = ["period", "entity"]
-    marked = cells.join(
-        have.with_columns(_have=pl.lit(True)), on=keys, how="left", coalesce=True
-    ).join(empty.unique().with_columns(_empty=pl.lit(True)), on=keys, how="left", coalesce=True)
-    have_it, is_empty, due = (
-        pl.col("_have").fill_null(False),
+    marked = (
+        cells.join(have.with_columns(_have=pl.lit(True)), on=keys, how="left", coalesce=True)
+        .join(empty.unique().with_columns(_empty=pl.lit(True)), on=keys, how="left", coalesce=True)
+        .join(short.unique().with_columns(_short=pl.lit(True)), on=keys, how="left", coalesce=True)
+    )
+    if ready is not None:
+        marked = marked.join(
+            ready.select(pl.col("period").cast(pl.String))
+            .unique()
+            .with_columns(_ready=pl.lit(True)),
+            on="period",
+            how="left",
+        )
+    else:
+        marked = marked.with_columns(_ready=pl.lit(True))
+    have_it = pl.col("_have").fill_null(False) & ~pl.col("_short").fill_null(False)
+    is_empty, due, is_ready = (
         pl.col("_empty").fill_null(False),
         pl.col("due"),
+        pl.col("_ready").fill_null(False),
     )
     if scope.redo == "all":
-        state = pl.when(~due).then(pl.lit("not_due")).otherwise(pl.lit("gap"))
+        state = (
+            pl.when(~due)
+            .then(pl.lit("not_due"))
+            .when(~is_ready)
+            .then(pl.lit("blocked"))
+            .otherwise(pl.lit("gap"))
+        )
     else:
-        state = pl.when(have_it).then(pl.lit("covered")).when(~due).then(pl.lit("not_due"))
+        state = (
+            pl.when(have_it)
+            .then(pl.lit("covered"))
+            .when(~due)
+            .then(pl.lit("not_due"))
+            .when(~is_ready)
+            .then(pl.lit("blocked"))
+        )
         if scope.redo == "gaps":
             state = state.when(is_empty).then(pl.lit("empty"))
         state = state.otherwise(pl.lit("gap"))
@@ -230,6 +272,110 @@ def _plan_refresh(
     )
 
 
+def answered(cells: pl.DataFrame, grain: cov.Grain) -> pl.DataFrame:
+    """The periods of *grain* in which *cells* (a plan of an input) hold an answer: ``period``.
+
+    A period of the input counts when any of its cells is covered or empty;
+    it is relabelled to the period of *grain* its first day falls in.
+    """
+    found = cells.filter(pl.col("state").is_in(["covered", "empty"]))["period"].unique()
+    return pl.DataFrame(
+        {"period": sorted({_relabel(period, grain) for period in found.to_list()})},
+        schema={"period": pl.String},
+    )
+
+
+def _relabel(period: str, grain: cov.Grain) -> str:
+    for source in ("day", "week", "month", "quarter", "year"):
+        try:
+            first = cov.span(source, period)[0]
+        except cov.CoverageError:
+            continue
+        return cov.label(grain, first)
+    return period
+
+
+@dataclass(frozen=True)
+class Declared:
+    """What the planner needs of one dataset: its coverage and the column that dates its rows."""
+
+    coverage: Coverage
+    column: str | None = None
+
+
+def plan_all(
+    catalog: Catalog,
+    declared: Mapping[str, Declared],
+    scope: Scope,
+    *,
+    wanted: Sequence[str] | None = None,
+    now: datetime | None = None,
+    calendar: Calendar | None = None,
+    universe: Universe | None = None,
+    written: Mapping[str, datetime | None] | None = None,
+) -> dict[str, DatasetPlan]:
+    """Plans for *wanted* (default: every declared dataset), inputs planned first.
+
+    *written* says when each refreshed dataset was last written, for a lake
+    that keeps its revisions in a record table of its own.
+    """
+    moment = now or datetime.now(timezone.utc)
+    done: dict[str, DatasetPlan] = {}
+    visiting: set[str] = set()
+
+    def ready_for(name: str, coverage: Coverage) -> pl.DataFrame | None:
+        sets = []
+        for source in coverage.inputs:
+            if source not in declared:
+                raise ValueError(f"{name} names an undeclared input {source}")
+            given = declared[source]
+            if given.coverage.by == "write":
+                # Only its latest state is kept: it bounds where history can begin.
+                begins = cov.first_stored(catalog, source, given.column) if given.column else None
+                if begins is None:
+                    continue
+                periods = owed(name, coverage, scope, calendar=calendar)["period"].to_list()
+                sets.append({p for p in periods if cov.span(coverage.grain, p)[1] >= begins})
+                continue
+            sets.append(set(answered(one(source).cells, coverage.grain)["period"].to_list()))
+        if not sets:
+            return None
+        return pl.DataFrame(
+            {"period": sorted(set.intersection(*sets))}, schema={"period": pl.String}
+        )
+
+    def one(name: str) -> DatasetPlan:
+        if name in done:
+            return done[name]
+        if name in visiting:
+            raise ValueError(f"{name} is among its own inputs")
+        visiting.add(name)
+        item = declared[name]
+        ready = None
+        if item.coverage.inputs and item.coverage.by == "rows":
+            ready = ready_for(name, item.coverage)
+        extra = {} if written is None else {"written": written.get(name)}
+        done[name] = plan_dataset(
+            catalog,
+            name,
+            item.coverage,
+            scope,
+            now=moment,
+            column=item.column,
+            calendar=calendar,
+            universe=universe,
+            ready=ready,
+            **extra,
+        )
+        visiting.discard(name)
+        return done[name]
+
+    names = list(wanted) if wanted is not None else list(declared)
+    for name in names:
+        one(name)
+    return {name: done[name] for name in names}
+
+
 def plan(
     lake,
     scope: Scope,
@@ -240,23 +386,22 @@ def plan(
 ) -> Plan:
     """The state of every cell in *scope*, for each dataset of *lake* that declares coverage."""
     moment = now or datetime.now(timezone.utc)
-    wanted: Sequence[str] = scope.datasets if scope.datasets is not None else lake.registry.names()
-    found: dict[str, DatasetPlan] = {}
+    declared = {
+        spec.name: Declared(spec.coverage, spec.time)
+        for spec in lake.registry
+        if spec.coverage is not None
+    }
+    for name in scope.datasets or ():
+        if name not in declared:
+            raise ValueError(f"{name} declares no coverage")
     with lake.catalog() as catalog:
-        for name in wanted:
-            spec = lake.registry[name]
-            if spec.coverage is None:
-                if scope.datasets is not None:
-                    raise ValueError(f"{name} declares no coverage")
-                continue
-            found[name] = plan_dataset(
-                catalog,
-                name,
-                spec.coverage,
-                scope,
-                now=moment,
-                column=spec.time,
-                calendar=calendar,
-                universe=universe,
-            )
+        found = plan_all(
+            catalog,
+            declared,
+            scope,
+            wanted=scope.datasets,
+            now=moment,
+            calendar=calendar,
+            universe=universe,
+        )
     return Plan(scope, moment, found)

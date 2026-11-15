@@ -459,6 +459,17 @@ class DatasetSpec:
     # owed, because readers take the last one on or before their date and a
     # day without a capture is not a hole.
     cells: Literal["session", "day", "week", "quarter", "latest"] | None = None
+    # The column naming the entity a cell is owed for, for a dataset owed once
+    # per entity per period rather than once per period: a day that has some
+    # of its rows is then still owed the rest.
+    cells_by: str | None = None
+    # A SQL condition a row must meet to cover its cell, where the dataset
+    # keeps rows that do not (a zero-volume bar is not a print).
+    cells_count: str | None = None
+    # The datasets a derived dataset is computed from. A period is owed only
+    # once each of them has answered it, so a derivation is not asked for days
+    # its inputs do not reach (5m bars before their source horizon).
+    derived_from: tuple[str, ...] = ()
 
     @property
     def pit(self) -> bool:
@@ -1244,6 +1255,8 @@ _SPECS = [
     # L1 bars
     DatasetSpec(
         "daily_bars",
+        cells_by="symbol",
+        cells_count="volume > 0 OR volume IS NULL",
         adjustable=True,
         universe_filter=True,
         total_return=True,
@@ -2063,6 +2076,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "market_breadth",
+        derived_from=("daily_bars", "trading_status"),
         coverage_end_contiguous=True,
         support="extended",
         primary_source="derived",
@@ -2077,6 +2091,7 @@ _SPECS = [
     # L7 sentiment / rotation
     DatasetSpec(
         "sentiment_scores",
+        derived_from=("daily_bars", "announcement_index", "hot_rank", "news_headlines"),
         support="best_effort",
         unit_contract={"sentiment_score": "normalized[-1,1]", "headline_count": "headline"},
         primary_source="derived",
@@ -2304,6 +2319,7 @@ _SPECS = [
     # for, so these carry the tier of the question they answer, not "derived".
     DatasetSpec(
         "adj_factors",
+        derived_from=("daily_bars", "corporate_actions"),
         support="core",
         # v2 records month partitions. Columns and the primary key are unchanged.
         schema_version=2,
@@ -2335,6 +2351,7 @@ _SPECS = [
     # membership table that produces it rather than beside the bars.
     DatasetSpec(
         "industry_index",
+        derived_from=("daily_bars", "industry_members"),
         coverage_end_contiguous=True,
         support="extended",
         unit_contract={"ret": "fraction", "amount": "source_native"},
@@ -2352,6 +2369,7 @@ _SPECS = [
     # futures_bars, so it has no incremental watermark of its own.
     DatasetSpec(
         "futures_continuous",
+        derived_from=("futures_bars", "futures_contracts"),
         enable_switch="futures",
         support="optional",
         # Rolled from futures_bars and stored at raw contract prices (the
@@ -2377,6 +2395,7 @@ _SPECS = [
     # exchange, beside the exchanges' own delta/IV in option_bars.
     DatasetSpec(
         "option_greeks",
+        derived_from=("option_bars", "futures_bars", "option_contracts"),
         enable_switch="futures_options",
         support="optional",
         unit_contract={
@@ -2423,6 +2442,7 @@ _SPECS = [
             watermark=False,
             required=False,
             row_grain=frequency,
+            derived_from=("minute_bars_5m",),
         )
         for name, frequency in RESAMPLED_MINUTE_DATASETS.items()
     ),
