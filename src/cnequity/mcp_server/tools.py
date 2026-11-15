@@ -180,6 +180,14 @@ def _read(
         raise ToolError(str(exc)) from exc
 
 
+def _lake_has_data(config: Config) -> bool:
+    """Whether any dataset has published rows."""
+    from cnequity.query.parquet_scan import dataset_has_parquet
+    from cnequity.storage.locator import logical_root
+
+    return any(dataset_has_parquet(logical_root(config, spec)) for spec in DATASETS.values())
+
+
 def _live_only(config: Config, tool: str, reason: str) -> None:
     """Refuse a tool that live mode cannot serve honestly, and say why.
 
@@ -723,7 +731,7 @@ def run_sql(config: Config, *, sql: str, limit: int | None = None) -> dict:
 
     text = _guard_sql(sql)
     limit = _clamp_limit(limit)
-    if live.enabled(config) and not any(config.curated_root.rglob("*.parquet")):
+    if live.enabled(config) and not _lake_has_data(config):
         _live_only(
             config,
             "run_sql",

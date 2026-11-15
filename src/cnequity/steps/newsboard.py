@@ -74,18 +74,18 @@ def step_economic_calendar(config: Config, trade_date: date, run_id: str, contex
     )
 
 
-def _scan_stored(files):
-    """Scan year files whose columns differ: a backfilled year predates `withdrawn`.
+def _scan_stored(config: Config, dataset: str):
+    """Scan *dataset*'s published rows, or None when it has none.
 
-    One scan over the list takes its schema from the first file and rejects a
-    later file's extra column, so each file is scanned on its own.
+    Year files differ in columns (a backfilled year predates `withdrawn`); the
+    scanner fills a column a file lacks with nulls.
     """
-    import polars as pl
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
-    return pl.concat(
-        [pl.scan_parquet(f, hive_partitioning=False) for f in sorted(files)],
-        how="diagonal_relaxed",
-    )
+    root = config.curated_root / dataset
+    if not dataset_has_parquet(root):
+        return None
+    return scan_parquet_root(root)
 
 
 def _with_withdrawn(config: Config, dataset: str, df, start: date, end: date):
@@ -99,11 +99,9 @@ def _with_withdrawn(config: Config, dataset: str, df, start: date, end: date):
     import polars as pl
 
     df = df.with_columns(pl.lit(False).alias("withdrawn"))
-    root = config.curated_root / dataset
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
+    scan = _scan_stored(config, dataset)
+    if scan is None:
         return df
-    scan = _scan_stored(files)
     names = scan.collect_schema().names()
     # Columns no stored file has yet (rows from before they existed).
     scan = scan.with_columns(
@@ -128,15 +126,13 @@ CALENDAR_HISTORY_START = date(2008, 1, 1)
 def _calendar_days_present(config: Config) -> set[date]:
     import polars as pl
 
-    root = config.curated_root / "economic_calendar"
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
+    stored = _scan_stored(config, "economic_calendar")
+    if stored is None:
         return set()
     # A day written before indicator_code existed is not "present": the
     # backfill refetches it so every row names its series.
     days = (
-        _scan_stored(files)
-        .group_by("event_date")
+        stored.group_by("event_date")
         .agg(pl.col("indicator_code").null_count().alias("uncoded"))
         .filter(pl.col("uncoded") == 0)
         .collect()

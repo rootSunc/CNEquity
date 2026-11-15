@@ -60,7 +60,7 @@ from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.domain.partitions import granularity_of, parse_partition
 from cnequity.file_lock import LockUnavailable, exclusive_lock
-from cnequity.query.parquet_scan import list_partitions, partition_dir
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.atomic import write_json_atomic, write_parquet_atomic
 from cnequity.storage.locator import logical_root
@@ -160,26 +160,21 @@ def _partition_of(file_path: str, partition_col: str | None) -> str | None:
     if partition_col is None:
         return None
     prefix = f"{partition_col}="
-    for parent in Path(file_path).parents:
+    path = Path(file_path)
+    for parent in path.parents:
         name = parent.name
         if name.startswith(prefix):
             return name[len(prefix) :]
-    return None
+    # A file the lake catalog holds sits in a folder named by the bare value.
+    folder = path.parent.name
+    return folder if parse_partition(folder) is not None else None
 
 
 def _file_groups(root: Path, spec: DatasetSpec) -> dict[str | None, list[Path]]:
     """Parquet files under *root*, grouped by the partition value owning them."""
     groups: dict[str | None, list[Path]] = {}
-    if spec.partition_col:
-        for part in list_partitions(root, spec.partition_col):
-            files = sorted(partition_dir(root, spec.partition_col, part.value).rglob("*.parquet"))
-            if files:
-                groups[part.value] = files
-    loose = sorted(
-        root.rglob("*.parquet") if spec.partition_col is None else root.glob("*.parquet")
-    )
-    if loose:
-        groups[None] = loose
+    for path in root_parquet_files(root):
+        groups.setdefault(_partition_of(str(path), spec.partition_col), []).append(path)
     return groups
 
 

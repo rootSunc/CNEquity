@@ -26,7 +26,11 @@ from cnequity.derive.stock_factors import apply_stock_event_factors
 from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.schemas import with_provenance
 from cnequity.quality.cross_checks import factor_action_contradictions
-from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+from cnequity.query.parquet_scan import (
+    dataset_has_parquet,
+    root_parquet_files,
+    scan_parquet_root,
+)
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.instrument_catalog import load_curated_instruments
 from cnequity.storage.lake_write import planned_on
@@ -63,10 +67,7 @@ def _identities(config, context, symbols):
         identities[name] = (
             str(root)
             if current == root
-            else {
-                p.relative_to(root).as_posix(): sha256_file(p)
-                for p in sorted(root.rglob("*.parquet"))
-            }
+            else {p.name: sha256_file(p) for p in root_parquet_files(root, resolve=False)}
         )
     for symbol in symbols:
         path = config.meta_root / "adj_factors_cache" / f"{symbol.replace('.', '_')}_hfq.parquet"

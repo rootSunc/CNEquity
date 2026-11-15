@@ -415,36 +415,26 @@ def _save_cache(config: Config, symbol: str, adjust_type: str, factors: pl.DataF
     write_parquet_atomic(path, factors, compression="zstd")
 
 
-def _read_parquet_files(files: list[Path]) -> pl.DataFrame:
-    if not files:
-        return pl.DataFrame()
-    return pl.concat([pl.read_parquet(f) for f in files], how="diagonal_relaxed")
+def _symbols_dated(config: Config, dataset: str, column: str, trade_date: date) -> set[str]:
+    """Symbols whose published *dataset* row carries *trade_date* in *column*."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
+    root = config.curated_root / dataset
+    if not dataset_has_parquet(root):
+        return set()
+    scan = scan_parquet_root(root)
+    if not {"symbol", column}.issubset(scan.collect_schema().names()):
+        return set()
+    found = scan.filter(pl.col(column) == trade_date).select("symbol").unique().collect()
+    return set(found["symbol"].to_list())
 
 
 def _corporate_action_symbols_on(config: Config, trade_date: date) -> set[str]:
-    root = config.curated_root / "corporate_actions"
-    if not root.exists():
-        return set()
-
-    part_files = list((root / f"ex_date={trade_date.isoformat()}").glob("**/*.parquet"))
-    files = part_files or list(root.glob("**/*.parquet"))
-    df = _read_parquet_files(files)
-    if df.is_empty() or not {"symbol", "ex_date"}.issubset(df.columns):
-        return set()
-    today = df.filter(pl.col("ex_date") == trade_date)
-    return set(today["symbol"].unique().to_list())
+    return _symbols_dated(config, "corporate_actions", "ex_date", trade_date)
 
 
 def _new_listing_symbols_on(config: Config, trade_date: date) -> set[str]:
-    root = config.curated_root / "instruments"
-    if not root.exists():
-        return set()
-
-    df = _read_parquet_files(list(root.glob("**/*.parquet")))
-    if df.is_empty() or not {"symbol", "list_date"}.issubset(df.columns):
-        return set()
-    listed = df.filter(pl.col("list_date") == trade_date)
-    return set(listed["symbol"].unique().to_list())
+    return _symbols_dated(config, "instruments", "list_date", trade_date)
 
 
 def _delisted_symbols(config: Config) -> set[str]:

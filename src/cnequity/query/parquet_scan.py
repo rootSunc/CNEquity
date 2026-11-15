@@ -207,6 +207,16 @@ def uses_hive_partitions(
     return bool(list_partitions(root, partition_col, resolve=resolve))
 
 
+def loose_root_files(root: Path) -> list[Path]:
+    """Parquet files directly under *root*'s committed revision, outside any partition.
+
+    Only a generation directory can hold them: the lake catalog files every
+    row of a partitioned dataset under its partition.
+    """
+    resolved = _resolved_root(root)
+    return sorted(resolved.glob("*.parquet")) if resolved.is_dir() else []
+
+
 def root_parquet_files(root: Path, *, resolve: bool = True) -> list[Path]:
     """Every parquet file of *root*'s committed revision, one only the lake catalog holds included.
 

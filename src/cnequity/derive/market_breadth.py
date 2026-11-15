@@ -26,10 +26,6 @@ MARKET_BREADTH_METRICS = (
 
 
 def _read_bars(root: Path, trade_date: date) -> pl.DataFrame:
-    if not root.exists():
-        return pl.DataFrame()
-    from cnequity.query.parquet_scan import collect_parquet_root
-
     try:
         df = collect_parquet_root(
             root,
@@ -46,8 +42,6 @@ def _read_bars(root: Path, trade_date: date) -> pl.DataFrame:
 
 def _prev_trading_date(config: Config, trade_date: date) -> date | None:
     cal_root = config.curated_root / "trading_calendar"
-    if not cal_root.exists():
-        return None
     try:
         cal = collect_parquet_root(
             cal_root,
@@ -69,8 +63,6 @@ def _prev_trading_date(config: Config, trade_date: date) -> date | None:
 
 def _read_trading_status(root: Path, trade_date: date) -> pl.DataFrame:
     """Read optional same-day status evidence without scanning all history."""
-    if not root.exists():
-        return pl.DataFrame()
     try:
         df = collect_parquet_root(
             root,

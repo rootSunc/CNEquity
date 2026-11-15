@@ -33,6 +33,7 @@ from cnequity.query.parquet_scan import (
     lazy_n_unique_symbol,
     lazy_row_count,
     list_partitions,
+    loose_root_files,
     partition_files_in_range,
     root_parquet_files,
     scan_parquet_files,
@@ -1013,7 +1014,7 @@ def check_mixed_partition_granularity(
     by_gran: dict[str, list[str]] = {}
     for part in partitions:
         by_gran.setdefault(granularity_of(part), []).append(part.value)
-    root_files = sorted(root.glob("*.parquet"))
+    root_files = loose_root_files(root)
     if root_files:
         by_gran["unpartitioned"] = [path.name for path in root_files]
     stale = {g: vals for g, vals in by_gran.items() if g != configured}

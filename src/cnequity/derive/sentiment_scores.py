@@ -25,9 +25,10 @@ _A_SHARE_RE = re.compile(r"^\d{6}\.(SH|SZ)$", re.IGNORECASE)
 
 
 def _read_announcements(root: Path, trade_date: date) -> pl.DataFrame:
-    if not root.exists():
+    from cnequity.query.parquet_scan import collect_parquet_root, dataset_has_parquet
+
+    if not dataset_has_parquet(root):
         return pl.DataFrame()
-    from cnequity.query.parquet_scan import collect_parquet_root
 
     try:
         df = collect_parquet_root(
@@ -70,9 +71,10 @@ def _announcement_sentiment(config: Config, trade_date: date) -> pl.DataFrame:
 
 
 def _read_news_headlines(root: Path, trade_date: date) -> pl.DataFrame:
-    if not root.exists():
+    from cnequity.query.parquet_scan import collect_parquet_root, dataset_has_parquet
+
+    if not dataset_has_parquet(root):
         return pl.DataFrame()
-    from cnequity.query.parquet_scan import collect_parquet_root
 
     try:
         df = collect_parquet_root(
@@ -137,11 +139,12 @@ def _headlines_sentiment(config: Config, trade_date: date) -> pl.DataFrame:
 
 
 def _hot_rank_symbols(config: Config, trade_date: date, limit: int) -> list[str]:
-    root = config.curated_root / "hot_rank"
-    if not root.exists() or limit <= 0:
-        return []
     from cnequity.domain.canonical import dedupe_by_primary_key
-    from cnequity.query.parquet_scan import collect_parquet_root
+    from cnequity.query.parquet_scan import collect_parquet_root, dataset_has_parquet
+
+    root = config.curated_root / "hot_rank"
+    if limit <= 0 or not dataset_has_parquet(root):
+        return []
 
     try:
         df = collect_parquet_root(
@@ -190,8 +193,10 @@ def _news_sentiment_symbols(config: Config, trade_date: date, limit: int) -> lis
     if len(symbols) >= limit:
         return symbols[:limit]
 
+    from cnequity.query.parquet_scan import dataset_has_parquet
+
     bars_root = config.curated_root / "daily_bars"
-    if bars_root.exists():
+    if dataset_has_parquet(bars_root):
         from cnequity.domain.canonical import dedupe_by_primary_key
         from cnequity.query.parquet_scan import collect_parquet_root
 

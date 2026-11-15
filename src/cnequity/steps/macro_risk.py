@@ -40,10 +40,10 @@ def _existing_market_breadth_dates(config: Config, days: list[date]) -> set[date
     """Only skip dates with a complete seven-metric breadth observation."""
     if not days:
         return set()
-    from cnequity.query.parquet_scan import collect_parquet_root
+    from cnequity.query.parquet_scan import collect_parquet_root, dataset_has_parquet
 
     root = config.curated_root / "market_breadth"
-    if not root.exists():
+    if not dataset_has_parquet(root):
         return set()
     try:
         frame = collect_parquet_root(

@@ -73,14 +73,15 @@ def _existing_as_of_dates(
     required_index_symbols: tuple[str, ...] | None = None,
     min_members_per_index: int | None = None,
 ) -> set[date]:
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
     root = config.curated_root / dataset
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
+    if not dataset_has_parquet(root):
         return set()
+    scan = scan_parquet_root(root)
     if required_index_symbols is not None:
         grouped = (
-            pl.scan_parquet(files)
-            .filter(pl.col("index_symbol").is_in(list(required_index_symbols)))
+            scan.filter(pl.col("index_symbol").is_in(list(required_index_symbols)))
             .group_by("as_of_date", "index_symbol")
             .agg(pl.col("symbol").n_unique().alias("_member_count"))
             .group_by("as_of_date")
@@ -93,9 +94,7 @@ def _existing_as_of_dates(
         if min_members_per_index is not None:
             grouped = grouped.filter(pl.col("_min_member_count") >= min_members_per_index)
         return set(grouped.select("as_of_date").collect().get_column("as_of_date").to_list())
-    return set(
-        pl.scan_parquet(files).select("as_of_date").unique().collect()["as_of_date"].to_list()
-    )
+    return set(scan.select("as_of_date").unique().collect()["as_of_date"].to_list())
 
 
 def _validate_daily_membership_snapshot(
@@ -614,12 +613,13 @@ def _delist_dates(config: Config) -> pl.DataFrame | None:
 
 
 def _existing_sw_as_of_dates(config: Config, *, min_rows: int | None = None) -> set[date]:
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
     root = config.curated_root / "industry_members"
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
+    if not dataset_has_parquet(root):
         return set()
     scan = dedupe_lazy_by_primary_key(
-        pl.scan_parquet(files).filter(pl.col("classification_system") == "sw"),
+        scan_parquet_root(root).filter(pl.col("classification_system") == "sw"),
         "industry_members",
     )
     if min_rows is not None:

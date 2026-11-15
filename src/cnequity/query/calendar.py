@@ -11,7 +11,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.domain.holidays_cn import exchange_may_open, session_expr
 from cnequity.domain.market_time import is_session_final
-from cnequity.query.parquet_scan import dataset_has_parquet
+from cnequity.query.parquet_scan import dataset_has_parquet, root_parquet_files
 from cnequity.storage.read_context import read_root
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def _load_trading_calendar_df(
                 curated,
                 exc,
             )
-        files = list(curated.glob("**/*.parquet"))
+        files = root_parquet_files(curated, resolve=False)
         if files:
             try:
                 lf = pl.scan_parquet([str(f) for f in files])
@@ -137,7 +137,7 @@ def list_trading_dates(
         start,
         end,
         seed_path=effective_seed,
-        curated_root=config.curated_root if config.curated_root.exists() else None,
+        curated_root=config.curated_root,
     )
     return calendar.filter(session_expr())["trade_date"].sort().to_list()
 
@@ -165,7 +165,7 @@ def is_trading_day(config: Config, trade_date: date, *, include_staging: bool = 
         trade_date,
         trade_date,
         seed_path=effective_seed,
-        curated_root=config.curated_root if config.curated_root.exists() else None,
+        curated_root=config.curated_root,
     )
     if day_cal.is_empty():
         raise RuntimeError(

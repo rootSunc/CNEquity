@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import polars as pl
 
 from cnequity.config import Config
-from cnequity.storage.revisions import RevisionStore
+from cnequity.query.parquet_scan import dataset_has_parquet
 
 
 def load_share_counts(config: Config) -> pl.DataFrame:
@@ -22,11 +22,7 @@ def load_share_counts(config: Config) -> pl.DataFrame:
     """
     from cnequity.query import load
 
-    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    if (
-        store.current_root("share_structure") is None
-        and not (config.curated_root / "share_structure").is_dir()
-    ):
+    if not dataset_has_parquet(config.curated_root / "share_structure"):
         return pl.DataFrame(
             schema={"symbol": pl.Utf8, "change_date": pl.Date, "total_shares": pl.Float64}
         )

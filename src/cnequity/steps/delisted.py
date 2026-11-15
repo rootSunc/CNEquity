@@ -1037,8 +1037,10 @@ def repair_delisted_instruments(
     # carry no delist_date (or no instruments row at all). Same structural
     # tell the survivorship audit uses.
     retired_orphans: list[str] = []
+    from cnequity.query.parquet_scan import dataset_has_parquet
+
     bars_root = config.curated_root / "daily_bars"
-    lake_last = coverage_end_date(config, "daily_bars") if bars_root.exists() else None
+    lake_last = coverage_end_date(config, "daily_bars") if dataset_has_parquet(bars_root) else None
     if lake_last is not None:
         cutoff = lake_last - timedelta(days=RETIRED_GAP_DAYS)
         from cnequity.query.parquet_scan import scan_parquet_root

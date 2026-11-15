@@ -299,7 +299,7 @@ def last_dense_valuation_date(
     Walks partitions newest→oldest so a sparse tip (partial baostock refill)
     cannot pin the watermark or history-end past a complete EastMoney day.
     """
-    from cnequity.query.parquet_scan import list_partitions
+    from cnequity.query.parquet_scan import list_partitions, loose_root_files
 
     val_root = config.curated_root / "valuation_metrics"
     if not dataset_has_parquet(val_root):
@@ -309,7 +309,7 @@ def last_dense_valuation_date(
     # parquet beside partition directories. The normal reader includes those
     # rows, so the dense-tip gate must include their dates too; otherwise a
     # complete legacy tip is mistaken for an older watermark.
-    root_files = sorted(val_root.glob("*.parquet"))
+    root_files = loose_root_files(val_root)
     candidate_dates: set[date] = set()
     if parts and all(part.start == part.end for part in parts) and not root_files:
         candidate_dates = {part.end for part in parts}

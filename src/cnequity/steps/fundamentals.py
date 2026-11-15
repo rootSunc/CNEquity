@@ -546,9 +546,10 @@ def _symbols_needing_backfill(
                 elif delist_date is not None and delist_date < end:
                     expected_end[symbol] = delist_date
 
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
     part = config.curated_root / "valuation_metrics"
-    files = list(part.glob("**/*.parquet")) if part.exists() else []
-    if not files:
+    if not dataset_has_parquet(part):
         return [
             symbol
             for symbol in universe
@@ -556,7 +557,7 @@ def _symbols_needing_backfill(
         ]
     stats = (
         dedupe_lazy_by_primary_key(
-            pl.scan_parquet(files).filter(pl.col("source") == "baostock"),
+            scan_parquet_root(part).filter(pl.col("source") == "baostock"),
             "valuation_metrics",
         )
         .group_by("symbol")

@@ -416,11 +416,12 @@ def _existing_margin_dates(
     *,
     min_symbols: int = _MIN_MARGIN_SYMBOLS_PER_DAY,
 ) -> set[date]:
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+
     root = config.curated_root / "margin_trading"
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
+    if not dataset_has_parquet(root):
         return set()
-    scan = pl.scan_parquet(files)
+    scan = scan_parquet_root(root)
     if "symbol" not in scan.collect_schema().names():
         return set()
     from cnequity.storage.state import StateStore

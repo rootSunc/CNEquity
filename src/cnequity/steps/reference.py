@@ -694,9 +694,6 @@ def _earliest_bar_date(config: Config) -> date | None:
     """
     earliest: date | None = None
     for dataset in ("index_bars", "daily_bars"):
-        root = config.curated_root / dataset
-        if not root.exists():
-            continue
         dates = curated_bar_dates(config.curated_root, dataset)
         if not dates:
             continue

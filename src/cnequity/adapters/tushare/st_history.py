@@ -41,7 +41,7 @@ from cnequity.domain.schemas import FETCHED_AT_DTYPE
 from cnequity.domain.symbols import parse_symbol
 from cnequity.domain.trading_status import STATUS_NORMAL
 from cnequity.file_lock import exclusive_lock
-from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 from cnequity.storage.atomic import write_json_atomic
 
 __all__ = ["TUSHARE_ST_DIRECT_FLOOR", "TUSHARE_ST_HISTORY_FLOOR", "fetch_st_history"]
@@ -155,7 +155,7 @@ def _traded_dates_from_lake(
     end: date,
 ) -> dict[str, list[date]]:
     root = config.curated_root / "daily_bars"
-    if not root.exists():
+    if not dataset_has_parquet(root):
         return {}
     frame = (
         scan_parquet_root(

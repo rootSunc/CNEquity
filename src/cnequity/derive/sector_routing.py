@@ -171,20 +171,27 @@ def build_sector_routing(
 
 
 def _latest_em_boards_from_lake(config: Config) -> list[dict]:
+    from cnequity.query.parquet_scan import (
+        dataset_has_parquet,
+        list_partitions,
+        scan_parquet_root,
+    )
+
     root = config.curated_root / "sector_bars"
-    if not root.exists():
+    if not dataset_has_parquet(root):
         return []
-    parts = sorted(root.glob("trade_date=*"))
+    parts = list_partitions(root, "trade_date")
     if not parts:
         return []
     latest = parts[-1]
-    files = list(latest.rglob("*.parquet"))
-    if not files:
-        return []
     df = dedupe_by_primary_key(
-        pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed"),
+        scan_parquet_root(
+            root, partition_col="trade_date", start=latest.start, end=latest.end
+        ).collect(),
         "sector_bars",
     )
+    if df.is_empty():
+        return []
     return [
         {
             "sector_code": r["sector_code"],

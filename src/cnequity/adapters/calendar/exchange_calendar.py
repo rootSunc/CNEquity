@@ -86,10 +86,12 @@ def _bar_dates(curated_root: Path, dataset: str) -> set[date]:
     their historical row-presence semantics. Index bars are also kept row-based
     because index volume has different units and zero can be a valid quote.
     """
+    from cnequity.query.parquet_scan import dataset_has_parquet, root_parquet_files
+
     root = curated_root / dataset
-    if not root.exists():
+    if not dataset_has_parquet(root):
         return set()
-    if dataset == "daily_bars" and any(root.rglob("*.parquet")):
+    if dataset == "daily_bars":
         # The per-file fallback below deliberately isolates corrupt fragments,
         # but filtering each fragment independently lets an old positive retry
         # create a session beside a newer zero-volume canonical row. Use the
@@ -106,7 +108,7 @@ def _bar_dates(curated_root: Path, dataset: str) -> set[date]:
         except (FileNotFoundError, OSError, pl.exceptions.PolarsError, ValueError) as exc:
             logger.warning("Falling back to per-file %s bar dates: %s", dataset, exc)
     dates: set[date] = set()
-    for path in root.glob("**/*.parquet"):
+    for path in root_parquet_files(root):
         try:
             scan = pl.scan_parquet(str(path))
             names = scan.collect_schema().names()
