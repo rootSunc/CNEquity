@@ -2361,6 +2361,10 @@ msgstr ""
 msgid "Delete snapshot %s permanently?"
 msgstr "永久删除快照 %s？"
 
+#: cnequity/storage/migrations.py
+msgid "Delete the curated/ and derived/ directories and the generations, pointers and receipts under meta/revisions that the lake catalog replaced; held revisions stay"
+msgstr "删除已被湖目录取代的 curated/、derived/ 目录，以及 meta/revisions 下的代目录、指针和回执；被持有的修订保留"
+
 #: cnequity/cli/govern_cmds.py
 msgid "Delete without asking for confirmation."
 msgstr "不询问确认，直接删除。"

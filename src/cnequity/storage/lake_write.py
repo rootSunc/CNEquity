@@ -954,7 +954,11 @@ class RevisionCheck:
 
 def verify_revisions(catalog: Catalog, dataset: str | None = None) -> list[RevisionCheck]:
     """Compare each published revision's recorded row digest with the rows its snapshot holds."""
-    if not catalog.has_table(REVISIONS_TABLE):
+    # A publish adds the digest columns; a catalog nothing has been published
+    # into has the table without them, and no revision to check.
+    if not catalog.has_table(REVISIONS_TABLE) or "rows_digest" not in catalog.column_types(
+        REVISIONS_TABLE
+    ):
         return []
     recorded = catalog.execute(
         f"SELECT dataset, revision_id, snapshot_id, rows, rows_digest, digest_algorithm, "

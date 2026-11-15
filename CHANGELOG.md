@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 新迁移 `drop-generations`（`cne upgrade` 会运行，排在最后，**不可恢复**）：删除旧发布方式留下、湖目录已经取代的文件，即 `curated/` 和 `derived/` 下各数据集的目录、`meta/revisions/data` 下的代目录、`meta/revisions/<数据集>/` 下的指针和回执。先用 `cne migrate` 预览要删的目录和释放的空间。被持有的修订（`cne storage hold`、案例依赖、引用文件提到的修订号）连同回执保留，仍可按修订号读取；`curated/` 下不是数据集的目录、湖目录没有记录的数据集原样留下并列出。仍在直接读 `curated/`、`derived/` 的外部工具必须先改用 `cne storage export`。
+- 修复 `cne storage verify-catalog` 在还没有任何发布进湖目录的修订时报错（`_revisions` 表还没有摘要列）；现在返回 0 个修订。
 - 新迁移 `revision-records`（`cne upgrade` 会运行）：把每个已发布修订的回执记进湖目录，核对每个数据集的当前修订与指针一致后，读取修订改以湖目录为准，不再读 `meta/revisions` 下的指针和回执文件。
 - **升级步骤：** 从 0.25.0 升级后运行一次 `cne upgrade --apply`（会运行上面的 `revision-records` 迁移）。完成前 `cne run`、`cne backfill`、`cne derive`、`cne repair --apply` 拒绝写入并提示运行它，读取不受影响。从 0.24.0 及更早版本升级时，`lake-catalog` 迁移会一并导入回执，不需要额外步骤。
 - 发布不再写 `meta/revisions/<数据集>/` 下的指针（`current.json`）和回执文件：修订只记在湖目录里，和这次发布的数据在同一个事务里提交。此前发布要先写回执、提交目录、再移动指针，中途停下会留下没有发布的回执或落后的指针，要靠维护任务修正；现在发布要么完整生效，要么不留痕迹。已有的指针和回执文件保持原样，不再更新，后续版本的迁移会删除它们。

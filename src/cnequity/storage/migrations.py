@@ -83,6 +83,12 @@ def _revision_records(config, *, apply: bool) -> dict:
     return import_receipts(config, apply=apply)
 
 
+def _drop_generations(config, *, apply: bool) -> dict:
+    from cnequity.storage.drop_generations import drop_generations
+
+    return drop_generations(config, apply=apply)
+
+
 def _missing_values(dataset: str) -> Callable[..., dict]:
     def run(config, *, apply: bool) -> dict:
         from cnequity.storage.repairs.missing_values import repair_missing_values
@@ -237,6 +243,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         "0.23.0",
         _repair("missing_values", "repair_all_missing_values"),
+    ),
+    # Last: nothing above reads the directories it deletes, and it cannot be undone.
+    Migration(
+        "drop-generations",
+        N_(
+            "Delete the curated/ and derived/ directories and the generations, pointers and "
+            "receipts under meta/revisions that the lake catalog replaced; held revisions stay"
+        ),
+        "0.26.0",
+        _drop_generations,
     ),
 )
 
