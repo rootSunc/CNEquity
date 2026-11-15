@@ -217,6 +217,9 @@ class Config:
     #: Days before it are not owed, though the source may serve them; a fact
     #: about this lake, so it lives here rather than in the dataset spec.
     history_from: dict[str, date] = field(default_factory=dict)
+    #: ``[datasets] planned``: datasets whose dates to fetch the coverage
+    #: planner adds to, beside the watermark and the missing-dates ledger.
+    planned_datasets: frozenset[str] = frozenset()
     init_phases: list[str] = field(default_factory=list)
     on_demand_enabled: bool = True
     on_demand_datasets: list[str] = field(default_factory=list)
@@ -908,6 +911,18 @@ def _warn_renamed_keys(raw: Mapping) -> None:
         )
 
 
+def _planned(listed) -> frozenset[str]:
+    """``[datasets] planned``: the datasets the coverage planner helps decide."""
+    from cnequity.domain.datasets import DATASETS
+
+    if not isinstance(listed, list) or not all(isinstance(name, str) for name in listed):
+        raise ConfigError("datasets.planned must be a list of dataset names")
+    unknown = sorted(set(listed) - set(DATASETS))
+    if unknown:
+        raise ConfigError("datasets.planned names unknown datasets: " + ", ".join(unknown))
+    return frozenset(listed)
+
+
 def _history_from(section) -> dict[str, date]:
     """``[datasets.history_from]``: dataset name to the first day this lake holds it from."""
     from cnequity.domain.datasets import DATASETS
@@ -939,7 +954,9 @@ def load_config(path: str | Path) -> Config:
         raw = effective_raw(tomllib.load(f))
     opted_out_steps = frozenset(raw.pop(OPTED_OUT_KEY, ()))
     best_effort_enabled = frozenset(raw.pop(BEST_EFFORT_KEY, ()))
-    history_from = _history_from((raw.pop("datasets", None) or {}).get("history_from", {}))
+    datasets_raw = raw.pop("datasets", None) or {}
+    history_from = _history_from(datasets_raw.get("history_from", {}))
+    planned_datasets = _planned(datasets_raw.get("planned", []))
     _warn_renamed_keys(raw)
 
     data_root = _data_root(raw, config_path.parent)
@@ -1351,6 +1368,7 @@ def load_config(path: str | Path) -> Config:
         opted_out_steps=opted_out_steps,
         best_effort_enabled=best_effort_enabled,
         history_from=history_from,
+        planned_datasets=planned_datasets,
         init_phases=init_phases,
         on_demand_enabled=bool(on_demand.get("enabled", True)),
         on_demand_datasets=list(on_demand.get("datasets", [])),

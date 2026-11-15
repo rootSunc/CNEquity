@@ -604,6 +604,78 @@ def _by_day(config, name: str, end: date) -> bool:
     )
 
 
+#: The finding a fetch step reports its answers in; compact records them.
+ANSWER_CHECK = "planner_empty_answer"
+
+
+def gap_days(config, dataset: str, trade_date: date) -> list[date]:
+    """The days *dataset* owes and does not have, over the last ``SYNC_DAYS``.
+
+    For a dataset owed once per session or calendar day and not per entity;
+    others are planned elsewhere and give none here.
+    """
+    coverage = coverage_of(DATASETS[dataset], trade_date, config)
+    if not (
+        coverage.by == "rows" and coverage.entity is None and coverage.grain in ("session", "day")
+    ):
+        return []
+    scope = Scope(trade_date - timedelta(days=SYNC_DAYS), trade_date)
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        cells = planned(config, catalog, scope, [dataset])[dataset].cells
+    return sorted(
+        date.fromisoformat(period)
+        for period in cells.filter(pl.col("state") == "gap")["period"].to_list()
+    )
+
+
+def answer_finding(dataset: str, empty: Iterable[date], asked_at: datetime) -> dict:
+    """What a fetch step says it asked about and found empty, for compact to record."""
+    days = sorted({day.isoformat() for day in empty})
+    return {
+        "dataset": dataset,
+        "check": ANSWER_CHECK,
+        "severity": "info",
+        "message": f"{len(days)} day(s) asked about came back empty",
+        "periods": days,
+        "asked_at": asked_at.isoformat(),
+    }
+
+
+def record_answers(config, run_id: str, findings: Iterable[dict]) -> int:
+    """Record the empty answers fetch steps reported in *findings*; returns the cells recorded."""
+    rows = [
+        {
+            "dataset": item["dataset"],
+            "period": period,
+            "entity": "",
+            "run": f"run:{run_id}:step",
+            "asked_at": datetime.fromisoformat(item["asked_at"]),
+            "outcome": "empty",
+        }
+        for item in findings
+        if item.get("check") == ANSWER_CHECK and item.get("dataset") in DATASETS
+        for period in item.get("periods") or ()
+    ]
+    if not rows:
+        return 0
+    frame = pl.DataFrame(rows).unique()
+    keys = ["dataset", "period", "run", "asked_at"]
+    with lake_mutation_lock(config.meta_root, blocking=True):
+        with Catalog(lake_root(config)) as catalog:
+            if catalog.has_table(cov.ATTEMPTS):
+                # A run compacts more than once; each sees the same findings.
+                seen = catalog.records(cov.ATTEMPTS, ", ".join(keys)).cast(
+                    {"asked_at": pl.Datetime("us", "UTC")}
+                )
+                frame = frame.cast({"asked_at": pl.Datetime("us", "UTC")}).join(
+                    seen, on=keys, how="anti"
+                )
+            if frame.is_empty():
+                return 0
+            cov.record(catalog, frame, message=f"run:{run_id}:answers")
+    return frame.height
+
+
 def record_seeds(config, found: Iterable[Seed], *, run: str = "seed:meta-state") -> int | None:
     """Write *found* to the lake's ``_attempts`` in one snapshot, under the lake lock."""
     rows = [

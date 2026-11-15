@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -300,8 +300,52 @@ def incremental_trade_dates(config: Config, dataset: str, trade_date: date) -> l
         # A max watermark can move beyond a failed interior day. The durable
         # ledger keeps that day in the plan even after the normal tail expires.
         owed = StateStore(config.meta_root).get_missing_dates(dataset)
-        return sorted(set(current) | {day for day in owed if day <= trade_date})
+        dates = set(current) | {day for day in owed if day <= trade_date}
+        if dataset in getattr(config, "planned_datasets", ()):
+            dates |= _planner_days(config, dataset, trade_date, dates)
+        return sorted(dates)
     return current
+
+
+#: Where the planner and the old ledgers disagreed on what to fetch, per
+#: (dataset, run day): read once by :func:`fetch_incremental_daily`.
+_PLANNER_SPLIT: dict[tuple[str, date], tuple[list[date], list[date]]] = {}
+
+
+def _planner_days(config: Config, dataset: str, trade_date: date, old: set[date]) -> set[date]:
+    """The planner's gap days for *dataset*, fetched beside what the old ledgers name.
+
+    Both are fetched while they are compared, so a planner mistake can only
+    add requests, never drop one. A planner that cannot plan adds nothing.
+    """
+    from cnequity.quality.planned_coverage import gap_days
+
+    try:
+        planned = {day for day in gap_days(config, dataset, trade_date) if day <= trade_date}
+    except Exception as exc:  # noqa: BLE001 — the old ledgers still decide
+        logger.warning("%s: the planner could not plan %s: %s", dataset, trade_date, exc)
+        return set()
+    _PLANNER_SPLIT[(dataset, trade_date)] = (sorted(planned - old), sorted(old - planned))
+    return planned
+
+
+def _planner_split_finding(dataset: str, trade_date: date) -> dict | None:
+    """Where the planner and the old ledgers named different days, as an info finding."""
+    split = _PLANNER_SPLIT.pop((dataset, trade_date), None)
+    if split is None or not (split[0] or split[1]):
+        return None
+    planner_only, old_only = split
+    return {
+        "dataset": dataset,
+        "check": "planner_fetch_split",
+        "severity": "info",
+        "message": (
+            f"the planner alone asked for {len(planner_only)} day(s), "
+            f"the old ledgers alone for {len(old_only)}"
+        ),
+        "planner_only": [day.isoformat() for day in planner_only[:20]],
+        "old_only": [day.isoformat() for day in old_only[:20]],
+    }
 
 
 #: How far back :func:`last_session_on_or_before` will look. The longest CN
@@ -536,6 +580,11 @@ def fetch_incremental_daily(
     else:
         fetch_dates = dates
         findings = []
+    split = _planner_split_finding(dataset, trade_date)
+    if split is not None:
+        findings.append(split)
+    planned = semantics == "by_date" and dataset in getattr(config, "planned_datasets", ())
+    answered_empty: list[date] = []
 
     frames: list[pl.DataFrame] = []
     empty_days: list[date] = []
@@ -576,6 +625,8 @@ def fetch_incremental_daily(
             logger.warning("%s: %s could not be fetched: %s", dataset, d.isoformat(), exc)
             continue
         fetched_days += 1
+        if part.is_empty() and planned:
+            answered_empty.append(d)
         if part.is_empty():
             if empty_day_is_expected(config, dataset, d):
                 # The exchanges never opened: nothing was filed market-wide and
@@ -604,6 +655,10 @@ def fetch_incremental_daily(
         # Nothing was readable: that is a source outage, not one bad day, and
         # there is no partial result worth keeping.
         raise first_failure
+    if answered_empty:
+        from cnequity.quality.planned_coverage import answer_finding
+
+        findings.append(answer_finding(dataset, answered_empty, datetime.now(UTC)))
     if empty_days:
         findings.append(_dense_empty_day_finding(dataset, empty_days))
     if failed_days:

@@ -515,16 +515,27 @@ def _settle_published_datasets(
         )
 
 
-def _sync_attempts(config: Config, run_id: str, trade_date: date, datasets: set[str]) -> list[dict]:
+def _sync_attempts(
+    config: Config,
+    run_id: str,
+    trade_date: date,
+    datasets: set[str],
+    answers: list[dict] = (),
+) -> list[dict]:
     """Keep the planner's ledger beside ``meta/state``; never fails a compact.
+
+    *answers* are the findings in which this run's fetch steps reported the
+    days they asked about and found empty; they are recorded first, so the
+    projection from the state files does not record them again.
 
     Info findings name the gaps the planner sees that the state files hold
     done, so the two can be watched agreeing before the planner decides.
     """
     from cnequity.domain.findings import finding
-    from cnequity.quality.planned_coverage import sync_attempts
+    from cnequity.quality.planned_coverage import record_answers, sync_attempts
 
     try:
+        record_answers(config, run_id, answers)
         report = sync_attempts(config, run_id, trade_date, datasets)
     except Exception as exc:  # the ledger is a shadow while meta/state decides
         logger.warning("attempts ledger not synced for %s: %s", run_id, exc)
@@ -981,7 +992,15 @@ def _compact_datasets(
         reconcile_no_print=bool({"daily_bars", "instruments"} & published),
     )
     audit_findings.extend(_reconcile_watermarks(config))
-    audit_findings.extend(_sync_attempts(config, run_id, trade_date, set(staged) | compacted))
+    audit_findings.extend(
+        _sync_attempts(
+            config,
+            run_id,
+            trade_date,
+            set(staged) | compacted,
+            answers=list(context.get("audit_findings") or ()),
+        )
+    )
 
     from cnequity.query.views import ensure_duckdb_views
 

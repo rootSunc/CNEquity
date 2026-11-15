@@ -522,6 +522,9 @@ best_effort = []
 # Where this lake's history of a dataset begins, when it starts later than the
 # source does. The planner does not owe earlier days; move a date earlier to
 # backfill further back.
+# Datasets whose days to fetch also include the coverage planner's gaps, beside
+# the watermark and the missing-dates ledger:
+#   planned = ["announcement_index", "margin_trading"]
 # [datasets.history_from]
 # fund_flow = 2023-09-11
 
