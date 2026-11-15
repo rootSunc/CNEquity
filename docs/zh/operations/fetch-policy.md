@@ -67,7 +67,7 @@ TDX K 线只有记录偏移量，没有按日期过滤的服务器参数。回�
 | `status`、`delisted status`、`profile list/show`、`contract show/diff/validate` | 本地状态、目录或契约检查 |
 | `decision-data payment-gaps/stock-terms/cash-rights` | 从已提交数据生成本地决策清单，不采集 |
 | `stats show/rebuild` | 读本地 Parquet/统计；可能刷新统计文件 |
-| `snapshot create/verify/restore/export/import`、`snapshot delta create/verify/apply` | 本地快照、校验、复制；不向行情源取数，restore/apply 会写目标 |
+| `snapshot create/verify/restore/export/import` | 本地快照、校验、复制；不向行情源取数，restore/apply 会写目标 |
 | `ths-official capture/backfill/repair-bars/resource-sectors` | 可选凭证源；capture 写对照证据，backfill 补空缺。repair/resource 的默认预演**也会联网**，`--apply` 控制写入，不表示联网许可或配额无限 |
 
 ## 数据源选择与请求成本

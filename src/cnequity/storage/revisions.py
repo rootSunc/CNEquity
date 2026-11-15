@@ -14,6 +14,7 @@ import os
 import shutil
 import stat
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -549,6 +550,7 @@ class RevisionStore:
         schema_version: int,
         contract_fingerprint: str,
         metadata: dict[str, Any] | None = None,
+        identity: Mapping[str, Any] | None = None,
     ) -> DatasetRevision:
         """The revision the lake catalog is about to publish for *dataset*.
 
@@ -556,6 +558,11 @@ class RevisionStore:
         written here: the caller holds ``lake_mutation_lock`` and records the
         revision in the transaction that publishes its rows, so a publish that
         stops leaves no trace, then calls :meth:`index_catalog_revision`.
+
+        *identity* republishes a revision another lake made (a snapshot being
+        restored): its number, id, time, run and content digest are kept, so a
+        result that pinned that revision reads it here too. It must be newer
+        than every revision this catalog records for the dataset.
         """
         if schema_version < 1:
             raise ValueError("schema_version must be a positive integer")
@@ -573,19 +580,29 @@ class RevisionStore:
         records = self._catalog_records()
         previous = None if records is None else records.current.get(dataset)
         history = [] if records is None else records.history(dataset)
-        revision = max((record.revision for record in history), default=0) + 1
+        newest = max((record.revision for record in history), default=0)
+        revision = newest + 1
         revision_id = uuid.uuid4().hex
+        committed_at = datetime.now(timezone.utc).isoformat()
+        content_digest = self._content_digest(dataset, schema_version, contract_fingerprint, files)
+        if identity is not None:
+            revision, revision_id = int(identity["revision"]), str(identity["revision_id"])
+            if revision <= newest or any(r.revision_id == revision_id for r in history):
+                raise RevisionConsistencyError(
+                    f"{dataset}: revision {revision} is not newer than this lake's {newest}"
+                )
+            committed_at = str(identity.get("committed_at") or committed_at)
+            run_id = str(identity.get("run_id") or run_id)
+            content_digest = str(identity.get("content_digest") or content_digest)
         receipt = DatasetRevision(
             dataset=dataset,
             revision=revision,
             revision_id=revision_id,
-            committed_at=datetime.now(timezone.utc).isoformat(),
+            committed_at=committed_at,
             run_id=run_id,
             schema_version=schema_version,
             contract_fingerprint=contract_fingerprint,
-            content_digest=self._content_digest(
-                dataset, schema_version, contract_fingerprint, files
-            ),
+            content_digest=content_digest,
             changed_partitions=tuple(sorted(changed_partitions)),
             files=files,
             metadata={

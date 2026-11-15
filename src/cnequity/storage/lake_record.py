@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Any
 
 from cnequity.storage.atomic import write_json_atomic
 
@@ -90,3 +91,40 @@ def start_on_catalog(config) -> None:
     path = Path(config.meta_root) / STORAGE_FILE
     if not path.exists():
         write_json_atomic(path, {"publish": "catalog", "revisions": "catalog"}, indent=2)
+
+
+def affected(report: Any) -> int:
+    """How many rows (or settled keys) a repair report says it touches.
+
+    A report that separates what it read (``rows``) from what it rewrites
+    (``rows_changed``) is counted by the latter.
+    """
+    if isinstance(report, dict) and isinstance(report.get("rows_changed"), int):
+        return report["rows_changed"]
+    if isinstance(report, dict):
+        total = 0
+        for key, value in report.items():
+            if key in {"rows", "rows_dropped"} and isinstance(value, int):
+                total += value
+            elif key in {"resolved_sessions", "resolved_prelisting_keys"} and isinstance(
+                value, list
+            ):
+                total += len(value)
+            elif isinstance(value, dict):
+                total += affected(value)
+        return total
+    return 0
+
+
+def record_migration(config, migration_id: str, report: dict) -> None:
+    """Note in ``lake.json`` that the migration *migration_id* ran here, applied or found nothing."""
+    from datetime import datetime, timezone
+
+    lake = read_lake(config)
+    lake.setdefault("migrations", {})[migration_id] = {
+        "status": "applied" if affected(report) else "not_needed",
+        "affected": affected(report),
+        "at": datetime.now(timezone.utc).isoformat(),
+        "version": package_version(),
+    }
+    _write_lake(config, lake)

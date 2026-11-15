@@ -15,8 +15,6 @@ from cnequity.storage.revisions import (
     resolve_committed_root,
 )
 from cnequity.storage.snapshots import (
-    DeltaChange,
-    DeltaVerification,
     SnapshotStore,
     SnapshotVerification,
 )
@@ -33,8 +31,6 @@ __all__ = [
     "committed_revision",
     "SnapshotStore",
     "SnapshotVerification",
-    "DeltaChange",
-    "DeltaVerification",
     "StateStore",
     "RawArchiveError",
     "RawPayloadArchive",

@@ -56,12 +56,16 @@ def test_source_slo_without_history_fails_closed(tmp_path):
 
 
 def test_snapshot_cli_round_trip(tmp_path):
+    from dataclasses import replace
+    from datetime import date
+
+    from tests.catalog_seed import publish_rows
+    from tests.unit.test_lake_write import _bars
+
+    from cnequity.query import catalog_read, load
+
     cfg, path = _config(tmp_path)
-    part = cfg.curated_root / "daily_bars" / "trade_date=2026-08-28"
-    part.mkdir(parents=True)
-    pl.DataFrame({"symbol": ["600000.SH"], "trade_date": ["2026-08-28"]}).write_parquet(
-        part / "part.parquet"
-    )
+    publish_rows(cfg, "daily_bars", _bars(date(2026, 8, 28), {"600000.SH": 10.0}))
     snapshots = tmp_path / "snapshots"
     runner = CliRunner()
 
@@ -109,7 +113,9 @@ def test_snapshot_cli_round_trip(tmp_path):
     assert created.exit_code == 0, created.output
     assert verified.exit_code == 0, verified.output
     assert restored.exit_code == 0, restored.output
-    assert (target / "curated/daily_bars/trade_date=2026-08-28/part.parquet").is_file()
+    catalog_read.close_all()
+    assert load("daily_bars", config=replace(cfg, data_root=target))["close"].to_list() == [10.0]
+    catalog_read.close_all()
 
 
 def test_snapshot_archive_cli_wraps_expected_errors_without_traceback(tmp_path):

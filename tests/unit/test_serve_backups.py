@@ -3,7 +3,6 @@
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-import polars as pl
 import pytest
 from test_serve_ops import _client, _csrf, _launch, _preview
 from test_serve_schedule import FakeBackend
@@ -21,17 +20,21 @@ from cnequity.storage.snapshots import SnapshotStore
 
 @pytest.fixture
 def published(config):
-    path = config.curated_root / "daily_bars" / "trade_date=2024-06-18"
-    path.mkdir(parents=True)
-    pl.DataFrame(
-        {
-            "symbol": ["600000.SH"],
-            "trade_date": [date(2024, 6, 18)],
-            "close": [10.0],
-            "fetched_at": [datetime(2024, 6, 18, tzinfo=timezone.utc)],
-        }
-    ).write_parquet(path / "part-merged.parquet")
-    return config
+    from tests.catalog_seed import publish_rows
+    from tests.unit.test_lake_write import _bars
+
+    from cnequity.query import catalog_read
+    from equitylake_core.extensions import ExtensionUnavailableError, ensure_extensions
+
+    try:
+        import duckdb
+
+        ensure_extensions(duckdb.connect())
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    publish_rows(config, "daily_bars", _bars(date(2024, 6, 18), {"600000.SH": 10.0}))
+    yield config
+    catalog_read.close_all()
 
 
 def test_web_backup_verify_restore_real_children(published, tmp_path, monkeypatch):
@@ -67,8 +70,11 @@ def test_web_backup_verify_restore_real_children(published, tmp_path, monkeypatc
     assert response.status_code == 422 and not target.exists()
     result = _launch(client, headers, restored, ["confirm", "heavy"])
     assert result["state"] == "complete", result
-    restored_file = next((target / "curated").rglob("*.parquet"))
-    assert pl.read_parquet(restored_file)["close"].to_list() == [10.0]
+    from dataclasses import replace
+
+    from cnequity.query import load
+
+    assert load("daily_bars", config=replace(config, data_root=target))["close"].to_list() == [10.0]
     assert client.app.state.config.data_root == config.data_root
 
 

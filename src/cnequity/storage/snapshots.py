@@ -17,7 +17,7 @@ import tempfile
 import uuid
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,19 +25,37 @@ from cnequity.config import Config
 from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.i18n import N_, Message
 from cnequity.storage.atomic import (
-    RollbackIncompleteError,
     replace_with_retry,
     swap_with_backup,
     write_json_atomic,
     write_parquet_atomic,
 )
-from cnequity.storage.locator import layer_root, logical_root
+from cnequity.storage.lake_record import read_lake
 from cnequity.storage.provenance import runtime_lineage
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
-from cnequity.storage.revisions import resolve_committed_root
 from cnequity.storage.state import StateStore
+
+#: What a snapshot keeps of each dataset's revision (the rest named files it no longer has).
+_REVISION_FIELDS = (
+    "revision",
+    "revision_id",
+    "committed_at",
+    "run_id",
+    "schema_version",
+    "contract_fingerprint",
+    "content_digest",
+    "changed_partitions",
+    "metadata",
+)
+#: The snapshot layout this release writes: each dataset's published files once,
+#: its revision in the manifest. Version 1 also carried revision pointers,
+#: receipts and a second copy of each dataset as a generation.
+FORMAT_VERSION = 2
+#: Where a restore puts the data files it then publishes into the new catalog.
+_RESTORE_DIR = ".restore"
+#: The migrations that move a lake onto its catalog; a restore does them itself.
+_STORAGE_MIGRATIONS = ("lake-catalog", "revision-records", "drop-generations")
 
 _SNAPSHOT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
@@ -432,129 +450,11 @@ def _safe_target_path(root: Path, relative: Path) -> Path:
     return destination
 
 
-def _ensure_target_parent(root: Path, relative: Path) -> Path:
-    """Create missing destination directories without accepting links."""
-
-    destination = _safe_target_path(root, relative)
-    target = Path(root).resolve(strict=False)
-    parent = destination.parent
-    missing: list[Path] = []
-    cursor = parent
-    while cursor != target:
-        info = _lstat(cursor)
-        if info is None:
-            missing.append(cursor)
-            cursor = cursor.parent
-            continue
-        if stat.S_ISLNK(info.st_mode):
-            raise ValueError(f"delta target contains symlink ancestor: {cursor}")
-        if not stat.S_ISDIR(info.st_mode):
-            raise ValueError(f"delta target ancestor is not a directory: {cursor}")
-        break
-    for directory in reversed(missing):
-        try:
-            directory.mkdir()
-        except FileExistsError:
-            pass
-        info = _lstat(directory)
-        if info is None or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise ValueError(f"delta target parent is not a real directory: {directory}")
-    return destination
-
-
-def _reject_symlink_ancestors(root: Path, relative: Path) -> None:
-    """Reject links or non-directory ancestors below a canonical lake root."""
-
-    root = Path(root)
-    _reject_symlink_path(root, label="lake root")
-    root = root.resolve(strict=False)
-    cursor = root
-    for index, part in enumerate(relative.parts):
-        cursor = cursor / part
-        info = _lstat(cursor)
-        if info is None:
-            # Missing components are safe to create only after the caller has
-            # run its own destination preflight.  There cannot be a later
-            # existing ancestor without an existing parent.
-            break
-        if stat.S_ISLNK(info.st_mode):
-            raise ValueError(f"lake path contains symlink ancestor: {cursor}")
-        if index < len(relative.parts) - 1 and not stat.S_ISDIR(info.st_mode):
-            raise ValueError(f"lake path ancestor is not a directory: {cursor}")
-
-
 def _safe_relative(raw: str) -> Path:
     path = Path(raw)
     if path.is_absolute() or not path.parts or ".." in path.parts:
         raise ValueError(f"unsafe snapshot path: {raw}")
     return path
-
-
-def _safe_lake_relative(raw: str) -> Path:
-    """Validate a path that may be applied to a lake root.
-
-    Delta packages intentionally use a single canonical path namespace.  The
-    namespace is narrower than a generic snapshot path: an update may touch
-    curated/derived data and the metadata needed to identify that data, but it
-    must never be able to write an arbitrary file below the target root.
-    """
-
-    path = _safe_relative(raw)
-    if path.parts[0] not in {"curated", "derived", "meta"}:
-        raise ValueError(f"unsupported lake path: {raw}")
-    if path.parts[0] == "meta":
-        allowed = {"state", "revisions", "adj_factors_cache", "applied-deltas", "raw"}
-        if len(path.parts) < 2 or path.parts[1] not in allowed:
-            from cnequity.storage.research_inputs import CONTEXT_PATH, RESEARCH_METADATA
-
-            relative = Path(*path.parts[1:])
-            if relative != CONTEXT_PATH and not any(
-                relative == Path(prefix) or Path(prefix) in relative.parents
-                for prefix in RESEARCH_METADATA
-            ):
-                raise ValueError(f"unsupported lake metadata path: {raw}")
-    return path
-
-
-def _is_current_pointer(relative: Path) -> bool:
-    """Whether a lake-relative path is a COW commit pointer."""
-
-    return (
-        len(relative.parts) == 4
-        and relative.parts[0] == "meta"
-        and relative.parts[1] == "revisions"
-        and relative.parts[3] == "current.json"
-    )
-
-
-def _file_digest_record(path: Path, relative: Path, *, dataset: str, layer: str) -> dict[str, Any]:
-    """Build the stable content record used by snapshot and delta indexes."""
-
-    info = _reject_link_or_non_regular(path)
-    return {
-        "path": relative.as_posix(),
-        "dataset": dataset,
-        "layer": layer,
-        "size_bytes": info.st_size,
-        "sha256": _sha256(path),
-    }
-
-
-def _index_digest(index: Mapping[str, Mapping[str, Any]]) -> str:
-    """Hash a lake index without embedding machine-specific absolute paths."""
-
-    payload = [
-        {
-            "path": path,
-            "dataset": str(record.get("dataset", "")),
-            "layer": str(record.get("layer", "")),
-            "size_bytes": int(record.get("size_bytes", 0)),
-            "sha256": str(record.get("sha256", "")),
-        }
-        for path, record in sorted(index.items())
-    ]
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -670,6 +570,12 @@ def _manifest_state_issues(snapshot: Path, manifest: Mapping[str, Any]) -> list[
     if not isinstance(raw_datasets, list):
         return ["datasets"]
     datasets = [str(item) for item in raw_datasets]
+    version = manifest.get("format_version", 1)
+    revisions = manifest.get("revisions")
+    if version >= 2 and (
+        not isinstance(revisions, Mapping) or set(map(str, revisions)) != set(datasets)
+    ):
+        issues.append("revisions")
     raw_states = manifest.get("dataset_states", {})
     if not isinstance(raw_states, Mapping):
         return ["dataset_states"]
@@ -717,6 +623,8 @@ def _manifest_state_issues(snapshot: Path, manifest: Mapping[str, Any]) -> list[
             elif relative.parts[0] == "meta":
                 if layer != "meta":
                     issues.append(f"file:{raw_path}:layer")
+                if version >= 2 and relative.parts[1:2] == ("revisions",):
+                    issues.append(f"file:{raw_path}:root")
             else:
                 issues.append(f"file:{raw_path}:root")
 
@@ -786,6 +694,9 @@ def _manifest_state_issues(snapshot: Path, manifest: Mapping[str, Any]) -> list[
                     if maximum is not None:
                         try:
                             maximum_day = maximum.date() if hasattr(maximum, "date") else maximum
+                            if isinstance(maximum_day, str):
+                                # A report period stored as text (``2025-12-31``).
+                                maximum_day = date.fromisoformat(maximum_day[:10])
                             if marker > maximum_day:
                                 issues.append(f"state:{dataset}:{field}")
                             else:
@@ -807,6 +718,31 @@ def _manifest_state_issues(snapshot: Path, manifest: Mapping[str, Any]) -> list[
         revision_id = state.get("revision_id")
         if revision is not None and revision > 0 and not isinstance(revision_id, str):
             issues.append(f"state:{dataset}:revision_id")
+
+        if version >= 2:
+            # The manifest holds the revision; there is no pointer or receipt.
+            recorded = revisions.get(dataset) if isinstance(revisions, Mapping) else None
+            number = recorded.get("revision") if isinstance(recorded, Mapping) else None
+            if (
+                not isinstance(recorded, Mapping)
+                or isinstance(number, bool)
+                or not isinstance(number, int)
+                or number < 1
+                or not isinstance(recorded.get("revision_id"), str)
+                or not recorded["revision_id"]
+            ):
+                issues.append(f"revision:{dataset}")
+                continue
+            for field in (
+                "revision",
+                "revision_id",
+                "content_digest",
+                "schema_version",
+                "contract_fingerprint",
+            ):
+                if state.get(field) is not None and state[field] != recorded.get(field):
+                    issues.append(f"state:{dataset}:{field}")
+            continue
 
         state_receipt: dict[str, Any] | None = None
         receipt_raw = state.get("revision_receipt")
@@ -1021,6 +957,8 @@ class _SnapshotPlan:
     research_inputs: dict[str, Any]
     lifecycle_dependencies: Any
     copies: list[_PlannedCopy]
+    revisions: dict[str, dict[str, Any]]
+    lake_record: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -1030,43 +968,6 @@ class SnapshotVerification:
     verified_files: int
     missing: tuple[str, ...]
     mismatched: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class DeltaVerification:
-    """Result of checking the payload files in an immutable delta package.
-
-    ``missing`` and ``mismatched`` contain package paths, while ``invalid``
-    contains malformed change records.  Keeping this shape close to
-    :class:`SnapshotVerification` lets callers use the same release gate for
-    both a full baseline and a small incremental package.
-    """
-
-    delta: str
-    passed: bool
-    verified_files: int
-    missing: tuple[str, ...]
-    mismatched: tuple[str, ...]
-    invalid: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class DeltaChange:
-    """One add/replace/delete operation in a delta manifest."""
-
-    operation: str
-    path: str
-    package_path: str | None
-    dataset: str
-    layer: str
-    size_bytes: int | None
-    sha256: str | None
-    old_size_bytes: int | None = None
-    old_sha256: str | None = None
-    allow_missing: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 class SnapshotStore:
@@ -1088,24 +989,6 @@ class SnapshotStore:
         candidate = self.root / self._validate_name(name)
         _reject_symlink_path(candidate, label="snapshot path")
         return candidate
-
-    def _source_root(self, dataset: str) -> tuple[str, Path]:
-        spec = DATASETS[dataset]
-        # Check configured roots before the revision resolver canonicalises
-        # them.  Otherwise a data-root symlink is indistinguishable from the
-        # real lake and a snapshot could silently read outside the configured
-        # boundary.
-        _reject_symlink_path(self.config.data_root, label="data root")
-        _reject_symlink_path(self.config.meta_root, label="metadata root")
-        base = layer_root(self.config, spec)
-        logical = logical_root(self.config, spec)
-        _reject_symlink_path(base, label="lake source root")
-        _reject_symlink_path(logical, label="dataset root")
-        return spec.layer, resolve_committed_root(
-            logical,
-            dataset=dataset,
-            meta_root=self.config.meta_root,
-        )
 
     def create(self, name: str, datasets: list[str], *, research: bool = False) -> Path:
         """Copy selected datasets into a new immutable snapshot directory.
@@ -1164,8 +1047,6 @@ class SnapshotStore:
         records: list[SnapshotFile] = []
         copies: list[_PlannedCopy] = []
         runtime_state: dict[str, Any] = {}
-        # Datasets whose revision lives only in the lake catalog, by export dir.
-        exported: dict[str, Path] = {}
         try:
             research_inputs = self._capture_research_inputs(temp, selected, records)
             from cnequity.storage.lifecycle import LifecycleStore
@@ -1185,147 +1066,34 @@ class SnapshotStore:
                     )
                 )
             dataset_states = {dataset: state.get_payload(dataset) for dataset in selected}
+            for payload in dataset_states.values():
+                # The catalog is each revision's record; it has no receipt or pointer file.
+                payload.pop("revision_receipt", None)
+                payload.pop("revision_pointer", None)
+            from cnequity.storage.lake_write import export_tree, published_layout
+
+            revisions = self._current_revisions(selected)
             for dataset in selected:
-                layer, source = self._source_root(dataset)
-                if not source.is_dir():
-                    # A revision published only into the lake catalog has no
-                    # generation directory: export its rows in the dataset's
-                    # own partition layout, which restores as any other.
-                    from cnequity.storage.published import catalog_published, export_partitioned
-
-                    if catalog_published(self.config, dataset) is None:
-                        raise FileNotFoundError(f"dataset has no stored files: {dataset}")
+                layer = str(DATASETS[dataset].layer)
+                layout = published_layout(self.config.data_root, dataset)
+                if layout is None:
+                    # Rows the catalog wrote itself, possibly several
+                    # partitions to a file: write each partition out now.
                     source = temp / ".export" / layer / dataset
-                    if not export_partitioned(self.config, dataset, source):
-                        raise FileNotFoundError(f"dataset has no parquet files: {dataset}")
-                    exported[dataset] = source
-                # The source is the committed generation, whose unchanged
-                # files are hard links shared with older generations.  They
-                # are regular files read once and copied into independent
-                # snapshot files, so only symlinks and special files are unsafe.
-                source_entries, unsafe = _tree_files_no_follow(source)
-                if unsafe:
-                    raise ValueError(
-                        f"dataset contains unsupported link or special file(s): "
-                        f"{', '.join(sorted(unsafe)[:8])}"
-                    )
-                files = sorted(
-                    source / relative
-                    for relative in map(Path, source_entries)
-                    if relative.suffix == ".parquet"
-                )
-                if not files:
+                    export_tree(self.config.data_root, dataset, source)
+                    layout = {}
+                    for path in sorted(source.rglob("*.parquet")):
+                        label = path.parent.relative_to(source).as_posix()
+                        layout.setdefault("" if label == "." else label, []).append(
+                            (path, path.name)
+                        )
+                if not any(layout.values()):
                     raise FileNotFoundError(f"dataset has no parquet files: {dataset}")
-                for source_file in files:
-                    _reject_link_or_non_regular(source_file)
-                    relative = source_file.relative_to(source)
-                    stored = temp / "data" / layer / dataset / relative
-                    copies.append(_planned_copy(source_file, stored, dataset, layer))
-
-            _reject_symlink_path(self.config.meta_root, label="metadata root")
-            meta_root = self.config.meta_root.resolve(strict=False)
-            # Where each dataset's pointer and receipt are read from: the
-            # lake's own files, or the copies written out of its catalog.
-            documents = self._revision_documents(temp, meta_root, dataset_states)
-            for dataset, payload in dataset_states.items():
-                receipt = payload.get("revision_receipt")
-                if receipt:
-                    receipt_logical = documents / _safe_relative(str(receipt))
-                    _reject_symlink_path(receipt_logical, label="revision receipt")
-                    receipt_source = receipt_logical.resolve(strict=False)
-                    try:
-                        receipt_relative = receipt_source.relative_to(documents)
-                    except ValueError as exc:
-                        raise ValueError(
-                            f"revision receipt is outside meta root: {receipt}"
-                        ) from exc
-                    if not receipt_source.is_file():
-                        raise FileNotFoundError(
-                            f"dataset state references missing revision receipt: {receipt_source}"
-                        )
-                    _reject_link_or_non_regular(receipt_source, hardlink=True)
-                    stored = temp / "meta" / receipt_relative
-                    stored.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(receipt_source, stored)
-                    records.append(
-                        SnapshotFile(
-                            dataset=dataset,
-                            layer="meta",
-                            path=(Path("meta") / receipt_relative).as_posix(),
-                            size_bytes=stored.stat().st_size,
-                            sha256=_sha256(stored),
-                        )
-                    )
-
-                # A revision receipt points at an immutable generation under
-                # meta/revisions/data. Include both the pointer and the
-                # generation bytes, otherwise restoring a snapshot would
-                # retain a dangling pointer and the query resolver would
-                # correctly fail closed. Older snapshots without a pointer
-                # continue through the legacy path above.
-                pointer_source = documents / "revisions" / dataset / "current.json"
-                _reject_symlink_path(pointer_source, label="revision pointer")
-                if pointer_source.is_file():
-                    pointer_relative = pointer_source.relative_to(documents)
-                    stored_pointer = temp / "meta" / pointer_relative
-                    stored_pointer.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(pointer_source, stored_pointer)
-                    if dataset in exported:
-                        # The snapshot carries this revision as a generation;
-                        # its pointer says so, so a restore reads it from there.
-                        stored_payload = _read_json_object(stored_pointer)
-                        stored_payload.pop("storage", None)
-                        write_json_atomic(stored_pointer, stored_payload, indent=2)
-                    records.append(
-                        SnapshotFile(
-                            dataset=dataset,
-                            layer="meta",
-                            path=(Path("meta") / pointer_relative).as_posix(),
-                            size_bytes=stored_pointer.stat().st_size,
-                            sha256=_sha256(stored_pointer),
-                        )
-                    )
-                    try:
-                        pointer_payload = _read_json_object(pointer_source)
-                        generation_relative = _safe_relative(
-                            str(pointer_payload.get("generation_path", ""))
-                        )
-                        generation_logical = meta_root / generation_relative
-                        _reject_symlink_path(generation_logical, label="revision generation")
-                        generation_source = generation_logical.resolve(strict=False)
-                        generation_source.relative_to(meta_root)
-                    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-                        raise ValueError(
-                            f"invalid current revision pointer for {dataset}: {pointer_source}"
-                        ) from exc
-                    if not generation_source.is_dir() and dataset in exported:
-                        generation_source = exported[dataset]
-                        generation_target = meta_root / generation_relative
-                    elif not generation_source.is_dir():
-                        raise FileNotFoundError(
-                            f"current revision generation is missing: {generation_source}"
-                        )
-                    else:
-                        generation_target = generation_source
-                    # Generations share unchanged files by hard link; each
-                    # is copied into the snapshot as an independent file.
-                    generation_entries, unsafe = _tree_files_no_follow(generation_source)
-                    if unsafe:
-                        raise ValueError(
-                            f"revision generation contains unsupported link or special file(s): "
-                            f"{', '.join(sorted(unsafe)[:8])}"
-                        )
-                    for generation_file in sorted(
-                        generation_source / relative
-                        for relative in map(Path, generation_entries)
-                        if relative.suffix == ".parquet"
-                    ):
-                        _reject_link_or_non_regular(generation_file)
-                        relative = (
-                            generation_target / generation_file.relative_to(generation_source)
-                        ).relative_to(meta_root)
-                        stored = temp / "meta" / relative
-                        copies.append(_planned_copy(generation_file, stored, dataset, "meta"))
+                for label, files in sorted(layout.items()):
+                    for source_file, stored_name in files:
+                        _reject_link_or_non_regular(source_file)
+                        stored = temp / "data" / layer / dataset / label / stored_name
+                        copies.append(_planned_copy(source_file, stored, dataset, layer))
 
             # Adjustment-factor HTTP responses are a hot, sparse cache rather
             # than the query-facing derived table.  It is cheap to include it
@@ -1408,6 +1176,8 @@ class SnapshotStore:
             research_inputs=research_inputs,
             lifecycle_dependencies=lifecycle_dependencies,
             copies=copies,
+            revisions=revisions,
+            lake_record=read_lake(self.config),
         )
 
     def _copy_and_publish(self, plan: _SnapshotPlan) -> Path:
@@ -1418,6 +1188,9 @@ class SnapshotStore:
                 item.stored.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     shutil.copy2(item.source, item.stored)
+                    # Lake files are read-only; a snapshot's own copy is not, or
+                    # deleting the snapshot would fail on Windows.
+                    item.stored.chmod(0o644)
                     status = item.source.stat()
                 except FileNotFoundError as exc:
                     raise RuntimeError(
@@ -1438,11 +1211,15 @@ class SnapshotStore:
                 )
             manifest = {
                 "format": "cnequity.lake-snapshot",
-                "format_version": 1,
+                "format_version": FORMAT_VERSION,
                 "name": name,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "datasets": selected,
                 "dataset_states": plan.dataset_states,
+                # Each dataset's revision: a restore republishes it under this number and id.
+                "revisions": plan.revisions,
+                # The migrations the lake had: a restored lake owes what it owed.
+                "lake_record": plan.lake_record,
                 "contracts": {
                     dataset: {
                         "schema_version": dataset_contract(dataset)["schema_version"],
@@ -1492,53 +1269,36 @@ class SnapshotStore:
             raise
         return plan.destination / "manifest.json"
 
-    def _revision_documents(
-        self, temp: Path, meta_root: Path, dataset_states: dict[str, dict]
-    ) -> Path:
-        """The directory holding each dataset's ``current.json`` and receipt, as ``meta/`` would.
+    def _current_revisions(self, datasets: list[str]) -> dict[str, dict[str, Any]]:
+        """Each dataset's current revision as the lake catalog records it; caller holds the lock.
 
-        A lake that records its revisions in its catalog keeps neither file,
-        while a snapshot carries both: they are written out of the catalog
-        here, and each dataset's state in the snapshot names them. A receipt
-        the lake still has on disk (a revision published as a generation) is
-        used as it is, since only it lists the generation's files.
+        A snapshot keeps the revision's number and id, so a restored lake
+        answers a read pinned to it, and a result made against this lake can
+        be reproduced from the snapshot.
         """
+        from cnequity.storage.lake_record import LakeMigrationRequired
         from cnequity.storage.revision_records import enabled
         from cnequity.storage.revisions import RevisionStore
 
         if not enabled(self.config.meta_root):
-            return meta_root
-        documents = (temp / ".export" / "meta").resolve(strict=False)
+            raise LakeMigrationRequired(
+                "a snapshot is made of a lake on its catalog; run `cne upgrade --apply` first"
+            )
         store = RevisionStore(
             self.config.meta_root,
             self.config.curated_root,
             self.config.derived_root,
             create=False,
         )
-        for dataset, payload in dataset_states.items():
-            payload.pop("revision_receipt", None)
-            payload.pop("revision_pointer", None)
-            pointer = store.current_pointer(dataset)
-            if pointer is None:
-                continue
-            pointer_relative = Path("revisions") / dataset / "current.json"
-            write_json_atomic(documents / pointer_relative, pointer, indent=2)
-            payload["revision_pointer"] = pointer_relative.as_posix()
-            if not pointer.get("receipt"):
-                continue
-            receipt_relative = _safe_relative(str(pointer["receipt"]))
-            stored = documents / receipt_relative
-            kept = meta_root / receipt_relative
-            if kept.is_file() and not kept.is_symlink():
-                stored.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(kept, stored)
-            else:
-                receipt = store.latest(dataset)
-                if receipt is None:
-                    raise FileNotFoundError(f"dataset has no recorded revision: {dataset}")
-                write_json_atomic(stored, receipt.to_dict(), indent=2)
-            payload["revision_receipt"] = receipt_relative.as_posix()
-        return documents
+        revisions: dict[str, dict[str, Any]] = {}
+        for dataset in datasets:
+            receipt = store.latest(dataset)
+            if receipt is None:
+                raise FileNotFoundError(f"dataset has no published revision: {dataset}")
+            revisions[dataset] = {
+                key: value for key, value in receipt.to_dict().items() if key in _REVISION_FIELDS
+            }
+        return revisions
 
     def _research_evidence_identity(self) -> dict[str, str]:
         from cnequity.storage.research_inputs import CONTEXT_PATH, RESEARCH_METADATA
@@ -1609,7 +1369,9 @@ class SnapshotStore:
             # Name what the operator typed. The bare manifest path reads as a
             # path they never wrote, on a command whose only argument was NAME.
             raise FileNotFoundError(f"no snapshot named {name!r} ({manifest})") from None
-        if payload.get("format") != "cnequity.lake-snapshot" or payload.get("format_version") != 1:
+        if payload.get("format") != "cnequity.lake-snapshot" or payload.get(
+            "format_version"
+        ) not in (1, FORMAT_VERSION):
             raise ValueError(f"unsupported snapshot manifest: {manifest}")
         return snapshot, payload
 
@@ -2006,10 +1768,9 @@ class SnapshotStore:
             if not manifest_path.is_file():
                 raise ValueError("archive does not contain manifest.json")
             manifest = _read_json_object(manifest_path)
-            if (
-                manifest.get("format") != "cnequity.lake-snapshot"
-                or manifest.get("format_version") != 1
-            ):
+            if manifest.get("format") != "cnequity.lake-snapshot" or manifest.get(
+                "format_version"
+            ) not in (1, FORMAT_VERSION):
                 raise ValueError(f"unsupported snapshot manifest: {manifest_path}")
             if not explicit_name and manifest.get("name") not in {None, snapshot_name}:
                 raise ValueError(
@@ -2050,7 +1811,14 @@ class SnapshotStore:
     import_tarball = import_archive
 
     def restore(self, name: str, target_data_root: Path) -> Path:
-        """Restore into a new or empty explicit target; existing data is never overwritten."""
+        """Restore into a new or empty explicit target; existing data is never overwritten.
+
+        The target is a lake on its catalog, which every command can write. A
+        snapshot of this format is published into a new catalog, each dataset
+        under the revision number and id it had. A snapshot made before 0.25.0
+        restores the lake it held and then moves it onto its catalog, as
+        ``cne upgrade`` would; the other migrations that lake owes stay owed.
+        """
         verification = self.verify(name)
         if not verification.passed:
             raise ValueError(
@@ -2084,13 +1852,17 @@ class SnapshotStore:
             raise FileExistsError(f"restore target is not empty: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
         temp = Path(tempfile.mkdtemp(prefix=f".{target.name}-restore-", dir=target.parent))
+        current = manifest.get("format_version") == FORMAT_VERSION
+        # Where the data files land: a pre-0.25 lake's own layout, or a folder
+        # they are published from into the new catalog.
+        landing = Path(_RESTORE_DIR) if current else Path()
         try:
             for record in manifest["files"]:
                 relative = _safe_relative(str(record["path"]))
                 if relative.parts[0] == "data":
                     # Stored data paths include a leading data/ while the
                     # restore root itself is the lake's data directory.
-                    restored_relative = Path(*relative.parts[1:])
+                    restored_relative = landing / Path(*relative.parts[1:])
                 elif relative.parts[0] == "meta":
                     restored_relative = relative
                 else:
@@ -2108,7 +1880,9 @@ class SnapshotStore:
                         indent=2,
                         ensure_ascii=False,
                     )
-            self._rebuild_runtime_state(temp, manifest)
+            self._rebuild_runtime_state(temp, manifest, data_root=temp / landing)
+            if current:
+                self._start_restored_lake(temp, manifest)
             write_json_atomic(
                 meta / "restored-snapshot.json", manifest, indent=2, ensure_ascii=False
             )
@@ -2119,10 +1893,119 @@ class SnapshotStore:
         except Exception:
             shutil.rmtree(temp, ignore_errors=True)
             raise
+        # The catalog is built where the lake will live: it records where its files are.
+        if not current:
+            self._upgrade_restored(target)
+            return target
+        try:
+            self._publish_restored(target, manifest)
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+            raise
         return target
 
+    def _start_restored_lake(self, root: Path, manifest: Mapping[str, Any]) -> None:
+        """Give the lake being restored the migration record of the lake it was taken from.
+
+        A snapshot of this format comes from a lake on its catalog and holds no
+        generations, so the migrations that move a lake there are not owed.
+        """
+        from dataclasses import replace
+
+        from cnequity.storage.lake_record import _write_lake, package_version, start_on_catalog
+
+        config = replace(self.config, data_root=root)
+        record = dict(manifest.get("lake_record") or {})
+        migrations = dict(record.get("migrations") or {})
+        for migration_id in _STORAGE_MIGRATIONS:
+            migrations.setdefault(
+                migration_id,
+                {
+                    "status": "not_needed",
+                    "affected": 0,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "version": package_version(),
+                },
+            )
+        record["migrations"] = migrations
+        _write_lake(config, record)
+        start_on_catalog(config)
+
+    def _publish_restored(self, target: Path, manifest: Mapping[str, Any]) -> None:
+        """Publish each dataset's restored files into the new lake's catalog as its revision."""
+        from dataclasses import replace
+
+        from cnequity.storage.lake_write import DatasetPublish, LakeWrite
+
+        config = replace(self.config, data_root=target)
+        landing = target / _RESTORE_DIR
+        run_id = f"restore-{manifest.get('name', 'snapshot')}-{uuid.uuid4().hex[:8]}"
+        publishes: dict[str, DatasetPublish] = {}
+        with LakeWrite(config, run_id) as write:
+            for dataset in manifest["datasets"]:
+                root = landing / str(DATASETS[dataset].layer) / dataset
+                partitions: dict[str, list[Path]] = {}
+                for path in sorted(root.rglob("*.parquet")):
+                    label = path.parent.relative_to(root).as_posix()
+                    partitions.setdefault("" if label == "." else label, []).append(path)
+                checkout = write.checkout(dataset)
+                for label, files in partitions.items():
+                    # Moved, not copied: the landing folder is this restore's own.
+                    folder = checkout.partition(label)
+                    for path in files:
+                        replace_with_retry(path, folder / path.name)
+                identity = dict(manifest["revisions"][dataset])
+                metadata = {
+                    key: value
+                    for key, value in (identity.get("metadata") or {}).items()
+                    # Facts about how the revision was written there, not here.
+                    if key not in {"storage", "base_revision_id", "removed_partitions"}
+                }
+                publishes[dataset] = DatasetPublish(
+                    schema_version=int(identity["schema_version"]),
+                    contract_fingerprint=str(identity["contract_fingerprint"]),
+                    metadata=metadata,
+                    identity=identity,
+                )
+            write.publish(publishes, message=f"restore snapshot {manifest.get('name')}")
+        shutil.rmtree(landing, ignore_errors=True)
+
+    def _upgrade_restored(self, target: Path) -> None:
+        """Move a restored pre-0.25 lake onto its catalog, as `cne upgrade` would.
+
+        Only the migrations that change how the lake is stored run here; the
+        repairs it may also owe can read sources and stay for ``cne upgrade``.
+        A failure leaves the restored lake in place, as an older release left it.
+        """
+        from dataclasses import replace
+
+        from cnequity.storage.catalog_migration import migrate_to_catalog
+        from cnequity.storage.drop_generations import drop_generations
+        from cnequity.storage.lake_record import record_migration
+        from cnequity.storage.revision_records import import_receipts
+
+        config = replace(self.config, data_root=target)
+        steps = {
+            "lake-catalog": migrate_to_catalog,
+            "revision-records": import_receipts,
+            "drop-generations": drop_generations,
+        }
+        for migration_id in _STORAGE_MIGRATIONS:
+            if migration_id in (read_lake(config).get("migrations") or {}):
+                continue
+            try:
+                report = steps[migration_id](config, apply=True)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"restored to {target}, but moving it onto its lake catalog failed "
+                    f"({migration_id}: {exc}); run `cne upgrade --apply` there"
+                ) from exc
+            record_migration(config, migration_id, report)
+
     @staticmethod
-    def _rebuild_runtime_state(target: Path, manifest: Mapping[str, Any]) -> int:
+    def _rebuild_runtime_state(
+        target: Path, manifest: Mapping[str, Any], *, data_root: Path | None = None
+    ) -> int:
         """Recreate runtime caches omitted by old snapshots.
 
         The adjustment cache is a source-response optimisation, not a second
@@ -2139,14 +2022,14 @@ class SnapshotStore:
             # v1 snapshots predating ``runtime_state`` may still contain the
             # aligned derived table.  Treat that shape as rebuildable rather
             # than forcing the first restored derive to hit Sina again.
-            if (target / "derived" / "adj_factors").is_dir():
+            if ((data_root or target) / "derived" / "adj_factors").is_dir():
                 cache_state = {"mode": "rebuildable"}
             else:
                 return 0
         if cache_state.get("mode") == "included":
             return 0
 
-        derived = target / "derived" / "adj_factors"
+        derived = (data_root or target) / "derived" / "adj_factors"
         files = sorted(derived.rglob("*.parquet")) if derived.is_dir() else []
         if not files:
             return 0
@@ -2186,1484 +2069,3 @@ class SnapshotStore:
             write_parquet_atomic(destination, frame.sort("trade_date"), compression="zstd")
             written += 1
         return written
-
-    # ------------------------------------------------------------------
-    # Incremental packages
-    # ------------------------------------------------------------------
-
-    def delta_path(self, name: str) -> Path:
-        """Return the canonical storage path for a delta package.
-
-        Full snapshots and deltas have separate namespaces so a release can
-        use the same human name for a baseline and its next update.  The
-        fallback candidates in :meth:`_delta_manifest` keep packages made by
-        early development builds (``root/name`` or ``root/delta-name``)
-        readable.
-        """
-
-        _reject_symlink_path(self.root, label="snapshot root")
-        path = self.root / "deltas" / self._validate_name(name)
-        _reject_symlink_path(path, label="delta path")
-        return path
-
-    def _delta_candidates(self, name: str) -> tuple[Path, ...]:
-        safe = self._validate_name(name)
-        _reject_symlink_path(self.root, label="snapshot root")
-        return (
-            self.root / "deltas" / safe,
-            self.root / f"delta-{safe}",
-            self.root / safe,
-        )
-
-    def _delta_manifest(self, name: str) -> tuple[Path, dict[str, Any]]:
-        for package in self._delta_candidates(name):
-            _reject_symlink_path(package, label="delta package")
-            manifest = package / "manifest.json"
-            try:
-                _reject_link_or_non_regular(manifest, hardlink=True)
-            except FileNotFoundError:
-                continue
-            payload = _read_json_object(manifest)
-            if payload.get("format") != "cnequity.lake-delta":
-                continue
-            if payload.get("format_version") != 1:
-                raise ValueError(f"unsupported delta manifest: {manifest}")
-            return package, payload
-        raise FileNotFoundError(
-            f"no delta package named {name!r} ({self.delta_path(name) / 'manifest.json'})"
-        )
-
-    @classmethod
-    def _lake_index(
-        cls,
-        lake_root: Path,
-        datasets: list[str],
-        *,
-        include_runtime: bool = True,
-    ) -> dict[str, dict[str, Any]]:
-        """Index data and identity metadata for *datasets*.
-
-        A delta must compare more than Parquet bytes: state watermarks and the
-        referenced revision receipt are part of the published identity.  This
-        index deliberately excludes locks, SQLite's operational attempt log,
-        and unrelated dataset state so an update remains portable and
-        composable with a newly restored lake.
-        """
-
-        _reject_symlink_path(lake_root, label="lake root")
-        root = Path(lake_root).resolve(strict=False)
-        _reject_symlink_path(root / "meta", label="metadata root")
-        for protection in ("registry.json", "snapshot-dependencies.json"):
-            path = root / "meta/lifecycle" / protection
-            if path.exists() or path.is_symlink():
-                raise ValueError(
-                    "lifecycle-protected lakes require a full snapshot; "
-                    "delta does not yet merge retention dependencies"
-                )
-        index: dict[str, dict[str, Any]] = {}
-
-        def add(path: Path, relative: Path, dataset: str, layer: str) -> None:
-            _reject_symlink_ancestors(root, relative)
-            if _lstat(path) is None:
-                return
-            _reject_link_or_non_regular(path)
-            canonical = _safe_lake_relative(relative.as_posix()).as_posix()
-            index[canonical] = _file_digest_record(
-                path,
-                Path(canonical),
-                dataset=dataset,
-                layer=layer,
-            )
-
-        for dataset in sorted(set(datasets)):
-            if dataset not in DATASETS:
-                raise ValueError(f"unknown dataset(s): {dataset}")
-            spec = DATASETS[dataset]
-            layer = str(spec.layer)
-            data_dir = root / layer / dataset
-            data_info = _lstat(data_dir)
-            if data_info is not None and stat.S_ISLNK(data_info.st_mode):
-                raise ValueError(f"lake dataset root is a symlink: {data_dir}")
-            if data_info is not None and stat.S_ISDIR(data_info.st_mode):
-                data_entries, unsafe = _tree_files_no_follow(data_dir)
-                if unsafe:
-                    raise ValueError(
-                        f"lake dataset contains unsupported link or special file(s): "
-                        f"{', '.join(sorted(unsafe)[:8])}"
-                    )
-                for raw_relative in sorted(data_entries):
-                    relative = Path(raw_relative)
-                    if relative.suffix != ".parquet":
-                        continue
-                    path = data_dir / relative
-                    add(path, Path(layer) / dataset / relative, dataset, layer)
-
-            state_path = root / "meta" / "state" / f"{dataset}.json"
-            add(state_path, Path("meta") / "state" / f"{dataset}.json", dataset, "meta")
-
-            # Include the current receipt even though it is not a dataset
-            # payload.  Without it a restored state would point to a dangling
-            # revision_receipt and cache invalidation would be unverifiable.
-            if state_path.is_file():
-                try:
-                    state = _read_json_object(state_path)
-                    receipt = state.get("revision_receipt")
-                    if receipt:
-                        receipt_relative = _safe_relative(str(receipt))
-                        if receipt_relative.parts[0] != "revisions":
-                            raise ValueError(
-                                f"dataset state references unsupported receipt: {receipt}"
-                            )
-                        add(
-                            root / "meta" / receipt_relative,
-                            Path("meta") / receipt_relative,
-                            dataset,
-                            "meta",
-                        )
-                    pointer_path = root / "meta" / "revisions" / dataset / "current.json"
-                    _reject_symlink_ancestors(
-                        root,
-                        Path("meta") / "revisions" / dataset / "current.json",
-                    )
-                    if _lstat(pointer_path) is not None:
-                        _reject_link_or_non_regular(pointer_path)
-                        pointer_relative = Path("meta") / "revisions" / dataset / "current.json"
-                        add(pointer_path, pointer_relative, dataset, "meta")
-                        pointer_payload = _read_json_object(pointer_path)
-                        generation_relative = _safe_relative(
-                            str(pointer_payload.get("generation_path", ""))
-                        )
-                        generation_logical = root / "meta" / generation_relative
-                        _reject_symlink_path(generation_logical, label="revision generation")
-                        generation = generation_logical.resolve(strict=False)
-                        try:
-                            generation.relative_to((root / "meta").resolve())
-                        except ValueError as exc:
-                            raise ValueError(
-                                f"revision generation escapes meta root: {pointer_path}"
-                            ) from exc
-                        if not generation.is_dir():
-                            raise FileNotFoundError(
-                                f"current revision generation is missing: {generation}"
-                            )
-                        generation_entries, unsafe = _tree_files_no_follow(generation)
-                        if unsafe:
-                            raise ValueError(
-                                f"revision generation contains unsupported link or special file(s): "
-                                f"{', '.join(sorted(unsafe)[:8])}"
-                            )
-                        for raw_relative in sorted(generation_entries):
-                            relative = Path(raw_relative)
-                            if relative.suffix != ".parquet":
-                                continue
-                            generation_file = generation / relative
-                            meta_relative = Path("meta") / generation_file.relative_to(
-                                root / "meta"
-                            )
-                            add(generation_file, meta_relative, dataset, "meta")
-
-                    # COW generations are immutable research history.  The
-                    # current pointer above is enough for a normal live read,
-                    # but a byte-level delta must not interpret an older
-                    # retained receipt/generation as a deletion merely
-                    # because it is not selected by the target's current
-                    # pointer.  Include every retained vintage in the identity
-                    # index so applying a newer delta preserves fixed-revision
-                    # queries and produces the same post-apply fingerprint.
-                    receipt_dir = root / "meta" / "revisions" / dataset
-                    receipt_dir_info = _lstat(receipt_dir)
-                    if receipt_dir_info is not None and stat.S_ISLNK(receipt_dir_info.st_mode):
-                        raise ValueError(f"revision receipt directory is a symlink: {receipt_dir}")
-                    if receipt_dir_info is not None and stat.S_ISDIR(receipt_dir_info.st_mode):
-                        for receipt_path in sorted(receipt_dir.glob("*.json")):
-                            if receipt_path.name == "current.json":
-                                continue
-                            receipt_relative = receipt_path.relative_to(root / "meta")
-                            add(
-                                receipt_path,
-                                Path("meta") / receipt_relative,
-                                dataset,
-                                "meta",
-                            )
-                            try:
-                                historical = _read_json_object(receipt_path)
-                                historical_relative = _safe_relative(
-                                    str(historical.get("generation_path", ""))
-                                )
-                                historical_logical = root / "meta" / historical_relative
-                                _reject_symlink_path(
-                                    historical_logical, label="retained revision generation"
-                                )
-                                historical_generation = historical_logical.resolve(strict=False)
-                                historical_generation.relative_to((root / "meta").resolve())
-                            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-                                raise ValueError(
-                                    f"invalid retained revision receipt: {receipt_path}"
-                                ) from exc
-                            if not historical_generation.is_dir():
-                                raise FileNotFoundError(
-                                    f"retained revision generation is missing: "
-                                    f"{historical_generation}"
-                                )
-                            historical_entries, unsafe = _tree_files_no_follow(
-                                historical_generation
-                            )
-                            if unsafe:
-                                raise ValueError(
-                                    "retained revision generation contains unsupported link "
-                                    "or special file(s): "
-                                    f"{', '.join(sorted(unsafe)[:8])}"
-                                )
-                            for raw_relative in sorted(historical_entries):
-                                relative = Path(raw_relative)
-                                if relative.suffix != ".parquet":
-                                    continue
-                                historical_file = historical_generation / relative
-                                meta_relative = Path("meta") / historical_file.relative_to(
-                                    root / "meta"
-                                )
-                                add(historical_file, meta_relative, dataset, "meta")
-                except (json.JSONDecodeError, OSError) as exc:
-                    raise ValueError(f"invalid dataset state: {state_path}") from exc
-
-            # A pointer is authoritative even when the denormalised state
-            # cache was removed.  Keep indexing the generation and retained
-            # receipts in that pointer-only layout so a delta neither misses
-            # the immutable bytes nor treats them as deletions.
-            if _lstat(state_path) is None:
-                pointer_path = root / "meta" / "revisions" / dataset / "current.json"
-                _reject_symlink_ancestors(
-                    root,
-                    Path("meta") / "revisions" / dataset / "current.json",
-                )
-                pointer_info = _lstat(pointer_path)
-                if pointer_info is not None:
-                    _reject_link_or_non_regular(pointer_path)
-                    pointer_relative = Path("meta") / "revisions" / dataset / "current.json"
-                    add(pointer_path, pointer_relative, dataset, "meta")
-                    pointer_payload = _read_json_object(pointer_path)
-                    generation_relative = _safe_relative(
-                        str(pointer_payload.get("generation_path", ""))
-                    )
-                    generation_logical = root / "meta" / generation_relative
-                    _reject_symlink_path(generation_logical, label="revision generation")
-                    generation = generation_logical.resolve(strict=False)
-                    generation.relative_to((root / "meta").resolve())
-                    if not generation.is_dir():
-                        raise FileNotFoundError(
-                            f"current revision generation is missing: {generation}"
-                        )
-                    generation_entries, unsafe = _tree_files_no_follow(generation)
-                    if unsafe:
-                        raise ValueError(
-                            "pointer generation contains unsupported link or special file(s): "
-                            f"{', '.join(sorted(unsafe)[:8])}"
-                        )
-                    for raw_relative in sorted(generation_entries):
-                        relative = Path(raw_relative)
-                        if relative.suffix != ".parquet":
-                            continue
-                        generation_file = generation / relative
-                        meta_relative = Path("meta") / generation_file.relative_to(root / "meta")
-                        add(generation_file, meta_relative, dataset, "meta")
-
-            if include_runtime and dataset == "adj_factors":
-                cache_dir = root / "meta" / "adj_factors_cache"
-                cache_info = _lstat(cache_dir)
-                if cache_info is not None and stat.S_ISLNK(cache_info.st_mode):
-                    raise ValueError(f"adjustment cache root is a symlink: {cache_dir}")
-                if cache_info is not None and stat.S_ISDIR(cache_info.st_mode):
-                    cache_entries, unsafe = _tree_files_no_follow(cache_dir)
-                    if unsafe:
-                        raise ValueError(
-                            f"adjustment cache contains unsupported link or special file(s): "
-                            f"{', '.join(sorted(unsafe)[:8])}"
-                        )
-                    for raw_relative in sorted(cache_entries):
-                        relative = Path(raw_relative)
-                        if relative.suffix != ".parquet" or len(relative.parts) != 1:
-                            continue
-                        path = cache_dir / relative
-                        add(
-                            path,
-                            Path("meta") / "adj_factors_cache" / relative,
-                            dataset,
-                            "meta",
-                        )
-
-            raw_dir = root / "meta" / "raw" / dataset
-            raw_info = _lstat(raw_dir)
-            if raw_info is not None and stat.S_ISLNK(raw_info.st_mode):
-                raise ValueError(f"raw archive root is a symlink: {raw_dir}")
-            if raw_info is not None and stat.S_ISDIR(raw_info.st_mode):
-                raw_entries, unsafe = _tree_files_no_follow(raw_dir)
-                if unsafe:
-                    raise ValueError(
-                        f"raw archive contains unsupported link or special file(s): "
-                        f"{', '.join(sorted(unsafe)[:8])}"
-                    )
-                for raw_relative in sorted(raw_entries):
-                    relative = Path(raw_relative)
-                    path = raw_dir / relative
-                    add(
-                        path,
-                        Path("meta") / "raw" / dataset / relative,
-                        dataset,
-                        "meta",
-                    )
-        if datasets:
-            from cnequity.storage.research_inputs import CONTEXT_PATH, RESEARCH_METADATA
-
-            for relative in (*RESEARCH_METADATA, CONTEXT_PATH.as_posix()):
-                source = root / "meta" / relative
-                _reject_symlink_path(source, label="research evidence")
-                if not source.exists():
-                    continue
-                if source.is_dir():
-                    entries, unsafe = _tree_files_no_follow(source)
-                    if unsafe:
-                        raise ValueError(f"unsafe research evidence: {sorted(unsafe)}")
-                    paths = [source / item for item in entries]
-                else:
-                    paths = [source]
-                for path in paths:
-                    add(path, path.relative_to(root), sorted(datasets)[0], "meta")
-        return index
-
-    @staticmethod
-    def _detect_datasets(*roots: Path) -> list[str]:
-        found: set[str] = set()
-        for root in roots:
-            root = Path(root)
-            for dataset, spec in DATASETS.items():
-                data_dir = root / str(spec.layer) / dataset
-                state = root / "meta" / "state" / f"{dataset}.json"
-                if (data_dir.is_dir() and any(data_dir.rglob("*.parquet"))) or state.is_file():
-                    found.add(dataset)
-        return sorted(found)
-
-    @staticmethod
-    def _state_payloads(root: Path, datasets: list[str]) -> dict[str, dict[str, Any]]:
-        out: dict[str, dict[str, Any]] = {}
-        for dataset in datasets:
-            path = Path(root) / "meta" / "state" / f"{dataset}.json"
-            if path.is_file():
-                out[dataset] = _read_json_object(path)
-        return out
-
-    @staticmethod
-    def _contracts(datasets: list[str]) -> dict[str, dict[str, Any]]:
-        return {
-            dataset: {
-                "schema_version": dataset_contract(dataset)["schema_version"],
-                "fingerprint": contract_fingerprint(dataset),
-            }
-            for dataset in datasets
-        }
-
-    def _copy_delta_file(self, source: Path, temporary: Path, relative: str) -> str:
-        """Copy one target file into a package and return its package path."""
-
-        lake_relative = _safe_lake_relative(relative)
-        package_relative = Path("data") / lake_relative
-        destination = temporary / package_relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        # Generations share unchanged partitions by hard link. Copy the bytes
-        # so the package file does not share that inode.
-        _reject_link_or_non_regular(source)
-        shutil.copy2(source, destination)
-        return package_relative.as_posix()
-
-    def _materialize_snapshot_source(self, source: Path) -> Path | None:
-        """Expose a full snapshot package as a temporary lake root.
-
-        ``create_delta`` primarily compares live roots, but accepting a
-        snapshot directory (or a snapshot name below ``snapshot_root``) makes
-        the common "baseline snapshot → current lake" workflow one command.
-        The temporary view is removed by the caller after package creation.
-        """
-
-        source = Path(source)
-        _reject_symlink_path(source, label="snapshot source root")
-        manifest_path = source / "manifest.json"
-        try:
-            _reject_link_or_non_regular(manifest_path, hardlink=True)
-        except FileNotFoundError:
-            return None
-        manifest = _read_json_object(manifest_path)
-        if manifest.get("format") != "cnequity.lake-snapshot":
-            return None
-        if manifest.get("format_version") != 1:
-            raise ValueError(f"unsupported snapshot manifest: {manifest_path}")
-        files = manifest.get("files", [])
-        if not isinstance(files, list):
-            raise ValueError(f"snapshot files must be a list: {manifest_path}")
-        verification = self._verify_directory(source.name, source, manifest)
-        if not verification.passed:
-            raise ValueError(
-                f"snapshot source verification failed: missing={verification.missing}, "
-                f"mismatched={verification.mismatched}"
-            )
-        temporary = Path(tempfile.mkdtemp(prefix=f".{source.name}-delta-source-"))
-        try:
-            for record in files:
-                if not isinstance(record, Mapping):
-                    raise ValueError(f"invalid snapshot file record: {record}")
-                package_relative = _safe_relative(str(record.get("path", "")))
-                package_file = source / package_relative
-                info = _reject_link_or_non_regular(package_file, hardlink=True)
-                if info.st_size != int(record["size_bytes"]):
-                    raise ValueError(f"snapshot file size mismatch: {package_relative}")
-                if _sha256(package_file) != str(record["sha256"]):
-                    raise ValueError(f"snapshot file digest mismatch: {package_relative}")
-                if package_relative.parts[0] == "data":
-                    lake_relative = Path(*package_relative.parts[1:])
-                elif package_relative.parts[0] == "meta":
-                    lake_relative = package_relative
-                else:
-                    raise ValueError(f"unsupported snapshot file root: {package_relative}")
-                lake_relative = _safe_lake_relative(lake_relative.as_posix())
-                destination = temporary / lake_relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(package_file, destination)
-            for dataset, state in manifest.get("dataset_states", {}).items():
-                if state:
-                    write_json_atomic(
-                        temporary / "meta" / "state" / f"{dataset}.json",
-                        state,
-                        indent=2,
-                        ensure_ascii=False,
-                    )
-            self._rebuild_runtime_state(temporary, manifest)
-            return temporary
-        except Exception:
-            shutil.rmtree(temporary, ignore_errors=True)
-            raise
-
-    def _write_delta_package(
-        self,
-        name: str,
-        *,
-        base_root: Path | None,
-        target_root: Path,
-        datasets: list[str],
-        base_index: Mapping[str, Mapping[str, Any]],
-        target_index: Mapping[str, Mapping[str, Any]],
-        base_states: Mapping[str, Mapping[str, Any]],
-        target_states: Mapping[str, Mapping[str, Any]],
-        base_revisions: Mapping[str, int] | None = None,
-        revision_only: bool = False,
-        changed_paths: set[str] | None = None,
-    ) -> Path:
-        destination = self.delta_path(name)
-        if destination.exists():
-            raise FileExistsError(f"delta already exists: {destination}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=destination.parent))
-        changes: list[dict[str, Any]] = []
-        try:
-            paths = set(target_index) | set(base_index)
-            if changed_paths is not None:
-                paths = {path for path in paths if path in changed_paths}
-                # Revision receipts can describe a removed path that is no
-                # longer in the current index; retain it as a delete.
-                paths |= changed_paths - set(target_index)
-            for relative in sorted(paths):
-                old = base_index.get(relative)
-                new = target_index.get(relative)
-                if (
-                    old
-                    and new
-                    and old["sha256"] == new["sha256"]
-                    and old["size_bytes"] == new["size_bytes"]
-                ):
-                    continue
-                if new is None:
-                    change = DeltaChange(
-                        operation="delete",
-                        path=relative,
-                        package_path=None,
-                        dataset=str((old or {}).get("dataset", "")),
-                        layer=str((old or {}).get("layer", "")),
-                        size_bytes=None,
-                        sha256=None,
-                        old_size_bytes=int(old["size_bytes"]) if old else None,
-                        old_sha256=str(old["sha256"]) if old else None,
-                        allow_missing=revision_only,
-                    )
-                else:
-                    source = Path(target_root) / _safe_lake_relative(relative)
-                    if not source.is_file():
-                        raise FileNotFoundError(source)
-                    package_path = self._copy_delta_file(source, temporary, relative)
-                    change = DeltaChange(
-                        operation="replace" if old else "add",
-                        path=relative,
-                        package_path=package_path,
-                        dataset=str(new.get("dataset", "")),
-                        layer=str(new.get("layer", "")),
-                        size_bytes=int(new["size_bytes"]),
-                        sha256=str(new["sha256"]),
-                        old_size_bytes=int(old["size_bytes"]) if old else None,
-                        old_sha256=str(old["sha256"]) if old else None,
-                        # A revision receipt carries changed-file identity but
-                        # not the previous bytes.  The revision number is the
-                        # precondition, so an absent file is a valid upsert.
-                        allow_missing=revision_only and old is None,
-                    )
-                changes.append(change.to_dict())
-
-            contracts = self._contracts(datasets)
-            target_fingerprint = _index_digest(target_index)
-            base_fingerprint = _index_digest(base_index) if not revision_only else None
-            manifest = {
-                "format": "cnequity.lake-delta",
-                "format_version": 1,
-                "name": name,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "datasets": datasets,
-                "contracts": contracts,
-                "contract_fingerprint": contract_fingerprint(),
-                "contract_fingerprints": {
-                    dataset: item["fingerprint"] for dataset, item in contracts.items()
-                },
-                "lineage": runtime_lineage(self.config),
-                "base": {
-                    "lake_fingerprint": base_fingerprint,
-                    "dataset_states": dict(base_states),
-                    "revisions": dict(base_revisions or {}),
-                },
-                "target": {
-                    "lake_fingerprint": target_fingerprint,
-                    "dataset_states": dict(target_states),
-                },
-                # Top-level aliases make the manifest convenient for shell
-                # tooling and preserve a clear contract for v1 consumers.
-                "base_fingerprint": base_fingerprint,
-                "target_fingerprint": target_fingerprint,
-                "base_dataset_states": dict(base_states),
-                "dataset_states": dict(target_states),
-                "precondition": "revision" if revision_only else "lake_fingerprint",
-                "changes": changes,
-                "files": changes,
-                "deletes": [item for item in changes if item["operation"] == "delete"],
-            }
-            write_json_atomic(temporary / "manifest.json", manifest, indent=2, ensure_ascii=False)
-            replace_with_retry(temporary, destination)
-        except Exception:
-            shutil.rmtree(temporary, ignore_errors=True)
-            raise
-        return destination / "manifest.json"
-
-    def create_delta(
-        self,
-        name: str,
-        baseline: Path | str | int | None = None,
-        target: Path | str | None = None,
-        datasets: list[str] | tuple[str, ...] | None = None,
-        *,
-        from_revision: int | Mapping[str, int] | None = None,
-    ) -> Path:
-        """Create a verifiable delta between two lake roots.
-
-        ``baseline`` and ``target`` are data roots, not ``curated`` roots.
-        ``target`` defaults to the configured active lake.  Passing an integer
-        baseline (or ``from_revision=``) selects the revision-baseline mode;
-        see :meth:`create_delta_from_revision` for its precondition semantics.
-        """
-
-        if isinstance(baseline, int) and from_revision is None:
-            from_revision = baseline
-            baseline = None
-        if from_revision is not None:
-            if baseline is not None:
-                raise ValueError("baseline path and from_revision are mutually exclusive")
-            return self.create_delta_from_revision(
-                name,
-                from_revision,
-                list(datasets or []),
-                target_data_root=Path(target) if target is not None else None,
-            )
-        if baseline is None:
-            raise ValueError("baseline lake root is required")
-        base_input = Path(baseline).expanduser()
-        target_input = Path(target or self.config.data_root).expanduser()
-        _reject_symlink_path(base_input, label="baseline lake root")
-        _reject_symlink_path(target_input, label="target lake root")
-        base_root = base_input.resolve(strict=False)
-        target_root = target_input.resolve(strict=False)
-        if base_root == target_root:
-            raise ValueError("baseline and target lake roots must differ")
-        # Permit a snapshot path as the baseline and the shorthand snapshot
-        # name when it lives under this store.  A target snapshot is accepted
-        # as well, which is useful for producing a delta entirely offline.
-        source_temporaries: list[Path] = []
-        for candidate_name, candidate in (("baseline", base_root), ("target", target_root)):
-            if not candidate.exists() and _SNAPSHOT_NAME.fullmatch(
-                str(baseline if candidate_name == "baseline" else target)
-            ):
-                shorthand = self.path(str(baseline if candidate_name == "baseline" else target))
-                if shorthand.is_dir():
-                    candidate = shorthand
-                    if candidate_name == "baseline":
-                        base_root = candidate
-                    else:
-                        target_root = candidate
-            if not candidate.is_dir():
-                raise FileNotFoundError(f"{candidate_name} lake root not found: {candidate}")
-            materialized = self._materialize_snapshot_source(candidate)
-            if materialized is not None:
-                source_temporaries.append(materialized)
-                if candidate_name == "baseline":
-                    base_root = materialized
-                else:
-                    target_root = materialized
-        selected = sorted(set(datasets or self._detect_datasets(base_root, target_root)))
-        if not selected:
-            raise ValueError("at least one dataset is required")
-        unknown = sorted(set(selected) - set(DATASETS))
-        if unknown:
-            raise ValueError(f"unknown dataset(s): {', '.join(unknown)}")
-
-        try:
-            # The target may be the active lake.  Sharing compact's mutation
-            # lock makes the index and copied bytes one stable observation,
-            # while a detached target has its own lock namespace.
-            _reject_symlink_path(target_root / "meta", label="metadata root")
-            with lake_mutation_lock(target_root / "meta", blocking=True):
-                base_index = self._lake_index(base_root, selected)
-                target_index = self._lake_index(target_root, selected)
-                return self._write_delta_package(
-                    name,
-                    base_root=base_root,
-                    target_root=target_root,
-                    datasets=selected,
-                    base_index=base_index,
-                    target_index=target_index,
-                    base_states=self._state_payloads(base_root, selected),
-                    target_states=self._state_payloads(target_root, selected),
-                )
-        finally:
-            for temporary in source_temporaries:
-                shutil.rmtree(temporary, ignore_errors=True)
-
-    def _revision_receipts(self, root: Path, dataset: str, after: int) -> list[dict[str, Any]]:
-        directory = Path(root) / "meta" / "revisions" / dataset
-        if not directory.is_dir():
-            return []
-        receipts: list[dict[str, Any]] = []
-        for path in sorted(directory.glob("*.json")):
-            try:
-                payload = _read_json_object(path)
-                revision = int(payload.get("revision", 0))
-            except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if revision > after:
-                receipts.append(payload)
-        return sorted(receipts, key=lambda item: int(item.get("revision", 0)))
-
-    def create_delta_from_revision(
-        self,
-        name: str,
-        revision: int | Mapping[str, int],
-        datasets: list[str] | tuple[str, ...] | None = None,
-        *,
-        target_data_root: Path | None = None,
-    ) -> Path:
-        """Create an update from one or more committed revision baselines.
-
-        Revision receipts record changed files, not a second copy of the old
-        lake.  Therefore this mode uses the baseline revision number as its
-        precondition and emits ``replace`` operations with ``allow_missing``
-        for files whose previous add/replace status cannot be inferred.  A
-        normal two-root delta should be used when byte-level old hashes are
-        required; it emits strict add/replace/delete preconditions.
-        """
-
-        target_input = Path(target_data_root or self.config.data_root).expanduser()
-        _reject_symlink_path(target_input, label="target lake root")
-        target_root = target_input.resolve(strict=False)
-        selected = sorted(set(datasets or self._detect_datasets(target_root)))
-        if not selected:
-            raise ValueError("at least one dataset is required for a revision delta")
-        unknown = sorted(set(selected) - set(DATASETS))
-        if unknown:
-            raise ValueError(f"unknown dataset(s): {', '.join(unknown)}")
-        if not target_root.is_dir():
-            raise FileNotFoundError(f"target lake root not found: {target_root}")
-        _reject_symlink_path(target_root / "meta", label="metadata root")
-        if isinstance(revision, Mapping):
-            baseline_revisions = {dataset: int(revision[dataset]) for dataset in selected}
-        else:
-            baseline_revisions = {dataset: int(revision) for dataset in selected}
-        if any(value < 0 for value in baseline_revisions.values()):
-            raise ValueError("revision must be a non-negative integer")
-
-        with lake_mutation_lock(target_root / "meta", blocking=True):
-            target_states = self._state_payloads(target_root, selected)
-            changed_paths: set[str] = set()
-            from cnequity.storage.research_inputs import CONTEXT_PATH, RESEARCH_METADATA
-
-            # A snapshot restore can add a credential-free read context that
-            # the live revision producer does not have. Remove that context
-            # when absent from the target, or replace it with the target one.
-            changed_paths.add((Path("meta") / CONTEXT_PATH).as_posix())
-            for path in self._lake_index(target_root, selected):
-                relative = Path(path)
-                if (
-                    any(Path("meta") / prefix in relative.parents for prefix in RESEARCH_METADATA)
-                    or path == "meta/state/delisted_catalog.json"
-                ):
-                    changed_paths.add(path)
-            for dataset in selected:
-                current_state = target_states.get(dataset, {})
-                current_raw = current_state.get("revision", 0)
-                if isinstance(current_raw, bool) or not isinstance(current_raw, int):
-                    raise ValueError(f"state field {dataset}.revision must be an integer")
-                if current_raw < baseline_revisions[dataset]:
-                    raise ValueError(
-                        f"target revision for {dataset} ({current_raw}) is older than baseline "
-                        f"{baseline_revisions[dataset]}"
-                    )
-                for receipt in self._revision_receipts(
-                    target_root, dataset, baseline_revisions[dataset]
-                ):
-                    layer_root = Path(str(DATASETS[dataset].layer))
-                    for item in receipt.get("files", []):
-                        if not isinstance(item, Mapping) or not item.get("path"):
-                            continue
-                        relative = _safe_relative(str(item["path"]))
-                        changed_paths.add((layer_root / relative).as_posix())
-                    # Newer receipts may explicitly describe removals.  This
-                    # is optional so old receipts remain fully readable.
-                    for item in receipt.get("deleted_files", []):
-                        raw = item.get("path") if isinstance(item, Mapping) else item
-                        if raw:
-                            changed_paths.add((layer_root / _safe_relative(str(raw))).as_posix())
-
-                # State and its receipt are part of the update even when a
-                # custom producer did not put metadata paths in its receipt.
-                changed_paths.add((Path("meta") / "state" / f"{dataset}.json").as_posix())
-                receipt = current_state.get("revision_receipt")
-                if receipt:
-                    receipt_relative = _safe_relative(str(receipt))
-                    if receipt_relative.parts[0] != "revisions":
-                        raise ValueError(f"unsupported revision receipt: {receipt}")
-                    changed_paths.add((Path("meta") / receipt_relative).as_posix())
-
-                # A revision-baseline lake normally already carries the old
-                # receipt.  The target index only contains the latest receipt,
-                # so explicitly delete the baseline receipt or the post-apply
-                # fingerprint would retain a stale identity file.
-                receipt_dir = target_root / "meta" / "revisions" / dataset
-                if receipt_dir.is_dir():
-                    for receipt_path in sorted(receipt_dir.glob("*.json")):
-                        try:
-                            receipt_payload = _read_json_object(receipt_path)
-                            receipt_revision = int(receipt_payload.get("revision", 0))
-                        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                            continue
-                        if receipt_revision == baseline_revisions[dataset]:
-                            changed_paths.add(
-                                (
-                                    Path("meta") / "revisions" / dataset / receipt_path.name
-                                ).as_posix()
-                            )
-
-                if dataset == "adj_factors":
-                    # RevisionStore currently tracks curated commits while
-                    # factor caches are a separate derive optimisation.  A
-                    # revision delta still has to carry the warm state when
-                    # the target has it, otherwise the post-apply identity
-                    # would differ from the packaged target.
-                    changed_paths.update(
-                        path
-                        for path in self._lake_index(target_root, [dataset])
-                        if path.startswith("meta/adj_factors_cache/")
-                    )
-
-                # COW lakes publish a pointer and retain the generation under
-                # meta/revisions/data.  A revision delta must carry those
-                # bytes as well as the changed mutable files, otherwise the
-                # post-apply fingerprint would leave the target pointing at a
-                # generation that was never transferred.
-                changed_paths.update(
-                    path
-                    for path in self._lake_index(target_root, [dataset])
-                    if path.startswith(f"meta/revisions/{dataset}/")
-                    or path.startswith(f"meta/revisions/data/{dataset}/")
-                )
-
-            base_index: dict[str, dict[str, Any]] = {}
-            target_index = self._lake_index(target_root, selected)
-            # For revision mode the old bytes are intentionally unknown.  The
-            # package writer still sees the target index and emits only receipt
-            # paths plus state/cache changes.
-            return self._write_delta_package(
-                name,
-                base_root=None,
-                target_root=target_root,
-                datasets=selected,
-                base_index=base_index,
-                target_index=target_index,
-                base_states={},
-                target_states=target_states,
-                base_revisions=baseline_revisions,
-                revision_only=True,
-                changed_paths=changed_paths,
-            )
-
-    delta_from_revision = create_delta_from_revision
-
-    def verify_delta(self, name: str) -> DeltaVerification:
-        """Verify every add/replace payload and every change path."""
-
-        package, manifest = self._delta_manifest(name)
-        missing: list[str] = []
-        mismatched: list[str] = []
-        invalid: list[str] = []
-        verified = 0
-        invalid.extend(_manifest_contract_issues(manifest))
-        changes = manifest.get("changes", manifest.get("files", []))
-        if not isinstance(changes, list):
-            raise ValueError(f"delta changes must be a list: {package / 'manifest.json'}")
-        actual_files, unsafe_files = _tree_files_no_follow(package, reject_hardlinks=True)
-        if unsafe_files:
-            invalid.extend(sorted(unsafe_files))
-        expected_package_files = {"manifest.json"}
-        seen_paths: set[str] = set()
-        seen_package_paths: set[str] = set()
-        for item in changes:
-            if not isinstance(item, Mapping):
-                invalid.append(str(item))
-                continue
-            operation = str(item.get("operation", ""))
-            try:
-                relative = _safe_lake_relative(str(item["path"]))
-            except (KeyError, TypeError, ValueError) as exc:
-                invalid.append(str(item.get("path", item)))
-                if isinstance(exc, ValueError) and "unsafe" in str(exc):
-                    # Keep the specific path in invalid rather than allowing a
-                    # malformed package to become an arbitrary file write.
-                    continue
-                continue
-            path_key = relative.as_posix()
-            if path_key in seen_paths:
-                invalid.append(path_key)
-                continue
-            seen_paths.add(path_key)
-            if operation not in {"add", "replace", "delete"}:
-                invalid.append(relative.as_posix())
-                continue
-            if operation == "delete":
-                if item.get("package_path") not in (None, ""):
-                    invalid.append(relative.as_posix())
-                continue
-            package_raw = item.get("package_path")
-            if not isinstance(package_raw, str):
-                invalid.append(relative.as_posix())
-                continue
-            try:
-                package_relative = _safe_relative(package_raw)
-            except ValueError:
-                invalid.append(package_raw)
-                continue
-            if not package_relative.parts or package_relative.parts[0] != "data":
-                invalid.append(package_raw)
-                continue
-            package_key = package_relative.as_posix()
-            if package_key in seen_package_paths:
-                invalid.append(package_key)
-                continue
-            seen_package_paths.add(package_key)
-            expected_package_files.add(package_key)
-            # A package payload must correspond exactly to its lake path.  A
-            # detached payload with a renamed manifest entry is otherwise a
-            # subtle but valid-looking data substitution.
-            if Path(*package_relative.parts[1:]) != relative:
-                invalid.append(relative.as_posix())
-                continue
-            path = package / package_relative
-            try:
-                _reject_link_or_non_regular(path, hardlink=True)
-            except FileNotFoundError:
-                missing.append(package_relative.as_posix())
-                continue
-            except ValueError:
-                invalid.append(package_relative.as_posix())
-                continue
-            try:
-                size = int(item["size_bytes"])
-                digest = str(item["sha256"])
-            except (KeyError, TypeError, ValueError):
-                invalid.append(relative.as_posix())
-                continue
-            if path.stat().st_size != size or _sha256(path) != digest:
-                mismatched.append(package_relative.as_posix())
-                continue
-            verified += 1
-        for path in sorted(actual_files - expected_package_files):
-            invalid.append(path)
-        for path in sorted(expected_package_files - actual_files):
-            if path == "manifest.json":
-                invalid.append(path)
-            else:
-                missing.append(path)
-        return DeltaVerification(
-            delta=name,
-            passed=not missing and not mismatched and not invalid,
-            verified_files=verified,
-            missing=tuple(missing),
-            mismatched=tuple(mismatched),
-            invalid=tuple(invalid),
-        )
-
-    delta_verify = verify_delta
-    verify_delta_package = verify_delta
-
-    @staticmethod
-    def _current_contracts_match(manifest: Mapping[str, Any]) -> None:
-        contracts = manifest.get("contracts", {})
-        if not isinstance(contracts, Mapping) or not contracts:
-            raise ValueError("delta manifest has no dataset contracts")
-        expected_full = manifest.get("contract_fingerprint")
-        if not isinstance(expected_full, str) or not expected_full:
-            raise ValueError("delta manifest has no global contract fingerprint")
-        if expected_full != contract_fingerprint():
-            raise ValueError(
-                "delta contract registry mismatch: "
-                f"expected {expected_full}, running code has {contract_fingerprint()}"
-            )
-        datasets = manifest.get("datasets", [])
-        if not isinstance(datasets, list) or not datasets:
-            raise ValueError("delta manifest has no datasets")
-        expected_datasets = {str(item) for item in datasets}
-        if set(str(dataset) for dataset in contracts) != expected_datasets:
-            raise ValueError("delta manifest dataset contracts do not match datasets")
-        for dataset, expected in contracts.items():
-            if dataset not in DATASETS:
-                raise ValueError(f"delta references unknown dataset: {dataset}")
-            if not isinstance(expected, Mapping):
-                raise ValueError(f"invalid contract record for {dataset}")
-            actual = contract_fingerprint(str(dataset))
-            if actual != expected.get("fingerprint"):
-                raise ValueError(
-                    f"delta contract mismatch for {dataset}: expected {expected.get('fingerprint')}, "
-                    f"running code has {actual}"
-                )
-            if expected.get("schema_version") != dataset_contract(str(dataset)).get(
-                "schema_version"
-            ):
-                raise ValueError(f"delta schema contract mismatch for {dataset}")
-
-    @staticmethod
-    def _change_records(manifest: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-        changes = manifest.get("changes", manifest.get("files", []))
-        if not isinstance(changes, list):
-            raise ValueError("delta changes must be a list")
-        return [item for item in changes if isinstance(item, Mapping)]
-
-    @staticmethod
-    def _pointer_payload_from_delta(
-        item: Mapping[str, Any],
-        source: Path,
-        target: Path,
-        operations: list[tuple[Mapping[str, Any], Path, Path | None]],
-    ) -> dict[str, Any]:
-        """Validate a pointer payload before it can become visible.
-
-        A COW pointer is the one file whose atomic replacement changes the
-        reader's generation.  Checking its referenced receipt/generation
-        against both the package and the planned target tree means a reader
-        can only ever observe a complete old or complete new identity.
-        """
-
-        payload = _read_json_object(source)
-        relative = _safe_lake_relative(str(item.get("path", "")))
-        dataset = relative.parts[2] if len(relative.parts) >= 3 else ""
-        revision = payload.get("revision")
-        if (
-            payload.get("schema_version") != 1
-            or payload.get("dataset") != dataset
-            or isinstance(revision, bool)
-            or not isinstance(revision, int)
-            or revision < 0
-            or not isinstance(payload.get("revision_id"), str)
-            or not payload.get("revision_id")
-        ):
-            raise ValueError(f"invalid revision pointer payload: {relative}")
-        generation_raw = payload.get("generation_path") or payload.get("root")
-        generation = _safe_relative(str(generation_raw))
-        if generation.parts[:3] != ("revisions", "data", dataset):
-            raise ValueError(f"revision pointer generation mismatch: {relative}")
-        generation_target = target / "meta" / generation
-        generation_prefix = (Path("meta") / generation).as_posix().rstrip("/") + "/"
-        generation_in_package = any(
-            op_source is not None
-            and _safe_lake_relative(str(op_item.get("path", "")))
-            .as_posix()
-            .startswith(generation_prefix)
-            for op_item, _destination, op_source in operations
-        )
-        if not generation_target.is_dir() and not generation_in_package:
-            raise ValueError(f"revision pointer generation is not transferred: {relative}")
-
-        pointer_receipt = payload.get("receipt")
-        if revision == 0:
-            if pointer_receipt not in (None, "") or payload.get("revision_id") != "legacy":
-                raise ValueError(f"invalid legacy revision pointer payload: {relative}")
-            return payload
-        if not isinstance(pointer_receipt, str) or not pointer_receipt:
-            raise ValueError(f"revision pointer has no receipt: {relative}")
-        receipt = _safe_relative(pointer_receipt)
-        if receipt.parts[:2] != ("revisions", dataset):
-            raise ValueError(f"revision pointer receipt mismatch: {relative}")
-        receipt_target = target / "meta" / receipt
-        receipt_source: Path | None = None
-        for op_item, _destination, op_source in operations:
-            if op_source is None:
-                continue
-            op_path = _safe_lake_relative(str(op_item.get("path", "")))
-            if op_path == Path("meta") / receipt:
-                receipt_source = op_source
-                break
-        if receipt_source is None and not receipt_target.is_file():
-            raise ValueError(f"revision pointer receipt is not transferred: {relative}")
-        receipt_payload = (
-            _read_json_object(receipt_source)
-            if receipt_source is not None
-            else _read_json_object(receipt_target)
-        )
-        if (
-            receipt_payload.get("dataset") != dataset
-            or receipt_payload.get("revision") != revision
-            or receipt_payload.get("revision_id") != payload.get("revision_id")
-        ):
-            raise ValueError(f"revision pointer and receipt disagree: {relative}")
-        if receipt_payload.get("generation_path") not in (None, generation_raw):
-            raise ValueError(f"revision pointer and generation disagree: {relative}")
-        return payload
-
-    def apply_delta(
-        self,
-        name: str,
-        target_data_root: Path | None = None,
-        *,
-        dry_run: bool = False,
-    ) -> Path:
-        """Verify and apply a delta to a non-empty lake root.
-
-        Add/replace/delete operations are checked against the baseline lake
-        fingerprint (or per-dataset revision for revision deltas).  Bytes are
-        copied to same-directory temporary files and every overwritten file is
-        backed up until the full change set and post-apply target fingerprint
-        pass.  An exception rolls all individual changes back, so callers never
-        observe a knowingly partial operation.
-        """
-
-        package, manifest = self._delta_manifest(name)
-        verification = self.verify_delta(name)
-        if not verification.passed:
-            raise ValueError(
-                f"delta verification failed: missing={verification.missing}, "
-                f"mismatched={verification.mismatched}, invalid={verification.invalid}"
-            )
-        self._current_contracts_match(manifest)
-        target_input = Path(target_data_root or self.config.data_root).expanduser()
-        _reject_symlink_path(target_input, label="target lake root")
-        target = target_input.resolve(strict=False)
-        if not target.is_dir():
-            raise FileNotFoundError(f"target lake root not found: {target}")
-        if not any(target.iterdir()):
-            raise FileExistsError(f"delta target is empty: {target}")
-        datasets = manifest.get("datasets", [])
-        if not isinstance(datasets, list) or not datasets:
-            raise ValueError("delta manifest has no datasets")
-        selected = [str(item) for item in datasets]
-        # Validate the lock parent before acquiring it.  Otherwise a malicious
-        # ``meta`` symlink could redirect even the lock file outside the lake.
-        _safe_target_path(target, Path("meta") / "locks" / "compact.lock")
-
-        with lake_mutation_lock(target / "meta", blocking=True):
-            current_index = self._lake_index(target, selected)
-            expected_target = manifest.get("target_fingerprint")
-            if expected_target and _index_digest(current_index) == expected_target:
-                # Applying the same package twice is a harmless no-op.  This
-                # matters when a transfer job retries after the first process
-                # committed but before it returned its receipt.
-                return target
-
-            precondition = str(manifest.get("precondition", "lake_fingerprint"))
-            if precondition == "lake_fingerprint":
-                expected_base = manifest.get("base_fingerprint")
-                actual_base = _index_digest(current_index)
-                if not expected_base or actual_base != expected_base:
-                    raise ValueError(
-                        f"delta base mismatch: expected {expected_base}, got {actual_base}"
-                    )
-            elif precondition == "revision":
-                base = manifest.get("base", {})
-                expected_revisions = base.get("revisions", {}) if isinstance(base, Mapping) else {}
-                states = self._state_payloads(target, selected)
-                for dataset in selected:
-                    expected = expected_revisions.get(dataset)
-                    if expected is None:
-                        continue
-                    actual = states.get(dataset, {}).get("revision", 0)
-                    if actual != expected:
-                        raise ValueError(
-                            f"delta revision mismatch for {dataset}: expected {expected}, got {actual}"
-                        )
-            else:
-                raise ValueError(f"unsupported delta precondition: {precondition}")
-
-            changes = self._change_records(manifest)
-            operations: list[tuple[Mapping[str, Any], Path, Path | None]] = []
-            for item in changes:
-                relative = _safe_lake_relative(str(item.get("path", "")))
-                operation = str(item.get("operation", ""))
-                if operation not in {"add", "replace", "delete"}:
-                    raise ValueError(f"unsupported delta operation: {operation}")
-                # Check every existing ancestor with lstat.  In particular,
-                # ``exists()`` is false for a dangling symlink, but mkdir on
-                # its child would still follow that link outside the lake.
-                destination = _safe_target_path(target, relative)
-                destination_info = _lstat(destination)
-                if destination_info is not None and stat.S_ISLNK(destination_info.st_mode):
-                    raise ValueError(f"delta target path is a symlink: {relative}")
-                if destination_info is not None and not stat.S_ISREG(destination_info.st_mode):
-                    raise ValueError(f"delta target path is not a regular file: {relative}")
-                if operation == "delete":
-                    if destination_info is not None:
-                        expected_old = item.get("old_sha256")
-                        if expected_old and _sha256(destination) != expected_old:
-                            raise ValueError(f"delta old digest mismatch: {relative}")
-                    elif not bool(item.get("allow_missing", False)):
-                        raise ValueError(f"delta delete target is missing: {relative}")
-                    operations.append((item, destination, None))
-                    continue
-
-                package_raw = item.get("package_path")
-                if not isinstance(package_raw, str):
-                    raise ValueError(f"delta payload path missing: {relative}")
-                package_relative = _safe_relative(package_raw)
-                source = package / package_relative
-                _reject_link_or_non_regular(source, hardlink=True)
-                if (
-                    operation == "add"
-                    and destination_info is not None
-                    and not item.get("allow_missing")
-                ):
-                    raise ValueError(f"delta add target already exists: {relative}")
-                expected_old = item.get("old_sha256")
-                if (
-                    destination_info is not None
-                    and expected_old
-                    and _sha256(destination) != expected_old
-                ):
-                    raise ValueError(f"delta old digest mismatch: {relative}")
-                if (
-                    destination_info is None
-                    and operation == "replace"
-                    and not item.get("allow_missing", False)
-                ):
-                    raise ValueError(f"delta replace target is missing: {relative}")
-                operations.append((item, destination, source))
-
-            # Materialise every generation, receipt, state and data payload
-            # before replacing any COW pointer.  ``current.json`` is the
-            # commit marker: making it the final visible operation guarantees
-            # that lock-free readers select either the old complete generation
-            # or the new complete generation, never a dangling intermediate.
-            pointer_operations = [
-                operation
-                for operation in operations
-                if _is_current_pointer(operation[1].relative_to(target))
-            ]
-            other_operations = [
-                operation
-                for operation in operations
-                if not _is_current_pointer(operation[1].relative_to(target))
-            ]
-            if any(str(item.get("operation")) == "delete" for item, _, _ in pointer_operations):
-                raise ValueError("delta cannot delete a current revision pointer")
-
-            # A two-root delta may retire the generation or receipt selected by
-            # the old pointer.  Those deletes/replacements are safe only after
-            # the pointer has switched: removing an old generation first would
-            # make a concurrent lock-free reader resolve a dangling pointer.
-            # Keep the operations in a separate final phase.  The pointer's
-            # ``os.replace`` remains the last visible replacement operation,
-            # while retired bytes are cleaned up immediately afterwards.
-            old_pointer_payloads: dict[Path, dict[str, Any] | None] = {}
-            deferred_operations: list[tuple[Mapping[str, Any], Path, Path | None]] = []
-            active_old_paths: dict[Path, set[Path]] = {}
-
-            def path_below(path: Path, prefix: Path) -> bool:
-                return path == prefix or prefix in path.parents
-
-            for _item, destination, _source in pointer_operations:
-                old_payload: dict[str, Any] | None = None
-                info = _lstat(destination)
-                if info is not None:
-                    old_payload = _read_json_object(destination)
-                    old_generation_raw = old_payload.get("generation_path") or old_payload.get(
-                        "root"
-                    )
-                    old_generation = _safe_relative(str(old_generation_raw))
-                    old_paths = {Path("meta") / old_generation}
-                    old_receipt = old_payload.get("receipt")
-                    if old_receipt:
-                        old_paths.add(Path("meta") / _safe_relative(str(old_receipt)))
-                    active_old_paths[destination] = old_paths
-                old_pointer_payloads[destination] = old_payload
-
-            for operation in other_operations:
-                _item, destination, _source = operation
-                relative = destination.relative_to(target)
-                if any(
-                    path_below(relative, prefix)
-                    for paths in active_old_paths.values()
-                    for prefix in paths
-                ):
-                    deferred_operations.append(operation)
-
-            if deferred_operations:
-                deferred_ids = {id(operation) for operation in deferred_operations}
-                other_operations = [
-                    operation for operation in other_operations if id(operation) not in deferred_ids
-                ]
-            operations = other_operations + pointer_operations + deferred_operations
-            pointer_payloads: dict[Path, dict[str, Any]] = {}
-            for item, destination, source in pointer_operations:
-                assert source is not None
-                pointer_payloads[destination] = self._pointer_payload_from_delta(
-                    item, source, target, operations
-                )
-
-            if dry_run:
-                return target
-
-            transaction = uuid.uuid4().hex
-            backup_root = Path(tempfile.mkdtemp(prefix=f".delta-{transaction}-", dir=target.parent))
-            backups: list[tuple[Path, Path]] = []
-            created: list[Path] = []
-            published_pointers: set[Path] = set()
-            application_receipt: Path | None = None
-            receipt_relative = Path("meta") / "applied-deltas" / f"{name}-{transaction}.json"
-            application_receipt = target / receipt_relative
-            application_receipt_payload = {
-                "format": "cnequity.lake-delta-application",
-                "format_version": 1,
-                "delta": name,
-                "applied_at": datetime.now(timezone.utc).isoformat(),
-                "target_fingerprint": manifest.get("target_fingerprint"),
-                "changes": len(operations),
-            }
-            receipt_written = False
-            unrestored: list[Path] = []
-
-            def restore_atomically(destination: Path, backup: Path) -> None:
-                """Restore one file without exposing a truncated JSON/data file."""
-
-                relative = destination.relative_to(target)
-                _ensure_target_parent(target, relative)
-                fd, temporary_name = tempfile.mkstemp(
-                    dir=destination.parent,
-                    prefix=f".{destination.name}.{transaction}-rollback-",
-                    suffix=".tmp",
-                )
-                os.close(fd)
-                temporary = Path(temporary_name)
-                try:
-                    shutil.copy2(backup, temporary)
-                    replace_with_retry(temporary, destination)
-                finally:
-                    temporary.unlink(missing_ok=True)
-
-            try:
-                for item, destination, source in operations:
-                    # The application receipt is operational metadata, but it
-                    # still belongs before publication.  Writing it before
-                    # the first pointer switch keeps ``current.json`` the
-                    # commit marker and makes a failed switch easy to roll
-                    # back without leaving a false "applied" record behind.
-                    if (
-                        not receipt_written
-                        and pointer_operations
-                        and destination in pointer_payloads
-                    ):
-                        _ensure_target_parent(target, receipt_relative)
-                        write_json_atomic(
-                            application_receipt,
-                            application_receipt_payload,
-                            indent=2,
-                            ensure_ascii=False,
-                        )
-                        receipt_written = True
-                    destination_info = _lstat(destination)
-                    if destination_info is not None:
-                        if stat.S_ISLNK(destination_info.st_mode) or not stat.S_ISREG(
-                            destination_info.st_mode
-                        ):
-                            raise ValueError(
-                                f"delta target path changed to unsafe entry: {destination}"
-                            )
-                        backup = backup_root / destination.relative_to(target)
-                        backup.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(destination, backup)
-                        backups.append((destination, backup))
-                    if str(item.get("operation")) == "delete":
-                        if destination_info is not None:
-                            destination.unlink()
-                        continue
-                    assert source is not None
-                    _ensure_target_parent(target, destination.relative_to(target))
-                    fd, tmp_name = tempfile.mkstemp(
-                        dir=destination.parent,
-                        prefix=f".{destination.name}.{transaction}-",
-                        suffix=".tmp",
-                    )
-                    os.close(fd)
-                    temporary = Path(tmp_name)
-                    try:
-                        shutil.copy2(source, temporary)
-                        replace_with_retry(temporary, destination)
-                    finally:
-                        temporary.unlink(missing_ok=True)
-                    if destination in pointer_payloads:
-                        published_pointers.add(destination)
-                    if not any(path == destination for path, _ in backups):
-                        created.append(destination)
-
-                if not receipt_written:
-                    _ensure_target_parent(target, receipt_relative)
-                    write_json_atomic(
-                        application_receipt,
-                        application_receipt_payload,
-                        indent=2,
-                        ensure_ascii=False,
-                    )
-                    receipt_written = True
-
-                after = self._lake_index(target, selected)
-                expected_target = manifest.get("target_fingerprint")
-                if expected_target and _index_digest(after) != expected_target:
-                    raise ValueError(
-                        "delta post-apply fingerprint mismatch: "
-                        f"expected {expected_target}, got {_index_digest(after)}"
-                    )
-            except Exception as exc:
-                # A pointer replacement is the publication boundary.  During
-                # rollback, keep every generation/receipt selected by a newly
-                # published pointer until that pointer has been switched back
-                # (or removed); otherwise readers could resolve a pointer to a
-                # half-restored generation.  Files from the old active view
-                # are restored before switching back to that old pointer.
-                protected_new_paths: set[Path] = set()
-                for destination in published_pointers:
-                    payload = pointer_payloads.get(destination)
-                    if payload is None:
-                        continue
-                    protected_new_paths.add(destination.relative_to(target))
-                    generation_raw = payload.get("generation_path") or payload.get("root")
-                    protected_new_paths.add(Path("meta") / _safe_relative(str(generation_raw)))
-                    receipt_raw = payload.get("receipt")
-                    if receipt_raw:
-                        protected_new_paths.add(Path("meta") / _safe_relative(str(receipt_raw)))
-
-                def is_protected(relative: Path) -> bool:
-                    return any(
-                        relative == prefix or prefix in relative.parents
-                        for prefix in protected_new_paths
-                    )
-
-                pointer_backup_paths = {
-                    destination: backup
-                    for destination, backup in backups
-                    if destination in pointer_payloads
-                }
-
-                # Restore all non-pointer files first.  This includes any
-                # deferred deletion/replacement of the old generation, while
-                # leaving the new pointer's generation intact until the
-                # pointer itself is no longer visible.
-                for destination, backup in reversed(backups):
-                    relative = destination.relative_to(target)
-                    if destination in pointer_payloads or is_protected(relative):
-                        continue
-                    try:
-                        restore_atomically(destination, backup)
-                    except OSError:
-                        unrestored.append(destination)
-                for path in reversed(created):
-                    relative = path.relative_to(target)
-                    if path in pointer_payloads or is_protected(relative):
-                        continue
-                    try:
-                        path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-
-                # Restore an existing pointer with an atomic inode swap.  A
-                # pointer that did not exist before the transaction is removed
-                # only after the legacy mutable view has been restored above.
-                for destination, backup in pointer_backup_paths.items():
-                    try:
-                        restore_atomically(destination, backup)
-                    except OSError:
-                        unrestored.append(destination)
-                for destination in published_pointers:
-                    if old_pointer_payloads.get(destination) is None:
-                        try:
-                            destination.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-
-                # Once no reader can select the new generation, clean up its
-                # unpublished bytes and restore any pre-existing files that
-                # occupied those paths.
-                for destination, backup in reversed(backups):
-                    relative = destination.relative_to(target)
-                    if not is_protected(relative):
-                        continue
-                    try:
-                        restore_atomically(destination, backup)
-                    except OSError:
-                        unrestored.append(destination)
-                for path in reversed(created):
-                    relative = path.relative_to(target)
-                    if path not in pointer_payloads and is_protected(relative):
-                        try:
-                            path.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                if application_receipt is not None:
-                    try:
-                        application_receipt.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                if unrestored:
-                    # The backups are the only copy of these files now.
-                    raise RollbackIncompleteError(
-                        Message(
-                            N_(
-                                "Incremental package rollback incomplete: %d files could not be "
-                                "restored (e.g. %s). The original backups are kept at %s; close "
-                                "the program holding them and copy them back to %s by relative "
-                                "path to recover"
-                            ),
-                            len(unrestored),
-                            unrestored[0],
-                            backup_root,
-                            target,
-                        )
-                    ) from exc
-                raise
-            finally:
-                if not unrestored:
-                    shutil.rmtree(backup_root, ignore_errors=True)
-        return target
-
-    delta_apply = apply_delta
-    apply_delta_package = apply_delta

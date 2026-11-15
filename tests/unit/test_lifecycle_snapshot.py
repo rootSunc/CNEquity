@@ -3,7 +3,6 @@
 import json
 from datetime import date
 
-import polars as pl
 import pytest
 
 from cnequity.config import Config
@@ -15,6 +14,30 @@ from cnequity.storage.lifecycle.snapshot import (
     read_dependencies,
 )
 from cnequity.storage.snapshots import SnapshotStore
+
+
+@pytest.fixture(autouse=True)
+def _catalog():
+    from cnequity.query import catalog_read
+    from cnequity.storage import revision_records
+    from equitylake_core.extensions import ExtensionUnavailableError, ensure_extensions
+
+    try:
+        import duckdb
+
+        ensure_extensions(duckdb.connect())
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    yield
+    catalog_read.close_all()
+    revision_records.forget()
+
+
+def _seed(cfg) -> None:
+    from tests.catalog_seed import publish_rows
+    from tests.unit.test_lake_write import _bars
+
+    publish_rows(cfg, "daily_bars", _bars(date(2024, 1, 2), {"600000.SH": 10.0}))
 
 
 def imported_store(cfg, evidence):
@@ -37,11 +60,7 @@ def imported_store(cfg, evidence):
 
 def test_snapshot_restores_protection_without_deletion_authority(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
-    source = cfg.curated_root / "daily_bars/part.parquet"
-    source.parent.mkdir(parents=True)
-    pl.DataFrame(
-        {"symbol": ["600000.SH"], "trade_date": [date(2024, 1, 2)], "close": [10.0]}
-    ).write_parquet(source)
+    _seed(cfg)
     lifecycle = imported_store(cfg, tmp_path / "evidence")
     snapshots = SnapshotStore(cfg)
     manifest = json.loads(snapshots.create("protected", ["daily_bars"]).read_text())
@@ -68,8 +87,6 @@ def test_snapshot_restores_protection_without_deletion_authority(tmp_path):
     assert restored.registry()["holds"] == lifecycle.registry()["holds"]
     assert restored.registry()["lake_id"] != lifecycle.registry()["lake_id"]
     assert "pending" not in restored.registry()
-    with pytest.raises(ValueError, match="full snapshot"):
-        snapshots._lake_index(cfg.data_root, ["daily_bars"])
 
 
 def test_tampered_dependencies_cannot_be_reimported(tmp_path):
@@ -96,11 +113,7 @@ def test_digest_valid_but_missing_case_hold_rejected(tmp_path):
 
 def test_deleting_a_snapshot_releases_only_the_references_it_contributed(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
-    source = cfg.curated_root / "daily_bars/part.parquet"
-    source.parent.mkdir(parents=True)
-    pl.DataFrame(
-        {"symbol": ["600000.SH"], "trade_date": [date(2024, 1, 2)], "close": [10.0]}
-    ).write_parquet(source)
+    _seed(cfg)
     lifecycle = imported_store(cfg, tmp_path / "evidence")
     snapshots = SnapshotStore(cfg)
     path = snapshots.create("rollback", ["daily_bars"]).parent

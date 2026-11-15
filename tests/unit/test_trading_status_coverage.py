@@ -45,6 +45,7 @@ def test_snapshot_restores_coverage_evidence_without_live_credentials(tmp_path):
         root = (cfg.derived_root if dataset == "adj_factors" else cfg.curated_root) / dataset
         root.mkdir(parents=True)
         pl.DataFrame({"trade_date": [day]}).write_parquet(root / "part.parquet")
+    _publish_trees(cfg)
     store = SnapshotStore(cfg, tmp_path / "snapshots")
     manifest = store.create("research", ["daily_bars"], research=True)
     assert json.loads(manifest.read_text())["research_inputs"]["dependency_closure"]
@@ -71,14 +72,15 @@ def test_snapshot_rejects_evidence_changed_during_capture(tmp_path, monkeypatch)
     _write_bars_partition(cfg, day)
     _write_status_partition(cfg, day, source="baostock")
     _write_st_receipt(cfg, day, day)
+    _publish_trees(cfg)
     store = SnapshotStore(cfg)
-    original = store._source_root
+    original = store._current_revisions
 
-    def mutate(dataset):
+    def mutate(datasets):
         next((cfg.meta_root / "quality/coverage").rglob("*.json")).write_text("{}")
-        return original(dataset)
+        return original(datasets)
 
-    monkeypatch.setattr(store, "_source_root", mutate)
+    monkeypatch.setattr(store, "_current_revisions", mutate)
     with pytest.raises(RuntimeError, match="evidence changed"):
         store.create("racing", ["daily_bars"])
     assert not store.path("racing").exists()
@@ -117,6 +119,29 @@ def test_receipt_integrity_uses_selected_status_generation(tmp_path):
     # Same quality receipt, different retained data: no latest-root or cached
     # integrity result from the current generation may leak into this read.
     assert st_evidence_coverage_report(cfg, day, day, read_context=selected)["verified"]
+
+
+def _publish_trees(cfg: Config) -> None:
+    """Publish each hand-written dataset tree into the lake's catalog, as a lake holds it now."""
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.query import catalog_read
+
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
+    for dataset in sorted(DATASETS):
+        tree = store._layer_root(dataset) / dataset
+        files = sorted(tree.rglob("*.parquet")) if tree.is_dir() else []
+        if files:
+            contract = dataset_contract(dataset)
+            commit_tree(
+                store,
+                dataset,
+                run_id=f"seed-{dataset}",
+                changed_files=files,
+                schema_version=int(contract["schema_version"]),
+                contract_fingerprint=contract_fingerprint(contract),
+            )
+    catalog_read.close_all()
 
 
 def _write_status_partition(

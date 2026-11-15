@@ -67,7 +67,7 @@ The table covers every leaf command. Offline means no requests to data sources; 
 | `status`, `delisted status`, `profile list/show`, `contract show/diff/validate` | Local status, catalog or contract checks |
 | `decision-data payment-gaps/stock-terms/cash-rights` | Generate local decision lists from committed data; no collection |
 | `stats show/rebuild` | Read local Parquet/statistics; may refresh statistics files |
-| `snapshot create/verify/restore/export/import`, `snapshot delta create/verify/apply` | Local snapshots, verification and copying; no fetching from market data sources; restore/apply write to the target |
+| `snapshot create/verify/restore/export/import` | Local snapshots, verification and copying; no fetching from market data sources; restore/apply write to the target |
 | `ths-official capture/backfill/repair-bars/resource-sectors` | Optional credentialed source; capture writes comparison evidence, backfill fills gaps. The default dry run of repair/resource **also goes online**; `--apply` controls writing and does not mean network permission or an unlimited quota |
 
 ## Data source selection and request cost

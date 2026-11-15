@@ -59,9 +59,6 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne serve` | conditional | Starts the lake dashboard. On a loopback address the operations page can start allowlisted fetches and daily updates; --read-only disables write endpoints; remote fetches require --allow-remote-ops; storage cleanup still needs web confirmation; fetch toggles are written back to the config, with a backup, after preview confirmation and do not start a fetch |
 | `cne snapshot create` | none | Creates a local snapshot |
 | `cne snapshot delete` | none | Deletes a local snapshot and releases the stale retention references it contributed |
-| `cne snapshot delta apply` | none | Applies a local delta package; --dry-run only validates |
-| `cne snapshot delta create` | none | Creates a local delta package |
-| `cne snapshot delta verify` | none | Verifies a local delta package |
 | `cne snapshot export` | none | Exports a local snapshot |
 | `cne snapshot import` | none | Imports a local snapshot |
 | `cne snapshot restore` | none | Restores a local snapshot to the target directory |

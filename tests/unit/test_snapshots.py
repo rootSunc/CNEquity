@@ -1,60 +1,130 @@
 import json
+import shutil
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 import polars as pl
 import pytest
-from tests.legacy_lake import commit_generation
+from tests.catalog_seed import publish_rows
+from tests.unit.test_lake_write import _bars
 
 from cnequity.config import Config
-from cnequity.storage.snapshots import SnapshotStore
+from cnequity.storage.snapshots import FORMAT_VERSION, SnapshotStore
 from cnequity.storage.state import StateStore
 
 
-def _write_bars(cfg: Config) -> None:
-    path = cfg.curated_root / "daily_bars" / "trade_date=2024-06-18"
-    path.mkdir(parents=True)
-    pl.DataFrame(
-        {
-            "symbol": ["600000.SH"],
-            "trade_date": [date(2024, 6, 18)],
-            "close": [10.0],
-            "fetched_at": [datetime(2024, 6, 18, tzinfo=timezone.utc)],
-        }
-    ).write_parquet(path / "part-merged.parquet")
+@pytest.fixture(autouse=True)
+def _catalog():
+    from cnequity.query import catalog_read
+    from cnequity.storage import revision_records
+    from equitylake_core.extensions import ExtensionUnavailableError, ensure_extensions
+
+    try:
+        import duckdb
+
+        ensure_extensions(duckdb.connect())
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    yield
+    catalog_read.close_all()
+    revision_records.forget()
+
+
+def _write_bars(cfg: Config, close: float = 10.0, day: date = date(2024, 6, 18)):
+    """Publish one bar into the lake's catalog; returns the revision."""
+    return publish_rows(cfg, "daily_bars", _bars(day, {"600000.SH": close}), run_id=f"r{close}")
+
+
+def _load(cfg: Config, **kwargs) -> pl.DataFrame:
+    from cnequity.query import catalog_read, load
+
+    catalog_read.close_all()
+    return load("daily_bars", config=cfg, **kwargs)
+
+
+def _lake_file(cfg: Config) -> Path:
+    return next((cfg.data_root / "lake" / "data").rglob("*.parquet"))
 
 
 def test_snapshot_create_verify_and_restore(tmp_path):
+    from cnequity.storage.migrations import owed
+
     cfg = Config(data_root=tmp_path / "lake")
     _write_bars(cfg)
     StateStore(cfg.meta_root).set_date("daily_bars", date(2024, 6, 18))
     store = SnapshotStore(cfg)
-    manifest = store.create("research-2024", ["daily_bars"])
-    assert manifest.exists()
+    manifest_path = store.create("research-2024", ["daily_bars"])
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["format_version"] == FORMAT_VERSION
+    assert manifest["revisions"]["daily_bars"]["revision"] == 1
+    snapshot = store.path("research-2024")
+    # Each dataset once, and no generation, pointer or receipt beside it.
+    assert [p.relative_to(snapshot).as_posix() for p in snapshot.rglob("*.parquet")] == [
+        "data/curated/daily_bars/trade_date=2024-06/part-merged.parquet"
+    ]
+    assert not (snapshot / "meta" / "revisions").exists()
     verification = store.verify("research-2024")
     assert verification.passed and verification.verified_files == 2
 
     restored = store.restore("research-2024", tmp_path / "restored")
-    file = restored / "curated" / "daily_bars" / "trade_date=2024-06-18" / "part-merged.parquet"
-    assert file.exists()
-    assert pl.read_parquet(file)["close"].to_list() == [10.0]
+    restored_cfg = replace(cfg, data_root=restored)
+    assert _load(restored_cfg)["close"].to_list() == [10.0]
+    assert not (restored / "curated").exists() and not (restored / ".restore").exists()
     assert (restored / "meta" / "restored-snapshot.json").exists()
     assert StateStore(restored / "meta").get_date("daily_bars") == date(2024, 6, 18)
+    # A lake on its catalog that owes nothing it did not owe before.
+    assert json.loads((restored / "meta" / "storage.json").read_text())["publish"] == "catalog"
+    storage = {"lake-catalog", "revision-records", "drop-generations"}
+    assert [migration.id for migration in owed(restored_cfg)] == [
+        migration.id for migration in owed(cfg) if migration.id not in storage
+    ]
+
+
+def test_a_restored_lake_keeps_each_revision_and_reads_it_pinned(tmp_path):
+    from cnequity.storage.revisions import RevisionStore
+
+    cfg = Config(data_root=tmp_path / "lake")
+    _write_bars(cfg, 10.0)
+    second = _write_bars(cfg, 12.0)
+    assert second.revision == 2
+    store = SnapshotStore(cfg, tmp_path / "snapshots")
+    store.create("pinned", ["daily_bars"])
+    restored_cfg = replace(cfg, data_root=tmp_path / "restored")
+    store.restore("pinned", restored_cfg.data_root)
+
+    pointer = RevisionStore(restored_cfg.meta_root, restored_cfg.curated_root).current_pointer(
+        "daily_bars"
+    )
+    assert (pointer["revision"], pointer["revision_id"]) == (2, second.revision_id)
+    by_id = _load(restored_cfg, revision_map={"daily_bars": second.revision_id})
+    assert by_id["close"].to_list() == [12.0]
+    # The restored lake takes new writes after the restored revision.
+    assert _write_bars(restored_cfg, 13.0).revision == 3
 
 
 def test_snapshot_accepts_a_calendar_whose_watermark_runs_ahead_of_today(tmp_path):
     """trading_calendar is written a year ahead; its rows back the watermark."""
+    from cnequity.domain.schemas import DATASET_SCHEMAS
+
     cfg = Config(data_root=tmp_path / "lake")
     day = date(2099, 1, 4)
-    path = cfg.curated_root / "trading_calendar" / "trade_date=2099"
-    path.mkdir(parents=True)
-    pl.DataFrame(
+    schema = DATASET_SCHEMAS["trading_calendar"]
+    frame = pl.DataFrame(
         {
             "trade_date": [day],
             "is_trading": [True],
+            "source": ["test"],
+            "data_version": ["v1"],
             "fetched_at": [datetime(2024, 6, 18, tzinfo=timezone.utc)],
         }
-    ).write_parquet(path / "part-merged.parquet")
+    )
+    frame = frame.with_columns(
+        pl.lit(None, dtype=dtype).alias(name)
+        for name, dtype in schema.items()
+        if name not in frame.columns
+    ).select(list(schema))
+    publish_rows(cfg, "trading_calendar", frame)
     StateStore(cfg.meta_root).set_date("trading_calendar", day)
     store = SnapshotStore(cfg, tmp_path / "snapshots")
 
@@ -73,6 +143,7 @@ def test_snapshot_detects_tampering_and_refuses_restore(tmp_path):
     assert not store.verify("tampered").passed
     with pytest.raises(ValueError, match="verification failed"):
         store.restore("tampered", tmp_path / "restored")
+    assert not (tmp_path / "restored").exists()
 
 
 def test_snapshot_verify_and_export_require_exact_manifest_files(tmp_path):
@@ -147,20 +218,7 @@ def test_snapshot_rejects_symlinked_lake_and_snapshot_roots(tmp_path):
         linked_store.create("data-root-link", ["daily_bars"])
     assert not linked_store.path("data-root-link").exists()
 
-    real_dataset = real_cfg.curated_root / "daily_bars"
-    external_dataset = tmp_path / "external-dataset"
-    real_dataset.rename(external_dataset)
-    real_dataset.symlink_to(external_dataset, target_is_directory=True)
-    with pytest.raises(ValueError, match="symlink"):
-        SnapshotStore(real_cfg, tmp_path / "dataset-snapshots").create(
-            "dataset-root-link", ["daily_bars"]
-        )
-
     normal_store = SnapshotStore(real_cfg, tmp_path / "normal-snapshots")
-    # Restore the old layout for the control snapshot after exercising the
-    # source-root rejection above.
-    real_dataset.unlink()
-    external_dataset.rename(real_dataset)
     normal_store.create("normal", ["daily_bars"])
     linked_snapshots = tmp_path / "linked-snapshots"
     linked_snapshots.symlink_to(normal_store.root, target_is_directory=True)
@@ -183,7 +241,7 @@ def test_restore_rejects_existing_and_dangling_symlink_targets(tmp_path):
     linked_target.symlink_to(external, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
         store.restore("restore-safe", linked_target)
-    assert not (external / "curated").exists()
+    assert not any(external.iterdir())
 
     dangling_destination = tmp_path / "not-created"
     dangling_target = tmp_path / "dangling-target"
@@ -204,47 +262,17 @@ def test_snapshot_rejects_unknown_dataset_and_duplicate_name(tmp_path):
         store.create("once", ["daily_bars"])
 
 
-def test_snapshot_copies_and_restores_referenced_revision_receipt(tmp_path):
+def test_a_lake_not_yet_on_its_catalog_is_not_snapshotted(tmp_path):
+    from tests.legacy_lake import publish_generation
+
+    from cnequity.storage.lake_record import LakeMigrationRequired
+
     cfg = Config(data_root=tmp_path / "lake")
-    _write_bars(cfg)
-    receipt_relative = Path("revisions/daily_bars/00000001-test.json")
-    receipt = cfg.meta_root / receipt_relative
-    receipt.parent.mkdir(parents=True)
-    receipt.write_text(
-        json.dumps(
-            {
-                "dataset": "daily_bars",
-                "revision": 1,
-                "revision_id": "test",
-                "committed_at": "2026-08-29T00:00:00+00:00",
-                "run_id": "run-test",
-                "schema_version": 1,
-                "contract_fingerprint": "contract-test",
-                "content_digest": "content-test",
-                "changed_partitions": [],
-                "files": [],
-                "metadata": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-    state = StateStore(cfg.meta_root)
-    state._write_payload(
-        state._path("daily_bars"),
-        {
-            "revision": 1,
-            "revision_id": "test",
-            "revision_receipt": receipt_relative.as_posix(),
-        },
-    )
-
-    store = SnapshotStore(cfg)
-    store.create("with-revision", ["daily_bars"])
-    restored = store.restore("with-revision", tmp_path / "restored")
-
-    restored_receipt = restored / "meta" / receipt_relative
-    assert restored_receipt.is_file()
-    assert json.loads(restored_receipt.read_text())["revision_id"] == "test"
+    publish_generation(cfg, "daily_bars", _bars(date(2024, 6, 18), {"600000.SH": 10.0}))
+    store = SnapshotStore(cfg, tmp_path / "snapshots")
+    with pytest.raises(LakeMigrationRequired, match="cne upgrade"):
+        store.create("old", ["daily_bars"])
+    assert not store.path("old").exists()
 
 
 def test_snapshot_rejects_traversal_in_manifest(tmp_path):
@@ -283,52 +311,32 @@ def test_snapshot_verify_rejects_contract_and_fake_watermark_edits(tmp_path):
         store.restore("semantic", tmp_path / "restored")
 
 
-def test_snapshot_verify_rejects_dataset_contract_and_pointer_state_tampering(tmp_path):
+def test_snapshot_verify_rejects_dataset_contract_and_revision_tampering(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
     _write_bars(cfg)
-    from cnequity.storage.revisions import RevisionStore
-
-    data_file = cfg.curated_root / "daily_bars" / "trade_date=2024-06-18" / "part-merged.parquet"
-    revision = commit_generation(
-        RevisionStore(cfg.meta_root, cfg.curated_root),
-        "daily_bars",
-        run_id="r1",
-        changed_files=[data_file],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert revision is not None
     store = SnapshotStore(cfg, tmp_path / "snapshots")
-    store.create("pointer-semantic", ["daily_bars"])
-    manifest_path = store.path("pointer-semantic") / "manifest.json"
+    store.create("revision-semantic", ["daily_bars"])
+    manifest_path = store.path("revision-semantic") / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["contracts"]["daily_bars"]["fingerprint"] = "forged-dataset-contract"
-    manifest["dataset_states"]["daily_bars"]["revision"] = revision.revision + 1
+    manifest["revisions"]["daily_bars"]["revision_id"] = "f" * 32
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    verification = store.verify("pointer-semantic")
+    verification = store.verify("revision-semantic")
     assert not verification.passed
     assert any(item.startswith("contract:daily_bars") for item in verification.mismatched)
-    assert "state:daily_bars:pointer" in verification.mismatched
+    assert "state:daily_bars:revision_id" in verification.mismatched
     with pytest.raises(ValueError, match="verification failed"):
-        store.restore("pointer-semantic", tmp_path / "restored")
+        store.restore("revision-semantic", tmp_path / "restored")
+
+    del manifest["revisions"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert "revisions" in store.verify("revision-semantic").mismatched
 
 
-def test_snapshot_create_refuses_state_pointer_mismatch(tmp_path):
+def test_snapshot_create_refuses_a_state_that_names_another_revision(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
-    _write_bars(cfg)
-    from cnequity.storage.revisions import RevisionStore
-
-    data_file = cfg.curated_root / "daily_bars" / "trade_date=2024-06-18" / "part-merged.parquet"
-    revision = commit_generation(
-        RevisionStore(cfg.meta_root, cfg.curated_root),
-        "daily_bars",
-        run_id="r1",
-        changed_files=[data_file],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert revision is not None
+    revision = _write_bars(cfg)
     state = StateStore(cfg.meta_root)
     payload = state.get_payload("daily_bars")
     payload["revision"] = revision.revision + 1
@@ -340,74 +348,33 @@ def test_snapshot_create_refuses_state_pointer_mismatch(tmp_path):
     assert not store.path("inconsistent").exists()
 
 
-def _commit_two_bar_generations(cfg: Config) -> Path:
-    """Publish two generations; the unchanged day is hard-linked between them."""
-    from cnequity.storage.revisions import RevisionStore
-
+def test_snapshot_files_are_copies_the_lake_can_retire(tmp_path):
+    cfg = Config(data_root=tmp_path / "lake")
     _write_bars(cfg)
-    second_dir = cfg.curated_root / "daily_bars" / "trade_date=2024-06-19"
-    second_dir.mkdir(parents=True)
-    second = second_dir / "part-merged.parquet"
-
-    def write_second(close: float) -> None:
-        pl.DataFrame(
-            {
-                "symbol": ["600000.SH"],
-                "trade_date": [date(2024, 6, 19)],
-                "close": [close],
-                "fetched_at": [datetime(2024, 6, 19, tzinfo=timezone.utc)],
-            }
-        ).write_parquet(second)
-
-    write_second(11.0)
-    first = cfg.curated_root / "daily_bars" / "trade_date=2024-06-18" / "part-merged.parquet"
-    revisions = RevisionStore(cfg.meta_root, cfg.curated_root)
-    for run_id, changed in (("r1", [first, second]), ("r2", [second])):
-        if run_id == "r2":
-            write_second(12.0)
-        assert (
-            commit_generation(
-                revisions,
-                "daily_bars",
-                run_id=run_id,
-                changed_files=changed,
-                schema_version=1,
-                contract_fingerprint="contract",
-            )
-            is not None
-        )
-    StateStore(cfg.meta_root).set_date("daily_bars", date(2024, 6, 19))
-    current = revisions.current_root("daily_bars")
-    assert current is not None
-    return current / "trade_date=2024-06-18" / "part-merged.parquet"
-
-
-def test_snapshot_copies_hard_linked_generation_files(tmp_path):
-    cfg = Config(data_root=tmp_path / "lake")
-    linked = _commit_two_bar_generations(cfg)
-    assert linked.stat().st_nlink > 1
-
     store = SnapshotStore(cfg, tmp_path / "snapshots")
-    store.create("linked", ["daily_bars"])
+    store.create("copied", ["daily_bars"])
 
-    assert store.verify("linked").passed
-    copies = list((store.path("linked")).rglob("trade_date=2024-06-18/*.parquet"))
+    copies = list((store.path("copied") / "data").rglob("*.parquet"))
     assert copies and all(path.stat().st_nlink == 1 for path in copies)
-    restored = store.restore("linked", tmp_path / "restored")
-    file = restored / "curated" / "daily_bars" / "trade_date=2024-06-19" / "part-merged.parquet"
-    assert pl.read_parquet(file)["close"].to_list() == [12.0]
+    # Retention removing the lake's file leaves the snapshot whole.
+    lake_file = _lake_file(cfg)
+    lake_file.chmod(0o644)
+    lake_file.unlink()
+    assert store.verify("copied").passed
 
 
-def test_snapshot_still_refuses_symlink_in_generation(tmp_path):
+def test_snapshot_refuses_a_symlinked_lake_file(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
-    linked = _commit_two_bar_generations(cfg)
+    _write_bars(cfg)
+    lake_file = _lake_file(cfg)
     external = tmp_path / "outside.parquet"
-    external.write_bytes(linked.read_bytes())
-    linked.unlink()
-    linked.symlink_to(external)
+    external.write_bytes(lake_file.read_bytes())
+    lake_file.chmod(0o644)
+    lake_file.unlink()
+    lake_file.symlink_to(external)
 
     store = SnapshotStore(cfg, tmp_path / "snapshots")
-    with pytest.raises(ValueError, match="unsupported link or special file"):
+    with pytest.raises(ValueError, match="unsupported symlink"):
         store.create("symlinked", ["daily_bars"])
     assert not store.path("symlinked").exists()
 
@@ -427,7 +394,6 @@ def test_restore_rejects_targets_inside_source_snapshot_package(tmp_path):
 
 def test_snapshot_copies_files_without_holding_the_lake_lock(tmp_path, monkeypatch):
     """A slow copy (a raw archive on a network drive) must not make every run wait."""
-    import shutil
     import threading
 
     from cnequity.file_lock import lake_mutation_lock
@@ -461,8 +427,6 @@ def test_snapshot_copies_files_without_holding_the_lake_lock(tmp_path, monkeypat
 
 
 def test_snapshot_fails_when_a_listed_file_changes_before_it_is_copied(tmp_path, monkeypatch):
-    import shutil
-
     from cnequity.storage import snapshots
 
     cfg = Config(data_root=tmp_path / "lake")
@@ -472,6 +436,7 @@ def test_snapshot_fails_when_a_listed_file_changes_before_it_is_copied(tmp_path,
 
     def rewrite_then_copy(source, target):
         if str(source).endswith(".parquet"):
+            Path(source).chmod(0o644)
             Path(source).write_bytes(b"rewritten by another writer")
         return copy2(source, target)
 
@@ -480,3 +445,79 @@ def test_snapshot_fails_when_a_listed_file_changes_before_it_is_copied(tmp_path,
         store.create("torn", ["daily_bars"])
     assert not store.path("torn").exists()
     assert not list(store.root.glob(".torn-*"))
+
+
+def _legacy_snapshot(store: SnapshotStore, name: str, lake: Config, dataset: str) -> None:
+    """A snapshot as releases before 0.25.0 made it: the tree, and the generation behind it."""
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.storage.revisions import sha256_file
+
+    snapshot = store.path(name)
+    files = []
+
+    def add(source: Path, relative: str, layer: str) -> None:
+        stored = snapshot / relative
+        stored.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, stored)
+        files.append(
+            {
+                "dataset": dataset,
+                "layer": layer,
+                "path": relative,
+                "size_bytes": stored.stat().st_size,
+                "sha256": sha256_file(stored),
+            }
+        )
+
+    tree = lake.curated_root / dataset
+    for path in sorted(tree.rglob("*.parquet")):
+        add(path, f"data/curated/{dataset}/{path.relative_to(tree).as_posix()}", "curated")
+    for path in sorted((lake.meta_root / "revisions").rglob("*")):
+        if path.is_file():
+            add(path, f"meta/{path.relative_to(lake.meta_root).as_posix()}", "meta")
+    state = json.loads((lake.meta_root / "state" / f"{dataset}.json").read_text())
+    manifest = {
+        "format": "cnequity.lake-snapshot",
+        "format_version": 1,
+        "name": name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "datasets": [dataset],
+        "dataset_states": {dataset: state},
+        "contracts": {
+            dataset: {
+                "schema_version": dataset_contract(dataset)["schema_version"],
+                "fingerprint": contract_fingerprint(dataset),
+            }
+        },
+        "contract_fingerprint": contract_fingerprint(),
+        "contract_fingerprints": {dataset: contract_fingerprint(dataset)},
+        "lineage": {},
+        "runtime_state": {},
+        "research_inputs": None,
+        "lifecycle_dependencies": None,
+        "files": files,
+    }
+    (snapshot / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_a_snapshot_made_before_0_25_restores_onto_a_catalog(tmp_path):
+    from tests.legacy_lake import publish_generation
+
+    from cnequity.storage.lake_record import read_lake
+
+    old = Config(data_root=tmp_path / "old-lake")
+    publish_generation(old, "daily_bars", _bars(date(2024, 6, 18), {"600000.SH": 10.0}))
+    store = SnapshotStore(old, tmp_path / "snapshots")
+    _legacy_snapshot(store, "before", old, "daily_bars")
+    assert store.verify("before").passed
+
+    restored = replace(old, data_root=tmp_path / "restored")
+    store.restore("before", restored.data_root)
+
+    assert _load(restored)["close"].to_list() == [10.0]
+    done = read_lake(restored)["migrations"]
+    assert {"lake-catalog", "revision-records", "drop-generations"} <= set(done)
+    # The generation layout is gone: the catalog holds the rows.
+    assert not any((restored.data_root / "curated").rglob("*.parquet"))
+    assert not (restored.meta_root / "revisions" / "data" / "daily_bars").exists()
+    assert _write_bars(restored, 11.0).revision == 2

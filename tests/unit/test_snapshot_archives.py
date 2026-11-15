@@ -20,22 +20,38 @@ from cnequity.storage.snapshots import SnapshotStore
 from cnequity.storage.state import StateStore
 
 
+@pytest.fixture
+def _catalog():
+    from cnequity.query import catalog_read
+    from cnequity.storage import revision_records
+    from equitylake_core.extensions import ExtensionUnavailableError, ensure_extensions
+
+    try:
+        import duckdb
+
+        ensure_extensions(duckdb.connect())
+    except ExtensionUnavailableError as exc:
+        pytest.skip(str(exc))
+    yield
+    catalog_read.close_all()
+    revision_records.forget()
+
+
 def _lake(tmp_path: Path) -> tuple[Config, SnapshotStore]:
+    from tests.catalog_seed import publish_rows
+    from tests.unit.test_lake_write import _bars
+
     root = tmp_path / "lake"
-    part = root / "curated" / "daily_bars" / "trade_date=2026-08-28"
-    part.mkdir(parents=True)
-    pl.DataFrame(
-        {"symbol": ["600000.SH"], "trade_date": [date(2026, 8, 28)], "close": [10.0]}
-    ).write_parquet(part / "part.parquet")
-    StateStore(root / "meta").set_date("daily_bars", date(2026, 8, 28))
     config = Config(data_root=root)
+    publish_rows(config, "daily_bars", _bars(date(2026, 8, 28), {"600000.SH": 10.0}))
+    StateStore(root / "meta").set_date("daily_bars", date(2026, 8, 28))
     store = SnapshotStore(config, tmp_path / "snapshots")
     store.create("base", ["daily_bars"])
     return config, store
 
 
 @pytest.mark.parametrize("suffix", [".tar.zst", ".tar.gz", ".tar"])
-def test_snapshot_archive_round_trip_is_streamed_and_verified(tmp_path, suffix):
+def test_snapshot_archive_round_trip_is_streamed_and_verified(_catalog, tmp_path, suffix):
     _, store = _lake(tmp_path)
     archive = store.export_archive("base", tmp_path / f"base{suffix}")
     assert archive.is_file()
@@ -44,10 +60,10 @@ def test_snapshot_archive_round_trip_is_streamed_and_verified(tmp_path, suffix):
     imported = store.import_archive(archive, name=f"restored-{suffix[1:].replace('.', '-')}")
     result = store.verify(imported.name)
     assert result.passed
-    assert (imported / "data/curated/daily_bars/trade_date=2026-08-28/part.parquet").is_file()
+    assert (imported / "data/curated/daily_bars/trade_date=2026-08/part-merged.parquet").is_file()
 
 
-def test_snapshot_archive_rejects_path_traversal_without_publishing(tmp_path):
+def test_snapshot_archive_rejects_path_traversal_without_publishing(_catalog, tmp_path):
     _, store = _lake(tmp_path)
     archive = tmp_path / "evil.tar"
     with tarfile.open(archive, "w") as tar:
@@ -62,7 +78,7 @@ def test_snapshot_archive_rejects_path_traversal_without_publishing(tmp_path):
     assert not (tmp_path / "escape").exists()
 
 
-def test_snapshot_archive_rejects_tampered_manifest_before_overwrite(tmp_path):
+def test_snapshot_archive_rejects_tampered_manifest_before_overwrite(_catalog, tmp_path):
     _, store = _lake(tmp_path)
     archive = store.export_archive("base", tmp_path / "base.tar.zst")
     raw = bytearray(archive.read_bytes())
@@ -82,7 +98,7 @@ def test_snapshot_archive_rejects_tampered_manifest_before_overwrite(tmp_path):
         ("total-bytes", {"max_total_bytes": 1}),
     ],
 )
-def test_snapshot_archive_enforces_uncompressed_resource_limits(tmp_path, limit, kwargs):
+def test_snapshot_archive_enforces_uncompressed_resource_limits(_catalog, tmp_path, limit, kwargs):
     _, store = _lake(tmp_path)
     archive = tmp_path / f"oversized-{limit}.tar"
     with tarfile.open(archive, "w") as tar:
@@ -96,7 +112,7 @@ def test_snapshot_archive_enforces_uncompressed_resource_limits(tmp_path, limit,
     assert not store.path(f"oversized-{limit}").exists()
 
 
-def test_snapshot_archive_cli_export_import(tmp_path):
+def test_snapshot_archive_cli_export_import(_catalog, tmp_path):
     config, store = _lake(tmp_path)
     config_path = tmp_path / "cnequity.toml"
     config_path.write_text(
@@ -136,17 +152,6 @@ def test_snapshot_archive_cli_export_import(tmp_path):
     assert store.verify("cli-restored").passed
 
 
-def test_delta_namespace_rejects_user_symlinked_snapshot_root(tmp_path):
-    real_root = tmp_path / "real-snapshots"
-    real_root.mkdir()
-    linked_root = tmp_path / "linked-snapshots"
-    linked_root.symlink_to(real_root, target_is_directory=True)
-    store = SnapshotStore(Config(data_root=tmp_path / "lake"), linked_root)
-
-    with pytest.raises(ValueError, match="symlink"):
-        store.delta_path("unsafe")
-
-
 @pytest.mark.parametrize(
     "dataset",
     [
@@ -163,7 +168,9 @@ def test_delta_namespace_rejects_user_symlinked_snapshot_root(tmp_path):
         "economic_calendar",
     ],
 )
-def test_write_fetched_raw_none_fails_before_staging_when_archive_required(tmp_path, dataset):
+def test_write_fetched_raw_none_fails_before_staging_when_archive_required(
+    _catalog, tmp_path, dataset
+):
     config = Config(data_root=tmp_path / "lake")
     frame = pl.DataFrame({"symbol": ["600000.SH"]})
 
@@ -185,11 +192,9 @@ def test_write_fetched_raw_none_fails_before_staging_when_archive_required(tmp_p
     [
         (["snapshot", "verify", "nope"], "no snapshot named 'nope'"),
         (["snapshot", "restore", "nope", "TARGET"], "no snapshot named 'nope'"),
-        (["snapshot", "delta", "verify", "nope"], "no delta package named 'nope'"),
-        (["snapshot", "delta", "apply", "nope", "TARGET"], "no delta package named 'nope'"),
     ],
 )
-def test_naming_a_missing_snapshot_is_an_error_not_a_traceback(tmp_path, argv, expected):
+def test_naming_a_missing_snapshot_is_an_error_not_a_traceback(_catalog, tmp_path, argv, expected):
     """`export`/`import` already treated this as operator input; the rest did not.
 
     Naming a snapshot that does not exist printed a Python traceback, and the

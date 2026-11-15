@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 from cnequity.i18n import N_
@@ -36,9 +35,11 @@ from cnequity.storage.lake_record import (  # noqa: F401 — re-exported
     LAKE_FILE,
     _parse,
     _write_lake,
+    affected,
     lake_path,
     package_version,
     read_lake,
+    record_migration,
     stamp_new_lake,
 )
 
@@ -271,36 +272,6 @@ def owed(config) -> list[Migration]:
     ]
 
 
-def affected(report: Any) -> int:
-    """How many rows (or settled keys) a repair report says it touches.
-
-    A report that separates what it read (``rows``) from what it rewrites
-    (``rows_changed``) is counted by the latter.
-    """
-    if isinstance(report, dict) and isinstance(report.get("rows_changed"), int):
-        return report["rows_changed"]
-    if isinstance(report, dict):
-        total = 0
-        for key, value in report.items():
-            if key in {"rows", "rows_dropped"} and isinstance(value, int):
-                total += value
-            elif key in {"resolved_sessions", "resolved_prelisting_keys"} and isinstance(
-                value, list
-            ):
-                total += len(value)
-            elif isinstance(value, dict):
-                total += affected(value)
-        return total
-    return 0
-
-
 def record(config, migration: Migration, report: dict) -> None:
     """Note in ``lake.json`` that *migration* ran here, applied or found nothing to do."""
-    lake = read_lake(config)
-    lake.setdefault("migrations", {})[migration.id] = {
-        "status": "applied" if affected(report) else "not_needed",
-        "affected": affected(report),
-        "at": datetime.now(timezone.utc).isoformat(),
-        "version": package_version(),
-    }
-    _write_lake(config, lake)
+    record_migration(config, migration.id, report)

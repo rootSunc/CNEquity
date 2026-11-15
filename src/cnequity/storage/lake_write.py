@@ -547,6 +547,8 @@ class DatasetPublish:
     schema_version: int
     contract_fingerprint: str
     metadata: dict | None = None
+    #: A revision another lake made, republished under its own number and id.
+    identity: dict | None = None
 
 
 class LakeWrite:
@@ -843,6 +845,7 @@ class LakeWrite:
                 **dict(publish.metadata or {}),
                 **({"removed_partitions": removed} if removed else {}),
             },
+            identity=publish.identity,
         )
 
 
@@ -852,6 +855,27 @@ class _Reader:
     def __init__(self, catalog: Catalog, root: Path):
         self.catalog = catalog
         self.root = root
+
+
+def published_layout(data_root: Path, dataset: str) -> dict[str, list[tuple[Path, str]]] | None:
+    """Each published partition of *dataset*: its lake files and the names its writers give them.
+
+    Lake files are never changed in place, so the list stays true until
+    retention removes a file. ``None`` when some file does not sit in its
+    partition's folder (written by the catalog itself), so the partition has
+    to be read by its rows instead; see :func:`export_tree`.
+    """
+    with Catalog(Path(data_root) / "lake", read_only=True) as catalog:
+        checkout = Checkout(
+            _Reader(catalog, Path(data_root)), dataset, root=Path(data_root) / dataset, link=False
+        )
+        layout: dict[str, list[tuple[Path, str]]] = {}
+        for label in checkout.labels():
+            files = checkout._touch(label)
+            if not files or not all(checkout._laid_out(path, label) for path in files):
+                return None
+            layout[label] = [(Path(path), logical_name(path)) for path in files]
+        return layout
 
 
 def export_tree(data_root: Path, dataset: str, destination: Path) -> None:

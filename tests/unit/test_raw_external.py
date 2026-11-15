@@ -167,15 +167,23 @@ def test_snapshot_materializes_external_payloads_without_machine_paths(tmp_path)
     archive, root = external(tmp_path)
     record = capture(archive)
     config = Config(data_root=archive.meta_root.parent)
-    part = config.curated_root / DATASET
-    part.mkdir(parents=True)
-    pl.DataFrame(
-        {
-            "symbol": ["600000.SH"],
-            "report_period": [date(2025, 12, 31)],
-            "announce_date": [date(2026, 10, 1)],
-        }
-    ).write_parquet(part / "part.parquet")
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.domain.schemas import DATASET_SCHEMAS
+    from cnequity.query import catalog_read
+
+    schema = DATASET_SCHEMAS[DATASET]
+    row = {
+        "symbol": "600000.SH",
+        "report_period": "2025-12-31",
+        "announce_date": date(2026, 10, 1),
+        "source": "test",
+        "data_version": "v1",
+        "fetched_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+    }
+    frame = pl.DataFrame([{name: row.get(name) for name in schema}], schema=schema)
+    publish_rows(config, DATASET, frame)
+    catalog_read.close_all()
     StateStore(config.meta_root).set_date(DATASET, date(2025, 12, 31))
     store = SnapshotStore(config, tmp_path / "snapshots")
     store.create("external", [DATASET])

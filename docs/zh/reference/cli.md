@@ -68,7 +68,7 @@
 
 | 命令 | 作用 | 子命令 |
 |------|------|--------|
-| [`cne snapshot`](#cne-snapshot) | 可移植快照的建立、校验与安全恢复 | `create` `verify` `restore` `export` `import` · `delta {create,verify,apply}` |
+| [`cne snapshot`](#cne-snapshot) | 可移植快照的建立、校验与安全恢复 | `create` `verify` `restore` `export` `import` |
 | [`cne contract`](#cne-contract) | 检视与校验已注册的数据契约 | `show` `diff` `validate` |
 | [`cne profile`](#cne-profile) | 检视版本化的研究 universe 画像 | `list` `show` |
 | [`cne stats`](#cne-stats) | `meta/stats` 下的度量表（行数、字节、源分布） | `rebuild` `show` |
@@ -1079,32 +1079,13 @@ daily_bars  —  有独立替代
 
 | 子命令 | 说明 |
 |--------|------|
-| `create NAME --dataset D [--dataset D ...]` | 建快照；manifest 固化每个 Parquet 的大小/SHA-256、数据集 state、契约指纹和运行 lineage |
+| `create NAME --dataset D [--dataset D ...]` | 建快照；每个数据集只存一份当前修订的文件，manifest 固化每个 Parquet 的大小/SHA-256、数据集 state、修订号与修订 id、契约指纹和运行 lineage。只对已在湖目录上的湖可用，旧湖先运行 `cne upgrade --apply` |
 | `verify NAME` | 逐文件校验大小与哈希；不通过退出 1 |
-| `restore NAME TARGET` | 恢复到新目录或空目录（拒绝活动湖根、不覆盖已有文件）。恢复后对 TARGET 跑 `cne status --datasets` 再切换 |
+| `restore NAME TARGET` | 恢复到新目录或空目录（拒绝活动湖根、不覆盖已有文件）。恢复出的是一个能直接写入的湖目录湖，每个数据集保留快照时的修订号和修订 id，按修订号固定的读取照样读得到。0.25.0 之前做的快照恢复后自动跑 `lake-catalog`、`revision-records`、`drop-generations` 三个迁移，其余欠下的迁移留给 `cne upgrade`。恢复后对 TARGET 跑 `cne status --datasets` 再切换 |
 | `export NAME [DEST]` | 打成一个可移植 tar 归档。`--compression auto` 有 zstd 就用 `tar.zst`，否则退到 `tar.gz`；先写同目录 `.part`，压缩器正常收尾后才原子改名 |
 | `import ARCHIVE` | 先校验后落地：逐个 tar member 拒绝绝对路径、`..`、重名、软硬链接和设备节点，解出的目录先按 manifest 全量校验，再原子改目录名发布。`--name` 覆盖快照名（默认取归档文件名），`--overwrite` 只在校验通过后才替换同名快照 |
 
 `--config` / `--snapshot-root` 各子命令通用；默认根为 `meta/snapshots`。
-
-### 增量包 `cne snapshot delta`
-
-整湖快照适合冻结实验依赖；**日常同步一个已有的湖用增量包**——只搬动变化的文件，
-且带足够的前置条件让"应用到错误的基线上"变成一次失败而不是一次静默污染。
-
-| 子命令 | 说明 |
-|--------|------|
-| `delta create NAME --from A --to B` | 把两个**数据根**（不是 `curated` 根）逐字节比对成不可变的 add/replace/delete 包。`--to` 默认当前配置的活动湖；`--dataset` 可重复，省略时取两根共有的数据集 |
-| `delta create NAME --from-revision N` | 以已提交的 revision 号作前置条件。revision receipt 记的是变更文件、不是旧湖副本，所以这一模式发的是带 `allow_missing` 的 `replace`；需要严格的旧文件哈希前置就用上面的双根模式 |
-| `delta verify NAME` | 校验每个 add/replace 载荷哈希与每条变更路径的语义 |
-| `delta apply NAME TARGET` | 应用到**非空**的 TARGET 湖根。`--dry-run` 只验前置条件不落盘 |
-
-
-apply 的安全边界值得单独说：add/replace/delete 逐条对基线指纹（revision 增量则对
-各数据集 revision）核验，写入走同目录临时文件，每个被覆盖的文件在整包变更与
-应用后的目标指纹都通过之前一直留着备份；中途抛异常会把已做的逐条回滚——调用方
-不会观察到一个已知的半成品状态。可写路径也被收窄到 `curated/`、`derived/` 和
-`meta/` 下的白名单，增量包无法借此在目标根里写任意文件。
 
 ## cne ths-official
 

@@ -68,7 +68,7 @@ When [`[research] holdout_start`](../getting-started/configuration.md#research) 
 
 | Command | Purpose | Subcommands |
 |------|------|--------|
-| [`cne snapshot`](#cne-snapshot) | Create, verify and safely restore portable snapshots | `create` `verify` `restore` `export` `import` · `delta {create,verify,apply}` |
+| [`cne snapshot`](#cne-snapshot) | Create, verify and safely restore portable snapshots | `create` `verify` `restore` `export` `import` |
 | [`cne contract`](#cne-contract) | Inspect and validate registered data contracts | `show` `diff` `validate` |
 | [`cne profile`](#cne-profile) | Inspect versioned research universe profiles | `list` `show` |
 | [`cne stats`](#cne-stats) | Metrics tables under `meta/stats` (row counts, bytes, source distribution) | `rebuild` `show` |
@@ -1082,32 +1082,13 @@ Copies selected datasets into an immutable, checksummed portable snapshot, for f
 
 | Subcommand | Description |
 |--------|------|
-| `create NAME --dataset D [--dataset D ...]` | Create a snapshot; the manifest pins each Parquet file's size/SHA-256, dataset state, contract fingerprint and run lineage |
+| `create NAME --dataset D [--dataset D ...]` | Create a snapshot; each dataset's current revision is stored once, and the manifest pins each Parquet file's size/SHA-256, dataset state, revision number and id, contract fingerprint and run lineage. Only a lake on its catalog can be snapshotted; run `cne upgrade --apply` on an older one first |
 | `verify NAME` | Verify size and hash file by file; exits 1 on failure |
-| `restore NAME TARGET` | Restore into a new or empty directory (refuses the active lake root, never overwrites existing files). After restoring, run `cne status --datasets` on TARGET before switching |
+| `restore NAME TARGET` | Restore into a new or empty directory (refuses the active lake root, never overwrites existing files). The result is a lake on its catalog that can be written at once, and each dataset keeps the revision number and id it had when the snapshot was made, so a read pinned to that revision still finds it. A snapshot made before 0.25.0 is restored and then moved onto its catalog by the `lake-catalog`, `revision-records` and `drop-generations` migrations; any other migration it owes is left to `cne upgrade`. After restoring, run `cne status --datasets` on TARGET before switching |
 | `export NAME [DEST]` | Pack into one portable tar archive. `--compression auto` uses `tar.zst` when zstd is available, otherwise falls back to `tar.gz`; writes a `.part` in the same directory first and renames atomically only after the compressor finishes cleanly |
 | `import ARCHIVE` | Verify first, then land: each tar member is checked to reject absolute paths, `..`, duplicate names, soft and hard links and device nodes; the extracted directory is fully verified against the manifest first, then published by an atomic directory rename. `--name` overrides the snapshot name (default from the archive file name), `--overwrite` replaces a snapshot of the same name only after verification passes |
 
 `--config` / `--snapshot-root` are common to all subcommands; the default root is `meta/snapshots`.
-
-### Delta packages `cne snapshot delta` {#增量包-cne-snapshot-delta}
-
-A whole-lake snapshot suits freezing experiment dependencies; **for routinely syncing an existing lake, use delta packages**: they move only changed files,
-and carry enough preconditions that "applied to the wrong baseline" becomes a failure rather than silent contamination.
-
-| Subcommand | Description |
-|--------|------|
-| `delta create NAME --from A --to B` | Compare two **data roots** (not `curated` roots) byte by byte into an immutable add/replace/delete package. `--to` defaults to the active lake of the current configuration; `--dataset` is repeatable, and when omitted the datasets common to both roots are used |
-| `delta create NAME --from-revision N` | Use a committed revision number as the precondition. A revision receipt records the changed files, not a copy of the old lake, so this mode emits `replace` with `allow_missing`; when you need strict old-file hash preconditions, use the two-root mode above |
-| `delta verify NAME` | Verify every add/replace payload hash and the semantics of every changed path |
-| `delta apply NAME TARGET` | Apply to a **non-empty** TARGET lake root. `--dry-run` only verifies preconditions without writing |
-
-
-apply's safety boundary deserves its own mention: each add/replace/delete is checked against the baseline fingerprint (for revision deltas, against
-each dataset's revision), writes go through temporary files in the same directory, and every overwritten file keeps a backup until both the whole-package change and
-the post-apply target fingerprint pass; an exception midway rolls back what has been done, entry by entry, so the caller
-never observes a known half-finished state. Writable paths are also narrowed to an allowlist under `curated/`, `derived/` and
-`meta/`, so a delta package cannot use this to write arbitrary files in the target root.
 
 ## cne ths-official
 

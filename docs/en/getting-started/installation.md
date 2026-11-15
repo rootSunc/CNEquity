@@ -142,7 +142,7 @@ The CLI offers no physical deletion: `cne storage plan` only previews what autom
 
 After upgrading, restart serve to load the new routes and safeguards. For detailed constraints, see [version lifecycle commands](../reference/cli.md#cne-storage).
 
-Archived original directories also have their own observation period. A full snapshot carries the retention basis and external dependency declarations, and rebinds references after restore; incremental packages involving lifecycle registration are rejected for now, so use a full snapshot instead. Neither archives nor snapshots automatically lift existing protections.
+Archived original directories also have their own observation period. A full snapshot carries the retention basis and external dependency declarations, and rebinds references after restore. Neither archives nor snapshots automatically lift existing protections.
 
 ### Reporting issues
 

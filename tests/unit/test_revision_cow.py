@@ -1,8 +1,4 @@
-import json
 import shutil
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -17,7 +13,6 @@ from cnequity.query.universe import coverage_end_date, coverage_start_date
 from cnequity.steps.common import load_bar_universe
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
 from cnequity.storage.revisions import RevisionConsistencyError, RevisionStore
-from cnequity.storage.snapshots import SnapshotStore
 
 
 def _bars(path: Path, day: date, close: float) -> None:
@@ -127,131 +122,6 @@ def test_explicit_revision_cannot_silently_read_unversioned_lake(tmp_path):
     _bars(tmp_path / "curated/daily_bars/part.parquet", date(2026, 1, 1), 10.0)
     with pytest.raises(RevisionConsistencyError, match="no retained revision"):
         load("daily_bars", data_root=tmp_path, revision=1)
-
-
-def test_delta_pointer_switch_keeps_lock_free_readers_on_complete_generations(
-    tmp_path, monkeypatch
-):
-    baseline_cfg, _, _ = _revision_lake(tmp_path / "baseline", 10.0)
-    target_cfg, target_revisions, target_path = _revision_lake(tmp_path / "target", 10.0)
-    _bars(target_path, date(2026, 1, 1), 11.0)
-    second = commit_generation(
-        target_revisions,
-        "daily_bars",
-        run_id="r2",
-        changed_files=[target_path],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert second is not None
-    snapshots = SnapshotStore(target_cfg, tmp_path / "snapshots")
-    snapshots.create_delta(
-        "reader-safe", baseline_cfg.data_root, target_cfg.data_root, ["daily_bars"]
-    )
-
-    import cnequity.storage.snapshots as snapshot_module
-
-    original_copy2 = snapshot_module.shutil.copy2
-    copy_started = threading.Event()
-
-    def slow_copy2(source, destination, *args, **kwargs):
-        copy_started.set()
-        time.sleep(0.003)
-        return original_copy2(source, destination, *args, **kwargs)
-
-    monkeypatch.setattr(snapshot_module.shutil, "copy2", slow_copy2)
-    stop = threading.Event()
-    consistency_errors: list[RevisionConsistencyError] = []
-    observed: list[float] = []
-
-    def read_while_applying() -> None:
-        while not stop.is_set():
-            frame = load("daily_bars", config=baseline_cfg)
-            if not frame.is_empty():
-                observed.extend(frame["close"].to_list())
-                assert set(observed) <= {10.0, 11.0}
-
-    def collect_consistency_errors() -> None:
-        try:
-            read_while_applying()
-        except RevisionConsistencyError as exc:
-            consistency_errors.append(exc)
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        reader_future = executor.submit(collect_consistency_errors)
-        apply_future = executor.submit(snapshots.apply_delta, "reader-safe", baseline_cfg.data_root)
-        assert copy_started.wait(timeout=5)
-        apply_future.result(timeout=15)
-        stop.set()
-        reader_future.result(timeout=5)
-
-    assert not consistency_errors
-    assert observed
-    assert load("daily_bars", config=baseline_cfg)["close"].to_list() == [11.0]
-
-
-def test_delta_receipt_failure_rolls_back_pointer_and_generation(tmp_path, monkeypatch):
-    baseline_cfg, _, _ = _revision_lake(tmp_path / "baseline", 10.0)
-    target_cfg, target_revisions, target_path = _revision_lake(tmp_path / "target", 10.0)
-    _bars(target_path, date(2026, 1, 1), 11.0)
-    second = commit_generation(
-        target_revisions,
-        "daily_bars",
-        run_id="r2",
-        changed_files=[target_path],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert second is not None
-    snapshots = SnapshotStore(target_cfg, tmp_path / "snapshots")
-    snapshots.create_delta("rollback", baseline_cfg.data_root, target_cfg.data_root, ["daily_bars"])
-    before_index = snapshots._lake_index(baseline_cfg.data_root, ["daily_bars"])
-    before_pointer = json.loads(
-        (baseline_cfg.meta_root / "revisions/daily_bars/current.json").read_text(encoding="utf-8")
-    )
-
-    import cnequity.storage.snapshots as snapshot_module
-
-    original_write = snapshot_module.write_json_atomic
-
-    def fail_application_receipt(path, *args, **kwargs):
-        if "applied-deltas" in str(path):
-            raise OSError("injected application receipt failure")
-        return original_write(path, *args, **kwargs)
-
-    monkeypatch.setattr(snapshot_module, "write_json_atomic", fail_application_receipt)
-    with pytest.raises(OSError, match="application receipt"):
-        snapshots.apply_delta("rollback", baseline_cfg.data_root)
-    assert snapshots._lake_index(baseline_cfg.data_root, ["daily_bars"]) == before_index
-    assert (
-        json.loads(
-            (baseline_cfg.meta_root / "revisions/daily_bars/current.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        == before_pointer
-    )
-    assert load("daily_bars", config=baseline_cfg)["close"].to_list() == [10.0]
-
-
-def test_snapshot_roundtrip_preserves_current_pointer_generation(tmp_path):
-    data = tmp_path / "data"
-    cfg = Config(data_root=data)
-    path = data / "curated/daily_bars/trade_date=2026-01-01/part.parquet"
-    _bars(path, date(2026, 1, 1), 10.0)
-    commit_generation(
-        RevisionStore(cfg.meta_root, cfg.curated_root),
-        "daily_bars",
-        run_id="r1",
-        changed_files=[path],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    snapshots = SnapshotStore(cfg, tmp_path / "snapshots")
-    snapshots.create("baseline", ["daily_bars"])
-    restored = snapshots.restore("baseline", tmp_path / "restored")
-    restored_cfg = Config(data_root=restored)
-    assert load("daily_bars", config=restored_cfg)["close"].to_list() == [10.0]
 
 
 def test_corrupt_pointer_fails_closed_instead_of_falling_back(tmp_path):

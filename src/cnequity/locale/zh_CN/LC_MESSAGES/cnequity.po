@@ -1532,10 +1532,6 @@ msgstr "另一个统计重算正在进行 —— `--dataset` / `--by-source` 需
 msgid "Append verifiable current-year figures from original reports; retain existing vintages and honest observation times."
 msgstr "追加可核实的原文当期数，保留既有版本及真实采集时间。"
 
-#: cnequity/cli/govern_cmds.py
-msgid "Apply NAME safely onto the non-empty TARGET lake root."
-msgstr "把 NAME 安全地应用到非空的 TARGET 湖根目录上。"
-
 #: cnequity/cli/maintain_cmds.py
 msgid "Apply the reconciliation above only to runs silent for more than this many seconds (defaults to [orchestrator].batch_stale_seconds)."
 msgstr "只对静默超过这么多秒的 run 做上面的对账（默认取 [orchestrator].batch_stale_seconds）。"
@@ -1671,10 +1667,6 @@ msgstr "湖内备份只允许放在 meta/snapshots 或 backups，避免混入业
 #: cnequity/cli/ths_official_cmds.py
 msgid "Bar window in calendar days."
 msgstr "K 线窗口，按自然日算。"
-
-#: cnequity/cli/govern_cmds.py
-msgid "Baseline lake root. The target root is compared against it byte for byte."
-msgstr "基线湖根目录。目标根目录会与它逐字节比对。"
 
 #: cnequity/diagnostics/source_health.py
 msgid "Before 2015-10 it reads the old comma-separated archive; a non-trading day returns a \"no data today\" page."
@@ -2160,10 +2152,6 @@ msgstr "覆盖完整：没有可修复的缺口。"
 msgid "Coverage window end; --bars defaults to the last complete trading day, required for --derivatives."
 msgstr "覆盖窗口终点；--bars 默认上一个完整交易日，--derivatives 必填。"
 
-#: cnequity/cli/govern_cmds.py
-msgid "Create NAME as an immutable add/replace/delete package."
-msgstr "把 NAME 创建成一个不可变的 增加/替换/删除 包。"
-
 #: cnequity/ops/catalog.py
 msgid "Create data backup"
 msgstr "创建数据备份"
@@ -2175,10 +2163,6 @@ msgstr "只建目录、manifest 和 DuckDB 视图，跳过 init 各阶段。"
 #: cnequity/cli/storage_cmds.py
 msgid "Create the lake catalog when it does not exist yet; the first run copies every dataset."
 msgstr "湖目录不存在时先创建；首次运行会复制全部数据集。"
-
-#: cnequity/cli/govern_cmds.py
-msgid "Create, verify and apply portable delta packages."
-msgstr "创建、校验并应用可移植的增量包。"
 
 #: cnequity/cli/govern_cmds.py
 msgid "Create, verify and safely restore portable lake snapshots."
@@ -2303,10 +2287,6 @@ msgstr "数据集名（也可以直接作为参数传）。不给则输出完整
 #: cnequity/cli/consume_cmds.py
 msgid "Dataset name to fetch on demand"
 msgstr "按需抓取的数据集名"
-
-#: cnequity/cli/govern_cmds.py
-msgid "Dataset to include (repeatable). If omitted, auto-discover datasets present in both roots."
-msgstr "要包含的数据集（可重复）。不给则自动发现两个根目录里都有的数据集。"
 
 #: cnequity/cli/govern_cmds.py
 msgid "Dataset to include (repeatable). Snapshots are always explicit, never the whole lake."
@@ -3044,10 +3024,6 @@ msgstr "生成于：{value}  run：{value2}{stale_note}"
 msgid "Generations to keep per dataset; defaults to [storage.retention].keep_generations."
 msgstr "每个数据集保留的代数；默认取 [storage.retention].keep_generations。"
 
-#: cnequity/cli/govern_cmds.py
-msgid "Give --from BASELINE or --from-revision REVISION"
-msgstr "请给出 --from BASELINE 或 --from-revision REVISION"
-
 #: cnequity/cli/run_cmds.py
 msgid "Give --run-id or --failed-groups"
 msgstr "请给出 --run-id 或 --failed-groups"
@@ -3189,11 +3165,6 @@ msgstr "列表里包含历史遗留的 universe 别名。"
 #: cnequity/cli/govern_cmds.py
 msgid "Include prices, factors, identity, status, calendar and research coverage evidence; errors if dependencies are missing."
 msgstr "包含价格、因子、身份、状态、日历及研究覆盖证据；缺少依赖时报错。"
-
-#: cnequity/storage/snapshots.py
-#, python-format
-msgid "Incremental package rollback incomplete: %d files could not be restored (e.g. %s). The original backups are kept at %s; close the program holding them and copy them back to %s by relative path to recover"
-msgstr "增量包回滚未完成：%d 个文件没能还原（例如 %s）。原文件备份保留在 %s，关闭占用的程序后按相对路径复制回 %s 即可恢复"
 
 #: cnequity/domain/datasets.py
 msgid "Industry structure"
@@ -4021,10 +3992,6 @@ msgstr "只能重新审核同一未完成删除记录。"
 #: cnequity/ops/catalog.py
 msgid "Only used during first-time setup."
 msgstr "只在首次配置时使用。"
-
-#: cnequity/cli/govern_cmds.py
-msgid "Only validate preconditions; do not modify TARGET."
-msgstr "只校验前置条件，不改动 TARGET。"
 
 #: cnequity/serve/guard.py
 msgid "Open dashboard operations from localhost or 127.0.0.1; remote access needs a token."
@@ -5719,10 +5686,6 @@ msgstr "同花顺页面"
 msgid "THS q.10jqka (sector directory page)"
 msgstr "同花顺 q.10jqka（板块目录页）"
 
-#: cnequity/cli/govern_cmds.py
-msgid "Target lake root; defaults to the currently active root in the config."
-msgstr "目标湖根目录；默认取配置里当前生效的根目录。"
-
 #: cnequity/ops/catalog.py
 msgid "Targeted backfill"
 msgstr "定向补数"
@@ -6534,10 +6497,6 @@ msgstr "使用数据湖"
 msgid "Use the lake stock catalogue; choose this or --symbols."
 msgstr "使用湖中股票目录；与 --symbols 二选一。"
 
-#: cnequity/cli/govern_cmds.py
-msgid "Use the revision committed in the target as the baseline precondition."
-msgstr "用目标里已提交的 revision 作为基线前置条件。"
-
 #: cnequity/diagnostics/source_health.py
 msgid "Used to cross-check EastMoney's PMI values."
 msgstr "用于交叉核验东财的 PMI 取值。"
@@ -6599,10 +6558,6 @@ msgstr "校验覆盖"
 #: cnequity/ops/catalog.py
 msgid "Verify data backup"
 msgstr "校验数据备份"
-
-#: cnequity/cli/govern_cmds.py
-msgid "Verify the hashes and change semantics of every add/replace payload."
-msgstr "校验全部 增加/替换 载荷的哈希与变更语义。"
 
 #: cnequity/ops/catalog.py
 msgid "Verify, then restore into a new or empty directory. You can inspect the result afterward."
@@ -6682,10 +6637,6 @@ msgstr "不带参数运行时不跑事件流（公告、监管事件、资讯）
 #: cnequity/cli/quality_cmds.py
 msgid "Where this probe runs from — 'cn', 'overseas', or any label you use. Some sources reject non-mainland egress, so results without this label cannot be interpreted."
 msgstr "这次探测是从哪儿跑的 —— 'cn'、'overseas'，或你自己用的任何标签。有几个源拒绝非大陆出口，所以没有这个标签的结果没法解读。"
-
-#: cnequity/cli/govern_cmds.py
-msgid "Where to put the delta package; defaults to meta/snapshots under the data root."
-msgstr "增量包放在哪；默认是数据根目录下的 meta/snapshots。"
 
 #: cnequity/cli/govern_cmds.py
 msgid "Where to put the snapshot; defaults to meta/snapshots under the data root."
