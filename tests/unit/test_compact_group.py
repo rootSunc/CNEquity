@@ -5,6 +5,7 @@ import polars as pl
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
 from cnequity.query import dataset_state
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.steps.finalize import step_compact
 from cnequity.storage import StagingWriter, compact_dataset
 
@@ -37,9 +38,8 @@ def test_compact_only_merges_datasets_staged_in_run(tmp_path):
 
     out = step_compact(cfg, date(2024, 6, 28), run_id, {})
     assert out["rows_written"] == 1
-    curated = cfg.curated_root / "fund_flow" / "trade_date=2024-06-28" / "part-merged.parquet"
-    assert curated.exists()
-    assert not (cfg.curated_root / "daily_bars").exists()
+    assert root_parquet_files(cfg.curated_root / "fund_flow")
+    assert not root_parquet_files(cfg.curated_root / "daily_bars")
     assert out["dataset_revisions"]["fund_flow"]["revision"] == 1
     state = dataset_state("fund_flow", config=cfg)
     assert state.revision == 1
@@ -67,60 +67,6 @@ def test_staging_writer_lists_nested_run_fragments(tmp_path):
     frame.write_parquet(nested / "part-recovered.parquet")
 
     assert writer.list_run_files("fund_flow", "run-nested") == [nested / "part-recovered.parquet"]
-
-
-def test_compact_removes_stale_partition_fragments(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    run_id = "run-fragment-cleanup"
-    part = cfg.curated_root / "fund_flow" / "trade_date=2024-06-28"
-    part.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(
-        {
-            "symbol": ["600519.SH"],
-            "trade_date": [date(2024, 6, 28)],
-            "main_net_inflow": [1.0],
-            "super_large_net_inflow": [0.0],
-            "large_net_inflow": [0.0],
-            "medium_net_inflow": [0.0],
-            "small_net_inflow": [0.0],
-            "source": ["eastmoney"],
-            "data_version": ["v1"],
-            "fetched_at": ["2024-06-27T00:00:00+00:00"],
-        }
-    ).write_parquet(part / "part-old.parquet")
-    nested = part / ".old-fragments"
-    nested.mkdir()
-    pl.read_parquet(part / "part-old.parquet").with_columns(
-        pl.lit("000001.SZ").alias("symbol"),
-        pl.lit(0.5).alias("main_net_inflow"),
-    ).write_parquet(nested / "part-old.parquet")
-
-    StagingWriter(cfg.staging_root).write_batch(
-        "fund_flow",
-        run_id,
-        "batch-0",
-        pl.DataFrame(
-            {
-                "symbol": ["600519.SH"],
-                "trade_date": [date(2024, 6, 28)],
-                "main_net_inflow": [2.0],
-                "super_large_net_inflow": [0.0],
-                "large_net_inflow": [0.0],
-                "medium_net_inflow": [0.0],
-                "small_net_inflow": [0.0],
-                "source": ["eastmoney"],
-                "data_version": ["v1"],
-                "fetched_at": ["2024-06-28T00:00:00+00:00"],
-            }
-        ),
-    )
-
-    step_compact(cfg, date(2024, 6, 28), run_id, {})
-
-    assert [p.name for p in part.rglob("*.parquet")] == ["part-merged.parquet"]
-    result = pl.read_parquet(part / "part-merged.parquet")
-    assert set(result["symbol"]) == {"000001.SZ", "600519.SH"}
-    assert result.filter(pl.col("symbol") == "600519.SH")["main_net_inflow"].to_list() == [2.0]
 
 
 def test_compact_merge_style_dataset_preserves_prior_runs(tmp_path):

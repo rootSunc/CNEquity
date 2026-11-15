@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree, publish_rows
 
 from cnequity.config import Config
 from cnequity.derive.stock_factors import stock_event_series
@@ -181,20 +182,32 @@ def _lake(tmp_path):
             "fetched_at": [stamp] * 2,
         }
     )
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
     for dataset, frame, root in (
         ("daily_bars", bars, cfg.curated_root),
         ("corporate_actions", actions, cfg.curated_root),
         ("adj_factors", factors, cfg.derived_root),
     ):
+        written = []
         if dataset == "adj_factors":
             for day in DAYS:
                 path = root / dataset / f"trade_date={day}" / "part.parquet"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 frame.filter(pl.col("trade_date") == day).write_parquet(path)
-            continue
-        path = root / dataset / "part.parquet"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        frame.write_parquet(path)
+                written.append(path)
+        else:
+            path = root / dataset / "part.parquet"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            frame.write_parquet(path)
+            written.append(path)
+        commit_tree(
+            store,
+            dataset,
+            run_id="seed",
+            changed_files=written,
+            schema_version=1,
+            contract_fingerprint="seed",
+        )
     raw = cfg.meta_root / "adj_factors_cache" / "600001_SH_hfq.parquet"
     raw.parent.mkdir(parents=True)
     vendor.write_parquet(raw)
@@ -207,10 +220,11 @@ def test_preview_apply_and_second_apply_are_reproducible(tmp_path, monkeypatch):
     report = repair_adj_factors(cfg, symbols=["600001.SH"])
     assert report["rows"] == 7 and not report["applied"]
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root, create=False)
-    assert store.current_pointer("adj_factors") is None
+    seeded = store.current_pointer("adj_factors")["revision"]
     applied = repair_adj_factors(cfg, symbols=["600001.SH"], apply=True, plan_id=report["plan_id"])
     assert applied["rows"] == 7 and applied["applied"]
     old_revision = store.latest("adj_factors").revision
+    assert old_revision == seeded + 1
     assert store.latest("adj_factors").metadata["factor_event_proofs"]
     assert repair_adj_factors(cfg, symbols=["600001.SH"], apply=True)["rows"] == 0
     assert store.latest("adj_factors").revision == old_revision
@@ -219,19 +233,27 @@ def test_preview_apply_and_second_apply_are_reproducible(tmp_path, monkeypatch):
 def test_stale_plan_cannot_change_the_lake(tmp_path):
     cfg = _lake(tmp_path)
     plan = repair_adj_factors(cfg, symbols=["600001.SH"])
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
+    before = store.current_pointer("adj_factors")["revision_id"]
     path = cfg.curated_root / "daily_bars" / "part.parquet"
     pl.read_parquet(path).with_columns(pl.lit(10.0).alias("pre_close")).write_parquet(path)
+    commit_tree(
+        store,
+        "daily_bars",
+        run_id="restated",
+        changed_files=[path],
+        schema_version=1,
+        contract_fingerprint="seed",
+    )
     with pytest.raises(ValueError, match="refresh the preview"):
         repair_adj_factors(cfg, symbols=["600001.SH"], apply=True, plan_id=plan["plan_id"])
-    assert not RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).current_pointer(
-        "adj_factors"
-    )
+    assert store.current_pointer("adj_factors")["revision_id"] == before
 
 
 def test_publish_failure_preserves_source_and_generation(tmp_path, monkeypatch):
     cfg = _lake(tmp_path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    old = store.ensure_current("adj_factors")
+    old = store.current_root("adj_factors")
 
     def fail(*args, **kwargs):
         raise RuntimeError("publication failed")
@@ -328,8 +350,6 @@ def test_adjusted_receipt_is_available_with_unresolved_history(tmp_path):
     from cnequity.query import load_with_receipt
 
     cfg = _lake(tmp_path)
-    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.ensure_current("adj_factors")
     diagnostics = publish_factor_diagnostics(cfg)
     assert diagnostics["assessed"]
     result = load_with_receipt(
@@ -408,19 +428,15 @@ def test_later_factor_revision_retains_committed_event_proofs(tmp_path, monkeypa
     repair_adj_factors(cfg, symbols=["600001.SH"], apply=True)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
     proofs = store.latest("adj_factors").metadata["factor_event_proofs"]
-    path = cfg.derived_root / "adj_factors" / f"trade_date={DAYS[-1]}" / "part-0.parquet"
-    files = sorted((cfg.derived_root / "adj_factors" / f"trade_date={DAYS[-1]}").glob("*.parquet"))
-    path = files[0]
-    pl.read_parquet(path).with_columns(
-        (pl.col("fetched_at") + pl.duration(hours=1)).alias("fetched_at")
-    ).write_parquet(path)
-    revision = store.commit(
-        "adj_factors",
-        run_id="ordinary-derive",
-        changed_files=[path],
-        schema_version=1,
-        contract_fingerprint="test",
+    from cnequity.query import load
+
+    rows = load("adj_factors", config=cfg).with_columns(
+        pl.when(pl.col("trade_date") == DAYS[-1])
+        .then(pl.col("fetched_at") + pl.duration(hours=1))
+        .otherwise(pl.col("fetched_at"))
+        .alias("fetched_at")
     )
+    revision = publish_rows(cfg, "adj_factors", rows, run_id="ordinary-derive")
     assert revision.metadata["factor_event_proofs"] == proofs
     assert repair_adj_factors(cfg, symbols=["600001.SH"])["rows"] == 0
 
@@ -456,7 +472,6 @@ def test_plain_adjusted_load_skips_diagnostics_and_receipt_survives_them(tmp_pat
     from cnequity.query import load, load_with_receipt
 
     cfg = _lake(tmp_path)
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).ensure_current("adj_factors")
 
     def fail(*args, **kwargs):
         raise ValueError("corrupt diagnostics snapshot")

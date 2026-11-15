@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.schemas import SchemaValidationError, validate_dataframe
@@ -122,7 +123,8 @@ def lake(tmp_path, request):
     )
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
     for dataset in ("valuation_metrics", "daily_bars", "share_structure"):
-        store.commit(
+        commit_tree(
+            store,
             dataset,
             run_id="seed",
             changed_files=sorted((curated / dataset).rglob("*.parquet")),

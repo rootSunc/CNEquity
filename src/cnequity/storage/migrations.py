@@ -71,25 +71,6 @@ def _repair(module: str, name: str, **kwargs: Any) -> Callable[..., dict]:
     return run
 
 
-def _repartition(dataset: str) -> Callable[..., dict]:
-    def run(config, *, apply: bool) -> dict:
-        from cnequity.storage.repairs.repartition import RepartitionError, repartition_dataset
-
-        try:
-            result = repartition_dataset(config, dataset, dry_run=not apply)
-        except RepartitionError:
-            # No partitions yet: nothing laid out the old way to rewrite.
-            return {"dataset": dataset, "rows_changed": 0}
-        stale = result.changed or result.partitions_after != result.partitions_before
-        return {
-            "dataset": dataset,
-            "rows_changed": result.rows if stale else 0,
-            "files": f"{result.files_before} -> {result.files_after}",
-        }
-
-    return run
-
-
 def _lake_catalog(config, *, apply: bool) -> dict:
     from cnequity.storage.catalog_migration import migrate_to_catalog
 
@@ -247,48 +228,6 @@ MIGRATIONS: tuple[Migration, ...] = (
         N_("Drop zero-volume daily bars dated after a security's delisting"),
         "0.21.0",
         _repair("bar_listing_window", "repair_bar_listing_window"),
-    ),
-    Migration(
-        "daily-bars-month-partitions",
-        N_("Rewrite daily_bars history from one file per day into one file per month"),
-        "0.23.0",
-        _repartition("daily_bars"),
-    ),
-    Migration(
-        "adj-factors-month-partitions",
-        N_("Rewrite adj_factors history from one file per day into one file per month"),
-        "0.23.0",
-        _repartition("adj_factors"),
-    ),
-    Migration(
-        "margin-trading-month-partitions",
-        N_("Rewrite margin_trading history from one file per day into one file per month"),
-        "0.23.0",
-        _repartition("margin_trading"),
-    ),
-    Migration(
-        "valuation-metrics-month-partitions",
-        N_("Rewrite valuation_metrics history from one file per day into one file per month"),
-        "0.23.0",
-        _repartition("valuation_metrics"),
-    ),
-    Migration(
-        "limit-prices-month-partitions",
-        N_("Rewrite limit_prices history from one file per day into one file per month"),
-        "0.23.0",
-        _repartition("limit_prices"),
-    ),
-    Migration(
-        "fund-flow-tushare-month-partitions",
-        N_("Rewrite fund_flow_tushare history from one file per day into one file per month"),
-        "0.23.0",
-        _repartition("fund_flow_tushare"),
-    ),
-    Migration(
-        "chip-distribution-month-partitions",
-        N_("Rewrite chip_distribution history from one file per day into one file per month"),
-        "0.23.0",
-        _repartition("chip_distribution"),
     ),
     Migration(
         "vendor-zero-nulls",

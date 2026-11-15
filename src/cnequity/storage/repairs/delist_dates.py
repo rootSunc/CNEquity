@@ -89,7 +89,6 @@ def repair_delist_dates(config, *, apply: bool = False, sample: int = 15) -> dic
             pl.lit(datetime.now(timezone.utc)).alias("fetched_at"),
         )
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-        store.ensure_current("instruments")
         published = publish_staged(
             config,
             store,

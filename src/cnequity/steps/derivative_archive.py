@@ -17,7 +17,7 @@ from pathlib import Path
 import polars as pl
 
 from cnequity.adapters.futures_exchange.shfe_archive import iter_archive
-from cnequity.query.parquet_scan import scan_parquet_files
+from cnequity.query.parquet_scan import root_parquet_files, scan_parquet_files
 from cnequity.steps.common import write_simple
 from cnequity.storage.atomic import replace_with_retry, write_json_atomic
 from cnequity.storage.read_context import read_root
@@ -64,7 +64,7 @@ def _retain_archive(config, path: Path, digest: str) -> Path:
 
 def _curated_keys(config, dataset: str, year: int) -> pl.DataFrame | None:
     root = read_root(config, dataset)
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
+    files = root_parquet_files(root)
     if not files:
         return None
     return (

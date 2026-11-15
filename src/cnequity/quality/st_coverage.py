@@ -105,7 +105,7 @@ def current_st_universe(
         )
     requested_symbols = set(symbols) if symbols is not None else None
     root = read_root(config, "instruments", read_context)
-    if not root.exists():
+    if not dataset_has_parquet(root):
         return []
     try:
         frame = dedupe_by_primary_key(
@@ -968,7 +968,7 @@ def _first_traded_dates(
     if not symbols:
         return {}
     root = read_root(config, "daily_bars", read_context)
-    if not root.exists():
+    if not dataset_has_parquet(root):
         return {}
     try:
         frame = (

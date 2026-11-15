@@ -4,9 +4,11 @@ import json
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.schemas import DAILY_BARS_SCHEMA
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.steps.delisted import (
     _ingested_symbols,
     catalog_path,
@@ -123,7 +125,8 @@ def test_repair_and_compact_publish_a_catalog_without_subscription_placeholders(
     ).write_parquet(catalog)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
     for dataset in ("instruments", "daily_bars"):
-        store.commit(
+        commit_tree(
+            store,
             dataset,
             run_id="seed",
             changed_files=sorted((cfg.curated_root / dataset).rglob("*.parquet")),
@@ -136,7 +139,7 @@ def test_repair_and_compact_publish_a_catalog_without_subscription_placeholders(
     step_compact(cfg, date(2026, 7, 24), "run-1", {})
 
     # The stub must leave the catalog readers see, not only the mutable tree.
-    published = pl.read_parquet(store.current_root("instruments"), hive_partitioning=False)
+    published = pl.read_parquet(root_parquet_files(store.current_root("instruments")))
     assert sorted(published["symbol"].to_list()) == ["600070.SH", "600519.SH"]
 
 

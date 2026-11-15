@@ -1,4 +1,4 @@
-"""Partition period arithmetic, mixed-granularity reads, compact, repartition."""
+"""Partition period arithmetic, mixed-granularity reads and compact."""
 
 from datetime import date, datetime, timezone
 
@@ -19,11 +19,6 @@ from cnequity.query.parquet_scan import (
     partition_files_in_range,
 )
 from cnequity.storage.parquet import StagingWriter, compact_dataset
-from cnequity.storage.repairs.repartition import (
-    RepartitionError,
-    repartition_candidates,
-    repartition_dataset,
-)
 
 # --- period arithmetic ------------------------------------------------------
 
@@ -319,9 +314,6 @@ def test_compact_removes_legacy_index_weekend_rows(tmp_path):
     assert dates == [date(1991, 4, 5), date(1991, 4, 8)]
 
 
-# --- repartition ------------------------------------------------------------
-
-
 def _daily_layout(cfg, dataset="index_bars", dates=None):
     """Schema-complete rows in one directory per day — the pre-migration layout."""
     dates = dates or [date(2024, 1, 4), date(2024, 6, 3), date(2025, 1, 6)]
@@ -331,108 +323,6 @@ def _daily_layout(cfg, dataset="index_bars", dates=None):
         part.mkdir(parents=True, exist_ok=True)
         _bar_frame([d]).write_parquet(part / "part-merged.parquet")
     return root
-
-
-def test_repartition_collapses_day_dirs_into_the_configured_period(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    root = _daily_layout(cfg)
-
-    result = repartition_dataset(cfg, "index_bars")
-
-    assert result.changed is True
-    assert result.rows == 3
-    assert sorted(p.value for p in list_partitions(root, "trade_date")) == ["2024", "2025"]
-    df = collect_parquet_root(root, partition_col="trade_date")
-    assert sorted(df["trade_date"].to_list()) == [
-        date(2024, 1, 4),
-        date(2024, 6, 3),
-        date(2025, 1, 6),
-    ]
-
-
-def test_repartition_is_idempotent(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    _daily_layout(cfg)
-    repartition_dataset(cfg, "index_bars")
-
-    assert repartition_dataset(cfg, "index_bars").changed is False
-
-
-def test_repartition_cleans_weekend_index_rows_in_current_layout(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    root = cfg.curated_root / "index_bars" / "trade_date=1991"
-    root.mkdir(parents=True, exist_ok=True)
-    _bar_frame([date(1991, 4, 5), date(1991, 4, 6)]).write_parquet(root / "part-merged.parquet")
-
-    result = repartition_dataset(cfg, "index_bars")
-
-    assert result.changed is True
-    cleaned = pl.read_parquet(root / "part-merged.parquet")
-    assert cleaned["trade_date"].to_list() == [date(1991, 4, 5)]
-
-
-def test_repartition_cleans_weekend_trading_calendar_flags(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    root = cfg.curated_root / "trading_calendar" / "trade_date=1991"
-    root.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(
-        {
-            "trade_date": [date(1991, 4, 5), date(1991, 4, 6)],
-            "is_trading": [True, True],
-            "source": ["seed", "seed"],
-            "data_version": ["v1", "v1"],
-            "fetched_at": ["2026-07-21T00:00:00+00:00"] * 2,
-        }
-    ).with_columns(
-        pl.col("fetched_at").str.to_datetime(time_unit="us", time_zone="UTC")
-    ).write_parquet(root / "part-merged.parquet")
-
-    result = repartition_dataset(cfg, "trading_calendar")
-
-    assert result.changed is True
-    cleaned = pl.read_parquet(root / "part-merged.parquet")
-    assert cleaned.filter(pl.col("is_trading"))["trade_date"].to_list() == [date(1991, 4, 5)]
-
-
-def test_dry_run_leaves_the_dataset_untouched(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    root = _daily_layout(cfg)
-
-    result = repartition_dataset(cfg, "index_bars", dry_run=True)
-
-    assert result.changed is False
-    assert result.files_after == 2, "reports the effect it would have"
-    assert len(list_partitions(root, "trade_date")) == 3, "but changes nothing"
-    assert not list(root.parent.glob("*repartition-tmp*"))
-
-
-def test_candidates_lists_only_datasets_whose_layout_is_stale(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    _daily_layout(cfg)  # index_bars is configured year → stale
-    _write_partition(
-        cfg.curated_root / "option_bars", "trade_date", "2024-06-03", [date(2024, 6, 3)]
-    )
-    _write_partition(
-        cfg.curated_root / "daily_bars", "trade_date", "2024-06-03", [date(2024, 6, 3)]
-    )
-
-    candidates = repartition_candidates(cfg)
-
-    assert "index_bars" in candidates
-    assert "option_bars" not in candidates, "already matches its configured day granularity"
-    assert "daily_bars" in candidates, "day directories under a month-partitioned dataset"
-
-
-def test_repartition_refuses_a_merge_style_dataset(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    with pytest.raises(RepartitionError, match="merge-style"):
-        repartition_dataset(cfg, "instruments")
-
-
-def test_repartition_refuses_an_unknown_dataset(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    with pytest.raises(RepartitionError, match="unknown dataset"):
-        repartition_dataset(cfg, "not_a_dataset")
 
 
 def _calendar_row(d: date, *, fetched_at: str, is_trading: bool = True) -> pl.DataFrame:
@@ -445,32 +335,6 @@ def _calendar_row(d: date, *, fetched_at: str, is_trading: bool = True) -> pl.Da
             "fetched_at": [fetched_at],
         }
     ).with_columns(pl.col("fetched_at").str.to_datetime(time_unit="us", time_zone="UTC"))
-
-
-def test_repartition_dedupes_pk_when_day_and_year_dirs_overlap(tmp_path):
-    """A granularity flip leaves day dirs beside year dirs; rewrite must not bake the overlap in."""
-    cfg = Config(data_root=tmp_path / "data")
-    root = cfg.curated_root / "trading_calendar"
-    day = date(2024, 6, 3)
-    day_dir = root / f"trade_date={day.isoformat()}"
-    year_dir = root / "trade_date=2024"
-    day_dir.mkdir(parents=True)
-    year_dir.mkdir(parents=True)
-    _calendar_row(day, fetched_at="2026-01-01T00:00:00+00:00", is_trading=False).write_parquet(
-        day_dir / "part-merged.parquet"
-    )
-    _calendar_row(day, fetched_at="2026-07-01T00:00:00+00:00", is_trading=True).write_parquet(
-        year_dir / "part-merged.parquet"
-    )
-
-    result = repartition_dataset(cfg, "trading_calendar")
-
-    assert result.changed is True
-    assert result.rows == 1
-    assert [p.value for p in list_partitions(root, "trade_date")] == ["2024"]
-    df = collect_parquet_root(root, partition_col="trade_date")
-    assert df.height == 1
-    assert df["is_trading"].to_list() == [True], "freshest fetched_at wins"
 
 
 def test_list_partitions_sees_a_directory_added_within_one_mtime_tick(tmp_path):

@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.adapters.sina.adj_factors import (
     SinaAdjFactorUnavailableError,
@@ -19,6 +20,7 @@ from cnequity.derive.adj_factors import (
     _write_adj_partitions,
     compute_adj_factors,
 )
+from cnequity.storage.revisions import RevisionStore
 
 
 @pytest.fixture(autouse=True)
@@ -904,6 +906,15 @@ def test_compute_adj_factors_fails_over_threshold(adj_config, monkeypatch):
     assert result.fail_ratio > FAIL_RATIO_THRESHOLD
     assert result.findings[0]["check"] == "adj_factor_fetch_failed"
 
+    bars = adj_config.curated_root / "daily_bars" / "trade_date=2024-06-28" / "part-0.parquet"
+    commit_tree(
+        RevisionStore(adj_config.meta_root, adj_config.curated_root, adj_config.derived_root),
+        "daily_bars",
+        run_id="seed",
+        changed_files=[bars],
+        schema_version=1,
+        contract_fingerprint="seed",
+    )
     with pytest.raises(AdjFactorsDeriveError, match="adj_factors"):
         step_derive_adj_factors(adj_config, date(2024, 6, 28), "run-adj", {})
 

@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 import pandas as pd
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.adapters.exchange.index_snapshots import CSI_ROOT, parse_index_snapshot
 from cnequity.config import Config
@@ -99,7 +100,8 @@ def test_replace_whole_book_and_keep_old_revision(tmp_path, monkeypatch, settle)
     )
     old.write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
+    commit_tree(
+        store,
         "index_constituents",
         run_id="seed",
         changed_files=[path],

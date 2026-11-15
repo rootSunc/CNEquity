@@ -316,7 +316,7 @@ def repair_corporate_action_gaps(
     before anything is written.
     """
     evidence = evidence or latest_arbitration_evidence(config)
-    plan = _plan(config, evidence, ensure=False)
+    plan = _plan(config, evidence)
     if not apply or plan["missing"].is_empty():
         return plan["report"]
     run_id = f"corporate-action-gaps-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
@@ -335,15 +335,13 @@ def repair_corporate_action_gaps(
         config, run_id, list(remaining.select("symbol", "step_date").iter_rows())
     )
     with planned_on(config):
-        fresh = _plan(config, evidence, ensure=True)
+        fresh = _plan(config, evidence)
         fresh["report"]["notice_diagnostics"] = notice_diagnostics[:50]
         return _publish(config, fresh, fetched, failed, notices, run_id=run_id, evidence=evidence)
 
 
-def _plan(config: Config, evidence: Path, *, ensure: bool) -> dict:
+def _plan(config: Config, evidence: Path) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    if ensure:
-        store.ensure_current(_DATASET)
     scan = scan_published(config, _DATASET) if store.current_root(_DATASET) else None
     if scan is None:
         raise RuntimeError(f"{_DATASET}: no committed generation to repair")

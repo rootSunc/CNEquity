@@ -1063,6 +1063,11 @@ def test_derive_adj_factors(cfg_path, monkeypatch):
     monkeypatch.setattr(
         "cnequity.query.parquet_scan.dataset_has_parquet", lambda _root, **kwargs: True
     )
+    # Every input is published.
+    monkeypatch.setattr(
+        "cnequity.storage.revisions.RevisionStore.current_root",
+        lambda self, dataset, revision=None: self.meta_root,
+    )
     monkeypatch.setattr(
         "cnequity.cli.maintain_cmds.compute_adj_factors",
         lambda cfg, full=False, output=None: AdjFactorsResult(
@@ -1077,6 +1082,11 @@ def test_derive_adj_factors(cfg_path, monkeypatch):
 def test_derive_industry_index(cfg_path, monkeypatch):
     monkeypatch.setattr(
         "cnequity.query.parquet_scan.dataset_has_parquet", lambda _root, **kwargs: True
+    )
+    # Every input is published.
+    monkeypatch.setattr(
+        "cnequity.storage.revisions.RevisionStore.current_root",
+        lambda self, dataset, revision=None: self.meta_root,
     )
     monkeypatch.setattr(
         "cnequity.derive.industry_index.derive_industry_index",
@@ -2121,18 +2131,17 @@ def test_group_ownership_includes_derived_outputs(tmp_path):
 
 
 def test_cli_derive_publishes_new_revision_and_preserves_old_reader(cfg_path, monkeypatch):
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.config import load_config
+    from cnequity.domain.schemas import ADJ_FACTORS_SCHEMA
+    from cnequity.query import catalog_read, load
+    from cnequity.storage.revisions import RevisionStore
+
     monkeypatch.setattr(
         "cnequity.query.parquet_scan.dataset_has_parquet", lambda _root, **kwargs: True
     )
-    from cnequity.config import load_config
-    from cnequity.domain.schemas import ADJ_FACTORS_SCHEMA
-    from cnequity.query.parquet_scan import scan_parquet_root
-    from cnequity.storage.revisions import RevisionStore
-
     cfg = load_config(cfg_path)
-    root = cfg.derived_root / "adj_factors"
-    path = root / "trade_date=2026-09-15" / "part-0.parquet"
-    path.parent.mkdir(parents=True)
     frame = pl.DataFrame(
         [
             {
@@ -2142,32 +2151,58 @@ def test_cli_derive_publishes_new_revision_and_preserves_old_reader(cfg_path, mo
                 "factor": 1.0,
                 "source": "sina",
                 "data_version": "v1",
-                "fetched_at": None,
+                "fetched_at": datetime(2026, 9, 15, tzinfo=timezone.utc),
             }
         ],
         schema=ADJ_FACTORS_SCHEMA,
     )
-    frame.write_parquet(path)
+    publish_rows(cfg, "daily_bars", _cli_bar(date(2026, 9, 15)))
+    first = publish_rows(cfg, "adj_factors", frame)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    before = store.ensure_current("adj_factors")
 
     def compute(config, full=False, output=None):
-        frame.with_columns(pl.lit(2.0).alias("factor")).write_parquet(path)
+        output.write("trade_date=2026-09", frame.with_columns(pl.lit(2.0).alias("factor")), "x")
         return AdjFactorsResult(1, 1, [], [])
 
     monkeypatch.setattr("cnequity.cli.maintain_cmds.compute_adj_factors", compute)
     result = CliRunner().invoke(cli, ["derive", "adj_factors", "--config", cfg_path])
     assert result.exit_code == 0, result.output
-    assert store.current_root("adj_factors") != before
-    assert scan_parquet_root(root).collect()["factor"].to_list() == [2.0]
-    assert pl.read_parquet(before / "trade_date=2026-09-15" / "part-0.parquet")[
-        "factor"
-    ].to_list() == [1.0]
+    catalog_read.close_all()
+    assert store.current_pointer("adj_factors")["revision_id"] != first.revision_id
+    assert load("adj_factors", config=cfg)["factor"].to_list() == [2.0]
+    # A reader pinned to the old revision still sees it.
+    pinned = load("adj_factors", config=cfg, revision=first.revision_id)
+    assert pinned["factor"].to_list() == [1.0]
+
+
+def _cli_bar(day: date) -> pl.DataFrame:
+    from cnequity.domain.schemas import DAILY_BARS_SCHEMA
+
+    row = {name: None for name in DAILY_BARS_SCHEMA}
+    row.update(
+        symbol="920001.BJ",
+        trade_date=day,
+        open=1.0,
+        high=1.0,
+        low=1.0,
+        close=1.0,
+        volume=1,
+        amount=1.0,
+        source="test",
+        data_version="v1",
+        fetched_at=datetime(2026, 9, 15, tzinfo=timezone.utc),
+    )
+    return pl.DataFrame([row], schema=DAILY_BARS_SCHEMA)
 
 
 def test_cli_derive_source_limit_finishes_with_fallback(cfg_path, monkeypatch):
     monkeypatch.setattr(
         "cnequity.query.parquet_scan.dataset_has_parquet", lambda _root, **kwargs: True
+    )
+    # Every input is published.
+    monkeypatch.setattr(
+        "cnequity.storage.revisions.RevisionStore.current_root",
+        lambda self, dataset, revision=None: self.meta_root,
     )
     monkeypatch.setattr(
         "cnequity.cli.maintain_cmds.compute_adj_factors",

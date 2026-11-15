@@ -1,6 +1,5 @@
 import json
 import shutil
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -9,9 +8,9 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.legacy_lake import commit_generation
 
 from cnequity.config import Config
-from cnequity.file_lock import is_locked
 from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.query.reader import load, scan
 from cnequity.query.universe import coverage_end_date, coverage_start_date
@@ -45,7 +44,8 @@ def _revision_lake(root: Path, close: float) -> tuple[Config, RevisionStore, Pat
     path = root / "curated/daily_bars/trade_date=2026-01-01/part.parquet"
     _bars(path, date(2026, 1, 1), close)
     store = RevisionStore(config.meta_root, config.curated_root)
-    receipt = store.commit(
+    receipt = commit_generation(
+        store,
         "daily_bars",
         run_id=f"r-{close}",
         changed_files=[path],
@@ -56,19 +56,11 @@ def _revision_lake(root: Path, close: float) -> tuple[Config, RevisionStore, Pat
     return config, store, path
 
 
-@pytest.mark.skipif(not Path("/tmp").is_symlink(), reason="needs the macOS /tmp alias")
-def test_commit_accepts_lake_under_system_tmp_alias():
-    root = Path(tempfile.mkdtemp(dir="/tmp")) / "lake"
-    try:
-        _commit_twice_through(root)
-    finally:
-        shutil.rmtree(root.parent, ignore_errors=True)
-
-
 def _commit_twice_through(root: Path) -> None:
     cfg, store, path = _revision_lake(root, 10.0)
     _bars(path, date(2026, 1, 1), 11.0)
-    receipt = store.commit(
+    receipt = commit_generation(
+        store,
         "daily_bars",
         run_id="r-again",
         changed_files=[path],
@@ -102,7 +94,8 @@ def test_revision_map_pins_universe_dependencies(tmp_path, changed_dataset):
         path = cfg.curated_root / dataset / "part.parquet"
         path.parent.mkdir(parents=True)
         frame.write_parquet(path)
-        store.commit(
+        commit_generation(
+            store,
             dataset,
             run_id="initial",
             changed_files=[path],
@@ -118,7 +111,8 @@ def test_revision_map_pins_universe_dependencies(tmp_path, changed_dataset):
     )
     path = cfg.curated_root / changed_dataset / "part.parquet"
     frame.write_parquet(path)
-    store.commit(
+    commit_generation(
+        store,
         changed_dataset,
         run_id="correction",
         changed_files=[path],
@@ -135,90 +129,14 @@ def test_explicit_revision_cannot_silently_read_unversioned_lake(tmp_path):
         load("daily_bars", data_root=tmp_path, revision=1)
 
 
-def test_cow_pointer_keeps_query_on_one_generation_after_failed_publish(tmp_path, monkeypatch):
-    data = tmp_path / "data"
-    cfg = Config(data_root=data)
-    path = data / "curated/daily_bars/trade_date=2026-01-01/part.parquet"
-    _bars(path, date(2026, 1, 1), 10.0)
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    first = store.commit(
-        "daily_bars",
-        run_id="r1",
-        changed_files=[path],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert first is not None
-    old_root = store.current_root("daily_bars")
-    assert old_root is not None
-
-    _bars(path, date(2026, 1, 1), 11.0)
-    second_pointer = store.pointer_path("daily_bars")
-
-    def fail_pointer(target, payload, **kwargs):
-        if Path(target) == second_pointer:
-            raise OSError("injected pointer failure")
-        from cnequity.storage.atomic import write_json_atomic
-
-        return write_json_atomic(target, payload, **kwargs)
-
-    monkeypatch.setattr("cnequity.storage.revisions.write_json_atomic", fail_pointer)
-    with pytest.raises(OSError, match="injected pointer failure"):
-        store.commit(
-            "daily_bars",
-            run_id="r2",
-            changed_files=[path],
-            schema_version=1,
-            contract_fingerprint="contract",
-        )
-    assert store.current_root("daily_bars") == old_root
-    assert load("daily_bars", config=cfg)["close"].to_list() == [10.0]
-
-
-def test_snapshot_create_holds_lake_lock_while_commit_waits(tmp_path, monkeypatch):
-    data = tmp_path / "data"
-    cfg, revisions, path = _revision_lake(data, 10.0)
-    _bars(path, date(2026, 1, 1), 11.0)
-    snapshots = SnapshotStore(cfg, tmp_path / "snapshots")
-    entered = threading.Event()
-    release = threading.Event()
-    original_source_root = snapshots._source_root
-
-    def blocked_source_root(dataset: str):
-        assert is_locked(cfg.meta_root / "locks" / "compact.lock")
-        entered.set()
-        assert release.wait(timeout=5)
-        return original_source_root(dataset)
-
-    monkeypatch.setattr(snapshots, "_source_root", blocked_source_root)
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        snapshot_future = executor.submit(snapshots.create, "during-commit", ["daily_bars"])
-        assert entered.wait(timeout=5)
-        commit_future = executor.submit(
-            revisions.commit,
-            "daily_bars",
-            run_id="r2",
-            changed_files=[path],
-            schema_version=1,
-            contract_fingerprint="contract",
-        )
-        time.sleep(0.05)
-        assert not commit_future.done()
-        release.set()
-        snapshot_future.result(timeout=10)
-        second = commit_future.result(timeout=10)
-    assert second is not None and second.revision == 2
-    restored = snapshots.restore("during-commit", tmp_path / "restored")
-    assert load("daily_bars", config=Config(data_root=restored))["close"].to_list() == [10.0]
-
-
 def test_delta_pointer_switch_keeps_lock_free_readers_on_complete_generations(
     tmp_path, monkeypatch
 ):
     baseline_cfg, _, _ = _revision_lake(tmp_path / "baseline", 10.0)
     target_cfg, target_revisions, target_path = _revision_lake(tmp_path / "target", 10.0)
     _bars(target_path, date(2026, 1, 1), 11.0)
-    second = target_revisions.commit(
+    second = commit_generation(
+        target_revisions,
         "daily_bars",
         run_id="r2",
         changed_files=[target_path],
@@ -276,7 +194,8 @@ def test_delta_receipt_failure_rolls_back_pointer_and_generation(tmp_path, monke
     baseline_cfg, _, _ = _revision_lake(tmp_path / "baseline", 10.0)
     target_cfg, target_revisions, target_path = _revision_lake(tmp_path / "target", 10.0)
     _bars(target_path, date(2026, 1, 1), 11.0)
-    second = target_revisions.commit(
+    second = commit_generation(
+        target_revisions,
         "daily_bars",
         run_id="r2",
         changed_files=[target_path],
@@ -320,7 +239,8 @@ def test_snapshot_roundtrip_preserves_current_pointer_generation(tmp_path):
     cfg = Config(data_root=data)
     path = data / "curated/daily_bars/trade_date=2026-01-01/part.parquet"
     _bars(path, date(2026, 1, 1), 10.0)
-    RevisionStore(cfg.meta_root, cfg.curated_root).commit(
+    commit_generation(
+        RevisionStore(cfg.meta_root, cfg.curated_root),
         "daily_bars",
         run_id="r1",
         changed_files=[path],
@@ -340,7 +260,7 @@ def test_corrupt_pointer_fails_closed_instead_of_falling_back(tmp_path):
     path = data / "curated/daily_bars/trade_date=2026-01-01/part.parquet"
     _bars(path, date(2026, 1, 1), 10.0)
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    store.ensure_current("daily_bars")
+    store.pointer_path("daily_bars").parent.mkdir(parents=True)
     store.pointer_path("daily_bars").write_text("{}", encoding="utf-8")
     with pytest.raises(RevisionConsistencyError):
         scan_parquet_root(data / "curated/daily_bars", partition_col="trade_date")
@@ -371,7 +291,8 @@ def test_pointer_only_reads_cover_reader_scan_and_universe_paths(tmp_path):
     ).write_parquet(instruments)
 
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    receipt = store.commit(
+    receipt = commit_generation(
+        store,
         "daily_bars",
         run_id="r1",
         changed_files=[path],
@@ -411,14 +332,16 @@ def test_derived_revision_cow_isolates_fixed_curated_and_derived_reads(tmp_path)
     ).write_parquet(factors_path)
 
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    first_bar = store.commit(
+    first_bar = commit_generation(
+        store,
         "daily_bars",
         run_id="r1",
         changed_files=[bars_path],
         schema_version=1,
         contract_fingerprint="contract",
     )
-    first_factor = store.commit(
+    first_factor = commit_generation(
+        store,
         "adj_factors",
         run_id="r1",
         changed_files=[factors_path],
@@ -439,14 +362,16 @@ def test_derived_revision_cow_isolates_fixed_curated_and_derived_reads(tmp_path)
             "fetched_at": ["2026-01-02T00:00:00+00:00"],
         }
     ).write_parquet(factors_path)
-    second_bar = store.commit(
+    second_bar = commit_generation(
+        store,
         "daily_bars",
         run_id="r2",
         changed_files=[bars_path],
         schema_version=1,
         contract_fingerprint="contract",
     )
-    second_factor = store.commit(
+    second_factor = commit_generation(
+        store,
         "adj_factors",
         run_id="r2",
         changed_files=[factors_path],
@@ -486,14 +411,16 @@ def test_adjusted_pinned_read_uses_per_dataset_revision_map(tmp_path):
     )
     factor_frame.write_parquet(factors_path)
     revisions = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    bar_revision = revisions.commit(
+    bar_revision = commit_generation(
+        revisions,
         "daily_bars",
         run_id="bars",
         changed_files=[bars_path],
         schema_version=1,
         contract_fingerprint="contract",
     )
-    factor_one = revisions.commit(
+    factor_one = commit_generation(
+        revisions,
         "adj_factors",
         run_id="factors-1",
         changed_files=[factors_path],
@@ -503,7 +430,8 @@ def test_adjusted_pinned_read_uses_per_dataset_revision_map(tmp_path):
     assert bar_revision is not None and factor_one is not None
 
     factor_frame.with_columns(pl.lit(0.75).alias("factor")).write_parquet(factors_path)
-    factor_two = revisions.commit(
+    factor_two = commit_generation(
+        revisions,
         "adj_factors",
         run_id="factors-2",
         changed_files=[factors_path],
@@ -524,55 +452,6 @@ def test_adjusted_pinned_read_uses_per_dataset_revision_map(tmp_path):
         revision={"daily_bars": bar_revision.revision, "adj_factors": factor_one.revision},
     )
     assert explicit["adj_close"].to_list() == [5.0]
-
-
-def test_revision_commits_serialize_complete_derived_generations(tmp_path):
-    data = tmp_path / "data"
-    cfg = Config(data_root=data)
-    factors = []
-    for index, value in enumerate((0.5, 0.75), start=1):
-        path = data / f"derived/adj_factors/trade_date=2026-01-0{index}/part.parquet"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        pl.DataFrame(
-            {
-                "symbol": ["600000.SH"],
-                "trade_date": [date(2026, 1, index)],
-                "adjust_type": ["hfq"],
-                "factor": [value],
-                "source": ["derived"],
-                "data_version": ["v1"],
-                "fetched_at": [f"2026-01-0{index}T00:00:00+00:00"],
-            }
-        ).write_parquet(path)
-        factors.append(path)
-
-    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    first = store.commit(
-        "adj_factors",
-        run_id="r0",
-        changed_files=[factors[0]],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert first is not None
-
-    def commit(path: Path) -> int:
-        revision = store.commit(
-            "adj_factors",
-            run_id=path.stem,
-            changed_files=[path],
-            schema_version=1,
-            contract_fingerprint="contract",
-        )
-        assert revision is not None
-        return revision.revision
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        revisions = sorted(executor.map(commit, [factors[0], factors[1]]))
-    assert revisions == [2, 3]
-    current = store.current_root("adj_factors")
-    assert current is not None
-    assert len(list(current.rglob("*.parquet"))) == 2
 
 
 def test_raw_archive_redacts_secrets_and_replays_without_network(tmp_path):
@@ -626,7 +505,8 @@ def test_retention_keeps_the_pointer_and_the_newest_generations(tmp_path):
 
     for index in range(6):
         _bars(path, date(2026, 1, 1), 10.0 + index)
-        assert store.commit(
+        assert commit_generation(
+            store,
             "daily_bars",
             run_id=f"r-{index}",
             changed_files=[path],
@@ -674,21 +554,6 @@ def test_retention_keeps_what_the_pointer_resolves_to_even_at_keep_one(tmp_path)
     assert list(generations.iterdir()), "at least the pointed-to generation remains"
 
 
-def test_commit_excludes_abandoned_mutable_partition(tmp_path):
-    cfg, store, first = _revision_lake(tmp_path, 10.0)
-    _bars(first, date(2026, 1, 1), 99.0)
-    second = cfg.curated_root / "daily_bars/trade_date=2026-01-02/part.parquet"
-    _bars(second, date(2026, 1, 2), 20.0)
-    store.commit(
-        "daily_bars",
-        run_id="next",
-        changed_files=[second],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert load("daily_bars", config=cfg).sort("trade_date")["close"].to_list() == [10.0, 20.0]
-
-
 def test_dataset_state_uses_pointer_after_state_write_interruption(tmp_path):
     from cnequity.query.state import dataset_state
 
@@ -696,7 +561,8 @@ def test_dataset_state_uses_pointer_after_state_write_interruption(tmp_path):
     state_path = cfg.meta_root / "state/daily_bars.json"
     old_state = state_path.read_bytes()
     _bars(path, date(2026, 1, 1), 20.0)
-    receipt = store.commit(
+    receipt = commit_generation(
+        store,
         "daily_bars",
         run_id="next",
         changed_files=[path],
@@ -706,140 +572,3 @@ def test_dataset_state_uses_pointer_after_state_write_interruption(tmp_path):
     state_path.write_bytes(old_state)
     assert dataset_state("daily_bars", config=cfg).revision_id == receipt.revision_id
     assert load("daily_bars", config=cfg)["close"].to_list() == [20.0]
-
-
-def test_commit_keeps_undeclared_files_of_a_declared_partition(tmp_path):
-    cfg, store, first = _revision_lake(tmp_path, 10.0)
-    sibling = first.parent / "part-other.parquet"
-    _bars(sibling, date(2026, 1, 1), 11.0)
-    pl.read_parquet(sibling).with_columns(pl.lit("600001.SH").alias("symbol")).write_parquet(
-        sibling
-    )
-    store.commit(
-        "daily_bars",
-        run_id="sibling",
-        changed_files=[sibling],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert sorted(load("daily_bars", config=cfg)["close"].to_list()) == [10.0, 11.0]
-
-
-def test_commit_propagates_a_partition_removed_by_the_writer(tmp_path):
-    cfg, store, first = _revision_lake(tmp_path, 10.0)
-    second = cfg.curated_root / "daily_bars/trade_date=2026-01-02/part.parquet"
-    _bars(second, date(2026, 1, 2), 20.0)
-    store.commit(
-        "daily_bars",
-        run_id="add",
-        changed_files=[second],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    shutil.rmtree(first.parent)
-    _bars(second, date(2026, 1, 2), 21.0)
-    store.commit(
-        "daily_bars",
-        run_id="rebuild",
-        changed_files=[second],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    assert load("daily_bars", config=cfg)["close"].to_list() == [21.0]
-
-
-def test_commit_rejects_a_root_file_in_a_partitioned_dataset(tmp_path):
-    cfg, store, first = _revision_lake(tmp_path, 10.0)
-    stray = cfg.curated_root / "daily_bars/merged.parquet"
-    _bars(stray, date(2026, 1, 1), 99.0)
-    with pytest.raises(RevisionConsistencyError, match="partition layout"):
-        store.commit(
-            "daily_bars",
-            run_id="stray",
-            changed_files=[stray],
-            schema_version=1,
-            contract_fingerprint="contract",
-        )
-    assert load("daily_bars", config=cfg)["close"].to_list() == [10.0]
-
-
-def test_layout_violations_flags_root_files_beside_partitions_and_foreign_keys():
-    from cnequity.storage.revisions import layout_violations
-
-    problems = layout_violations(
-        "daily_bars",
-        [
-            Path("merged.parquet"),
-            Path("symbol=600000.SH/part.parquet"),
-            Path("trade_date=2026-01/part.parquet"),
-            Path("trade_date=2026-01-02/part.parquet"),
-        ],
-    )
-    assert len(problems) == 2
-    assert any("root file beside" in problem for problem in problems)
-    assert any("not a trade_date partition" in problem for problem in problems)
-    # A root-only legacy layout or a legacy granularity is left to the audit.
-    assert layout_violations("daily_bars", [Path("merged.parquet")]) == []
-    assert layout_violations("instruments", [Path("part-merged.parquet")]) == []
-
-
-def test_a_change_made_only_of_removed_partitions_publishes(tmp_path):
-    """`commit` read "no changed files" as "unchanged", so a repair that only
-    deleted partitions had to rewrite an untouched one to get published."""
-    cfg, store, first = _revision_lake(tmp_path, 10.0)
-    second = cfg.curated_root / "daily_bars/trade_date=2026-01-02/part.parquet"
-    _bars(second, date(2026, 1, 2), 11.0)
-    store.commit(
-        "daily_bars",
-        run_id="r-2",
-        changed_files=[second],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    kept = store.current_root("daily_bars") / "trade_date=2026-01-01/part.parquet"
-    kept_bytes = kept.read_bytes()
-
-    shutil.rmtree(second.parent)
-    receipt = store.commit(
-        "daily_bars",
-        run_id="r-3",
-        changed_files=[],
-        removed_partitions=["trade_date=2026-01-02"],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-
-    assert receipt is not None
-    assert receipt.changed_partitions == ("daily_bars/trade_date=2026-01-02",)
-    assert receipt.metadata["removed_partitions"] == ["daily_bars/trade_date=2026-01-02"]
-    current = store.current_root("daily_bars")
-    assert not (current / "trade_date=2026-01-02").exists()
-    assert (current / "trade_date=2026-01-01/part.parquet").read_bytes() == kept_bytes
-    assert load("daily_bars", config=cfg)["close"].to_list() == [10.0]
-    # Nothing declared and nothing changed is still "unchanged".
-    assert (
-        store.commit(
-            "daily_bars",
-            run_id="r-4",
-            changed_files=[],
-            schema_version=1,
-            contract_fingerprint="contract",
-        )
-        is None
-    )
-
-
-@pytest.mark.parametrize("name", ["trade_date=2026-01-01", "trade_date=1999-01-01", "../x"])
-def test_a_removal_must_be_real(tmp_path, name):
-    from cnequity.storage.revisions import RevisionConsistencyError
-
-    _cfg, store, _path = _revision_lake(tmp_path, 10.0)
-    with pytest.raises(RevisionConsistencyError):
-        store.commit(
-            "daily_bars",
-            run_id="r-x",
-            changed_files=[],
-            removed_partitions=[name],
-            schema_version=1,
-            contract_fingerprint="contract",
-        )

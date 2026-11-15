@@ -11,6 +11,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 from click.testing import CliRunner
+from tests.legacy_lake import commit_generation
 
 from cnequity.cli.main import cli
 from cnequity.config import Config
@@ -275,7 +276,8 @@ def test_revision_delta_checks_revision_precondition(tmp_path):
     from cnequity.storage.revisions import RevisionStore
 
     path = target / "curated/daily_bars/trade_date=2026-08-28/part.parquet"
-    RevisionStore(target / "meta", target / "curated").commit(
+    commit_generation(
+        RevisionStore(target / "meta", target / "curated"),
         "daily_bars",
         run_id="r1",
         changed_files=[path],
@@ -284,7 +286,8 @@ def test_revision_delta_checks_revision_precondition(tmp_path):
     )
     _write_bar(target, day, 11.0)
     revision_store = RevisionStore(target / "meta", target / "curated")
-    revision_store.commit(
+    commit_generation(
+        revision_store,
         "daily_bars",
         run_id="r2",
         changed_files=[path],
@@ -311,7 +314,8 @@ def test_revision_delta_from_rev2_snapshot_publishes_usable_rev3_chain(tmp_path)
     from cnequity.storage.revisions import RevisionStore
 
     revisions = RevisionStore(source / "meta", source / "curated")
-    first = revisions.commit(
+    first = commit_generation(
+        revisions,
         "daily_bars",
         run_id="r1",
         changed_files=[path],
@@ -320,7 +324,8 @@ def test_revision_delta_from_rev2_snapshot_publishes_usable_rev3_chain(tmp_path)
     )
     assert first is not None
     _write_queryable_bar(source, date(2026, 8, 28), 11.0)
-    second = revisions.commit(
+    second = commit_generation(
+        revisions,
         "daily_bars",
         run_id="r2",
         changed_files=[path],
@@ -334,7 +339,8 @@ def test_revision_delta_from_rev2_snapshot_publishes_usable_rev3_chain(tmp_path)
     baseline = snapshots.restore("rev2", tmp_path / "baseline")
 
     _write_queryable_bar(source, date(2026, 8, 28), 12.0)
-    third = revisions.commit(
+    third = commit_generation(
+        revisions,
         "daily_bars",
         run_id="r3",
         changed_files=[path],
@@ -366,14 +372,16 @@ def test_delta_defers_deleting_old_cow_generation_until_pointer_switch(tmp_path)
 
     baseline_revisions = RevisionStore(baseline / "meta", baseline / "curated")
     target_revisions = RevisionStore(target / "meta", target / "curated")
-    baseline_first = baseline_revisions.commit(
+    baseline_first = commit_generation(
+        baseline_revisions,
         "daily_bars",
         run_id="r1",
         changed_files=[baseline_path],
         schema_version=1,
         contract_fingerprint="contract",
     )
-    target_first = target_revisions.commit(
+    target_first = commit_generation(
+        target_revisions,
         "daily_bars",
         run_id="r1",
         changed_files=[target_path],
@@ -384,7 +392,8 @@ def test_delta_defers_deleting_old_cow_generation_until_pointer_switch(tmp_path)
     _write_queryable_bar(baseline, date(2026, 8, 28), 11.0)
     _write_queryable_bar(target, date(2026, 8, 28), 11.0)
     assert (
-        baseline_revisions.commit(
+        commit_generation(
+            baseline_revisions,
             "daily_bars",
             run_id="r2",
             changed_files=[baseline_path],
@@ -393,7 +402,8 @@ def test_delta_defers_deleting_old_cow_generation_until_pointer_switch(tmp_path)
         )
         is not None
     )
-    target_second = target_revisions.commit(
+    target_second = commit_generation(
+        target_revisions,
         "daily_bars",
         run_id="r2",
         changed_files=[target_path],
@@ -438,7 +448,8 @@ def test_revision_delta_rollback_restores_preexisting_protected_orphan_bytes(
     mutable = source / "curated/daily_bars/trade_date=2026-08-28/part.parquet"
     _write_queryable_bar(source, day, 10.0)
     revisions = RevisionStore(source_cfg.meta_root, source_cfg.curated_root)
-    first = revisions.commit(
+    first = commit_generation(
+        revisions,
         "daily_bars",
         run_id="r1",
         changed_files=[mutable],
@@ -447,7 +458,8 @@ def test_revision_delta_rollback_restores_preexisting_protected_orphan_bytes(
     )
     assert first is not None and first.revision == 1
     _write_queryable_bar(source, day, 11.0)
-    second = revisions.commit(
+    second = commit_generation(
+        revisions,
         "daily_bars",
         run_id="r2",
         changed_files=[mutable],
@@ -462,7 +474,8 @@ def test_revision_delta_rollback_restores_preexisting_protected_orphan_bytes(
     baseline = store.restore("rev2", tmp_path / "baseline")
 
     _write_queryable_bar(source, day, 12.0)
-    third = revisions.commit(
+    third = commit_generation(
+        revisions,
         "daily_bars",
         run_id="r3",
         changed_files=[mutable],

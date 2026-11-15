@@ -12,10 +12,10 @@ from __future__ import annotations
 from datetime import date
 
 import polars as pl
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.query.parquet_scan import collect_parquet_root
-from cnequity.storage.merge_files import merge_candidates, merge_dataset_files
 from cnequity.storage.parquet import (
     MAX_PARTITION_FILES,
     MERGED_FILE,
@@ -156,102 +156,17 @@ def test_replace_by_drops_stored_rows_the_recompute_no_longer_has(tmp_path):
 
 
 def _publish(cfg: Config, store: RevisionStore, run_id: str, frame: pl.DataFrame):
-    store.ensure_current(_DATASET)
-    store.materialize_current(_DATASET)
     changed = _compact(cfg, run_id, frame)
     if not changed:
         return None
-    return store.commit(
+    return commit_tree(
+        store,
         _DATASET,
         run_id=run_id,
         changed_files=changed,
         schema_version=1,
         contract_fingerprint="test",
     )
-
-
-def test_a_new_generation_links_the_files_a_write_did_not_touch(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    _publish(cfg, store, "run-1", _bars([f"{i:06d}.SH" for i in range(20)]))
-    first = store.current_root(_DATASET) / _YEAR / MERGED_FILE
-
-    _publish(cfg, store, "run-2", _bars(["999999.SH"]))
-    second = store.current_root(_DATASET) / _YEAR / MERGED_FILE
-
-    assert first != second
-    assert first.stat().st_ino == second.stat().st_ino  # linked, not copied
-    assert len(list((store.current_root(_DATASET) / _YEAR).glob("*.parquet"))) == 2
-
-
-def test_materialize_copies_only_what_differs(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    _publish(cfg, store, "run-1", _bars(["000001.SH"]))
-    _publish(cfg, store, "run-2", _bars(["000002.SH"], day=date(2025, 1, 6)))
-    mutable = cfg.curated_root / _DATASET
-    kept = mutable / _YEAR / MERGED_FILE
-    before = _stamp(kept)
-    stray = mutable / _YEAR / "part-interrupted.parquet"
-    _bars(["000003.SH"]).write_parquet(stray)
-
-    store.materialize_current(_DATASET)
-
-    assert _stamp(kept) == before
-    assert not stray.exists()
-
-
-def test_maintain_merges_a_partition_with_many_files(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    _publish(cfg, store, "run-0", _bars(["000000.SH"]))
-    for i in range(1, 5):
-        _publish(cfg, store, f"run-{i}", _bars([f"{i:06d}.SH"]))
-    assert merge_candidates(cfg, _DATASET)
-
-    plan = merge_dataset_files(cfg, _DATASET)
-    assert plan["applied"] is False and plan["files_before"] == 5
-
-    result = merge_dataset_files(cfg, _DATASET, apply=True)
-
-    assert result["applied"] is True
-    current = store.current_root(_DATASET) / _YEAR
-    assert [path.name for path in current.glob("*.parquet")] == [MERGED_FILE]
-    assert pl.read_parquet(current / MERGED_FILE).height == 5
-    assert not merge_candidates(cfg, _DATASET)
-
-
-def test_a_merge_audits_only_when_it_changes_rows(tmp_path, monkeypatch):
-    """Same rows in fewer files skip the whole-lake audit; a collapsed duplicate does not."""
-    import cnequity.quality.publication as publication
-
-    audited: list[str] = []
-
-    def gate(config, dataset, run_id, changed, **kwargs):
-        audited.append(dataset)
-        return {"report_path": None}
-
-    monkeypatch.setattr(publication, "check_repair_publication", gate)
-    cfg = Config(data_root=tmp_path / "data")
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    for i in range(4):
-        _publish(cfg, store, f"run-{i}", _bars([f"{i:06d}.SH"]))
-    assert merge_dataset_files(cfg, _DATASET, apply=True)["content_changed"] is False
-    assert audited == []
-
-    store.materialize_current(_DATASET)
-    part = cfg.curated_root / _DATASET / _YEAR
-    for i in range(4):
-        _bars(["000000.SH"]).write_parquet(part / f"part-dup{i}.parquet")
-    store.commit(
-        _DATASET,
-        run_id="dup",
-        changed_files=sorted(part.glob("part-dup*.parquet")),
-        schema_version=1,
-        contract_fingerprint="test",
-    )
-    assert merge_dataset_files(cfg, _DATASET, apply=True)["content_changed"] is True
-    assert audited == [_DATASET]
 
 
 def test_a_large_partition_is_bucketed_and_an_update_rewrites_one_bucket(tmp_path, monkeypatch):
@@ -273,30 +188,6 @@ def test_a_large_partition_is_bucketed_and_an_update_rewrites_one_bucket(tmp_pat
     rows = collect_parquet_root(cfg.curated_root / _DATASET, partition_col="trade_date")
     assert rows.height == 50
     assert rows.filter(pl.col("symbol") == "000007.SH")["close"].to_list() == [3.0]
-
-
-def test_a_merge_folds_appended_rows_into_their_buckets_only(tmp_path, monkeypatch):
-    import cnequity.storage.parquet as storage
-
-    monkeypatch.setattr(storage, "BUCKET_ROWS", 10)
-    cfg = Config(data_root=tmp_path / "data")
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    _publish(cfg, store, "run-0", _bars([f"{i:06d}.SH" for i in range(50)]))
-    for i in range(3):
-        _publish(cfg, store, f"run-{i + 1}", _bars([f"{900 + i:06d}.SH"]))
-    current = store.current_root(_DATASET) / _YEAR
-    before = {p.name: _stamp(p) for p in current.glob("*.parquet")}
-    assert sum(not storage.is_base_file(name) for name in before) == 3
-
-    merge_dataset_files(cfg, _DATASET, apply=True)
-
-    current = store.current_root(_DATASET) / _YEAR
-    after = {p.name: p for p in current.glob("*.parquet")}
-    assert all(storage.parse_bucket(name) for name in after)
-    untouched = [name for name, path in after.items() if before.get(name) == _stamp(path)]
-    assert untouched  # buckets the appended rows did not belong to were not rewritten
-    rows = collect_parquet_root(cfg.curated_root / _DATASET, partition_col="trade_date")
-    assert rows.height == 53
 
 
 def test_views_are_rebuilt_only_when_a_pointer_moves(tmp_path):

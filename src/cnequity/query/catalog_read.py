@@ -1,6 +1,6 @@
 """Read a dataset's committed rows from the lake catalog instead of scanning its generation.
 
-On when the lake has a catalog; ``CNE_READ_CATALOG=0`` turns it off. The
+On whenever the lake has a catalog. The
 catalog answers only when its table holds exactly the revision the read is
 pinned to; in every other case the caller gets ``None`` and scans the
 revision store, so the catalog can never return older data than the scan.
@@ -9,7 +9,6 @@ revision store, so the catalog can never return older data than the scan.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from datetime import date
 from pathlib import Path
@@ -30,8 +29,6 @@ from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog, quote_identifi
 
 logger = logging.getLogger(__name__)
 
-ENV_SWITCH = "CNE_READ_CATALOG"
-
 _lock = threading.Lock()
 _open: dict[Path, Catalog] = {}
 
@@ -40,10 +37,6 @@ class CatalogRows(NamedTuple):
     frame: pl.DataFrame
     # One row per primary key: nothing left to dedupe.
     unique_keys: bool
-
-
-def enabled() -> bool:
-    return os.environ.get(ENV_SWITCH, "").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _catalog(config) -> Catalog | None:
@@ -92,8 +85,6 @@ def read_published(
     catalog answers only if it holds that revision; without, only if it holds
     the committed one.
     """
-    if not enabled():
-        return None
     try:
         with _lock:
             catalog = _catalog(config)
@@ -170,8 +161,6 @@ def published_table(config, dataset: str, revision_id: str) -> PublishedTable | 
     ``None`` when the catalog does not hold that revision, or the table is not
     file-complete; the caller then reads the generation.
     """
-    if not enabled():
-        return None
     try:
         with _lock:
             catalog = _catalog(config)
@@ -236,8 +225,6 @@ def published_stats(config, dataset: str, revision_id: str, *, column: str | Non
 
     ``None`` under the same conditions as :func:`published_table`.
     """
-    if not enabled():
-        return None
     try:
         with _lock:
             catalog = _catalog(config)

@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 from tests.unit.test_minute_resample_derive import NEW, OLD, _lake
 
 from cnequity.config import Config
@@ -40,7 +41,8 @@ def _frame(*rows: dict) -> pl.DataFrame:
 
 
 def _commit(cfg: Config, dataset: str, layer) -> None:
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         dataset,
         run_id="seed",
         changed_files=sorted((layer / dataset).rglob("*.parquet")),

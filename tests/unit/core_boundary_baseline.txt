@@ -63,8 +63,6 @@ cnequity.query.views -> names dataset flash_news_wire
 cnequity.query.views -> names dataset index_constituents
 cnequity.query.views -> names dataset instruments
 cnequity.query.views -> names dataset news_headlines
-cnequity.storage.merge_files -> names dataset adj_factors
-cnequity.storage.merge_files -> names dataset industry_index
 cnequity.storage.parquet -> imports cnequity.domain.action_evidence
 cnequity.storage.parquet -> imports cnequity.domain.trading_status
 cnequity.storage.parquet -> names dataset corporate_actions

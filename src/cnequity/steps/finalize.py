@@ -85,34 +85,23 @@ def _dataset_criticality(dataset: str) -> str:
 
 
 def _max_partition_date(config: Config, dataset: str, partition_col: str) -> date | None:
-    """Freshest date actually present, for the watermark.
+    """Freshest date the published rows hold, for the watermark.
 
-    Reads the column rather than trusting the directory name: under month/year
-    granularity a ``trade_date=2026`` directory says nothing about how far into
+    Reads the column rather than trusting the partition name: under month/year
+    granularity a ``trade_date=2026`` partition says nothing about how far into
     the year the data goes, and taking the period start as the watermark would
     rewind it by up to a year and re-fetch everything since.
     """
-    from cnequity.query.parquet_scan import list_partitions, partition_dir
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+    from cnequity.storage.read_context import read_root
 
-    root = config.curated_root / dataset
-    if not root.exists():
+    root = Path(read_root(config, dataset))
+    if not dataset_has_parquet(root):
         return None
-
-    parts = list_partitions(root, partition_col)
-    files = list(root.glob("*.parquet"))
-    if parts:
-        # Newest period only — earlier ones cannot hold a later date.
-        files.extend(
-            sorted(partition_dir(root, partition_col, parts[-1].value).glob("**/*.parquet"))
-        )
-    elif not files:
-        files = list(root.glob("**/*.parquet"))
-    if not files:
+    scan = scan_parquet_root(root)
+    if partition_col not in scan.collect_schema().names():
         return None
-    combined = pl.concat([pl.read_parquet(f) for f in files], how="diagonal_relaxed")
-    if partition_col not in combined.columns:
-        return None
-    return combined[partition_col].max()
+    return scan.select(pl.col(partition_col).max()).collect().item()
 
 
 def _watermarked_datasets() -> list[tuple[str, str]]:
@@ -140,7 +129,6 @@ def _capture_derive_inputs(config: Config, dataset: str) -> dict:
     state = StateStore(config.meta_root)
     inputs = {}
     for name in DERIVE_INPUTS.get(dataset, ()):
-        store.ensure_current(name)
         pointer = store.current_pointer(name) or {}
         gaps = state.get_payload(name)
         latest = store.latest(name) if pointer.get("receipt") else None
@@ -171,110 +159,84 @@ def _publish_derived_revision(
 ) -> dict | None:
     """Publish what a derivation wrote into *output* as one gated revision.
 
-    *output* is the ``DerivedOutput`` the derivation wrote: the dataset's
-    working tree, or on a lake that publishes into its catalog a checkout of
+    *output* is the ``DerivedOutput`` the derivation wrote: a checkout of
     the partitions it changed.
     """
     from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.quality.publication import evaluate_publication
+    from cnequity.storage.lake_write import DatasetPublish, InputChanged
     from cnequity.storage.revisions import RevisionStore
 
     if not output.changed():
         return None
     changed = output.changed_files()
-    from contextlib import nullcontext
-
-    from cnequity.file_lock import lake_mutation_lock
-    from cnequity.quality.publication import evaluate_publication
-
     revisions = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
     lake_write = output.lake_write
 
-    def reject(reason: str) -> None:
-        # Published data is untouched either way; the candidate is kept aside.
-        if lake_write is not None:
-            lake_write.discard(dataset)
-        else:
-            revisions.quarantine_candidate(dataset, run_id=run_id, reason=reason)
+    def reject() -> None:
+        # Published data is untouched; the candidate is kept aside.
+        lake_write.discard(dataset)
 
     def input_changed(name: str):
         from cnequity.orchestrator.outcomes import InputUnavailableError
 
-        reject("input_revision_changed")
+        reject()
         return InputUnavailableError(
             f"{dataset}: input {name} changed during calculation; re-run derive"
         )
 
-    # A catalog write holds the lake lock only while it commits, and checks the
-    # inputs again there; a working tree is published under the lock throughout.
-    with (
-        lake_mutation_lock(config.meta_root, blocking=True) if lake_write is None else nullcontext()
-    ):
-        for name, identity in (input_revisions or {}).items():
-            current = revisions.current_pointer(name) or {}
-            if any(
-                current.get(key) != identity.get(key)
-                for key in ("revision", "revision_id", "content_digest")
-            ):
-                raise input_changed(name)
-            if lake_write is not None:
-                lake_write.expect(name, identity.get("revision_id"))
-        if any(row.get("coverage_status") == "partial" for row in (input_revisions or {}).values()):
-            coverage_status = "partial"
-        publication = evaluate_publication(
-            config,
-            f"{run_id}-{dataset}",
-            trade_date,
-            {dataset: output.root},
-            {dataset: changed},
-            lake_write=lake_write,
-        )
-        if publication["blocked"]:
-            reject("publication_gate")
-            raise RuntimeError(
-                f"publication gate blocked {dataset}: {publication.get('report_path')}"
-            )
-        factor_metadata = {}
-        if dataset == "adj_factors" and factor_findings:
-            previous = revisions.latest(dataset)
-            proofs = dict(previous.metadata.get("factor_event_proofs", {})) if previous else {}
-            for item in factor_findings:
-                if item.get("check") == "stock_event_factor" and "correction" in item:
-                    proofs[f"{item['symbol']}|{item['trade_date']}"] = item
-            factor_metadata["factor_event_proofs"] = proofs
-        contract = dataset_contract(dataset)
-        schema_version = int(contract["schema_version"])
-        fingerprint = contract_fingerprint(contract)
-        metadata = {
-            "trade_date": trade_date.isoformat(),
-            "layer": "derived",
-            "input_revisions": input_revisions or {},
-            "coverage_status": coverage_status,
-            "publication_audit": {
-                key: publication.get(key) for key in ("mode", "blocked", "report_path")
-            },
-            "changed_files_count": len(changed),
-            **factor_metadata,
-        }
-        if lake_write is not None:
-            from cnequity.storage.lake_write import DatasetPublish, InputChanged
-
-            try:
-                revision = lake_write.publish(
-                    {dataset: DatasetPublish(schema_version, fingerprint, metadata)},
-                    message=f"{dataset} revision from {run_id}",
-                ).get(dataset)
-            except InputChanged as exc:
-                raise input_changed(exc.dataset) from exc
-        else:
-            revision = revisions.commit(
-                dataset,
-                run_id=run_id,
-                changed_files=changed,
-                schema_version=schema_version,
-                contract_fingerprint=fingerprint,
-                metadata=metadata,
-                _locked=True,
-            )
+    # The write holds the lake lock only while it commits, and checks the
+    # inputs again there.
+    for name, identity in (input_revisions or {}).items():
+        current = revisions.current_pointer(name) or {}
+        if any(
+            current.get(key) != identity.get(key)
+            for key in ("revision", "revision_id", "content_digest")
+        ):
+            raise input_changed(name)
+        lake_write.expect(name, identity.get("revision_id"))
+    if any(row.get("coverage_status") == "partial" for row in (input_revisions or {}).values()):
+        coverage_status = "partial"
+    publication = evaluate_publication(
+        config,
+        f"{run_id}-{dataset}",
+        trade_date,
+        {dataset: output.root},
+        {dataset: changed},
+        lake_write=lake_write,
+    )
+    if publication["blocked"]:
+        reject()
+        raise RuntimeError(f"publication gate blocked {dataset}: {publication.get('report_path')}")
+    factor_metadata = {}
+    if dataset == "adj_factors" and factor_findings:
+        previous = revisions.latest(dataset)
+        proofs = dict(previous.metadata.get("factor_event_proofs", {})) if previous else {}
+        for item in factor_findings:
+            if item.get("check") == "stock_event_factor" and "correction" in item:
+                proofs[f"{item['symbol']}|{item['trade_date']}"] = item
+        factor_metadata["factor_event_proofs"] = proofs
+    contract = dataset_contract(dataset)
+    schema_version = int(contract["schema_version"])
+    fingerprint = contract_fingerprint(contract)
+    metadata = {
+        "trade_date": trade_date.isoformat(),
+        "layer": "derived",
+        "input_revisions": input_revisions or {},
+        "coverage_status": coverage_status,
+        "publication_audit": {
+            key: publication.get(key) for key in ("mode", "blocked", "report_path")
+        },
+        "changed_files_count": len(changed),
+        **factor_metadata,
+    }
+    try:
+        revision = lake_write.publish(
+            {dataset: DatasetPublish(schema_version, fingerprint, metadata)},
+            message=f"{dataset} revision from {run_id}",
+        ).get(dataset)
+    except InputChanged as exc:
+        raise input_changed(exc.dataset) from exc
     if revision is None:
         return None
     _record_dataset_result(
@@ -564,9 +526,11 @@ def step_compact(config: Config, trade_date: date, run_id: str, context: dict) -
 
 
 def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    lake_write = _open_lake_write(config, run_id)
-    if lake_write is None:
-        return _compact_datasets(config, trade_date, run_id, context, None)
+    from cnequity.storage.catalog_migration import require_catalog_lake
+    from cnequity.storage.lake_write import LakeWrite
+
+    require_catalog_lake(config)
+    lake_write = LakeWrite(config, run_id)
     try:
         result = _compact_datasets(config, trade_date, run_id, context, lake_write)
     except BaseException:
@@ -574,33 +538,6 @@ def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict
         raise
     lake_write.close()
     return result
-
-
-def _open_lake_write(config: Config, run_id: str):
-    """The run's catalog write when the lake publishes into its catalog and has one.
-
-    Either the config asks for it (``[storage].publish = "catalog"``) or the
-    lake already recorded the switch (``meta/storage.json``, written here or by
-    the ``lake-catalog`` migration): how a lake stores revisions belongs to
-    the lake, and a config that never mentions it must not send compaction
-    back to generations while every other writer publishes into the catalog.
-    """
-    from cnequity.storage.revisions import RevisionStore
-
-    recorded = RevisionStore(
-        config.meta_root, config.curated_root, config.derived_root, create=False
-    ).publishes_to_catalog()
-    if getattr(config, "storage_publish", "generation") != "catalog" and not recorded:
-        return None
-    from cnequity.storage.atomic import write_json_atomic
-    from cnequity.storage.lake_write import LakeWrite
-
-    # How the lake stores revisions belongs to the lake, so every writer (also
-    # derivations and repairs, through RevisionStore.commit) follows it.
-    setting = config.meta_root / "storage.json"
-    if not setting.exists():
-        write_json_atomic(setting, {"publish": "catalog"}, indent=2)
-    return LakeWrite(config, run_id)
 
 
 def _compact_datasets(
@@ -687,27 +624,13 @@ def _compact_datasets(
         pcol = PARTITION_COLS[ds]
         changed_files: list[Path] = []
         change_log: list[dict] = []
-        # Establish revision zero before touching the legacy-compatible
-        # curated path, then always merge against the immutable committed
-        # generation. A previous process may have died after replacing only
-        # some mutable partitions; it must never become the next compact's
-        # implicit base.
-        checkout = (
-            lake_write.checkout_staged(ds, selected_files) if lake_write is not None else None
-        )
-        if checkout is None:
-            committed_root = revisions.ensure_current(ds)
-            # Candidate audits must see the same base that commit will publish.
-            # Discard only the disposable compatibility copy of an interrupted run.
-            revisions.materialize_current(ds)
-            merge_base, out_root, candidate_root = committed_root, None, config.curated_root / ds
-        else:
-            # The partitions this run changes, checked out of the catalog: the
-            # merge reads and writes them in place, and only they publish.
-            from cnequity.storage.read_context import read_root
+        # The partitions this run changes, checked out of the catalog: the
+        # merge reads and writes them in place, and only they publish.
+        from cnequity.storage.read_context import read_root
 
-            committed_root = read_root(config, ds)
-            merge_base, out_root, candidate_root = checkout.root, checkout.layer_root, checkout.root
+        checkout = lake_write.checkout_staged(ds, selected_files)
+        committed_root = read_root(config, ds)
+        merge_base, out_root, candidate_root = checkout.root, checkout.layer_root, checkout.root
         if ds == "instruments":
             rows, inst_findings = compact_instruments(
                 config.staging_root,
@@ -833,7 +756,7 @@ def _compact_datasets(
                     source_diff_blocks_revision,
                 )
 
-                if checkout is not None and pcol == checkout.spec.partition_col:
+                if pcol == checkout.spec.partition_col:
                     # A checkout holds only the partitions this run changes;
                     # the comparison needs the session's rows even when the
                     # run staged other days. An unchanged partition is not
@@ -849,13 +772,7 @@ def _compact_datasets(
                 )
                 audit_findings.extend(gate_findings)
                 if source_diff_blocks_revision(gate_findings):
-                    quarantine = (
-                        lake_write.discard(ds)
-                        if checkout is not None
-                        else revisions.quarantine_candidate(
-                            ds, run_id=run_id, reason="source_diff_gate"
-                        )
-                    )
+                    quarantine = lake_write.discard(ds)
                     compacted.discard(ds)
                     skipped.append(
                         {
@@ -885,14 +802,7 @@ def _compact_datasets(
         config,
         run_id,
         trade_date,
-        {
-            item[0]: (
-                lake_write.checkout(item[0]).root
-                if lake_write is not None and lake_write.has(item[0])
-                else config.curated_root / item[0]
-            )
-            for item in pending
-        },
+        {item[0]: lake_write.checkout(item[0]).root for item in pending},
         {item[0]: item[3] for item in pending},
         lake_write=lake_write,
     )
@@ -901,11 +811,7 @@ def _compact_datasets(
         for ds, _pcol, rows, *_ in pending:
             if ds not in blocked_datasets:
                 continue
-            quarantine = (
-                lake_write.discard(ds)
-                if lake_write is not None and lake_write.has(ds)
-                else revisions.quarantine_candidate(ds, run_id=run_id, reason="publication_gate")
-            )
+            quarantine = lake_write.discard(ds)
             compacted.discard(ds)
             skipped.append(
                 {
@@ -956,9 +862,7 @@ def _compact_datasets(
         }
 
     catalog_revisions: dict = {}
-    catalog_pending = [
-        item for item in pending if lake_write is not None and lake_write.has(item[0])
-    ]
+    catalog_pending = [item for item in pending if lake_write.has(item[0])]
     if catalog_pending:
         from cnequity.storage.lake_write import DatasetPublish
 
@@ -989,62 +893,9 @@ def _compact_datasets(
                     error_message=str(exc),
                 )
             raise
-    for index, (ds, pcol, rows, changed_files, change_log, gate_spec) in enumerate(pending):
-        try:
-            contract = dataset_contract(ds)
-            if lake_write is not None and lake_write.has(ds):
-                revision = catalog_revisions.get(ds)
-            else:
-                revision = revisions.commit(
-                    ds,
-                    run_id=run_id,
-                    changed_files=changed_files,
-                    schema_version=int(contract["schema_version"]),
-                    contract_fingerprint=contract_fingerprint(contract),
-                    metadata=_revision_metadata(ds, pcol, rows, change_log, gate_spec),
-                    # ``_compact_locked`` already holds the shared compact
-                    # run lock, whose path is intentionally the same as the
-                    # low-level lake mutation lock.  Re-entering it would
-                    # deadlock on POSIX; direct RevisionStore callers still
-                    # acquire the lock through the default path.
-                    _locked=True,
-                )
-        except Exception as exc:
-            _record_dataset_result(
-                config,
-                run_id,
-                ds,
-                "publish_revision",
-                "failed",
-                criticality=_dataset_criticality(ds),
-                rows_written=rows,
-                error_code=type(exc).__name__,
-                error_message=str(exc),
-            )
-            # Every dataset before this one already has its revision on disk:
-            # current.json names it and readers see it. Leaving their coverage
-            # ledgers and watermarks behind would keep reporting those
-            # published days as missing — and, once this run's staging is
-            # cleaned, nothing would ever settle them. Settle exactly the
-            # datasets whose publication is final, then fail as before.
-            unpublished = {item[0] for item in pending[index:]}
-            try:
-                _settle_published_datasets(
-                    config,
-                    compacted - unpublished,
-                    run_id=run_id,
-                    trade_date=trade_date,
-                    fully_selected=fully_selected,
-                    resolved_keys=resolved_keys,
-                    reconcile_no_print=bool(
-                        {"daily_bars", "instruments"} & set(committed_revisions)
-                    ),
-                )
-            except Exception:  # noqa: BLE001 — never mask the commit failure
-                logger.exception(
-                    "compact: could not settle ledgers of datasets published before %s", ds
-                )
-            raise
+    # One catalog transaction published every dataset above, or none of them.
+    for ds, _pcol, rows, *_rest in pending:
+        revision = catalog_revisions.get(ds)
         after_commit = hooks_for(ds).after_commit
         if after_commit is not None:
             after_commit(config, ds)

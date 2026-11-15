@@ -140,18 +140,16 @@ def refresh_references(config_path: str):
     ),
 )
 def sync_catalog(config_path: str, create: bool):
-    """Bring the lake catalog to the committed revision of every dataset; reads the revision store only."""
-    from cnequity.storage.catalog_bridge import lake_root, sync_all, sync_summary
-    from equitylake_core.catalog import CATALOG_FILE, Catalog
-
-    config = _cfg(config_path)
-    root = lake_root(config)
-    if not create and not (root / CATALOG_FILE).exists():
-        raise click.ClickException(
-            _("No lake catalog at {root}; run again with --create to build it.").format(root=root)
-        )
-    with Catalog(root, create=create, memory_limit="8GB", temp_directory=root / "tmp") as catalog:
-        _emit(sync_summary(sync_all(config, catalog)))
+    """No longer does anything: every write publishes into the lake catalog. Removed in 0.27.0."""
+    _emit(
+        {
+            "applied": False,
+            "note": _(
+                "Nothing to sync: every write publishes into the lake catalog. "
+                "This command is removed in 0.27.0."
+            ),
+        }
+    )
 
 
 @storage.command("catalog-retention")
@@ -319,21 +317,13 @@ def apply(args: tuple[str, ...]):
     "--apply", is_flag=True, help=N_("Publish the merge; without it, only report what would merge.")
 )
 def merge_files(config_path: str, datasets: tuple[str, ...], min_files: int | None, apply: bool):
-    """Merge partitions that incremental writes left in several files.
-
-    \b
-    New keys are written as a file of their own instead of rewriting the partition, so
-    partitions gather files over time. `cne run maintain` merges them after each daily
-    update; run this to merge now or to see what would merge.
-    """
-    from cnequity.storage.merge_files import MERGE_AT_FILES, merge_all, merge_dataset_files
-
-    cfg = _cfg(config_path)
-    threshold = min_files or MERGE_AT_FILES
-    if datasets:
-        reports = [
-            merge_dataset_files(cfg, name, apply=apply, min_files=threshold) for name in datasets
-        ]
-    else:
-        reports = merge_all(cfg, apply=apply, min_files=threshold)
-    _emit({"applied": apply, "min_files": threshold, "datasets": reports})
+    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0."""
+    _emit(
+        {
+            "applied": False,
+            "note": _(
+                "Nothing to merge: the lake catalog lays out each partition's files. "
+                "This command is removed in 0.27.0."
+            ),
+        }
+    )

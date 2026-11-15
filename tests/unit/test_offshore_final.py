@@ -3,6 +3,7 @@
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.schemas import DATASET_SCHEMAS
@@ -45,7 +46,8 @@ def _lake(tmp_path):
     pl.DataFrame(rows, schema=DATASET_SCHEMAS["commodity_bars"]).write_parquet(
         root / "part.parquet"
     )
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         "commodity_bars",
         run_id="seed",
         changed_files=[root / "part.parquet"],

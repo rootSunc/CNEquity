@@ -1,9 +1,7 @@
-"""Where a derivation writes its dataset: the working tree, or a checkout of the lake catalog.
+"""Where a derivation writes its dataset: a checkout of the lake catalog.
 
 A derivation computes rows and writes whole partitions, or merges into the
-ones already there. It used to do both in the dataset's working tree, which on
-a lake that publishes into its catalog meant rebuilding the whole dataset on
-disk first. A :class:`DerivedOutput` gives it one shape for both:
+ones already there. A :class:`DerivedOutput` gives it one shape for that:
 
 * ``partition(label)`` is a directory holding that partition's published
   rows, to merge into in place;
@@ -11,9 +9,10 @@ disk first. A :class:`DerivedOutput` gives it one shape for both:
 * ``remove(label)`` deletes one;
 * ``layer_root`` goes where a writer expects ``derived_root``.
 
-Opened by the step that publishes the result (``steps.finalize``), which
-reads :meth:`changed_files` afterwards. A derivation called without one
-writes the working tree, as it always has.
+Opened with a run id by the step that publishes the result
+(``steps.finalize``), which reads :meth:`changed_files` afterwards. Without a
+run id it is a plain directory under the dataset's layer root that nothing
+publishes: what a derivation called on its own writes.
 """
 
 from __future__ import annotations
@@ -67,25 +66,16 @@ class DerivedOutput:
         return self.layer_root / self.dataset
 
     def __enter__(self) -> DerivedOutput:
-        store = RevisionStore(
-            self.config.meta_root, self.config.curated_root, self.config.derived_root
-        )
-        if self.run_id is not None:
-            from cnequity.storage.catalog_migration import require_catalog_lake
-
-            require_catalog_lake(self.config)
-        if self.run_id is not None and store.commits_to_catalog(self.dataset):
-            from cnequity.storage.lake_write import LakeWrite
-
-            self.lake_write = LakeWrite(self.config, self.run_id)
-            self.checkout = self.lake_write.checkout(self.dataset)
-            self.layer_root = self.checkout.layer_root
+        if self.run_id is None:
+            self._before = _identity(self.root)
             return self
-        # Seed the working tree from the published revision: an append-only
-        # derivation must not publish only its new tip and lose the history.
-        store.ensure_current(self.dataset)
-        store.materialize_current(self.dataset)
-        self._before = _identity(self.root)
+        from cnequity.storage.catalog_migration import require_catalog_lake
+        from cnequity.storage.lake_write import LakeWrite
+
+        require_catalog_lake(self.config)
+        self.lake_write = LakeWrite(self.config, self.run_id)
+        self.checkout = self.lake_write.checkout(self.dataset)
+        self.layer_root = self.checkout.layer_root
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -137,7 +127,7 @@ class DerivedOutput:
         )
 
     def write(self, label: str, rows: pl.DataFrame, name: str) -> None:
-        """Make *rows* the whole of partition *label* (in the file *name*, in a working tree)."""
+        """Make *rows* the whole of partition *label* (in the file *name*, in a plain directory)."""
         value = self._label(label)
         if self.checkout is not None:
             # A rebuild that computes what is already published changes nothing:

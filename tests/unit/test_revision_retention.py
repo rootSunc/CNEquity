@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tests.legacy_lake import commit_generation
 
 from cnequity.cli._shared import attach_revision_retention
 from cnequity.config import Config, load_config
@@ -26,7 +27,8 @@ def _file(root: Path, day: str, value: bytes) -> Path:
 
 
 def _commit(store: RevisionStore, run_id: str, files: list[Path]):
-    receipt = store.commit(
+    receipt = commit_generation(
+        store,
         "daily_bars",
         run_id=run_id,
         changed_files=files,

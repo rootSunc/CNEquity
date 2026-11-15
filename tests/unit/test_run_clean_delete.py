@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 from click.testing import CliRunner
+from tests.legacy_lake import commit_generation
 
 from cnequity.cli.main import cli
 from cnequity.config import Config
@@ -79,7 +80,8 @@ def _publish_two_generations(cfg: Config) -> str:
     first_path = cfg.curated_root / "daily_bars" / "trade_date=2024-06-18" / "part-merged.parquet"
     first_path.parent.mkdir(parents=True)
     first_path.write_bytes(b"day-1")
-    store.commit(
+    commit_generation(
+        store,
         "daily_bars",
         run_id="run-1",
         changed_files=[first_path],
@@ -89,7 +91,8 @@ def _publish_two_generations(cfg: Config) -> str:
     second = cfg.curated_root / "daily_bars" / "trade_date=2024-06-19" / "part-merged.parquet"
     second.parent.mkdir(parents=True)
     second.write_bytes(b"day-2")
-    receipt = store.commit(
+    receipt = commit_generation(
+        store,
         "daily_bars",
         run_id="run-2",
         changed_files=[second],

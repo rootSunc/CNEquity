@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.query import load
@@ -12,7 +13,8 @@ DAYS = [date(2024, 1, 2), date(2024, 1, 3)]
 
 
 def _commit(cfg: Config, dataset: str, root) -> None:
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         dataset,
         run_id="seed",
         changed_files=sorted(root.rglob("*.parquet")),

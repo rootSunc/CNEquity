@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.schemas import DATASET_SCHEMAS
@@ -19,7 +20,8 @@ def _write(cfg, dataset, rows, partition, value):
     root = cfg.curated_root / dataset / f"{partition}={value}"
     root.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(rows, schema=DATASET_SCHEMAS[dataset]).write_parquet(root / "part.parquet")
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         dataset,
         run_id=f"seed-{dataset}",
         changed_files=sorted((cfg.curated_root / dataset).rglob("*.parquet")),
@@ -72,7 +74,8 @@ def lake(tmp_path):
         ],
         schema=DATASET_SCHEMAS["instruments"],
     ).write_parquet(inst / "part.parquet")
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         "instruments",
         run_id="seed",
         changed_files=[inst / "part.parquet"],
@@ -235,7 +238,8 @@ def _published_lake(tmp_path):
     root = cfg.curated_root / "share_structure" / "change_date=2024"
     root.mkdir(parents=True)
     pl.DataFrame(rows, schema=schema).write_parquet(root / "part.parquet")
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         "share_structure",
         run_id="seed",
         changed_files=[root / "part.parquet"],
@@ -285,7 +289,8 @@ def test_published_mode_has_no_industry_and_leaves_status_alone(lake):
         ],
         schema=DATASET_SCHEMAS["industry_members"],
     ).write_parquet(root / "part.parquet")
-    RevisionStore(lake.meta_root, lake.curated_root, lake.derived_root).commit(
+    commit_tree(
+        RevisionStore(lake.meta_root, lake.curated_root, lake.derived_root),
         "industry_members",
         run_id="seed",
         changed_files=[root / "part.parquet"],
@@ -318,7 +323,8 @@ def test_canonical_reads_a_renamed_security_under_its_code_on_the_date(tmp_path)
         ],
         schema=DATASET_SCHEMAS["trading_status"],
     ).write_parquet(root / "part.parquet")
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         "trading_status",
         run_id="seed",
         changed_files=[root / "part.parquet"],

@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.query import load
@@ -101,7 +102,8 @@ def lake(tmp_path) -> Config:
         ],
         schema_overrides=_SCHEMA,
     ).write_parquet(part / "part-merged.parquet")
-    RevisionStore(cfg.meta_root, cfg.curated_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root),
         "corporate_actions",
         run_id="seed",
         changed_files=sorted((cfg.curated_root / "corporate_actions").rglob("*.parquet")),
@@ -193,7 +195,8 @@ def test_a_row_dated_inside_a_halt_is_never_moved(lake):
         pl.lit(0.2).alias("cash_dividend"),
     )
     pl.concat([frame, halted]).write_parquet(part / "part-merged.parquet")
-    RevisionStore(lake.meta_root, lake.curated_root).commit(
+    commit_tree(
+        RevisionStore(lake.meta_root, lake.curated_root),
         "corporate_actions",
         run_id="halt",
         changed_files=[part / "part-merged.parquet"],
@@ -281,7 +284,8 @@ def test_the_gate_blocks_moving_a_halt_dated_ex_date(lake, monkeypatch):
         pl.lit(0.2).alias("cash_dividend"),
     )
     pl.concat([frame, halted]).write_parquet(part / "part-merged.parquet")
-    RevisionStore(lake.meta_root, lake.curated_root).commit(
+    commit_tree(
+        RevisionStore(lake.meta_root, lake.curated_root),
         "corporate_actions",
         run_id="halt",
         changed_files=[part / "part-merged.parquet"],

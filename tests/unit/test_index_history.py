@@ -8,6 +8,7 @@ import httpx
 import pandas as pd
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.storage.raw_archive import RawPayloadArchive
@@ -112,7 +113,8 @@ def seed(cfg, frame):
     path.parent.mkdir(parents=True)
     frame.write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
+    commit_tree(
+        store,
         "index_constituents",
         run_id="fixture",
         changed_files=[path],

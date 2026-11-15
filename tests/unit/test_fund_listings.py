@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.adapters.exchange.fund_listings import (
     parse_sse_fund_listings,
@@ -120,7 +121,8 @@ def test_listing_repair_preserves_known_dates_and_old_revision(tmp_path, monkeyp
     ]
     pl.DataFrame(rows, schema=DATASET_SCHEMAS["instruments"]).write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
+    commit_tree(
+        store,
         "instruments",
         run_id="seed",
         changed_files=[path],

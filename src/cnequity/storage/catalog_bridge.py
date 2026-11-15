@@ -759,33 +759,6 @@ def sync_summary(results: list[SyncResult]) -> dict:
     }
 
 
-@dataclass(frozen=True)
-class _StoreRoots:
-    """The paths the bridge reads from a config, taken from a revision store instead."""
-
-    meta_root: Path
-    curated_root: Path
-    derived_root: Path
-    data_root: Path
-
-
-def sync_published(store: RevisionStore, dataset: str) -> SyncResult | None:
-    """Sync *dataset* right after *store* published it. Does nothing in a lake without a catalog."""
-    from equitylake_core.catalog import CATALOG_FILE
-
-    roots = _StoreRoots(
-        meta_root=store.meta_root,
-        curated_root=store.curated_root,
-        derived_root=store.derived_root,
-        data_root=store.meta_root.parent,
-    )
-    root = lake_root(roots)
-    if not (root / CATALOG_FILE).exists():
-        return None
-    with Catalog(root, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
-        return sync_dataset(roots, catalog, dataset)
-
-
 # --- export -------------------------------------------------------------------------
 
 
@@ -816,7 +789,7 @@ def export_dataset(
         if not catalog_is_current(config, catalog, dataset):
             raise ExportRefused(
                 f"the lake catalog does not hold the published revision of {dataset}; "
-                "run cne storage sync-catalog first"
+                "run cne upgrade --apply first"
             )
         types = {
             row[0]: row[1]

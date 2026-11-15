@@ -40,10 +40,6 @@ class CatalogMigrationError(RuntimeError):
     """The lake was not switched; the catalog may hold copies, which a rerun reuses."""
 
 
-#: Set by the test suite while tests of the generation layer remain; never by users.
-GENERATION_LAKE_SWITCH = "CNE_TEST_GENERATION_LAKE"
-
-
 def require_catalog_lake(config) -> None:
     """Refuse to write a lake that still publishes generations.
 
@@ -52,10 +48,6 @@ def require_catalog_lake(config) -> None:
     which copies and verifies what it has published; until then nothing
     writes to it. A lake that holds nothing yet simply starts on the catalog.
     """
-    import os
-
-    if os.environ.get(GENERATION_LAKE_SWITCH):
-        return
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     if store.publishes_to_catalog():
         from cnequity.storage.revision_records import enabled

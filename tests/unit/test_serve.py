@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import polars as pl
 import pytest
 from fastapi.testclient import TestClient
+from tests.catalog_seed import commit_tree
 
 from cnequity.serve.app import create_app
 from cnequity.storage.stats import rebuild_stats
@@ -158,7 +159,8 @@ def test_http_read_returns_a_replayable_receipt_for_the_exact_rows(lake):
     from cnequity.storage.revisions import RevisionStore
 
     files = sorted((lake.curated_root / "daily_bars").rglob("*.parquet"))
-    committed = RevisionStore(lake.meta_root, lake.curated_root).commit(
+    committed = commit_tree(
+        RevisionStore(lake.meta_root, lake.curated_root),
         "daily_bars",
         run_id="http-receipt-fixture",
         changed_files=files,

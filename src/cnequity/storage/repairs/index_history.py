@@ -309,8 +309,6 @@ def repair_index_history(config, *, index_symbol="399001.SZ", apply=False, refre
     }
     with planned_on(config) if apply else nullcontext():
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-        if apply:
-            store.ensure_current(DATASET)
         with PartitionRewrite(config, store, DATASET, run_id=run_id, apply=apply) as rewrite:
             # Each partition as it is stored. An old generation file may hold
             # rows of another month, so the stored content is compared, not

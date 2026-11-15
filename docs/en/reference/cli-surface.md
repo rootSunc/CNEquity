@@ -41,9 +41,9 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne repair fund-volume` | only with --refresh-sources | Offline preview by default; online refresh archives historical K-lines from the SSE quote service and reuses or collects EastMoney evidence when turnover conflicts; --apply repairs verified Shanghai and Shenzhen fund volume, passes publication checks and retains old revisions |
 | `cne repair index-history` | --refresh-sources only | Replays the reviewed official attachment catalog for the selected SZSE Component or STAR 50 index offline by default; --apply replaces whole books on effective dates, retaining official dated weights and old revisions; unknown historical weights remain null |
 | `cne repair index-snapshots` | --refresh-sources only | Replays official files offline by default; --apply replaces complete dated constituent snapshots and real weights, publishes through the repair gate and retains old revisions |
-| `cne repair layout` | none | Preview only by default; --apply publishes a new version, keeping the old version and duplicate-observation evidence |
+| `cne repair layout` | none | No longer does anything and only prints a note; removed in 0.27.0 |
 | `cne repair payment-dates` | only with --apply | Read-only preview by default; --apply repairs cash payment dates from reviewed issuer announcements (CNINFO, BSE) and Baostock, published through the backfill gate |
-| `cne repair repartition` | none | Read-only listing or preview by default; --apply rewrites partitions at the registered granularity under the lake lock and swaps them in |
+| `cne repair repartition` | none | No longer does anything and only prints a note; removed in 0.27.0 |
 | `cne repair status-traded` | none | Read-only preview by default; --apply fills missing status keys from committed positive-volume bars, leaves ST unknown, publishes a new version and keeps the old one |
 | `cne repair stock-listing-dates` | --refresh-sources only | Replays IPO calendars offline by default; --apply fills stock listing dates confirmed by official listed events, publishes through the repair gate and retains old revisions |
 | `cne repair valuation-outage` | only with --apply | Read-only preview by default; --apply requests the EastMoney datacenter valuation report for the outage window and writes only when the whole market is retrieved |
@@ -82,12 +82,12 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne storage hold` | none | Adds object protection; automatic retention no longer deletes it |
 | `cne storage import` | none | Validates and registers a reference manifest; only adds protection |
 | `cne storage inspect` | none | Reads versions and retention reasons |
-| `cne storage merge-files` | none | Read-only preview; --apply merges many-file partitions and publishes a new version with the rows unchanged |
+| `cne storage merge-files` | none | No longer does anything and only prints a note; removed in 0.27.0 |
 | `cne storage plan` | none | Previews which generations retention would delete now; deletes no data |
 | `cne storage raw-external` | none | Registers external payload storage; retains local source sidecars and does not move or delete files |
 | `cne storage refresh` | none | Re-scans the reference roots and adds holds for the versions they cite; never releases a hold |
 | `cne storage release` | none | Drops manual holds and stale references on the named versions; case dependencies and live references stay |
-| `cne storage sync-catalog` | none | Brings the lake catalog to the committed revisions; reads the revision store only and writes only under lake/ |
+| `cne storage sync-catalog` | none | No longer does anything and only prints a note; removed in 0.27.0 |
 | `cne storage verify-catalog` | none | Read-only; checks that each revision published into the lake catalog still holds, at its snapshot, the rows whose digest was recorded at publish |
 | `cne ths-official backfill` | when run | Calls the credentialed source and fills gaps |
 | `cne ths-official capture` | when run | Calls the credentialed source and writes comparison evidence |

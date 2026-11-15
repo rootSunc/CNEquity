@@ -614,8 +614,8 @@ cne migrate --apply    # 复制、逐行核对，然后切换；再运行其余�
 
 | 子命令 | 说明 |
 |------|------|
-| `layout DATASET` | 把分区数据集根目录或错误键目录中的文件并入登记分区。同一主键的多份观察只在非空值完全一致时互补填空；有冲突的键按规范规则整行保留一份。重复键的全部原始观察写入 `_quarantine`。发布新版本时若检测到这类布局，会提示运行此命令 |
-| `repartition [DATASET] [--all]` | 按登记的分区粒度改写数据集分区；不带参数只列出需要改写的数据集，带数据集时预览文件、分区和体积变化，`--apply` 在湖锁下改写并整体换上。只回收空间和文件句柄，不修正确性；审计发现粒度混用时会指向这里 |
+| `layout DATASET` | 已不做任何事：每个分区的文件由湖目录安排。0.27.0 删除 |
+| `repartition [DATASET] [--all]` | 已不做任何事：每个分区的文件由湖目录安排。0.27.0 删除 |
 | `payment-dates` | `corporate_actions` 现金到账日：先用已审发行人公告，再用 Baostock 匹配；`--issuer-notices-only` 只用发行人公告并应用已审送转条款。需要 `--symbols`/`--start`/`--end` |
 | `delisted-actions --source baostock\|ths` | 补已退市证券的历史分红除权：`baostock` 用于沪深，`ths` 用于北交所 |
 | `ex-dates --ex-dates ...` | 按给定除权日逐日向东财请求历史除权行；只有它能取到 2015-09-29 之前的行 |
@@ -631,11 +631,6 @@ cne migrate --apply    # 复制、逐行核对，然后切换；再运行其余�
 | `adj-factors` | 统一股票因子与 ETF/LOF 份额折算修复。默认离线预览并保存计划；`--refresh-sources` 显式联网采证，`--apply` 复查输入后发布确定的修正。支持 `--symbols`、事件窗口 `--start/--end`、`--max-symbols` 和 `--plan`；未解决事件保留原值和提示。详见 [历史因子修复](../datasets/sources.md) |
 | `fund-volume` | 用上交所完整历史 K 线修复沪深场内基金零成交量、正成交额的行。`--refresh-sources` 归档来源，默认离线回放；`--apply` 仅替换上市窗口内、开高低收及舍入金额一致的行并保留旧版本。若湖中金额冲突，须有已归档的东财未复权日线同时证实价格和金额，才替换整行；东财整手成交量不参与补量。优先复用相符的原始响应归档，避免重复请求。不得用成交额倒算成交量。 后续重抓的零量正额行不会覆盖已恢复的有效成交量。 |
 | `fund-no-print` | 用深交所明确的零成交额，或上交所按证券和日期返回的零竞价开高低及正参考价，核对日线欠账。默认离线预览；`--refresh-sources` 联网归档报表，`--max-sessions` 限制交易日数；`--apply` 保存证明并刷新覆盖水位。缺失响应不构成证明，正常可交易不等于当日有成交；舍入量额为零本身不足以证明无成交；上交所覆盖证明表示未形成竞价日线，不能据此否认汇总口径成交，不生成日线或停牌行。证据失效会重新打开欠账，实际成交记录优先 |
-
-```bash
-cne repair layout futures_bars
-cne repair layout futures_bars --apply
-```
 
 ## cne audit
 
@@ -811,7 +806,7 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 
 ## cne storage
 
-版本只有一种保留规则：每个数据集保留最近 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) 代（默认 5），回补和日更结束时删掉更老的代，不碰 staging，也不删当前正在使用的一代、`hold` 保住的版本和仍被引用的版本。只合并文件、行内容不变的版本（`storage merge-files` 发布的）不占名额：它夹在保留的代之间时一起保留，随它们一起过期。设为 `0` 则回补和日更不删。要提前删除选定的历史，在 `cne serve` 的存储页勾选并确认；交互终端里的 `cne run clean` 也会在预览后询问。外部读取须由操作者停止。
+版本只有一种保留规则：每个数据集保留最近 [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) 代（默认 5），回补和日更结束时删掉更老的代，不碰 staging，也不删当前正在使用的一代、`hold` 保住的版本和仍被引用的版本。设为 `0` 则回补和日更不删。要提前删除选定的历史，在 `cne serve` 的存储页勾选并确认；交互终端里的 `cne run clean` 也会在预览后询问。外部读取须由操作者停止。
 
 | 命令 | 行为 |
 |---|---|
@@ -820,7 +815,7 @@ init 不属于任何调度组，因此不受 `--groups` 豁免；截面校验则
 | `import --manifest FILE` | 校验并合并已审核的本地引用清单；不会自动解除已有保护 |
 | `hold OBJECT_ID --reason TEXT` | 新增版本或清理资源的保留理由；自动清理不再删除它 |
 | `plan [--keep N]` | 只读预览：按当前保护，自动清理现在会删除哪些代，输出 `candidate_ids` 和 `logical_bytes_selected` |
-| `merge-files [DATASET...] [--min-files N] [--apply]` | 合并写入后分成多个文件的分区（默认文件数不少于 4）。不加 `--apply` 只报告会合并哪些分区；加上后像修复一样发布新版本，行内容不变。`cne run maintain` 每天自动执行 |
+| `merge-files [DATASET...] [--min-files N] [--apply]` | 已不做任何事：每个分区的文件由湖目录安排。0.27.0 删除 |
 
 每个子命令接受 `--config`。版本 `OBJECT_ID` 为当前湖内的 `revision/<dataset>/<revision_id>`；计划另外绑定湖身份及 metadata 根，不能直接在另一个湖使用。被引用但暂时缺失的版本也可通过清单登记保护，以便恢复后继续受到保护。
 

@@ -330,39 +330,14 @@ def _bars_missing_factor_partition(config: Config, watermark: date) -> pl.DataFr
 
 
 def _factor_partition_symbols(config: Config, day: date) -> set[str]:
-    """Symbols with an ``adj_factors`` row on *day*, in any partition layout."""
+    """Symbols with a published ``adj_factors`` row on *day*."""
     from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
     root = config.derived_root / "adj_factors"
-    from cnequity.storage.revisions import RevisionStore
-
-    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    if store.commits_to_catalog("adj_factors"):
-        # No working tree is kept for a dataset the lake catalog holds: the
-        # published rows are what the derive starts from.
-        if not dataset_has_parquet(root):
-            return set()
-        return set(
-            scan_parquet_root(root, partition_col="trade_date", start=day, end=day)
-            .filter(pl.col("trade_date") == day)
-            .select("symbol")
-            .unique()
-            .collect()["symbol"]
-            .to_list()
-        )
-    part = root / f"trade_date={day.isoformat()}"
-    if dataset_has_parquet(part):
-        return {
-            symbol
-            for path in sorted(part.rglob("*.parquet"))
-            for symbol in pl.read_parquet(path, columns=["symbol"])["symbol"].to_list()
-        }
-    if not dataset_has_parquet(root, committed=False):
+    if not dataset_has_parquet(root):
         return set()
-    # Not a day directory: the day lives inside a coarser period. Read the same
-    # mutable tree the day path reads, filtered to the day.
     return set(
-        scan_parquet_root(root, partition_col="trade_date", start=day, end=day, committed=False)
+        scan_parquet_root(root, partition_col="trade_date", start=day, end=day)
         .filter(pl.col("trade_date") == day)
         .select("symbol")
         .unique()

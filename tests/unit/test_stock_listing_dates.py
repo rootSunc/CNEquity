@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 import httpx
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.adapters.cninfo.listings import (
     IPO_CALENDAR_URL,
@@ -103,7 +104,8 @@ def test_offline_repair_is_retained_and_idempotent(tmp_path, settle):
     path = root / "part-0.parquet"
     pl.DataFrame(rows, schema=DATASET_SCHEMAS["instruments"]).write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
+    commit_tree(
+        store,
         "instruments",
         run_id="seed",
         changed_files=[path],
@@ -132,7 +134,8 @@ def test_offline_repair_is_retained_and_idempotent(tmp_path, settle):
         ],
         schema=DATASET_SCHEMAS["daily_bars"],
     ).write_parquet(path)
-    store.commit(
+    commit_tree(
+        store,
         "daily_bars",
         run_id="seed",
         changed_files=[path],
@@ -187,7 +190,8 @@ def seed_listing_catalog(tmp_path):
         schema=DATASET_SCHEMAS["instruments"],
     ).write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
+    commit_tree(
+        store,
         "instruments",
         run_id="seed",
         changed_files=[path],
@@ -248,7 +252,8 @@ def test_explicit_event_cannot_contradict_an_earlier_real_trade(tmp_path):
         ],
         schema=DATASET_SCHEMAS["daily_bars"],
     ).write_parquet(path)
-    store.commit(
+    commit_tree(
+        store,
         "daily_bars",
         run_id="seed",
         changed_files=[path],
@@ -308,7 +313,8 @@ def test_official_listing_clears_only_an_impossible_earlier_end_date(tmp_path, d
     path = cfg.curated_root / "instruments" / "part-0.parquet"
     frame = pl.read_parquet(path).with_columns(pl.lit(delisted).alias("delist_date"))
     frame.write_parquet(path)
-    store.commit(
+    commit_tree(
+        store,
         "instruments",
         run_id="stale-end",
         changed_files=[path],

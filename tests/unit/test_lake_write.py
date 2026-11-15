@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.legacy_lake import commit_generation
 
 from cnequity.config.loader import Config
 from cnequity.storage.catalog_bridge import (
@@ -51,10 +52,6 @@ def _bars(day: date, closes: dict[str, float]) -> pl.DataFrame:
 def cfg(tmp_path, monkeypatch):
     from cnequity.query import catalog_read
 
-    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
-    monkeypatch.setattr(
-        "cnequity.storage.catalog_bridge.sync_published", lambda store, dataset: None
-    )
     config = Config(data_root=tmp_path / "data")
     files = []
     for month, frame in {
@@ -65,7 +62,8 @@ def cfg(tmp_path, monkeypatch):
         path.parent.mkdir(parents=True)
         frame.write_parquet(path)
         files.append(path)
-    RevisionStore(config.meta_root, config.curated_root).commit(
+    commit_generation(
+        RevisionStore(config.meta_root, config.curated_root),
         "daily_bars",
         run_id="seed",
         changed_files=files,
@@ -337,88 +335,6 @@ def test_a_publish_that_stops_before_the_state_file_is_still_published(cfg, monk
     assert store.sweep(apply=True)["state_synced"] == []
 
 
-def test_a_generation_writer_publishes_into_the_catalog_only_from_a_verified_tree(cfg):
-    from cnequity.storage.revisions import CatalogOnlyDatasetError
-
-    with LakeWrite(cfg, "r7") as write:
-        january = write.checkout("daily_bars").partition("trade_date=2024-01")
-        _replace(january, _bars(date(2024, 1, 2), {"600000.SH": 10.5}))
-        write.publish({"daily_bars": PUBLISH})
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    april = cfg.curated_root / "daily_bars/trade_date=2024-04"
-
-    def commit():
-        april.mkdir(parents=True, exist_ok=True)
-        _bars(date(2024, 4, 1), {"600000.SH": 13.0}).write_parquet(april / "part-merged.parquet")
-        return store.commit(
-            "daily_bars",
-            run_id="old-writer",
-            changed_files=[april / "part-merged.parquet"],
-            schema_version=1,
-            contract_fingerprint="contract",
-        )
-
-    # A publish does not touch the working tree: the store no longer vouches
-    # for it, and a tree it cannot vouch for is never committed from.
-    assert not (cfg.meta_root / "working_trees" / "daily_bars.json").exists()
-    with pytest.raises(CatalogOnlyDatasetError, match="not verified"):
-        commit()
-    assert _load(cfg)["trade_date"].max() == date(2024, 2, 1)
-
-    store.materialize_current("daily_bars")
-    receipt = commit()
-    assert receipt.changed_partitions == ("daily_bars/trade_date=2024-04",)
-    assert _pointer(cfg)["storage"] == "catalog"
-    rows = _load(cfg).sort("trade_date", "symbol").select("trade_date", "close").rows()
-    assert rows == [
-        (date(2024, 1, 2), 10.5),
-        (date(2024, 2, 1), 11.0),
-        (date(2024, 4, 1), 13.0),
-    ]
-
-
-def test_the_working_tree_of_a_catalog_revision_is_rebuilt_unless_verified(cfg):
-    with LakeWrite(cfg, "r8") as write:
-        january = write.checkout("daily_bars").partition("trade_date=2024-01")
-        _replace(january, _bars(date(2024, 1, 2), {"600000.SH": 10.5}))
-        write.publish({"daily_bars": PUBLISH})
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    tree = cfg.curated_root / "daily_bars"
-    # The tree still holds the old January: it must be rebuilt from the catalog.
-    store.materialize_current("daily_bars")
-    rows = pl.read_parquet(list(tree.rglob("*.parquet"))).sort("trade_date", "symbol")
-    assert rows.select("symbol", "close").rows() == [("600000.SH", 10.5), ("600000.SH", 11.0)]
-    # Now recorded as current: a second call keeps it as it is.
-    before = {path: path.stat().st_mtime_ns for path in tree.rglob("*.parquet")}
-    store.materialize_current("daily_bars")
-    assert {path: path.stat().st_mtime_ns for path in tree.rglob("*.parquet")} == before
-    # A file changed behind the store's back is never trusted.
-    stray = tree / "trade_date=2024-02" / "part-stray.parquet"
-    _bars(date(2024, 2, 1), {"000001.SZ": 1.0}).write_parquet(stray)
-    store.materialize_current("daily_bars")
-    assert not stray.exists()
-
-
-def test_a_lake_switched_to_the_catalog_publishes_every_writer_there(cfg):
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    assert _pointer(cfg).get("storage") is None  # still a generation revision
-    store.materialize_current("daily_bars")
-    february = cfg.curated_root / "daily_bars/trade_date=2024-02"
-    _replace(february, _bars(date(2024, 2, 1), {"600000.SH": 11.5}))
-    receipt = store.commit(
-        "daily_bars",
-        run_id="derive",
-        changed_files=[february / "part-merged.parquet"],
-        schema_version=1,
-        contract_fingerprint="contract",
-    )
-    pointer = _pointer(cfg)
-    assert pointer["storage"] == "catalog" and pointer["revision_id"] == receipt.revision_id
-    assert not (cfg.meta_root / pointer["generation_path"]).exists()
-    closes = _load(cfg).sort("trade_date", "symbol")["close"].to_list()
-    assert closes == [9.0, 10.0, 11.5]
-
-
 def test_a_published_revision_records_a_digest_of_the_rows_the_catalog_holds(cfg):
     from cnequity.storage.lake_write import verify_revisions
 
@@ -464,3 +380,26 @@ def test_export_writes_plain_parquet_a_hive_reader_cannot_misread(cfg, tmp_path)
         export_dataset(cfg, "daily_bars", out)
     ranged = export_dataset(cfg, "daily_bars", tmp_path / "feb", start=date(2024, 2, 1))
     assert ranged["rows"] == 1
+
+
+def test_the_first_publish_of_a_dataset_keyed_by_a_period_label_checks_its_rows(tmp_path):
+    """A table not created yet takes the partition column's type from the schema."""
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.domain.schemas import DATASET_SCHEMAS
+
+    cfg = Config(data_root=tmp_path / "fresh")
+    schema = DATASET_SCHEMAS["financial_statement_items"]
+    row = {name: None for name in schema}
+    row.update(
+        symbol="600519.SH",
+        report_period="2024Q1",
+        statement_type="income",
+        item_code="net_profit",
+        item_value=1.0,
+        source="test",
+        data_version="v1",
+        fetched_at=FETCHED,
+    )
+    revision = publish_rows(cfg, "financial_statement_items", pl.DataFrame([row], schema=schema))
+    assert revision is not None and revision.changed_partitions

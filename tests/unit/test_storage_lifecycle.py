@@ -8,6 +8,7 @@ from datetime import date
 import polars as pl
 import pytest
 from click.testing import CliRunner
+from tests.legacy_lake import commit_generation
 
 from cnequity.cli.main import cli
 from cnequity.config import Config
@@ -31,7 +32,8 @@ def lake(tmp_path):
     source.parent.mkdir(parents=True)
     for i in range(7):
         pl.DataFrame({"trade_date": [date(2026, 1, 1)], "close": [float(i)]}).write_parquet(source)
-        writer.commit(
+        commit_generation(
+            writer,
             "daily_bars",
             run_id=f"run-{i}",
             changed_files=[source],
@@ -78,7 +80,8 @@ def test_a_merge_that_changed_no_row_does_not_use_up_a_place(lake):
     cfg, store, writer, _ = lake
     source = cfg.curated_root / "daily_bars/part.parquet"
     for content_changed in (False, False):
-        writer.commit(
+        commit_generation(
+            writer,
             "daily_bars",
             run_id="merge",
             changed_files=[source],
@@ -105,7 +108,8 @@ def test_changes_invalidate_saved_plan(lake, change):
     elif change == "pointer":
         source = cfg.curated_root / "daily_bars/part.parquet"
         pl.DataFrame({"close": [99.0]}).write_parquet(source)
-        writer.commit(
+        commit_generation(
+            writer,
             "daily_bars",
             run_id="new",
             changed_files=[source],

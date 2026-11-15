@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 
 from cnequity.config import Config
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps import rotation as rot
 from cnequity.steps.rotation import (
@@ -296,6 +297,6 @@ def test_a_retry_keeps_the_batches_it_skips(tmp_path, monkeypatch):
     assert seen == [set(codes[:3])]
 
     step_compact(cfg, date(2026, 7, 14), "run1", {})
-    published = pl.read_parquet(cfg.curated_root / "sector_bars", hive_partitioning=False)
+    published = pl.read_parquet(root_parquet_files(cfg.curated_root / "sector_bars"))
     assert sorted(published["sector_code"].unique().to_list()) == codes
     assert _sector_bars_completed(cfg) == set(codes)

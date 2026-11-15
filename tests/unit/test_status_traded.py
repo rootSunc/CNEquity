@@ -6,6 +6,7 @@ from pathlib import Path
 import duckdb
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_by_primary_key
@@ -28,7 +29,8 @@ FETCHED = datetime(2026, 7, 3, 8, tzinfo=timezone.utc)
 
 
 def _commit(cfg, dataset):
-    return RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    return commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         dataset,
         run_id="seed",
         changed_files=sorted((cfg.curated_root / dataset).rglob("*.parquet")),
@@ -114,7 +116,12 @@ def lake(tmp_path):
 
 
 def _tree(root: Path):
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    # A reader of the lake catalog leaves SQLite's shared-memory files behind.
+    return {
+        str(p.relative_to(root)): p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and not p.name.endswith(("-shm", "-wal"))
+    }
 
 
 def test_preview_is_read_only_and_names_only_missing_listed_prints(lake):

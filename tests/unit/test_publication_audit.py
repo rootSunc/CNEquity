@@ -5,6 +5,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.quality.publication import check_repair_publication, evaluate_publication
@@ -88,7 +89,8 @@ def test_candidate_audit_precedes_pointer_switch(tmp_path, monkeypatch, mode, ex
     path.parent.mkdir(parents=True)
     _bar(10.0, "2024-06-28T00:00:00Z").write_parquet(path)
     revisions = RevisionStore(cfg.meta_root, cfg.curated_root)
-    revisions.commit(
+    commit_tree(
+        revisions,
         "daily_bars",
         run_id="initial",
         changed_files=[path],
@@ -182,7 +184,8 @@ def test_repair_reports_a_new_factor_action_contradiction_without_blocking(tmp_p
     )
     original.write_parquet(action)
     revisions = RevisionStore(cfg.meta_root, cfg.curated_root)
-    revisions.commit(
+    commit_tree(
+        revisions,
         "corporate_actions",
         run_id="initial",
         changed_files=[action],
@@ -190,18 +193,33 @@ def test_repair_reports_a_new_factor_action_contradiction_without_blocking(tmp_p
         contract_fingerprint="test",
     )
     old_id = revisions.latest("corporate_actions").revision_id
-    original.with_columns(pl.lit(before).alias("ex_date")).write_parquet(action)
     monkeypatch.setattr("cnequity.quality.publication._errors", lambda *args: [])
+    from cnequity.domain.datasets import granularity_for_dataset
+    from cnequity.storage.lake_write import LakeWrite
+    from cnequity.storage.parquet import _partition_values
 
-    report = check_repair_publication(
-        cfg, "corporate_actions", "repair", [action], symbols=frozenset({"600000.SH"})
-    )
+    moved = original.with_columns(pl.lit(before).alias("ex_date"))
+    with LakeWrite(cfg, "repair") as write:
+        checkout = write.checkout("corporate_actions")
+        for frame in (original, moved):
+            value = _partition_values(
+                frame, "ex_date", granularity_for_dataset("corporate_actions")
+            ).item()
+            checkout.rewrite(f"ex_date={value}", moved if frame is moved else frame.clear())
+        files = [path for found in checkout.changed().values() for path in found]
+        report = check_repair_publication(
+            cfg,
+            "corporate_actions",
+            "repair",
+            files,
+            symbols=frozenset({"600000.SH"}),
+            lake_write=write,
+        )
     assert not report["blocked"]
     assert report["factor_diagnostics"]["candidate"][0]["severity"] == "warning"
     assert report["factor_diagnostics"]["gate_impact"] == "none"
 
     assert revisions.latest("corporate_actions").revision_id == old_id
-    assert pl.read_parquet(action)["ex_date"].to_list() == [before]
     assert not list((cfg.data_root / "_quarantine").glob("corporate_actions-*"))
 
     # An empty action candidate still exposes the factor step it would orphan.
@@ -273,16 +291,19 @@ def test_publication_blocks_only_the_candidate_that_causes_the_error(tmp_path, m
     )
 
     def errors(view, day, scope=None):
-        bars = view.curated_root / "daily_bars"
-        files = list(bars.rglob("*.parquet")) if bars.exists() else []
-        if files and pl.read_parquet(files[0])["close"].item() == 20.0:
+        try:
+            closes = load("daily_bars", config=view)["close"].to_list()
+        except Exception:  # noqa: BLE001 - nothing published or staged yet
+            closes = []
+        if 20.0 in closes:
             return [{"dataset": "daily_bars", "severity": "error", "check": "bad_bar"}]
         return []
 
     monkeypatch.setattr("cnequity.quality.publication._errors", errors)
     result = step_compact(cfg, date(2024, 6, 28), "mixed", {})
 
-    assert not list((cfg.curated_root / "daily_bars").rglob("*.parquet"))
+    store = RevisionStore(cfg.meta_root, cfg.curated_root)
+    assert store.current_pointer("daily_bars") is None
     assert load("fund_flow", config=cfg).height == 1
     assert result["context_updates"]["compact_skipped_datasets"][0]["dataset"] == "daily_bars"
 

@@ -326,7 +326,6 @@ def repair_financial_originals(
         return report
     with planned_on(config):
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-        store.ensure_current(DATASET)
         context = ReadContext.capture(config, (DATASET,), {})
         incoming = _novel_originals(parsed_rows, context.roots[DATASET])
         report["rows"] = incoming.height

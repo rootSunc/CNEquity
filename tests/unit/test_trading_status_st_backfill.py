@@ -11,6 +11,7 @@ import json
 from datetime import date
 
 import polars as pl
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.orchestrator.engine import JobEngine
@@ -22,12 +23,21 @@ from cnequity.quality.st_coverage import (
 from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps import reference
 from cnequity.steps.reference import _backfill_trading_status_st, _resolve_explicit_st_symbols
+from cnequity.storage.revisions import RevisionStore
 
 
 def _write_instruments(config: Config, symbols: list[str]) -> None:
     root = config.curated_root / "instruments"
     root.mkdir(parents=True, exist_ok=True)
     pl.DataFrame({"symbol": symbols}).write_parquet(root / "part-merged.parquet")
+    commit_tree(
+        RevisionStore(config.meta_root, config.curated_root, config.derived_root),
+        "instruments",
+        run_id="seed",
+        changed_files=[root / "part-merged.parquet"],
+        schema_version=1,
+        contract_fingerprint="seed",
+    )
 
 
 def _st_row(symbol: str, d: date) -> dict:

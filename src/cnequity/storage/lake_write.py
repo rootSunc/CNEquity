@@ -502,7 +502,10 @@ class Checkout:
             )
         types = self._column_types()
         predicate = _partition_predicate(
-            column, types.get(column, "DATE"), self.spec.partition_granularity, value
+            column,
+            types.get(column) or _declared_type(self.dataset, column),
+            self.spec.partition_granularity,
+            value,
         )
         if predicate is None:
             raise ValueError(f"{self.dataset}: no row predicate for partition {label}")
@@ -559,9 +562,6 @@ class LakeWrite:
         self.catalog = Catalog(root, create=True, memory_limit="4GB", temp_directory=root / "tmp")
         prepare_record_tables(self.catalog)
         self._checkouts: dict[str, Checkout] = {}
-        # Datasets published from a whole working tree: root, and changed partitions.
-        self._trees: dict[str, tuple[Path, list[str]]] = {}
-        self._from_tree: set[str] = set()
         # Files placed in the lake for a rehearsal on a copy of its catalog.
         self._rehearsed: list[Path] = []
         self._checks: list[tuple[str, Callable[[Catalog], str | None]]] = []
@@ -611,39 +611,24 @@ class LakeWrite:
         return target
 
     def can_write(self, dataset: str) -> bool:
-        """Whether *dataset* can be written here: the catalog holds its published revision.
-
-        A dataset the catalog is behind on (or has never seen while the store
-        has it) stays on the generation path until ``sync-catalog`` catches up.
-        """
+        """Whether *dataset* can be written here: the catalog holds its published revision."""
         pointer = self.store.current_pointer(dataset)
         held = _catalog_revision(self.catalog, dataset)
         if pointer is None:
             return held is None and not self.catalog.has_table(dataset)
         return held == pointer.get("revision_id")
 
-    def checkout_staged(self, dataset: str, files: list[Path]) -> Checkout | None:
-        """Check out the partitions *files* (a run's staged rows) will change, or ``None``."""
+    def checkout_staged(self, dataset: str, files: list[Path]) -> Checkout:
+        """Check out the partitions *files* (a run's staged rows) will change."""
         if not self.can_write(dataset):
-            return None
+            raise WriteRejected(f"{dataset}: the lake catalog does not hold its published revision")
         checkout = self.checkout(dataset)
         for label in staged_partitions(dataset, files):
             checkout.partition(label)
         return checkout
 
     def has(self, dataset: str) -> bool:
-        return dataset in self._checkouts or dataset in self._trees
-
-    def stage_tree(self, dataset: str, root: Path, partitions: list[str]) -> None:
-        """Publish *partitions* of *dataset* from the working tree *root*, whole.
-
-        For writers that read their own history from a working tree the store
-        keeps verified against the catalog (``RevisionStore.materialize_current``):
-        each named partition is replaced by every file it holds there, and a
-        partition missing there is removed.
-        """
-        self.checkout(dataset)  # records the revision the write is based on
-        self._trees[dataset] = (Path(root), sorted(set(partitions)))
+        return dataset in self._checkouts
 
     def discard(self, dataset: str) -> Path | None:
         """Drop *dataset*'s checkout from this write, keeping its files aside for inspection."""
@@ -710,16 +695,6 @@ class LakeWrite:
     def _changes(self, datasets) -> dict[str, dict[str, list[Path]]]:
         changes: dict[str, dict[str, list[Path]]] = {}
         for dataset in datasets:
-            if dataset in self._trees:
-                # A working tree's partitions become the checkout's, whole.
-                root, labels = self._trees.pop(dataset)
-                checkout = self.checkout(dataset)
-                for label in labels:
-                    directory = root / label if label else root
-                    checkout.replace_with(
-                        label, sorted(directory.rglob("*.parquet")) if directory.is_dir() else []
-                    )
-                self._from_tree.add(dataset)
             if dataset not in self._checkouts:
                 continue
             changed = self._checkouts[dataset].changed()
@@ -786,11 +761,8 @@ class LakeWrite:
             self._rehearsed.extend(placed)
         for dataset, receipt in receipts.items():
             store.index_catalog_revision(receipt)
-            if advance:
-                # The working tree, where one is left, no longer holds what is published.
-                store.forget_working_tree(dataset)
-                if self._scope is not None:
-                    self._scope.revisions[dataset] = receipt.revision_id
+            if advance and self._scope is not None:
+                self._scope.revisions[dataset] = receipt.revision_id
         return receipts
 
     def _place_files(
@@ -891,6 +863,18 @@ def export_tree(data_root: Path, dataset: str, destination: Path) -> None:
         )
         for label in checkout.labels():
             checkout.partition(label)
+
+
+def _declared_type(dataset: str, column: str) -> str:
+    """The SQL type *column* has in *dataset*'s schema, for a table not created yet."""
+    from cnequity.domain.schemas import DATASET_SCHEMAS
+
+    dtype = DATASET_SCHEMAS.get(dataset, {}).get(column)
+    if dtype == pl.Utf8:
+        return "VARCHAR"
+    if isinstance(dtype, pl.Datetime) or dtype == pl.Datetime:
+        return "TIMESTAMP"
+    return "DATE"
 
 
 def staged_partitions(dataset: str, files: list[Path]) -> list[str]:

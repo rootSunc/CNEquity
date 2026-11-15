@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.schemas import DAILY_BARS_SCHEMA, with_provenance
@@ -19,6 +20,7 @@ from cnequity.steps.delisted import (
     delisted_symbols_in_window,
 )
 from cnequity.storage.parquet import StagingWriter
+from cnequity.storage.revisions import RevisionStore
 
 _START = date(2016, 1, 1)
 _BAR_COLS = [
@@ -64,11 +66,19 @@ def _cfg(tmp_path, catalog: dict[str, str], live=("600519.SH",)):
             "asset_type": ["stock"] * len(live),
             "list_date": pl.Series([date(2000, 1, 1)] * len(live), dtype=pl.Date),
             "delist_date": pl.Series([None] * len(live), dtype=pl.Date),
-            "prev_symbol": [None] * len(live),
+            "prev_symbol": pl.Series([None] * len(live), dtype=pl.Utf8),
         }
     )
     with_provenance(frame, source="test_seed", data_version="v1").write_parquet(
         inst / "part-merged.parquet"
+    )
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
+        "instruments",
+        run_id="seed",
+        changed_files=[inst / "part-merged.parquet"],
+        schema_version=1,
+        contract_fingerprint="seed",
     )
     return cfg
 

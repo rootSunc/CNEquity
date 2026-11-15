@@ -7,6 +7,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.legacy_lake import commit_generation
 
 from cnequity.config.loader import Config
 from cnequity.storage.catalog_bridge import (
@@ -59,7 +60,8 @@ def cfg(tmp_path):
         path.parent.mkdir(parents=True)
         frame.write_parquet(path)
         files.append(path)
-    RevisionStore(config.meta_root, config.curated_root).commit(
+    commit_generation(
+        RevisionStore(config.meta_root, config.curated_root),
         "daily_bars",
         run_id="seed",
         changed_files=files,
@@ -121,7 +123,8 @@ def _commit_month(cfg, month: str, frame: pl.DataFrame) -> None:
     path = cfg.curated_root / f"daily_bars/trade_date={month}/part-merged.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(path)
-    RevisionStore(cfg.meta_root, cfg.curated_root).commit(
+    commit_generation(
+        RevisionStore(cfg.meta_root, cfg.curated_root),
         "daily_bars",
         run_id="next",
         changed_files=[path],
@@ -176,22 +179,8 @@ def test_an_unknown_previous_state_replaces_the_whole_table(cfg, lake):
 def catalog_reads(monkeypatch):
     from cnequity.query import catalog_read
 
-    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
     yield catalog_read
     catalog_read.close_all()
-
-
-def test_the_catalog_answers_unless_switched_off(cfg, lake, monkeypatch):
-    from cnequity.query import catalog_read
-
-    sync_dataset(cfg, lake, "daily_bars")
-    monkeypatch.setenv(catalog_read.ENV_SWITCH, "0")
-    assert catalog_read.read_published(cfg, "daily_bars", partition_col="trade_date") is None
-    monkeypatch.delenv(catalog_read.ENV_SWITCH)
-    rows = catalog_read.read_published(cfg, "daily_bars", partition_col="trade_date")
-    catalog_read.close_all()
-    # One row per key: the reader has nothing left to dedupe.
-    assert rows.unique_keys and rows.frame.height == 3
 
 
 def test_catalog_reads_filter_like_the_partition_scan(cfg, lake, catalog_reads):
@@ -219,47 +208,6 @@ def test_a_catalog_behind_the_revision_store_is_not_read(cfg, lake, catalog_read
         catalog_reads.read_published(cfg, "daily_bars", partition_col="trade_date").frame.height
         == 4
     )
-
-
-@pytest.fixture(autouse=True)
-def _publish_does_not_sync(request, monkeypatch):
-    """Most tests here drive the sync by hand; ``auto_sync`` keeps the publish hook."""
-    if "auto_sync" not in request.fixturenames:
-        monkeypatch.setattr(
-            "cnequity.storage.catalog_bridge.sync_published", lambda store, dataset: None
-        )
-
-
-@pytest.fixture
-def auto_sync():
-    return True
-
-
-def test_a_publish_carries_the_new_revision_into_the_catalog(cfg, lake, auto_sync):
-    sync_dataset(cfg, lake, "daily_bars")
-    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
-    assert catalog_is_current(cfg, lake, "daily_bars")
-    assert compare_dataset(cfg, lake, "daily_bars").matches
-
-
-def test_a_lake_without_a_catalog_publishes_as_before(cfg, auto_sync):
-    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
-    assert not lake_root(cfg).exists()
-
-
-def test_a_catalog_that_cannot_be_updated_does_not_fail_the_publish(
-    cfg, lake, auto_sync, monkeypatch
-):
-    sync_dataset(cfg, lake, "daily_bars")
-
-    def broken(config, catalog, dataset):
-        raise RuntimeError("catalog is locked")
-
-    monkeypatch.setattr("cnequity.storage.catalog_bridge.sync_dataset", broken)
-    _commit_month(cfg, "2024-03", _rows(date(2024, 3, 1), {"600000.SH": 12.0}, pre_close=11.5))
-    monkeypatch.undo()
-    assert not catalog_is_current(cfg, lake, "daily_bars")
-    assert sync_dataset(cfg, lake, "daily_bars").action == "partitions"
 
 
 def test_a_synced_table_is_file_complete(cfg, lake):
@@ -295,11 +243,6 @@ def test_the_generation_scan_reads_the_catalog_files(cfg, lake, catalog_reads, m
     assert used and via_catalog.select("symbol", "trade_date").rows() == [
         ("600000.SH", date(2024, 2, 1))
     ]
-    monkeypatch.setenv(catalog_reads.ENV_SWITCH, "0")
-    via_files = parquet_scan.scan_parquet_root(
-        root, partition_col="trade_date", start=date(2024, 2, 1), committed=False
-    ).collect()
-    assert via_files.equals(via_catalog.select(via_files.columns))
 
 
 def test_sql_views_read_the_catalog_files_and_stay_inside_the_sandbox(cfg, lake, catalog_reads):
@@ -354,7 +297,7 @@ def _pointer(cfg):
 
 
 def test_retention_keeps_recent_and_held_revisions_and_deletes_after_the_grace(
-    cfg, lake, catalog_reads, auto_sync
+    cfg, lake, catalog_reads
 ):
     from cnequity.storage.catalog_bridge import apply_retention
 
@@ -364,6 +307,7 @@ def test_retention_keeps_recent_and_held_revisions_and_deletes_after_the_grace(
         _commit_month(
             cfg, f"2024-{month:02d}", _rows(date(2024, month, 1), {"600000.SH": 1.0 * month})
         )
+        sync_dataset(cfg, lake, "daily_bars")
         revisions.append(_pointer(cfg)["revision_id"])
     catalog_reads.close_all()
     oldest, held, recent = revisions[0], revisions[1], revisions[-2]

@@ -17,6 +17,7 @@ from cnequity.domain.schemas import with_provenance
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import StepEntry
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import walk_day_backfill
 from cnequity.storage.parquet import StagingWriter
@@ -69,9 +70,7 @@ def test_date_walk_publishes_before_an_outage_and_clears_the_gap_after_repair(
     assert result["fallback"][0]["retry_command"]
     assert StateStore(cfg.meta_root).get_missing_dates("market_breadth") == {end}
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("market_breadth")
-    assert pl.read_parquet(list(root.rglob("*.parquet"))).get_column("trade_date").to_list() == [
-        start
-    ]
+    assert pl.read_parquet(root_parquet_files(root)).get_column("trade_date").to_list() == [start]
 
     recovering = True
     again = _backfill_once(cfg, "market_breadth")
@@ -80,7 +79,7 @@ def test_date_walk_publishes_before_an_outage_and_clears_the_gap_after_repair(
     assert again["status"] == "success"
     assert StateStore(cfg.meta_root).get_missing_dates("market_breadth") == set()
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("market_breadth")
-    assert set(pl.read_parquet(list(root.rglob("*.parquet")))["trade_date"]) == {start, end}
+    assert set(pl.read_parquet(root_parquet_files(root))["trade_date"]) == {start, end}
 
 
 def test_empty_source_backfill_cli_finishes_with_truthful_fallback(tmp_path, monkeypatch):
@@ -157,7 +156,7 @@ def test_valid_days_publish_when_remaining_days_are_unavailable(tmp_path, monkey
     assert result["rows_written"] == 1
     assert result["publication_status"] == "partial"
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("market_breadth")
-    assert pl.read_parquet(list(root.rglob("*.parquet"))).height == 1
+    assert pl.read_parquet(root_parquet_files(root)).height == 1
     gaps = StateStore(cfg.meta_root).get_payload("market_breadth")["missing_ranges"]
     assert [row["start"] for row in gaps] == [f"2024-06-{day}" for day in (25, 26, 27, 28)]
 
@@ -334,7 +333,7 @@ def test_partial_index_bars_publish_without_advancing_complete_coverage(tmp_path
     assert result["status"] == "degraded"
     assert result["publication_status"] == "partial"
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    assert pl.read_parquet(list(store.current_root("index_bars").rglob("*.parquet"))).height == 1
+    assert pl.read_parquet(root_parquet_files(store.current_root("index_bars"))).height == 1
     state = StateStore(cfg.meta_root).get_payload("index_bars")
     assert len(state["outstanding_keys"]) == len(INDEX_SYMBOLS) - 1
     assert state["coverage_status"] == "incomplete"

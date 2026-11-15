@@ -26,8 +26,6 @@ def repair_financial_announcements(config: Config, *, apply: bool = False) -> di
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )
-        if apply:
-            store.ensure_current(DATASET)
         context = ReadContext.capture(config, (DATASET,), {})
         root = context.roots[DATASET]
         report = {"applied": False, "rows": 0, "symbols": 0, "source": "eastmoney_backfill"}

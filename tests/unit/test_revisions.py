@@ -5,11 +5,12 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.legacy_lake import commit_generation
 
 from cnequity.config import Config
 from cnequity.query import dataset_revisions, dataset_state
 from cnequity.storage.parquet import StagingWriter, compact_dataset
-from cnequity.storage.revisions import RevisionConsistencyError, RevisionStore
+from cnequity.storage.revisions import RevisionStore
 
 
 def _curated_file(root: Path, value: bytes = b"first") -> Path:
@@ -24,7 +25,8 @@ def test_revision_commit_publishes_receipt_and_state(tmp_path):
     path = _curated_file(curated)
     store = RevisionStore(tmp_path / "meta", curated)
 
-    receipt = store.commit(
+    receipt = commit_generation(
+        store,
         "daily_bars",
         run_id="run-1",
         changed_files=[path],
@@ -51,7 +53,8 @@ def test_revision_increments_when_an_old_partition_changes(tmp_path):
     curated = tmp_path / "curated"
     path = _curated_file(curated)
     store = RevisionStore(tmp_path / "meta", curated)
-    first = store.commit(
+    first = commit_generation(
+        store,
         "daily_bars",
         run_id="run-1",
         changed_files=[path],
@@ -59,7 +62,8 @@ def test_revision_increments_when_an_old_partition_changes(tmp_path):
         contract_fingerprint="contract-sha",
     )
     path.write_bytes(b"historical repair")
-    second = store.commit(
+    second = commit_generation(
+        store,
         "daily_bars",
         run_id="run-2",
         changed_files=[path],
@@ -70,35 +74,6 @@ def test_revision_increments_when_an_old_partition_changes(tmp_path):
     assert first is not None and second is not None
     assert second.revision == first.revision + 1
     assert second.content_digest != first.content_digest
-
-
-def test_revision_does_not_advance_without_changed_files(tmp_path):
-    store = RevisionStore(tmp_path / "meta", tmp_path / "curated")
-    assert (
-        store.commit(
-            "daily_bars",
-            run_id="run-1",
-            changed_files=[],
-            schema_version=1,
-            contract_fingerprint="contract-sha",
-        )
-        is None
-    )
-    assert store.state.get_revision("daily_bars") is None
-
-
-def test_revision_rejects_files_outside_curated_root(tmp_path):
-    outside = tmp_path / "outside.parquet"
-    outside.write_bytes(b"data")
-    store = RevisionStore(tmp_path / "meta", tmp_path / "curated")
-    with pytest.raises(ValueError, match="outside curated root"):
-        store.commit(
-            "daily_bars",
-            run_id="run-1",
-            changed_files=[outside],
-            schema_version=1,
-            contract_fingerprint="contract-sha",
-        )
 
 
 def test_compact_reports_only_physical_dataset_changes(tmp_path):
@@ -156,7 +131,8 @@ def test_compact_ignores_fetch_timestamp_churn_but_keeps_business_changes(tmp_pa
     path = first_changes[0]
     before = path.read_bytes()
     revisions = RevisionStore(tmp_path / "meta", curated)
-    first_revision = revisions.commit(
+    first_revision = commit_generation(
+        revisions,
         "daily_bars",
         run_id="run-1",
         changed_files=first_changes,
@@ -174,7 +150,8 @@ def test_compact_ignores_fetch_timestamp_churn_but_keeps_business_changes(tmp_pa
     assert second_changes == []
     assert path.read_bytes() == before
     assert (
-        revisions.commit(
+        commit_generation(
+            revisions,
             "daily_bars",
             run_id="run-2",
             changed_files=second_changes,
@@ -191,7 +168,8 @@ def test_compact_ignores_fetch_timestamp_churn_but_keeps_business_changes(tmp_pa
     compact_dataset(staging, curated, "daily_bars", "run-3", changed_files=third_changes)
     assert third_changes == [path]
     assert pl.read_parquet(path)["close"].item() == 10.3
-    third_revision = revisions.commit(
+    third_revision = commit_generation(
+        revisions,
         "daily_bars",
         run_id="run-3",
         changed_files=third_changes,
@@ -204,7 +182,8 @@ def test_compact_ignores_fetch_timestamp_churn_but_keeps_business_changes(tmp_pa
 def test_public_dataset_state_reads_committed_identity(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     path = _curated_file(cfg.curated_root)
-    receipt = RevisionStore(cfg.meta_root, cfg.curated_root).commit(
+    receipt = commit_generation(
+        RevisionStore(cfg.meta_root, cfg.curated_root),
         "daily_bars",
         run_id="run-1",
         changed_files=[path],
@@ -255,7 +234,8 @@ def test_public_dataset_revisions_lists_changes_after_a_revision(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     path = _curated_file(cfg.curated_root)
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    first = store.commit(
+    first = commit_generation(
+        store,
         "daily_bars",
         run_id="run-1",
         changed_files=[path],
@@ -265,7 +245,8 @@ def test_public_dataset_revisions_lists_changes_after_a_revision(tmp_path):
     later = cfg.curated_root / "daily_bars" / "trade_date=2026-10-28" / "part-merged.parquet"
     later.parent.mkdir(parents=True)
     later.write_bytes(b"later")
-    second = store.commit(
+    second = commit_generation(
+        store,
         "daily_bars",
         run_id="run-2",
         changed_files=[later],
@@ -284,7 +265,8 @@ def test_public_dataset_revisions_lists_changes_after_a_revision(tmp_path):
         dataset_revisions("daily_bars", after="unknown", config=cfg)
 
     later.write_bytes(b"later again")
-    third = store.commit(
+    third = commit_generation(
+        store,
         "daily_bars",
         run_id="run-3",
         changed_files=[later],
@@ -298,132 +280,14 @@ def test_public_dataset_revisions_lists_changes_after_a_revision(tmp_path):
 
 
 def _commit(store, run_id, files):
-    return store.commit(
+    return commit_generation(
+        store,
         "daily_bars",
         run_id=run_id,
         changed_files=files,
         schema_version=1,
         contract_fingerprint="contract-sha",
     )
-
-
-def test_unchanged_partitions_are_shared_with_the_previous_generation(tmp_path):
-    curated = tmp_path / "curated"
-    old = _curated_file(curated, b"old day")
-    store = RevisionStore(tmp_path / "meta", curated)
-    first = _commit(store, "run-1", [old])
-    new = curated / "daily_bars" / "trade_date=2024-06-19" / "part-merged.parquet"
-    new.parent.mkdir(parents=True)
-    new.write_bytes(b"new day")
-    second = _commit(store, "run-2", [new])
-
-    relative = Path("daily_bars") / "trade_date=2024-06-18" / "part-merged.parquet"
-    shared = tmp_path / "meta" / second.generation_path / relative.relative_to("daily_bars")
-    previous = tmp_path / "meta" / first.generation_path / relative.relative_to("daily_bars")
-    assert shared.stat().st_ino == previous.stat().st_ino
-    added = tmp_path / "meta" / second.generation_path / "trade_date=2024-06-19/part-merged.parquet"
-    assert added.stat().st_nlink == 1
-    assert {item.path: item for item in second.generation_files}[relative.as_posix()] == {
-        item.path: item for item in first.generation_files
-    }[relative.as_posix()]
-
-    # A later rewrite of the mutable file never reaches either generation.
-    old.write_bytes(b"rewritten in place")
-    assert shared.read_bytes() == b"old day"
-    shutil.rmtree(tmp_path / "meta" / first.generation_path)
-    assert shared.read_bytes() == b"old day"
-
-
-def test_generation_falls_back_to_copy_when_links_are_unsupported(tmp_path, monkeypatch):
-    import errno
-    import os
-
-    from cnequity.storage import revisions
-
-    def refuse(_source, _target):
-        raise OSError(errno.EPERM, "links disabled")
-
-    curated = tmp_path / "curated"
-    old = _curated_file(curated, b"old day")
-    store = RevisionStore(tmp_path / "meta", curated)
-    first = _commit(store, "run-1", [old])
-    new = curated / "daily_bars" / "trade_date=2024-06-19" / "part-merged.parquet"
-    new.parent.mkdir(parents=True)
-    new.write_bytes(b"new day")
-    monkeypatch.setattr(revisions.os, "link", refuse)
-    second = _commit(store, "run-2", [new])
-
-    carried = (
-        tmp_path / "meta" / second.generation_path / "trade_date=2024-06-18/part-merged.parquet"
-    )
-    previous = (
-        tmp_path / "meta" / first.generation_path / "trade_date=2024-06-18/part-merged.parquet"
-    )
-    assert carried.read_bytes() == b"old day"
-    assert os.stat(carried).st_ino != os.stat(previous).st_ino
-
-
-def _fail_the_next_pointer_write(monkeypatch, store, dataset="daily_bars"):
-    """Let the receipt land, then stop before ``current.json`` is replaced."""
-    import cnequity.storage.revisions as revisions
-
-    real = revisions.write_json_atomic
-    pointer = store.pointer_path(dataset)
-
-    def write(path, payload, **kwargs):
-        if Path(path) == pointer:
-            monkeypatch.setattr(revisions, "write_json_atomic", real)
-            raise RuntimeError("interrupted before publish")
-        return real(path, payload, **kwargs)
-
-    monkeypatch.setattr(revisions, "write_json_atomic", write)
-
-
-def test_a_failed_publish_never_shares_its_number_with_a_published_revision(tmp_path, monkeypatch):
-    cfg = Config(data_root=tmp_path / "data")
-    path = _curated_file(cfg.curated_root)
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    first = _commit(store, "run-1", [path])
-    receipts = cfg.meta_root / "revisions" / "daily_bars"
-    before = {p.name for p in receipts.glob("[0-9]*-*.json")}
-
-    path.write_bytes(b"never published")
-    _fail_the_next_pointer_write(monkeypatch, store)
-    with pytest.raises(RuntimeError):
-        _commit(store, "run-2", [path])
-    (orphan,) = {p.name for p in receipts.glob("[0-9]*-*.json")} - before
-    orphan_number, _, orphan_id = orphan.removesuffix(".json").partition("-")
-
-    path.write_bytes(b"published")
-    published = _commit(store, "run-3", [path])
-
-    numbers = [p.name[:8] for p in receipts.glob("[0-9]*-*.json")]
-    assert len(numbers) == len(set(numbers)) == 3
-    assert published.revision > int(orphan_number)
-    pinned = store.current_root("daily_bars", revision=published.revision)
-    assert pinned == cfg.meta_root / published.generation_path
-    assert (pinned / "trade_date=2024-06-18" / "part-merged.parquet").read_bytes() == b"published"
-    # The delta after the first revision is the published one only.
-    changes = dataset_revisions("daily_bars", after=first.revision_id, config=cfg)
-    assert [c.revision_id for c in changes] == [published.revision_id]
-    with pytest.raises(ValueError, match="never published"):
-        dataset_revisions("daily_bars", after=orphan_id, config=cfg)
-
-
-def test_a_pinned_read_refuses_a_revision_newer_than_the_pointer(tmp_path, monkeypatch):
-    curated = tmp_path / "curated"
-    path = _curated_file(curated)
-    store = RevisionStore(tmp_path / "meta", curated)
-    _commit(store, "run-1", [path])
-    path.write_bytes(b"never published")
-    _fail_the_next_pointer_write(monkeypatch, store)
-    with pytest.raises(RuntimeError):
-        _commit(store, "run-2", [path])
-    (orphan,) = (tmp_path / "meta" / "revisions" / "daily_bars").glob("00000002-*.json")
-
-    for pinned in (2, orphan.stem.partition("-")[2]):
-        with pytest.raises(RevisionConsistencyError, match="never published"):
-            store.current_root("daily_bars", revision=pinned)
 
 
 def test_history_reads_receipts_written_before_the_base_link(tmp_path):

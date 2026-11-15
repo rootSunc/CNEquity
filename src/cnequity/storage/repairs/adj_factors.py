@@ -415,7 +415,6 @@ def repair_adj_factors(
             changed.drop("source"), source="derived_stock_actions", data_version="v1"
         ).with_columns(changed["source"])
         run_id = f"adj-factors-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
-        store.ensure_current("adj_factors")
         overrides = source_overrides(config)
         for item in replacements:
             symbol = item["symbol"][0]

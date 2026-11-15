@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS
@@ -199,7 +200,8 @@ def _bond_lake(tmp_path) -> tuple[Config, RevisionStore]:
         schema=DATASET_SCHEMAS["convertible_bond_bars"],
     ).write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
+    commit_tree(
+        store,
         "convertible_bond_bars",
         run_id="seed",
         changed_files=[path],
@@ -217,7 +219,9 @@ def test_the_migration_rewrites_stored_placeholders_once(tmp_path):
 
     result = repair_missing_values(cfg, "convertible_bond_bars", apply=True)
     assert result["applied"] is True
-    stored = pl.read_parquet(list(store.current_root("convertible_bond_bars").rglob("*.parquet")))
+    from cnequity.query.parquet_scan import root_parquet_files
+
+    stored = pl.read_parquet(root_parquet_files(store.current_root("convertible_bond_bars")))
     untraded = stored.filter(pl.col("symbol") == "113001.SH")
     assert untraded.select("open", "high", "low", "close").row(0) == (None, None, None, None)
     assert stored.filter(pl.col("symbol") == "110001.SH")["close"].to_list() == [101.5]

@@ -1724,10 +1724,6 @@ msgstr ""
 "升级期间读取不受影响，写入的任务会等到升级完成。\n"
 "中途停下可以重新运行，从停下的地方继续。"
 
-#: cnequity/cli/storage_cmds.py
-msgid "Bring the lake catalog to the committed revision of every dataset; reads the revision store only."
-msgstr "把湖目录同步到每个数据集的已发布版本；只读取版本库，不写入。"
-
 #: cnequity/cli/consume_cmds.py
 msgid "Browse only. Do not register the write endpoints of the operations page and storage cleanup."
 msgstr "只浏览。不注册操作页和存储清理的写入口。"
@@ -3490,10 +3486,6 @@ msgstr "要探测的 key，逗号分隔；高成本/已受挑战的端点仅在�
 msgid "Lake catalog retention"
 msgstr "湖目录保留"
 
-#: cnequity/cli/schedule_cmds.py
-msgid "Lake catalog sync"
-msgstr "同步湖目录"
-
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
 msgid "Lake health @ last trading day {last_trading_day}"
@@ -3631,35 +3623,6 @@ msgstr "每批最多检查的证券数；应用后保存历史进度。"
 #: cnequity/cli/quality_cmds.py
 msgid "Measure now instead of reading the stored report. Makes the same requests as `sources probe`."
 msgstr "现在实测，而不是读已存的报告。请求和 `sources probe` 相同。"
-
-#: cnequity/cli/repair_cmds.py
-msgid ""
-"Merge files under a partitioned dataset's root or a wrong-key directory into the registered partitions.\n"
-"\n"
-"\n"
-"Several observations of one primary key only fill each other's blanks when their non-null values agree exactly; conflicting keys keep one whole row by the canonical rules.\n"
-"All original observations of duplicated keys are written to _quarantine as evidence, and old versions are kept."
-msgstr ""
-"把分区数据集根目录或错误键目录里的文件并入登记分区。\n"
-"\n"
-"\n"
-"同一主键的多份观察只在非空值完全一致时互补填空；有冲突的键按规范规则整行取一份。\n"
-"重复键的全部原始观察写入 _quarantine 作为证据，旧版本继续保留。"
-
-#: cnequity/cli/storage_cmds.py
-msgid ""
-"Merge partitions that incremental writes left in several files.\n"
-"\n"
-"\n"
-"New keys are written as a file of their own instead of rewriting the partition, so\n"
-"partitions gather files over time. `cne run maintain` merges them after each daily\n"
-"update; run this to merge now or to see what would merge."
-msgstr ""
-"合并增量写入后分成多个文件的分区。\n"
-"\n"
-"\n"
-"新的键会写成单独的文件，而不是重写整个分区，所以分区里的文件会逐渐变多。\n"
-"`cne run maintain` 在每次日更之后合并它们；运行这条命令可以立即合并，或查看会合并哪些分区。"
 
 #: cnequity/cli/storage_cmds.py
 msgid "Merge partitions with at least this many files (default 4)."
@@ -3801,9 +3764,12 @@ msgid "No futures daily quote file was fetched for either of the last two weekda
 msgstr "最近两个工作日都没有取到期货日行情文件"
 
 #: cnequity/cli/storage_cmds.py
-#, python-brace-format
-msgid "No lake catalog at {root}; run again with --create to build it."
-msgstr "{root} 下没有湖目录；加 --create 重新运行来创建。"
+msgid "No longer does anything: every write publishes into the lake catalog. Removed in 0.27.0."
+msgstr "已不做任何事：每次写入都直接发布到湖目录。0.27.0 删除。"
+
+#: cnequity/cli/repair_cmds.py cnequity/cli/storage_cmds.py
+msgid "No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0."
+msgstr "已不做任何事：每个分区的文件由湖目录安排。0.27.0 删除。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
@@ -3922,9 +3888,25 @@ msgstr "没有欠下的迁移：这个湖由 {version} 建立，或全部迁移�
 msgid "Nothing to execute this time."
 msgstr "本次没有可执行的对象。"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Nothing to merge: the lake catalog lays out each partition's files. This command is removed in 0.27.0."
+msgstr "无需合并：每个分区的文件由湖目录安排。此命令在 0.27.0 删除。"
+
+#: cnequity/cli/repair_cmds.py
+msgid "Nothing to repair: the lake catalog lays out each partition's files. This command is removed in 0.27.0."
+msgstr "无需修复：每个分区的文件由湖目录安排。此命令在 0.27.0 删除。"
+
+#: cnequity/cli/repair_cmds.py
+msgid "Nothing to repartition: the lake catalog lays out each partition's files. This command is removed in 0.27.0."
+msgstr "无需重新分区：每个分区的文件由湖目录安排。此命令在 0.27.0 删除。"
+
 #: cnequity/ops/job.py
 msgid "Nothing to run, or the day is not a trading day."
 msgstr "没有要跑的内容，或当天不是交易日。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Nothing to sync: every write publishes into the lake catalog. This command is removed in 0.27.0."
+msgstr "无需同步：每次写入都直接发布到湖目录。此命令在 0.27.0 删除。"
 
 #: cnequity/cli/repair_cmds.py
 msgid "Nothing was changed. Fix what is blocked above, then run this again."
@@ -4185,10 +4167,6 @@ msgstr "付费数据源"
 msgid "Parquet of (symbol, trade_date, close) from an independent source."
 msgstr "来自独立源的 (symbol, trade_date, close) parquet。"
 
-#: cnequity/cli/schedule_cmds.py
-msgid "Partition file merge"
-msgstr "合并分区文件"
-
 #: cnequity/serve/lake.py
 #, python-brace-format
 msgid "Partitioned by {partition_granularity}: pick a period to get back all its rows."
@@ -4446,11 +4424,6 @@ msgstr "把这次 run 留在 staging 里、已经结束的数据发布到湖里�
 #: cnequity/cli/storage_cmds.py
 msgid "Publish the merge; without it, only report what would merge."
 msgstr "发布合并结果；不加这个参数时只报告会合并哪些分区。"
-
-#: cnequity/storage/revisions.py
-#, python-brace-format
-msgid "Publishing {dataset} ran out of disk space ({free} bytes, {free_mib} MiB free). The unfinished generation was not kept. Delete historical generations on the storage page of `cne serve`, or free space and publish again. Lowering [storage.retention].keep_generations only takes effect after a publish that fits. `cne storage inspect` reports exclusive_bytes for each generation."
-msgstr "发布 {dataset} 时磁盘空间用尽（剩余 {free} 字节，{free_mib} MiB）。未完成的这一代没有保留。请到 `cne serve` 的存储页删除历史版本，或腾出空间后再发布。调低 [storage.retention].keep_generations 只在一次放得下的发布成功之后才生效。`cne storage inspect` 会列出每一代的 exclusive_bytes。"
 
 #: cnequity/cli/init_summary.py
 msgid "Python:"
@@ -4968,31 +4941,9 @@ msgstr "清理中断的提交"
 msgid "Revision sweep failed: {exc}"
 msgstr "清理中断的提交失败：{exc}"
 
-#: cnequity/cli/repair_cmds.py
-msgid ""
-"Rewrite a dataset's partitions at its registered granularity.\n"
-"\n"
-"\n"
-"Without a dataset or --all it lists what is out of layout. With one it previews the effect\n"
-"(files, partitions, size); --apply rewrites under the lake lock and swaps the dataset root.\n"
-"Reads work whatever span the directories have, so this reclaims space and file opens rather\n"
-"than fixing correctness: the audit points here when a granularity change left an old layout."
-msgstr ""
-"按登记的分区粒度改写数据集分区。\n"
-"\n"
-"\n"
-"不给数据集也不给 --all 时只列出布局不符的数据集。给出数据集时预览效果\n"
-"（文件、分区、体积）；--apply 在湖锁下改写并整体换上数据集根目录。\n"
-"读取不受目录跨度影响，所以这只回收空间和文件打开次数，不修正确性：\n"
-"粒度变更留下旧布局时，审计会指向这里。"
-
 #: cnequity/cli/setup_cmds.py
 msgid "Rewrite a full config to extend the built-in defaults, keeping only the settings that differ; lists every setting whose behaviour would change."
 msgstr "把完整配置改写为继承内置默认值，只保留不同的设置；列出行为会改变的每一项设置。"
-
-#: cnequity/storage/migrations.py
-msgid "Rewrite adj_factors history from one file per day into one file per month"
-msgstr "把 adj_factors 的历史从每天一个文件改写为每月一个文件"
 
 #: cnequity/cli/maintain_cmds.py
 msgid "Rewrite all partitions of adj_factors / industry_index / option_greeks / minute_bars_15m|30m|60m (default: incremental only)."
@@ -5001,30 +4952,6 @@ msgstr "重写 adj_factors / industry_index / option_greeks / minute_bars_15m|30
 #: cnequity/cli/repair_cmds.py
 msgid "Rewrite and swap the partitions; by default only previews."
 msgstr "改写并换上分区；默认只预览。"
-
-#: cnequity/storage/migrations.py
-msgid "Rewrite chip_distribution history from one file per day into one file per month"
-msgstr "把 chip_distribution 的历史从每天一个文件改写为每月一个文件"
-
-#: cnequity/storage/migrations.py
-msgid "Rewrite daily_bars history from one file per day into one file per month"
-msgstr "把 daily_bars 的历史从每天一个文件改写为每月一个文件"
-
-#: cnequity/storage/migrations.py
-msgid "Rewrite fund_flow_tushare history from one file per day into one file per month"
-msgstr "把 fund_flow_tushare 的历史从每天一个文件改写为每月一个文件"
-
-#: cnequity/storage/migrations.py
-msgid "Rewrite limit_prices history from one file per day into one file per month"
-msgstr "把 limit_prices 的历史从每天一个文件改写为每月一个文件"
-
-#: cnequity/storage/migrations.py
-msgid "Rewrite margin_trading history from one file per day into one file per month"
-msgstr "把 margin_trading 的历史从每天一个文件改写为每月一个文件"
-
-#: cnequity/storage/migrations.py
-msgid "Rewrite valuation_metrics history from one file per day into one file per month"
-msgstr "把 valuation_metrics 的历史从每天一个文件改写为每月一个文件"
 
 #: cnequity/domain/datasets.py
 msgid "Risk and compliance"
@@ -7658,11 +7585,6 @@ msgstr "{data_root} 里是合成的 sample 湖（source=mock），不会把真�
 #, python-brace-format
 msgid "{dataset} is missing whole exchanges: {value}"
 msgstr "{dataset} 缺整所：{value}"
-
-#: cnequity/storage/revisions.py
-#, python-brace-format
-msgid "{dataset} needs about {required} bytes ({required_mib} MiB) free for this publish, and {free} bytes ({free_mib} MiB) are free. The unfinished generation was not kept. Delete historical generations on the storage page of `cne serve`, or free space and publish again. Lowering [storage.retention].keep_generations only takes effect after a publish that fits, because older generations are removed once that publish succeeds. `cne storage inspect` reports exclusive_bytes, the bytes deleting that generation would release; a hard-linked file shared with another generation is not included."
-msgstr "这次发布 {dataset} 大约需要 {required} 字节（{required_mib} MiB）空闲空间，目前剩余 {free} 字节（{free_mib} MiB）。未完成的这一代没有保留。请到 `cne serve` 的存储页删除历史版本，或腾出空间后再发布。调低 [storage.retention].keep_generations 只在一次放得下的发布成功之后才生效，因为更早的代要等这次发布成功才会删。`cne storage inspect` 的 exclusive_bytes 是删掉这一代能腾出的字节；和其他代硬链接共享的文件不计入。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format

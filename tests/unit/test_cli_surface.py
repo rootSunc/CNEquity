@@ -293,6 +293,11 @@ def test_a_derive_target_resolves_whatever_its_case(tmp_path, monkeypatch):
     from cnequity.cli import maintain_cmds
 
     monkeypatch.setattr("cnequity.query.parquet_scan.dataset_has_parquet", lambda *a, **kw: True)
+    # Every input is published.
+    monkeypatch.setattr(
+        "cnequity.storage.revisions.RevisionStore.current_root",
+        lambda self, dataset, revision=None: self.meta_root,
+    )
 
     seen: list[str] = []
     monkeypatch.setattr(

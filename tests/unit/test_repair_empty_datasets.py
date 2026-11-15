@@ -5,7 +5,6 @@ from datetime import date
 import pytest
 
 from cnequity.config import Config
-from cnequity.storage.repairs.layout import repair_layout
 from cnequity.storage.repairs.orphan_symbols import (
     repair_orphan_symbols,
     repair_stale_derived_suspensions,
@@ -24,7 +23,6 @@ REPAIRS = {
     ),
     "misdated_valuation": repair_misdated_valuation,
     "valuation_basis": repair_valuation_basis,
-    "layout": lambda cfg, apply: repair_layout(cfg, "trading_status", apply=apply),
 }
 
 
@@ -48,24 +46,3 @@ def test_an_empty_dataset_directory_is_not_registered(tmp_path):
     (cfg.curated_root / "trading_status" / "trade_date=2024-01").mkdir(parents=True)
     assert repair_status_listing_window(cfg)["note"].endswith("nothing to repair")
     assert _registered(cfg) == []
-
-
-def test_a_preview_of_an_unregistered_legacy_lake_reads_it_without_registering(tmp_path):
-    import polars as pl
-
-    cfg = Config(data_root=tmp_path)
-    part = cfg.curated_root / "valuation_metrics" / "trade_date=2024-01"
-    part.mkdir(parents=True)
-    pl.DataFrame({"symbol": ["600519.SH"], "trade_date": [date(2024, 1, 2)]}).write_parquet(
-        part / "part-0.parquet"
-    )
-    from cnequity.storage.revisions import RevisionStore
-
-    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    assert store.repair_base("valuation_metrics", register=False) == (
-        cfg.curated_root / "valuation_metrics"
-    )
-    assert _registered(cfg) == []
-    registered = store.repair_base("valuation_metrics", register=True)
-    assert registered is not None and registered != cfg.curated_root / "valuation_metrics"
-    assert _registered(cfg) == ["valuation_metrics"]

@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.derive.industry_crosswalk import (
@@ -101,7 +102,8 @@ def lake(tmp_path):
         root = cfg.curated_root / "industry_members" / f"as_of_date={day}"
         root.mkdir(parents=True)
         part.write_parquet(root / "part.parquet")
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         "industry_members",
         run_id="seed",
         changed_files=sorted((cfg.curated_root / "industry_members").rglob("*.parquet")),
@@ -133,7 +135,8 @@ def test_without_same_day_evidence_it_says_what_to_run(tmp_path):
     root = cfg.curated_root / "industry_members" / f"as_of_date={DAY}"
     root.mkdir(parents=True)
     frame.write_parquet(root / "part.parquet")
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         "industry_members",
         run_id="seed",
         changed_files=[root / "part.parquet"],

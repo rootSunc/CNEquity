@@ -2,6 +2,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.derive.fund_factors import fund_share_series
 
@@ -162,7 +163,8 @@ def test_offline_repair_is_idempotent_and_keeps_old_revision(tmp_path, halt_afte
             path = directory / "part.parquet"
             group.write_parquet(path)
             paths.append(path)
-        store.commit(
+        commit_tree(
+            store,
             dataset,
             run_id="seed",
             changed_files=paths,

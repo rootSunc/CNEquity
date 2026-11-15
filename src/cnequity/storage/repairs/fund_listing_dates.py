@@ -68,7 +68,6 @@ def repair_fund_listing_dates(config: Config, *, apply: bool = False) -> dict:
         changed_rows = changed_rows.with_columns(
             pl.lit(datetime.now(timezone.utc)).alias("fetched_at")
         )
-        store.ensure_current("instruments")
         published = publish_staged(
             config,
             store,

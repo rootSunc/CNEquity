@@ -3,6 +3,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.quality.audit import run_audit
@@ -91,7 +92,8 @@ def test_receipt_integrity_uses_selected_status_generation(tmp_path):
     _write_st_receipt(cfg, day, day)
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
     path = cfg.curated_root / "trading_status" / f"trade_date={day}" / "part-0.parquet"
-    store.commit(
+    commit_tree(
+        store,
         "trading_status",
         run_id="evidence",
         changed_files=[path],
@@ -103,7 +105,8 @@ def test_receipt_integrity_uses_selected_status_generation(tmp_path):
     )
     assert st_evidence_coverage_report(cfg, day, day, read_context=selected)["verified"]
     pl.read_parquet(path).with_columns(pl.lit("eastmoney").alias("source")).write_parquet(path)
-    store.commit(
+    commit_tree(
+        store,
         "trading_status",
         run_id="missing-evidence",
         changed_files=[path],

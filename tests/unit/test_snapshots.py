@@ -4,6 +4,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.legacy_lake import commit_generation
 
 from cnequity.config import Config
 from cnequity.storage.snapshots import SnapshotStore
@@ -288,7 +289,8 @@ def test_snapshot_verify_rejects_dataset_contract_and_pointer_state_tampering(tm
     from cnequity.storage.revisions import RevisionStore
 
     data_file = cfg.curated_root / "daily_bars" / "trade_date=2024-06-18" / "part-merged.parquet"
-    revision = RevisionStore(cfg.meta_root, cfg.curated_root).commit(
+    revision = commit_generation(
+        RevisionStore(cfg.meta_root, cfg.curated_root),
         "daily_bars",
         run_id="r1",
         changed_files=[data_file],
@@ -318,7 +320,8 @@ def test_snapshot_create_refuses_state_pointer_mismatch(tmp_path):
     from cnequity.storage.revisions import RevisionStore
 
     data_file = cfg.curated_root / "daily_bars" / "trade_date=2024-06-18" / "part-merged.parquet"
-    revision = RevisionStore(cfg.meta_root, cfg.curated_root).commit(
+    revision = commit_generation(
+        RevisionStore(cfg.meta_root, cfg.curated_root),
         "daily_bars",
         run_id="r1",
         changed_files=[data_file],
@@ -363,7 +366,8 @@ def _commit_two_bar_generations(cfg: Config) -> Path:
         if run_id == "r2":
             write_second(12.0)
         assert (
-            revisions.commit(
+            commit_generation(
+                revisions,
                 "daily_bars",
                 run_id=run_id,
                 changed_files=changed,

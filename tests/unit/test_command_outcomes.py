@@ -10,6 +10,7 @@ from datetime import date
 import polars as pl
 import pytest
 from click.testing import CliRunner
+from tests.catalog_seed import publish_rows
 
 from cnequity.cli.main import cli
 from cnequity.config import Config
@@ -268,8 +269,10 @@ def test_partial_publication_keeps_missing_keys_and_retry_attempts(tmp_path):
     assert receipt["revision_id"]
     assert engine.manifest.get_batch(run, "source")["status"] == "failed"
     assert len(state.get_outstanding_keys("daily_bars")) == 1
-    root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("daily_bars")
-    assert pl.read_parquet(next(root.rglob("*.parquet")))["symbol"].to_list() == ["600519.SH"]
+    from cnequity.query import catalog_read, load
+
+    catalog_read.close_all()
+    assert load("daily_bars", config=cfg)["symbol"].to_list() == ["600519.SH"]
     assert state.get_payload("daily_bars")["complete_through"] < DAY.isoformat()
 
 
@@ -314,9 +317,8 @@ def test_published_repair_clears_only_matching_keys(tmp_path):
     assert [(r["symbol"], r["trade_date"]) for r in state.get_outstanding_keys("daily_bars")] == [
         ("000001.SZ", DAY.isoformat())
     ]
-    pointer = RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars")
-    receipt = json.loads((cfg.meta_root / pointer["receipt"]).read_text())
-    coverage = receipt["metadata"]["coverage"]
+    latest = RevisionStore(cfg.meta_root, cfg.curated_root).latest("daily_bars")
+    coverage = latest.metadata["coverage"]
     assert coverage["resolved_outstanding_keys"] == 1
     assert coverage["gaps_source"] == "dataset_state"
     assert coverage["gaps"]["counts"]["outstanding_keys"] == 1
@@ -333,10 +335,8 @@ def test_receipt_bounds_the_gap_index_it_records(tmp_path):
     )
     StagingWriter(cfg.staging_root).write_batch("daily_bars", run, "valid", _bars())
     engine.run_step("compact", DAY, run)
-    pointer = RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars")
-    gaps = json.loads((cfg.meta_root / pointer["receipt"]).read_text())["metadata"]["coverage"][
-        "gaps"
-    ]
+    latest = RevisionStore(cfg.meta_root, cfg.curated_root).latest("daily_bars")
+    gaps = latest.metadata["coverage"]["gaps"]
     assert gaps["counts"]["outstanding_keys"] == 500
     assert len(gaps["sample"]["outstanding_keys"]) == 20
     assert gaps["truncated"] is True
@@ -437,64 +437,44 @@ def _factor_frame():
     )
 
 
+def _derive_factors(cfg, inputs):
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.steps.finalize import _publish_derived_revision
+
+    label = f"trade_date={DATASETS['adj_factors'].partition_for(DAY)}"
+    with DerivedOutput(cfg, "adj_factors", "derive") as output:
+        output.write(label, _factor_frame(), "part.parquet")
+        return _publish_derived_revision(
+            cfg, "adj_factors", "derive", DAY, output, input_revisions=inputs
+        )
+
+
 def test_derived_publication_records_partial_input_identity(tmp_path):
-    from cnequity.steps.finalize import _capture_derive_inputs, _publish_derived_revision
+    from cnequity.steps.finalize import _capture_derive_inputs
 
     cfg = _config(tmp_path)
-    root = cfg.curated_root / "daily_bars"
-    root.mkdir(parents=True)
-    _bars().write_parquet(root / "part.parquet")
+    publish_rows(cfg, "daily_bars", _bars())
     StateStore(cfg.meta_root).record_outstanding_keys(
         "daily_bars", [("000001.SZ", DAY)], run_id="source", reason="source_unavailable"
     )
     inputs = _capture_derive_inputs(cfg, "adj_factors")
-    target = cfg.derived_root / "adj_factors"
-    target.mkdir(parents=True)
-    _factor_frame().write_parquet(target / "part.parquet")
-    result = _publish_derived_revision(
-        cfg, "adj_factors", "derive", DAY, DerivedOutput(cfg, "adj_factors"), input_revisions=inputs
-    )
+    result = _derive_factors(cfg, inputs)
     assert result["coverage_status"] == "partial"
     assert result["publication_status"] == "partial"
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    pointer = store.current_pointer("adj_factors")
-    receipt = json.loads((cfg.meta_root / pointer["receipt"]).read_text())
-    assert receipt["metadata"]["input_revisions"] == inputs
+    assert store.latest("adj_factors").metadata["input_revisions"] == inputs
 
 
 def test_changed_input_revision_cannot_publish_derived_candidate(tmp_path):
-    from cnequity.steps.finalize import _capture_derive_inputs, _publish_derived_revision
+    from cnequity.steps.finalize import _capture_derive_inputs
 
     cfg = _config(tmp_path)
-    root = cfg.curated_root / "daily_bars"
-    root.mkdir(parents=True)
-    path = root / "part.parquet"
-    _bars().write_parquet(path)
+    publish_rows(cfg, "daily_bars", _bars())
     inputs = _capture_derive_inputs(cfg, "adj_factors")
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    _bars("000001.SZ").write_parquet(path)
-    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
-
-    contract = dataset_contract("daily_bars")
-    store.commit(
-        "daily_bars",
-        run_id="new-input",
-        changed_files=[path],
-        schema_version=contract["schema_version"],
-        contract_fingerprint=contract_fingerprint(contract),
-    )
-    target = cfg.derived_root / "adj_factors"
-    target.mkdir(parents=True)
-    _factor_frame().write_parquet(target / "part.parquet")
+    publish_rows(cfg, "daily_bars", _bars("000001.SZ"), run_id="new-input")
     with pytest.raises(InputUnavailableError, match="changed during calculation"):
-        _publish_derived_revision(
-            cfg,
-            "adj_factors",
-            "derive",
-            DAY,
-            DerivedOutput(cfg, "adj_factors"),
-            input_revisions=inputs,
-        )
+        _derive_factors(cfg, inputs)
     assert store.current_pointer("adj_factors") is None
 
 
@@ -596,38 +576,22 @@ def test_monthly_repair_does_not_count_other_scopes_as_attempted(tmp_path):
 
 def test_share_structure_change_blocks_adj_factors_publication(tmp_path):
     """The share-reform step reads share_structure, so publication must pin it."""
-    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
-    from cnequity.steps.finalize import _capture_derive_inputs, _publish_derived_revision
+    from cnequity.steps.finalize import _capture_derive_inputs
 
     cfg = _config(tmp_path)
-    root = cfg.curated_root / "share_structure"
-    root.mkdir(parents=True)
-    path = root / "part.parquet"
-    pl.DataFrame({"symbol": ["600000.SH"], "float_a_shares": [1.0]}).write_parquet(path)
+
+    def shares(value: float) -> pl.DataFrame:
+        return pl.DataFrame(
+            {"symbol": ["600000.SH"], "change_date": [DAY], "float_a_shares": [value]}
+        )
+
+    publish_rows(cfg, "share_structure", shares(1.0))
     inputs = _capture_derive_inputs(cfg, "adj_factors")
     assert "share_structure" in inputs
-    pl.DataFrame({"symbol": ["600000.SH"], "float_a_shares": [2.0]}).write_parquet(path)
-    contract = dataset_contract("share_structure")
-    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
-        "share_structure",
-        run_id="new-input",
-        changed_files=[path],
-        schema_version=contract["schema_version"],
-        contract_fingerprint=contract_fingerprint(contract),
-    )
-    target = cfg.derived_root / "adj_factors"
-    target.mkdir(parents=True)
-    _factor_frame().write_parquet(target / "part.parquet")
+    publish_rows(cfg, "share_structure", shares(2.0), run_id="new-input")
     with pytest.raises(InputUnavailableError, match="share_structure changed"):
-        _publish_derived_revision(
-            cfg,
-            "adj_factors",
-            "derive",
-            DAY,
-            DerivedOutput(cfg, "adj_factors"),
-            input_revisions=inputs,
-        )
+        _derive_factors(cfg, inputs)
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
     assert store.current_pointer("adj_factors") is None
 
 

@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.mcp_server import protocol, tools
@@ -401,7 +402,8 @@ def test_run_sql_reads_a_published_generation(lake):
 
     store = RevisionStore(lake.meta_root, lake.curated_root)
     files = sorted((lake.curated_root / "daily_bars").rglob("*.parquet"))
-    assert store.commit(
+    assert commit_tree(
+        store,
         "daily_bars",
         run_id="r1",
         changed_files=files,
@@ -421,7 +423,8 @@ def _publish_daily_bars(lake) -> None:
 
     store = RevisionStore(lake.meta_root, lake.curated_root)
     files = sorted((lake.curated_root / "daily_bars").rglob("*.parquet"))
-    assert store.commit(
+    assert commit_tree(
+        store,
         "daily_bars",
         run_id="r1",
         changed_files=files,

@@ -34,6 +34,7 @@ from cnequity.query.parquet_scan import (
     lazy_row_count,
     list_partitions,
     partition_files_in_range,
+    root_parquet_files,
     scan_parquet_files,
     scan_parquet_root,
 )
@@ -67,7 +68,7 @@ def _schema_contract_scan(
         except SchemaValidationError as exc:
             invalid.append(
                 {
-                    "file": path.relative_to(root).as_posix(),
+                    "file": _relative(path, root).as_posix(),
                     "message": str(exc),
                 }
             )
@@ -75,7 +76,7 @@ def _schema_contract_scan(
             unreadable_count += 1
             invalid.append(
                 {
-                    "file": path.relative_to(root).as_posix(),
+                    "file": _relative(path, root).as_posix(),
                     "message": f"unreadable parquet or schema: {exc}",
                 }
             )
@@ -233,7 +234,7 @@ def _unreadable_parquet_finding(files: list[Path], dataset: str, root: Path) -> 
         except (OSError, pl.exceptions.PolarsError, ValueError) as exc:
             unreadable.append(
                 {
-                    "file": path.relative_to(root).as_posix(),
+                    "file": _relative(path, root).as_posix(),
                     "message": f"unreadable parquet or schema: {exc}",
                 }
             )
@@ -255,12 +256,29 @@ def _unreadable_parquet_finding(files: list[Path], dataset: str, root: Path) -> 
     }
 
 
+def _relative(path: Path, root: Path, partition_col: str | None = None) -> Path:
+    """*path* relative to the dataset *root*, also for a file only the lake catalog holds.
+
+    The catalog keeps a partition's files in a folder named by its value, away
+    from *root*; such a file reads as ``<partition_col>=<value>/<name>``.
+    """
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        if partition_col and parse_partition(path.parent.name) is not None:
+            return Path(f"{partition_col}={path.parent.name}", path.name)
+        return Path(path.name)
+
+
 def partition_parquet_files(root: Path, partition_col: str, partition_value: str) -> list[Path]:
     """Files in one partition directory. *partition_value* is the literal
     directory value — a day, month or year label depending on granularity."""
     part_dir = root / f"{partition_col}={partition_value}"
     if not part_dir.exists():
-        return []
+        if Path(root).exists():
+            return []
+        # A catalog revision: its files sit in folders named by the value.
+        return [path for path in root_parquet_files(root) if path.parent.name == partition_value]
     return sorted(part_dir.glob("**/*.parquet"))
 
 
@@ -339,10 +357,7 @@ def _partitioned_pk_duplicate_count(
     prefix = f"{partition_col}="
     groups: dict[str, list[Path]] = {}
     for path in files:
-        try:
-            relative = path.relative_to(root)
-        except ValueError:
-            relative = path
+        relative = _relative(path, root, partition_col)
         partition = next(
             (part for part in relative.parts if part.startswith(prefix)),
             "__root__",
@@ -655,7 +670,7 @@ def audit_curated_dataset(
         else ("error" if required else "warning")
     )
 
-    if not root.exists():
+    if not root.exists() and not dataset_has_parquet(root):
         findings.append(
             {
                 "dataset": dataset,
@@ -684,15 +699,15 @@ def audit_curated_dataset(
 
     pk_files: list[Path] | None = None
     if full:
-        audit_files = sorted(root.rglob("*.parquet"))
+        audit_files = root_parquet_files(root)
         if partitions is not None:
             if partition_col is None or partition_col not in PRIMARY_KEYS.get(dataset, []):
                 pk_files = audit_files
             audit_files = [
                 path
                 for path in audit_files
-                if len(path.relative_to(root).parts) > 1
-                and path.relative_to(root).parts[0] in partitions
+                if len(_relative(path, root, partition_col).parts) > 1
+                and _relative(path, root, partition_col).parts[0] in partitions
             ]
             if not audit_files:
                 # Every requested partition was removed: nothing left to scan.
@@ -766,7 +781,7 @@ def audit_curated_dataset(
                 else []
             )
         else:
-            contract_files = sorted(root.rglob("*.parquet"))
+            contract_files = root_parquet_files(root)
     contract, valid_contract_files, readable_contract_files = _schema_contract_scan(
         contract_files, dataset, root
     )
@@ -791,7 +806,7 @@ def audit_curated_dataset(
         # footers first so one old corrupt file cannot abort those checks.
         current_files = set(contract_files)
         historical_unreadable = _unreadable_parquet_finding(
-            [path for path in sorted(root.rglob("*.parquet")) if path not in current_files],
+            [path for path in root_parquet_files(root) if path not in current_files],
             dataset,
             root,
         )
@@ -1013,7 +1028,7 @@ def check_mixed_partition_granularity(
     sample = sample[:8]
 
     pk_dupes: int | None = None
-    files = sorted(root.glob("**/*.parquet"))
+    files = root_parquet_files(root)
     pk = PRIMARY_KEYS.get(dataset, [])
     if pk and len(files) <= _MIXED_GRANULARITY_PK_SCAN_MAX_FILES:
         # Keep the whole-dataset overlap check lazy as well. Mixed layouts are
@@ -1062,7 +1077,7 @@ def check_partition_fragmentation(
     if len(partitions) < PARTITION_FRAGMENTATION_MIN_PARTITIONS:
         return None
 
-    files = sorted(root.glob("**/*.parquet"))
+    files = root_parquet_files(root)
     rows = lazy_row_count(scan_parquet_files(files))
     avg = rows / len(partitions)
     if avg >= PARTITION_FRAGMENTATION_MIN_ROWS:

@@ -4,13 +4,16 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.steps.common import instrument_metadata, load_symbols
 from cnequity.steps.finalize import step_compact
 from cnequity.storage import StagingWriter
 from cnequity.storage.instruments import compact_instruments
+from cnequity.storage.revisions import RevisionStore
 
 
 def _prov(source: str = "tdx_protocol") -> dict:
@@ -267,7 +270,7 @@ def test_compact_instruments_via_step_respects_manifest_gate(tmp_path):
     )
 
     step_compact(cfg, trade_date, run_id, {})
-    assert (cfg.curated_root / "instruments" / "part-merged.parquet").exists()
+    assert root_parquet_files(cfg.curated_root / "instruments")
 
 
 def test_compact_instruments_removes_stale_siblings(tmp_path):
@@ -386,6 +389,14 @@ def test_audit_emits_instruments_delist_suppressed_error(tmp_path):
     for i in range(9):
         existing_rows.append(_instrument(f"600{i:03d}.SH", list_date=date(2000, 1, 1)))
     pl.DataFrame(existing_rows).write_parquet(curated_path)
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
+        "instruments",
+        run_id="seed",
+        changed_files=[curated_path],
+        schema_version=1,
+        contract_fingerprint="seed",
+    )
 
     writer = StagingWriter(cfg.staging_root)
     writer.write_batch(

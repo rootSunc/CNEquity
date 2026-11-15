@@ -8,6 +8,7 @@ from datetime import date
 import polars as pl
 import pytest
 from tests.catalog_seed import record_revisions
+from tests.legacy_lake import publish_generation
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
@@ -64,9 +65,17 @@ def _run(cfg: Config, run_id: str, day: date, flows, margins) -> dict:
     return step_compact(cfg, day, run_id, {})
 
 
+def _legacy_run(cfg: Config, run_id: str, day: date, flows, margins) -> None:
+    """What a compaction published before 0.25.0: a generation of each dataset."""
+    del day
+    publish_generation(cfg, "fund_flow", flows, run_id=run_id)
+    publish_generation(cfg, "margin_trading", margins, run_id=run_id)
+
+
 def _lake(root, mode: str) -> Config:
+    """A lake that published its first run on the catalog (``fresh``) or before (``catalog``)."""
     cfg = Config(data_root=root / mode)
-    _run(
+    (_legacy_run if mode == "catalog" else _run)(
         cfg,
         "r1",
         FIRST,
@@ -97,11 +106,10 @@ def _lake(root, mode: str) -> Config:
     return cfg
 
 
-def test_a_catalog_compaction_publishes_what_a_generation_compaction_does(tmp_path, monkeypatch):
+def test_an_upgraded_lake_compacts_as_a_new_one_does(tmp_path, monkeypatch):
     from cnequity.query import catalog_read, load
 
-    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
-    generation = _lake(tmp_path, "generation")
+    generation = _lake(tmp_path, "fresh")
     catalog = _lake(tmp_path, "catalog")
     catalog_read.close_all()
 
@@ -123,7 +131,7 @@ def test_a_catalog_compaction_publishes_what_a_generation_compaction_does(tmp_pa
 def _gated_lake(root) -> Config:
     """A catalog lake holding the first run, with the publication gate blocking."""
     cfg = Config(data_root=root / "gated")
-    _run(
+    _legacy_run(
         cfg,
         "r1",
         FIRST,
@@ -142,7 +150,6 @@ def _gated_lake(root) -> Config:
 def test_the_publication_gate_audits_a_rehearsed_catalog_publish(tmp_path, monkeypatch):
     from cnequity.query import catalog_read, load
 
-    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
     cfg = _gated_lake(tmp_path)
     audited = []
 
@@ -186,7 +193,6 @@ def test_the_publication_gate_audits_a_rehearsed_catalog_publish(tmp_path, monke
 def test_a_clean_rehearsal_lets_the_catalog_publish_through(tmp_path, monkeypatch):
     from cnequity.query import catalog_read, load
 
-    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
     cfg = _gated_lake(tmp_path)
     _run(
         cfg,

@@ -6,6 +6,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.schemas import validate_dataframe, with_provenance
@@ -15,6 +16,7 @@ from cnequity.quality.derivative_checks import (
     exchange_session_gaps,
 )
 from cnequity.storage.parquet import StagingWriter, compact_dataset
+from cnequity.storage.revisions import RevisionStore
 
 
 @pytest.fixture
@@ -236,7 +238,6 @@ def test_exchange_missing_for_multiple_sessions_is_visible(cfg):
 
 
 def test_unpublished_mutable_rows_do_not_change_coverage_evidence(cfg):
-    from cnequity.storage.revisions import RevisionStore
 
     rows = [
         _bar("IF2610.CFE", date(2026, 9, 23)),
@@ -244,7 +245,14 @@ def test_unpublished_mutable_rows_do_not_change_coverage_evidence(cfg):
         _bar("IF2610.CFE", date(2026, 9, 24)),
     ]
     _write(cfg, "futures_bars", rows)
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).ensure_current("futures_bars")
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
+        "futures_bars",
+        run_id="published",
+        changed_files=sorted((cfg.curated_root / "futures_bars").rglob("*.parquet")),
+        schema_version=1,
+        contract_fingerprint="seed",
+    )
     _write(cfg, "futures_bars", [_bar("IF2611.CFE", date(2026, 9, 24))])
     assert derivative_tip_scope(cfg, "futures_bars")["missing"] == ["IF2611.CFE"]
 

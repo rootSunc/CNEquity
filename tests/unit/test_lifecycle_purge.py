@@ -7,6 +7,7 @@ import sqlite3
 
 import polars as pl
 import pytest
+from tests.legacy_lake import commit_generation
 
 from cnequity.config import Config
 from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, digest
@@ -21,7 +22,8 @@ def lake(tmp_path):
     source.parent.mkdir(parents=True)
     for i in range(5):
         pl.DataFrame({"close": [float(i)]}).write_parquet(source)
-        writer.commit(
+        commit_generation(
+            writer,
             "daily_bars",
             run_id=str(i),
             changed_files=[source],
@@ -91,7 +93,8 @@ def test_purge_rejects_changed_plan_before_deleting(lake, monkeypatch, change):
     elif change == "publish":
         source = cfg.curated_root / "daily_bars/part.parquet"
         pl.DataFrame({"close": [999.0]}).write_parquet(source)
-        writer.commit(
+        commit_generation(
+            writer,
             "daily_bars",
             run_id="new",
             changed_files=[source],

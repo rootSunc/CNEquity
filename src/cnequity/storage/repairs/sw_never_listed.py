@@ -42,8 +42,6 @@ def repair_sw_never_listed(config: Config, *, apply: bool = False) -> dict:
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )
-        if apply:
-            store.ensure_current(DATASET)
         context = ReadContext.capture(config, (DATASET, *EVIDENCE), {})
         root = context.roots[DATASET]
         report: dict = {"dataset": DATASET, "applied": False, "rows": 0, "symbols": []}

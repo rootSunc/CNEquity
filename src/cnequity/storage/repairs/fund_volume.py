@@ -264,7 +264,6 @@ def repair_fund_volume(config, *, apply=False, refresh_sources=False, max_symbol
         return report
     with planned_on(config):
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-        store.ensure_current(DATASET)
         live = ReadContext.capture(config, (DATASET, "instruments"), {})
         live_targets = _targets(live)
         matching = _matching(live_targets, incoming, peer)

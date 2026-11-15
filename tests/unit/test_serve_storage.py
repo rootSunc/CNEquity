@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
+from tests.legacy_lake import commit_generation
 
 from cnequity.cli.main import cli
 from cnequity.config import Config
@@ -23,7 +24,8 @@ def web(tmp_path, monkeypatch):
     source.parent.mkdir(parents=True)
     for i in range(7):
         pl.DataFrame({"close": [float(i)]}).write_parquet(source)
-        writer.commit(
+        commit_generation(
+            writer,
             "daily_bars",
             run_id=str(i),
             changed_files=[source],

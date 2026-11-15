@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 import polars as pl
 import pytest
 from pypdf import PdfWriter
+from tests.catalog_seed import commit_tree
 
 from cnequity.adapters.cninfo.financial_originals import (
     original_annual_notice,
@@ -585,7 +586,8 @@ def test_append_original_with_current_observation_and_archive_replay(tmp_path, m
     )
     old.write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
+    commit_tree(
+        store,
         DATASET,
         run_id="seed",
         changed_files=[path],

@@ -92,20 +92,7 @@ Formerly `cne delisted discover / reconcile / repair / coverage`.
 
 ## Partition rewrites (`cne repair repartition`)
 
-Rewrites historical partitions into the period configured in `DatasetSpec.partition_granularity`
-(see [partition granularity](../architecture/lake-layout.md#day-to-day-management)). Without arguments it only lists the datasets awaiting a rewrite,
-so the listing form can be run at any time.
-
-```bash
-cne repair repartition                          # datasets awaiting a rewrite
-cne repair repartition --all                    # preview the impact first
-cne repair repartition trading_calendar --apply # a single dataset
-```
-
-The read path resolves the layout from the directory shape, so changing the granularity itself **does not need** a migration; this only gathers up fragmented files. Writes first build a temporary directory,
-write each partition and check the total row count, then swap it in with a single rename, so a crash midway leaves the original data untouched; repeated runs are idempotent.
-
-It used to be the repository script `scripts/migrations/repartition.py` (earlier `cne repartition`); it now ships with the package, previews by default, and rewrites only with `--apply`. What triggers it is a change of registry granularity under an existing lake, not routine operations. One-off data migrations for lakes written by older versions are `cne migrate`'s job.
+No longer does anything: the lake catalog lays out each partition's files when it publishes them, so there is nothing to rewrite. The command only prints a note and is removed in 0.27.0. One-off data migrations for lakes written by older versions are `cne upgrade`'s job.
 
 ## Tests and smoke runs
 

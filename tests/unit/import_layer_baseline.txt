@@ -29,6 +29,5 @@ cnequity.steps.compact_hooks -> cnequity.research.preview
 cnequity.steps.http_common -> cnequity.diagnostics.source_health
 cnequity.storage.coverage -> cnequity.quality.bar_coverage
 cnequity.storage.layout -> cnequity.query.views
-cnequity.storage.merge_files -> cnequity.quality.publication
 cnequity.storage.repairs.daily_bar_coverage -> cnequity.steps.finalize
 cnequity.storage.repairs.fund_no_print -> cnequity.steps.finalize

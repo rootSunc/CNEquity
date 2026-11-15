@@ -14,6 +14,7 @@ from cnequity.adapters.futures_exchange.common import ExchangeDay, FuturesDayUna
 from cnequity.config import Config
 from cnequity.derive.derivative_contracts import build_futures_contracts, build_option_contracts
 from cnequity.domain.datasets import is_dataset_enabled
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps import derivatives
 from cnequity.storage.parquet import compact_dataset
@@ -519,8 +520,8 @@ def test_cli_backfill_publishes_contracts_and_derivatives_even_on_weekend(cfg, r
     )
     assert result.exit_code == 0, result.output
     assert '"followup"' in result.output
-    assert list(read_root(cfg, "futures_contracts").glob("**/*.parquet"))
-    assert list(read_root(cfg, "futures_continuous").glob("**/*.parquet"))
+    assert root_parquet_files(read_root(cfg, "futures_contracts"))
+    assert root_parquet_files(read_root(cfg, "futures_continuous"))
 
 
 def test_exchange_scope_also_limits_reference_requests(cfg, reader, monkeypatch):

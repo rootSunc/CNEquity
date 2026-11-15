@@ -3,6 +3,7 @@
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.storage.repairs.delist_dates import last_listed_sessions
@@ -131,7 +132,8 @@ def test_placeholder_bars_after_delisting_are_removed_on_either_lake(tmp_path, s
         ).write_parquet(part / "part-0.parquet")
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
     for dataset in ("instruments", "daily_bars"):
-        store.commit(
+        commit_tree(
+            store,
             dataset,
             run_id="seed",
             changed_files=sorted((cfg.curated_root / dataset).rglob("*.parquet")),

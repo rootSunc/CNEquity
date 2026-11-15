@@ -16,6 +16,7 @@ import pytest
 
 from cnequity.adapters.exchange import margin_trading as em
 from cnequity.config import Config
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.run_scope import set_backfill
 from cnequity.steps.capital import _fetch_margin_via_exchange, _margin_source
 
@@ -338,7 +339,7 @@ def test_partial_exchange_publishes_and_the_retry_fetches_the_missing_exchange(
     assert state["coverage_status"] == "incomplete"
     assert not state.get("complete_through") or state["complete_through"] < TD.isoformat()
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("margin_trading")
-    assert pl.read_parquet(list(root.rglob("*.parquet"))).height == 60
+    assert pl.read_parquet(root_parquet_files(root)).height == 60
 
     again = JobEngine(cfg).run_job(
         job, TD, steps=["margin_trading", "compact"], backfill=job == "backfill"
@@ -347,7 +348,7 @@ def test_partial_exchange_publishes_and_the_retry_fetches_the_missing_exchange(
     assert again["status"] == "success", again
     assert TD not in StateStore(cfg.meta_root).get_missing_dates("margin_trading")
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("margin_trading")
-    assert pl.read_parquet(list(root.rglob("*.parquet"))).height == 120
+    assert pl.read_parquet(root_parquet_files(root)).height == 120
 
 
 def test_the_exchange_is_the_default_owner(tmp_path):

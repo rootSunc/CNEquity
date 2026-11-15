@@ -316,12 +316,15 @@ def _collect_lake_findings(
         if scope is not None and ds not in scope:
             continue
         root = config.curated_root / ds
-        if demo_lake and not root.exists():
+        # The path names the dataset; its published rows may live only in the
+        # lake catalog, with no directory here.
+        present = root.exists() or dataset_has_parquet(root)
+        if demo_lake and not present:
             continue
         # An opt-in capture that was never switched on has nothing to audit;
         # "no curated data" is its configured state, not a finding. One that
         # was switched off later still has history on disk, and that is audited.
-        if not root.exists() and not is_dataset_enabled(ds, config):
+        if not present and not is_dataset_enabled(ds, config):
             continue
         dataset_findings = audit_curated_dataset(
             ds,

@@ -160,10 +160,10 @@ def test_compact_advances_watermark_when_all_batches_succeed(tmp_path):
 
     step_compact(cfg, trade_date, run_id, {})
     assert state.get_date("daily_bars") == trade_date
-    assert (
-        # daily_bars is month-partitioned: the session merges into its month file.
-        cfg.curated_root / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet"
-    ).exists()
+    from cnequity.query import catalog_read, load
+
+    catalog_read.close_all()
+    assert trade_date in load("daily_bars", config=cfg)["trade_date"].to_list()
 
 
 def test_partial_by_date_publication_keeps_the_missing_day_outstanding(tmp_path):
@@ -254,9 +254,8 @@ def test_source_diff_gate_rolls_back_mutable_candidate_before_next_partition(tmp
     first = step_compact(cfg, day_one, "run-good", {})
     assert first["dataset_revisions"]["daily_bars"]["revision"] == 1
 
-    # The candidate contains the prior good partition plus this bad one.  The
-    # gate must quarantine the whole mutable candidate and restore the pointer
-    # generation, rather than leave day_bad to contaminate the next merge.
+    # The gate keeps the candidate aside and publishes nothing, so day_bad
+    # cannot contaminate the next merge.
     stage("run-bad", "batch-bad", day_bad, _gate_bar_frame(day_bad, 1800.0, "tdx_protocol"))
     backup_day("backup-bad", day_bad, 1802.0)
     blocked = step_compact(cfg, day_bad, "run-bad", {})
@@ -266,32 +265,23 @@ def test_source_diff_gate_rolls_back_mutable_candidate_before_next_partition(tmp
     assert quarantine.is_dir()
     assert list(quarantine.rglob("trade_date=2024-07/*.parquet"))
 
-    revisions = RevisionStore(cfg.meta_root, cfg.curated_root)
-    pointer = revisions.current_pointer("daily_bars")
-    published = revisions.current_root("daily_bars")
-    assert pointer is not None and pointer["revision"] == 1
-    assert published is not None
-    assert list(published.rglob("trade_date=2024-07-01/*.parquet")) == []
-    mutable = cfg.curated_root / "daily_bars"
-    assert list(mutable.rglob("trade_date=2024-07-01/*.parquet")) == []
-    assert pl.read_parquet(next(published.rglob("*.parquet")))["trade_date"].to_list() == [day_one]
+    from cnequity.query import catalog_read, load
 
-    # A later good partition must merge from the restored immutable revision,
-    # not from the quarantined candidate.
+    def published_days():
+        catalog_read.close_all()
+        return sorted(load("daily_bars", config=cfg)["trade_date"].to_list())
+
+    revisions = RevisionStore(cfg.meta_root, cfg.curated_root)
+    assert revisions.current_pointer("daily_bars")["revision"] == 1
+    assert published_days() == [day_one]
+
+    # A later good partition merges from the published revision, not from the
+    # quarantined candidate.
     stage("run-next", "batch-next", day_next, _gate_bar_frame(day_next, 1805.0, "tdx_protocol"))
     backup_day("backup-next", day_next, 1805.0)
     next_result = step_compact(cfg, day_next, "run-next", {})
     assert next_result["dataset_revisions"]["daily_bars"]["revision"] == 2
-    current = revisions.current_root("daily_bars")
-    assert current is not None
-    assert list(current.rglob("trade_date=2024-07-01/*.parquet")) == []
-    assert sorted(
-        pl.read_parquet(path)["trade_date"][0] for path in current.rglob("*.parquet")
-    ) == [
-        day_one,
-        day_next,
-    ]
-    assert list(mutable.rglob("trade_date=2024-07-01/*.parquet")) == []
+    assert published_days() == [day_one, day_next]
 
 
 def test_compact_snapshot_watermark_uses_run_date_not_max_partition(tmp_path):
@@ -456,7 +446,6 @@ def test_source_diff_gate_blocks_a_catalog_publish_and_judges_the_session_from_i
     from equitylake_core.catalog import Catalog
     from equitylake_core.extensions import ExtensionUnavailableError
 
-    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
     cfg = Config(
         data_root=tmp_path / "data",
         failover_enabled=True,

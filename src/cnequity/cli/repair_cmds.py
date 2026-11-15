@@ -585,19 +585,17 @@ def stock_listing_dates(
     help=N_("Write and publish a new version; by default only prints the plan."),
 )
 def layout(dataset: str, config_path: str, apply: bool):
-    """Merge files under a partitioned dataset's root or a wrong-key directory into the registered partitions.
-
-    \b
-    Several observations of one primary key only fill each other's blanks when their non-null values agree exactly; conflicting keys keep one whole row by the canonical rules.
-    All original observations of duplicated keys are written to _quarantine as evidence, and old versions are kept.
-
-    """
-    from cnequity.storage.repairs.layout import LayoutRepairError, repair_layout
-
-    try:
-        _emit(repair_layout(_cfg(config_path), dataset.lower(), apply=apply))
-    except LayoutRepairError as exc:
-        raise click.ClickException(str(exc)) from exc
+    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0."""
+    _emit(
+        {
+            "dataset": dataset.lower(),
+            "applied": False,
+            "note": _(
+                "Nothing to repair: the lake catalog lays out each partition's files. "
+                "This command is removed in 0.27.0."
+            ),
+        }
+    )
 
 
 @repair.command("corporate-action-gaps")
@@ -670,46 +668,19 @@ def status_traded(config_path: str, start, end, apply: bool):
     "--apply", is_flag=True, help=N_("Rewrite and swap the partitions; by default only previews.")
 )
 def repartition(dataset: str | None, config_path: str, do_all: bool, apply: bool):
-    """Rewrite a dataset's partitions at its registered granularity.
-
-    \b
-    Without a dataset or --all it lists what is out of layout. With one it previews the effect
-    (files, partitions, size); --apply rewrites under the lake lock and swaps the dataset root.
-    Reads work whatever span the directories have, so this reclaims space and file opens rather
-    than fixing correctness: the audit points here when a granularity change left an old layout.
-
-    """
-    from cnequity.storage.repairs.repartition import (
-        RepartitionError,
-        repartition_candidates,
-        repartition_dataset,
-    )
-
+    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0."""
     if dataset and do_all:
         raise click.UsageError(_("Give a dataset or --all, not both."))
-    cfg = _cfg(config_path)
-    candidates = repartition_candidates(cfg)
-    if not dataset and not do_all:
-        _emit({"needs_repartition": candidates})
-        return
-    results = []
-    for name in [dataset.lower()] if dataset else candidates:
-        try:
-            res = repartition_dataset(cfg, name, dry_run=not apply)
-        except RepartitionError as exc:
-            raise click.ClickException(str(exc)) from exc
-        results.append(
-            {
-                "dataset": res.dataset,
-                "changed": res.changed,
-                "rows": res.rows,
-                "files": f"{res.files_before} -> {res.files_after}",
-                "partitions": f"{res.partitions_before} -> {res.partitions_after}",
-                "mb": f"{res.bytes_before / 1e6:.1f} -> {res.bytes_after / 1e6:.1f}",
-                "mb_saved": round(res.bytes_saved / 1e6, 1),
-            }
-        )
-    _emit({"applied": apply, "results": results})
+    _emit(
+        {
+            "needs_repartition": [],
+            "applied": False,
+            "note": _(
+                "Nothing to repartition: the lake catalog lays out each partition's files. "
+                "This command is removed in 0.27.0."
+            ),
+        }
+    )
 
 
 # Each of these used to be a mode flag on `cne backfill`, valid for one dataset,

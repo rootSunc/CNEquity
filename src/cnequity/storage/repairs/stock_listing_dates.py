@@ -138,7 +138,6 @@ def repair_stock_listing_dates(
             pl.lit(datetime.now(timezone.utc)).alias("fetched_at"),
         )
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-        store.ensure_current("instruments")
         published = publish_staged(
             config,
             store,

@@ -46,8 +46,7 @@ def _purge_valuation_orphan_symbols_planned(config: Config) -> dict:
         return {**nothing, "note": "no daily_bars; skipped"}
 
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    # Read the published generation: editing the mutable tree in place is
-    # invisible to readers and undone by the next compact's materialize.
+    # Read the published rows where they are.
     base = repair_root(config, store, _DATASET, register=False)
     if base is None:
         return nothing

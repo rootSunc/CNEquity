@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.adapters.exchange.fund_volume import (
     PARAMS,
@@ -117,7 +118,8 @@ def test_offline_repair_is_retained_idempotent_and_requires_same_prices(
         root.mkdir(parents=True)
         path = root / "part-merged.parquet"
         pl.DataFrame(rows, schema=DATASET_SCHEMAS[dataset]).write_parquet(path)
-        store.commit(
+        commit_tree(
+            store,
             dataset,
             run_id="seed",
             changed_files=[path],

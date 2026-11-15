@@ -39,8 +39,6 @@ def repair_missing_values(config: Config, dataset: str, *, apply: bool = False) 
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )
-        if apply:
-            store.ensure_current(dataset)
         context = ReadContext.capture(config, (dataset,), {})
         root = context.roots[dataset]
         report = {"dataset": dataset, "applied": False, "rows": 0, "fields": {}}

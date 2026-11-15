@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from tests.unit.test_compact_to_catalog import FIRST, SECOND, _flows, _margins, _run
+from tests.unit.test_compact_to_catalog import FIRST, SECOND, _flows, _legacy_run, _margins, _run
 
 from cnequity.config import Config
 from cnequity.storage.catalog_bridge import catalog_is_current, lake_root
@@ -21,9 +21,8 @@ from equitylake_core.extensions import ExtensionUnavailableError
 def lake(tmp_path, monkeypatch):
     from cnequity.query import catalog_read
 
-    monkeypatch.setenv(catalog_read.ENV_SWITCH, "1")
     cfg = Config(data_root=tmp_path / "lake")
-    _run(
+    _legacy_run(
         cfg,
         "r1",
         FIRST,
@@ -46,11 +45,10 @@ def test_a_lake_built_before_owes_the_migration_first(lake):
 def test_nothing_writes_a_lake_that_has_not_moved(lake, monkeypatch):
     from cnequity.orchestrator.engine import JobEngine
     from cnequity.query import catalog_read
-    from cnequity.storage.catalog_migration import GENERATION_LAKE_SWITCH, require_catalog_lake
+    from cnequity.storage.catalog_migration import require_catalog_lake
     from cnequity.storage.lake_record import LakeMigrationRequired
     from cnequity.storage.repairs.publish import publish_repair
 
-    monkeypatch.delenv(GENERATION_LAKE_SWITCH)
     store = RevisionStore(lake.meta_root, lake.curated_root)
     before = store.current_pointer("fund_flow")
 
@@ -72,9 +70,8 @@ def test_nothing_writes_a_lake_that_has_not_moved(lake, monkeypatch):
 
 def test_a_lake_that_holds_nothing_starts_on_the_catalog(tmp_path, monkeypatch):
     from cnequity.query import catalog_read, load
-    from cnequity.storage.catalog_migration import GENERATION_LAKE_SWITCH, require_catalog_lake
+    from cnequity.storage.catalog_migration import require_catalog_lake
 
-    monkeypatch.delenv(GENERATION_LAKE_SWITCH)
     cfg = Config(data_root=tmp_path / "new")
     try:
         Catalog(tmp_path / "probe", create=True).close()
@@ -162,46 +159,6 @@ def test_a_copy_that_differs_leaves_the_lake_unswitched(lake, monkeypatch):
     assert pointer.get("storage") != "catalog"
 
 
-def test_the_repair_gate_audits_a_lake_whose_datasets_live_only_in_the_catalog(lake, monkeypatch):
-    import polars as pl
-
-    from cnequity.quality.publication import check_repair_publication
-    from cnequity.query import catalog_read, load
-
-    migrate_to_catalog(lake, apply=True)
-    _run(
-        lake,
-        "r2",
-        SECOND,
-        _flows(SECOND, {"600519.SH": 3.0}),
-        _margins(SECOND, {"600519.SH": 11.0}),
-    )
-    catalog_read.close_all()
-    store = RevisionStore(lake.meta_root, lake.curated_root)
-    assert store.current_pointer("margin_trading")["storage"] == "catalog"
-
-    # A repair rewrites one partition of the verified working tree.
-    store.materialize_current("fund_flow")
-    target = sorted((lake.curated_root / "fund_flow").rglob("trade_date=2024-07*/*.parquet"))[-1]
-    pl.read_parquet(target).with_columns(pl.lit(7.0).alias("main_net_inflow")).write_parquet(target)
-    audited = []
-
-    def errors(view, day, scope=None):
-        flows = load("fund_flow", config=view).sort("trade_date")
-        audited.append(
-            (flows["main_net_inflow"].to_list()[-1], load("margin_trading", config=view).height)
-        )
-        return []
-
-    monkeypatch.setattr("cnequity.quality.publication._errors", errors)
-    report = check_repair_publication(lake, "fund_flow", "repair-1", [target])
-
-    # The published rows first, then the candidate; the other dataset, which
-    # exists only in the catalog, is readable in both.
-    assert audited == [(3.0, 2), (7.0, 2)]
-    assert report["blocked"] is False
-
-
 def test_a_repair_publishes_into_the_catalog_on_a_lake_that_lives_there(lake):
     from cnequity.query import catalog_read, load
     from cnequity.storage.repairs.publish import publish_repair, repair_root
@@ -277,22 +234,6 @@ def test_a_repair_the_gate_blocks_publishes_nothing_and_keeps_its_checkout(lake,
     assert list(Path(kept).rglob("*.parquet"))
 
 
-def test_file_layout_tools_leave_a_catalog_dataset_alone(lake):
-    from cnequity.storage.merge_files import merge_candidates
-    from cnequity.storage.repairs.layout import repair_layout
-    from cnequity.storage.repairs.repartition import repartition_dataset
-
-    migrate_to_catalog(lake, apply=True)
-
-    # The catalog lays out and merges its own files: none of these builds a
-    # working tree or publishes anything.
-    assert merge_candidates(lake, "fund_flow", min_files=1) == {}
-    assert repair_layout(lake, "fund_flow", apply=True)["applied"] is False
-    assert repartition_dataset(lake, "fund_flow").changed is False
-    store = RevisionStore(lake.meta_root, lake.curated_root)
-    assert store.current_pointer("fund_flow")["revision"] == 1
-
-
 def _built_by(lake, version: str):
     """Record that *lake* was built by *version*, and return a config file for it."""
     from cnequity.storage.lake_record import _write_lake
@@ -308,9 +249,8 @@ def test_one_command_shows_then_does_the_whole_upgrade(lake, monkeypatch):
 
     from cnequity.cli.main import cli
     from cnequity.query import catalog_read, load
-    from cnequity.storage.catalog_migration import GENERATION_LAKE_SWITCH, require_catalog_lake
+    from cnequity.storage.catalog_migration import require_catalog_lake
 
-    monkeypatch.delenv(GENERATION_LAKE_SWITCH)
     config = _built_by(lake, "0.24.0")
 
     preview = CliRunner().invoke(cli, ["upgrade", "--config", config])

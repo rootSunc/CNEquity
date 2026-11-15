@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.orchestrator.manifest import Manifest
@@ -108,7 +109,8 @@ def test_receipt_pins_and_replays_old_generation_after_repair(tmp_path):
     path = cfg.curated_root / "daily_bars" / "part.parquet"
     _bars(path, 10.0)
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    first = store.commit(
+    first = commit_tree(
+        store,
         "daily_bars",
         run_id="before-repair",
         changed_files=[path],
@@ -122,7 +124,8 @@ def test_receipt_pins_and_replays_old_generation_after_repair(tmp_path):
     assert original.receipt["replayable"] is True
 
     _bars(path, 11.0)
-    second = store.commit(
+    second = commit_tree(
+        store,
         "daily_bars",
         run_id="repair",
         changed_files=[path],
@@ -151,7 +154,8 @@ def test_replayable_read_rejects_unversioned_adjustment_dependency(tmp_path):
     _bars(path, 10.0)
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
     assert (
-        store.commit(
+        commit_tree(
+            store,
             "daily_bars",
             run_id="bars-only",
             changed_files=[path],

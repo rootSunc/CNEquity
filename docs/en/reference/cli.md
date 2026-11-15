@@ -617,8 +617,8 @@ Before publishing, `--apply` compares offline quality checks between the committ
 
 | Subcommand | Description |
 |------|------|
-| `layout DATASET` | Merge files in a partitioned dataset's root directory or in wrongly keyed directories into the registered partitions. Multiple observations of the same primary key fill each other's blanks only when their non-null values agree exactly; for conflicting keys one whole row is kept by the canonical rule. All original observations of duplicate keys are written to `_quarantine`. When publishing a new version detects such a layout, it suggests running this command |
-| `repartition [DATASET] [--all]` | Rewrite a dataset's partitions at its registered granularity; without arguments it lists the datasets that need it, with one it previews the file, partition and size change, and `--apply` rewrites under the lake lock and swaps it in. It reclaims space and file handles and fixes no correctness problem; the audit points here when it finds mixed granularity |
+| `layout DATASET` | No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0 |
+| `repartition [DATASET] [--all]` | No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0 |
 | `payment-dates` | `corporate_actions` cash payment dates: reviewed issuer announcements first, then Baostock; `--issuer-notices-only` uses issuer announcements only and applies reviewed bonus/transfer terms. Needs `--symbols`/`--start`/`--end` |
 | `delisted-actions --source baostock\|ths` | Fill historical dividends and ex-rights of delisted securities: `baostock` for Shanghai/Shenzhen, `ths` for Beijing |
 | `ex-dates --ex-dates ...` | Request historical ex-rights rows from EastMoney day by day for the given ex-dates; the only way to reach rows before 2015-09-29 |
@@ -634,11 +634,6 @@ Before publishing, `--apply` compares offline quality checks between the committ
 | `adj-factors` | Unified stock factor and ETF/LOF unit conversion repair. Offline preview saves a plan; `--refresh-sources` explicitly fetches evidence and `--apply` rechecks inputs before publishing supported corrections. Supports `--symbols`, event window `--start/--end`, `--max-symbols` and `--plan`; unresolved events retain values and diagnostics. See [historical factor repair](../datasets/sources.md) |
 | `fund-volume` | Repair zero-volume, positive-amount Shanghai and Shenzhen exchange-listed fund bars from complete SSE auction K-lines. `--refresh-sources` archives evidence; offline replay is the default. `--apply` replaces only rows within the listing window with matching OHLC and rounded amounts, retaining old revisions. When stored turnover conflicts, archived unadjusted EastMoney OHLC and amount must corroborate the complete official bar; peer whole-lot volume never supplies the quantity. Compatible raw archives are reused before sending another request. Volume is never inferred from turnover. Later zero-volume, positive-amount observations cannot overwrite a restored usable quantity. |
 | `fund-no-print` | Reconcile fund bar debts using explicit zero-yuan turnover in historical SZSE reports or SSE responses matching the security and date with explicitly absent auction prices and a positive reference price. Offline preview by default; `--refresh-sources` fetches and archives reports, and `--max-sessions` bounds sessions. `--apply` approves evidence and refreshes coverage watermarks. Missing responses do not prove absence; normal tradability does not imply an actual print. Rounded zero turnover alone is insufficient; SSE evidence proves absence of auction OHLC, not absence of all transactions. Creates no bars or halt rows. Unusable evidence reopens debts, and actual traded bars take precedence |
-
-```bash
-cne repair layout futures_bars
-cne repair layout futures_bars --apply
-```
 
 ## cne audit
 
@@ -814,7 +809,7 @@ The preview also returns `staging_inventory`, `staging_run_count`, and `skipped_
 
 ## cne storage
 
-Versions have one retention rule: each dataset keeps its newest [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) generations (default 5), and backfill and the daily run delete older ones when they finish. They do not touch staging, the generation currently in use, versions kept with `hold`, or versions still referenced. A version that only merged files and left the rows unchanged (published by `storage merge-files`) does not use up a place: it is kept while it sits between kept generations and goes when they age out. Set the value to `0` and backfill and the daily run delete none. To delete chosen history earlier, tick it and confirm on the storage page of `cne serve`; an interactive `cne run clean` also asks after its preview. External readers must be stopped by the operator.
+Versions have one retention rule: each dataset keeps its newest [`[storage.retention].keep_generations`](../getting-started/configuration.md#storage-retention) generations (default 5), and backfill and the daily run delete older ones when they finish. They do not touch staging, the generation currently in use, versions kept with `hold`, or versions still referenced. Set the value to `0` and backfill and the daily run delete none. To delete chosen history earlier, tick it and confirm on the storage page of `cne serve`; an interactive `cne run clean` also asks after its preview. External readers must be stopped by the operator.
 
 | Command | Behavior |
 |---|---|
@@ -823,7 +818,7 @@ Versions have one retention rule: each dataset keeps its newest [`[storage.reten
 | `import --manifest FILE` | Validate and merge a reviewed local reference manifest; never lifts existing protection automatically |
 | `hold OBJECT_ID --reason TEXT` | Add a retention reason for a version or cleanup resource; automatic retention no longer deletes it |
 | `plan [--keep N]` | Read-only preview of which generations automatic retention would delete now, under the current protections; outputs `candidate_ids` and `logical_bytes_selected` |
-| `merge-files [DATASET...] [--min-files N] [--apply]` | Merge partitions that writes left in several files (4 or more by default). Without `--apply` it only reports what would merge; with it, it publishes a new version like a repair, with the rows unchanged. `cne run maintain` runs it every day |
+| `merge-files [DATASET...] [--min-files N] [--apply]` | No longer does anything: the lake catalog lays out each partition's files. Removed in 0.27.0 |
 
 Every subcommand accepts `--config`. A version `OBJECT_ID` is `revision/<dataset>/<revision_id>` within the current lake; a plan is additionally bound to the lake identity and the metadata root, and cannot be used directly on another lake. A version that is referenced but temporarily missing can also be protected through manifest registration, so it stays protected after it is restored.
 

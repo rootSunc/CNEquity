@@ -92,20 +92,7 @@ python scripts/delisted_ops.py coverage --start 2016-01-01 --universe all_a_sh_s
 
 ## 分区重写（`cne repair repartition`）
 
-把历史分区改写成 `DatasetSpec.partition_granularity` 配的周期
-（见 [分区粒度](../architecture/lake-layout.md#日常管理)）。不带参数只列出待改写的数据集，
-所以列表形式随时可跑。
-
-```bash
-cne repair repartition                          # 待改写的数据集
-cne repair repartition --all                    # 先看影响
-cne repair repartition trading_calendar --apply # 单个数据集
-```
-
-读路径按目录形状自解析，改粒度本身**不需要**迁移；这只是把碎文件收回来。写入是先建临时目录、
-逐分区写完并核对总行数，再一次 rename 换上去，中途挂掉不动原数据；重复执行幂等。
-
-以前是仓库脚本 `scripts/migrations/repartition.py`（更早是 `cne repartition`），现在随安装包提供，默认只预览，`--apply` 才改写。触发它的是 registry 粒度在既有湖之下变了，不是日常运维。旧版本湖的一次性数据迁移由 `cne migrate` 负责。
+已不做任何事：湖目录发布时就按分区安排好文件，没有需要改写的布局。命令只输出说明，0.27.0 删除。旧版本湖的一次性数据迁移由 `cne upgrade` 负责。
 
 ## 测试与冒烟
 

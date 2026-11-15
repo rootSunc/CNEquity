@@ -12,6 +12,7 @@ from cnequity.adapters.futures_exchange.common import FuturesPayloadError
 from cnequity.adapters.futures_exchange.shfe_archive import HEADER, parse_workbook
 from cnequity.cli.backfill_cmds import _run_shfe_annual_archive
 from cnequity.config import Config
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.steps.derivative_archive import import_shfe_annual
 from cnequity.storage.parquet import StagingWriter, compact_dataset
 
@@ -270,4 +271,4 @@ def test_annual_import_uses_manifest_and_compact_without_network(tmp_path):
     )
     assert result["status"] == "success"
     assert result["compact"]["status"] == "success"
-    assert list((config.curated_root / "futures_bars").rglob("*.parquet"))
+    assert root_parquet_files(config.curated_root / "futures_bars")

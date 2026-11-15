@@ -11,7 +11,6 @@ from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.steps.finalize import step_compact
 from cnequity.storage import StagingWriter
-from cnequity.storage.revisions import RevisionStore
 
 THEN = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -46,8 +45,10 @@ def _publish(cfg: Config, run_id: str, rows: list[dict]) -> dict:
 
 
 def _published(cfg: Config) -> dict[tuple, dict]:
-    root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("corporate_actions")
-    rows = pl.concat([pl.read_parquet(path) for path in root.rglob("*.parquet")]).to_dicts()
+    from cnequity.query import catalog_read, load
+
+    catalog_read.close_all()
+    rows = load("corporate_actions", config=cfg).to_dicts()
     return {(r["symbol"], r["ex_date"], r["action_type"]): r for r in rows}
 
 

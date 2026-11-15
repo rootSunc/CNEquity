@@ -207,6 +207,27 @@ def uses_hive_partitions(
     return bool(list_partitions(root, partition_col, resolve=resolve))
 
 
+def root_parquet_files(root: Path, *, resolve: bool = True) -> list[Path]:
+    """Every parquet file of *root*'s committed revision, one only the lake catalog holds included.
+
+    A revision published into the catalog names a generation directory that
+    is never created, so walking it finds nothing; its files are the
+    catalog's.
+    """
+    if resolve:
+        root = _resolved_root(root)
+    root = Path(root)
+    if root.is_dir():
+        return sorted(root.rglob("*.parquet"))
+    from cnequity.query.catalog_read import generation_identity, published_files
+
+    identity = generation_identity(root)
+    if identity is None:
+        return []
+    found = published_files(_ConfigRoots(root.parents[3]), *identity)
+    return [] if found is None else sorted(Path(path) for path in found[0])
+
+
 def partition_files_in_range(
     root: Path,
     partition_col: str,
@@ -226,6 +247,15 @@ def partition_files_in_range(
     """
     if resolve:
         root = _resolved_root(root)
+    if not root.is_dir():
+        # A revision only the lake catalog holds: its files sit in folders
+        # named by their partition's value.
+        out = []
+        for path in root_parquet_files(root, resolve=False):
+            part = parse_partition(path.parent.name)
+            if part is None or part.overlaps(start, end):
+                out.append(path)
+        return out
     files = sorted(root.glob("*.parquet"))
     for part in list_partitions(root, partition_col, resolve=False):
         if not part.overlaps(start, end):

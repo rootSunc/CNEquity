@@ -49,7 +49,6 @@ CORE: tuple[str, ...] = (
     "cnequity.storage.raw_archive",
     "cnequity.storage.provenance",
     "cnequity.storage.parquet",
-    "cnequity.storage.merge_files",
     "cnequity.storage.read_context",
     "cnequity.storage.partition_cache",
     "cnequity.storage.snapshots",

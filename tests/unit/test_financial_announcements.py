@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.financial_statements import original_disclosures, reconstruct_disclosures
@@ -100,8 +101,13 @@ def test_late_value_is_visible_only_as_inexact_historical_reconstruction(tmp_pat
     path.parent.mkdir(parents=True)
     _rows().write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
-        dataset, run_id="seed", changed_files=[path], schema_version=1, contract_fingerprint="test"
+    commit_tree(
+        store,
+        dataset,
+        run_id="seed",
+        changed_files=[path],
+        schema_version=1,
+        contract_fingerprint="test",
     )
     settle(cfg)
     files = _entries(cfg)

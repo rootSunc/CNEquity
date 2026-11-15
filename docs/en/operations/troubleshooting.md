@@ -179,7 +179,7 @@ When you need historical backfill, use `cne backfill sector_bars` or `cne backfi
 | Finding type | Meaning | Fix |
 |--------------|------|------|
 | `pk_unique` | Duplicate PK; `--full` checks the full history | Check the most recent compact; if necessary, backfill and rerun that partition |
-| `mixed_partition_granularity` | Fine-grained partitions still sit on disk on top of year/month partitions, duplicating the same PK across granularities | Prefer `cne repair repartition <dataset> --apply` (or `--all`) to rewrite atomically according to `DatasetSpec`; only if the tool cannot run, move the fine-grained directories to `_quarantine/`. Historical derivation of `trading_status` must go through `partition_for` (monthly partitions); do not write daily directories again |
+| `mixed_partition_granularity` | Fine-grained partitions still sit on disk on top of year/month partitions, duplicating the same PK across granularities | Run `cne upgrade --apply`: a lake on its catalog files each partition by the dataset's period when it publishes. Historical derivation of `trading_status` must go through `partition_for` (monthly partitions); do not write daily directories again |
 | `mock_source` | Mock data in production | Turn off `allow_mock`; clear the mock partitions and recollect |
 | `adj_close_discontinuity` | Abnormal adjusted returns | `cne derive adj_factors`; check the Sina source |
 | `missing_corporate_action` | No corp action on an ex-date | `cne backfill corporate_actions` |

@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.adapters.eastmoney import industry as em_industry
 from cnequity.config import Config
@@ -106,7 +107,8 @@ def lake(tmp_path, settle):
     pl.DataFrame(
         [_v1("600519.SH", "eastmoney", "1575"), _v1("000001.SZ", "sw", "480101")], schema=old
     ).write_parquet(root / "part.parquet")
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         "industry_members",
         run_id="seed",
         changed_files=sorted(root.rglob("*.parquet")),

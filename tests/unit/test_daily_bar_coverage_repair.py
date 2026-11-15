@@ -2,6 +2,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.storage.coverage import resolved_bj_session_dates
@@ -13,7 +14,8 @@ DAY = date(2026, 8, 7)
 
 
 def _commit(cfg, dataset):
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         dataset,
         run_id="seed",
         schema_version=1,

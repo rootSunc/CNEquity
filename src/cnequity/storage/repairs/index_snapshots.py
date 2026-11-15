@@ -113,7 +113,6 @@ def repair_index_snapshots(config, *, indices=None, apply=False, refresh_sources
         return report
     with planned_on(config) if apply else nullcontext():
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-        store.ensure_current(dataset)
         with PartitionRewrite(config, store, dataset, run_id=run_id, apply=True) as rewrite:
             partitioned = rows.with_columns(
                 pl.col("as_of_date")

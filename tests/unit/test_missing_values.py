@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 import polars as pl
 import pytest
 from click.testing import CliRunner
+from tests.catalog_seed import commit_tree
 
 from cnequity.cli.main import cli
 from cnequity.config import Config
@@ -10,6 +11,7 @@ from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import DATASET_SCHEMAS
 from cnequity.domain.value_rules import apply_value_rules
 from cnequity.query import load
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.storage.published import published
 from cnequity.storage.repairs.missing_values import repair_missing_values
 from cnequity.storage.revisions import RevisionStore
@@ -47,8 +49,13 @@ def test_missing_value_repair_is_gated_retained_and_idempotent(tmp_path, dataset
     frame = pl.DataFrame(rows, schema=DATASET_SCHEMAS[dataset])
     frame.write_parquet(path)
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-    store.commit(
-        dataset, run_id="seed", changed_files=[path], schema_version=1, contract_fingerprint="test"
+    commit_tree(
+        store,
+        dataset,
+        run_id="seed",
+        changed_files=[path],
+        schema_version=1,
+        contract_fingerprint="test",
     )
     settle(cfg)
     before = _entries(cfg)
@@ -68,7 +75,11 @@ def test_missing_value_repair_is_gated_retained_and_idempotent(tmp_path, dataset
     assert raw["fetched_at"].to_list() == [stamp] * 3
     # The earlier revision keeps the bytes it was published with; reading it
     # applies today's rules, so the placeholder reads as null either way.
-    old_files = list((cfg.meta_root / "revisions").rglob("*.parquet"))
+    old_files = root_parquet_files(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).current_root(
+            dataset, revision=1
+        )
+    )
     value = "total_mv" if dataset == "valuation_metrics" else "weight"
     assert any(0.0 in pl.read_parquet(p)[value].to_list() for p in old_files)
     old = load(dataset, config=cfg, revision=1)

@@ -70,3 +70,90 @@ def record_revisions(config) -> None:
     Path(config.meta_root).mkdir(parents=True, exist_ok=True)
     _record_revisions(config)
     revision_records.forget()
+
+
+def commit_tree(
+    store,
+    dataset: str,
+    *,
+    run_id: str,
+    changed_files,
+    schema_version: int,
+    contract_fingerprint: str,
+    metadata: dict | None = None,
+    removed_partitions=(),
+    _locked: bool = False,
+):
+    """Publish a hand-written tree's changes, the way ``RevisionStore.commit`` did.
+
+    Many tests write parquet files under ``curated/<dataset>/`` (or
+    ``derived/``) and published them with ``store.commit``. The tree is taken
+    as what the dataset holds: every catalog partition that a changed file's
+    rows fall into is published with all of the tree's rows in it, and with
+    *removed_partitions* every published partition the tree no longer has
+    rows for is removed. Returns the revision, or ``None`` when nothing
+    changed.
+    """
+    from types import SimpleNamespace
+
+    import polars as pl
+
+    from cnequity.domain.datasets import DATASETS, granularity_for_dataset
+    from cnequity.query import catalog_read
+    from cnequity.storage.lake_record import start_on_catalog
+    from cnequity.storage.lake_write import DatasetPublish, LakeWrite
+    from cnequity.storage.parquet import _partition_values
+
+    changed_files = [Path(path) for path in changed_files]
+    if not changed_files and not removed_partitions:
+        return None
+    tree = store._layer_root(dataset) / dataset
+    column = DATASETS[dataset].partition_col
+
+    def read(paths) -> pl.DataFrame:
+        frames = [pl.read_parquet(path) for path in paths if Path(path).exists()]
+        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+
+    def labelled(frame: pl.DataFrame) -> pl.DataFrame:
+        if column is None:
+            return frame.with_columns(pl.lit("").alias("__label__"))
+        labels = _partition_values(frame, column, granularity_for_dataset(dataset))
+        return frame.with_columns(
+            pl.concat_str(pl.lit(f"{column}="), labels.cast(pl.Utf8)).alias("__label__")
+        )
+
+    everything = read(sorted(tree.rglob("*.parquet")) if tree.is_dir() else [])
+    if not everything.is_empty():
+        everything = labelled(everything)
+    touched = read(changed_files)
+    labels = set() if touched.is_empty() else set(labelled(touched)["__label__"].to_list())
+
+    data_root = Path(store.meta_root).parent
+    roots = SimpleNamespace(
+        data_root=data_root,
+        meta_root=Path(store.meta_root),
+        curated_root=store.curated_root,
+        derived_root=store.derived_root,
+        staging_root=data_root / "staging",
+    )
+    Path(store.meta_root).mkdir(parents=True, exist_ok=True)
+    start_on_catalog(roots)
+    catalog_read.close(roots)
+    with LakeWrite(roots, run_id) as write:
+        checkout = write.checkout(dataset)
+        if removed_partitions:
+            held = set() if everything.is_empty() else set(everything["__label__"].to_list())
+            labels |= set(checkout.labels()) - held
+        for label in sorted(labels):
+            rows = (
+                everything.filter(pl.col("__label__") == label).drop("__label__")
+                if not everything.is_empty()
+                else pl.DataFrame()
+            )
+            checkout.rewrite(label, rows)
+        published = write.publish(
+            {dataset: DatasetPublish(schema_version, contract_fingerprint, metadata)},
+            message=f"{dataset} seeded by {run_id}",
+        )
+    catalog_read.close(roots)
+    return published.get(dataset)

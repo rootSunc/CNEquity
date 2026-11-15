@@ -41,9 +41,9 @@
 | `cne repair fund-volume` | 仅 --refresh-sources 联网 | 默认离线预览；联网归档上交所行情服务的历史 K 线，金额冲突时复用或采集东财证据；--apply 核验后修复沪深场内基金成交量，经修复门禁发布并保留旧版 |
 | `cne repair index-history` | 仅 --refresh-sources 联网 | 默认离线回放所选深证成指或科创50的已核验官方附件目录；--apply 按生效日替换完整历史名单，保留官方实际日期权重及旧版本；未知历史权重为空 |
 | `cne repair index-snapshots` | 仅 --refresh-sources 联网 | 默认离线回放官方文件；--apply 按实际日期替换完整指数成分快照及真实权重，经修复门禁发布并保留旧版本 |
-| `cne repair layout` | 无 | 默认只预览；--apply 发布新版本，保留旧版本和重复观察证据 |
+| `cne repair layout` | 无 | 不再做任何事，只输出说明；0.27.0 删除 |
 | `cne repair payment-dates` | 仅 --apply 时 | 默认只读预览；--apply 用已审发行人公告（巨潮、北交所）与 Baostock 修复现金到账日，经回填门禁发布 |
-| `cne repair repartition` | 无 | 默认只读列出或预览；--apply 在湖锁下按登记粒度改写分区并整体换上 |
+| `cne repair repartition` | 无 | 不再做任何事，只输出说明；0.27.0 删除 |
 | `cne repair status-traded` | 无 | 默认只读预览；--apply 用已提交成交日线补缺失状态键，ST 保持未知，发布新版本并保留旧版本 |
 | `cne repair stock-listing-dates` | 仅 --refresh-sources 联网 | 默认离线回放 IPO 日历；--apply 补官方上市事件证实的股票上市日期，经修复门禁发布并保留旧版本 |
 | `cne repair valuation-outage` | 仅 --apply 时 | 默认只读预览；--apply 请求东财数据中心估值报表补断档窗口，取到全市场才写入 |
@@ -82,12 +82,12 @@
 | `cne storage hold` | 无 | 增加对象保护；自动清理不再删除它 |
 | `cne storage import` | 无 | 校验并登记引用清单；只增加保护 |
 | `cne storage inspect` | 无 | 读取版本与保留原因 |
-| `cne storage merge-files` | 无 | 预演只读；--apply 合并多文件分区并发布新版本，行内容不变 |
+| `cne storage merge-files` | 无 | 不再做任何事，只输出说明；0.27.0 删除 |
 | `cne storage plan` | 无 | 预览自动清理现在会删除哪些代；不删除数据 |
 | `cne storage raw-external` | 无 | 登记外置原文目录；本地保留来源记录，不移动或删除文件 |
 | `cne storage refresh` | 无 | 重新扫描引用目录，为其中提到的版本增加保留；不会解除保留 |
 | `cne storage release` | 无 | 解除指定版本的手动保留与失效引用；案例依赖和仍有效的引用保留 |
-| `cne storage sync-catalog` | 无 | 把湖目录同步到已发布版本；只读版本库，只写 lake/ 目录 |
+| `cne storage sync-catalog` | 无 | 不再做任何事，只输出说明；0.27.0 删除 |
 | `cne storage verify-catalog` | 无 | 只读；核对发布进湖目录的每个修订，其快照里的行与发布时记录的摘要是否一致 |
 | `cne ths-official backfill` | 执行时 | 调用凭证源并补缺 |
 | `cne ths-official capture` | 执行时 | 调用凭证源并写对照证据 |

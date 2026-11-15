@@ -36,9 +36,6 @@ def repair_status_traded(config: Config, *, start: date, end: date, apply: bool 
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )
-        if apply:
-            for dataset in ("daily_bars", "instruments", "trading_status"):
-                store.ensure_current(dataset)
         context = ReadContext.capture(config, ("daily_bars", "instruments", "trading_status"), {})
         evidence = traded_status_evidence(config, start=start, end=end, read_context=context)
         missing = evidence.filter(pl.col("exclusion").is_null() & ~pl.col("has_status"))

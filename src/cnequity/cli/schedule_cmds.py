@@ -232,14 +232,6 @@ def maintain(config_path: str, groups: str | None, notify: bool):
         if subprocess.run(_cne(*argv, "--config", path), check=False).returncode:
             (problems if gating else notes).append(_(label))
 
-    # Writes append new keys as files of their own; fold them back in here,
-    # once, rather than rewriting a partition on every write.
-    click.echo(f"--- {_('Partition file merge')} ---", err=True)
-    if subprocess.run(
-        _cne("storage", "merge-files", "--apply", "--config", path), check=False
-    ).returncode:
-        notes.append(_("Partition file merge"))
-
     click.echo(f"--- {_('Revision sweep')} ---", err=True)
     try:
         from cnequity.storage.revisions import RevisionStore
@@ -255,17 +247,11 @@ def maintain(config_path: str, groups: str | None, notify: bool):
         click.echo(_("Revision sweep failed: {exc}").format(exc=exc), err=True)
         notes.append(_("Revision sweep"))
 
-    # Only a lake that already has a catalog is kept in step; building one is
-    # a deliberate `cne storage sync-catalog --create`.
+    # A lake that has not been upgraded onto its catalog has none to keep.
     from cnequity.storage.catalog_bridge import lake_root
     from equitylake_core.catalog import CATALOG_FILE
 
     if (lake_root(cfg) / CATALOG_FILE).exists():
-        click.echo(f"--- {_('Lake catalog sync')} ---", err=True)
-        if subprocess.run(
-            _cne("storage", "sync-catalog", "--config", path), check=False
-        ).returncode:
-            notes.append(_("Lake catalog sync"))
         click.echo(f"--- {_('Lake catalog retention')} ---", err=True)
         if subprocess.run(
             _cne("storage", "catalog-retention", "--apply", "--config", path), check=False

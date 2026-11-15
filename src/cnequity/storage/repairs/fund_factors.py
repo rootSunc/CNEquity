@@ -23,8 +23,6 @@ def repair_fund_factors(config: Config, *, apply: bool = False) -> dict:
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )
-        if apply:
-            store.ensure_current("adj_factors")
         context = ReadContext.capture(
             config, ("daily_bars", "instruments", "corporate_actions", "adj_factors"), {}
         )

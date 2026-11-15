@@ -58,8 +58,6 @@ def repair_sw_delisted(config: Config, *, apply: bool = False) -> dict:
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )
-        if apply:
-            store.ensure_current(DATASET)
         context = ReadContext.capture(config, (DATASET, "instruments"), {})
         root = context.roots[DATASET]
         report: dict = {"dataset": DATASET, "applied": False, "rows": 0, "symbols": 0}

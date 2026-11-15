@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.schemas import DATASET_SCHEMAS
@@ -17,7 +18,8 @@ STOCKS = [f"6000{i:02d}.SH" for i in range(12)]
 
 def _commit(cfg, dataset):
     root = cfg.curated_root / dataset
-    RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
         dataset,
         run_id="seed",
         changed_files=sorted(root.rglob("*.parquet")),

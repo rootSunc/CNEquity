@@ -12,6 +12,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.steps import bars
@@ -194,7 +195,8 @@ def test_sina_history_repair_asks_tdx_only_for_null_sina_rows(tmp_path, monkeypa
         ],
         schema_overrides={"amount": pl.Float64},
     ).write_parquet(path)
-    RevisionStore(lake.meta_root, lake.curated_root).commit(
+    commit_tree(
+        RevisionStore(lake.meta_root, lake.curated_root),
         "daily_bars",
         run_id="seed",
         changed_files=[path],

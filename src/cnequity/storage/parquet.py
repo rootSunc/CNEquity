@@ -735,28 +735,19 @@ def _partitionwise_eligible(dataset: str, partition_col: str | None) -> bool:
 def resolve_merge_base(base_root: Path | None, dataset: str) -> Path | None:
     """The directory to merge against for the published revision *base_root* names.
 
-    A revision only the lake catalog holds names a generation path that is
-    never created. Merging against nothing would publish the staged rows
-    alone and drop the rest of each partition, so such a base resolves to the
-    working tree, but only when the store verified the tree at exactly that
-    revision and nothing changed it since; otherwise the merge is refused.
+    A revision the lake catalog holds names a generation path that is never
+    created. Merging against nothing would publish the staged rows alone and
+    drop the rest of each partition, so such a base is refused: the merge must
+    read a checkout of the partitions it changes.
     """
     if base_root is None or Path(base_root).exists():
         return base_root
     from cnequity.query.parquet_scan import dataset_has_parquet
 
-    base = Path(base_root)
-    if not dataset_has_parquet(base, committed=False):
+    if not dataset_has_parquet(Path(base_root), committed=False):
         return base_root
-    from cnequity.storage.revisions import RevisionStore
-
-    meta = base.parents[3]  # <meta>/revisions/data/<dataset>/<revision id>
-    store = RevisionStore(meta, meta.parent / "curated", meta.parent / "derived", create=False)
-    if store._tree_matches(dataset, base.name):
-        return store._layer_root(dataset) / dataset
     raise RuntimeError(
-        f"{dataset}: the merge base is a catalog revision and the working tree is not "
-        "verified at it; call materialize_current before merging"
+        f"{dataset}: the merge base is a catalog revision; merge into a checkout of it instead"
     )
 
 

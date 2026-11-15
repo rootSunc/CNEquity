@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import polars as pl
 
@@ -1065,13 +1066,14 @@ def classify_daily_bar_ownership(
 
 
 def _existing_dates(config: Config, dataset: str, date_col: str) -> set[date]:
-    root = config.curated_root / dataset
-    files = list(root.glob("**/*.parquet")) if root.exists() else []
-    if not files:
-        return set()
-    from cnequity.query.parquet_scan import scan_parquet_files
+    """Dates *dataset*'s published rows hold."""
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+    from cnequity.storage.read_context import read_root
 
-    return set(scan_parquet_files(files).select(date_col).unique().collect()[date_col].to_list())
+    root = Path(read_root(config, dataset))
+    if not dataset_has_parquet(root):
+        return set()
+    return set(scan_parquet_root(root).select(date_col).unique().collect()[date_col].to_list())
 
 
 def walk_day_backfill(

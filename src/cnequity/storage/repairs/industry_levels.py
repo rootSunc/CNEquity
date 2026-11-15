@@ -109,8 +109,6 @@ def repair_industry_levels(
         store = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=apply
         )
-        if apply:
-            store.ensure_current(DATASET)
         context = ReadContext.capture(config, (DATASET,), {})
         root = context.roots[DATASET]
         report: dict = {"dataset": DATASET, "applied": False, "rows": 0}

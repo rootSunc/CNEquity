@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.derive.minute_resample import (
@@ -10,6 +11,7 @@ from cnequity.derive.minute_resample import (
     resample_session,
     stale_sessions,
 )
+from cnequity.storage.revisions import RevisionStore
 from cnequity.storage.state import StateStore
 
 OLD, NEW = date(2026, 9, 14), date(2026, 9, 15)
@@ -37,6 +39,14 @@ def _write(config: Config, dataset: str, day: date, frame: pl.DataFrame) -> None
     part = config.curated_root / dataset / f"trade_date={day.isoformat()}"
     part.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(part / "part-000.parquet")
+    commit_tree(
+        RevisionStore(config.meta_root, config.curated_root, config.derived_root),
+        dataset,
+        run_id=f"seed-{day}",
+        changed_files=[part / "part-000.parquet"],
+        schema_version=1,
+        contract_fingerprint="seed",
+    )
 
 
 def _lake(tmp_path) -> Config:
@@ -218,7 +228,8 @@ def test_cli_derive_is_current_after_publishing_and_drops_emptied_sessions(tmp_p
 
     config = load_config(cfg_path)
     _write(config, "minute_bars", NEW, _bars("603869.SH", NEW, 1, 29))
-    RevisionStore(config.meta_root, config.curated_root).commit(
+    commit_tree(
+        RevisionStore(config.meta_root, config.curated_root),
         "minute_bars",
         run_id="backfill",
         changed_files=[
@@ -269,7 +280,8 @@ def test_backlog_reaches_the_panel_and_status(tmp_path):
 
     config = load_config(cfg_path)
     _write(config, "minute_bars", OLD, _bars("603869.SH", OLD, 1, 30))
-    RevisionStore(config.meta_root, config.curated_root).commit(
+    commit_tree(
+        RevisionStore(config.meta_root, config.curated_root),
         "minute_bars",
         run_id="backfill",
         changed_files=[

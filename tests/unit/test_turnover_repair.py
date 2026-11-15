@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
 from cnequity.domain.units import turnover_defect_expr
@@ -147,7 +148,8 @@ def lake(tmp_path):
         ],
         schema_overrides={"amount": pl.Float64},
     ).write_parquet(path)
-    RevisionStore(cfg.meta_root, cfg.curated_root).commit(
+    commit_tree(
+        RevisionStore(cfg.meta_root, cfg.curated_root),
         "daily_bars",
         run_id="seed",
         changed_files=[path],

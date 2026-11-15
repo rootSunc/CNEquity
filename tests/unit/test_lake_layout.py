@@ -8,6 +8,7 @@ from datetime import date
 import polars as pl
 import pytest
 from tests.catalog_seed import record_revisions
+from tests.legacy_lake import commit_generation
 from tests.unit.test_lake_write import (  # noqa: F401 - cfg is a fixture
     PUBLISH,
     _bars,
@@ -230,7 +231,8 @@ def test_a_generation_file_with_rows_of_another_partition_is_not_filed_under_its
     path = config.curated_root / "daily_bars/trade_date=2024-01/part-merged.parquet"
     path.parent.mkdir(parents=True)
     stray.write_parquet(path)
-    RevisionStore(config.meta_root, config.curated_root).commit(
+    commit_generation(
+        RevisionStore(config.meta_root, config.curated_root),
         "daily_bars",
         run_id="seed",
         changed_files=[path],
