@@ -37,6 +37,8 @@ _EXCLUDED = re.compile(
 )
 _CONTINUE = re.compile("进展|继续停牌|停牌期间")
 _OPEN = re.compile(r"停牌(的)?公告")
+#: Order of a symbol's notices published on the same day.
+_SAME_DAY_ORDER = {"resume": 0, "continue": 1, "open": 2}
 
 
 def classify_title(title: str | None) -> str | None:
@@ -64,7 +66,12 @@ def announced_halt_keys(announcements: pl.DataFrame, sessions: list[date]) -> se
         )
         .drop_nulls(["symbol", "announce_date", "kind"])
         .unique(["symbol", "announce_date", "kind"])
-        .sort("symbol", "announce_date")
+        # Notices of one day about a halt already under way come before a new
+        # one: a resumption closes the old span and a progress notice extends
+        # it before an opening notice starts the next. Without a fixed order
+        # within a day the spans changed from one read to the next.
+        .with_columns(_rank=pl.col("kind").replace_strict(_SAME_DAY_ORDER, return_dtype=pl.Int8))
+        .sort("symbol", "announce_date", "_rank")
     )
     keys: set[tuple[str, date]] = set()
     for (symbol,), group in notices.group_by("symbol", maintain_order=True):

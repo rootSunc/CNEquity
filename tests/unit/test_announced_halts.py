@@ -145,3 +145,35 @@ def test_the_loader_adds_announced_halts_without_overriding_first_hand_rows(tmp_
 
     plain = load_curated_trading_status(cfg, start=day, end=day, include_announced=False)
     assert set(plain["source"]) == {"eastmoney_cached", "baostock"}
+
+
+def test_notices_of_one_day_are_read_in_a_fixed_order_whatever_order_they_arrive_in():
+    # A halt opens 11-17 and is confirmed 11-20; on 11-24 a progress notice of
+    # that halt and the opening notice of the next one arrive together; on
+    # 11-27 the stock resumes and halts again the same day; 12-01 resumes.
+    rows = [
+        ("600000.SH", date(2025, 11, 17), "关于筹划重大资产重组的停牌公告"),
+        ("600000.SH", date(2025, 11, 20), "关于筹划重大资产重组的停牌进展公告"),
+        ("600000.SH", date(2025, 11, 24), "关于筹划重大资产重组的停牌进展公告"),
+        ("600000.SH", date(2025, 11, 24), "关于筹划发行股份购买资产的停牌公告"),
+        ("600000.SH", date(2025, 11, 27), "关于公司股票复牌的公告"),
+        ("600000.SH", date(2025, 11, 27), "关于筹划控制权变更的停牌公告"),
+        ("600000.SH", date(2025, 12, 1), "关于公司股票复牌的公告"),
+    ]
+    found = {
+        frozenset(announced_halt_keys(_notices(*order), SESSIONS)) for order in (rows, rows[::-1])
+    }
+    assert len(found) == 1
+    (keys,) = found
+    days = sorted(day for _, day in keys)
+    # The first halt holds 11-18 to 11-21 (its 11-24 progress notice closes the bracket
+    # before the second halt opens), the second 11-25 and 11-26, the third 11-28.
+    assert days == [
+        date(2025, 11, 18),
+        date(2025, 11, 19),
+        date(2025, 11, 20),
+        date(2025, 11, 21),
+        date(2025, 11, 25),
+        date(2025, 11, 26),
+        date(2025, 11, 28),
+    ]
