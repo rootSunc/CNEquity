@@ -143,11 +143,8 @@ def _capture_derive_inputs(config: Config, dataset: str) -> dict:
         store.ensure_current(name)
         pointer = store.current_pointer(name) or {}
         gaps = state.get_payload(name)
-        metadata = {}
-        if pointer.get("receipt"):
-            metadata = json.loads((config.meta_root / pointer["receipt"]).read_text()).get(
-                "metadata", {}
-            )
+        latest = store.latest(name) if pointer.get("receipt") else None
+        metadata = {} if latest is None else latest.metadata
         inputs[name] = {
             key: pointer.get(key) for key in ("revision", "revision_id", "content_digest")
         }

@@ -785,7 +785,7 @@ class LakeWrite:
             # they belong to no snapshot of the lake, and go when the copy does.
             self._rehearsed.extend(placed)
         for dataset, receipt in receipts.items():
-            store.finish_catalog_revision(receipt)
+            store.index_catalog_revision(receipt)
             if advance:
                 # The working tree, where one is left, no longer holds what is published.
                 store.forget_working_tree(dataset)
@@ -860,7 +860,7 @@ class LakeWrite:
         )
         partitions = tuple(f"{dataset}/{label}" if label else dataset for label in changed)
         removed = [f"{dataset}/{label}" for label, files in changed.items() if not files]
-        return store.prepare_catalog_revision(
+        return store.next_catalog_revision(
             dataset,
             run_id=self.run_id,
             files=records,

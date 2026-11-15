@@ -47,6 +47,8 @@ def _bars(day: date, *, with_pre_close: bool) -> pl.DataFrame:
 def lake(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     init_data_layout(cfg)
+    # Repartitioning acts on generations only: a lake from before it published into a catalog.
+    (cfg.meta_root / "storage.json").unlink()
     for i, day in enumerate(DAYS):
         out = cfg.curated_root / "daily_bars" / f"trade_date={day}"
         out.mkdir(parents=True)

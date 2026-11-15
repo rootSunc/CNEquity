@@ -40,33 +40,65 @@ def _link_read_only(source: str, target: str) -> str:
     return target
 
 
+def _records_in_catalog(config: Config) -> bool:
+    """Whether *config*'s lake keeps its revisions in its catalog, with no pointer files."""
+    from cnequity.storage.revision_records import enabled
+
+    return enabled(config.meta_root)
+
+
+def _forget(view: Config) -> None:
+    from cnequity.query import catalog_read
+    from cnequity.storage.revision_records import forget
+
+    catalog_read.close(view)
+    forget(view.meta_root)
+
+
+def _reset_state(config: Config, view: Config, name: str) -> None:
+    real_state = config.meta_root / "state" / f"{name}.json"
+    view_state = view.meta_root / "state" / real_state.name
+    if real_state.is_file():
+        view_state.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(real_state, view_state)
+    else:
+        view_state.unlink(missing_ok=True)
+
+
 def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> None:
     """Give *view* a lake catalog of its own that holds what *config*'s publishes.
 
     The catalog database is copied and reads the lake's own data files, which
-    are immutable; no file is copied. Datasets published only into the catalog are found through their
-    pointer and receipt, which are copied too. Calling it again resets the
-    view's lake, undoing a rehearsed publish.
+    are immutable; no file is copied. The copy records every revision, so the
+    view reads each dataset as the lake publishes it, and a publish rehearsed
+    in the view is read back the same way. Calling it again resets the view's
+    lake, undoing a rehearsed publish.
+
+    A lake whose revisions are still recorded in pointer files (one that has
+    not had the ``revision-records`` migration) has the pointers and receipts
+    of its catalog datasets copied instead.
     """
-    from cnequity.query import catalog_read
     from cnequity.storage.catalog_bridge import lake_root
     from equitylake_core.catalog import copy_catalog
 
     source, target = lake_root(config), lake_root(view)
-    catalog_read.close(view)
+    _forget(view)
     if target.exists():
         shutil.rmtree(target)
     copy_catalog(source, target)
+    if _records_in_catalog(config):
+        write_json_atomic(
+            view.meta_root / "storage.json", {"publish": "catalog", "revisions": "catalog"}
+        )
+        # A rehearsed publish leaves its state in the view.
+        for name in DATASETS:
+            _reset_state(config, view, name)
+        return
     # A rehearsed publish leaves its pointer and state in the view; drop them,
     # so a dataset the real lake keeps as a generation is read as one again.
     for stale in (view.meta_root / "revisions").glob("*/current.json"):
         stale.unlink()
-        real_state = config.meta_root / "state" / f"{stale.parent.name}.json"
-        view_state = view.meta_root / "state" / real_state.name
-        if real_state.is_file():
-            shutil.copy2(real_state, view_state)
-        else:
-            view_state.unlink(missing_ok=True)
+        _reset_state(config, view, stale.parent.name)
     for name in sorted(catalog_datasets):
         pointer = config.meta_root / "revisions" / name / "current.json"
         if not pointer.is_file():
@@ -83,19 +115,57 @@ def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> Non
             shutil.copy2(state, view.meta_root / "state" / state.name)
 
 
+#: Where the view's catalog keeps the record of a dataset it reads from a tree instead.
+_WITHDRAWN = "_withdrawn"
+
+
+def _move_record(view: Config, names, *, withdraw: bool) -> None:
+    """Take the datasets *names* out of the view catalog's record, or put them back."""
+    from cnequity.storage.catalog_bridge import SYNC_TABLE, lake_root
+    from equitylake_core.catalog import CATALOG_FILE, Catalog
+
+    names = sorted(names)
+    root = lake_root(view)
+    if not names or not (root / CATALOG_FILE).exists():
+        return
+    source, target = (SYNC_TABLE, _WITHDRAWN) if withdraw else (_WITHDRAWN, SYNC_TABLE)
+    _forget(view)
+    with Catalog(root) as catalog:
+        if not catalog.has_table(source):
+            return
+        catalog.execute(
+            f"CREATE TABLE IF NOT EXISTS {target} "
+            "(dataset VARCHAR, revision_id VARCHAR, unique_keys BOOLEAN)"
+        )
+        marks = ", ".join("?" for _ in names)
+        with catalog.transaction(message="publication view"):
+            catalog.execute(
+                f"INSERT INTO {target} SELECT dataset, revision_id, unique_keys "
+                f"FROM {source} WHERE dataset IN ({marks})",
+                names,
+            )
+            catalog.execute(f"DELETE FROM {source} WHERE dataset IN ({marks})", names)
+
+
 def _read_candidate_tree(view: Config, names) -> None:
     """Make *view* read each of *names* from its dataset tree, not from the catalog.
 
     A candidate handed over as a whole tree replaces the dataset in the view.
-    A pointer left there would send readers to the catalog's published rows
+    A record left there would send readers to the catalog's published rows
     and the candidate would never be audited.
     """
+    names = list(names)
     for name in names:
         (view.meta_root / "revisions" / name / "current.json").unlink(missing_ok=True)
+    if _records_in_catalog(view):
+        _move_record(view, names, withdraw=True)
 
 
 def _read_published(config: Config, view: Config, name: str) -> None:
     """Make *view* read *name* as the lake publishes it from its catalog again."""
+    if _records_in_catalog(view):
+        _move_record(view, [name], withdraw=False)
+        return
     pointer = config.meta_root / "revisions" / name / "current.json"
     stored = view.meta_root / "revisions" / name / "current.json"
     stored.parent.mkdir(parents=True, exist_ok=True)
@@ -111,14 +181,17 @@ def _has_catalog(config: Config) -> bool:
 
 def _catalog_datasets(config: Config) -> set[str]:
     """Datasets whose published revision lives only in the lake catalog."""
+    from cnequity.storage.revisions import RevisionStore
+
+    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     names = set()
     for name in DATASETS:
-        pointer = config.meta_root / "revisions" / name / "current.json"
         try:
-            if json.loads(pointer.read_text(encoding="utf-8")).get("storage") == "catalog":
-                names.add(name)
-        except (OSError, ValueError):
+            pointer = store.current_pointer(name)
+        except Exception:  # noqa: BLE001 - an unreadable pointer is not a catalog dataset
             continue
+        if pointer is not None and pointer.get("storage") == "catalog":
+            names.add(name)
     return names
 
 
@@ -578,9 +651,7 @@ def evaluate_publication(
             report["blocked_datasets"] = sorted(blocked_datasets)
             if cloned:
                 # Release the clone's catalog before its directory is removed.
-                from cnequity.query import catalog_read
-
-                catalog_read.close(view)
+                _forget(view)
     except Exception as exc:
         # In block mode an audit that could not inspect the candidate is not a
         # successful publication check. Preserve the reason for a safe retry.

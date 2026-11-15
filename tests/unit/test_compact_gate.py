@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import polars as pl
+from tests.catalog_seed import record_revisions
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config, FailoverDatasetSpec
@@ -498,6 +499,7 @@ def test_source_diff_gate_blocks_a_catalog_publish_and_judges_the_session_from_i
     try:
         with Catalog(lake_root(cfg), create=True) as lake:
             sync_all(cfg, lake)
+        record_revisions(cfg)
     except ExtensionUnavailableError as exc:
         pytest.skip(str(exc))
     cfg = replace(cfg, storage_publish="catalog")

@@ -2,8 +2,9 @@
 
 The migration ``lake-catalog`` (``cne migrate``), owed by every lake built
 before 0.25.0. It copies every published dataset into the catalog, proves each copy holds
-the same rows as the generation it came from, and then records in
-``meta/storage.json`` that the lake publishes into its catalog. The copy is
+the same rows as the generation it came from, imports every revision's
+receipt, and then records in ``meta/storage.json`` that the lake publishes into
+its catalog and keeps its revisions there. The copy is
 the generation's own files, linked into the lake and registered: nothing is
 written again. A lake already on a catalog an earlier release wrote gets its
 tables laid out the same way (``storage.catalog_layout``). From then on
@@ -57,7 +58,15 @@ def require_catalog_lake(config) -> None:
         return
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     if store.publishes_to_catalog():
-        return
+        from cnequity.storage.revision_records import enabled
+
+        if enabled(config.meta_root):
+            return
+        raise LakeMigrationRequired(
+            "this lake keeps revision receipts its catalog does not record yet, and the catalog "
+            "is where a publish records its revision; run `cne upgrade` to see what importing "
+            "them does and `cne upgrade --apply` to do it, then run this again"
+        )
     if not _holds_data(config):
         from cnequity.storage.lake_record import start_on_catalog
 
@@ -103,6 +112,24 @@ def _mismatched(config, catalog: Catalog, datasets: list[str], progress=None) ->
         if comparison is None or not comparison.matches:
             bad.append(name)
     return bad
+
+
+def _record_revisions(config) -> None:
+    """Make the catalog the record of the lake's revisions, as it is on a new lake.
+
+    Every receipt is imported and checked against the pointer files; only then
+    does ``storage.json`` say the catalog records them, which is what lets a
+    writer publish. Nothing writes in between: a lake that publishes into its
+    catalog but does not record its revisions there is refused.
+    """
+    from cnequity.storage.revision_records import import_receipts
+
+    import_receipts(config, apply=True)
+    write_json_atomic(
+        Path(config.meta_root) / "storage.json",
+        {"publish": STORAGE_CATALOG, "revisions": STORAGE_CATALOG},
+        indent=2,
+    )
 
 
 def migrate_to_catalog(config, *, apply: bool, progress=None) -> dict:
@@ -163,6 +190,7 @@ def migrate_to_catalog(config, *, apply: bool, progress=None) -> dict:
             write_json_atomic(
                 Path(config.meta_root) / "storage.json", {"publish": STORAGE_CATALOG}, indent=2
             )
+    _record_revisions(config)
     report.update(copied=sorted(set(copied) | set(late)), verified=len(current), switched=True)
     report["laid_out"] = [item["dataset"] for item in lay_out_all(config, tell("lay_out"))]
     return report

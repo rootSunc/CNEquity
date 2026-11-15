@@ -7,6 +7,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import record_revisions
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
@@ -76,6 +77,7 @@ def _lake(root, mode: str) -> Config:
         try:
             with Catalog(lake_root(cfg), create=True) as lake:
                 sync_all(cfg, lake)
+            record_revisions(cfg)
         except ExtensionUnavailableError as exc:
             pytest.skip(str(exc))
         cfg = replace(cfg, storage_publish="catalog")
@@ -131,6 +133,7 @@ def _gated_lake(root) -> Config:
     try:
         with Catalog(lake_root(cfg), create=True) as lake:
             sync_all(cfg, lake)
+        record_revisions(cfg)
     except ExtensionUnavailableError as exc:
         pytest.skip(str(exc))
     return replace(cfg, storage_publish="catalog", publication_gate="block")

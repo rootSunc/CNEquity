@@ -82,7 +82,10 @@ def test_a_lake_that_holds_nothing_starts_on_the_catalog(tmp_path, monkeypatch):
         pytest.skip(str(exc))
 
     require_catalog_lake(cfg)
-    assert json.loads((cfg.meta_root / "storage.json").read_text()) == {"publish": "catalog"}
+    assert json.loads((cfg.meta_root / "storage.json").read_text()) == {
+        "publish": "catalog",
+        "revisions": "catalog",
+    }
     _run(
         cfg,
         "r1",
@@ -106,7 +109,10 @@ def test_creating_a_lake_records_that_it_publishes_into_its_catalog(tmp_path):
 
     cfg = Config(data_root=tmp_path / "fresh")
     init_data_layout(cfg)
-    assert json.loads((cfg.meta_root / "storage.json").read_text()) == {"publish": "catalog"}
+    assert json.loads((cfg.meta_root / "storage.json").read_text()) == {
+        "publish": "catalog",
+        "revisions": "catalog",
+    }
 
 
 def test_a_preview_reports_and_creates_nothing(lake):
@@ -123,7 +129,10 @@ def test_applying_copies_verifies_and_switches_the_lake(lake):
     report = migrate_to_catalog(lake, apply=True)
     assert report["copied"] == ["fund_flow", "margin_trading"]
     assert report["verified"] == 2 and report["switched"] is True
-    assert json.loads((lake.meta_root / "storage.json").read_text()) == {"publish": "catalog"}
+    assert json.loads((lake.meta_root / "storage.json").read_text()) == {
+        "publish": "catalog",
+        "revisions": "catalog",
+    }
     with Catalog(lake_root(lake), read_only=True) as catalog:
         assert catalog_is_current(lake, catalog, "fund_flow")
     # A second run has nothing left to do.

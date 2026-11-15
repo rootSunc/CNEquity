@@ -77,6 +77,21 @@ def _receipt_for_revision(
             "content_digest": current.content_digest,
             "revision_receipt": current.revision_receipt,
         }
+    from cnequity.storage.revisions import RevisionStore
+
+    store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
+    recorded = store.recorded_revision(dataset, revision_id)
+    if recorded is not None:
+        relative = f"revisions/{dataset}/{recorded.revision:08d}-{revision_id}.json"
+        return {
+            "revision": recorded.revision,
+            "revision_id": revision_id,
+            "revision_at": recorded.committed_at,
+            "schema_version": recorded.schema_version,
+            "contract_fingerprint": recorded.contract_fingerprint,
+            "content_digest": recorded.content_digest,
+            "revision_receipt": relative if (config.meta_root / relative).is_file() else None,
+        }
     directory = config.meta_root / "revisions" / dataset
     if directory.is_symlink():
         raise ReadReceiptError(f"revision receipt directory is a symlink: {dataset}")

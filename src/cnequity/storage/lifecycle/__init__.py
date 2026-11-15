@@ -366,6 +366,8 @@ class LifecycleStore:
                 known.setdefault(record["revision_id"], set()).add(
                     f"revision/{record['dataset']}/{record['revision_id']}"
                 )
+        for dataset, revision_id in self._catalog_revisions():
+            known.setdefault(revision_id, set()).add(f"revision/{dataset}/{revision_id}")
         roots = registry["reference_roots"]
         holds: dict[str, list[dict]] = {}
         fingerprints = []
@@ -395,6 +397,13 @@ class LifecycleStore:
             "new_holds": sorted(set(holds) - before),
         }
 
+    def _catalog_revisions(self) -> set[tuple[str, str]]:
+        """Revisions the lake catalog records and still holds: they have no receipt file."""
+        from cnequity.storage.revision_records import records_for
+
+        records = records_for(self.meta)
+        return set() if records is None else records.revision_ids()
+
     def hold(self, object_id: str, reason: str) -> None:
         if not reason.strip():
             raise LifecycleError("A hold requires a reason")
@@ -402,6 +411,7 @@ class LifecycleStore:
             value = self.registry(required=True)
             assert value is not None
             known = {o["object_id"] for o in self.inventory()}
+            known |= {f"revision/{d}/{rid}" for d, rid in self._catalog_revisions()}
             from cnequity.storage.lifecycle.resources import resource_exists
 
             if object_id not in known and not resource_exists(self.meta, object_id):

@@ -7,6 +7,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import record_revisions
 from tests.unit.test_lake_write import (  # noqa: F401 - cfg is a fixture
     PUBLISH,
     _bars,
@@ -192,6 +193,10 @@ def test_a_rehearsal_copies_no_data_and_leaves_nothing_in_the_lake(cfg, tmp_path
     before = sorted(path for path in data.rglob("*.parquet"))
     view = replace(cfg, data_root=tmp_path / "view")
     copy_catalog(lake_root(cfg), lake_root(view))
+    view.meta_root.mkdir(parents=True, exist_ok=True)
+    (view.meta_root / "storage.json").write_text(
+        '{"publish": "catalog", "revisions": "catalog"}', encoding="utf-8"
+    )
     with LakeWrite(cfg, "r1") as write:
         _replace(
             write.checkout("daily_bars").partition(JAN),
@@ -235,6 +240,7 @@ def test_a_generation_file_with_rows_of_another_partition_is_not_filed_under_its
     try:
         with Catalog(lake_root(config), create=True) as lake:
             sync_dataset(config, lake, "daily_bars")
+        record_revisions(config)
     except ExtensionUnavailableError as exc:
         pytest.skip(str(exc))
     assert list(_folders(config)) == ["_mixed"]

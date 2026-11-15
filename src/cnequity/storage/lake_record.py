@@ -82,9 +82,11 @@ def start_on_catalog(config) -> None:
     """Record that this lake publishes into its catalog (``meta/storage.json``).
 
     A new lake starts there: the catalog itself is created by its first
-    publish. An existing lake gets here through the ``lake-catalog`` migration,
-    which copies and verifies its published data first.
+    publish, and it is the only record of the lake's revisions from the start
+    (``revisions``). An existing lake gets here through the ``lake-catalog``
+    migration, which copies and verifies its published data first, and the
+    ``revision-records`` migration, which imports the receipts it kept.
     """
     path = Path(config.meta_root) / STORAGE_FILE
     if not path.exists():
-        write_json_atomic(path, {"publish": "catalog"}, indent=2)
+        write_json_atomic(path, {"publish": "catalog", "revisions": "catalog"}, indent=2)

@@ -156,6 +156,15 @@ class CatalogRecords:
             self._history[dataset] = [_record(row) for row in rows]
         return self._history[dataset]
 
+    def revision_ids(self) -> set[tuple[str, str]]:
+        """``(dataset, revision id)`` of every revision the catalog still holds rows for."""
+        rows = _query(
+            self.root,
+            "SELECT dataset, revision_id FROM (" + _all_records_sql() + ") "
+            "WHERE snapshot IS NOT NULL",
+        )
+        return {(dataset, revision_id) for dataset, revision_id in rows}
+
     def find(self, dataset: str, revision: int | str) -> RevisionRecord | None:
         """The revision of *dataset* with this number or id."""
         for record in self.history(dataset):
@@ -202,6 +211,16 @@ def _stamp(path: Path) -> int:
         return 0
 
 
+def enabled(meta_root: Path | str) -> bool:
+    """Whether the catalog is the record of the revisions of the lake at *meta_root*.
+
+    True for a lake that started on its catalog, and for an earlier one once
+    the ``revision-records`` migration imported its receipts. Only such a
+    lake is written: a publish records its revision nowhere else.
+    """
+    return _enabled(Path(meta_root))
+
+
 def _enabled(meta: Path) -> bool:
     """Whether *meta*'s lake publishes into its catalog and its receipts are all in it."""
     storage, lake = meta / "storage.json", meta / "state" / "lake.json"
@@ -211,21 +230,23 @@ def _enabled(meta: Path) -> bool:
         return known[1]
     try:
         setting = json.loads(storage.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        setting = None
+    try:
         record = json.loads(lake.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        record = None
+    if not isinstance(setting, dict):
         enabled = False
     else:
         from cnequity.storage.lake_record import _parse
 
         created = record.get("created_with") if isinstance(record, dict) else None
         done = (record.get("migrations") or {}) if isinstance(record, dict) else {}
-        enabled = (
-            isinstance(setting, dict)
-            and setting.get("publish") == STORAGE_CATALOG
-            and (
-                MIGRATION_ID in done
-                or (created is not None and _parse(created) >= _parse(INTRODUCED_IN))
-            )
+        enabled = setting.get("publish") == STORAGE_CATALOG and (
+            setting.get("revisions") == STORAGE_CATALOG
+            or MIGRATION_ID in done
+            or (created is not None and _parse(created) >= _parse(INTRODUCED_IN))
         )
     _settings[meta] = (stamps, enabled)
     return enabled
@@ -321,6 +342,15 @@ def _published_chain(meta: Path, dataset: str, pointer: dict) -> tuple[list[dict
     return chain, len(by_id) - len(chain)
 
 
+def _records_revisions(meta: Path) -> bool:
+    """Whether ``storage.json`` says the lake's catalog is the record of its revisions."""
+    try:
+        setting = json.loads((meta / "storage.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(setting, dict) and setting.get("revisions") == STORAGE_CATALOG
+
+
 def import_receipts(config, *, apply: bool) -> dict:
     """Preview, or with *apply* perform, the import of every published receipt into the catalog.
 
@@ -348,7 +378,9 @@ def import_receipts(config, *, apply: bool) -> dict:
     meta = Path(config.meta_root)
     root = lake_root(config)
     report: dict[str, Any] = {"datasets": 0, "receipts": 0, "unpublished": 0, "rows_changed": 0}
-    if not (root / CATALOG_FILE).is_file():
+    if not (root / CATALOG_FILE).is_file() or _records_revisions(meta):
+        # A lake that already keeps its revisions in its catalog has no newer
+        # receipt: its pointer files stopped at the last revision they recorded.
         return report
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     datasets = sorted(

@@ -58,21 +58,28 @@ def settle(request, tmp_path):
     moved: list[Path] = []
 
     def move(cfg):
+        from cnequity.storage import revision_records
+        from cnequity.storage.catalog_bridge import HISTORY_TABLE, lake_root
+
         migrate_to_catalog(cfg, apply=True)
         catalog_read.close_all()
+        revision_records.forget()
+        # Mark every published revision as the catalog's, as a publish there does.
+        with Catalog(lake_root(cfg)) as catalog:
+            rows = catalog.execute(
+                f"SELECT dataset, revision_id, metadata FROM {HISTORY_TABLE}"
+            ).fetchall()
+            for dataset, revision_id, metadata in rows:
+                marked = {**(json.loads(metadata) if metadata else {}), "storage": "catalog"}
+                catalog.execute(
+                    f"UPDATE {HISTORY_TABLE} SET metadata = ? "
+                    "WHERE dataset = ? AND revision_id = ?",
+                    [json.dumps(marked), dataset, revision_id],
+                )
         store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
         for path in sorted((cfg.meta_root / "revisions").glob("*/current.json")):
-            pointer = json.loads(path.read_text())
-            dataset = pointer["dataset"]
+            dataset = json.loads(path.read_text())["dataset"]
             generation = store.current_root(dataset)
-            # Mark the published revision as the catalog's, as a publish there does.
-            pointer["storage"] = "catalog"
-            path.write_text(json.dumps(pointer))
-            if pointer.get("receipt"):
-                receipt_path = cfg.meta_root / pointer["receipt"]
-                receipt = json.loads(receipt_path.read_text())
-                receipt.setdefault("metadata", {})["storage"] = "catalog"
-                receipt_path.write_text(json.dumps(receipt))
             for layer in (cfg.curated_root, cfg.derived_root):
                 shutil.rmtree(layer / dataset, ignore_errors=True)
                 moved.append(layer / dataset)
@@ -86,5 +93,8 @@ def settle(request, tmp_path):
     move.kind = "catalog"
     yield move
     catalog_read.close_all()
+    from cnequity.storage import revision_records
+
+    revision_records.forget()
     # The writer read and published through the catalog alone.
     assert [str(path) for path in moved if path.exists()] == []

@@ -224,7 +224,7 @@ def _published_derive(cfg, dataset: str):
             missing = [
                 name
                 for name in required.get(dataset, ())
-                if not dataset_has_parquet(store.current_root(name))
+                if (root := store.current_root(name)) is None or not dataset_has_parquet(root)
             ]
             if missing:
                 from cnequity.research.packs import next_command_for_dataset

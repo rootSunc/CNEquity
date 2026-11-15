@@ -1224,14 +1224,17 @@ class SnapshotStore:
 
             _reject_symlink_path(self.config.meta_root, label="metadata root")
             meta_root = self.config.meta_root.resolve(strict=False)
+            # Where each dataset's pointer and receipt are read from: the
+            # lake's own files, or the copies written out of its catalog.
+            documents = self._revision_documents(temp, meta_root, dataset_states)
             for dataset, payload in dataset_states.items():
                 receipt = payload.get("revision_receipt")
                 if receipt:
-                    receipt_logical = meta_root / _safe_relative(str(receipt))
+                    receipt_logical = documents / _safe_relative(str(receipt))
                     _reject_symlink_path(receipt_logical, label="revision receipt")
                     receipt_source = receipt_logical.resolve(strict=False)
                     try:
-                        receipt_relative = receipt_source.relative_to(meta_root)
+                        receipt_relative = receipt_source.relative_to(documents)
                     except ValueError as exc:
                         raise ValueError(
                             f"revision receipt is outside meta root: {receipt}"
@@ -1260,10 +1263,10 @@ class SnapshotStore:
                 # retain a dangling pointer and the query resolver would
                 # correctly fail closed. Older snapshots without a pointer
                 # continue through the legacy path above.
-                pointer_source = meta_root / "revisions" / dataset / "current.json"
+                pointer_source = documents / "revisions" / dataset / "current.json"
                 _reject_symlink_path(pointer_source, label="revision pointer")
                 if pointer_source.is_file():
-                    pointer_relative = pointer_source.relative_to(meta_root)
+                    pointer_relative = pointer_source.relative_to(documents)
                     stored_pointer = temp / "meta" / pointer_relative
                     stored_pointer.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(pointer_source, stored_pointer)
@@ -1488,6 +1491,54 @@ class SnapshotStore:
             shutil.rmtree(temp, ignore_errors=True)
             raise
         return plan.destination / "manifest.json"
+
+    def _revision_documents(
+        self, temp: Path, meta_root: Path, dataset_states: dict[str, dict]
+    ) -> Path:
+        """The directory holding each dataset's ``current.json`` and receipt, as ``meta/`` would.
+
+        A lake that records its revisions in its catalog keeps neither file,
+        while a snapshot carries both: they are written out of the catalog
+        here, and each dataset's state in the snapshot names them. A receipt
+        the lake still has on disk (a revision published as a generation) is
+        used as it is, since only it lists the generation's files.
+        """
+        from cnequity.storage.revision_records import enabled
+        from cnequity.storage.revisions import RevisionStore
+
+        if not enabled(self.config.meta_root):
+            return meta_root
+        documents = (temp / ".export" / "meta").resolve(strict=False)
+        store = RevisionStore(
+            self.config.meta_root,
+            self.config.curated_root,
+            self.config.derived_root,
+            create=False,
+        )
+        for dataset, payload in dataset_states.items():
+            payload.pop("revision_receipt", None)
+            payload.pop("revision_pointer", None)
+            pointer = store.current_pointer(dataset)
+            if pointer is None:
+                continue
+            pointer_relative = Path("revisions") / dataset / "current.json"
+            write_json_atomic(documents / pointer_relative, pointer, indent=2)
+            payload["revision_pointer"] = pointer_relative.as_posix()
+            if not pointer.get("receipt"):
+                continue
+            receipt_relative = _safe_relative(str(pointer["receipt"]))
+            stored = documents / receipt_relative
+            kept = meta_root / receipt_relative
+            if kept.is_file() and not kept.is_symlink():
+                stored.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(kept, stored)
+            else:
+                receipt = store.latest(dataset)
+                if receipt is None:
+                    raise FileNotFoundError(f"dataset has no recorded revision: {dataset}")
+                write_json_atomic(stored, receipt.to_dict(), indent=2)
+            payload["revision_receipt"] = receipt_relative.as_posix()
+        return documents
 
     def _research_evidence_identity(self) -> dict[str, str]:
         from cnequity.storage.research_inputs import CONTEXT_PATH, RESEARCH_METADATA

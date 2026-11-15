@@ -26,8 +26,25 @@ def _publish(cfg, run_id: str, close: float) -> None:
         write.publish({"daily_bars": PUBLISH})
 
 
-def _switch(cfg):
+def _as_0_25_left_it(cfg):
+    """Give the lake what 0.25.0 kept: a receipt and pointer file per published revision,
+    a catalog that does not say it records them, and synced rows without their receipts."""
+    from cnequity.storage import revision_records
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import Catalog
+
+    store = _store(cfg)
+    records = records_for(cfg.meta_root)
+    for record in records.history("daily_bars"):
+        if record.metadata.get("storage") == "catalog":
+            path = cfg.meta_root / record.receipt_path
+            path.write_text(json.dumps(store._revision_of(record).to_dict()), encoding="utf-8")
+    pointer = cfg.meta_root / "revisions" / "daily_bars" / "current.json"
+    pointer.write_text(json.dumps(records.pointer("daily_bars")), encoding="utf-8")
     (cfg.meta_root / "storage.json").write_text('{"publish": "catalog"}', encoding="utf-8")
+    revision_records.forget()
+    with Catalog(lake_root(cfg)) as catalog:
+        catalog.execute("UPDATE _revision_history SET revision = NULL, metadata = NULL")
 
 
 def _record_migration(cfg, report):
@@ -41,16 +58,11 @@ def _record_migration(cfg, report):
 def lake(cfg):
     """A generation revision synced into the catalog, then two published there."""
     from cnequity.storage import revision_records
-    from cnequity.storage.catalog_bridge import lake_root
-    from equitylake_core.catalog import Catalog
 
-    _switch(cfg)
     first = _store(cfg).pointer_file("daily_bars")["revision_id"]
-    with Catalog(lake_root(cfg)) as catalog:
-        # As 0.25.0 synced it: the snapshot, but not what the receipt says.
-        catalog.execute("UPDATE _revision_history SET revision = NULL, metadata = NULL")
     _publish(cfg, "second", 2.0)
     _publish(cfg, "third", 3.0)
+    _as_0_25_left_it(cfg)
     yield cfg, first
     revision_records.forget()
 
@@ -121,10 +133,9 @@ def test_a_publish_is_seen_at_once_and_a_revision_the_catalog_let_go_has_no_snap
     before = store.current_pointer("daily_bars")["revision"]
     _publish(cfg, "fourth", 4.0)
     assert store.current_pointer("daily_bars")["revision"] == before + 1
-    assert store.current_pointer("daily_bars") == {
-        **store.pointer_file("daily_bars"),
-        "storage": "catalog",
-    }
+    # The publish wrote no file: the pointer file stays at the revision before it.
+    assert store.pointer_file("daily_bars")["revision"] == before
+    assert store.current_pointer("daily_bars")["storage"] == "catalog"
 
     with Catalog(lake_root(cfg)) as catalog:
         catalog.execute(

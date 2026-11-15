@@ -52,9 +52,11 @@ def dataset_state(
     from cnequity.storage.revisions import RevisionStore
 
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root, create=False)
-    if store.pointer_path(dataset).exists():
+    if store.current_pointer(dataset) is not None:
         receipt = store.latest(dataset)
         if receipt is not None:
+            # A revision the lake catalog records has no receipt file.
+            relative = f"revisions/{dataset}/{receipt.revision:08d}-{receipt.revision_id}.json"
             return DatasetState(
                 dataset=dataset,
                 revision=receipt.revision,
@@ -64,9 +66,7 @@ def dataset_state(
                 schema_version=receipt.schema_version,
                 contract_fingerprint=receipt.contract_fingerprint,
                 content_digest=receipt.content_digest,
-                revision_receipt=(
-                    f"revisions/{dataset}/{receipt.revision:08d}-{receipt.revision_id}.json"
-                ),
+                revision_receipt=relative if (cfg.meta_root / relative).is_file() else None,
                 changed_partitions=receipt.changed_partitions,
                 updated_at=receipt.committed_at,
             )

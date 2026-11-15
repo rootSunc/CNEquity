@@ -56,3 +56,17 @@ def publish_rows(config, dataset: str, rows: pl.DataFrame, *, run_id: str = "see
         published = write.publish({dataset: publish}, message=f"{dataset} seeded by {run_id}")
     catalog_read.close(config)
     return published.get(dataset)
+
+
+def record_revisions(config) -> None:
+    """Finish moving a generation lake that was synced into a catalog onto it, as `cne upgrade` does.
+
+    The catalog then records every revision and the lake publishes there:
+    the state every writer requires.
+    """
+    from cnequity.storage import revision_records
+    from cnequity.storage.catalog_migration import _record_revisions
+
+    Path(config.meta_root).mkdir(parents=True, exist_ok=True)
+    _record_revisions(config)
+    revision_records.forget()

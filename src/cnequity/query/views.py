@@ -65,14 +65,13 @@ def _view_glob(data_root: str, spec: DatasetSpec) -> tuple[str, bool]:
     # POSIX host) purely lexical.  Resolving through RevisionStore would turn
     # ``C:/...`` into a cwd-relative POSIX path and would also create metadata
     # directories as a side effect when no pointer exists.
-    pointer = Path(data_root) / "meta" / "revisions" / spec.name / "current.json"
     dataset_root = (
         resolve_committed_root(
             logical,
             dataset=spec.name,
             meta_root=Path(data_root) / "meta",
         )
-        if pointer.is_file()
+        if _current_pointer(Path(data_root) / "meta", spec.name) is not None
         else logical
     )
     if spec.partition_col is None:
@@ -86,12 +85,32 @@ def _view_glob(data_root: str, spec: DatasetSpec) -> tuple[str, bool]:
     )
 
 
-def _committed_revision_id(config: Config, dataset: str) -> str | None:
-    pointer = config.data_root / "meta" / "revisions" / dataset / "current.json"
-    try:
-        return str(json.loads(pointer.read_text("utf-8")).get("revision_id") or "") or None
-    except (OSError, ValueError):
+def _current_pointer(meta_root: Path, dataset: str) -> dict | None:
+    """The current revision of *dataset* as the lake records it, without creating anything.
+
+    A lake that keeps its revisions in its catalog is asked there; any other
+    is asked only when the dataset has a pointer file, so a path that names no
+    lake stays purely lexical.
+    """
+    from cnequity.storage.revision_records import enabled
+    from cnequity.storage.revisions import RevisionStore
+
+    if (
+        not enabled(meta_root)
+        and not (meta_root / "revisions" / dataset / "current.json").is_file()
+    ):
         return None
+    try:
+        return RevisionStore(meta_root, meta_root.parent / "curated", create=False).current_pointer(
+            dataset
+        )
+    except Exception:  # noqa: BLE001 - an unreadable record is no revision to read
+        return None
+
+
+def _committed_revision_id(config: Config, dataset: str) -> str | None:
+    pointer = _current_pointer(config.data_root / "meta", dataset)
+    return None if pointer is None else str(pointer.get("revision_id") or "") or None
 
 
 def _catalog_table(config: Config, dataset: str):
@@ -122,7 +141,7 @@ def view_read_roots(config: Config) -> list[Path]:
     # catalog database beside it is not readable from SQL.
     roots = [meta / "data", root / "lake" / "data"]
     for name, spec in sorted(DATASETS.items()):
-        if (meta / name / "current.json").is_file():
+        if _current_pointer(root / "meta", name) is not None:
             continue
         roots.append(root / layer_name(spec) / name)
     return roots
@@ -331,13 +350,12 @@ def _views_inputs(config: Config, *, require_data: bool) -> dict:
             )
         ).encode()
     )
-    meta = config.data_root / "meta" / "revisions"
     datasets: dict[str, str] = {}
     for name, spec in sorted(DATASETS.items()):
         digest = hashlib.sha256()
-        pointer = meta / name / "current.json"
-        if pointer.is_file():
-            digest.update(pointer.read_bytes())
+        pointer = _current_pointer(config.data_root / "meta", name)
+        if pointer is not None:
+            digest.update(json.dumps(pointer, sort_keys=True, default=str).encode())
             published = _catalog_table(config, name)
             if published is not None:
                 digest.update(repr((published.files, published.unique_keys)).encode())

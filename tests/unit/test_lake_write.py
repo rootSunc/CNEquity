@@ -77,8 +77,14 @@ def cfg(tmp_path, monkeypatch):
             sync_dataset(config, lake, "daily_bars")
     except ExtensionUnavailableError as exc:
         pytest.skip(str(exc))
+    # As `cne upgrade` leaves a lake: publishing into its catalog, which records its revisions.
+    from cnequity.storage import revision_records
+    from cnequity.storage.catalog_migration import _record_revisions
+
+    _record_revisions(config)
     yield config
     catalog_read.close_all()
+    revision_records.forget()
 
 
 def _pointer(cfg, dataset="daily_bars"):
@@ -279,11 +285,36 @@ def test_an_input_published_since_it_was_read_refuses_the_commit(cfg):
     assert refused.value.dataset == "daily_bars"
 
 
-def test_sweep_moves_the_pointer_to_what_the_catalog_published(cfg, monkeypatch):
+def test_a_publish_writes_no_pointer_or_receipt_file(cfg):
+    import json
+
+    directory = cfg.meta_root / "revisions" / "daily_bars"
+    files = {path.name: path.read_bytes() for path in directory.glob("*.json")}
+    before = _pointer(cfg)
+    with LakeWrite(cfg, "r6") as write:
+        january = write.checkout("daily_bars").partition("trade_date=2024-01")
+        _replace(january, _bars(date(2024, 1, 2), {"600000.SH": 10.5}))
+        (receipt,) = write.publish({"daily_bars": PUBLISH}).values()
+
+    # The catalog is the record: the revision store's files are as they were.
+    assert {path.name: path.read_bytes() for path in directory.glob("*.json")} == files
+    after = _pointer(cfg)
+    assert after["revision"] == before["revision"] + 1 == receipt.revision
+    assert after["revision_id"] == receipt.revision_id and after["storage"] == "catalog"
+    store = RevisionStore(cfg.meta_root, cfg.curated_root)
+    assert store.latest("daily_bars").metadata["base_revision_id"] == before["revision_id"]
+    state = json.loads((cfg.meta_root / "state" / "daily_bars.json").read_text())
+    assert state["revision_id"] == receipt.revision_id
+    assert "revision_receipt" not in state and "revision_pointer" not in state
+
+
+def test_a_publish_that_stops_before_the_state_file_is_still_published(cfg, monkeypatch):
+    import json
+
     before = _pointer(cfg)
     monkeypatch.setattr(
         RevisionStore,
-        "finish_catalog_revision",
+        "index_catalog_revision",
         lambda self, receipt: (_ for _ in ()).throw(SystemExit("crash")),
     )
     write = LakeWrite(cfg, "r6")
@@ -293,13 +324,17 @@ def test_sweep_moves_the_pointer_to_what_the_catalog_published(cfg, monkeypatch)
         write.publish({"daily_bars": PUBLISH})
     write.close()
     monkeypatch.undo()
-    assert _pointer(cfg) == before
-
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    report = store.sweep(apply=True)
-    assert report["pointer_restored"] == ["daily_bars"]
+    # The catalog committed the rows and the revision together.
     after = _pointer(cfg)
     assert after["revision"] == before["revision"] + 1 and after["storage"] == "catalog"
+    state_path = cfg.meta_root / "state" / "daily_bars.json"
+    assert json.loads(state_path.read_text())["revision_id"] == before["revision_id"]
+
+    store = RevisionStore(cfg.meta_root, cfg.curated_root)
+    assert store.sweep()["state_synced"] == ["daily_bars"]
+    assert store.sweep(apply=True)["state_synced"] == ["daily_bars"]
+    assert json.loads(state_path.read_text())["revision_id"] == after["revision_id"]
+    assert store.sweep(apply=True)["state_synced"] == []
 
 
 def test_a_generation_writer_publishes_into_the_catalog_only_from_a_verified_tree(cfg):
@@ -365,9 +400,6 @@ def test_the_working_tree_of_a_catalog_revision_is_rebuilt_unless_verified(cfg):
 
 
 def test_a_lake_switched_to_the_catalog_publishes_every_writer_there(cfg):
-    import json
-
-    (cfg.meta_root / "storage.json").write_text(json.dumps({"publish": "catalog"}))
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
     assert _pointer(cfg).get("storage") is None  # still a generation revision
     store.materialize_current("daily_bars")

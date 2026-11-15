@@ -40,8 +40,8 @@ def lake_root(config) -> Path:
 def committed_source(config, dataset: str) -> tuple[str, str] | None:
     """The Parquet glob and revision id of *dataset*'s committed generation, if it has one."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    pointer = store.pointer_file(dataset)
-    root = store.current_root_file(dataset)
+    pointer = store.current_pointer(dataset)
+    root = store.current_root(dataset)
     if pointer is None or root is None or not any(root.rglob("*.parquet")):
         return None
     return (root / "**" / "*.parquet").as_posix(), str(pointer.get("revision_id", ""))
@@ -316,8 +316,8 @@ def _table_keys_unique(catalog: Catalog, dataset: str) -> bool:
 def _committed_files(config, dataset: str) -> tuple[str, Path, dict[str, str]] | None:
     """Revision id, generation root and ``relative path -> digest`` of the committed files."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    pointer = store.pointer_file(dataset)
-    root = store.current_root_file(dataset)
+    pointer = store.current_pointer(dataset)
+    root = store.current_root(dataset)
     if pointer is None or root is None:
         return None
     files: dict[str, str] = {}
@@ -712,9 +712,9 @@ def _sync_dataset(config, catalog: Catalog, dataset: str) -> SyncResult | None:
 
 
 def catalog_is_current(config, catalog: Catalog, dataset: str) -> bool:
-    """True when the catalog table holds exactly the revision the revision store's files name."""
+    """True when the catalog table holds exactly the lake's current revision of *dataset*."""
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
-    pointer = store.pointer_file(dataset)
+    pointer = store.current_pointer(dataset)
     return pointer is not None and synced_revision_id(catalog, dataset) == str(
         pointer.get("revision_id", "")
     )
