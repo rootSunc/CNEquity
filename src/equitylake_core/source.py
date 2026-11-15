@@ -10,16 +10,23 @@
 
 A source that pages says what the next request is from the body it got
 (:meth:`Fetcher.pages`); the core does not know any vendor's paging.
+
+A source that allows it is asked several requests at a time
+(:meth:`Fetcher.fetch_all`, ``Policy.concurrency``). Pacing then counts the
+moments requests start, whichever thread sends them, so a source never sees
+more than one start per ``min_interval``.
 """
 
 from __future__ import annotations
 
 import gzip
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from equitylake_core.raw import RawArchive
@@ -79,6 +86,8 @@ class Policy:
     #: Requests this fetcher may send to the source in its lifetime; ``None`` is no limit.
     budget: int | None = None
     timeout: float = 60.0
+    #: Requests that may be in flight at once in :meth:`Fetcher.fetch_all`.
+    concurrency: int = 1
 
 
 Transport = Callable[[str, Mapping[str, str], float], Response]
@@ -113,17 +122,29 @@ class Fetcher:
         self.policies = dict(policies)
         self.archive = archive
         self._transport, self._sleep, self._clock = transport, sleep, clock
+        #: When the last request to each source started, or is booked to start.
         self._last: dict[str, float] = {}
+        self._lock = threading.Lock()
         #: Requests sent and bytes received, by source.
         self.requests: dict[str, int] = {}
         self.bytes: dict[str, int] = {}
 
-    def _pace(self, policy: Policy) -> None:
-        last = self._last.get(policy.name)
-        if last is not None:
-            wait = policy.min_interval - (self._clock() - last)
-            if wait > 0:
-                self._sleep(wait)
+    def _start(self, request: Request, policy: Policy) -> None:
+        """Book this request's start ``min_interval`` after the last one's, then wait for it.
+
+        The budget is checked and the request counted in the same step, so
+        threads sharing the fetcher never overspend it.
+        """
+        with self._lock:
+            if policy.budget is not None and self.requests.get(policy.name, 0) >= policy.budget:
+                raise BudgetExhausted(request, f"the budget of {policy.budget} requests is spent")
+            now = self._clock()
+            last = self._last.get(policy.name)
+            at = now if last is None else max(now, last + policy.min_interval)
+            self._last[policy.name] = at
+            self.requests[policy.name] = self.requests.get(policy.name, 0) + 1
+        if at > now:
+            self._sleep(at - now)
 
     def fetch(self, request: Request) -> bytes:
         """The body of a successful answer to *request*; raises :class:`FetchError` otherwise."""
@@ -131,35 +152,52 @@ class Fetcher:
         url = request.url + ("?" + urllib.parse.urlencode(request.params) if request.params else "")
         reason, status = "no attempt made", None
         for attempt in range(policy.attempts):
-            if policy.budget is not None and self.requests.get(policy.name, 0) >= policy.budget:
-                raise BudgetExhausted(request, f"the budget of {policy.budget} requests is spent")
             if attempt:
                 self._sleep(min(60.0, 2.0**attempt))
-            self._pace(policy)
-            self.requests[policy.name] = self.requests.get(policy.name, 0) + 1
+            self._start(request, policy)
             try:
                 response = self._transport(url, policy.headers, policy.timeout)
             except OSError as exc:  # no answer at all: refused, reset, timed out
                 reason, status = f"{type(exc).__name__}: {exc}", None
                 continue
-            finally:
-                self._last[policy.name] = self._clock()
-            self.bytes[policy.name] = self.bytes.get(policy.name, 0) + len(response.body)
-            if self.archive is not None and request.archive:
-                self.archive.put(
-                    request.source,
-                    request.key,
-                    request.url,
-                    dict(request.params),
-                    response.status,
-                    response.body,
-                )
+            with self._lock:
+                self.bytes[policy.name] = self.bytes.get(policy.name, 0) + len(response.body)
+                if self.archive is not None and request.archive:
+                    self.archive.put(
+                        request.source,
+                        request.key,
+                        request.url,
+                        dict(request.params),
+                        response.status,
+                        response.body,
+                    )
             if response.status == 200:
                 return response.body
             reason, status = f"HTTP {response.status}", response.status
             if response.status not in RETRYABLE:
                 break
         raise FetchError(request, reason, status)
+
+    def fetch_all(self, requests: Sequence[Request]) -> list[bytes | FetchError]:
+        """Each request's body, or the :class:`FetchError` it ended in, in the order asked.
+
+        Up to the largest ``concurrency`` of the sources asked are in flight
+        at once; each source's pacing and budget hold across them. Once a
+        budget is spent, the requests still to start end in
+        :class:`BudgetExhausted`.
+        """
+        workers = max((self.policies[r.source].concurrency for r in requests), default=1)
+
+        def one(request: Request) -> bytes | FetchError:
+            try:
+                return self.fetch(request)
+            except FetchError as exc:
+                return exc
+
+        if workers <= 1 or len(requests) <= 1:
+            return [one(request) for request in requests]
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(one, requests))
 
     def pages(
         self, request: Request, following: Callable[[Request, bytes], Request | None]

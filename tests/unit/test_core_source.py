@@ -152,3 +152,47 @@ def test_a_request_can_keep_its_answer_out_of_the_archive(tmp_path):
     assert fetcher.fetch(Request("vendor", "small", "https://example.test/small")) == b"small"
     assert [entry["key"] for entry in archive.entries("vendor")] == ["small"]
     assert fetcher.requests == {"vendor": 2}
+
+
+def test_several_requests_are_in_flight_but_their_starts_keep_their_distance():
+    import threading
+    import time
+
+    starts: list[float] = []
+    lock = threading.Lock()
+
+    def slow(url, headers, timeout):
+        with lock:
+            starts.append(time.monotonic())
+        time.sleep(0.2)
+        return Response(404 if url.endswith("/7") else 200, url.encode())
+
+    fetcher = Fetcher(
+        {"vendor": Policy("vendor", min_interval=0.05, concurrency=4, attempts=1)}, transport=slow
+    )
+    requests = [Request("vendor", str(i), f"https://example.test/{i}") for i in range(12)]
+    began = time.monotonic()
+    answers = fetcher.fetch_all(requests)
+    took = time.monotonic() - began
+    assert [a for i, a in enumerate(answers) if i != 7] == [
+        f"https://example.test/{i}".encode() for i in range(12) if i != 7
+    ]
+    assert isinstance(answers[7], FetchError) and answers[7].status == 404
+    gaps = [b - a for a, b in zip(sorted(starts), sorted(starts)[1:], strict=False)]
+    assert min(gaps) >= 0.045
+    # One at a time this is 12 x 0.25 s; four in flight finish in well under half.
+    assert took < 1.2
+    assert fetcher.requests == {"vendor": 12}
+
+
+def test_a_budget_holds_across_threads():
+    fetcher = Fetcher(
+        {"vendor": Policy("vendor", concurrency=4, budget=5)},
+        transport=lambda url, headers, timeout: Response(200, b"x"),
+    )
+    answers = fetcher.fetch_all(
+        [Request("vendor", str(i), "https://example.test") for i in range(9)]
+    )
+    assert sum(1 for a in answers if a == b"x") == 5
+    assert sum(1 for a in answers if isinstance(a, BudgetExhausted)) == 4
+    assert fetcher.requests == {"vendor": 5}
