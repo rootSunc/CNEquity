@@ -166,6 +166,7 @@ class Catalog:
         )
         self._rows_in_files: bool | None = None
         self._format: str | None = None
+        self._records: dict[tuple[str, str], tuple[int, Any]] = {}
         catalog_path = self.root / CATALOG_FILE
         created = not catalog_path.exists()
         if created:
@@ -238,6 +239,27 @@ class Catalog:
 
     def has_table(self, table: str) -> bool:
         return table in self.tables()
+
+    def records(self, table: str, columns: str = "*"):
+        """Every row of the small record table *table*, as a Polars frame; filter it in Python.
+
+        A filtered scan of any table makes DuckLake read the whole lake's file
+        list and per-file column statistics from SQLite: the backend does not
+        narrow that read to the table scanned. On a lake of 34,000 files that
+        is 0.13 s per query, while reading a record table whole costs a few
+        milliseconds. A read-only connection keeps the frame until the lake's
+        snapshot moves; a writer reads afresh, so it sees its own open
+        transaction. *columns* may name virtual columns such as ``snapshot_id``.
+        """
+        if self.read_only:
+            snapshot = self.snapshot()
+            kept = self._records.get((table, columns))
+            if kept is not None and kept[0] == snapshot:
+                return kept[1]
+        frame = self.relation(f"SELECT {columns} FROM {quote_identifier(table)}").pl()
+        if self.read_only:
+            self._records[(table, columns)] = (snapshot, frame)
+        return frame
 
     @contextmanager
     def transaction(

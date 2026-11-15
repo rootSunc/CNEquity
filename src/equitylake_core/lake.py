@@ -43,6 +43,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import polars as pl
+
 from equitylake_core.catalog import (
     CATALOG_FILE,
     Catalog,
@@ -142,10 +144,8 @@ def _head(catalog: Catalog, dataset: str) -> int | None:
     """The snapshot of *dataset*'s latest revision."""
     if not catalog.has_table(REVISIONS):
         return None
-    row = catalog.execute(
-        f"SELECT max(snapshot_id) FROM {REVISIONS} WHERE dataset = ?", [dataset]
-    ).fetchone()
-    return None if row is None or row[0] is None else int(row[0])
+    rows = catalog.records(REVISIONS, "dataset, snapshot_id").filter(pl.col("dataset") == dataset)
+    return None if rows.is_empty() else int(rows["snapshot_id"].max())
 
 
 def _canonical(catalog: Catalog, kind: str) -> str:

@@ -313,14 +313,15 @@ def refreshed(catalog: Catalog, dataset: str, *, revisions: str) -> datetime | N
     """When *dataset* was last written, from the record table *revisions*."""
     if not catalog.has_table(revisions):
         return None
+    rows = catalog.records(revisions, "dataset, snapshot_id").filter(pl.col("dataset") == dataset)
+    if rows.is_empty():
+        return None
     found = catalog.relation(
-        "SELECT max(s.snapshot_time) AS at "
-        f"FROM {quote_identifier(revisions)} r "
-        f"JOIN ducklake_snapshots({quote_literal(ALIAS)}) s ON s.snapshot_id = r.snapshot_id "
-        "WHERE r.dataset = ?",
-        [dataset],
+        "SELECT snapshot_time AS at "
+        f"FROM ducklake_snapshots({quote_literal(ALIAS)}) WHERE snapshot_id = ?",
+        [int(rows["snapshot_id"].max())],
     ).pl()
-    return found.cast({"at": pl.Datetime("us", "UTC")})["at"][0]
+    return found.cast({"at": pl.Datetime("us", "UTC")})["at"][0] if found.height else None
 
 
 def attempted(catalog: Catalog, dataset: str) -> pl.DataFrame:
@@ -328,17 +329,17 @@ def attempted(catalog: Catalog, dataset: str) -> pl.DataFrame:
     schema = {**CELLS_SCHEMA, "at": pl.Datetime("us", "UTC"), "outcome": pl.String}
     if not catalog.has_table(ATTEMPTS):
         return pl.DataFrame(schema=schema)
+    rows = catalog.records(ATTEMPTS).filter(pl.col("dataset") == dataset)
+    if rows.is_empty():
+        return pl.DataFrame(schema=schema)
     # A row written before attempts carried an outcome said "empty".
-    outcome = (
-        "COALESCE(outcome, 'empty')" if "outcome" in catalog.column_types(ATTEMPTS) else "'empty'"
-    )
+    outcome = pl.col("outcome").fill_null("empty") if "outcome" in rows.columns else pl.lit("empty")
     return (
-        catalog.relation(
-            f"SELECT period, entity, max(asked_at) AS at, arg_max({outcome}, asked_at) AS outcome "
-            f"FROM {ATTEMPTS} WHERE dataset = ? GROUP BY ALL",
-            [dataset],
-        )
-        .pl()
+        rows.with_columns(outcome=outcome)
+        .sort("asked_at")
+        .group_by("period", "entity", maintain_order=True)
+        .agg(pl.col("asked_at").max().alias("at"), pl.col("outcome").last())
+        .select("period", "entity", "at", "outcome")
         .cast(schema)
     )
 

@@ -10,8 +10,10 @@ directory beside ``curated/`` and ``meta/``.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
@@ -173,6 +175,78 @@ def prepare_record_tables(catalog: Catalog) -> None:
         catalog.execute(f"DROP TABLE {LEGACY_SYNC_TABLE}")
 
 
+class _Records(NamedTuple):
+    """The small record tables of one catalog snapshot, read whole."""
+
+    #: dataset -> (revision_id, unique_keys) of the sync record.
+    synced: dict[str, tuple[str, bool | None]]
+    #: (dataset, revision_id) -> (snapshot, unique_keys), the latest snapshot holding it.
+    snapshots: dict[tuple[str, str], tuple[int, bool]]
+
+
+_records_lock = threading.Lock()
+
+
+def _records(catalog: Catalog) -> _Records | None:
+    """The record tables of a read-only catalog at its current snapshot, read once.
+
+    Every filtered query on a DuckLake table costs about 0.13 s on the real
+    lake whatever it reads (an unfiltered read of these tables costs 0.02 s),
+    and a compact resolves a revision several hundred times. A writer's
+    catalog is never cached: its open transaction is newer than any snapshot.
+
+    The records are kept on the connection, by snapshot. Not by path: the
+    publication gate rehearses each candidate on a fresh copy of the catalog
+    at one path, and two copies reach the same snapshot number with
+    different contents.
+    """
+    if not catalog.read_only:
+        return None
+    current = catalog.snapshot()
+    with _records_lock:
+        kept = getattr(catalog, "_cnequity_records", None)
+    if kept is not None and kept[0] == current:
+        return kept[1]
+    tables = set(catalog.tables())
+    synced: dict[str, tuple[str, bool | None]] = {}
+    state = (
+        SYNC_TABLE
+        if SYNC_TABLE in tables
+        else (LEGACY_SYNC_TABLE if LEGACY_SYNC_TABLE in tables else None)
+    )
+    if state is not None:
+        columns = {row[0] for row in catalog.execute(f"DESCRIBE {state}").fetchall()}
+        unique = "unique_keys" if "unique_keys" in columns else "NULL"
+        for dataset, revision_id, flag in catalog.execute(
+            f"SELECT dataset, revision_id, {unique} FROM {state}"
+        ).fetchall():
+            synced[dataset] = (revision_id, flag)
+    snapshots: dict[tuple[str, str], tuple[int, bool]] = {}
+    # The history table first, so the record table wins where both name a revision.
+    if HISTORY_TABLE in tables:
+        for dataset, revision_id, snapshot, flag in catalog.execute(
+            f"SELECT dataset, revision_id, snapshot, unique_keys FROM {HISTORY_TABLE}"
+        ).fetchall():
+            if snapshot is None:
+                continue
+            old = snapshots.get((dataset, revision_id))
+            if old is None or int(snapshot) > old[0]:
+                snapshots[(dataset, revision_id)] = (int(snapshot), bool(flag))
+    if REVISIONS_TABLE in tables:
+        latest: dict[tuple[str, str], tuple[int, bool]] = {}
+        for dataset, revision_id, snapshot, flag in catalog.execute(
+            f"SELECT dataset, revision_id, snapshot_id, unique_keys FROM {REVISIONS_TABLE}"
+        ).fetchall():
+            old = latest.get((dataset, revision_id))
+            if old is None or int(snapshot) > old[0]:
+                latest[(dataset, revision_id)] = (int(snapshot), bool(flag))
+        snapshots.update(latest)
+    found = _Records(synced, snapshots)
+    with _records_lock:
+        catalog._cnequity_records = (current, found)
+    return found
+
+
 def _state_table(catalog: Catalog) -> str | None:
     """The table holding the sync record: the old one until a writer has moved it."""
     if catalog.has_table(SYNC_TABLE):
@@ -182,6 +256,10 @@ def _state_table(catalog: Catalog) -> str | None:
 
 def synced_revision_id(catalog: Catalog, dataset: str) -> str | None:
     """The revision the catalog table was last brought to."""
+    records = _records(catalog)
+    if records is not None:
+        entry = records.synced.get(dataset)
+        return entry[0] if entry else None
     table = _state_table(catalog)
     if table is None:
         return None
@@ -218,6 +296,10 @@ def synced_revision(catalog: Catalog, dataset: str) -> tuple[str, dict[str, str]
 
 def keys_unique(catalog: Catalog, dataset: str) -> bool | None:
     """Whether the catalog table has one row per primary key; ``None`` when not yet checked."""
+    records = _records(catalog)
+    if records is not None:
+        entry = records.synced.get(dataset)
+        return entry[1] if entry else None
     table = _state_table(catalog)
     if table is None:
         return None
@@ -575,6 +657,9 @@ def revision_snapshot(catalog: Catalog, dataset: str, revision_id: str) -> tuple
     A read pinned to an earlier revision is served from that snapshot's files
     for as long as the catalog keeps them.
     """
+    records = _records(catalog)
+    if records is not None:
+        return records.snapshots.get((dataset, revision_id))
     if catalog.has_table(REVISIONS_TABLE):
         row = catalog.execute(
             f"SELECT snapshot_id, unique_keys FROM {REVISIONS_TABLE} "

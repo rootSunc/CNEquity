@@ -142,3 +142,31 @@ def test_a_publish_is_seen_at_once_and_a_revision_the_catalog_let_go_has_no_snap
             "UPDATE _revision_history SET snapshot = NULL WHERE revision_id = ?", [first]
         )
         assert revision_snapshot(catalog, "daily_bars", first) is None
+
+
+def test_a_read_only_catalog_reads_its_records_once_per_snapshot(lake):
+    from cnequity.storage.catalog_bridge import (
+        keys_unique,
+        lake_root,
+        revision_snapshot,
+        synced_revision_id,
+    )
+    from equitylake_core.catalog import Catalog
+
+    cfg, first = lake
+    _record_migration(cfg, import_receipts(cfg, apply=True))
+    with Catalog(lake_root(cfg), read_only=True) as reader:
+        current = synced_revision_id(reader, "daily_bars")
+        held = revision_snapshot(reader, "daily_bars", first)
+        with Catalog(lake_root(cfg)) as writer:
+            assert synced_revision_id(writer, "daily_bars") == current
+            assert revision_snapshot(writer, "daily_bars", first) == held
+            assert keys_unique(writer, "daily_bars") == keys_unique(reader, "daily_bars")
+        kept = reader._cnequity_records
+        assert synced_revision_id(reader, "daily_bars") == current
+        assert reader._cnequity_records is kept  # same snapshot: not read again
+
+        # Another writer publishes: the reader's next question sees the new snapshot.
+        _publish(cfg, "fifth", 5.0)
+        assert synced_revision_id(reader, "daily_bars") != current
+        assert revision_snapshot(reader, "daily_bars", first) == held

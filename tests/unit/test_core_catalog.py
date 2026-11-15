@@ -142,3 +142,26 @@ def test_a_moved_lake_reads_its_own_files(lake, tmp_path):
             files = again.data_files("t")
             assert files and all(str(moved) in path for path in files)
             assert again.execute("SELECT count(*) FROM t").fetchone()[0] == 1
+
+
+def test_a_record_table_is_read_whole_and_kept_until_the_snapshot_moves(tmp_path):
+    from equitylake_core.catalog import Catalog
+
+    root = tmp_path / "lake"
+    try:
+        with Catalog(root, create=True) as writer:
+            writer.execute("CREATE TABLE _notes (dataset VARCHAR, n BIGINT)")
+            writer.execute("INSERT INTO _notes VALUES ('a', 1)")
+    except Exception as exc:  # no DuckLake extension on this machine
+        pytest.skip(str(exc))
+    with Catalog(root, read_only=True) as reader:
+        first = reader.records("_notes")
+        assert first.rows() == [("a", 1)]
+        assert reader.records("_notes") is first  # same snapshot: not read again
+        with Catalog(root) as writer:
+            with writer.transaction():
+                writer.execute("INSERT INTO _notes VALUES ('b', 2)")
+                # A writer reads afresh and sees its own open transaction.
+                assert sorted(writer.records("_notes").rows()) == [("a", 1), ("b", 2)]
+        assert sorted(reader.records("_notes").rows()) == [("a", 1), ("b", 2)]
+        assert "snapshot_id" in reader.records("_notes", "dataset, snapshot_id").columns
