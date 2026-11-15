@@ -15,6 +15,17 @@ from cnequity.storage.parquet import StagingWriter
 from cnequity.storage.revisions import RevisionStore
 
 
+def _gate(cfg, run_id: str, day: date) -> dict:
+    """Run the gate on a checkout of daily_bars that changes nothing."""
+    from cnequity.storage.lake_write import LakeWrite
+
+    with LakeWrite(cfg, run_id) as write:
+        checkout = write.checkout("daily_bars")
+        return evaluate_publication(
+            cfg, run_id, day, {"daily_bars": checkout.root}, lake_write=write
+        )
+
+
 @pytest.mark.parametrize("backup_fails", [False, True])
 def test_manifest_backup_closes_connections(tmp_path, monkeypatch, backup_fails):
     cfg = Config(data_root=tmp_path / "lake", publication_gate="block")
@@ -24,8 +35,6 @@ def test_manifest_backup_closes_connections(tmp_path, monkeypatch, backup_fails)
     connection.execute("INSERT INTO receipt VALUES (42)")
     connection.commit()
     connection.close()
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
     connections = []
     connect = sqlite3.connect
 
@@ -51,11 +60,12 @@ def test_manifest_backup_closes_connections(tmp_path, monkeypatch, backup_fails)
     monkeypatch.setattr("cnequity.quality.publication.sqlite3.connect", tracked_connect)
     monkeypatch.setattr("cnequity.quality.publication._errors", errors)
     try:
-        report = evaluate_publication(cfg, "backup", date(2024, 6, 28), {"daily_bars": candidate})
+        report = _gate(cfg, "backup", date(2024, 6, 28))
         assert report["blocked"] is backup_fails
         if backup_fails:
             assert report["new_errors"][0]["message"] == "backup unavailable"
-        assert len(connections) == 2
+        # The manifest's two, and the ones that copy the lake catalog for the view.
+        assert len(connections) >= 2
         for connection in connections:
             with pytest.raises(sqlite3.ProgrammingError, match="closed"):
                 connection.execute("SELECT 1")
@@ -129,14 +139,14 @@ def test_candidate_audit_precedes_pointer_switch(tmp_path, monkeypatch, mode, ex
         assert pl.read_parquet(path)["close"].to_list() == [10.0]
 
 
-def test_full_audit_detects_corrupt_candidate_offline(tmp_path):
+def test_a_candidate_that_is_not_a_checkout_is_blocked(tmp_path):
     cfg = Config(data_root=tmp_path / "lake", publication_gate="block", lake_profile="sample")
     candidate = tmp_path / "candidate"
     candidate.mkdir()
-    (candidate / "part.parquet").write_bytes(b"not parquet")
-    report = evaluate_publication(cfg, "corrupt", date(2024, 6, 28), {"daily_bars": candidate})
+    report = evaluate_publication(cfg, "tree", date(2024, 6, 28), {"daily_bars": candidate})
     assert report["blocked"]
-    assert any(item["check"] == "schema_contract" for item in report["new_errors"])
+    assert report["new_errors"][0]["check"] == "candidate_audit_failed"
+    assert "checkout" in report["new_errors"][0]["message"]
 
 
 def test_audit_failure_cannot_publish_in_block_mode(tmp_path, monkeypatch):
@@ -146,9 +156,7 @@ def test_audit_failure_cannot_publish_in_block_mode(tmp_path, monkeypatch):
         raise RuntimeError("audit unavailable")
 
     monkeypatch.setattr("cnequity.quality.publication._errors", fail)
-    report = evaluate_publication(
-        cfg, "failure", date(2024, 6, 28), {"daily_bars": tmp_path / "missing"}
-    )
+    report = _gate(cfg, "failure", date(2024, 6, 28))
     assert report["blocked"]
     assert report["new_errors"][0]["check"] == "candidate_audit_failed"
 
@@ -311,8 +319,6 @@ def test_publication_blocks_only_the_candidate_that_causes_the_error(tmp_path, m
 @pytest.mark.parametrize("new,blocked", [({"A": 1}, False), ({"C": 1}, True), ({"A": 3}, True)])
 def test_partial_repair_requires_per_key_non_regression(tmp_path, monkeypatch, new, blocked):
     cfg = Config(data_root=tmp_path / "lake", publication_gate="block")
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
 
     def finding(violations):
         return {
@@ -327,7 +333,7 @@ def test_partial_repair_requires_per_key_non_regression(tmp_path, monkeypatch, n
     baseline = [finding({"A": 2, "B": 1})]
     answers = iter([baseline, [finding(new)], baseline])
     monkeypatch.setattr("cnequity.quality.publication._errors", lambda *args: next(answers))
-    report = evaluate_publication(cfg, "repair", date(2026, 1, 1), {"daily_bars": candidate})
+    report = _gate(cfg, "repair", date(2026, 1, 1))
     assert report["blocked"] is blocked
 
 
@@ -356,12 +362,10 @@ def test_gate_compares_stable_issue_keys_not_whole_findings(
     tmp_path, monkeypatch, candidate, blocked
 ):
     cfg = Config(data_root=tmp_path / "lake", publication_gate="block")
-    source = tmp_path / "candidate"
-    source.mkdir()
     baseline = [{**_bad_rows(2), "message": "2 rows failed invariants", "sample": ["x", "y"]}]
     answers = iter([baseline, candidate, baseline])
     monkeypatch.setattr("cnequity.quality.publication._errors", lambda *args: next(answers))
-    report = evaluate_publication(cfg, "keys", date(2026, 1, 1), {"daily_bars": source})
+    report = _gate(cfg, "keys", date(2026, 1, 1))
     assert report["blocked"] is blocked
     changes = report["issue_changes"]
     if candidate == [_bad_rows(1)]:

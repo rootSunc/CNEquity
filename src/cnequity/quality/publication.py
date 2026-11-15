@@ -21,7 +21,7 @@ from cnequity.quality.factor_policy import advisory_factor_findings, factor_advi
 from cnequity.quality.gate import contradictions
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.locator import layer_root, logical_root
+from cnequity.storage.locator import logical_root
 from cnequity.storage.read_context import read_root
 
 # Coverage gaps (absent observations) remain audit findings and explicit
@@ -113,63 +113,6 @@ def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> Non
         if state.is_file():
             (view.meta_root / "state").mkdir(parents=True, exist_ok=True)
             shutil.copy2(state, view.meta_root / "state" / state.name)
-
-
-#: Where the view's catalog keeps the record of a dataset it reads from a tree instead.
-_WITHDRAWN = "_withdrawn"
-
-
-def _move_record(view: Config, names, *, withdraw: bool) -> None:
-    """Take the datasets *names* out of the view catalog's record, or put them back."""
-    from cnequity.storage.catalog_bridge import SYNC_TABLE, lake_root
-    from equitylake_core.catalog import CATALOG_FILE, Catalog
-
-    names = sorted(names)
-    root = lake_root(view)
-    if not names or not (root / CATALOG_FILE).exists():
-        return
-    source, target = (SYNC_TABLE, _WITHDRAWN) if withdraw else (_WITHDRAWN, SYNC_TABLE)
-    _forget(view)
-    with Catalog(root) as catalog:
-        if not catalog.has_table(source):
-            return
-        catalog.execute(
-            f"CREATE TABLE IF NOT EXISTS {target} "
-            "(dataset VARCHAR, revision_id VARCHAR, unique_keys BOOLEAN)"
-        )
-        marks = ", ".join("?" for _ in names)
-        with catalog.transaction(message="publication view"):
-            catalog.execute(
-                f"INSERT INTO {target} SELECT dataset, revision_id, unique_keys "
-                f"FROM {source} WHERE dataset IN ({marks})",
-                names,
-            )
-            catalog.execute(f"DELETE FROM {source} WHERE dataset IN ({marks})", names)
-
-
-def _read_candidate_tree(view: Config, names) -> None:
-    """Make *view* read each of *names* from its dataset tree, not from the catalog.
-
-    A candidate handed over as a whole tree replaces the dataset in the view.
-    A record left there would send readers to the catalog's published rows
-    and the candidate would never be audited.
-    """
-    names = list(names)
-    for name in names:
-        (view.meta_root / "revisions" / name / "current.json").unlink(missing_ok=True)
-    if _records_in_catalog(view):
-        _move_record(view, names, withdraw=True)
-
-
-def _read_published(config: Config, view: Config, name: str) -> None:
-    """Make *view* read *name* as the lake publishes it from its catalog again."""
-    if _records_in_catalog(view):
-        _move_record(view, [name], withdraw=False)
-        return
-    pointer = config.meta_root / "revisions" / name / "current.json"
-    stored = view.meta_root / "revisions" / name / "current.json"
-    stored.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(pointer, stored)
 
 
 def _has_catalog(config: Config) -> bool:
@@ -504,8 +447,8 @@ def evaluate_publication(
     audit view, so datasets that exist only there are read as published. A
     candidate that *lake_write* holds as a checkout is a set of changed
     partitions, not a whole dataset tree: the checkouts are published into the
-    clone as the run would publish them. A candidate given as a whole tree (a
-    repair's working tree) replaces the dataset in the view.
+    clone as the run would publish them. Every candidate has to be such a
+    checkout; one that is not fails the audit.
     """
     mode = config.publication_gate
     if mode == "off" or not candidates:
@@ -555,7 +498,12 @@ def evaluate_publication(
             rehearsed = sorted(
                 name for name in candidates if lake_write is not None and lake_write.has(name)
             )
-            trees = sorted(name for name in candidates if name not in rehearsed)
+            loose = sorted(name for name in candidates if name not in rehearsed)
+            if loose:
+                raise ValueError(
+                    "a candidate must be a checkout of the write that publishes it: "
+                    + ", ".join(loose)
+                )
             catalog_only = _catalog_datasets(config) if _has_catalog(config) else set()
             cloned = lake_write is not None or bool(catalog_only)
             if cloned:
@@ -564,17 +512,7 @@ def evaluate_publication(
             factor_baseline = advisory_factor_findings(_factor_action_errors(view, repair_symbols))
             guard_actions = "corporate_actions" in candidates and bool(repair_symbols)
             actions_before = _repair_actions(view, repair_symbols) if guard_actions else None
-            for name, source in candidates.items():
-                if name in rehearsed:
-                    continue
-                layer = layer_root(view, name)
-                target = layer / name
-                if target.exists():
-                    shutil.rmtree(target)
-                shutil.copytree(source, target, copy_function=_link_read_only)
-            _read_candidate_tree(view, trees)
-            if rehearsed:
-                _rehearse(lake_write, view, rehearsed)
+            _rehearse(lake_write, view, rehearsed)
             candidate_errors = [
                 item for item in _errors(view, day, scope) if not factor_advisory(item)
             ]
@@ -606,43 +544,15 @@ def evaluate_publication(
                 # This also catches cross-dataset checks: if either side's
                 # removal resolves the finding, both sides are held together.
                 introduced_keys = Counter(issue_key(item) for item in introduced)
-                for name, source in candidates.items():
-                    if name in rehearsed:
-                        # Rehearse the publish again without this candidate.
-                        _clone_lake(config, view, catalog_only)
-                        _read_candidate_tree(view, trees)
-                        others = [other for other in rehearsed if other != name]
-                        if others:
-                            _rehearse(lake_write, view, others)
-                        remaining = Counter(
-                            issue_key(item)
-                            for item in _new_errors(baseline, _errors(view, day, scope))
-                        )
-                        if any(remaining[key] < count for key, count in introduced_keys.items()):
-                            blocked_datasets.add(name)
-                        continue
-                    layer = (
-                        view.derived_root
-                        if DATASETS[name].layer == "derived"
-                        else view.curated_root
+                for name in rehearsed:
+                    # Rehearse the publish again without this candidate.
+                    _clone_lake(config, view, catalog_only)
+                    others = [other for other in rehearsed if other != name]
+                    if others:
+                        _rehearse(lake_write, view, others)
+                    remaining = Counter(
+                        issue_key(item) for item in _new_errors(baseline, _errors(view, day, scope))
                     )
-                    target = layer / name
-                    shutil.rmtree(target)
-                    original = read_root(config, name)
-                    if original.is_dir():
-                        shutil.copytree(original, target, copy_function=_link_read_only)
-                    elif name in catalog_only:
-                        _read_published(config, view, name)
-                    try:
-                        remaining = Counter(
-                            issue_key(item)
-                            for item in _new_errors(baseline, _errors(view, day, scope))
-                        )
-                    finally:
-                        if target.exists():
-                            shutil.rmtree(target)
-                        shutil.copytree(source, target, copy_function=_link_read_only)
-                        _read_candidate_tree(view, [name])
                     if any(remaining[key] < count for key, count in introduced_keys.items()):
                         blocked_datasets.add(name)
                 if not blocked_datasets:
