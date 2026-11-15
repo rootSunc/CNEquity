@@ -22,6 +22,10 @@ What a write refuses, and what it only records:
   ``_rejects``; the rest of the frame is stored.
 * A write that would change nothing makes no snapshot.
 
+A write also says what it asked a source for and got nothing to store
+(:meth:`LakeWrite.empty`). That goes into ``_attempts`` in the same snapshot,
+so the planner does not take an empty cell for one nobody asked about.
+
 Only the commit holds the lake lock. Merging runs without it and is
 protected by a check under the lock: a dataset another writer published to
 since this write looked at it refuses the commit, and the write is run again.
@@ -33,7 +37,7 @@ import os
 import re
 import shutil
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -46,6 +50,7 @@ from equitylake_core.catalog import (
     quote_identifier,
     quote_literal,
 )
+from equitylake_core.coverage import ATTEMPT_COLUMNS, ATTEMPTS, Cell, cell_keys
 from equitylake_core.lock import exclusive
 from equitylake_core.read import load
 from equitylake_core.spec import DatasetSpec, Registry
@@ -64,6 +69,7 @@ _RECORD_TABLES = {
         "rows_digest VARCHAR, digest_algorithm VARCHAR, rejected BIGINT"
     ),
     REJECTS: "dataset VARCHAR, run VARCHAR, reason VARCHAR, rows BIGINT, sample VARCHAR",
+    ATTEMPTS: ATTEMPT_COLUMNS,
 }
 _FLOATS = frozenset({"DOUBLE", "FLOAT"})
 _SAMPLE_ROWS = 3
@@ -249,6 +255,7 @@ class LakeWrite:
         self.run = run or f"run-{datetime.now():%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
         self.catalog = Catalog(lake.root)
         self._pending: dict[str, _Pending] = {}
+        self._empty: list[tuple[str, str, str]] = []
         self._types: dict[str, dict[str, str]] = {}
         self._staging = (
             lake.root / STAGING_DIR / f"{_UNSAFE.sub('_', self.run)}.{uuid.uuid4().hex[:8]}"
@@ -281,6 +288,17 @@ class LakeWrite:
     def replace(self, dataset: str, frame) -> int:
         """Make *frame*'s rows all of *dataset*: stored rows it does not hold are removed."""
         return self._take(dataset, frame, replace=True)
+
+    def empty(self, dataset: str, cells: Iterable[str | tuple[str, str] | Cell]) -> None:
+        """Record that *cells* of *dataset* were asked for and there was nothing to store.
+
+        A cell is a period label, or a period and an entity. For a dataset
+        covered by write, any one period says the refresh found nothing new.
+        """
+        self.lake.registry[dataset]  # an unknown dataset is a programming error
+        self._empty.extend(
+            (dataset, period, entity) for period, entity in cell_keys(dataset, cells)
+        )
 
     def _spec_types(self, spec: DatasetSpec) -> dict[str, str]:
         if spec.name not in self._types:
@@ -558,7 +576,7 @@ class LakeWrite:
                 for dataset, pending in self._pending.items()
                 if pending.rejects
             }
-            if not plans and not rejected:
+            if not plans and not rejected and not self._empty:
                 return None
             write = Write(catalog)
             rows: dict[str, int] = {}
@@ -604,6 +622,18 @@ class LakeWrite:
                                 "sample": "[" + ", ".join(samples) + "]",
                             },
                         )
+                moment = datetime.now(timezone.utc)
+                for dataset, period, entity in dict.fromkeys(self._empty):
+                    write.record(
+                        ATTEMPTS,
+                        {
+                            "dataset": dataset,
+                            "period": period,
+                            "entity": entity,
+                            "run": self.run,
+                            "asked_at": moment,
+                        },
+                    )
                 result = write.commit(message=message or self.run)
         except BaseException:
             # Nothing was registered: the files placed for it belong to no snapshot.
@@ -614,6 +644,7 @@ class LakeWrite:
             for pending in self._pending.values():
                 catalog.con.execute(f"DROP TABLE IF EXISTS {pending.table}")
             self._pending.clear()
+            self._empty.clear()
             shutil.rmtree(self._staging, ignore_errors=True)
         return Commit(
             result.snapshot,

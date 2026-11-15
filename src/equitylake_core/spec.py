@@ -17,6 +17,8 @@ from datetime import date
 from types import MappingProxyType
 from typing import Literal
 
+from equitylake_core.coverage import Coverage
+
 Partition = Literal["none", "year", "month", "day"]
 
 PARTITIONS: tuple[Partition, ...] = ("none", "year", "month", "day")
@@ -65,6 +67,9 @@ class DatasetSpec:
         ``key``), so appending a later period never moves an earlier row.
     ``rules``
         Hard errors, checked on write.
+    ``coverage``
+        How the dataset's time is cut into cells that are owed; without it
+        the planner leaves the dataset alone.
     """
 
     name: str
@@ -76,6 +81,7 @@ class DatasetSpec:
     order: tuple[str, ...] = ()
     rules: tuple[Rule, ...] = ()
     description: str = ""
+    coverage: Coverage | None = None
 
     def __post_init__(self) -> None:
         if not _NAME.match(self.name):
@@ -117,6 +123,18 @@ class DatasetSpec:
         names = [rule.name for rule in self.rules]
         if len(set(names)) != len(names):
             raise SpecError(f"{self.name}: two rules share a name")
+        if self.coverage is not None:
+            self._check_coverage(self.coverage)
+
+    def _check_coverage(self, coverage: Coverage) -> None:
+        if coverage.by == "write":
+            return
+        placed_by = coverage.column or self.time
+        if placed_by is None:
+            raise SpecError(f"{self.name}: coverage needs a column that places a row in a cell")
+        for role, column in (("coverage", placed_by), ("coverage entity", coverage.entity)):
+            if column is not None and column not in self.columns:
+                raise SpecError(f"{self.name}: {role} column {column!r} is not a column")
 
     @property
     def key_spans_partitions(self) -> bool:

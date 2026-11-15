@@ -451,6 +451,14 @@ class DatasetSpec:
     # missing one. For derived dense series, where a hole means the derive has
     # not caught up; not for fetched bars, whose history has real closures.
     coverage_end_contiguous: bool = False
+    # How the dataset's time is cut into the cells it owes, where that cannot
+    # be told from the fields above (``quality.planned_coverage.coverage_of``
+    # has the rule that reads them). ``week`` and ``quarter``: one value per
+    # period, dated to a day inside it. ``day``: a feed walked by trading day
+    # whose rows also fall on weekends. ``latest``: only the newest state is
+    # owed, because readers take the last one on or before their date and a
+    # day without a capture is not a hole.
+    cells: Literal["session", "day", "week", "quarter", "latest"] | None = None
 
     @property
     def pit(self) -> bool:
@@ -771,6 +779,8 @@ _SPECS = [
     # Weekly share-pledge totals per stock (Tushare pledge_stat), from 2014-03-07.
     DatasetSpec(
         "pledge_stats",
+        # Tushare dates each week's statistics to its Friday.
+        cells="week",
         support="best_effort",
         unit_contract={
             "unrestricted_pledged_shares": "share",
@@ -889,6 +899,8 @@ _SPECS = [
     # Company earnings forecasts (Tushare forecast) by announcement date, from 2004.
     DatasetSpec(
         "earnings_forecasts",
+        # Announcements are also dated to Saturdays.
+        cells="day",
         support="best_effort",
         unit_contract={
             "change_min_pct": "percent",
@@ -909,6 +921,8 @@ _SPECS = [
     # (Tushare fina_mainbz_vip), per report period from 2004.
     DatasetSpec(
         "business_segments",
+        # Rows are dated to the report period's last day.
+        cells="quarter",
         support="best_effort",
         unit_contract={
             "revenue": "source_native",
@@ -1119,6 +1133,8 @@ _SPECS = [
     # Announced board members, supervisors and executives (Tushare stk_managers).
     DatasetSpec(
         "executives",
+        # Announcements are also dated to Saturdays.
+        cells="day",
         support="best_effort",
         primary_source="tushare",
         tier="L0",
@@ -1131,6 +1147,8 @@ _SPECS = [
     # Executive pay and shareholdings per report period (Tushare stk_rewards).
     DatasetSpec(
         "executive_compensation",
+        # ``period_end`` is whatever day a filing names, not a period to walk.
+        cells="latest",
         support="best_effort",
         unit_contract={"pay": "CNY", "shares_held": "share"},
         primary_source="tushare",
@@ -1897,6 +1915,8 @@ _SPECS = [
     # gap to the next quarter-end before flagging stale.
     DatasetSpec(
         "northbound_holdings",
+        # Daily until 2024-08-16; the exchanges have published quarter-end holdings since.
+        cells="quarter",
         support="best_effort",
         unit_contract={
             "holding_shares": "share",
@@ -1992,6 +2012,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "index_constituents",
+        cells="latest",
         support="core",
         value_rules=ValueRules(
             zero_is_missing=("weight",), zero_is_missing_sources=("eastmoney", "cni")
@@ -2016,6 +2037,7 @@ _SPECS = [
     ),
     DatasetSpec(
         "industry_members",
+        cells="latest",
         # data_version v2: industry_code is the level-3 leaf and the level columns are filled.
         data_version="v2",
         support="extended",
