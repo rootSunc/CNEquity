@@ -323,3 +323,21 @@ def test_keep_generations_loads_from_config_and_rejects_a_boolean(tmp_path):
     )
     with pytest.raises(ValueError, match="keep_generations"):
         load_config(path)
+
+
+def test_a_snapshot_copy_of_the_raw_archive_is_not_scanned_for_references(tmp_path):
+    """A research snapshot copies meta/raw; its archive cites nothing and is skipped."""
+    from cnequity.storage.lifecycle import reference_files
+
+    meta = tmp_path / "meta"
+    snapshot = meta / "snapshots" / "before-switch"
+    (snapshot / "meta" / "raw" / "daily_bars").mkdir(parents=True)
+    (snapshot / "meta" / "raw" / "daily_bars" / "page.json").write_text("{}")
+    (snapshot / "meta" / "revisions" / "daily_bars").mkdir(parents=True)
+    (snapshot / "meta" / "revisions" / "daily_bars" / "current.json").write_text("{}")
+    (snapshot / "manifest.json").write_text("{}")
+    found = reference_files([{"path": str(meta)}], meta_root=meta)
+    assert sorted(path.relative_to(meta).as_posix() for path in found) == [
+        "snapshots/before-switch/manifest.json",
+        "snapshots/before-switch/meta/revisions/daily_bars/current.json",
+    ]

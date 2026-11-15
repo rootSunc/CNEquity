@@ -151,6 +151,23 @@ RUNTIME_META_PATHS = (
 )
 
 
+def _in_snapshot_runtime(relative: Path) -> bool:
+    """Whether *relative* (to the lake's meta) is a runtime path inside a research snapshot.
+
+    A snapshot under ``meta/snapshots/<name>/meta/`` carries a copy of the
+    lake's metadata, raw archive included: hundreds of thousands of files the
+    lake itself is never scanned for. Its runtime paths are skipped the same
+    way, except its revision records, which name the revisions it captured.
+    """
+    parts = relative.parts
+    if len(parts) < 4 or parts[0] != "snapshots" or parts[2] != "meta":
+        return False
+    inner = Path(*parts[3:])
+    return any(
+        inner == Path(p) or Path(p) in inner.parents for p in RUNTIME_META_PATHS if p != "revisions"
+    )
+
+
 def reference_files(roots: list[dict], *, meta_root: Path | None = None) -> list[Path]:
     """Enumerate registered evidence roots, including newly added reports.
 
@@ -169,7 +186,8 @@ def reference_files(roots: list[dict], *, meta_root: Path | None = None) -> list
         excluded = [Path(p) for p in spec.get("exclude", [])]
         if any(p.is_absolute() or ".." in p.parts or not p.parts for p in excluded):
             raise LifecycleError("Invalid reference exclusion")
-        if lake_meta is not None and root.resolve() == lake_meta:
+        lake_root_meta = lake_meta is not None and root.resolve() == lake_meta
+        if lake_root_meta:
             excluded += [Path(p) for p in RUNTIME_META_PATHS]
 
         def onerror(error: OSError) -> None:
@@ -180,6 +198,10 @@ def reference_files(roots: list[dict], *, meta_root: Path | None = None) -> list
             for name in list(dirs) + names:
                 path = parent / name
                 relative = path.relative_to(root)
+                if lake_root_meta and _in_snapshot_runtime(relative):
+                    if name in dirs:
+                        dirs.remove(name)
+                    continue
                 if any(relative == p or p in relative.parents for p in excluded):
                     if name in dirs:
                         dirs.remove(name)
