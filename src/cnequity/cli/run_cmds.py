@@ -248,6 +248,24 @@ def _auto_repair_gaps(cfg, anchor: date) -> list[dict]:
     return results
 
 
+def _retry_owed_bars(cfg, trade_date: date) -> dict:
+    """Retry the daily bars owed over the last weeks, before the audit reads the lake.
+
+    Best effort: the day's groups have already published, so a failed retry
+    leaves the keys owed for the next run and never fails the day.
+    """
+    from cnequity.cli.backfill_cmds import retry_recent_owed
+
+    try:
+        result = retry_recent_owed(cfg, "daily_bars", trade_date)
+    except RunLockError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — the groups already ran
+        result = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    click.echo(_("Owed daily bars: {status}").format(status=result.get("status")), err=True)
+    return result
+
+
 def _group_is_runnable(cfg, group) -> bool:
     """False when every dataset the group would fetch is disabled.
 
@@ -396,6 +414,8 @@ def _run_all_groups(
             worst = exit_code
     payload: dict = {"groups": results, "repairs": repairs}
     ran = [r for r in results if not str(r.get("status", "")).startswith("skipped")]
+    if ran and not backfill and "daily_bars" in getattr(cfg, "planned_datasets", ()):
+        payload["owed_bars"] = _retry_owed_bars(cfg, schedule_date)
     if audit_after and ran:
         try:
             audit = engine.run_job(

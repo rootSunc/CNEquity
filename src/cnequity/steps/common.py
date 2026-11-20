@@ -583,7 +583,12 @@ def fetch_incremental_daily(
     split = _planner_split_finding(dataset, trade_date)
     if split is not None:
         findings.append(split)
-    planned = semantics == "by_date" and dataset in getattr(config, "planned_datasets", ())
+    # A dataset owed per entity (daily_bars) answers per key, not per day.
+    planned = (
+        semantics == "by_date"
+        and dataset in getattr(config, "planned_datasets", ())
+        and (spec is None or spec.cells_by is None)
+    )
     answered_empty: list[date] = []
 
     frames: list[pl.DataFrame] = []

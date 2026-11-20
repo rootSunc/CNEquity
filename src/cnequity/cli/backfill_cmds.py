@@ -819,8 +819,54 @@ def _derivatives_plan(cfg, dataset, start_str, end_str, symbols_str) -> dict:
     }
 
 
-def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
-    """Repair monthly key scopes and close with truthful remaining coverage."""
+def retry_recent_owed(cfg, dataset: str, trade_date: date) -> dict:
+    """The daily run's pass over *dataset*'s recently owed keys.
+
+    The coverage planner's gaps over the last ``SYNC_DAYS`` join the old
+    owed-key ledger first, so either side can only add work, then the same
+    repair as ``cne backfill --outstanding`` runs over the keys of those days.
+    Older debt is left to that command: a backlog must never make the daily
+    run take hours. The config's backfill window is put back afterwards.
+    """
+    from datetime import timedelta
+
+    from cnequity.quality import planned_coverage
+    from cnequity.storage.state import StateStore
+
+    since = trade_date - timedelta(days=planned_coverage.SYNC_DAYS)
+    store = StateStore(cfg.meta_root)
+    try:
+        planner = planned_coverage.gap_keys(cfg, dataset, trade_date)
+    except Exception as exc:  # noqa: BLE001 — the old ledger still decides
+        logging.getLogger(__name__).warning(
+            "%s: the planner could not list owed keys (%s)", dataset, exc
+        )
+        planner = []
+    owed = {
+        (row.get("symbol"), row.get("trade_date")) for row in store.get_outstanding_keys(dataset)
+    }
+    added = [(symbol, day) for symbol, day in planner if (symbol, day.isoformat()) not in owed]
+    if added:
+        store.record_outstanding_keys(dataset, added, run_id="planner", reason="planner_gap")
+    previous = backfill_of(cfg)
+    try:
+        result = _repair_outstanding(cfg, dataset, 1, since=since)
+    finally:
+        object.__setattr__(cfg, "backfill_window", previous)
+    return {
+        **result,
+        "since": since.isoformat(),
+        "planner_keys": len(planner),
+        "planner_added": len(added),
+    }
+
+
+def _repair_outstanding(cfg, dataset: str, workers: int, *, since: date | None = None) -> dict:
+    """Repair monthly key scopes and close with truthful remaining coverage.
+
+    With *since*, only keys of that day or later are repaired; earlier ones
+    stay owed.
+    """
     from collections import defaultdict
 
     from cnequity.orchestrator.manifest import Manifest
@@ -832,6 +878,8 @@ def _repair_outstanding(cfg, dataset: str, workers: int) -> dict:
     # unnecessary source requests. This is not a repair attempt for missing keys.
     _settle_outstanding(cfg, dataset, note_missing_attempt=False)
     owed = StateStore(cfg.meta_root).get_outstanding_keys(dataset)
+    if since is not None:
+        owed = [row for row in owed if str(row.get("trade_date") or "") >= since.isoformat()]
     if not owed:
         return {"dataset": dataset, "status": "success", "outstanding": 0, "note": "nothing owed"}
 

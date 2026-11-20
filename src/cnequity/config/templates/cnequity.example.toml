@@ -522,6 +522,8 @@ best_effort = []
 # Datasets whose days to fetch also include the coverage planner's gaps, beside
 # the watermark and the missing-dates ledger:
 #   planned = ["announcement_index", "margin_trading"]
+# Listing daily_bars makes `cne run daily` retry, after the groups, the bars
+# owed over the last 45 days (the planner's and the owed-key ledger's).
 # Where this lake's history of a dataset begins, when it starts later than the
 # source does. The planner does not owe earlier days; move a date earlier to
 # backfill further back.

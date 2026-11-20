@@ -636,6 +636,25 @@ def gap_days(config, dataset: str, trade_date: date) -> list[date]:
     )
 
 
+def gap_keys(config, dataset: str, trade_date: date) -> list[tuple[str, date]]:
+    """The (entity, day) cells *dataset* owes per entity, over the last ``SYNC_DAYS``.
+
+    For a dataset owed a cell per security and session (``daily_bars``);
+    others give none here.
+    """
+    coverage = coverage_of(DATASETS[dataset], trade_date, config)
+    if not (coverage.by == "rows" and coverage.entity is not None and coverage.grain == "session"):
+        return []
+    scope = Scope(trade_date - timedelta(days=SYNC_DAYS), trade_date)
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        cells = planned(config, catalog, scope, [dataset])[dataset].cells
+    gaps = cells.filter(pl.col("state") == "gap")
+    return sorted(
+        (entity, date.fromisoformat(period))
+        for period, entity in gaps.select("period", "entity").iter_rows()
+    )
+
+
 def answer_finding(dataset: str, empty: Iterable[date], asked_at: datetime) -> dict:
     """What a fetch step says it asked about and found empty, for compact to record."""
     days = sorted({day.isoformat() for day in empty})

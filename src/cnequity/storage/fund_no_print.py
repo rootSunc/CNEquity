@@ -126,15 +126,18 @@ def quiet_fund_keys(config, *, start=None, end=None, read_context=None) -> set:
     root = read_root(config, "daily_bars", read_context)
     if funds.is_empty() or not dataset_has_parquet(root, committed=False):
         return set()
-    rows = scan_parquet_root(
-        root,
-        partition_col="trade_date",
-        start=start,
-        end=end,
-        symbols=funds["symbol"].unique().to_list(),
-        committed=False,
-    )
-    columns = rows.collect_schema().names()
+    try:
+        rows = scan_parquet_root(
+            root,
+            partition_col="trade_date",
+            start=start,
+            end=end,
+            symbols=funds["symbol"].unique().to_list(),
+            committed=False,
+        )
+        columns = rows.collect_schema().names()
+    except FileNotFoundError:  # no bars in the window: nothing quiet to excuse
+        return set()
     if "volume" not in columns:
         return set()
     quiet = pl.col("volume").fill_null(0) == 0

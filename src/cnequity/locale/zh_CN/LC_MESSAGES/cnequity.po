@@ -4113,6 +4113,11 @@ msgstr "填写后覆盖上面的深度。"
 msgid "Overwrite an existing config file."
 msgstr "覆盖已有的配置文件。"
 
+#: cnequity/cli/run_cmds.py
+#, python-brace-format
+msgid "Owed daily bars: {status}"
+msgstr "欠着的日线：{status}"
+
 #: cnequity/diagnostics/source_health.py
 msgid "PBOC Survey and Statistics Department (total social financing)"
 msgstr "人民银行 调查统计司（社融）"
