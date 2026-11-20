@@ -108,9 +108,11 @@ def daily_bar_coverage(config: Config, start: date, end: date) -> dict:
         status = load_curated_trading_status(config, start=chunk[0], end=chunk[-1], symbols=scope)
         if status is None:
             status = pl.DataFrame(schema={**KEYS, "is_trading": pl.Boolean})
-        from cnequity.storage.fund_no_print import approved_no_print_keys
+        from cnequity.storage.fund_no_print import approved_no_print_keys, quiet_fund_keys
 
-        no_print = approved_no_print_keys(config, start=chunk[0], end=chunk[-1])
+        no_print = approved_no_print_keys(config, start=chunk[0], end=chunk[-1]) | quiet_fund_keys(
+            config, start=chunk[0], end=chunk[-1]
+        )
         missing = missing_bar_keys(instruments, bars, status, chunk, no_print_keys=no_print)
         total += missing.height
         for symbol, day in missing.iter_rows():

@@ -35,7 +35,7 @@ from cnequity.quality.freshness import freshness_owed
 from cnequity.query.calendar import list_trading_dates
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.catalog_bridge import lake_root, revision_snapshots
-from cnequity.storage.fund_no_print import approved_no_print_keys
+from cnequity.storage.fund_no_print import approved_no_print_keys, quiet_fund_keys
 from cnequity.storage.instrument_catalog import (
     listed_fund_symbols,
     load_curated_instruments,
@@ -120,8 +120,8 @@ class BarUniverse:
     The same scope ``quality.bar_coverage`` checks: listed securities in the
     configured ingest universe (and listed funds when they are ingested),
     from the listing date up to the day before delisting. A session is not
-    owed a bar when the security was independently shown suspended or a fund
-    was verified not to have printed.
+    owed a bar when the security was independently shown suspended, or a fund
+    was verified not to have printed or holds a zero-volume row for it.
     """
 
     def __init__(self, config):
@@ -174,7 +174,9 @@ class BarUniverse:
             if status is not None and not status.is_empty()
             else pl.DataFrame(schema=keys)
         )
-        quiet = approved_no_print_keys(self._config, start=start, end=end)
+        quiet = approved_no_print_keys(self._config, start=start, end=end) | quiet_fund_keys(
+            self._config, start=start, end=end
+        )
         if quiet:
             halted = pl.concat(
                 [halted.select(*keys), pl.DataFrame(sorted(quiet), schema=keys, orient="row")]

@@ -105,6 +105,59 @@ def approved_no_print_keys(config, *, start=None, end=None, read_context=None) -
     return set(valid.iter_rows())
 
 
+def quiet_fund_keys(config, *, start=None, end=None, read_context=None) -> set:
+    """Fund sessions the lake holds as a zero-volume row: listed, and nothing traded.
+
+    TDX files a row for a fund session with no trade (volume and turnover 0,
+    the previous close carried). For a fund that row is taken as the answer
+    for its session, so it is not owed a bar; a stock's is not, since a stock
+    that does not trade is suspended and trading status says so.
+    """
+    from cnequity.storage.read_context import read_root
+
+    instruments = load_curated_instruments(config, read_context)
+    if instruments is None or not {"asset_type", "list_date", "delist_date"} <= set(
+        instruments.columns
+    ):
+        return set()
+    funds = instruments.filter(
+        pl.col("asset_type").is_in(["etf", "lof"]) & pl.col("list_date").is_not_null()
+    ).select("symbol", "list_date", "delist_date")
+    root = read_root(config, "daily_bars", read_context)
+    if funds.is_empty() or not dataset_has_parquet(root, committed=False):
+        return set()
+    rows = scan_parquet_root(
+        root,
+        partition_col="trade_date",
+        start=start,
+        end=end,
+        symbols=funds["symbol"].unique().to_list(),
+        committed=False,
+    )
+    columns = rows.collect_schema().names()
+    if "volume" not in columns:
+        return set()
+    quiet = pl.col("volume").fill_null(0) == 0
+    if "amount" in columns:
+        quiet = quiet & (pl.col("amount").fill_null(0) == 0)
+    keys = (
+        rows.select("symbol", "trade_date", "volume", *(["amount"] if "amount" in columns else []))
+        .group_by("symbol", "trade_date")
+        # Every source's row for the session says nothing traded.
+        .agg(quiet.all().alias("_quiet"))
+        .filter(pl.col("_quiet"))
+        .select("symbol", "trade_date")
+        .collect()
+        .join(funds, on="symbol")
+        .filter(
+            (pl.col("trade_date") >= pl.col("list_date"))
+            & (pl.col("delist_date").is_null() | (pl.col("trade_date") < pl.col("delist_date")))
+        )
+        .select("symbol", "trade_date")
+    )
+    return set(keys.iter_rows())
+
+
 def _proof_stamp(meta_root, proof_path, record) -> list | None:
     """Identity of a proof and the archived bytes it names, or None if unknowable."""
     from pathlib import Path

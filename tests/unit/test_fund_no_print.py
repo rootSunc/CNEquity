@@ -321,3 +321,37 @@ def test_normal_tradability_is_compatible_with_no_print_but_not_stock_exemption(
     assert fund.no_data_reasons[SYMBOL] == "exchange_fund_no_print"
     stock = classify_daily_bar_ownership([SYMBOL], {SYMBOL: (DAY, None, "stock")}, DAY, DAY, **args)
     assert not stock.expected_no_data
+
+
+def test_a_fund_zero_volume_row_answers_its_session_and_a_stock_s_does_not(tmp_path):
+    from cnequity.storage.fund_no_print import quiet_fund_keys
+
+    cfg = Config(data_root=tmp_path / "lake")
+    root = cfg.curated_root / "instruments"
+    root.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": [SYMBOL, "600000.SH", "161834.SZ"],
+            "asset_type": ["lof", "stock", "lof"],
+            "list_date": [DAY, DAY, DAY.replace(day=29)],
+            "delist_date": [None, None, None],
+        },
+        schema_overrides={"delist_date": pl.Date},
+    ).write_parquet(root / "part.parquet")
+    bars = cfg.curated_root / "daily_bars" / f"trade_date={DAY}"
+    bars.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            # A quiet fund, a quiet stock, and a fund before it listed.
+            "symbol": [SYMBOL, "600000.SH", "161834.SZ"],
+            "trade_date": [DAY] * 3,
+            "volume": [0, 0, 0],
+            "amount": [0.0, 0.0, 0.0],
+        }
+    ).write_parquet(bars / "part.parquet")
+    assert quiet_fund_keys(cfg) == {(SYMBOL, DAY)}
+    # A row that printed is a trade, not a quiet session.
+    pl.DataFrame(
+        {"symbol": [SYMBOL], "trade_date": [DAY], "volume": [0], "amount": [12.5]}
+    ).write_parquet(bars / "part.parquet")
+    assert quiet_fund_keys(cfg) == set()
