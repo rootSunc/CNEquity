@@ -57,6 +57,7 @@ from cnequity.steps.common import (
 )
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
 from cnequity.storage.observation import note_observation
+from cnequity.storage.state import StateStore
 
 # TDX xdxr is per-symbol (backfill); EastMoney datacenter supports ex-date filter (daily).
 _CANONICAL_BACKFILL = "tdx_protocol"
@@ -1116,6 +1117,9 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
     # The [start, through] window this run asked of the whole lake and got a
     # clean answer for; None when it did not (see storage/observation.py).
     observed: tuple[date | None, date] | None = None
+    # Days the EastMoney window answered; they leave the missing-dates ledger
+    # once their rows are published (or now, when there were none).
+    answered: set[date] = set()
 
     if backfill:
         symbols = list(
@@ -1607,12 +1611,19 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
         df, findings = pl.DataFrame(), []
         if config.sources.get("eastmoney", True):
             window = incremental_trade_dates(config, "corporate_actions", trade_date)
+            window_fetch = _window_fetcher(config, trade_date, run_id)
+
+            def fetch_day(d: date) -> pl.DataFrame:
+                part = window_fetch(d)
+                answered.add(d)
+                return part
+
             try:
                 df, findings = fetch_incremental_daily(
                     config,
                     "corporate_actions",
                     trade_date,
-                    _window_fetcher(config, trade_date, run_id),
+                    fetch_day,
                     allow_empty=True,
                     date_col="ex_date",
                 )
@@ -1799,6 +1810,11 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 source=_CANONICAL_DAILY,
                 request_scope=f"daily:{trade_date.isoformat()}",
             )
+        if answered:
+            # Nothing to publish, so the empty answers count now.
+            StateStore(config.meta_root).clear_missing_dates(
+                "corporate_actions", answered - source_gap_dates("corporate_actions")
+            )
         result = {
             "rows_read": heal_written,
             "rows_written": heal_written,
@@ -1851,6 +1867,11 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 else None
             ),
         )
+        if answered:
+            rejected = {date.fromisoformat(day) for day in result.get("rejected_dates", [])}
+            StateStore(config.meta_root).mark_staged_request_days(
+                "corporate_actions", run_id, answered - rejected
+            )
         if heal_written:
             # Staged under their own batch, but still rows this step wrote.
             result["rows_read"] = int(result.get("rows_read", 0)) + heal_written

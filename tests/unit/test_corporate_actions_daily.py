@@ -6,6 +6,7 @@ import pytest
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config, FailoverDatasetSpec
+from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.run_scope import set_backfill
 from cnequity.steps.events import step_corporate_actions
 from cnequity.storage.raw_archive import RawArchiveError
@@ -276,3 +277,58 @@ def test_parse_row_maps_current_eastmoney_columns():
 
     # no ex-date → skipped (not yet ex-dividend)
     assert _parse_row({"SECUCODE": "600000.SH", "IMPL_PLAN_PROFILE": "10派1元"}) is None
+
+
+def _owed_day(tmp_path):
+    from cnequity.storage.state import StateStore
+
+    cfg = Config(
+        data_root=tmp_path / "data", sources={"eastmoney": True}, raw_archive_enabled=False
+    )
+    state = StateStore(cfg.meta_root)
+    state.set_date("corporate_actions", date(2024, 6, 27))
+    state.record_missing_dates("corporate_actions", [date(2024, 6, 20)], reason="proxy down")
+    return cfg, state
+
+
+def test_a_day_the_window_answered_leaves_the_ledger_when_published(tmp_path):
+    cfg, state = _owed_day(tmp_path)
+    row = pl.DataFrame(
+        {
+            "symbol": ["600519.SH"],
+            "ex_date": [date(2024, 6, 28)],
+            "action_type": ["cash_dividend"],
+            "cash_dividend": [1.0],
+            "bonus_ratio": [0.0],
+            "transfer_ratio": [0.0],
+            "allotment_ratio": [None],
+            "allotment_price": [None],
+        }
+    )
+    with patch("cnequity.steps.events.fetch_corporate_actions_eastmoney", return_value=row):
+        step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
+    assert date(2024, 6, 20) in state.get_missing_dates("corporate_actions")
+    state.commit_staged_request_days("corporate_actions", "run-1")
+    assert state.get_missing_dates("corporate_actions") == set()
+
+
+def test_an_empty_window_clears_the_days_it_answered_at_once(tmp_path):
+    cfg, state = _owed_day(tmp_path)
+    with patch(
+        "cnequity.steps.events.fetch_corporate_actions_eastmoney", return_value=pl.DataFrame()
+    ):
+        step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
+    assert state.get_missing_dates("corporate_actions") == set()
+
+
+def test_a_day_the_window_could_not_read_stays_owed(tmp_path):
+    cfg, state = _owed_day(tmp_path)
+
+    def fetch(d, **kwargs):
+        if kwargs.get("dates") or d == date(2024, 6, 20):
+            raise SourceUnavailableError("code=9501")
+        return pl.DataFrame()
+
+    with patch("cnequity.steps.events.fetch_corporate_actions_eastmoney", side_effect=fetch):
+        step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
+    assert state.get_missing_dates("corporate_actions") == {date(2024, 6, 20)}
