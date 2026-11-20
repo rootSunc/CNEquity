@@ -104,6 +104,10 @@ class Coverage:
         An empty answer given later than this after a cell's last day is
         final. An earlier one may mean "not yet" and stands only for
         ``recheck`` (the default, zero: it is asked again every time).
+    ``open_day``
+        Rows keep arriving until a cell's last day ends (a feed published
+        through the day). Until then the rows it holds are only part of it,
+        so the cell is still owed.
     """
 
     grain: Grain
@@ -118,6 +122,7 @@ class Coverage:
     lag: timedelta = _NO_TIME
     settle: timedelta = _NO_TIME
     recheck: timedelta = _NO_TIME
+    open_day: bool = False
 
     def __post_init__(self) -> None:
         if self.grain not in GRAINS:

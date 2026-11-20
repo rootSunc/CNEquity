@@ -478,6 +478,9 @@ class DatasetSpec:
     # another source splits the same distribution, their combined row is
     # dropped rather than stored beside the split.
     combined_share_sources: tuple[str, ...] = ()
+    # Rows keep arriving through the day (a feed published as it happens), so
+    # a day that has not ended is owed even though it already holds rows.
+    cells_open_day: bool = False
 
     @property
     def pit(self) -> bool:
@@ -1667,6 +1670,8 @@ _SPECS = [
     DatasetSpec(
         "announcement_index",
         support="extended",
+        # CNINFO files notices all day: today's rows are only part of today.
+        cells_open_day=True,
         primary_source="cninfo",
         tier="L2",
         partition_col="announce_date",
@@ -2316,6 +2321,8 @@ _SPECS = [
     DatasetSpec(
         "regulatory_events",
         support="extended",
+        # CNINFO files notices all day: today's rows are only part of today.
+        cells_open_day=True,
         primary_source="cninfo",
         tier="L8",
         partition_col="event_date",

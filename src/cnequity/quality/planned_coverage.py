@@ -80,6 +80,7 @@ def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
         "inputs": spec.derived_from,
         "counts": spec.cells_count,
         "settle": timedelta(days=spec.cells_settle_days),
+        "open_day": spec.cells_open_day,
     }
     if spec.cells is not None:
         return Coverage(spec.cells, column=spec.query_date_col, **shared)

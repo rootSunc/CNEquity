@@ -485,3 +485,33 @@ def test_an_attempt_with_an_unknown_outcome_is_refused(lake):
     )
     with lake.catalog(read_only=False) as catalog, pytest.raises(CoverageError):
         cov.record(catalog, rows)
+
+
+def test_a_day_still_being_published_is_owed_until_it_ends(lake):
+    from dataclasses import replace
+
+    shanghai = ZoneInfo("Asia/Shanghai")
+    with lake.write("first") as write:
+        write.put("bars", _bars(date(2026, 11, 19), date(2026, 11, 20)))
+        write.commit()
+    scope = Scope(date(2026, 11, 19), date(2026, 11, 20), datasets=("bars",))
+    open_day = replace(BARS.coverage, open_day=True)
+    # 17:30 on the 20th in Shanghai: the 19th is over, the 20th is not.
+    now = datetime(2026, 11, 20, 9, 30, tzinfo=UTC)
+
+    def states(coverage):
+        with lake.catalog() as catalog:
+            found = plan_dataset(
+                catalog,
+                "bars",
+                coverage,
+                scope,
+                now=now,
+                column="day",
+                calendar=Weekdays(),
+                zone=shanghai,
+            )
+        return dict(found.cells.select("period", "state").iter_rows())
+
+    assert states(open_day) == {"2026-11-19": "covered", "2026-11-20": "gap"}
+    assert states(BARS.coverage) == {"2026-11-19": "covered", "2026-11-20": "covered"}

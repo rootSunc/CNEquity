@@ -216,6 +216,15 @@ def plan_dataset(
     else:
         marked = marked.with_columns(_ready=pl.lit(True))
     have_it = pl.col("_have").fill_null(False) & ~pl.col("_short").fill_null(False)
+    if coverage.open_day:
+        # A cell whose last day has not ended yet holds only part of its rows.
+        ended = {
+            period
+            for period in cells["period"].unique().to_list()
+            if cov.day_start(cov.span(coverage.grain, period)[1] + timedelta(days=1), zone)
+            <= moment
+        }
+        have_it = have_it & pl.col("period").is_in(sorted(ended))
     is_empty, due, is_ready = (
         pl.col("_empty").fill_null(False),
         pl.col("due"),
