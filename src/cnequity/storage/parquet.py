@@ -490,9 +490,13 @@ def merge_group_keys(dataset: str) -> list[str]:
     Usually the primary key: storage dedupe never compares rows of different
     keys, and PIT vintages share their business key. ``index_constituents``
     picks one source per index book, so a whole (index, date) book is one group.
+    ``corporate_actions`` drops a combined 送转 row that another source splits,
+    so a whole (symbol, ex-date) event is one group.
     """
     if dataset == "index_constituents":
         return ["index_symbol", "as_of_date"]
+    if dataset == "corporate_actions":
+        return ["symbol", "ex_date"]
     return list(PRIMARY_KEYS.get(dataset, []))
 
 

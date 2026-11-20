@@ -280,6 +280,62 @@ def one_book_per_index_date(frame, dataset: str):
     return frame.filter(official | ~official.any().over(["index_symbol", "as_of_date"]))
 
 
+def one_share_distribution_per_event(frame, dataset: str):
+    """Drop a combined 送转 row where another source splits the same distribution.
+
+    A source the spec names in ``combined_share_sources`` (TDX) records 送股
+    and 转增 as one ``bonus`` ratio, so a 转增 reaches the lake as its
+    ``bonus`` and another source's ``transfer``. The key carries
+    ``action_type``, so the two never collapse and anything adding
+    ``bonus_ratio`` to ``transfer_ratio`` counts the dilution twice (603596.SH
+    on 2026-11-10: TDX healed the day while EastMoney was down, EastMoney's
+    row came later). Wherever another source's 送 and 转 add up to the
+    combined ratio for the same symbol and ex-date, the combined row goes,
+    whichever run wrote either side.
+    """
+    spec = DATASETS.get(dataset)
+    sources = spec.combined_share_sources if spec is not None else ()
+    if not sources:
+        return frame
+    columns = frame.collect_schema().names() if isinstance(frame, pl.LazyFrame) else frame.columns
+    if not {"source", "symbol", "ex_date", "action_type", "bonus_ratio", "transfer_ratio"} <= set(
+        columns
+    ):
+        return frame
+    event = ["symbol", "ex_date"]
+    combined = pl.col("source").is_in(sources) & (pl.col("action_type") == "bonus")
+    split = ~pl.col("source").is_in(sources) & pl.col("action_type").is_in(["bonus", "transfer"])
+    shares = pl.col("bonus_ratio").fill_null(0.0) + pl.col("transfer_ratio").fill_null(0.0)
+    # Judged on every source's own rows, before the key keeps one of two
+    # ``bonus`` rows; one row per source and key, so a refetch counts once.
+    # Each splitting source on its own: two that file the same split must
+    # not add up to twice the combined ratio.
+    totals = (
+        frame.filter(split)
+        .unique(subset=[*event, "action_type", "source"], keep="last", maintain_order=True)
+        .group_by([*event, "source"])
+        .agg(shares.sum().alias("_split_total"))
+    )
+    ratios = frame.filter(combined).group_by(event).agg(pl.col("bonus_ratio").max().alias("_ratio"))
+    # TDX ratios carry five decimals (0.51471 against 0.5147058).
+    agreed = (
+        totals.join(ratios, on=event)
+        .filter(
+            (pl.col("_split_total") > 0)
+            & ((pl.col("_split_total") - pl.col("_ratio")).abs() <= 1e-4)
+        )
+        .select(event)
+        .unique()
+        .with_columns(pl.lit(True).alias("_restated"))
+    )
+    return (
+        # The key's dedupe that follows keeps the last row: order must hold.
+        frame.join(agreed, on=event, how="left", maintain_order="left")
+        .filter(~(combined & pl.col("_restated").fill_null(False)))
+        .drop("_restated")
+    )
+
+
 def dedupe_by_primary_key(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
     """Keep one row per registered PK, preferring the freshest provenance.
 
@@ -295,6 +351,7 @@ def dedupe_by_primary_key(df: pl.DataFrame, dataset: str) -> pl.DataFrame:
     if any(column in df.columns for column in ("fetched_at", "source", "data_version")):
         df = _sort_for_canonical(df, dataset)
     df = _retain_pre_close(_retain_payment_evidence(df, dataset), dataset)
+    df = one_share_distribution_per_event(df, dataset)
     out = df.unique(subset=primary_key, keep="last", maintain_order=True)
     return one_book_per_index_date(out.drop(*_HELPER_COLUMNS, strict=False), dataset)
 
@@ -308,6 +365,7 @@ def dedupe_lazy_by_primary_key(lf: pl.LazyFrame, dataset: str) -> pl.LazyFrame:
     if any(column in columns for column in ("fetched_at", "source", "data_version")):
         lf = _sort_for_canonical(lf, dataset)
     lf = _retain_pre_close(_retain_payment_evidence(lf, dataset), dataset)
+    lf = one_share_distribution_per_event(lf, dataset)
     return one_book_per_index_date(
         lf.unique(subset=primary_key, keep="last", maintain_order=True).drop(
             *_HELPER_COLUMNS, strict=False

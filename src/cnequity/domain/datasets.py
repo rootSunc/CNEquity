@@ -474,6 +474,10 @@ class DatasetSpec:
     # One given sooner stands only until the next ask, so the cell is asked
     # again on every run until then.
     cells_settle_days: int = 0
+    # Sources that file 送股 and 转增 together as one ``bonus`` ratio. Where
+    # another source splits the same distribution, their combined row is
+    # dropped rather than stored beside the split.
+    combined_share_sources: tuple[str, ...] = ()
 
     @property
     def pit(self) -> bool:
@@ -1650,6 +1654,7 @@ _SPECS = [
         # baostock supplies actions for delisted names the live boards cannot
         # answer for; the THS dividend page is the explicit BJ repair route.
         supplementary_sources=("baostock", "ths"),
+        combined_share_sources=("tdx_protocol",),
         # Issuer payment-date repair can publish CNINFO and exchange notice
         # evidence, but neither is an automatic failover for daily actions.
         repair_sources=("cninfo", "exchange"),
