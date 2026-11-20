@@ -77,6 +77,12 @@ def test_where_this_lake_begins_bounds_the_cells_too():
     assert coverage_of(DATASETS["block_trades"], TODAY, lake).start is None
 
 
+def test_where_this_lake_ends_bounds_the_cells():
+    lake = SimpleNamespace(history_until={"fund_flow": date(2026, 11, 4)})
+    assert coverage_of(DATASETS["fund_flow"], TODAY, lake).end == date(2026, 11, 4)
+    assert coverage_of(DATASETS["block_trades"], TODAY, lake).end is None
+
+
 def test_every_registered_dataset_gets_a_declaration():
     for spec in DATASETS.values():
         coverage_of(spec, TODAY)

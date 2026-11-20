@@ -118,6 +118,21 @@ def test_history_from_names_where_this_lake_begins(tmp_path):
         load_config(_layered(tmp_path, '[datasets.history_from]\nfund_flow = "soon"\n'))
 
 
+def test_history_until_names_where_this_lake_ends(tmp_path):
+    cfg = load_config(_layered(tmp_path, "[datasets.history_until]\nfund_flow = 2026-11-04\n"))
+    assert cfg.history_until == {"fund_flow": date(2026, 11, 4)}
+    with pytest.raises(ConfigError, match="unknown dataset"):
+        load_config(_layered(tmp_path, "[datasets.history_until]\nno_such = 2020-01-01\n"))
+    with pytest.raises(ConfigError, match="before its history_from"):
+        load_config(
+            _layered(
+                tmp_path,
+                "[datasets.history_from]\nfund_flow = 2023-09-11\n"
+                "[datasets.history_until]\nfund_flow = 2023-01-01\n",
+            )
+        )
+
+
 def test_a_group_can_be_disabled(tmp_path):
     path = _layered(tmp_path, "[job.daily.groups.research]\nenabled = false\n")
 

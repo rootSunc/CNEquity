@@ -217,6 +217,10 @@ class Config:
     #: Days before it are not owed, though the source may serve them; a fact
     #: about this lake, so it lives here rather than in the dataset spec.
     history_from: dict[str, date] = field(default_factory=dict)
+    #: ``[datasets.history_until]``: the last day this lake's history of a
+    #: dataset runs to, when its only source is gone (EastMoney push2 for
+    #: ``fund_flow``). Later days are not owed until a new source is set up.
+    history_until: dict[str, date] = field(default_factory=dict)
     #: ``[datasets] planned``: datasets whose dates to fetch the coverage
     #: planner adds to, beside the watermark and the missing-dates ledger.
     planned_datasets: frozenset[str] = frozenset()
@@ -923,25 +927,23 @@ def _planned(listed) -> frozenset[str]:
     return frozenset(listed)
 
 
-def _history_from(section) -> dict[str, date]:
-    """``[datasets.history_from]``: dataset name to the first day this lake holds it from."""
+def _dataset_dates(section, key: str) -> dict[str, date]:
+    """``[datasets.<key>]``: dataset name to a date this lake bounds its history by."""
     from cnequity.domain.datasets import DATASETS
 
     if not isinstance(section, dict):
-        raise ConfigError("datasets.history_from must be a table of dataset = date")
+        raise ConfigError(f"datasets.{key} must be a table of dataset = date")
     out: dict[str, date] = {}
     for name, value in section.items():
         if name not in DATASETS:
-            raise ConfigError(f"datasets.history_from names an unknown dataset: {name}")
+            raise ConfigError(f"datasets.{key} names an unknown dataset: {name}")
         if isinstance(value, str):
             try:
                 value = date.fromisoformat(value)
             except ValueError:
-                raise ConfigError(
-                    f"datasets.history_from.{name} must be a date, not {value!r}"
-                ) from None
+                raise ConfigError(f"datasets.{key}.{name} must be a date, not {value!r}") from None
         if type(value) is not date:
-            raise ConfigError(f"datasets.history_from.{name} must be a date, not {value!r}")
+            raise ConfigError(f"datasets.{key}.{name} must be a date, not {value!r}")
         out[name] = value
     return out
 
@@ -955,7 +957,11 @@ def load_config(path: str | Path) -> Config:
     opted_out_steps = frozenset(raw.pop(OPTED_OUT_KEY, ()))
     best_effort_enabled = frozenset(raw.pop(BEST_EFFORT_KEY, ()))
     datasets_raw = raw.pop("datasets", None) or {}
-    history_from = _history_from(datasets_raw.get("history_from", {}))
+    history_from = _dataset_dates(datasets_raw.get("history_from", {}), "history_from")
+    history_until = _dataset_dates(datasets_raw.get("history_until", {}), "history_until")
+    for name in history_from.keys() & history_until.keys():
+        if history_until[name] < history_from[name]:
+            raise ConfigError(f"datasets.history_until.{name} is before its history_from")
     planned_datasets = _planned(datasets_raw.get("planned", []))
     _warn_renamed_keys(raw)
 
@@ -1368,6 +1374,7 @@ def load_config(path: str | Path) -> Config:
         opted_out_steps=opted_out_steps,
         best_effort_enabled=best_effort_enabled,
         history_from=history_from,
+        history_until=history_until,
         planned_datasets=planned_datasets,
         init_phases=init_phases,
         on_demand_enabled=bool(on_demand.get("enabled", True)),

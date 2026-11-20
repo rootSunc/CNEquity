@@ -40,6 +40,7 @@ _NOT_DATA_FIELDS = frozenset(
         "run_flags",
         # Where the planner starts owing cells; it changes no fetched row.
         "history_from",
+        "history_until",
         # Adds dates to fetch; the rows a fetch writes are the same.
         "planned_datasets",
         "eastmoney_proxy_hosts",
