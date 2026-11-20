@@ -127,3 +127,44 @@ def test_prelisting_debt_requires_committed_uncontradicted_dates(lake):
     assert resolved_prelisting_keys(lake, owed) == {("920003.BJ", str(DAY))}
     _commit(lake, "daily_bars")
     assert not resolved_prelisting_keys(lake, owed)
+
+
+def test_debt_after_a_recorded_delisting_is_retired_unless_a_later_trade_disproves_it(tmp_path):
+    from datetime import timedelta
+
+    from cnequity.storage.coverage import resolved_postdelisting_keys
+
+    cfg = Config(data_root=tmp_path / "lake")
+    gone = DAY + timedelta(days=3)  # 2026-08-10
+    root = cfg.curated_root / "instruments"
+    root.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["002731.SZ", "000001.SZ"],
+            "list_date": [date(2014, 11, 4), date(1991, 4, 3)],
+            "delist_date": [gone, None],
+        }
+    ).write_parquet(root / "part.parquet")
+    _commit(cfg, "instruments")
+    root = cfg.curated_root / "daily_bars" / f"trade_date={gone}"
+    root.mkdir(parents=True)
+    # Its last print falls on the recorded date itself.
+    pl.DataFrame({"symbol": ["002731.SZ"], "trade_date": [gone], "volume": [100]}).write_parquet(
+        root / "part.parquet"
+    )
+    _commit(cfg, "daily_bars")
+    later = str(gone + timedelta(days=1))
+    owed = [
+        dict(symbol="002731.SZ", trade_date=str(gone)),
+        dict(symbol="002731.SZ", trade_date=later),
+        dict(symbol="000001.SZ", trade_date=later),
+    ]
+    assert resolved_postdelisting_keys(cfg, owed) == {("002731.SZ", later)}
+    # A traded bar after the date disproves it: nothing is retired.
+    root = cfg.curated_root / "daily_bars" / f"trade_date={later}"
+    root.mkdir(parents=True)
+    pl.DataFrame(
+        {"symbol": ["002731.SZ"], "trade_date": [date.fromisoformat(later)], "volume": [5]}
+    ).write_parquet(root / "part.parquet")
+    _commit(cfg, "daily_bars")
+    assert not resolved_postdelisting_keys(cfg, owed)

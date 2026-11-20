@@ -147,6 +147,59 @@ def resolved_prelisting_keys(
     return {(symbol, str(day)) for symbol, day in early.iter_rows()}
 
 
+def resolved_postdelisting_keys(
+    config, owed: list[dict], *, read_context=None
+) -> set[tuple[str, str]]:
+    """Retire bar requests for sessions after a recorded delisting.
+
+    A key is owed while the code may still trade; one dated after the
+    instrument's ``delist_date`` is not, unless a traded bar after that date
+    disproves it. Strictly after: a code's last session can fall on the date
+    itself (002731.SZ printed on 2026-11-12, its recorded delisting). Keys
+    for a code with no recorded delisting are never retired here.
+    """
+    from cnequity.storage.instrument_catalog import load_curated_instruments
+    from cnequity.storage.read_context import ReadContext, read_root
+
+    if not owed:
+        return set()
+    context = read_context or ReadContext.capture(config, ("instruments", "daily_bars"), {})
+    listings = load_curated_instruments(config, context)
+    if listings is None or not {"symbol", "delist_date"} <= set(listings.columns):
+        return set()
+    rows = pl.DataFrame(owed).select("symbol", pl.col("trade_date").str.to_date())
+    gone = (
+        listings.filter(
+            pl.col("symbol").is_in(rows["symbol"].unique().to_list())
+            & pl.col("delist_date").is_not_null()
+        )
+        .select("symbol", pl.col("delist_date").cast(pl.Date))
+        .unique("symbol", keep="last")
+    )
+    late = rows.join(gone, on="symbol").filter(pl.col("trade_date") > pl.col("delist_date"))
+    if late.is_empty():
+        return set()
+    root = read_root(config, "daily_bars", context)
+    last = (
+        scan_parquet_root(
+            root,
+            partition_col="trade_date",
+            symbols=late["symbol"].unique().to_list(),
+            traded_only=True,
+            committed=False,
+        )
+        .group_by("symbol")
+        .agg(pl.col("trade_date").max().alias("last_traded"))
+        .collect()
+        if dataset_has_parquet(root, committed=False)
+        else pl.DataFrame(schema={"symbol": pl.String, "last_traded": pl.Date})
+    )
+    late = late.join(last, on="symbol", how="left").filter(
+        pl.col("last_traded").is_null() | (pl.col("last_traded") <= pl.col("delist_date"))
+    )
+    return {(symbol, str(day)) for symbol, day in late.select("symbol", "trade_date").iter_rows()}
+
+
 def candidate_gaps(
     payload: dict, run_id: str, resolved: set[tuple[str, str]], *, full_staging: bool
 ) -> dict:

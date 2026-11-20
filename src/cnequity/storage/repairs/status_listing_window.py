@@ -11,6 +11,11 @@ Two writers put rows there before their guards existed:
   list, including one not yet listed, so codes were stored as trading for
   weeks before their first session.
 
+A third: a status carried forward through an outage before the delisting was
+known stays dated after it (002731.SZ was carried as trading on 2026-11-13
+and 11-16; its delisting on 11-12 was learned on 11-17). Such a carried row
+goes unless a traded bar after the date shows the date is wrong.
+
 A ``derived_delisted`` row is kept only while the current instrument record
 still dates a delisting on or before it (and not before the code listed). A
 row of any source before the listing date goes, unless a traded bar precedes
@@ -26,6 +31,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.trading_status import (
+    CACHED_SOURCES,
     DELISTED_SOURCE,
     impossible_delistings,
     split_before_listing,
@@ -61,8 +67,8 @@ def instrument_spans(store: RevisionStore, config: Config) -> pl.DataFrame:
 
 
 def first_traded(store: RevisionStore, config: Config, symbols: list[str]) -> pl.DataFrame:
-    """``symbol / first_traded`` from the committed ``daily_bars``."""
-    schema = {"symbol": pl.Utf8, "first_traded": pl.Date}
+    """``symbol / first_traded / last_traded`` from the committed ``daily_bars``."""
+    schema = {"symbol": pl.Utf8, "first_traded": pl.Date, "last_traded": pl.Date}
     scan = (
         scan_published(
             config,
@@ -78,7 +84,10 @@ def first_traded(store: RevisionStore, config: Config, symbols: list[str]) -> pl
         return pl.DataFrame(schema=schema)
     return (
         scan.group_by("symbol")
-        .agg(pl.col("trade_date").min().alias("first_traded"))
+        .agg(
+            pl.col("trade_date").min().alias("first_traded"),
+            pl.col("trade_date").max().alias("last_traded"),
+        )
         .collect()
         .cast(schema)
     )
@@ -105,7 +114,22 @@ def plan_listing_window(rows: pl.DataFrame, spans: pl.DataFrame) -> pl.DataFrame
     ).select(*_KEY, pl.lit("delisting_not_on_record").alias("reason"))
     _, early = split_before_listing(rows.select(_KEY), spans)
     early = early.select(*_KEY, pl.lit("before_listing").alias("reason"))
-    return pl.concat([unfounded, early], how="vertical").unique(
+    # A status carried forward through an outage repeats an earlier reading;
+    # one dated after the code's recorded delisting carried it past its life
+    # (it was written before the delisting was known). Kept when a traded bar
+    # after the date shows the date is wrong.
+    ended = spans.filter(pl.col("delist_date").is_not_null())
+    last = pl.col("last_traded") if "last_traded" in spans.columns else pl.lit(None, dtype=pl.Date)
+    carried = (
+        rows.filter(pl.col("source").is_in(sorted(CACHED_SOURCES)))
+        .join(ended.select("symbol", "delist_date", last.alias("_last")), on="symbol")
+        .filter(
+            (pl.col("trade_date") > pl.col("delist_date"))
+            & (pl.col("_last").is_null() | (pl.col("_last") <= pl.col("delist_date")))
+        )
+        .select(*_KEY, pl.lit("carried_after_delisting").alias("reason"))
+    )
+    return pl.concat([unfounded, early, carried], how="vertical").unique(
         _KEY, keep="first", maintain_order=True
     )
 
@@ -125,8 +149,12 @@ def _repair_planned(config: Config, *, apply: bool) -> dict:
         return report
     rows = scan_parquet_root(base, partition_col="trade_date").select(_KEY).collect()
     spans = instrument_spans(store, config)
-    candidates = rows.join(spans.select("symbol", "list_date"), on="symbol").filter(
-        pl.col("trade_date") < pl.col("list_date")
+    candidates = rows.join(spans.select("symbol", "list_date", "delist_date"), on="symbol").filter(
+        (pl.col("trade_date") < pl.col("list_date"))
+        | (
+            pl.col("source").is_in(sorted(CACHED_SOURCES))
+            & (pl.col("trade_date") > pl.col("delist_date"))
+        )
     )
     spans = spans.join(
         first_traded(store, config, candidates["symbol"].unique().to_list()),

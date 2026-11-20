@@ -342,14 +342,17 @@ def _update_watermarks(
                 reconcile_no_print_coverage(config)
             from cnequity.storage.coverage import (
                 resolved_bj_session_dates,
+                resolved_postdelisting_keys,
                 resolved_prelisting_keys,
             )
 
             state.clear_missing_dates(
                 dataset, resolved_bj_session_dates(config, state.get_payload(dataset))
             )
+            owed = state.get_outstanding_keys(dataset)
             state.clear_outstanding_keys(
-                dataset, resolved_prelisting_keys(config, state.get_outstanding_keys(dataset))
+                dataset,
+                resolved_prelisting_keys(config, owed) | resolved_postdelisting_keys(config, owed),
             )
         max_dt = _watermark_date_for(config, dataset, pcol)
         if max_dt is not None:

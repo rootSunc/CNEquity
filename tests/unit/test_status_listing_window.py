@@ -243,3 +243,31 @@ def test_an_outage_does_not_carry_a_status_onto_a_session_before_listing():
     )
     _, carried = plan_status_outages(history, sessions, D1, D1, {}, listings)
     assert carried["symbol"].to_list() == ["000001.SZ"]
+
+
+def test_a_status_carried_past_a_recorded_delisting_goes_and_a_first_hand_one_stays():
+    from cnequity.storage.repairs.status_listing_window import plan_listing_window
+
+    rows = pl.DataFrame(
+        {
+            "symbol": ["002731.SZ", "002731.SZ", "002731.SZ", "000020.SZ"],
+            "trade_date": [D1, D2, D3, D3],
+            # Carried through an outage before the D1 delisting was learned.
+            "source": ["baostock", "exchange_cached", "exchange_cached", "exchange_cached"],
+        }
+    )
+    spans = pl.DataFrame(
+        {
+            "symbol": ["002731.SZ", "000020.SZ"],
+            "list_date": [date(2014, 11, 4), date(2020, 1, 2)],
+            "delist_date": [D1, D2],
+            "first_traded": [date(2014, 11, 4), date(2020, 1, 2)],
+            # 000020.SZ printed after its recorded date: the date is wrong.
+            "last_traded": [D1, D3],
+        }
+    )
+    plan = plan_listing_window(rows, spans)
+    assert sorted(plan.select("symbol", "trade_date", "reason").rows()) == [
+        ("002731.SZ", D2, "carried_after_delisting"),
+        ("002731.SZ", D3, "carried_after_delisting"),
+    ]
