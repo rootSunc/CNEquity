@@ -454,7 +454,9 @@ def _answers(
     short = sorted(owed & covered)
     if short:
         found.append(Seed(name, "short", tuple(short), now, "partial"))
-    pending = set(cov.partial(attempts)["period"].to_list()) & set(cells["period"].to_list())
+    # Any part-answered cell, not only those in *cells*: a day that left the
+    # sync window while still owed would otherwise stay partial forever.
+    pending = set(cov.partial(attempts)["period"].to_list())
     if pending:
         first = cov.span(coverage.grain, min(pending))[0]
         last = cov.span(coverage.grain, max(pending))[1]

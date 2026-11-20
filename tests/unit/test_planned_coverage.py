@@ -201,3 +201,25 @@ def test_compact_reports_disagreements_and_never_fails_on_the_ledger(monkeypatch
     monkeypatch.setattr(planned_coverage, "sync_attempts", broken)
     (warning,) = _sync_attempts(None, "run", TODAY, {"news"})
     assert (warning["check"], warning["severity"]) == ("attempts_ledger_sync", "warning")
+
+
+def test_a_part_answered_day_outside_the_sync_window_still_settles(tmp_path):
+    from datetime import UTC, datetime
+
+    from cnequity.config import Config
+    from cnequity.quality.planned_coverage import Seed, record_seeds, sync_attempts
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core import coverage as cov
+    from equitylake_core.catalog import Catalog
+
+    cfg = Config(data_root=tmp_path / "data")
+    with Catalog(lake_root(cfg), create=True) as catalog:
+        cov.prepare(catalog)
+        catalog.execute("CREATE TABLE corporate_actions AS SELECT DATE '2026-09-17' AS ex_date")
+    old = datetime(2026, 11, 17, tzinfo=UTC)
+    record_seeds(cfg, [Seed("corporate_actions", "short", ("2026-09-17",), old, "partial")])
+    # 2026-09-17 is more than SYNC_DAYS before the run, and the old ledger owes nothing.
+    sync_attempts(cfg, "r1", date(2026, 11, 19), ["corporate_actions"])
+    with Catalog(lake_root(cfg), read_only=True) as catalog:
+        latest = cov.attempted(catalog, "corporate_actions")
+    assert latest.select("period", "outcome").rows() == [("2026-09-17", "complete")]
