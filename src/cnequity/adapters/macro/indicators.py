@@ -26,7 +26,7 @@ import calendar
 import logging
 import math
 import re
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 
@@ -43,6 +43,13 @@ _SHIBOR_COLUMNS = "REPORT_DATE,IR_RATE"
 _SHIBOR_FILTER = '(MARKET_CODE="001")(CURRENCY_CODE="CNY")(INDICATOR_ID="203")'
 _LPR_REPORT = "RPTA_WEB_RATE"
 _LPR_COLUMNS = "TRADE_DATE,LPR1Y,LPR5Y"
+#: The first reformed (monthly) LPR. Before it RPTA_WEB_RATE's LPR1Y is the
+#: old daily 贷款基础利率, a different benchmark under the same column.
+LPR_REFORM_DATE = date(2019, 8, 20)
+#: Each run reads the last year of LPR rather than its own day: a release
+#: dated on a weekend (2026-09-20) is never a run day, and a column added
+#: later (LPR5Y, 2026-11-01) gets its recent history on the next run.
+LPR_LOOKBACK_DAYS = 366
 
 # The daily series a backfill reads as a window instead of one day at a time.
 # Both reports take a `(COL>='…')(COL<='…')` range and page it — measured
@@ -230,17 +237,21 @@ def _eastmoney_daily(
                 }
             )
 
+    lpr_from = max(LPR_REFORM_DATE, trade_date - timedelta(days=LPR_LOOKBACK_DAYS))
     lpr = _capture_series(
         "eastmoney:lpr_1y",
         lambda: fetch_datacenter(
-            client, _LPR_REPORT, _LPR_COLUMNS, filter_expr=f"(TRADE_DATE='{ds}')"
+            client,
+            _LPR_REPORT,
+            _LPR_COLUMNS,
+            filter_expr=f"(TRADE_DATE>='{lpr_from.isoformat()}')(TRADE_DATE<='{ds}')",
         ),
         failures,
         completed,
     )
     for item in lpr:
         obs = _parse_obs_date(item.get("TRADE_DATE"))
-        if obs != trade_date:
+        if obs is None or not lpr_from <= obs <= trade_date:
             continue
         for ind_id, col_name in (("lpr_1y", "LPR1Y"), ("lpr_5y", "LPR5Y")):
             val = _finite_float(item.get(col_name))

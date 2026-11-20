@@ -825,3 +825,42 @@ def test_lake_health_snapshot(tmp_path):
     assert "economic_calendar" not in health["empty_datasets"]
     assert (cfg.meta_root / "quality" / "health-latest.json").exists()
     assert (cfg.meta_root / "quality" / "historical-validity-latest.json").exists()
+
+
+def test_lpr_reads_the_last_year_so_a_weekend_release_and_a_new_column_land(monkeypatch):
+    from cnequity.adapters.macro import indicators as macro_indicators
+
+    _no_social_financing(monkeypatch)
+    asked: list[str] = []
+    real = macro_indicators.fetch_datacenter
+
+    def spy(client, report, columns, **kwargs):
+        if report == "RPTA_WEB_RATE":
+            asked.append(kwargs.get("filter_expr"))
+        return real(client, report, columns, **kwargs)
+
+    monkeypatch.setattr(macro_indicators, "fetch_datacenter", spy)
+    client = FakeDatacenterClient(
+        {
+            "RPTA_WEB_RATE": [
+                {"TRADE_DATE": "2026-10-20 00:00:00", "LPR1Y": 3, "LPR5Y": 3.5},
+                # A Sunday: never a run day, so a same-day query never saw it.
+                {"TRADE_DATE": "2026-09-20 00:00:00", "LPR1Y": 3, "LPR5Y": 3.5},
+                # Outside the asked window: the report ignored the range.
+                {"TRADE_DATE": "2019-08-19 00:00:00", "LPR1Y": 4.31, "LPR5Y": None},
+            ]
+        }
+    )
+    df = fetch_macro_indicators(date(2026, 11, 19), client=client)  # type: ignore[arg-type]
+    assert asked == ["(TRADE_DATE>='2025-11-18')(TRADE_DATE<='2026-11-19')"]
+    lpr = df.filter(pl.col("indicator_id").str.starts_with("lpr")).sort("indicator_id", "obs_date")
+    assert lpr.select("indicator_id", "obs_date", "value").rows() == [
+        ("lpr_1y", date(2026, 9, 20), 3.0),
+        ("lpr_1y", date(2026, 10, 20), 3.0),
+        ("lpr_5y", date(2026, 9, 20), 3.5),
+        ("lpr_5y", date(2026, 10, 20), 3.5),
+    ]
+    # Never reaches before the reform, whatever the lookback.
+    asked.clear()
+    fetch_macro_indicators(date(2020, 1, 2), client=client)  # type: ignore[arg-type]
+    assert asked == ["(TRADE_DATE>='2019-08-20')(TRADE_DATE<='2020-01-02')"]
