@@ -200,3 +200,35 @@ def test_a_budget_holds_across_threads():
     assert sum(1 for a in answers if a == b"x") == 5
     assert sum(1 for a in answers if isinstance(a, BudgetExhausted)) == 4
     assert fetcher.requests == {"vendor": 5}
+
+
+def test_a_source_plans_the_gaps_and_gather_sorts_the_answers():
+    import json
+
+    import polars as pl
+
+    from equitylake_core.source import gather
+
+    class Daily:
+        def plan(self, gaps):
+            return [
+                Request("vendor", period, f"https://example.test/{period}", cells=((period, ""),))
+                for period in gaps["period"].to_list()
+            ]
+
+        def parse(self, request, body):
+            return pl.DataFrame(json.loads(body), schema={"day": pl.String, "v": pl.Int64})
+
+    bodies = {
+        "https://example.test/2026-11-18": Response(200, b'[{"day": "2026-11-18", "v": 1}]'),
+        "https://example.test/2026-11-19": Response(200, b"[]"),
+        "https://example.test/2026-11-20": Response(503, b""),
+    }
+    fetcher = Fetcher(
+        {"vendor": Policy("vendor", attempts=1)}, transport=lambda url, h, t: bodies[url]
+    )
+    gaps = pl.DataFrame({"period": list(d[-10:] for d in bodies), "entity": [""] * 3})
+    got = gather(fetcher, Daily(), gaps)
+    assert got.rows["day"].to_list() == ["2026-11-18"]
+    assert got.empty == [("2026-11-19", "")]
+    assert [failure.request.key for failure in got.failed] == ["2026-11-20"]

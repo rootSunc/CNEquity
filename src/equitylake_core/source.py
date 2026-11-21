@@ -27,7 +27,10 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import Protocol
+
+import polars as pl
 
 from equitylake_core.raw import RawArchive
 
@@ -60,10 +63,13 @@ class Request:
     #: answer that is large, asked for often, and can be asked for again with
     #: the same result (an official publisher's current view of filed documents).
     archive: bool = True
+    #: The coverage cells, ``(period, entity)``, this request answers: what is
+    #: recorded as answered empty when its rows hold none.
+    cells: tuple[tuple[str, str], ...] = ()
 
     def with_params(self, **changes: str) -> Request:
         merged = {**dict(self.params), **changes}
-        return Request(self.source, self.key, self.url, tuple(merged.items()), self.archive)
+        return replace(self, params=tuple(merged.items()))
 
 
 @dataclass(frozen=True)
@@ -208,3 +214,59 @@ class Fetcher:
             body = self.fetch(current)
             yield current, body
             current = following(current, body)
+
+
+class Source(Protocol):
+    """A market's half of fetching: what to ask for a set of gaps, and what an answer says.
+
+    Both halves are pure: :meth:`plan` reads no network, :meth:`parse` only
+    the body it is given, so a source is tested on saved bodies and replayed
+    from the raw archive.
+    """
+
+    def plan(self, gaps: pl.DataFrame) -> list[Request]:
+        """Requests that answer *gaps* (``period``, ``entity``: the planner's ``gap`` cells).
+
+        Each request names the cells it answers (:attr:`Request.cells`); a
+        cell no request names stays a gap.
+        """
+        ...
+
+    def parse(self, request: Request, body: bytes) -> pl.DataFrame:
+        """The rows *body* holds, the answer to *request*."""
+        ...
+
+
+@dataclass
+class Gathered:
+    """What a source answered for one set of gaps."""
+
+    rows: pl.DataFrame
+    #: Cells whose request was answered and held no rows: record them empty.
+    empty: list[tuple[str, str]] = field(default_factory=list)
+    #: Requests that got no usable answer; their cells stay gaps.
+    failed: list[FetchError] = field(default_factory=list)
+
+
+def gather(fetcher: Fetcher, source: Source, gaps: pl.DataFrame) -> Gathered:
+    """Plan *gaps* with *source*, send the requests, and parse the answers.
+
+    The one execution path for a gap whatever asked for it (a daily run, a
+    backfill, a repair): the caller writes ``rows`` and records ``empty`` in
+    the same snapshot, and leaves ``failed`` for the next plan to find.
+    """
+    requests = source.plan(gaps)
+    frames: list[pl.DataFrame] = []
+    out = Gathered(pl.DataFrame())
+    for request, answer in zip(requests, fetcher.fetch_all(requests), strict=True):
+        if isinstance(answer, FetchError):
+            out.failed.append(answer)
+            continue
+        rows = source.parse(request, answer)
+        if rows.is_empty():
+            out.empty.extend(request.cells)
+        else:
+            frames.append(rows)
+    if frames:
+        out.rows = pl.concat(frames, how="diagonal_relaxed")
+    return out
