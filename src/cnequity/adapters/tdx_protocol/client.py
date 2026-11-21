@@ -40,6 +40,7 @@ from cnequity.domain.symbols import (
 )
 from cnequity.run_scope import backfill_of
 from cnequity.storage.raw_archive import RawArchiveError
+from equitylake_core.lock import LockIOError, LockUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,8 @@ def _connect_with_retry(config: Config | None = None):
     for attempt in range(_CONNECT_RETRY_ATTEMPTS):
         try:
             return _quotes_client(config)
+        except (LockIOError, LockUnavailable):
+            raise
         except Exception as exc:  # noqa: BLE001 — retried, then re-raised as-is
             last_exc = exc
             if attempt + 1 < _CONNECT_RETRY_ATTEMPTS:

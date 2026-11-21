@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import polars as pl
 
+from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
+from cnequity.domain.market_time import CONTINUOUS_SESSION_MINUTES
+
 #: Bump when the bars built from the same minute input change. Stored
 #: ``minute_bars_{15,30,60}m`` record it, so a bump rebuilds every session.
 RESAMPLE_VERSION = 1
@@ -24,13 +27,21 @@ _COLUMNS = [
 # Input frequency -> output frequencies it can build. Every output is a whole
 # multiple of its input, and every boundary falls on the input's session grid.
 _TARGETS = {
-    "1m": ("5m", "15m", "30m", "60m"),
-    "5m": ("15m", "30m", "60m"),
+    "1m": ("5m", *RESAMPLED_MINUTE_DATASETS.values()),
+    "5m": tuple(RESAMPLED_MINUTE_DATASETS.values()),
 }
 
 # Minutes since midnight, and the opening minute of the half-session a bar is in.
+(_AM_START, _AM_END), (_PM_START, _PM_END) = CONTINUOUS_SESSION_MINUTES
 _CLOCK = pl.col("bar_time").dt.hour().cast(pl.Int32) * 60 + pl.col("bar_time").dt.minute()
-_BASE = pl.when(_CLOCK < 720).then(570).otherwise(780)
+_MORNING = _CLOCK <= _AM_END
+_BASE = pl.when(_MORNING).then(_AM_START).otherwise(_PM_START)
+
+
+def continuous_bar_slot(step: int) -> pl.Expr:
+    """Number closing-minute bars consecutively across the midday break."""
+    morning_bars = (_AM_END - _AM_START) // step
+    return (_CLOCK - _BASE) // step + pl.when(_MORNING).then(0).otherwise(morning_bars)
 
 
 def _interval_end(minutes: int) -> pl.Expr:
@@ -69,7 +80,9 @@ def resample_trade_bars(frame: pl.DataFrame, frequency: str = "5m") -> pl.DataFr
         raise ValueError("null minute fields")
     if not isinstance(frame.schema["bar_time"], pl.Datetime) or frame.schema["bar_time"].time_zone:
         raise ValueError("bar_time must use exchange-local naive datetimes")
-    legal = _CLOCK.is_between(570 + step, 690) | _CLOCK.is_between(780 + step, 900)
+    legal = _CLOCK.is_between(_AM_START + step, _AM_END) | _CLOCK.is_between(
+        _PM_START + step, _PM_END
+    )
     invalid = (
         ~legal
         | ((_CLOCK - _BASE) % step != 0)

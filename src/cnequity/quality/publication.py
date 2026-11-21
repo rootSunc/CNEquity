@@ -17,6 +17,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.datasets import DATASETS
+from cnequity.meta_layout import STORAGE_RECORD
 from cnequity.quality.factor_policy import advisory_factor_findings, factor_advisory
 from cnequity.quality.gate import contradictions
 from cnequity.sqlite_readonly import connect_readonly
@@ -78,7 +79,7 @@ def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> Non
     copy_catalog(source, target)
     if _records_in_catalog(config):
         write_json_atomic(
-            view.meta_root / "storage.json", {"publish": "catalog", "revisions": "catalog"}
+            view.meta_root / STORAGE_RECORD, {"publish": "catalog", "revisions": "catalog"}
         )
         return
     # A rehearsed publish leaves its pointer in the view; drop it, so a

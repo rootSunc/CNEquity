@@ -18,11 +18,12 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.domain.bse_codes import legacy_symbol_map
+from cnequity.domain.datasets import get_dataset
 
 __all__ = ["FUND_FLOW_TUSHARE_FLOOR", "SOURCE", "fetch_fund_flow_measure", "normalize"]
 
 #: First session ``moneyflow`` serves.
-FUND_FLOW_TUSHARE_FLOOR = date(2010, 1, 4)
+FUND_FLOW_TUSHARE_FLOOR = get_dataset("fund_flow_tushare").history_floor_date
 
 _SIZES = {"sm": "small", "md": "medium", "lg": "large", "elg": "xlarge"}
 _PAGE_SIZE = 3000

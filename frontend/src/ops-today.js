@@ -438,7 +438,7 @@ export function matrixHtml(matrix) {
     <div class="ops-legend"><span><i class="ops-cell tone-ok"></i>${tr("成功", "Success")}</span><span><i class="ops-cell tone-warn"></i>${tr("降级", "Degraded")}</span><span><i class="ops-cell tone-bad"></i>${tr("失败", "Failed")}</span><span><i class="ops-cell tone-none"></i>${tr("没有运行", "Did not run")}</span><span><i class="ops-cell tone-ok retried"></i>${tr("重试过", "Retried")}</span></div>`;
 }
 
-// --- stale datasets ----------------------------------------------------------
+// --- coverage and freshness -------------------------------------------------
 
 function daysBetween(from, to) {
   const a = Date.parse(`${from}T00:00:00Z`);
@@ -447,52 +447,97 @@ function daysBetween(from, to) {
   return Math.round((b - a) / 86400000);
 }
 
-function nextDay(text) {
-  const at = Date.parse(`${text}T00:00:00Z`);
-  return Number.isFinite(at) ? new Date(at + 86400000).toISOString().slice(0, 10) : "";
+function opsAction(op, label, params = {}) {
+  return { op, params, label, href: `#/ops?${new URLSearchParams({ op, ...params })}` };
 }
 
-/** Stale datasets with how far behind they are and the action that can fix them. */
+function actionHtml(action, canRun, accessibleLabel = null) {
+  return action && canRun(action)
+    ? `<a class="button button-ghost" href="${esc(action.href)}"${accessibleLabel ? ` aria-label="${esc(accessibleLabel)}"` : ""}>${esc(action.label)}</a>`
+    : "";
+}
+
+function dataStatusRow({ dataset, status, detail, tone, action }) {
+  return `<li class="ops-data-row"><div>
+      <div class="ops-data-title"><a class="ds-link" href="#/dataset/${encodeURIComponent(dataset)}">${esc(ds(dataset))}</a>
+        <span class="ops-data-state" data-tone="${tone}">${esc(status)}</span></div>
+      ${detail ? `<p class="ops-data-detail">${esc(detail)}</p>` : ""}
+    </div>${action || ""}</li>`;
+}
+
+export function barCoverageHtml(report, canRun) {
+  if (report.status === "sample") {
+    return `<p class="muted">${tr("样例或演示湖不评估近期覆盖。", "Recent coverage is not assessed for sample or demo lakes.")}</p>`;
+  }
+  if (report.status === "unavailable" || !report.datasets.length) {
+    return `<p class="muted">${tr("当前湖没有可用的日线覆盖计划。", "No daily bar coverage plan is available for this lake.")}</p>`;
+  }
+  const fmt = (value) => value.toLocaleString(locale());
+  const rows = report.datasets.map((row) => {
+    const counts = row.counts;
+    const name = ds(row.dataset);
+    const countText = (value) => row.dataset === "daily_bars"
+      ? tr(`${fmt(value)} 个证券日`, `${fmt(value)} instrument-session${value === 1 ? "" : "s"}`)
+      : tr(`${fmt(value)} 个交易日`, `${fmt(value)} session${value === 1 ? "" : "s"}`);
+    const range = row.first_gap === row.last_gap ? row.first_gap : `${row.first_gap} – ${row.last_gap}`;
+    let status = tr("覆盖未能判定", "Coverage unknown");
+    let tone = "muted";
+    if (counts?.gap) {
+      status = tr(`待补 ${countText(counts.gap)}`, `${countText(counts.gap)} to backfill`);
+      tone = "warn";
+    } else if (counts?.blocked) {
+      status = tr("覆盖受阻", "Coverage blocked");
+      tone = "warn";
+    } else if (counts) {
+      status = tr("无待补缺口", "No gaps to backfill");
+      tone = "ok";
+    }
+    const preview = counts?.gap && opsAction("backfill.run", tr("预览回填", "Preview backfill"), {
+      dataset: row.dataset, start: row.first_gap, end: row.last_gap,
+    });
+    const notes = [];
+    if (counts?.gap) notes.push(range);
+    if (row.dataset === "daily_bars" && row.gap_days > 1) notes.push(tr(`涉及 ${fmt(row.gap_days)} 个交易日`, `across ${fmt(row.gap_days)} sessions`));
+    if (counts?.empty) notes.push(tr(`已确认无数据 ${countText(counts.empty)}`, `${countText(counts.empty)} confirmed empty`));
+    if (counts?.blocked) notes.push(tr(`依赖阻塞 ${countText(counts.blocked)}`, `${countText(counts.blocked)} blocked by inputs`));
+    if (counts?.not_due) notes.push(tr(`未到期 ${countText(counts.not_due)}`, `${countText(counts.not_due)} not due`));
+    const actionLabel = tr(`预览回填 ${name}`, `Preview backfill for ${name}`);
+    return dataStatusRow({ dataset: row.dataset, status, tone, detail: notes.join(" · "), action: actionHtml(preview, canRun, actionLabel) });
+  }).join("");
+  const period = `${report.start} – ${report.end}`;
+  return `<p class="ops-hint">${esc(tr(`检查范围 ${period}`, `Window ${period}`))}</p><ul class="ops-data-list">${rows}</ul>`;
+}
+
 export function staleRows(health, datasets) {
   const byName = new Map((datasets || []).map((item) => [item.dataset, item]));
   const anchor = health?.anchor || "";
   return (health?.stale_datasets || []).map((name) => {
     const item = byName.get(name) || {};
-    const watermark = item.watermark || item.coverage_end || "";
-    const lag = watermark && anchor ? daysBetween(watermark, anchor) : null;
+    const latest = item.watermark || item.coverage_end || "";
+    const lag = latest && anchor ? daysBetween(latest, anchor) : null;
     const snapshot = item.history_mode === "snapshot_only";
     const action = snapshot
-      ? { op: "daily.stale", href: "#/ops?op=daily.stale", label: tr("补抓落后", "Catch up") }
-      : {
-          op: "backfill.run",
-          href: `#/ops?op=backfill.run&dataset=${encodeURIComponent(name)}${watermark ? `&start=${nextDay(watermark)}` : ""}${anchor ? `&end=${anchor}` : ""}`,
-          label: tr("回填", "Backfill"),
-        };
-    return { dataset: name, watermark, lag, snapshot, action };
+      ? opsAction("daily.stale", tr("补抓落后", "Catch up"))
+      : item.history_mode === "derived"
+        ? opsAction("derive.run", tr("重算", "Recompute"), { name })
+        : opsAction("backfill.run", tr("查看回填", "Open backfill"), { dataset: name });
+    return { dataset: name, latest, watermarked: Boolean(item.watermark), lag, snapshot, action };
   }).sort((a, b) => (b.lag ?? -1) - (a.lag ?? -1));
 }
 
-export function staleHtml(rows, anchor = "", disabled = false) {
+export function staleHtml(rows, anchor, canRun) {
   if (!rows.length) {
     return `<p class="ops-ok-line"><i class="ops-dot tone-ok"></i>${tr("没有落后的数据集。", "No dataset is stale.")}</p>`;
   }
-  const most = Math.max(1, ...rows.map((row) => row.lag || 0));
   const items = rows
     .map((row) => {
-      const width = row.lag ? Math.max(6, Math.round((Math.min(row.lag, most) / most) * 100)) : 0;
       const lag = row.lag != null ? tr(`落后 ${row.lag} 天`, `${row.lag} ${row.lag === 1 ? "day" : "days"} behind`) : tr("没有水位", "No watermark");
       const note = row.snapshot ? tr("快照：漏掉的日子补不回来", "Snapshot: missed days cannot be refetched") : "";
-      const action = disabled
-        ? ""
-        : `<a class="button button-ghost" href="${esc(row.action.href)}">${esc(row.action.label)}</a>`;
-      return `<li class="ops-stale-row">
-        <div class="ops-stale-name"><a class="ds-link" href="#/dataset/${encodeURIComponent(row.dataset)}">${esc(ds(row.dataset))}</a>
-          <span class="muted">${esc(row.watermark || "—")}${note ? ` · ${esc(note)}` : ""}</span></div>
-        <div class="ops-stale-bar" title="${esc(lag)}"><i style="width:${width}%"></i><span>${esc(lag)}</span></div>
-        <div class="ops-actions">${action}</div>
-      </li>`;
+      const dateLabel = row.watermarked ? tr("水位", "Watermark") : tr("覆盖至", "Covered through");
+      const detail = [row.latest ? `${dateLabel} ${row.latest}` : "", note].filter(Boolean).join(" · ");
+      return dataStatusRow({ dataset: row.dataset, status: lag, tone: "warn", detail, action: actionHtml(row.action, canRun) });
     })
     .join("");
   const head = anchor ? `<p class="ops-hint">${tr(`以最近交易日 ${anchor} 为准。`, `Measured against the last session, ${anchor}.`)}</p>` : "";
-  return `${head}<ul class="ops-stale">${items}</ul>`;
+  return `${head}<ul class="ops-data-list">${items}</ul>`;
 }

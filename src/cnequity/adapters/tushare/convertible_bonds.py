@@ -18,6 +18,7 @@ from datetime import date
 import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
+from cnequity.domain.datasets import get_dataset
 
 __all__ = [
     "CONVERTIBLE_BOND_BARS_FLOOR",
@@ -29,7 +30,7 @@ __all__ = [
 ]
 
 #: First session ``cb_daily`` serves.
-CONVERTIBLE_BOND_BARS_FLOOR = date(2004, 1, 2)
+CONVERTIBLE_BOND_BARS_FLOOR = get_dataset("convertible_bond_bars").history_floor_date
 
 _PAGE_SIZE = 2000
 _BOND_TYPES = {"CB": "convertible", "EB": "exchangeable"}

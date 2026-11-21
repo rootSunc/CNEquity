@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cnequity.config.retention import DEFAULT_KEEP_GENERATIONS, revision_keep
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.revisions import (
@@ -631,9 +632,8 @@ class LifecycleStore:
                 )
         return result
 
-    def inspect(self, *, keep: int = 5) -> dict:
-        if keep < 1:
-            raise LifecycleError("keep must be at least 1")
+    def inspect(self, *, keep: int = DEFAULT_KEEP_GENERATIONS) -> dict:
+        keep = revision_keep(None, keep)
         registry = self.registry()
         objects = self.inventory()
         for dataset in {o["dataset"] for o in objects}:
@@ -641,8 +641,9 @@ class LifecycleStore:
                 (o for o in objects if o["dataset"] == dataset and not o["blocked_reasons"]),
                 key=lambda o: o["revision"],
             )
-            for obj in _recent(valid, keep):
-                obj["blocked_reasons"].append("recent_generation")
+            if keep:
+                for obj in _recent(valid, keep):
+                    obj["blocked_reasons"].append("recent_generation")
         for obj in objects:
             oid = obj["object_id"]
             if obj["current"]:
@@ -670,14 +671,36 @@ class LifecycleStore:
             "purge_available": True,
         }
 
-    def _plan(self, keep: int) -> dict:
-        registry = self.registry(required=True)
-        assert registry is not None
-        if (
+    def retention_registry(self, *, refresh: bool = False) -> dict | None:
+        """Protection for an expiry plan, with optional refresh under the mutation lock."""
+        from cnequity.storage.lifecycle.purge import unfinished
+
+        if unfinished(self):
+            raise LifecycleError("Resume unfinished purge before revision retention")
+        return self._checked_reference_registry(refresh=refresh)
+
+    def _checked_reference_registry(
+        self, *, refresh: bool = False, required: bool = False
+    ) -> dict | None:
+        registry = self.registry(required=required)
+        if registry is not None and (
             reference_fingerprint(registry["reference_roots"], meta_root=self.meta)
             != registry["reference_fingerprint"]
         ):
-            raise LifecycleError("Reference inventory changed; refresh holds before planning")
+            if not refresh:
+                if required:
+                    raise LifecycleError(
+                        "Reference inventory changed; refresh holds before planning"
+                    )
+                raise LifecycleError(
+                    "References changed; refresh the lifecycle import before cleanup"
+                )
+            self.refresh_references()
+            registry = self.registry(required=True)
+        return registry
+
+    def _plan(self, keep: int) -> dict:
+        self._checked_reference_registry(required=True)
         report = self.inspect(keep=keep)
         candidates = [o for o in report["objects"] if not o["blocked_reasons"]]
         for obj in candidates:
@@ -686,7 +709,7 @@ class LifecycleStore:
         report["logical_bytes_selected"] = sum(o["logical_bytes"] for o in candidates)
         return report
 
-    def plan(self, *, selected_ids: list[str], keep: int = 5) -> dict:
+    def plan(self, *, selected_ids: list[str], keep: int = DEFAULT_KEEP_GENERATIONS) -> dict:
         """Save an immutable plan to delete exactly *selected_ids*; deletes nothing."""
         from cnequity.storage.lifecycle.purge import prepare_selected, unfinished
 

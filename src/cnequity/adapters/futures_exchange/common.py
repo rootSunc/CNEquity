@@ -34,6 +34,7 @@ from urllib.parse import urlsplit
 import httpx
 import polars as pl
 
+from cnequity.config.loader import rate_limit_root_override
 from cnequity.domain.http_policy import (
     record_cache_reuse,
     record_http_response,
@@ -103,14 +104,7 @@ def looks_like_challenge(status_code: int, body: bytes) -> bool:
 
 
 def _budget_root(config) -> Path | None:
-    shared = os.environ.get("CNE_RATE_LIMIT_ROOT")
-    return (
-        Path(shared).expanduser()
-        if shared
-        else config.meta_root / "rate_limits"
-        if config
-        else None
-    )
+    return config.rate_limit_root if config is not None else rate_limit_root_override()
 
 
 def _host_key(url: str, source: str) -> str:

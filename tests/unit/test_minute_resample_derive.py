@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 import polars as pl
@@ -174,11 +175,22 @@ def test_sessions_without_a_full_interval_are_counted_not_written(tmp_path):
     assert not (config.derived_root / "minute_bars_60m").exists()
 
 
-def _cli_config(tmp_path) -> str:
+@pytest.fixture
+def inputs_covered(monkeypatch):
+    """The one-session test lake: the planner owes the minute inputs nothing else."""
+    import cnequity.steps.finalize as finalize
+
+    monkeypatch.setattr(finalize, "_planner_owes", lambda _config, _dataset: False)
+
+
+def _cli_config(tmp_path, *, intraday: bool = False) -> str:
     from cnequity.config.bootstrap import path_for_toml
 
     path = tmp_path / "cne.toml"
-    path.write_text(f'[data]\nroot = "{path_for_toml(tmp_path / "data")}"\n')
+    content = f'[data]\nroot = "{path_for_toml(tmp_path / "data")}"\n'
+    if intraday:
+        content = f'extends = "builtin"\n{content}\n[minute_bars]\nenabled = true\n'
+    path.write_text(content)
     return str(path)
 
 
@@ -223,6 +235,13 @@ def test_cli_derive_is_current_after_publishing_and_drops_emptied_sessions(tmp_p
     config = load_config(cfg_path)
     assert stale_sessions(config, "minute_bars_15m") == []
     assert '"rows": 0' in run().output
+    # An explicit rebuild writes the same facts, so the catalog keeps the
+    # published timestamp. Its receipt must keep matching that partition.
+    rebuilt = CliRunner().invoke(
+        cli, ["derive", "minute_bars_15m", "--config", cfg_path, "--start", str(OLD)]
+    )
+    assert rebuilt.exit_code == 0, rebuilt.output
+    assert stale_sessions(config, "minute_bars_15m") == []
     # A backfill publishes the shorter 1m session as a new input revision.
     from cnequity.storage.revisions import RevisionStore
 
@@ -248,6 +267,130 @@ def test_cli_derive_is_current_after_publishing_and_drops_emptied_sessions(tmp_p
     frame = load("minute_bars_15m", data_root=tmp_path / "data")
     assert frame["trade_date"].unique().to_list() == [OLD]
     assert stale_sessions(load_config(cfg_path), "minute_bars_15m") == []
+
+
+def test_intraday_compacts_before_reconciling_already_stored_resamples(
+    tmp_path, monkeypatch, inputs_covered
+):
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+    from cnequity.config import load_config
+    from cnequity.orchestrator.engine import JobEngine
+    from cnequity.orchestrator.registry import STEP_REGISTRY
+    from cnequity.query import load
+    from cnequity.storage import StagingWriter
+
+    cfg_path = _cli_config(tmp_path, intraday=True)
+    config = load_config(cfg_path)
+    _write(config, "minute_bars_5m", OLD, _bars("603869.SH", OLD, 5, 12))
+    for dataset in ("minute_bars_15m", "minute_bars_30m"):
+        activated = CliRunner().invoke(cli, ["derive", dataset, "--config", cfg_path])
+        assert activated.exit_code == 0, activated.output
+
+    def stage(config, trade_date, run_id, context):
+        frame = _bars("603869.SH", trade_date, 1, 60)
+        StagingWriter(config.staging_root).write_batch("minute_bars", run_id, "test", frame)
+        return {"rows_written": frame.height}
+
+    monkeypatch.setitem(
+        STEP_REGISTRY,
+        "minute_bars",
+        replace(STEP_REGISTRY["minute_bars"], fn=stage, requires_workers=False),
+    )
+    monkeypatch.setitem(
+        STEP_REGISTRY,
+        "minute_bars_5m",
+        replace(STEP_REGISTRY["minute_bars_5m"], fn=lambda *_: {}, requires_workers=False),
+    )
+    engine = JobEngine(config)
+    steps = config.schedule_groups["intraday"].steps
+    out = engine.run_job("daily:intraday", NEW, steps=steps, backfill=True)
+    assert out["status"] == "success", out
+    for dataset in ("minute_bars_15m", "minute_bars_30m"):
+        assert load(dataset, config=config)["trade_date"].unique().sort().to_list() == [OLD, NEW]
+        assert stale_sessions(config, dataset) == []
+        assert engine.manifest.get_dataset_result(out["run_id"], dataset, "derive")["status"] == (
+            "success"
+        )
+    assert (
+        RevisionStore(config.meta_root, config.curated_root).current_pointer("minute_bars_60m")
+        is None
+    )
+
+    repeat = engine.run_job(
+        "derive:minute_bars", NEW, steps=steps[steps.index("compact") + 1 :], backfill=True
+    )
+    assert repeat["status"] == "success"
+    assert not repeat["rows_written"]
+
+
+def test_minute_backfill_reconciles_stored_resamples_after_publish(
+    tmp_path, monkeypatch, inputs_covered
+):
+    import json
+
+    from click.testing import CliRunner
+
+    from cnequity.cli import backfill_cmds
+    from cnequity.cli.main import cli
+    from cnequity.config import load_config
+    from cnequity.query import load
+
+    cfg_path = _cli_config(tmp_path, intraday=True)
+    config = load_config(cfg_path)
+    _write(config, "minute_bars_5m", OLD, _bars("603869.SH", OLD, 5, 6))
+    activated = CliRunner().invoke(cli, ["derive", "minute_bars_30m", "--config", cfg_path])
+    assert activated.exit_code == 0, activated.output
+
+    def backfill(config, dataset, start, end, chunk_symbols):
+        assert (dataset, start, end) == ("minute_bars", OLD, OLD)
+        _write(config, dataset, OLD, _bars("603869.SH", OLD, 1, 30))
+        return {"status": "success", "rows_written": 30}
+
+    monkeypatch.setattr(backfill_cmds, "_backfill_symbol_chunked", backfill)
+    finished = CliRunner().invoke(
+        cli,
+        ["backfill", "minute_bars", "--config", cfg_path, "--start", str(OLD), "--end", str(OLD)],
+    )
+    assert finished.exit_code == 0, finished.output
+    assert json.loads(finished.stdout)["followup"]["status"] == "success"
+    assert load("minute_bars_30m", config=config)["resampled_from"].to_list() == ["1m"]
+    assert stale_sessions(config, "minute_bars_30m") == []
+
+
+def test_rejected_resample_publication_is_still_pending(tmp_path, monkeypatch, inputs_covered):
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+    from cnequity.config import load_config
+    from cnequity.orchestrator.engine import JobEngine
+    from cnequity.orchestrator.outcomes import InputChangedError
+    from cnequity.steps import minute_resamples
+
+    cfg_path = _cli_config(tmp_path, intraday=True)
+    config = load_config(cfg_path)
+    dataset = "minute_bars_15m"
+    _write(config, "minute_bars_5m", OLD, _bars("603869.SH", OLD, 5, 6))
+    activated = CliRunner().invoke(cli, ["derive", dataset, "--config", cfg_path])
+    assert activated.exit_code == 0, activated.output
+    _write(config, "minute_bars", NEW, _bars("603869.SH", NEW, 1, 30))
+
+    def reject(*args, **kwargs):
+        raise InputChangedError("input changed during calculation")
+
+    engine = JobEngine(config)
+    steps = [f"derive_{dataset}"]
+    with monkeypatch.context() as patch:
+        patch.setattr(minute_resamples, "publish_derived_revision", reject)
+        failed = engine.run_job("derive:minute_bars", NEW, steps=steps, backfill=True)
+    receipt = engine.manifest.get_dataset_result(failed["run_id"], dataset, "derive")
+    assert receipt["execution_status"] == "failed"
+    assert stale_sessions(config, dataset) == [NEW]
+
+    retried = engine.run_job("derive:minute_bars", NEW, steps=steps, backfill=True)
+    assert retried["status"] == "success"
+    assert stale_sessions(config, dataset) == []
 
 
 @pytest.mark.usefixtures("chinese_output")

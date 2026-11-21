@@ -387,8 +387,8 @@ def audit(
     \b
     A bare `cne run daily` already audits once after all schedule groups (with `--core-only`, as the last step of the `finalize` wave),
     so running it here re-audits data that has already been audited.
-    What is not scheduled is `--full`: it judges the state of the lake right now rather than what one run wrote,
-    and it is what the health check and the dashboard read.
+    The timer schedules `--full` separately each week. This mode assesses the current state of the lake
+    and is also used by the health check and the dashboard.
 
     """
     cfg = _cfg(config_path)
@@ -1717,9 +1717,9 @@ def sources_probe(
             suffix = _(" [explicit probe only]") if probe.manual_only else ""
             click.echo(f"{probe.key:<24} {_(probe.label)}{suffix}")
         return
-    _progress_logging(quiet=True)
     keys = comma_values(only, "--only")
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "sources-probe")
     vantage = effective_vantage(cfg, vantage)
     try:
         report = run_probes(cfg, vantage=vantage, only=keys, stale_only=stale_only)

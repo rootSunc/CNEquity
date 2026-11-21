@@ -12,10 +12,15 @@ from typing import Any
 
 from cnequity.orchestrator.outcomes import (
     LEGACY_STATUSES,
+    RESULT_SCHEMA_VERSION,
     STEP_STATUSES,
+    ExecutionStatus,
+    RunStatus,
     run_status,
     status_word,
     step_outcome,
+    summarize_coverage,
+    summarize_publication,
 )
 
 
@@ -193,7 +198,8 @@ class _ClosingConnection(sqlite3.Connection):
 
 
 class Manifest:
-    def __init__(self, db_path: Path | str):
+    def __init__(self, db_path: Path | str, *, config=None):
+        self._config = config
         # Worker-pool children pass a str path across process boundaries.
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,6 +247,7 @@ class Manifest:
                     error_message TEXT,
                     heartbeat_at TEXT,
                     blocks_compaction INTEGER DEFAULT 1,
+                    source_routes_json TEXT,
                     PRIMARY KEY (run_id, batch_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_batches_run_status
@@ -280,6 +287,8 @@ class Manifest:
                 conn.execute("ALTER TABLE ingestion_batches ADD COLUMN execution_status TEXT")
             if "reason_code" not in cols:
                 conn.execute("ALTER TABLE ingestion_batches ADD COLUMN reason_code TEXT")
+            if "source_routes_json" not in cols:
+                conn.execute("ALTER TABLE ingestion_batches ADD COLUMN source_routes_json TEXT")
             run_cols = {row[1] for row in conn.execute("PRAGMA table_info(ingestion_runs)")}
             for name, definition in (
                 ("execution_status", "TEXT"),
@@ -371,6 +380,10 @@ class Manifest:
         """
         run_id = run_id or str(uuid.uuid4())
         metadata = dict(metadata or {})
+        if self._config is not None:
+            from cnequity.config.provenance import run_configuration
+
+            metadata["effective_config"] = run_configuration(self._config)
         # A dashboard job sets this in its own process, and in every child that
         # process starts (retry --failed-groups inherits the environment). A
         # run tagged this way is not "the day's scheduled pipeline".
@@ -601,6 +614,7 @@ class Manifest:
         request_retry_count: int | None = None,
         execution_status: str | None = None,
         reason_code: str | None = None,
+        source_routes: dict[str, list[str]] | None = None,
     ) -> None:
         if request_retry_count is not None:
             try:
@@ -622,6 +636,7 @@ class Manifest:
                     END,
                     execution_status = ?,
                     reason_code = ?,
+                    source_routes_json = ?,
                     blocks_compaction = CASE
                         WHEN ? IN ('degraded', 'failed', 'stale') THEN 1
                         ELSE blocks_compaction
@@ -639,6 +654,7 @@ class Manifest:
                     request_retry_count,
                     execution_status or step_outcome(status).execution_status,
                     reason_code,
+                    json.dumps(source_routes, sort_keys=True) if source_routes else None,
                     status,
                     run_id,
                     batch_id,
@@ -1376,31 +1392,17 @@ class Manifest:
             status = "degraded"
         else:
             status = "success"
-        coverage = {row["coverage_status"] for row in rows} - {"not_applicable"}
-        publications = {
-            row["publication_status"] for row in rows if row["stage"] == "publish_revision"
-        }
+        execution = (
+            ExecutionStatus.FAILED if status == RunStatus.FAILED else ExecutionStatus.COMPLETED
+        )
         return {
             "status": status,
-            "result_schema_version": 2,
-            "execution_status": "failed" if status == "failed" else "completed",
-            "coverage_status": "partial"
-            if "partial" in coverage
-            else "unknown"
-            if "unknown" in coverage
-            else "complete"
-            if coverage
-            else "not_applicable",
-            "publication_status": "partial"
-            if "partial" in publications
-            or ("published" in publications and "rejected" in publications)
-            else "published"
-            if "published" in publications
-            else "rejected"
-            if "rejected" in publications
-            else "unchanged"
-            if "unchanged" in publications
-            else "none",
+            "result_schema_version": RESULT_SCHEMA_VERSION,
+            "execution_status": execution.value,
+            "coverage_status": summarize_coverage(row["coverage_status"] for row in rows).value,
+            "publication_status": summarize_publication(
+                row["publication_status"] for row in rows if row["stage"] == "publish_revision"
+            ).value,
             "usable_result": usable,
             "counts": counts,
             "core_failures": core_failures,

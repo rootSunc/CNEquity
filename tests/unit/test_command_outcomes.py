@@ -97,6 +97,25 @@ def test_result_axes_do_not_infer_coverage_from_success(status, out, execution, 
     assert result.result_schema_version == 2
 
 
+def test_run_aggregates_coverage_and_publication_independently(tmp_path):
+    manifest = Manifest(_config(tmp_path).manifest_path)
+    run = manifest.start_run("backfill")
+    manifest.record_dataset_result(
+        run, "daily_bars", "fetch", "success", coverage_status="complete"
+    )
+    manifest.record_dataset_result(run, "index_bars", "fetch", "success", coverage_status="unknown")
+    manifest.record_dataset_result(
+        run, "daily_bars", "publish_revision", "success", revision_id="r1"
+    )
+    manifest.record_dataset_result(
+        run, "index_bars", "publish_revision", "blocked", publication_status="rejected"
+    )
+    result = manifest.aggregate_run_status(run)
+    assert result["execution_status"] == "failed"
+    assert result["coverage_status"] == "unknown"
+    assert result["publication_status"] == "partial"
+
+
 def test_unknown_errors_are_not_source_outages():
     assert error_kind(RuntimeError("network timeout in my buggy computation")) == "execution_error"
     assert error_kind(OSError("disk full")) == "storage_failure"
@@ -454,24 +473,24 @@ def _factor_frame():
 
 def _derive_factors(cfg, inputs):
     from cnequity.domain.datasets import DATASETS
-    from cnequity.steps.finalize import _publish_derived_revision
+    from cnequity.steps.finalize import publish_derived_revision
 
     label = f"trade_date={DATASETS['adj_factors'].partition_for(DAY)}"
     with DerivedOutput(cfg, "adj_factors", "derive") as output:
         output.write(label, _factor_frame(), "part.parquet")
-        return _publish_derived_revision(
+        return publish_derived_revision(
             cfg, "adj_factors", "derive", DAY, output, input_revisions=inputs
         )
 
 
 def test_derived_publication_records_partial_input_identity(tmp_path, monkeypatch):
-    from cnequity.steps.finalize import _capture_derive_inputs
+    from cnequity.steps.finalize import capture_derive_inputs
 
     cfg = _config(tmp_path)
     publish_rows(cfg, "daily_bars", _bars())
     # The planner still owes daily_bars a day, so the input is only partial.
     covered(monkeypatch, "daily_bars", DAY, gaps=[DAY])
-    inputs = _capture_derive_inputs(cfg, "adj_factors")
+    inputs = capture_derive_inputs(cfg, "adj_factors")
     result = _derive_factors(cfg, inputs)
     assert result["coverage_status"] == "partial"
     assert result["publication_status"] == "partial"
@@ -480,16 +499,19 @@ def test_derived_publication_records_partial_input_identity(tmp_path, monkeypatc
 
 
 def test_changed_input_revision_cannot_publish_derived_candidate(tmp_path):
-    from cnequity.steps.finalize import _capture_derive_inputs
+    from cnequity.steps.finalize import capture_derive_inputs
 
     cfg = _config(tmp_path)
     publish_rows(cfg, "daily_bars", _bars())
-    inputs = _capture_derive_inputs(cfg, "adj_factors")
+    inputs = capture_derive_inputs(cfg, "adj_factors")
     store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
     publish_rows(cfg, "daily_bars", _bars("000001.SZ"), run_id="new-input")
-    with pytest.raises(InputUnavailableError, match="changed during calculation"):
+    with pytest.raises(InputUnavailableError, match="changed during calculation") as raised:
         _derive_factors(cfg, inputs)
     assert store.current_pointer("adj_factors") is None
+    # A lost race is retried, unlike an input that is missing outright.
+    assert error_kind(raised.value) == "execution_error"
+    assert error_kind(InputUnavailableError("no bars")) == "input_unavailable"
 
 
 def test_storage_failure_stops_later_writes(tmp_path, monkeypatch):
@@ -568,7 +590,7 @@ def test_unknown_missing_bar_key_is_not_a_suspension_fact(tmp_path):
 
 def test_share_structure_change_blocks_adj_factors_publication(tmp_path):
     """The share-reform step reads share_structure, so publication must pin it."""
-    from cnequity.steps.finalize import _capture_derive_inputs
+    from cnequity.steps.finalize import capture_derive_inputs
 
     cfg = _config(tmp_path)
 
@@ -578,7 +600,7 @@ def test_share_structure_change_blocks_adj_factors_publication(tmp_path):
         )
 
     publish_rows(cfg, "share_structure", shares(1.0))
-    inputs = _capture_derive_inputs(cfg, "adj_factors")
+    inputs = capture_derive_inputs(cfg, "adj_factors")
     assert "share_structure" in inputs
     publish_rows(cfg, "share_structure", shares(2.0), run_id="new-input")
     with pytest.raises(InputUnavailableError, match="share_structure changed"):

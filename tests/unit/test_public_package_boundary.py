@@ -21,6 +21,12 @@ def test_release_members_reject_local_materials(prefix, directory):
     assert checker.check_members([*required, local]) == [local]
 
 
+@pytest.mark.parametrize("name", ["cnequity.toml", "cnequity.demo.toml", "cnequity.sample.toml"])
+def test_release_members_reject_local_configs(name):
+    path = f"configs/{name}"
+    assert checker.check_members([*checker.REQUIRED_FILES, path]) == [path]
+
+
 def test_release_members_allow_public_contracts_and_tests():
     members = [
         *checker.REQUIRED_FILES,

@@ -38,10 +38,11 @@ from pathlib import Path
 
 import polars as pl
 
+from cnequity.config.resources import resources_for
 from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.meta_layout import LAKE_DIR
 from cnequity.storage.catalog_bridge import (
-    REVISIONS_TABLE,
     _ensure_sync_table,
     _partition_key_column,
     _partition_predicate,
@@ -57,7 +58,15 @@ from cnequity.storage.catalog_bridge import (
 from cnequity.storage.locator import layer_name
 from cnequity.storage.parquet import emit_partition, merge_group_keys
 from cnequity.storage.revisions import DatasetRevision, RevisionFile, RevisionStore, sha256_file
-from equitylake_core.catalog import CATALOG_FILE, Catalog, quote_identifier, quote_literal
+from equitylake_core.catalog import (
+    ALIAS,
+    CATALOG_FILE,
+    REVISIONS_TABLE,
+    Catalog,
+    quote_identifier,
+    quote_literal,
+)
+from equitylake_core.lock import lake_read
 from equitylake_core.write import (
     Write,
     WriteRejected,
@@ -250,7 +259,7 @@ class Checkout:
         granularity = granularity_for_dataset(self.dataset)
         folders: dict[str, list[str]] | None = {}
         for (path,) in catalog.execute(
-            "SELECT data_file FROM ducklake_list_files('lake', ?)", [self.dataset]
+            f"SELECT data_file FROM ducklake_list_files('{ALIAS}', ?)", [self.dataset]
         ).fetchall():
             found = Path(path)
             parts = found.relative_to(table).parts if table in found.parents else ()
@@ -566,9 +575,16 @@ class LakeWrite:
                 prepare_record_tables(created)
         # Checkouts only read: the lake lock is taken at publish, not for the
         # whole of a derive or a compact's merge.
-        self.catalog = Catalog(
-            root, read_only=True, memory_limit="4GB", temp_directory=root / "tmp"
-        )
+        with contextlib.ExitStack() as resources:
+            resources.enter_context(lake_read(root))
+            self.catalog = resources.enter_context(
+                Catalog(
+                    root,
+                    read_only=True,
+                    **resources_for(config, "write").options(scratch=root / "tmp"),
+                )
+            )
+            self._resources = resources.pop_all()
         self._checkouts: dict[str, Checkout] = {}
         # Files placed in the lake for a rehearsal on a copy of its catalog.
         self._rehearsed: list[Path] = []
@@ -605,8 +621,10 @@ class LakeWrite:
 
     def close(self, *, keep: bool = False) -> Path | None:
         """Release the catalog and the checkout; *keep* moves it aside for inspection."""
-        self._drop_rehearsed()
-        self.catalog.close()
+        try:
+            self._drop_rehearsed()
+        finally:
+            self._resources.close()
         if not self.root.exists():
             return None
         if not keep:
@@ -667,7 +685,11 @@ class LakeWrite:
         self._checks.append((name, check))
 
     def publish(
-        self, datasets: dict[str, DatasetPublish], *, message: str | None = None
+        self,
+        datasets: dict[str, DatasetPublish],
+        *,
+        message: str | None = None,
+        record: Callable[[Write], None] | None = None,
     ) -> dict[str, DatasetRevision]:
         """Publish every changed partition of *datasets* as one snapshot.
 
@@ -680,9 +702,13 @@ class LakeWrite:
             return {}
         root = lake_root(self.config)
         with lake_mutation_lock(self.config.meta_root, blocking=True):
-            with Catalog(root, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
+            with Catalog(
+                root, **resources_for(self.config, "write").options(scratch=root / "tmp")
+            ) as catalog:
                 prepare_record_tables(catalog)
-                return self._commit(catalog, self.store, changes, datasets, message, advance=True)
+                return self._commit(
+                    catalog, self.store, changes, datasets, message, advance=True, record=record
+                )
 
     def rehearse(
         self, config, datasets: dict[str, DatasetPublish], *, message: str | None = None
@@ -700,7 +726,9 @@ class LakeWrite:
             return {}
         store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         root = lake_root(config)
-        with Catalog(root, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
+        with Catalog(
+            root, **resources_for(config, "write").options(scratch=root / "tmp")
+        ) as catalog:
             return self._commit(catalog, store, changes, datasets, message, advance=False)
 
     def _changes(self, datasets) -> dict[str, dict[str, list[Path]]]:
@@ -722,6 +750,7 @@ class LakeWrite:
         message: str | None,
         *,
         advance: bool,
+        record: Callable[[Write], None] | None = None,
     ) -> dict[str, DatasetRevision]:
         for dataset in changes:
             checkout = self._checkouts[dataset]
@@ -740,12 +769,10 @@ class LakeWrite:
             )
             for dataset in changes
         }
-        write = Write(catalog)
-        placed: list[Path] = []
-        try:
+        with Write(catalog) as write:
             holding: dict[str, list[str]] = {}
             for dataset, found in swaps.items():
-                add, remove, holding[dataset] = self._place_files(catalog, dataset, found, placed)
+                add, remove, holding[dataset] = self._place_files(write, dataset, found)
                 write.swap(dataset, add=add, remove=remove)
             for name, check in self._checks:
                 write.check(name, check)
@@ -760,16 +787,13 @@ class LakeWrite:
                 write.record(REVISIONS_TABLE, _revision_recorder(receipt, where, files))
             # One snapshot holds the files, the sync state and the revision
             # rows, and it is file-complete: a pinned read needs nothing more.
+            if record is not None:
+                record(write)
             write.commit(message=message or f"run {self.run_id}")
-        except BaseException:
-            # Nothing was registered: the files placed for it belong to no snapshot.
-            for path in placed:
-                path.unlink(missing_ok=True)
-            raise
         if catalog.borrows_data:
             # Placed in the lake's own data directory for a copy of its catalog:
             # they belong to no snapshot of the lake, and go when the copy does.
-            self._rehearsed.extend(placed)
+            self._rehearsed.extend(write.placed)
         for dataset, receipt in receipts.items():
             store.index_catalog_revision(receipt)
             if advance and self._scope is not None:
@@ -777,13 +801,14 @@ class LakeWrite:
         return receipts
 
     def _place_files(
-        self, catalog: Catalog, dataset: str, swaps: list[PartitionSwap], placed: list[Path]
+        self, write: Write, dataset: str, swaps: list[PartitionSwap]
     ) -> tuple[list[Path], list[str], list[str]]:
         """Put each partition's new files in *catalog*'s lake.
 
         Returns the files placed, the lake files to drop, and every file that
         holds a changed partition once both are done.
         """
+        catalog = write.catalog
         checkout = self._checkouts[dataset]
         ours, theirs = self.catalog.data_root, catalog.data_root
         add: list[Path] = []
@@ -807,12 +832,8 @@ class LakeWrite:
             directory = checkout.layout_dir(swap.label, catalog)
             for source in swap.add:
                 target = directory / lake_file_name(source.name)
-                placed.append(target)
-                if catalog.file_fits(dataset, source):
-                    _place(source, target)
-                else:
-                    catalog.conform_file(dataset, source, target)
-                _protect(target)
+                conform_to = None if catalog.file_fits(dataset, source) else dataset
+                write.place(source, target, conform_to=conform_to)
                 add.append(target)
                 holding.append(target.as_posix())
             # A copy of the lake's catalog reads the same files at the same place.
@@ -874,7 +895,7 @@ def published_layout(data_root: Path, dataset: str) -> dict[str, list[tuple[Path
     partition's folder (written by the catalog itself), so the partition has
     to be read by its rows instead; see :func:`export_tree`.
     """
-    with Catalog(Path(data_root) / "lake", read_only=True) as catalog:
+    with Catalog(Path(data_root) / LAKE_DIR, read_only=True) as catalog:
         checkout = Checkout(
             _Reader(catalog, Path(data_root)), dataset, root=Path(data_root) / dataset, link=False
         )
@@ -890,7 +911,7 @@ def published_layout(data_root: Path, dataset: str) -> dict[str, list[tuple[Path
 def export_tree(data_root: Path, dataset: str, destination: Path) -> None:
     """Write *dataset*'s published catalog rows to *destination* in its partition layout."""
     destination.mkdir(parents=True, exist_ok=True)
-    with Catalog(Path(data_root) / "lake", read_only=True) as catalog:
+    with Catalog(Path(data_root) / LAKE_DIR, read_only=True) as catalog:
         checkout = Checkout(
             _Reader(catalog, destination.parent), dataset, root=destination, link=False
         )
@@ -999,7 +1020,9 @@ def verify_revisions(catalog: Catalog, dataset: str | None = None) -> list[Revis
     ).fetchall()
     kept = {
         int(row[0])
-        for row in catalog.execute("SELECT snapshot_id FROM ducklake_snapshots('lake')").fetchall()
+        for row in catalog.execute(
+            f"SELECT snapshot_id FROM ducklake_snapshots('{ALIAS}')"
+        ).fetchall()
     }
     checks = []
     for name, revision_id, snapshot, rows, digest, algorithm, where in recorded:
@@ -1021,7 +1044,7 @@ def verify_revisions(catalog: Catalog, dataset: str | None = None) -> list[Revis
 
 
 def _revision_row(receipt: DatasetRevision) -> dict[str, object]:
-    from cnequity.storage.catalog_bridge import receipt_columns
+    from cnequity.storage.revision_records import receipt_columns
 
     return {
         "dataset": receipt.dataset,
@@ -1038,7 +1061,7 @@ def catalog_revision(store: RevisionStore, dataset: str) -> str | None:
     """The revision id the catalog holds for *dataset*, or ``None`` without a catalog."""
     from equitylake_core.catalog import CATALOG_FILE
 
-    root = Path(store.meta_root.parent) / "lake"
+    root = Path(store.meta_root.parent) / LAKE_DIR
     if not (root / CATALOG_FILE).exists():
         return None
     with Catalog(root, read_only=True) as catalog:

@@ -15,8 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
 
+from cnequity.domain.request_meter import record_source_route
 from cnequity.file_lock import exclusive_lock
 from cnequity.file_replace import replace_with_retry
+from cnequity.progress import step_scope, wait_scope
 
 DEFAULT_LOCK_TIMEOUT_SECONDS = 15.0
 # Code-level defaults for minimal TOML and programmatic Config callers. The
@@ -223,7 +225,11 @@ class RateLimiter:
                         },
                     )
                     return
-            time.sleep(delay)
+            if delay < 3:
+                time.sleep(delay)
+            else:
+                with wait_scope(f"{self.name} request pacing"):
+                    time.sleep(delay)
 
 
 _CONCURRENCY_SCHEMA_VERSION = 1
@@ -430,6 +436,10 @@ class SourceConcurrencyLimiter:
 
     def acquire(self, *, timeout: float | None = None, metrics: dict | None = None) -> str:
         """Reserve one in-flight slot and return its opaque lease token."""
+        with wait_scope(f"{self.name} concurrency slot (limit {self.limit})"):
+            return self._acquire_slot(timeout=timeout, metrics=metrics)
+
+    def _acquire_slot(self, *, timeout: float | None, metrics: dict | None) -> str:
         started = time.perf_counter()
         deadline = None if timeout is None else started + max(float(timeout), 0.0)
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -576,6 +586,17 @@ def source_slot(
 
 
 @contextmanager
+def _route_attempt(source: str) -> Iterator[None]:
+    record_source_route(source, "attempted")
+    try:
+        with step_scope(f"request {source}"):
+            yield
+    except Exception:
+        record_source_route(source, "failed")
+        raise
+
+
+@contextmanager
 def source_request(
     config: object | None,
     source: str,
@@ -587,7 +608,8 @@ def source_request(
     started = time.perf_counter()
     if config is None:
         try:
-            yield
+            with _route_attempt(source):
+                yield
         except BaseException:
             _record_request_metrics(metrics, started, failed=True)
             raise
@@ -602,7 +624,8 @@ def source_request(
             context = requester(source)
         try:
             with context:
-                yield
+                with _route_attempt(source):
+                    yield
         except BaseException:
             _record_request_metrics(metrics, started, failed=True)
             raise
@@ -616,7 +639,7 @@ def source_request(
     if rate is not None:
         rate(source)
     try:
-        with source_slot(config, source, metrics=metrics, timeout=timeout):
+        with source_slot(config, source, metrics=metrics, timeout=timeout), _route_attempt(source):
             yield
     except BaseException:
         _record_request_metrics(metrics, started, failed=True)
@@ -648,7 +671,10 @@ def source_request_slot_spec(
         try:
             if spec is not None:
                 record_metered_attempt(spec.state_dir, spec.source, spec.source)
-            yield
+                with _route_attempt(spec.source):
+                    yield
+            else:
+                yield
         except BaseException:
             _record_request_metrics(metrics, started, failed=True)
             raise
@@ -665,7 +691,8 @@ def source_request_slot_spec(
     try:
         with limiter.slot(metrics=metrics, timeout=timeout):
             record_metered_attempt(state_dir, spec.source, spec.source)
-            yield
+            with _route_attempt(spec.source):
+                yield
     except BaseException:
         _record_request_metrics(metrics, started, failed=True)
         raise

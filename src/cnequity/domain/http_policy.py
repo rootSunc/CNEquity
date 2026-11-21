@@ -21,26 +21,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from cnequity.domain.rate_limit import _owner_is_alive, _read_json, _safe_source_name, _write_json
+from cnequity.domain.request_meter import record_source_route
+from cnequity.domain.source_routes import source_family as source_family
 from cnequity.file_lock import exclusive_lock
 from cnequity.i18n import N_, Message
 
 logger = logging.getLogger(__name__)
-
-
-def source_family(source: str) -> str:
-    text = str(source).strip().lower()
-    if text == "ths_official":
-        return text  # independent keyed service, not the public THS website
-    if text.startswith("tdx_fin"):
-        return "tdx_fin"  # HTTP package server, not the TDX quote protocol
-    for prefix in ("ths", "cninfo", "eastmoney_push2", "eastmoney_dc", "sina"):
-        if text.startswith(prefix):
-            return prefix
-    if text.startswith("tdx"):
-        return "tdx_protocol"
-    if text.startswith("eastmoney") or text in {"em", "datacenter"}:
-        return "eastmoney"
-    return text
 
 
 class SourceCoolingDown(RuntimeError):
@@ -191,6 +177,7 @@ def record_business_refusal(
     config: object | None, source: str, *, kind: str, cooldown_seconds: float = 300.0
 ) -> None:
     """Adapters call this only for a known refusal code or challenge page."""
+    record_source_route(source, "failed")
     root = getattr(config, "rate_limit_root", None)
     if not isinstance(root, Path):
         return
@@ -224,6 +211,9 @@ def record_http_response(
     adapter. A later call (including another process/alias) fails locally.
     """
     status = status if status is not None else getattr(response, "status_code", None)
+    record_source_route(source, "attempted")
+    if isinstance(status, int) and status >= 400:
+        record_source_route(source, "failed")
     if meter:
         try:
             _record_wire_response(config, source, response, status=status)
@@ -357,6 +347,7 @@ def record_request_event(config: object | None, source: str, event: str) -> None
     """
     if event not in {"retry", "fallback"}:
         raise ValueError(f"unknown request event {event!r}")
+    record_source_route(source, event)
     root = getattr(config, "rate_limit_root", None)
     if not isinstance(root, Path):
         return

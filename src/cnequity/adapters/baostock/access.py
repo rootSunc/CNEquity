@@ -26,9 +26,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from cnequity.domain.http_policy import SourceCoolingDown, source_family
+from cnequity.domain.market_time import SHANGHAI_TZ
 from cnequity.domain.rate_limit import _read_json, _safe_source_name, _write_json
 from cnequity.file_lock import LockUnavailable, exclusive_lock
 
@@ -44,7 +44,7 @@ EMPTY_RELEASE_REFRESH_SECONDS = 5 * 60
 # hanging a scheduled run.
 CONNECTION_WAIT_SECONDS = 10 * 60
 
-_SHANGHAI = ZoneInfo("Asia/Shanghai")
+_SHANGHAI = SHANGHAI_TZ
 _LEDGER_NAME = "baostock-access.json"
 _CONNECTION_LOCK = "baostock-connection.lock"
 _RELEASE_AT = re.compile(r"(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)")

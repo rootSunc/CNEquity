@@ -110,22 +110,21 @@ def list_trading_dates(
     if start > end:
         return []
     cal = _load_trading_calendar_df(config, start=start, end=end, include_staging=include_staging)
-    if cal is not None and not cal.is_empty() and "trade_date" in cal.columns:
-        covered = set(cal.get_column("trade_date").drop_nulls().to_list())
+    if cal is not None and {"trade_date", "is_trading"} <= set(cal.columns):
+        covered = cal["trade_date"].drop_nulls().n_unique()
         expected_days = (end - start).days + 1
-        if len(covered) == expected_days:
-            out = cal.filter(session_expr())["trade_date"].sort().to_list()
-            if out:
-                return out
-        else:
-            logger.warning(
-                "trading_calendar only covers %d/%d calendar day(s) in %s..%s; "
-                "rebuilding from the seed and bar evidence",
-                len(covered),
-                expected_days,
-                start.isoformat(),
-                end.isoformat(),
-            )
+        if covered == expected_days:
+            return cal.filter(session_expr())["trade_date"].sort().to_list()
+        logger.warning(
+            "trading_calendar only covers %d/%d calendar day(s) in %s..%s; "
+            "filling missing dates from the seed and bar evidence",
+            covered,
+            expected_days,
+            start.isoformat(),
+            end.isoformat(),
+        )
+    else:
+        cal = None
     from cnequity.adapters.calendar.exchange_calendar import (
         build_trading_calendar,
         ensure_seed_csv,
@@ -138,41 +137,16 @@ def list_trading_dates(
         end,
         seed_path=effective_seed,
         curated_root=config.curated_root,
+        known=cal,
     )
     return calendar.filter(session_expr())["trade_date"].sort().to_list()
 
 
 def is_trading_day(config: Config, trade_date: date, *, include_staging: bool = False) -> bool:
     """Return whether *trade_date* is a trading day per curated calendar or seed."""
-    if not exchange_may_open(trade_date):
-        return False
-    cal = _load_trading_calendar_df(
-        config, start=trade_date, end=trade_date, include_staging=include_staging
+    return exchange_may_open(trade_date) and bool(
+        list_trading_dates(config, trade_date, trade_date, include_staging=include_staging)
     )
-    if cal is not None and not cal.is_empty():
-        row = cal.filter(pl.col("trade_date") == trade_date)
-        if not row.is_empty():
-            return bool(row["is_trading"][0])
-
-    from cnequity.adapters.calendar.exchange_calendar import (
-        build_trading_calendar,
-        ensure_seed_csv,
-    )
-
-    seed_path = config.meta_root / "seeds" / "trading_calendar.csv"
-    effective_seed = seed_path if seed_path.exists() else ensure_seed_csv()
-    day_cal = build_trading_calendar(
-        trade_date,
-        trade_date,
-        seed_path=effective_seed,
-        curated_root=config.curated_root,
-    )
-    if day_cal.is_empty():
-        raise RuntimeError(
-            f"trading calendar returned no row for {trade_date.isoformat()}; "
-            "refusing to classify it by weekday"
-        )
-    return bool(day_cal["is_trading"][0])
 
 
 def last_trading_day(

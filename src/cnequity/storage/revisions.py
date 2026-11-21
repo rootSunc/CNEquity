@@ -20,8 +20,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cnequity.config.retention import revision_keep
 from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.meta_layout import LEGACY_STATE, REVISION_DATA, REVISION_RECORDS, STORAGE_RECORD
 from cnequity.storage.atomic import (
     fsync_dir,
 )
@@ -190,8 +192,8 @@ class RevisionStore:
             if derived_root is not None
             else self.curated_root.parent / "derived"
         )
-        _reject_symlink_path(self.meta_root / "state", label="state root")
-        self.root = self.meta_root / "revisions"
+        _reject_symlink_path(self.meta_root / LEGACY_STATE, label="state root")
+        self.root = self.meta_root / REVISION_RECORDS
         _reject_symlink_path(self.root, label="revision root")
         if create:
             self.root.mkdir(parents=True, exist_ok=True)
@@ -317,7 +319,7 @@ class RevisionStore:
         if not isinstance(root_raw, str) or not root_raw:
             raise RevisionConsistencyError(f"revision pointer has no generation path: {path}")
         relative = self._safe_relative(root_raw)
-        if relative.parts[:3] != ("revisions", "data", dataset):
+        if relative.parts[:3] != (REVISION_DATA / dataset).parts:
             raise RevisionConsistencyError(f"revision pointer generation mismatch: {path}")
         generation = self._safe_meta_path(relative, label="generation")
         try:
@@ -337,7 +339,7 @@ class RevisionStore:
             if not isinstance(receipt_raw, str) or not receipt_raw:
                 raise RevisionConsistencyError(f"revision pointer has no receipt: {path}")
             receipt_relative = self._safe_relative(receipt_raw)
-            if receipt_relative.parts[:2] != ("revisions", dataset):
+            if receipt_relative.parts[:2] != (REVISION_RECORDS / dataset).parts:
                 raise RevisionConsistencyError(f"revision pointer receipt mismatch: {path}")
             receipt_path = self._safe_meta_path(receipt_relative, label="receipt")
             try:
@@ -519,7 +521,7 @@ class RevisionStore:
     def publishes_to_catalog(self) -> bool:
         """Whether this lake publishes new revisions into its catalog (``meta/storage.json``)."""
         try:
-            setting = json.loads((self.meta_root / "storage.json").read_text(encoding="utf-8"))
+            setting = json.loads((self.meta_root / STORAGE_RECORD).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
         return isinstance(setting, dict) and setting.get("publish") == STORAGE_CATALOG
@@ -951,7 +953,11 @@ def preview_revision_retention(meta_root: Path | str, *, keep: int) -> list[Gene
     """
     from cnequity.storage.lifecycle import LifecycleStore
 
-    report = LifecycleStore(meta_root).inspect(keep=max(1, int(keep)))
+    if keep == 0:
+        return []
+    store = LifecycleStore(meta_root)
+    store.retention_registry()
+    report = store.inspect(keep=keep)
     candidates = [o for o in report["objects"] if not o["blocked_reasons"]]
     results = []
     for dataset in sorted({o["dataset"] for o in candidates}):
@@ -1010,7 +1016,7 @@ def _refuse_live_lake_deletion(meta: Path, path: Path, obj: dict, protected: set
         raise RevisionConsistencyError(f"refusing to delete in-use generation: {obj['path']}")
     relative = Path(obj["path"])
     if (
-        relative.parts[:3] != ("revisions", "data", obj["dataset"])
+        relative.parts[:3] != (REVISION_DATA / obj["dataset"]).parts
         or relative.name != obj["revision_id"]
     ):
         raise RevisionConsistencyError(
@@ -1041,25 +1047,14 @@ def retain_revision_generations(
     having no external references. A stale inventory or an unfinished purge
     deletes nothing.
     """
-    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
-        raise ValueError("keep must be at least 1")
-    from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, reference_fingerprint
-    from cnequity.storage.lifecycle.purge import unfinished
+    keep = revision_keep(None, keep)
+    if keep == 0:
+        return []
+    from cnequity.storage.lifecycle import LifecycleStore
 
     store = LifecycleStore(meta_root)
     with lake_mutation_lock(store.meta):
-        if unfinished(store):
-            raise LifecycleError("Resume unfinished purge before revision retention")
-        registry = store.registry()
-        if registry is not None and (
-            reference_fingerprint(registry["reference_roots"], meta_root=store.meta)
-            != registry["reference_fingerprint"]
-        ):
-            # A file under the reference roots changed. Re-scan and hold what
-            # it now cites before deleting anything; the refresh only adds
-            # holds, so it can never expose a generation a reference needs.
-            refreshed = store.refresh_references()
-            logger.info("revision retention: reference inventory refreshed: %s", refreshed)
+        store.retention_registry(refresh=True)
         report = store.inspect(keep=keep)
         revision_store = RevisionStore(store.meta, store.meta.parent / "curated", create=False)
         protected = set()
@@ -1073,7 +1068,7 @@ def retain_revision_generations(
             if obj["blocked_reasons"] or obj["current"] or obj["path"] in protected:
                 continue
             relative = Path(obj["path"])
-            if relative.parts[:3] != ("revisions", "data", obj["dataset"]) or (
+            if relative.parts[:3] != (REVISION_DATA / obj["dataset"]).parts or (
                 relative.name != obj["revision_id"]
             ):
                 raise RevisionConsistencyError(
@@ -1093,7 +1088,7 @@ def retain_revision_generations(
                 freed += _exclusive_tree_bytes(path)
                 shutil.rmtree(path)
                 removed.append(obj["revision_id"])
-            parent = store.meta / "revisions" / "data" / dataset
+            parent = store.meta / REVISION_DATA / dataset
             if parent.is_dir():
                 fsync_dir(parent)
             removed_ids = set(removed)
@@ -1123,8 +1118,8 @@ def apply_configured_revision_retention(config) -> dict[str, Any] | None:
     generation. A failure is reported and does not undo the publication that
     just finished; the next backfill or daily run tries again.
     """
-    keep = getattr(config, "revision_keep_generations", 5)
-    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+    keep = revision_keep(config)
+    if keep == 0:
         return None
     from cnequity.storage.lifecycle import LifecycleError
 

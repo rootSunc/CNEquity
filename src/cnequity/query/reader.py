@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import warnings
 from collections.abc import Mapping
 from datetime import date, timedelta
@@ -280,12 +279,14 @@ def resolve_config(
         return Config(data_root=Path(data_root).expanduser().resolve())
     # The same lookup as the CLI, so `load()` in a notebook opened from any
     # directory reads the lake `cne` commands update.
-    from cnequity.config.locate import PROJECT_CONFIG, find_config, user_config_path
+    from cnequity.config.locate import (
+        PROJECT_CONFIG,
+        config_from_environment,
+        find_config,
+        user_config_path,
+    )
 
-    env = os.environ.get("CNE_CONFIG")
-    if env:
-        return load_config(Path(env).expanduser())
-    path = find_config()
+    path = config_from_environment() or find_config()
     if path is not None:
         return load_config(path)
     raise ReaderError(
@@ -1198,198 +1199,209 @@ def load(
         configuration and software versions are not pinned by this map.
     """
     cfg = resolve_config(config=config, data_root=data_root)
-    revision_selection = _merge_revision_selection(revision, revision_map)
-    effective_universe, resolved_profile, effective_strict_universe = _resolve_reader_scope(
-        universe=universe,
-        profile=profile,
-        universe_profile=universe_profile,
-        strict_universe=strict_universe,
-    )
-    if dataset not in CURATED_DATASETS | DERIVED_DATASETS:
-        raise ReaderError(f"unknown dataset {dataset!r}")
-    effective_pit_mode: PitMode = "best_effort" if pit_mode is None else pit_mode
-    if effective_pit_mode not in ("strict", "best_effort"):
-        raise ReaderError(f"unsupported pit_mode {pit_mode!r}; use 'strict' or 'best_effort'")
-
-    spec = DATASETS[dataset]
-    if (effective_universe or resolved_profile) and not spec.universe_filter:
-        supported = ", ".join(n for n, s in DATASETS.items() if s.universe_filter)
-        raise ReaderError(
-            f"universe filter applies to {supported} only; it is not supported for {dataset}"
+    with read_scope(config=cfg):
+        revision_selection = _merge_revision_selection(revision, revision_map)
+        effective_universe, resolved_profile, effective_strict_universe = _resolve_reader_scope(
+            universe=universe,
+            profile=profile,
+            universe_profile=universe_profile,
+            strict_universe=strict_universe,
         )
-    if adjust and dataset == "index_bars":
-        raise ReaderError(
-            "adjustment applies to per-share prices only; index_bars levels are not adjustable"
-        )
-    if adjust == "total_return" and not spec.total_return:
-        supported = ", ".join(n for n, s in DATASETS.items() if s.total_return)
-        raise ReaderError(f"adjust='total_return' applies to {supported} only")
+        if dataset not in CURATED_DATASETS | DERIVED_DATASETS:
+            raise ReaderError(f"unknown dataset {dataset!r}")
+        effective_pit_mode: PitMode = "best_effort" if pit_mode is None else pit_mode
+        if effective_pit_mode not in ("strict", "best_effort"):
+            raise ReaderError(f"unsupported pit_mode {pit_mode!r}; use 'strict' or 'best_effort'")
 
-    start_d = _parse_date(start)
-    end_d = _parse_date(end)
-    as_of_d = _parse_date(as_of)
-
-    dependencies = {dataset}
-    if dataset == "flash_news_wire":
-        dependencies.add("news_headlines")
-    if adjust and dataset in ADJUSTABLE_DATASETS:
-        dependencies.add("adj_factors")
-    if adjust == "total_return":
-        # Fund distributions and which securities are funds are read as well.
-        dependencies.update({"corporate_actions", "instruments"})
-    if effective_universe:
-        dependencies.update({"instruments", "trading_status", "trading_calendar"})
-    if dataset in OTC_SCOPED_DATASETS and not include_otc and _has_listing_dates(cfg):
-        # Which Beijing rows are NEEQ quotes is read from listing dates.
-        dependencies.add("instruments")
-    selected_revisions = {
-        name: (
-            _revision_for_dataset(revision_selection, name, fallback_primary=name == dataset)
-            if name == dataset or isinstance(revision_selection, Mapping)
-            else None
-        )
-        for name in dependencies
-    }
-    read_context = ReadContext.capture(cfg, dependencies, selected_revisions)
-    from cnequity.storage.research_inputs import validate_research_policies
-
-    validate_research_policies(
-        cfg,
-        dependencies,
-        resolved_profile.name
-        if resolved_profile
-        else f"legacy_{effective_universe}"
-        if effective_universe
-        else None,
-    )
-
-    if dataset in PIT_DATASETS:
-        if as_of_d is None:
-            raise ReaderError(f"{dataset} requires as_of= for point-in-time queries")
-        # Every later step scales with what is scanned: an unwindowed read of
-        # one financial_statement_items quarter held 5.9 GB for 161k rows.
-        scan_start, scan_end = pit_scan_window(
-            dataset, start_d, end_d, as_of_d, all_vintages=all_vintages
-        )
-        df = _read_dataset(
-            cfg,
-            dataset,
-            start=scan_start,
-            end=scan_end,
-            symbols=symbols,
-            revision=_revision_for_dataset(revision_selection, dataset),
-            read_context=read_context,
-        )
-        df = _apply_pit_filters(
-            df,
-            dataset,
-            as_of=as_of_d,
-            items=items,
-            all_vintages=all_vintages,
-            pit_mode=effective_pit_mode,
-        )
-        df = _apply_pit_date_range(df, dataset, start_d, end_d)
-        df = _apply_symbol_filter(df, symbols)
-        # The rest of the key breaks ties. Several top holders share one
-        # announce_date and symbol, and their order otherwise followed the scan.
-        leading = ("announce_date", "symbol", "report_period", "item_code")
-        tie_break = [c for c in (*PRIMARY_KEYS.get(dataset, []), "revision_id") if c not in leading]
-        sort_cols = [c for c in (*leading, *tie_break) if c in df.columns]
-        return df.sort(sort_cols) if sort_cols else df
-
-    if dataset == "flash_news_wire":
-        from cnequity.adapters.eastmoney.news_wire import flash_rows_from_news
-
-        frames: list[pl.DataFrame] = []
-        if dataset_has_parquet(read_context.roots["news_headlines"]):
-            headlines = _read_dataset(
-                cfg, "news_headlines", start=start_d, end=end_d, read_context=read_context
-            )
-            if not headlines.is_empty():
-                frames.append(flash_rows_from_news(headlines))
-        if dataset_has_parquet(read_context.roots[dataset]):
-            frames.append(
-                _read_dataset(cfg, dataset, start=start_d, end=end_d, read_context=read_context)
-            )
-        if not frames:
+        spec = DATASETS[dataset]
+        if (effective_universe or resolved_profile) and not spec.universe_filter:
+            supported = ", ".join(n for n, s in DATASETS.items() if s.universe_filter)
             raise ReaderError(
-                "flash_news_wire has no legacy revision or news_headlines canonical data"
+                f"universe filter applies to {supported} only; it is not supported for {dataset}"
             )
-        df = dedupe_by_primary_key(pl.concat(frames, how="diagonal_relaxed"), dataset)
-    else:
-        df = _read_dataset(
-            cfg,
-            dataset,
-            start=start_d,
-            end=end_d,
-            symbols=symbols,
-            universe=effective_universe,
-            strict_universe=effective_strict_universe,
-            revision=_revision_for_dataset(revision_selection, dataset),
-            read_context=read_context,
-            include_otc=include_otc,
-        )
-    if resolved_profile is not None and dataset == "daily_bars":
-        _require_profile_delisting_evidence(cfg, df, resolved_profile, read_context)
+        if adjust and dataset == "index_bars":
+            raise ReaderError(
+                "adjustment applies to per-share prices only; index_bars levels are not adjustable"
+            )
+        if adjust == "total_return" and not spec.total_return:
+            supported = ", ".join(n for n, s in DATASETS.items() if s.total_return)
+            raise ReaderError(f"adjust='total_return' applies to {supported} only")
 
-    if dataset == "index_constituents" and as_of_d is not None:
-        from cnequity.domain.membership import index_members_as_of
+        start_d = _parse_date(start)
+        end_d = _parse_date(end)
+        as_of_d = _parse_date(as_of)
 
-        df = index_members_as_of(df, as_of_d)
-
-    # Intraday datasets join on (symbol, trade_date) like the daily bars do: a
-    # corporate action applies to a whole session, so every bar in a day shares
-    # that day's factor. Intraday prices are stored unadjusted for the same
-    # reason daily ones are — the factor series can be recomputed, a price
-    # written adjusted cannot be undone.
-    if adjust and dataset in ADJUSTABLE_DATASETS:
-        df = _apply_adjustment(
-            df,
-            cfg,
-            adjust,
-            start_d,
-            end_d,
-            strict_adj=strict_adj,
-            read_context=read_context,
-            # A scalar revision belongs to the primary dataset.  Adjustment
-            # factors have their own revision sequence; absent an explicit
-            # map, use their current committed generation for backwards
-            # compatibility instead of interpreting (say) daily revision 7 as
-            # factor revision 7.  Research callers can pin both explicitly.
-            revision=(
-                _revision_for_dataset(
-                    revision_selection,
-                    "adj_factors",
-                    fallback_primary=False,
-                )
-                if isinstance(revision_selection, Mapping)
+        dependencies = {dataset}
+        if dataset == "flash_news_wire":
+            dependencies.add("news_headlines")
+        if adjust and dataset in ADJUSTABLE_DATASETS:
+            dependencies.add("adj_factors")
+        if adjust == "total_return":
+            # Fund distributions and which securities are funds are read as well.
+            dependencies.update({"corporate_actions", "instruments"})
+        if effective_universe:
+            dependencies.update({"instruments", "trading_status", "trading_calendar"})
+        if dataset in OTC_SCOPED_DATASETS and not include_otc and _has_listing_dates(cfg):
+            # Which Beijing rows are NEEQ quotes is read from listing dates.
+            dependencies.add("instruments")
+        selected_revisions = {
+            name: (
+                _revision_for_dataset(revision_selection, name, fallback_primary=name == dataset)
+                if name == dataset or isinstance(revision_selection, Mapping)
                 else None
-            ),
+            )
+            for name in dependencies
+        }
+        read_context = ReadContext.capture(cfg, dependencies, selected_revisions)
+        from cnequity.storage.research_inputs import validate_research_policies
+
+        validate_research_policies(
+            cfg,
+            dependencies,
+            resolved_profile.name
+            if resolved_profile
+            else f"legacy_{effective_universe}"
+            if effective_universe
+            else None,
         )
 
-    # Intraday rows sort by symbol then timestamp: trade_date alone would leave
-    # a session's 240 bars in whatever order the pages arrived, and grouping by
-    # symbol first is what every resampling consumer wants.
-    #
-    # Transaction records need `tick_seq` rather than the timestamp, because
-    # the timestamp has no seconds: sorting a session by `trade_time` leaves
-    # the twenty records sharing a minute in file order, which is the one thing
-    # this dataset exists to preserve.
-    if "tick_seq" in df.columns:
-        order = ("symbol", "trade_date", "tick_seq")
-    elif "bar_time" in df.columns:
-        order = ("symbol", "bar_time")
-    else:
-        order = (DATE_COLUMNS.get(dataset), "symbol")
-    sort_cols = [c for c in order if c and c in df.columns]
-    if sort_cols:
-        # The rest of the key breaks ties, so the order does not depend on
-        # which files the rows came from or how they were scanned.
-        sort_cols += [
-            c for c in PRIMARY_KEYS.get(dataset, []) if c in df.columns and c not in sort_cols
-        ]
-        df = df.sort(sort_cols, nulls_last=True)
-    return df
+        if dataset in PIT_DATASETS:
+            if as_of_d is None:
+                raise ReaderError(f"{dataset} requires as_of= for point-in-time queries")
+            # Every later step scales with what is scanned: an unwindowed read of
+            # one financial_statement_items quarter held 5.9 GB for 161k rows.
+            scan_start, scan_end = pit_scan_window(
+                dataset, start_d, end_d, as_of_d, all_vintages=all_vintages
+            )
+            df = _read_dataset(
+                cfg,
+                dataset,
+                start=scan_start,
+                end=scan_end,
+                symbols=symbols,
+                revision=_revision_for_dataset(revision_selection, dataset),
+                read_context=read_context,
+            )
+            df = _apply_pit_filters(
+                df,
+                dataset,
+                as_of=as_of_d,
+                items=items,
+                all_vintages=all_vintages,
+                pit_mode=effective_pit_mode,
+            )
+            df = _apply_pit_date_range(df, dataset, start_d, end_d)
+            df = _apply_symbol_filter(df, symbols)
+            # The rest of the key breaks ties. Several top holders share one
+            # announce_date and symbol, and their order otherwise followed the scan.
+            leading = ("announce_date", "symbol", "report_period", "item_code")
+            tie_break = [
+                c for c in (*PRIMARY_KEYS.get(dataset, []), "revision_id") if c not in leading
+            ]
+            sort_cols = [c for c in (*leading, *tie_break) if c in df.columns]
+            return df.sort(sort_cols) if sort_cols else df
+
+        if dataset == "flash_news_wire":
+            from cnequity.adapters.eastmoney.news_wire import flash_rows_from_news
+
+            frames: list[pl.DataFrame] = []
+            if dataset_has_parquet(read_context.roots["news_headlines"]):
+                headlines = _read_dataset(
+                    cfg, "news_headlines", start=start_d, end=end_d, read_context=read_context
+                )
+                if not headlines.is_empty():
+                    frames.append(flash_rows_from_news(headlines))
+            if dataset_has_parquet(read_context.roots[dataset]):
+                frames.append(
+                    _read_dataset(cfg, dataset, start=start_d, end=end_d, read_context=read_context)
+                )
+            if not frames:
+                raise ReaderError(
+                    "flash_news_wire has no legacy revision or news_headlines canonical data"
+                )
+            df = dedupe_by_primary_key(pl.concat(frames, how="diagonal_relaxed"), dataset)
+        else:
+            df = _read_dataset(
+                cfg,
+                dataset,
+                start=start_d,
+                end=end_d,
+                symbols=symbols,
+                universe=effective_universe,
+                strict_universe=effective_strict_universe,
+                revision=_revision_for_dataset(revision_selection, dataset),
+                read_context=read_context,
+                include_otc=include_otc,
+            )
+        if resolved_profile is not None and dataset == "daily_bars":
+            _require_profile_delisting_evidence(cfg, df, resolved_profile, read_context)
+
+        if dataset == "index_constituents" and as_of_d is not None:
+            from cnequity.domain.membership import index_members_as_of
+
+            df = index_members_as_of(df, as_of_d)
+
+        # Intraday datasets join on (symbol, trade_date) like the daily bars do: a
+        # corporate action applies to a whole session, so every bar in a day shares
+        # that day's factor. Intraday prices are stored unadjusted for the same
+        # reason daily ones are — the factor series can be recomputed, a price
+        # written adjusted cannot be undone.
+        if adjust and dataset in ADJUSTABLE_DATASETS:
+            df = _apply_adjustment(
+                df,
+                cfg,
+                adjust,
+                start_d,
+                end_d,
+                strict_adj=strict_adj,
+                read_context=read_context,
+                # A scalar revision belongs to the primary dataset.  Adjustment
+                # factors have their own revision sequence; absent an explicit
+                # map, use their current committed generation for backwards
+                # compatibility instead of interpreting (say) daily revision 7 as
+                # factor revision 7.  Research callers can pin both explicitly.
+                revision=(
+                    _revision_for_dataset(
+                        revision_selection,
+                        "adj_factors",
+                        fallback_primary=False,
+                    )
+                    if isinstance(revision_selection, Mapping)
+                    else None
+                ),
+            )
+
+        # Intraday rows sort by symbol then timestamp: trade_date alone would leave
+        # a session's 240 bars in whatever order the pages arrived, and grouping by
+        # symbol first is what every resampling consumer wants.
+        #
+        # Transaction records need `tick_seq` rather than the timestamp, because
+        # the timestamp has no seconds: sorting a session by `trade_time` leaves
+        # the twenty records sharing a minute in file order, which is the one thing
+        # this dataset exists to preserve.
+        if "tick_seq" in df.columns:
+            order = ("symbol", "trade_date", "tick_seq")
+        elif "bar_time" in df.columns:
+            order = ("symbol", "bar_time")
+        else:
+            order = (DATE_COLUMNS.get(dataset), "symbol")
+        sort_cols = [c for c in order if c and c in df.columns]
+        if sort_cols:
+            # The rest of the key breaks ties, so the order does not depend on
+            # which files the rows came from or how they were scanned.
+            sort_cols += [
+                c for c in PRIMARY_KEYS.get(dataset, []) if c in df.columns and c not in sort_cols
+            ]
+            df = df.sort(sort_cols, nulls_last=True)
+        return df
+
+
+def read_scope(*, config: Config | None = None, data_root: str | Path | None = None):
+    """Protect a lazy query from retention through its final collection."""
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.lock import lake_read
+
+    return lake_read(lake_root(resolve_config(config=config, data_root=data_root)))
 
 
 def scan(
@@ -1407,7 +1419,8 @@ def scan(
 
     Raw scan for heavy pipelines — no adjustment/universe/PIT semantics
     (use ``load`` for those); date window and symbol filters push down to
-    the partition scan.
+    the partition scan. Use :func:`read_scope` around both plan construction
+    and collection when retention may run concurrently.
     """
     cfg = resolve_config(config=config, data_root=data_root)
     revision_selection = _merge_revision_selection(revision, revision_map)

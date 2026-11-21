@@ -1700,26 +1700,6 @@ msgstr "二进制 TCP 协议，与所有 HTTP 源不共享风控面。海外直�
 msgid "Bind the profile to concrete symbols and include concrete_scope_hash."
 msgstr "把 profile 绑定到具体标的，并附带 concrete_scope_hash。"
 
-#: cnequity/cli/repair_cmds.py
-msgid ""
-"Bring a lake built by an earlier version up to this one, in one step.\n"
-"\n"
-"\n"
-"Shows what this version changes about the lake and checks that this machine can do it;\n"
-"--apply then does all of it in order: a backup of the lake's records, the move onto the\n"
-"lake catalog, and every other fix the lake still owes. Data files are linked, not copied.\n"
-"Reading the lake keeps working throughout; jobs that write wait until the upgrade is done.\n"
-"A run that stops can be started again and continues where it stopped."
-msgstr ""
-"把较早版本建的湖一步升级到当前版本。\n"
-"\n"
-"\n"
-"先显示这个版本对湖的改动，并检查这台机器能不能完成；\n"
-"加 --apply 后按顺序全部做完：备份湖的记录、把湖搬到湖目录、以及湖还欠的其他修复。\n"
-"数据文件只做链接，不复制。\n"
-"升级期间读取不受影响，写入的任务会等到升级完成。\n"
-"中途停下可以重新运行，从停下的地方继续。"
-
 #: cnequity/cli/consume_cmds.py
 msgid "Browse only. Do not register the write endpoints of the operations page and storage cleanup."
 msgstr "只浏览。不注册操作页和存储清理的写入口。"
@@ -1876,32 +1856,23 @@ msgstr "核对发布进湖目录的每个修订是否仍保存着发布时记录
 
 #: cnequity/cli/schedule_cmds.py
 msgid ""
-"Check the day's update, back up what cannot be rebuilt, and preview expiry.\n"
+"Check the daily update, apply catalog retention, and back up metadata.\n"
 "\n"
 "\n"
-"The scheduled timer runs this once after each session's daily update. In order:\n"
-"the session's daily group runs ([job.maintenance].gate_groups fail at once, others after\n"
-"soft_fail_max_days sessions in a row), a retry of keys in the debt ledger\n"
-"(`cne backfill <dataset> --outstanding`), the run audit (the whole lake on\n"
-"[job.maintenance].full_audit_weekday), the freshness gate,\n"
-"source probes and SLO, run evidence over 20 sessions, a merge of partitions that writes\n"
-"left in several files, a repair of state files an interrupted publish left one\n"
-"revision behind, a metadata backup\n"
-"(manifest DB, receipts, quality findings; never curated Parquet), and a preview of `cne run clean`.\n"
-"The preview passes --dry-run, so this command never asks to delete.\n"
-"Exits 1 when a group run, the audit, the freshness gate or the backup fails; source,\n"
-"debt-retry and run-evidence findings are reported without failing."
+"Checks daily group results, retries outstanding keys, runs the audit and freshness\n"
+"gate, probes sources, and checks run evidence. If a catalog exists, maintenance\n"
+"applies retention and can delete expired snapshots and files. It also writes\n"
+"and rotates metadata backups and previews routine cleanup.\n"
+"The timer schedules the weekly whole-lake audit separately. Use --full-audit-only\n"
+"to run just the audit when it is due."
 msgstr ""
-"检查当天的更新，备份无法重建的内容，并预览过期文件。\n"
+"检查日更、执行湖目录保留策略并备份元数据。\n"
 "\n"
-"\n"
-"定时任务在每个交易日的日更之后跑一次。顺序是：\n"
-"当天各调度组的运行（[job.maintenance].gate_groups 失败立即算，其余连续 soft_fail_max_days 个交易日才算）、\n"
-"补欠账台账里的键（`cne backfill <dataset> --outstanding`）、运行审计（[job.maintenance].full_audit_weekday 那天改为全湖）、\n"
-"新鲜度门禁、源探针与 SLO、最近 20 个交易日的运行证据、合并写入后分成多个文件的分区、修复被中断的发布落后一个修订的状态文件、元数据备份\n"
-"（manifest 数据库、收据、质量结论，不含 curated Parquet），以及 `cne run clean` 的预览。\n"
-"这次预览带 --dry-run，所以不会询问删除。\n"
-"调度组、审计、新鲜度门禁或备份失败时退出 1；源、欠账重试和运行证据只报告，不因此失败。"
+"\n"
+"检查分组结果、重试覆盖欠账、运行审计与新鲜度门禁，并探测来源和检查运行证据。\n"
+"有湖目录时，维护会应用保留策略，可能清理到期快照与文件。\n"
+"维护也会写入和轮换元数据备份，并预览常规清理。\n"
+"全湖审计每周独立调度。用 --full-audit-only 仅执行已到期的全湖审计。"
 
 #: cnequity/cli/setup_cmds.py
 msgid ""
@@ -1924,6 +1895,11 @@ msgstr "检查数据湖"
 #: cnequity/ops/scheduler.py
 msgid "Checked once a minute. The daily update and catch-up each try once per trading day; the catch-up only handles snapshots and waits for the daily update to have run. Backups try once per calendar day once their time comes, and event streams run at their own frequency, weekends and holidays included. When a task is busy it waits and the next check decides again. It keeps working after the web page or serve is closed. Windows and macOS need the current user logged in; Linux needs the cron service running. Nothing runs during sleep, and it decides again after waking; the daily update and catch-up go no later than 09:15 on the next trading day, backups only make up the same day, and event streams do not accumulate missed runs. Only tasks created from the web are managed here; check existing scripts and other system tasks first to avoid double scheduling."
 msgstr "每分钟检查一次。日更与补抓每个交易日各尝试一次；补抓只处理快照，并等待日更已执行。备份每个自然日到点后尝试一次，事件流按独立频率运行，含周末和节假日。任务占用时等待，下次检查再判断。关闭网页或 serve 后继续生效。Windows 和 macOS 需要当前用户已登录；Linux 需要 cron 服务运行。休眠期间不执行，恢复后再判断；日更与补抓最迟到下个交易日 09:15，备份只补当天，事件流不累积补跑。这里只管理 Web 创建的任务，已有的脚本和其他系统任务请先核对，避免重复调度。"
+
+#: cnequity/quality/audit.py
+#, python-format
+msgid "Checking whole-lake quality for %s"
+msgstr "正在检查截至 %s 的全湖数据质量"
 
 #: cnequity/diagnostics/report.py
 msgid "Checks that need these endpoints are skipped; your account decides which apply."
@@ -2430,7 +2406,7 @@ msgid ""
 "`futures_continuous` and `option_greeks` update daily in the `derivatives` group.\n"
 "`futures_continuous` is recomputed in full every time; `option_greeks` detects changes in quotes, contracts, rates and model dependencies.\n"
 "After a derivatives backfill, contracts and derived data update automatically; `--full` recomputes everything explicitly.\n"
-"`minute_bars_15m`, `minute_bars_30m` and `minute_bars_60m` are not computed by default and are only derived here:\n"
+"`minute_bars_15m`, `minute_bars_30m` and `minute_bars_60m` are first built here and then maintained by the intraday schedule:\n"
 "a stock's day uses 1m when it has 1m, otherwise 5m. Without a window, only sessions not yet computed, or whose minute inputs changed, are recomputed."
 msgstr ""
 "派生计算类数据集。\n"
@@ -2449,7 +2425,7 @@ msgstr ""
 "`futures_continuous` 和 `option_greeks` 在 `derivatives` 组里日更。\n"
 "`futures_continuous` 每次全量重算；`option_greeks` 自动检测行情、合约、利率和模型依赖变化。\n"
 "衍生品回填后自动更新合约及派生；`--full` 可显式全部重算。\n"
-"`minute_bars_15m`、`minute_bars_30m`、`minute_bars_60m` 默认不计算，只在这里手动派生：\n"
+"`minute_bars_15m`、`minute_bars_30m`、`minute_bars_60m` 首次在这里派生入湖，之后随盘中组增量维护。\n"
 "某只股票某天有 1m 就用 1m，否则用 5m。不给窗口时只重算还没算过、或分钟线输入已更新的交易日。"
 
 #: cnequity/ops/catalog.py
@@ -3447,6 +3423,10 @@ msgstr "保留已有湖，交付本次通过校验的数据；缺口留在覆盖
 msgid "Keep the existing snapshot; add this dataset to the daily configuration so it accumulates from later collections."
 msgstr "保留已有快照；将该数据集加入日更配置，从后续采集开始积累。"
 
+#: cnequity/cli/maintain_cmds.py
+msgid "Keep this many recent generations in addition to the current version and holds. Defaults to [storage.retention].keep_generations. 0 skips version handling."
+msgstr "除当前版本和 hold 外，额外保留最近指定代数。默认取 [storage.retention].keep_generations。0 跳过版本清理。"
+
 #: cnequity/cli/setup_cmds.py
 #, python-brace-format
 msgid "Keeps {kept} of {total} settings; the rest follow the built-in defaults of each release."
@@ -3547,6 +3527,11 @@ msgstr "--http 的监听地址。非回环地址必须配 --token。"
 #: cnequity/cli/setup_cmds.py
 msgid "Loading the new file gives the same settings as the old one."
 msgstr "新文件加载后的设置与旧文件相同。"
+
+#: cnequity/cli/demo.py
+#, python-brace-format
+msgid "Local file lock failed: {exc}"
+msgstr "本地文件锁操作失败：{exc}"
 
 #: cnequity/cli/_shared.py
 #, python-brace-format
@@ -3895,10 +3880,6 @@ msgstr "无需同步：每次写入都直接发布到湖目录。此命令在 0.
 msgid "Nothing was changed. Fix what is blocked above, then run this again."
 msgstr "没有做任何改动。先解决上面被拦下的项目，再运行一次。"
 
-#: cnequity/cli/repair_cmds.py
-msgid "Nothing was changed. Run `cne upgrade --apply` to upgrade. Reading the lake keeps working meanwhile; jobs that write wait until it is done."
-msgstr "没有做任何改动。运行 `cne upgrade --apply` 开始升级。升级期间读取不受影响，写入的任务会等到升级完成。"
-
 #: cnequity/cli/ths_official_cmds.py
 msgid "Number of concurrent requests."
 msgstr "并发请求数。"
@@ -3941,8 +3922,8 @@ msgid "Off by default. When on, the daily update keeps fetching for the current 
 msgstr "默认关闭。打开后日更会按当前范围持续抓取。"
 
 #: cnequity/cli/maintain_cmds.py
-msgid "Offer `logs/cne-*.log` older than this many days; 0 skips."
-msgstr "列出超过这个天数的 `logs/cne-*.log` 供确认删除；0 跳过。"
+msgid "Offer `logs/cne-*.log` older than this many days. Defaults to [logging].retention_days. 0 skips."
+msgstr "预览超过指定天数的 `logs/cne-*.log`。默认取 [logging].retention_days。0 跳过。"
 
 #: cnequity/cli/maintain_cmds.py
 msgid "Offer meta/source_snapshots run_id directories older than this many days (the latest one per dataset / source is always kept)."
@@ -3983,6 +3964,10 @@ msgstr "只支持 empty,stale,interior,shallow"
 #: cnequity/cli/setup_cmds.py
 msgid "Only list the steps and schedule groups to add; writes no files."
 msgstr "只列出要加的步骤和调度组，不写任何文件。"
+
+#: cnequity/ops/catalog.py
+msgid "Only the due full audit"
+msgstr "只运行已到期的全湖审计"
 
 #: cnequity/ops/catalog.py
 msgid "Only the latest unfinished init can be resumed."
@@ -4254,29 +4239,25 @@ msgstr "仅预览；加 --apply 才运行。"
 msgid "Preview orphan staging, and offer run lock files, older than this many days."
 msgstr "预览超过这个天数的孤儿 staging，并列出同样超龄的运行锁文件供确认删除。"
 
+#: cnequity/cli/repair_cmds.py
+msgid ""
+"Preview pending lake migrations or select migration IDs with --only.\n"
+"\n"
+"\n"
+"--apply runs the selected migrations in registry order and records the result.\n"
+"--only can select an already recorded migration. Individual migrations can\n"
+"contact providers or remove superseded files. Use `cne upgrade` for the usual\n"
+"upgrade of an older lake."
+msgstr ""
+"预览待执行的迁移，或用 --only 选定迁移 ID。\n"
+"\n"
+"\n"
+"加 --apply 后，按注册顺序执行所选迁移并记录结果。--only 可以指定已经记录的迁移。\n"
+"个别迁移可能访问数据源或清理被取代的文件。常规旧湖升级请用 `cne upgrade`。"
+
 #: cnequity/cli/storage_cmds.py
 msgid "Preview which generations retention would delete now; deletes nothing."
 msgstr "预览自动清理现在会删除哪些代；不删除任何数据。"
-
-#: cnequity/cli/repair_cmds.py
-msgid ""
-"Preview, or with --apply run, the one-off fixes this lake still owes.\n"
-"\n"
-"\n"
-"A release that fixes a writer can leave rows the old writer stored. Each such fix is a\n"
-"migration; meta/lake.json records the version that built the lake (it owes nothing\n"
-"introduced earlier) and every migration it has applied or found nothing to do.\n"
-"A preview reports how many rows each would change. --apply runs them in order: each takes the\n"
-"lake lock, publishes through the repair gate and keeps the previous revision readable."
-msgstr ""
-"预览，或加 --apply 运行这个湖还欠的一次性修正。\n"
-"\n"
-"\n"
-"新版本修好写入逻辑后，旧版本存下的行仍需修正。每个修正是一个\n"
-"迁移；meta/lake.json 记录建湖的版本（早于它引入的迁移不需要运行）\n"
-"以及已经运行过、或检查后无需运行的迁移。\n"
-"预览报告每个迁移会改动多少行。--apply 按顺序运行：每个迁移持有\n"
-"湖的变更锁，经修复门禁发布，旧版本保留可读。"
 
 #: cnequity/domain/datasets.py
 msgid "Prices"
@@ -4370,6 +4351,11 @@ msgstr "探测 TDX"
 #: cnequity/cli/demo.py
 msgid "Probing TDX hosts (the first server to connect wins)…"
 msgstr "正在探测 TDX 主机（第一个连通的服务器胜出）…"
+
+#: cnequity/diagnostics/source_health.py
+#, python-format
+msgid "Probing source %s"
+msgstr "正在探测数据源 %s"
 
 #: cnequity/cli/schedule_cmds.py
 #, python-brace-format
@@ -4940,6 +4926,11 @@ msgstr "改写并换上分区；默认只预览。"
 msgid "Risk and compliance"
 msgstr "风险合规"
 
+#: cnequity/orchestrator/engine.py
+#, python-format
+msgid "Run %s: %s for %s"
+msgstr "运行 %s：%s（%s）"
+
 #: cnequity/cli/consume_cmds.py
 msgid "Run DuckDB SQL, or fetch a single dataset on demand."
 msgstr "跑 DuckDB SQL，或按需抓取单个数据集。"
@@ -5025,6 +5016,10 @@ msgstr "只跑 [[job.daily.waves]] 核心骨架（旧版不带参数时的行为
 msgid "Run only the daily schedule groups for these research packs, without the event streams. If omitted, all schedule groups and event streams still run. Repeatable."
 msgstr "只跑这些研究包对应的日更调度组，不跑事件流。不写则仍跑全部调度组和事件流。可重复。"
 
+#: cnequity/cli/schedule_cmds.py
+msgid "Run only the due weekly full audit."
+msgstr "只运行已到期的每周全湖审计。"
+
 #: cnequity/ops/catalog.py
 msgid "Run only the selected daily-update schedule group. Does not mark today as done, so the scheduled full run still happens."
 msgstr "只跑选定的日更调度组。不写“今天已跑过”的标记，定时全流程仍会执行。"
@@ -5082,16 +5077,14 @@ msgid ""
 "\n"
 "A bare `cne run daily` already audits once after all schedule groups (with `--core-only`, as the last step of the `finalize` wave),\n"
 "so running it here re-audits data that has already been audited.\n"
-"What is not scheduled is `--full`: it judges the state of the lake right now rather than what one run wrote,\n"
-"and it is what the health check and the dashboard read."
+"The timer schedules `--full` separately each week. This mode assesses the current state of the lake\n"
+"and is also used by the health check and the dashboard."
 msgstr ""
-"跑质量审计；加 --full 则给出当前整个湖的健康快照。\n"
+"运行质量审计。加 --full 可查看当前全湖的健康快照。\n"
 "\n"
-"\n"
-"不带参数的 `cne run daily` 在全部调度组之后已经审计一次（`--core-only` 则是 `finalize` wave 的最后一步），\n"
-"所以在这里跑等于把已经审过的数据再审一遍。\n"
-"没有被调度的是 `--full`：它判的是此刻这个湖的状态，而不是某一次 run 写了什么，\n"
-"健康检查和面板读的也是它。"
+"\n"
+"不带参数的 `cne run daily` 会在全部调度组结束后审计一次（`--core-only` 在 `finalize` wave 的最后一步审计）。\n"
+"定时器每周独立运行 `--full`，评估当前全湖状态。健康检查和面板也使用这一模式。"
 
 #: cnequity/cli/run_cmds.py
 msgid "Run with backfill semantics: skip the trading-day gate and each step's own incremental window, and fetch the window given by the backfill scope in the config instead. Used to rerun a day the schedule missed; scheduled runs never pass it."
@@ -6174,21 +6167,6 @@ msgstr "{name} 熔断今天已经触发，相关请求会失败到明天。"
 msgid "There is no config file to write."
 msgstr "没有可写入的配置文件。"
 
-#: cnequity/cli/consume_cmds.py
-#, python-brace-format
-msgid ""
-"There is no curated data under {curated}.\n"
-"  config:    {value}\n"
-"  data.root: {data_root}\n"
-"If this is not your lake: `data.root` is a relative path, resolved against the working directory the client launched this process from. Write both `--config` and `[data].root` as absolute paths.\n"
-"If this really is your lake and it really is empty: `cne init` builds one, `cne init --profile demo` makes a 5-symbol sample in thirty seconds, and `--live` serves symbol lookup and unadjusted daily bars straight from the source with no lake at all."
-msgstr ""
-"{curated} 下没有任何 curated 数据。\n"
-"  配置：     {value}\n"
-"  data.root：{data_root}\n"
-"如果这不是你的湖：`data.root` 是相对路径，会相对客户端拉起这个进程时的工作目录解析。请把 `--config` 和 `[data].root` 都写成绝对路径。\n"
-"如果这确实是你的湖、而且它真的是空的：`cne init` 会建一个，`cne init --profile demo` 三十秒内做出一个 5 只票的样例，而 `--live` 不需要湖也能直接从源头提供标的查找和未复权日线。"
-
 #: cnequity/serve/ops/routes.py
 msgid "There is no writable config path."
 msgstr "没有可写入的配置路径。"
@@ -6249,9 +6227,28 @@ msgstr "这个日更组还会带上指数成分、行业成分和股东人数。
 msgid "This directory already holds a lake; once the config is generated it takes it over without clearing it."
 msgstr "这个目录里已经有数据湖，生成配置后会接管它，不会清空。"
 
+#: cnequity/ops/scheduled.py
+msgid "This full audit is no longer due."
+msgstr "本次全湖审计已完成或尚未到期。"
+
 #: cnequity/cli/storage_cmds.py
 msgid "This lake has no lake catalog."
 msgstr "这个湖没有湖目录。"
+
+#: cnequity/cli/consume_cmds.py
+#, python-brace-format
+msgid ""
+"This lake has no published data.\n"
+"  config:    {value}\n"
+"  data.root: {data_root}\n"
+"If this is not your lake: `data.root` is a relative path, resolved against the working directory the client launched this process from. Write both `--config` and `[data].root` as absolute paths.\n"
+"If this really is your lake and it really is empty: `cne init` builds one, `cne init --profile demo` makes a 5-symbol sample in thirty seconds, and `--live` serves symbol lookup and unadjusted daily bars straight from the source with no lake at all."
+msgstr ""
+"这个湖还没有已发布的数据。\n"
+"  配置：     {value}\n"
+"  data.root：{data_root}\n"
+"如果这不是你的湖：`data.root` 是相对路径，会相对客户端拉起这个进程时的工作目录解析。请把 `--config` 和 `[data].root` 都写成绝对路径。\n"
+"如果这确实是你的湖、而且它真的是空的：`cne init` 会建一个，`cne init --profile demo` 三十秒内做出一个 5 只票的样例，而 `--live` 不需要湖也能直接从源头提供标的查找和未复权日线。"
 
 #: cnequity/cli/repair_cmds.py
 #, python-brace-format
@@ -6464,6 +6461,31 @@ msgid "Updated {path} (the original was backed up as {name})"
 msgstr "已更新 {path}（原文件备份为 {name}）"
 
 #: cnequity/cli/repair_cmds.py
+msgid ""
+"Upgrade a lake built by an earlier version.\n"
+"\n"
+"\n"
+"Preview the pending migrations and check disk and extension requirements. A missing\n"
+"DuckDB extension may be downloaded during the checks.\n"
+"With --apply, back up the lake's records by default, register existing data in the\n"
+"catalog and run the remaining migrations in order. Registration can copy data files\n"
+"on filesystems without hard-link support. Migrations can remove superseded files.\n"
+"Keep a restorable copy of the data before applying. To resume, rerun the command\n"
+"after addressing the reported problem."
+msgstr ""
+"升级由旧版创建的数据湖。\n"
+"\n"
+"\n"
+"预览待执行的迁移，并检查磁盘与扩展要求。检查可能下载缺少的 DuckDB 扩展。\n"
+"加 --apply 后，默认先备份湖的记录，再登记已有数据并按顺序执行其余迁移。\n"
+"文件系统不支持硬链接时，登记可能复制数据文件。迁移可能清理已被取代的文件。\n"
+"执行前请保留可恢复的数据副本。中断后先处理报告的问题，再运行同一条命令。"
+
+#: cnequity/cli/repair_cmds.py
+msgid "Upgrade preview complete. Review the plan and your backup before running `cne upgrade --apply`."
+msgstr "升级预览完成。核对计划和备份后，再运行 `cne upgrade --apply`。"
+
+#: cnequity/cli/repair_cmds.py
 msgid "Upgrade the lake. Without it, only show what the upgrade would do."
 msgstr "执行升级。不加时只显示升级会做什么。"
 
@@ -6633,10 +6655,6 @@ msgstr "波次 %s：%s（并行：%s）"
 #: cnequity/diagnostics/health_page.py
 msgid "What the states mean"
 msgstr "状态的含义"
-
-#: cnequity/cli/maintain_cmds.py
-msgid "When a person confirms deletion, keep the latest this many generations plus the current version and holds. 0 skips version handling."
-msgstr "确认删除时，每个数据集保留最近这么多代，并保留当前版本和 hold。0 表示不处理版本。"
 
 #: cnequity/cli/run_cmds.py
 msgid "When run without arguments, skip the event streams (announcements, regulatory events, news)."
@@ -7112,6 +7130,11 @@ msgstr "失败"
 msgid "fetches and daily updates can be started from the dashboard"
 msgstr "可从面板发起取数和日更"
 
+#: cnequity/progress.py
+msgctxt "progress unit"
+msgid "files"
+msgstr "个文件"
+
 #: cnequity/serve/lake.py
 msgid "fill gaps by date"
 msgstr "按日期回补缺口"
@@ -7488,6 +7511,11 @@ msgstr "vantage 必须是 1–64 位字母/数字/点/下划线/连字符，且�
 #: cnequity/cli/repair_cmds.py
 msgid "verifying"
 msgstr "核对"
+
+#: cnequity/progress.py
+#, python-format
+msgid "waiting for %s"
+msgstr "正在等待 %s"
 
 #: cnequity/cli/quality_cmds.py
 msgid "whole-lake audit"

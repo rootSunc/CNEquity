@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Literal
 
+from cnequity.domain.holidays_cn import exchange_may_open
 from cnequity.domain.partitions import Granularity, partition_value
 
 # Re-export the storage contract from the registry module for callers that
@@ -239,6 +240,7 @@ class DatasetSpec:
     # one, and wherever no config is at hand, the dataset stays snapshot-only,
     # so a lake without a token is never told to backfill what it cannot.
     keyed_backfill_source: str | None = None
+    keyed_backfill_floor: date | None = None
     # The rest of the recovery chain: sources that legitimately write rows to
     # this dataset without being any of the three roles above.
     #
@@ -606,6 +608,23 @@ class DatasetSpec:
             return None
         calendar_days = round(self.history_horizon_days * 365 / trading_days_per_year)
         return date.fromordinal(max(1, today.toordinal() - calendar_days))
+
+    def history_bounds(self, today: date, config=None) -> tuple[date | None, date | None]:
+        """Intersect the dataset's source capability with this lake's history."""
+        start, end = self.earliest_available(today), self.source_retired_date
+        if (
+            self.keyed_backfill_floor is not None
+            and self.keyed_backfill_source
+            and keyed_source_ready(self.keyed_backfill_source, config)
+        ):
+            start = max(start or self.keyed_backfill_floor, self.keyed_backfill_floor)
+        begins = getattr(config, "history_from", {}).get(self.name)
+        ends = getattr(config, "history_until", {}).get(self.name)
+        if begins is not None:
+            start = max(start, begins) if start is not None else begins
+        if ends is not None:
+            end = min(end, ends) if end is not None else ends
+        return start, end
 
     def partition_for(self, d: date) -> str:
         """Directory value of the partition holding *d* for this dataset."""
@@ -1916,6 +1935,7 @@ _SPECS = [
         # Tushare moneyflow_dc republishes EastMoney's own measure for every
         # session since 2023-09-11; it only fills keys the lake does not have.
         keyed_backfill_source="tushare",
+        keyed_backfill_floor=date(2023, 9, 11),
         tier="L4",
         partition_col="trade_date",
         fetch_semantics="snapshot",
@@ -2170,6 +2190,7 @@ _SPECS = [
         # Tushare moneyflow_ind_dc serves EastMoney's boards by date from
         # 2023-09-12, and the session itself while push2 is paused.
         keyed_backfill_source="tushare",
+        keyed_backfill_floor=date(2023, 9, 12),
         tier="L7",
         partition_col="trade_date",
         partition_granularity="month",
@@ -2443,12 +2464,11 @@ _SPECS = [
         required=False,
     ),
     # 15m / 30m / 60m bars, stored only when a user runs `cne derive` for
-    # them (derive/minute_resample.py); nothing schedules them. Each
+    # them (derive/minute_resample.py); intraday keeps existing datasets current. Each
     # symbol-day comes from 1m where the lake has it and from 5m otherwise.
     # `row_grain` only: `intraday_frequency` would register a TDX fetch step
-    # and backfill path for a frequency this lake never fetches. No watermark:
-    # nothing advances them, so one would read as stale a session after every
-    # derive.
+    # and backfill path for a frequency this lake never fetches. Input digests
+    # track per-session freshness without a separate watermark.
     *(
         DatasetSpec(
             name,
@@ -2665,15 +2685,6 @@ def staleness_counts_trading_sessions(dataset: str) -> bool:
     return True
 
 
-def _is_exchange_session(day: date) -> bool:
-    from cnequity.domain.holidays_cn import CLOSED_DATES, EXTRA_TRADING_DATES
-
-    iso = day.isoformat()
-    if iso in EXTRA_TRADING_DATES:
-        return True
-    return day.weekday() < 5 and iso not in CLOSED_DATES
-
-
 def _trading_session_lag(mark: date, anchor: date) -> int:
     """Exchange sessions strictly after *mark* and through *anchor*."""
     if anchor <= mark:
@@ -2682,7 +2693,7 @@ def _trading_session_lag(mark: date, anchor: date) -> int:
     day = mark
     while day < anchor:
         day += timedelta(days=1)
-        if _is_exchange_session(day):
+        if exchange_may_open(day):
             lag += 1
     return lag
 

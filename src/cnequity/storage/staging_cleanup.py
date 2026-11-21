@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cnequity.config import Config
+from cnequity.config.logging import DEFAULT_LOG_RETENTION_DAYS as DEFAULT_LOG_RETENTION_DAYS
 from cnequity.file_lock import (
     IS_WINDOWS,
     LockUnavailable,
@@ -243,9 +244,6 @@ def _preview_staging(
         skipped_reasons=skipped_reasons,
         inventory=inventory,
     )
-
-
-DEFAULT_LOG_RETENTION_DAYS = 30
 
 
 @dataclass(frozen=True)

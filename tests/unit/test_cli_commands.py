@@ -1139,6 +1139,24 @@ def test_clean_dry_run(cfg_path, monkeypatch):
     assert payload["logical_bytes_selected"] == 120
 
 
+@pytest.mark.parametrize(("override", "keep"), [(None, 0), (2, 2)])
+def test_clean_previews_the_configured_retention_unless_overridden(
+    tmp_path, monkeypatch, override, keep
+):
+    config = _write_config(tmp_path, extra="[storage.retention]\nkeep_generations = 0")
+    observed = []
+
+    def preview(meta_root, *, keep):
+        observed.append(keep)
+        return []
+
+    monkeypatch.setattr("cnequity.cli.maintain_cmds.preview_revision_retention", preview)
+    options = ["--keep-revision-generations", str(override)] if override is not None else []
+    result = CliRunner().invoke(cli, ["run", "clean", "--dry-run", "--config", config, *options])
+    assert result.exit_code == 0, result.output
+    assert observed == [keep]
+
+
 def test_clean_with_changed_references_refuses_without_traceback(cfg_path, tmp_path, caplog):
     from cnequity.config import load_config
     from cnequity.storage.lifecycle import LifecycleStore, reference_fingerprint

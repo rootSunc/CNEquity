@@ -27,6 +27,7 @@ from datetime import date
 import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
+from cnequity.domain.datasets import get_dataset
 from cnequity.domain.futures_products import PRODUCTS
 
 __all__ = [
@@ -37,7 +38,7 @@ __all__ = [
     "normalize_futures_member_positions",
 ]
 
-FUTURES_MEMBER_POSITIONS_FLOOR = date(2010, 1, 4)
+FUTURES_MEMBER_POSITIONS_FLOOR = get_dataset("futures_member_positions").history_floor_date
 
 _PAGE_SIZE = 5000
 _EXCHANGE = {spec.product.upper(): spec.exchange for spec in PRODUCTS}

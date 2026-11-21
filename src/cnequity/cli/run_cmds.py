@@ -750,7 +750,7 @@ def run_daily(
         cfg._validate_source_limits()
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    attach_log_file(cfg, "run-daily", quiet=quiet)
+    attach_log_file(cfg, "run-daily")
     engine = JobEngine(cfg)
     td = parse_date_option(trade_date_str, "--trade-date")
     if (
@@ -992,7 +992,7 @@ def run_events(config_path: str, group_name: str | None, trade_date_str: str | N
         cfg._validate_source_limits()
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    attach_log_file(cfg, "run-events", quiet=quiet)
+    attach_log_file(cfg, "run-events")
     if not cfg.events_groups:
         raise click.ClickException(
             _("This config has no [job.events.groups]; see configs/cnequity.example.toml")

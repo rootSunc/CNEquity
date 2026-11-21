@@ -13,6 +13,7 @@ from cnequity.query.reader import (
     dataset_schema,
     list_datasets,
     load,
+    read_scope,
     resolve_config,
     scan,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "load",
     "load_profile",
     "load_with_receipt",
+    "read_scope",
     "ProfileError",
     "ReadReceiptError",
     "ReadResult",

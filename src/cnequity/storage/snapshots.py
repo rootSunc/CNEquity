@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
@@ -25,6 +26,7 @@ from cnequity.config import Config
 from cnequity.domain.contracts import contract_fingerprint, dataset_contract
 from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.progress import sweep_progress
 from cnequity.storage.atomic import (
     replace_with_retry,
     swap_with_backup,
@@ -34,6 +36,8 @@ from cnequity.storage.atomic import (
 from cnequity.storage.lake_record import read_lake
 from cnequity.storage.provenance import runtime_lineage
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
+
+logger = logging.getLogger(__name__)
 
 #: What a snapshot keeps of each dataset's revision (the rest named files it no longer has).
 _REVISION_FIELDS = (
@@ -1023,9 +1027,13 @@ class SnapshotStore:
             from cnequity.storage.research_inputs import RESEARCH_DATASETS
 
             datasets = sorted(set(datasets) | RESEARCH_DATASETS)
-        with lake_mutation_lock(self.config.meta_root, blocking=True):
-            plan = self._plan_locked(name, datasets)
-        return self._copy_and_publish(plan)
+        from cnequity.storage.catalog_bridge import lake_root
+        from equitylake_core.lock import lake_read
+
+        with lake_read(lake_root(self.config)):
+            with lake_mutation_lock(self.config.meta_root, blocking=True):
+                plan = self._plan_locked(name, datasets)
+            return self._copy_and_publish(plan)
 
     def _plan_locked(self, name: str, datasets: list[str]) -> _SnapshotPlan:
         """Read the lake's view and copy its small mutable files; caller owns the lake lock."""
@@ -1195,7 +1203,10 @@ class SnapshotStore:
         """Copy the planned files, then verify and publish the snapshot. Needs no lock."""
         name, selected, temp, records = plan.name, plan.selected, plan.temp, plan.records
         try:
-            for item in plan.copies:
+            report = sweep_progress(
+                logger, "snapshot copy", len(plan.copies), every=250, unit="files"
+            )
+            for index, item in enumerate(plan.copies, 1):
                 item.stored.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     shutil.copy2(item.source, item.stored)
@@ -1220,6 +1231,7 @@ class SnapshotStore:
                         sha256=_sha256(item.stored),
                     )
                 )
+                report(index)
             manifest = {
                 "format": "cnequity.lake-snapshot",
                 "format_version": FORMAT_VERSION,
@@ -1428,7 +1440,9 @@ class SnapshotStore:
             raise ValueError(f"snapshot files must be a list: {snapshot / 'manifest.json'}")
         actual_files, unsafe_files = _tree_files_no_follow(snapshot, reject_hardlinks=True)
         seen: set[str] = set()
-        for record in records:
+        report = sweep_progress(logger, "snapshot verify", len(records), every=250, unit="files")
+        for index, record in enumerate(records, 1):
+            report(index - 1)
             if not isinstance(record, Mapping):
                 mismatched.append(str(record))
                 continue
@@ -1467,6 +1481,7 @@ class SnapshotStore:
                 mismatched.append(relative.as_posix())
                 continue
             verified += 1
+        report(len(records))
         if "manifest.json" not in actual_files:
             missing.append("manifest.json")
         for path in sorted(unsafe_files):
@@ -1868,7 +1883,11 @@ class SnapshotStore:
         # they are published from into the new catalog.
         landing = Path(_RESTORE_DIR) if current else Path()
         try:
-            for record in manifest["files"]:
+            records = manifest["files"]
+            report = sweep_progress(
+                logger, "snapshot restore", len(records), every=250, unit="files"
+            )
+            for index, record in enumerate(records, 1):
                 relative = _safe_relative(str(record["path"]))
                 if relative.parts[0] == "data":
                     # Stored data paths include a leading data/ while the
@@ -1881,6 +1900,7 @@ class SnapshotStore:
                 destination = temp / restored_relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(snapshot / relative, destination)
+                report(index)
             meta = temp / "meta"
             meta.mkdir(parents=True, exist_ok=True)
             for dataset, state in manifest.get("dataset_states", {}).items():

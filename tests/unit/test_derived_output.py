@@ -13,7 +13,7 @@ from cnequity.config import Config
 from cnequity.derive.minute_resample import derive_minute_resample
 from cnequity.domain.schemas import DATASET_SCHEMAS
 from cnequity.query import load
-from cnequity.steps.finalize import _publish_derived_revision
+from cnequity.steps.finalize import publish_derived_revision
 from cnequity.storage.derived_output import DerivedOutput
 from cnequity.storage.revisions import RevisionStore
 
@@ -89,7 +89,7 @@ def test_a_partition_is_merged_into_replaced_and_removed(lake):
         output.write("trade_date=2024-03", _frame(_row(MAR, 3.0)), "part-000.parquet")
         assert output.exists("trade_date=2024-02") and not output.exists("trade_date=2024-04")
         output.remove("trade_date=2024-02")
-        published = _publish_derived_revision(lake, DATASET, "derive-1", MAR, output)
+        published = publish_derived_revision(lake, DATASET, "derive-1", MAR, output)
 
     assert published["revision"] == 2
     assert _closes(lake) == {JAN: 1.0, date(2024, 1, 8): 1.5, MAR: 3.0}
@@ -103,7 +103,7 @@ def test_a_rebuild_of_what_is_published_changes_nothing_on_a_catalog_lake(lake, 
         # Recomputed later: the same facts with a newer fetch time.
         output.write("trade_date=2024-01", _frame(_row(JAN, 1.0, fetched=9)), "part-000.parquet")
         assert not output.changed()
-        assert _publish_derived_revision(lake, DATASET, "derive-2", JAN, output) is None
+        assert publish_derived_revision(lake, DATASET, "derive-2", JAN, output) is None
         output.write("trade_date=2024-01", _frame(_row(JAN, 1.25, fetched=9)), "part-000.parquet")
         assert output.changed()
 
@@ -118,7 +118,7 @@ def test_a_rejected_derivation_publishes_nothing(lake, monkeypatch):
         DerivedOutput(lake, DATASET, "derive-3") as output,
     ):
         output.write("trade_date=2024-03", _frame(_row(MAR, 3.0)), "part-000.parquet")
-        _publish_derived_revision(lake, DATASET, "derive-3", MAR, output)
+        publish_derived_revision(lake, DATASET, "derive-3", MAR, output)
 
     assert _closes(lake) == {JAN: 1.0, FEB: 2.0}
 
@@ -129,13 +129,13 @@ def test_minute_resample_publishes_only_the_stale_session(tmp_path, settle):
         _commit(cfg, dataset, cfg.curated_root)
     with DerivedOutput(cfg, "minute_bars_30m", "resample-1") as output:
         derive_minute_resample(cfg, "minute_bars_30m", start=OLD, end=OLD, output=output)
-        first = _publish_derived_revision(cfg, "minute_bars_30m", "resample-1", OLD, output)
+        first = publish_derived_revision(cfg, "minute_bars_30m", "resample-1", OLD, output)
     assert first["revision"] == 1
     settle(cfg)
 
     with DerivedOutput(cfg, "minute_bars_30m", "resample-2") as output:
         summary = derive_minute_resample(cfg, "minute_bars_30m", output=output)
-        second = _publish_derived_revision(cfg, "minute_bars_30m", "resample-2", NEW, output)
+        second = publish_derived_revision(cfg, "minute_bars_30m", "resample-2", NEW, output)
 
     assert summary["sessions"] == 1
     assert second["revision"] == 2
@@ -189,7 +189,7 @@ def test_the_factor_derive_checks_out_only_the_partitions_it_changes(tmp_path, s
                 "trade_date=2024-02",
                 "trade_date=2024-03",
             ]
-        published = _publish_derived_revision(cfg, "adj_factors", "adj-1", MAR, output)
+        published = publish_derived_revision(cfg, "adj_factors", "adj-1", MAR, output)
 
     assert published["revision"] == 2
     assert sorted(published["changed_partitions"]) == [

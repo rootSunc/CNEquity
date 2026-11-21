@@ -22,6 +22,7 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.domain.bse_codes import legacy_symbol_map
+from cnequity.domain.datasets import get_dataset
 
 __all__ = [
     "CHIP_DISTRIBUTION_FLOOR",
@@ -36,9 +37,9 @@ __all__ = [
     "normalize_northbound_top10",
 ]
 
-CHIP_DISTRIBUTION_FLOOR = date(2018, 1, 2)
-NORTHBOUND_TOP10_FLOOR = date(2014, 11, 17)
-LIMIT_EVENTS_FLOOR = date(2020, 1, 2)
+CHIP_DISTRIBUTION_FLOOR = get_dataset("chip_distribution").history_floor_date
+NORTHBOUND_TOP10_FLOOR = get_dataset("northbound_top10").history_floor_date
+LIMIT_EVENTS_FLOOR = get_dataset("limit_events").history_floor_date
 
 _PAGE_SIZE = 5000
 _CHANNELS = {1: "sh_connect", 3: "sz_connect"}

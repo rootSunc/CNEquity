@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog
+from cnequity.meta_layout import LAKE_DIR, REVISION_DATA, REVISION_RECORDS, STORAGE_RECORD
+from equitylake_core.catalog import ALIAS, CATALOG_FILE, REVISIONS_TABLE, Catalog
 
 #: The migration that imports the receipts; until a lake has had it, its files are read.
 MIGRATION_ID = "revision-records"
@@ -36,12 +37,40 @@ INTRODUCED_IN = "0.25.0"
 
 _POINTER_SCHEMA_VERSION = 1
 STORAGE_CATALOG = "catalog"
-LAKE_DIR = "lake"
+HISTORY_TABLE = "_revision_history"
+SYNC_TABLE = "_sync_state"
 
-_COLUMNS = (
-    "revision, run_id, committed_at, schema_version, contract_fingerprint, "
-    "content_digest, changed_partitions, metadata"
+#: What a revision's receipt records. A ``_revisions`` row carries these columns,
+#: and so does a history row: a revision synced in from a generation, or one
+#: imported from the receipts a lake kept before (``snapshot`` empty when the
+#: catalog no longer holds it).
+RECEIPT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("revision", "BIGINT"),
+    ("run_id", "VARCHAR"),
+    ("committed_at", "VARCHAR"),
+    ("schema_version", "BIGINT"),
+    ("contract_fingerprint", "VARCHAR"),
+    ("content_digest", "VARCHAR"),
+    ("changed_partitions", "VARCHAR"),
+    ("metadata", "VARCHAR"),
 )
+
+
+def receipt_columns(receipt: dict) -> dict[str, object]:
+    """The :data:`RECEIPT_COLUMNS` of a receipt (a ``DatasetRevision.to_dict()``)."""
+    return {
+        "revision": receipt["revision"],
+        "run_id": receipt.get("run_id"),
+        "committed_at": receipt.get("committed_at"),
+        "schema_version": receipt.get("schema_version"),
+        "contract_fingerprint": receipt.get("contract_fingerprint"),
+        "content_digest": receipt.get("content_digest"),
+        "changed_partitions": json.dumps(list(receipt.get("changed_partitions") or ())),
+        "metadata": json.dumps(receipt.get("metadata") or {}, sort_keys=True, default=str),
+    }
+
+
+_COLUMNS = ", ".join(name for name, _ in RECEIPT_COLUMNS)
 
 
 @dataclass(frozen=True)
@@ -63,13 +92,15 @@ class RevisionRecord:
 
     @property
     def generation_path(self) -> str:
-        return f"revisions/data/{self.dataset}/{self.revision_id}"
+        return (REVISION_DATA / self.dataset / self.revision_id).as_posix()
 
     @property
     def receipt_path(self) -> str | None:
         if self.revision == 0:
             return None
-        return f"revisions/{self.dataset}/{self.revision:08d}-{self.revision_id}.json"
+        return (
+            REVISION_RECORDS / self.dataset / f"{self.revision:08d}-{self.revision_id}.json"
+        ).as_posix()
 
     def pointer(self) -> dict[str, Any]:
         """What the revision store's ``current.json`` says for this revision."""
@@ -122,9 +153,9 @@ def _all_records_sql(where: str = "") -> str:
     return (
         "SELECT dataset, revision_id, " + _COLUMNS + ", snapshot FROM ("
         f"SELECT dataset, revision_id, {_COLUMNS}, snapshot_id AS snapshot, 0 AS rank "
-        "FROM _revisions "
+        f"FROM {REVISIONS_TABLE} "
         f"UNION ALL SELECT dataset, revision_id, {_COLUMNS}, snapshot, 1 AS rank "
-        "FROM _revision_history WHERE revision IS NOT NULL"
+        f"FROM {HISTORY_TABLE} WHERE revision IS NOT NULL"
         f") {where} "
         "QUALIFY row_number() OVER (PARTITION BY dataset, revision_id "
         "ORDER BY rank, snapshot DESC NULLS LAST) = 1"
@@ -225,7 +256,7 @@ def _enabled(meta: Path) -> bool:
     """Whether *meta*'s lake publishes into its catalog and its receipts are all in it."""
     from cnequity.storage.lake_record import lake_file
 
-    storage, lake = meta / "storage.json", lake_file(meta)
+    storage, lake = meta / STORAGE_RECORD, lake_file(meta)
     stamps = (_stamp(storage), _stamp(lake))
     known = _settings.get(meta)
     if known is not None and known[0] == stamps:
@@ -259,7 +290,7 @@ def _load_current(root: Path) -> dict[str, RevisionRecord | None]:
     columns = ", ".join(f"r.{column}" for column in _COLUMNS.split(", "))
     rows = _query(
         root,
-        f"SELECT s.dataset, r.revision_id, {columns}, r.snapshot FROM _sync_state s "
+        f"SELECT s.dataset, r.revision_id, {columns}, r.snapshot FROM {SYNC_TABLE} s "
         f"LEFT JOIN ({_all_records_sql()}) r "
         "ON r.dataset = s.dataset AND r.revision_id = s.revision_id",
     )
@@ -319,7 +350,7 @@ def _published_chain(meta: Path, dataset: str, pointer: dict) -> tuple[list[dict
     """
     by_id: dict[str, dict] = {}
     by_number: dict[int, list[dict]] = {}
-    for path in (meta / "revisions" / dataset).glob(_RECEIPT_NAME):
+    for path in (meta / REVISION_RECORDS / dataset).glob(_RECEIPT_NAME):
         number, _, revision_id = path.stem.partition("-")
         if not number.isdigit():
             continue
@@ -347,7 +378,7 @@ def _published_chain(meta: Path, dataset: str, pointer: dict) -> tuple[list[dict
 def _records_revisions(meta: Path) -> bool:
     """Whether ``storage.json`` says the lake's catalog is the record of its revisions."""
     try:
-        setting = json.loads((meta / "storage.json").read_text(encoding="utf-8"))
+        setting = json.loads((meta / STORAGE_RECORD).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     return isinstance(setting, dict) and setting.get("revisions") == STORAGE_CATALOG
@@ -367,12 +398,9 @@ def import_receipts(config, *, apply: bool) -> dict:
 
     from cnequity.file_lock import lake_mutation_lock
     from cnequity.storage.catalog_bridge import (
-        HISTORY_TABLE,
-        REVISIONS_TABLE,
         keys_unique,
         lake_root,
         prepare_record_tables,
-        receipt_columns,
         synced_revision_ids,
     )
     from cnequity.storage.revisions import RevisionStore
@@ -387,7 +415,7 @@ def import_receipts(config, *, apply: bool) -> dict:
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root, create=False)
     datasets = sorted(
         path.parent.name
-        for path in (meta / "revisions").glob("*/current.json")
+        for path in (meta / REVISION_RECORDS).glob("*/current.json")
         if path.parent.name != "data"
     )
     from contextlib import nullcontext

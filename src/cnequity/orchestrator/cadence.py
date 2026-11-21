@@ -55,9 +55,9 @@ def scheduled_group_names(config: Any) -> list[str]:
 
 
 def _is_session(day: date) -> bool:
-    from cnequity.domain.datasets import _is_exchange_session
+    from cnequity.domain.holidays_cn import exchange_may_open
 
-    return _is_exchange_session(day)
+    return exchange_may_open(day)
 
 
 def _is_weekly(group: Any) -> bool:

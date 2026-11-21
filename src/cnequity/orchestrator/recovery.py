@@ -4,24 +4,10 @@ from __future__ import annotations
 
 import shlex
 
-from cnequity.domain.datasets import DATASETS, history_mode_for
-from cnequity.domain.http_policy import source_family
+from cnequity.domain.datasets import DATASETS, history_mode_for, keyed_source_ready
 from cnequity.domain.market_time import shanghai_today
+from cnequity.domain.source_routes import source_route_enabled
 from cnequity.i18n import _
-
-
-def _source_enabled(config, source: str) -> bool:
-    family = source_family(source)
-    return (
-        config.sources.get(source, True)
-        and config.sources.get(family, True)
-        and (not family.startswith("eastmoney") or config.sources.get("eastmoney", True))
-        and (
-            not family.startswith("futures_exchange_")
-            or config.sources.get("futures_exchange", True)
-        )
-        and (family != "tdx_protocol" or config.tdx_enabled)
-    )
 
 
 def fallback_options(config, manifest, run_id: str) -> list[dict]:
@@ -71,18 +57,23 @@ def fallback_options(config, manifest, run_id: str) -> list[dict]:
     for dataset, reasons in sorted(limitations.items()):
         spec = DATASETS[dataset]
         sources = [
-            {"source": source, "role": role, "enabled": _source_enabled(config, source)}
+            {
+                "source": source,
+                "role": role,
+                "enabled": source_route_enabled(config, source)
+                and (source != spec.keyed_backfill_source or keyed_source_ready(source, config)),
+            }
             for role, names in (
                 ("primary", (spec.primary_source,)),
                 ("backup", (spec.backup_source,)),
-                ("backfill", (spec.backfill_source,)),
+                ("backfill", (spec.backfill_source or spec.keyed_backfill_source,)),
                 ("supplementary", spec.supplementary_sources),
             )
             for source in names
             if source
         ]
-        mode = history_mode_for(spec)
-        earliest = spec.earliest_available(shanghai_today())
+        mode = history_mode_for(spec, config)
+        earliest = spec.history_bounds(shanghai_today(), config)[0]
         collection_commands = [
             shlex.join(["cne", "run", job, "--group", name, *config_args])
             for job, groups in (("daily", config.schedule_groups), ("events", config.events_groups))

@@ -714,8 +714,45 @@ def test_mcp_refuses_a_lake_with_nothing_in_it(tmp_path):
 
     result = CliRunner().invoke(cli, ["mcp", "--config", str(cfg_path)])
     assert result.exit_code != 0
-    assert "没有任何 curated 数据" in result.output
+    assert "这个湖还没有已发布的数据" in result.output
     assert "相对客户端拉起这个进程时的工作目录解析" in result.output
+
+
+def test_mcp_serves_a_lake_that_only_has_its_catalog(tmp_path):
+    from click.testing import CliRunner
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.cli.main import cli
+    from cnequity.config.bootstrap import path_for_toml
+
+    config = Config(data_root=tmp_path / "data")
+    publish_rows(
+        config,
+        "instruments",
+        pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                "name": ["贵州茅台"],
+                "exchange": ["SH"],
+                "asset_type": ["stock"],
+                "list_date": [date(2001, 8, 27)],
+                "delist_date": [None],
+                "prev_symbol": [None],
+                **{key: [value] for key, value in _prov().items()},
+            },
+            schema_overrides={"delist_date": pl.Date, "prev_symbol": pl.Utf8},
+        ),
+    )
+    assert not config.curated_root.exists()
+    cfg_path = tmp_path / "lake.toml"
+    cfg_path.write_text(f'[data]\nroot = "{path_for_toml(config.data_root)}"\n')
+
+    result = CliRunner().invoke(
+        cli,
+        ["mcp", "--config", str(cfg_path)],
+        input=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n",
+    )
+    assert result.exit_code == 0, result.output
 
 
 def test_mcp_serves_a_populated_lake(lake, tmp_path):
@@ -1028,7 +1065,7 @@ _FLOW_DAYS = [date(2024, 6, 24), date(2024, 6, 25), date(2024, 6, 26), date(2024
 def test_query_dataset_refuses_an_oversized_read_before_loading(lake, monkeypatch):
     sizes = _fund_flow_days(lake, _FLOW_DAYS)
     # Room for the newest two days, not all four.
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", sizes[-1] + sizes[-2])
+    lake.query_scan_budget_rows = sizes[-1] + sizes[-2]
 
     def _must_not_load(*_args, **_kwargs):
         raise AssertionError("an oversized read must be refused before load()")
@@ -1043,24 +1080,24 @@ def test_query_dataset_refuses_an_oversized_read_before_loading(lake, monkeypatc
     assert "run_sql" in message
 
 
-def test_query_dataset_serves_the_window_it_suggested(lake, monkeypatch):
+def test_query_dataset_serves_the_window_it_suggested(lake):
     sizes = _fund_flow_days(lake, _FLOW_DAYS)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", sizes[-1] + sizes[-2])
+    lake.query_scan_budget_rows = sizes[-1] + sizes[-2]
     payload = tools.query_dataset(lake, dataset="fund_flow", start="2024-06-26", end="2024-06-27")
     assert payload["total"] == 4
     assert {row[1] for row in payload["rows"]} == {"2024-06-26", "2024-06-27"}
 
 
-def test_query_dataset_suggestion_stays_inside_the_requested_window(lake, monkeypatch):
+def test_query_dataset_suggestion_stays_inside_the_requested_window(lake):
     sizes = _fund_flow_days(lake, _FLOW_DAYS)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", sizes[0] + sizes[1])
+    lake.query_scan_budget_rows = sizes[0] + sizes[1]
     with pytest.raises(tools.ToolError, match="start=2024-06-25 end=2024-06-26 fits"):
         tools.query_dataset(lake, dataset="fund_flow", start="2024-06-24", end="2024-06-26")
 
 
-def test_query_dataset_short_symbol_lists_are_not_budgeted(lake, monkeypatch):
+def test_query_dataset_short_symbol_lists_are_not_budgeted(lake):
     _fund_flow_days(lake, _FLOW_DAYS)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", 1)
+    lake.query_scan_budget_rows = 1
     payload = tools.query_dataset(lake, dataset="fund_flow", symbols="600519.SH")
     assert payload["total"] == 4
     many = [f"{n:06d}.SZ" for n in range(tools._SYMBOL_SCAN_EXEMPT)] + ["600519.SH"]
@@ -1068,14 +1105,14 @@ def test_query_dataset_short_symbol_lists_are_not_budgeted(lake, monkeypatch):
         tools.query_dataset(lake, dataset="fund_flow", symbols=many)
 
 
-def test_query_dataset_leaves_bad_dates_to_the_reader(lake, monkeypatch):
+def test_query_dataset_leaves_bad_dates_to_the_reader(lake):
     _fund_flow_days(lake, _FLOW_DAYS)
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", 1)
+    lake.query_scan_budget_rows = 1
     with pytest.raises(ValueError, match="isoformat|Invalid"):
         tools.query_dataset(lake, dataset="fund_flow", start="last tuesday")
 
 
-def test_read_budget_prunes_derived_datasets_by_partition(tmp_path, monkeypatch):
+def test_read_budget_prunes_derived_datasets_by_partition(tmp_path):
     """The legacy PARTITION_COLS table has no derived datasets; sizing a window
     through it read every file and refused windowed option_greeks calls."""
     from cnequity.domain.datasets import DATASETS, PARTITION_COLS
@@ -1095,7 +1132,7 @@ def test_read_budget_prunes_derived_datasets_by_partition(tmp_path, monkeypatch)
         part = config.derived_root / name / f"{DATASETS[name].partition_col}={day}"
         part.mkdir(parents=True)
         pl.DataFrame({"n": range(1000)}).write_parquet(part / "part-0.parquet")
-    monkeypatch.setattr(tools, "QUERY_SCAN_BUDGET_ROWS", 1500)
+    config.query_scan_budget_rows = 1500
     tools._refuse_oversized_read(config, name, start="2024-06-27", end=None, symbols=None)
     with pytest.raises(tools.ToolError, match="budget"):
         tools._refuse_oversized_read(config, name, start=None, end=None, symbols=None)

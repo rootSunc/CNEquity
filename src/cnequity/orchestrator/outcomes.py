@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import socket
 import ssl
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any, TypedDict
@@ -72,17 +72,65 @@ STEP_STATUSES = frozenset(
 )
 #: Skips that are the run doing its job, not failing at it (exit 0).
 QUIET_SKIP_REASONS = frozenset({"non_trading_day", "not_scheduled", "disabled", "locked"})
-EXECUTION_STATUSES = frozenset(
-    {"queued", "running", "completed", "skipped", "failed", "interrupted"}
-)
-COVERAGE_STATUSES = frozenset({"complete", "partial", "unknown", "not_applicable"})
-PUBLICATION_STATUSES = frozenset(
-    {"pending", "published", "partial", "unchanged", "none", "rejected"}
-)
-TERMINAL_EXECUTION_STATUSES = frozenset({"completed", "skipped", "failed", "interrupted"})
+
+
+class ExecutionStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class CoverageStatus(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class PublicationStatus(StrEnum):
+    PENDING = "pending"
+    PUBLISHED = "published"
+    PARTIAL = "partial"
+    UNCHANGED = "unchanged"
+    NONE = "none"
+    REJECTED = "rejected"
+
+
+EXECUTION_STATUSES = frozenset(status.value for status in ExecutionStatus)
+COVERAGE_STATUSES = frozenset(status.value for status in CoverageStatus)
+PUBLICATION_STATUSES = frozenset(status.value for status in PublicationStatus)
+TERMINAL_EXECUTION_STATUSES = EXECUTION_STATUSES - {ExecutionStatus.QUEUED, ExecutionStatus.RUNNING}
 SOURCE_LIMIT_REASONS = frozenset(
     {"source_transient", "source_unavailable", "capability_limit", "source_payload_invalid"}
 )
+
+
+def summarize_coverage(statuses: Iterable[str]) -> CoverageStatus:
+    """Report the least complete coverage among the applicable receipts."""
+    found = set(statuses)
+    for status in (CoverageStatus.PARTIAL, CoverageStatus.UNKNOWN, CoverageStatus.COMPLETE):
+        if status in found:
+            return status
+    return CoverageStatus.NOT_APPLICABLE
+
+
+def summarize_publication(statuses: Iterable[str]) -> PublicationStatus:
+    """Summarize the receipts of a publication stage across datasets."""
+    found = set(statuses)
+    if {PublicationStatus.PUBLISHED, PublicationStatus.REJECTED} <= found:
+        return PublicationStatus.PARTIAL
+    for status in (
+        PublicationStatus.PARTIAL,
+        PublicationStatus.PUBLISHED,
+        PublicationStatus.REJECTED,
+        PublicationStatus.UNCHANGED,
+    ):
+        if status in found:
+            return status
+    return PublicationStatus.NONE
 
 
 #: Step result keys that report scope the step could not cover. Any truthy
@@ -146,6 +194,12 @@ class InputUnavailableError(RuntimeError):
     """A calculation has no trustworthy input for its requested scope."""
 
 
+class InputChangedError(InputUnavailableError):
+    """An input was republished during the calculation; a retry reads the new one."""
+
+    reason_code = "execution_error"
+
+
 class SourcePayloadError(RuntimeError):
     """A source response violates its requested shape or scope."""
 
@@ -180,6 +234,8 @@ def error_kind(error: BaseException) -> str:
         return "interrupted"
     if isinstance(error, SourceUnavailableError):
         return "source_unavailable"
+    if isinstance(error, InputChangedError):
+        return error.reason_code
     if isinstance(error, InputUnavailableError):
         return "input_unavailable"
     declared = getattr(error, "reason_code", None)
@@ -249,41 +305,44 @@ def step_outcome(
     execution = result.get("execution_status")
     if execution is None:
         execution = (
-            "interrupted"
+            ExecutionStatus.INTERRUPTED
             if reason == "interrupted"
-            else "skipped"
-            if status == "skipped" or reason == "input_unavailable"
-            else "failed"
-            if status == "blocked" or (status == "failed" and reason not in SOURCE_LIMIT_REASONS)
-            else "completed"
+            else ExecutionStatus.SKIPPED
+            if status == RunStatus.SKIPPED or reason == "input_unavailable"
+            else ExecutionStatus.FAILED
+            if status == RunStatus.BLOCKED
+            or (status == RunStatus.FAILED and reason not in SOURCE_LIMIT_REASONS)
+            else ExecutionStatus.COMPLETED
         )
     coverage = result.get("coverage_status")
     if coverage is None:
         coverage = (
-            "partial"
+            CoverageStatus.PARTIAL
             if status == RunStatus.DEGRADED
             or result.get("coverage_complete") is False
             or reason in SOURCE_LIMIT_REASONS | {"input_unavailable"}
-            else "complete"
+            else CoverageStatus.COMPLETE
             if result.get("coverage_complete") is True
-            else "not_applicable"
+            else CoverageStatus.NOT_APPLICABLE
             if stage in {"audit", "compact", "publish_revision"}
-            else "unknown"
+            else CoverageStatus.UNKNOWN
         )
     publication = result.get("publication_status")
     if publication is None:
         publication = (
-            "rejected"
-            if status == "blocked"
-            else "published"
-            if stage == "publish_revision" and status == "success" and result.get("revision_id")
-            else "unchanged"
-            if stage == "publish_revision" and status == "success"
-            else "none"
+            PublicationStatus.REJECTED
+            if status == RunStatus.BLOCKED
+            else PublicationStatus.PUBLISHED
+            if stage == "publish_revision"
+            and status == RunStatus.SUCCESS
+            and result.get("revision_id")
+            else PublicationStatus.UNCHANGED
+            if stage == "publish_revision" and status == RunStatus.SUCCESS
+            else PublicationStatus.NONE
         )
     if reason is None and status == RunStatus.DEGRADED:
         reason = "coverage_limited"
-    if reason is None and status == "failed":
+    if reason is None and status == RunStatus.FAILED:
         reason = "execution_error"
     return Outcome(str(execution), str(coverage), str(publication), reason)
 
@@ -291,9 +350,12 @@ def step_outcome(
 def execution_settled(row: Mapping[str, Any]) -> bool:
     """Source-limited attempts can finish while their retry evidence survives."""
     data = dict(row)
-    return data.get("execution_status") in {"completed", "skipped"} or data.get("status") in {
-        "success",
-        "superseded",
+    return data.get("execution_status") in {
+        ExecutionStatus.COMPLETED,
+        ExecutionStatus.SKIPPED,
+    } or data.get("status") in {
+        RunStatus.SUCCESS,
+        RunStatus.SUPERSEDED,
     }
 
 

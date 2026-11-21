@@ -43,6 +43,7 @@ import httpx
 import polars as pl
 
 from cnequity.domain.http_policy import record_http_response
+from cnequity.domain.market_time import SHANGHAI_ZONE
 from cnequity.domain.rate_limit import source_request
 from cnequity.storage.atomic import replace_with_retry
 
@@ -128,7 +129,7 @@ def parse_adjustment_factor_dump(path: Path) -> pl.DataFrame:
     frame = raw.select(
         pl.col("thscode").cast(pl.Utf8).alias("symbol"),
         pl.from_epoch(pl.col("ex_date_ms"), time_unit="ms")
-        .dt.convert_time_zone("Asia/Shanghai")
+        .dt.convert_time_zone(SHANGHAI_ZONE)
         .dt.date()
         .alias("ex_date"),
         pl.col("dividend_per_share").cast(pl.Float64).fill_null(0.0).alias("_cash"),

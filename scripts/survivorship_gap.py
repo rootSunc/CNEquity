@@ -31,7 +31,7 @@ for three reasons that all point the same way:
 Usage::
 
     python scripts/survivorship_gap.py                    # table only
-    python scripts/survivorship_gap.py --svg docs/assets/survivorship-gap.svg
+    python scripts/survivorship_gap.py --svg /tmp/survivorship-gap.svg
 """
 
 from __future__ import annotations

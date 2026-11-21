@@ -32,9 +32,10 @@ from typing import Any
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.config.resources import resources_for
 from cnequity.domain.datasets import DATASETS, RESAMPLED_MINUTE_DATASETS, TIER_LABELS
 from cnequity.mcp_server import live
-from cnequity.query.read_budget import SCAN_BUDGET_ROWS, SYMBOL_SCAN_EXEMPT, oversized_read
+from cnequity.query.read_budget import SYMBOL_SCAN_EXEMPT, oversized_read
 from cnequity.query.reader import ReaderError, load
 from cnequity.query.universe import UniverseCoverageError
 
@@ -589,9 +590,6 @@ def query_dataset(
     return payload
 
 
-#: The shared read budget (``query/read_budget.py``), kept here so a test can
-#: shrink it for this tool alone.
-QUERY_SCAN_BUDGET_ROWS = SCAN_BUDGET_ROWS
 _SYMBOL_SCAN_EXEMPT = SYMBOL_SCAN_EXEMPT
 
 
@@ -618,9 +616,7 @@ def _refuse_oversized_read(
         start_d, end_d = _parse_window_date(start), _parse_window_date(end)
     except ValueError:
         return  # load() reports the bad date in its own words
-    over = oversized_read(
-        config, dataset, start=start_d, end=end_d, symbols=symbols, budget=QUERY_SCAN_BUDGET_ROWS
-    )
+    over = oversized_read(config, dataset, start=start_d, end=end_d, symbols=symbols)
     if over is None:
         return
     size = f"{over.selected_rows:,} rows"
@@ -707,12 +703,12 @@ def _configure_sql_connection(con: Any, config: Config) -> None:
     # This must be configured before enable_external_access is disabled.  Use
     # a bound list parameter so paths containing quotes cannot alter SQL.
     con.execute("SET allowed_directories = ?", [allowed])
+    resources_for(config, "read").apply(con)
     con.execute("SET enable_external_access = false")
     con.execute("SET autoinstall_known_extensions = false")
     con.execute("SET autoload_known_extensions = false")
     con.execute("SET allow_community_extensions = false")
-    con.execute("SET memory_limit = ?", [config.duckdb_memory_limit])
-    con.execute("SET threads = ?", [config.duckdb_threads])
+
     # Prevent a query from re-enabling filesystem, extension, or network
     # capabilities after this function returns.
     con.execute("SET lock_configuration = true")
@@ -738,25 +734,28 @@ def run_sql(config: Config, *, sql: str, limit: int | None = None) -> dict:
             "it queries the parquet on disk, and in live mode nothing is written there.",
         )
 
-    con = views_connection(config)
+    from contextlib import closing
+
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.lock import lake_read
+
     try:
-        _configure_sql_connection(con, config)
-        relation = con.sql(text)
-        # Only the page is materialised. Fetching the whole result and slicing
-        # it afterwards let one `SELECT * FROM minute_bars` claim the entire
-        # DuckDB memory limit and then copy it again into Polars, to return
-        # 200 rows. The count runs as its own aggregate, which DuckDB can
-        # answer with projection pushdown instead of carrying every column.
-        df = pl.from_arrow(relation.limit(limit).to_arrow_table())
-        # DuckDB 2 removed Relation.fetchone(): a relation keeps no result
-        # between calls. limit(1).fetchall() is the replacement and still
-        # works on 1.5, which is what Python 3.10 resolves.
-        counted = relation.aggregate("count(*)").limit(1).fetchall()
-        total = int(counted[0][0])
+        with lake_read(lake_root(config)), closing(views_connection(config)) as con:
+            _configure_sql_connection(con, config)
+            relation = con.sql(text)
+            # Only the page is materialised. Fetching the whole result and slicing
+            # it afterwards let one `SELECT * FROM minute_bars` claim the entire
+            # DuckDB memory limit and then copy it again into Polars, to return
+            # 200 rows. The count runs as its own aggregate, which DuckDB can
+            # answer with projection pushdown instead of carrying every column.
+            df = pl.from_arrow(relation.limit(limit).to_arrow_table())
+            # DuckDB 2 removed Relation.fetchone(): a relation keeps no result
+            # between calls. limit(1).fetchall() is the replacement and still
+            # works on 1.5, which is what Python 3.10 resolves.
+            counted = relation.aggregate("count(*)").limit(1).fetchall()
+            total = int(counted[0][0])
     except Exception as exc:  # noqa: BLE001 — surfaced as a fixable tool error
         raise ToolError(f"query failed: {exc}") from exc
-    finally:
-        con.close()
 
     payload = _frame_payload(df, limit=limit, include_provenance=True, total=total)
     payload["sql"] = text

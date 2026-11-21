@@ -43,6 +43,7 @@ from cnequity.adapters.numeric import finite_int64
 from cnequity.adapters.tdx_protocol._decode import decoded_quantity_or_none
 from cnequity.adapters.tdx_protocol.history_window import window_pages
 from cnequity.domain.market_profile import EXCHANGES, serves
+from cnequity.domain.market_time import CONTINUOUS_SESSION_MINUTES
 from cnequity.domain.rate_limit import RateLimitSpec, source_request_slot_spec, wait_spec
 
 logger = logging.getLogger(__name__)
@@ -52,12 +53,10 @@ _MAX_PAGES = 1000
 
 # category → (label, bars per full session). The label is what lands in the
 # `frequency` column and what the CLI accepts.
+_MINUTES_PER_SESSION = sum(end - start for start, end in CONTINUOUS_SESSION_MINUTES)
 FREQUENCIES: dict[str, tuple[int, int]] = {
-    "1m": (8, 240),
-    "5m": (0, 48),
-    "15m": (1, 16),
-    "30m": (2, 8),
-    "60m": (3, 4),
+    frequency: (category, _MINUTES_PER_SESSION // int(frequency[:-1]))
+    for frequency, category in {"1m": 8, "5m": 0, "15m": 1, "30m": 2, "60m": 3}.items()
 }
 
 # Continuous-trading windows, as closing-minute labels. A bar at exactly 11:30
@@ -69,9 +68,9 @@ FREQUENCIES: dict[str, tuple[int, int]] = {
 # a tradable minute. An actively traded name emits none (600519 over 2,400 bars
 # checked, zero). Keeping them would put a phantom bar in every gap check and
 # skew any resampling that assumes fixed bar counts.
-SESSIONS: tuple[tuple[time, time], ...] = (
-    (time(9, 31), time(11, 30)),
-    (time(13, 1), time(15, 0)),
+SESSIONS: tuple[tuple[time, time], ...] = tuple(
+    (time(*divmod(start + 1, 60)), time(*divmod(end, 60)))
+    for start, end in CONTINUOUS_SESSION_MINUTES
 )
 
 

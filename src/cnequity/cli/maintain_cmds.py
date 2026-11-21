@@ -24,6 +24,8 @@ from cnequity.cli._shared import (
     emit_json,
     parse_date_option,
 )
+from cnequity.config.logging import logging_settings
+from cnequity.config.retention import revision_keep
 from cnequity.derive.adj_factors import compute_adj_factors
 from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
 from cnequity.domain.market_time import shanghai_today
@@ -37,7 +39,6 @@ from cnequity.storage.source_snapshots import (
     clean_source_snapshots,
 )
 from cnequity.storage.staging_cleanup import (
-    DEFAULT_LOG_RETENTION_DAYS,
     clean_run_logs,
     clean_stale_lock_files,
     preview_staging_cleanup,
@@ -198,14 +199,14 @@ def _published_derive(cfg, dataset: str):
     from cnequity.orchestrator.run_lock import run_lock
     from cnequity.query.parquet_scan import dataset_has_parquet
     from cnequity.steps.finalize import (
-        _capture_derive_inputs,
-        _publish_derived_revision,
         _record_dataset_result,
+        capture_derive_inputs,
+        publish_derived_revision,
     )
     from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.revisions import RevisionStore
 
-    manifest = Manifest(cfg.manifest_path)
+    manifest = Manifest(cfg.manifest_path, config=cfg)
     run_id = manifest.start_run(f"derive:{dataset}", {"dataset": dataset})
     outcome = {"status": "success", "rows_written": 0}
     try:
@@ -214,7 +215,7 @@ def _published_derive(cfg, dataset: str):
             DerivedOutput(cfg, dataset, run_id) as output,
         ):
             store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
-            inputs = _capture_derive_inputs(cfg, dataset)
+            inputs = capture_derive_inputs(cfg, dataset)
             required = {
                 "adj_factors": ("daily_bars",),
                 "industry_index": ("daily_bars", "industry_members"),
@@ -237,7 +238,7 @@ def _published_derive(cfg, dataset: str):
                     f"{dataset}: missing input {', '.join(missing)}; build it first with {remedies}"
                 )
             yield outcome, output
-            revision = _publish_derived_revision(
+            revision = publish_derived_revision(
                 cfg,
                 dataset,
                 run_id,
@@ -375,7 +376,7 @@ def derive(
     `futures_continuous` and `option_greeks` update daily in the `derivatives` group.
     `futures_continuous` is recomputed in full every time; `option_greeks` detects changes in quotes, contracts, rates and model dependencies.
     After a derivatives backfill, contracts and derived data update automatically; `--full` recomputes everything explicitly.
-    `minute_bars_15m`, `minute_bars_30m` and `minute_bars_60m` are not computed by default and are only derived here:
+    `minute_bars_15m`, `minute_bars_30m` and `minute_bars_60m` are first built here and then maintained by the intraday schedule:
     a stock's day uses 1m when it has 1m, otherwise 5m. Without a window, only sessions not yet computed, or whose minute inputs changed, are recomputed.
 
     """
@@ -445,9 +446,13 @@ def derive(
             outcome["rows_written"] = summary.get("rows", 0)
         emit_json(summary, indent=2, default=str)
     elif name in RESAMPLED_MINUTE_DATASETS:
-        from cnequity.derive.minute_resample import derive_minute_resample
+        from cnequity.derive.minute_resample import derive_minute_resample, resample_has_gaps
+        from cnequity.orchestrator.run_lock import run_lock
 
-        with _published_derive(cfg, name) as (outcome, output):
+        with (
+            run_lock(cfg.meta_root, f"derive-{name}", blocking=True),
+            _published_derive(cfg, name) as (outcome, output),
+        ):
             _require_minute_input(cfg, name)
             summary = derive_minute_resample(
                 cfg, name, start=start, end=end, full=full, output=output
@@ -455,10 +460,7 @@ def derive(
             outcome["rows_written"] = summary.get("rows", 0)
             # Halts are expected gaps; a gap in a traded day, or input the
             # resampler rejects, is a data problem.
-            if any(
-                summary.get(key)
-                for key in ("skipped_incomplete_1m", "skipped_incomplete_5m", "skipped_invalid")
-            ):
+            if resample_has_gaps(summary):
                 outcome["status"] = "degraded"
         emit_json(summary, indent=2, default=str, ensure_ascii=False)
     elif name == "trading_status":
@@ -537,21 +539,19 @@ def derive(
 )
 @click.option(
     "--keep-revision-generations",
-    default=5,
-    show_default=True,
-    type=int,
+    type=click.IntRange(min=0),
     help=(
         N_(
-            "When a person confirms deletion, keep the latest this many generations plus the current version and holds. 0 skips version handling."
+            "Keep this many recent generations in addition to the current version and holds. Defaults to [storage.retention].keep_generations. 0 skips version handling."
         )
     ),
 )
 @click.option(
     "--log-retention-days",
-    default=DEFAULT_LOG_RETENTION_DAYS,
-    show_default=True,
-    type=int,
-    help=N_("Offer `logs/cne-*.log` older than this many days; 0 skips."),
+    type=click.IntRange(min=0),
+    help=N_(
+        "Offer `logs/cne-*.log` older than this many days. Defaults to [logging].retention_days. 0 skips."
+    ),
 )
 @click.option(
     "--reconcile-runs",
@@ -573,8 +573,8 @@ def clean(
     dry_run: bool,
     orphan_retention_days: int,
     snapshot_retention_days: int,
-    keep_revision_generations: int,
-    log_retention_days: int,
+    keep_revision_generations: int | None,
+    log_retention_days: int | None,
     force: bool,
     reconcile_runs: bool,
     reconcile_after_seconds: float | None,
@@ -602,11 +602,11 @@ def clean(
     # afterwards, one kind at a time; a scheduler has no terminal and is not asked.
     cfg = _cfg(config_path)
     attach_log_file(cfg, "run-clean")
-    generations = (
-        preview_revision_retention(cfg.meta_root, keep=keep_revision_generations)
-        if keep_revision_generations > 0
-        else []
+    log_days = (
+        logging_settings(cfg).retention_days if log_retention_days is None else log_retention_days
     )
+    keep = revision_keep(cfg, keep_revision_generations)
+    generations = preview_revision_retention(cfg.meta_root, keep=keep)
     reconciled: dict[str, int] | None = None
     if reconcile_runs:
         manifest = Manifest(cfg.manifest_path)
@@ -623,15 +623,15 @@ def clean(
     snaps = clean_source_snapshots(
         cfg.meta_root, retention_days=snapshot_retention_days, dry_run=True
     )
-    logs = clean_run_logs(cfg.data_root, retention_days=log_retention_days, dry_run=True)
+    logs = clean_run_logs(cfg.data_root, retention_days=log_days, dry_run=True)
     stale_locks = clean_stale_lock_files(
         cfg.meta_root, retention_days=orphan_retention_days, dry_run=True
     )
     selection = _Selection(
-        keep_revision_generations=keep_revision_generations,
+        keep_revision_generations=keep,
         generations=sum(len(item.candidate_revision_ids) for item in generations),
         staging_run_ids=list(result.candidate_run_ids),
-        log_retention_days=log_retention_days,
+        log_retention_days=log_days,
         logs=len(logs.removed),
         snapshot_retention_days=snapshot_retention_days,
         snapshot_run_dirs=len(snaps.removed_run_dirs),

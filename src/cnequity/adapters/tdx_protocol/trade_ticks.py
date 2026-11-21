@@ -34,6 +34,7 @@ from cnequity.adapters.tdx_protocol._wire import MAX_TICK_PAGE
 from cnequity.adapters.tdx_protocol._wire.constants import SECURITY_COEFFICIENT
 from cnequity.adapters.tdx_protocol._wire.helper import get_security_type
 from cnequity.domain.market_profile import EXCHANGES, serves
+from cnequity.domain.market_time import CONTINUOUS_SESSIONS
 from cnequity.domain.rate_limit import RateLimitSpec, source_request_slot_spec, wait_spec
 
 logger = logging.getLogger(__name__)
@@ -58,14 +59,11 @@ UNKNOWN_DIRECTION = "unknown"
 # Legal windows, inclusive. Measured: every session opens with one 09:25 record
 # and nothing falls in the lunch break or between 15:00 and 15:05.
 #
-# Note how little this shares with `minute_bars.SESSIONS`, which is why it is
-# not imported from there: bars are labelled by their closing minute, so the
-# auction lives inside the 09:31 bar and 13:00 is not a bar at all. A trade at
-# 09:25 or 13:00 is a real trade.
+# Ticks include trades at the session open and auction. Bars use their
+# closing-minute label, so their first regular label is one minute later.
 SESSIONS: tuple[tuple[time, time], ...] = (
     (time(9, 25), time(9, 25)),  # opening call auction
-    (time(9, 30), time(11, 30)),
-    (time(13, 0), time(15, 0)),
+    *CONTINUOUS_SESSIONS,
     (time(15, 5), time(15, 30)),  # after-hours fixed price
 )
 

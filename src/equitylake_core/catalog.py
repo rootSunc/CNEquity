@@ -24,14 +24,15 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import duckdb
 
 from equitylake_core.extensions import ensure_extensions
-from equitylake_core.lock import LAKE_LOCK_TIMEOUT, lake_lock
+from equitylake_core.lock import LAKE_LOCK_TIMEOUT, lake_lock, lake_operation, snapshot_lock
 
 CATALOG_FILE = "catalog.sqlite"
+REVISIONS_TABLE = "_revisions"
 DATA_DIR = "data"
 #: In a lake directory that has no data of its own: the data directory it reads.
 DATA_LINK = "data.at"
@@ -95,6 +96,13 @@ class CatalogError(RuntimeError):
     """The lake directory is missing, or is not a lake."""
 
 
+@dataclass
+class TransactionOutcome:
+    """Whether files staged for a transaction can be discarded after an exception."""
+
+    status: Literal["not_committed", "unknown", "committed"] = "not_committed"
+
+
 @dataclass(frozen=True)
 class DataFile:
     """One data file of a file-complete table, with the range of one column in it."""
@@ -150,6 +158,8 @@ class Catalog:
         read_only: bool = False,
         memory_limit: str | None = None,
         temp_directory: str | Path | None = None,
+        threads: int | None = None,
+        max_temp_directory_size: str | None = None,
         extension_dir: str | Path | None = None,
         extension_mirror: str | None = None,
         lock_timeout: float = LAKE_LOCK_TIMEOUT,
@@ -168,6 +178,8 @@ class Catalog:
                 create=create,
                 memory_limit=memory_limit,
                 temp_directory=temp_directory,
+                threads=threads,
+                max_temp_directory_size=max_temp_directory_size,
                 extension_dir=extension_dir,
                 extension_mirror=extension_mirror,
             )
@@ -175,7 +187,17 @@ class Catalog:
             self._release()
             raise
 
-    def _open(self, *, create, memory_limit, temp_directory, extension_dir, extension_mirror):
+    def _open(
+        self,
+        *,
+        create,
+        memory_limit,
+        temp_directory,
+        threads,
+        max_temp_directory_size,
+        extension_dir,
+        extension_mirror,
+    ):
         read_only = self.read_only
         link = self.root / DATA_LINK
         #: True for a copy of another lake's catalog that reads that lake's files.
@@ -206,6 +228,10 @@ class Catalog:
                 self.con.execute(
                     f"SET temp_directory = {quote_literal(Path(temp_directory).as_posix())}"
                 )
+            if threads is not None:
+                self.con.execute("SET threads = ?", [threads])
+            if max_temp_directory_size is not None:
+                self.con.execute("SET max_temp_directory_size = ?", [max_temp_directory_size])
             ensure_extensions(self.con, local_dir=extension_dir, mirror=extension_mirror)
             # The catalog stores the absolute data path it was created with.
             # Always resolve files under this catalog's own directory instead,
@@ -259,6 +285,23 @@ class Catalog:
             f"SELECT max(snapshot_id) FROM ducklake_snapshots({quote_literal(ALIAS)})"
         ).fetchone()[0]
 
+    @contextmanager
+    def pin_snapshot(self, snapshot: int | None = None) -> Iterator[int]:
+        """Keep a snapshot readable until the operation using its files ends."""
+        with lake_operation(self.root):
+            while True:
+                version = self.snapshot() if snapshot is None else snapshot
+                with snapshot_lock(self.root, version, shared=True):
+                    exists = self.execute(
+                        f"SELECT 1 FROM ducklake_snapshots({quote_literal(ALIAS)}) WHERE snapshot_id = ?",
+                        [version],
+                    ).fetchall()
+                    if exists:
+                        yield version
+                        return
+                if snapshot is not None:
+                    raise CatalogError(f"snapshot {snapshot} has expired or does not exist")
+
     def tables(self) -> list[str]:
         rows = self.con.execute(
             "SELECT table_name FROM information_schema.tables "
@@ -292,9 +335,15 @@ class Catalog:
 
     @contextmanager
     def transaction(
-        self, *, message: str | None = None, author: str | None = None
+        self,
+        *,
+        message: str | None = None,
+        author: str | None = None,
+        outcome: TransactionOutcome | None = None,
     ) -> Iterator[Catalog]:
         """Everything written inside becomes one snapshot, or nothing does."""
+        if outcome is not None:
+            outcome.status = "unknown"
         self.con.execute("BEGIN")
         try:
             if message is not None:
@@ -305,8 +354,12 @@ class Catalog:
             yield self
         except BaseException:
             self.con.execute("ROLLBACK")
+            if outcome is not None:
+                outcome.status = "not_committed"
             raise
         self.con.execute("COMMIT")
+        if outcome is not None:
+            outcome.status = "committed"
 
     def keep_rows_in_files(self) -> None:
         """Stop inlining small writes into the catalog database, and move any inlined rows to files."""

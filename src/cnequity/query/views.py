@@ -13,15 +13,18 @@ import duckdb
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.config.resources import resources_for
 from cnequity.domain.canonical import OFFICIAL_INDEX_SOURCES, source_rank_sql
 from cnequity.domain.canonical import evidence_rank_sql as canonical_evidence_sql
 from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.domain.market_profile import OTC_SCOPED_DATASETS, otc_quote_sql
 from cnequity.domain.partitions import uses_hive
 from cnequity.domain.schemas import DATASET_SCHEMAS, OPTIONAL_COLUMNS, PRIMARY_KEYS
+from cnequity.meta_layout import LAKE_DIR
 from cnequity.storage.atomic import replace_with_retry
 from cnequity.storage.locator import layer_name, logical_root
 from cnequity.storage.revisions import resolve_committed_root
+from equitylake_core.catalog import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +142,7 @@ def view_read_roots(config: Config) -> list[Path]:
     meta = root / "meta" / "revisions"
     # The lake catalog's data directory holds published rows only; its
     # catalog database beside it is not readable from SQL.
-    roots = [meta / "data", root / "lake" / "data"]
+    roots = [meta / "data", root / LAKE_DIR / DATA_DIR]
     for name, spec in sorted(DATASETS.items()):
         if _current_pointer(root / "meta", name) is not None:
             continue
@@ -344,8 +347,7 @@ def _views_inputs(config: Config, *, require_data: bool) -> dict:
         repr(
             (
                 str(config.data_root.resolve()),
-                config.duckdb_memory_limit,
-                config.duckdb_threads,
+                resources_for(config, "read"),
                 require_data,
             )
         ).encode()
@@ -387,6 +389,14 @@ def ensure_duckdb_views(config: Config, *, require_data: bool = False, force: bo
     (see `_views_inputs`), unless *force*.
     """
     db_path = config.duckdb_path or (config.data_root / "duckdb" / "cnequity.duckdb")
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.lock import file_lock, lake_read
+
+    with lake_read(lake_root(config)), file_lock(db_path.with_suffix(".views.lock"), timeout=60):
+        return _build_duckdb_views(config, db_path, require_data=require_data, force=force)
+
+
+def _build_duckdb_views(config: Config, db_path: Path, *, require_data: bool, force: bool) -> Path:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     stamp = db_path.with_name(db_path.name + ".inputs")
     inputs = _views_inputs(config, require_data=require_data)
@@ -471,8 +481,7 @@ def _define_views(
     # `/`, which is what the SQL literals below and DuckDB's glob both want.
     root = config.data_root.resolve().as_posix()
 
-    con.execute(f"SET memory_limit='{config.duckdb_memory_limit}'")
-    con.execute(f"SET threads={config.duckdb_threads}")
+    resources_for(config, "read").apply(con)
 
     for name, spec in sorted(DATASETS.items()):
         if only is not None and name not in only:

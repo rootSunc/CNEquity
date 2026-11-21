@@ -79,7 +79,7 @@ def test_an_up_to_date_config_is_left_alone(tmp_path):
 def test_a_missing_group_is_copied_with_its_comments(tmp_path):
     text = example_toml_text()
     start = text.index("# Futures and options.")
-    end = text.index("# Not scheduled by anything")
+    end = text.index("[job.daily.groups.intraday]")
     path = _old_config(tmp_path, text[:start] + text[end:])
 
     plan = plan_upgrade(path)
@@ -88,6 +88,26 @@ def test_a_missing_group_is_copied_with_its_comments(tmp_path):
     assert "# Futures and options." in plan.text
     groups = tomllib.loads(plan.text)["job"]["daily"]["groups"]
     assert list(groups)[-1] == "derivatives", "appended after the existing groups"
+
+
+def test_upgrade_adds_minute_resamples_to_explicit_intraday_steps(tmp_path):
+    text = re.sub(
+        r'(?m)^  "derive_minute_bars_15m", "derive_minute_bars_30m", "derive_minute_bars_60m",\n',
+        "",
+        example_toml_text(),
+    )
+    path = _old_config(tmp_path, text)
+    plan = plan_upgrade(path)
+    group = tomllib.loads(plan.text)["job"]["daily"]["groups"]["intraday"]
+
+    assert group["steps"] == [
+        "minute_bars",
+        "minute_bars_5m",
+        "compact",
+        "derive_minute_bars_15m",
+        "derive_minute_bars_30m",
+        "derive_minute_bars_60m",
+    ]
 
 
 def test_operator_settings_survive(tmp_path):

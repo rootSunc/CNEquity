@@ -205,3 +205,54 @@ def test_a_clean_rehearsal_lets_the_catalog_publish_through(tmp_path, monkeypatc
     assert load("fund_flow", config=cfg).height == 3
     report = next((cfg.meta_root / "quality" / "publication").glob("r2.json")).read_text()
     assert '"blocked": false' in report and "candidate_audit_failed" not in report
+
+
+def test_compact_publishes_coverage_and_resume_units_in_the_same_snapshot(tmp_path):
+    from datetime import datetime, timezone
+
+    from cnequity.quality.planned_coverage import answer_finding
+    from cnequity.storage.resume_units import finding
+
+    cfg = Config(data_root=tmp_path / "lake")
+    writer = StagingWriter(cfg.staging_root)
+    writer.write_batch("fund_flow", "records", "batch-0", _flows(FIRST, {"600519.SH": 1.0}))
+    findings = [
+        answer_finding("fund_flow", [SECOND], datetime(2024, 7, 1, tzinfo=timezone.utc)),
+        finding("fund_flow", ["one"], "test-scope"),
+    ]
+    step_compact(cfg, FIRST, "records", {"audit_findings": findings})
+    with Catalog(lake_root(cfg), read_only=True) as lake:
+        revision = lake.execute("SELECT snapshot_id FROM _revisions").fetchone()
+        assert lake.execute("SELECT snapshot_id FROM _attempts").fetchone() == revision
+        assert lake.execute("SELECT snapshot_id FROM _resume_units").fetchone() == revision
+
+
+def test_compact_can_prepare_alongside_a_writer_and_rejects_a_moved_base(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.storage.lake_write import InputChanged
+    from equitylake_core.lock import holds_lake_lock
+
+    cfg = Config(data_root=tmp_path)
+    publish_rows(cfg, "fund_flow", _flows(FIRST, {"600519.SH": 1.0}), run_id="seed")
+    writer = StagingWriter(cfg.staging_root)
+    writer.write_batch("fund_flow", "slow", "batch-0", _flows(SECOND, {"600519.SH": 2.0}))
+
+    def compare_while_another_writer_commits(*args, **kwargs):
+        assert not holds_lake_lock(lake_root(cfg))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                publish_rows, cfg, "fund_flow", _flows(FIRST, {"600519.SH": 3.0}), run_id="fast"
+            )
+            assert future.result(timeout=20) is not None
+        return {"blocked": False, "new_errors": []}
+
+    monkeypatch.setattr(
+        "cnequity.quality.publication.evaluate_publication", compare_while_another_writer_commits
+    )
+    with pytest.raises(InputChanged, match="fund_flow"):
+        step_compact(cfg, SECOND, "slow", {})
+    with Catalog(lake_root(cfg), read_only=True) as catalog:
+        assert catalog.execute("SELECT main_net_inflow FROM fund_flow").fetchall() == [(3.0,)]

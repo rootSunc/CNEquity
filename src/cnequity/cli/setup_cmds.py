@@ -411,7 +411,7 @@ def init(
 
     # After the layout-only exit: a command that finishes in a second has
     # nothing to leave behind but an empty file.
-    log_path = attach_log_file(cfg, "init", quiet=quiet)
+    log_path = attach_log_file(cfg, "init")
 
     # On a weekend or holiday "today" has no session: the Beijing board and the
     # exchange status pages answer nothing for it, which left a lake built on a

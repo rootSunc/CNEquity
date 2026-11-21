@@ -21,8 +21,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cnequity.config.resources import resources_for
 from cnequity.domain.datasets import DATASETS
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.meta_layout import STORAGE_RECORD
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.catalog_bridge import (
     catalog_is_current,
@@ -118,7 +120,7 @@ def _record_revisions(config) -> None:
 
     import_receipts(config, apply=True)
     write_json_atomic(
-        Path(config.meta_root) / "storage.json",
+        Path(config.meta_root) / STORAGE_RECORD,
         {"publish": STORAGE_CATALOG, "revisions": STORAGE_CATALOG},
         indent=2,
     )
@@ -158,7 +160,9 @@ def migrate_to_catalog(config, *, apply: bool, progress=None) -> dict:
         return report
 
     root = lake_root(config)
-    with Catalog(root, create=True, memory_limit="8GB", temp_directory=root / "tmp") as catalog:
+    with Catalog(
+        root, create=True, **resources_for(config, "maintenance").options(scratch=root / "tmp")
+    ) as catalog:
         copied = [
             r.dataset for r in sync_all(config, catalog, tell("copy")) if r.action != "current"
         ]
@@ -180,7 +184,7 @@ def migrate_to_catalog(config, *, apply: bool, progress=None) -> dict:
                     f"{', '.join(sorted(set(bad)))}"
                 )
             write_json_atomic(
-                Path(config.meta_root) / "storage.json", {"publish": STORAGE_CATALOG}, indent=2
+                Path(config.meta_root) / STORAGE_RECORD, {"publish": STORAGE_CATALOG}, indent=2
             )
     _record_revisions(config)
     report.update(copied=sorted(set(copied) | set(late)), verified=len(current), switched=True)

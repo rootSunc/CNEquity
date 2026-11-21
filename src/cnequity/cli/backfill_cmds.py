@@ -294,6 +294,17 @@ def run_backfill(config_path: str, request: BackfillRequest) -> None:
         result = _backfill_chunked(cfg, dataset, start_d, end_d, spec.backfill_chunk_days)
     else:
         result = _backfill_once(cfg, dataset)
+    if dataset in {"minute_bars", "minute_bars_5m"} and result.get("rows_written"):
+        from cnequity.steps.minute_resamples import MINUTE_RESAMPLE_STEPS
+
+        configured = {step for group in cfg.schedule_groups.values() for step in group.steps}
+        steps = [step for step in MINUTE_RESAMPLE_STEPS if step in configured]
+        if steps:
+            # Run once after all symbol slices have had a chance to publish.
+            result["followup"] = _follow_lineage(
+                result,
+                lambda: JobEngine(cfg).run_job("derive:minute_bars", steps=steps, backfill=True),
+            )
     if (
         dataset in {"futures_bars", "option_bars", "futures_contracts", "option_contracts"}
         and result.get("status") != "failed"
@@ -715,7 +726,7 @@ def _backfill_plan(cfg, dataset, start, end, symbols, workers, repair_modes) -> 
         "source_note": "The registered source describes capability; per-market routing and explicit repair modes are in the fetch guide, and the actual source is written into the data rows",
         "chunk_symbols": spec.backfill_chunk_symbols,
         "chunk_days": spec.backfill_chunk_days,
-        "earliest_available": spec.earliest_available(shanghai_today()),
+        "earliest_available": spec.history_bounds(shanghai_today(), cfg)[0],
         "requests": None,
         "cold_request_lower_bound": cold_minimum,
         "broad_tip_snapshots": broad_tip,

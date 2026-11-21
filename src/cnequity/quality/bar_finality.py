@@ -8,6 +8,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
+from cnequity.domain.market_time import SHANGHAI_ZONE
 from cnequity.domain.trading_status import SESSION_FINAL_AT
 from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
 
@@ -29,7 +30,7 @@ def daily_bar_finality_findings(config: Config, end: date) -> list[dict]:
             fetched = fetched.dt.replace_time_zone("UTC")
     else:
         return []
-    local = fetched.dt.convert_time_zone("Asia/Shanghai")
+    local = fetched.dt.convert_time_zone(SHANGHAI_ZONE)
     suspect = (
         dedupe_lazy_by_primary_key(bars, "daily_bars")
         .filter(

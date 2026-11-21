@@ -203,13 +203,13 @@ def compute_futures_continuous(
             digits = "".join(ch for ch in code if ch.isdigit())[-4:]
             deliveries[symbol] = date(2000 + int(digits[:2]), int(digits[2:]), 1)
     if sessions is None:
-        from cnequity.domain.datasets import _is_exchange_session
+        from cnequity.domain.holidays_cn import exchange_may_open
 
         first, last = bars["trade_date"].min(), bars["trade_date"].max()
         sessions = [
             first + timedelta(days=i)
             for i in range((last - first).days + 1)
-            if _is_exchange_session(first + timedelta(days=i))
+            if exchange_may_open(first + timedelta(days=i))
         ]
     sessions = sorted(set(sessions))
     # The shared calendar can follow equity holidays while an exchange's

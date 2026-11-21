@@ -341,6 +341,7 @@ def test_real_timer_child_logs_and_marks_once_without_web(scheduler, monkeypatch
     config = scheduler.config
     path = scheduler.path
     text = edit_times(path.read_text(), "00:00", "00:00")
+    text += "\n[job.maintenance]\nfull_audit_weekday = 0\n"
     path.write_text(text)
     config = load_config(path)
     atomic_write(

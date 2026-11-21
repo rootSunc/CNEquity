@@ -511,7 +511,7 @@ def resource_sector_bars_ths_official(
     zero** — the same numbers through a licensed channel. The peer also carried
     698 rows the lake did not.
 
-    Still switching rather than routing (see docs/zh/reference/cli.md for explicit source repair),
+    Still switching rather than routing (see docs/zh/reference/cli-surface.md for explicit source repair),
     so ``dry_run`` defaults to true. The floor at 2022-01-04 leaves 37,304 rows
     (12.3%) on the scraper; those years hold a handful of boards, 2 in 2018 and
     39 in 2019, against 432 today.

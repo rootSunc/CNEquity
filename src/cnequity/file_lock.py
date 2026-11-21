@@ -1,25 +1,8 @@
-"""Cross-platform exclusive file lock (POSIX ``flock`` / Windows ``msvcrt``).
-
-Every concurrency guard in the lake — run lock, watermark writes, rate-limit
-state, staging cleanup — needs the same three properties, and both backends
-provide them:
-
-* exclusive: one holder at a time, across processes *and* across handles inside
-  one process (both backends key the lock to the open handle, not the pid);
-* non-blocking acquire fails loudly (:class:`LockUnavailable`) instead of waiting;
-* the lock is released when the handle closes, including on process death, so a
-  crashed run never strands a lock file.
-
-This module deliberately sits at the package root rather than in ``storage`` or
-``domain``: all four call sites live in different layers, and a leaf with no
-first-party imports can be used by any of them without inventing a new edge in
-the dependency graph.
-"""
+"""Application lock policies and holder diagnostics over the Core file-lock backend."""
 
 from __future__ import annotations
 
 import contextlib
-import errno
 import json
 import logging
 import os
@@ -32,6 +15,13 @@ from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
+
+from cnequity.meta_layout import LAKE_DIR
+from cnequity.terminal_log import configured_log_secrets, redact_log_text
+from equitylake_core.lock import LockUnavailable as LockUnavailable
+from equitylake_core.lock import acquire_handle as _acquire
+from equitylake_core.lock import lake_lock, lake_lock_path, open_lock_file
+from equitylake_core.lock import release_handle as _release
 
 logger = logging.getLogger(__name__)
 
@@ -56,40 +46,7 @@ QUIET_LOCK_WAIT_SECONDS = 3.0
 
 IS_WINDOWS = sys.platform == "win32"
 
-# Windows locks a byte *range*, not a whole file. One byte at offset 0 is enough
-# as long as every participant locks the same range, and a range may sit past
-# EOF — which is what makes this work on the empty files we use as locks.
-_WIN_LOCK_BYTES = 1
-
-# msvcrt has no "wait forever" mode: LK_LOCK retries for ~10s and then raises.
-# Poll LK_NBLCK instead so ``blocking=True`` means under Windows what it means
-# under flock — wait until the holder is done.
-_WIN_RETRY_INTERVAL = 0.05
-_POSIX_RETRY_INTERVAL = 0.05
-
-# Contention as reported by msvcrt.locking: EACCES from LK_NBLCK, EDEADLOCK from
-# an exhausted LK_LOCK. Anything else (a bad descriptor, say) is a real error and
-# must not be retried forever. `EDEADLOCK` is the Windows spelling and `EDEADLK`
-# the POSIX one; only one exists per platform, and the tests exercise this branch
-# on both, so collect whichever is there.
-_WIN_BUSY_ERRNOS = frozenset(
-    code
-    for code in (
-        errno.EACCES,
-        errno.EAGAIN,
-        getattr(errno, "EDEADLOCK", None),
-        getattr(errno, "EDEADLK", None),
-    )
-    if code is not None
-)
-
-
-# ``run_lock(meta_root, "compact")`` and ``lake_mutation_lock(meta_root)``
-# intentionally share one lock file.  A compact step can therefore call a
-# revision helper while already holding that file.  ``flock`` does not make a
-# second descriptor in the same thread re-entrant, so keep a tiny thread-local
-# ownership marker: the specialised lake lock can reuse the outer handle,
-# while an accidental nested ``exclusive_lock`` still fails immediately.
+# Generic locks are deliberately non-reentrant within one thread.
 _LOCK_STATE = threading.local()
 
 
@@ -139,79 +96,6 @@ def _unmark_held(path: Path | str) -> None:
         held[key] = (entry[0], entry[1] - 1)
 
 
-class LockUnavailable(RuntimeError):
-    """A lock could not be acquired immediately or before its deadline."""
-
-
-def _acquire_posix(handle: IO, *, blocking: bool, timeout: float | None = None) -> None:
-    import fcntl
-
-    if blocking and timeout is None:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        return
-
-    deadline = time.monotonic() + max(timeout, 0.0) if blocking and timeout is not None else None
-    while True:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
-        except (BlockingIOError, PermissionError) as exc:
-            # EWOULDBLOCK on Linux/macOS, EACCES on some other Unixes.
-            if not blocking:
-                raise LockUnavailable(str(getattr(handle, "name", handle))) from exc
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise LockUnavailable(
-                        f"{getattr(handle, 'name', handle)}: timed out acquiring lock"
-                    ) from exc
-                time.sleep(min(_POSIX_RETRY_INTERVAL, remaining))
-
-
-def _release_posix(handle: IO) -> None:
-    import fcntl
-
-    fcntl.flock(handle, fcntl.LOCK_UN)
-
-
-def _acquire_windows(handle: IO, *, blocking: bool, timeout: float | None = None) -> None:
-    import msvcrt
-
-    deadline = time.monotonic() + max(timeout, 0.0) if blocking and timeout is not None else None
-    while True:
-        # The locked range starts at the current file position, and "a+" opens
-        # at EOF — seek every time so both backends lock the same byte.
-        handle.seek(0)
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, _WIN_LOCK_BYTES)
-            return
-        except OSError as exc:
-            if exc.errno not in _WIN_BUSY_ERRNOS:
-                raise
-            if not blocking:
-                raise LockUnavailable(str(getattr(handle, "name", handle))) from exc
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise LockUnavailable(
-                        f"{getattr(handle, 'name', handle)}: timed out acquiring lock"
-                    ) from exc
-                time.sleep(min(_WIN_RETRY_INTERVAL, remaining))
-            else:
-                time.sleep(_WIN_RETRY_INTERVAL)
-
-
-def _release_windows(handle: IO) -> None:
-    import msvcrt
-
-    handle.seek(0)
-    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, _WIN_LOCK_BYTES)
-
-
-_acquire = _acquire_windows if IS_WINDOWS else _acquire_posix
-_release = _release_windows if IS_WINDOWS else _release_posix
-
-
 # ------------------------------------------------------------ holder notes
 #
 # "waiting for compact.lock — held by another process" was all a queued command
@@ -231,6 +115,7 @@ HOLDER_SUFFIX = ".holder.json"
 _COMMAND_CHARS = 240
 
 _holder_activity: Callable[[], str | None] | None = None
+_wait_activity: Callable[..., contextlib.AbstractContextManager] | None = None
 
 
 def set_holder_activity(describe: Callable[[], str | None] | None) -> None:
@@ -241,6 +126,18 @@ def set_holder_activity(describe: Callable[[], str | None] | None) -> None:
     """
     global _holder_activity
     _holder_activity = describe
+
+
+def set_wait_activity(scope: Callable[..., contextlib.AbstractContextManager]) -> None:
+    """Allow the application progress reporter to track a blocked lock acquire."""
+    global _wait_activity
+    _wait_activity = scope
+
+
+def _wait_for_lock(label: str, path: Path) -> contextlib.AbstractContextManager:
+    if _wait_activity is None:
+        return contextlib.nullcontext()
+    return _wait_activity(label, lambda: f"{path.name}: {_held_by(path)}")
 
 
 def holder_path(path: Path | str) -> Path:
@@ -256,7 +153,10 @@ def _command_line() -> str:
     elif head == "__main__.py":
         # ``python -m cnequity ...`` puts the package's __main__ path here.
         head = f"python -m {Path(argv[0]).parent.name}"
-    command = " ".join([head, *(shlex.quote(str(arg)) for arg in argv[1:])])
+    command = redact_log_text(
+        " ".join([head, *(shlex.quote(str(arg)) for arg in argv[1:])]),
+        configured_log_secrets(),
+    )
     if len(command) > _COMMAND_CHARS:
         command = command[: _COMMAND_CHARS - 1] + "…"
     return command
@@ -358,7 +258,7 @@ def describe_holder(path: Path | str) -> str | None:
     command = record.get("command")
     if command:
         parts.append(f"`{command}`")
-    return ", ".join(parts)
+    return redact_log_text(", ".join(parts))
 
 
 def _held_by(path: Path) -> str:
@@ -406,12 +306,8 @@ def exclusive_lock(
         # Do not let an accidental nested generic lock deadlock this thread.
         # ``lake_mutation_lock`` handles the one intentional nested case below.
         raise LockUnavailable(str(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # "a+" creates without truncating. Truncation matters on Windows, where the
-    # locks are mandatory: opening "w" against a file whose byte 0 another
-    # process holds fails outright instead of politely queueing.
     while True:
-        with open(path, "a+", encoding="utf-8") as handle:
+        with open_lock_file(path) as handle:
             if blocking:
                 # Try once without waiting, so queuing can be announced. A blocking
                 # acquire is otherwise indistinguishable from a hang: no output, no
@@ -444,11 +340,12 @@ def exclusive_lock(
                             _hms(timeout) if timeout is not None else "indefinitely",
                         )
                         try:
-                            _acquire(
-                                handle,
-                                blocking=True,
-                                timeout=None if timeout is None else timeout - grace,
-                            )
+                            with _wait_for_lock(f"lock {path.name}", path):
+                                _acquire(
+                                    handle,
+                                    blocking=True,
+                                    timeout=None if timeout is None else timeout - grace,
+                                )
                         except LockUnavailable as exc:
                             raise LockUnavailable(
                                 f"{path}: timed out acquiring lock after "
@@ -476,7 +373,7 @@ def exclusive_lock(
                 yield handle
             finally:
                 try:
-                    if record_holder:
+                    if record_holder and not handle.closed:
                         _clear_holder(path)
                     _release(handle)
                 finally:
@@ -519,12 +416,10 @@ def _hms(seconds: float) -> str:
 #: path can count itself the lake's writer without it.
 def lake_lock_root(meta_root: Path) -> Path:
     """The lake directory beside a data root's ``meta`` directory."""
-    return Path(meta_root).parent / "lake"
+    return Path(meta_root).parent / LAKE_DIR
 
 
 def lake_lock_file(meta_root: Path) -> Path:
-    from equitylake_core.lock import lake_lock_path
-
     return lake_lock_path(lake_lock_root(meta_root))
 
 
@@ -541,27 +436,28 @@ def lake_mutation_lock(
     takes the same lock). The outermost holder leaves a holder note beside
     the lock, so a queued writer can say who it waits for.
     """
-    from equitylake_core.lock import LockTimeout, lake_lock
-
     root = lake_lock_root(meta_root)
     path = lake_lock_file(meta_root)
     queued: list[float] = []
 
-    def announce(_path: Path) -> None:
-        queued.append(time.monotonic())
-        logger.info(
-            "waiting for the lake lock — %s (up to %s)",
-            _held_by(path),
-            _hms(timeout) if timeout is not None else "indefinitely",
-        )
-
     wait = 0.0 if not blocking else (timeout if timeout is not None else float("inf"))
     with contextlib.ExitStack() as stack:
         try:
-            took = stack.enter_context(
-                lake_lock(root, timeout=wait, on_wait=announce if blocking else None)
-            )
-        except LockTimeout as exc:
+            with contextlib.ExitStack() as pending:
+
+                def announce(_path: Path) -> None:
+                    queued.append(time.monotonic())
+                    pending.enter_context(_wait_for_lock("lake write lock", path))
+                    logger.info(
+                        "waiting for the lake lock — %s (up to %s)",
+                        _held_by(path),
+                        _hms(timeout) if timeout is not None else "indefinitely",
+                    )
+
+                took = stack.enter_context(
+                    lake_lock(root, timeout=wait, on_wait=announce if blocking else None)
+                )
+        except LockUnavailable as exc:
             raise LockUnavailable(
                 f"{path}: timed out acquiring lock ({exc}); {_held_by(path)}"
             ) from exc
@@ -571,8 +467,9 @@ def lake_mutation_lock(
             )
         if took:
             _write_holder(path)
+        owner_pid = os.getpid()
         try:
             yield None
         finally:
-            if took:
+            if took and os.getpid() == owner_pid:
                 _clear_holder(path)

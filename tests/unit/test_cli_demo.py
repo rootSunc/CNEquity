@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 
 import click
+import duckdb
 import polars as pl
 import pytest
 from click.testing import CliRunner
@@ -124,24 +125,9 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
         StagingWriter(config.staging_root).write_batch("daily_bars", run_id, "batch-0", df)
         return {"rows_read": df.height, "rows_written": df.height}
 
-    def fake_compact(config, trade_date, run_id, context):
-        from cnequity.storage.parquet import compact_dataset
-        from cnequity.storage.state import StateStore
-
-        total = 0
-        for dataset in ("trading_calendar", "daily_bars"):
-            if not (config.staging_root / dataset / f"run_id={run_id}").exists():
-                continue
-            total += compact_dataset(config.staging_root, config.curated_root, dataset, run_id)
-            StateStore(config.meta_root).set_date(dataset, trade_date)
-        return {"rows_read": total, "rows_written": total}
-
-    originals = {
-        name: STEP_REGISTRY[name] for name in ("trading_calendar", "daily_bars", "compact")
-    }
+    originals = {name: STEP_REGISTRY[name] for name in ("trading_calendar", "daily_bars")}
     STEP_REGISTRY["trading_calendar"] = StepEntry(fn=fake_calendar, group="core")
     STEP_REGISTRY["daily_bars"] = StepEntry(fn=fake_daily_bars, group="core", requires_workers=True)
-    STEP_REGISTRY["compact"] = StepEntry(fn=fake_compact, group="finalize")
     try:
         data_root = tmp_path / "demo-lake"
         config_out = tmp_path / "demo.toml"
@@ -168,11 +154,94 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
         assert "600519.SH" in result.output
         assert config_out.exists()
         assert (data_root / "curated" / "instruments" / "part-merged.parquet").exists()
-        assert list((data_root / "curated" / "daily_bars").glob("**/*.parquet"))
-        # Fetched is not published: the calendar must reach curated too.
-        assert list((data_root / "curated" / "trading_calendar").glob("**/*.parquet"))
+        # Only the source steps are mocked. The demo must exercise the same
+        # catalog publication and SQL read as an ordinary run.
+        assert (data_root / "lake" / "catalog.sqlite").is_file()
+        assert list((data_root / "lake" / "data" / "main" / "trading_calendar").rglob("*.parquet"))
+        _assert_query_keeps_daily_dates(config_out)
     finally:
         STEP_REGISTRY.update(originals)
+
+
+def test_demo_distinguishes_file_lock_failure_from_a_connection_failure(tmp_path, monkeypatch):
+    from equitylake_core.lock import LockBusy
+
+    def fail(_config):
+        raise LockBusy("tdx.lock is held")
+
+    monkeypatch.setattr("cnequity.cli.demo._probe_tdx", fail)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "init",
+            "--profile",
+            "demo",
+            "--data-root",
+            str(tmp_path / "lake"),
+            "--config-out",
+            str(tmp_path / "demo.toml"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Local file lock failed: tdx.lock is held" in result.output
+    assert "Cannot connect to TDX" not in result.output
+
+
+def test_demo_reports_a_windows_permission_error_on_its_actual_tdx_lock(tmp_path, monkeypatch):
+    import ctypes
+    import errno
+
+    from cnequity.adapters.tdx_protocol import client
+    from equitylake_core import lock
+
+    limits = (tmp_path / "limits").resolve()
+    monkeypatch.setenv("CNE_RATE_LIMIT_ROOT", str(limits))
+    # Use a cached endpoint so the actual probe reaches one lock attempt and
+    # the network guard catches any mistaken attempt to start a connection.
+    monkeypatch.setattr(client, "_TDX_SERVER_CACHE", ("192.0.2.1", 7709))
+    native_try = lock._try_lock
+    native_range = lock._windows_range
+    denied_paths = []
+
+    def win_error(code):
+        exc = PermissionError(errno.EACCES, "Access is denied")
+        exc.winerror = code
+        return exc
+
+    def try_lock(handle, *, shared):
+        path = Path(handle.name).resolve()
+        if path.parent != limits:
+            return native_try(handle, shared=shared)
+        assert path.stat().st_size == 0
+        denied_paths.append(path)
+        return lock._try_windows(handle, shared=shared)
+
+    def windows_range(handle, **kwargs):
+        if Path(handle.name).resolve().parent == limits:
+            return 5
+        return native_range(handle, **kwargs)
+
+    monkeypatch.setattr(ctypes, "WinError", win_error, raising=False)
+    monkeypatch.setattr(lock, "_windows_range", windows_range)
+    monkeypatch.setattr(lock, "_try_lock", try_lock)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "init",
+            "--profile",
+            "demo",
+            "--data-root",
+            str(tmp_path / "lake"),
+            "--config-out",
+            str(tmp_path / "demo.toml"),
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert len(denied_paths) == 1
+    assert "Local file lock failed" in result.output
+    assert denied_paths[0].name in result.output
+    assert "Access is denied" in result.output
+    assert "Cannot connect to TDX" not in result.output
 
 
 def test_demo_help_lists_command():
@@ -275,9 +344,18 @@ def test_cne_demo_sample_needs_no_network(tmp_path, monkeypatch):
     assert "离线样例" in result.output
     assert "source=mock" in result.output
     assert config_out.exists()
-    bars = pl.read_parquet(list((data_root / "curated" / "daily_bars").glob("**/*.parquet")))
+    dataset = data_root / "curated" / "daily_bars"
+    sample_file = dataset / "part-sample.parquet"
+    bars = pl.read_parquet(sample_file)
     assert bars.height == 10
     assert bars["source"].unique().to_list() == ["mock"]
+    with duckdb.connect() as con:
+        dates = con.execute(
+            "SELECT DISTINCT trade_date FROM read_parquet(?, hive_partitioning = true) ORDER BY 1",
+            [(dataset / "**" / "*.parquet").as_posix()],
+        ).fetchall()
+    assert dates == [(date(2024, 6, day),) for day in range(24, 29)]
+    _assert_query_keeps_daily_dates(config_out)
 
     status = CliRunner().invoke(cli, ["status", "--datasets", "--config", str(config_out)])
     assert status.exit_code == 0, status.output
@@ -288,6 +366,24 @@ def test_cne_demo_sample_needs_no_network(tmp_path, monkeypatch):
     assert audit.exit_code == 0, audit.output
     assert "0 error" in audit.output
     assert "预期 info" in audit.output
+
+
+def _assert_query_keeps_daily_dates(config_out):
+    result = CliRunner().invoke(
+        cli,
+        [
+            "query",
+            "--config",
+            str(config_out),
+            "--sql",
+            "SELECT DISTINCT trade_date, typeof(trade_date) FROM daily_bars "
+            "WHERE trade_date BETWEEN DATE '2024-06-27' AND DATE '2024-06-28' ORDER BY 1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "DATE" in result.output
+    assert "2024-06-27" in result.output
+    assert "2024-06-28" in result.output
 
 
 def test_sample_ends_ready_for_the_panel_and_an_agent(tmp_path):

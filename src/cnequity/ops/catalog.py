@@ -8,11 +8,14 @@ table against Click, so a renamed flag fails there instead of 404ing a button.
 from __future__ import annotations
 
 import shlex
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from functools import cache
 from pathlib import Path
 from typing import Any
 
+from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
 from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _, use_language
 from cnequity.serve.display import en, zh
@@ -26,9 +29,7 @@ DERIVE_NAMES = (
     "trading_status",
     "futures_continuous",
     "option_greeks",
-    "minute_bars_15m",
-    "minute_bars_30m",
-    "minute_bars_60m",
+    *RESAMPLED_MINUTE_DATASETS,
 )
 
 # Click choices the page deliberately does not offer.
@@ -258,6 +259,12 @@ def _ops() -> tuple[OpSpec, ...]:
             group=N_("Catch-up and recovery"),
             command=("run", "maintain"),
             params=(
+                Param(
+                    "full_audit_only",
+                    "bool",
+                    N_("Only the due full audit"),
+                    flag="--full-audit-only",
+                ),
                 Param(
                     "notify",
                     "bool",
@@ -632,17 +639,28 @@ def _choice_list(param: Param, config) -> list[str]:
     return list(param.choices)
 
 
-def unavailable_reason(spec: OpSpec, config, *, setup: bool) -> str | None:
+def unavailable_reason(
+    spec: OpSpec,
+    config,
+    *,
+    setup: bool,
+    load_choices: Callable[[str], list[str] | None] | None = None,
+) -> str | None:
     if setup and spec.available_in == "normal":
         return _("Finish first-time setup first.")
     if not setup and spec.available_in == "setup":
         return _("Only used during first-time setup.")
     if config is None:
         return None if spec.available_in != "normal" else _("Finish first-time setup first.")
-    if spec.needs and not choices_for(spec.needs, config):
+
+    def no_choices(source: str) -> bool:
+        values = choices_for(source, config) if load_choices is None else load_choices(source)
+        return values == []
+
+    if spec.needs and no_choices(spec.needs):
         return _(spec.needs_reason) if spec.needs_reason else _("The config has no such entry.")
     for param in spec.params:
-        if param.required and param.choice_source and not _choice_list(param, config):
+        if param.required and param.choice_source and no_choices(param.choice_source):
             if param.empty_reason:
                 return _(param.empty_reason)
             return _("No {value} to choose from.").format(value=_(param.label))
@@ -666,16 +684,25 @@ def command_template(spec: OpSpec) -> str:
     return " ".join(tokens)
 
 
-def describe(config, *, setup: bool) -> list[dict[str, Any]]:
-    """Cards and form fields. Choices come from the loaded config."""
+def describe(
+    config, *, setup: bool, op_id: str | None = None, include_choices: bool = True
+) -> list[dict[str, Any]]:
+    """Describe operations, resolving each choice source at most once per request."""
+
+    @cache
+    def load_choices(source: str) -> list[str] | None:
+        if not include_choices and source in {"stored_datasets", "snapshots"}:
+            return None
+        return choices_for(source, config)
+
     cards = []
-    for spec in OPS:
+    for spec in OPS if op_id is None else (spec_for(op_id),):
         # Computed text, so it is rendered once in each language rather than
         # looked up afterwards.
         with use_language("zh_CN"):
-            reason = unavailable_reason(spec, config, setup=setup)
+            reason = unavailable_reason(spec, config, setup=setup, load_choices=load_choices)
         with use_language("en"):
-            reason_en = unavailable_reason(spec, config, setup=setup)
+            reason_en = unavailable_reason(spec, config, setup=setup, load_choices=load_choices)
         cards.append(
             {
                 "id": spec.id,
@@ -691,6 +718,11 @@ def describe(config, *, setup: bool) -> list[dict[str, Any]]:
                 "available": reason is None,
                 "unavailable_reason": reason,
                 "unavailable_reason_en": reason_en,
+                **(
+                    {"choices_deferred": True}
+                    if not include_choices and any(param.choice_source for param in spec.params)
+                    else {}
+                ),
                 "params": [
                     {
                         "name": param.name,
@@ -700,7 +732,12 @@ def describe(config, *, setup: bool) -> list[dict[str, Any]]:
                         "help": zh(param.help),
                         "help_en": en(param.help),
                         "required": param.required,
-                        "choices": _choice_list(param, config) or None,
+                        "choices": (
+                            load_choices(param.choice_source)
+                            if include_choices and param.choice_source
+                            else list(param.choices)
+                        )
+                        or None,
                     }
                     for param in spec.params
                 ],

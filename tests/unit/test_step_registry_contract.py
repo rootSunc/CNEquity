@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 import cnequity.steps  # noqa: F401 — register the built-in steps
-from cnequity.domain.datasets import DATASETS
+from cnequity.domain.datasets import DATASETS, RESAMPLED_MINUTE_DATASETS
 from cnequity.orchestrator.deps import committed_reads_in_run
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.registry import (
@@ -18,23 +18,21 @@ from cnequity.orchestrator.registry import (
 # Datasets no registered step writes, and what does.
 EXTERNALLY_PRODUCED = {
     "delisting_events": "steps/delisted.py, from the delisted maintenance commands",
-    "minute_bars_15m": "`cne derive minute_bars_15m`",
-    "minute_bars_30m": "`cne derive minute_bars_30m`",
-    "minute_bars_60m": "`cne derive minute_bars_60m`",
 }
 
-# The receipt keys the engine hard-coded before the registry carried outputs.
-_LEGACY_RECEIPT_KEYS = {
+# Steps whose receipts use the physical dataset name.
+_DATASET_RECEIPT_KEYS = {
     "derive_adj_factors": "adj_factors",
     "derive_industry_index": "industry_index",
     "derive_futures_continuous": "futures_continuous",
     "derive_option_greeks": "option_greeks",
+    **{f"derive_{dataset}": dataset for dataset in RESAMPLED_MINUTE_DATASETS},
 }
 
 
 def test_receipt_keys_are_unchanged_for_every_step():
     for name in STEP_REGISTRY:
-        assert receipt_dataset(name) == _LEGACY_RECEIPT_KEYS.get(name, name), name
+        assert receipt_dataset(name) == _DATASET_RECEIPT_KEYS.get(name, name), name
         assert JobEngine._step_dataset(name, {}) == receipt_dataset(name)
 
 

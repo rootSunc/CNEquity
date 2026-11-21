@@ -14,6 +14,8 @@ and the low-frequency governance surface underneath.
 from __future__ import annotations
 
 import logging
+import sys
+import time
 from functools import cache
 
 import click
@@ -154,8 +156,8 @@ class _LoggedFailures(click.Group):
         want a file in the lake still call `attach_log_file` themselves, since
         only they know which config to read.
 
-        A command with its own `--quiet` calls `_progress_logging` again; that
-        uses `basicConfig(force=True)`, so the later call wins.
+        A command with its own `--quiet` can raise the terminal threshold
+        independently of its file level.
         """
         if ctx.invoked_subcommand in self.OWNS_ITS_LOGGING:
             return
@@ -197,6 +199,12 @@ class _LoggedFailures(click.Group):
         return False
 
     def invoke(self, ctx: click.Context):
+        root = ctx.parent is None
+        if root:
+            from cnequity.cli._shared import close_command_logging, finish_command_logging
+
+            close_command_logging(ctx)
+        started = time.monotonic()
         self._wire_process_logging(ctx)
         try:
             return super().invoke(ctx)
@@ -253,6 +261,9 @@ class _LoggedFailures(click.Group):
             if not self._already_logged(ctx):
                 logger.exception(N_("%s: unhandled error"), self._failed_command(ctx))
             raise
+        finally:
+            if root:
+                finish_command_logging(ctx, time.monotonic() - started, sys.exc_info()[1])
 
 
 def _interrupt_hint(command: str) -> str | None:
@@ -393,6 +404,14 @@ class LocalizedHelpOption:
 
 class CneCommand(LocalizedHelpOption, TranslatedHelp, click.Command):
     """The class every leaf command is built with (see `SectionedGroup`)."""
+
+    def invoke(self, ctx: click.Context):
+        if self.name in _LoggedFailures.OWNS_ITS_LOGGING:
+            return super().invoke(ctx)
+        from cnequity.progress import step_scope
+
+        with step_scope(ctx.command_path):
+            return super().invoke(ctx)
 
 
 class SectionedGroup(LocalizedHelpOption, TranslatedHelp, moved_hints(MOVED, base=_LoggedFailures)):  # type: ignore[misc]

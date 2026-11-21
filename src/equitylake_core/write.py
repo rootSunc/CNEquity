@@ -32,11 +32,14 @@ made from the first files written to it and takes their types.
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from equitylake_core.catalog import Catalog, quote_identifier, quote_literal
+from equitylake_core.catalog import Catalog, TransactionOutcome, quote_identifier, quote_literal
 
 
 class WriteRejected(RuntimeError):
@@ -156,6 +159,33 @@ class Write:
     swaps: list[Swap] = field(default_factory=list)
     checks: list[tuple[str, Check]] = field(default_factory=list)
     records: list[tuple[str, Record]] = field(default_factory=list)
+    frames: list[tuple[str, object]] = field(default_factory=list)
+    outcome: TransactionOutcome = field(default_factory=TransactionOutcome, init=False)
+    placed: list[Path] = field(default_factory=list, init=False)
+
+    def __enter__(self) -> Write:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self.outcome.status == "not_committed":
+            for path in self.placed:
+                path.unlink(missing_ok=True)
+
+    def place(self, source: Path, target: Path, *, conform_to: str | None = None) -> None:
+        """Place an immutable file for this write, reclaiming it on a confirmed rollback."""
+        if self.outcome.status != "not_committed":
+            raise ValueError("open a new write to place more files")
+        self.placed.append(target)
+        if conform_to is not None:
+            self.catalog.conform_file(conform_to, source, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source, target)
+            except OSError:
+                shutil.copy2(source, target)
+        if os.name != "nt":  # Windows also checks the read-only bit when removing a file.
+            target.chmod(0o444)
 
     def create(self, table: str, columns: Mapping[str, str]) -> None:
         """Make *table* with *columns* (name to SQL type) first in this write, unless it exists."""
@@ -204,11 +234,27 @@ class Write:
         """
         self.records.append((table, row if callable(row) else dict(row)))
 
+    def record_frame(self, table: str, frame) -> None:
+        """Append a frame of records in the same snapshot, matching columns by name."""
+        if not frame.is_empty():
+            self.frames.append((table, frame.to_arrow()))
+
     def commit(self, *, message: str | None = None) -> WriteResult:
-        if not self.replacements and not self.swaps and not self.records:
+        if self.placed and self.outcome.status != "not_committed":
+            raise ValueError("open a new write to publish more files")
+        if not (self.replacements or self.swaps or self.records or self.frames):
             raise ValueError("nothing to write")
         rows: dict[str, int] = {}
-        with self.catalog.transaction(message=message):
+        with ExitStack() as inputs:
+            frame_inputs = []
+            if self.frames:
+                self.catalog.con.abort()
+            for index, (table, arrow) in enumerate(self.frames):
+                name = f"_el_records_{index}"
+                self.catalog.con.register(name, arrow)
+                inputs.callback(self.catalog.con.unregister, name)
+                frame_inputs.append((table, name))
+            inputs.enter_context(self.catalog.transaction(message=message, outcome=self.outcome))
             for table, columns in self.creations:
                 if not self.catalog.has_table(table):
                     listed = ", ".join(f"{quote_identifier(name)} {kind}" for name, kind in columns)
@@ -223,6 +269,10 @@ class Write:
                     raise WriteRejected(f"{name}: {refusal}")
             for table, row in self.records:
                 _append(self.catalog, table, row(self.catalog) if callable(row) else row)
+            for table, name in frame_inputs:
+                self.catalog.execute(
+                    f"INSERT INTO {quote_identifier(table)} BY NAME SELECT * FROM {name}"
+                )
         snapshot = self.catalog.snapshot()
         # A replacement leaves no delete file. A table that already carried
         # one (written by something else) is folded here, in a later snapshot.

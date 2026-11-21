@@ -58,6 +58,25 @@ def test_walks_range_and_stages_rows(tmp_path):
     assert set(df["source"]) == {"derived"}
 
 
+def test_walk_never_requests_dates_outside_the_lake_history(tmp_path):
+    dataset = "market_breadth"
+    cfg = Config(
+        data_root=tmp_path / "data",
+        history_from={dataset: date(2026, 6, 2)},
+        history_until={dataset: date(2026, 6, 3)},
+    )
+    set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 5), redo="all")
+    fetched = []
+
+    def fetch_one(day):
+        fetched.append(day)
+        return pl.DataFrame([_fake_row(day, "trade_date")])
+
+    walk_day_backfill(cfg, date(2026, 6, 5), "run-1", dataset, fetch_one, source="derived")
+
+    assert fetched == [date(2026, 6, 2), date(2026, 6, 3)]
+
+
 def test_skips_dates_already_curated(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
     set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 3))

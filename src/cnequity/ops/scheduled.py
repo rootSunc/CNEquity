@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import secrets
 import sys
@@ -10,14 +11,26 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cnequity.config import load_config
+from cnequity.config.logging import logging_settings
+from cnequity.domain.market_time import shanghai_today
 from cnequity.fd_limit import raise_open_file_limit
 from cnequity.file_lock import LockUnavailable, exclusive_lock
 from cnequity.i18n import _, use_language
+from cnequity.meta_layout import SCHEDULER_EVENTS_LAST
 from cnequity.ops.catalog import OpsError
 from cnequity.ops.records import atomic_write, read_record
 from cnequity.ops.runner import OpsService
 from cnequity.ops.scheduler import settings, state_dir
-from cnequity.orchestrator.run_window import CST, is_done, mark_done, parse_run_at, pending_session
+from cnequity.orchestrator.run_window import (
+    CST,
+    FULL_AUDIT_JOB,
+    is_done,
+    mark_done,
+    parse_run_at,
+    pending_full_audit,
+    pending_session,
+)
+from cnequity.terminal_log import diagnostic_formatter
 
 
 def _daily_params(saved: dict, session) -> dict:
@@ -51,7 +64,7 @@ def backup_session(config, saved: dict, now: datetime | None = None):
 
 
 def events_due(config, saved: dict, now: datetime | None = None) -> bool:
-    path = state_dir(config) / "events_last.json"
+    path = config.meta_root / SCHEDULER_EVENTS_LAST
     if not path.exists():
         return True
     last = read_record(path)
@@ -72,18 +85,24 @@ def events_due(config, saved: dict, now: datetime | None = None) -> bool:
 
 
 #: A job switched on by another job's setting: maintenance follows the daily update.
-_SETTING = {"maintain": "daily"}
+_SETTING = {"maintain": "daily", FULL_AUDIT_JOB: "daily"}
 
 
 def claim_session(config, scheduled: dict) -> None:
     """Recheck under both the child's scheduler lock and the control lock."""
     job = scheduled.get("job")
-    if job not in {"daily", "maintain", "stale", "backup", "events"}:
+    if job not in {"daily", "maintain", "stale", "backup", "events", FULL_AUDIT_JOB}:
         raise OpsError(_("Invalid scheduled task type."))
     with exclusive_lock(state_dir(config) / "control.lock", blocking=False):
         saved = settings(config)
         if not saved.get(_SETTING.get(job, job)):
             raise OpsError(_("The scheduled task is paused, so no fetch started."))
+        if job == FULL_AUDIT_JOB:
+            due = pending_full_audit(config)
+            if due is None or due.isoformat() != scheduled.get("session"):
+                raise OpsError(_("This full audit is no longer due."))
+            # The audit records completion after evaluating the lake.
+            return
         if job == "events" and scheduled.get("schedule"):
             from cnequity.ops import event_schedules
 
@@ -108,7 +127,7 @@ def claim_session(config, scheduled: dict) -> None:
                     )
                 )
             atomic_write(
-                state_dir(config) / "events_last.json",
+                config.meta_root / SCHEDULER_EVENTS_LAST,
                 {
                     "at": datetime.now(timezone.utc).isoformat(),
                     "group": saved["events_group"],
@@ -180,6 +199,7 @@ def tick(config, *, now: datetime | None = None) -> dict:
                     ("maintain", "daily.maintain"),
                     ("stale", "daily.stale"),
                     ("backup", "snapshot.create"),
+                    (FULL_AUDIT_JOB, "daily.maintain"),
                     ("events", "events.run"),
                 ):
                     if not saved.get(_SETTING.get(job, job)):
@@ -207,6 +227,14 @@ def tick(config, *, now: datetime | None = None) -> dict:
                             "group": group,
                             "interval_minutes": saved.get("events_interval_minutes", 60),
                         }
+                    elif job == FULL_AUDIT_JOB:
+                        due = pending_full_audit(config, shanghai_today(now))
+                        if due is None:
+                            continue
+                        params = {"full_audit_only": True}
+                        if sys.platform == "darwin":
+                            params["notify"] = True
+                        scheduled = {"job": job, "session": due.isoformat()}
                     else:
                         session = (
                             backup_session(config, saved, now)
@@ -286,6 +314,25 @@ def main() -> int:
         language = None
     with use_language(language):
         report = tick(config)
+    status = report["status"]
+    level = logging.ERROR if status == "error" else logging.INFO
+    if (
+        status in {"started", "waiting", "error"}
+        and level >= logging_settings(config).console_threshold()
+    ):
+        handler = logging.StreamHandler()
+        handler.setFormatter(diagnostic_formatter(config))
+        handler.handle(
+            logging.LogRecord(
+                __name__,
+                level,
+                __file__,
+                0,
+                "scheduler %s: %s",
+                (status, report.get("message") or report.get("jobs", [])),
+                None,
+            )
+        )
     return int(report["status"] == "error")
 
 

@@ -15,9 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from cnequity.i18n import _
+from cnequity.meta_layout import LAKE_DIR, MANIFEST_FILE, META_DIR
 from cnequity.ops.catalog import OpsError, UnknownOp
 from cnequity.ops.runner import OpsRejected, OpsService, requested_by
 from cnequity.serve.guard import LOOPBACK_HOSTS, check_browser, client_host, ops_enabled
+from equitylake_core.catalog import CATALOG_FILE
 
 _FRAME = 64 * 1024
 
@@ -164,7 +166,11 @@ def accept_data_root(text: str) -> tuple[Path, str | None]:
     if not os.access(resolved if resolved.exists() else parent, os.W_OK):
         raise OpsError(_("The data directory or its parent is not writable."))
     hint = None
-    if (resolved / "curated").exists() or (resolved / "meta" / "manifest.db").exists():
+    if (
+        (resolved / LAKE_DIR / CATALOG_FILE).is_file()
+        or (resolved / "curated").exists()
+        or (resolved / META_DIR / MANIFEST_FILE).exists()
+    ):
         hint = _(
             "This directory already holds a lake; once the config is generated it takes it over without clearing it."
         )
@@ -179,6 +185,32 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
         payload["mode"] = mode_payload(request)
         payload["csrf_token"] = request.app.state.csrf
         return payload
+
+    @app.get("/api/ops/status")
+    def ops_status(request: Request, controls: bool = False) -> dict:
+        check_browser(request, mutation=False, scope="ops")
+        state = request.app.state
+        payload = {
+            "mode": mode_payload(request),
+            "occupancy": _service(request).occupancy(),
+            "csrf_token": state.csrf,
+        }
+        if controls:
+            from cnequity.ops.catalog import describe
+
+            payload["operations"] = describe(state.config, setup=state.setup, include_choices=False)
+        return payload
+
+    @app.get("/api/ops/operations/{op_id}")
+    def ops_operation(request: Request, op_id: str) -> dict:
+        from cnequity.ops.catalog import describe
+
+        check_browser(request, mutation=False, scope="ops")
+        state = request.app.state
+        try:
+            return describe(state.config, setup=state.setup, op_id=op_id)[0]
+        except UnknownOp as exc:
+            raise _fail(exc) from exc
 
     @app.get("/api/ops/readiness")
     def ops_readiness(request: Request) -> dict:
@@ -196,10 +228,10 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
             raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/ops/schedule")
-    def ops_schedule(request: Request) -> dict:
+    def ops_schedule(request: Request, summary: bool = False) -> dict:
         check_browser(request, mutation=False, scope="ops")
         try:
-            return _schedule_service(request).home()
+            return _schedule_service(request).home(include_backup_choices=not summary)
         except (OpsError, OSError, ValueError) as exc:
             raise HTTPException(422, str(exc)) from exc
 

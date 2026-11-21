@@ -77,6 +77,34 @@ def test_backup_of_a_lake_without_a_catalog_has_none(tmp_path):
         assert not any(name.startswith("lake/") for name in tar.getnames())
 
 
+def test_backup_includes_migrated_records_without_scheduler_runtime_files(tmp_path):
+    meta = tmp_path / "meta"
+    records = {
+        "lake.json",
+        "storage.json",
+        "checkpoints/sector_bars_backfill.json",
+        "decisions/adj_factors.json",
+        "scheduler/markers/daily-2026-09-24.done",
+        "scheduler/web/settings.json",
+        "scheduler/web/events_schedules_last.json",
+    }
+    runtime = {
+        "source_cache/delisted_catalog.json",
+        "scheduler/web/tick.lock",
+        "scheduler/web/timer.out.log",
+    }
+    for name in records | runtime:
+        path = meta / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+
+    result = backup_meta(meta, tmp_path / "backups")
+    with tarfile.open(result.archive) as tar:
+        names = set(tar.getnames())
+    assert records <= names
+    assert runtime.isdisjoint(names)
+
+
 def test_backup_refuses_a_missing_or_empty_meta(tmp_path):
     with pytest.raises(FileNotFoundError):
         backup_meta(tmp_path / "nope", tmp_path / "b")
@@ -165,11 +193,65 @@ def test_a_stale_dataset_fails_maintenance_but_a_source_probe_does_not(maintain_
 
 def test_full_audit_runs_on_its_weekday(maintain_env, monkeypatch):
     config, calls, _ = maintain_env
+    from cnequity.cli.quality_cmds import audit
+
+    def full(**options):
+        assert options["full"] and options["quality_only"]
+        calls.append(["audit", "--full", "--quality-only"])
+
+    monkeypatch.setattr(audit, "callback", full)
     monkeypatch.setattr(
         "cnequity.cli.schedule_cmds.shanghai_today", lambda: date(2026, 10, 24)
     )  # a Saturday: the default full_audit_weekday is 6
-    _maintain(config)
+    _maintain(config, "--full-audit-only")
     assert calls[0][:3] == ["audit", "--full", "--quality-only"]
+
+
+def test_full_audit_runs_independently_and_records_findings_once(maintain_env, monkeypatch):
+    from cnequity.cli.quality_cmds import audit
+    from cnequity.orchestrator.run_window import pending_full_audit
+
+    config, calls, _ = maintain_env
+    friday, saturday = date(2026, 10, 23), date(2026, 10, 24)
+    mark_done(config.meta_root, "maintain", friday)
+    monkeypatch.setattr("cnequity.cli.schedule_cmds.shanghai_today", lambda: saturday)
+    notifications = []
+    monkeypatch.setattr(
+        "cnequity.cli.schedule_cmds._notify", lambda *args: notifications.append(args)
+    )
+
+    def findings(**options):
+        calls.append(options["quality_only"])
+        raise SystemExit(1)
+
+    monkeypatch.setattr(audit, "callback", findings)
+    assert pending_full_audit(config, saturday) == saturday
+    assert _maintain(config, "--full-audit-only", "--notify").exit_code == 1
+    assert pending_full_audit(config, saturday) is None
+    assert _maintain(config, "--full-audit-only", "--notify").exit_code == 0
+    assert calls == [True]
+    assert len(notifications) == 1
+
+
+def test_interrupted_full_audit_remains_due_and_retries_through_real_command(config, monkeypatch):
+    from cnequity.orchestrator.run_window import pending_full_audit
+    from cnequity.quality import audit
+
+    saturday = date(2026, 10, 24)
+    monkeypatch.setattr("cnequity.cli.schedule_cmds.shanghai_today", lambda: saturday)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(audit, "lake_health", interrupted)
+        assert _maintain(config, "--full-audit-only").exit_code == 1
+    assert pending_full_audit(config, saturday) == saturday
+
+    completed = _maintain(config, "--full-audit-only")
+    assert completed.exit_code in {0, 1}
+    assert "Quality gate:" in completed.output
+    assert pending_full_audit(config, saturday) is None
 
 
 @pytest.fixture

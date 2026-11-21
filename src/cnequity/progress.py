@@ -30,10 +30,7 @@ from cnequity.i18n import N_, NP_, Message
 
 logger = logging.getLogger(__name__)
 
-# One minute is longer than any healthy gap measured in a full-market sweep
-# (the widest was 105s inside `instruments`, which is exactly the case this
-# exists to cover) and short enough that nobody reaches for Ctrl-C first.
-HEARTBEAT_INTERVAL_SECONDS = 60.0
+HEARTBEAT_INTERVAL_SECONDS = 30
 _POLL_SECONDS = 5.0
 
 
@@ -54,6 +51,7 @@ PROGRESS_UNITS = (
     NP_("progress unit", "windows"),
     NP_("progress unit", "datasets"),
     NP_("progress unit", "boards"),
+    NP_("progress unit", "files"),
 )
 
 
@@ -146,6 +144,7 @@ _active: dict[int, tuple[str, float]] = {}
 _tokens = itertools.count(1)
 _last_record = time.monotonic()
 _heartbeat: threading.Thread | None = None
+_heartbeat_interval: float | None = None
 # The thread waits on its own event instead of sleeping, which makes it both
 # stoppable and immune to a patched `time.sleep`: a test that fakes sleep to
 # capture its arguments would otherwise turn this loop into a full-speed spin,
@@ -235,6 +234,20 @@ def detail_scope(describe: Callable[[], object]) -> Iterator[None]:
             _details.pop(token, None)
 
 
+@contextmanager
+def wait_scope(label: str, describe: Callable[[], object] | None = None) -> Iterator[None]:
+    """Expose the reason for a wait to the same heartbeat as ordinary work."""
+    with step_scope(Message(N_("waiting for %s"), label)):
+        if describe is None:
+            yield
+        else:
+            with detail_scope(describe):
+                yield
+
+
+file_lock.set_wait_activity(wait_scope)
+
+
 def running_steps() -> list[tuple[str, float]]:
     """Active steps as (name, seconds running), oldest first."""
     now = time.monotonic()
@@ -266,12 +279,20 @@ def start_heartbeat(interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS) -> Non
     filter attached to a logger never sees the records its children propagate —
     and every record this pipeline emits comes from a child.
     """
-    global _heartbeat, _stop
+    global _heartbeat, _heartbeat_interval, _last_record, _stop
+    if interval_seconds <= 0:
+        stop_heartbeat()
+        return
     for handler in logging.getLogger().handlers:
         handler.addFilter(_ACTIVITY)
+    if _heartbeat_interval == interval_seconds:
+        return
+    stop_heartbeat()
     with _lock:
         if _heartbeat is not None:
             return
+        _heartbeat_interval = interval_seconds
+        _last_record = time.monotonic()
         _stop = stop = threading.Event()
         _heartbeat = threading.Thread(
             target=_beat,
@@ -290,9 +311,10 @@ def stop_heartbeat(timeout: float = 5.0) -> None:
     this. A test process is one process for thousands of tests, and a thread
     one test started keeps running through every test after it.
     """
-    global _heartbeat, _stop
+    global _heartbeat, _heartbeat_interval, _stop
     with _lock:
         thread, _heartbeat = _heartbeat, None
+        _heartbeat_interval = None
         stop, _stop = _stop, None
     if stop is not None:
         stop.set()
@@ -308,9 +330,19 @@ def _beat_once(interval_seconds: float) -> bool:
     active = running_steps()
     if not active:
         return False
+    groups: dict[str, tuple[float, int]] = {}
+    for name, elapsed in active:
+        oldest, count = groups.get(name, (elapsed, 0))
+        groups[name] = (oldest, count + 1)
+    labels = [
+        f"{name} {hms(elapsed)}" + (f" ×{count}" if count > 1 else "")
+        for name, (elapsed, count) in list(groups.items())[:12]
+    ]
+    if len(groups) > 12:
+        labels.append(f"+{len(groups) - 12}")
     logger.info(
         N_("still working: %s (no output for %s)"),
-        ", ".join(f"{name} {hms(elapsed)}" for name, elapsed in active),
+        ", ".join(labels),
         hms(silent_for),
     )
     global _hinted

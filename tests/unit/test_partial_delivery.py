@@ -245,6 +245,8 @@ def test_delisted_child_fallback_resumes_the_parent_scope(tmp_path):
 
 
 def test_snapshot_history_finishes_with_configured_collection_command(tmp_path, monkeypatch):
+    from cnequity.orchestrator.recovery import fallback_options
+
     cfg = Config(
         data_root=tmp_path / "data",
         schedule_groups={"capital": ScheduleGroup(at="16:00", steps=["fund_flow"])},
@@ -262,7 +264,19 @@ def test_snapshot_history_finishes_with_configured_collection_command(tmp_path, 
     assert result["execution_status"] == "completed"
     assert result["fallback"][0]["collection_commands"] == ["cne run daily --group capital"]
     assert result["fallback"][0]["retry_command"] is None
+    assert {"source": "tushare", "role": "backfill", "enabled": False} in result["fallback"][0][
+        "registered_sources"
+    ]
     assert not list(cfg.data_root.rglob("*.parquet"))
+
+    cfg.sources["tushare"] = True
+    cfg.tushare_token = "fixture-token"
+    recovery = fallback_options(cfg, JobEngine(cfg).manifest, result["run_id"])[0]
+    assert {"source": "tushare", "role": "backfill", "enabled": True} in recovery[
+        "registered_sources"
+    ]
+    assert recovery["history_mode"] == "snapshot_with_backfill"
+    assert recovery["earliest_available"] == "2023-09-11"
 
 
 def test_source_history_floor_delivers_available_scope(tmp_path, monkeypatch):

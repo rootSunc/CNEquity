@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from cnequity.config import Config
+from cnequity.config.retention import revision_keep
 from cnequity.i18n import _, carry_language
 from cnequity.storage.lifecycle import LifecycleError, LifecycleStore
 from cnequity.storage.lifecycle.purge import unfinished
@@ -103,12 +104,8 @@ class StorageMaintenance:
 
     def _summary(self) -> dict:
         now = datetime.now(timezone.utc)
-        # The same count backfill and the daily run keep; 0 means they keep all.
-        configured = getattr(self.config, "revision_keep_generations", 5)
-        automatic = (
-            isinstance(configured, int) and not isinstance(configured, bool) and configured > 0
-        )
-        keep = configured if automatic else 5
+        keep = revision_keep(self.config)
+        automatic = keep > 0
         report = self.store.inspect(keep=keep)
         registry = self.store.registry()
         objects = []
@@ -280,7 +277,7 @@ class StorageMaintenance:
                     for oid in object_ids
                 ):
                     raise LifecycleError(_("Invalid version number."))
-                plan = self.store.plan(selected_ids=object_ids)
+                plan = self.store.plan(selected_ids=object_ids, keep=revision_keep(self.config))
             else:
                 raise LifecycleError(_("Choose the versions to delete."))
             if kind == "revisions":

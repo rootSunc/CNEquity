@@ -90,8 +90,11 @@ class OpsService:
 
         return {
             "operations": describe(self.config, setup=self.config is None),
-            "occupancy": occupancy(self.config, storage_busy=self.storage_busy()),
+            "occupancy": self.occupancy(),
         }
+
+    def occupancy(self) -> dict:
+        return occupancy(self.config, storage_busy=self.storage_busy())
 
     def preview(self, op_id: str, raw: dict | None) -> dict:
         spec = spec_for(op_id)

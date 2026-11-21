@@ -8,11 +8,6 @@ cnequity.domain.canonical -> names dataset instruments
 cnequity.domain.canonical -> names dataset trading_status
 cnequity.domain.canonical -> names vendor cni
 cnequity.domain.canonical -> names vendor cninfo
-cnequity.domain.http_policy -> names vendor cninfo
-cnequity.domain.http_policy -> names vendor eastmoney
-cnequity.domain.http_policy -> names vendor sina
-cnequity.domain.http_policy -> names vendor tdx
-cnequity.domain.http_policy -> names vendor ths
 cnequity.domain.rate_limit -> names vendor baostock
 cnequity.domain.rate_limit -> names vendor bse
 cnequity.domain.rate_limit -> names vendor cni

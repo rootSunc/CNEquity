@@ -6,13 +6,12 @@ import hashlib
 import json
 from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 import polars as pl
 
 from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_by_primary_key
-from cnequity.domain.market_time import shanghai_now
+from cnequity.domain.market_time import SHANGHAI_TZ, shanghai_now
 from cnequity.run_scope import backfill_of
 from cnequity.steps.bars._base import _DAILY_BAR_FINAL_AT, logger
 from cnequity.steps.common import (
@@ -444,7 +443,7 @@ def _eligible_etf_bar_symbols(config: Config, on: date, *, retry: bool = False) 
         started = datetime.fromisoformat(attempt["started_at"])
         if started.tzinfo is None:
             started = started.replace(tzinfo=timezone.utc)
-        if started.astimezone(ZoneInfo("Asia/Shanghai")).date() <= on:
+        if started.astimezone(SHANGHAI_TZ).date() <= on:
             logger.warning(
                 "ETF bar scope held after failed directory attempt %s", attempt.get("run_id")
             )

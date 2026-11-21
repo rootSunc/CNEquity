@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  barCoverageHtml,
   beijingMidnight,
   digestJobs,
   jobReasons,
@@ -84,7 +85,7 @@ test("the timeline places today's jobs by lane and marks the scheduled times", (
   assert.doesNotMatch(svg, /23:00<\/text>.*备份/);
 });
 
-test("stale datasets sort by lag and offer the action that can fix them", () => {
+test("stale datasets sort by lag and leave the backfill scope unset", () => {
   const rows = staleRows(
     { anchor: "2026-11-06", stale_datasets: ["news_headlines", "valuation_metrics"] },
     [
@@ -93,13 +94,30 @@ test("stale datasets sort by lag and offer the action that can fix them", () => 
     ],
   );
   assert.deepEqual(rows.map((row) => [row.dataset, row.lag]), [["valuation_metrics", 3], ["news_headlines", 2]]);
-  assert.equal(rows[0].action.href, "#/ops?op=backfill.run&dataset=valuation_metrics&start=2026-11-04&end=2026-11-06");
+  assert.equal(rows[0].action.href, "#/ops?op=backfill.run&dataset=valuation_metrics");
   assert.equal(rows[1].action.op, "daily.stale");
-  const html = staleHtml(rows, "2026-11-06");
+  const html = staleHtml(rows, "2026-11-06", () => true);
   assert.match(html, /落后 3 天/);
+  assert.match(html, /水位 2026-11-03/);
   assert.match(html, /快照：漏掉的日子补不回来/);
-  assert.doesNotMatch(staleHtml(rows, "", true), /class="button/);
+  assert.doesNotMatch(staleHtml(rows, "", () => false), /class="button/);
   assert.match(staleHtml([]), /没有落后的数据集/);
+});
+
+test("coverage uses planned gaps for previews and preserves empty and unknown states", () => {
+  const report = {
+    status: "planned", start: "2026-10-01", end: "2026-11-06",
+    datasets: [
+      { dataset: "daily_bars", counts: { gap: 3, empty: 2 }, first_gap: "2026-10-14", last_gap: "2026-10-15" },
+      { dataset: "index_bars", counts: null },
+    ],
+  };
+  const html = barCoverageHtml(report, () => true);
+  assert.match(html, /data-tone="warn">待补 3 个证券日/);
+  assert.match(html, /已确认无数据 2 个证券日/);
+  assert.match(html, /覆盖未能判定/);
+  assert.match(html, /dataset=daily_bars&amp;start=2026-10-14&amp;end=2026-10-15/);
+  assert.doesNotMatch(barCoverageHtml(report, () => false), /op=backfill.run/);
 });
 
 test("the daily matrix colours each group's latest attempt and links its run", () => {

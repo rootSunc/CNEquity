@@ -8,10 +8,16 @@ test("a render that finishes after the next route does not repaint the page", as
   const pending = new Map();
   const deferred = (path) => new Promise((resolve, reject) => pending.set(path, { resolve, reject }));
   const app = { innerHTML: "", querySelectorAll: () => [] };
+  const sections = new Map();
   const listeners = {};
   globalThis.location = { search: "", hash: "#/quality/slow-run" };
   globalThis.document = {
-    getElementById: (id) => (id === "app" ? app : null),
+    getElementById: (id) => {
+      if (id === "app") return app;
+      if (!app.innerHTML.includes(`id="${id}"`)) return null;
+      if (!sections.has(id)) sections.set(id, { innerHTML: "", addEventListener() {} });
+      return sections.get(id);
+    },
     addEventListener: () => {},
     querySelectorAll: () => [],
     documentElement: { style: {} },
@@ -53,4 +59,25 @@ test("a render that finishes after the next route does not repaint the page", as
   await failing;
   assert.match(app.innerHTML, /FAST-RUN/);
   assert.doesNotMatch(app.innerHTML, /late failure/);
+
+  location.hash = "#/";
+  const overview = listeners.hashchange();
+  assert.match(app.innerHTML, /概览/);
+  assert.ok(!pending.has("/api/ops"), "the overview uses lightweight status");
+  assert.ok(!pending.has("/api/heatmap?days=90"), "heatmap loading follows the summary");
+  pending.get("/api/health").resolve({
+    anchor: "2026-11-20", datasets: 85, stale_datasets: [], empty_required: [],
+  });
+  pending.get("/api/tiers").resolve([]);
+  pending.get("/api/datasets").resolve([]);
+  await overview;
+  assert.match(sections.get("overview-summary").innerHTML, /2026-11-20/);
+  assert.ok(pending.has("/api/heatmap?days=90"), "the summary paints while the heatmap is pending");
+
+  location.hash = "#/quality/fast-run";
+  await listeners.hashchange();
+  pending.get("/api/heatmap?days=90").reject(new Error("late heatmap failure"));
+  await new Promise(setImmediate);
+  assert.match(app.innerHTML, /FAST-RUN/);
+  assert.doesNotMatch(app.innerHTML, /late heatmap failure/);
 });

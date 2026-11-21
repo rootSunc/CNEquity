@@ -16,6 +16,7 @@ from typing import NamedTuple
 
 import polars as pl
 
+from cnequity.config.resources import DuckDBResources, resources_for
 from cnequity.domain.datasets import granularity_for_dataset
 from cnequity.domain.partitions import partition_value
 from cnequity.storage.catalog_bridge import (
@@ -30,7 +31,7 @@ from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog, quote_identifi
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_open: dict[Path, Catalog] = {}
+_open: dict[Path, tuple[DuckDBResources, Catalog]] = {}
 
 
 class CatalogRows(NamedTuple):
@@ -43,12 +44,14 @@ def _catalog(config) -> Catalog | None:
     root = lake_root(config).resolve()
     if not (root / CATALOG_FILE).exists():
         return None
-    catalog = _open.get(root)
-    if catalog is None:
-        catalog = Catalog(root, read_only=True)
-        # Stored timestamps are UTC; without this they come back in the machine's zone.
-        catalog.execute("SET TimeZone = 'UTC'")
-        _open[root] = catalog
+    budget = resources_for(config, "read")
+    cached = _open.get(root)
+    if cached is not None and cached[0] == budget:
+        return cached[1]
+    catalog = Catalog(root, read_only=True, **budget.options())
+    _open[root] = (budget, catalog)
+    if cached is not None:
+        cached[1].close()
     return catalog
 
 
@@ -56,14 +59,14 @@ def close(config) -> None:
     """Close the cached connection to *config*'s lake, so the next read sees it as it is now."""
     root = lake_root(config).resolve()
     with _lock:
-        catalog = _open.pop(root, None)
-        if catalog is not None:
-            catalog.close()
+        cached = _open.pop(root, None)
+        if cached is not None:
+            cached[1].close()
 
 
 def close_all() -> None:
     with _lock:
-        for catalog in _open.values():
+        for _, catalog in _open.values():
             catalog.close()
         _open.clear()
 
@@ -283,6 +286,7 @@ def catalog_partition_values(
 
     con = duckdb.connect()
     try:
+        resources_for(config, "read").apply(con)
         source = files_sql(table, con)
         rows = con.execute(
             f"SELECT DISTINCT {label} FROM {source} WHERE {name} IS NOT NULL"

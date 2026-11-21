@@ -20,11 +20,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+LAKE_DIR = "lake"
+META_DIR = "meta"
+
 #: Relative to ``meta/``.
+MANIFEST_FILE = Path("manifest.db")
 LAKE_RECORD = Path("lake.json")
+STORAGE_RECORD = Path("storage.json")
 SCHEDULER = Path("scheduler")
 SCHEDULER_MARKERS = SCHEDULER / "markers"
 WEB_SCHEDULER = SCHEDULER / "web"
+SCHEDULER_SETTINGS = WEB_SCHEDULER / "settings.json"
+SCHEDULER_EVENTS_LAST = WEB_SCHEDULER / "events_last.json"
+SCHEDULER_EVENT_ATTEMPTS = WEB_SCHEDULER / "events_schedules_last.json"
 SOFT_STREAK = SCHEDULER / "soft_streak"
 CHECKPOINTS = Path("checkpoints")
 SOURCE_CACHE = Path("source_cache")
@@ -32,6 +40,28 @@ DECISIONS = Path("decisions")
 
 #: The old home of every record above.
 LEGACY_STATE = Path("state")
+
+#: Metadata kept in the daily archive. Caches, generations and locks are
+#: reproducible or have their own lifecycle.
+REVISION_RECORDS = Path("revisions")
+REVISION_DATA = REVISION_RECORDS / "data"
+METADATA_BACKUP_PATHS = (
+    LAKE_RECORD,
+    STORAGE_RECORD,
+    LEGACY_STATE,
+    SCHEDULER_MARKERS,
+    SOFT_STREAK,
+    SCHEDULER_SETTINGS,
+    SCHEDULER_EVENTS_LAST,
+    SCHEDULER_EVENT_ATTEMPTS,
+    CHECKPOINTS,
+    DECISIONS,
+    Path("quality"),
+    REVISION_RECORDS,
+    Path("source_snapshots"),
+    Path("source_health"),
+    Path("stability"),
+)
 
 #: Each entry under ``meta/state/`` and where it lives now, relative to ``meta/``.
 #: A dataset's own ``<dataset>.json`` held its coverage ledger, which is gone;

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import polars as pl
 import pytest
 from fastapi.testclient import TestClient
-from tests.catalog_seed import commit_tree
+from tests.catalog_seed import commit_tree, publish_rows
 
 from cnequity.serve.app import create_app
 from cnequity.storage.stats import rebuild_stats
@@ -153,6 +153,84 @@ def test_health_counts_every_registered_dataset(client):
     assert sum(body[bucket] for bucket in (*buckets, "sample")) == len(DATASETS)
     # 3 daily_bars + 1 instruments + 2 trading_calendar + 1 fsi
     assert body["rows"] == 7
+
+
+def test_ops_recognizes_a_catalog_only_lake_and_an_external_writer(config):
+    from cnequity.file_lock import lake_mutation_lock
+    from cnequity.serve.ops.routes import accept_data_root
+
+    with TestClient(create_app(config, read_only=True), base_url="http://127.0.0.1") as client:
+        assert client.get("/api/ops").json()["occupancy"]["lake_empty"] is True
+        publish_rows(
+            config,
+            "daily_bars",
+            pl.DataFrame([_full_row("daily_bars", trade_date=FROZEN_TODAY, symbol="600519.SH")]),
+        )
+        assert not config.curated_root.exists()
+        assert accept_data_root(str(config.data_root))[1]
+        with lake_mutation_lock(config.meta_root):
+            occupancy = client.get("/api/ops").json()["occupancy"]
+            assert occupancy["lake_empty"] is False
+            assert occupancy["lake_write_locked"] is True
+            assert occupancy["slot"] is None
+        assert client.get("/api/ops").json()["occupancy"]["lake_write_locked"] is False
+
+
+def test_recent_ops_coverage_finds_a_hole_before_the_latest_bar(config, monkeypatch):
+    from cnequity.quality.planned_coverage import SYNC_DAYS, record_cell_answers
+
+    end = FROZEN_TODAY
+    first, missing = end - timedelta(days=2), end - timedelta(days=1)
+    start = end - timedelta(days=SYNC_DAYS)
+    monkeypatch.setattr("cnequity.serve.lake.current_anchor", lambda config: end)
+    symbol = "600519.SH"
+    publish_rows(
+        config,
+        "instruments",
+        pl.DataFrame([_full_row("instruments", symbol=symbol, list_date=first, delist_date=None)]),
+    )
+    publish_rows(
+        config,
+        "trading_calendar",
+        pl.DataFrame(
+            [
+                _full_row("trading_calendar", trade_date=day, is_trading=first <= day)
+                for day in (start + timedelta(days=offset) for offset in range(SYNC_DAYS + 1))
+            ]
+        ),
+    )
+    publish_rows(
+        config,
+        "daily_bars",
+        pl.DataFrame([_full_row("daily_bars", trade_date=end, symbol=symbol)]),
+    )
+    publish_rows(
+        config,
+        "index_bars",
+        pl.DataFrame(
+            [_full_row("index_bars", trade_date=day, symbol="000001.SH") for day in (first, end)]
+        ),
+    )
+    record_cell_answers(config, "daily_bars", [(first.isoformat(), symbol)], run="empty")
+    rebuild_stats(config)
+    with TestClient(create_app(config, read_only=True), base_url="http://127.0.0.1") as client:
+        response = client.get("/api/coverage/recent")
+        detail = client.get("/api/datasets/index_bars")
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["start"] == start.isoformat()
+    assert report["end"] == end.isoformat()
+    rows = {row["dataset"]: row for row in report["datasets"]}
+    assert rows["daily_bars"] == {
+        "dataset": "daily_bars",
+        "counts": {"covered": 1, "empty": 1, "gap": 1, "blocked": 0, "not_due": 0},
+        "gap_days": 1,
+        "first_gap": missing.isoformat(),
+        "last_gap": missing.isoformat(),
+    }
+    assert rows["index_bars"]["first_gap"] == missing.isoformat()
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["gaps"] == {"missing": [missing.isoformat()], "total": 1, "unit": "day"}
 
 
 def test_http_read_returns_a_replayable_receipt_for_the_exact_rows(lake):

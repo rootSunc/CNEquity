@@ -8,9 +8,12 @@ rejection is the one that counts.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+
+import duckdb
 
 from cnequity.domain.market_time import shanghai_now, shanghai_today
 from cnequity.i18n import N_, _
@@ -33,6 +36,8 @@ from cnequity.orchestrator.scheduler_lock import lock_directory, scheduler_lock_
 from cnequity.serve.display import en, local
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.key_checks import last_check
+
+logger = logging.getLogger(__name__)
 
 ENGINE_TEXT = {
     DAILY_INGESTION_LOCK: N_(
@@ -164,8 +169,8 @@ def source_status(config) -> dict:
     still opens. ``requests`` holds the EastMoney host profiles the ledger
     counts. ``keys`` says whether each paid source has a credential, never the
     credential, and ``key_checks`` holds the last check of that credential
-    (see ``cnequity.storage.key_checks``). ``failures`` counts today's failed batches by the primary
-    source of their dataset.
+    (see ``cnequity.storage.key_checks``). ``failures`` counts today's failed batches by the
+    route for which evidence was recorded.
     """
     if config is None:
         return {"push2_paused": False, "breakers": [], "readable": True}
@@ -205,40 +210,54 @@ def source_status(config) -> dict:
 
 
 def _failures_today(config) -> dict[str, dict]:
-    """Failed batches since Beijing midnight, grouped by their dataset's primary source."""
+    """Failed batches since Beijing midnight, grouped by recorded route evidence."""
     path = Path(config.manifest_path)
     if not path.exists():
         return {}
+    import json
     import sqlite3
     from contextlib import closing
     from datetime import time
-    from zoneinfo import ZoneInfo
 
-    from cnequity.domain.datasets import DATASETS
+    from cnequity.domain.market_time import SHANGHAI_TZ
 
     since = (
-        datetime.combine(shanghai_today(), time(0), tzinfo=ZoneInfo("Asia/Shanghai"))
+        datetime.combine(shanghai_today(), time(0), tzinfo=SHANGHAI_TZ)
         .astimezone(timezone.utc)
         .isoformat()
     )
     try:
         with closing(connect_readonly(path)) as conn:
+            columns = {column[1] for column in conn.execute("PRAGMA table_info(ingestion_batches)")}
+            routes = "source_routes_json" if "source_routes_json" in columns else "NULL"
             rows = conn.execute(
-                "SELECT dataset, COUNT(*) FROM ingestion_batches WHERE status = 'failed' "
-                "AND COALESCE(finished_at, started_at) >= ? GROUP BY dataset",
+                f"SELECT dataset, {routes}, COUNT(*) FROM ingestion_batches WHERE status = 'failed' "
+                f"AND COALESCE(finished_at, started_at) >= ? GROUP BY dataset, {routes}",
                 (since,),
             ).fetchall()
     except sqlite3.Error:
         return {}
     grouped: dict[str, dict] = {}
-    for dataset, count in rows:
-        spec = DATASETS.get(dataset)
-        source = getattr(spec, "primary_source", None) or "unknown"
-        entry = grouped.setdefault(source, {"batches": 0, "datasets": []})
+    for dataset, encoded, count in rows:
+        try:
+            evidence = json.loads(encoded) if encoded else {}
+        except (ValueError, TypeError):
+            evidence = {}
+        failed = (
+            [
+                name
+                for name, events in evidence.items()
+                if isinstance(events, list) and "failed" in events
+            ]
+            if isinstance(evidence, dict)
+            else []
+        )
+        source = failed[0] if len(failed) == 1 else "multiple" if failed else "unknown"
+        entry = grouped.setdefault(source, {"batches": 0, "datasets": set()})
         entry["batches"] += int(count)
-        entry["datasets"].append(dataset)
+        entry["datasets"].add(dataset)
     for entry in grouped.values():
-        entry["datasets"].sort()
+        entry["datasets"] = sorted(entry["datasets"])
     return grouped
 
 
@@ -320,6 +339,12 @@ def incomplete_init(config) -> dict | None:
 def lake_empty(config) -> bool:
     if config is None:
         return True
+    from cnequity.storage import revision_records
+
+    if revision_records.enabled(config.meta_root):
+        records = revision_records.records_for(config.meta_root)
+        return records is None or not any(records.current.values())
+    # Older lakes can still be browsed before an upgrade.
     curated = Path(config.curated_root)
     if not curated.exists():
         return True
@@ -329,13 +354,13 @@ def lake_empty(config) -> bool:
 def schedule_view(config) -> dict:
     if config is None:
         return {}
-    from cnequity.domain.datasets import _is_exchange_session
+    from cnequity.query.calendar import is_trading_day
 
     now = datetime.now(timezone.utc)
     local = shanghai_now(now)
     today = shanghai_today(now)
     run_at = parse_run_at(config.daily_run_at)
-    due = due_session(now, run_at)
+    due = due_session(now, run_at, config=config)
     pending = pending_session(config, "daily", now)
     return {
         "daily_run_at": config.daily_run_at,
@@ -344,7 +369,7 @@ def schedule_view(config) -> dict:
         "daily_pending": pending.isoformat() if pending else None,
         "daily_done": bool(due) and is_done(config.meta_root, "daily", due, config),
         "today": today.isoformat(),
-        "today_is_session": _is_exchange_session(today),
+        "today_is_session": is_trading_day(config, today),
         "before_daily_run_at": local.time() < run_at,
     }
 
@@ -361,6 +386,11 @@ def occupancy(config, *, storage_busy: bool) -> dict:
         ]
         root = lock_directory(config)
         schedulers = [name for name in ("daily", "events") if scheduler_lock_holder(root, name)]
+    try:
+        empty = lake_empty(config)
+    except (OSError, RuntimeError, duckdb.Error):
+        logger.exception("could not read published lake revisions")
+        empty = None
     # push2 pausing is reported once, through ``sources``; the status bar shows it.
     notes: list[str] = []
     return {
@@ -378,9 +408,10 @@ def occupancy(config, *, storage_busy: bool) -> dict:
         ),
         "engine_locks": engines,
         "scheduler_locks": schedulers,
+        "lake_write_locked": config is not None and _lake_locked(config.meta_root),
         "storage_busy": storage_busy,
         "incomplete_init": incomplete_init(config),
-        "lake_empty": lake_empty(config),
+        "lake_empty": empty,
         "schedule": schedule_view(config),
         "sources": source_status(config),
         "hints": notes,

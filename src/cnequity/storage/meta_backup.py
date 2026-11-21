@@ -23,15 +23,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from cnequity.meta_layout import LAKE_DIR, MANIFEST_FILE, METADATA_BACKUP_PATHS, REVISION_DATA
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.atomic import replace_with_retry
+from equitylake_core.catalog import CATALOG_FILE
 
-#: Subtrees of ``meta/`` worth keeping. ``revisions/`` is kept for its receipts
-#: (``{dataset}/*.json``), which name the generation a dataset points at.
-INCLUDED = ("state", "quality", "revisions", "source_snapshots", "source_health", "stability")
-EXCLUDED = ("revisions/data",)
 #: Where the lake catalog's database goes in the archive.
-CATALOG_ARCNAME = "lake/catalog.sqlite"
+CATALOG_ARCNAME = (Path(LAKE_DIR) / CATALOG_FILE).as_posix()
 PREFIX = "meta-"
 SUFFIX = ".tar.gz"
 
@@ -58,7 +56,7 @@ def _add_database(tar: tarfile.TarFile, source: Path, arcname: str, scratch: Pat
 
 
 def _excluded(name: str) -> bool:
-    return any(name == item or name.startswith(item + "/") for item in EXCLUDED)
+    return Path(name).is_relative_to(REVISION_DATA)
 
 
 def _archive_path(backup_dir: Path, now: datetime) -> Path:
@@ -116,9 +114,11 @@ def backup_meta(
         raise FileNotFoundError(f"meta directory not found: {meta_root}")
     backup_dir = Path(backup_dir)
     backup_dir.mkdir(parents=True, exist_ok=True)
-    manifest = meta_root / "manifest.db"
-    members = [sub for sub in INCLUDED if (meta_root / sub).exists()]
-    if not manifest.is_file() and not members:
+    manifest = meta_root / MANIFEST_FILE
+    members = [sub for sub in METADATA_BACKUP_PATHS if (meta_root / sub).exists()]
+    catalog_path = Path(catalog) if catalog is not None else None
+    has_catalog = catalog_path is not None and catalog_path.is_file()
+    if not manifest.is_file() and not members and not has_catalog:
         raise ValueError(f"nothing to back up under {meta_root}")
 
     archive = _archive_path(backup_dir, now or datetime.now())
@@ -127,13 +127,13 @@ def backup_meta(
         try:
             with tarfile.open(partial, "w:gz") as tar:
                 if manifest.is_file():
-                    _add_database(tar, manifest, "manifest.db", Path(scratch))
-                if catalog is not None and Path(catalog).is_file():
-                    _add_database(tar, Path(catalog), CATALOG_ARCNAME, Path(scratch))
+                    _add_database(tar, manifest, MANIFEST_FILE.as_posix(), Path(scratch))
+                if has_catalog:
+                    _add_database(tar, catalog_path, CATALOG_ARCNAME, Path(scratch))
                 for sub in members:
                     tar.add(
                         meta_root / sub,
-                        arcname=sub,
+                        arcname=sub.as_posix(),
                         filter=lambda info: None if _excluded(info.name) else info,
                     )
             replace_with_retry(partial, archive)

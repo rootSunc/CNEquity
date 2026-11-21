@@ -18,7 +18,7 @@ from typing import Literal
 import polars as pl
 
 from equitylake_core import coverage as cov
-from equitylake_core.catalog import Catalog
+from equitylake_core.catalog import REVISIONS_TABLE, Catalog
 from equitylake_core.coverage import Cell, Coverage
 from equitylake_core.market import Calendar, Universe
 
@@ -162,7 +162,7 @@ def plan_dataset(
     column: str | None = None,
     calendar: Calendar | None = None,
     universe: Universe | None = None,
-    revisions: str = "_revisions",
+    revisions: str = REVISIONS_TABLE,
     written: datetime | None | object = _READ,
     ready: pl.DataFrame | None = None,
     zone: tzinfo = timezone.utc,

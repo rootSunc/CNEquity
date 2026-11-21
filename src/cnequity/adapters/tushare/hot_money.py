@@ -17,6 +17,7 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.domain.bse_codes import legacy_symbol_map
+from cnequity.domain.datasets import get_dataset
 
 __all__ = [
     "HOT_MONEY_TRADES_FLOOR",
@@ -27,7 +28,7 @@ __all__ = [
     "normalize_hot_money_trades",
 ]
 
-HOT_MONEY_TRADES_FLOOR = date(2022, 8, 1)
+HOT_MONEY_TRADES_FLOOR = get_dataset("hot_money_trades").history_floor_date
 _PAGE_SIZE = 2000
 
 HOT_MONEY_TRADERS_SCHEMA = {

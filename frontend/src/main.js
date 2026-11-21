@@ -73,23 +73,29 @@ function pageShell(content, active = "overview") {
 // (the overview's heatmap, say) must not paint over the page the user has
 // since moved to, so every render checks live() after each await.
 let routeSeq = 0;
-function beginRoute() {
+function beginRoute(controls) {
   const seq = ++routeSeq;
   const live = () => seq === routeSeq;
-  return { live, setPage: (content, active) => (live() ? setPage(content, active) : undefined) };
+  let status;
+  const opsStatus = () => (status ??= api(controls ? "/api/ops/status?controls=true" : "/api/ops/status"));
+  return {
+    live,
+    opsStatus,
+    setPage: (content, active) => (live() ? setPage(content, active, opsStatus) : undefined),
+  };
 }
 
-function setPage(content, active = "overview") {
+function setPage(content, active = "overview", opsStatus = () => api("/api/ops/status")) {
   app.innerHTML = pageShell(content, active);
   document.getElementById("refresh-page")?.addEventListener("click", () => location.reload());
-  paintMode();
+  void paintMode(opsStatus);
 }
 
 let modePaint = 0;
-async function paintMode() {
+async function paintMode(opsStatus) {
   const ticket = ++modePaint;
   try {
-    const body = await api("/api/ops");
+    const body = await opsStatus();
     if (ticket !== modePaint) return;
     const el = document.querySelector(".console-mode");
     if (el) el.textContent = modeLabel(body.mode?.label || "");
@@ -122,7 +128,7 @@ async function paintMode() {
       meta.prepend(link);
     }
   } catch {
-    /* a page that cannot read /api/ops still renders its own error */
+    /* The page handles its own load errors. */
   }
 }
 
@@ -252,14 +258,7 @@ function dsLink(id) {
   return `<span class="ds-link" data-ds="${esc(id)}">${dsMarkup(id)}</span>`;
 }
 
-async function renderOverview(view) {
-  const [h, tiers, datasets, hm] = await Promise.all([
-    api("/api/health"),
-    api("/api/tiers"),
-    api("/api/datasets"),
-    api(`/api/heatmap?days=${DAYS}`),
-  ]);
-  if (!view.live()) return;
+function overviewSummary(h, ops) {
   const sev = h.findings_by_severity || {};
   const notes = [];
   // The reason strings come from the ingestion layer and are English, with a
@@ -286,54 +285,48 @@ async function renderOverview(view) {
   }
   let primaryHref = "#/quality";
   let primaryLabel = tr("查看质量", "Open quality");
-  try {
-    const ops = await api("/api/ops");
-    if (!view.live()) return;
-    const pending = ops.occupancy?.incomplete_init;
-    if (pending?.running) {
-      // An empty lake during its first init is expected; offering to start
-      // another init sent people into a form that could only refuse.
-      notes.push({
-        tone: "info",
-        title: tr("初始化正在进行", "Initialization is running"),
-        detail: tr("数据会随批次陆续出现，进度在运行记录里。", "Data appears batch by batch; the run shows its progress."),
-        action: { href: "#/runs", label: tr("查看进度", "View progress") },
-      });
-      primaryHref = "#/runs";
-      primaryLabel = tr("查看进度", "View progress");
-    } else if (pending) {
-      const resume = `#/ops?op=init.resume&run_id=${encodeURIComponent(pending.run_id)}`;
-      if (ops.occupancy?.lake_empty) {
-        notes.push({
-          tone: "stale",
-          title: tr("湖里还没有 curated 数据", "The lake has no curated data yet"),
-          detail: tr("初始化会下载全市场行情主干。", "Initialization downloads the full-market price spine."),
-          action: { href: "#/ops?op=init.start", label: tr("初始化数据湖", "Initialize the lake") },
-        });
-      }
+  const pending = ops?.occupancy?.incomplete_init;
+  if (pending?.running) {
+    // An empty lake during its first init is expected; offering to start
+    // another init sent people into a form that could only refuse.
+    notes.push({
+      tone: "info",
+      title: tr("初始化正在进行", "Initialization is running"),
+      detail: tr("数据会随批次陆续出现，进度在运行记录里。", "Data appears batch by batch; the run shows its progress."),
+      action: { href: "#/runs", label: tr("查看进度", "View progress") },
+    });
+    primaryHref = "#/runs";
+    primaryLabel = tr("查看进度", "View progress");
+  } else if (pending) {
+    const resume = `#/ops?op=init.resume&run_id=${encodeURIComponent(pending.run_id)}`;
+    if (ops.occupancy?.lake_empty) {
       notes.push({
         tone: "stale",
-        title: tr("初始化没跑完", "Initialization did not finish"),
-        detail: tr("已成功的批次会保留。", "Batches that succeeded are kept."),
-        action: { href: resume, label: tr("继续初始化", "Resume initialization") },
-      });
-      primaryHref = resume;
-      primaryLabel = tr("继续初始化", "Resume initialization");
-    } else if (ops.occupancy?.lake_empty) {
-      notes.push({
-        tone: "stale",
-        title: tr("湖里还没有 curated 数据", "The lake has no curated data yet"),
+        title: tr("湖里还没有发布数据", "The lake has no published data yet"),
         detail: tr("初始化会下载全市场行情主干。", "Initialization downloads the full-market price spine."),
         action: { href: "#/ops?op=init.start", label: tr("初始化数据湖", "Initialize the lake") },
       });
-      primaryHref = "#/ops?op=init.start";
-      primaryLabel = tr("初始化数据湖", "Initialize the lake");
-    } else if (h.stale_datasets.length) {
-      primaryHref = "#/ops?op=daily.stale";
-      primaryLabel = tr("补抓落后数据集", "Catch up stale datasets");
     }
-  } catch {
-    /* overview still renders without the operations summary */
+    notes.push({
+      tone: "stale",
+      title: tr("初始化没跑完", "Initialization did not finish"),
+      detail: tr("已成功的批次会保留。", "Batches that succeeded are kept."),
+      action: { href: resume, label: tr("继续初始化", "Resume initialization") },
+    });
+    primaryHref = resume;
+    primaryLabel = tr("继续初始化", "Resume initialization");
+  } else if (ops?.occupancy?.lake_empty) {
+    notes.push({
+      tone: "stale",
+      title: tr("湖里还没有发布数据", "The lake has no published data yet"),
+      detail: tr("初始化会下载全市场行情主干。", "Initialization downloads the full-market price spine."),
+      action: { href: "#/ops?op=init.start", label: tr("初始化数据湖", "Initialize the lake") },
+    });
+    primaryHref = "#/ops?op=init.start";
+    primaryLabel = tr("初始化数据湖", "Initialize the lake");
+  } else if (h.stale_datasets.length) {
+    primaryHref = "#/ops?op=daily.stale";
+    primaryLabel = tr("补抓落后数据集", "Catch up stale datasets");
   }
   if (h.empty_required.length) {
     notes.push({
@@ -342,20 +335,6 @@ async function renderOverview(view) {
       chips: h.empty_required.map((d) => dsLink(d)).join(""),
     });
   }
-
-  const byTier = {};
-  for (const d of datasets) (byTier[d.tier] ||= []).push(d);
-  const totalBytes = tiers.reduce((sum, tier) => sum + (tier.bytes || 0), 0);
-  const tierMeters = (tier) => {
-    const count = tier.datasets || 0;
-    const width = (n) => (count ? ((n || 0) / count) * 100 : 0);
-    const share = totalBytes ? ((tier.bytes || 0) / totalBytes) * 100 : 0;
-    const title = tr(
-      `${tier.fresh} 最新，${tier.stale} 落后，${tier.empty} 为空`,
-      `${tier.fresh} fresh, ${tier.stale} stale, ${tier.empty} empty`,
-    );
-    return `<span class="tier-meters"><span class="tier-health" title="${esc(title)}"><i class="fresh" style="width:${width(tier.fresh)}%"></i><i class="stale" style="width:${width(tier.stale)}%"></i><i class="empty" style="width:${width(tier.empty)}%"></i></span><span class="tier-share" title="${esc(mb(tier.bytes))}"><i style="width:${share}%"></i></span></span>`;
-  };
 
   const state = sev.error ? "error" : notes.length ? "attention" : "healthy";
   const stateLabel = {
@@ -378,31 +357,10 @@ async function renderOverview(view) {
   const headerAction = notes.some((note) => note.action?.href === primaryHref)
     ? ""
     : `<a class="button button-primary" href="${primaryHref}">${esc(primaryLabel)}</a>`;
-  const tierCards = tiers
-    .map((tier) => {
-      const status = tier.stale
-        ? tr(`${tier.stale} 个落后`, `${tier.stale} stale`)
-        : tier.empty
-          ? tr(`${tier.empty} 个为空`, `${tier.empty} empty`)
-          : tier.fresh === tier.datasets
-            ? tr("全部最新", "All fresh")
-            : tr("无落后", "Nothing stale");
-      return `<details class="tier-card" ${tier.stale || tier.empty ? "open" : ""}>
-        <summary><span class="tier-summary"><span class="tier-name"><span class="tier-tag">${esc(tier.tier)}</span>${esc(tierText(tier.tier, tier.label))}</span>
-          <span class="tier-counts"><span><b>${tier.datasets}</b> ${tr("个数据集", "datasets")}</span><span><b>${fmt(tier.rows)}</b> ${tr("行", "rows")}</span></span>
-          <span class="tier-status-wrap">${tierMeters(tier)}<span class="tier-status ${tier.stale ? "is-stale" : tier.empty ? "is-empty" : "is-fresh"}">${status}</span></span></span></summary>
-        <div class="tier-members">${membersTable(byTier[tier.tier] || [])}</div>
-      </details>`;
-    })
-    .join("");
-
-  const visibleHeatmapRows = hm.rows.filter((row) => /[#.]/.test(row.cells));
-  const heatmapData = { ...hm, rows: visibleHeatmapRows };
-
   const stateDetail = state === "healthy"
     ? `${tr("基准日", "Anchor")} ${esc(h.anchor || "-")}`
     : tr(`${notes.length} 项待核查`, `${notes.length} to review`);
-  setPage(`
+  return `
     <section class="page-heading">
       <div class="heading-row"><h1>${tr("概览", "Overview")}</h1>
         <div class="action-row"><a class="button button-ghost" href="#/runs">${tr("运行记录", "Runs")}</a>${headerAction}</div>
@@ -421,13 +379,116 @@ async function renderOverview(view) {
       ${kpi(mb(h.bytes), tr("存储", "Storage"), "curated")}
       ${kpi(`${num(sev.error, "err")}<span class="metric-secondary"> / ${fmt(sev.warning)}</span>`, tr("审计", "Audit"), "", sev.error ? "alert" : "")}
     </section>
-    <article class="surface-panel heat-panel"><div class="panel-header"><h2>${tr("覆盖", "Coverage")}</h2><span class="panel-meta">${tr(`${visibleHeatmapRows.length}/${hm.rows.length} 个数据集，${hm.days.length} 个交易日`, `${visibleHeatmapRows.length}/${hm.rows.length} datasets, ${hm.days.length} sessions`)}</span></div>
+  `;
+}
+
+function overviewTiers(tiers, datasets) {
+  const byTier = {};
+  for (const d of datasets) (byTier[d.tier] ||= []).push(d);
+  const totalBytes = tiers.reduce((sum, tier) => sum + (tier.bytes || 0), 0);
+  const tierMeters = (tier) => {
+    const count = tier.datasets || 0;
+    const width = (n) => (count ? ((n || 0) / count) * 100 : 0);
+    const share = totalBytes ? ((tier.bytes || 0) / totalBytes) * 100 : 0;
+    const title = tr(
+      `${tier.fresh} 最新，${tier.stale} 落后，${tier.empty} 为空`,
+      `${tier.fresh} fresh, ${tier.stale} stale, ${tier.empty} empty`,
+    );
+    return `<span class="tier-meters"><span class="tier-health" title="${esc(title)}"><i class="fresh" style="width:${width(tier.fresh)}%"></i><i class="stale" style="width:${width(tier.stale)}%"></i><i class="empty" style="width:${width(tier.empty)}%"></i></span><span class="tier-share" title="${esc(mb(tier.bytes))}"><i style="width:${share}%"></i></span></span>`;
+  };
+
+  const tierCards = tiers
+    .map((tier) => {
+      const status = tier.stale
+        ? tr(`${tier.stale} 个落后`, `${tier.stale} stale`)
+        : tier.empty
+          ? tr(`${tier.empty} 个为空`, `${tier.empty} empty`)
+          : tier.fresh === tier.datasets
+            ? tr("全部最新", "All fresh")
+            : tr("无落后", "Nothing stale");
+      return `<details class="tier-card" ${tier.stale || tier.empty ? "open" : ""}>
+        <summary><span class="tier-summary"><span class="tier-name"><span class="tier-tag">${esc(tier.tier)}</span>${esc(tierText(tier.tier, tier.label))}</span>
+          <span class="tier-counts"><span><b>${tier.datasets}</b> ${tr("个数据集", "datasets")}</span><span><b>${fmt(tier.rows)}</b> ${tr("行", "rows")}</span></span>
+          <span class="tier-status-wrap">${tierMeters(tier)}<span class="tier-status ${tier.stale ? "is-stale" : tier.empty ? "is-empty" : "is-fresh"}">${status}</span></span></span></summary>
+        <div class="tier-members">${membersTable(byTier[tier.tier] || [])}</div>
+      </details>`;
+    })
+    .join("");
+
+  return `
+    <section class="surface-panel dataset-panel"><div class="panel-header"><h2>${tr("数据层", "Layers")}</h2><a class="panel-link" href="#/datasets">${tr("全部数据集", "All datasets")}</a></div><div class="tier-grid">${tierCards}</div></section>
+  `;
+}
+
+function paintOverviewHeatmap(host, hm) {
+  const visibleHeatmapRows = hm.rows.filter((row) => /[#.]/.test(row.cells));
+  host.innerHTML = `
+    <div class="panel-header"><h2>${tr("覆盖", "Coverage")}</h2><span class="panel-meta">${tr(`${visibleHeatmapRows.length}/${hm.rows.length} 个数据集，${hm.days.length} 个交易日`, `${visibleHeatmapRows.length}/${hm.rows.length} datasets, ${hm.days.length} sessions`)}</span></div>
       ${visibleHeatmapRows.length ? `<div id="heat" aria-label="${tr("覆盖", "Coverage")}"></div>` : `<p class="heat-empty">${tr("当前窗口没有分区。", "No partitions in this window.")}</p>`}
       ${visibleHeatmapRows.length ? `<p class="legend"><span><i class="swatch" style="background:var(--cell-covered)"></i> ${tr("有分区", "Present")}</span><span><i class="swatch" style="background:var(--cell-gap)"></i> ${tr("日更缺口", "Daily gap")}</span><span><i class="swatch" style="background:var(--cell-cadence)"></i> ${tr("采集间隔", "Cadence")}</span><span><i class="swatch" style="background:var(--cell-outside)"></i> ${tr("窗口外", "Outside")}</span></p>` : ""}
+  `;
+  if (visibleHeatmapRows.length) heatmap(document.getElementById("heat"), { ...hm, rows: visibleHeatmapRows });
+}
+
+async function renderOverview(view, ctx) {
+  const loading = `<p class="muted" role="status">${tr("正在读取…", "Reading…")}</p>`;
+  view.setPage(`
+    <div id="overview-summary">
+    <section class="page-heading">
+      <div class="heading-row"><h1>${tr("概览", "Overview")}</h1>
+        <div class="action-row"><a class="button button-ghost" href="#/runs">${tr("运行记录", "Runs")}</a></div>
+      </div>
+    </section>
+      ${loading}
+    </div>
+    <article class="surface-panel heat-panel" id="overview-heatmap">
+      <div class="panel-header"><h2>${tr("覆盖", "Coverage")}</h2></div>${loading}
     </article>
-    <section class="surface-panel dataset-panel" id="dataset-list"><div class="panel-header"><h2>${tr("数据层", "Layers")}</h2><a class="panel-link" href="#/datasets">${tr("全部数据集", "All datasets")}</a></div><div class="tier-grid">${tierCards}</div></section>
+    <div id="dataset-list">
+      <section class="surface-panel dataset-panel"><div class="panel-header"><h2>${tr("数据层", "Layers")}</h2></div>${loading}</section>
+    </div>
   `);
-  if (visibleHeatmapRows.length) heatmap(document.getElementById("heat"), heatmapData);
+
+  const paintPanel = async (id, request, paint) => {
+    const host = document.getElementById(id);
+    try {
+      const data = await request;
+      if (view.live() && host) paint(host, data);
+    } catch (err) {
+      if (view.live() && host) {
+        host.innerHTML = `<p class="panel-note err">${tr("读取失败。", "Failed to load.")} ${esc(err.message)}</p>`;
+      }
+    }
+  };
+
+  let health;
+  let ops;
+  const paintSummary = () => {
+    const host = document.getElementById("overview-summary");
+    if (view.live() && health && host) host.innerHTML = overviewSummary(health, ops);
+  };
+  const statusRequest = view.opsStatus().catch(() => null);
+  void statusRequest.then((status) => {
+    ops = status;
+    paintSummary();
+  });
+  const healthRequest = api("/api/health");
+  void paintPanel("dataset-list", Promise.all([api("/api/tiers"), api("/api/datasets")]), (host, [tiers, datasets]) => {
+    host.innerHTML = overviewTiers(tiers, datasets);
+  });
+
+  try {
+    health = await healthRequest;
+  } catch (err) {
+    const status = await statusRequest;
+    if (!view.live()) return;
+    if (status?.mode?.setup) await renderOps(ctx);
+    else throw err;
+    return;
+  }
+  if (!view.live()) return;
+  paintSummary();
+  void paintPanel("overview-heatmap", api(`/api/heatmap?days=${DAYS}`), paintOverviewHeatmap);
 }
 
 function datasetOpLabel(op, why) {
@@ -1294,13 +1355,13 @@ async function route() {
   closeRunStream();
   closeStorage();
   closeOps();
-  const view = beginRoute();
-  const ctx = { api, setPage: view.setPage, esc, dataTable };
   const dataset = location.hash.match(/^#\/dataset\/([^/]+)(?:\/(state|meta|data))?/);
   const run = location.hash.match(/^#\/runs\/([^/?]+)/);
   const qrun = location.hash.match(/^#\/quality\/(.+)$/);
   const opsJob = location.hash.match(/^#\/ops\/jobs\/([^/?]+)/);
   const opsPage = location.hash === "#/ops" || location.hash.startsWith("#/ops?");
+  const view = beginRoute(opsPage);
+  const ctx = { api, setPage: view.setPage, esc, dataTable, opsStatus: view.opsStatus };
   try {
     if (opsJob) await renderOps({ ...ctx, jobId: decodeURIComponent(opsJob[1]) });
     else if (opsPage) await renderOps(ctx);
@@ -1311,7 +1372,7 @@ async function route() {
     else if (qrun) await renderQualityRun(decodeURIComponent(qrun[1]), view);
     else if (location.hash.startsWith("#/quality")) await renderQuality(view);
     else if (location.hash.startsWith("#/datasets")) await renderDatasets(view);
-    else await renderOverview(view);
+    else await renderOverview(view, ctx);
     if (view.live() && !location.hash.includes("?")) window.scrollTo(0, 0);
   } catch (err) {
     if (!view.live()) return;

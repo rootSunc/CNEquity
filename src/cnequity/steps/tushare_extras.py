@@ -13,6 +13,7 @@ from datetime import date
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.datasets import BACKFILL_START, get_dataset
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
 from cnequity.run_scope import backfill_of
@@ -28,7 +29,6 @@ def _by_day(
     dataset: str,
     fetch_one: Callable[[date], pl.DataFrame],
     *,
-    floor: date,
     date_col: str = "trade_date",
     sparse: bool = False,
     calendar_days: bool | None = None,
@@ -51,7 +51,7 @@ def _by_day(
             fetch_one,
             source=SOURCE,
             date_col=date_col,
-            floor=floor,
+            floor=None,
             calendar_days=sparse if calendar_days is None else calendar_days,
             allow_empty_days=sparse,
         )
@@ -97,10 +97,7 @@ def step_convertible_bond_bars(
     """``cb_daily``, one session at a time."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.convertible_bonds import (
-        CONVERTIBLE_BOND_BARS_FLOOR,
-        fetch_bars,
-    )
+    from cnequity.adapters.tushare.convertible_bonds import fetch_bars
 
     return _by_day(
         config,
@@ -108,7 +105,6 @@ def step_convertible_bond_bars(
         run_id,
         "convertible_bond_bars",
         lambda day: fetch_bars(day, config=config),
-        floor=CONVERTIBLE_BOND_BARS_FLOOR,
     )
 
 
@@ -122,7 +118,7 @@ def step_holder_trades(config: Config, trade_date: date, run_id: str, context: d
     """``stk_holdertrade`` by announcement date; codes outside ``instruments`` are dropped."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.holder_events import HOLDER_TRADES_FLOOR, fetch_holder_trades
+    from cnequity.adapters.tushare.holder_events import fetch_holder_trades
     from cnequity.steps.common import load_symbols
 
     universe = sorted(set(load_symbols(config)))
@@ -134,7 +130,6 @@ def step_holder_trades(config: Config, trade_date: date, run_id: str, context: d
         lambda day: fetch_holder_trades(day, config=config).filter(
             pl.col("symbol").is_in(universe)
         ),
-        floor=HOLDER_TRADES_FLOOR,
         date_col="ann_date",
         sparse=True,
     )
@@ -150,10 +145,7 @@ def step_share_repurchases(config: Config, trade_date: date, run_id: str, contex
     """``repurchase`` by announcement date; codes outside ``instruments`` are dropped."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.holder_events import (
-        SHARE_REPURCHASES_FLOOR,
-        fetch_share_repurchases,
-    )
+    from cnequity.adapters.tushare.holder_events import fetch_share_repurchases
     from cnequity.steps.common import load_symbols
 
     universe = sorted(set(load_symbols(config)))
@@ -165,7 +157,6 @@ def step_share_repurchases(config: Config, trade_date: date, run_id: str, contex
         lambda day: fetch_share_repurchases(day, config=config).filter(
             pl.col("symbol").is_in(universe)
         ),
-        floor=SHARE_REPURCHASES_FLOOR,
         date_col="ann_date",
         sparse=True,
     )
@@ -181,7 +172,7 @@ def step_pledge_stats(config: Config, trade_date: date, run_id: str, context: di
     """``pledge_stat`` by week-end date; other days are empty."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.holder_events import PLEDGE_STATS_FLOOR, fetch_pledge_stats
+    from cnequity.adapters.tushare.holder_events import fetch_pledge_stats
     from cnequity.steps.common import load_symbols
 
     universe = sorted(set(load_symbols(config)))
@@ -191,7 +182,6 @@ def step_pledge_stats(config: Config, trade_date: date, run_id: str, context: di
         run_id,
         "pledge_stats",
         lambda day: fetch_pledge_stats(day, config=config).filter(pl.col("symbol").is_in(universe)),
-        floor=PLEDGE_STATS_FLOOR,
         date_col="end_date",
         sparse=True,
         calendar_days=False,
@@ -208,10 +198,7 @@ def step_chip_distribution(config: Config, trade_date: date, run_id: str, contex
     """``cyq_perf``, one session at a time."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.market_stats import (
-        CHIP_DISTRIBUTION_FLOOR,
-        fetch_chip_distribution,
-    )
+    from cnequity.adapters.tushare.market_stats import fetch_chip_distribution
     from cnequity.steps.common import load_symbols
 
     universe = sorted(set(load_symbols(config)))
@@ -223,7 +210,6 @@ def step_chip_distribution(config: Config, trade_date: date, run_id: str, contex
         lambda day: fetch_chip_distribution(day, config=config).filter(
             pl.col("symbol").is_in(universe)
         ),
-        floor=CHIP_DISTRIBUTION_FLOOR,
     )
 
 
@@ -236,10 +222,7 @@ def step_northbound_top10(config: Config, trade_date: date, run_id: str, context
     """``hsgt_top10``; Connect is closed on some A-share sessions, so empty days are normal."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.market_stats import (
-        NORTHBOUND_TOP10_FLOOR,
-        fetch_northbound_top10,
-    )
+    from cnequity.adapters.tushare.market_stats import fetch_northbound_top10
 
     return _by_day(
         config,
@@ -247,7 +230,6 @@ def step_northbound_top10(config: Config, trade_date: date, run_id: str, context
         run_id,
         "northbound_top10",
         lambda day: fetch_northbound_top10(day, config=config),
-        floor=NORTHBOUND_TOP10_FLOOR,
         sparse=True,
         calendar_days=False,
     )
@@ -262,7 +244,7 @@ def step_limit_events(config: Config, trade_date: date, run_id: str, context: di
     """``limit_list_d``, one session at a time; a quiet session can be empty."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.market_stats import LIMIT_EVENTS_FLOOR, fetch_limit_events
+    from cnequity.adapters.tushare.market_stats import fetch_limit_events
 
     return _by_day(
         config,
@@ -270,7 +252,6 @@ def step_limit_events(config: Config, trade_date: date, run_id: str, context: di
         run_id,
         "limit_events",
         lambda day: fetch_limit_events(day, config=config),
-        floor=LIMIT_EVENTS_FLOOR,
         sparse=True,
         calendar_days=False,
     )
@@ -287,10 +268,7 @@ def step_futures_member_positions(
     """``fut_holding``, one session at a time, every exchange."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.futures_positions import (
-        FUTURES_MEMBER_POSITIONS_FLOOR,
-        fetch_futures_member_positions,
-    )
+    from cnequity.adapters.tushare.futures_positions import fetch_futures_member_positions
 
     return _by_day(
         config,
@@ -298,7 +276,6 @@ def step_futures_member_positions(
         run_id,
         "futures_member_positions",
         lambda day: fetch_futures_member_positions(day, config=config),
-        floor=FUTURES_MEMBER_POSITIONS_FLOOR,
     )
 
 
@@ -312,10 +289,7 @@ def step_earnings_forecasts(config: Config, trade_date: date, run_id: str, conte
     """``forecast`` by announcement date; codes outside ``instruments`` are dropped."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.disclosures import (
-        EARNINGS_FORECASTS_FLOOR,
-        fetch_earnings_forecasts,
-    )
+    from cnequity.adapters.tushare.disclosures import fetch_earnings_forecasts
     from cnequity.steps.common import load_symbols
 
     universe = sorted(set(load_symbols(config)))
@@ -327,7 +301,6 @@ def step_earnings_forecasts(config: Config, trade_date: date, run_id: str, conte
         lambda day: fetch_earnings_forecasts(day, config=config).filter(
             pl.col("symbol").is_in(universe)
         ),
-        floor=EARNINGS_FORECASTS_FLOOR,
         date_col="ann_date",
         sparse=True,
     )
@@ -343,10 +316,7 @@ def step_investor_visits(config: Config, trade_date: date, run_id: str, context:
     """``stk_surv`` by visit date; codes outside ``instruments`` are dropped."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.disclosures import (
-        INVESTOR_VISITS_FLOOR,
-        fetch_investor_visits,
-    )
+    from cnequity.adapters.tushare.disclosures import fetch_investor_visits
     from cnequity.steps.common import load_symbols
 
     universe = sorted(set(load_symbols(config)))
@@ -358,7 +328,6 @@ def step_investor_visits(config: Config, trade_date: date, run_id: str, context:
         lambda day: fetch_investor_visits(day, config=config).filter(
             pl.col("symbol").is_in(universe)
         ),
-        floor=INVESTOR_VISITS_FLOOR,
         date_col="visit_date",
         sparse=True,
     )
@@ -389,18 +358,15 @@ def step_business_segments(config: Config, trade_date: date, run_id: str, contex
     if not _enabled(config):
         return dict(_SKIPPED)
     from cnequity.adapters.tushare.client import SOURCE, TushareClient
-    from cnequity.adapters.tushare.disclosures import (
-        BUSINESS_SEGMENTS_FLOOR,
-        fetch_business_segments,
-    )
+    from cnequity.adapters.tushare.disclosures import fetch_business_segments
     from cnequity.steps.common import load_symbols
 
     window = backfill_of(config)
     if window.active:
-        periods = quarter_ends(
-            max(window.start or BUSINESS_SEGMENTS_FLOOR, BUSINESS_SEGMENTS_FLOOR),
-            window.end or trade_date,
-        )
+        earliest, latest = get_dataset("business_segments").history_bounds(trade_date, config)
+        start = window.start or earliest or BACKFILL_START
+        end = window.end or trade_date
+        periods = quarter_ends(max(start, earliest or start), min(end, latest or end))
     else:
         periods = quarter_ends(date(trade_date.year - 1, 1, 1), trade_date)[-2:]
     universe = sorted(set(load_symbols(config)))
@@ -473,7 +439,7 @@ def step_hot_money_trades(config: Config, trade_date: date, run_id: str, context
     """``hm_detail``, one session at a time."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.hot_money import HOT_MONEY_TRADES_FLOOR, fetch_hot_money_trades
+    from cnequity.adapters.tushare.hot_money import fetch_hot_money_trades
 
     return _by_day(
         config,
@@ -481,7 +447,6 @@ def step_hot_money_trades(config: Config, trade_date: date, run_id: str, context
         run_id,
         "hot_money_trades",
         lambda day: fetch_hot_money_trades(day, config=config),
-        floor=HOT_MONEY_TRADES_FLOOR,
         sparse=True,
         calendar_days=False,
     )
@@ -517,7 +482,7 @@ for _name, _description in (
     register_step(_name, group="research", description=_description)(_bond_events_step(_name))
 
 
-def _sentiment_day_step(dataset: str, floor_name: str):
+def _sentiment_day_step(dataset: str):
     def step(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
         if not _enabled(config):
             return dict(_SKIPPED)
@@ -529,7 +494,6 @@ def _sentiment_day_step(dataset: str, floor_name: str):
             run_id,
             dataset,
             lambda day: sentiment_lists.fetch_day(dataset, day, config=config),
-            floor=getattr(sentiment_lists, floor_name),
             sparse=True,
             calendar_days=False,
         )
@@ -538,39 +502,34 @@ def _sentiment_day_step(dataset: str, floor_name: str):
     return step
 
 
-for _name, _floor, _group, _description in (
+for _name, _group, _description in (
     (
         "popularity_ranks",
-        "POPULARITY_RANKS_FLOOR",
         "research",
         "THS and EastMoney popularity lists (Tushare)",
     ),
     (
         "limit_ladder",
-        "LIMIT_LADDER_FLOOR",
         "capital",
         "Consecutive limit-up runs per session (Tushare)",
     ),
     (
         "strongest_sectors",
-        "STRONGEST_SECTORS_FLOOR",
         "research",
         "THS concept boards ranked by limit-ups (Tushare)",
     ),
     (
         "kpl_limit_ups",
-        "KPL_LIMIT_UPS_FLOOR",
         "capital",
         "开盘啦 limit-up list with seal times and reasons (Tushare)",
     ),
     (
         "fund_flow_ths_tushare",
-        "FUND_FLOW_THS_TUSHARE_FLOOR",
         "capital",
         "THS net flow per stock by order size (Tushare)",
     ),
 ):
-    register_step(_name, group=_group, description=_description)(_sentiment_day_step(_name, _floor))
+    register_step(_name, group=_group, description=_description)(_sentiment_day_step(_name))
 
 
 @register_step(
@@ -583,7 +542,7 @@ def step_investor_qa(config: Config, trade_date: date, run_id: str, context: dic
     """``irm_qa_sh`` and ``irm_qa_sz`` by publication day, calendar days included."""
     if not _enabled(config):
         return dict(_SKIPPED)
-    from cnequity.adapters.tushare.company_people import INVESTOR_QA_FLOOR, fetch_investor_qa
+    from cnequity.adapters.tushare.company_people import fetch_investor_qa
 
     return _by_day(
         config,
@@ -591,7 +550,6 @@ def step_investor_qa(config: Config, trade_date: date, run_id: str, context: dic
         run_id,
         "investor_qa",
         lambda day: fetch_investor_qa(day, config=config),
-        floor=INVESTOR_QA_FLOOR,
         sparse=True,
     )
 

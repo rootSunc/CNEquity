@@ -34,6 +34,7 @@ from cnequity.orchestrator.engine import JobEngine
 from cnequity.run_scope import set_backfill
 from cnequity.storage.atomic import replace_with_retry, write_parquet_atomic
 from cnequity.storage.layout import init_data_layout
+from equitylake_core.lock import LockIOError, LockUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ DEFAULT_SYMBOLS = (
 DEFAULT_DAYS = 30
 RESEARCH_MIN_DAYS = 756  # roughly three trading years; enough to cross corporate actions
 
-MCP_GUIDE_URL = "https://rootsunc.github.io/CNEquity/reference/mcp/"
+MCP_GUIDE_URL = "https://rootsunc.github.io/CNEquity/datasets/query-guide/#mcp"
 
 
 def _banner(step: str, title: str) -> None:
@@ -184,17 +185,6 @@ def _demo_config(
         daily_waves=[WaveConfig(name="demo", parallel=False, steps=["daily_bars", "compact"])],
         config_path=config_path,
     )
-
-
-def _configure_logging() -> None:
-    from cnequity.cli._shared import terminal_formatter
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(terminal_formatter(handler.stream))
-    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
-    # Keep httpx noise down; TDX/session logs stay visible.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _probe_tdx(cfg: Config) -> None:
@@ -667,17 +657,14 @@ def run_sample_demo(
         instruments,
         compression="zstd",
     )
-    # Same period as every other writer (month for daily_bars), so a fresh
-    # sample lake does not start out with a layout the audit calls mixed.
-    from cnequity.domain.datasets import DATASETS
-
-    spec = DATASETS["daily_bars"]
-    periods = bars.with_columns(
-        pl.col("trade_date").map_elements(spec.partition_for, return_dtype=pl.Utf8).alias("_p")
+    # The offline fixture is small enough for one file. A Hive-style
+    # trade_date=YYYY-MM directory would overwrite the DATE column in some
+    # external readers even though the values inside the file are correct.
+    write_parquet_atomic(
+        cfg.curated_root / "daily_bars" / "part-sample.parquet",
+        bars,
+        compression="zstd",
     )
-    for (period,), frame in periods.partition_by("_p", as_dict=True).items():
-        out = cfg.curated_root / "daily_bars" / f"{spec.partition_col}={period}"
-        write_parquet_atomic(out / "part-sample.parquet", frame.drop("_p"), compression="zstd")
     ensure_duckdb_views(cfg)
     _rebuild_demo_stats(cfg)
 
@@ -721,7 +708,9 @@ def run_demo(
     force: bool = False,
 ) -> dict:
     """Run the mini real-source demo. Returns a small summary dict."""
-    _configure_logging()
+    from cnequity.cli._shared import _progress_logging, attach_log_file
+
+    _progress_logging()
     symbols = [s.strip().upper() for s in symbols if s.strip()]
     if not symbols:
         raise click.ClickException(_("--symbols needs at least one symbol"))
@@ -740,6 +729,7 @@ def run_demo(
     _write_demo_toml(config_out, data_root, force=force)
     cfg = _demo_config(data_root, config_path=config_out.resolve(), research=research)
     init_data_layout(cfg)
+    attach_log_file(cfg, "init-demo")
     click.echo(f"data_root = {cfg.data_root}")
     click.echo(f"config    = {config_out}")
     click.echo(
@@ -751,6 +741,8 @@ def run_demo(
     _banner(f"2/{steps}", _("Probing TDX"))
     try:
         _probe_tdx(cfg)
+    except (LockUnavailable, LockIOError) as exc:
+        raise click.ClickException(_("Local file lock failed: {exc}").format(exc=exc)) from exc
     except Exception as exc:
         raise click.ClickException(
             _(

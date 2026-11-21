@@ -33,11 +33,11 @@ since this write looked at it refuses the commit, and the write is run again.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import uuid
 from collections.abc import Iterable, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -52,14 +52,13 @@ from equitylake_core.catalog import (
     quote_identifier,
     quote_literal,
 )
+from equitylake_core.catalog import REVISIONS_TABLE as REVISIONS
 from equitylake_core.coverage import ATTEMPT_COLUMNS, ATTEMPTS, Cell, cell_keys
-from equitylake_core.lock import LAKE_LOCK_FILE, lake_lock
+from equitylake_core.lock import LAKE_LOCK_FILE, lake_operation, lake_read
 from equitylake_core.read import load
 from equitylake_core.spec import DatasetSpec, Registry
 from equitylake_core.write import Write, WriteRejected, files_digest
 
-#: One row per dataset per write that changed it; the row's ``snapshot_id`` is the revision.
-REVISIONS = "_revisions"
 #: Rows a write left out, counted by reason, with a few of them as JSON.
 REJECTS = "_rejects"
 STAGING_DIR = "staging"
@@ -130,17 +129,6 @@ def _prepare_records(catalog: Catalog) -> None:
         catalog.keep_rows_inline(table)
 
 
-def _place(source: Path, target: Path) -> None:
-    """Make *target* the same file as *source* (a hard link, or a copy across volumes), read-only."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.link(source, target)
-    except OSError:
-        shutil.copy2(source, target)
-    if os.name != "nt":  # a read-only file cannot be deleted on Windows, and the catalog must
-        target.chmod(0o444)
-
-
 def _head(catalog: Catalog, dataset: str) -> int | None:
     """The snapshot of *dataset*'s latest revision."""
     if not catalog.has_table(REVISIONS):
@@ -188,14 +176,18 @@ class Lake:
         where=None,
     ):
         """The rows of *dataset* as a Polars frame; see :func:`equitylake_core.read.load`."""
-        with self.catalog() as catalog:
+        with (
+            lake_operation(self.root),
+            self.catalog() as catalog,
+            catalog.pin_snapshot(snapshot) as version,
+        ):
             return load(
                 catalog,
                 self.registry[dataset],
                 start=start,
                 end=end,
                 columns=columns,
-                snapshot=snapshot,
+                snapshot=version,
                 where=where,
             )
 
@@ -254,18 +246,16 @@ class LakeWrite:
     def __init__(self, lake: Lake, run: str | None = None):
         self.lake = lake
         self.run = run or f"run-{datetime.now():%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
-        self.catalog = Catalog(lake.root)
+        with ExitStack() as resources:
+            resources.enter_context(lake_operation(lake.root))
+            self.catalog = resources.enter_context(lake.catalog())
+            self._resources = resources.pop_all()
         self._pending: dict[str, _Pending] = {}
         self._empty: list[tuple[str, str, str, str]] = []
         self._types: dict[str, dict[str, str]] = {}
         self._staging = (
             lake.root / STAGING_DIR / f"{_UNSAFE.sub('_', self.run)}.{uuid.uuid4().hex[:8]}"
         )
-        try:
-            _prepare_records(self.catalog)
-        except BaseException:
-            self.catalog.close()
-            raise
 
     def __enter__(self) -> LakeWrite:
         return self
@@ -275,7 +265,7 @@ class LakeWrite:
 
     def close(self) -> None:
         shutil.rmtree(self._staging, ignore_errors=True)
-        self.catalog.close()
+        self._resources.close()
 
     # -- taking rows -------------------------------------------------------------
 
@@ -540,15 +530,15 @@ class LakeWrite:
             changes.append(_Change(label, add, tuple(old)))
         return changes
 
-    def _check_columns(self, spec: DatasetSpec) -> None:
+    def _check_columns(self, catalog: Catalog, spec: DatasetSpec) -> None:
         """Refuse a spec whose type for a stored column is not the stored one.
 
         A column the spec gained is added by the write; a changed type needs
         the stored rows rewritten, which is a migration, not a write.
         """
-        if not self.catalog.has_table(spec.name):
+        if not catalog.has_table(spec.name):
             return
-        have = self.catalog.column_types(spec.name)
+        have = catalog.column_types(spec.name)
         for name, kind in self._spec_types(spec).items():
             if name in have and have[name] != kind:
                 raise WriteRejected(
@@ -575,14 +565,14 @@ class LakeWrite:
     def commit(self, *, message: str | None = None) -> Commit | None:
         """Publish everything taken so far as one snapshot; ``None`` if it changes nothing."""
         catalog, registry = self.catalog, self.lake.registry
-        placed: list[Path] = []
         try:
-            bases = {dataset: _head(catalog, dataset) for dataset in self._pending}
-            plans = {
-                dataset: changes
-                for dataset, pending in self._pending.items()
-                if (changes := self._stage(registry[dataset], pending))
-            }
+            with lake_read(self.lake.root):
+                bases = {dataset: _head(catalog, dataset) for dataset in self._pending}
+                plans = {
+                    dataset: changes
+                    for dataset, pending in self._pending.items()
+                    if (changes := self._stage(registry[dataset], pending))
+                }
             rejected = {
                 dataset: {reason: entry[0] for reason, entry in pending.rejects.items()}
                 for dataset, pending in self._pending.items()
@@ -590,16 +580,16 @@ class LakeWrite:
             }
             if not plans and not rejected and not self._empty:
                 return None
-            write = Write(catalog)
             rows: dict[str, int] = {}
-            with lake_lock(self.lake.root):
+            with self.lake.catalog(read_only=False) as catalog, Write(catalog) as write:
+                _prepare_records(catalog)
                 for dataset in plans:
                     if _head(catalog, dataset) != bases[dataset]:
                         raise WriteRejected(
                             f"{dataset} was published to by another writer; run this write again"
                         )
                 for dataset in plans:
-                    self._check_columns(registry[dataset])
+                    self._check_columns(catalog, registry[dataset])
                 for dataset, changes in plans.items():
                     spec = registry[dataset]
                     write.create(dataset, spec.columns)
@@ -610,8 +600,7 @@ class LakeWrite:
                             target = (
                                 home / change.label if change.label else home
                             ) / f"part.{uuid.uuid4().hex[:8]}.parquet"
-                            placed.append(target)
-                            _place(source, target)
+                            write.place(source, target)
                             add.append(target)
                     remove = [path for change in changes for path in change.remove]
                     write.swap(dataset, add=add, remove=remove)
@@ -648,14 +637,9 @@ class LakeWrite:
                         },
                     )
                 result = write.commit(message=message or self.run)
-        except BaseException:
-            # Nothing was registered: the files placed for it belong to no snapshot.
-            for path in placed:
-                path.unlink(missing_ok=True)
-            raise
         finally:
             for pending in self._pending.values():
-                catalog.con.execute(f"DROP TABLE IF EXISTS {pending.table}")
+                self.catalog.con.execute(f"DROP TABLE IF EXISTS {pending.table}")
             self._pending.clear()
             self._empty.clear()
             shutil.rmtree(self._staging, ignore_errors=True)

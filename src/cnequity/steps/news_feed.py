@@ -14,15 +14,15 @@ import base64
 import logging
 import threading
 from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.market_time import SHANGHAI_TZ
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 
 logger = logging.getLogger(__name__)
-CST = ZoneInfo("Asia/Shanghai")
+CST = SHANGHAI_TZ
 # Items keep their news_id, so re-reading a few minutes costs nothing but a
 # duplicate the compact collapses; it guards against items that appear late.
 _OVERLAP = timedelta(minutes=30)

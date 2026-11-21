@@ -126,20 +126,22 @@ class DerivedOutput:
             if path.is_dir() and any(path.rglob("*.parquet"))
         )
 
-    def write(self, label: str, rows: pl.DataFrame, name: str) -> None:
-        """Make *rows* the whole of partition *label* (in the file *name*, in a plain directory)."""
+    def write(self, label: str, rows: pl.DataFrame, name: str) -> bool:
+        """Replace *label* and report whether anything was written."""
         value = self._label(label)
         if self.checkout is not None:
             # A rebuild that computes what is already published changes nothing:
             # only the time it was computed differs, and that is not a restatement.
-            if not _same_facts(self.checkout.rows(label), rows):
-                self.checkout.rewrite(label, rows)
-            return
+            if _same_facts(self.checkout.rows(label), rows):
+                return False
+            self.checkout.rewrite(label, rows)
+            return True
         from cnequity.storage.parquet import CuratedWriter
 
         CuratedWriter(self.layer_root).write_partition(
             self.dataset, self.spec.partition_col, value, rows, name
         )
+        return True
 
     def exists(self, label: str) -> bool:
         """Whether partition *label* is published."""

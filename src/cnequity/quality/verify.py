@@ -55,6 +55,7 @@ from cnequity.query.parquet_scan import (
 )
 from cnequity.storage.locator import logical_root
 from cnequity.storage.published import catalog_published, published
+from equitylake_core.catalog import CATALOG_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -549,7 +550,7 @@ def last_published_day(config, dataset: str) -> date | None:
     from equitylake_core.catalog import Catalog
 
     root = lake_root(config)
-    if not (root / "catalog.sqlite").exists():
+    if not (root / CATALOG_FILE).exists():
         return None
     from equitylake_core import coverage as cov
 

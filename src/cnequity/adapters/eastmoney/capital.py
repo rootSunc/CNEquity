@@ -385,7 +385,7 @@ def fetch_northbound_holdings(
     # depth claim: measured 2026-08, RPT_MUTUAL_HOLDSTOCKNORTH_STA answers
     # 9201 "返回数据为空" for TRADE_DATE='2023-12-29' and every older quarter
     # tried, while a recent one (2026-06-30) returns 3,933 rows. The source
-    # itself does not serve history here — see docs/zh/datasets/sources.md.
+    # itself does not serve history here — see docs/zh/datasets/catalog.md.
     owns = client is None
     if client is None:
         client = EastMoneyClient(config=config)

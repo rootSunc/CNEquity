@@ -26,7 +26,7 @@ def repair_deep_history_ths_official(
 ) -> dict:
     """Re-source the 2005-2015 block from the licensed peer instead of the scraper.
 
-    This is **switching**, not routing (see docs/zh/reference/cli.md for explicit source repair):
+    This is **switching**, not routing (see docs/zh/reference/cli-surface.md for explicit source repair):
     4,403,582 rows already have a canonical owner, so nothing here happens on a
     schedule and ``dry_run`` defaults to true. A caller has to ask twice.
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from cnequity.domain.datasets import DATASETS
 from cnequity.quality.planned_coverage import LakeCalendar, coverage_of
 
@@ -81,6 +83,25 @@ def test_where_this_lake_ends_bounds_the_cells():
     lake = SimpleNamespace(history_until={"fund_flow": date(2026, 11, 4)})
     assert coverage_of(DATASETS["fund_flow"], TODAY, lake).end == date(2026, 11, 4)
     assert coverage_of(DATASETS["block_trades"], TODAY, lake).end is None
+
+
+@pytest.mark.parametrize(
+    ("dataset", "floor"),
+    [("fund_flow", date(2023, 9, 11)), ("sector_fund_flow", date(2023, 9, 12))],
+)
+def test_planner_uses_the_enabled_history_providers_floor(dataset, floor):
+    lake = SimpleNamespace(
+        sources={"tushare": True},
+        tushare_token="fixture-token",
+        history_from={dataset: date(2020, 1, 1)},
+    )
+    spec = DATASETS[dataset]
+    assert coverage_of(spec, TODAY, lake).start == floor
+    assert coverage_of(spec, TODAY, lake).by == "rows"
+
+    lake.tushare_token = None
+    assert coverage_of(spec, TODAY, lake).start == date(2020, 1, 1)
+    assert coverage_of(spec, TODAY, lake).by == "write"
 
 
 def test_every_registered_dataset_gets_a_declaration():

@@ -15,7 +15,7 @@ function tickText(raw) {
   }).format(new Date(at));
 }
 
-function paintSchedulerStatus(value, esc) {
+export function paintSchedulerStatus(value, esc) {
   const el = document.getElementById("ops-status-scheduler");
   if (!el || !value) return;
   const native = value.native || {};
@@ -186,4 +186,5 @@ export async function renderSchedule(ctx, home, alive) {
       if (alive() && current === previewGeneration) target.innerHTML = `<p class="panel-note err">${esc(err.message)}</p>`;
     }
   };
+  return value;
 }

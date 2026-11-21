@@ -22,15 +22,64 @@ is shown as it was written.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import time
 
 from cnequity.i18n import DEFAULT_LANGUAGE, N_, Message, current_language, translate_to
+
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s [pid=%(process)d]: %(message)s"
 
 _TAGS = {
     logging.WARNING: N_("Warning: "),
     logging.ERROR: N_("Error: "),
     logging.CRITICAL: N_("Error: "),
 }
+
+_URL_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@", re.IGNORECASE)
+_SECRET_KEY = r"(?:tushare[-_]?token|hithink[-_]finance[-_]api[-_]key|access[-_]?token|api[-_]?key|token|password|secret)"
+_SECRET_VALUE = re.compile(
+    rf"""(?i)((?:--{_SECRET_KEY}(?:\s+|=)|\b{_SECRET_KEY}['"]?\s*[:=]\s*))"""
+    r"""(?:"[^"]*"|'[^']*'|[^\s&#,;]+)"""
+)
+_BEARER = re.compile(r"(\b(?:Bearer|Basic)\s+)\S+", re.IGNORECASE)
+
+
+def redact_log_text(text: str, secrets: tuple[str, ...] = ()) -> str:
+    for secret in secrets:
+        text = text.replace(secret, "<redacted>")
+    text = _URL_USERINFO.sub(r"\1<redacted>@", text)
+    text = _SECRET_VALUE.sub(r"\1<redacted>", text)
+    return _BEARER.sub(r"\1<redacted>", text)
+
+
+def configured_log_secrets(config=None) -> tuple[str, ...]:
+    return tuple(
+        value
+        for value in (
+            getattr(config, "tushare_token", None),
+            getattr(config, "ths_official_api_key", None),
+            os.environ.get("TUSHARE_TOKEN"),
+            os.environ.get("HITHINK_FINANCE_API_KEY"),
+        )
+        if value
+    )
+
+
+class RedactedFormatter(logging.Formatter):
+    """Mask credential values after rendering the record and its traceback."""
+
+    secrets: tuple[str, ...] = ()
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_log_text(super().format(record), self.secrets)
+
+
+def diagnostic_formatter(config=None) -> RedactedFormatter:
+    formatter = RedactedFormatter(LOG_FORMAT, datefmt="%Y-%m-%dT%H:%M:%SZ")
+    formatter.converter = time.gmtime
+    formatter.secrets = configured_log_secrets(config)
+    return formatter
 
 
 def render_message(record: logging.LogRecord, language: str) -> str:
@@ -51,7 +100,7 @@ def render_message(record: logging.LogRecord, language: str) -> str:
         return record.getMessage()
 
 
-class TerminalFormatter(logging.Formatter):
+class TerminalFormatter(RedactedFormatter):
     """`HH:MM:SS message`, warnings and errors tagged, in the process language."""
 
     def __init__(self, language: str | None = None) -> None:
@@ -76,4 +125,4 @@ class TerminalFormatter(logging.Formatter):
             text = f"{text}\n{record.exc_text}"
         if record.stack_info:
             text = f"{text}\n{self.formatStack(record.stack_info)}"
-        return text
+        return redact_log_text(text, self.secrets)

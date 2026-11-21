@@ -63,6 +63,7 @@ from typing import Literal
 import polars as pl
 
 from cnequity.config import Config
+from cnequity.domain.market_time import SHANGHAI_ZONE
 
 SHARE_FIELDS = {
     "shares.total": "total_shares",
@@ -143,7 +144,7 @@ def _observed_day(frame: pl.DataFrame) -> pl.Expr:
     cols = [pl.col(c) for c in ("observed_at", "fetched_at") if c in frame.columns]
     if not cols:
         return pl.lit(None, dtype=pl.Date).alias("_observed")
-    stamp = pl.coalesce(cols).dt.convert_time_zone("Asia/Shanghai")
+    stamp = pl.coalesce(cols).dt.convert_time_zone(SHANGHAI_ZONE)
     return stamp.dt.date().alias("_observed")
 
 
@@ -153,7 +154,7 @@ def _first_hand() -> pl.Expr:
 
 def _day(column: str) -> pl.Expr:
     """A timestamp column as its Shanghai date, null-safe."""
-    return pl.col(column).dt.convert_time_zone("Asia/Shanghai").dt.date()
+    return pl.col(column).dt.convert_time_zone(SHANGHAI_ZONE).dt.date()
 
 
 def _published_day(frame: pl.DataFrame, cutoff: time | None) -> pl.Expr:
@@ -164,7 +165,7 @@ def _published_day(frame: pl.DataFrame, cutoff: time | None) -> pl.Expr:
     """
     if "available_at" not in frame.columns:
         return pl.lit(None, dtype=pl.Date).alias("_published")
-    local = pl.col("available_at").dt.convert_time_zone("Asia/Shanghai")
+    local = pl.col("available_at").dt.convert_time_zone(SHANGHAI_ZONE)
     day = local.dt.date()
     if cutoff is None:
         return day.alias("_published")

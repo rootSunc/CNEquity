@@ -8,7 +8,8 @@ from pathlib import Path
 import click
 
 from cnequity.cli._root import cli
-from cnequity.cli._shared import _cfg, config_option
+from cnequity.cli._shared import _cfg, attach_log_file, config_option
+from cnequity.config.retention import revision_keep
 from cnequity.file_lock import LockUnavailable
 from cnequity.i18n import N_, _
 from cnequity.storage.lifecycle import LifecycleError, LifecycleStore
@@ -40,11 +41,7 @@ def _emit(value: dict) -> None:
 
 
 def _keep(config_path: str, keep: int | None) -> int:
-    """``--keep``, else the count backfill and the daily run keep (5 when they keep all)."""
-    if keep is not None:
-        return keep
-    configured = getattr(_cfg(config_path), "revision_keep_generations", 5)
-    return configured if isinstance(configured, int) and configured >= 1 else 5
+    return revision_keep(_cfg(config_path) if keep is None else None, keep)
 
 
 _KEEP_HELP = N_(
@@ -81,7 +78,7 @@ def raw_external(config_path: str, dataset: str, source: str, root: Path, format
 
 @storage.command("inspect")
 @config_option
-@click.option("--keep", type=click.IntRange(min=1), default=None, help=_KEEP_HELP)
+@click.option("--keep", type=click.IntRange(min=0), default=None, help=_KEEP_HELP)
 def inspect(config_path: str, keep: int | None):
     """List versions and their retention reasons, read-only."""
     _emit(_store(config_path).inspect(keep=_keep(config_path, keep)))
@@ -124,7 +121,9 @@ def import_references(config_path: str, manifest: Path):
 @config_option
 def refresh_references(config_path: str):
     """Re-scan the registered reference roots and hold every version they now cite; never releases a hold."""
-    summary = _store(config_path).refresh_references()
+    config = _cfg(config_path)
+    attach_log_file(config, "storage-refresh")
+    summary = LifecycleStore(config.meta_root).refresh_references()
     if summary is None:
         raise click.ClickException("No reference inventory has been imported for this lake.")
     _emit(summary)
@@ -165,7 +164,9 @@ def catalog_retention_cmd(config_path: str, apply: bool):
     """Keep each dataset's recent and held revisions in the lake catalog; expire the rest."""
     from cnequity.storage.catalog_bridge import catalog_retention
 
-    result = catalog_retention(_cfg(config_path), apply=apply)
+    config = _cfg(config_path)
+    attach_log_file(config, "storage-catalog-retention")
+    result = catalog_retention(config, apply=apply)
     if result is None:
         raise click.ClickException(_("This lake has no lake catalog."))
     _emit(result)
@@ -200,6 +201,7 @@ def export_cmd(config_path: str, datasets: tuple[str, ...], out: str, start, end
     from cnequity.storage.catalog_bridge import ExportRefused, export_dataset
 
     config = _cfg(config_path)
+    attach_log_file(config, "storage-export")
     exported = []
     for dataset in datasets:
         try:
@@ -223,14 +225,21 @@ def export_cmd(config_path: str, datasets: tuple[str, ...], out: str, start, end
 @click.option("--dataset", default=None, help=N_("Check only this dataset's revisions."))
 def verify_catalog(config_path: str, dataset: str | None):
     """Check that each revision published into the lake catalog still holds the rows recorded for it."""
+    from cnequity.config.resources import resources_for
     from cnequity.storage.catalog_bridge import lake_root
     from cnequity.storage.lake_write import verify_revisions
     from equitylake_core.catalog import CATALOG_FILE, Catalog
 
-    root = lake_root(_cfg(config_path))
+    config = _cfg(config_path)
+    attach_log_file(config, "storage-verify-catalog")
+    root = lake_root(config)
     if not (root / CATALOG_FILE).exists():
         raise click.ClickException(_("This lake has no lake catalog."))
-    with Catalog(root, read_only=True, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
+    with Catalog(
+        root,
+        read_only=True,
+        **resources_for(config, "maintenance").options(scratch=root / "tmp"),
+    ) as catalog:
         checks = verify_revisions(catalog, dataset)
     counts: dict[str, int] = {}
     for check in checks:
@@ -267,7 +276,7 @@ def release(config_path: str, object_ids: tuple[str, ...], note: str):
 
 @storage.command("plan")
 @config_option
-@click.option("--keep", type=click.IntRange(min=1), default=None, help=_KEEP_HELP)
+@click.option("--keep", type=click.IntRange(min=0), default=None, help=_KEEP_HELP)
 @click.option("--phase", type=click.Choice(["mark", "purge"]), default=None, hidden=True)
 def plan(config_path: str, keep: int | None, phase: str | None):
     """Preview which generations retention would delete now; deletes nothing."""

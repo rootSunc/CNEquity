@@ -44,13 +44,24 @@ negative_evidence_ttl_days = 7
 # arrives — only the lake's completeness lags.
 deep_reconciliation_dow = 6
 
+# Optional command logging settings. Heartbeats report work after a quiet interval.
+# [logging]
+# console_level = "INFO"
+# file_level = "INFO"
+# heartbeat_seconds = 30  # 0 disables heartbeats
+# retention_days = 30    # 0 skips log cleanup
+
 [quality]
+# Consecutive unhealthy runs inside this window trigger a job health finding.
+# 0 disables this finding. The daily maintenance gate uses trading sessions.
+# run_failure_window_hours = 24
+# run_failure_streak = 3
 # What a run does when the lake audit reports `error` findings.
 #   off    — record nothing, never fail (pre-0.8.2 behaviour)
 #   shadow — record what would have been blocked, but let the run succeed
 #   block  — fail the run, so `cne status` and the pipeline exit code see it
-# The audit step depends on `compact`, so it runs *after* the rows are in
-# curated: blocking fails the run, it does not prevent the write. Shadow mode
+# The audit step depends on `compact`, so it runs *after* the rows are
+# published: blocking fails the run, it does not prevent the write. Shadow mode
 # appends one line per affected run to `meta/quality/audit_gate.jsonl`, which
 # is what to read before switching this to "block" — a gate turned on without
 # knowing how often it fires is a gate that gets turned off again.
@@ -278,7 +289,7 @@ min_interval_seconds = 1.0
 # (as for [sources.tushare] above).
 #
 # `verify` and `backfill` are deliberately separate. Verification writes source
-# snapshots and findings and never touches curated rows, so it is safe whenever a
+# snapshots and findings and never touches published rows, so it is safe whenever a
 # key is present. Backfill changes what the lake holds — the 2016-2024 balance
 # sheet and cash-flow gap — so it stays off until asked for.
 [sources.ths_official]
@@ -304,7 +315,7 @@ source = "exchange"
 [adj_factors]
 source = "sina"
 adjust_types = ["hfq"]
-# The factor series has one vendor, so each step is re-derived from curated
+# The factor series has one vendor, so each step is re-derived from published
 # `corporate_actions` (a different vendor) and the disagreement is reported.
 # Findings are advisory — they mark the run degraded, they never fail it.
 # Tolerance is materiality, not equality: the two sides round differently.
@@ -316,7 +327,7 @@ crosscheck_error_bps = 200
 [sentiment]
 # Batch path uses keyword lexicon only; SnowNLP is for on-demand stock_news.
 use_snownlp = false
-# HTTP stock_news fallback cap (primary news channel is curated news_headlines).
+# HTTP stock_news fallback cap (primary news channel is the published news_headlines).
 news_symbol_limit = 50
 
 [minute_bars]
@@ -464,7 +475,7 @@ revision_gate = true
 # arbitrated same-day; SZSE serves any past date.
 price_tolerance_bps = 10
 # Turnover is looser on purpose: the exchange daily total folds in trading a
-# continuous-auction bar excludes, so curated is legitimately a little lower.
+# continuous-auction bar excludes, so the lake's figure is legitimately a little lower.
 # The finding fires on the *share* of the universe, so a standing definitional
 # gap stays quiet while a widening one is caught.
 turnover_tolerance_bps = 100
@@ -519,14 +530,6 @@ ingest_listed_funds = false
 # A group's own steps_add naming one also turns it on.
 best_effort = []
 
-# Datasets whose days to fetch also include the coverage planner's gaps, beside
-# the watermark and the missing-dates ledger:
-#   planned = ["announcement_index", "margin_trading"]
-# Listing daily_bars makes `cne run daily` retry, after the groups, the bars
-# owed over the last 45 days (the planner's and the owed-key ledger's).
-# Datasets whose days to fetch come from the planner alone; their coverage is
-# no longer kept in meta/state (the watermark is read off the published rows):
-#   planner_only = ["margin_trading"]
 # Where this lake's history of a dataset begins, when it starts later than the
 # source does. The planner does not owe earlier days; move a date earlier to
 # backfill further back.
@@ -537,7 +540,7 @@ best_effort = []
 # [datasets.history_until]
 # fund_flow = 2026-11-04
 
-# Wave DAG for daily job (see docs/zh/datasets/catalog.md)
+# Wave DAG for the daily job
 [[job.daily.waves]]
 name = "reference"
 parallel = true
@@ -577,14 +580,14 @@ steps = [
 # Prefer one scheduler sequencing the required groups; do not assume a region
 # or worker count guarantees a particular runtime.
 # When the scheduled jobs run, in Beijing time — whatever the host timezone.
-# launchd/cron wake them hourly; each runs once per session after its run_at.
+# The system timer checks every minute; each job runs after its configured run_at.
 [job.daily]
 run_at = "17:30"
 [job.stale]
 # Only retries the snapshot datasets the day's run missed.
 run_at = "21:00"
 # `cne run maintain`, which the scheduled timer runs once after each session's
-# daily update: run audit (whole lake on full_audit_weekday), freshness gate,
+# daily update: run audit, freshness gate,
 # source probes and SLO, run-evidence check, metadata backup, expiry preview.
 [source_health]
 # Label of this machine's network egress, carried by every source probe and health
@@ -596,6 +599,7 @@ run_at = "21:00"
 [job.maintenance]
 # ISO weekday (1 = Monday … 7 = Sunday) of the whole-lake audit, which reads
 # every Parquet file and can take hours on a large lake; 0 never runs it.
+# The timer runs this as a separate calendar-day job, including weekends.
 full_audit_weekday = 6
 # Metadata archives (manifest DB, receipts, quality findings); default
 # {data.root}/backups. Keep it on another disk if you can.
@@ -607,7 +611,7 @@ backup_retention_count = 30
 gate_groups = ["core"]
 soft_fail_max_days = 3
 
-# Per-group fetch frequency (docs/zh/getting-started/configuration.md, 取数频率):
+# Per-group fetch frequency (docs/zh/getting-started/configuration.md):
 #   cadence = "daily"   (default) or "weekly"
 #   weekday = 5         weekly: run on the last session of the week up to this ISO weekday
 # A weekly group rests only its history datasets (they catch up by date on the
@@ -695,16 +699,18 @@ steps = [
   "compact", "derive_futures_continuous", "derive_option_greeks",
 ]
 
-# Not scheduled by anything: `cne run daily --group intraday` only. Enable
-# [minute_bars] first, and read the horizon note there before expecting history.
+# Enable [minute_bars] to schedule capture. After compact, keep already-stored
+# resamples current. Each frequency is first created explicitly with cne derive.
 [job.daily.groups.intraday]
 at = "18:45"
 parallel = true
-steps = ["minute_bars", "minute_bars_5m", "compact"]
+steps = [
+  "minute_bars", "minute_bars_5m", "compact",
+  "derive_minute_bars_15m", "derive_minute_bars_30m", "derive_minute_bars_60m",
+]
 
-# Also unscheduled: `cne run daily --group ticks`. Its own group rather than a
-# fourth entry in `intraday` above, so that turning on minute bars cannot drag
-# transaction records along with it. Enable [trade_ticks] first.
+# Ticks have their own group, so enabling minute bars cannot enable transaction
+# capture. Enable [trade_ticks] to schedule it.
 [job.daily.groups.ticks]
 at = "19:00"
 parallel = true
@@ -785,10 +791,19 @@ names = [
 enabled = true
 datasets = ["stock_news", "research_reports"]
 
+# Web and MCP share this limit on the rows selected before paging.
+# [query]
+# scan_budget_rows = 4000000
+
 [duckdb]
 path = "{data.root}/duckdb/cnequity.duckdb"
 memory_limit = "2GB"
 threads = 4
+# Optional overrides for write, audit, export and maintenance connections.
+# Each accepts memory_limit, threads, temp_directory and max_temp_directory_size.
+# [duckdb.write]
+# memory_limit = "4GB"
+# max_temp_directory_size = "20GB"
 
 # Optional. `cne decision-data` refuses any window reaching this date, so a
 # research holdout stays unseen by evidence inventories. Unset: no limit.

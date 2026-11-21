@@ -15,6 +15,7 @@ from cnequity.config import load_config
 from cnequity.config.upgrade import _table_span, tomllib
 from cnequity.file_lock import LockUnavailable, exclusive_lock
 from cnequity.i18n import _, current_language, normalize_language
+from cnequity.meta_layout import SCHEDULER_SETTINGS, WEB_SCHEDULER
 from cnequity.ops.catalog import OpsError, config_file
 from cnequity.ops.records import atomic_write, read_record
 from cnequity.ops.scheduler_backend import SchedulerBackend
@@ -23,13 +24,11 @@ from cnequity.storage.atomic import replace_with_retry
 
 
 def state_dir(config) -> Path:
-    from cnequity.meta_layout import WEB_SCHEDULER
-
     return Path(config.meta_root) / WEB_SCHEDULER
 
 
 def settings(config) -> dict:
-    path = state_dir(config) / "settings.json"
+    path = config.meta_root / SCHEDULER_SETTINGS
     if not path.exists():
         return {"daily": False, "stale": False}
     value = read_record(path)
@@ -80,7 +79,7 @@ def settings(config) -> dict:
 
 
 def _settings_bytes(config) -> bytes:
-    path = state_dir(config) / "settings.json"
+    path = config.meta_root / SCHEDULER_SETTINGS
     return path.read_bytes() if path.exists() else b""
 
 
@@ -166,7 +165,7 @@ class ScheduleService:
             )
         return config
 
-    def home(self) -> dict:
+    def home(self, *, include_backup_choices: bool = True) -> dict:
         from cnequity.ops.backups import stored_datasets
 
         # Show what the timer will actually load, including external edits.
@@ -198,7 +197,7 @@ class ScheduleService:
             "backup": bool(state.get("backup")),
             "backup_run_at": state.get("backup_run_at", "23:00"),
             "backup_datasets": state.get("backup_datasets", []),
-            "backup_choices": stored_datasets(config),
+            "backup_choices": stored_datasets(config) if include_backup_choices else [],
             "backup_root": state.get("backup_root") or str(Path(config.meta_root) / "snapshots"),
             "events": bool(state.get("events")),
             "events_group": state.get("events_group"),
@@ -416,7 +415,7 @@ class ScheduleService:
                     "backup": False,
                     "events": False,
                 }
-                destination = state_dir(self.config) / "settings.json"
+                destination = self.config.meta_root / SCHEDULER_SETTINGS
                 # Fail closed before unregistering/reloading a timer. A failed
                 # OS command must never leave background ingestion enabled.
                 atomic_write(destination, state)

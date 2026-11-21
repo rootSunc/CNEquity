@@ -20,6 +20,7 @@ from cnequity.domain.rate_limit import (
     _read_json,
     _safe_source_name,
 )
+from cnequity.domain.source_routes import source_route_enabled
 from cnequity.sqlite_readonly import connect_readonly
 
 
@@ -207,15 +208,8 @@ def build_source_limits(config) -> dict:
     for family in families:
         aliases = sorted(name for name in names if source_family(name) == family)
         sources[family] = {
-            "enabled": any(config.sources.get(name, True) for name in aliases)
-            and config.sources.get(family, True)
-            and (not family.startswith("eastmoney") or config.sources.get("eastmoney", True))
-            and (
-                not family.startswith("futures_exchange_")
-                or config.sources.get("futures_exchange", True)
-            )
-            and (family != "tdx_protocol" or config.tdx_enabled),
-            "alias_enabled": {name: config.sources.get(name, True) for name in aliases},
+            "enabled": any(source_route_enabled(config, name) for name in aliases),
+            "alias_enabled": {name: source_route_enabled(config, name) for name in aliases},
             **effective_source_policy(config, family, set(aliases)),
             **cooldown_status(config.rate_limit_root, family),
             "metered_attempts_today": _metered_attempts_today(config, family),

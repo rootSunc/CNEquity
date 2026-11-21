@@ -11,16 +11,32 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+from cnequity.config.resources import resources_for
+from cnequity.config.retention import revision_keep
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
+from cnequity.meta_layout import LAKE_DIR
+from cnequity.storage.revision_records import (
+    HISTORY_TABLE,
+    RECEIPT_COLUMNS,
+    SYNC_TABLE,
+    receipt_columns,
+)
 from cnequity.storage.revisions import RevisionStore
-from equitylake_core.catalog import Catalog, ImportResult, quote_identifier, quote_literal
-
-LAKE_DIR = "lake"
+from equitylake_core.catalog import (
+    ALIAS,
+    REVISIONS_TABLE,
+    Catalog,
+    ImportResult,
+    quote_identifier,
+    quote_literal,
+)
+from equitylake_core.lock import LockTimeout, lake_files, lake_read, snapshot_lock
 
 
 @dataclass(frozen=True)
@@ -91,8 +107,6 @@ def compare_dataset(config, catalog: Catalog, dataset: str) -> Comparison | None
 
 # --- keeping the catalog in step with the revision store ---------------------------
 
-SYNC_TABLE = "_sync_state"
-
 
 @dataclass(frozen=True)
 class SyncResult:
@@ -143,7 +157,7 @@ def prepare_record_tables(catalog: Catalog) -> None:
         # The columns a reader looks a revision up by; a publish adds the rest.
         (
             REVISIONS_TABLE,
-            "dataset VARCHAR, revision BIGINT, revision_id VARCHAR, unique_keys BOOLEAN",
+            "dataset VARCHAR, revision_id VARCHAR, unique_keys BOOLEAN",
         ),
     ):
         if not catalog.has_table(table):
@@ -474,7 +488,7 @@ def _listed_files(catalog: Catalog, dataset: str) -> list[str]:
     return [
         row[0]
         for row in catalog.execute(
-            "SELECT data_file FROM ducklake_list_files('lake', ?)", [dataset]
+            f"SELECT data_file FROM ducklake_list_files('{ALIAS}', ?)", [dataset]
         ).fetchall()
     ]
 
@@ -581,44 +595,6 @@ def _register(
         for path in placed:
             path.unlink(missing_ok=True)
         raise
-
-
-HISTORY_TABLE = "_revision_history"
-#: One row per revision published into the catalog, written in the snapshot that
-#: holds its rows. The catalog stamps every row with the snapshot that wrote it
-#: (the ``snapshot_id`` virtual column), so the row is also the revision's
-#: history entry: there is nothing to record afterwards, and nothing to lose.
-REVISIONS_TABLE = "_revisions"
-
-
-#: What a revision's receipt records. A ``_revisions`` row carries these columns,
-#: and so does a history row: a revision synced in from a generation, or one
-#: imported from the receipts a lake kept before (``snapshot`` empty when the
-#: catalog no longer holds it).
-RECEIPT_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("revision", "BIGINT"),
-    ("run_id", "VARCHAR"),
-    ("committed_at", "VARCHAR"),
-    ("schema_version", "BIGINT"),
-    ("contract_fingerprint", "VARCHAR"),
-    ("content_digest", "VARCHAR"),
-    ("changed_partitions", "VARCHAR"),
-    ("metadata", "VARCHAR"),
-)
-
-
-def receipt_columns(receipt: dict) -> dict[str, object]:
-    """The :data:`RECEIPT_COLUMNS` of a receipt (a ``DatasetRevision.to_dict()``)."""
-    return {
-        "revision": receipt["revision"],
-        "run_id": receipt.get("run_id"),
-        "committed_at": receipt.get("committed_at"),
-        "schema_version": receipt.get("schema_version"),
-        "contract_fingerprint": receipt.get("contract_fingerprint"),
-        "content_digest": receipt.get("content_digest"),
-        "changed_partitions": json.dumps(list(receipt.get("changed_partitions") or ())),
-        "metadata": json.dumps(receipt.get("metadata") or {}, sort_keys=True, default=str),
-    }
 
 
 def _ensure_history_table(catalog: Catalog) -> None:
@@ -870,7 +846,11 @@ def export_dataset(
     target = Path(destination) / dataset
     if target.exists() and any(target.iterdir()):
         raise ExportRefused(f"{target} is not empty")
-    with Catalog(root, read_only=True, memory_limit="4GB") as catalog:
+    with (
+        lake_read(root),
+        Catalog(root, read_only=True, **resources_for(config, "export").options()) as catalog,
+        catalog.transaction(),
+    ):
         if not catalog_is_current(config, catalog, dataset):
             raise ExportRefused(
                 f"the lake catalog does not hold the published revision of {dataset}; "
@@ -892,15 +872,14 @@ def export_dataset(
             if end is not None:
                 clauses.append(f"CAST({name} AS DATE) <= DATE {quote_literal(str(end))}")
         revision = synced_revision(catalog, dataset)
-        with catalog.transaction():
-            # One snapshot for the count and the copy.
-            rows = catalog.export_parquet(
-                dataset,
-                target,
-                partition_by=column if dated else None,
-                where=" AND ".join(clauses) or None,
-            )
-            snapshot = catalog.snapshot()
+        # One snapshot for the revision identity, schema, count and copy.
+        rows = catalog.export_parquet(
+            dataset,
+            target,
+            partition_by=column if dated else None,
+            where=" AND ".join(clauses) or None,
+        )
+        snapshot = catalog.snapshot()
     files = sorted(target.rglob("*.parquet"))
     return {
         "dataset": dataset,
@@ -926,6 +905,7 @@ class RetentionResult:
     snapshots_expired: int
     files_deleted: int
     applied: bool
+    active_readers: bool = False
 
 
 def retained_snapshots(catalog: Catalog, *, keep: int, held: set[str]) -> set[int]:
@@ -968,30 +948,51 @@ def apply_retention(
     through ``pytz`` (not a dependency), so the rows are dropped unread and the
     effect is counted from the files in the lake before and after.
     """
-    keep_ids = retained_snapshots(catalog, keep=keep, held=held)
+    keep = revision_keep(None, keep)
     every = {
         int(row[0])
-        for row in catalog.execute("SELECT snapshot_id FROM ducklake_snapshots('lake')").fetchall()
+        for row in catalog.execute(
+            f"SELECT snapshot_id FROM ducklake_snapshots('{ALIAS}')"
+        ).fetchall()
     }
+    if keep == 0:
+        return RetentionResult(len(every), 0, 0, False)
+    keep_ids = retained_snapshots(catalog, keep=keep, held=held)
     expire = sorted(every - keep_ids)
     if not apply:
         return RetentionResult(len(every & keep_ids), len(expire), 0, False)
-    if expire:
-        versions = "[" + ", ".join(str(snapshot) for snapshot in expire) + "]"
-        catalog.execute(f"CALL ducklake_expire_snapshots('lake', versions => {versions})")
-        catalog.con.abort()
-    remaining = catalog.execute("SELECT count(*) FROM ducklake_snapshots('lake')").fetchone()[0]
     if catalog.borrows_data:
         raise RuntimeError("a copy of a lake's catalog never deletes the lake's files")
-    data = catalog.data_root
-    before = sum(1 for _ in data.rglob("*.parquet"))
-    catalog.execute(
-        "CALL ducklake_cleanup_old_files('lake', "
-        f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
+    with ExitStack() as locks:
+        try:
+            locks.enter_context(lake_files(catalog.root, shared=False, timeout=0))
+        except LockTimeout:
+            return RetentionResult(len(every), 0, 0, False, active_readers=True)
+        can_expire = []
+        for snapshot in expire:
+            try:
+                locks.enter_context(snapshot_lock(catalog.root, snapshot, shared=False, timeout=0))
+            except LockTimeout:
+                continue
+            can_expire.append(snapshot)
+        if can_expire:
+            versions = "[" + ", ".join(map(str, can_expire)) + "]"
+            catalog.execute(f"CALL ducklake_expire_snapshots('{ALIAS}', versions => {versions})")
+            catalog.con.abort()
+        remaining = int(
+            catalog.execute(f"SELECT count(*) FROM ducklake_snapshots('{ALIAS}')").fetchone()[0]
+        )
+        data = catalog.data_root
+        before = sum(1 for _ in data.rglob("*.parquet"))
+        catalog.execute(
+            f"CALL ducklake_cleanup_old_files('{ALIAS}', "
+            f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
+        )
+        catalog.con.abort()
+        after = sum(1 for _ in data.rglob("*.parquet"))
+    return RetentionResult(
+        remaining, len(every) - remaining, before - after, True, len(can_expire) < len(expire)
     )
-    catalog.con.abort()
-    after = sum(1 for _ in data.rglob("*.parquet"))
-    return RetentionResult(len(every & keep_ids), len(every) - int(remaining), before - after, True)
 
 
 def delete_orphans(catalog: Catalog, *, grace_hours: int = FILE_GRACE_HOURS) -> int:
@@ -1013,7 +1014,7 @@ def delete_orphans(catalog: Catalog, *, grace_hours: int = FILE_GRACE_HOURS) -> 
     data = catalog.data_root
     before = sum(1 for _ in data.rglob("*.parquet"))
     catalog.execute(
-        "CALL ducklake_delete_orphaned_files('lake', "
+        f"CALL ducklake_delete_orphaned_files('{ALIAS}', "
         f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
     )
     catalog.con.abort()
@@ -1032,22 +1033,36 @@ def catalog_retention(config, *, apply: bool) -> dict | None:
     root = lake_root(config)
     if not (root / CATALOG_FILE).exists():
         return None
-    keep = getattr(config, "revision_keep_generations", 5)
-    keep = keep if isinstance(keep, int) and not isinstance(keep, bool) and keep >= 1 else 5
-    registry = LifecycleStore(config.meta_root).registry() or {}
-    held = set(registry.get("holds") or {})
+    keep = revision_keep(config)
+    apply = apply and keep > 0
     from cnequity.file_lock import lake_mutation_lock
 
     orphans = 0
     # Expiring snapshots and deleting files change the lake: the whole of it
     # runs under the lake lock, as a writable catalog connection must.
-    with lake_mutation_lock(config.meta_root, blocking=True), Catalog(root) as catalog:
-        result = apply_retention(catalog, keep=keep, held=held, apply=apply)
-        switched = RevisionStore(
-            config.meta_root, config.curated_root, config.derived_root, create=False
-        ).publishes_to_catalog()
-        if apply and switched:
-            orphans = delete_orphans(catalog)
+    lock = lake_mutation_lock(config.meta_root, blocking=True) if apply else nullcontext()
+    with lock:
+        registry = (
+            LifecycleStore(config.meta_root).retention_registry(refresh=apply) if keep else None
+        )
+        held = set(registry["holds"]) if registry else set()
+        with Catalog(
+            root,
+            read_only=not apply,
+            **resources_for(config, "maintenance").options(scratch=root / "tmp"),
+        ) as catalog:
+            result = apply_retention(catalog, keep=keep, held=held, apply=apply)
+            switched = RevisionStore(
+                config.meta_root, config.curated_root, config.derived_root, create=False
+            ).publishes_to_catalog()
+            if result.applied and switched:
+                with ExitStack() as readers:
+                    try:
+                        readers.enter_context(lake_files(root, shared=False, timeout=0))
+                    except LockTimeout:
+                        pass  # A shared reader or rehearsal started after the expiry pass.
+                    else:
+                        orphans = delete_orphans(catalog)
     return {
         "keep_revisions": keep,
         "snapshots_kept": result.snapshots_kept,
@@ -1055,5 +1070,6 @@ def catalog_retention(config, *, apply: bool) -> dict | None:
         "files_deleted": result.files_deleted,
         "orphans_deleted": orphans,
         "applied": result.applied,
+        "active_readers": result.active_readers,
         "file_grace_hours": FILE_GRACE_HOURS,
     }

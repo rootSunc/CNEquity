@@ -9,7 +9,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from cnequity.config import Config
-from cnequity.file_lock import exclusive_lock, lake_mutation_lock
+from cnequity.file_lock import exclusive_lock, lake_lock_root, lake_mutation_lock
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.storage.atomic import replace_with_retry, write_json_atomic
 from cnequity.storage.lifecycle import (
@@ -27,6 +27,7 @@ from cnequity.storage.staging_cleanup import (
     run_ready_for_staging_cleanup,
     staging_run_paths,
 )
+from equitylake_core.lock import lake_maintenance
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,11 @@ class StagingRetirement:
         plan = self.read_plan(plan_id)
         event_path = self.store.root / "staging-purges" / f"{plan_id}.json"
         _reject_symlink_path(event_path)
-        with lake_mutation_lock(self.store.meta, blocking=False), ExitStack() as locks:
+        with (
+            lake_maintenance(lake_lock_root(self.store.meta)),
+            lake_mutation_lock(self.store.meta, blocking=False),
+            ExitStack() as locks,
+        ):
             check_idle(self.config.manifest_path)
             registry = self.store.registry()
             planned_lake = plan.get("lake_id")

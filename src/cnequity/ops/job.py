@@ -25,6 +25,7 @@ from cnequity.ops.preflight import engine_blockers, mark_due_daily_session, sche
 from cnequity.ops.records import read_record, update_record
 from cnequity.orchestrator.scheduler_lock import SchedulerLockError, lock_directory, scheduler_lock
 from cnequity.sqlite_readonly import connect_readonly
+from cnequity.terminal_log import configured_log_secrets, redact_log_text
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -43,6 +44,8 @@ def _load_config(record: dict):
 
 
 def _reject(path: Path, message: str) -> None:
+    message = redact_log_text(message, configured_log_secrets())
+    print(message, file=sys.stderr, flush=True)
     update_record(
         path,
         state="rejected",
@@ -326,7 +329,7 @@ def _result(
     }
 
 
-def _run(argv: list[str]) -> tuple[int | None, str | None, str]:
+def _run(argv: list[str], *, config=None) -> tuple[int | None, str | None, str]:
     """``(exit_code, forced_state, message)``. A forced state skips classification."""
     import click
 
@@ -335,8 +338,9 @@ def _run(argv: list[str]) -> tuple[int | None, str | None, str]:
     except (KeyboardInterrupt, click.Abort):
         return None, "interrupted", _("Cancelled.")
     except click.ClickException as exc:
-        exc.show()
-        return None, "error", exc.format_message()
+        message = redact_log_text(exc.format_message(), configured_log_secrets(config))
+        print(message, file=sys.stderr, flush=True)
+        return None, "error", message
     except SystemExit as exc:
         code = exc.code
         if code is None or code == 0:
@@ -345,8 +349,9 @@ def _run(argv: list[str]) -> tuple[int | None, str | None, str]:
             return code, None, ""
         return 1, "error", str(code)
     except Exception as exc:  # noqa: BLE001 — the record has to outlive the traceback
-        traceback.print_exc()
-        return None, "error", f"{type(exc).__name__}: {exc}"
+        secrets = configured_log_secrets(config)
+        print(redact_log_text(traceback.format_exc(), secrets), file=sys.stderr, end="", flush=True)
+        return None, "error", redact_log_text(f"{type(exc).__name__}: {exc}", secrets)
 
 
 def execute(path: Path) -> None:
@@ -358,6 +363,10 @@ def execute(path: Path) -> None:
         return
     try:
         config = _load_config(record)
+        if config is not None:
+            from cnequity.config.provenance import run_configuration
+
+            update_record(path, effective_config=run_configuration(config))
     except Exception as exc:  # noqa: BLE001 — a bad config must become a record
         _finish(
             path,
@@ -367,7 +376,11 @@ def execute(path: Path) -> None:
             result={},
         )
         return
-    print(_("Running: {value}").format(value=record.get("command")), file=sys.stderr, flush=True)
+    print(
+        _("Running: {value}").format(value=record["op"]),
+        file=sys.stderr,
+        flush=True,
+    )
     with ExitStack() as stack:
         try:
             stack.enter_context(exclusive_lock(slot, blocking=False))
@@ -441,7 +454,7 @@ def execute(path: Path) -> None:
         result_path = path.with_suffix(".result")
         result_path.unlink(missing_ok=True)
         os.environ["CNE_RESULT_PATH"] = str(result_path)
-        exit_code, forced, message = _run(record["argv"])
+        exit_code, forced, message = _run(record["argv"], config=config)
         runs = launch_runs(config, record["job_id"], record.get("target_run_id"))
         stdout = _read_log((record.get("logs") or {}).get("out"))
         payload = read_result(result_path)
@@ -472,7 +485,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         execute(path)
     except Exception:
-        traceback.print_exc()
+        print(
+            redact_log_text(traceback.format_exc(), configured_log_secrets()),
+            file=sys.stderr,
+            end="",
+            flush=True,
+        )
         try:
             _finish(
                 path,

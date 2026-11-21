@@ -12,7 +12,7 @@ import logging
 import secrets
 from datetime import date, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -103,6 +103,21 @@ class Health(BaseModel):
     stats_stale: bool
     stats_reason: str | None
     stats_generated_at: datetime | None
+
+
+class BarCoverage(BaseModel):
+    dataset: str
+    counts: dict[str, int] | None = Field(description="Planner counts, or null without owed cells.")
+    gap_days: int
+    first_gap: date | None
+    last_gap: date | None
+
+
+class RecentBarCoverage(BaseModel):
+    status: Literal["planned", "unavailable", "sample"]
+    start: date
+    end: date
+    datasets: list[BarCoverage]
 
 
 class ReadReceiptPage(BaseModel):
@@ -730,11 +745,13 @@ def create_app(
 
     @app.get("/api/health", response_model=Health)
     def health(view: View) -> Health:
-        # The overview page loads this first, so it is where the cache gets its
-        # chance to notice the lake moved. A partial refresh usually finishes
-        # within the wait; a long one carries on and the page says so.
-        view.refresh_stats_in_background(wait=3.0)
+        # Show the last available statistics while a rebuild is in flight.
+        view.refresh_stats_in_background()
         return Health(**view.health())
+
+    @app.get("/api/coverage/recent", response_model=RecentBarCoverage)
+    def recent_bar_coverage(view: View) -> RecentBarCoverage:
+        return RecentBarCoverage(**view.recent_bar_coverage())
 
     @app.get("/api/tiers", response_model=list[Tier])
     def tiers(view: View) -> list[Tier]:

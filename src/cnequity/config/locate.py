@@ -27,6 +27,13 @@ from pathlib import Path
 
 #: Project-local config, relative to the working directory.
 PROJECT_CONFIG = Path("configs") / "cnequity.toml"
+CONFIG_ENV_VAR = "CNE_CONFIG"
+
+
+def config_from_environment() -> Path | None:
+    """The config named by the process, with normal home-directory expansion."""
+    value = os.environ.get(CONFIG_ENV_VAR)
+    return Path(value).expanduser() if value else None
 
 
 def user_config_path() -> Path:

@@ -2,9 +2,8 @@
 
 Every value here comes from something already on disk — the registry, the
 directory layout, ``meta/stats``, ``meta/quality/health-latest.json``, the
-manifest. **Nothing in this module scans curated.** A request that reads parquet
-is a request that gets slower as the lake grows, which is the failure mode the
-stats tables exist to prevent.
+manifest. Summary requests use measured stats; detail and coverage views
+can also read a bounded range of published rows.
 
 Two things this deliberately does *not* do:
 
@@ -172,6 +171,7 @@ class LakeView:
         self._lock = threading.Lock()
         self._cache: dict[str, _Cached] = {}
         self._inflight: dict[str, threading.Event] = {}
+        self._cache_generation = 0
         self._session_days_cache: dict[str, tuple[object, frozenset[date]]] = {}
         self._refresh_lock = threading.Lock()
         self._refreshing = False
@@ -192,6 +192,7 @@ class LakeView:
                 event = threading.Event()
                 self._inflight[key] = event
                 leader = True
+                generation = self._cache_generation
             else:
                 leader = False
         if not leader:
@@ -212,13 +213,15 @@ class LakeView:
             event.set()
             raise
         with self._lock:
-            self._cache[key] = _Cached(value, time.monotonic())
+            if generation == self._cache_generation:
+                self._cache[key] = _Cached(value, time.monotonic())
             self._inflight.pop(key, None)
         event.set()
         return value
 
     def invalidate(self) -> None:
         with self._lock:
+            self._cache_generation += 1
             self._cache.clear()
 
     # --- background stats refresh -----------------------------------------
@@ -282,6 +285,49 @@ class LakeView:
         """Last trading day, the date freshness is judged against (``current_anchor``)."""
         return self._cached("anchor", lambda: current_anchor(self.config))
 
+    def recent_bar_coverage(self) -> dict:
+        """Summarize the same recent coverage window that drives bar catch-up."""
+        from cnequity.domain.datasets import is_dataset_enabled
+        from cnequity.quality.planned_coverage import SYNC_DAYS, ledger, planned
+        from cnequity.query.reader import read_scope
+        from cnequity.storage.catalog_bridge import lake_root
+        from cnequity.storage.revision_records import enabled
+        from equitylake_core.catalog import CATALOG_FILE
+        from equitylake_core.plan import Scope
+
+        def _build() -> dict:
+            end = self.anchor()
+            start = end - timedelta(days=SYNC_DAYS)
+            result: dict[str, Any] = {"start": start, "end": end, "datasets": []}
+            if self.config.lake_profile in {"demo", "sample"}:
+                return {**result, "status": "sample"}
+            if not (lake_root(self.config) / CATALOG_FILE).is_file() or not enabled(
+                self.config.meta_root
+            ):
+                return {**result, "status": "unavailable"}
+            names = [
+                name
+                for name in ("daily_bars", "index_bars")
+                if is_dataset_enabled(name, self.config)
+            ]
+            with read_scope(config=self.config), ledger(self.config) as catalog:
+                plan = planned(self.config, catalog, Scope(start, end), names)
+            for name in names:
+                dataset = plan[name]
+                periods = dataset.cells.filter(pl.col("state") == "gap")["period"]
+                result["datasets"].append(
+                    {
+                        "dataset": name,
+                        "counts": dataset.counts() if not dataset.cells.is_empty() else None,
+                        "gap_days": periods.n_unique(),
+                        "first_gap": periods.min(),
+                        "last_gap": periods.max(),
+                    }
+                )
+            return {**result, "status": "planned"}
+
+        return self._cached("bar-coverage", _build)
+
     def _catalog(self) -> pl.DataFrame:
         """``list_datasets()`` joined with the measured rows and bytes."""
 
@@ -326,6 +372,9 @@ class LakeView:
 
     def _rows(self) -> list[dict]:
         """One enriched dict per registered dataset."""
+        return self._cached("dataset-rows", self._build_rows)
+
+    def _build_rows(self) -> list[dict]:
         anchor = self.anchor()
         out = []
         for row in self._catalog().iter_rows(named=True):
@@ -502,20 +551,25 @@ class LakeView:
             self.config.derived_root,
             create=False,
         ).current_pointer(spec.name)
-        key = (pointer or {}).get("revision_id") or (
-            root.stat().st_mtime_ns if root.exists() else None
-        )
+        revision = (pointer or {}).get("revision_id")
+        key = revision or (root.stat().st_mtime_ns if root.exists() else None)
         with self._lock:
             hit = self._session_days_cache.get(spec.name)
         if hit is not None and hit[0] == key:
             return hit[1]
-        if not dataset_has_parquet(root):
+        if not dataset_has_parquet(
+            root, dataset=spec.name, meta_root=self.config.meta_root, revision=revision
+        ):
             days: frozenset[date] = frozenset()
         else:
             column = spec.partition_col
             frame = (
                 scan_parquet_root(
-                    root, partition_col=column, dataset=spec.name, meta_root=self.config.meta_root
+                    root,
+                    partition_col=column,
+                    dataset=spec.name,
+                    meta_root=self.config.meta_root,
+                    revision=revision,
                 )
                 .select(column)
                 .unique()
@@ -534,7 +588,7 @@ class LakeView:
         and reporting it that way would drown the real gaps.
         """
         dated = [p for p in parts if p["period_start"] is not None]
-        if len(dated) < 2:
+        if not dated:
             return {"missing": [], "total": 0, "unit": spec.partition_granularity}
 
         present = {p["partition"] for p in dated}
@@ -542,9 +596,12 @@ class LakeView:
         missing: list[str] = []
         session_days = self._session_days(spec)
         if session_days is not None:
+            if len(session_days) < 2:
+                return {"missing": [], "total": 0, "unit": "day"}
             present = {day.isoformat() for day in session_days}
-            if session_days:
-                first, last = min(session_days), max(session_days)
+            first, last = min(session_days), max(session_days)
+        elif len(dated) < 2:
+            return {"missing": [], "total": 0, "unit": spec.partition_granularity}
 
         if spec.partition_granularity == "day" or session_days is not None:
             # Only sessions count as missing; a weekend is not a gap.

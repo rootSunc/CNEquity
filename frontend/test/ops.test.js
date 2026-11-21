@@ -29,7 +29,7 @@ function page(t) {
 test("a completed job replays both log streams before closing them", async (t) => {
   const ctx = page(t);
   ctx.jobId = "finished-job";
-  ctx.api = async (path) => path === "/api/ops"
+  ctx.api = async (path) => path.startsWith("/api/ops/status")
     ? { csrf_token: "csrf" }
     : { state: "complete", title: "新鲜度", runs: [] };
   await renderOps(ctx);
@@ -52,7 +52,7 @@ for (const failure of ["invalid preview", "busy preview", "lost setup response"]
     let previews = 0;
     let launched;
     ctx.api = async (path, options) => {
-      if (path === "/api/ops") return { mode: { setup: !configured }, csrf_token: "csrf" };
+      if (path.startsWith("/api/ops/status")) return { mode: { setup: !configured }, csrf_token: "csrf" };
       if (path === "/api/setup/config") {
         creates++;
         assert.equal(configured, false, "config must be created only once");
@@ -105,7 +105,7 @@ test("an existing lake pauses on the takeover note before showing the command", 
   let launched;
   const hint = "这个目录里已经有数据湖，生成配置后会接管它，不会清空。";
   ctx.api = async (path, options) => {
-    if (path === "/api/ops") return { mode: { setup: creates === 0 }, csrf_token: "csrf" };
+    if (path.startsWith("/api/ops/status")) return { mode: { setup: creates === 0 }, csrf_token: "csrf" };
     if (path === "/api/setup/config") {
       creates += 1;
       return { hint };
@@ -147,7 +147,7 @@ test("changing init parameters requires a new command preview", async (t) => {
   const previews = [];
   let launched;
   ctx.api = async (path, options) => {
-    if (path === "/api/ops") return { mode: { setup: !configured }, csrf_token: "csrf" };
+    if (path.startsWith("/api/ops/status")) return { mode: { setup: !configured }, csrf_token: "csrf" };
     if (path === "/api/setup/config") {
       configured = true;
       return {};
@@ -181,7 +181,7 @@ test("environment check holds initialization until it finishes", async (t) => {
   const ctx = page(t);
   let polls = 0;
   ctx.api = async (path) => {
-    if (path === "/api/ops") return { mode: { setup: true }, csrf_token: "csrf" };
+    if (path.startsWith("/api/ops/status")) return { mode: { setup: true }, csrf_token: "csrf" };
     if (path === "/api/ops/preview") return { preview_id: "preview", launch_token: "launch" };
     if (path === "/api/ops/jobs") return { job_id: "doc", state: "running" };
     if (path === "/api/ops/jobs/doc") {
@@ -207,7 +207,7 @@ test("environment check holds initialization until it finishes", async (t) => {
 test("environment findings keep initialization blocked", async (t) => {
   const ctx = page(t);
   ctx.api = async (path) => {
-    if (path === "/api/ops") return { mode: { setup: true }, csrf_token: "csrf" };
+    if (path.startsWith("/api/ops/status")) return { mode: { setup: true }, csrf_token: "csrf" };
     if (path === "/api/ops/preview") return { preview_id: "preview", launch_token: "launch" };
     if (path === "/api/ops/jobs") {
       return {
@@ -310,9 +310,9 @@ function capture(ctx) {
 
 function consoleApi(home, jobs = []) {
   return async (path) => {
-    if (path === "/api/ops") return home;
+    if (path.startsWith("/api/ops/status")) return home;
     if (path.startsWith("/api/ops/jobs?") || path === "/api/ops/jobs") return jobs;
-    if (path === "/api/ops/schedule") return scheduleState();
+    if (path === "/api/ops/schedule" || path === "/api/ops/schedule?summary=true") return scheduleState();
     if (path === "/api/ops/settings") return { note: "保存设置不会启动取数。", sections: [], push2_env_paused: false, push2_env_note: null };
     if (path.startsWith("/api/ops/backups")) return { root: "/isolated/backups", snapshots: [] };
     throw new Error(path);
@@ -348,7 +348,7 @@ test("ops status names the pending session and links an unfinished init", async 
   });
   await renderOps(ctx);
   const pageHtml = html();
-  assert.match(pageHtml, /2026-09-30 的定时日更（17:30）已到点，还没跑。/);
+  assert.match(pageHtml, /待跑 2026-09-30<\/strong><p>北京时间 17:30/);
   assert.match(pageHtml, /op=init.resume&run_id=run%2F1/);
   assert.match(pageHtml, /初始化数据湖/);
   const initAt = pageHtml.indexOf('data-op="init.start"');
@@ -374,7 +374,7 @@ test("a finished scheduled session names that trade date", async (t) => {
     },
   });
   await renderOps(ctx);
-  assert.match(html(), /2026-09-30 的定时日更（17:30）已经跑过。/);
+  assert.match(html(), /2026-09-30 已跑过<\/strong><p>北京时间 17:30/);
   assert.doesNotMatch(html(), /ops-secondary/);
   assert.doesNotMatch(html(), /没有需要先处理的占用/);
   assert.doesNotMatch(html(), /ops-side/);
@@ -386,7 +386,7 @@ test("a finished scheduled session names that trade date", async (t) => {
   assert.match(html(), /id="ops-tab-today"/);
   assert.match(html(), /id="ops-form" hidden/);
   assert.match(html(), /id="ops-commands-fold"/);
-  assert.match(html(), /初始化已完成/);
+  assert.doesNotMatch(html(), /id="ops-init"/);
 });
 
 test("a closed session does not offer run today, and a pending one names that date", async (t) => {
@@ -418,10 +418,9 @@ test("a closed session does not offer run today, and a pending one names that da
     return pageHtml.slice(pageHtml.indexOf('id="ops-daily"'), pageHtml.indexOf('id="ops-timeline"'));
   };
   await renderOps(ctx);
-  // The session sentence lives on the status card only, not again above the buttons.
+  // The status card keeps both the last scheduled day and today's market status.
   const card = () => html().slice(html().indexOf('id="ops-status-session"'), html().indexOf('id="ops-status-scheduler"'));
-  assert.match(card(), /今天 2026-10-05 不是交易日。/);
-  assert.match(card(), /2026-09-30 的定时日更（17:30）已经跑过。/);
+  assert.match(card(), /2026-09-30 已跑过<\/strong><p>今日休市 · 北京时间 17:30/);
   assert.doesNotMatch(daily(), /已经跑过/);
   assert.doesNotMatch(daily(), /data-op="daily.full"/);
   assert.match(daily(), /今天不是交易日，所以没有“现在跑今天”。/);
@@ -564,7 +563,7 @@ test("a live job shows batch progress from the run stream", async (t) => {
     ],
   };
   ctx.api = async (path) => {
-    if (path === "/api/ops") return { csrf_token: "csrf" };
+    if (path.startsWith("/api/ops/status")) return { csrf_token: "csrf" };
     if (path === "/api/runs/run-1") return detail;
     if (path === "/api/ops/jobs/job-live") return job;
     throw new Error(path);
@@ -594,7 +593,7 @@ test("a finished job offers the next step for that command", async (t) => {
     runs: [{ run_id: "run-9", job_name: "daily", status: "failed" }],
   };
   ctx.jobId = "job-1";
-  ctx.api = async (path) => (path === "/api/ops" ? { csrf_token: "csrf" } : job);
+  ctx.api = async (path) => (path.startsWith("/api/ops/status") ? { csrf_token: "csrf" } : job);
   await renderOps(ctx);
   assert.match(html(), /重试这次 run/);
   assert.match(html(), /run_id=run-9/);
@@ -833,17 +832,57 @@ test("backup inventory only reads and links to job previews", async (t) => {
   assert.doesNotMatch(ctx.node("ops-backups").innerHTML, /op=snapshot.restore/);
 });
 
-test("the today panel draws stale datasets, the daily matrix and today's timeline", async (t) => {
+test("a form resolves its choices after opening and ignores a reply after closing", async (t) => {
   const ctx = page(t);
+  const full = {
+    id: "backfill.run", title: "回填", available: true,
+    params: [{ name: "dataset", kind: "choice", label: "数据集", choices: ["daily_bars"], required: true }],
+  };
+  const base = consoleApi({
+    csrf_token: "csrf",
+    mode: { ops_enabled: false },
+    operations: [{ ...full, choices_deferred: true }],
+    occupancy: { hints: [], lake_empty: false, schedule: {} },
+  });
+  let finishChoices;
+  ctx.api = (path) => path === "/api/ops/operations/backfill.run"
+    ? new Promise((resolve) => { finishChoices = resolve; })
+    : base(path);
+  await renderOps(ctx);
+  assert.equal(finishChoices, undefined);
+
+  globalThis.location.hash = "#/ops?op=backfill.run&dataset=daily_bars";
+  const opened = renderOps(ctx);
+  await new Promise(setImmediate);
+  assert.match(ctx.node("ops-form").innerHTML, /正在读取可选项/);
+  finishChoices(full);
+  await opened;
+  assert.match(ctx.node("ops-form").innerHTML, /value="daily_bars" selected/);
+
+  const reopened = renderOps(ctx);
+  await new Promise(setImmediate);
+  ctx.node("ops-drawer-close").onclick();
+  finishChoices(full);
+  await reopened;
+  assert.equal(ctx.node("ops-form").innerHTML, "");
+});
+
+test("the today panel shows gaps, freshness, and run history with one schedule read", async (t) => {
+  const ctx = page(t);
+  const html = capture(ctx);
   const base = consoleApi({
     csrf_token: "csrf",
     mode: { ops_enabled: true, label: "可发起取数" },
     operations: [{ id: "backfill.run", title: "回填一个数据集", summary: "回填", available: true, params: [] }],
-    occupancy: { hints: [], lake_empty: false, schedule: { daily_run_at: "17:30" }, sources: { push2_paused: true, breakers: [] } },
+    occupancy: { hints: [], lake_empty: false, lake_write_locked: true, schedule: { daily_run_at: "17:30" }, sources: { push2_paused: true, breakers: [] } },
   });
   const asked = [];
   ctx.api = async (path) => {
     asked.push(path);
+    if (path === "/api/coverage/recent") return {
+      status: "planned", start: "2026-10-01", end: "2026-11-06",
+      datasets: [{ dataset: "daily_bars", counts: { gap: 1 }, first_gap: "2026-11-04", last_gap: "2026-11-04" }],
+    };
     if (path === "/api/health") return { anchor: "2026-11-06", stale_datasets: ["valuation_metrics"] };
     if (path === "/api/datasets") return [{ dataset: "valuation_metrics", history_mode: "by_date", watermark: "2026-11-03" }];
     if (path.startsWith("/api/runs/daily-matrix")) {
@@ -855,9 +894,24 @@ test("the today panel draws stale datasets, the daily matrix and today's timelin
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.ok(asked.some((path) => /^\/api\/ops\/jobs\?limit=500&since=/.test(path)), "today's jobs are asked by time, not by count");
   assert.ok(asked.includes("/api/ops/jobs?limit=50&exclude_op=events.run"));
+  assert.equal(asked.filter((path) => path === "/api/ops/schedule?summary=true").length, 1);
+  assert.ok(!asked.includes("/api/ops/schedule"));
+  assert.ok(!asked.includes("/api/ops/settings"));
+  assert.ok(!asked.some((path) => path.startsWith("/api/ops/backups")));
+  assert.match(html(), /湖写锁占用/);
+  assert.doesNotMatch(html(), /可以启动下一条命令/);
+  assert.match(ctx.node("ops-coverage-body").innerHTML, /start=2026-11-04&amp;end=2026-11-04/);
   assert.match(ctx.node("ops-stale-body").innerHTML, /落后 3 天/);
   assert.match(ctx.node("ops-stale-body").innerHTML, /op=backfill.run&amp;dataset=valuation_metrics|op=backfill.run&dataset=valuation_metrics/);
   assert.match(ctx.node("ops-matrix-body").innerHTML, /href="#\/runs\/r1"/);
   assert.match(ctx.node("ops-timeline-body").innerHTML, /<svg class="ops-timeline-svg"/);
+
+  await ctx.node("ops-tab-schedule").onclick();
+  assert.ok(asked.includes("/api/ops/schedule"));
+  assert.ok(asked.includes("/api/ops/settings"));
+  assert.ok(asked.includes("/api/ops/backups"));
+  await ctx.node("ops-tab-today").onclick();
+  await ctx.node("ops-tab-schedule").onclick();
+  assert.equal(asked.filter((path) => path === "/api/ops/backups").length, 1);
 });
 

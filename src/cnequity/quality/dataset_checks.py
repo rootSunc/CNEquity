@@ -9,6 +9,7 @@ from pathlib import Path
 
 import polars as pl
 
+from cnequity.config.resources import DuckDBResources, resources_for
 from cnequity.domain.datasets import (
     DATASETS,
     PIT_DATASET_NAMES,
@@ -258,16 +259,19 @@ def _unreadable_parquet_finding(files: list[Path], dataset: str, root: Path) -> 
 
 
 def _relative(path: Path, root: Path, partition_col: str | None = None) -> Path:
-    """*path* relative to the dataset *root*, also for a file only the lake catalog holds.
+    """Name a dataset file relative to its logical root.
 
-    The catalog keeps a partition's files in a folder named by its value, away
-    from *root*; such a file reads as ``<partition_col>=<value>/<name>``.
+    Catalog files use bare partition values and retained revisions use Hive
+    partition names. Both can live outside the logical root.
     """
     try:
         return path.relative_to(root)
     except ValueError:
-        if partition_col and parse_partition(path.parent.name) is not None:
-            return Path(f"{partition_col}={path.parent.name}", path.name)
+        if partition_col:
+            prefix = f"{partition_col}="
+            value = path.parent.name.removeprefix(prefix)
+            if parse_partition(value) is not None:
+                return Path(f"{prefix}{value}", path.name)
         return Path(path.name)
 
 
@@ -340,6 +344,7 @@ def _partitioned_pk_duplicate_count(
     root: Path,
     *,
     violations: dict[str, int] | None = None,
+    resources: DuckDBResources | None = None,
 ) -> int:
     """Count PK duplicates one on-disk partition at a time.
 
@@ -376,10 +381,8 @@ def _partitioned_pk_duplicate_count(
     with tempfile.TemporaryDirectory(prefix="cnequity-pk-") as scratch:
         con = duckdb.connect(":memory:")
         try:
-            con.execute("SET memory_limit='512MB'")
-            con.execute("SET threads=1")
+            (resources or resources_for(None, "audit")).apply(con, scratch=Path(scratch))
             con.execute("SET preserve_insertion_order=false")
-            con.execute("SET temp_directory=?", [scratch])
             if dataset in PIT_DATASET_NAMES:
                 # Legacy files lack revision IDs. Normalize one file at a time
                 # so old/new layouts share the same physical vintage key.
@@ -450,7 +453,9 @@ def _partitioned_pk_duplicate_count(
     return duplicate_count
 
 
-def _full_scalar_stats(files: list[Path], dataset: str) -> tuple[int, int, dict[str, int]]:
+def _full_scalar_stats(
+    files: list[Path], dataset: str, resources: DuckDBResources | None = None
+) -> tuple[int, int, dict[str, int]]:
     """Return row/mock/null totals with one bounded scalar Parquet query."""
     if not files:
         return 0, 0, {}
@@ -477,8 +482,7 @@ def _full_scalar_stats(files: list[Path], dataset: str) -> tuple[int, int, dict[
 
     con = duckdb.connect(":memory:")
     try:
-        con.execute("SET memory_limit='512MB'")
-        con.execute("SET threads=1")
+        (resources or resources_for(None, "audit")).apply(con)
         row = con.execute(query, [MOCK_SOURCE, [str(path) for path in files]]).fetchone()
     finally:
         con.close()
@@ -642,6 +646,7 @@ def audit_curated_dataset(
     full: bool = False,
     stale: bool = False,
     partitions: frozenset[str] | None = None,
+    resources: DuckDBResources | None = None,
 ) -> list[dict]:
     """Audit the current partition, or every historical file when ``full``.
 
@@ -845,7 +850,7 @@ def audit_curated_dataset(
     # bounded-memory contract of the full audit.
     sample_df = audit_lf.limit(_AUDIT_SAMPLE_FILES).collect(engine="streaming")
     if full and audit_files is not None:
-        row_count, mock_rows, nulls = _full_scalar_stats(audit_files, dataset)
+        row_count, mock_rows, nulls = _full_scalar_stats(audit_files, dataset, resources)
     else:
         row_count = lazy_row_count(audit_lf)
         mock_rows = lazy_mock_row_count(audit_lf, mock_source=MOCK_SOURCE)
@@ -893,6 +898,7 @@ def audit_curated_dataset(
             partition_col,
             root,
             violations=violations,
+            resources=resources,
         )
     else:
         dupes = _lazy_pk_duplicate_count(audit_lf, dataset)

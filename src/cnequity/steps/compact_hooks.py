@@ -1,6 +1,6 @@
 """Per-dataset steps of ``compact``, kept out of the generic publish loop.
 
-``steps.finalize._compact_locked`` merges, gates and commits every staged
+``steps.finalize.step_compact`` merges, gates and commits every staged
 dataset the same way. A few datasets need one more thing at a fixed point of
 that sequence — a cross-dataset contract before the merge, a cache to retire
 after it, evidence to confirm once the generation is current. Those used to be

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from multiprocessing import get_context
 from pathlib import Path
 
 import polars as pl
@@ -344,6 +345,160 @@ def _stray(lake, name: str, *, days_old: float) -> Path:
     stamp = time.time() - days_old * 86400
     os.utime(path, (stamp, stamp))
     return path
+
+
+def test_retention_reads_holds_after_entering_the_writer_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from tests.catalog_seed import publish_rows
+
+    from cnequity import file_lock
+    from cnequity.storage.catalog_bridge import catalog_retention, revision_snapshot
+    from cnequity.storage.lifecycle import LifecycleStore
+
+    config = Config(data_root=tmp_path, revision_keep_generations=1)
+    day = date(2024, 1, 2)
+    older = publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 10.0}), run_id="older")
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 11.0}), run_id="newer")
+    assert older is not None
+    store = LifecycleStore(config.meta_root)
+    store._save(
+        {
+            "schema_version": 1,
+            "meta_root": str(store.meta),
+            "lake_id": "test-lake",
+            "holds": {},
+            "reference_roots": [],
+            "reference_fingerprint": "",
+        }
+    )
+    lock = file_lock.lake_mutation_lock
+
+    @contextmanager
+    def hold_before_retention_acquires(*args, **kwargs):
+        store.hold(f"revision/daily_bars/{older.revision_id}", "keep historical revision")
+        with lock(*args, **kwargs):
+            yield
+
+    monkeypatch.setattr(file_lock, "lake_mutation_lock", hold_before_retention_acquires)
+    catalog_retention(config, apply=True)
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        version, _ = revision_snapshot(catalog, "daily_bars", older.revision_id)
+        assert catalog.execute(
+            f"SELECT close FROM daily_bars AT (VERSION => {version})"
+        ).fetchall() == [(10.0,)]
+
+
+def test_catalog_retention_refreshes_edited_references_before_expiring(tmp_path):
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.storage.catalog_bridge import catalog_retention, revision_snapshot
+    from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, reference_fingerprint
+
+    config = Config(data_root=tmp_path / "lake", revision_keep_generations=1)
+    day = date(2024, 1, 2)
+    older = publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 10.0}), run_id="old")
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 11.0}), run_id="new")
+    assert older is not None
+    notes = tmp_path / "research"
+    notes.mkdir()
+    evidence = notes / "report.md"
+    evidence.write_text("draft", encoding="utf-8")
+    store = LifecycleStore(config.meta_root)
+    roots = [{"path": str(notes)}]
+    store.import_manifest(
+        {
+            "schema_version": 1,
+            "meta_root": str(store.meta),
+            "holds": {},
+            "reference_roots": roots,
+            "reference_fingerprint": reference_fingerprint(roots, meta_root=store.meta),
+        }
+    )
+    evidence.write_text(f"revision {older.revision_id}", encoding="utf-8")
+    with pytest.raises(LifecycleError, match="References changed"):
+        catalog_retention(config, apply=False)
+    catalog_retention(config, apply=True)
+    assert f"revision/daily_bars/{older.revision_id}" in store.registry()["holds"]
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        version, _ = revision_snapshot(catalog, "daily_bars", older.revision_id)
+        assert catalog.execute(
+            f"SELECT close FROM daily_bars AT (VERSION => {version})"
+        ).fetchall() == [(10.0,)]
+
+
+def _read_pinned_snapshot(root, channel):
+    with channel, Catalog(root, read_only=True) as reader, reader.pin_snapshot() as held:
+        channel.send(held)
+        if channel.poll(30):
+            channel.recv()
+            rows = reader.execute(f"SELECT close FROM daily_bars AT (VERSION => {held})").fetchall()
+            channel.send(rows)
+
+
+def test_retention_skips_an_active_snapshot_while_publication_can_continue(tmp_path):
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.storage.catalog_bridge import catalog_retention
+    from equitylake_core.lock import lake_read
+
+    config = Config(data_root=tmp_path, revision_keep_generations=1)
+    day = date(2024, 1, 2)
+    root = lake_root(config)
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 10.0}), run_id="first")
+    ctx = get_context("spawn")
+    parent, child = ctx.Pipe()
+    process = ctx.Process(target=_read_pinned_snapshot, args=(root, child))
+    process.start()
+    child.close()
+    try:
+        with parent:
+            assert parent.poll(20)
+            held = parent.recv()
+            publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 11.0}), run_id="second")
+            with lake_read(root):
+                outcome = catalog_retention(config, apply=True)
+                assert outcome["active_readers"] and not outcome["applied"]
+            outcome = catalog_retention(config, apply=True)
+            assert outcome["active_readers"] and outcome["applied"]
+            parent.send("read")
+            assert parent.poll(20)
+            assert parent.recv() == [(10.0,)]
+    finally:
+        process.join(5)
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+    assert process.exitcode == 0
+    catalog_retention(config, apply=True)
+    with Catalog(root, read_only=True) as reader:
+        from equitylake_core.catalog import CatalogError
+
+        with (
+            pytest.raises(CatalogError, match="snapshot .* has expired"),
+            reader.pin_snapshot(held),
+        ):
+            pytest.fail("retention should expire the snapshot after the reader exits")
+
+
+def test_zero_retention_never_applies_catalog_cleanup(cfg, lake, monkeypatch):
+    from cnequity.storage import catalog_bridge
+
+    sync_dataset(cfg, lake, "daily_bars")
+    old = _stray(lake, "left-by-a-crash.parquet", days_old=3)
+    lake.close()
+    cfg.revision_keep_generations = 0
+
+    def refused(*args, **kwargs):
+        pytest.fail("disabled retention attempted to delete orphans")
+
+    monkeypatch.setattr(catalog_bridge, "delete_orphans", refused)
+    preview = catalog_bridge.catalog_retention(cfg, apply=False)
+    assert catalog_bridge.catalog_retention(cfg, apply=True) == preview
+    assert preview["keep_revisions"] == 0
+    assert preview["snapshots_expired"] == preview["files_deleted"] == 0
+    assert not preview["applied"]
+    assert old.exists()
 
 
 def test_retention_deletes_files_no_snapshot_registers_once_past_the_grace(cfg, lake):

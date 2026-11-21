@@ -1017,8 +1017,12 @@ def run_probe(probe: SourceProbe, config: Config) -> ProbeResult:
         )
 
     started = time.monotonic()
+    from cnequity.progress import step_scope
+
+    logger.info(N_("Probing source %s"), probe.key)
     try:
-        detail = probe.run(config)
+        with step_scope(f"probe {probe.key}"):
+            detail = probe.run(config)
         status = ProbeStatus.OK
     except Exception as exc:  # noqa: BLE001 — the failure is the result
         status, detail = _classify(exc)

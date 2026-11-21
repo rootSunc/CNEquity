@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from contextlib import contextmanager
 
 import click
 
@@ -11,6 +13,7 @@ from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
     apply_option,
+    attach_log_file,
     comma_option,
     comma_values,
     config_option,
@@ -18,10 +21,32 @@ from cnequity.cli._shared import (
 )
 from cnequity.i18n import N_, _
 from cnequity.orchestrator.backfill_request import REPAIRS, BackfillRequest
+from cnequity.progress import step_scope
+from cnequity.terminal_log import configured_log_secrets, redact_log_text
+
+logger = logging.getLogger(__name__)
 
 
 def _emit(value: dict) -> None:
     click.echo(json.dumps(value, indent=2, ensure_ascii=False, default=str))
+
+
+@contextmanager
+def _maintenance(config, *, apply: bool = True):
+    if not apply:
+        yield
+        return
+    from contextlib import ExitStack
+
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.lock import LockUnavailable, lake_maintenance
+
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(lake_maintenance(lake_root(config)))
+        except LockUnavailable as exc:
+            raise click.ClickException(str(exc)) from exc
+        yield
 
 
 @cli.command("migrate")
@@ -41,19 +66,19 @@ def _emit(value: dict) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, help=N_("Output machine-readable JSON."))
 def migrate(config_path: str, apply: bool, only: str | None, as_json: bool):
-    """Preview, or with --apply run, the one-off fixes this lake still owes.
+    """Preview pending lake migrations or select migration IDs with --only.
 
-    
-    A release that fixes a writer can leave rows the old writer stored. Each such fix is a
-    migration; meta/lake.json records the version that built the lake (it owes nothing
-    introduced earlier) and every migration it has applied or found nothing to do.
-    A preview reports how many rows each would change. --apply runs them in order: each takes the
-    lake lock, publishes through the repair gate and keeps the previous revision readable.
+    \b
+    --apply runs the selected migrations in registry order and records the result.
+    --only can select an already recorded migration. Individual migrations can
+    contact providers or remove superseded files. Use `cne upgrade` for the usual
+    upgrade of an older lake.
 
     """
     from cnequity.storage.migrations import MIGRATIONS, affected, owed, read_lake, record
 
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "migrate")
     by_id = {m.id: m for m in MIGRATIONS}
     only = comma_values(only, "--only")
     if only:
@@ -80,28 +105,37 @@ def migrate(config_path: str, apply: bool, only: str | None, as_json: bool):
             else _("Nothing owed: every migration is recorded in meta/lake.json.")
         )
         return
-    for migration in chosen:
-        if not as_json:
-            note = " (" + _("reads") + f" {_(migration.reads)})" if migration.reads else ""
-            click.echo(f"--- {migration.id}: {_(migration.title)}{note}", err=True)
-        try:
-            report = migration.apply(cfg, apply=apply)
-        except Exception as exc:  # noqa: BLE001 — report it and stop; later ones may depend on it
-            failed = True
-            results.append({"id": migration.id, "error": f"{type(exc).__name__}: {exc}"})
+    with _maintenance(cfg, apply=apply):
+        for migration in chosen:
+            logger.info(
+                "starting migration %s (apply=%s)", migration.id, apply, extra={"file_only": True}
+            )
             if not as_json:
-                click.echo(_("  failed: {exc}").format(exc=exc), err=True)
-            break
-        count = affected(report)
-        if apply:
-            record(cfg, migration, report)
-        results.append({"id": migration.id, "affected": count, "report": report})
-        if not as_json:
+                note = " (" + _("reads") + f" {_(migration.reads)})" if migration.reads else ""
+                click.echo(f"--- {migration.id}: {_(migration.title)}{note}", err=True)
+            try:
+                with step_scope(f"migration {migration.id}"):
+                    report = migration.apply(cfg, apply=apply)
+            except Exception as exc:  # noqa: BLE001 — report it and stop; later ones may depend on it
+                failed = True
+                reason = redact_log_text(str(exc), configured_log_secrets(cfg))
+                logger.exception("migration %s failed", migration.id, extra={"file_only": True})
+                results.append({"id": migration.id, "error": f"{type(exc).__name__}: {reason}"})
+                if not as_json:
+                    click.echo(_("  failed: {exc}").format(exc=reason), err=True)
+                break
+            count = affected(report)
             if apply:
-                line = _("  applied: {count} row(s)") if count else _("  nothing to do; recorded")
-            else:
-                line = _("  would change {count} row(s)") if count else _("  nothing to do")
-            click.echo(line.format(count=count), err=True)
+                record(cfg, migration, report)
+            results.append({"id": migration.id, "affected": count, "report": report})
+            if not as_json:
+                if apply:
+                    line = (
+                        _("  applied: {count} row(s)") if count else _("  nothing to do; recorded")
+                    )
+                else:
+                    line = _("  would change {count} row(s)") if count else _("  nothing to do")
+                click.echo(line.format(count=count), err=True)
     if as_json:
         click.echo(json.dumps({"applied": apply, "migrations": results}, default=str, indent=2))
     elif not apply and not failed:
@@ -132,14 +166,16 @@ _UPGRADE_STAGES = {
 )
 @click.option("--json", "as_json", is_flag=True, help=N_("Output machine-readable JSON."))
 def upgrade(config_path: str, apply: bool, no_backup: bool, as_json: bool):
-    """Bring a lake built by an earlier version up to this one, in one step.
+    """Upgrade a lake built by an earlier version.
 
-    
-    Shows what this version changes about the lake and checks that this machine can do it;
-    --apply then does all of it in order: a backup of the lake's records, the move onto the
-    lake catalog, and every other fix the lake still owes. Data files are linked, not copied.
-    Reading the lake keeps working throughout; jobs that write wait until the upgrade is done.
-    A run that stops can be started again and continues where it stopped.
+    \b
+    Preview the pending migrations and check disk and extension requirements. A missing
+    DuckDB extension may be downloaded during the checks.
+    With --apply, back up the lake's records by default, register existing data in the
+    catalog and run the remaining migrations in order. Registration can copy data files
+    on filesystems without hard-link support. Migrations can remove superseded files.
+    Keep a restorable copy of the data before applying. To resume, rerun the command
+    after addressing the reported problem.
 
     """
     import time
@@ -148,6 +184,7 @@ def upgrade(config_path: str, apply: bool, no_backup: bool, as_json: bool):
     from cnequity.storage.migrations import MIGRATIONS
 
     cfg = _cfg(config_path)
+    attach_log_file(cfg, "upgrade")
     plan = upgrading.plan(cfg)
     titles = {migration.id: migration.title for migration in MIGRATIONS}
     catalog = plan["catalog"]
@@ -197,30 +234,32 @@ def upgrade(config_path: str, apply: bool, no_backup: bool, as_json: bool):
     if not apply:
         say(
             _(
-                "Nothing was changed. Run `cne upgrade --apply` to upgrade. Reading the lake "
-                "keeps working meanwhile; jobs that write wait until it is done."
+                "Upgrade preview complete. Review the plan and your backup before running `cne upgrade --apply`."
             )
         )
         return
 
-    backup = None if no_backup else upgrading.back_up(cfg)
-    if backup is not None:
-        say(_("Backed up the lake's records to {path}").format(path=backup))
-    totals = {
-        "copy": len(catalog["to_copy"]),
-        "verify": int(catalog.get("datasets") or 0),
-        "lay_out": len(catalog["to_lay_out"]),
-    }
-    seen: dict[tuple[str, str], int] = {}
+    with _maintenance(cfg):
+        backup = None if no_backup else upgrading.back_up(cfg)
+        if backup is not None:
+            say(_("Backed up the lake's records to {path}").format(path=backup))
+        totals = {
+            "copy": len(catalog["to_copy"]),
+            "verify": int(catalog.get("datasets") or 0),
+            "lay_out": len(catalog["to_lay_out"]),
+        }
+        seen: dict[tuple[str, str], int] = {}
 
-    def progress(migration: str, stage: str, dataset: str) -> None:
-        count = seen[(migration, stage)] = seen.get((migration, stage), 0) + 1
-        total = totals.get(stage) if migration == "lake-catalog" else None
-        position = f" {count}/{total}" if total and count <= total else ""
-        say(f"  [{migration}] {_(_UPGRADE_STAGES.get(stage, stage))}{position} {dataset}".rstrip())
+        def progress(migration: str, stage: str, dataset: str) -> None:
+            count = seen[(migration, stage)] = seen.get((migration, stage), 0) + 1
+            total = totals.get(stage) if migration == "lake-catalog" else None
+            position = f" {count}/{total}" if total and count <= total else ""
+            say(
+                f"  [{migration}] {_(_UPGRADE_STAGES.get(stage, stage))}{position} {dataset}".rstrip()
+            )
 
-    started = time.monotonic()
-    result = upgrading.run(cfg, progress)
+        started = time.monotonic()
+        result = upgrading.run(cfg, progress)
     elapsed = int(time.monotonic() - started)
     took = f"{elapsed // 60}m {elapsed % 60}s" if elapsed >= 60 else f"{elapsed}s"
     if as_json:

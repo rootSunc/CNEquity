@@ -19,6 +19,7 @@ from cnequity.domain.datasets import (
     fetch_semantics,
 )
 from cnequity.domain.frames import with_columns_unless_blank
+from cnequity.domain.market_time import shanghai_today
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.domain.symbols import is_subscription_placeholder
 from cnequity.orchestrator.outcomes import (
@@ -996,7 +997,7 @@ def walk_day_backfill(
     *,
     source: str,
     date_col: str = "trade_date",
-    floor: date = BACKFILL_START,
+    floor: date | None = BACKFILL_START,
     flush_days: int = 60,
     existing_dates_fn: Callable[[list[date]], set[date]] | None = None,
     calendar_days: bool = False,
@@ -1019,9 +1020,15 @@ def walk_day_backfill(
     measured safe at higher concurrency for these sources, and getting a
     correct sweep once is worth more than a faster wrong one.
     """
-    start = backfill_of(config).start or floor
-    end = backfill_of(config).end or trade_date
-    bounded_end = min(end, trade_date)
+    window = backfill_of(config)
+    spec = DATASETS.get(dataset)
+    earliest, latest = spec.history_bounds(shanghai_today(), config) if spec else (None, None)
+    start = window.start or floor or earliest or BACKFILL_START
+    if earliest is not None:
+        start = max(start, earliest)
+    bounded_end = min(window.end or trade_date, trade_date)
+    if latest is not None:
+        bounded_end = min(bounded_end, latest)
     if calendar_days:
         days = (
             [start + timedelta(days=offset) for offset in range((bounded_end - start).days + 1)]

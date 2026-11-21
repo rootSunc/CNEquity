@@ -19,9 +19,11 @@ import click
 from cnequity.cli._root import cli
 from cnequity.cli._shared import (
     _cfg,
+    _progress_logging,
     config_option,
     resolve_config_path,
 )
+from cnequity.config.logging import logging_settings
 from cnequity.i18n import N_, _
 from cnequity.query.on_demand import OnDemandService
 from cnequity.query.views import views_connection
@@ -139,7 +141,9 @@ def _install_access_log_redaction() -> None:
         access.addFilter(_AccessLogRedactor())
 
 
-def _run_server(app, host: str, port: int, sockets: list[socket.socket] | None) -> None:
+def _run_server(
+    app, host: str, port: int, sockets: list[socket.socket] | None, *, log_level: str = "info"
+) -> None:
     import uvicorn
 
     # uvicorn.Config re-applies its logging dictConfig on construction; that
@@ -147,9 +151,9 @@ def _run_server(app, host: str, port: int, sockets: list[socket.socket] | None) 
     # filter first is enough.
     _install_access_log_redaction()
     if sockets is not None:
-        uvicorn.Server(uvicorn.Config(app, log_level="info")).run(sockets=sockets)
+        uvicorn.Server(uvicorn.Config(app, log_level=log_level)).run(sockets=sockets)
         return
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level=log_level)
 
 
 @cli.command()
@@ -280,6 +284,7 @@ def serve(
             host,
             port,
             sockets,
+            log_level=logging_settings(cfg).console_level.lower(),
         )
     finally:
         for sock in sockets or []:
@@ -328,11 +333,15 @@ def query(
         if data.get("error"):
             raise SystemExit(1)
         return
+    from contextlib import closing
+
     import duckdb
     import polars as pl
 
-    con = views_connection(cfg)
-    try:
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.lock import lake_read
+
+    with lake_read(lake_root(cfg)), closing(views_connection(cfg)) as con:
         # A typo in the SQL is the most ordinary thing that happens here, and
         # DuckDB's own message already names the line, the column and the near
         # miss. Keep that text and drop the Python traceback wrapped around it.
@@ -341,8 +350,6 @@ def query(
         except duckdb.Error as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(df)
-    finally:
-        con.close()
 
 
 @cli.command("mcp")
@@ -435,10 +442,7 @@ def mcp_cmd(config_path: str, live: bool, use_http: bool, host: str, port: int, 
     # on the client with no indication of where it came from, so every log
     # record — ours and every library's — goes to stderr, which MCP clients
     # capture as the server's log.
-    # `force=True` because the CLI root configures INFO logging for every
-    # command; without it this call would be a no-op and the wire's log
-    # would carry every INFO record the pipeline emits.
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
+    _progress_logging(quiet=True)
     if use_http:
         _serve_mcp_http(cfg, host, port, token)
         return
@@ -469,7 +473,15 @@ def _serve_mcp_http(cfg, host: str, port: int, token: str | None) -> None:
                     "No token set: only direct connections from this machine are accepted; requests through a tunnel or proxy are refused."
                 )
             )
-        _run_server(create_app(cfg, token=token), host, port, sockets)
+        _run_server(
+            create_app(cfg, token=token),
+            host,
+            port,
+            sockets,
+            log_level=logging.getLevelName(
+                logging_settings(cfg).console_threshold(quiet=True)
+            ).lower(),
+        )
     finally:
         for sock in sockets or []:
             try:
@@ -488,17 +500,17 @@ def _guard_mcp_data_root(cfg, config_path: str) -> None:
     data", and the agent reports that the data is missing. Which is true of that
     path and false of the user's lake.
 
-    Cheap enough to do on every start: one directory walk that stops at the
-    first file.
+    Cheap enough to do on every start: it reads the lake's revision records,
+    not its data.
     """
-    curated = cfg.curated_root
-    if curated.exists() and next(curated.rglob("*.parquet"), None) is not None:
+    from cnequity.ops.preflight import lake_empty
+
+    if not lake_empty(cfg):
         return
     raise click.ClickException(
         _(
-            "There is no curated data under {curated}.\n  config:    {value}\n  data.root: {data_root}\nIf this is not your lake: `data.root` is a relative path, resolved against the working directory the client launched this process from. Write both `--config` and `[data].root` as absolute paths.\nIf this really is your lake and it really is empty: `cne init` builds one, `cne init --profile demo` makes a 5-symbol sample in thirty seconds, and `--live` serves symbol lookup and unadjusted daily bars straight from the source with no lake at all."
+            "This lake has no published data.\n  config:    {value}\n  data.root: {data_root}\nIf this is not your lake: `data.root` is a relative path, resolved against the working directory the client launched this process from. Write both `--config` and `[data].root` as absolute paths.\nIf this really is your lake and it really is empty: `cne init` builds one, `cne init --profile demo` makes a 5-symbol sample in thirty seconds, and `--live` serves symbol lookup and unadjusted daily bars straight from the source with no lake at all."
         ).format(
-            curated=curated,
             value=resolve_config_path(config_path).resolve(),
             data_root=cfg.data_root,
         )

@@ -79,12 +79,17 @@ def _uncatalogued(config, datasets: set[str]) -> set[str]:
 
 def _mismatched(config) -> set[str]:
     """Datasets with a revision whose rows in the catalog are not the rows recorded for it."""
+    from cnequity.config.resources import resources_for
     from cnequity.storage.catalog_bridge import lake_root
     from cnequity.storage.lake_write import verify_revisions
     from equitylake_core.catalog import Catalog
 
     root = lake_root(config)
-    with Catalog(root, read_only=True, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
+    with Catalog(
+        root,
+        read_only=True,
+        **resources_for(config, "maintenance").options(scratch=root / "tmp"),
+    ) as catalog:
         return {c.dataset for c in verify_revisions(catalog) if c.status == "mismatch"}
 
 

@@ -24,9 +24,9 @@ import threading
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from zoneinfo import ZoneInfo
 
 from cnequity.domain.http_policy import record_cache_reuse
+from cnequity.domain.market_time import SHANGHAI_TZ
 from cnequity.file_lock import exclusive_lock
 from cnequity.storage.atomic import replace_with_retry
 
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # f62/f66/f72/f78/f84 fund flow.
 SNAPSHOT_FIELDS = "f12,f13,f2,f5,f6,f9,f15,f16,f17,f20,f21,f23,f26,f62,f66,f72,f78,f84,f130"
 _SNAPSHOT_FIELD_SET = frozenset(SNAPSHOT_FIELDS.split(","))
-_CST = ZoneInfo("Asia/Shanghai")
+_CST = SHANGHAI_TZ
 _CLOSE = time(15, 30)
 _OPEN = time(9, 15)
 # A snapshot this young is reused even mid-session: two steps of the same run.

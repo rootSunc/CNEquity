@@ -11,8 +11,10 @@ repository checkout had.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -20,8 +22,11 @@ import click
 from cnequity.cli._root import cli, run
 from cnequity.cli._shared import _cfg, attach_log_file, config_option, resolve_config_path
 from cnequity.domain.market_time import shanghai_today
-from cnequity.i18n import N_, _
+from cnequity.i18n import N_, Message, _
+from cnequity.progress import step_scope
 from cnequity.sqlite_readonly import connect_readonly
+
+logger = logging.getLogger(__name__)
 
 #: (label, `cne` arguments, whether a failure makes the day unhealthy).
 #: Probes, SLO and run evidence are observations about sources and history,
@@ -43,7 +48,24 @@ _LEGACY_LAUNCHD = (
 
 
 def _cne(*args: str) -> list[str]:
-    return [sys.executable, "-X", "utf8", "-m", "cnequity", *args]
+    return [sys.executable, "-u", "-X", "utf8", "-m", "cnequity", *args]
+
+
+def _maintenance_check(label: str, argv: list[str]) -> int:
+    started = time.monotonic()
+    click.echo(f"--- {_(label)} ---", err=True)
+    logger.info("starting maintenance phase %s", label, extra={"file_only": True})
+    with step_scope(Message(label)):
+        code = subprocess.run(argv, check=False).returncode
+    logger.log(
+        logging.WARNING if code else logging.INFO,
+        "maintenance phase %s (exit=%d, elapsed=%.1fs)",
+        label,
+        code,
+        time.monotonic() - started,
+        extra={"file_only": True},
+    )
+    return code
 
 
 def _scheduled_groups(cfg) -> list[str]:
@@ -121,6 +143,7 @@ def _bump_streak(cfg, group: str, session) -> int:
 
 def _check_daily_groups(cfg) -> tuple[list[str], list[str]]:
     """(problems, notes) from the last closed session's daily group runs."""
+    from cnequity.config.failure_policy import daily_group_streak
     from cnequity.domain.market_time import last_closed_session
 
     session = last_closed_session()
@@ -129,7 +152,7 @@ def _check_daily_groups(cfg) -> tuple[list[str], list[str]]:
     failed, seen = _group_failures(cfg, session)
     problems: list[str] = []
     notes: list[str] = []
-    limit = cfg.maintenance_soft_fail_max_days
+    policy = daily_group_streak(cfg)
     for group in sorted(seen - set(failed)):
         _streak_path(cfg, group).unlink(missing_ok=True)
         (Path(cfg.data_root) / "state" / "soft_streak" / group).unlink(missing_ok=True)
@@ -141,7 +164,7 @@ def _check_daily_groups(cfg) -> tuple[list[str], list[str]]:
         label = _("daily group {group} failed {days} session(s) in a row").format(
             group=group, days=days
         )
-        (problems if limit and days >= limit else notes).append(label)
+        (problems if policy.reached(days) else notes).append(label)
     return problems, notes
 
 
@@ -171,6 +194,38 @@ def _notify(title: str, message: str) -> None:
         pass
 
 
+def _run_due_full_audit(cfg, config_path: str, today) -> int | None:
+    """Record a completed audit, including one that returned quality findings."""
+    from cnequity.cli.quality_cmds import audit
+    from cnequity.file_lock import exclusive_lock
+    from cnequity.meta_layout import SCHEDULER
+    from cnequity.ops.records import atomic_write
+    from cnequity.orchestrator.run_window import FULL_AUDIT_JOB, marker_path, pending_full_audit
+
+    if pending_full_audit(cfg, today) is None:
+        return None
+    with exclusive_lock(cfg.meta_root / SCHEDULER / "full-audit.lock", blocking=True):
+        due = pending_full_audit(cfg, today)
+        if due is None:
+            return None
+        click.echo(f"--- {_('Whole-lake audit')} ---", err=True)
+        try:
+            click.get_current_context().invoke(
+                audit, config_path=config_path, full=True, quality_only=True
+            )
+        except SystemExit as exc:
+            if exc.code != 1:
+                raise
+            result = 1
+        else:
+            result = 0
+        atomic_write(
+            marker_path(cfg.meta_root, FULL_AUDIT_JOB, due),
+            {"date": today.isoformat(), "exit_code": result},
+        )
+        return result
+
+
 @run.command("maintain")
 @config_option
 @click.option(
@@ -184,22 +239,17 @@ def _notify(title: str, message: str) -> None:
 @click.option(
     "--notify", is_flag=True, help=N_("On problems, also show a desktop notification (macOS).")
 )
-def maintain(config_path: str, groups: str | None, notify: bool):
-    """Check the day's update, back up what cannot be rebuilt, and preview expiry.
+@click.option("--full-audit-only", is_flag=True, help=N_("Run only the due weekly full audit."))
+def maintain(config_path: str, groups: str | None, notify: bool, full_audit_only: bool):
+    """Check the daily update, apply catalog retention, and back up metadata.
 
     \b
-    The scheduled timer runs this once after each session's daily update. In order:
-    the session's daily group runs ([job.maintenance].gate_groups fail at once, others after
-    soft_fail_max_days sessions in a row), a retry of keys in the debt ledger
-    (`cne backfill <dataset> --outstanding`), the run audit (the whole lake on
-    [job.maintenance].full_audit_weekday), the freshness gate,
-    source probes and SLO, run evidence over 20 sessions, a merge of partitions that writes
-    left in several files, a repair of state files an interrupted publish left one
-    revision behind, a metadata backup
-    (manifest DB, receipts, quality findings; never curated Parquet), and a preview of `cne run clean`.
-    The preview passes --dry-run, so this command never asks to delete.
-    Exits 1 when a group run, the audit, the freshness gate or the backup fails; source,
-    debt-retry and run-evidence findings are reported without failing.
+    Checks daily group results, retries outstanding keys, runs the audit and freshness
+    gate, probes sources, and checks run evidence. If a catalog exists, maintenance
+    applies retention and can delete expired snapshots and files. It also writes
+    and rotates metadata backups and previews routine cleanup.
+    The timer schedules the weekly whole-lake audit separately. Use --full-audit-only
+    to run just the audit when it is due.
 
     """
     from cnequity.diagnostics.source_health import effective_vantage
@@ -208,13 +258,18 @@ def maintain(config_path: str, groups: str | None, notify: bool):
     cfg = _cfg(config_path)
     attach_log_file(cfg, "run-maintain")
     path = str(resolve_config_path(config_path).resolve())
-    weekday = cfg.maintenance_full_audit_weekday
-    full = bool(weekday) and shanghai_today().isoweekday() == weekday
-    audit = (
-        (N_("Whole-lake audit"), ("audit", "--full", "--quality-only"), True)
-        if full
-        else (N_("Run audit"), ("audit",), True)
-    )
+    today = shanghai_today()
+    if full_audit_only:
+        result = _run_due_full_audit(cfg, path, today)
+        if result:
+            if notify:
+                _notify(
+                    _("cnequity maintenance"),
+                    _("Problems: {names}").format(names=_("Whole-lake audit")),
+                )
+            raise SystemExit(result)
+        return
+    audit = (N_("Run audit"), ("audit",), True)
     gate_groups = groups if groups is not None else " ".join(_scheduled_groups(cfg))
     click.echo("--- " + _("Daily group runs") + " ---", err=True)
     problems, notes = _check_daily_groups(cfg)
@@ -224,11 +279,8 @@ def maintain(config_path: str, groups: str | None, notify: bool):
     # source could not answer yet, Baostock posts halts about a week late) are
     # asked here.
     for dataset in _owed_datasets(cfg):
-        click.echo(
-            "--- " + _("Outstanding keys: {dataset}").format(dataset=dataset) + " ---", err=True
-        )
         argv = _cne("backfill", dataset, "--outstanding", "--config", path)
-        if subprocess.run(argv, check=False).returncode:
+        if _maintenance_check(_("Outstanding keys: {dataset}").format(dataset=dataset), argv):
             notes.append(_("Outstanding keys: {dataset}").format(dataset=dataset))
     for label, args, gating in (audit, *_CHECKS):
         argv = list(args)
@@ -236,15 +288,17 @@ def maintain(config_path: str, groups: str | None, notify: bool):
             argv += ["--groups", gate_groups]
         if args[:2] == ("sources", "probe"):
             argv += ["--vantage", effective_vantage(cfg)]
-        click.echo(f"--- {_(label)} ---", err=True)
-        if subprocess.run(_cne(*argv, "--config", path), check=False).returncode:
+        if _maintenance_check(label, _cne(*argv, "--config", path)):
             (problems if gating else notes).append(_(label))
 
     click.echo(f"--- {_('Revision sweep')} ---", err=True)
     try:
         from cnequity.storage.revisions import RevisionStore
 
-        swept = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).sweep(apply=True)
+        with step_scope(Message(N_("Revision sweep"))):
+            swept = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root).sweep(
+                apply=True
+            )
         click.echo(
             _("Rebuilt {state} state file(s) that named an earlier revision.").format(
                 state=len(swept["state_synced"])
@@ -260,21 +314,22 @@ def maintain(config_path: str, groups: str | None, notify: bool):
     from equitylake_core.catalog import CATALOG_FILE
 
     if (lake_root(cfg) / CATALOG_FILE).exists():
-        click.echo(f"--- {_('Lake catalog retention')} ---", err=True)
-        if subprocess.run(
-            _cne("storage", "catalog-retention", "--apply", "--config", path), check=False
-        ).returncode:
+        if _maintenance_check(
+            N_("Lake catalog retention"),
+            _cne("storage", "catalog-retention", "--apply", "--config", path),
+        ):
             notes.append(_("Lake catalog retention"))
 
     click.echo(f"--- {_('Metadata backup')} ---", err=True)
     try:
-        result = backup_meta(
-            cfg.meta_root,
-            cfg.backup_root,
-            retention_days=cfg.maintenance_backup_retention_days,
-            retention_count=cfg.maintenance_backup_retention_count,
-            catalog=lake_root(cfg) / CATALOG_FILE,
-        )
+        with step_scope(Message(N_("Metadata backup"))):
+            result = backup_meta(
+                cfg.meta_root,
+                cfg.backup_root,
+                retention_days=cfg.maintenance_backup_retention_days,
+                retention_count=cfg.maintenance_backup_retention_count,
+                catalog=lake_root(cfg) / CATALOG_FILE,
+            )
         click.echo(
             _("Wrote {archive} ({size:,} bytes); {kept} archives kept, {removed} removed.").format(
                 archive=result.archive,
@@ -288,8 +343,9 @@ def maintain(config_path: str, groups: str | None, notify: bool):
         click.echo(_("Metadata backup failed: {exc}").format(exc=exc), err=True)
         problems.append(_("Metadata backup"))
 
-    click.echo(f"--- {_('Expiry preview')} ---", err=True)
-    if subprocess.run(_cne("run", "clean", "--dry-run", "--config", path), check=False).returncode:
+    if _maintenance_check(
+        N_("Expiry preview"), _cne("run", "clean", "--dry-run", "--config", path)
+    ):
         notes.append(_("Expiry preview"))
 
     if notes:

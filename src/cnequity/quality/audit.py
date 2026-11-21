@@ -13,10 +13,13 @@ from cnequity.adapters.calendar.exchange_calendar import (
     calendar_seed_end,
 )
 from cnequity.config import Config
+from cnequity.config.resources import resources_for
 from cnequity.domain.canonical import dedupe_lazy_by_primary_key
 from cnequity.domain.datasets import PARTITION_COLS, curated_dataset_names, is_dataset_enabled
 from cnequity.domain.findings import checked_findings
 from cnequity.domain.holidays_cn import session_expr
+from cnequity.i18n import N_
+from cnequity.progress import step_scope
 from cnequity.quality.authority_checks import run_authority_checks
 from cnequity.quality.bar_finality import daily_bar_finality_findings
 from cnequity.quality.cross_checks import (
@@ -326,15 +329,18 @@ def _collect_lake_findings(
         # was switched off later still has history on disk, and that is audited.
         if not present and not is_dataset_enabled(ds, config):
             continue
-        dataset_findings = audit_curated_dataset(
-            ds,
-            pcol,
-            root,
-            trade_date,
-            full=full,
-            stale=ds in stale_datasets,
-            partitions=None if scope is None else scope[ds],
-        )
+        with step_scope(f"audit {ds}"):
+            logger.debug("auditing dataset %s", ds)
+            dataset_findings = audit_curated_dataset(
+                ds,
+                pcol,
+                root,
+                trade_date,
+                full=full,
+                stale=ds in stale_datasets,
+                partitions=None if scope is None else scope[ds],
+                resources=resources_for(config, "audit"),
+            )
         findings.extend(dataset_findings)
         if any(
             f.get("check") == "schema_contract" and f.get("unreadable_files", 0) > 0
@@ -849,21 +855,25 @@ def lake_health(
     # Health can be requested on a weekend/holiday. All data observations
     # (including source snapshots) must use the last actual session; the raw
     # calendar date is retained below for reporting only.
-    findings = _profile_adjusted_findings(
-        config,
-        _collect_lake_findings(config, anchor, None, full=True),
-    )
+    logger.info(N_("Checking whole-lake quality for %s"), anchor)
+    with step_scope("whole-lake quality checks"):
+        findings = _profile_adjusted_findings(
+            config,
+            _collect_lake_findings(config, anchor, None, full=True),
+        )
     # source_diff is local-only: it compares curated rows with the latest
     # already-captured backup snapshot. Running it here makes an explicit
     # health check authoritative even when no ingestion run happened today.
-    findings.extend(run_source_diffs(config, f"health-{anchor.isoformat()}", anchor))
+    with step_scope("audit source comparisons"):
+        findings.extend(run_source_diffs(config, f"health-{anchor.isoformat()}", anchor))
     findings = checked_findings(findings)
     by_severity: dict[str, int] = {}
     for f in findings:
         sev = f.get("severity", "info")
         by_severity[sev] = by_severity.get(sev, 0) + 1
 
-    catalog = list_datasets(config=config)
+    with step_scope("audit dataset inventory"):
+        catalog = list_datasets(config=config)
     stale: list[str] = []
     empty: list[str] = []
     expected_empty: list[str] = []

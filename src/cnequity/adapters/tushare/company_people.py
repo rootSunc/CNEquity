@@ -25,6 +25,7 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.domain.bse_codes import legacy_symbol_map
+from cnequity.domain.datasets import get_dataset
 
 __all__ = [
     "INVESTOR_QA_FLOOR",
@@ -37,7 +38,7 @@ __all__ = [
     "normalize_investor_qa",
 ]
 
-INVESTOR_QA_FLOOR = date(2022, 1, 1)
+INVESTOR_QA_FLOOR = get_dataset("investor_qa").history_floor_date
 
 EXECUTIVES_SCHEMA = {
     "record_id": pl.Utf8,

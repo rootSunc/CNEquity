@@ -136,6 +136,37 @@ def test_command_templates_omit_the_local_config_path():
     assert "--config" not in "".join(cards.values())
 
 
+def test_ops_status_defers_backup_choices_and_full_descriptions_reuse_them(config, monkeypatch):
+    calls = []
+
+    def stored(cfg):
+        calls.append(cfg)
+        return ["daily_bars"]
+
+    monkeypatch.setattr("cnequity.ops.backups.stored_datasets", stored)
+    client = _client(config)
+    status = client.get("/api/ops/status").json()
+    assert set(status) == {"mode", "occupancy", "csrf_token"}
+    assert status["mode"]["ops_enabled"]
+
+    compact = client.get("/api/ops/status?controls=true").json()
+    summary = next(card for card in compact["operations"] if card["id"] == "snapshot.create")
+    assert summary["choices_deferred"] and summary["available"]
+    assert all(param["choices"] is None for param in summary["params"])
+    assert calls == []
+
+    single = client.get("/api/ops/operations/snapshot.create").json()
+    assert next(param for param in single["params"] if param["name"] == "datasets")["choices"] == [
+        "daily_bars"
+    ]
+    assert len(calls) == 1
+    assert client.get("/api/ops/operations/unknown").status_code == 404
+
+    full = client.get("/api/ops").json()
+    assert next(card for card in full["operations"] if card["id"] == single["id"]) == single
+    assert len(calls) == 2
+
+
 def test_click_walk_is_isolated_from_the_helper_above(config):
     """The alignment walk above is the contract. This one rejects a forged flag."""
     client = _client(config)
@@ -805,11 +836,12 @@ def test_missing_default_config_opens_setup_without_binding(tmp_path, monkeypatc
         )()
         return [v4, v6]
 
-    def fake_run(app, host, port, sockets):
+    def fake_run(app, host, port, sockets, *, log_level):
         captured["setup"] = app.state.setup
         captured["host"] = host
         captured["port"] = port
         captured["sockets"] = len(sockets)
+        captured["log_level"] = log_level
 
     monkeypatch.setattr(consume_cmds, "bind_loopback", fake_bind)
     monkeypatch.setattr(consume_cmds, "_run_server", fake_run)
@@ -818,6 +850,7 @@ def test_missing_default_config_opens_setup_without_binding(tmp_path, monkeypatc
     assert captured["setup"] is True
     assert captured["host"] == "127.0.0.1"
     assert captured["sockets"] == 2
+    assert captured["log_level"] == "info"
     assert "http://localhost:8791/" in result.output
     assert "http://127.0.0.1:8791/" not in result.output
     assert "首次配置" in result.output
@@ -995,12 +1028,22 @@ def test_source_status_counts_requests_keys_and_todays_failures(config, monkeypa
     manifest = Manifest(config.manifest_path)
     run_id = manifest.start_run("events:news_wire")
     manifest.start_batch(run_id, "b1", "task", "news_headlines")
-    manifest.finish_batch(run_id, "b1", "failed", error_message="proxy down")
+    manifest.finish_batch(
+        run_id,
+        "b1",
+        "failed",
+        error_message="proxy down",
+        source_routes={"eastmoney_push2": ["attempted"], "eastmoney_dc": ["fallback", "failed"]},
+    )
+    manifest.start_batch(run_id, "b2", "task", "news_headlines")
+    manifest.finish_batch(run_id, "b2", "failed")
     manifest.finish_run(run_id, "failed")
     monkeypatch.setattr(config, "tushare_token", None, raising=False)
     shown = source_status(config)
     assert shown["keys"]["tushare"] is False
-    assert shown["failures"]["eastmoney"] == {"batches": 1, "datasets": ["news_headlines"]}
+    assert shown["failures"]["eastmoney_dc"] == {"batches": 1, "datasets": ["news_headlines"]}
+    assert shown["failures"]["unknown"] == {"batches": 1, "datasets": ["news_headlines"]}
+    assert "eastmoney" not in shown["failures"]
     assert "push2" in shown["requests"]
 
 

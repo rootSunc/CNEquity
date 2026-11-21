@@ -9,7 +9,7 @@ writes to ``meta/source_snapshots`` and never to curated, so it only feeds the
 arbitration checks in `cne audit`. ``backfill`` and ``repair-bars`` change what
 the lake holds and are gated separately, on ``[sources.ths_official].backfill``.
 
-See ``docs/zh/getting-started/configuration.md`` (THS 官方接口) for the user-facing boundaries these
+See ``docs/zh/datasets/catalog.md`` for the user-facing boundaries these
 commands act on.
 """
 
@@ -106,7 +106,7 @@ def _staged_run(cfg, job_name: str, prefix: str, metadata: dict, *, record: bool
         # A dry run stages nothing, so there is nothing for a run to account for.
         yield run_id, outcome
         return
-    manifest = Manifest(cfg.manifest_path)
+    manifest = Manifest(cfg.manifest_path, config=cfg)
     manifest.start_run(job_name, metadata, run_id=run_id)
     try:
         yield run_id, outcome

@@ -19,21 +19,20 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from cnequity.config import Config
+from cnequity.config.failure_policy import (
+    DEFAULT_RUN_FAILURE_STREAK as RUN_STREAK_MIN,
+)
+from cnequity.config.failure_policy import (
+    DEFAULT_RUN_FAILURE_WINDOW_HOURS as RUN_STREAK_WINDOW_HOURS,
+)
+from cnequity.config.failure_policy import (
+    recent_run_streak,
+)
 from cnequity.sqlite_readonly import connect_readonly
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["RUN_STREAK_WINDOW_HOURS", "RUN_STREAK_MIN", "degraded_job_findings"]
-
-# How far back to read. Long enough that a job firing hourly has several runs
-# inside it, short enough that yesterday's fixed outage does not keep a finding
-# alive: only the trailing streak counts, and it has to reach into this window.
-RUN_STREAK_WINDOW_HOURS = 24
-
-# Three consecutive misses. Two can be one source's bad minute seen twice; a
-# job that fires once a day cannot reach three inside the window at all, which
-# is deliberate — a daily job that fails is already a failed run somebody sees.
-RUN_STREAK_MIN = 3
 
 _UNHEALTHY = ("failed", "degraded")
 
@@ -71,7 +70,10 @@ def _recent_runs(
 def degraded_job_findings(config: Config, *, now: datetime | None = None) -> list[dict]:
     """Report a job whose recent runs have all come back unhealthy."""
     moment = now or datetime.now(timezone.utc)
-    since = moment - timedelta(hours=RUN_STREAK_WINDOW_HOURS)
+    rule = recent_run_streak(config)
+    if not rule.minimum:
+        return []
+    since = moment - timedelta(hours=rule.window_hours)
     runs = _recent_runs(config, since, moment)
     if not runs:
         return []
@@ -91,7 +93,7 @@ def degraded_job_findings(config: Config, *, now: datetime | None = None) -> lis
             if entry[0] not in _UNHEALTHY:
                 break
             trailing.append(entry)
-        if len(trailing) < RUN_STREAK_MIN:
+        if not rule.reached(len(trailing)):
             continue
         entries = list(reversed(trailing))
         streak = len(entries)
@@ -112,7 +114,7 @@ def degraded_job_findings(config: Config, *, now: datetime | None = None) -> lis
                 ),
                 "job_name": job,
                 "streak": streak,
-                "window_hours": RUN_STREAK_WINDOW_HOURS,
+                "window_hours": rule.window_hours,
                 "first_started_at": entries[0][1],
                 "last_started_at": entries[-1][1],
                 "statuses": statuses,

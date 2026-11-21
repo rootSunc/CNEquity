@@ -18,11 +18,12 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.domain.bse_codes import legacy_symbol_map
+from cnequity.domain.datasets import get_dataset
 
 __all__ = ["LIMIT_PRICES_FLOOR", "SOURCE", "fetch_limit_prices", "normalize"]
 
 #: First session ``stk_limit`` serves.
-LIMIT_PRICES_FLOOR = date(2007, 1, 4)
+LIMIT_PRICES_FLOOR = get_dataset("limit_prices").history_floor_date
 
 _FIELDS = "trade_date,ts_code,up_limit,down_limit"
 _PAGE_SIZE = 3000

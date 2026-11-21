@@ -29,6 +29,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cnequity.meta_layout import (
+    LAKE_DIR,
+    LAKE_RECORD,
+    LEGACY_STATE,
+    META_DIR,
+    REVISION_RECORDS,
+    STORAGE_RECORD,
+)
 from cnequity.sqlite_readonly import connect_readonly
 
 
@@ -118,7 +126,7 @@ def _check_extensions() -> Check:
 
     with tempfile.TemporaryDirectory(prefix="cne-upgrade-probe-") as folder:
         try:
-            Catalog(Path(folder) / "lake", create=True).close()
+            Catalog(Path(folder) / LAKE_DIR, create=True).close()
         except ExtensionUnavailableError as exc:
             return Check("extensions", False, str(exc))
     return Check("extensions", True, "the DuckDB extensions the lake catalog needs are available")
@@ -138,21 +146,21 @@ def back_up(config) -> Path:
     target = Path(config.data_root) / "backups" / f"upgrade-{stamp}"
     meta = Path(config.meta_root)
     for source in (
-        meta / "storage.json",
-        meta / "lake.json",
-        meta / "state" / "lake.json",  # a lake from before 0.25 that has not read it since
-        *sorted((meta / "revisions").glob("*/current.json")),
+        meta / STORAGE_RECORD,
+        meta / LAKE_RECORD,
+        meta / LEGACY_STATE / LAKE_RECORD,  # a lake from before 0.25 that has not read it since
+        *sorted((meta / REVISION_RECORDS).glob("*/current.json")),
     ):
         if source.is_file():
-            stored = target / "meta" / source.relative_to(meta)
+            stored = target / META_DIR / source.relative_to(meta)
             stored.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, stored)
     catalog = lake_root(config) / CATALOG_FILE
     if catalog.is_file():
-        (target / "lake").mkdir(parents=True, exist_ok=True)
+        (target / LAKE_DIR).mkdir(parents=True, exist_ok=True)
         with (
             closing(connect_readonly(catalog)) as original,
-            closing(sqlite3.connect(target / "lake" / CATALOG_FILE)) as copied,
+            closing(sqlite3.connect(target / LAKE_DIR / CATALOG_FILE)) as copied,
         ):
             original.backup(copied)
     target.mkdir(parents=True, exist_ok=True)
@@ -166,35 +174,38 @@ def run(config, progress: Callable[[str, str, str], None] | None = None) -> dict
     A migration that fails stops the run; the ones before it are recorded and
     are not repeated when the upgrade is started again.
     """
+    from cnequity.storage.catalog_bridge import lake_root
     from cnequity.storage.catalog_migration import migrate_to_catalog
     from cnequity.storage.migrations import affected, owed, record
+    from equitylake_core.lock import lake_maintenance
 
-    results: list[dict] = []
-    for migration in owed(config):
-        started = datetime.now(timezone.utc)
-        try:
-            if migration.id == "lake-catalog":
-                report = migrate_to_catalog(
-                    config,
-                    apply=True,
-                    progress=None
-                    if progress is None
-                    else lambda stage, dataset: progress("lake-catalog", stage, dataset),
-                )
-            else:
-                if progress is not None:
-                    progress(migration.id, "repair", "")
-                report = migration.apply(config, apply=True)
-        except Exception as exc:  # noqa: BLE001 — reported; later ones may depend on it
-            results.append({"id": migration.id, "error": f"{type(exc).__name__}: {exc}"})
-            return {"done": False, "migrations": results}
-        record(config, migration, report)
-        results.append(
-            {
-                "id": migration.id,
-                "affected": affected(report),
-                "seconds": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
-                "report": report,
-            }
-        )
-    return {"done": True, "migrations": results}
+    with lake_maintenance(lake_root(config)):
+        results: list[dict] = []
+        for migration in owed(config):
+            started = datetime.now(timezone.utc)
+            try:
+                if migration.id == "lake-catalog":
+                    report = migrate_to_catalog(
+                        config,
+                        apply=True,
+                        progress=None
+                        if progress is None
+                        else lambda stage, dataset: progress("lake-catalog", stage, dataset),
+                    )
+                else:
+                    if progress is not None:
+                        progress(migration.id, "repair", "")
+                    report = migration.apply(config, apply=True)
+            except Exception as exc:  # noqa: BLE001 — reported; later ones may depend on it
+                results.append({"id": migration.id, "error": f"{type(exc).__name__}: {exc}"})
+                return {"done": False, "migrations": results}
+            record(config, migration, report)
+            results.append(
+                {
+                    "id": migration.id,
+                    "affected": affected(report),
+                    "seconds": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
+                    "report": report,
+                }
+            )
+        return {"done": True, "migrations": results}

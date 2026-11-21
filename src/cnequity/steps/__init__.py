@@ -11,6 +11,7 @@ from cnequity.steps import (  # noqa: F401
     fundamentals,
     intraday,
     macro_risk,
+    minute_resamples,
     newsboard,
     reference,
     research,

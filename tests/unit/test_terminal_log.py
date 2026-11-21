@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 
 import pytest
 from babel.messages.catalog import Catalog
@@ -12,7 +13,7 @@ from babel.messages.mofile import write_mo
 from cnequity import i18n
 from cnequity.cli._shared import LOG_FORMAT, terminal_formatter
 from cnequity.i18n import Message
-from cnequity.terminal_log import TerminalFormatter
+from cnequity.terminal_log import RedactedFormatter, TerminalFormatter
 
 
 def _record(msg, *args, level=logging.INFO, name="cnequity.orchestrator.engine", exc_info=None):
@@ -32,12 +33,31 @@ def test_one_record_reads_english_in_the_file_and_chinese_on_screen():
     screen = TerminalFormatter("zh_CN").format(record)
 
     assert file_line.endswith(
-        "INFO cnequity.orchestrator.engine: Step daily_bars success in 3.2s (52341 rows)"
+        f"INFO cnequity.orchestrator.engine [pid={os.getpid()}]: Step daily_bars success in 3.2s (52341 rows)"
     )
     assert screen.endswith(" 步骤 daily_bars 成功，用时 3.2s（52341 行）")
     # The formatter changed nothing a later handler would see.
     assert record.msg is msg and record.args is args
     assert record.getMessage() == "Step daily_bars success in 3.2s (52341 rows)"
+
+
+@pytest.mark.parametrize("formatter", [RedactedFormatter(), TerminalFormatter("zh_CN")])
+def test_log_formats_mask_credentials_without_changing_the_record(formatter):
+    record = _record(
+        "GET https://user:password-value@example.test/?token=query-value --api-key flag-value "
+        "Authorization: Bearer header-value configured-value"
+    )
+    formatter.secrets = ("configured-value",)
+    shown = formatter.format(record)
+    for secret in (
+        "password-value",
+        "query-value",
+        "flag-value",
+        "header-value",
+        "configured-value",
+    ):
+        assert secret not in shown
+        assert secret in record.getMessage()
 
 
 def test_english_screen_is_short_and_tags_problems():
@@ -127,7 +147,7 @@ class _Stream(io.StringIO):
 
 
 @pytest.mark.parametrize(
-    ("tty", "expected"), [(True, TerminalFormatter), (False, logging.Formatter)]
+    ("tty", "expected"), [(True, TerminalFormatter), (False, RedactedFormatter)]
 )
 def test_only_an_interactive_terminal_gets_the_short_view(tty, expected):
     formatter = terminal_formatter(_Stream(tty))

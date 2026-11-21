@@ -26,6 +26,7 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.domain.bse_codes import legacy_symbol_map
+from cnequity.domain.datasets import get_dataset
 
 __all__ = [
     "BUSINESS_SEGMENTS_FLOOR",
@@ -42,9 +43,9 @@ __all__ = [
     "repeated_page",
 ]
 
-EARNINGS_FORECASTS_FLOOR = date(2004, 1, 1)
-BUSINESS_SEGMENTS_FLOOR = date(2004, 3, 31)
-INVESTOR_VISITS_FLOOR = date(2021, 8, 1)
+EARNINGS_FORECASTS_FLOOR = get_dataset("earnings_forecasts").history_floor_date
+BUSINESS_SEGMENTS_FLOOR = get_dataset("business_segments").history_floor_date
+INVESTOR_VISITS_FLOOR = get_dataset("investor_visits").history_floor_date
 
 #: ``fina_mainbz_vip`` ``type`` → stored ``segment_type``.
 SEGMENT_TYPES = {"P": "product", "D": "region", "I": "industry"}

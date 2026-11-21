@@ -1,10 +1,9 @@
 """15m / 30m / 60m bars stored on request, resampled from the lake's 1m and 5m.
 
-Nothing schedules this. The coarser bars are a pure function of minute data the
-lake already holds, so by default they are computed at read time
-(``cnequity.query.resample_minute_history``); ``cne derive minute_bars_15m``
-and its siblings are for users who want them as ordinary datasets — readable by
-SQL, the HTTP API and MCP without a Python step.
+The coarser bars are a pure function of minute data the lake already holds.
+They can be computed at read time (``cnequity.query.resample_minute_history``).
+Once stored with ``cne derive minute_bars_15m`` or its siblings, they can be
+maintained by the intraday schedule.
 
 Each symbol-day is built from 1m when the lake has 1m for it and from 5m
 otherwise, and ``resampled_from`` records which. 1m keeps trade-only OHLC; the
@@ -40,7 +39,11 @@ from typing import TYPE_CHECKING
 import polars as pl
 
 from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
-from cnequity.query.resample import incomplete_symbol_days, resample_minute_history
+from cnequity.query.resample import (
+    continuous_bar_slot,
+    incomplete_symbol_days,
+    resample_minute_history,
+)
 
 if TYPE_CHECKING:
     from cnequity.config import Config
@@ -97,7 +100,9 @@ def _input_days(config: Config) -> dict[date, dict[str, str | None]]:
     return {day: {name: digests[name].get(day) for name in INPUTS} for day in days}
 
 
-def stale_sessions(config: Config, dataset: str) -> list[date]:
+def stale_sessions(
+    config: Config, dataset: str, *, input_days: dict[date, dict[str, str | None]] | None = None
+) -> list[date]:
     """Sessions never built, or whose inputs, code or output no longer match.
 
     A later 1m backfill is the case that matters most: a session first built
@@ -107,8 +112,9 @@ def stale_sessions(config: Config, dataset: str) -> list[date]:
 
     derivation = _derivation_identity()
     outputs = _partition_digests(config, dataset)
+    input_days = _input_days(config) if input_days is None else input_days
     stale = []
-    for day, inputs in _input_days(config).items():
+    for day, inputs in input_days.items():
         receipt = read_json(_receipt_path(config, dataset, day))
         if (
             receipt.get("format") != RECEIPT_FORMAT
@@ -123,13 +129,12 @@ def stale_sessions(config: Config, dataset: str) -> list[date]:
 def resample_backlog(config: Config, dataset: str) -> dict:
     """How far a stored resample trails its minute inputs, for status and the panel.
 
-    ``pending`` counts the sessions a default ``cne derive`` would rebuild:
-    nothing reruns these datasets when 1m or 5m change, so without this number
-    a reader could not tell current bars from bars a backfill has overtaken.
+    ``pending`` counts the sessions a default ``cne derive`` would reconcile.
     """
+    inputs = _input_days(config)
     return {
-        "pending": len(stale_sessions(config, dataset)),
-        "input_sessions": len(_input_days(config)),
+        "pending": len(stale_sessions(config, dataset, input_days=inputs)),
+        "input_sessions": len(inputs),
         "derived": bool(_partition_digests(config, dataset)),
     }
 
@@ -155,14 +160,8 @@ def _day_shape(frame: pl.DataFrame, step: int) -> pl.DataFrame:
     fetch looks like.
     """
     keys = ["symbol", "trade_date"]
-    clock = pl.col("bar_time").dt.hour().cast(pl.Int32) * 60 + pl.col("bar_time").dt.minute()
-    slot = (
-        pl.when(clock <= 690)
-        .then((clock - 570) // step)
-        .otherwise((clock - 780) // step + 120 // step)
-    )
     return (
-        frame.with_columns(slot.alias("_slot"))
+        frame.with_columns(continuous_bar_slot(step).alias("_slot"))
         .group_by(keys)
         .agg(
             ((pl.col("volume") > 0) | (pl.col("amount") > 0)).any().alias("traded"),
@@ -264,8 +263,7 @@ def derive_minute_resample(
 
     By default only :func:`stale_sessions` are rebuilt; ``start``/``end``
     pick a window instead, and ``full`` rebuilds every input session. No
-    watermark is kept: nothing schedules these datasets, so one would only
-    ever read as stale.
+    watermark is kept: the input and output digests track individual sessions.
     """
     from cnequity.domain.schemas import validate_dataframe, with_provenance
     from cnequity.storage.atomic import write_json_atomic
@@ -275,7 +273,7 @@ def derive_minute_resample(
     frequency = FREQUENCY_BY_DATASET[dataset]
     inputs = _input_days(config)
     if start is None and end is None and not full:
-        sessions = stale_sessions(config, dataset)
+        sessions = stale_sessions(config, dataset, input_days=inputs)
         if not sessions:
             return {"rows": 0, "note": f"{dataset} 已是最新：分钟线输入和计算规则都没有变化"}
     else:
@@ -327,8 +325,11 @@ def derive_minute_resample(
             frame = validate_dataframe(
                 with_provenance(bars, source="derived", data_version="v1"), dataset
             )
-            out.write(label, frame, "part-000.parquet")
-            digest = frame_day_digests(frame, dataset).get(day)
+            # An unchanged catalog partition keeps its original fetched_at.
+            # The receipt must describe those rows, including that timestamp.
+            applied = out.write(label, frame, "part-000.parquet")
+            stored = frame if applied or frame.is_empty() else out.rows(label)
+            digest = frame_day_digests(stored, dataset).get(day)
         write_json_atomic(
             _receipt_path(config, dataset, day),
             {
@@ -360,3 +361,10 @@ def derive_minute_resample(
         "skipped_invalid": len(invalid),
         "invalid_examples": invalid[:5],
     }
+
+
+def resample_has_gaps(summary: dict) -> bool:
+    return any(
+        summary.get(key)
+        for key in ("skipped_incomplete_1m", "skipped_incomplete_5m", "skipped_invalid")
+    )

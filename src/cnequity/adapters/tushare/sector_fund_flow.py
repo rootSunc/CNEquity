@@ -18,11 +18,12 @@ from datetime import date
 import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
+from cnequity.domain.datasets import get_dataset
 
 __all__ = ["MONEYFLOW_IND_DC_FLOOR", "SOURCE", "fetch_sector_fund_flow", "normalize"]
 
 #: First session ``moneyflow_ind_dc`` serves (2023-09-11 is empty).
-MONEYFLOW_IND_DC_FLOOR = date(2023, 9, 12)
+MONEYFLOW_IND_DC_FLOOR = get_dataset("sector_fund_flow").keyed_backfill_floor
 
 _FIELDS = "trade_date,content_type,ts_code,name,pct_change,net_amount"
 _PAGE_SIZE = 3000

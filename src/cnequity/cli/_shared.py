@@ -9,15 +9,23 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import click
 
 from cnequity.config import load_config
 from cnequity.config.errors import ConfigError
-from cnequity.config.locate import PROJECT_CONFIG, default_config_path, user_config_path
+from cnequity.config.locate import (
+    CONFIG_ENV_VAR,
+    PROJECT_CONFIG,
+    default_config_path,
+    user_config_path,
+)
+from cnequity.config.logging import DEFAULT_LOGGING, logging_settings
 from cnequity.i18n import N_, _
+from cnequity.terminal_log import LOG_FORMAT as LOG_FORMAT
+from cnequity.terminal_log import RedactedFormatter, configured_log_secrets, diagnostic_formatter
 
 USER_CONFIG = PROJECT_CONFIG.as_posix()
 EXAMPLE_CONFIG = "configs/cnequity.example.toml"
@@ -60,7 +68,7 @@ def config_option(func):
         # as `--config`; the CLI itself did not, so a cron line that forgot its
         # `cd` failed with "Config not found" instead of using the config the
         # environment already named.
-        envvar="CNE_CONFIG",
+        envvar=CONFIG_ENV_VAR,
         show_envvar=True,
     )(func)
 
@@ -136,6 +144,7 @@ def _cfg(config: str):
         cfg._validate_source_limits()
     except ValueError as exc:
         raise click.ClickException(str(exc).split("; got", 1)[0]) from None
+    _apply_logging_settings(cfg)
     return cfg
 
 
@@ -170,10 +179,7 @@ def comma_values(value: str | None, flag: str) -> list[str] | None:
     return parts
 
 
-LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-
-
-def terminal_formatter(stream) -> logging.Formatter:
+def terminal_formatter(stream) -> RedactedFormatter:
     """The short, translated view for a person at a terminal; the log format otherwise.
 
     Output that is redirected — a scheduler capturing stderr, CI, a pipe into
@@ -188,58 +194,119 @@ def terminal_formatter(stream) -> logging.Formatter:
     if interactive:
         from cnequity.terminal_log import TerminalFormatter
 
-        return TerminalFormatter()
-    return logging.Formatter(LOG_FORMAT)
+        formatter = TerminalFormatter()
+        formatter.secrets = configured_log_secrets()
+        return formatter
+    return diagnostic_formatter()
+
+
+_CONSOLE = "cne_console"
+_FILE = "cne_file"
+_QUIET_LOGGERS = ("httpx", "httpcore", "urllib3", "curl_cffi")
+
+
+def _apply_logging_settings(config) -> None:
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return
+    settings = logging_settings(config)
+    ctx.meta["cne.logging.settings"] = settings
+    secrets = configured_log_secrets(config)
+    ctx.meta["cne.logging.secrets"] = secrets
+    root = logging.getLogger()
+    owned = [h for h in root.handlers if getattr(h, _CONSOLE, False) or getattr(h, _FILE, False)]
+    if not owned:
+        return
+    quiet = ctx.meta.get("cne.logging.quiet", False)
+    for handler in owned:
+        if isinstance(handler.formatter, RedactedFormatter):
+            handler.formatter.secrets = secrets
+        if getattr(handler, _CONSOLE, False):
+            handler.setLevel(settings.console_threshold(quiet=quiet))
+    _enable_package_logging(owned, settings.heartbeat_seconds)
+
+
+def _enable_package_logging(handlers, interval: int) -> None:
+    from cnequity.progress import start_heartbeat
+
+    threshold = min(h.level for h in handlers)
+    logging.getLogger("cnequity").setLevel(threshold)
+    start_heartbeat(interval if threshold <= logging.INFO else 0)
+
+
+def close_command_logging(ctx: click.Context) -> None:
+    """Scope our handlers and heartbeat to a CLI invocation, including when embedded."""
+    root = logging.getLogger()
+    package = logging.getLogger("cnequity")
+    original = tuple(root.handlers)
+    root_level, package_level = root.level, package.level
+    external_levels = {name: logging.getLogger(name).level for name in _QUIET_LOGGERS}
+
+    def close():
+        from cnequity.progress import stop_heartbeat
+
+        if ctx.meta.get("cne.logging.owned"):
+            stop_heartbeat()
+        for handler in root.handlers[:]:
+            if handler not in original and (
+                getattr(handler, _CONSOLE, False) or getattr(handler, _FILE, False)
+            ):
+                root.removeHandler(handler)
+                handler.close()
+        if ctx.meta.get("cne.logging.owned"):
+            root.setLevel(root_level)
+            package.setLevel(package_level)
+            for name, level in external_levels.items():
+                logging.getLogger(name).setLevel(level)
+
+    ctx.call_on_close(close)
 
 
 def _progress_logging(quiet: bool = False, *, take_over: bool = True) -> bool:
-    """Send the pipeline's own INFO records to the terminal.
-
-    Long fetches were silent until they finished: `cne init` runs for hours and
-    printed nothing until the closing JSON, which is indistinguishable from
-    hung — and a process that looks hung gets killed. The steps and the worker
-    pool already log their progress; nothing was listening.
-
-    Third-party loggers stay at WARNING. httpx logs a line per request, which
-    on a full-market sweep is hundreds of thousands of lines and buries exactly
-    the progress this exists to surface.
-
-    Per-step progress still leaves gaps — a step reports a batch only once the
-    whole batch lands — so a heartbeat names whatever is running whenever the
-    log goes quiet. It is started here, after the root handlers the heartbeat
-    needs to watch are in place.
-
-    `take_over=False` declines to touch a root logger somebody else already
-    configured, and returns False to say so. The CLI wires this for every
-    command now, and `force=True` on every one of them meant that importing
-    `cnequity.cli` and calling a command destroyed the host application's
-    logging — a query like `contract show` has no business doing that. The
-    commands that own the terminal for hours still take over.
-    """
+    """Install the command's stderr handler without replacing an embedding app's handlers."""
     root = logging.getLogger()
     if not take_over and root.handlers:
         return False
+    ctx = click.get_current_context(silent=True)
+    settings = ctx.meta.get("cne.logging.settings", DEFAULT_LOGGING) if ctx else DEFAULT_LOGGING
+    threshold = settings.console_threshold(quiet=quiet)
     handler = logging.StreamHandler()
-    handler.setFormatter(terminal_formatter(handler.stream))
-    handler.addFilter(lambda record: not getattr(record, "echoed_by_click", False))
-    logging.basicConfig(
-        level=logging.WARNING if quiet else logging.INFO,
-        handlers=[handler],
-        force=True,
+    setattr(handler, _CONSOLE, True)
+    handler.setLevel(threshold)
+    formatter = terminal_formatter(handler.stream)
+    if ctx is not None:
+        formatter.secrets = ctx.meta.get("cne.logging.secrets", formatter.secrets)
+    handler.setFormatter(formatter)
+    handler.addFilter(
+        lambda record: (
+            not (getattr(record, "echoed_by_click", False) or getattr(record, "file_only", False))
+        )
     )
-    for noisy in ("httpx", "httpcore", "urllib3", "curl_cffi"):
+    if ctx is None:
+        logging.basicConfig(level=threshold, handlers=[handler], force=True)
+    else:
+        ctx.meta["cne.logging.owned"] = True
+        ctx.meta["cne.logging.quiet"] = quiet
+        for previous in root.handlers[:]:
+            if getattr(previous, _CONSOLE, False):
+                root.removeHandler(previous)
+                previous.close()
+        root.addHandler(handler)
+        if not any(h is not handler and not getattr(h, _FILE, False) for h in root.handlers):
+            root.setLevel(threshold)
+    for noisy in _QUIET_LOGGERS:
         logging.getLogger(noisy).setLevel(logging.WARNING)
     from cnequity.progress import enable_stack_dumps
 
     enable_stack_dumps()
-    if not quiet:
-        from cnequity.progress import start_heartbeat
-
-        start_heartbeat()
+    _enable_package_logging(
+        [handler, *(h for h in root.handlers if getattr(h, _FILE, False))],
+        settings.heartbeat_seconds,
+    )
     return True
 
 
-def attach_log_file(cfg, command: str, *, quiet: bool = False) -> Path | None:
+def attach_log_file(cfg, command: str) -> Path | None:
     """Tee this run's log into the lake, and say where.
 
     Progress on the terminal only helps someone watching it. A run that took
@@ -250,6 +317,9 @@ def attach_log_file(cfg, command: str, *, quiet: bool = False) -> Path | None:
     Failing to open the file is never worth failing the run over — `cne init`
     in particular is what creates the directory tree this would live in.
     """
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None and "cne.logging.file_path" in ctx.meta:
+        return ctx.meta["cne.logging.file_path"]
     env_dir = os.environ.get("CNE_LOG_DIR")
     data_root = getattr(cfg, "data_root", None)
     if not env_dir and data_root is None:
@@ -257,34 +327,60 @@ def attach_log_file(cfg, command: str, *, quiet: bool = False) -> Path | None:
         # no lake root is not running the kind of job this file is for.
         return None
     log_dir = Path(env_dir) if env_dir else Path(data_root) / "logs"
-    path = log_dir / f"cne-{command}-{datetime.now():%Y%m%d-%H%M%S}.log"
+    path = (
+        log_dir / f"cne-{command}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S-%f}-{os.getpid()}.log"
+    )
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        # `delay` so the file appears only once something is written to it.
-        # Commands that report through `click.echo` rather than `logging` — a
-        # bare `cne audit` is one — otherwise left a 0-byte file behind on
-        # every invocation, which the retention prune then had to clear.
-        handler = logging.FileHandler(path, encoding="utf-8", delay=True)
+        handler = logging.FileHandler(path, encoding="utf-8")
     except OSError as exc:
         logging.getLogger(__name__).warning("no log file at %s: %s", path, exc)
         return None
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    handler.setLevel(logging.WARNING if quiet else logging.INFO)
-    logging.getLogger().addHandler(handler)
-    # The CLI leaves a root logger someone else configured alone, and that
-    # root may sit at WARNING. Then no INFO record reaches this file, and the
-    # log a long job promised holds only its failure. Let the package's own
-    # records through at the file's level without reconfiguring the host.
-    package = logging.getLogger("cnequity")
-    if package.getEffectiveLevel() > handler.level:
-        package.setLevel(handler.level)
-    if not quiet:
-        # The heartbeat watches the root handlers; this is a new one.
-        from cnequity.progress import start_heartbeat
+    settings = logging_settings(cfg)
+    handler.setFormatter(diagnostic_formatter(cfg))
+    handler.setLevel(settings.file_threshold)
+    setattr(handler, _FILE, True)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    _enable_package_logging(
+        [handler, *(h for h in root.handlers if getattr(h, _CONSOLE, False))],
+        settings.heartbeat_seconds,
+    )
+    if ctx is not None:
+        ctx.meta["cne.logging.file_path"] = path
+        ctx.meta["cne.logging.owned"] = True
+        from cnequity.progress import current_step, step_scope
 
-        start_heartbeat()
+        if current_step() is None:
+            ctx.find_root().with_resource(step_scope(ctx.command_path))
+    launch = os.environ.get("CNE_LAUNCH_ID", "")
+    logger = logging.getLogger("cnequity.command")
+    logger.info(
+        "started %s (task=%s, config=%s)",
+        command,
+        launch if re.fullmatch(r"[0-9a-f]{32}", launch) else "direct",
+        getattr(cfg, "config_path", None) or "built-in",
+        extra={"file_only": True},
+    )
     click.echo(_("Log written to {path}").format(path=path), err=True)
     return path
+
+
+def finish_command_logging(ctx: click.Context, elapsed: float, exc: BaseException | None) -> None:
+    if "cne.logging.file_path" not in ctx.meta:
+        return
+    code = (
+        exc.code if isinstance(exc, SystemExit) else getattr(exc, "exit_code", int(exc is not None))
+    )
+    if not isinstance(code, int):
+        code = int(code is not None)
+    logging.getLogger("cnequity.command").log(
+        logging.WARNING if code else logging.INFO,
+        "finished (exit=%d, elapsed=%.1fs)",
+        code,
+        elapsed,
+        extra={"file_only": True},
+    )
 
 
 def parse_date_option(value: str | None, flag: str) -> date | None:

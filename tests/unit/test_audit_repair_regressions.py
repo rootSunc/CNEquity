@@ -36,14 +36,18 @@ def test_offline_audit_never_calls_live_close_check(tmp_path, monkeypatch):
     audit._collect_lake_findings(Config(data_root=tmp_path), date(2026, 1, 1), offline=True)
 
 
-def test_scoped_full_audit_reads_changed_partitions_but_checks_foreign_keys_globally(tmp_path):
+@pytest.mark.parametrize("retained_revision", [False, True])
+def test_scoped_full_audit_reads_changed_partitions_but_checks_foreign_keys_globally(
+    tmp_path, retained_revision
+):
     from datetime import datetime, timezone
 
     from cnequity.quality.dataset_checks import audit_curated_dataset
 
     # event_id is the whole key, so a changed partition can collide with an
     # unchanged one; the scoped audit must still see both.
-    root = tmp_path / "regulatory_events"
+    config = Config(data_root=tmp_path)
+    root = config.curated_root / "regulatory_events"
     for day in ("2026-01-01", "2026-01-02"):
         path = root / f"event_date={day[:4]}" / f"part-{day}.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,6 +68,16 @@ def test_scoped_full_audit_reads_changed_partitions_but_checks_foreign_keys_glob
     pl.read_parquet(root / "event_date=2026" / "part-2026-01-01.parquet").with_columns(
         pl.lit(date(2025, 6, 1)).alias("event_date")
     ).write_parquet(other)
+    if retained_revision:
+        from tests.legacy_lake import commit_generation
+
+        from cnequity.storage.revisions import RevisionStore
+
+        store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
+        commit_generation(
+            store, "regulatory_events", run_id="test", changed_files=list(root.rglob("*.parquet"))
+        )
+
     findings = audit_curated_dataset(
         "regulatory_events",
         "event_date",

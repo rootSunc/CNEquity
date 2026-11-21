@@ -24,6 +24,7 @@ from typing import Literal
 import polars as pl
 
 from cnequity.domain.frames import is_blank
+from cnequity.domain.market_time import SHANGHAI_ZONE
 
 PitMode = Literal["strict", "best_effort"]
 PitQuality = Literal["strict", "reconstructed", "snapshot_only", "not_applicable"]
@@ -224,7 +225,7 @@ def _date_expr(df: pl.DataFrame, column: str) -> pl.Expr:
         # timestamp is UTC, as in ``_as_datetime_expr``.
         if dtype.time_zone is None:
             expr = expr.dt.replace_time_zone("UTC")
-        return expr.dt.convert_time_zone("Asia/Shanghai").dt.date()
+        return expr.dt.convert_time_zone(SHANGHAI_ZONE).dt.date()
     if dtype == pl.String or dtype == pl.Utf8:
         return expr.str.to_date(strict=False)
     return expr.cast(pl.Date, strict=False)

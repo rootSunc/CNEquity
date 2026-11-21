@@ -20,11 +20,12 @@ import shutil
 import uuid
 from pathlib import Path
 
+from cnequity.config.resources import resources_for
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.catalog_bridge import _laid_out_files, _listed_files, lake_root
-from cnequity.storage.lake_write import Checkout, _place, _protect, _Reader, lake_file_name
+from cnequity.storage.lake_write import Checkout, _Reader, lake_file_name
 from equitylake_core.catalog import Catalog
-from equitylake_core.write import Swap, apply_swap, rows_digest
+from equitylake_core.write import Write, rows_digest
 
 
 class LayoutError(RuntimeError):
@@ -144,31 +145,29 @@ def _swap_in(
     digest = rows_digest(catalog, dataset)
     # Registered files are refused by a table the catalog partitions itself.
     catalog.unpartition(dataset)
-    placed: list[Path] = []
-    try:
+
+    def check_rows(rewritten: Catalog) -> None:
+        after = rows_digest(rewritten, dataset)
+        if after.digest != digest.digest:
+            raise LayoutError(
+                f"{dataset}: the rows written out ({after.rows}) are not the rows "
+                f"the table held ({digest.rows}); nothing was changed"
+            )
+
+    with Write(catalog) as write:
         for label, source in written:
             target = checkout.layout_dir(label, catalog) / lake_file_name(source.name)
-            placed.append(target)
-            if catalog.file_fits(dataset, source):
-                _place(source, target)
-            else:
-                catalog.conform_file(dataset, source, target)
-            _protect(target)
-        with catalog.transaction(message=f"lay out {dataset}"):
-            apply_swap(
-                catalog, Swap(dataset, tuple(path.as_posix() for path in placed), tuple(old))
-            )
-            after = rows_digest(catalog, dataset)
-            if after.digest != digest.digest:
-                raise LayoutError(
-                    f"{dataset}: the rows written out ({after.rows}) are not the rows "
-                    f"the table held ({digest.rows}); nothing was changed"
-                )
-    except BaseException:
-        for path in placed:
-            path.unlink(missing_ok=True)
-        raise
-    return {"dataset": dataset, "rows": digest.rows, "files_before": len(old), "files": len(placed)}
+            conform_to = None if catalog.file_fits(dataset, source) else dataset
+            write.place(source, target, conform_to=conform_to)
+        write.swap(dataset, add=write.placed, remove=old)
+        write.check("same rows after layout", check_rows)
+        write.commit(message=f"lay out {dataset}")
+    return {
+        "dataset": dataset,
+        "rows": digest.rows,
+        "files_before": len(old),
+        "files": len(write.placed),
+    }
 
 
 def lay_out_all(config, progress=None) -> list[dict]:
@@ -178,7 +177,9 @@ def lay_out_all(config, progress=None) -> list[dict]:
     """
     root = lake_root(config)
     done = []
-    with Catalog(root, memory_limit="8GB", temp_directory=root / "tmp") as catalog:
+    with Catalog(
+        root, **resources_for(config, "maintenance").options(scratch=root / "tmp")
+    ) as catalog:
         from cnequity.domain.datasets import DATASETS
 
         for dataset in sorted(DATASETS):

@@ -28,6 +28,7 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.config import Config
+from cnequity.domain.datasets import get_dataset
 from cnequity.domain.schemas import BROKER_FORECASTS_SCHEMA
 
 __all__ = ["BROKER_FORECASTS_FLOOR", "SOURCE", "fetch_broker_forecasts"]
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 DATA_VERSION = "v1"
 # Tushare documents report_rc from 2010; full days were served from 2016.
-BROKER_FORECASTS_FLOOR = date(2016, 1, 1)
+BROKER_FORECASTS_FLOOR = get_dataset("broker_forecasts").history_floor_date
 # report_rc returns at most 3,000 rows per call; page well under that.
 _PAGE_SIZE = 2000
 _MAX_PAGES = 50

@@ -13,7 +13,7 @@ from equitylake_core.catalog import CatalogError
 from equitylake_core.extensions import ExtensionUnavailableError
 from equitylake_core.lake import Lake
 from equitylake_core.spec import DatasetSpec, Registry, Rule
-from equitylake_core.write import WriteRejected
+from equitylake_core.write import Write, WriteRejected
 
 BARS = DatasetSpec(
     name="bars",
@@ -73,6 +73,41 @@ def _files(lake, dataset):
 def _on_disk(lake, dataset):
     """Every file under the dataset's directory, also those only older snapshots hold."""
     return sorted((lake.root / "data" / "main" / dataset).rglob("*.parquet"))
+
+
+@pytest.mark.parametrize("fault", ["commit", "result"])
+def test_an_uncertain_or_unreadable_commit_preserves_registered_files(lake, monkeypatch, fault):
+    original = Write.commit
+
+    def result_unavailable(write, **kwargs):
+        def fail():
+            raise OSError("cannot read committed snapshot")
+
+        class LostCommitReply:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
+
+            def execute(self, sql, *args):
+                result = self.connection.execute(sql, *args)
+                if sql == "COMMIT":
+                    fail()
+                return result
+
+        with monkeypatch.context() as patch:
+            if fault == "commit":
+                patch.setattr(write.catalog, "con", LostCommitReply(write.catalog.con))
+            else:
+                patch.setattr(write.catalog, "snapshot", fail)
+            return original(write, **kwargs)
+
+    monkeypatch.setattr(Write, "commit", result_unavailable)
+    frame = _bars((date(2024, 1, 2), "A", 1.0, 2.0))
+    with pytest.raises(OSError, match="cannot read committed snapshot"):
+        _put(lake, "bars", frame)
+    assert lake.load("bars").equals(frame)
 
 
 def test_a_lake_must_exist_to_be_opened(tmp_path, lake):

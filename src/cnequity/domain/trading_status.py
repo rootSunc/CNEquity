@@ -42,11 +42,15 @@ runs; the migration only makes the old rows say it in the new column.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 
-from cnequity.domain.market_time import SHANGHAI_TZ
+from cnequity.domain.market_time import (
+    A_SHARE_CLOSE_AT,
+    SHANGHAI_STANDARD_OFFSET,
+    SHANGHAI_STANDARD_TZ,
+)
 
 STATUS_NORMAL = "normal"
 STATUS_SUSPENDED = "suspended"
@@ -317,7 +321,7 @@ def independent_suspension_keys(status: pl.DataFrame) -> pl.DataFrame:
 
 #: The closing auction ends at 15:00 Asia/Shanghai. A current-state board read
 #: before then describes a session that had not finished happening.
-SESSION_FINAL_AT = time(15, 0)
+SESSION_FINAL_AT = A_SHARE_CLOSE_AT
 
 #: An exchange record, or a current-state board read after that same session
 #: closed. Unknown sources land here too, so a newly introduced authority is
@@ -335,8 +339,7 @@ _EVIDENCE_INPUTS = ("source", "trade_date", "fetched_at")
 #: ``fetched_at`` is stored as a UTC instant, and the exchange runs at a fixed
 #: UTC+08:00 (see ``domain/market_time``). Shifting the instant is therefore
 #: exact, and keeps both readers free of an IANA timezone database.
-_SHANGHAI_OFFSET_HOURS = 8
-_SHANGHAI_OFFSET_US = _SHANGHAI_OFFSET_HOURS * 3600 * 1_000_000
+_SHANGHAI_OFFSET_US = SHANGHAI_STANDARD_OFFSET // timedelta(microseconds=1)
 
 
 def _shanghai(value: object) -> datetime | None:
@@ -350,7 +353,7 @@ def _shanghai(value: object) -> datetime | None:
         return None
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(SHANGHAI_TZ)
+    return value.astimezone(SHANGHAI_STANDARD_TZ)
 
 
 def evidence_rank(row: Mapping[str, object]) -> int:
@@ -402,7 +405,9 @@ def evidence_rank_expr(schema: Iterable[str] | Mapping[str, pl.DataType]) -> pl.
         # only means this frame gets the ordinary ordering rather than an
         # exception raised from inside somebody's query.
         return None
-    fetched_local = (fetched + pl.duration(hours=_SHANGHAI_OFFSET_HOURS)).dt.replace_time_zone(None)
+    fetched_local = (fetched + pl.duration(microseconds=_SHANGHAI_OFFSET_US)).dt.replace_time_zone(
+        None
+    )
     same_session = (
         fetched.is_not_null()
         & (fetched_local.dt.date() == pl.col("trade_date"))

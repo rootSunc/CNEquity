@@ -159,31 +159,36 @@ def build_trading_calendar(
     *,
     seed_path: Path | None = None,
     curated_root: Path | None = None,
+    known: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
-    """Return calendar rows for [start, end] from seed, extended by bar data.
+    """Return calendar rows for [start, end] from published rows, seed, or bars.
 
-    The seed is authoritative for every date it covers (2016 onward): bar
+    Published calendar rows take precedence. The seed comes next: bar
     derivation only fills dates outside its range — future dates past the bundled
     holiday schedule, and the deep history before it. That ordering keeps a
     spurious bar row from flipping a seed ``is_trading=False`` (a known holiday)
     to ``True``.
     """
-    seed = load_seed_calendar(seed_path)
-    seed = seed.filter((pl.col("trade_date") >= start) & (pl.col("trade_date") <= end))
-
-    seed_dates = set(seed["trade_date"].to_list())
+    seed = load_seed_calendar(seed_path).filter(pl.col("trade_date").is_between(start, end))
+    sessions = dict(seed.select("trade_date", "is_trading").iter_rows())
+    if known is not None:
+        sessions.update(
+            known.filter(pl.col("trade_date").is_between(start, end))
+            .select("trade_date", "is_trading")
+            .iter_rows()
+        )
     bar_trading_days: set[date] = set()
-    if curated_root is not None:
+    if curated_root is not None and len(sessions) < (end - start).days + 1:
         # Only consider bar-derived trading days for dates the seed does not
         # cover; within the seed range the seed wins outright.
-        bar_trading_days = _trading_days_from_bars(curated_root) - seed_dates
+        bar_trading_days = _trading_days_from_bars(curated_root) - sessions.keys()
 
     if end > _SEED_END:
         unknown_weekdays: list[date] = []
         unknown_start = max(start, _SEED_END + timedelta(days=1))
         d = unknown_start
         while d <= end:
-            if d.weekday() < 5 and d not in bar_trading_days:
+            if exchange_may_open(d) and d not in sessions and d not in bar_trading_days:
                 unknown_weekdays.append(d)
             d += timedelta(days=1)
         if unknown_weekdays:
@@ -198,14 +203,13 @@ def build_trading_calendar(
     # 春节/国庆 a session and inflating 2001-2008 to ~261 days against an actual
     # ~243. Inside this range a date with no bar anywhere is a closed market.
     bar_era_start = min(bar_trading_days) if bar_trading_days else None
-    seed_start = min(seed_dates) if seed_dates else None
+    seed_start = seed["trade_date"].min()
 
     rows: list[dict] = []
     d = start
     while d <= end:
-        in_seed = seed.filter(pl.col("trade_date") == d)
-        if not in_seed.is_empty():
-            is_trading = bool(in_seed["is_trading"][0])
+        if d in sessions:
+            is_trading = bool(sessions[d])
         elif d.isoformat() in CLOSED_DATES:
             is_trading = False
         elif d in bar_trading_days:

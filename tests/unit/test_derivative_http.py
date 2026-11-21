@@ -21,6 +21,15 @@ def clean():
     common.clear_cache()
 
 
+def test_relative_egress_ledger_has_one_absolute_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CNE_RATE_LIMIT_ROOT", "egress-budget")
+    cfg = Config(data_root=tmp_path / "lake")
+
+    assert common._budget_root(cfg) == common._budget_root(None) == cfg.rate_limit_root
+    assert cfg.rate_limit_root == tmp_path / "egress-budget"
+
+
 @pytest.mark.parametrize("status", [403, 412, 429, 456, 503, 567])
 def test_refusal_stops_other_dates_and_is_shared_across_configs(tmp_path, monkeypatch, status):
     monkeypatch.setenv("CNE_RATE_LIMIT_ROOT", str(tmp_path / "egress-budget"))

@@ -57,6 +57,7 @@ import polars as pl
 import pyarrow.parquet as pq
 
 from cnequity.config import Config
+from cnequity.config.resources import resources_for
 from cnequity.domain.datasets import DATASETS, DatasetSpec
 from cnequity.domain.partitions import granularity_of, parse_partition
 from cnequity.file_lock import LockUnavailable, exclusive_lock
@@ -278,10 +279,7 @@ def _provenance_for_dataset(
     scratch.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(":memory:")
     try:
-        con.execute(f"SET memory_limit='{config.duckdb_memory_limit}'")
-        con.execute(f"SET threads={config.duckdb_threads}")
-        escaped_scratch = scratch.resolve().as_posix().replace("'", "''")
-        con.execute(f"SET temp_directory='{escaped_scratch}'")
+        resources_for(config, "read").apply(con, scratch=scratch)
         frames = [_scan_provenance_batch(con, batch, keys) for batch in _provenance_batches(files)]
     finally:
         con.close()

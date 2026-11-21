@@ -20,7 +20,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -29,9 +28,11 @@ from cnequity.domain.datasets import (
     DatasetSpec,
     history_mode_for,
 )
+from cnequity.domain.market_time import SHANGHAI_TZ
 from cnequity.domain.symbols import filter_ingest_universe, is_subscription_placeholder
 from cnequity.domain.trading_status import independent_suspension_keys
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.meta_layout import LAKE_DIR
 from cnequity.quality.freshness import freshness_mark
 from cnequity.query.calendar import list_trading_dates
 from cnequity.sqlite_readonly import connect_readonly
@@ -44,7 +45,7 @@ from cnequity.storage.instrument_catalog import (
 )
 from cnequity.storage.state import StateStore
 from equitylake_core import coverage as cov
-from equitylake_core.catalog import ALIAS, Catalog, quote_literal
+from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog, quote_literal
 from equitylake_core.coverage import Coverage
 from equitylake_core.plan import Declared, Scope, plan_all, plan_dataset
 
@@ -61,9 +62,9 @@ def ledger(config) -> Iterator[Catalog]:
     """
     global _EMPTY_LAKE
     root = lake_root(config)
-    if not (root / "catalog.sqlite").exists():
-        if _EMPTY_LAKE is None or not (_EMPTY_LAKE / "catalog.sqlite").exists():
-            made = Path(tempfile.mkdtemp(prefix="cnequity-empty-lake-")) / "lake"
+    if not (root / CATALOG_FILE).exists():
+        if _EMPTY_LAKE is None or not (_EMPTY_LAKE / CATALOG_FILE).exists():
+            made = Path(tempfile.mkdtemp(prefix="cnequity-empty-lake-")) / LAKE_DIR
             Catalog(made, create=True).close()
             _EMPTY_LAKE = made
         root = _EMPTY_LAKE
@@ -84,13 +85,7 @@ def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
     ``history_until``). A spec that names its
     ``cells`` overrides the rule.
     """
-    start, end = spec.earliest_available(today), spec.source_retired_date
-    begins = getattr(config, "history_from", {}).get(spec.name) if config is not None else None
-    if begins is not None:
-        start = begins if start is None else max(start, begins)
-    ends = getattr(config, "history_until", {}).get(spec.name) if config is not None else None
-    if ends is not None:
-        end = ends if end is None else min(end, ends)
+    start, end = spec.history_bounds(today, config)
     if spec.cells == "latest" or (
         spec.cells is None and history_mode_for(spec, config) == "snapshot_only"
     ):
@@ -211,7 +206,7 @@ class BarUniverse:
 
 
 #: The market's time zone: a day, and whether an answer came after it, ends at its midnight.
-MARKET_ZONE = ZoneInfo("Asia/Shanghai")
+MARKET_ZONE = SHANGHAI_TZ
 
 
 def declared(config, end: date) -> dict[str, Declared]:
@@ -831,30 +826,36 @@ def _answer_rows(run_id: str, item: dict) -> list[dict]:
     ]
 
 
-def record_answers(config, run_id: str, findings: Iterable[dict]) -> int:
-    """Record the answers fetch steps reported in *findings*; returns the cells recorded.
-
-    Empty answers, and the days a clean reconcile sweep re-asked and got rows for.
-    """
+def attach_answers(write, run_id: str, findings: Iterable[dict]) -> int:
+    """Add the fetch findings that are not on record to this publication."""
     rows = [row for item in findings for row in _answer_rows(run_id, item)]
     if not rows:
         return 0
-    frame = pl.DataFrame(rows).unique()
+    catalog = write.catalog
+    frame = pl.DataFrame(rows).unique().cast({"asked_at": pl.Datetime("us", "UTC")})
+    cov.prepare(catalog)
     keys = ["dataset", "period", "run", "asked_at"]
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        with Catalog(lake_root(config)) as catalog:
-            if catalog.has_table(cov.ATTEMPTS):
-                # A run compacts more than once; each sees the same findings.
-                seen = catalog.records(cov.ATTEMPTS, ", ".join(keys)).cast(
-                    {"asked_at": pl.Datetime("us", "UTC")}
-                )
-                frame = frame.cast({"asked_at": pl.Datetime("us", "UTC")}).join(
-                    seen, on=keys, how="anti"
-                )
-            if frame.is_empty():
-                return 0
-            cov.record(catalog, frame, message=f"run:{run_id}:answers")
+    seen = catalog.records(cov.ATTEMPTS, ", ".join(keys)).cast(
+        {"asked_at": pl.Datetime("us", "UTC")}
+    )
+    frame = frame.join(seen, on=keys, how="anti")
+    write.record_frame(cov.ATTEMPTS, frame)
     return frame.height
+
+
+def record_answers(config, run_id: str, findings: Iterable[dict]) -> int:
+    """Record fetch answers when there is no data publication to include them in."""
+    from equitylake_core.write import Write
+
+    findings = list(findings)
+    if not any(item.get("check") in {ANSWER_CHECK, RECHECK_CHECK} for item in findings):
+        return 0
+    with lake_mutation_lock(config.meta_root), Catalog(lake_root(config)) as catalog:
+        write = Write(catalog)
+        count = attach_answers(write, run_id, findings)
+        if count:
+            write.commit(message=f"run:{run_id}:answers")
+    return count
 
 
 def record_cell_answers(

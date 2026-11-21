@@ -671,7 +671,7 @@ def test_a_job_log_keeps_info_under_a_host_root_at_warning(tmp_path, monkeypatch
     root.setLevel(logging.WARNING)
     package.setLevel(logging.NOTSET)
     try:
-        path = attach_log_file(Config(data_root=tmp_path), "offline", quiet=True)
+        path = attach_log_file(Config(data_root=tmp_path), "offline")
         logging.getLogger("cnequity.test_job").warning("kept")
         attach_log_file(Config(data_root=tmp_path), "offline-info")
         logging.getLogger("cnequity.test_job").info("progress line")
@@ -690,6 +690,66 @@ def test_a_job_log_keeps_info_under_a_host_root_at_warning(tmp_path, monkeypatch
         root.handlers = prior[0]
         root.setLevel(prior[1])
         package.setLevel(prior[2])
+
+
+def test_command_log_records_waits_and_keeps_stdout_and_invocations_isolated(tmp_path, monkeypatch):
+    import json
+    import threading
+    from pathlib import Path
+
+    from click.testing import CliRunner
+
+    from cnequity import progress
+    from cnequity.cli.main import cli
+    from cnequity.storage.staging_cleanup import StagingCleanupResult
+
+    config = Path(_lake_config(tmp_path))
+    with config.open("a", encoding="utf-8") as stream:
+        stream.write(
+            '\n[logging]\nconsole_level = "ERROR"\nfile_level = "DEBUG"\n'
+            "heartbeat_seconds = 1\nretention_days = 0\n"
+        )
+    monkeypatch.delenv("CNE_LOG_DIR", raising=False)
+    monkeypatch.setenv("TUSHARE_TOKEN", "fixture-secret-value")
+    monkeypatch.setenv("CNE_LAUNCH_ID", "a" * 32)
+    handlers = list(logging.getLogger().handlers)
+    messages = iter(("first invocation", "second invocation"))
+
+    def preview(cfg, **kwargs):
+        logger = logging.getLogger("cnequity.test_logging")
+        logger.debug("%s using fixture-secret-value", next(messages))
+        with progress.wait_scope("test storage lock", lambda: "lock holder pid 892"):
+            assert progress._beat_once(interval_seconds=0)
+        return StagingCleanupResult([], [], 0, [])
+
+    def preview_logs(root, *, retention_days, dry_run):
+        from cnequity.storage.staging_cleanup import LogCleanupResult
+
+        assert retention_days == 0 and dry_run
+        return LogCleanupResult([], 0, 0)
+
+    monkeypatch.setattr("cnequity.cli.maintain_cmds.preview_staging_cleanup", preview)
+    monkeypatch.setattr("cnequity.cli.maintain_cmds.clean_run_logs", preview_logs)
+
+    for expected in ("first invocation", "second invocation"):
+        result = CliRunner().invoke(cli, ["run", "clean", "--config", str(config), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["dry_run"]
+        assert expected not in result.stderr
+        assert logging.getLogger().handlers == handlers
+        assert all(thread.name != "cne-heartbeat" for thread in threading.enumerate())
+
+    first, second = [
+        path.read_text(encoding="utf-8")
+        for path in sorted((tmp_path / "lake" / "logs").glob("cne-run-clean-*.log"))
+    ]
+    assert "first invocation" in first and "second invocation" not in first
+    assert "second invocation" in second and "first invocation" not in second
+    for log in (first, second):
+        assert "fixture-secret-value" not in log
+        assert "DEBUG cnequity.test_logging" in log
+        assert "waiting for test storage lock" in log and "lock holder pid 892" in log
+        assert f"task={'a' * 32}" in log and "finished (exit=0" in log
 
 
 @pytest.mark.usefixtures("chinese_output")

@@ -19,13 +19,15 @@ from __future__ import annotations
 from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
+from cnequity.domain.holidays_cn import exchange_may_open
+from cnequity.domain.market_time import A_SHARE_OPEN_AUCTION_AT, SHANGHAI_TZ, shanghai_now
+from cnequity.meta_layout import MANIFEST_FILE
 from cnequity.sqlite_readonly import connect_readonly
 
-CST = ZoneInfo("Asia/Shanghai")
-OPEN = time(9, 15)
+CST = SHANGHAI_TZ
 JOBS = ("daily", "stale", "maintain")
+FULL_AUDIT_JOB = "full-audit"
 #: Jobs that follow the day's run: due at its run_at, never before it ran.
 _AFTER_DAILY = {"stale": "stale_run_at", "maintain": "daily_run_at"}
 
@@ -35,31 +37,21 @@ def parse_run_at(value: str) -> time:
     return time(hour, minute)
 
 
-def _is_session(day: date) -> bool:
-    from cnequity.domain.datasets import _is_exchange_session
-
-    return _is_exchange_session(day)
-
-
-def _next_session(day: date) -> date:
-    day += timedelta(days=1)
-    while not _is_session(day):
-        day += timedelta(days=1)
-    return day
-
-
-def due_session(now: datetime, run_at: time) -> date | None:
+def due_session(now: datetime, run_at: time, *, config=None) -> date | None:
     """The session a job with Beijing ``run_at`` is due for at *now*, or None."""
-    local = now.astimezone(CST)
-    day = local.date()
+    from cnequity.query.calendar import is_trading_day
+
+    local = shanghai_now(now)
+    today = day = local.date()
     for _ in range(40):
-        if _is_session(day) and datetime.combine(day, run_at, CST) <= local:
-            break
+        session = exchange_may_open(day) if config is None else is_trading_day(config, day)
+        if session:
+            if day < today or local.time() >= run_at:
+                return day
+            if local.time() >= A_SHARE_OPEN_AUCTION_AT:
+                return None
         day -= timedelta(days=1)
-    else:
-        return None
-    next_open = datetime.combine(_next_session(day), OPEN, CST)
-    return day if local < next_open else None
+    return None
 
 
 def marker_path(meta_root: Path, job: str, session: date) -> Path:
@@ -78,7 +70,7 @@ def _ran_in_manifest(config, job: str, session: date) -> bool:
     from that page must not cancel the day's scheduled pipeline; the full daily
     operation writes the session marker itself when it is the due session.
     """
-    path = Path(getattr(config, "manifest_path", None) or Path(config.meta_root) / "manifest.db")
+    path = Path(getattr(config, "manifest_path", None) or Path(config.meta_root) / MANIFEST_FILE)
     if not path.exists():
         return False
     import sqlite3
@@ -117,7 +109,7 @@ def pending_session(config, job: str, now: datetime | None = None) -> date | Non
     if job not in JOBS:
         raise ValueError(f"unknown scheduled job {job!r}; expected one of {JOBS}")
     run_at = parse_run_at(getattr(config, _AFTER_DAILY.get(job, f"{job}_run_at")))
-    session = due_session(now or datetime.now(timezone.utc), run_at)
+    session = due_session(now or datetime.now(timezone.utc), run_at, config=config)
     if session is None or is_done(config.meta_root, job, session, config):
         return None
     if job in _AFTER_DAILY and not is_done(config.meta_root, "daily", session, config):
@@ -126,6 +118,18 @@ def pending_session(config, job: str, now: datetime | None = None) -> date | Non
         # anything to do.
         return None
     return session
+
+
+def pending_full_audit(config, today: date | None = None) -> date | None:
+    """Latest due Beijing calendar date for the weekly audit, including a missed wake."""
+    weekday = config.maintenance_full_audit_weekday
+    if not weekday:
+        return None
+    today = today or shanghai_now().date()
+    due = today - timedelta(days=(today.isoweekday() - weekday) % 7)
+    if is_done(config.meta_root, FULL_AUDIT_JOB, due):
+        return None
+    return due
 
 
 def current_anchor(config, now: datetime | None = None) -> date:
@@ -137,7 +141,7 @@ def current_anchor(config, now: datetime | None = None) -> date:
     dataset as stale. ``cne status --datasets`` and the dashboard both judge
     against this day.
     """
-    from cnequity.domain.market_time import is_session_final, shanghai_now
+    from cnequity.domain.market_time import is_session_final
     from cnequity.query.calendar import last_trading_day
 
     now = shanghai_now(now)

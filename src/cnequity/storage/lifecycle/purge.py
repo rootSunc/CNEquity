@@ -12,12 +12,14 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cnequity.file_lock import lake_mutation_lock
+from cnequity.file_lock import lake_lock_root, lake_mutation_lock
 from cnequity.i18n import _
+from cnequity.meta_layout import MANIFEST_FILE
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.atomic import replace_with_retry, write_json_atomic
 from cnequity.storage.lifecycle import LifecycleError, _read, _tree_signature, digest
 from cnequity.storage.revisions import _reject_symlink_path, sha256_file
+from equitylake_core.lock import lake_maintenance
 
 
 def check_idle(manifest: Path) -> None:
@@ -135,8 +137,11 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
         raise LifecycleError("A deletion plan is required")
     event_path = store.root / "purges" / f"{plan_id}.json"
     _reject_symlink_path(event_path)
-    with lake_mutation_lock(store.meta, blocking=False):
-        check_idle(manifest or store.meta / "manifest.db")
+    with (
+        lake_maintenance(lake_lock_root(store.meta)),
+        lake_mutation_lock(store.meta, blocking=False),
+    ):
+        check_idle(manifest or store.meta / MANIFEST_FILE)
         registry = store.registry(required=True)
         if plan["lake_id"] != registry["lake_id"] or plan["meta_root"] != str(store.meta):
             raise LifecycleError("Purge belongs to another lake")

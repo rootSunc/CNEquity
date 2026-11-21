@@ -13,7 +13,6 @@ import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
-import cnequity.query.read_budget as read_budget
 from cnequity.serve.app import create_app
 
 DAYS = [date(2024, 6, 24), date(2024, 6, 25), date(2024, 6, 26)]
@@ -55,7 +54,7 @@ def _rows(config, dataset, **params):
 
 def test_a_page_without_a_period_is_refused_before_reading(config, monkeypatch):
     sizes = _fund_flow(config)
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", sizes[-1] + 1)
+    config.query_scan_budget_rows = sizes[-1] + 1
     import cnequity.query.reader as reader
 
     def _must_not_load(*_args, **_kwargs):
@@ -70,9 +69,9 @@ def test_a_page_without_a_period_is_refused_before_reading(config, monkeypatch):
     assert "budget" in detail and detail.endswith("Pick a period or enter a symbol.")
 
 
-def test_one_period_or_one_symbol_fits(config, monkeypatch):
+def test_one_period_or_one_symbol_fits(config):
     sizes = _fund_flow(config)
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", sizes[-1] + 1)
+    config.query_scan_budget_rows = sizes[-1] + 1
 
     by_period = _rows(config, "fund_flow", period="2024-06-26")
     by_symbol = _rows(config, "fund_flow", symbol="600519.SH")
@@ -87,7 +86,7 @@ def _two_quarters_of_statements(config, monkeypatch) -> list[dict]:
         part = root / f"report_period={quarter}"
         part.mkdir(parents=True)
         pl.DataFrame({"n": range(1000)}).write_parquet(part / "part-0.parquet")
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", 1500)
+    config.query_scan_budget_rows = 1500
     import cnequity.query.reader as reader
 
     calls: list[dict] = []
@@ -128,7 +127,7 @@ def test_an_announcement_page_is_sized_up_to_its_as_of(config, monkeypatch):
         part = root / f"announce_date={day}"
         part.mkdir(parents=True)
         pl.DataFrame({"n": range(1000)}).write_parquet(part / "part-0.parquet")
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", 1500)
+    config.query_scan_budget_rows = 1500
     import cnequity.query.reader as reader
 
     monkeypatch.setattr(reader, "load", lambda *_a, **_k: pl.DataFrame({"announcement_id": ["A"]}))
@@ -141,11 +140,11 @@ def test_an_announcement_page_is_sized_up_to_its_as_of(config, monkeypatch):
 
 
 @pytest.mark.parametrize("language", ["zh_CN"])
-def test_the_refusal_is_translated(config, monkeypatch, language):
+def test_the_refusal_is_translated(config, language):
     from cnequity.i18n import use_language
 
     sizes = _fund_flow(config)
-    monkeypatch.setattr(read_budget, "SCAN_BUDGET_ROWS", sizes[-1] + 1)
+    config.query_scan_budget_rows = sizes[-1] + 1
     from cnequity.serve.lake import LakeView
 
     with use_language(language), pytest.raises(ValueError, match="请选择一个时段或输入标的"):

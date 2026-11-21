@@ -21,7 +21,7 @@ from cnequity.storage.lake_write import DatasetPublish, LakeWrite
 from cnequity.storage.revisions import RevisionStore
 from equitylake_core.catalog import Catalog
 from equitylake_core.extensions import ExtensionUnavailableError
-from equitylake_core.write import WriteRejected
+from equitylake_core.write import Write, WriteRejected
 
 FETCHED = datetime(2024, 3, 1, tzinfo=timezone.utc)
 PUBLISH = DatasetPublish(schema_version=1, contract_fingerprint="contract")
@@ -100,6 +100,29 @@ def _replace(directory, frame):
     for old in directory.glob("*.parquet"):
         old.unlink()
     frame.write_parquet(directory / "part-merged.parquet")
+
+
+def test_a_failure_reading_the_commit_result_keeps_published_files(cfg, monkeypatch):
+    original = Write.commit
+
+    def result_unavailable(write, **kwargs):
+        def fail():
+            raise OSError("cannot read committed snapshot")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(write.catalog, "snapshot", fail)
+            return original(write, **kwargs)
+
+    monkeypatch.setattr(Write, "commit", result_unavailable)
+    with LakeWrite(cfg, "commit-result") as write:
+        checkout = write.checkout("daily_bars")
+        _replace(
+            checkout.partition("trade_date=2024-01"), _bars(date(2024, 1, 2), {"600000.SH": 20})
+        )
+        with pytest.raises(OSError, match="cannot read committed snapshot"):
+            write.publish({"daily_bars": PUBLISH})
+    rows = _load(cfg)
+    assert rows.filter(pl.col("trade_date") == date(2024, 1, 2))["close"].to_list() == [20]
 
 
 def test_a_checkout_holds_the_published_rows_and_an_untouched_one_publishes_nothing(cfg):

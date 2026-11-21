@@ -16,16 +16,6 @@ from datetime import date, timedelta
 
 from cnequity.config import Config
 
-#: Rows one paged read may select when nothing narrows it by symbol.
-#:
-#: Rows, not bytes: peak memory follows the rows a read decodes, while the
-#: same rows take very different space on disk depending on compression and
-#: sort order (the lake catalog stores ``trade_ticks`` in 40% of the bytes the
-#: revision store did, and reading a day of it still peaks at 5.5 GB). The
-#: earlier 64 MiB of compressed Parquet came to 3-7 million rows on a real
-#: lake, a 1.5-3 GB peak.
-SCAN_BUDGET_ROWS = 4_000_000
-
 #: A short symbol list is pushed into the scan and keeps the read small (one
 #: symbol over all of ``margin_trading`` peaked at 0.3 GB), so it is not
 #: budgeted. A long list reads close to everything and is.
@@ -53,7 +43,6 @@ def oversized_read(
     start: date | None,
     end: date | None,
     symbols: list[str] | None,
-    budget: int | None = None,
 ) -> OversizedRead | None:
     """Size the partitions a read of *dataset* over ``start..end`` selects.
 
@@ -64,7 +53,7 @@ def oversized_read(
     """
     if symbols and len(symbols) <= SYMBOL_SCAN_EXEMPT:
         return None
-    budget = SCAN_BUDGET_ROWS if budget is None else budget
+    budget = config.query_scan_budget_rows
     from cnequity.storage.published import published
 
     names = [dataset, "news_headlines"] if dataset == "flash_news_wire" else [dataset]

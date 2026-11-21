@@ -101,6 +101,8 @@ def test_only_reruns_a_recorded_migration_and_rejects_unknown_ids(config, fake_r
 
 
 def test_a_failure_stops_and_records_nothing_after_it(config, monkeypatch):
+    monkeypatch.delenv("CNE_LOG_DIR", raising=False)
+
     def boom(config, *, apply):
         raise RuntimeError("exchange source disabled")
 
@@ -115,9 +117,13 @@ def test_a_failure_stops_and_records_nothing_after_it(config, monkeypatch):
     )
 
     assert result.exit_code == 1
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
+    assert "cne-migrate-" in result.stderr
     assert [item["id"] for item in payload["migrations"]] == ["broken"]
     assert read_lake(config).get("migrations", {}) == {}
+    (log,) = (config.data_root / "logs").glob("cne-migrate-*.log")
+    text = log.read_text(encoding="utf-8")
+    assert "migration broken failed" in text and "exchange source disabled" in text
 
 
 def test_doctor_reports_owed_migrations(config, fake_registry):

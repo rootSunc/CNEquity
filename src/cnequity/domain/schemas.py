@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import polars as pl
 
-from cnequity.domain.datasets import DATASETS, PIT_DATASET_NAMES
+from cnequity.domain.datasets import DATASETS, PIT_DATASET_NAMES, RESAMPLED_MINUTE_DATASETS
 from cnequity.domain.pit import (
     PIT_STORAGE_COLUMNS,
     PIT_STORAGE_DTYPES,
@@ -1453,9 +1453,7 @@ DATASET_SCHEMAS = {
     "index_bars": {**DAILY_BARS_SCHEMA, "frequency": pl.Utf8},
     "minute_bars": MINUTE_BARS_SCHEMA,
     "minute_bars_5m": MINUTE_BARS_SCHEMA,
-    "minute_bars_15m": RESAMPLED_MINUTE_BARS_SCHEMA,
-    "minute_bars_30m": RESAMPLED_MINUTE_BARS_SCHEMA,
-    "minute_bars_60m": RESAMPLED_MINUTE_BARS_SCHEMA,
+    **dict.fromkeys(RESAMPLED_MINUTE_DATASETS, RESAMPLED_MINUTE_BARS_SCHEMA),
     "trade_ticks": TRADE_TICKS_SCHEMA,
     "commodity_bars": COMMODITY_BARS_SCHEMA,
     "futures_contracts": FUTURES_CONTRACTS_SCHEMA,
@@ -1542,9 +1540,10 @@ PRIMARY_KEYS = {
     "index_bars": ["symbol", "trade_date", "frequency"],
     "minute_bars": ["symbol", "trade_date", "bar_time", "frequency"],
     "minute_bars_5m": ["symbol", "trade_date", "bar_time", "frequency"],
-    "minute_bars_15m": ["symbol", "trade_date", "bar_time", "frequency"],
-    "minute_bars_30m": ["symbol", "trade_date", "bar_time", "frequency"],
-    "minute_bars_60m": ["symbol", "trade_date", "bar_time", "frequency"],
+    **{
+        name: ["symbol", "trade_date", "bar_time", "frequency"]
+        for name in RESAMPLED_MINUTE_DATASETS
+    },
     # Not trade_time: it has no seconds, so a busy minute holds twenty records
     # sharing one. tick_seq is the only thing that separates them.
     "trade_ticks": ["symbol", "trade_date", "tick_seq"],

@@ -70,6 +70,16 @@ def test_two_misses_are_a_bad_minute_not_an_outage(tmp_path):
     assert degraded_job_findings(cfg, now=NOW) == []
 
 
+def test_recent_run_window_and_threshold_come_from_the_alert_policy(tmp_path):
+    cfg = _lake(tmp_path, [("events:news_wire", "degraded", ago) for ago in (90, 15)])
+    cfg.run_failure_streak = 1
+    cfg.run_failure_window_hours = 1
+    (finding,) = degraded_job_findings(cfg, now=NOW)
+    assert (finding["streak"], finding["window_hours"]) == (1, 1)
+    cfg.run_failure_streak = 0
+    assert degraded_job_findings(cfg, now=NOW) == []
+
+
 def test_an_earlier_success_does_not_excuse_the_streak(tmp_path):
     """The outage began with healthy runs behind it, which is the normal case.
 

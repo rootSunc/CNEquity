@@ -11,11 +11,12 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from cnequity.meta_layout import LAKE_RECORD, LEGACY_STATE, STORAGE_RECORD
 from cnequity.storage.atomic import write_json_atomic
 
-LAKE_FILE = Path("lake.json")
+LAKE_FILE = LAKE_RECORD
 #: Where it lived before 0.25 (``meta/state/``); moved on the first read.
-LEGACY_LAKE_FILE = Path("state") / "lake.json"
+LEGACY_LAKE_FILE = LEGACY_STATE / LAKE_RECORD
 FORMAT = 1
 
 
@@ -94,9 +95,6 @@ def stamp_new_lake(config) -> None:
     start_on_catalog(config)
 
 
-STORAGE_FILE = "storage.json"
-
-
 def start_on_catalog(config) -> None:
     """Record that this lake publishes into its catalog (``meta/storage.json``).
 
@@ -106,7 +104,7 @@ def start_on_catalog(config) -> None:
     migration, which copies and verifies its published data first, and the
     ``revision-records`` migration, which imports the receipts it kept.
     """
-    path = Path(config.meta_root) / STORAGE_FILE
+    path = Path(config.meta_root) / STORAGE_RECORD
     if not path.exists():
         write_json_atomic(path, {"publish": "catalog", "revisions": "catalog"}, indent=2)
 

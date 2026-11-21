@@ -3,18 +3,31 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# Mainland China has used UTC+08:00 without daylight-saving changes for the
-# exchange dates handled by this project. A fixed offset also works on Windows
-# without requiring an IANA timezone database or an extra runtime dependency.
-SHANGHAI_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
+from cnequity.domain.holidays_cn import exchange_may_open
+from cnequity.domain.market_profile import BSE_FIRST_SESSION as BSE_FIRST_SESSION
+
+SHANGHAI_ZONE = "Asia/Shanghai"
+SHANGHAI_STANDARD_OFFSET = timedelta(hours=8)
+SHANGHAI_STANDARD_TZ = timezone(SHANGHAI_STANDARD_OFFSET, name=SHANGHAI_ZONE)
+try:
+    SHANGHAI_TZ = ZoneInfo(SHANGHAI_ZONE)
+except ZoneInfoNotFoundError:
+    # Keep the present-day market clock usable without system tzdata.
+    SHANGHAI_TZ = SHANGHAI_STANDARD_TZ
+
+A_SHARE_OPEN_AUCTION_AT = time(9, 15)
+A_SHARE_CLOSE_AT = time(15)
+CONTINUOUS_SESSIONS = ((time(9, 30), time(11, 30)), (time(13), A_SHARE_CLOSE_AT))
+CONTINUOUS_SESSION_MINUTES = tuple(
+    (start.hour * 60 + start.minute, end.hour * 60 + end.minute)
+    for start, end in CONTINUOUS_SESSIONS
+)
 # Leave a small settlement buffer after the 15:00 closing auction before a
 # daily dataset is expected to publish the session.
 A_SHARE_FINAL_AT = time(15, 5)
-
-# The Beijing Stock Exchange's first trading session, re-exported for callers
-# that read it here. Market eras are declared in ``market_profile``.
-from cnequity.domain.market_profile import BSE_FIRST_SESSION  # noqa: E402, F401
+A_SHARE_SNAPSHOT_AT = time(15, 30)
 
 
 def shanghai_now(now: datetime | None = None) -> datetime:
@@ -49,18 +62,16 @@ def last_closed_session(now: datetime | None = None) -> date | None:
     describe that session. Walks the bundled exchange calendar, so a weekend
     or holiday points at the last session before it.
     """
-    from cnequity.domain.datasets import _is_exchange_session
-
     local = shanghai_now(now)
     day, clock = local.date(), local.time()
-    if _is_exchange_session(day):
-        if clock >= time(15, 30):
+    if exchange_may_open(day):
+        if clock >= A_SHARE_SNAPSHOT_AT:
             return day
-        if clock >= time(9, 15):
+        if clock >= A_SHARE_OPEN_AUCTION_AT:
             return None
     day -= timedelta(days=1)
     for _ in range(40):
-        if _is_exchange_session(day):
+        if exchange_may_open(day):
             return day
         day -= timedelta(days=1)
     return None

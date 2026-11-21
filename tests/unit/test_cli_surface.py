@@ -126,15 +126,10 @@ def test_an_unknown_config_action_still_names_the_valid_ones():
 
 
 def test_the_cli_reference_indexes_every_top_level_command():
-    """`docs/zh/reference/cli.md` opens with an index; a new command must join it.
-
-    The page is 700 lines of per-command sections, so the index is how anyone
-    finds the right one — and an index that silently misses a command is worse
-    than none. It is also what GitHub Pages serves as the CLI reference.
-    """
+    """Every command group must reach the generated effects reference."""
     from pathlib import Path
 
-    reference = Path(__file__).resolve().parents[2] / "docs" / "zh" / "reference" / "cli.md"
+    reference = Path(__file__).resolve().parents[2] / "docs" / "zh" / "reference" / "cli-surface.md"
     index = reference.read_text(encoding="utf-8").split("## 改名对照")[0]
     missing = sorted(n for n in _top_level() if f"`cne {n}" not in index)
     assert not missing, (
@@ -146,7 +141,7 @@ def test_the_cli_reference_documents_every_move():
     """Same for the rename table: an old spelling users may type must be listed."""
     from pathlib import Path
 
-    reference = Path(__file__).resolve().parents[2] / "docs" / "zh" / "reference" / "cli.md"
+    reference = Path(__file__).resolve().parents[2] / "docs" / "zh" / "reference" / "cli-surface.md"
     text = reference.read_text(encoding="utf-8")
     assert "## 改名对照" in text, "the rename table is gone"
     # Bound it to that one section. The per-command sections below it also say

@@ -605,3 +605,24 @@ def test_connect_with_retry_raises_the_last_error_once_exhausted(monkeypatch):
     monkeypatch.setattr(client_mod, "_quotes_client", always_fails)
     with pytest.raises(TimeoutError, match="timed out"):
         client_mod._connect_with_retry(None)
+
+
+def test_connect_does_not_reprobe_tdx_on_a_local_lock_failure(monkeypatch, tmp_path):
+    import errno
+
+    from cnequity.adapters.tdx_protocol import client
+    from equitylake_core.lock import LockIOError
+
+    error = LockIOError(tmp_path / "tdx.lock", PermissionError(errno.EACCES, "denied"))
+
+    def fail(_config):
+        raise error
+
+    def reprobe():
+        pytest.fail("a local lock error cannot be fixed by choosing another TDX host")
+
+    monkeypatch.setattr(client, "_quotes_client", fail)
+    monkeypatch.setattr(client, "reset_tdx_server_cache", reprobe)
+    with pytest.raises(LockIOError) as excinfo:
+        client._connect_with_retry(None)
+    assert excinfo.value is error

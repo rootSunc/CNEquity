@@ -19,6 +19,7 @@ from cnequity.adapters.tdx_protocol.client import fetch_daily_bars, normalize_wi
 from cnequity.config import Config, load_config
 from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.rate_limit import RateLimitSpec
+from cnequity.domain.request_meter import request_meter_scope
 from cnequity.i18n import N_, Message
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.outcomes import SourcePayloadError, error_kind, step_outcome
@@ -362,19 +363,21 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
         if manifest:
             manifest.touch_batch_heartbeat(run_id, batch_id)
 
+    meter = None
     try:
         _heartbeat()
-        df = fetch_daily_bars(
-            symbols,
-            start,
-            end,
-            rate_limit=rl,
-            allow_mock=allow_mock,
-            backfill=backfill,
-            config=tdx_cfg,
-            on_heartbeat=_heartbeat,
-            metrics=batch_metrics,
-        )
+        with request_meter_scope() as meter:
+            df = fetch_daily_bars(
+                symbols,
+                start,
+                end,
+                rate_limit=rl,
+                allow_mock=allow_mock,
+                backfill=backfill,
+                config=tdx_cfg,
+                on_heartbeat=_heartbeat,
+                metrics=batch_metrics,
+            )
         df = normalize_with_source(df, "tdx_protocol", dataset=dataset)
         _require_daily_bar_date_coverage(df, start, end)
         try:
@@ -399,6 +402,7 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
                 rows_read=df.height,
                 rows_written=df.height,
                 request_retry_count=request_retries,
+                source_routes=meter.routes() if meter else None,
             )
         return {
             "rows_read": df.height,
@@ -423,6 +427,7 @@ def _worker_fetch_batch(args: tuple) -> dict[str, Any]:
                 reason_code=error_kind(exc),
                 execution_status=step_outcome("failed", error=exc).execution_status,
                 request_retry_count=request_retries,
+                source_routes=meter.routes() if meter else None,
             )
         # Tip windows: step-level clist gap-fill. Multi-day: kline snapshot only
         # (staging gap-fill also happens at the step for failed_symbols).
@@ -579,23 +584,25 @@ def _fetch_daily_bars_parallel(
             window_start=batch_start.isoformat(),
             window_end=batch_end.isoformat(),
         )
+        meter = None
         try:
 
             def _heartbeat() -> None:
                 manifest.touch_batch_heartbeat(run_id, batch_id)
 
             _heartbeat()
-            df = fetch_daily_bars(
-                batch_symbols,
-                batch_start,
-                batch_end,
-                rate_limit=rl,
-                allow_mock=config.tdx_allow_mock,
-                backfill=backfill,
-                config=config,
-                on_heartbeat=_heartbeat,
-                metrics=batch_metrics,
-            )
+            with request_meter_scope() as meter:
+                df = fetch_daily_bars(
+                    batch_symbols,
+                    batch_start,
+                    batch_end,
+                    rate_limit=rl,
+                    allow_mock=config.tdx_allow_mock,
+                    backfill=backfill,
+                    config=config,
+                    on_heartbeat=_heartbeat,
+                    metrics=batch_metrics,
+                )
             df = normalize_with_source(df, "tdx_protocol", dataset=dataset)
             _require_daily_bar_date_coverage(df, batch_start, batch_end)
             try:
@@ -614,6 +621,7 @@ def _fetch_daily_bars_parallel(
                 "success",
                 rows_read=df.height,
                 rows_written=df.height,
+                source_routes=meter.routes() if meter else None,
                 request_retry_count=prior_request_retries
                 + max(
                     0,
@@ -637,6 +645,7 @@ def _fetch_daily_bars_parallel(
                 error_message=str(exc),
                 reason_code=error_kind(exc),
                 execution_status=step_outcome("failed", error=exc).execution_status,
+                source_routes=meter.routes() if meter else None,
                 request_retry_count=prior_request_retries
                 + max(
                     0,

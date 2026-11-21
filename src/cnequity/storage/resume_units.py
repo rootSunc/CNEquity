@@ -7,8 +7,7 @@ the lake catalog, and a later backfill of the same scope skips them for a
 week. The age bound keeps this a resume, not a cache: an older unit is asked
 again, so a long idle gap is re-observed rather than trusted.
 
-This replaces ``staged_units``/``published_units`` in ``meta/state`` for the
-datasets in ``[datasets] planner_only``.
+This replaces the per-dataset resume checkpoints previously stored in ``meta/state``.
 """
 
 from __future__ import annotations
@@ -20,7 +19,8 @@ import polars as pl
 
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.catalog_bridge import lake_root
-from equitylake_core.catalog import Catalog
+from equitylake_core.catalog import CATALOG_FILE, Catalog
+from equitylake_core.write import Write
 
 TABLE = "_resume_units"
 COLUMNS = "dataset VARCHAR, unit VARCHAR, scope VARCHAR, run VARCHAR, published_at TIMESTAMPTZ"
@@ -43,8 +43,8 @@ def finding(dataset: str, units: Iterable[str], scope: str) -> dict:
     }
 
 
-def record(config, run_id: str, findings: Iterable[dict], datasets: Iterable[str]) -> int:
-    """Record the units *findings* name for *datasets*, whose staging compact published whole."""
+def attach(write: Write, run_id: str, findings: Iterable[dict], datasets: Iterable[str]) -> int:
+    """Add the newly published resume units to the pending publication."""
     wanted = set(datasets)
     rows = {
         (item["dataset"], unit, item["scope"])
@@ -68,31 +68,31 @@ def record(config, run_id: str, findings: Iterable[dict], datasets: Iterable[str
             "published_at": pl.Datetime("us", "UTC"),
         },
     )
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        with Catalog(lake_root(config)) as catalog:
-            _prepare(catalog)
-            # A run compacts more than once; each sees the same findings.
-            seen = catalog.records(TABLE, "dataset, unit, scope, run")
-            frame = frame.join(seen, on=["dataset", "unit", "scope", "run"], how="anti")
-            if frame.is_empty():
-                return 0
-            catalog.con.abort()
-            catalog.con.register("_resume_rows", frame.to_arrow())
-            try:
-                with catalog.transaction(message=f"run:{run_id}:resume-units"):
-                    catalog.execute(
-                        f"INSERT INTO {TABLE} SELECT dataset, unit, scope, run, published_at "
-                        "FROM _resume_rows"
-                    )
-            finally:
-                catalog.con.unregister("_resume_rows")
+    catalog = write.catalog
+    _prepare(catalog)
+    seen = catalog.records(TABLE, "dataset, unit, scope, run")
+    frame = frame.join(seen, on=["dataset", "unit", "scope", "run"], how="anti")
+    write.record_frame(TABLE, frame)
     return frame.height
+
+
+def record(config, run_id: str, findings: Iterable[dict], datasets: Iterable[str]) -> int:
+    """Record resume units after a run that changed no published files."""
+    findings = list(findings)
+    if not any(item.get("check") == CHECK for item in findings):
+        return 0
+    with lake_mutation_lock(config.meta_root), Catalog(lake_root(config)) as catalog:
+        write = Write(catalog)
+        count = attach(write, run_id, findings, datasets)
+        if count:
+            write.commit(message=f"run:{run_id}:resume-units")
+    return count
 
 
 def published(config, dataset: str, scope: str, *, now: datetime | None = None) -> set[str]:
     """Units of *scope* that compact published for *dataset* within ``TTL_DAYS``."""
     root = lake_root(config)
-    if not (root / "catalog.sqlite").exists():
+    if not (root / CATALOG_FILE).exists():
         return set()
     with Catalog(root, read_only=True) as catalog:
         if not catalog.has_table(TABLE):

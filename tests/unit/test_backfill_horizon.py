@@ -63,6 +63,29 @@ def test_a_dataset_without_a_limit_keeps_an_old_start():
     assert (window.start, finding) == (date(2001, 1, 1), None)
 
 
+def test_implicit_start_respects_the_lake_history_bounds(tmp_path):
+    from types import SimpleNamespace
+
+    from cnequity.config import Config
+    from cnequity.orchestrator.engine import JobEngine
+    from cnequity.run_scope import set_backfill
+
+    dataset = "daily_bars"
+    first, last = date(2026, 6, 1), date(2026, 6, 5)
+    requested_end = last + timedelta(days=7)
+    cfg = Config(
+        data_root=tmp_path,
+        history_from={dataset: first},
+        history_until={dataset: last},
+    )
+    set_backfill(cfg, active=True, end=requested_end)
+    scoped, _ = JobEngine._backfill_source_scope(
+        SimpleNamespace(config=cfg), dataset, requested_end
+    )
+
+    assert (backfill_of(scoped).start, backfill_of(scoped).end) == (first, last)
+
+
 def test_a_window_entirely_before_the_floor_is_a_capability_limit():
     from cnequity.orchestrator.outcomes import CapabilityLimitError
 
@@ -509,15 +532,16 @@ def test_chunked_backfill_keeps_a_warning_status_across_later_successes(monkeypa
     assert len(result["slices"]) == 3
 
 
-def test_cli_backfill_takes_the_symbol_chunked_path_when_both_dates_given(monkeypatch):
-    import types
-
+def test_cli_backfill_takes_the_symbol_chunked_path_when_both_dates_given(tmp_path, monkeypatch):
     from click.testing import CliRunner
+
+    from cnequity.config import Config
 
     monkeypatch.setattr(backfill_cmds, "JobEngine", FakeEngine)
     symbols = [f"{i:06d}.SH" for i in range(250)]
     monkeypatch.setattr("cnequity.steps.intraday.resolve_scope", lambda _cfg: symbols)
-    cfg = types.SimpleNamespace(
+    cfg = Config(
+        data_root=tmp_path,
         minute_bars_scope="index:000300.SH",
         minute_bars_symbols=[],
         minute_bars_enabled=True,

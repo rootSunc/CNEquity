@@ -19,7 +19,6 @@ import base64
 import logging
 from datetime import datetime, timezone
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -30,9 +29,10 @@ from cnequity.adapters.eastmoney.rotation import (
     _news_symbols,
     _object_rows,
 )
+from cnequity.domain.market_time import SHANGHAI_TZ
 
 logger = logging.getLogger(__name__)
-CST = ZoneInfo("Asia/Shanghai")
+CST = SHANGHAI_TZ
 
 NEWS_COLUMNS = {
     "news_id": pl.Utf8,

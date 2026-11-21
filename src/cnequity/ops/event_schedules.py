@@ -18,11 +18,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cnequity.config.loader import EventSchedule
+from cnequity.meta_layout import SCHEDULER_EVENT_ATTEMPTS
 from cnequity.ops.records import atomic_write, read_record
 
 BEIJING = timezone(timedelta(hours=8))  # no daylight saving
 QUIET_SLACK = timedelta(minutes=5)
-STATE_FILE = "events_schedules_last.json"
+STATE_FILE = SCHEDULER_EVENT_ATTEMPTS.name
 
 
 def in_quiet_hours(spec: EventSchedule, now: datetime) -> bool:

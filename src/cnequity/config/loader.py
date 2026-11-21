@@ -11,14 +11,36 @@ from pathlib import Path
 from typing import Literal
 
 from cnequity.config.errors import ConfigError
+from cnequity.config.failure_policy import (
+    DEFAULT_DAILY_FAILURE_STREAK,
+    DEFAULT_RUN_FAILURE_STREAK,
+    DEFAULT_RUN_FAILURE_WINDOW_HOURS,
+)
+from cnequity.config.logging import LoggingSettings, parse_logging
+from cnequity.config.resources import (
+    DEFAULT_READ_MEMORY,
+    DEFAULT_READ_THREADS,
+    DEFAULT_SCAN_BUDGET_ROWS,
+    DuckDBResources,
+    parse_resources,
+)
+from cnequity.config.retention import DEFAULT_KEEP_GENERATIONS, revision_keep
 from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.domain.symbols import INGEST_UNIVERSES
+from cnequity.meta_layout import MANIFEST_FILE, META_DIR
 from cnequity.run_scope import (
     BackfillWindow,
     RunFlags,
 )
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_WORKERS = 8
+DEFAULT_BATCH_SIZE = 100
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 5
+DEFAULT_BATCH_STALE_SECONDS = 3600
+DEFAULT_BATCH_STALL_SECONDS = 600
 
 try:
     import tomllib
@@ -103,12 +125,12 @@ class Config:
     # it promised. Nothing else branches on it, and a production config has
     # no reason to set it.
     lake_profile: str | None = None
-    workers: int = 8
-    batch_size: int = 100
-    max_retries: int = 3
-    retry_backoff_seconds: int = 5
-    batch_stale_seconds: int = 3600
-    batch_stall_seconds: int = 600
+    workers: int = DEFAULT_WORKERS
+    batch_size: int = DEFAULT_BATCH_SIZE
+    max_retries: int = DEFAULT_MAX_RETRIES
+    retry_backoff_seconds: int = DEFAULT_RETRY_BACKOFF_SECONDS
+    batch_stale_seconds: int = DEFAULT_BATCH_STALE_SECONDS
+    batch_stall_seconds: int = DEFAULT_BATCH_STALL_SECONDS
     tdx_enabled: bool = True
     tdx_min_interval_ms: int = 100
     tdx_lock_timeout_sec: float = 15.0
@@ -199,7 +221,7 @@ class Config:
     # Daily groups whose failed run fails maintenance at once; any other failed
     # group fails it after this many consecutive sessions (0 never escalates).
     maintenance_gate_groups: tuple[str, ...] = ("core",)
-    maintenance_soft_fail_max_days: int = 3
+    maintenance_soft_fail_max_days: int = DEFAULT_DAILY_FAILURE_STREAK
     # [source_health].vantage: the egress label probes and health records carry.
     source_vantage: str | None = None
     # Continuous event streams. Same shape as a daily schedule group, but the
@@ -225,8 +247,8 @@ class Config:
     on_demand_enabled: bool = True
     on_demand_datasets: list[str] = field(default_factory=list)
     duckdb_path: Path | None = None
-    duckdb_memory_limit: str = "2GB"
-    duckdb_threads: int = 4
+    duckdb_memory_limit: str = DEFAULT_READ_MEMORY
+    duckdb_threads: int = DEFAULT_READ_THREADS
     # Who owns `margin_trading` rows: "exchange" (SSE + SZSE, the bodies that
     # compile the balances) or "eastmoney". The exchange path matched EastMoney
     # exactly on every compared field and carries more securities, but SSE does
@@ -407,7 +429,7 @@ class Config:
     ths_js_runtime: str | None = None
     # Generations kept after ``cne backfill`` and ``cne run daily``. Matches
     # the existing retention count of 5. 0 keeps every generation.
-    revision_keep_generations: int = 5
+    revision_keep_generations: int = DEFAULT_KEEP_GENERATIONS
     # Hosts that use ``eastmoney_proxy`` (a name also covers its subdomains);
     # the others connect directly. Empty sends every EastMoney host through it.
     eastmoney_proxy_hosts: tuple[str, ...] = ()
@@ -422,6 +444,11 @@ class Config:
     backfill_window: BackfillWindow = field(default_factory=BackfillWindow, repr=False)
     # One-off switches a command sets for this run; see ``run_scope.RunFlags``.
     run_flags: RunFlags = field(default_factory=RunFlags, repr=False)
+    duckdb_resources: dict[str, DuckDBResources] = field(default_factory=dict)
+    query_scan_budget_rows: int = DEFAULT_SCAN_BUDGET_ROWS
+    run_failure_window_hours: int = DEFAULT_RUN_FAILURE_WINDOW_HOURS
+    run_failure_streak: int = DEFAULT_RUN_FAILURE_STREAK
+    logging: LoggingSettings = field(default_factory=LoggingSettings)
 
     def __post_init__(self) -> None:
         """Normalize path-like fields for programmatic configurations.
@@ -659,12 +686,11 @@ class Config:
     @property
     def rate_limit_root(self) -> Path:
         """One local ledger directory for HTTP and wire traffic on this egress."""
-        value = os.environ.get("CNE_RATE_LIMIT_ROOT")
-        return _absolute(Path(value).expanduser()) if value else self.meta_root / "rate_limits"
+        return rate_limit_root_override() or self.meta_root / "rate_limits"
 
     @property
     def manifest_path(self) -> Path:
-        return self.data_root / "meta" / "manifest.db"
+        return self.meta_root / MANIFEST_FILE
 
     @property
     def staging_root(self) -> Path:
@@ -680,7 +706,7 @@ class Config:
 
     @property
     def meta_root(self) -> Path:
-        return self.data_root / "meta"
+        return self.data_root / META_DIR
 
     @property
     def backup_root(self) -> Path:
@@ -727,6 +753,12 @@ def _credential(
 def _absolute(path: Path) -> Path:
     """Normalize a path to an absolute lexical path without following links."""
     return Path(os.path.abspath(os.fspath(path)))
+
+
+def rate_limit_root_override() -> Path | None:
+    """The shared egress ledger directory, including for callers without a lake."""
+    value = os.environ.get("CNE_RATE_LIMIT_ROOT")
+    return _absolute(Path(value).expanduser()) if value else None
 
 
 def _parse_proxy_hosts(raw: object) -> tuple[str, ...]:
@@ -948,6 +980,13 @@ def _dataset_dates(section, key: str) -> dict[str, date]:
             raise ConfigError(f"datasets.{key}.{name} must be a date, not {value!r}")
         out[name] = value
     return out
+
+
+def _minimum_int(raw: dict, key: str, default: int, minimum: int) -> int:
+    value = raw.get(key, default)
+    if type(value) is not int or value < minimum:
+        raise ConfigError(f"{key} must be an integer >= {minimum}")
+    return value
 
 
 def load_config(path: str | Path) -> Config:
@@ -1203,7 +1242,16 @@ def load_config(path: str | Path) -> Config:
             )
         )
 
+    query_raw = raw.get("query", {})
+    if not isinstance(query_raw, dict):
+        raise ConfigError("[query] must be a table")
+    scan_budget = _minimum_int(query_raw, "scan_budget_rows", DEFAULT_SCAN_BUDGET_ROWS, 1)
     duckdb_raw = raw.get("duckdb", {})
+    if not isinstance(duckdb_raw, dict):
+        raise ConfigError("[duckdb] must be a table")
+    duckdb_resources = parse_resources(
+        duckdb_raw, lambda value: _expand(value, data_root, config_path.parent)
+    )
     duckdb_path_str = duckdb_raw.get("path")
     duckdb_path = (
         _expand(duckdb_path_str, data_root, config_path.parent)
@@ -1258,13 +1306,9 @@ def load_config(path: str | Path) -> Config:
     retention_raw = storage_raw.get("retention") or {}
     if not isinstance(retention_raw, dict):
         raise ValueError("[storage.retention] must be a table")
-    revision_keep_generations = retention_raw.get("keep_generations", 5)
-    if (
-        isinstance(revision_keep_generations, bool)
-        or not isinstance(revision_keep_generations, int)
-        or revision_keep_generations < 0
-    ):
-        raise ValueError("[storage.retention].keep_generations must be an integer >= 0")
+    revision_keep_generations = revision_keep(
+        None, retention_raw.get("keep_generations", DEFAULT_KEEP_GENERATIONS)
+    )
     storage_publish = storage_raw.get("publish", "generation")
     if storage_publish not in ("generation", "catalog"):
         raise ValueError('[storage].publish must be "generation" or "catalog"')
@@ -1289,7 +1333,7 @@ def load_config(path: str | Path) -> Config:
     cfg = Config(
         data_root=data_root,
         lake_profile=str(lake_profile) if lake_profile else None,
-        workers=int(orch.get("workers", 8)),
+        workers=int(orch.get("workers", DEFAULT_WORKERS)),
         tdx_daily_workers=(
             int(orch["tdx_daily_workers"]) if orch.get("tdx_daily_workers") is not None else None
         ),
@@ -1311,11 +1355,11 @@ def load_config(path: str | Path) -> Config:
             if raw_archive_raw.get("max_payload_bytes") is not None
             else None
         ),
-        batch_size=int(orch.get("batch_size", 100)),
-        max_retries=int(orch.get("max_retries", 3)),
-        retry_backoff_seconds=int(orch.get("retry_backoff_seconds", 5)),
-        batch_stale_seconds=int(orch.get("batch_stale_seconds", 3600)),
-        batch_stall_seconds=int(orch.get("batch_stall_seconds", 600)),
+        batch_size=int(orch.get("batch_size", DEFAULT_BATCH_SIZE)),
+        max_retries=int(orch.get("max_retries", DEFAULT_MAX_RETRIES)),
+        retry_backoff_seconds=int(orch.get("retry_backoff_seconds", DEFAULT_RETRY_BACKOFF_SECONDS)),
+        batch_stale_seconds=int(orch.get("batch_stale_seconds", DEFAULT_BATCH_STALE_SECONDS)),
+        batch_stall_seconds=int(orch.get("batch_stall_seconds", DEFAULT_BATCH_STALL_SECONDS)),
         tdx_enabled=bool(tdx.get("enabled", True)),
         tdx_min_interval_ms=int(tdx.get("min_interval_ms", 100)),
         tdx_lock_timeout_sec=float(tdx.get("lock_timeout_sec", 15.0)),
@@ -1369,7 +1413,9 @@ def load_config(path: str | Path) -> Config:
         maintenance_gate_groups=tuple(
             str(g) for g in maintenance_raw.get("gate_groups", ["core"]) or []
         ),
-        maintenance_soft_fail_max_days=int(maintenance_raw.get("soft_fail_max_days", 3)),
+        maintenance_soft_fail_max_days=int(
+            maintenance_raw.get("soft_fail_max_days", DEFAULT_DAILY_FAILURE_STREAK)
+        ),
         source_vantage=str((raw.get("source_health") or {}).get("vantage") or "").strip() or None,
         events_groups=events_groups,
         event_schedules=event_schedules,
@@ -1381,8 +1427,11 @@ def load_config(path: str | Path) -> Config:
         on_demand_enabled=bool(on_demand.get("enabled", True)),
         on_demand_datasets=list(on_demand.get("datasets", [])),
         duckdb_path=duckdb_path,
-        duckdb_memory_limit=str(duckdb_raw.get("memory_limit", "2GB")),
-        duckdb_threads=int(duckdb_raw.get("threads", 4)),
+        duckdb_memory_limit=duckdb_resources["read"].memory_limit,
+        duckdb_threads=duckdb_resources["read"].threads,
+        duckdb_resources=duckdb_resources,
+        query_scan_budget_rows=scan_budget,
+        logging=parse_logging(raw.get("logging", {})),
         margin_trading_source=str(margin_raw.get("source", "exchange")),
         adj_factors_source=str(adj_raw.get("source", "sina")),
         adj_factors_types=list(adj_raw.get("adjust_types", ["hfq"])),
@@ -1432,6 +1481,12 @@ def load_config(path: str | Path) -> Config:
             str(value).strip()
             for value in (raw.get("sources", {}).get("slo", {}).get("unreachable", []) or [])
             if str(value).strip()
+        ),
+        run_failure_window_hours=_minimum_int(
+            quality_raw, "run_failure_window_hours", DEFAULT_RUN_FAILURE_WINDOW_HOURS, 1
+        ),
+        run_failure_streak=_minimum_int(
+            quality_raw, "run_failure_streak", DEFAULT_RUN_FAILURE_STREAK, 0
         ),
         audit_gate=str(quality_raw.get("audit_gate", "shadow")).strip().lower(),
         publication_gate=str(quality_raw.get("publication_gate", "off")).strip().lower(),

@@ -22,6 +22,7 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.domain.bse_codes import legacy_symbol_map
+from cnequity.domain.datasets import get_dataset
 
 __all__ = [
     "HOLDER_TRADES_FLOOR",
@@ -36,9 +37,9 @@ __all__ = [
     "normalize_share_repurchases",
 ]
 
-HOLDER_TRADES_FLOOR = date(2006, 1, 1)
-SHARE_REPURCHASES_FLOOR = date(2005, 1, 1)
-PLEDGE_STATS_FLOOR = date(2014, 3, 7)
+HOLDER_TRADES_FLOOR = get_dataset("holder_trades").history_floor_date
+SHARE_REPURCHASES_FLOOR = get_dataset("share_repurchases").history_floor_date
+PLEDGE_STATS_FLOOR = get_dataset("pledge_stats").history_floor_date
 
 _PAGE_SIZE = 3000
 _HOLDER_TYPES = {"C": "company", "P": "individual", "G": "executive"}

@@ -1,9 +1,10 @@
 // Whitelisted commands. A preview is not a start; the launch token is single use.
-import { renderSchedule } from "./schedule.js";
+import { paintSchedulerStatus, renderSchedule } from "./schedule.js";
 import { renderBackups } from "./backups.js";
 import { renderSettings } from "./settings.js";
 import { choiceLabel, ds, locale, modeLabel, pick, tr } from "./i18n.js";
 import {
+  barCoverageHtml,
   beijingDate,
   beijingMidnight,
   digestJobs,
@@ -17,6 +18,7 @@ import {
   timelineSvg,
 } from "./ops-today.js";
 let generation = 0;
+let drawerRevision = 0;
 let streams = [];
 let paintRunBoard = () => {};
 
@@ -322,11 +324,13 @@ function opButton(home, id, label, className) {
 }
 
 function initBlock(home, escapeHtml) {
-  const empty = Boolean(home.occupancy.lake_empty);
+  const empty = home.occupancy.lake_empty;
   const pending = home.occupancy.incomplete_init;
+  if (empty === false && !pending) return "";
   const doctor = opButton(home, "diag.doctor", tr("环境体检", "Environment check"), "button button-ghost");
   if (!empty && !pending) {
-    return `<div class="ops-quiet" id="ops-init" data-workflow="init"><span>${tr("初始化已完成", "Initialization is complete")}</span>${doctor}</div>`;
+    const label = tr("读取不到湖的发布状态。", "The lake's publication status is unavailable.");
+    return `<div class="ops-quiet" id="ops-init" data-workflow="init"><span>${label}</span>${doctor}</div>`;
   }
   const actions = [];
   if (pending && !pending.running) {
@@ -341,7 +345,7 @@ function initBlock(home, escapeHtml) {
     ? tr("初始化正在进行。", "Initialization is running.")
     : pending
       ? tr("有一次初始化没跑完。已成功的批次会保留。", "An initialization did not finish. Batches that succeeded are kept.")
-      : tr("湖里还没有 curated 数据。初始化下载全市场行情主干。", "The lake has no curated data yet. Initialization downloads the full-market price spine.");
+      : tr("湖里还没有发布数据。初始化会下载全市场行情主干。", "The lake has no published data yet. Initialization downloads the full-market price spine.");
   const buttons = actions.filter(Boolean).join("");
   return `<section class="surface-panel report-panel ops-workflow ops-card-primary" id="ops-init" data-workflow="init">
     <div class="panel-header"><h2>${tr("初始化", "Initialize")}</h2></div>
@@ -501,7 +505,10 @@ function setDrawer(open) {
   const backdrop = document.getElementById("ops-drawer-backdrop");
   if (host) host.hidden = !open;
   if (backdrop) backdrop.hidden = !open;
-  if (!open && host) host.innerHTML = "";
+  if (!open) {
+    drawerRevision += 1;
+    if (host) host.innerHTML = "";
+  }
 }
 
 function closeDrawer() {
@@ -531,12 +538,19 @@ function bindDrawer() {
 }
 
 function sessionGlance(schedule) {
-  const at = schedule.daily_run_at ? tr(`北京时间 ${schedule.daily_run_at}`, `${schedule.daily_run_at} Beijing`) : "";
-  if (schedule.daily_pending) return { title: tr(`待跑 ${schedule.daily_pending}`, `Due ${schedule.daily_pending}`), detail: at };
-  if (schedule.daily_done && schedule.daily_due) return { title: tr(`${schedule.daily_due} 已跑过`, `${schedule.daily_due} already ran`), detail: at };
-  if (schedule.today_is_session === false) return { title: tr("非交易日", "Not a session"), detail: at || tr("今天不跑日更。", "No daily update today.") };
-  if (schedule.today_is_session) return { title: tr("交易日", "Trading session"), detail: at || tr("可以跑今天。", "Today can run.") };
-  return { title: tr("日更", "Daily"), detail: at || tr("还没有定时时间。", "No scheduled time yet.") };
+  const at = schedule.daily_run_at ? tr(`北京时间 ${schedule.daily_run_at}`, `${schedule.daily_run_at} Beijing time`) : "";
+  const closed = schedule.today_is_session === false;
+  const closedText = tr("今日休市", "Market closed today");
+  const detail = [closed ? closedText : "", at].filter(Boolean).join(" · ");
+  if (schedule.daily_pending) return { title: tr(`待跑 ${schedule.daily_pending}`, `Due ${schedule.daily_pending}`), detail };
+  if (schedule.daily_done) {
+    const day = schedule.daily_due || schedule.today;
+    const title = day ? tr(`${day} 已跑过`, `${day} already ran`) : tr("已跑过", "Already ran");
+    return { title, detail };
+  }
+  if (closed) return { title: closedText, detail: at };
+  if (schedule.today_is_session) return { title: tr("交易日", "Trading session"), detail: at };
+  return { title: tr("日更", "Daily"), detail: at || tr("尚未设定时间", "No scheduled time") };
 }
 
 function sourceGlance(sources) {
@@ -558,12 +572,12 @@ function sourceGlance(sources) {
       alert: true,
     };
   }
-  return { title: tr("正常", "Clear"), detail: tr("push2 可用，今日没有熔断。", "push2 is available; no breaker tripped today."), alert: false };
+  return { title: tr("今日无熔断", "No breakers tripped today"), detail: tr("push2 未暂停。", "push2 is not paused."), alert: false };
 }
 
-function statusCard(id, label, title, detail, extra = "", action = "") {
-  const tone = extra.includes("alert") ? "warn" : extra.includes("live") ? "live" : "ok";
-  return `<article class="ops-status-card${extra}" id="${id}"><span class="metric-label"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${label}</span><strong>${title}</strong><p>${detail}</p>${action}</article>`;
+function statusCard(id, label, title, detail, tone = "ok") {
+  const accent = tone === "warn" ? " ops-status-alert" : tone === "live" ? " ops-status-live" : "";
+  return `<article class="ops-status-card${accent}" id="${id}"><span class="metric-label"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${label}</span><strong>${title}</strong>${detail ? `<p>${detail}</p>` : ""}</article>`;
 }
 
 function statusBar(home, escapeHtml) {
@@ -571,19 +585,26 @@ function statusBar(home, escapeHtml) {
   const sources = sourceGlance(home.occupancy.sources);
   const slot = home.occupancy.slot;
   const slotLive = slot && (slot.state === "running" || slot.state === "starting");
-  const slotDetail = slotLive
+  const job = slotLive
     ? `<a href="#/ops/jobs/${encodeURIComponent(slot.job_id)}">${escapeHtml(pick(slot, "title") || slot.op || "")}</a>`
-    : escapeHtml(tr("可以启动下一条命令。", "The next command can start."));
+    : escapeHtml(tr("无网页任务", "No dashboard job"));
+  const writing = home.occupancy.lake_write_locked;
+  const otherActivity = home.occupancy.engine_locks?.length || home.occupancy.scheduler_locks?.length;
+  const lake = home.occupancy.storage_busy ? tr("存储维护中", "Storage maintenance")
+    : writing ? tr("湖写锁占用", "Lake write lock held")
+    : otherActivity ? tr("采集或调度进行中", "Ingestion or scheduling active")
+    : tr("未检测到写入占用", "No write lock detected");
+  const active = slotLive || writing || otherActivity || home.occupancy.storage_busy;
   const tabs = [
     ["today", tr("今日", "Today")],
     ["checks", tr("巡检", "Checks")],
     ["schedule", tr("定时、数据源与备份", "Schedule, sources & backups")],
   ].map(([id, label]) => `<button type="button" class="tab" role="tab" id="ops-tab-${id}">${label}</button>`).join("");
   return `<section class="ops-status-bar" aria-label="${tr("运维状态", "Operations status")}">
-    ${statusCard("ops-status-session", tr("日更", "Daily"), escapeHtml(session.title), escapeHtml(dailyHeader(home.occupancy.schedule || {}) || session.detail), home.occupancy.schedule?.daily_pending ? " ops-status-alert" : "")}
-    ${statusCard("ops-status-scheduler", tr("定时任务", "Schedule"), escapeHtml(tr("正在读取…", "Reading…")), escapeHtml(tr("正在读取定时任务状态…", "Reading schedule status…")))}
-    ${statusCard("ops-status-sources", tr("数据源", "Sources"), escapeHtml(sources.title), escapeHtml(sources.detail), sources.alert ? " ops-status-alert" : "")}
-    ${statusCard("ops-status-slot", tr("执行槽", "Slot"), escapeHtml(slotLive ? tr("执行中", "Running") : tr("空闲", "Idle")), slotDetail, slotLive ? " ops-status-live" : "")}
+    ${statusCard("ops-status-session", tr("日更", "Daily"), escapeHtml(session.title), escapeHtml(session.detail), home.occupancy.schedule?.daily_pending ? "warn" : "ok")}
+    ${statusCard("ops-status-scheduler", tr("定时任务", "Schedule"), escapeHtml(tr("正在读取…", "Reading…")), "", "muted")}
+    ${statusCard("ops-status-sources", tr("数据源", "Sources"), escapeHtml(sources.title), escapeHtml(sources.detail), sources.alert ? "warn" : "ok")}
+    ${statusCard("ops-status-slot", tr("任务与写入", "Jobs & writes"), escapeHtml(lake), job, active ? "live" : "ok")}
   </section>
   <nav class="tabs ops-tabs" role="tablist" aria-label="${tr("操作分区", "Operations sections")}">${tabs}</nav>`;
 }
@@ -596,9 +617,10 @@ export async function renderOps(ctx) {
     await renderJob(ctx, current);
     return;
   }
+  setPage(`<section class="page-heading"><h1>${tr("操作", "Operations")}</h1></section><p class="muted" role="status">${tr("正在读取…", "Reading…")}</p>`, "ops");
   let home;
   try {
-    home = await api("/api/ops");
+    home = await (ctx.opsStatus ? ctx.opsStatus() : api("/api/ops/status?controls=true"));
   } catch (err) {
     if (!alive()) return;
     setPage(`<section class="error-state"><h1>${tr("操作页打不开", "Operations page failed to open")}</h1><p class="sub err">${esc(err.message)}</p></section>`, "ops");
@@ -627,13 +649,16 @@ export async function renderOps(ctx) {
     : "";
   const deferredClose = emptyLake ? "</details>" : "";
   setPage(
-    `<section class="page-heading">
-      <div class="heading-row"><div><h1>${tr("操作", "Operations")}</h1>
-        <p class="meta-row"><span>${tr("数据目录", "Data directory")}</span><code>${esc(home.mode.data_root || "—")}</code></p></div>
-      <span class="status-pill">${esc(modeLabel(home.mode.label))}</span></div></section>
+    `<section class="page-heading ops-page-heading">
+      <div class="heading-row"><h1>${tr("操作", "Operations")}</h1><span class="status-pill">${esc(modeLabel(home.mode.label))}</span></div>
+      <p class="meta-row"><span>${tr("数据目录", "Data directory")}</span><code>${esc(home.mode.data_root || "—")}</code></p></section>
     ${attention}
     <div class="ops-work" id="ops-work">${statusBar(home, esc)}
       <div id="ops-panel-today" data-ops-panel="today"${hide("today")}>${initBlock(home, esc)}
+        ${emptyLake ? "" : `<section class="surface-panel report-panel" id="ops-coverage">
+          <div class="panel-header"><h2>${tr("近期日线覆盖", "Recent daily bar coverage")}</h2><a class="panel-meta" href="#/quality">${tr("质量报告", "Quality reports")}</a></div>
+          <div id="ops-coverage-body" aria-live="polite"><p class="muted">${tr("正在读取…", "Reading…")}</p></div>
+        </section>`}
         ${deferredOpen}${intentBlock(home, esc)}${deferredClose}
         <section class="surface-panel report-panel ops-timeline" id="ops-timeline">
           <div class="panel-header"><h2>${tr("任务时间线", "Job timeline")}</h2>
@@ -642,7 +667,7 @@ export async function renderOps(ctx) {
           <div id="ops-timeline-body"><p class="muted">${tr("正在读取今天的任务…", "Reading today's jobs…")}</p></div>
         </section>
         <div class="ops-split">
-          <section class="surface-panel report-panel" id="ops-stale"><div class="panel-header"><h2>${tr("落后的数据集", "Stale datasets")}</h2></div><div id="ops-stale-body"><p class="muted">${tr("正在读取…", "Reading…")}</p></div></section>
+          <section class="surface-panel report-panel" id="ops-stale"><div class="panel-header"><h2>${tr("数据新鲜度", "Data freshness")}</h2></div><div id="ops-stale-body"><p class="muted">${tr("正在读取…", "Reading…")}</p></div></section>
           <section class="surface-panel report-panel" id="ops-matrix"><div class="panel-header"><h2>${tr("近 14 个交易日的日更", "Daily groups, last 14 sessions")}</h2><a class="panel-meta" href="#/runs">${tr("全部运行", "All runs")}</a></div><div id="ops-matrix-body"><p class="muted">${tr("正在读取…", "Reading…")}</p></div></section>
         </div>
         <div id="ops-recent" hidden></div>
@@ -658,33 +683,51 @@ export async function renderOps(ctx) {
     <aside class="ops-drawer" id="ops-form" hidden aria-label="${tr("启动表单", "Start form")}"></aside>`,
     "ops",
   );
-  showOpsTab(activeTab);
-  bindOps(ctx, home, current);
+  const scheduleStatus = home.mode.config_drift
+    ? Promise.resolve({ held: true })
+    : api("/api/ops/schedule?summary=true").catch((err) => ({ native: { error: err.message } }));
+  const loadedTabs = new Map();
+  void scheduleStatus.then((status) => {
+    if (alive() && !loadedTabs.has("schedule")) paintSchedulerStatus(status, esc);
+  });
+  const showTab = (name) => {
+    showOpsTab(name);
+    if (loadedTabs.has(name)) return loadedTabs.get(name);
+    let work;
+    if (name === "today") {
+      if (!emptyLake) void paintCoverage(ctx, home, current);
+      void paintStale(ctx, home, current);
+      void paintMatrix(ctx, alive);
+      work = paintJobs(ctx, home, alive, scheduleStatus);
+    } else if (name === "schedule") {
+      work = Promise.all([
+        renderSchedule(ctx, home, alive),
+        renderSettings(ctx, home, alive),
+        renderBackups(ctx, home, alive, preset.get("snapshot_root") || ""),
+      ]);
+    }
+    loadedTabs.set(name, work);
+    return work;
+  };
+  bindOps(ctx, home, current, showTab);
   bindDrawer();
-  void renderSettings(ctx, home, alive);
-  void renderSchedule(ctx, home, alive);
-  void renderBackups(ctx, home, alive, preset.get("snapshot_root") || "");
-  void paintStale(ctx, home, current);
-  void paintMatrix(ctx, alive);
-  await paintJobs(ctx, home, alive);
-  if (!alive()) return;
-  if (selected && home.operations.some((card) => card.id === selected && card.available)) {
-    showForm(ctx, home, selected, preset, current);
-  }
+  const tabWork = showTab(activeTab);
+  const formWork = selected && home.operations.some((card) => card.id === selected && card.available)
+    ? showForm(ctx, home, selected, preset, current)
+    : undefined;
+  await Promise.all([tabWork, formWork]);
 }
 
 let jobFilter = "all";
 
-async function paintJobs(ctx, home, alive) {
+async function paintJobs(ctx, home, alive, scheduleRequest) {
   const since = new Date(beijingMidnight() - 86400000).toISOString();
   let today = [];
   let recent = [];
-  let schedule = null;
   try {
-    [today, recent, schedule] = await Promise.all([
+    [today, recent] = await Promise.all([
       ctx.api(`/api/ops/jobs?limit=500&since=${encodeURIComponent(since)}`),
       ctx.api("/api/ops/jobs?limit=50&exclude_op=events.run"),
-      ctx.api("/api/ops/schedule").catch(() => null),
     ]);
   } catch (err) {
     if (!alive()) return;
@@ -695,9 +738,12 @@ async function paintJobs(ctx, home, alive) {
   if (!alive()) return;
   const body = document.getElementById("ops-timeline-body");
   if (body) {
-    const marks = { ...(home.occupancy.schedule || {}), ...(schedule || {}) };
-    const legend = timelineLegend(schedule?.events ? schedule.events_interval_minutes : null);
+    let schedule;
+    let selectedDay = 0;
     const draw = (daysBack) => {
+      selectedDay = daysBack;
+      const marks = { ...home.occupancy.schedule, ...schedule };
+      const legend = timelineLegend(schedule?.events ? schedule.events_interval_minutes : null);
       body.innerHTML = `<div class="ops-timeline-scroll">${timelineSvg(timelineModel(today, marks, Date.now(), daysBack))}</div>${legend}`;
       if (typeof document.querySelectorAll !== "function") return;
       document.querySelectorAll("[data-tl-day]").forEach((button) => {
@@ -707,7 +753,12 @@ async function paintJobs(ctx, home, alive) {
         button.onclick = () => draw(Number(button.dataset.tlDay));
       });
     };
-    draw(0);
+    draw(selectedDay);
+    void scheduleRequest.then((status) => {
+      if (!alive()) return;
+      schedule = status;
+      draw(selectedDay);
+    });
   }
   paintLastRuns(recent);
   const host = document.getElementById("ops-recent");
@@ -740,27 +791,19 @@ async function paintJobs(ctx, home, alive) {
   paint();
 }
 
-async function paintStale(ctx, home, current) {
-  let health;
-  let datasets;
-  try {
-    [health, datasets] = await Promise.all([ctx.api("/api/health"), ctx.api("/api/datasets")]);
-  } catch {
-    const host = document.getElementById("ops-stale");
-    if (current === generation && host) host.hidden = true;
-    return;
-  }
-  const host = document.getElementById("ops-stale");
-  const body = document.getElementById("ops-stale-body");
-  if (current !== generation || !host || !body) return;
-  host.hidden = false;
-  body.innerHTML = staleHtml(staleRows(health, datasets), health.anchor || "", !home.mode.ops_enabled);
-  if (typeof body.querySelectorAll !== "function") return;
-  body.querySelectorAll("a.button[href^='#/ops?']").forEach((link) => {
+function canRunSuggestion(home, { op, params }) {
+  if (!home.mode.ops_enabled || home.mode.config_drift) return false;
+  const card = home.operations.find((entry) => entry.id === op && entry.available);
+  return Boolean(card && (card.params || []).every(({ name, choices }) => (
+    !Array.isArray(choices) || params[name] === undefined || choices.includes(params[name])
+  )));
+}
+
+function bindSuggestions(ctx, home, current, body) {
+  body.querySelectorAll?.("a.button[href^='#/ops?']").forEach((link) => {
     link.onclick = (event) => {
       const query = new URLSearchParams(link.getAttribute("href").split("?")[1] || "");
       const opId = query.get("op");
-      if (!home.operations.some((card) => card.id === opId && card.available)) return;
       event.preventDefault();
       try {
         history.replaceState(null, "", link.getAttribute("href"));
@@ -772,23 +815,48 @@ async function paintStale(ctx, home, current) {
   });
 }
 
-async function paintMatrix(ctx, alive) {
-  let matrix;
+async function paintCoverage(ctx, home, current) {
+  const body = document.getElementById("ops-coverage-body");
+  if (!body) return;
   try {
-    matrix = await ctx.api("/api/runs/daily-matrix?sessions=14");
-  } catch {
-    const host = document.getElementById("ops-matrix");
-    if (alive() && host) host.hidden = true;
-    return;
+    const report = await ctx.api("/api/coverage/recent");
+    if (current !== generation) return;
+    body.innerHTML = barCoverageHtml(report, (action) => canRunSuggestion(home, action));
+    bindSuggestions(ctx, home, current, body);
+  } catch (err) {
+    if (current === generation) {
+      body.innerHTML = `<p class="panel-note err">${tr("近期覆盖读取失败。", "Recent coverage is unavailable.")} ${esc(err.message)}</p>`;
+    }
   }
-  const host = document.getElementById("ops-matrix");
-  const body = document.getElementById("ops-matrix-body");
-  if (!alive() || !host || !body) return;
-  host.hidden = false;
-  body.innerHTML = matrixHtml(matrix);
 }
 
-function bindOps(ctx, home, current) {
+async function paintStale(ctx, home, current) {
+  const body = document.getElementById("ops-stale-body");
+  if (!body) return;
+  try {
+    const [health, datasets] = await Promise.all([ctx.api("/api/health"), ctx.api("/api/datasets")]);
+    if (current !== generation) return;
+    body.innerHTML = staleHtml(staleRows(health, datasets), health.anchor, (action) => canRunSuggestion(home, action));
+    bindSuggestions(ctx, home, current, body);
+  } catch (err) {
+    if (current === generation) {
+      body.innerHTML = `<p class="panel-note err">${tr("数据新鲜度读取失败。", "Data freshness is unavailable.")} ${esc(err.message)}</p>`;
+    }
+  }
+}
+
+async function paintMatrix(ctx, alive) {
+  const body = document.getElementById("ops-matrix-body");
+  if (!body) return;
+  try {
+    const matrix = await ctx.api("/api/runs/daily-matrix?sessions=14");
+    if (alive()) body.innerHTML = matrixHtml(matrix);
+  } catch (err) {
+    if (alive()) body.innerHTML = `<p class="panel-note err">${tr("日更记录读取失败。", "Daily run history is unavailable.")} ${esc(err.message)}</p>`;
+  }
+}
+
+function bindOps(ctx, home, current, showTab) {
   const open = (opId) => {
     if (typeof document.querySelectorAll === "function") {
       document.querySelectorAll("[data-op]").forEach((item) => item.classList?.toggle("on", item.dataset.op === opId));
@@ -852,7 +920,7 @@ function bindOps(ctx, home, current) {
   });
   for (const id of OPS_TABS) {
     const tab = document.getElementById(`ops-tab-${id}`);
-    if (tab) tab.onclick = () => showOpsTab(id);
+    if (tab) tab.onclick = () => showTab(id);
   }
 }
 
@@ -970,15 +1038,36 @@ export function mountOpForm(ctx, home, opId, preset, host, current, options = {}
   return card;
 }
 
-function showForm(ctx, home, opId, preset, current, options = {}) {
+async function showForm(ctx, home, opId, preset, current) {
   const card = home.operations.find((item) => item.id === opId);
   const host = document.getElementById("ops-form");
   if (!card || !host || current !== generation) return;
+  const revision = ++drawerRevision;
   if (typeof document.querySelectorAll === "function") {
     document.querySelectorAll("details.ops-more[open]").forEach((menu) => { menu.open = false; });
   }
-  mountOpForm(ctx, home, opId, preset, host, current, { ...options, drawer: true, scroll: false });
   setDrawer(true);
+  if (card.choices_deferred) {
+    const paintMessage = (message, failed = false) => {
+      host.innerHTML = `<section class="surface-panel report-panel ops-form"><div class="panel-header"><h2>${ctx.esc(pick(card, "title"))}</h2><button class="button button-ghost ops-drawer-close" id="ops-drawer-close" type="button">${tr("关闭", "Close")}</button></div><p class="panel-note${failed ? " err" : ""}" role="status">${ctx.esc(message)}</p></section>`;
+      const close = document.getElementById("ops-drawer-close");
+      if (close) close.onclick = closeDrawer;
+    };
+    paintMessage(tr("正在读取可选项…", "Loading choices…"));
+    try {
+      const fullCard = await ctx.api(`/api/ops/operations/${encodeURIComponent(opId)}`);
+      if (current !== generation || revision !== drawerRevision) return;
+      if (!fullCard.available) {
+        paintMessage(pick(fullCard, "unavailable_reason"), true);
+        return;
+      }
+      home = { ...home, operations: [fullCard] };
+    } catch (err) {
+      if (current === generation && revision === drawerRevision) paintMessage(err.message, true);
+      return;
+    }
+  }
+  mountOpForm(ctx, home, opId, preset, host, current, { drawer: true, scroll: false });
   const close = document.getElementById("ops-drawer-close");
   if (close) close.onclick = closeDrawer;
   host.querySelector?.("input, select, button")?.focus?.();
@@ -1227,7 +1316,7 @@ async function renderJob(ctx, current) {
     return;
   }
   if (current !== generation) return;
-  const home = await api("/api/ops");
+  const home = await (ctx.opsStatus ? ctx.opsStatus() : api("/api/ops/status"));
   if (current !== generation) return;
   const runItems = (runs) =>
     (runs || [])
@@ -1495,7 +1584,7 @@ function renderWizard(ctx, home, current) {
     go.disabled = true;
     note.textContent = tr("正在检查配置…", "Checking configuration…");
     try {
-      let fresh = await api("/api/ops");
+      let fresh = await api("/api/ops/status");
       if (current !== generation) return;
       if (fresh.mode.setup) {
         note.textContent = tr("正在生成配置…", "Creating configuration…");
@@ -1505,7 +1594,7 @@ function renderWizard(ctx, home, current) {
           body: JSON.stringify({ data_root: document.getElementById("setup-root").value.trim() }),
         });
         if (current !== generation) return;
-        fresh = await api("/api/ops");
+        fresh = await api("/api/ops/status");
         if (current !== generation) return;
         if (created.hint) {
           const hint = document.getElementById("setup-hint");

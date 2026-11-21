@@ -7,6 +7,7 @@ import sqlite3
 from datetime import date, datetime, time
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from cnequity.config import Config, load_config
@@ -60,6 +61,21 @@ def test_a_session_runs_once(tmp_path):
     assert pending_session(cfg, "daily", now) == date(2026, 9, 24)
     mark_done(cfg.meta_root, "daily", date(2026, 9, 24))
     assert pending_session(cfg, "daily", now) is None
+
+
+def test_scheduler_and_range_query_honor_published_calendar_corrections(tmp_path):
+    from cnequity.query.calendar import list_trading_dates
+
+    cfg = _cfg(tmp_path)
+    previous, closed = date(2026, 9, 23), date(2026, 9, 24)
+    calendar = cfg.curated_root / "trading_calendar"
+    calendar.mkdir(parents=True)
+    pl.DataFrame({"trade_date": [closed], "is_trading": [False]}).write_parquet(
+        calendar / "calendar.parquet"
+    )
+
+    assert list_trading_dates(cfg, previous, closed) == [previous]
+    assert pending_session(cfg, "daily", _utc("2026-09-24T09:40:00+00:00")) == previous
 
 
 def test_the_catch_up_waits_for_the_days_run(tmp_path):

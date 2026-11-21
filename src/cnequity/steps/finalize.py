@@ -14,6 +14,7 @@ from cnequity.derive.adj_factors import INPUTS as ADJ_FACTOR_INPUTS
 from cnequity.derive.minute_resample import INPUTS as MINUTE_RESAMPLE_INPUTS
 from cnequity.derive.option_greeks import INPUTS as OPTION_GREEK_INPUTS
 from cnequity.domain.datasets import PARTITION_COLS, RESAMPLED_MINUTE_DATASETS
+from cnequity.orchestrator.outcomes import CoverageStatus, PublicationStatus, summarize_coverage
 from cnequity.orchestrator.registry import register_step
 from cnequity.progress import sweep_progress
 from cnequity.steps.compact_hooks import hooks_for
@@ -100,7 +101,7 @@ def _planner_owes(config: Config, dataset: str) -> bool:
     return bool(gap_days(config, dataset, today) or gap_keys(config, dataset, today))
 
 
-def _capture_derive_inputs(config: Config, dataset: str) -> dict:
+def capture_derive_inputs(config: Config, dataset: str) -> dict:
     """Record immutable input identities and the available coverage evidence."""
     from cnequity.storage.revisions import RevisionStore
 
@@ -124,7 +125,7 @@ def _capture_derive_inputs(config: Config, dataset: str) -> dict:
     return inputs
 
 
-def _publish_derived_revision(
+def publish_derived_revision(
     config: Config,
     dataset: str,
     run_id: str,
@@ -156,10 +157,10 @@ def _publish_derived_revision(
         lake_write.discard(dataset)
 
     def input_changed(name: str):
-        from cnequity.orchestrator.outcomes import InputUnavailableError
+        from cnequity.orchestrator.outcomes import InputChangedError
 
         reject()
-        return InputUnavailableError(
+        return InputChangedError(
             f"{dataset}: input {name} changed during calculation; re-run derive"
         )
 
@@ -173,8 +174,14 @@ def _publish_derived_revision(
         ):
             raise input_changed(name)
         lake_write.expect(name, identity.get("revision_id"))
-    if any(row.get("coverage_status") == "partial" for row in (input_revisions or {}).values()):
-        coverage_status = "partial"
+    if (
+        summarize_coverage(
+            row.get("coverage_status", CoverageStatus.NOT_APPLICABLE)
+            for row in (input_revisions or {}).values()
+        )
+        == CoverageStatus.PARTIAL
+    ):
+        coverage_status = CoverageStatus.PARTIAL.value
     publication = evaluate_publication(
         config,
         f"{run_id}-{dataset}",
@@ -217,6 +224,11 @@ def _publish_derived_revision(
         raise input_changed(exc.dataset) from exc
     if revision is None:
         return None
+    publication_status = (
+        PublicationStatus.PARTIAL
+        if coverage_status == CoverageStatus.PARTIAL
+        else PublicationStatus.PUBLISHED
+    )
     _record_dataset_result(
         config,
         run_id,
@@ -226,7 +238,7 @@ def _publish_derived_revision(
         criticality=_dataset_criticality(dataset),
         revision_id=revision.revision_id,
         coverage_status=coverage_status,
-        publication_status="partial" if coverage_status == "partial" else "published",
+        publication_status=publication_status.value,
     )
     return {
         "revision": revision.revision,
@@ -234,7 +246,7 @@ def _publish_derived_revision(
         "content_digest": revision.content_digest,
         "changed_partitions": list(revision.changed_partitions),
         "coverage_status": coverage_status,
-        "publication_status": "partial" if coverage_status == "partial" else "published",
+        "publication_status": publication_status.value,
     }
 
 
@@ -257,10 +269,7 @@ def _settle_published_datasets(
 def _record_resume_units(
     config: Config, run_id: str, findings: list[dict], datasets: set[str]
 ) -> list[dict]:
-    """Record the backfill units of *datasets* this compact published whole; never fails it.
-
-    What ``commit_staged_units`` does in ``meta/state`` for the old ledger.
-    """
+    """Record complete resume units when compact had no changed files to publish."""
     if not datasets:
         return []
     from cnequity.domain.findings import finding
@@ -281,7 +290,7 @@ def _record_resume_units(
     return []
 
 
-def _record_answers(config: Config, run_id: str, answers: list[dict] = ()) -> list[dict]:
+def _record_answers(config: Config, run_id: str, answers: list[dict]) -> list[dict]:
     """Record this run's answers in the coverage ledger; never fails a compact.
 
     *answers* are the findings in which this run's fetch steps reported what
@@ -309,22 +318,41 @@ def _record_answers(config: Config, run_id: str, answers: list[dict] = ()) -> li
 
 @register_step("compact", group="finalize", parallelizable=False)
 def step_compact(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    from cnequity.file_lock import lake_mutation_lock
+    from cnequity.orchestrator.run_lock import reentrant_run_lock
+    from cnequity.storage.catalog_bridge import lake_root
+    from cnequity.storage.lake_write import planned_on
+    from equitylake_core.lock import lake_read
 
-    # Compact does read-merge-write on shared partitions; overlapping runs
-    # (cron group + manual run), retention and repairs serialize on the one
-    # lake lock, which every writable catalog connection also holds.
-    with lake_mutation_lock(config.meta_root, blocking=True):
-        return _compact_locked(config, trade_date, run_id, context)
+    # The run owns its staging. Another run may prepare its own candidate
+    # concurrently; publish rechecks the bases and inputs under the write lock.
+    with (
+        lake_read(lake_root(config)),
+        reentrant_run_lock(config.meta_root, run_id),
+        planned_on(config) as plan,
+    ):
+        return _compact_run(config, trade_date, run_id, context, plan)
 
 
-def _compact_locked(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
+def _compact_run(config: Config, trade_date: date, run_id: str, context: dict, plan) -> dict:
     from cnequity.storage.catalog_migration import require_catalog_lake
     from cnequity.storage.lake_write import LakeWrite
 
     require_catalog_lake(config)
     lake_write = LakeWrite(config, run_id)
     try:
+        if plan is not None:
+            # The publication audit may read any declared dataset. With the
+            # gate off, the daily-bar pre-merge contract has explicit inputs.
+            from cnequity.domain.datasets import DATASETS
+
+            if config.publication_gate != "off":
+                inputs = DATASETS
+            elif lake_write.config.staging_root.joinpath("daily_bars", f"run_id={run_id}").is_dir():
+                inputs = ("corporate_actions", "instruments", "trading_status")
+            else:
+                inputs = ()
+            for name in inputs:
+                lake_write.expect(name, plan.revisions.get(name))
         result = _compact_datasets(config, trade_date, run_id, context, lake_write)
     except BaseException:
         lake_write.close(keep=True)
@@ -401,11 +429,11 @@ def _compact_datasets(
         if full_staging:
             fully_selected.add(ds)
         receipts = [r for r in manifest.get_dataset_results(run_id) if r["dataset"] == ds]
-        dataset_coverage = {r["coverage_status"] for r in receipts} - {"not_applicable"}
+        dataset_coverage = summarize_coverage(r["coverage_status"] for r in receipts)
         gaps = _ledger_view(config, ds, context)
         if (
             incomplete_count
-            or "partial" in dataset_coverage
+            or dataset_coverage == CoverageStatus.PARTIAL
             or any(gaps.get(k) for k in ("missing_ranges", "missing_units", "outstanding_keys"))
             or len(selected_files) < len(writer.list_run_files(ds, run_id))
         ):
@@ -430,7 +458,7 @@ def _compact_datasets(
                 changed_files=changed_files,
                 base_root=merge_base,
                 staging_files=selected_files,
-                allow_delist_inference="partial" not in dataset_coverage,
+                allow_delist_inference=dataset_coverage != CoverageStatus.PARTIAL,
                 out_root=out_root,
             )
             if rows:
@@ -497,7 +525,7 @@ def _compact_datasets(
         is_partial = (
             incomplete_count > 0
             or not full_staging
-            or "partial" in dataset_coverage
+            or dataset_coverage == CoverageStatus.PARTIAL
             or any(remaining.values())
             or any(f.get("dataset") == ds and f.get("rows_rejected") for f in audit_findings)
         )
@@ -506,11 +534,11 @@ def _compact_datasets(
         else:
             partial_datasets.discard(ds)
         coverage_by_dataset[ds] = {
-            "status": "partial"
+            "status": CoverageStatus.PARTIAL.value
             if is_partial
-            else "complete"
-            if "complete" in dataset_coverage
-            else "unknown",
+            else CoverageStatus.COMPLETE.value
+            if dataset_coverage == CoverageStatus.COMPLETE
+            else CoverageStatus.UNKNOWN.value,
             "requested_scope": manifest.get_run_metadata(run_id).get("backfill_scope")
             or {
                 "start": manifest.get_run_metadata(run_id).get("history_start"),
@@ -646,6 +674,16 @@ def _compact_datasets(
             **lineage,
         }
 
+    findings = list(context.get("audit_findings") or ())
+    resume_datasets = compacted & fully_selected
+
+    def add_publication_records(write) -> None:
+        from cnequity.quality.planned_coverage import attach_answers
+        from cnequity.storage.resume_units import attach
+
+        attach_answers(write, run_id, findings)
+        attach(write, run_id, findings, resume_datasets)
+
     catalog_revisions: dict = {}
     catalog_pending = [item for item in pending if lake_write.has(item[0])]
     if catalog_pending:
@@ -662,9 +700,11 @@ def _compact_datasets(
                     for ds, pcol, rows, _files, change_log, gate_spec in catalog_pending
                 },
                 message=f"compact run {run_id}",
+                record=add_publication_records,
             )
         except Exception as exc:
-            # One catalog transaction: none of these datasets was published.
+            # Report that the caller did not receive a result; a failure at
+            # COMMIT or afterwards can leave a committed snapshot.
             for ds, _pcol, rows, *_ in catalog_pending:
                 _record_dataset_result(
                     config,
@@ -701,7 +741,11 @@ def _compact_datasets(
                 revision_id=revision.revision_id,
                 rows_written=rows,
                 coverage_status=coverage_by_dataset[ds]["status"],
-                publication_status="partial" if ds in partial_datasets else "published",
+                publication_status=(
+                    PublicationStatus.PARTIAL
+                    if ds in partial_datasets
+                    else PublicationStatus.PUBLISHED
+                ).value,
             )
         else:
             _record_dataset_result(
@@ -714,17 +758,9 @@ def _compact_datasets(
                 rows_written=rows,
             )
     _settle_published_datasets(config, compacted, run_id=run_id, fully_selected=fully_selected)
-    audit_findings.extend(
-        _record_resume_units(
-            config,
-            run_id,
-            list(context.get("audit_findings") or ()),
-            compacted & fully_selected,
-        )
-    )
-    audit_findings.extend(
-        _record_answers(config, run_id, answers=list(context.get("audit_findings") or ()))
-    )
+    if not catalog_revisions:
+        audit_findings.extend(_record_resume_units(config, run_id, findings, resume_datasets))
+    audit_findings.extend(_record_answers(config, run_id, [] if catalog_revisions else findings))
 
     from cnequity.query.views import ensure_duckdb_views
 
@@ -794,9 +830,9 @@ def step_derive_adj_factors(config: Config, trade_date: date, run_id: str, conte
 
     try:
         with DerivedOutput(config, "adj_factors", run_id) as output:
-            input_revisions = _capture_derive_inputs(config, "adj_factors")
+            input_revisions = capture_derive_inputs(config, "adj_factors")
             result = compute_adj_factors(config, refresh_symbols=rebackfill, output=output)
-            published_revision = _publish_derived_revision(
+            published_revision = publish_derived_revision(
                 config,
                 "adj_factors",
                 run_id,
@@ -827,7 +863,7 @@ def step_derive_adj_factors(config: Config, trade_date: date, run_id: str, conte
         out["context_updates"] = {"audit_findings": result.findings}
     if published_revision is not None:
         out["dataset_revision"] = published_revision
-        if published_revision["coverage_status"] == "partial":
+        if published_revision["coverage_status"] == CoverageStatus.PARTIAL:
             out.update(
                 status="warning", coverage_status="partial", reason_code="input_coverage_limited"
             )
@@ -951,9 +987,9 @@ def step_derive_futures_continuous(
             "note": "futures_continuous disabled ([futures].enabled = false)",
         }
     with DerivedOutput(config, "futures_continuous", run_id) as output:
-        inputs = _capture_derive_inputs(config, "futures_continuous")
+        inputs = capture_derive_inputs(config, "futures_continuous")
         summary = derive_futures_continuous(config, output=output)
-        published = _publish_derived_revision(
+        published = publish_derived_revision(
             config, "futures_continuous", run_id, trade_date, output, input_revisions=inputs
         )
     rows = int(summary.get("rows") or 0)
@@ -985,9 +1021,9 @@ def step_derive_option_greeks(config: Config, trade_date: date, run_id: str, con
             "note": "option_greeks disabled ([futures].enabled / options = false)",
         }
     with DerivedOutput(config, "option_greeks", run_id) as output:
-        inputs = _capture_derive_inputs(config, "option_greeks")
+        inputs = capture_derive_inputs(config, "option_greeks")
         summary = derive_option_greeks(config, output=output)
-        published = _publish_derived_revision(
+        published = publish_derived_revision(
             config, "option_greeks", run_id, trade_date, output, input_revisions=inputs
         )
     rows = int(summary.get("rows") or 0)
@@ -1015,9 +1051,9 @@ def step_derive_industry_index(
 
     try:
         with DerivedOutput(config, "industry_index", run_id) as output:
-            inputs = _capture_derive_inputs(config, "industry_index")
+            inputs = capture_derive_inputs(config, "industry_index")
             summary = derive_industry_index(config, output=output)
-            published_revision = _publish_derived_revision(
+            published_revision = publish_derived_revision(
                 config,
                 "industry_index",
                 run_id,
@@ -1041,7 +1077,7 @@ def step_derive_industry_index(
     out: dict = {"rows_read": rows, "rows_written": rows}
     if published_revision is not None:
         out["dataset_revision"] = published_revision
-        if published_revision["coverage_status"] == "partial":
+        if published_revision["coverage_status"] == CoverageStatus.PARTIAL:
             out.update(
                 status="warning", coverage_status="partial", reason_code="input_coverage_limited"
             )

@@ -195,7 +195,7 @@ class JobEngine:
 
     def __init__(self, config: Config):
         self.config = config
-        self.manifest = Manifest(config.manifest_path)
+        self.manifest = Manifest(config.manifest_path, config=config)
 
     def run_job(
         self,
@@ -309,6 +309,7 @@ class JobEngine:
             # status` showed a ghost. The kernel releases this the moment the
             # process dies, which is exactly the signal that was missing.
             stack.enter_context(self._run_lock(run_id))
+            logger.info(N_("Run %s: %s for %s"), run_id, job_name, trade_date)
 
             context: dict[str, Any] = {"run_id": run_id, "trade_date": trade_date}
             results: list[dict[str, Any]] = []
@@ -457,7 +458,8 @@ class JobEngine:
         `cne status` describing a process that had already exited.
         """
         try:
-            return self._run_step(name, trade_date, run_id, context or {})
+            with self._run_lock(run_id):
+                return self._run_step(name, trade_date, run_id, context or {})
         except (KeyboardInterrupt, SystemExit):
             self.manifest.interrupt_run(run_id, error_message="interrupted by operator")
             raise
@@ -515,7 +517,7 @@ class JobEngine:
     # with finer detail than the engine has here — partial-fetch ratios and
     # audit finding counts. The engine only backfills a receipt they could not
     # write themselves. ``compact`` is not in this set: its engine marker uses
-    # the ``("compact", "compact")`` key, which ``_compact_locked`` never
+    # the ``("compact", "compact")`` key, which compact never
     # writes, so there is no double write to suppress.
     _SELF_RECORDING_STEPS = frozenset({"audit", "derive_adj_factors", "derive_industry_index"})
 
@@ -541,12 +543,7 @@ class JobEngine:
             # per-dataset loop starts.
             stages = ("compact",)
             dataset = "compact"
-        elif name in {
-            "derive_adj_factors",
-            "derive_industry_index",
-            "derive_futures_continuous",
-            "derive_option_greeks",
-        }:
+        elif name.startswith("derive_"):
             stages = ("derive",)
         else:
             # A step result is the final outcome of both source fetch and
@@ -651,7 +648,13 @@ class JobEngine:
     @contextlib.contextmanager
     def _run_lock(self, run_id: str):
         """Hold one run lock across nested init phase/retry calls."""
-        with reentrant_run_lock(self.config.meta_root, run_id):
+        from cnequity.storage.catalog_bridge import lake_root
+        from equitylake_core.lock import lake_operation
+
+        with (
+            lake_operation(lake_root(self.config)),
+            reentrant_run_lock(self.config.meta_root, run_id),
+        ):
             yield
 
     def _run_wave(
@@ -734,6 +737,7 @@ class JobEngine:
             )
 
         t0 = time.perf_counter()
+        request_meter = None
         try:
             from cnequity.query.parquet_scan import dataset_has_parquet
             from cnequity.storage.read_context import read_root
@@ -857,6 +861,7 @@ class JobEngine:
                     request_retry_count=request_retry_count,
                     execution_status=outcome.execution_status,
                     reason_code=outcome.reason_code,
+                    source_routes=request_meter.routes() if request_meter else None,
                 )
                 if step_status == "success" and retry_of:
                     self.manifest.supersede_batches(
@@ -922,6 +927,7 @@ class JobEngine:
                     retry_count=1 if retry_of else None,
                     execution_status=outcome.execution_status,
                     reason_code=outcome.reason_code,
+                    source_routes=request_meter.routes() if request_meter else None,
                 )
             self._record_step_result(
                 name=name,
@@ -967,9 +973,11 @@ class JobEngine:
             )
         start = backfill_of(self.config).start
         end = backfill_of(self.config).end or trade_date
-        floor = spec.earliest_available(shanghai_today())
-        ceiling = spec.source_retired_date
-        lo = max(start, floor) if start and floor else start
+        floor, ceiling = spec.history_bounds(shanghai_today(), self.config)
+        if start is None:
+            lo = floor if name in self.config.history_from else None
+        else:
+            lo = max(start, floor or start)
         hi = min(end, ceiling) if ceiling else end
         if (floor and end < floor) or (lo and lo > hi):
             raise CapabilityLimitError(
@@ -986,7 +994,7 @@ class JobEngine:
             "dataset": name,
             "severity": "warning",
             "check": "source_scope_incomplete",
-            "message": f"{name}: requested history exceeds source capability; fetching {lo}..{hi}",
+            "message": f"{name}: requested history exceeds available lake scope; fetching {lo}..{hi}",
             "requested_scope": requested,
             "effective_scope": effective,
         }

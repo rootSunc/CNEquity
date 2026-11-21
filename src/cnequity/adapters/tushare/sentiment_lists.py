@@ -27,6 +27,7 @@ import polars as pl
 
 from cnequity.adapters.tushare.client import SOURCE, TushareClient
 from cnequity.domain.bse_codes import legacy_symbol_map
+from cnequity.domain.datasets import get_dataset
 
 __all__ = [
     "FUND_FLOW_THS_TUSHARE_FLOOR",
@@ -43,11 +44,11 @@ __all__ = [
     "normalize_strongest_sectors",
 ]
 
-POPULARITY_RANKS_FLOOR = date(2023, 10, 1)
-LIMIT_LADDER_FLOOR = date(2023, 10, 1)
-STRONGEST_SECTORS_FLOOR = date(2023, 10, 1)
-KPL_LIMIT_UPS_FLOOR = date(2017, 10, 1)
-FUND_FLOW_THS_TUSHARE_FLOOR = date(2024, 10, 1)
+POPULARITY_RANKS_FLOOR = get_dataset("popularity_ranks").history_floor_date
+LIMIT_LADDER_FLOOR = get_dataset("limit_ladder").history_floor_date
+STRONGEST_SECTORS_FLOOR = get_dataset("strongest_sectors").history_floor_date
+KPL_LIMIT_UPS_FLOOR = get_dataset("kpl_limit_ups").history_floor_date
+FUND_FLOW_THS_TUSHARE_FLOOR = get_dataset("fund_flow_ths_tushare").history_floor_date
 
 # i18n-ignore-start: source values
 _LISTS = {

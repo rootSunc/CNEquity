@@ -25,6 +25,7 @@ from cnequity.config import Config
 from cnequity.domain.action_sessions import effective_session
 from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.holidays_cn import session_expr
+from cnequity.domain.market_time import SHANGHAI_ZONE
 from cnequity.domain.symbols import parse_symbol
 from cnequity.domain.trading_status import not_trading_expr, risk_warning_expr
 from cnequity.quality.ex_events import (
@@ -1125,7 +1126,7 @@ def adj_factor_reconciliation_findings(
                     "Verified live against both tdx_protocol and the eastmoney backup: "
                     "neither serves corporate-action history for a name once it is gone "
                     "from their live symbol list. Not a market-id or filter bug — see "
-                    "docs/zh/datasets/sources.md#corporate_actions."
+                    "docs/zh/datasets/catalog.md."
                     f"{repair_hint}{unsupported_hint}"
                 ),
                 "symbols_total": delisted.height,
@@ -2311,7 +2312,7 @@ def adj_factor_arbitration_findings(config: Config) -> list[dict]:
     peer_coverage = peer.group_by("symbol").agg(
         pl.col("fetched_at")
         .max()
-        .dt.convert_time_zone("Asia/Shanghai")
+        .dt.convert_time_zone(SHANGHAI_ZONE)
         .dt.date()
         .alias("_captured_through")
     )
