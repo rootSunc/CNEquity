@@ -115,7 +115,6 @@ dependencies = [
 [dependency-groups]
 dev = [
   "pytest>=8.0",
-  "pytest-cov>=5.0",
   "pytest-timeout>=2.3",
   # Pinned to a minor line: CI runs `ruff format --check`, and the formatter's
   # line-wrapping changes between minors, so an unpinned `ruff>=0.4` turns any
@@ -238,11 +237,11 @@ known-first-party = ["cnequity"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Network probes run only with `-m network`.
-# Random order is opt-in (`-p randomly`): CI runs one shuffled pass to catch
-# tests that only pass after another test has set shared state.
+# Random order is opt-in (`-p randomly`). The weekly workflow runs one shuffled
+# unit pass; pull requests stay in collection order so a failure stays readable.
 addopts = "-ra -m 'not network' -p no:randomly"
-# Fail loud on a hung test instead of blocking the whole suite and leaving an
-# orphaned process behind. The full suite runs in ~10s; 120s is generous slack.
+# Fail loud on a hung test instead of blocking the suite and leaving an
+# orphaned process behind. 120s is slack for one test, not the whole session.
 # `thread` method dumps a traceback pinpointing where the hang occurred.
 timeout = 120
 timeout_method = "thread"
@@ -263,32 +262,3 @@ filterwarnings = [
   # at import time — match on the message alone.
   "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
-
-[tool.coverage.run]
-source = ["cnequity"]
-branch = true
-# Vendored upstream (tdxpy, MIT). Same boundary as ruff extend-exclude, and the
-# same three exceptions: `_wire/__init__.py` and the two transaction parsers are
-# first-party code that happens to sit in the vendored tree, so they are
-# measured like everything else. Omitting them hid the one place in this package
-# where a parsing regression corrupts every later row of a page.
-omit = [
-  "*/adapters/tdx_protocol/_wire/constants.py",
-  "*/adapters/tdx_protocol/_wire/exceptions.py",
-  "*/adapters/tdx_protocol/_wire/heartbeat.py",
-  "*/adapters/tdx_protocol/_wire/helper.py",
-  "*/adapters/tdx_protocol/_wire/logger.py",
-  "*/adapters/tdx_protocol/_wire/socket_client.py",
-  "*/adapters/tdx_protocol/_wire/parser/base.py",
-  "*/adapters/tdx_protocol/_wire/parser/raw_parser.py",
-  "*/adapters/tdx_protocol/_wire/parser/setup_commands.py",
-  "*/adapters/tdx_protocol/_wire/parser/std/get_index_bars.py",
-  "*/adapters/tdx_protocol/_wire/parser/std/get_security_bars.py",
-  "*/adapters/tdx_protocol/_wire/parser/std/get_security_count.py",
-  "*/adapters/tdx_protocol/_wire/parser/std/get_security_list.py",
-  "*/adapters/tdx_protocol/_wire/parser/std/get_xdxr_info.py",
-]
-
-[tool.coverage.report]
-show_missing = true
-skip_empty = true

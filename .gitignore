@@ -33,6 +33,7 @@ env/
 configs/*.local.toml
 configs/cnequity.toml
 configs/cnequity.demo.toml
+configs/cnequity.sample.toml
 configs/*.bak*
 
 # Data lake artifacts (never commit generated data)

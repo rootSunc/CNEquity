@@ -13,7 +13,7 @@ RETIRED = {
     "retry_init_finalize.py",
     "run_init_2016.py",
 }
-LOCAL_CONFIGS = {"cnequity.toml", "cnequity.demo.toml"}
+LOCAL_CONFIGS = {"cnequity.toml", "cnequity.demo.toml", "cnequity.sample.toml"}
 TEMPLATE = "cnequity/config/templates/cnequity.example.toml"
 REQUIRED_FILES = (TEMPLATE, "cnequity/domain/seeds/bse_code_mapping.json")
 

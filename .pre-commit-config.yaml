@@ -1,5 +1,5 @@
 # Local gate for the two checks CI's `quality` job runs (.github/workflows/ci.yml).
-# Both had already been documented in docs/development/conventions.md and run by hand, which is
+# Both had already been documented in the contributor notes and run by hand, which is
 # how 145 commits still accumulated formatter drift across 53 files and turned
 # the push red — the same failure 7b34ca7 cleaned up once before. Documenting a
 # command does not enforce it; this does.
@@ -24,8 +24,8 @@ repos:
 
   # SECURITY.md asks reporters to flag keys found in git history, but nothing
   # stopped one getting there. This scans staged content before the commit
-  # exists; `.github/workflows/security.yml` scans the full history, because a
-  # local hook only protects clones that installed it.
+  # exists; CI's secret-scan job scans the full history, because a local hook
+  # only protects clones that installed it.
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:
@@ -43,7 +43,7 @@ repos:
         pass_filenames: false
       # Installed with `pre-commit install --hook-type pre-push`; see the script.
       - id: unit-tests
-        name: unit tests (repo venv + Python 3.10)
+        name: unit tests (checkout interpreter, plus 3.11 if newer)
         entry: scripts/dev/pre_push.sh
         language: script
         stages: [pre-push]

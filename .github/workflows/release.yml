@@ -1,21 +1,17 @@
+# Publish a tag that is already on main.
+#
+# Main has already run the suite. This workflow checks what a green checkout
+# does not: the tag matches the package version, the dataset contract is the
+# one being shipped, a clean install of the built wheel can open the offline
+# sample, and that install has no known vulnerable dependency. PyPI and the
+# GitHub Release are created only for a stable vMAJOR.MINOR.PATCH tag.
+
 name: Release
 
 on:
   push:
     tags:
       - "v*.*.*"
-  pull_request:
-    paths:
-      - "pyproject.toml"
-      - "README.pypi.md"
-      - "CHANGELOG.md"
-      - "src/**"
-      - "contracts/**"
-      - "sources/SOURCES.yml"
-      - "scripts/dev/fresh_lake_e2e.py"
-      - "scripts/dev/check_release_contract.py"
-      - "tests/**"
-      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 permissions:
@@ -26,56 +22,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install build tools
-        run: python -m pip install --upgrade pip build twine
-      - name: Install project and test tooling
-        run: pip install -e . --group dev
-      - name: Prepare release evidence directory
-        run: mkdir -p evidence
-      - name: Validate the versioned dataset contract
+
+      - name: Install
         run: |
-          set -euo pipefail
-          package_version=$(python - <<'PY'
-          import tomllib
-          with open("pyproject.toml", "rb") as fh:
-              print(tomllib.load(fh)["project"]["version"])
-          PY
-          )
-          contract="contracts/v${package_version}.json"
-          test -f "$contract" || {
-            echo "missing release contract: $contract" >&2
-            exit 1
-          }
-          cne contract validate "$contract" --against-registry \
-            | tee evidence/contract-validate.txt
-          cp "$contract" evidence/
-          python scripts/dev/check_release_contract.py --current "$contract" \
-            --output evidence/contract-diff.json
-          printf 'package_version=%s\ncontract=%s\n' "$package_version" "$contract" \
-            > evidence/contract-metadata.txt
-      - name: Run offline regression suite
-        run: |
-          set -o pipefail
-          pytest -q | tee evidence/pytest-offline.txt
-      - name: Run fresh-lake snapshot recovery drill
-        run: |
-          set -o pipefail
-          python scripts/dev/fresh_lake_e2e.py --skip-wheel-smoke \
-            | tee evidence/fresh-lake-e2e.json
-      - name: Generate source legal-policy report
-        run: |
-          cne sources policy > evidence/source-policy.json
-          python -m json.tool evidence/source-policy.json > /dev/null
+          python -m pip install --upgrade pip
+          pip install -e . build twine
+
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -100,15 +64,33 @@ jobs:
             echo "release tag must point to a commit already on main" >&2
             exit 1
           }
-      - name: Build distributions
-        run: python -m build
-      - name: Validate distributions
-        run: |
-          twine check dist/*
-          python scripts/dev/check_public_package.py dist/*
-      - name: Verify the release contract is in sdist and wheel
+
+      - name: Validate the dataset contract
         run: |
           set -euo pipefail
+          package_version=$(python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              print(tomllib.load(fh)["project"]["version"])
+          PY
+          )
+          contract="contracts/v${package_version}.json"
+          test -f "$contract"
+          cne contract validate "$contract" --against-registry
+          python scripts/dev/check_release_contract.py --current "$contract" \
+            --output "${RUNNER_TEMP}/contract-diff.json"
+
+      - name: Fresh-lake snapshot recovery drill
+        run: python scripts/dev/fresh_lake_e2e.py --skip-wheel-smoke
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Validate distributions
+        run: |
+          set -euo pipefail
+          twine check dist/*
+          python scripts/dev/check_public_package.py dist/*
           package_version=$(python - <<'PY'
           import tomllib
           with open("pyproject.toml", "rb") as fh:
@@ -120,7 +102,8 @@ jobs:
           test -n "$sdist" && test -n "$wheel"
           tar -tzf "$sdist" | grep -Fx "cnequity-${package_version}/contracts/v${package_version}.json"
           unzip -Z1 "$wheel" | grep -F "/share/cnequity/contracts/v${package_version}.json"
-      - name: Install built wheel into a clean runtime environment
+
+      - name: Install the wheel into a clean environment
         env:
           RUNTIME_ROOT: ${{ runner.temp }}/cnequity-release-runtime
         run: |
@@ -130,55 +113,42 @@ jobs:
           wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
           test -n "$wheel"
           "$RUNTIME_ROOT/bin/pip" install "$wheel"
-          "$RUNTIME_ROOT/bin/python" -m pip list --format=json > evidence/runtime-pip-list.json
-      - name: Generate runtime SBOM and dependency audit
+
+      - name: Audit installed dependencies
         env:
           RUNTIME_ROOT: ${{ runner.temp }}/cnequity-release-runtime
           SCANNER_ROOT: ${{ runner.temp }}/cnequity-release-scanner
         run: |
           set -euo pipefail
-          # Scanner packages live in their own environment.  Both tools are
-          # explicitly pointed at the wheel-installed runtime so dev/editable
-          # packages from the build job cannot enter release evidence.
           python -m venv "$SCANNER_ROOT"
-          "$SCANNER_ROOT/bin/python" -m pip install --upgrade pip pip-audit cyclonedx-bom
-          "$SCANNER_ROOT/bin/cyclonedx-py" environment \
-            "$RUNTIME_ROOT/bin/python" \
-            --output-format JSON --output-file evidence/sbom.cdx.json
+          "$SCANNER_ROOT/bin/python" -m pip install --upgrade pip pip-audit
           runtime_site=$(
             "$RUNTIME_ROOT/bin/python" -c \
               'import sysconfig; print(sysconfig.get_path("purelib"))'
           )
-          "$SCANNER_ROOT/bin/pip-audit" \
-            --path "$runtime_site" --format=json --output=evidence/pip-audit.json
-      - name: Smoke-test the built wheel
+          "$SCANNER_ROOT/bin/pip-audit" --path "$runtime_site"
+
+      - name: Smoke-test the installed wheel
         env:
-          SMOKE_ROOT: ${{ runner.temp }}/cnequity-wheel-smoke
+          RUNTIME_ROOT: ${{ runner.temp }}/cnequity-release-runtime
         run: |
-          python -m venv "$SMOKE_ROOT"
-          wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
-          test -n "$wheel"
-          "$SMOKE_ROOT/bin/python" -m pip install --upgrade pip
-          "$SMOKE_ROOT/bin/pip" install "$wheel"
-          # Exercise the installed distribution outside the checkout: help
-          # alone cannot detect missing assets or a broken first query.
-          mkdir -p "$SMOKE_ROOT/work"
-          cd "$SMOKE_ROOT/work"
+          mkdir -p "$RUNTIME_ROOT/work"
+          cd "$RUNTIME_ROOT/work"
           unset CNE_CONFIG PYTHONPATH
-          "$SMOKE_ROOT/bin/cne" --version
-          "$SMOKE_ROOT/bin/cne" doctor
-          "$SMOKE_ROOT/bin/cne" config create --data-root "$SMOKE_ROOT/production-layout"
-          "$SMOKE_ROOT/bin/cne" config validate
-          "$SMOKE_ROOT/bin/cne" init --layout-only
-          "$SMOKE_ROOT/bin/cne" init --profile sample \
+          "$RUNTIME_ROOT/bin/cne" --version
+          "$RUNTIME_ROOT/bin/cne" doctor
+          "$RUNTIME_ROOT/bin/cne" config create --data-root "$RUNTIME_ROOT/production-layout"
+          "$RUNTIME_ROOT/bin/cne" config validate
+          "$RUNTIME_ROOT/bin/cne" init --layout-only
+          "$RUNTIME_ROOT/bin/cne" init --profile sample \
             --data-root data/cnequity-sample --config-out configs/cnequity.sample.toml
-          "$SMOKE_ROOT/bin/cne" config validate --config configs/cnequity.sample.toml
-          "$SMOKE_ROOT/bin/cne" query --config configs/cnequity.sample.toml \
+          "$RUNTIME_ROOT/bin/cne" config validate --config configs/cnequity.sample.toml
+          "$RUNTIME_ROOT/bin/cne" query --config configs/cnequity.sample.toml \
             --sql "SELECT symbol, trade_date, close, source FROM daily_bars LIMIT 5"
-          "$SMOKE_ROOT/bin/cne" status --config configs/cnequity.sample.toml --datasets
-          "$SMOKE_ROOT/bin/cne" verify --config configs/cnequity.sample.toml
-          "$SMOKE_ROOT/bin/cne" audit --config configs/cnequity.sample.toml --full --quality-only
-          "$SMOKE_ROOT/bin/python" -I - <<'PY'
+          "$RUNTIME_ROOT/bin/cne" status --config configs/cnequity.sample.toml --datasets
+          "$RUNTIME_ROOT/bin/cne" verify --config configs/cnequity.sample.toml
+          "$RUNTIME_ROOT/bin/cne" audit --config configs/cnequity.sample.toml --full --quality-only
+          "$RUNTIME_ROOT/bin/python" -I - <<'PY'
           import sys
           from pathlib import Path
           import cnequity
@@ -192,22 +162,16 @@ jobs:
           assert bars["source"].unique().to_list() == ["mock"]
           print("Installed wheel: sample Parquet and Python query passed")
           PY
+
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:
           name: release-dist
           path: dist/*
-      - name: Upload release evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-evidence
-          path: evidence/
-          if-no-files-found: error
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       id-token: write

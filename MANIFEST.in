@@ -2,5 +2,5 @@ include contracts/v*.json
 prune private
 prune evidence
 exclude AGENTS.md
-exclude configs/cnequity.toml configs/cnequity.demo.toml
+exclude configs/cnequity.toml configs/cnequity.demo.toml configs/cnequity.sample.toml
 global-exclude *.local.toml .env .env.*

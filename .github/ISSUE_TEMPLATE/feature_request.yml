@@ -14,7 +14,7 @@ body:
     id: proposal
     attributes:
       label: 提议
-      description: 数据集形态、来源，以及如何落入 L0–L8（见 docs/zh/architecture/overview.md）。
+      description: 数据集形态、来源，以及如何落入 L0–L9（见 docs/zh/datasets/catalog.md）。
     validations:
       required: true
   - type: checkboxes

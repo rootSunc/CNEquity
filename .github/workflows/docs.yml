@@ -1,3 +1,7 @@
+# Documentation site. A pull request that touches the site must build both
+# languages in strict mode. GitHub Pages updates only after Release publishes
+# a stable tag, and only from that tag's commit.
+
 name: Docs
 
 on:
@@ -7,49 +11,88 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "mkdocs.en.yml"
+      - "CHANGELOG.md"
+      - "pyproject.toml"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
       - "mkdocs.en.yml"
+      - "CHANGELOG.md"
+      - "pyproject.toml"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: docs-${{ github.ref }}
-  cancel-in-progress: true
+  group: docs-${{ github.event_name == 'workflow_run' && 'published' || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.release.outputs.tag }}
     steps:
+      - name: Resolve the latest published release
+        id: release
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+          if [[ "$sha" == "$RELEASE_SHA" ]]; then
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_run' || steps.release.outputs.tag != ''
+        with:
+          ref: ${{ steps.release.outputs.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
+        if: github.event_name != 'workflow_run' || steps.release.outputs.tag != ''
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: docs/requirements.txt
       - name: Install docs toolchain
-        run: python -m pip install --upgrade pip && pip install -r docs/requirements.txt
-      # Chinese site at the root first: its build cleans site/, then the
-      # English site lands in site/en/.
-      - name: Build
-        run: mkdocs build --strict && mkdocs build --strict -f mkdocs.en.yml
+        if: github.event_name != 'workflow_run' || steps.release.outputs.tag != ''
+        run: python -m pip install -r docs/requirements.txt
+      - name: Build and check both language sites
+        if: github.event_name != 'workflow_run' || steps.release.outputs.tag != ''
+        run: |
+          mkdocs build --strict
+          mkdocs build --strict -f mkdocs.en.yml
+          python docs/site.py site
       - name: Upload GitHub Pages artifact
+        if: steps.release.outputs.tag != ''
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: needs.build.outputs.release != ''
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

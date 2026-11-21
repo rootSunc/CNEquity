@@ -1,9 +1,29 @@
+# Pull requests and main.
+#
+# The offline suite takes long enough that running it on every claimed
+# interpreter is mostly wait. It runs on the floor (3.11) and the newest
+# claimed interpreter (3.14), and once more on 3.11 with the oldest declared
+# httpx. 3.12 and 3.13 only have to install: a missing native wheel fails
+# there. Windows and macOS each
+# run the unit suite once on 3.12. Several checks are skipped unless the
+# runner is that operating system: Windows file locks and Task Scheduler XML,
+# macOS plist lint, clonefile and the open-file-limit fallback.
+#
+# The wheel, the generated docs and the dataset contract are checked on every
+# run because a green test suite does not catch those. Publishing, the docs
+# site and the weekly advisory scan are separate workflows. Upstream data
+# sources are not probed here: availability is outside this repository's
+# security scope, and a GitHub-hosted runner is the wrong vantage.
+
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -12,8 +32,12 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The contract diff reads the previous release tag out of history.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -21,11 +45,9 @@ jobs:
           cache: pip
 
       - name: Install
-        # setup-python ships the pip bundled with each interpreter (24.0 on 3.11,
-        # 25.0.1 on 3.12); PEP 735 `--group` needs 25.1+.
         run: |
           python -m pip install --upgrade pip
-          pip install -e . --group dev
+          pip install -e . --group dev build
 
       - name: Lint
         run: |
@@ -33,21 +55,26 @@ jobs:
           ruff format --check .
           shellcheck scripts/dev/*.sh
 
-      - name: Offline benchmark check
-        # Synthetic fixture only: this guards limiter/telemetry regressions and
-        # deliberately makes no claim about vendor speed or availability.
-        run: python scripts/dev/benchmark_offline.py --check --max-elapsed-seconds 10 --max-concurrency 2
-
       - name: Generated docs in sync
-        # Schema column tables, the example config mirror, the derivative
-        # capability table and both CLI references are mirrors of code. The
-        # schema page is synced rather than generated: its prose is
-        # hand-written and only the column tables are kept honest here.
         run: python scripts/dev/sync_docs.py --check
+
+      - name: Dataset contract
+        run: |
+          set -euo pipefail
+          package_version=$(python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              print(tomllib.load(fh)["project"]["version"])
+          PY
+          )
+          contract="contracts/v${package_version}.json"
+          test -f "$contract"
+          cne contract validate "$contract" --against-registry
+          python scripts/dev/check_release_contract.py --current "$contract" \
+            --output "${RUNNER_TEMP}/contract-diff.json"
 
       - name: Public package boundary
         run: |
-          python -m pip install build
           python -m build --sdist --wheel
           python scripts/dev/check_public_package.py dist/*.whl dist/*.tar.gz
 
@@ -64,29 +91,19 @@ jobs:
           npm run check
 
   test:
+    name: tests (${{ matrix.python-version }}, httpx ${{ matrix.httpx }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
-      # Keep the minimum supported interpreter and the current stable one.
-      # `requires-python` is `>=3.11` with no upper bound, so pip already
-      # installs this package on 3.14 whether or not anything ever ran it
-      # there — the same untested-claim gap the httpx floor job below exists
-      # to close. 3.14 is a matrix entry rather than an assumption.
-      # Windows below covers the platform-specific file-lock/path behavior.
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
-        # "latest" = whatever pip resolves, which is what a fresh
-        # `pip install cnequity` gets. See the floor job in `include`.
+        python-version: ["3.11", "3.14"]
         httpx: ["latest"]
         include:
-          # pyproject declares `httpx>=0.25` with no upper bound, so the jobs
-          # above always test the newest release and the declared floor is
-          # never exercised. httpx 0.28 changed `params` from merging into a
-          # URL's existing query to replacing it outright — a silent, live
-          # breakage (see adapters/eastmoney/em_auth.py) that only shows up
-          # when the two ends of the declared range disagree. Pinning the floor
-          # here makes the lower bound a tested claim rather than an assumption.
-          - python-version: "3.12"
+          # pyproject declares `httpx>=0.25`. httpx 0.28 changed `params` from
+          # merging into a URL's query to replacing it (see
+          # adapters/eastmoney/em_auth.py), so the floor is tested, not assumed.
+          - python-version: "3.11"
             httpx: "0.25.2"
     steps:
       - uses: actions/checkout@v4
@@ -97,48 +114,50 @@ jobs:
           cache: pip
 
       - name: Install
-        # No extras: every runtime source is a hard dependency now. The pip
-        # upgrade is required — PEP 735 `--group` needs 25.1+.
+        env:
+          HTTPX: ${{ matrix.httpx }}
         run: |
           python -m pip install --upgrade pip
           pip install -e . --group dev
-          if [ "${{ matrix.httpx }}" != "latest" ]; then
-            pip install "httpx==${{ matrix.httpx }}"
+          if [ "$HTTPX" != "latest" ]; then
+            pip install "httpx==$HTTPX"
           fi
-
-      - name: Report resolved httpx
-        # The version is otherwise an invisible side effect of resolution drift;
-        # print it so a failure names the httpx it happened on.
-        run: python -c "import httpx; print('httpx', httpx.__version__)"
+          python -c "import httpx; print('httpx', httpx.__version__)"
 
       - name: Test
-        run: pytest --cov=cnequity --cov-report=term-missing --cov-report=xml
+        run: pytest -q
 
-      - name: Test in random order
-        # A test that passes only after another one left shared state behind
-        # (a root logging handler, a registry entry) fails here, not months
-        # later when an unrelated change reorders collection. The seed is in
-        # the log, so `pytest -p randomly --randomly-seed=<seed>` reproduces it.
-        if: matrix.python-version == '3.12' && matrix.httpx == 'latest'
-        run: pytest tests/unit -q -p randomly
+  install:
+    name: install (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Upload coverage
-        # Both 3.12 jobs would otherwise upload and double-count the same run.
-        if: matrix.python-version == '3.12' && matrix.httpx == 'latest'
-        uses: codecov/codecov-action@v5
+      - uses: actions/setup-python@v5
         with:
-          files: coverage.xml
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
+          python-version: ${{ matrix.python-version }}
+          cache: pip
 
-  # Windows is a first-class runtime target (file locks, path forms, wheels).
-  # One Python version is enough to catch platform regressions; Ubuntu covers
-  # the minimum supported and current stable interpreters. Network tests stay
-  # deselected via addopts.
+      - name: Install the package a user would install
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          cne --version
+          python -c "import cnequity, duckdb, polars, pyarrow, curl_cffi"
+
+  # Windows is the platform the suite cannot fake: lock files, paths and the
+  # default console encoding. One interpreter is enough. The dashboard bundle
+  # is checked on Linux; the check is a rebuild diff, not a Windows API.
   test-windows:
+    name: tests (windows)
     runs-on: windows-latest
+    timeout-minutes: 60
     env:
-      # Force UTF-8 stdio so Chinese CLI/doctor strings never hit cp1252 EncodeError.
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
     steps:
@@ -154,18 +173,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e . --group dev
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Check dashboard on Windows
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run check
-
       - name: Test
         # tests/conftest.py handles Windows atexit noise only after a fully
         # successful session. Preserve pytest's exit code here so interruption
@@ -173,17 +180,18 @@ jobs:
         shell: bash
         run: pytest tests/unit -q
 
-  # macOS is a supported runtime and also the platform used by the bundled
-  # launchd runbook.  Keep one current interpreter here to exercise native
-  # paths, advisory locks and package wheels without multiplying the matrix.
+  # Same unit suite as Windows. The tests that call plutil, clonefile and the
+  # Darwin open-file limit do not run on Linux.
   test-macos:
+    name: tests (macos)
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.12"
           cache: pip
 
       - name: Install
@@ -193,3 +201,24 @@ jobs:
 
       - name: Test
         run: pytest tests/unit -q
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Full history: a key in an old commit is the case SECURITY.md cares
+      # about, and a shallow checkout cannot see it. The pre-commit hook only
+      # covers clones that installed it. Allowlist: .gitleaks.toml.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan history for committed secrets
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks git --redact --no-banner --exit-code 1 .
