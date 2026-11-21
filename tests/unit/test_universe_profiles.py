@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from datetime import date
 
 import polars as pl
@@ -32,7 +31,7 @@ def test_official_profiles_are_versioned_and_scope_hash_is_stable():
     assert first == second
 
 
-def test_explicit_profile_enables_strict_scope_and_legacy_all_a_only_warns():
+def test_explicit_profile_enables_strict_scope_and_legacy_all_a_stays_permissive():
     universe, profile, strict = _resolve_reader_scope(
         universe=None,
         profile="cn_a_sh_sz_research_v1",
@@ -42,16 +41,25 @@ def test_explicit_profile_enables_strict_scope_and_legacy_all_a_only_warns():
     assert universe == "all_a_sh_sz"
     assert profile is not None and strict is True
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        legacy = _resolve_reader_scope(
+    universe, profile, strict = _resolve_reader_scope(
+        universe=None,
+        profile="legacy_all_a",
+        universe_profile=None,
+        strict_universe=False,
+    )
+    assert universe == "all_a"
+    assert profile is not None and strict is False
+
+
+@pytest.mark.parametrize("profile", [None, "legacy_all_a"])
+def test_universe_all_a_is_removed(profile):
+    with pytest.raises(ReaderError, match=r"universe='all_a' was removed.*profile='legacy_all_a'"):
+        _resolve_reader_scope(
             universe="all_a",
-            profile=None,
+            profile=profile,
             universe_profile=None,
             strict_universe=False,
         )
-    assert legacy == ("all_a", None, False)
-    assert any(item.category is DeprecationWarning for item in caught)
 
 
 def test_strict_profile_delisting_evidence_fails_closed(tmp_path, monkeypatch):

@@ -98,7 +98,7 @@ def test_revision_map_pins_universe_dependencies(tmp_path, changed_dataset):
             contract_fingerprint="test",
         )
     pinned = {"daily_bars": 1, "instruments": 1, "trading_status": 1}
-    assert load("daily_bars", config=cfg, universe="all_a", revision_map=pinned).height == 1
+    assert load("daily_bars", config=cfg, profile="legacy_all_a", revision_map=pinned).height == 1
     frame = frames[changed_dataset].with_columns(
         pl.lit(date(2025, 12, 31)).alias("delist_date")
         if changed_dataset == "instruments"
@@ -114,8 +114,8 @@ def test_revision_map_pins_universe_dependencies(tmp_path, changed_dataset):
         schema_version=1,
         contract_fingerprint="test",
     )
-    assert load("daily_bars", config=cfg, universe="all_a").height == 0
-    assert load("daily_bars", config=cfg, universe="all_a", revision_map=pinned).height == 1
+    assert load("daily_bars", config=cfg, profile="legacy_all_a").height == 0
+    assert load("daily_bars", config=cfg, profile="legacy_all_a", revision_map=pinned).height == 1
 
 
 def test_explicit_revision_cannot_silently_read_unversioned_lake(tmp_path):
@@ -178,7 +178,7 @@ def test_pointer_only_reads_cover_reader_scan_and_universe_paths(tmp_path):
     assert load_bar_universe(cfg) == {"600000.SH"}
     assert coverage_start_date(cfg, "daily_bars") == day
     assert coverage_end_date(cfg, "daily_bars") == day
-    assert load("daily_bars", config=cfg, universe="all_a").height == 1
+    assert load("daily_bars", config=cfg, profile="legacy_all_a").height == 1
 
 
 def test_derived_revision_cow_isolates_fixed_curated_and_derived_reads(tmp_path):

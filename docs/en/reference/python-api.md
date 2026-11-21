@@ -13,7 +13,7 @@ load(
     dataset, *, start=None, end=None,
     adjust=None,            # "qfq" | "hfq" | "total_return"
     profile=None,           # versioned universe; alias universe_profile
-    universe=None,          # compatibility: "all_a" | "all_a_sh_sz"
+    universe=None,          # compatibility: "all_a_sh_sz"
     as_of=None, pit_mode=None, all_vintages=False,
     items=None, symbols=None,
     strict_adj=False, strict_universe=False, include_otc=False,
@@ -28,7 +28,7 @@ load(
 | `adjust` | `qfq` forward-adjusted, `hfq` backward-adjusted, for daily, minute, and other price-volume datasets. `total_return` applies to `daily_bars` only: fund cash distributions are reinvested, and stocks read as `hfq`. Adds `adj_open`, `adj_high`, `adj_low`, `adj_close`, and `adj_is_exact` |
 | `strict_adj` | Raise when an adjustment factor is missing instead of returning `adj_is_exact=False`. It checks factor coverage only and cannot prove historical factors correct |
 | `profile` | A versioned universe such as `cn_a_sh_sz_research_v1`. List them with `cne profile list` or `list_universe_profiles()`; research profiles turn on strict evidence checks |
-| `universe` | Legacy parameter. `all_a` is deprecated, and `profile="legacy_all_a"` returns the same rows; `all_a_sh_sz` is the Shanghai/Shenzhen subset |
+| `universe` | Legacy parameter that only accepts `all_a_sh_sz` (the Shanghai/Shenzhen subset). `universe="all_a"` was removed in 0.25.0 and now raises an error; pass `profile="legacy_all_a"` for the same rows |
 | `strict_universe` | Raise when the universe lacks security master data, daily trading status, or historical ST evidence |
 | `as_of`, `pit_mode` | PIT cutoff. `best_effort` (default) keeps values backfilled later but disclosed before the cutoff and marks them `pit_is_exact=False`; `strict` returns only versions the lake had observed by the cutoff |
 | `all_vintages` | Return every version before the cutoff, for studying restatements; leave it off for cross-sectional screens, where it counts one fact several times |

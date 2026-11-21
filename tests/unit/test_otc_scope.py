@@ -71,7 +71,7 @@ def test_default_reads_leave_out_beijing_quotes_from_before_the_exchange(tmp_pat
 
 def test_the_universe_starts_a_beijing_security_at_its_exchange_listing(tmp_path):
     cfg = _lake(tmp_path)
-    bj = load("daily_bars", config=cfg, universe="all_a", include_otc=True).filter(
+    bj = load("daily_bars", config=cfg, profile="legacy_all_a", include_otc=True).filter(
         pl.col("symbol") == "920001.BJ"
     )
     assert bj["trade_date"].to_list() == [LISTED, BJ_DAYS[3]]

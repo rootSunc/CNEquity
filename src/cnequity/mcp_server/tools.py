@@ -34,6 +34,7 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.config.resources import resources_for
 from cnequity.domain.datasets import DATASETS, RESAMPLED_MINUTE_DATASETS, TIER_LABELS
+from cnequity.domain.universe_profiles import profile_for_legacy_universe
 from cnequity.mcp_server import live
 from cnequity.query.read_budget import SYMBOL_SCAN_EXEMPT, oversized_read
 from cnequity.query.reader import ReaderError, load
@@ -400,11 +401,11 @@ def query_bars(
             end=end,
             symbols=_symbols(symbols),
             adjust=adjust,
-            universe=universe,
+            profile=profile_for_legacy_universe(universe).name if universe else None,
             # MCP is an agent-facing research surface: opting into all-A must
             # fail closed when the lake cannot prove historical ST coverage.
             # The Python API keeps its permissive default for exploratory use.
-            strict_universe=universe in {"all_a", "all_a_sh_sz"},
+            strict_universe=universe is not None,
         )
     except LakeEmpty:
         if not live.enabled(config):

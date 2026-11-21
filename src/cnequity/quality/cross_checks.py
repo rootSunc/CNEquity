@@ -1281,7 +1281,7 @@ def universe_survivorship_findings(config: Config, trade_date: date) -> list[dic
                     f"{r['symbol']} last bar {_iso(r['last_bar'])}"
                     for r in sample.iter_rows(named=True)
                 )
-                + ") — universe='all_a' keeps selecting them after they stopped trading"
+                + ") — the all_a universe keeps selecting them after they stopped trading"
             ),
             "unmarked_count": unmarked.height,
             "retired_symbols": retired.height,

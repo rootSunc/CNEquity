@@ -157,7 +157,7 @@ def test_load_daily_bars_universe_filters_st_and_suspended(lake):
         "daily_bars",
         start="2024-06-27",
         end="2024-06-27",
-        universe="all_a",
+        profile="legacy_all_a",
         config=lake,
     )
     assert set(df["symbol"].to_list()) == {"600519.SH"}
@@ -183,7 +183,7 @@ def test_load_universe_drops_invalid_price_placeholders_before_validation(lake):
         "daily_bars",
         start="2024-06-27",
         end="2024-06-27",
-        universe="all_a",
+        profile="legacy_all_a",
         config=lake,
     )
     assert set(df["symbol"].to_list()) == {"600519.SH"}
@@ -226,7 +226,7 @@ def test_load_universe_excludes_cdr_despite_missing_factors(lake):
         start="2024-06-27",
         end="2024-06-27",
         adjust="hfq",
-        universe="all_a",
+        profile="legacy_all_a",
         strict_adj=True,
         config=lake,
     )
@@ -370,7 +370,7 @@ def test_strict_all_a_filter_rejects_partial_status_coverage(lake):
             "daily_bars",
             start="2024-06-27",
             end="2024-06-27",
-            universe="all_a",
+            profile="legacy_all_a",
             strict_universe=True,
             config=lake,
         )
@@ -383,7 +383,7 @@ def test_strict_all_a_filter_requires_historical_st_evidence(lake):
             "daily_bars",
             start="2024-06-27",
             end="2024-06-27",
-            universe="all_a",
+            profile="legacy_all_a",
             strict_universe=True,
             config=lake,
         )
@@ -521,13 +521,13 @@ def test_load_raises_when_data_root_has_no_dataset(tmp_path):
 
 def test_load_index_bars_rejects_universe_filter(lake):
     with pytest.raises(ReaderError, match="universe filter applies to daily_bars only"):
-        load("index_bars", universe="all_a", config=lake)
+        load("index_bars", profile="legacy_all_a", config=lake)
 
 
 @pytest.mark.parametrize("dataset", ["minute_bars", "minute_bars_5m", "fund_flow"])
 def test_load_rejects_universe_filter_for_non_daily_datasets(lake, dataset):
     with pytest.raises(ReaderError, match="universe filter applies to daily_bars only"):
-        load(dataset, universe="all_a", config=lake)
+        load(dataset, profile="legacy_all_a", config=lake)
 
 
 def test_strict_all_a_filter_rejects_empty_bar_scope(lake):
@@ -536,7 +536,7 @@ def test_strict_all_a_filter_rejects_empty_bar_scope(lake):
             "daily_bars",
             start="2024-06-28",
             end="2024-06-28",
-            universe="all_a",
+            profile="legacy_all_a",
             strict_universe=True,
             config=lake,
         )

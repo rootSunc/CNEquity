@@ -13,7 +13,7 @@ load(
     dataset, *, start=None, end=None,
     adjust=None,            # "qfq" | "hfq" | "total_return"
     profile=None,           # 版本化股票池，别名 universe_profile
-    universe=None,          # 兼容参数："all_a" | "all_a_sh_sz"
+    universe=None,          # 兼容参数："all_a_sh_sz"
     as_of=None, pit_mode=None, all_vintages=False,
     items=None, symbols=None,
     strict_adj=False, strict_universe=False, include_otc=False,
@@ -28,7 +28,7 @@ load(
 | `adjust` | `qfq` 前复权、`hfq` 后复权，用于日线、分钟线等价量数据。`total_return` 只用于 `daily_bars`：基金现金分配再投资，股票同 `hfq`。结果附加 `adj_open`、`adj_high`、`adj_low`、`adj_close` 和 `adj_is_exact` |
 | `strict_adj` | 缺复权因子时报错，而不是返回 `adj_is_exact=False`。它只检查因子覆盖，不能证明历史因子正确 |
 | `profile` | 版本化股票池，如 `cn_a_sh_sz_research_v1`。用 `cne profile list` 或 `list_universe_profiles()` 查看；研究画像自动启用严格证据校验 |
-| `universe` | 旧参数。`all_a` 已弃用，`profile="legacy_all_a"` 返回同样的行；`all_a_sh_sz` 为沪深子集 |
+| `universe` | 旧参数，只接受 `all_a_sh_sz`（沪深子集）。`universe="all_a"` 已在 0.25.0 移除，传入会报错；改用 `profile="legacy_all_a"`，返回同样的行 |
 | `strict_universe` | 股票池缺少证券主数据、逐日交易状态或历史 ST 证据时报错 |
 | `as_of`、`pit_mode` | PIT 截止日。`best_effort`（默认）保留事后回填但在截止日前已披露的值，标 `pit_is_exact=False`；`strict` 只返回湖在截止日已观察到的版本 |
 | `all_vintages` | 返回截止日前的全部版本，用于研究财报修订；截面选股不要开，会重复计同一事实 |

@@ -56,7 +56,7 @@ from cnequity.storage.read_context import ReadContext
 logger = logging.getLogger(__name__)
 
 AdjustType = Literal["qfq", "hfq", "total_return"]
-UniverseType = Literal["all_a", "all_a_sh_sz"]
+UniverseType = Literal["all_a_sh_sz"]
 UniverseProfileLike = str | UniverseProfile
 RevisionRef = int | str
 RevisionSelection = RevisionRef | Mapping[str, RevisionRef]
@@ -174,6 +174,12 @@ def _resolve_reader_scope(
     resolve to the same registry record.
     """
 
+    if universe == "all_a":
+        raise ReaderError(
+            "universe='all_a' was removed in 0.25.0; pass profile='legacy_all_a' for the "
+            "same rows, or choose a versioned profile such as 'cn_a_sh_sz_research_v1' "
+            "or 'cn_a_all_experimental_v1'"
+        )
     if universe_profile is not None:
         warnings.warn(
             "load(universe_profile=...) is deprecated and will be removed in 0.25.0; "
@@ -203,14 +209,6 @@ def _resolve_reader_scope(
             )
         return resolved.legacy_universe, resolved, bool(strict_universe or resolved.strict_research)
 
-    if universe == "all_a":
-        warnings.warn(
-            "universe='all_a' is a deprecated compatibility alias and will be removed in "
-            "0.25.0; pass profile='legacy_all_a' for the same rows, or choose a versioned "
-            "profile such as 'cn_a_sh_sz_research_v1' or 'cn_a_all_experimental_v1'",
-            DeprecationWarning,
-            stacklevel=3,
-        )
     return universe, None, strict_universe
 
 
@@ -1131,12 +1129,13 @@ def load(
         under different trading rules, and are left out unless this is
         ``True``. Shanghai and Shenzhen rows are never affected.
     universe:
-        ``all_a`` — drop unlisted/delisted rows per day via ``instruments``, and
-        drop ST/suspended rows when ``trading_status`` has data for that day.
-        ``all_a_sh_sz`` applies the same rules to the explicitly named
-        Shanghai/Shenzhen subset and excludes North Exchange symbols; use it
-        only when that scope is intentional and record the exclusion in the
-        research manifest.
+        ``all_a_sh_sz`` — drop unlisted/delisted rows per day via
+        ``instruments``, and drop ST/suspended rows when ``trading_status`` has
+        data for that day, over the explicitly named Shanghai/Shenzhen subset;
+        North Exchange symbols are excluded. Use it only when that scope is
+        intentional and record the exclusion in the research manifest. For all
+        three exchanges pass ``profile="legacy_all_a"`` (the former
+        ``universe="all_a"``, removed in 0.25.0) or a versioned profile.
         CDRs (SH 689xxx, e.g. 689009.SH) are excluded: they are depositary
         receipts with no adj-factor source coverage; query them via ``symbols=``
         without a universe if needed. Only valid for ``daily_bars``; passing it
