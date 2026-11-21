@@ -60,6 +60,7 @@
 - 数据集的修订号、修订 id、内容摘要等不再重复写进 `meta/state/<数据集>.json`：湖目录是它们唯一的记录，`dataset_state()`、`cne` 的数据集目录和各处读取都从湖目录取。旧版本留在状态文件里的这些字段，在该数据集下次发布时或由 `cne run maintain` 删除。
 - `planner_only` 的数据集也能表达“只抓到一部分的一天”：来源只答了一部分（`source_scope_incomplete`）或有行被隔离时，这一天在覆盖台账里记为 `partial`，仍算欠着，之后一次干净的抓取记为 `complete` 才算补齐；原来这些日子记在 `meta/state` 的缺失日期台账里。读旧台账的地方对这类数据集改看覆盖台账。
 - `daily_bars` 和 `index_bars` 也可以列入 `planner_only`：日线的来源对某只代码某天没有返回数据时，按（日期，代码）记进覆盖台账，过了 3 天确认期不再追问；抓取失败的格子不记，下次仍会补抓。停牌推断（`trading_status` 的派生行）改为排除没有任何回答的格子。指数日线某天缺了部分指数时，这一天记为 `partial`。迁移 `attempts-ledger` 现在也把旧台账视为已回答的日线格子（不在待补键、不在缺失日期里的无数据格子，多为没有成交的 LOF 和未报停牌的停牌日）写进覆盖台账，重跑 `cne migrate --only attempts-ledger --apply` 即可。
+- `planner_only` 的基本面回补（`financial_statement_items`、`top_holders`、`shareholder_counts`、`share_structure`）续跑时不再读写 `meta/state` 的 `staged_units`/`published_units`：已发布的回补单元在 compact 发布完这个数据集的整份暂存后记进湖目录的 `_resume_units` 表，同一范围的回补 7 天内跳过它们。此前 `planner_only` 下这些单元写进状态文件后不会被提交，中断的回补续跑时会从头再问。
 
 ## [0.24.0] — 2026-11-13 · 最低要求升到 Python 3.11 与 DuckDB 2.0，新增实验性的湖目录
 

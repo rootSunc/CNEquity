@@ -491,6 +491,33 @@ def _settle_published_datasets(
         )
 
 
+def _record_resume_units(
+    config: Config, run_id: str, findings: list[dict], datasets: set[str]
+) -> list[dict]:
+    """Record the backfill units of *datasets* this compact published whole; never fails it.
+
+    What ``commit_staged_units`` does in ``meta/state`` for the old ledger.
+    """
+    if not datasets:
+        return []
+    from cnequity.domain.findings import finding
+    from cnequity.storage import resume_units
+
+    try:
+        resume_units.record(config, run_id, findings, datasets)
+    except Exception as exc:  # a lost checkpoint only re-asks the units
+        logger.warning("backfill units not recorded for %s: %s", run_id, exc)
+        return [
+            finding(
+                dataset="",
+                check="resume_units_record",
+                severity="warning",
+                message=f"the backfill's published units were not recorded: {exc}",
+            )
+        ]
+    return []
+
+
 def _sync_attempts(
     config: Config,
     run_id: str,
@@ -975,6 +1002,14 @@ def _compact_datasets(
         reconcile_no_print=bool({"daily_bars", "instruments"} & published),
     )
     audit_findings.extend(_reconcile_watermarks(config))
+    audit_findings.extend(
+        _record_resume_units(
+            config,
+            run_id,
+            list(context.get("audit_findings") or ()),
+            {ds for ds in compacted & fully_selected if planner_only(config, ds)},
+        )
+    )
     audit_findings.extend(
         _sync_attempts(
             config,

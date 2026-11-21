@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Iterable
 from datetime import date, timedelta
 
 import httpx
@@ -624,7 +625,62 @@ def _reusable_units(config: Config, dataset: str, resume_scope: str) -> set[str]
     """Units a recent backfill already published; none under ``--refetch``."""
     if backfill_of(config).refetch:
         return set()
+    if planner_only(config, dataset):
+        from cnequity.storage import resume_units
+
+        return resume_units.published(config, dataset, resume_scope)
     return StateStore(config.meta_root).published_units(dataset, resume_scope)
+
+
+def _with_units(result: dict, marks: _StagedUnits) -> dict:
+    """*result*, naming the units its run staged for compact to record."""
+    named = marks.findings()
+    if named:
+        updates = result.setdefault("context_updates", {})
+        updates["audit_findings"] = [*(updates.get("audit_findings") or []), *named]
+    return result
+
+
+def _fsi_unit_of(name: str, prefix: str) -> str | None:
+    """The ``period|report`` unit a staged ``part-fsi-<period>-<report>-<uuid>`` file holds."""
+    head = f"part-{prefix}"
+    if not (name.startswith(head) and name.endswith(".parquet")):
+        return None
+    body = name[len(head) : -len(".parquet")].rsplit("-", 1)[0]
+    period, _, report = body[:10], body[10:11], body[11:]
+    if len(period) != 10 or not report:
+        return None
+    return f"{period}|{report}"
+
+
+class _StagedUnits:
+    """Where a backfill step notes the units it validated into staging.
+
+    The old ledger keeps them in ``meta/state`` until compact publishes them;
+    a planner-only dataset names them in a finding, and compact records them
+    in the lake once their rows are published (``storage.resume_units``).
+    """
+
+    def __init__(self, config: Config, dataset: str, run_id: str, scope: str | None):
+        self.config, self.dataset, self.run_id, self.scope = config, dataset, run_id, scope
+        self.planner = planner_only(config, dataset)
+        self.units: set[str] = set()
+
+    def mark(self, units: Iterable[str]) -> None:
+        units = set(units)
+        if self.planner:
+            self.units |= units
+            return
+        StateStore(self.config.meta_root).mark_staged_units(
+            self.dataset, self.run_id, units, resume_scope=self.scope
+        )
+
+    def findings(self) -> list[dict]:
+        if not (self.planner and self.units and self.scope is not None):
+            return []
+        from cnequity.storage import resume_units
+
+        return [resume_units.finding(self.dataset, self.units, self.scope)]
 
 
 def _quarter_of(period: str) -> str:
@@ -721,9 +777,13 @@ def step_financial_statement_items(
     staged_files = StagingWriter(config.staging_root).list_run_files(
         "financial_statement_items", run_id
     )
-    staged_units = set(
-        state.get_payload("financial_statement_items").get("staged_units", {}).get(run_id, [])
-    )
+    if planner_only(config, "financial_statement_items"):
+        # No ledger: a unit this run staged is named by its file.
+        staged_units = {_fsi_unit_of(path.name, unit_prefix) for path in staged_files} - {None}
+    else:
+        staged_units = set(
+            state.get_payload("financial_statement_items").get("staged_units", {}).get(run_id, [])
+        )
     # A state entry alone is not enough after a staging file was removed or
     # corrupted. Only the report-period units still backed by a readable file
     # can be skipped on retry.
@@ -752,6 +812,7 @@ def step_financial_statement_items(
     # Units a recent run already published (an interrupted backfill's staging
     # is compacted by the next one) are skipped too; their rows are in the lake.
     resume_scope = _resume_scope("financial_statement_items", backfill_of(config).symbol_list())
+    marks = _StagedUnits(config, "financial_statement_items", run_id, resume_scope)
     published_units = (
         _reusable_units(config, "financial_statement_items", resume_scope) - recoverable_units
         if backfill
@@ -790,9 +851,7 @@ def step_financial_statement_items(
             batch_id=f"{unit_prefix}{period}-{report}-{uuid.uuid4().hex}",
             raw_archive_evidence=evidence,
         )
-        state.mark_staged_units(
-            "financial_statement_items", run_id, [unit], resume_scope=resume_scope
-        )
+        marks.mark([unit])
 
     if backfill:
         df = fetch_financial_statement_items(
@@ -926,17 +985,17 @@ def step_financial_statement_items(
             result["missing_periods"] = len(missing_periods)
         if missing_statement_types:
             result["missing_statement_periods"] = len(missing_statement_types)
-        result["context_updates"] = {"audit_findings": findings}
+        result["context_updates"] = {"audit_findings": [*findings, *marks.findings()]}
         return result
     if df.is_empty():
-        return {"rows_read": 0, "rows_written": 0}
+        return _with_units({"rows_read": 0, "rows_written": 0}, marks)
     if unit_stage_used:
         result = {"rows_read": df.height, "rows_written": df.height}
         if failures:
             result["status"] = "degraded"
             result["batch_settled"] = True
-        return result
-    return write_fetched(
+        return _with_units(result, marks)
+    written = write_fetched(
         config,
         run_id,
         "financial_statement_items",
@@ -954,6 +1013,7 @@ def step_financial_statement_items(
             else None
         ),
     )
+    return _with_units(written, marks)
 
 
 # --- shareholder structure ---------------------------------------------------
@@ -1046,6 +1106,7 @@ def _run_shareholder_step(
     published_units = (
         _reusable_units(config, dataset, resume_scope) if resume_scope is not None else set()
     )
+    marks = _StagedUnits(config, dataset, run_id, resume_scope)
     windows_reused = 0
     for index, (win_start, win_end) in enumerate(windows, start=1):
         unit = f"{by}:{win_start.isoformat()}:{win_end.isoformat()}"
@@ -1088,7 +1149,7 @@ def _run_shareholder_step(
                 ):
                     rows_read += recovered.height
                     rows_written += recovered.height
-                    state.mark_staged_units(dataset, run_id, [unit], resume_scope=resume_scope)
+                    marks.mark([unit])
                     report(index)
                     continue
             except (OSError, pl.exceptions.PolarsError):
@@ -1159,7 +1220,7 @@ def _run_shareholder_step(
             ),
         )
         if not incomplete:
-            state.mark_staged_units(dataset, run_id, [unit], resume_scope=resume_scope)
+            marks.mark([unit])
         rows_read += int(chunk.get("rows_read", 0))
         rows_written += int(chunk.get("rows_written", 0))
 
@@ -1169,7 +1230,7 @@ def _run_shareholder_step(
     result: dict = {"rows_read": rows_read, "rows_written": rows_written, "windows": len(windows)}
     if windows_reused:
         result["windows_reused"] = windows_reused
-    findings: list[dict] = []
+    findings: list[dict] = marks.findings()
     if failures:
         result["status"] = "degraded"
         result["missing_units"] = len(failures)
