@@ -75,7 +75,7 @@ def write_simple(
     if not report["rows_rejected"]:
         return result
     rejected_dates = report.get("rejected_dates", [])
-    if rejected_dates:
+    if rejected_dates and not planner_only(config, dataset):
         StateStore(config.meta_root).record_missing_dates(
             dataset, [date.fromisoformat(day) for day in rejected_dates], reason="quarantined_rows"
         )
@@ -104,6 +104,14 @@ def write_simple(
             }
         ]
     }
+    if rejected_dates and planner_only(config, dataset):
+        from cnequity.quality.planned_coverage import answer_finding
+
+        # Rows were held back: the day is answered only in part, so it stays owed.
+        days = [date.fromisoformat(day) for day in rejected_dates]
+        result["context_updates"]["audit_findings"].append(
+            answer_finding(dataset, days, datetime.now(UTC), "partial")
+        )
     return result
 
 
@@ -715,6 +723,14 @@ def fetch_incremental_daily(
         from cnequity.quality.planned_coverage import answer_finding
 
         findings.append(answer_finding(dataset, answered_empty, datetime.now(UTC)))
+    if alone and planned and answered_rows:
+        from cnequity.quality.planned_coverage import answer_finding
+
+        # A clean answer settles a day an earlier one left partial; a day a
+        # source answered only in part is recorded so by ``record_source_gap``.
+        clean = set(answered_rows) - source_gap_dates(dataset)
+        if clean:
+            findings.append(answer_finding(dataset, clean, datetime.now(UTC), "complete"))
     if empty_days:
         findings.append(_dense_empty_day_finding(dataset, empty_days))
     if failed_days:

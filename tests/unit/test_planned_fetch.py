@@ -316,3 +316,43 @@ def test_a_planner_only_backfill_asks_again_what_redo_names(tmp_path, monkeypatc
     monkeypatch.setattr(planned_coverage, "settled_days", settled)
     out = common.walk_day_backfill(cfg, DAY, "r1", "margin_trading", lambda d: None, source="sse")
     assert seen["redo"] == "empty" and out["already_covered"] == 1
+
+
+def test_a_partial_day_is_recorded_partial_and_shown_as_missing(tmp_path):
+    from cnequity.orchestrator.source_gaps import record_source_gap, source_gap_scope
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core import coverage as cov
+    from equitylake_core.catalog import Catalog
+
+    cfg = _alone(tmp_path)
+    with Catalog(lake_root(cfg), create=True) as catalog:
+        cov.prepare(catalog)
+    with source_gap_scope(cfg) as findings:
+        record_source_gap("margin_trading", "SZ side missing", dates=[DAY])
+    answer = next(item for item in findings if item["check"] == planned_coverage.ANSWER_CHECK)
+    # The same shape compact records from ``answer_finding``.
+    expected = planned_coverage.answer_finding("margin_trading", [DAY], DAY, "partial")
+    assert set(answer) == set(expected) and answer["outcome"] == "partial"
+    # The ledger is not written; the planner's ledger is.
+    assert StateStore(cfg.meta_root).get_missing_dates("margin_trading") == {date(2025, 8, 1)}
+    assert planned_coverage.record_answers(cfg, "r1", findings) == 1
+    view = planned_coverage.ledger_view(cfg, "margin_trading")
+    assert [row["start"] for row in view["missing_ranges"]] == [DAY.isoformat()]
+    # A clean answer later settles it.
+    clean = planned_coverage.answer_finding("margin_trading", [DAY], datetime.now(UTC), "complete")
+    planned_coverage.record_answers(cfg, "r2", [clean])
+    assert planned_coverage.ledger_view(cfg, "margin_trading")["missing_ranges"] == []
+
+
+def test_a_dataset_compaction_never_watermarks_has_no_computed_watermark(tmp_path):
+    from cnequity.domain.datasets import DATASETS, PARTITION_COLS, WATERMARK_SKIP
+    from cnequity.quality.verify import covered_through
+
+    # top_holders keeps no watermark (WATERMARK_SKIP); its window is the default one.
+    assert "top_holders" in WATERMARK_SKIP and PARTITION_COLS.get("top_holders")
+    cfg = replace(Config(data_root=tmp_path / "data"), planner_only=frozenset({"top_holders"}))
+    assert covered_through(cfg, "top_holders") is None
+    # A derived dataset without a derive watermark neither.
+    assert DATASETS["delisting_events"].watermark is False
+    cfg = replace(cfg, planner_only=frozenset({"delisting_events"}))
+    assert covered_through(cfg, "delisting_events") is None

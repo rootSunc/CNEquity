@@ -622,6 +622,31 @@ def refreshed(dataset: str) -> bool:
     return coverage_of(DATASETS[dataset], date.today()).by == "write"
 
 
+def ledger_view(config, dataset: str) -> dict:
+    """*dataset*'s owed-work fields, as the old ledgers' readers expect them.
+
+    A planner-only dataset keeps no ledger in ``meta/state``: a day it holds
+    only in part is its ``partial`` answer in ``_attempts``, reported here as
+    a ``missing_ranges`` row (``source_scope_incomplete``), and it owes no
+    units or keys. Any other dataset reads its state file as before.
+    """
+    if dataset not in getattr(config, "planner_only", ()):
+        return StateStore(config.meta_root).get_payload(dataset)
+    root = lake_root(config)
+    if not (root / "catalog.sqlite").exists():
+        return {"missing_ranges": [], "missing_units": {}, "outstanding_keys": []}
+    with Catalog(root, read_only=True) as catalog:
+        short = cov.partial(cov.attempted(catalog, dataset))["period"].to_list()
+    return {
+        "missing_ranges": [
+            {"start": period, "end": period, "last_failure": "source_scope_incomplete"}
+            for period in sorted(short)
+        ],
+        "missing_units": {},
+        "outstanding_keys": [],
+    }
+
+
 def gap_days(config, dataset: str, trade_date: date) -> list[date]:
     """The days *dataset* owes and does not have, over the last ``SYNC_DAYS``.
 
@@ -675,15 +700,23 @@ def settled_days(config, dataset: str, start: date, end: date, *, redo: str = "g
     }
 
 
-def answer_finding(dataset: str, empty: Iterable[date], asked_at: datetime) -> dict:
-    """What a fetch step says it asked about and found empty, for compact to record."""
-    days = sorted({day.isoformat() for day in empty})
+def answer_finding(
+    dataset: str, days: Iterable[date], asked_at: datetime, outcome: str = "empty"
+) -> dict:
+    """What a fetch step says it asked about and how it was answered, for compact to record.
+
+    *outcome* as in ``_attempts``: ``empty`` (nothing to store), ``partial``
+    (rows, but the day is incomplete: it stays owed) or ``complete`` (a clean
+    answer, which settles a day an earlier answer left partial).
+    """
+    periods = sorted({day.isoformat() for day in days})
     return {
         "dataset": dataset,
         "check": ANSWER_CHECK,
         "severity": "info",
-        "message": f"{len(days)} day(s) asked about came back empty",
-        "periods": days,
+        "message": f"{len(periods)} day(s) asked about came back {outcome}",
+        "periods": periods,
+        "outcome": outcome,
         "asked_at": asked_at.isoformat(),
     }
 
@@ -753,7 +786,7 @@ def _answer_rows(run_id: str, item: dict) -> list[dict]:
     if item.get("dataset") not in DATASETS:
         return []
     if item.get("check") == ANSWER_CHECK:
-        run, outcome = f"run:{run_id}:step", "empty"
+        run, outcome = f"run:{run_id}:step", item.get("outcome", "empty")
     elif item.get("check") == RECHECK_CHECK:
         run, outcome = f"run:{run_id}:recheck:{item.get('depth')}", "complete"
     else:

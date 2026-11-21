@@ -26,7 +26,12 @@ from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap
 from cnequity.progress import sweep_progress
 from cnequity.run_scope import backfill_of, run_flags_of
-from cnequity.steps.common import instrument_metadata, load_bar_universe, load_symbols
+from cnequity.steps.common import (
+    instrument_metadata,
+    load_bar_universe,
+    load_symbols,
+    planner_only,
+)
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
 from cnequity.storage import StagingWriter
 from cnequity.storage.state import StateStore
@@ -201,14 +206,15 @@ def _valuation_history_end(config: Config, trade_date: date) -> date:
     from datetime import timedelta
 
     from cnequity.quality.cross_checks import last_complete_em_valuation_tip
-    from cnequity.storage.state import StateStore
 
     em_tip = last_complete_em_valuation_tip(config)
     if em_tip is not None:
         return min(trade_date, em_tip)
     # No complete EM tip yet — stay behind the watermark (or behind trade_date)
     # so history cannot invent the live tip day that EastMoney still owns.
-    watermark = StateStore(config.meta_root).get_date("valuation_metrics")
+    from cnequity.quality.verify import covered_through
+
+    watermark = covered_through(config, "valuation_metrics")
     if watermark is not None:
         return min(trade_date, watermark - timedelta(days=1))
     return min(trade_date, trade_date - timedelta(days=1))
@@ -798,7 +804,7 @@ def step_financial_statement_items(
             skip_units=recoverable_units | published_units,
             failures=failures,
         )
-        if failures:
+        if failures and not planner_only(config, "financial_statement_items"):
             state.record_missing_units("financial_statement_items", failures)
         if unit_stage_used:
             frames = [
@@ -1128,7 +1134,7 @@ def _run_shareholder_step(
             failures.append((unit, progress.failure or f"{progress.failed_report} incomplete"))
             stopped = True
         if part.is_empty():
-            if not incomplete:
+            if not incomplete and not planner_only(config, dataset):
                 state.clear_missing_units(dataset, [unit])
             if not incomplete and backfill_of(config).active:
                 empty_windows.append((win_start, win_end))
@@ -1162,7 +1168,8 @@ def _run_shareholder_step(
         rows_read += int(chunk.get("rows_read", 0))
         rows_written += int(chunk.get("rows_written", 0))
 
-    if failures:
+    # A planner-only dataset keeps no unit debt: a failed window is a gap.
+    if failures and not planner_only(config, dataset):
         state.record_missing_units(dataset, failures)
     result: dict = {"rows_read": rows_read, "rows_written": rows_written, "windows": len(windows)}
     if windows_reused:

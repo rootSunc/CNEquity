@@ -28,7 +28,7 @@ def source_gap_dates(dataset: str) -> set[date]:
     return {
         date.fromisoformat(day)
         for finding in current[1]
-        if finding["dataset"] == dataset
+        if finding["dataset"] == dataset and finding.get("check") == "source_scope_incomplete"
         for day in finding["dates"]
     }
 
@@ -60,7 +60,24 @@ def record_source_gap(dataset: str, message: str, *, frame=None, dates=()) -> No
             "dates": sorted(day.isoformat() for day in days),
         }
     )
-    if days:
+    if days and dataset in getattr(config, "planner_only", ()):
+        from datetime import UTC, datetime
+
+        # The day has rows but not all of them: recorded partial, it stays owed.
+        # (``planned_coverage.answer_finding``'s shape; this module sits below it.)
+        periods = sorted({day.isoformat() for day in days})
+        findings.append(
+            {
+                "dataset": dataset,
+                "check": "planner_empty_answer",
+                "severity": "info",
+                "message": f"{len(periods)} day(s) asked about came back partial",
+                "periods": periods,
+                "outcome": "partial",
+                "asked_at": datetime.now(UTC).isoformat(),
+            }
+        )
+    elif days:
         StateStore(config.meta_root).record_missing_dates(
             dataset, days, reason="source_scope_incomplete"
         )

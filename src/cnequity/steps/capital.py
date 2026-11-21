@@ -431,6 +431,13 @@ def _existing_margin_dates(
         return set()
     from cnequity.storage.state import StateStore
 
+    # A planner-only lake keeps no missing-date ledger: a partial day is a
+    # ``partial`` answer the backfill's planner already counts as owed.
+    owed = (
+        set()
+        if planner_only(config, "margin_trading")
+        else StateStore(config.meta_root).get_missing_dates("margin_trading")
+    )
     return set(
         scan.group_by("trade_date")
         .agg(
@@ -443,7 +450,7 @@ def _existing_margin_dates(
         .collect()
         .get_column("trade_date")
         .to_list()
-    ) - set(StateStore(config.meta_root).get_missing_dates("margin_trading"))
+    ) - set(owed)
 
 
 def _margin_symbol_count(df: pl.DataFrame) -> int:

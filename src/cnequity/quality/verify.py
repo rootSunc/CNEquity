@@ -571,15 +571,55 @@ def covered_through(config, dataset: str) -> date | None:
     it is read from ``meta/state``.
     """
     if dataset in getattr(config, "planner_only", ()):
-        from cnequity.domain.datasets import PARTITION_COLS
-
-        spec = DATASETS.get(dataset)
-        if spec is not None and not spec.watermark and spec.fetch_semantics == "snapshot":
-            return last_published_day(config, dataset)
-        column = PARTITION_COLS.get(dataset) or (
-            spec.partition_col or spec.query_date_col if spec is not None else None
-        )
-        return watermark_date(config, dataset, column) if column else None
+        key = _covered_key(config, dataset)
+        if key is not None and key in _COVERED:
+            return _COVERED[key]
+        value = _covered_through(config, dataset)
+        if key is not None:
+            _COVERED[key] = value
+        return value
     from cnequity.storage.state import StateStore
 
     return StateStore(config.meta_root).get_date(dataset)
+
+
+#: ``covered_through`` per (lake, dataset, its revision, the calendar's revision):
+#: the answer moves only when one of them is published again.
+_COVERED: dict[tuple, date | None] = {}
+
+
+def _covered_key(config, dataset: str) -> tuple | None:
+    from cnequity.query.state import dataset_state
+
+    try:
+        own = dataset_state(dataset, config=config).revision_id
+        calendar = dataset_state("trading_calendar", config=config).revision_id
+    except (OSError, ValueError):
+        return None
+    if own is None or _is_snapshot(DATASETS.get(dataset)):
+        # A snapshot's capture also moves with a refresh that publishes nothing.
+        return None
+    return (str(config.data_root), dataset, own, calendar)
+
+
+def _covered_through(config, dataset: str) -> date | None:
+    from cnequity.domain.datasets import PARTITION_COLS, WATERMARK_SKIP
+
+    spec = DATASETS.get(dataset)
+    if _is_snapshot(spec):
+        return last_published_day(config, dataset)
+    column = PARTITION_COLS.get(dataset)
+    if spec is not None and spec.layer == "derived":
+        # A derive step that keeps a watermark (``spec.watermark``) keeps it off
+        # the rows it publishes; the others never had one.
+        column = column or spec.partition_col or spec.query_date_col
+        return watermark_date(config, dataset, column) if column and spec.watermark else None
+    if column is None or dataset in WATERMARK_SKIP:
+        # Compaction keeps no watermark for these (``_watermarked_datasets``):
+        # their window has always been the default one, not a date off the rows.
+        return None
+    return watermark_date(config, dataset, column)
+
+
+def _is_snapshot(spec) -> bool:
+    return spec is not None and not spec.watermark and spec.fetch_semantics == "snapshot"

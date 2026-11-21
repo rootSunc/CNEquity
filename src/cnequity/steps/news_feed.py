@@ -159,11 +159,11 @@ def _stage_news_locked(config: Config, trade_date: date, run_id: str, dataset: s
     # Archived even when empty: a quiet window is still an observed response.
     _archive(config, canonical, run_id, scope, pages)
     if frame.is_empty():
-        from cnequity.storage.state import StateStore
+        from cnequity.quality.verify import covered_through
 
         if (
             not dataset_has_parquet(config.curated_root / canonical)
-            and StateStore(config.meta_root).get_date(canonical) is None
+            and covered_through(config, canonical) is None
         ):
             # A first capture that finds nothing must not look like a clean start
             # (an empty success once left the dataset unregistered in curated).

@@ -391,7 +391,7 @@ def run_incremental_fetched(
         writer = StagingWriter(config.staging_root)
         missing_days = {
             row["start"]
-            for row in StateStore(config.meta_root).get_payload(dataset).get("missing_ranges", [])
+            for row in _ledger_view(config, dataset).get("missing_ranges", [])
             if row.get("last_failure") == "source_scope_incomplete"
         }
         # A day that staged only part of its rows is fetched again, not reused.
@@ -555,3 +555,9 @@ def run_incremental_fetched(
 def empty_ok(df: pl.DataFrame, dataset: str, trade_date: date) -> None:
     if df.is_empty():
         raise SourceUnavailableError(f"{dataset}: no rows returned for {trade_date.isoformat()}")
+
+
+def _ledger_view(config, dataset: str) -> dict:
+    from cnequity.quality.planned_coverage import ledger_view
+
+    return ledger_view(config, dataset)

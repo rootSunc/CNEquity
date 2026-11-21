@@ -643,7 +643,7 @@ def _compact_datasets(
             fully_selected.add(ds)
         receipts = [r for r in manifest.get_dataset_results(run_id) if r["dataset"] == ds]
         dataset_coverage = {r["coverage_status"] for r in receipts} - {"not_applicable"}
-        gaps = StateStore(config.meta_root).get_payload(ds)
+        gaps = _ledger_view(config, ds)
         if (
             incomplete_count
             or "partial" in dataset_coverage
@@ -734,7 +734,7 @@ def _compact_datasets(
             rows_written=rows,
         )
 
-        payload = StateStore(config.meta_root).get_payload(ds)
+        payload = _ledger_view(config, ds)
         resolved_keys[ds] = resolved_outstanding_keys(
             ds, candidate_root, payload.get("outstanding_keys", []), committed=False
         )
@@ -1497,3 +1497,9 @@ def step_ths_official_snapshot(
         out[label] = result
         out["rows_written"] += int(result.get("rows_written", 0) or 0)
     return out
+
+
+def _ledger_view(config, dataset: str) -> dict:
+    from cnequity.quality.planned_coverage import ledger_view
+
+    return ledger_view(config, dataset)

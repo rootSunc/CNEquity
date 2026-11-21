@@ -323,9 +323,11 @@ def _session_completeness(
         return []
     from cnequity.storage.state import StateStore
 
-    StateStore(config.meta_root).record_missing_dates(
-        "daily_bars", short.get_column("trade_date").to_list(), reason="bj_session_incomplete"
-    )
+    # Planner-only bars are owed per symbol: a short session is its gaps.
+    if "daily_bars" not in getattr(config, "planner_only", ()):
+        StateStore(config.meta_root).record_missing_dates(
+            "daily_bars", short.get_column("trade_date").to_list(), reason="bj_session_incomplete"
+        )
     return [
         {
             "dataset": "daily_bars",
@@ -453,7 +455,10 @@ def _quarantine_limit_breaches(
     days = sorted({d for d in breaches.get_column("trade_date").to_list()})
     from cnequity.storage.state import StateStore
 
-    StateStore(config.meta_root).record_missing_dates("daily_bars", days, reason="bj_price_limit")
+    if "daily_bars" not in getattr(config, "planner_only", ()):
+        StateStore(config.meta_root).record_missing_dates(
+            "daily_bars", days, reason="bj_price_limit"
+        )
     report = {
         "dataset": "daily_bars",
         "run_id": run_id,
