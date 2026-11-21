@@ -64,6 +64,18 @@ def test_a_run_finished_with_an_old_word_is_stored_in_the_new_one(tmp_path):
     assert (run["status"], run["reason_code"]) == ("skipped", "not_scheduled")
 
 
+def test_a_missing_state_file_is_not_opened(tmp_path):
+    from cnequity.config import Config
+    from cnequity.storage.revisions import RevisionStore
+
+    cfg = Config(data_root=tmp_path / "data")
+    store = RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root)
+    store._drop_state_revision("hot_rank")
+    assert store.receipt_file("hot_rank") is None
+    state = cfg.meta_root / "state"
+    assert not state.exists()
+
+
 def test_the_state_file_drops_a_revision_copy_the_catalog_keeps(tmp_path):
     from cnequity.config import Config
     from cnequity.storage.revisions import STATE_REVISION_FIELDS, RevisionStore

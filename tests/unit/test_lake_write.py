@@ -362,6 +362,22 @@ def test_a_publish_that_stops_before_the_state_file_is_still_published(cfg, monk
     assert store.sweep(apply=True)["state_synced"] == []
 
 
+def test_a_publish_does_not_recreate_a_removed_state_directory(cfg):
+    import shutil
+
+    state = cfg.meta_root / "state"
+    shutil.rmtree(state)
+    with LakeWrite(cfg, "r-nostate") as write:
+        january = write.checkout("daily_bars").partition("trade_date=2024-01")
+        _replace(january, _bars(date(2024, 1, 2), {"600000.SH": 10.5}))
+        write.publish({"daily_bars": PUBLISH})
+
+    assert not state.exists()
+    store = RevisionStore(cfg.meta_root, cfg.curated_root)
+    assert store.sweep(apply=True)["state_synced"] == []
+    assert not state.exists()
+
+
 def test_a_published_revision_records_a_digest_of_the_rows_the_catalog_holds(cfg):
     from cnequity.storage.lake_write import verify_revisions
 

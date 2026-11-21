@@ -197,7 +197,10 @@ class RevisionStore:
         _reject_symlink_path(self.root, label="revision root")
         if create:
             self.root.mkdir(parents=True, exist_ok=True)
-        self._state = StateStore(self.meta_root) if create else None
+        # Leave the retired ``meta/state/`` directory alone. Constructing
+        # ``StateStore`` creates it, and reading a missing dataset file creates
+        # its lock. Open it only when an older release's file is still there.
+        self._state = None
 
     @property
     def state(self) -> StateStore:
@@ -693,12 +696,19 @@ class RevisionStore:
             pointer_path=self.pointer_path(record.dataset).relative_to(self.meta_root).as_posix(),
         )
 
+    def _legacy_state_file(self, dataset: str) -> Path:
+        """``meta/state/<dataset>.json`` from a release that copied the revision there."""
+        return self.meta_root / LEGACY_STATE / f"{dataset}.json"
+
     def receipt_file(self, dataset: str) -> DatasetRevision | None:
         """Read the receipt file referenced by the current pointer file."""
         pointer = self._read_pointer_file(dataset)
         if pointer is None:
-            state = self.state.get_payload(dataset)
-            relative = state.get("revision_receipt")
+            # No pointer and no state file: nothing named a receipt. Don't
+            # create the retired directory to confirm that.
+            if not self._legacy_state_file(dataset).is_file():
+                return None
+            relative = self.state.get_payload(dataset).get("revision_receipt")
         else:
             relative = pointer.get("receipt")
         if not relative:
@@ -814,6 +824,10 @@ class RevisionStore:
         return tuple(reversed(out))
 
     def _drop_state_revision(self, dataset: str) -> None:
+        # The catalog already holds the revision. A missing file has nothing
+        # to drop; opening it would create ``meta/state/`` and a lock.
+        if not self._legacy_state_file(dataset).is_file():
+            return
         if not any(key in self.state.get_payload(dataset) for key in STATE_REVISION_FIELDS):
             return
         with self.state.transaction(dataset) as state:
@@ -853,7 +867,10 @@ class RevisionStore:
                 if record is None or record.revision == 0:
                     continue
                 # The catalog keeps the revision; only a stale copy left in
-                # the state file by an older release needs removing.
+                # the state file by an older release needs removing. A missing
+                # file is not one, and opening it would recreate the lock.
+                if not self._legacy_state_file(dataset).is_file():
+                    continue
                 if any(key in self.state.get_payload(dataset) for key in STATE_REVISION_FIELDS):
                     report["state_synced"].append(dataset)
                     if apply:
