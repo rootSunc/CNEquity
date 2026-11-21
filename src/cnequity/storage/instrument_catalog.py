@@ -107,12 +107,12 @@ def load_curated_trading_status(
             committed=False,
         )
     except (FileNotFoundError, OSError, pl.exceptions.PolarsError, ValueError) as exc:
-        logger.warning("curated trading_status scan failed; status evidence unavailable: %s", exc)
+        logger.warning("trading_status scan failed; status evidence unavailable: %s", exc)
         return None
     required = {"symbol", "trade_date", "is_trading"}
     if not required.issubset(frame.columns):
         logger.warning(
-            "curated trading_status lacks required evidence columns: %s",
+            "trading_status lacks required evidence columns: %s",
             sorted(required - set(frame.columns)),
         )
         return None

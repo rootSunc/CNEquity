@@ -161,7 +161,7 @@ def macro_revision_findings(
                 f"{len(revised)} published value(s) changed since the last fetch "
                 f"({len(material)} by more than "
                 f"{REVISION_MATERIAL_RELATIVE:.0%}): {sample}. "
-                "curated keeps the newest value; this is the only record that the "
+                "The lake keeps the newest value; this is the only record that the "
                 "earlier one existed"
             ),
             "trade_date": trade_date.isoformat(),

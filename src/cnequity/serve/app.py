@@ -401,7 +401,7 @@ class Quality(BaseModel):
     findings_runs: list[FindingsRun]
     diff_runs: list[DiffRun]
     quarantine: list[QuarantineEntry] = Field(
-        description="Pulled out of curated and kept as evidence, not a wastebasket."
+        description="Held back from publishing and kept as evidence, not a wastebasket."
     )
     on_demand: list[OnDemandEntry] = Field(
         description="Per-symbol caches; empty means nobody has queried one yet."

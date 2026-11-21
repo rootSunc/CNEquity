@@ -228,7 +228,7 @@ export async function renderRuns(ctx) {
   if (launcher.status) notes.push(`<p class="ops-hint">${ctx.esc(launcher.status)}</p>`);
   if (launcher.closedNote) notes.push(`<p class="ops-hint">${ctx.esc(launcher.closedNote)}</p>`);
   if (home?.occupancy?.lake_empty) {
-    notes.push(`<p class="ops-hint">${tr("湖里还没有 curated 数据。日更和补抓不会补历史。", "The lake has no curated data yet. A daily update or catch-up does not fill history.")} <a href="#/ops?op=init.start">${tr("去初始化", "Initialize")}</a></p>`);
+    notes.push(`<p class="ops-hint">${tr("湖里还没有已发布的数据。日更和补抓不会补历史。", "The lake has no published data yet. A daily update or catch-up does not fill history.")} <a href="#/ops?op=init.start">${tr("去初始化", "Initialize")}</a></p>`);
   }
   if (home?.mode?.setup) {
     notes.push(`<p class="ops-hint">${tr("首次配置还没完成。", "First-time setup is not finished.")} <a href="#/ops">${tr("去操作页", "Operations")}</a></p>`);

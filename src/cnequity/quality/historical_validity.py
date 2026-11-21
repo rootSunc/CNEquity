@@ -327,7 +327,7 @@ def historical_universe_validity(
                     "code": "delisted_universe_unreadable",
                     "message": f"delisted coverage could not be read: {exc}",
                     "remediation": (
-                        "Repair the unreadable curated Parquet file, then rerun delisted "
+                        "Repair the unreadable published Parquet file, then rerun delisted "
                         "coverage and this validity check."
                     ),
                 }

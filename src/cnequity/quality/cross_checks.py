@@ -3135,7 +3135,7 @@ def undeclared_source_findings(
                 "severity": "error",
                 "check": "unregistered_source",
                 "message": (
-                    f"{len(unregistered)} source label(s) in curated have no policy entry and "
+                    f"{len(unregistered)} source label(s) in published data have no policy entry and "
                     "no registered base, so their terms are undetermined: "
                     + ", ".join(sorted(unregistered))
                 ),

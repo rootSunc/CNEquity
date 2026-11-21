@@ -146,7 +146,7 @@ def _publish_staged(cfg, run_id: str, result: dict, *, applied: bool = True) -> 
     "--sample", default=400, show_default=True, help=N_("Number of securities to sample for bars.")
 )
 def ths_snapshot(config_path: str, what: str, days: int, sample: int):
-    """Capture peer-source snapshots for audit arbitration, without overwriting curated data.
+    """Capture peer-source snapshots for audit arbitration, without overwriting published data.
 
     Corporate actions prefer the full-history file; daily bars are sampled per --sample.
     These operations call the configured keyed API; with no snapshot, the matching

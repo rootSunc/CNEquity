@@ -375,8 +375,8 @@ function overviewSummary(h, ops) {
       ${kpi(num(h.datasets), tr("数据集", "Datasets"))}
       ${kpi(num(h.fresh), tr("最新", "Fresh"))}
       ${kpi(num(h.stale, "err"), tr("落后", "Stale"), tr("超过容忍窗口", "Outside tolerance"), h.stale ? "alert" : "")}
-      ${kpi(`<span title="${fmt(h.rows)} ${tr("行", "rows")}">${compact(h.rows)}</span>`, tr("行数", "Rows"), "curated")}
-      ${kpi(mb(h.bytes), tr("存储", "Storage"), "curated")}
+      ${kpi(`<span title="${fmt(h.rows)} ${tr("行", "rows")}">${compact(h.rows)}</span>`, tr("行数", "Rows"), tr("已发布", "published"))}
+      ${kpi(mb(h.bytes), tr("存储", "Storage"), tr("已发布", "published"))}
       ${kpi(`${num(sev.error, "err")}<span class="metric-secondary"> / ${fmt(sev.warning)}</span>`, tr("审计", "Audit"), "", sev.error ? "alert" : "")}
     </section>
   `;
@@ -1167,8 +1167,8 @@ async function renderDetail(name, tab, view) {
       </div>
     </section>
     <section class="metric-grid detail-metrics" aria-label="${tr("数据集关键指标", "Dataset metrics")}">
-      ${kpi(`<span title="${fmt(d.row_count)} ${tr("行", "rows")}">${compact(d.row_count)}</span>`, tr("行数", "Rows"), "curated")}
-      ${kpi(mb(d.bytes), tr("存储", "Storage"), "curated")}
+      ${kpi(`<span title="${fmt(d.row_count)} ${tr("行", "rows")}">${compact(d.row_count)}</span>`, tr("行数", "Rows"), tr("已发布", "published"))}
+      ${kpi(mb(d.bytes), tr("存储", "Storage"), tr("已发布", "published"))}
       ${kpi(esc(d.watermark || "-"), tr("水位", "Watermark"), d.watermarked ? tr("维护中", "Maintained") : tr("不维护水位", "No watermark"))}
       ${kpi(esc(d.coverage_end || "-"), tr("覆盖至", "Covered through"), partitionText(d.granularity))}
     </section>

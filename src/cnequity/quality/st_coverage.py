@@ -630,7 +630,7 @@ def publish_st_coverage_receipt(config: Config, checkpoint: dict[str, Any]) -> P
     ]
     if missing:
         raise ValueError(
-            f"cannot publish ST coverage before {len(missing)} symbol(s) reach curated storage"
+            f"cannot publish ST coverage before {len(missing)} symbol(s) are published"
         )
     receipt = {
         "schema_version": 1,

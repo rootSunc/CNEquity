@@ -43,7 +43,7 @@ def repair_bse_tip_amounts_from_curated(
     )
     current = dedupe_by_primary_key(current, "daily_bars")
     if current.is_empty():
-        raise RuntimeError(f"daily_bars {trade_date}: no curated rows found for the repair scope")
+        raise RuntimeError(f"daily_bars {trade_date}: no published rows found for the repair scope")
 
     observed = set(current.get_column("symbol").to_list())
     missing = sorted(set(target) - observed)
@@ -78,7 +78,7 @@ def repair_bse_tip_amounts_from_curated(
                 "severity": "warning",
                 "check": "daily_bars_bse_tip_repair_missing_rows",
                 "message": (
-                    f"{len(missing)} requested BJ symbol(s) have no curated row on "
+                    f"{len(missing)} requested BJ symbol(s) have no published row on "
                     f"{trade_date}: {preview}{suffix}"
                 ),
                 "source": "bse",

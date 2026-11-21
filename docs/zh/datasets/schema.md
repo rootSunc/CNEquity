@@ -814,7 +814,7 @@ PIT 查询过滤 `announce_date <= as_of`。
 
 #### market_breadth
 
-由 curated ``daily_bars`` 相对前一交易日计算。
+由已发布的 ``daily_bars`` 相对前一交易日计算。
 
 | 列 | 类型 | 说明 |
 |--------|------|-------|

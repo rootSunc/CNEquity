@@ -70,7 +70,7 @@ def _gapfill_tip_via_clist(
                     "check": "daily_bars_clist_gapfill",
                     "message": (
                         f"{len(missing)} tip key(s) missing after TDX but eastmoney "
-                        "backup is disabled; curated tip stays sparse"
+                        "backup is disabled; the published tip stays sparse"
                     ),
                 }
             ],

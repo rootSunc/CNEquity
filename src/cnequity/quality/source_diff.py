@@ -222,7 +222,7 @@ def diff_dataset(
                     "dataset": spec.name,
                     "check": "no_curated",
                     "severity": "info",
-                    "message": f"No curated data for {spec.name}",
+                    "message": f"No published data for {spec.name}",
                 }
             ]
         return [

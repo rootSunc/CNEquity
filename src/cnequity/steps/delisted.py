@@ -524,7 +524,7 @@ def _publish_recovery_receipt(config: Config, checkpoint: dict) -> Path:
             missing.append(symbol)
     if missing:
         raise ValueError(
-            f"cannot publish delisted recovery before {len(missing)} symbol(s) reach curated storage"
+            f"cannot publish delisted recovery before {len(missing)} symbol(s) are published"
         )
     payload = {
         "schema_version": 2,

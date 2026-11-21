@@ -94,7 +94,7 @@ def _schema_contract_scan(
             "check": "schema_contract",
             "message": (
                 f"{len(invalid)} parquet file(s) violate the stored schema contract in "
-                f"curated {dataset}{suffix}"
+                f"published {dataset}{suffix}"
             ),
             "files_checked": len(files),
             "invalid_files": len(invalid),
@@ -249,7 +249,7 @@ def _unreadable_parquet_finding(files: list[Path], dataset: str, root: Path) -> 
         "severity": "error",
         "check": "schema_contract",
         "message": (
-            f"{len(unreadable)} parquet file(s) are unreadable in curated {dataset}{suffix}"
+            f"{len(unreadable)} parquet file(s) are unreadable in published {dataset}{suffix}"
         ),
         "files_checked": len(files),
         "invalid_files": len(unreadable),
@@ -682,7 +682,7 @@ def audit_curated_dataset(
                 "dataset": dataset,
                 "severity": empty_severity,
                 "check": "exists",
-                "message": f"No curated data for {dataset}",
+                "message": f"No published data for {dataset}",
             }
         )
         return findings
@@ -693,7 +693,7 @@ def audit_curated_dataset(
                 "dataset": dataset,
                 "severity": empty_severity,
                 "check": "non_empty",
-                "message": f"Empty curated {dataset}",
+                "message": f"Empty published {dataset}",
             }
         )
         return findings
@@ -864,7 +864,7 @@ def audit_curated_dataset(
                 "severity": "error",
                 "check": "mock_source",
                 "message": (
-                    f"{mock_rows} fabricated rows (source={MOCK_SOURCE!r}) in curated {dataset}; "
+                    f"{mock_rows} fabricated rows (source={MOCK_SOURCE!r}) in published {dataset}; "
                     "regenerate with a real source before using downstream"
                 ),
             }
@@ -908,7 +908,7 @@ def audit_curated_dataset(
                 "dataset": dataset,
                 "severity": "error",
                 "check": "pk_unique",
-                "message": (f"{dupes} duplicate PK rows in audited curated {dataset} partition"),
+                "message": (f"{dupes} duplicate PK rows in audited published {dataset} partition"),
                 "rows_checked": row_count,
                 "duplicate_rows": dupes,
                 "violations": violations,
@@ -927,7 +927,7 @@ def audit_curated_dataset(
                 "dataset": dataset,
                 "severity": "error",
                 "check": "required_non_null",
-                "message": f"Required fields contain nulls in curated {dataset}: {detail}",
+                "message": f"Required fields contain nulls in published {dataset}: {detail}",
                 "null_counts": nulls,
                 "rows_checked": row_count,
             }

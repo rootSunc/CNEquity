@@ -195,7 +195,7 @@ def build_trading_calendar(
             raise CalendarCoverageError(
                 "trading calendar holiday seed ends at "
                 f"{_SEED_END.isoformat()}; cannot classify {unknown_weekdays[0].isoformat()} "
-                "without refreshed holidays_cn.py or curated bar evidence"
+                "without refreshed holidays_cn.py or published bar evidence"
             )
 
     # Before the seed and the holiday table begin, bars are the only evidence

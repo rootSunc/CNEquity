@@ -1806,13 +1806,13 @@ msgstr "资金面"
 
 #: cnequity/cli/ths_official_cmds.py
 msgid ""
-"Capture peer-source snapshots for audit arbitration, without overwriting curated data.\n"
+"Capture peer-source snapshots for audit arbitration, without overwriting published data.\n"
 "\n"
 "Corporate actions prefer the full-history file; daily bars are sampled per --sample.\n"
 "These operations call the configured keyed API; with no snapshot, the matching\n"
 "arbitration checks stay silent."
 msgstr ""
-"抓取对手源快照供审计仲裁，不覆盖 curated 数据。\n"
+"抓取对手源快照供审计仲裁，不覆盖已发布的数据。\n"
 "\n"
 "公司行动优先下载全历史文件，日线按 --sample 抽样。\n"
 "这些操作会访问配置的 keyed API；没有快照时，相应仲裁检查保持静默。"
@@ -1955,7 +1955,7 @@ msgstr "逗号分隔，如 600519.SH,000001.SZ。不填就是该数据集的默�
 
 #: cnequity/cli/maintain_cmds.py
 msgid ""
-"Compact runs in staging that have finished but are not yet published into curated.\n"
+"Compact runs in staging that have finished but are not yet published into the lake.\n"
 "\n"
 "\n"
 "Without --run-id it handles every such run in turn: the process has ended, it has staged\n"
@@ -1963,7 +1963,7 @@ msgid ""
 "`cne init` resumes itself), are left alone; each dataset is still guarded by the compact\n"
 "gate, and datasets with unfinished batches are left for `cne run retry`."
 msgstr ""
-"把 staging 里已经结束、但还没发布的 run compact 进 curated。\n"
+"把 staging 里已经结束、但还没发布的 run compact 发布进湖。\n"
 "\n"
 "\n"
 "不带 --run-id 时逐个处理所有这样的 run：进程已结束、有暂存文件、还没有成功的 compact。\n"
@@ -3646,8 +3646,8 @@ msgid "Name of the imported snapshot; defaults to the archive file name."
 msgstr "导入后的快照名；默认取归档文件名。"
 
 #: cnequity/cli/quality_cmds.py
-msgid "Needs trading_calendar in curated"
-msgstr "需要 curated 里的 trading_calendar"
+msgid "Needs published trading_calendar data"
+msgstr "需要已发布的 trading_calendar 数据"
 
 #: cnequity/cli/setup_cmds.py
 #, python-brace-format
@@ -3762,8 +3762,8 @@ msgid "No runs yet."
 msgstr "还没有任何 run。"
 
 #: cnequity/cli/maintain_cmds.py
-msgid "No stats tables: scanned curated directly; adding --dataset or --by-source generates the stats automatically"
-msgstr "没有统计表 —— 已直接扫 curated；加 --dataset 或 --by-source 会自动生成统计表"
+msgid "No stats tables: scanned the published files directly; adding --dataset or --by-source generates the stats automatically"
+msgstr "没有统计表 —— 已直接扫描已发布的文件；加 --dataset 或 --by-source 会自动生成统计表"
 
 #: cnequity/ops/runner.py
 msgid "No such task."
@@ -4531,7 +4531,7 @@ msgstr "只重算这些数据集（可重复）。其它数据集的行保持不
 
 #: cnequity/cli/maintain_cmds.py
 msgid ""
-"Recompute partition_stats / provenance_stats from curated and derived.\n"
+"Recompute partition_stats / provenance_stats from the published datasets.\n"
 "\n"
 "\n"
 "Recomputes unconditionally by default. For a timer use `--if-stale`: it returns at once when nothing changed,\n"
@@ -4542,7 +4542,7 @@ msgid ""
 "Staleness is judged by run id, not by the clock. Only ingestion changes this lake,\n"
 "so stats built after the last run are current, however old they look."
 msgstr ""
-"从 curated 和 derived 重算 partition_stats / provenance_stats。\n"
+"从已发布的数据集重算 partition_stats / provenance_stats。\n"
 "\n"
 "\n"
 "默认无条件重算。要挂定时器请用 `--if-stale`：没有任何变化时它直接返回，\n"
@@ -5612,7 +5612,7 @@ msgid ""
 "\n"
 "When the stats lag the latest ingestion, they are recomputed by the rules of `cne stats rebuild --if-stale` before showing;\n"
 "stats that `--dataset` / `--by-source` need but that do not exist yet are generated first as well.\n"
-"Otherwise a lake that never built stats falls back to counting curated Parquet on the spot: thinner\n"
+"Otherwise a lake that never built stats falls back to counting published Parquet on the spot: thinner\n"
 "(no byte totals, no source mix, no per-partition detail) but able to answer\n"
 "\"what is in this lake\" without building anything first. That fallback is the former `cne catalog`, and `--json` is its output."
 msgstr ""
@@ -5621,7 +5621,7 @@ msgstr ""
 "\n"
 "统计表落后于最新一次采集时，先按 `cne stats rebuild --if-stale` 的规则重算再显示；\n"
 "`--dataset` / `--by-source` 需要的统计表还没生成时，也会先生成。\n"
-"其余情况下，从没建过统计表的湖退回到现场数 curated 的 Parquet：更薄 ——\n"
+"其余情况下，从没建过统计表的湖退回到现场数已发布的 Parquet：更薄 ——\n"
 "没有字节总量、没有来源构成、没有逐分区明细 —— 但不用先建任何东西就能回答\n"
 "「这个湖里有什么」。这个退路就是从前的 `cne catalog`，`--json` 是它的输出。"
 
@@ -7366,8 +7366,8 @@ msgid "reads"
 msgstr "读取"
 
 #: cnequity/serve/lake.py
-msgid "recomputed from curated"
-msgstr "由 curated 重算"
+msgid "recomputed from published data"
+msgstr "由已发布的数据重算"
 
 #: cnequity/diagnostics/source_health.py
 msgid "refused"

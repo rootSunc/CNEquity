@@ -119,7 +119,7 @@ def _macro_pmi_vs_nbs_outcome(config: Config, trade_date: date) -> AuthorityChec
                 "severity": "error",
                 "check": "macro_pmi_vs_nbs",
                 "message": (
-                    f"pmi_manufacturing for {obs_date.isoformat()} is {ours} in curated but "
+                    f"pmi_manufacturing for {obs_date.isoformat()} is {ours} in the lake but "
                     f"{published['value']} in the 国家统计局 release — the vendor has drifted "  # i18n-ignore: Chinese term in an English message
                     "from the publisher"
                 ),
@@ -359,7 +359,7 @@ def _daily_bars_vs_exchange_outcome(config: Config, trade_date: date) -> Authori
                 "check": "daily_bars_missing_vs_exchange",
                 "message": (
                     f"{len(symbols)} symbol(s) have an official {covered} close on "
-                    f"{trade_date.isoformat()} but no curated bar"
+                    f"{trade_date.isoformat()} but no published bar"
                 ),
                 "trade_date": trade_date.isoformat(),
                 "exchanges": covered,

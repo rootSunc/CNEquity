@@ -213,8 +213,8 @@ def _unregistered_curated_dirs(config: Config) -> list[dict]:
                 f"{len(stray)} directory(ies) under curated/ belong to no registered "
                 f"dataset ({', '.join(stray[:5])}"
                 + (f", +{len(stray) - 5} more" if len(stray) > 5 else "")
-                + ") — leftover backups or renamed datasets; move them out of the "
-                "curated layer so whole-layer scans cannot pick them up"
+                + ") — leftover backups or renamed datasets; move them out of "
+                "curated/ so whole-layer scans cannot pick them up"
             ),
             "stray_count": len(stray),
             "stray_dirs": stray[:20],
@@ -381,7 +381,7 @@ def _collect_lake_findings(
                 "severity": "warning",
                 "check": "quality_checks_skipped",
                 "message": (
-                    "Cross-dataset quality scans were skipped because these curated "
+                    "Cross-dataset quality scans were skipped because these published "
                     f"datasets contain unreadable Parquet: {names}. "
                     "Repair or remove the reported files, then rerun the audit."
                 ),

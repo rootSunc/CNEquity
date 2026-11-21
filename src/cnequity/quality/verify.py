@@ -379,7 +379,7 @@ def verify_dataset(
             Gap(
                 dataset=spec.name,
                 kind="unreadable",
-                detail=f"curated data could not be read: {exc}",
+                detail=f"published data could not be read: {exc}",
                 repairable=False,
             )
         )

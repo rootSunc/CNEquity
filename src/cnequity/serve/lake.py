@@ -656,7 +656,7 @@ class LakeView:
         name = spec.name
         out: list[dict] = []
         if spec.layer == "derived":
-            why = _("recomputed from curated")
+            why = _("recomputed from published data")
             if name in RESAMPLED_MINUTE_DATASETS:
                 why = _("not computed by default; resampled from 1m / 5m into the lake")
                 if resample and resample["derived"]:

@@ -53,7 +53,7 @@ from cnequity.storage.staging_cleanup import (
     help=N_("Publish only this run; by default handles all runs pending publication."),
 )
 def compact(config_path: str, run_id: str | None):
-    """Compact runs in staging that have finished but are not yet published into curated.
+    """Compact runs in staging that have finished but are not yet published into the lake.
 
     \b
     Without --run-id it handles every such run in turn: the process has ended, it has staged
@@ -898,7 +898,7 @@ def _stats_rebuild_if_stale(cfg, *, as_json: bool) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, help=N_("Print the result as JSON."))
 def stats_rebuild(config_path: str, dataset_names: tuple[str, ...], if_stale: bool, as_json: bool):
-    """Recompute partition_stats / provenance_stats from curated and derived.
+    """Recompute partition_stats / provenance_stats from the published datasets.
 
     \b
     Recomputes unconditionally by default. For a timer use `--if-stale`: it returns at once when nothing changed,
@@ -988,7 +988,7 @@ def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: 
     \b
     When the stats lag the latest ingestion, they are recomputed by the rules of `cne stats rebuild --if-stale` before showing;
     stats that `--dataset` / `--by-source` need but that do not exist yet are generated first as well.
-    Otherwise a lake that never built stats falls back to counting curated Parquet on the spot: thinner
+    Otherwise a lake that never built stats falls back to counting published Parquet on the spot: thinner
     (no byte totals, no source mix, no per-partition detail) but able to answer
     "what is in this lake" without building anything first. That fallback is the former `cne catalog`, and `--json` is its output.
 
@@ -1033,7 +1033,7 @@ def stats_show(config_path: str, dataset: str | None, by_source: bool, as_json: 
             return
         click.echo(
             _(
-                "No stats tables: scanned curated directly; adding --dataset or --by-source generates the stats automatically"
+                "No stats tables: scanned the published files directly; adding --dataset or --by-source generates the stats automatically"
             )
         )
         click.echo(

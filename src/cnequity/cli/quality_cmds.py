@@ -677,7 +677,7 @@ def _verify_runs(cfg, days: int | None, as_of: str | None, enforce: bool) -> Non
             cfg.curated_root / "trading_calendar", partition_col="trade_date"
         )
     except FileNotFoundError as exc:
-        raise click.ClickException(_("Needs trading_calendar in curated")) from exc
+        raise click.ClickException(_("Needs published trading_calendar data")) from exc
     trading_days = (
         calendar.filter(pl.col("is_trading"))["trade_date"].drop_nulls().unique().to_list()
     )

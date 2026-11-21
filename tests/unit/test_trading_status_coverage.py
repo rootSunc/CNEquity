@@ -669,7 +669,7 @@ def test_st_receipt_rejects_duplicate_primary_rows(tmp_path):
         "unresolved_symbols": [],
     }
 
-    with pytest.raises(ValueError, match="reach curated storage"):
+    with pytest.raises(ValueError, match="are published"):
         publish_st_coverage_receipt(cfg, checkpoint)
 
 

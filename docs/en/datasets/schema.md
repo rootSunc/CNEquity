@@ -821,7 +821,7 @@ to `meta/industry_taxonomy.parquet`, with its level, name, `parent_id`, first an
 
 #### market_breadth
 
-Computed from curated ``daily_bars`` relative to the previous trading day.
+Computed from published ``daily_bars`` relative to the previous trading day.
 
 | Column | Type | Description |
 |--------|------|-------|

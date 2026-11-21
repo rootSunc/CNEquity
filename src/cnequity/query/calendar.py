@@ -40,7 +40,7 @@ def _load_trading_calendar_df(
             )
         except (FileNotFoundError, OSError, pl.exceptions.PolarsError, ValueError) as exc:
             logger.warning(
-                "curated trading_calendar scan failed for %s; salvaging readable files: %s",
+                "trading_calendar scan failed for %s; salvaging readable files: %s",
                 curated,
                 exc,
             )
@@ -55,7 +55,7 @@ def _load_trading_calendar_df(
                 return dedupe_by_primary_key(lf.collect(), "trading_calendar")
             except (FileNotFoundError, OSError, pl.exceptions.PolarsError, ValueError) as exc:
                 logger.warning(
-                    "mixed curated trading_calendar scan failed for %s; reading files individually: %s",
+                    "mixed trading_calendar scan failed for %s; reading files individually: %s",
                     curated,
                     exc,
                 )

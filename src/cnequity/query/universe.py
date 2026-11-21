@@ -247,7 +247,7 @@ def apply_universe_filter(
     instruments = _load_instruments(config, read_context)
     if instruments.is_empty():
         if strict:
-            raise UniverseCoverageError(f"{universe} universe requires curated instruments")
+            raise UniverseCoverageError(f"{universe} universe requires published instruments")
         return df
 
     valid_symbols = instruments.filter(_all_a_symbol_expr(universe=universe))["symbol"]
@@ -286,7 +286,7 @@ def apply_universe_filter(
     except FileNotFoundError:
         if strict:
             raise UniverseCoverageError(
-                f"{universe} universe requires curated trading_status"
+                f"{universe} universe requires published trading_status"
             ) from None
         return df.drop(["list_date", "delist_date"], strict=False)
 
