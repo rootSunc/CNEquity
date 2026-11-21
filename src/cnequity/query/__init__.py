@@ -56,12 +56,3 @@ __all__ = [
     "scope_hash",
     "show_universe_profile",
 ]
-
-
-def __getattr__(name: str):
-    # Deprecated second names of the profile functions, removed in 0.25.0.
-    from cnequity.domain import universe_profiles
-
-    if name in universe_profiles.DEPRECATED_ALIASES:
-        return universe_profiles.deprecated_alias(name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

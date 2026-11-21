@@ -12,7 +12,7 @@ from cnequity.query import load, scan, read_scope, list_datasets, dataset_state
 load(
     dataset, *, start=None, end=None,
     adjust=None,            # "qfq" | "hfq" | "total_return"
-    profile=None,           # versioned universe; alias universe_profile
+    profile=None,           # versioned universe
     universe=None,          # compatibility: "all_a_sh_sz"
     as_of=None, pit_mode=None, all_vintages=False,
     items=None, symbols=None,

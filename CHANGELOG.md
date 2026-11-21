@@ -33,6 +33,7 @@
 - 发布不再写 `meta/revisions/<数据集>/` 下的指针（`current.json`）和回执文件：修订只记在湖目录里，和这次发布的数据在同一个事务里提交。此前发布要先写回执、提交目录、再移动指针，中途停下会留下没有发布的回执或落后的指针，要靠维护任务修正；现在发布要么完整生效，要么不留痕迹。已有的指针和回执文件由 `drop-generations` 迁移删除。
 - **不兼容变更**：`load_with_receipt()` 返回的 `revision_receipt` 和 `dataset_state()` 的 `revision_receipt`，对发布进湖目录的修订为 `None`（没有回执文件可指向）；修订号、修订 id、内容摘要等字段不变。`meta/state/<数据集>.json` 里不再有 `revision_receipt`、`revision_pointer` 两个字段。
 - **不兼容变更**：移除 `load(universe="all_a")`，传入会报错。改用 `profile="legacy_all_a"`，返回同样的行；需要严格证据的研究改用版本化股票池，如 `cn_a_sh_sz_research_v1`。`universe="all_a_sh_sz"` 和 MCP `query_bars` 的 `universe` 参数不变。
+- **不兼容变更**：移除 0.24.0 弃用的股票池函数第二名字 `get_universe_profile`、`list_profiles`、`show_profile`、`profile_json`，改用 `resolve_universe_profile`、`list_universe_profiles`、`show_universe_profile`；`load(universe_profile=...)` 也已移除，改用 `profile=...`。
 - 维护任务检查旧版状态文件中遗留的修订字段。现行修订由湖目录记录。
 - `cne storage` 的保留持有（hold）可以指向只存在湖目录里的修订；此前只认有回执文件或代目录的修订。
 - 发布门的预演视图不再靠复制指针文件决定读哪份数据：视图直接读自己那份目录库副本里的修订记录，预演发布后读到的就是预演结果。

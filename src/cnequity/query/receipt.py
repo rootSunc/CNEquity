@@ -53,7 +53,7 @@ def _dependencies(dataset: str, options: Mapping[str, Any], config: Config) -> s
         dependencies.add("adj_factors")
     if options.get("adjust") == "total_return":
         dependencies.update({"corporate_actions", "instruments"})
-    if options.get("universe") or options.get("profile") or options.get("universe_profile"):
+    if options.get("universe") or options.get("profile"):
         dependencies.update({"instruments", "trading_status", "trading_calendar"})
     if (
         dataset in OTC_SCOPED_DATASETS
@@ -206,7 +206,6 @@ def load_with_receipt(
         "adjust",
         "universe",
         "profile",
-        "universe_profile",
         "symbols",
         "items",
         "strict_adj",

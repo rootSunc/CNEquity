@@ -12,7 +12,7 @@ from cnequity.query import load, scan, read_scope, list_datasets, dataset_state
 load(
     dataset, *, start=None, end=None,
     adjust=None,            # "qfq" | "hfq" | "total_return"
-    profile=None,           # 版本化股票池，别名 universe_profile
+    profile=None,           # 版本化股票池
     universe=None,          # 兼容参数："all_a_sh_sz"
     as_of=None, pit_mode=None, all_vintages=False,
     items=None, symbols=None,

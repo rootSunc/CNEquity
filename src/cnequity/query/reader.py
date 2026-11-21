@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from collections.abc import Mapping
 from datetime import date, timedelta
 from pathlib import Path
@@ -162,16 +161,13 @@ def _resolve_reader_scope(
     *,
     universe: UniverseType | str | None,
     profile: UniverseProfileLike | None,
-    universe_profile: UniverseProfileLike | None,
     strict_universe: bool,
 ) -> tuple[str | None, UniverseProfile | None, bool]:
     """Resolve profile/universe compatibility arguments for one read.
 
     The old ``universe`` argument remains a permissive compatibility path.  A
     named profile is an explicit research contract and enables its strict
-    evidence requirements automatically.  ``universe_profile`` is a deprecated
-    second spelling of ``profile``; supplying both is only valid when they
-    resolve to the same registry record.
+    evidence requirements automatically.
     """
 
     if universe == "all_a":
@@ -180,26 +176,9 @@ def _resolve_reader_scope(
             "same rows, or choose a versioned profile such as 'cn_a_sh_sz_research_v1' "
             "or 'cn_a_all_experimental_v1'"
         )
-    if universe_profile is not None:
-        warnings.warn(
-            "load(universe_profile=...) is deprecated and will be removed in 0.25.0; "
-            "pass profile=... instead",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-    selected = profile
-    if profile is not None and universe_profile is not None:
+    if profile is not None:
         try:
-            if resolve_universe_profile(profile) != resolve_universe_profile(universe_profile):
-                raise ReaderError("profile and universe_profile refer to different profiles")
-        except UniverseProfileError as exc:
-            raise ReaderError(str(exc)) from exc
-    elif selected is None:
-        selected = universe_profile
-
-    if selected is not None:
-        try:
-            resolved = resolve_universe_profile(selected)
+            resolved = resolve_universe_profile(profile)
         except UniverseProfileError as exc:
             raise ReaderError(str(exc)) from exc
         if universe is not None and universe != resolved.legacy_universe:
@@ -1089,7 +1068,6 @@ def load(
     adjust: AdjustType | None = None,
     universe: UniverseType | None = None,
     profile: UniverseProfileLike | None = None,
-    universe_profile: UniverseProfileLike | None = None,
     as_of: str | date | None = None,
     items: list[str] | None = None,
     symbols: list[str] | None = None,
@@ -1145,13 +1123,12 @@ def load(
         requested window has complete ``trading_status`` rows and a versioned
         historical ST evidence receipt. Dates before that evidence coverage
         are not filtered in permissive mode; strict research reads fail closed.
-    profile / universe_profile:
+    profile:
         Explicit versioned :class:`cnequity.domain.UniverseProfile` name (or
         object). Profiles bind exchange/board, CDR/ETF, ST/suspension,
         delisting and PIT-evidence rules and persist a stable ``scope_hash``.
         A strict profile enables strict evidence checks even when
-        ``strict_universe`` is omitted. ``universe_profile`` is a deprecated
-        second spelling (removed in 0.25.0); pass ``profile``.
+        ``strict_universe`` is omitted.
     as_of:
         Point-in-time date for ``financial_statement_items``. Keeps only facts
         announced on or before this date, and — because a restatement stores a
@@ -1203,7 +1180,6 @@ def load(
         effective_universe, resolved_profile, effective_strict_universe = _resolve_reader_scope(
             universe=universe,
             profile=profile,
-            universe_profile=universe_profile,
             strict_universe=strict_universe,
         )
         if dataset not in CURATED_DATASETS | DERIVED_DATASETS:
