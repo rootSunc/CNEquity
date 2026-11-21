@@ -18,7 +18,7 @@ description: CNEquity 数据集目录：A 股行情、财务、期货、资金�
     - **on-demand** 数据集不进 curated 主路径。`flash_news_wire` 是新闻兼容读取。
     - 所以登记数既不是物理表数，也不是默认采集完成数。
 
-**图例**（下表）：语义 `by_date` / `snapshot`；水位 ✓ = 维护 `meta/state` 水位。
+**图例**（下表）：语义 `by_date` / `snapshot`；水位 ✓ = 有从已发布的行算出的日期水位。
 
 ## 数据分层
 

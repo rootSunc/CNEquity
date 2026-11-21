@@ -357,7 +357,7 @@ def star_hint_once(cfg) -> None:
 
     if not sys.stderr.isatty():
         return
-    marker = Path(cfg.meta_root) / "state" / "star-hint-shown"
+    marker = Path(cfg.meta_root) / "star-hint-shown"
     if marker.exists():
         return
     try:

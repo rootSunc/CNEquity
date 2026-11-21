@@ -13,6 +13,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 from cnequity.adapters.exchange import margin_trading as em
 from cnequity.config import Config
@@ -206,27 +207,6 @@ def test_combined_result_names_the_exchange_that_published(monkeypatch):
     assert result.failures == {"sse": "no usable rows"}
 
 
-def test_combined_exchange_does_not_hide_a_gap_ledger_storage_failure(tmp_path, monkeypatch):
-    from cnequity.orchestrator.source_gaps import source_gap_scope
-    from cnequity.storage.state import StateStore
-
-    responses = iter([_Resp(_sse_payload([_SSE_ROW], total=2)), OSError("connection reset")])
-
-    def get(*args, **kwargs):
-        response = next(responses)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    def fail_ledger(*args, **kwargs):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(em, "_client", lambda: type("C", (), {"get": staticmethod(get)}))
-    monkeypatch.setattr(StateStore, "record_missing_dates", fail_ledger)
-    with source_gap_scope(_cfg(tmp_path)), pytest.raises(OSError, match="disk full"):
-        em.fetch_exchange_margin_trading(TD)
-
-
 # --- step wiring -------------------------------------------------------------
 
 
@@ -286,8 +266,8 @@ def test_partial_exchange_publishes_and_the_retry_fetches_the_missing_exchange(
     tmp_path, monkeypatch, workers, job, source
 ):
     from cnequity.orchestrator.engine import JobEngine
+    from cnequity.quality import planned_coverage
     from cnequity.storage.revisions import RevisionStore
-    from cnequity.storage.state import StateStore
 
     cfg = _cfg(tmp_path)
     cfg.margin_trading_source = source
@@ -334,10 +314,8 @@ def test_partial_exchange_publishes_and_the_retry_fetches_the_missing_exchange(
     assert first["coverage_status"] == "partial"
     assert first["publication_status"] == "partial"
     assert first["usable_result"] is True
-    assert TD in StateStore(cfg.meta_root).get_missing_dates("margin_trading")
-    state = StateStore(cfg.meta_root).get_payload("margin_trading")
-    assert state["coverage_status"] == "incomplete"
-    assert not state.get("complete_through") or state["complete_through"] < TD.isoformat()
+    # The day is held only in part: the planner still owes it.
+    assert TD in planned_coverage.partial_days(cfg, "margin_trading")
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("margin_trading")
     assert pl.read_parquet(root_parquet_files(root)).height == 60
 
@@ -346,7 +324,7 @@ def test_partial_exchange_publishes_and_the_retry_fetches_the_missing_exchange(
     )
     assert len(calls) == 2
     assert again["status"] == "success", again
-    assert TD not in StateStore(cfg.meta_root).get_missing_dates("margin_trading")
+    assert TD not in planned_coverage.partial_days(cfg, "margin_trading")
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("margin_trading")
     assert pl.read_parquet(root_parquet_files(root)).height == 120
 
@@ -415,11 +393,10 @@ def test_the_grace_window_follows_the_publisher(tmp_path, monkeypatch):
     errored after two would fail every Monday for no reason.
     """
     from cnequity.steps import capital as cap
-    from cnequity.storage.state import StateStore
 
     cfg = _cfg(tmp_path)
     cfg.staging_root.mkdir(parents=True, exist_ok=True)
-    StateStore(cfg.meta_root).set_date("margin_trading", date(2026, 6, 25))
+    covered(monkeypatch, "margin_trading", date(2026, 6, 25))
     monkeypatch.setattr(cap, "shanghai_now", lambda: __import__("datetime").datetime(2026, 6, 30))
     monkeypatch.setattr(cap, "_fetch_margin_via_exchange", lambda d, *, config: pl.DataFrame())
 

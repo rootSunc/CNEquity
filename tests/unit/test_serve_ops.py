@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cnequity.config import load_config
+from cnequity.meta_layout import SCHEDULER_MARKERS
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.serve.app import create_app
 from cnequity.serve.ops.catalog import (
@@ -416,7 +417,7 @@ def test_launch_metadata_and_session_marker(config, monkeypatch):
     early = datetime.fromisoformat("2026-09-24T09:20:00+00:00")
     due = datetime.fromisoformat("2026-09-24T09:40:00+00:00")
     monday = datetime.fromisoformat("2026-09-28T00:30:00+00:00")
-    marker = config.meta_root / "state" / "scheduler" / "daily-2026-09-24.done"
+    marker = config.meta_root / SCHEDULER_MARKERS / "daily-2026-09-24.done"
     assert mark_due_daily_session(config, "daily.full", {}, now=early) is False
     assert not marker.exists()
     assert mark_due_daily_session(config, "daily.full", {"backfill": True}, now=due) is False

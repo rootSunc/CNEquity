@@ -31,11 +31,9 @@ from cnequity.steps.common import (
     instrument_metadata,
     load_bar_universe,
     load_symbols,
-    planner_only,
 )
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
 from cnequity.storage import StagingWriter
-from cnequity.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -625,11 +623,9 @@ def _reusable_units(config: Config, dataset: str, resume_scope: str) -> set[str]
     """Units a recent backfill already published; none under ``--refetch``."""
     if backfill_of(config).refetch:
         return set()
-    if planner_only(config, dataset):
-        from cnequity.storage import resume_units
+    from cnequity.storage import resume_units
 
-        return resume_units.published(config, dataset, resume_scope)
-    return StateStore(config.meta_root).published_units(dataset, resume_scope)
+    return resume_units.published(config, dataset, resume_scope)
 
 
 def _with_units(result: dict, marks: _StagedUnits) -> dict:
@@ -656,27 +652,19 @@ def _fsi_unit_of(name: str, prefix: str) -> str | None:
 class _StagedUnits:
     """Where a backfill step notes the units it validated into staging.
 
-    The old ledger keeps them in ``meta/state`` until compact publishes them;
-    a planner-only dataset names them in a finding, and compact records them
-    in the lake once their rows are published (``storage.resume_units``).
+    They are named in a finding, and compact records them in the lake once
+    their rows are published (``storage.resume_units``).
     """
 
     def __init__(self, config: Config, dataset: str, run_id: str, scope: str | None):
         self.config, self.dataset, self.run_id, self.scope = config, dataset, run_id, scope
-        self.planner = planner_only(config, dataset)
         self.units: set[str] = set()
 
     def mark(self, units: Iterable[str]) -> None:
-        units = set(units)
-        if self.planner:
-            self.units |= units
-            return
-        StateStore(self.config.meta_root).mark_staged_units(
-            self.dataset, self.run_id, units, resume_scope=self.scope
-        )
+        self.units |= set(units)
 
     def findings(self) -> list[dict]:
-        if not (self.planner and self.units and self.scope is not None):
+        if not (self.units and self.scope is not None):
             return []
         from cnequity.storage import resume_units
 
@@ -772,21 +760,13 @@ def step_financial_statement_items(
         return _financials_from_tdx_fin(config, run_id, trade_date, disabled)
     archive_source = "eastmoney_backfill" if backfill else "eastmoney"
     archive_scope = f"{'backfill' if backfill else 'daily'}:{trade_date.isoformat()}"
-    state = StateStore(config.meta_root)
     unit_prefix = "fsi-"
     staged_files = StagingWriter(config.staging_root).list_run_files(
         "financial_statement_items", run_id
     )
-    if planner_only(config, "financial_statement_items"):
-        # No ledger: a unit this run staged is named by its file.
-        staged_units = {_fsi_unit_of(path.name, unit_prefix) for path in staged_files} - {None}
-    else:
-        staged_units = set(
-            state.get_payload("financial_statement_items").get("staged_units", {}).get(run_id, [])
-        )
-    # A state entry alone is not enough after a staging file was removed or
-    # corrupted. Only the report-period units still backed by a readable file
-    # can be skipped on retry.
+    staged_units = {_fsi_unit_of(path.name, unit_prefix) for path in staged_files} - {None}
+    # A unit this run staged is named by its file. Only the units still backed
+    # by a readable, valid file can be skipped on retry.
     recoverable_units: set[str] = set()
     for unit in staged_units:
         if "|" not in unit:
@@ -863,8 +843,6 @@ def step_financial_statement_items(
             skip_units=recoverable_units | published_units,
             failures=failures,
         )
-        if failures and not planner_only(config, "financial_statement_items"):
-            state.record_missing_units("financial_statement_items", failures)
         if unit_stage_used:
             frames = [
                 pl.read_parquet(path)
@@ -1097,7 +1075,6 @@ def _run_shareholder_step(
     empty_windows: list[tuple[date, date]] = []
     failures: list[tuple[str, str]] = []
     stopped = False
-    state = StateStore(config.meta_root)
     report = sweep_progress(logger, f"{dataset} windows", len(windows), every=1, unit="windows")
     staged = StagingWriter(config.staging_root).list_run_files(dataset, run_id)
     # Windows a recent backfill already published are in the lake: an
@@ -1190,8 +1167,6 @@ def _run_shareholder_step(
             failures.append((unit, progress.failure or f"{progress.failed_report} incomplete"))
             stopped = True
         if part.is_empty():
-            if not incomplete and not planner_only(config, dataset):
-                state.clear_missing_units(dataset, [unit])
             if not incomplete and backfill_of(config).active:
                 empty_windows.append((win_start, win_end))
             continue
@@ -1224,9 +1199,7 @@ def _run_shareholder_step(
         rows_read += int(chunk.get("rows_read", 0))
         rows_written += int(chunk.get("rows_written", 0))
 
-    # A planner-only dataset keeps no unit debt: a failed window is a gap.
-    if failures and not planner_only(config, dataset):
-        state.record_missing_units(dataset, failures)
+    # No unit debt is kept: a failed window is asked again by the next run.
     result: dict = {"rows_read": rows_read, "rows_written": rows_written, "windows": len(windows)}
     if windows_reused:
         result["windows_reused"] = windows_reused

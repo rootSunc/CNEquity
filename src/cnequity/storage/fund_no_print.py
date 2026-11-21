@@ -180,36 +180,3 @@ def _proof_stamp(meta_root, proof_path, record) -> list | None:
         payload_info.st_size,
         payload_info.st_mtime_ns,
     ]
-
-
-def reconcile_no_print_coverage(config) -> dict:
-    """Retire valid proofs; restore obligations when retained evidence is lost."""
-    from cnequity.storage.coverage import resolved_outstanding_keys
-    from cnequity.storage.read_context import ReadContext
-    from cnequity.storage.state import StateStore
-
-    state = StateStore(config.meta_root)
-    payload = state.get_payload("daily_bars")
-    previous = payload.get("verified_no_print_keys", [])
-    if not previous and not (config.meta_root / "repairs" / "fund_no_print").is_dir():
-        return {"proved_keys": 0, "invalidated_keys": 0}
-    context = ReadContext.capture(config, ("instruments", "daily_bars"), {})
-    valid = approved_no_print_keys(config, read_context=context)
-    invalid = {(r["symbol"], r["trade_date"]) for r in previous} - {(s, str(d)) for s, d in valid}
-    if invalid:
-        rows = [{"symbol": s, "trade_date": d} for s, d in sorted(invalid)]
-        present = resolved_outstanding_keys(
-            "daily_bars", context.roots["daily_bars"], rows, committed=False
-        )
-        state.record_outstanding_keys(
-            "daily_bars",
-            [(s, date.fromisoformat(d)) for s, d in invalid - present],
-            run_id="fund-no-print-recheck",
-            reason="no_print_evidence_unavailable",
-        )
-    state.clear_outstanding_keys("daily_bars", [(s, str(d)) for s, d in valid])
-    with state.transaction("daily_bars") as current:
-        current["verified_no_print_keys"] = [
-            {"symbol": s, "trade_date": str(d)} for s, d in sorted(valid)
-        ]
-    return {"proved_keys": len(valid), "invalidated_keys": len(invalid)}

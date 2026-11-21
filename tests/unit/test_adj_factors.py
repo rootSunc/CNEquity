@@ -579,6 +579,7 @@ def test_compute_adj_factors_fetches_uncached_beijing_symbols(adj_config, monkey
 
 
 def test_compute_adj_factors_persists_delisted_source_gap_without_retrying(adj_config, monkeypatch):
+    from cnequity.meta_layout import DECISIONS
     from cnequity.storage.state import StateStore
 
     _write_bar(adj_config, "830799.BJ", date(2024, 6, 28))
@@ -608,8 +609,11 @@ def test_compute_adj_factors_persists_delisted_source_gap_without_retrying(adj_c
     first = compute_adj_factors(adj_config)
     assert first.failed == []
     assert [finding["check"] for finding in first.findings] == ["adj_factor_source_unavailable"]
-    assert StateStore(adj_config.meta_root).get_string_set("adj_factors", "retry_symbols") == set()
-    assert StateStore(adj_config.meta_root).get_string_set(
+    assert (
+        StateStore(adj_config.meta_root, DECISIONS).get_string_set("adj_factors", "retry_symbols")
+        == set()
+    )
+    assert StateStore(adj_config.meta_root, DECISIONS).get_string_set(
         "adj_factors", "source_unavailable_symbols"
     ) == {"830799.BJ"}
 
@@ -620,6 +624,7 @@ def test_compute_adj_factors_persists_delisted_source_gap_without_retrying(adj_c
 
 
 def test_compute_adj_factors_parallel_tracks_success_by_future_symbol(adj_config, monkeypatch):
+    from cnequity.meta_layout import DECISIONS
     from cnequity.storage.state import StateStore
 
     adj_config.workers = 2
@@ -637,9 +642,9 @@ def test_compute_adj_factors_parallel_tracks_success_by_future_symbol(adj_config
     result = compute_adj_factors(adj_config)
 
     assert result.failed == ["600519.SH:hfq"]
-    assert StateStore(adj_config.meta_root).get_string_set("adj_factors", "retry_symbols") == {
-        "600519.SH"
-    }
+    assert StateStore(adj_config.meta_root, DECISIONS).get_string_set(
+        "adj_factors", "retry_symbols"
+    ) == {"600519.SH"}
 
 
 def test_compute_adj_factors_uses_independent_source_capped_workers(adj_config, monkeypatch):
@@ -921,6 +926,7 @@ def test_compute_adj_factors_fails_over_threshold(adj_config, monkeypatch):
 
 def test_failed_symbol_is_retried_after_global_watermark_advances(adj_config, monkeypatch):
     """A per-symbol failure must not disappear behind another symbol's partition."""
+    from cnequity.meta_layout import DECISIONS
     from cnequity.storage.state import StateStore
 
     _write_bar(adj_config, "000001.SZ", date(2024, 6, 28))
@@ -936,9 +942,9 @@ def test_failed_symbol_is_retried_after_global_watermark_advances(adj_config, mo
     )
     first = compute_adj_factors(adj_config)
     assert first.failed == ["600519.SH:hfq"]
-    assert StateStore(adj_config.meta_root).get_string_set("adj_factors", "retry_symbols") == {
-        "600519.SH"
-    }
+    assert StateStore(adj_config.meta_root, DECISIONS).get_string_set(
+        "adj_factors", "retry_symbols"
+    ) == {"600519.SH"}
 
     def recovered_fetch(symbol, adjust_type, client=None):
         assert symbol == "600519.SH"
@@ -951,7 +957,10 @@ def test_failed_symbol_is_retried_after_global_watermark_advances(adj_config, mo
     second = compute_adj_factors(adj_config)
     assert second.failed == []
     assert second.rows == 1
-    assert StateStore(adj_config.meta_root).get_string_set("adj_factors", "retry_symbols") == set()
+    assert (
+        StateStore(adj_config.meta_root, DECISIONS).get_string_set("adj_factors", "retry_symbols")
+        == set()
+    )
     written = pl.read_parquet(
         # The retried symbol is new to the partition, so it lands in a file of its own.
         adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "*.parquet"

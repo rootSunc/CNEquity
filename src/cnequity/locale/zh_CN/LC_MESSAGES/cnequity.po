@@ -169,11 +169,11 @@ msgstr ""
 msgid ""
 "\n"
 "Keys owed by tolerated gaps: {summary}\n"
-"These sessions are already past the watermark, and no incremental run will ask for them again; fill them with `cne backfill <dataset> --outstanding`."
+"The daily run asks the last 45 days of them again; fill older ones with `cne backfill <dataset> --outstanding`."
 msgstr ""
 "\n"
 "被容忍缺口欠下的 key：{summary}\n"
-"这些交易日已经在水位之后，任何增量 run 都不会再去要它们 —— 用 `cne backfill <数据集> --outstanding` 补上。"
+"日更会再问最近 45 天的这些 key；更早的用 `cne backfill <数据集> --outstanding` 补上。"
 
 #: cnequity/cli/quality_cmds.py
 msgid ""
@@ -1127,11 +1127,6 @@ msgstr "--profile delisted 只适用于 daily_bars"
 msgid "--quality-only needs --full"
 msgstr "--quality-only 需要配合 --full"
 
-#: cnequity/cli/backfill_cmds.py
-#, python-brace-format
-msgid "--redo applies to datasets in [datasets] planner_only; {dataset} is not"
-msgstr "--redo 只用于 [datasets] planner_only 里的数据集；{dataset} 不在其中"
-
 #: cnequity/orchestrator/backfill_request.py
 #, python-brace-format
 msgid "--refetch applies to {datasets}"
@@ -1568,6 +1563,10 @@ msgstr "init 各阶段的 as-of 交易日（YYYY-MM-DD）；默认今天。"
 #: cnequity/cli/run_cmds.py
 msgid "As-of trading day YYYY-MM-DD (default today). Use for catch-up runs on weekends / holidays."
 msgstr "as-of 交易日 YYYY-MM-DD（默认今天）。周末 / 节假日补跑时用。"
+
+#: cnequity/cli/backfill_cmds.py
+msgid "Ask only what the coverage planner says is owed (gaps), also the days it recorded as empty (empty), or every day in the range (all)."
+msgstr "只问覆盖规划认为欠着的（gaps），连同记为空的日子一起问（empty），或范围内每天都问（all）。"
 
 #: cnequity/ops/catalog.py
 msgid "At most 200 symbols at a time."
@@ -2301,10 +2300,6 @@ msgstr "要包含的数据集（可重复）。快照永远是显式指定的，
 #, python-brace-format
 msgid "Dataset {dataset!r} has no stats rows"
 msgstr "数据集 {dataset!r} 没有统计行"
-
-#: cnequity/cli/backfill_cmds.py
-msgid "Datasets in [datasets] planner_only: ask only what the coverage planner says is owed (gaps), also the days it recorded as empty (empty), or every day in the range (all)."
-msgstr "[datasets] planner_only 里的数据集：只问覆盖规划认为欠着的日子（gaps），连同记为空的日子一起问（empty），或范围内每一天都问（all）。"
 
 #: cnequity/cli/run_cmds.py
 #, python-brace-format
@@ -3653,6 +3648,10 @@ msgstr "把存成摘牌日的退市日期改回最后一个上市交易日"
 msgid "Move it to a file and set [%s].%s = <path> (chmod 600), or export %s"
 msgstr "把它移到文件里并设置 [%s].%s = <路径>（chmod 600），或 export %s"
 
+#: cnequity/storage/migrations.py
+msgid "Move what is left in meta/state to each record's own directory under meta/, and drop the coverage ledger and revision copies the lake catalog replaced"
+msgstr "把 meta/state 里剩下的记录搬到 meta/ 下各自的目录，并删掉已由湖目录取代的覆盖台账和修订副本"
+
 #: cnequity/diagnostics/source_health.py
 msgid "NBS (PMI release)"
 msgstr "国家统计局（PMI 发布）"
@@ -3860,8 +3859,8 @@ msgid "Nothing in staging to publish: every finished run has been compacted."
 msgstr "没有待发布的 staging：所有已结束的 run 都已经 compact。"
 
 #: cnequity/cli/repair_cmds.py
-msgid "Nothing owed: every migration is recorded in meta/state/lake.json."
-msgstr "没有欠下的迁移：全部迁移已记录在 meta/state/lake.json。"
+msgid "Nothing owed: every migration is recorded in meta/lake.json."
+msgstr "没有欠下的迁移：全部迁移已记录在 meta/lake.json。"
 
 #: cnequity/cli/repair_cmds.py
 #, python-brace-format
@@ -3916,11 +3915,6 @@ msgstr "K 线抽样多少只证券。"
 #, python-brace-format
 msgid "Of these, datasets lost for good if a day is missed: {datasets}."
 msgstr "其中漏一天就补不回的数据集：{datasets}。"
-
-#: cnequity/cli/quality_cmds.py
-#, python-brace-format
-msgid "Of these, still unfilled after 3 or more repair attempts: {detail}. No configured source provides them; check `cne sources probe`, or accept the gap."
-msgstr "其中修复尝试 3 次以上仍未补上的：{detail} —— 没有任何已配置的源提供它们；查一下 `cne sources probe`，或者接受这个缺口。"
 
 #: cnequity/ops/settings.py
 msgid "Off"
@@ -4270,7 +4264,7 @@ msgid ""
 "\n"
 "\n"
 "A release that fixes a writer can leave rows the old writer stored. Each such fix is a\n"
-"migration; meta/state/lake.json records the version that built the lake (it owes nothing\n"
+"migration; meta/lake.json records the version that built the lake (it owes nothing\n"
 "introduced earlier) and every migration it has applied or found nothing to do.\n"
 "A preview reports how many rows each would change. --apply runs them in order: each takes the\n"
 "lake lock, publishes through the repair gate and keeps the previous revision readable."
@@ -4279,7 +4273,7 @@ msgstr ""
 "\n"
 "\n"
 "新版本修好写入逻辑后，旧版本存下的行仍需修正。每个修正是一个\n"
-"迁移；meta/state/lake.json 记录建湖的版本（早于它引入的迁移不需要运行）\n"
+"迁移；meta/lake.json 记录建湖的版本（早于它引入的迁移不需要运行）\n"
 "以及已经运行过、或检查后无需运行的迁移。\n"
 "预览报告每个迁移会改动多少行。--apply 按顺序运行：每个迁移持有\n"
 "湖的变更锁，经修复门禁发布，旧版本保留可读。"
@@ -5056,8 +5050,8 @@ msgstr ""
 "不带参数的 `cne run daily` 末尾已经包含这一步；单独运行用于更高频地刷新某个组。"
 
 #: cnequity/cli/repair_cmds.py
-msgid "Run the owed migrations and record each result in meta/state/lake.json."
-msgstr "运行欠下的迁移，并把每个结果记入 meta/state/lake.json。"
+msgid "Run the owed migrations and record each result in meta/lake.json."
+msgstr "运行欠下的迁移，并把每个结果记入 meta/lake.json。"
 
 #: cnequity/cli/_root.py
 msgid "Run the pipeline"
@@ -5260,10 +5254,6 @@ msgstr "服务起点。"
 #: cnequity/cli/setup_cmds.py
 msgid "Set [data].root (defaults to ./data/cnequity resolved to an absolute path)."
 msgstr "设置 [data].root（默认 ./data/cnequity，解析为绝对路径）。"
-
-#: cnequity/storage/migrations.py
-msgid "Settle Beijing whole-day and pre-listing daily-bar debts already proven"
-msgstr "结清已证明的北交所整日与上市前日线欠账"
 
 #: cnequity/cli/_shared.py
 msgid "Shanghai and Shenzhen A shares (config excludes Beijing)"

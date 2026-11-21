@@ -45,7 +45,7 @@ from cnequity.domain.datasets import (
     is_dataset_enabled,
     staleness_counts_trading_sessions,
 )
-from cnequity.quality.freshness import is_stale
+from cnequity.quality.freshness import freshness_mark, is_stale
 from cnequity.query.parquet_scan import (
     dataset_has_parquet,
     list_partitions,
@@ -54,7 +54,6 @@ from cnequity.query.parquet_scan import (
     uses_hive_partitions,
 )
 from cnequity.storage.locator import logical_root
-from cnequity.storage.observation import freshness_mark
 from cnequity.storage.published import catalog_published, published
 
 logger = logging.getLogger(__name__)
@@ -566,21 +565,16 @@ def last_published_day(config, dataset: str) -> date | None:
 def covered_through(config, dataset: str) -> date | None:
     """The freshest date that is safe to call covered for *dataset*.
 
-    The date compaction caches as the watermark: for a planner-only dataset
-    it is computed from the published rows (and not cached), for any other
-    it is read from ``meta/state``.
+    The watermark, computed from the published rows; kept per process for a
+    dataset revision and calendar revision.
     """
-    if dataset in getattr(config, "planner_only", ()):
-        key = _covered_key(config, dataset)
-        if key is not None and key in _COVERED:
-            return _COVERED[key]
-        value = _covered_through(config, dataset)
-        if key is not None:
-            _COVERED[key] = value
-        return value
-    from cnequity.storage.state import StateStore
-
-    return StateStore(config.meta_root).get_date(dataset)
+    key = _covered_key(config, dataset)
+    if key is not None and key in _COVERED:
+        return _COVERED[key]
+    value = _covered_through(config, dataset)
+    if key is not None:
+        _COVERED[key] = value
+    return value
 
 
 #: ``covered_through`` per (lake, dataset, its revision, the calendar's revision):
@@ -615,7 +609,7 @@ def _covered_through(config, dataset: str) -> date | None:
         column = column or spec.partition_col or spec.query_date_col
         return watermark_date(config, dataset, column) if column and spec.watermark else None
     if column is None or dataset in WATERMARK_SKIP:
-        # Compaction keeps no watermark for these (``_watermarked_datasets``):
+        # Compaction never watermarked these (no partition column, or WATERMARK_SKIP):
         # their window has always been the default one, not a date off the rows.
         return None
     return watermark_date(config, dataset, column)

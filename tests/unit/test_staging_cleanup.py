@@ -464,18 +464,18 @@ def test_pruning_logs_is_safe_without_a_logs_directory(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot unlink an open lock file")
-def test_the_stale_lock_sweep_never_leaves_two_lake_lock_holders(tmp_path, monkeypatch):
+def test_the_stale_lock_sweep_never_leaves_two_lock_holders(tmp_path, monkeypatch):
     """A command queued on compact.lock while the sweep deletes it.
 
     The sweep used to probe the lock and unlink it afterwards; a command that
     took the lock in that gap kept it on the deleted file while the next
-    command locked a fresh one, so two processes mutated the lake at once.
+    command locked a fresh one, so two processes held the same lock at once.
     """
     import os
     import threading
     import time
 
-    from cnequity.file_lock import LockUnavailable, lake_mutation_lock
+    from cnequity.file_lock import LockUnavailable
     from cnequity.storage import staging_cleanup
 
     meta_root = tmp_path / "meta"
@@ -489,7 +489,7 @@ def test_the_stale_lock_sweep_never_leaves_two_lake_lock_holders(tmp_path, monke
     release_first = threading.Event()
 
     def first_command():
-        with lake_mutation_lock(meta_root, blocking=True, timeout=10):
+        with exclusive_lock(lock_path, blocking=True, timeout=10):
             first_holds.set()
             release_first.wait(10)
 

@@ -23,6 +23,7 @@ from datetime import date, timedelta
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 from cnequity.config import Config
 from cnequity.run_scope import set_backfill
@@ -80,9 +81,11 @@ def test_backfill_across_a_closure_never_requests_or_owes_a_closed_day(tmp_path,
 
 
 @pytest.mark.parametrize("calendar", CALENDARS)
-def test_first_incremental_run_after_a_closure_fetches_only_the_new_session(tmp_path, calendar):
+def test_first_incremental_run_after_a_closure_fetches_only_the_new_session(
+    tmp_path, calendar, monkeypatch
+):
     cfg = _lake(tmp_path, calendar)
-    StateStore(cfg.meta_root).set_date("margin_trading", date(2025, 9, 30))
+    covered(monkeypatch, "margin_trading", date(2025, 9, 30))
     fetched: list[date] = []
 
     def fetch(day: date) -> pl.DataFrame:
@@ -94,17 +97,16 @@ def test_first_incremental_run_after_a_closure_fetches_only_the_new_session(tmp_
     assert fetched == [date(2025, 10, 9)]
     assert df.height == 1
     assert findings == []
-    assert StateStore(cfg.meta_root).get_missing_dates("margin_trading") == set()
 
 
-def test_a_gap_owed_from_before_a_closure_is_retried_without_adding_closed_days(tmp_path):
-    """The durable ledger outranks the calendar walk: a gap recorded before
-    the closure is retried on the first session after it, alongside the new
+def test_a_gap_owed_from_before_a_closure_is_retried_without_adding_closed_days(
+    tmp_path, monkeypatch
+):
+    """The planner outranks the calendar walk: a gap owed from before the
+    closure is retried on the first session after it, alongside the new
     session, and the closed days in between are not added."""
     cfg = _lake(tmp_path, "seed")
-    state = StateStore(cfg.meta_root)
-    state.set_date("margin_trading", date(2025, 9, 30))
-    state.record_missing_dates("margin_trading", [date(2025, 9, 29)], reason="timeout")
+    covered(monkeypatch, "margin_trading", date(2025, 9, 30), gaps=[date(2025, 9, 29)])
     fetched: list[date] = []
 
     def fetch(day: date) -> pl.DataFrame:

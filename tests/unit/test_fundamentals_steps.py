@@ -24,6 +24,31 @@ def cfg(tmp_path):
     return c
 
 
+def _findings(result: dict, check: str) -> list[dict]:
+    return [
+        item
+        for item in result.get("context_updates", {}).get("audit_findings", [])
+        if item["check"] == check
+    ]
+
+
+def _staged_units(result: dict) -> set[str]:
+    """The units a backfill step names for compact to record once published."""
+    return {unit for item in _findings(result, "backfill_units_staged") for unit in item["units"]}
+
+
+def _publish_units(config: Config, run_id: str, result: dict, dataset: str) -> None:
+    """What compact does once it publishes the run's staging: record its units in the lake."""
+    from cnequity.storage import resume_units
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import Catalog
+
+    if not (lake_root(config) / "catalog.sqlite").exists():
+        with Catalog(lake_root(config), create=True):
+            pass
+    resume_units.record(config, run_id, _findings(result, resume_units.CHECK), {dataset})
+
+
 def test_financial_statement_items_disabled(cfg):
     cfg.sources["eastmoney"] = False
     cfg.sources["tdx_fin"] = False
@@ -537,8 +562,6 @@ def test_shareholder_backfill_rows_are_marked_reconstructed(cfg, monkeypatch):
 
 
 def test_share_structure_later_window_failure_keeps_earlier_valid_year(cfg, monkeypatch):
-    from cnequity.storage.state import StateStore
-
     set_backfill(cfg, active=True, start=date(2023, 1, 1), end=date(2024, 12, 31))
 
     def fetch(start, end, **_kwargs):
@@ -559,12 +582,13 @@ def test_share_structure_later_window_failure_keeps_earlier_valid_year(cfg, monk
     assert result["batch_settled"] is True
     assert result["rows_written"] == 1
     assert result["missing_units"] == 1
-    assert StateStore(cfg.meta_root).get_payload("share_structure")["missing_units"]
+    # Only the valid year is named for resume; the failed one stays owed.
+    assert _staged_units(result) == {"change_date:2023-01-01:2023-12-31"}
+    (missing,) = _findings(result, "shareholder_missing_windows")
+    assert missing["missing_units"] == ["change_date:2024-01-01:2024-12-31"]
 
 
 def test_shareholder_programming_error_is_not_a_retryable_source_gap(cfg):
-    from cnequity.storage.state import StateStore
-
     def fetch(_start, _end, **_kwargs):
         raise TypeError("invalid adapter argument")
 
@@ -578,7 +602,6 @@ def test_shareholder_programming_error_is_not_a_retryable_source_gap(cfg):
             daily_by="notice_date",
             daily_lookback_days=30,
         )
-    assert not StateStore(cfg.meta_root).get_payload("share_structure").get("missing_units")
 
 
 def test_daily_top_holders_follows_notices_from_the_last_30_days(cfg, monkeypatch):
@@ -631,8 +654,6 @@ def test_top_holders_quarter_slices_resume_without_reasking_completed_windows(cf
 
 
 def test_top_holders_failure_keeps_complete_windows_and_retries_only_missing(cfg, monkeypatch):
-    from cnequity.storage.state import StateStore
-
     set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 12, 31))
     calls = []
     fail_once = {"value": True}
@@ -670,9 +691,8 @@ def test_top_holders_failure_keeps_complete_windows_and_retries_only_missing(cfg
     assert second["rows_written"] == 4
     assert "missing_units" not in second
     assert [start.month for start, _ in calls[3:]] == [7, 10]
-    state = StateStore(cfg.meta_root)
-    state.commit_staged_units("top_holders", "run-windows")
-    assert not state.get_payload("top_holders").get("missing_units")
+    assert len(_staged_units(second)) == 4
+    assert not _findings(second, "shareholder_missing_windows")
 
 
 def test_top_holders_partial_page_rows_publish_without_claiming_window_complete(cfg, monkeypatch):
@@ -715,7 +735,7 @@ def test_top_holders_real_archive_partial_page_reaches_curated_with_gap(tmp_path
     from cnequity.adapters.eastmoney import shareholders as sh
     from cnequity.query.reader import load
     from cnequity.steps.finalize import step_compact
-    from cnequity.storage.state import StateStore
+    from cnequity.storage import resume_units
 
     config = Config(data_root=tmp_path / "isolated-lake", raw_archive_enabled=True)
     set_backfill(config, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
@@ -754,13 +774,16 @@ def test_top_holders_real_archive_partial_page_reaches_curated_with_gap(tmp_path
     assert result["status"] == "degraded"
     assert result["batch_settled"] is True
     assert result["rows_written"] == 1
-    assert StateStore(config.meta_root).get_payload("top_holders")["missing_units"]
+    (missing,) = _findings(result, "shareholder_missing_windows")
+    (window,) = missing["missing_units"]
+    assert window not in _staged_units(result)
 
-    step_compact(config, date(2024, 3, 31), "partial-wire", {})
+    step_compact(config, date(2024, 3, 31), "partial-wire", result["context_updates"])
     published = load("top_holders", config=config, as_of=date(2024, 5, 1), pit_mode="best_effort")
     assert published.height == 1
     assert published["holder_scope"].to_list() == ["float"]
-    assert StateStore(config.meta_root).get_payload("top_holders")["missing_units"]
+    # The partial window is published but not recorded as done: the next run asks again.
+    assert not resume_units.published(config, "top_holders", fund._resume_scope("top_holders"))
 
     class CompleteWindow:
         def __init__(self, *args, **kwargs):
@@ -780,10 +803,12 @@ def test_top_holders_real_archive_partial_page_reaches_curated_with_gap(tmp_path
     monkeypatch.setattr(sh, "EastMoneyClient", CompleteWindow)
     repaired = fund.step_top_holders(config, date(2024, 3, 31), "partial-wire", {})
     assert repaired["rows_written"] == 2
-    step_compact(config, date(2024, 3, 31), "partial-wire", {})
+    assert not _findings(repaired, "shareholder_missing_windows")
+    step_compact(config, date(2024, 3, 31), "partial-wire", repaired["context_updates"])
     published = load("top_holders", config=config, as_of=date(2024, 5, 1), pit_mode="best_effort")
     assert set(published["holder_scope"].to_list()) == {"float", "total"}
-    assert not StateStore(config.meta_root).get_payload("top_holders").get("missing_units")
+    (named,) = _findings(repaired, resume_units.CHECK)
+    assert window in resume_units.published(config, "top_holders", named["scope"])
 
 
 def test_share_structure_symbol_refresh_is_one_window_scoped_to_the_names(cfg, monkeypatch):
@@ -814,8 +839,6 @@ def _fsi_row(period: str, statement_type: str) -> dict:
 
 def test_financial_backfill_resumes_after_units_an_interrupted_run_published(cfg, monkeypatch):
     """A new run skips units an earlier run published; ``--refetch`` does not."""
-    from cnequity.storage.state import StateStore
-
     set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31))
     unit = "2024-03-31|RPT_LICO_FN_CPD"
     calls: list[set[str]] = []
@@ -827,9 +850,9 @@ def test_financial_backfill_resumes_after_units_an_interrupted_run_published(cfg
         return pl.DataFrame()
 
     monkeypatch.setattr(fund, "fetch_financial_statement_items", fake_fetch)
-    fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-killed", {})
+    killed = fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-killed", {})
     # The next invocation's staging recovery compacts the killed run.
-    StateStore(cfg.meta_root).commit_staged_units("financial_statement_items", "run-killed")
+    _publish_units(cfg, "run-killed", killed, "financial_statement_items")
     curated = cfg.curated_root / "financial_statement_items" / "report_period=2024Q1"
     curated.mkdir(parents=True)
     pl.DataFrame(
@@ -848,8 +871,6 @@ def test_financial_backfill_resumes_after_units_an_interrupted_run_published(cfg
 
 
 def test_scoped_financial_repair_does_not_stand_in_for_the_market(cfg, monkeypatch):
-    from cnequity.storage.state import StateStore
-
     set_backfill(
         cfg, active=True, start=date(2024, 1, 1), end=date(2024, 3, 31), symbols=["600519.SH"]
     )
@@ -863,8 +884,8 @@ def test_scoped_financial_repair_does_not_stand_in_for_the_market(cfg, monkeypat
         return pl.DataFrame()
 
     monkeypatch.setattr(fund, "fetch_financial_statement_items", fake_fetch)
-    fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-scoped", {})
-    StateStore(cfg.meta_root).commit_staged_units("financial_statement_items", "run-scoped")
+    scoped = fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-scoped", {})
+    _publish_units(cfg, "run-scoped", scoped, "financial_statement_items")
 
     set_backfill(cfg, symbols=None)
     fund.step_financial_statement_items(cfg, date(2024, 6, 28), "run-market", {})
@@ -872,8 +893,6 @@ def test_scoped_financial_repair_does_not_stand_in_for_the_market(cfg, monkeypat
 
 
 def test_shareholder_backfill_resumes_after_windows_an_interrupted_run_published(cfg, monkeypatch):
-    from cnequity.storage.state import StateStore
-
     set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 12, 31))
     calls = []
     fail = {"value": True}
@@ -893,8 +912,10 @@ def test_shareholder_backfill_resumes_after_windows_an_interrupted_run_published
 
     monkeypatch.setattr(fund, "write_fetched", write)
     kwargs = {"daily_by": "record_date", "daily_lookback_days": 240}
-    fund._run_shareholder_step(cfg, date(2024, 12, 31), "run-a", "top_holders", fetch, **kwargs)
-    StateStore(cfg.meta_root).commit_staged_units("top_holders", "run-a")
+    interrupted = fund._run_shareholder_step(
+        cfg, date(2024, 12, 31), "run-a", "top_holders", fetch, **kwargs
+    )
+    _publish_units(cfg, "run-a", interrupted, "top_holders")
 
     resumed = fund._run_shareholder_step(
         cfg, date(2024, 12, 31), "run-b", "top_holders", fetch, **kwargs

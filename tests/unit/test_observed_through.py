@@ -19,7 +19,6 @@ from cnequity.config import load_config
 from cnequity.config.bootstrap import path_for_toml
 from cnequity.run_scope import backfill_of
 from cnequity.steps import events
-from cnequity.storage.state import StateStore
 
 ANCHOR = date(2026, 10, 16)
 LAST_EVENT = date(2026, 6, 26)
@@ -39,8 +38,7 @@ def _event(symbol: str, ex_date: date) -> dict:
     }
 
 
-@pytest.fixture
-def demo_lake(tmp_path, monkeypatch):
+def _demo_lake(tmp_path, monkeypatch, looked_through: date):
     cfg_path = tmp_path / "demo.toml"
     cfg_path.write_text(
         f'[data]\nroot = "{path_for_toml(tmp_path / "data")}"\nprofile = "demo"\n\n'
@@ -71,9 +69,29 @@ def demo_lake(tmp_path, monkeypatch):
     from cnequity.cli.backfill_cmds import _run_backfill
 
     cfg = load_config(cfg_path)
-    first = _run_backfill(cfg, "corporate_actions", None, None)
+    first = _run_backfill(cfg, "corporate_actions", None, looked_through)
     assert first["status"] == "success", first
     return cfg_path, calls
+
+
+@pytest.fixture
+def demo_lake(tmp_path, monkeypatch):
+    """A lake whose first sweep asked every symbol through the anchor."""
+    return _demo_lake(tmp_path, monkeypatch, ANCHOR)
+
+
+@pytest.fixture
+def looked_in_june(tmp_path, monkeypatch):
+    """A lake whose last full sweep looked only through the last event."""
+    return _demo_lake(tmp_path, monkeypatch, LAST_EVENT)
+
+
+def _freshness(cfg) -> date | None:
+    """The day ``verify`` and ``status`` judge corporate_actions fresh through."""
+    from cnequity.quality.freshness import freshness_mark
+    from cnequity.quality.verify import covered_through
+
+    return freshness_mark(cfg, "corporate_actions", covered_through(cfg, "corporate_actions"))
 
 
 def _verify(cfg_path, *extra):
@@ -83,11 +101,12 @@ def _verify(cfg_path, *extra):
 def test_a_backfill_that_finds_nothing_new_still_closes_the_stale_gap(demo_lake):
     cfg_path, calls = demo_lake
     cfg = load_config(cfg_path)
-    state = StateStore(cfg.meta_root)
-    assert state.get_date("corporate_actions") == LAST_EVENT
+    from cnequity.quality.verify import covered_through
+
+    assert covered_through(cfg, "corporate_actions") == LAST_EVENT
     # The first sweep asked every symbol through the anchor and got a clean
     # answer, so the lake has looked through the anchor, events or not.
-    assert state.get_date("corporate_actions", field="observed_through") == ANCHOR
+    assert _freshness(cfg) == ANCHOR
 
     checked = _verify(cfg_path)
     assert checked.exit_code == 0, checked.output
@@ -95,13 +114,12 @@ def test_a_backfill_that_finds_nothing_new_still_closes_the_stale_gap(demo_lake)
     assert len(calls) == 1, "nothing was due, so nothing was fetched"
 
 
-def test_verify_offers_a_repair_that_actually_clears_the_gap(demo_lake):
+def test_verify_offers_a_repair_that_actually_clears_the_gap(looked_in_june):
     """The loop itself: a lake that last looked months ago is stale; the
     backfill `verify` suggests looks again and so must close the gap."""
-    cfg_path, calls = demo_lake
+    cfg_path, calls = looked_in_june
     cfg = load_config(cfg_path)
-    state = StateStore(cfg.meta_root)
-    state.set_date("corporate_actions", LAST_EVENT, field="observed_through")
+    from cnequity.quality.verify import covered_through
 
     before = _verify(cfg_path)
     assert before.exit_code == 1, before.output
@@ -111,18 +129,16 @@ def test_verify_offers_a_repair_that_actually_clears_the_gap(demo_lake):
     repaired = _verify(cfg_path, "--repair")
     assert repaired.exit_code == 0, repaired.output
     assert calls[-1][:2] == (LAST_EVENT, ANCHOR)
-    assert state.get_date("corporate_actions") == LAST_EVENT, "no event was invented"
+    assert covered_through(cfg, "corporate_actions") == LAST_EVENT, "no event was invented"
 
     after = _verify(cfg_path)
     assert after.exit_code == 0, after.output
     assert "[stale] corporate_actions" not in after.output
 
 
-def test_a_failed_symbol_leaves_the_observation_where_it_was(demo_lake, monkeypatch):
-    cfg_path, _calls = demo_lake
+def test_a_failed_symbol_leaves_the_observation_where_it_was(looked_in_june, monkeypatch):
+    cfg_path, _calls = looked_in_june
     cfg = load_config(cfg_path)
-    state = StateStore(cfg.meta_root)
-    state.set_date("corporate_actions", LAST_EVENT, field="observed_through")
     inner = events.fetch_corporate_actions
 
     def flaky(trade_date, *, symbols, **kwargs):
@@ -133,15 +149,13 @@ def test_a_failed_symbol_leaves_the_observation_where_it_was(demo_lake, monkeypa
     monkeypatch.setattr(events, "fetch_corporate_actions", flaky)
     _verify(cfg_path, "--repair")
 
-    assert state.get_date("corporate_actions", field="observed_through") == LAST_EVENT
+    assert _freshness(cfg) == LAST_EVENT
     assert "[stale] corporate_actions" in _verify(cfg_path).output
 
 
-def test_a_scoped_sweep_proves_nothing_about_the_rest_of_the_lake(demo_lake):
-    cfg_path, _calls = demo_lake
+def test_a_scoped_sweep_proves_nothing_about_the_rest_of_the_lake(looked_in_june):
+    cfg_path, _calls = looked_in_june
     cfg = load_config(cfg_path)
-    state = StateStore(cfg.meta_root)
-    state.set_date("corporate_actions", LAST_EVENT, field="observed_through")
     result = CliRunner().invoke(
         cli,
         [
@@ -158,19 +172,20 @@ def test_a_scoped_sweep_proves_nothing_about_the_rest_of_the_lake(demo_lake):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert state.get_date("corporate_actions", field="observed_through") == LAST_EVENT
+    assert _freshness(cfg) == LAST_EVENT
 
 
-def test_a_window_that_skips_unobserved_days_does_not_advance(demo_lake):
-    """Looking at October says nothing about July to September."""
-    cfg_path, _calls = demo_lake
+def test_a_window_that_skips_unobserved_days_leaves_them_owed(looked_in_june):
+    """Looking at October says nothing about July to September: those stay owed."""
+    cfg_path, _calls = looked_in_june
     cfg = load_config(cfg_path)
-    state = StateStore(cfg.meta_root)
-    state.set_date("corporate_actions", LAST_EVENT, field="observed_through")
     from cnequity.cli.backfill_cmds import _run_backfill
+    from cnequity.quality.planned_coverage import gap_days
 
     _run_backfill(cfg, "corporate_actions", date(2026, 10, 1), ANCHOR)
-    assert state.get_date("corporate_actions", field="observed_through") == LAST_EVENT
+    owed = set(gap_days(cfg, "corporate_actions", ANCHOR))
+    assert date(2026, 9, 14) in owed
+    assert not {day for day in owed if day >= date(2026, 10, 1)}
 
 
 def test_status_reads_freshness_from_the_observation(demo_lake):

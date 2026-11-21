@@ -7,7 +7,7 @@ The lake root is determined by `[data].root` in the configuration. Demo lakes an
 | `staging/` | Batch data waiting to be merged; failure recovery may depend on it |
 | `curated/`, `derived/` | Merge working copies and the compatibility layout; scanning them directly does not pin a published version |
 | `meta/revisions/` | Data version receipts, current-version pointers, and immutable data files |
-| `meta/state/` | Update watermarks and coverage state |
+| `meta/lake.json`, `meta/scheduler/`, `meta/checkpoints/`, `meta/source_cache/`, `meta/decisions/` | Migration record, scheduler markers, resume points, source caches, source decisions. Coverage lives in the lake catalog |
 | `meta/quality/` | Quality check and source discrepancy reports |
 | `meta/raw/` | Archive of raw responses |
 | `meta/raw_storage.json` | Optional external payload locations; source sidecars stay in `meta/raw/`, and snapshots materialize external payloads without machine-specific paths |

@@ -22,30 +22,56 @@ BEHIND = date(2026, 7, 29)
 FETCHED = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
 
 
-def _write(config, dataset: str, day: date) -> None:
-    part = config.curated_root / dataset / f"trade_date={day}"
-    part.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(
-        {
-            "symbol": ["600519.SH"],
-            "trade_date": [day],
-            "source": ["tdx_protocol"],
-            "data_version": ["v1"],
-            "fetched_at": [FETCHED],
-        }
-    ).write_parquet(part / "part-0.parquet")
+def _write(config, dataset: str, day: date, column: str = "trade_date", **extra) -> None:
+    """Rows of *dataset* through *day*, published into the lake's catalog."""
+    from tests.catalog_seed import publish_rows
+
+    publish_rows(
+        config,
+        dataset,
+        pl.DataFrame(
+            {
+                "symbol": ["600519.SH"],
+                column: [day],
+                **{name: [value] for name, value in extra.items()},
+                "source": ["tdx_protocol"],
+                "data_version": ["v1"],
+                "fetched_at": [FETCHED],
+            }
+        ),
+        run_id=f"seed-{dataset}",
+    )
 
 
 def _watermark(config, dataset: str, day: date) -> None:
-    from cnequity.storage.state import StateStore
-
-    StateStore(config.meta_root).set_date(dataset, day)
+    """The watermark is read off the rows ``_write`` published."""
 
 
 def _snapshot_capture(config, dataset: str, day: date) -> None:
-    from cnequity.storage.state import StateStore
+    """A capture of a rolling snapshot: a refresh on the coverage ledger."""
+    from datetime import time
+    from zoneinfo import ZoneInfo
 
-    StateStore(config.meta_root).set_date(dataset, day, field="last_snapshot_date")
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core import coverage as cov
+    from equitylake_core.catalog import Catalog
+
+    asked = datetime.combine(day, time(12), ZoneInfo("Asia/Shanghai"))
+    with Catalog(lake_root(config), create=True) as catalog:
+        cov.record(
+            catalog,
+            pl.DataFrame(
+                {
+                    "dataset": [dataset],
+                    "period": [day.isoformat()],
+                    "entity": [""],
+                    "run": [f"run:seed:{dataset}:refresh"],
+                    "asked_at": [asked],
+                    "outcome": ["empty"],
+                }
+            ),
+            message=f"seed {dataset}",
+        )
 
 
 @pytest.fixture
@@ -67,18 +93,7 @@ def test_a_feed_the_events_job_owns_is_left_to_that_job(lake):
     """Two jobs, two locks: the daily stale pass must not re-fetch an event feed."""
     from cnequity.config.loader import ScheduleGroup
 
-    part = lake.curated_root / "announcement_index" / f"announce_date={BEHIND}"
-    part.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(
-        {
-            "announcement_id": ["A-1"],
-            "symbol": ["600519.SH"],
-            "announce_date": [BEHIND],
-            "source": ["cninfo"],
-            "data_version": ["v1"],
-            "fetched_at": [FETCHED],
-        }
-    ).write_parquet(part / "part-0.parquet")
+    _write(lake, "announcement_index", BEHIND, "announce_date", announcement_id="A-1")
     _watermark(lake, "announcement_index", BEHIND)
 
     assert "announcement_index" in stale_fetch_steps(lake, ANCHOR)

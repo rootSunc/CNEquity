@@ -69,18 +69,10 @@ class CatchupError(RuntimeError):
 
 
 def dataset_watermark(cfg, dataset: str):
-    """Latest success date for a gate dataset (StateStore or hive max for adj)."""
-    from cnequity.query.parquet_scan import list_hive_partition_dates
-    from cnequity.storage.state import StateStore
+    """Latest covered date for a gate dataset, computed from its published rows."""
+    from cnequity.quality.verify import covered_through
 
-    state = StateStore(cfg.meta_root)
-    wm = state.get_date(dataset)
-    if wm is not None:
-        return wm
-    if dataset == "adj_factors":
-        parts = list_hive_partition_dates(cfg.derived_root / "adj_factors", "trade_date")
-        return parts[-1] if parts else None
-    return None
+    return covered_through(cfg, dataset)
 
 
 def gate_fresh(cfg, trade_date: date, *, core_only: bool) -> dict[str, bool]:

@@ -170,7 +170,9 @@ def _unwrap_jsonp(text: str) -> dict[str, Any]:
 
 
 def _catalog_path(config: Config) -> Path:
-    return config.meta_root / "state" / _CATALOG_FILE
+    from cnequity.meta_layout import SOURCE_CACHE
+
+    return config.meta_root / SOURCE_CACHE / _CATALOG_FILE
 
 
 _SEED_CATALOG = Path(__file__).with_name("seeds") / "board_catalog_seed.json"

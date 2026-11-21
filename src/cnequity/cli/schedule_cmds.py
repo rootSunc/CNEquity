@@ -92,7 +92,9 @@ def _group_failures(cfg, session) -> tuple[dict[str, str], set[str]]:
 
 
 def _streak_path(cfg, group: str) -> Path:
-    return Path(cfg.meta_root) / "state" / "soft_streak" / group
+    from cnequity.meta_layout import SOFT_STREAK
+
+    return Path(cfg.meta_root) / SOFT_STREAK / group
 
 
 def _bump_streak(cfg, group: str, session) -> int:
@@ -144,15 +146,17 @@ def _check_daily_groups(cfg) -> tuple[list[str], list[str]]:
 
 
 def _owed_datasets(cfg) -> list[str]:
-    """Datasets whose debt ledger still lists keys a tolerated gap left unfilled."""
+    """Datasets owed per key that the coverage planner says still owe some."""
     from cnequity.domain.datasets import DATASETS
-    from cnequity.storage.state import StateStore
+    from cnequity.domain.market_time import shanghai_today
+    from cnequity.quality.planned_coverage import HISTORY_START, coverage_of, owed_cells
 
-    store = StateStore(cfg.meta_root)
+    today = shanghai_today()
     return sorted(
-        path.stem
-        for path in store.root.glob("*.json")
-        if path.stem in DATASETS and store.get_outstanding_keys(path.stem)
+        name
+        for name, spec in DATASETS.items()
+        if coverage_of(spec, today, cfg).entity is not None
+        and owed_cells(cfg, name, HISTORY_START, today)
     )
 
 
@@ -216,9 +220,9 @@ def maintain(config_path: str, groups: str | None, notify: bool):
     problems, notes = _check_daily_groups(cfg)
     for line in [*problems, *notes]:
         click.echo(f"  {line}", err=True)
-    # Nothing else revisits the debt ledger: a key a source could not answer
-    # yet (Baostock posts halts about a week late) stayed owed until someone
-    # ran the repair by hand.
+    # The daily run retries the last 45 days of owed keys; older ones (a key a
+    # source could not answer yet, Baostock posts halts about a week late) are
+    # asked here.
     for dataset in _owed_datasets(cfg):
         click.echo(
             "--- " + _("Outstanding keys: {dataset}").format(dataset=dataset) + " ---", err=True

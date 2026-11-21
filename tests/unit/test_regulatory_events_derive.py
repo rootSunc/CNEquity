@@ -13,6 +13,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 from cnequity.config import Config
 from cnequity.derive.regulatory_events import (
@@ -21,7 +22,6 @@ from cnequity.derive.regulatory_events import (
 )
 from cnequity.run_scope import set_backfill
 from cnequity.steps.macro_risk import step_regulatory_events
-from cnequity.storage.state import StateStore
 
 DAY = date(2024, 6, 28)
 
@@ -87,7 +87,6 @@ def _seed_announcements(cfg: Config, rows: list[tuple[str, str]], day: date = DA
         pl.lit(datetime(2024, 6, 28, tzinfo=timezone.utc)).alias("fetched_at"),
     )
     frame.write_parquet(part / "part-merged.parquet")
-    StateStore(cfg.meta_root).set_date("announcement_index", day)
 
 
 def test_the_derive_reads_the_committed_announcements(tmp_path):
@@ -137,10 +136,10 @@ def test_a_window_the_announcements_do_not_cover_yet_is_reported(tmp_path):
     assert finding["covered_through"] == "2024-06-20"
 
 
-def test_deriving_from_nothing_is_refused(tmp_path):
+def test_deriving_from_nothing_is_refused(tmp_path, monkeypatch):
     """An empty window is only an answer when there was something to search."""
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    StateStore(cfg.meta_root).set_date("announcement_index", DAY)
+    covered(monkeypatch, "announcement_index", DAY)
 
     with pytest.raises(RuntimeError, match="no rows in 2024"):
         step_regulatory_events(cfg, DAY, "run-empty", {})
@@ -209,11 +208,11 @@ def test_an_incremental_lookback_reaching_past_the_first_indexed_day_is_not_a_fi
     assert "context_updates" not in result
 
 
-def test_a_hole_inside_the_indexed_range_is_still_refused(tmp_path):
+def test_a_hole_inside_the_indexed_range_is_still_refused(tmp_path, monkeypatch):
     """Clamping the ends must not explain away a gap in the middle."""
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
     _seed_announcements(cfg, [("A1", "关于收到监管函的公告")], day=date(2016, 1, 4))
-    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 28))
+    covered(monkeypatch, "announcement_index", date(2024, 6, 28))
     _backfill_slice(cfg, date(2020, 1, 1), date(2020, 1, 31))
 
     with pytest.raises(RuntimeError, match="no rows in 2020-01-01"):

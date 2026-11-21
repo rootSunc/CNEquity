@@ -279,20 +279,28 @@ def test_parse_row_maps_current_eastmoney_columns():
     assert _parse_row({"SECUCODE": "600000.SH", "IMPL_PLAN_PROFILE": "10派1元"}) is None
 
 
-def _owed_day(tmp_path):
-    from cnequity.storage.state import StateStore
+def _owed_day(tmp_path, monkeypatch):
+    from tests.coverage_fakes import covered
 
     cfg = Config(
         data_root=tmp_path / "data", sources={"eastmoney": True}, raw_archive_enabled=False
     )
-    state = StateStore(cfg.meta_root)
-    state.set_date("corporate_actions", date(2024, 6, 27))
-    state.record_missing_dates("corporate_actions", [date(2024, 6, 20)], reason="proxy down")
-    return cfg, state
+    covered(monkeypatch, "corporate_actions", date(2024, 6, 27), gaps=[date(2024, 6, 20)])
+    return cfg
 
 
-def test_a_day_the_window_answered_leaves_the_ledger_when_published(tmp_path):
-    cfg, state = _owed_day(tmp_path)
+def _answered(result: dict, outcome: str = "empty") -> set[date]:
+    """The days the step reports the source answered, for compact to record."""
+    return {
+        date.fromisoformat(period)
+        for item in result.get("context_updates", {}).get("audit_findings", [])
+        if item["check"] == "planner_empty_answer" and item["outcome"] == outcome
+        for period in item["periods"]
+    }
+
+
+def test_a_day_the_window_answered_is_reported_with_the_rows_it_staged(tmp_path, monkeypatch):
+    cfg = _owed_day(tmp_path, monkeypatch)
     row = pl.DataFrame(
         {
             "symbol": ["600519.SH"],
@@ -306,23 +314,24 @@ def test_a_day_the_window_answered_leaves_the_ledger_when_published(tmp_path):
         }
     )
     with patch("cnequity.steps.events.fetch_corporate_actions_eastmoney", return_value=row):
-        step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
-    assert date(2024, 6, 20) in state.get_missing_dates("corporate_actions")
-    state.commit_staged_request_days("corporate_actions", "run-1")
-    assert state.get_missing_dates("corporate_actions") == set()
+        result = step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
+    # The owed day came back empty; the run day is covered by the row it staged.
+    assert date(2024, 6, 20) in _answered(result)
+    assert date(2024, 6, 28) not in _answered(result)
+    assert result["rows_written"] == 1
 
 
-def test_an_empty_window_clears_the_days_it_answered_at_once(tmp_path):
-    cfg, state = _owed_day(tmp_path)
+def test_an_empty_window_answers_every_day_it_asked(tmp_path, monkeypatch):
+    cfg = _owed_day(tmp_path, monkeypatch)
     with patch(
         "cnequity.steps.events.fetch_corporate_actions_eastmoney", return_value=pl.DataFrame()
     ):
-        step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
-    assert state.get_missing_dates("corporate_actions") == set()
+        result = step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
+    assert {date(2024, 6, 20), date(2024, 6, 28)} <= _answered(result)
 
 
-def test_a_day_the_window_could_not_read_stays_owed(tmp_path):
-    cfg, state = _owed_day(tmp_path)
+def test_a_day_the_window_could_not_read_stays_owed(tmp_path, monkeypatch):
+    cfg = _owed_day(tmp_path, monkeypatch)
 
     def fetch(d, **kwargs):
         if kwargs.get("dates") or d == date(2024, 6, 20):
@@ -330,5 +339,13 @@ def test_a_day_the_window_could_not_read_stays_owed(tmp_path):
         return pl.DataFrame()
 
     with patch("cnequity.steps.events.fetch_corporate_actions_eastmoney", side_effect=fetch):
-        step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
-    assert state.get_missing_dates("corporate_actions") == {date(2024, 6, 20)}
+        result = step_corporate_actions(cfg, date(2024, 6, 28), "run-1", {})
+    # A failed fetch records nothing: the day is still a gap for the next run.
+    assert date(2024, 6, 20) not in _answered(result)
+    assert date(2024, 6, 28) in _answered(result)
+    (failed,) = [
+        item
+        for item in result["context_updates"]["audit_findings"]
+        if item["check"] == "fetch_failed_days"
+    ]
+    assert "2024-06-20" in str(failed)

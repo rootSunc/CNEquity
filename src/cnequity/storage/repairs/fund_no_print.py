@@ -20,17 +20,24 @@ from cnequity.adapters.exchange.fund_quotes import (
 from cnequity.domain.market_time import shanghai_today
 from cnequity.file_lock import lake_mutation_lock
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.fund_no_print import reconcile_no_print_coverage
 from cnequity.storage.instrument_catalog import load_curated_instruments
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
-from cnequity.storage.state import StateStore
+
+
+def _owed_fund_sessions(config) -> list[dict]:
+    """The (symbol, trade_date) daily-bar cells the coverage planner still owes."""
+    from cnequity.quality.planned_coverage import HISTORY_START, owed_cells
+
+    return [
+        {"symbol": symbol, "trade_date": day.isoformat()}
+        for symbol, day in owed_cells(config, "daily_bars", HISTORY_START, shanghai_today())
+    ]
 
 
 def repair_fund_no_print(config, *, apply=False, refresh_sources=False, max_sessions=32):
     if max_sessions < 1:
         raise ValueError("max_sessions must be positive")
-    state = StateStore(config.meta_root)
-    owed = state.get_outstanding_keys("daily_bars")
+    owed = _owed_fund_sessions(config)
     catalog = load_curated_instruments(config)
     bounds = (
         {
@@ -160,12 +167,14 @@ def repair_fund_no_print(config, *, apply=False, refresh_sources=False, max_sess
                         except (OSError, ValueError, TypeError, RawArchiveError):
                             pass
                     write_json_atomic(path, proof, indent=2)
-            report.update(reconcile_no_print_coverage(config))
-            from cnequity.steps.finalize import _update_watermarks
+            from cnequity.storage.fund_no_print import approved_no_print_keys
 
-            _update_watermarks(config, frozenset({"daily_bars"}), shanghai_today())
+            # The planner excuses what the proofs cover; what it still owes is
+            # what is left.
             report.update(
-                applied=True, remaining_keys=len(state.get_outstanding_keys("daily_bars"))
+                applied=True,
+                proved_keys=len(approved_no_print_keys(config)),
+                remaining_keys=len(_owed_fund_sessions(config)),
             )
             write_json_atomic(config.meta_root / "repairs" / f"{run_id}.json", report, indent=2)
     return report

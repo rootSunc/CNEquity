@@ -2,7 +2,7 @@
 
 import json
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from email.utils import format_datetime
 
 import httpx
@@ -367,7 +367,8 @@ def test_generic_backfill_plan_is_offline_and_does_not_create_lake(tmp_path, mon
     assert plan["cold_request_lower_bound"] == 1
     assert plan["broad_tip_snapshots"]["exchange"] == "skip"
     assert plan["tdx_history_window"]["strategy"] == "exponential-bracket-binary-seek-then-scan"
-    assert plan["checkpoint"]["outstanding_keys"] == 0
+    # What is owed is the planner's to say once the run starts; a plan only names the watermark.
+    assert plan["checkpoint"] == {"watermark": None}
     assert plan["writes"] is False
     assert not cfg.data_root.exists()
 
@@ -461,10 +462,12 @@ def test_source_limits_reads_recorded_run_and_repair_keys(tmp_path, monkeypatch)
     manifest = Manifest(cfg.manifest_path)
     run_id = manifest.start_run("fixture")
     manifest.record_stage_metrics(run_id, "fixture", 0.01, {"requests": 2, "request_retries": 1})
-    state = cfg.meta_root / "state" / "daily_bars.json"
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(
-        json.dumps({"outstanding_keys": [{"symbol": "000001.SZ", "trade_date": "2026-09-01"}]})
+    # The planner owes one daily_bars key (a fetch left it unanswered).
+    monkeypatch.setattr(
+        "cnequity.quality.planned_coverage.gap_keys",
+        lambda config, dataset, day: (
+            [("000001.SZ", date(2026, 9, 1))] if dataset == "daily_bars" else []
+        ),
     )
     monkeypatch.setattr("cnequity.cli.quality_cmds._cfg", lambda _: cfg)
     report = CliRunner().invoke(cli, ["sources", "limits"])

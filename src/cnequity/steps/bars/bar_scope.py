@@ -14,7 +14,6 @@ from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_by_primary_key
 from cnequity.domain.market_time import shanghai_now
 from cnequity.run_scope import backfill_of
-from cnequity.steps.bars import etf_debts
 from cnequity.steps.bars._base import _DAILY_BAR_FINAL_AT, logger
 from cnequity.steps.common import (
     BACKFILL_START,
@@ -362,13 +361,6 @@ def _merge_ownership_result(
     if ownership.delegated_delisted and not delegated_complete:
         out["status"] = "warning"
         out["delegated_symbols"] = len(ownership.delegated_delisted)
-    for settle in (
-        etf_debts._settle_official_etf_prelisting_debts,
-        etf_debts._settle_official_etf_delisted_debts,
-    ):
-        settlement = settle(config, end, run_id)
-        if settlement:
-            context.setdefault("audit_findings", []).append(settlement)
     return out
 
 

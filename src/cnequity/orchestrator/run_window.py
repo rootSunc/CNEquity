@@ -63,7 +63,9 @@ def due_session(now: datetime, run_at: time) -> date | None:
 
 
 def marker_path(meta_root: Path, job: str, session: date) -> Path:
-    return Path(meta_root) / "state" / "scheduler" / f"{job}-{session.isoformat()}.done"
+    from cnequity.meta_layout import SCHEDULER_MARKERS
+
+    return Path(meta_root) / SCHEDULER_MARKERS / f"{job}-{session.isoformat()}.done"
 
 
 def _ran_in_manifest(config, job: str, session: date) -> bool:

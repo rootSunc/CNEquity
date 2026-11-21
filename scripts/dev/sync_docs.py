@@ -355,7 +355,7 @@ EFFECTS: dict[str, tuple[str, str]] = {
     ),
     "migrate": (
         "条件",
-        "默认只读预览；--apply 按顺序运行还欠的迁移，经修复门禁发布并保留旧版本，结果写入 meta/state/lake.json；fund-listing-dates 读交易所基金列表，misdated-valuation 有待替换行时读东财数据中心",
+        "默认只读预览；--apply 按顺序运行还欠的迁移，经修复门禁发布并保留旧版本，结果写入 meta/lake.json；fund-listing-dates 读交易所基金列表，misdated-valuation 有待替换行时读东财数据中心",
     ),
     "repair payment-dates": (
         "仅 --apply 时",

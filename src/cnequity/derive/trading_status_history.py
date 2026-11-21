@@ -158,53 +158,13 @@ def _suspended_pairs(
         .select(["symbol", "trade_date"])
     )
     gaps = expected.join(bars, on=["symbol", "trade_date"], how="anti")
-    if "daily_bars" in getattr(config, "planner_only", ()):
-        # A cell no fetch answered is a failed fetch, not a halt; one the
-        # source answered empty, or one the ledger long holds answered, is.
-        from cnequity.quality.planned_coverage import unanswered_keys
+    # A cell no fetch answered is a failed fetch, not a halt; one the source
+    # answered empty, or one the ledger long holds answered, is.
+    from cnequity.quality.planned_coverage import unanswered_keys
 
-        days = cal["trade_date"]
-        unknown = unanswered_keys(config, "daily_bars", days.min(), days.max())
-        return gaps.join(unknown, on=["symbol", "trade_date"], how="anti")
-    # A session the bar feed is known to have missing is a failed fetch, not
-    # a market fact: inferring halts from it would label the gap "suspended"
-    # and hide it from the refetch (2026-08-07, 223 Beijing names).
-    unfetched = _unfetched_sessions(config)
-    if unfetched:
-        gaps = gaps.filter(~pl.col("trade_date").is_in(sorted(unfetched)))
-    from cnequity.storage.state import StateStore
-
-    state = StateStore(config.meta_root)
-    unknown_keys = [
-        {"symbol": row["symbol"], "trade_date": date.fromisoformat(row["trade_date"])}
-        for row in state.get_outstanding_keys("daily_bars")
-    ]
-    if state.get_payload("daily_bars").get("missing_units"):
-        from cnequity.orchestrator.outcomes import InputUnavailableError
-
-        raise InputUnavailableError(
-            "daily_bars has unresolved request units; cannot infer suspensions"
-        )
-    if unknown_keys:
-        gaps = gaps.join(pl.DataFrame(unknown_keys), on=["symbol", "trade_date"], how="anti")
-    return gaps
-
-
-def _unfetched_sessions(config: Config) -> set[date]:
-    from cnequity.storage.state import StateStore
-
-    days: set[date] = set()
-    for row in StateStore(config.meta_root).get_payload("daily_bars").get("missing_ranges", []):
-        try:
-            first = date.fromisoformat(str(row["start"]))
-            last = date.fromisoformat(str(row.get("end") or row["start"]))
-        except (KeyError, ValueError):
-            continue
-        day = first
-        while day <= last:
-            days.add(day)
-            day = date.fromordinal(day.toordinal() + 1)
-    return days
+    days = cal["trade_date"]
+    unknown = unanswered_keys(config, "daily_bars", days.min(), days.max())
+    return gaps.join(unknown, on=["symbol", "trade_date"], how="anti")
 
 
 def _risk_warning_across_halts(config: Config, pairs: pl.DataFrame) -> pl.Series:

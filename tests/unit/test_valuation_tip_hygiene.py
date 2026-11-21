@@ -12,10 +12,9 @@ from cnequity.quality.cross_checks import (
     last_dense_valuation_date,
     valuation_day_coverage_ratio,
 )
+from cnequity.quality.verify import watermark_date
 from cnequity.run_scope import set_backfill, set_run_flags
-from cnequity.steps.finalize import _reconcile_watermarks, _watermark_date_for
 from cnequity.steps.fundamentals import _valuation_history_end
-from cnequity.storage.state import StateStore
 
 
 def _write_day(
@@ -216,13 +215,7 @@ def test_watermark_date_ignores_sparse_tip(tmp_path):
         schema=VALUATION_METRICS_SCHEMA,
     )
 
-    assert _watermark_date_for(cfg, "valuation_metrics", "trade_date") == dense
-
-    state = StateStore(cfg.meta_root)
-    state.set_date("valuation_metrics", sparse)
-    findings = _reconcile_watermarks(cfg)
-    assert state.get_date("valuation_metrics") == dense
-    assert any(f["check"] == "valuation_watermark_coverage_gate" for f in findings)
+    assert watermark_date(cfg, "valuation_metrics", "trade_date") == dense
 
 
 def test_baostock_single_flight_refuses_overlap(tmp_path):

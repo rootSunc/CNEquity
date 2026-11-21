@@ -165,7 +165,7 @@ A proxy is network configuration, not a way to lift a ban. Do not rotate egress 
 - **Cause**: **this is a THS source, not EastMoney** — `[sources.eastmoney] proxy` has no effect on it.
   `d.10jqka.com.cn` rate-limits or even bans dense requests.
 - **Fix**: after the cooldown, raise `[sources.ths] min_interval_seconds` (default 1.0, not a guaranteed safe threshold), then `cne backfill sector_bars`;
-  it resumes from the checkpoint by default; after switching sources, use `--refetch` for a full refetch. Checkpoint: `meta/state/sector_bars_backfill.json`.
+  it resumes from the checkpoint by default; after switching sources, use `--refetch` for a full refetch. Checkpoint: `meta/checkpoints/sector_bars_backfill.json`.
   When the failure rate exceeds 50% the step status is `degraded`, and sectors that succeeded are still written.
 
 ### Deploying on another machine

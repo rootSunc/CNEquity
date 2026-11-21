@@ -6,7 +6,7 @@ deprecated) or a script only a repository checkout had, and nothing remembered
 which of them a lake had already been through: an operator had to read the
 changelog of every release in between and work it out.
 
-Now every such fix is a `Migration` in `MIGRATIONS`, and ``meta/state/lake.json``
+Now every such fix is a `Migration` in `MIGRATIONS`, and ``meta/lake.json``
 records two things:
 
 * ``created_with`` — the version that built the lake. A migration introduced in
@@ -87,10 +87,12 @@ def _revision_records(config, *, apply: bool) -> dict:
 def _attempts_ledger(config, *, apply: bool) -> dict:
     from datetime import date
 
+    from cnequity.domain.datasets import DATASETS
     from cnequity.quality.planned_coverage import (
         entity_seeds,
         record_cell_answers,
         record_seeds,
+        seed_rechecks,
         seeds,
     )
 
@@ -114,6 +116,9 @@ def _attempts_ledger(config, *, apply: bool) -> dict:
     if apply:
         for name, cells in per_entity.items():
             record_cell_answers(config, name, cells, run="seed:meta-state:answered")
+        # Where each tiered feed last swept deep and tail, so the first run
+        # after the switch does not sweep deep only because nothing is on record.
+        report["rechecks"] = seed_rechecks(config, sorted(DATASETS))
     return report
 
 
@@ -220,12 +225,6 @@ MIGRATIONS: tuple[Migration, ...] = (
         N_("the exchanges' official fund lists"),
     ),
     Migration(
-        "daily-bar-coverage",
-        N_("Settle Beijing whole-day and pre-listing daily-bar debts already proven"),
-        "0.18.0",
-        _repair("daily_bar_coverage", "repair_daily_bar_coverage"),
-    ),
-    Migration(
         "industry-levels",
         N_("Fill industry level columns on industry_members rows written before 0.20"),
         "0.20.0",
@@ -296,6 +295,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         "0.25.0",
         _drop_generations,
+    ),
+    # After every migration that reads meta/state (attempts-ledger seeds from it).
+    Migration(
+        "meta-layout",
+        N_(
+            "Move what is left in meta/state to each record's own directory under meta/, "
+            "and drop the coverage ledger and revision copies the lake catalog replaced"
+        ),
+        "0.25.0",
+        _repair("meta_layout", "repair_meta_layout"),
     ),
 )
 

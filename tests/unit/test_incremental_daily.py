@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 from cnequity.config import Config
 from cnequity.run_scope import set_backfill
@@ -15,7 +16,24 @@ from cnequity.steps.common import (
     is_trading_day,
     list_trading_dates,
 )
-from cnequity.storage.state import StateStore
+
+
+def _problems(findings: list[dict]) -> list[dict]:
+    """What a fetch reported beyond the answers it hands the coverage ledger."""
+    from cnequity.quality.planned_coverage import ANSWER_CHECK, RECHECK_CHECK
+
+    return [item for item in findings if item["check"] not in {ANSWER_CHECK, RECHECK_CHECK}]
+
+
+def _answered(findings: list[dict], outcome: str) -> set[date]:
+    from cnequity.quality.planned_coverage import ANSWER_CHECK
+
+    return {
+        date.fromisoformat(day)
+        for item in findings
+        if item["check"] == ANSWER_CHECK and item.get("outcome") == outcome
+        for day in item["periods"]
+    }
 
 
 def _seed_trading_calendar(cfg: Config, start: date, end: date) -> None:
@@ -29,27 +47,22 @@ def _seed_trading_calendar(cfg: Config, start: date, end: date) -> None:
     pl.DataFrame(rows).write_parquet(path)
 
 
-def test_incremental_trade_dates_uses_watermark(tmp_path):
+def test_incremental_trade_dates_uses_watermark(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("fund_flow", date(2024, 6, 25))
+    covered(monkeypatch, "fund_flow", date(2024, 6, 25))
 
     dates = incremental_trade_dates(cfg, "fund_flow", date(2024, 6, 28))
     assert dates == [date(2024, 6, 26), date(2024, 6, 27), date(2024, 6, 28)]
 
 
-def test_missing_day_survives_watermark_and_reconciliation_window(tmp_path):
+def test_missing_day_survives_watermark_and_reconciliation_window(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 7, 15))
-    state = StateStore(cfg.meta_root)
-    state.set_date("margin_trading", date(2024, 7, 12))
-    state.record_missing_dates("margin_trading", [date(2024, 6, 26)], reason="timeout")
+    # The watermark moved past a day a fetch failed: the planner still owes it.
+    covered(monkeypatch, "margin_trading", date(2024, 7, 12), gaps=[date(2024, 6, 26)])
 
     assert date(2024, 6, 26) in incremental_trade_dates(cfg, "margin_trading", date(2024, 7, 15))
-    assert (
-        StateStore(cfg.meta_root).get_payload("margin_trading")["missing_ranges"][0]["last_failure"]
-        == "timeout"
-    )
 
 
 def test_list_trading_dates_skips_weekends_without_calendar(tmp_path):
@@ -154,10 +167,10 @@ def test_is_trading_day_prefers_latest_curated_calendar_fragment(tmp_path):
     assert is_trading_day(cfg, date(2024, 6, 26)) is True
 
 
-def test_fetch_incremental_daily_loops_gap_days_for_by_date(tmp_path):
+def test_fetch_incremental_daily_loops_gap_days_for_by_date(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("margin_trading", date(2024, 6, 25))
+    covered(monkeypatch, "margin_trading", date(2024, 6, 25))
     fetched: list[date] = []
 
     def _fetch(day: date) -> pl.DataFrame:
@@ -167,7 +180,26 @@ def test_fetch_incremental_daily_loops_gap_days_for_by_date(tmp_path):
     df, findings = fetch_incremental_daily(cfg, "margin_trading", date(2024, 6, 28), _fetch)
     assert fetched == [date(2024, 6, 26), date(2024, 6, 27), date(2024, 6, 28)]
     assert df.height == 3
-    assert findings == []
+    assert _problems(findings) == []
+    # Days the planner did not owe are covered by their rows; nothing to settle.
+    assert _answered(findings, "complete") == set()
+
+
+def test_a_clean_answer_settles_a_day_the_planner_owed(tmp_path, monkeypatch):
+    cfg = Config(data_root=tmp_path / "data")
+    _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
+    # 06-24 was answered only in part by an earlier run.
+    covered(monkeypatch, "margin_trading", date(2024, 6, 27), gaps=[date(2024, 6, 24)])
+    monkeypatch.setattr(
+        "cnequity.quality.planned_coverage.partial_days",
+        lambda config, dataset: {date(2024, 6, 24)} if dataset == "margin_trading" else set(),
+    )
+
+    def _fetch(day: date) -> pl.DataFrame:
+        return pl.DataFrame({"trade_date": [day], "symbol": ["600519.SH"], "value": [1.0]})
+
+    _, findings = fetch_incremental_daily(cfg, "margin_trading", date(2024, 6, 28), _fetch)
+    assert _answered(findings, "complete") == {date(2024, 6, 24)}
 
 
 def test_fetch_incremental_daily_rejects_stale_snapshot_date(tmp_path):
@@ -193,10 +225,10 @@ def test_fetch_incremental_daily_rejects_stale_snapshot_date(tmp_path):
         )
 
 
-def test_allowed_empty_response_is_reported_for_dense_dataset(tmp_path):
+def test_allowed_empty_response_is_reported_for_dense_dataset(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("market_breadth", date(2024, 6, 25))
+    covered(monkeypatch, "market_breadth", date(2024, 6, 25))
 
     def _fetch(day: date) -> pl.DataFrame:
         if day == date(2024, 6, 27):
@@ -212,14 +244,14 @@ def test_allowed_empty_response_is_reported_for_dense_dataset(tmp_path):
     )
 
     assert df.height == 2
-    assert findings[0]["check"] == "session_dense_empty_days"
-    assert findings[0]["sample_dates"] == ["2024-06-27"]
+    assert _problems(findings)[0]["check"] == "session_dense_empty_days"
+    assert _problems(findings)[0]["sample_dates"] == ["2024-06-27"]
 
 
-def test_run_incremental_fetched_marks_dense_empty_day_retryable(tmp_path):
+def test_run_incremental_fetched_marks_dense_empty_day_retryable(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("market_breadth", date(2024, 6, 25))
+    covered(monkeypatch, "market_breadth", date(2024, 6, 25))
 
     def _fetch(day: date) -> pl.DataFrame:
         if day == date(2024, 6, 27):
@@ -237,7 +269,9 @@ def test_run_incremental_fetched_marks_dense_empty_day_retryable(tmp_path):
     )
 
     assert result["status"] == "warning"
-    assert result["context_updates"]["audit_findings"][0]["check"] == ("session_dense_empty_days")
+    assert _problems(result["context_updates"]["audit_findings"])[0]["check"] == (
+        "session_dense_empty_days"
+    )
 
 
 def test_market_breadth_backfill_does_not_skip_partial_existing_day(tmp_path, monkeypatch):
@@ -416,10 +450,10 @@ def test_fetch_incremental_daily_validates_explicit_non_trade_date_column(tmp_pa
         )
 
 
-def test_fetch_incremental_daily_snapshot_only_fetches_run_day(tmp_path):
+def test_fetch_incremental_daily_snapshot_only_fetches_run_day(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("fund_flow", date(2024, 6, 25))
+    covered(monkeypatch, "fund_flow", date(2024, 6, 25))
     fetched: list[date] = []
 
     def _fetch(day: date) -> pl.DataFrame:
@@ -434,10 +468,10 @@ def test_fetch_incremental_daily_snapshot_only_fetches_run_day(tmp_path):
     assert findings[0]["gap_dates"] == ["2024-06-26", "2024-06-27"]
 
 
-def test_trading_status_snapshot_does_not_replay_live_labels_into_gap_days(tmp_path):
+def test_trading_status_snapshot_does_not_replay_live_labels_into_gap_days(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("trading_status", date(2024, 6, 25))
+    covered(monkeypatch, "trading_status", date(2024, 6, 25))
     fetched: list[date] = []
 
     def _fetch(day: date) -> pl.DataFrame:
@@ -459,10 +493,10 @@ def test_trading_status_snapshot_does_not_replay_live_labels_into_gap_days(tmp_p
     assert findings[0]["gap_dates"] == ["2024-06-26", "2024-06-27"]
 
 
-def test_rolling_snapshot_without_watermark_ignores_legacy_future_state(tmp_path):
+def test_rolling_snapshot_without_watermark_ignores_legacy_future_state(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("share_unlock_schedule", date(2027, 2, 4))
+    covered(monkeypatch, "share_unlock_schedule", date(2027, 2, 4))
     fetched: list[date] = []
 
     def _fetch(day: date) -> pl.DataFrame:
@@ -560,7 +594,7 @@ def test_run_incremental_fetched_rejects_universe_with_no_overlap(tmp_path, monk
 def test_step_fund_flow_snapshot_gap_only_fetches_run_day(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("fund_flow", date(2024, 6, 25))
+    covered(monkeypatch, "fund_flow", date(2024, 6, 25))
     fetched: list[date] = []
 
     def fake_fetch(trade_date, **kwargs):
@@ -588,7 +622,7 @@ def test_step_fund_flow_snapshot_gap_only_fetches_run_day(tmp_path, monkeypatch)
 
 def test_step_fund_flow_single_day_when_caught_up(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    StateStore(cfg.meta_root).set_date("fund_flow", date(2024, 6, 27))
+    covered(monkeypatch, "fund_flow", date(2024, 6, 27))
     fetched: list[date] = []
 
     def fake_fetch(trade_date, **kwargs):
@@ -626,7 +660,7 @@ def _announcement_row(day: date) -> pl.DataFrame:
     )
 
 
-def test_one_unreadable_day_no_longer_discards_the_rest_of_the_window(tmp_path):
+def test_one_unreadable_day_no_longer_discards_the_rest_of_the_window(tmp_path, monkeypatch):
     """A 30-day reconciliation tail must not go blind over one bad day.
 
     `announcement_index` re-reads the last 30 days on every run, so a day the
@@ -635,7 +669,7 @@ def test_one_unreadable_day_no_longer_discards_the_rest_of_the_window(tmp_path):
     """
     cfg = Config(data_root=tmp_path / "data")
     broken = date(2024, 6, 26)
-    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 25))
+    covered(monkeypatch, "announcement_index", date(2024, 6, 25))
 
     def _fetch(day: date) -> pl.DataFrame:
         if day == broken:
@@ -654,9 +688,9 @@ def test_one_unreadable_day_no_longer_discards_the_rest_of_the_window(tmp_path):
     assert "pagination failed" in failed["errors"][0]
 
 
-def test_a_failed_day_publishes_the_others_and_reports_degraded(tmp_path):
+def test_a_failed_day_publishes_the_others_and_reports_degraded(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
-    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 25))
+    covered(monkeypatch, "announcement_index", date(2024, 6, 25))
 
     def _fetch(day: date) -> pl.DataFrame:
         if day == date(2024, 6, 26):
@@ -681,9 +715,9 @@ def test_a_failed_day_publishes_the_others_and_reports_degraded(tmp_path):
     assert "fetch_failed_days" in checks
 
 
-def test_a_window_that_fails_entirely_still_fails_loud(tmp_path):
+def test_a_window_that_fails_entirely_still_fails_loud(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data")
-    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 25))
+    covered(monkeypatch, "announcement_index", date(2024, 6, 25))
 
     def _fetch(day: date) -> pl.DataFrame:
         raise RuntimeError("cninfo down")
@@ -694,11 +728,11 @@ def test_a_window_that_fails_entirely_still_fails_loud(tmp_path):
         )
 
 
-def test_source_gap_without_reconciliation_tail_is_durable(tmp_path):
+def test_source_gap_without_reconciliation_tail_is_durable(tmp_path, monkeypatch):
     """Every source gap is retained for explicit repair, including session feeds."""
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("margin_trading", date(2024, 6, 25))
+    covered(monkeypatch, "margin_trading", date(2024, 6, 25))
 
     def _fetch(day: date) -> pl.DataFrame:
         if day == date(2024, 6, 27):
@@ -707,14 +741,15 @@ def test_source_gap_without_reconciliation_tail_is_durable(tmp_path):
 
     df, findings = fetch_incremental_daily(cfg, "margin_trading", date(2024, 6, 28), _fetch)
     assert df["trade_date"].to_list() == [date(2024, 6, 26), date(2024, 6, 28)]
-    assert findings
-    assert StateStore(cfg.meta_root).get_payload("margin_trading")["missing_ranges"]
+    assert _problems(findings)
+    # The failed day is not answered, so it stays a gap the planner asks again.
+    assert date(2024, 6, 27) not in _answered(findings, "complete") | _answered(findings, "empty")
 
 
-def test_failed_incremental_day_keeps_prior_staging_and_retries_only_the_gap(tmp_path):
+def test_failed_incremental_day_keeps_prior_staging_and_retries_only_the_gap(tmp_path, monkeypatch):
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("market_breadth", date(2024, 6, 25))
+    covered(monkeypatch, "market_breadth", date(2024, 6, 25))
     calls = []
 
     def fetch(day: date) -> pl.DataFrame:
@@ -733,7 +768,6 @@ def test_failed_incremental_day_keeps_prior_staging_and_retries_only_the_gap(tmp
     )
     assert first["status"] == "degraded"
     assert first["batch_settled"] is True
-    assert StateStore(cfg.meta_root).get_missing_dates("market_breadth") == {date(2024, 6, 27)}
     paths = list((cfg.staging_root / "market_breadth" / "run_id=retry-run").glob("*.parquet"))
     assert len(paths) == 2
     assert {d for path in paths for d in pl.read_parquet(path)["trade_date"]} == {
@@ -750,15 +784,11 @@ def test_failed_incremental_day_keeps_prior_staging_and_retries_only_the_gap(tmp
         source="derived",
     )
     assert calls == [date(2024, 6, 26), date(2024, 6, 27), date(2024, 6, 28), date(2024, 6, 27)]
-    state = StateStore(cfg.meta_root)
-    assert state.get_missing_dates("market_breadth") == {date(2024, 6, 27)}
-    state.commit_staged_request_days("market_breadth", "retry-run")
-    assert state.get_missing_dates("market_breadth") == set()
     staged = pl.concat([pl.read_parquet(path) for path in paths[0].parent.glob("*.parquet")])
     assert set(staged["trade_date"]) == {date(2024, 6, day) for day in (26, 27, 28)}
 
 
-def test_a_closed_day_with_no_disclosures_is_not_a_failed_fetch(tmp_path):
+def test_a_closed_day_with_no_disclosures_is_not_a_failed_fetch(tmp_path, monkeypatch):
     """A weekend is walked (companies do file on Saturdays) but may be empty.
 
     `announcement_index` steps through calendar days, so its window contains
@@ -768,7 +798,7 @@ def test_a_closed_day_with_no_disclosures_is_not_a_failed_fetch(tmp_path):
     """
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 7, 1))
-    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 28))
+    covered(monkeypatch, "announcement_index", date(2024, 6, 28))
     saturday, sunday, monday = date(2024, 6, 29), date(2024, 6, 30), date(2024, 7, 1)
     fetched: list[date] = []
 
@@ -786,14 +816,14 @@ def test_a_closed_day_with_no_disclosures_is_not_a_failed_fetch(tmp_path):
     assert saturday in published and monday in published
     assert sunday not in published
     # Not a coverage gap and not a dense-empty day: nothing was missed.
-    assert findings == []
+    assert _problems(findings) == []
 
 
-def test_empty_session_preserves_other_disclosures_and_gap(tmp_path):
+def test_empty_session_preserves_other_disclosures_and_gap(tmp_path, monkeypatch):
     """The empty-day gate stays where it catches a broken source."""
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("announcement_index", date(2024, 6, 26))
+    covered(monkeypatch, "announcement_index", date(2024, 6, 26))
 
     def _fetch(day: date) -> pl.DataFrame:
         return pl.DataFrame() if day == date(2024, 6, 27) else _announcement_row(day)
@@ -803,15 +833,14 @@ def test_empty_session_preserves_other_disclosures_and_gap(tmp_path):
     )
     assert date(2024, 6, 28) in df["announce_date"].to_list()
     assert date(2024, 6, 27) not in df["announce_date"].to_list()
-    assert findings
-    assert StateStore(cfg.meta_root).get_payload("announcement_index")["missing_ranges"]
+    assert _problems(findings)
 
 
-def test_a_session_scoped_dataset_never_tolerates_an_empty_day(tmp_path):
+def test_a_session_scoped_dataset_never_tolerates_an_empty_day(tmp_path, monkeypatch):
     """The tolerance is declared per dataset, not inherited by every feed."""
     cfg = Config(data_root=tmp_path / "data")
     _seed_trading_calendar(cfg, date(2024, 6, 24), date(2024, 6, 28))
-    StateStore(cfg.meta_root).set_date("margin_trading", date(2024, 6, 27))
+    covered(monkeypatch, "margin_trading", date(2024, 6, 27))
     assert not empty_day_is_expected(cfg, "margin_trading", date(2024, 6, 30))
 
     def _fetch(day: date) -> pl.DataFrame:

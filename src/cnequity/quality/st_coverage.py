@@ -25,6 +25,7 @@ from cnequity.config import Config
 from cnequity.domain.canonical import dedupe_by_primary_key, dedupe_lazy_by_primary_key
 from cnequity.domain.market_profile import unserved_exchanges
 from cnequity.domain.symbols import is_all_a_symbol, is_cdr_symbol, parse_symbol
+from cnequity.meta_layout import SOURCE_CACHE
 from cnequity.query.parquet_scan import (
     collect_parquet_root,
     dataset_has_parquet,
@@ -441,7 +442,7 @@ def build_st_scope(
 def st_checkpoint_path(config: Config, scope_id: str) -> Path:
     return (
         config.meta_root
-        / "state"
+        / SOURCE_CACHE
         / ST_COVERAGE_CLAIM
         / f"v{ST_EVIDENCE_VERSION}"
         / f"{scope_id}.json"
@@ -671,7 +672,7 @@ def publish_bse_st_observation_receipt(config: Config) -> Path | None:
     # rebuild the receipt from them (~5 s), and almost every compact leaves
     # them where they were; a lake without revision pointers always rebuilds.
     inputs = _bse_observation_inputs(config, universe)
-    marker = config.meta_root / "state" / ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
+    marker = config.meta_root / SOURCE_CACHE / ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
     if inputs is not None:
         try:
             previous = json.loads(marker.read_text(encoding="utf-8"))
@@ -748,7 +749,7 @@ def _publish_bse_st_observation_receipt(config: Config, universe: str) -> Path |
 
 def publish_st_receipts_for_compacted_run(config: Config, run_id: str) -> list[Path]:
     """Publish completed scopes only after this run's staging was compacted."""
-    root = config.meta_root / "state" / ST_COVERAGE_CLAIM / f"v{ST_EVIDENCE_VERSION}"
+    root = config.meta_root / SOURCE_CACHE / ST_COVERAGE_CLAIM / f"v{ST_EVIDENCE_VERSION}"
     if not root.exists():
         return []
     published: list[Path] = []
@@ -814,7 +815,7 @@ def _pending_checkpoint_progress(
     """
     if start is None or end is None or not supported_symbols:
         return {}
-    root = config.meta_root / "state" / ST_COVERAGE_CLAIM / f"v{ST_EVIDENCE_VERSION}"
+    root = config.meta_root / SOURCE_CACHE / ST_COVERAGE_CLAIM / f"v{ST_EVIDENCE_VERSION}"
     if not root.exists():
         return {}
     expected = set(supported_symbols)

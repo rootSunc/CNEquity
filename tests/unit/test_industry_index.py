@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 from cnequity.config import Config
 from cnequity.derive.industry_index import (
@@ -21,7 +22,7 @@ from cnequity.derive.industry_index import (
     compute_industry_index,
     derive_industry_index,
 )
-from cnequity.storage.state import StateStore
+from cnequity.quality.verify import covered_through
 
 
 def _members(rows: list[tuple[str, str, date]]) -> pl.DataFrame:
@@ -389,7 +390,7 @@ def test_derive_industry_index_writes_and_watermarks(tmp_path, monkeypatch):
     assert summary["rows"] == 2
     out = list((cfg.derived_root / "industry_index").glob("**/part-000.parquet"))
     assert out
-    assert StateStore(cfg.meta_root).get_date("industry_index") == date(2026, 5, 15)
+    assert covered_through(cfg, "industry_index") == date(2026, 5, 15)
 
     # Already current → no-op note.
     again = derive_industry_index(cfg, start=date(2026, 5, 16), end=date(2026, 5, 15))
@@ -435,7 +436,7 @@ def test_derive_industry_index_watermark_stops_before_interior_gap(tmp_path, mon
 
     derive_industry_index(cfg, start=date(2026, 8, 3), end=date(2026, 8, 5))
 
-    assert StateStore(cfg.meta_root).get_date("industry_index") == date(2026, 8, 3)
+    assert covered_through(cfg, "industry_index") == date(2026, 8, 3)
 
 
 def test_derive_industry_index_cleans_duplicate_existing_rows(tmp_path, monkeypatch):
@@ -617,13 +618,12 @@ def test_catchup_after_watermark_keeps_first_day(tmp_path, monkeypatch):
         ]
     )
     monkeypatch.setattr("cnequity.query.reader.load", lambda *a, **k: bars)
-    StateStore(cfg.meta_root).update_max_date("industry_index", date(2026, 7, 31))
+    covered(monkeypatch, "industry_index", date(2026, 7, 31))
 
     summary = derive_industry_index(cfg, end=date(2026, 8, 3))
     assert summary["rows"] > 0
     assert summary["first"] == "2026-08-03"
     assert summary["last"] == "2026-08-03"
-    assert StateStore(cfg.meta_root).get_date("industry_index") == date(2026, 8, 3)
 
     written = pl.read_parquet(
         next((cfg.derived_root / "industry_index").glob("**/part-000.parquet"))

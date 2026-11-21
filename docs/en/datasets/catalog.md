@@ -18,7 +18,7 @@ This page answers two questions: which datasets the lake registers, and where ea
     - **On-demand** datasets stay off the curated main path. `flash_news_wire` is a compatibility read for news.
     - So the registered count is neither the number of physical tables nor the number collected by default.
 
-**Legend** (tables below): semantics `by_date` / `snapshot`; watermark ✓ = maintains a `meta/state` watermark.
+**Legend** (tables below): semantics `by_date` / `snapshot`; watermark ✓ = has a date watermark computed from its published rows.
 
 ## Data tiers
 

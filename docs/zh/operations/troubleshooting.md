@@ -165,7 +165,7 @@ EOF
 - **原因**：**这是同花顺的源,不是东财**——`[sources.eastmoney] proxy` 对它不生效。
   `d.10jqka.com.cn` 对密集请求会限速甚至封禁。
 - **处理**：冷却后提高 `[sources.ths] min_interval_seconds`（默认 1.0，不是安全阈值保证），再 `cne backfill sector_bars`；
-  默认从断点续跑；换源后全量重拉用 `--refetch`。Checkpoint：`meta/state/sector_bars_backfill.json`。
+  默认从断点续跑；换源后全量重拉用 `--refetch`。Checkpoint：`meta/checkpoints/sector_bars_backfill.json`。
   失败率超过 50% 时 step 状态为 `degraded`，已成功的板块仍会写入。
 
 ### 在另一台机器部署

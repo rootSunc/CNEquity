@@ -16,6 +16,7 @@ import polars as pl
 from tests.catalog_seed import commit_tree
 
 from cnequity.config import Config
+from cnequity.meta_layout import SOURCE_CACHE
 from cnequity.query.parquet_scan import collect_parquet_root
 from cnequity.storage.parquet import (
     MAX_PARTITION_FILES,
@@ -283,7 +284,9 @@ def test_a_copied_lake_reads_its_own_bj_observation_receipt(tmp_path, monkeypatc
     monkeypatch.setattr(st, "_publish_bse_st_observation_receipt", publish)
     original = Config(data_root=tmp_path / "original")
     st.publish_bse_st_observation_receipt(original)
-    marker = original.meta_root / "state" / st.ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
+    marker = (
+        original.meta_root / SOURCE_CACHE / st.ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
+    )
     assert json.loads(marker.read_text())["receipt"] == "quality/coverage/receipt.json"
 
     shutil.copytree(original.data_root, tmp_path / "copy")
@@ -296,7 +299,9 @@ def test_a_copied_lake_reads_its_own_bj_observation_receipt(tmp_path, monkeypatc
 
     # A marker written before paths were relative names the original lake's file:
     # the copy builds its own instead of pointing there.
-    copy_marker = copy.meta_root / "state" / st.ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
+    copy_marker = (
+        copy.meta_root / SOURCE_CACHE / st.ST_COVERAGE_CLAIM / "bse_observation_inputs.json"
+    )
     copy_marker.write_text(json.dumps({"inputs": inputs, "receipt": str(built[0])}))
     assert (
         st.publish_bse_st_observation_receipt(copy)

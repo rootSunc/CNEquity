@@ -148,7 +148,14 @@ def test_d2_a_dns_failure_mid_backfill_keeps_fetched_days_and_owes_only_that_day
 
     assert result["status"] == "warning"
     assert result["failed_days"] == 1
-    assert StateStore(cfg.meta_root).get_missing_dates("market_breadth") == {poison}
+    # A failed day is not an answer: it stays a gap the planner asks again.
+    answered = {
+        date.fromisoformat(day)
+        for item in result.get("context_updates", {}).get("audit_findings", [])
+        if item.get("check") == "planner_empty_answer"
+        for day in item.get("periods", [])
+    }
+    assert poison not in answered
     staged = {
         d
         for path in (cfg.staging_root / "market_breadth").rglob("*.parquet")

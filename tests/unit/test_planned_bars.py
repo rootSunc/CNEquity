@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
 
@@ -11,7 +10,6 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.quality import planned_coverage
 from cnequity.steps import common
-from cnequity.storage.state import StateStore
 
 HALT = date(2025, 10, 9)
 FAILED = date(2025, 10, 10)
@@ -25,7 +23,7 @@ def _lake(tmp_path) -> Config:
     cfg = Config(data_root=tmp_path / "data")
     with Catalog(lake_root(cfg), create=True) as catalog:
         cov.prepare(catalog)
-    return replace(cfg, planner_only=frozenset({"daily_bars"}))
+    return cfg
 
 
 def _gaps(*cells: tuple[str, str]):
@@ -61,8 +59,8 @@ def test_a_source_empty_symbol_is_answered_per_cell_and_a_proof_is_not(tmp_path,
         source="instruments_or_trading_status",
     )
     assert planned_coverage.answered_cells(cfg, "daily_bars") == {("2025-10-09", "600001.SH")}
-    # Nothing reaches the old ledger.
-    assert StateStore(cfg.meta_root).get_payload("daily_bars").get("negative_evidence") is None
+    # Nothing reaches meta/state.
+    assert not (cfg.meta_root / "state" / "daily_bars.json").exists()
 
 
 def test_a_failed_fetch_is_unanswered_and_an_empty_answer_is_not(tmp_path, monkeypatch):
@@ -80,11 +78,20 @@ def test_a_failed_fetch_is_unanswered_and_an_empty_answer_is_not(tmp_path, monke
 
 
 def test_the_switch_carries_what_the_old_ledger_holds_answered(tmp_path, monkeypatch):
+    import json
+
     cfg = _lake(tmp_path)
-    state = StateStore(cfg.meta_root)
-    state.record_missing_dates("daily_bars", [date(2025, 10, 8)], reason="quarantined_rows")
-    state.record_outstanding_keys(
-        "daily_bars", [("600003.SH", HALT)], run_id="r1", reason="interior_gap"
+    # What an older lake's meta/state/daily_bars.json held.
+    legacy = cfg.meta_root / "state" / "daily_bars.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "missing_ranges": [{"start": "2025-10-08", "end": "2025-10-08"}],
+                "outstanding_keys": [{"symbol": "600003.SH", "trade_date": "2025-10-09"}],
+            }
+        ),
+        encoding="utf-8",
     )
     monkeypatch.setattr(
         planned_coverage,
@@ -103,7 +110,7 @@ def test_the_switch_carries_what_the_old_ledger_holds_answered(tmp_path, monkeyp
 def test_an_index_session_short_of_some_index_is_answered_in_part(tmp_path, monkeypatch):
     from cnequity.steps.bars import index_history
 
-    cfg = replace(Config(data_root=tmp_path / "data"), planner_only=frozenset({"index_bars"}))
+    cfg = Config(data_root=tmp_path / "data")
     monkeypatch.setattr(index_history, "incremental_window", lambda *args: HALT)
     monkeypatch.setattr(
         index_history.bar_scope, "_reject_unfinished_daily_bar_window", lambda *a: None
@@ -122,4 +129,4 @@ def test_an_index_session_short_of_some_index_is_answered_in_part(tmp_path, monk
         if item["check"] == planned_coverage.ANSWER_CHECK
     }
     assert answers == {"partial": ["2025-10-09"], "complete": ["2025-10-10"]}
-    assert StateStore(cfg.meta_root).get_outstanding_keys("index_bars") == []
+    assert not (cfg.meta_root / "state" / "index_bars.json").exists()

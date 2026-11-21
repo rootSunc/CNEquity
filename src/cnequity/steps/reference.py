@@ -39,6 +39,7 @@ from cnequity.domain.trading_status import (
     split_before_listing,
 )
 from cnequity.i18n import N_
+from cnequity.meta_layout import SOURCE_CACHE
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.outcomes import (
     SOURCE_LIMIT_REASONS,
@@ -68,7 +69,6 @@ from cnequity.steps.common import (
     load_bar_universe,
     load_curated_instruments,
     load_symbols,
-    planner_only,
     write_simple,
 )
 from cnequity.steps.http_common import write_fetched
@@ -539,6 +539,8 @@ def _instrument_basics_once(config: Config) -> Callable[[], pl.DataFrame]:
 _UNDATED_RECHECK_DAYS = 7
 _UNDATED_CHECKED_ON = "undated_checked_on"
 _UNDATED_SYMBOLS = "undated_symbols"
+#: ``meta/source_cache/instruments_undated.json``: names a vendor round could not date.
+_UNDATED_RECORD = "instruments_undated"
 
 
 def _carry_known_list_dates(config: Config, df: pl.DataFrame) -> pl.DataFrame:
@@ -578,18 +580,18 @@ def _undated_need_vendors(config: Config, df: pl.DataFrame, on: date) -> bool:
     undated = _undated_symbols(df)
     if not undated:
         return False
-    state = StateStore(config.meta_root)
-    checked_on = state.get_date("instruments", _UNDATED_CHECKED_ON)
+    state = StateStore(config.meta_root, SOURCE_CACHE)
+    checked_on = state.get_date(_UNDATED_RECORD, _UNDATED_CHECKED_ON)
     if checked_on is None or not 0 <= (on - checked_on).days < _UNDATED_RECHECK_DAYS:
         return True
-    return not undated <= state.get_string_set("instruments", _UNDATED_SYMBOLS)
+    return not undated <= state.get_string_set(_UNDATED_RECORD, _UNDATED_SYMBOLS)
 
 
 def _remember_undated(config: Config, df: pl.DataFrame, on: date) -> None:
     """Record the names a full vendor round could not date."""
-    state = StateStore(config.meta_root)
-    state.set_string_set("instruments", _UNDATED_SYMBOLS, _undated_symbols(df))
-    state.set_date("instruments", on, field=_UNDATED_CHECKED_ON)
+    state = StateStore(config.meta_root, SOURCE_CACHE)
+    state.set_string_set(_UNDATED_RECORD, _UNDATED_SYMBOLS, _undated_symbols(df))
+    state.set_date(_UNDATED_RECORD, on, field=_UNDATED_CHECKED_ON)
 
 
 def _merge_delisted_instruments(
@@ -1522,7 +1524,6 @@ def step_trading_status_derive(
     the whole bar history is reconstructed in one pass.
     """
     from cnequity.derive.trading_status_history import derive_suspension_history
-    from cnequity.storage.state import StateStore
 
     start = context.get("derive_start")
     end = context.get("derive_end")
@@ -1540,16 +1541,10 @@ def step_trading_status_derive(
         # staging file overwrite the other.
         batch_id=str(context.get("_batch_id") or "derive-0"),
     )
-    if planner_only(config, "daily_bars"):
-        from cnequity.quality.planned_coverage import HISTORY_START, unanswered_keys
+    from cnequity.quality.planned_coverage import HISTORY_START, unanswered_keys
 
-        first = start or HISTORY_START
-        partial = not unanswered_keys(config, "daily_bars", first, end or trade_date).is_empty()
-    else:
-        gaps = StateStore(config.meta_root).get_payload("daily_bars")
-        partial = any(
-            gaps.get(key) for key in ("missing_ranges", "missing_units", "outstanding_keys")
-        )
+    first = start or HISTORY_START
+    partial = not unanswered_keys(config, "daily_bars", first, end or trade_date).is_empty()
     return {
         "rows_read": rows,
         "rows_written": rows,

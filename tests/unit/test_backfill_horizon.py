@@ -135,7 +135,7 @@ class FakeEngine:
     def _status(self, index: int) -> str:
         return "success"
 
-    def run_step(self, step, trade_date, run_id):
+    def run_step(self, step, trade_date, run_id, context=None):
         self.compacted.append(run_id)
         return {"rows_written": 10}
 
@@ -226,7 +226,7 @@ def test_finish_backfill_run_compacts_on_failure():
 
 def test_finish_backfill_run_surfaces_compact_warning():
     class WarningCompact(FakeEngine):
-        def run_step(self, step, trade_date, run_id):
+        def run_step(self, step, trade_date, run_id, context=None):
             self.compacted.append(run_id)
             return {"rows_written": 10, "status": "warning"}
 

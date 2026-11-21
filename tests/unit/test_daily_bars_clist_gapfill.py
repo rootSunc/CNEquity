@@ -29,7 +29,6 @@ from cnequity.steps.bars.gapfill_chain import (
 from cnequity.steps.bars.staging import _staged_daily_bar_partial_symbols, _staged_daily_bar_symbols
 from cnequity.storage import StagingWriter
 from cnequity.storage.layout import init_data_layout
-from cnequity.storage.state import StateStore
 
 
 def _no_suspension_evidence(monkeypatch) -> None:
@@ -59,6 +58,21 @@ def _cfg(tmp_path) -> Config:
     )
     init_data_layout(cfg)
     return cfg
+
+
+def _open_ledger(cfg: Config) -> None:
+    from cnequity.storage.catalog_bridge import lake_root, prepare_record_tables
+    from equitylake_core.catalog import Catalog
+
+    with Catalog(lake_root(cfg), create=True) as catalog:
+        prepare_record_tables(catalog)
+
+
+def _answered(cfg: Config) -> set[tuple[str, str]]:
+    """The (session, symbol) cells the ledger holds as answered empty."""
+    from cnequity.quality.planned_coverage import answered_cells
+
+    return {(period, symbol) for period, symbol in answered_cells(cfg, "daily_bars")}
 
 
 def _bar_frame(symbols: list[str], d: date, *, volume: int = 100) -> pl.DataFrame:
@@ -949,6 +963,7 @@ def test_tip_partial_miss_retains_unknown_key_for_repair(tmp_path, monkeypatch):
     # data.  Without listing/status/source-empty evidence the unknown key must
     # remain in the repair ledger; independent facts can still publish.
     cfg = _cfg(tmp_path)
+    _open_ledger(cfg)
     manifest = Manifest(cfg.manifest_path)
     run_id = manifest.start_run("daily:core")
     tip = date(2026, 7, 24)
@@ -996,12 +1011,14 @@ def test_tip_partial_miss_retains_unknown_key_for_repair(tmp_path, monkeypatch):
     )
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == ["000001.SZ"]
+    assert _answered(cfg) == set()
     assert manifest.get_batch(run_id, "tdx-partial")["status"] == "failed"
 
 
 def test_tip_large_partial_miss_publishes_and_records_gap(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
+    _open_ledger(cfg)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     tip = date(2026, 7, 24)
     expected = [f"600{i:03d}.SH" for i in range(10)]
@@ -1041,7 +1058,8 @@ def test_tip_large_partial_miss_publishes_and_records_gap(tmp_path, monkeypatch)
     )
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == expected[1:]
+    assert _answered(cfg) == set()
 
 
 def test_multiday_uses_kline_not_clist(tmp_path, monkeypatch):
@@ -1119,6 +1137,7 @@ def test_multiday_partial_miss_retains_unknown_keys_for_repair(tmp_path, monkeyp
     # Even a large multi-day response cannot certify one unresolved symbol
     # without symbol-level metadata/status/empty evidence.
     cfg = _cfg(tmp_path)
+    _open_ledger(cfg)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     start, end = date(2024, 6, 20), date(2024, 6, 21)
     days = [date(2024, 6, 20), date(2024, 6, 21)]
@@ -1172,7 +1191,8 @@ def test_multiday_partial_miss_retains_unknown_keys_for_repair(tmp_path, monkeyp
     )
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == [missing]
+    assert _answered(cfg) == set()
 
 
 def test_multiday_single_symbol_scope_still_raises(tmp_path, monkeypatch):
@@ -1219,6 +1239,7 @@ def test_multiday_single_symbol_scope_still_raises(tmp_path, monkeypatch):
 
 def test_multiday_large_partial_miss_publishes_and_records_gaps(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
+    _open_ledger(cfg)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     start, end = date(2024, 6, 20), date(2024, 6, 21)
     days = [date(2024, 6, 20), date(2024, 6, 21)]
@@ -1271,7 +1292,8 @@ def test_multiday_large_partial_miss_publishes_and_records_gaps(tmp_path, monkey
     )
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == expected[1:]
+    assert _answered(cfg) == set()
 
 
 def test_multiday_requires_two_independent_source_empty_observations(tmp_path, monkeypatch):
@@ -2065,6 +2087,7 @@ def _probe_run(tmp_path, monkeypatch):
     from cnequity.steps import bars
 
     cfg = _cfg(tmp_path)
+    _open_ledger(cfg)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     tip = date(2026, 9, 24)
     StagingWriter(cfg.staging_root).write_batch(
@@ -2082,8 +2105,6 @@ def _probe_run(tmp_path, monkeypatch):
 def test_a_probed_code_with_no_bars_is_settled_as_not_listed(tmp_path, monkeypatch):
     """2026-09-24: 力勤资源 001246.SZ had a code but no listing; asked for, it
     comes back empty, and that is a proof, not an unresolved key."""
-    from cnequity.steps.common import load_negative_evidence
-
     cfg, run_id, tip = _probe_run(tmp_path, monkeypatch)
     result = _finish_daily_bars(
         cfg,
@@ -2101,17 +2122,16 @@ def test_a_probed_code_with_no_bars_is_settled_as_not_listed(tmp_path, monkeypat
     assert "daily_bars_unknown_missing_symbols" not in checks
     assert checks["daily_bars_undated_probe"]["not_listed"] == ["001246.SZ"]
     assert "001246.SZ" in checks["daily_bars_expected_no_data"]["symbols"]
-    evidence = load_negative_evidence(cfg, "daily_bars")
-    assert [(e["symbol"], e["reason"]) for e in evidence] == [("001246.SZ", "not_yet_listed")]
+    assert _answered(cfg) == {(tip.isoformat(), "001246.SZ")}
 
 
 def test_a_probe_answered_only_by_a_zero_volume_bar_has_not_listed(tmp_path, monkeypatch):
     """2026-10-19: TDX answered 皇冠新材 001381.SZ, days before its allotment
     results, with a flat bar at the 16.98 issue price and no volume. The probe
     read it as a listing; the deep window then owed 10-12..10-16."""
-    from cnequity.steps.common import load_negative_evidence
 
     cfg = _cfg(tmp_path)
+    _open_ledger(cfg)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     start, tip = date(2026, 10, 12), date(2026, 10, 19)
     sessions = [start + timedelta(days=offset) for offset in (0, 1, 2, 3, 4, 7)]
@@ -2159,15 +2179,13 @@ def test_a_probe_answered_only_by_a_zero_volume_bar_has_not_listed(tmp_path, mon
     assert checks["daily_bars_probe_placeholder"]["symbols"] == ["001381.SZ"]
     assert checks["daily_bars_undated_probe"]["not_listed"] == ["001381.SZ"]
     assert "daily_bars_interior_gap" not in checks
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars") == []
     staged = pl.concat(
         [pl.read_parquet(path) for path in writer.list_run_files("daily_bars", run_id)]
     )
     assert "001381.SZ" not in staged["symbol"].to_list()
     for path in writer.list_run_files("daily_bars", run_id):
         assert writer.is_sealed(path, "daily_bars", run_id)
-    evidence = load_negative_evidence(cfg, "daily_bars")
-    assert [(e["symbol"], e["reason"]) for e in evidence] == [("001381.SZ", "not_yet_listed")]
+    assert _answered(cfg) == {(day.isoformat(), "001381.SZ") for day in sessions}
 
 
 def test_a_probe_with_one_traded_row_keeps_its_zero_volume_rows(tmp_path, monkeypatch):
@@ -2203,4 +2221,5 @@ def test_a_probe_the_source_never_answered_settles_nothing(tmp_path, monkeypatch
     )
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == ["001246.SZ"]
+    assert _answered(cfg) == set()

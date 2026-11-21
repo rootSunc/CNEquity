@@ -16,8 +16,8 @@ RESEARCH_METADATA = (
     "quality/coverage/historical_st_evidence",
     "quality/coverage/delisted_daily_bars_recovery",
     "quality/evidence/delisted_security_identity",
-    "state/delisted_catalog.json",
-    "state/historical_st_evidence",
+    "source_cache/delisted_catalog.json",
+    "source_cache/historical_st_evidence",
     "seeds/trading_calendar.csv",
 )
 CONTEXT_PATH = Path("research/read-context.json")

@@ -86,7 +86,7 @@ listed go into `unknown_overlap` by default. When the complete Baostock security
 `reconcile --apply` does not take the "last record" returned by a single vendor as the truth: automatic changes are allowed only when there is a curated positive-volume end point,
 that end point is no later than `instruments.delist_date`, and the old catalog date also falls after the formal delisting date or on a non-trading day.
 It refuses to run if any active ingestion run is detected; the catalog before the change is saved in
-`meta/state/history/`, and the quality receipt is written to `meta/quality/`.
+`meta/source_cache/delisted_catalog_history/`, and the quality receipt is written to `meta/quality/`.
 
 Formerly `cne delisted discover / reconcile / repair / coverage`.
 

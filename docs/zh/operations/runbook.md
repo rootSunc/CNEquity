@@ -25,7 +25,7 @@ cne schedule remove         # 停用并注销；正在运行的任务继续
 
 定时任务在每个交易日的日更之后跑一次 `cne run maintain`，手工也可以运行：
 
-1. 最近收盘交易日各日更组的运行结果：`[job.maintenance] gate_groups`（默认 `core`）失败立即判失败；其他组失败只报告，连续失败 `soft_fail_max_days`（默认 3）个交易日后判失败，计数在 `meta/state/soft_streak/`，旧脚本的计数会被沿用；
+1. 最近收盘交易日各日更组的运行结果：`[job.maintenance] gate_groups`（默认 `core`）失败立即判失败；其他组失败只报告，连续失败 `soft_fail_max_days`（默认 3）个交易日后判失败，计数在 `meta/scheduler/soft_streak/`，旧脚本的计数会被沿用；
 2. 运行审计；`[job.maintenance] full_audit_weekday`（默认周六）改为全湖审计 `audit --full --quality-only`，它读全部 Parquet，大湖可能要几个小时；
 3. 新鲜度门禁 `status --datasets --gate`，只对定时日更实际跑的调度组判失败（`--groups` 可改）；
 4. 源探针 `sources probe --stale-only`（带上 `[source_health] vantage` 出口标签）与 `sources slo`；

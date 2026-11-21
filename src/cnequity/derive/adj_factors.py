@@ -21,6 +21,7 @@ from cnequity.domain.findings import finding
 from cnequity.domain.rate_limit import source_request
 from cnequity.domain.schemas import with_provenance
 from cnequity.domain.symbols import is_cdr_symbol, parse_symbol
+from cnequity.meta_layout import DECISIONS
 from cnequity.progress import sweep_progress
 from cnequity.storage.atomic import write_parquet_atomic
 from cnequity.storage.state import StateStore
@@ -144,12 +145,14 @@ def _adj_factors_watermark(config: Config) -> date | None:
 
 def _retry_symbols(config: Config) -> set[str]:
     """Symbols whose uncached fetch failed on a prior derive run."""
-    return StateStore(config.meta_root).get_string_set("adj_factors", _RETRY_STATE_FIELD)
+    return StateStore(config.meta_root, DECISIONS).get_string_set("adj_factors", _RETRY_STATE_FIELD)
 
 
 def _source_unavailable_symbols(config: Config) -> set[str]:
     """Symbols with an explicit, permanent source-unavailable classification."""
-    return StateStore(config.meta_root).get_string_set("adj_factors", _UNAVAILABLE_STATE_FIELD)
+    return StateStore(config.meta_root, DECISIONS).get_string_set(
+        "adj_factors", _UNAVAILABLE_STATE_FIELD
+    )
 
 
 def _update_retry_symbols(
@@ -166,7 +169,7 @@ def _update_retry_symbols(
     the symbol-level retry intent is persisted separately.
     """
     remaining = (previous - succeeded) | failed
-    StateStore(config.meta_root).set_string_set(
+    StateStore(config.meta_root, DECISIONS).set_string_set(
         "adj_factors",
         _RETRY_STATE_FIELD,
         remaining,
@@ -182,7 +185,7 @@ def _update_source_unavailable_symbols(
 ) -> None:
     """Persist explicit source gaps without turning them into retry storms."""
     remaining = (previous - succeeded) | newly_unavailable
-    StateStore(config.meta_root).set_string_set(
+    StateStore(config.meta_root, DECISIONS).set_string_set(
         "adj_factors",
         _UNAVAILABLE_STATE_FIELD,
         remaining,
@@ -387,8 +390,9 @@ def _overridden_symbols(config: Config) -> frozenset[str]:
     Read once per state change rather than once per symbol of a derive.
     """
     from cnequity.derive.factor_arbitration import source_overrides
+    from cnequity.meta_layout import DECISIONS
 
-    path = config.meta_root / "state" / "adj_factors.json"
+    path = config.meta_root / DECISIONS / "adj_factors.json"
     pointer = config.meta_root / "revisions" / "adj_factors" / "current.json"
     try:
         stamp = max(p.stat().st_mtime for p in (path, pointer) if p.exists())

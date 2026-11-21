@@ -321,13 +321,8 @@ def _session_completeness(
     short = bj_session_shortfall(sessions, present, instruments, status)
     if short.is_empty():
         return []
-    from cnequity.storage.state import StateStore
-
-    # Planner-only bars are owed per symbol: a short session is its gaps.
-    if "daily_bars" not in getattr(config, "planner_only", ()):
-        StateStore(config.meta_root).record_missing_dates(
-            "daily_bars", short.get_column("trade_date").to_list(), reason="bj_session_incomplete"
-        )
+    # Bars are owed per symbol: a short session is its gaps, which the next
+    # run's planner asks again.
     return [
         {
             "dataset": "daily_bars",
@@ -452,13 +447,6 @@ def _quarantine_limit_breaches(
             write_parquet_atomic(path, kept, compression="zstd")
             if sealed:
                 StagingWriter(config.staging_root).seal_file(path, "daily_bars", run_id)
-    days = sorted({d for d in breaches.get_column("trade_date").to_list()})
-    from cnequity.storage.state import StateStore
-
-    if "daily_bars" not in getattr(config, "planner_only", ()):
-        StateStore(config.meta_root).record_missing_dates(
-            "daily_bars", days, reason="bj_price_limit"
-        )
     report = {
         "dataset": "daily_bars",
         "run_id": run_id,

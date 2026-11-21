@@ -69,8 +69,10 @@ def test_daily_job_mock(config, monkeypatch, caplog):
     from cnequity.query import load
 
     symbols = {"600519.SH", "000001.SZ", "300750.SZ", "920000.BJ"}
-    bars = load("daily_bars", config=config)
-    factors = load("adj_factors", config=config)
+    # The run also fills the bars a fresh lake owes for earlier sessions.
+    day = date(2024, 6, 28)
+    bars = load("daily_bars", config=config, start=day, end=day)
+    factors = load("adj_factors", config=config, start=day, end=day)
     assert set(bars["symbol"]) == symbols
     assert bars.height == len(symbols)
     assert set(factors["symbol"]) == symbols

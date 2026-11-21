@@ -1,4 +1,4 @@
-"""``meta/state/lake.json``: which version built this lake and what it has had.
+"""``meta/lake.json``: which version built this lake and what it has had.
 
 Kept apart from ``storage.migrations`` because creating a lake needs only the
 record, while the migrations run repairs — operations that publish through the
@@ -13,7 +13,9 @@ from typing import Any
 
 from cnequity.storage.atomic import write_json_atomic
 
-LAKE_FILE = Path("state") / "lake.json"
+LAKE_FILE = Path("lake.json")
+#: Where it lived before 0.25 (``meta/state/``); moved on the first read.
+LEGACY_LAKE_FILE = Path("state") / "lake.json"
 FORMAT = 1
 
 
@@ -37,7 +39,23 @@ def _parse(value: str) -> tuple[int, ...]:
 
 
 def lake_path(config) -> Path:
-    return Path(config.meta_root) / LAKE_FILE
+    return lake_file(Path(config.meta_root))
+
+
+def lake_file(meta_root: Path) -> Path:
+    """``meta/lake.json``; an older lake's ``meta/state/lake.json`` is moved there first.
+
+    The migrations record themselves in it, so it cannot wait for one.
+    """
+    path, legacy = Path(meta_root) / LAKE_FILE, Path(meta_root) / LEGACY_LAKE_FILE
+    if not path.exists() and legacy.exists():
+        try:
+            legacy.replace(path)
+        except FileNotFoundError:
+            pass  # another process moved it first
+        except OSError:
+            return legacy
+    return path
 
 
 def read_lake(config) -> dict:

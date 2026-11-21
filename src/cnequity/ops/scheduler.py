@@ -23,7 +23,9 @@ from cnequity.storage.atomic import replace_with_retry
 
 
 def state_dir(config) -> Path:
-    return Path(config.meta_root) / "state" / "web_scheduler"
+    from cnequity.meta_layout import WEB_SCHEDULER
+
+    return Path(config.meta_root) / WEB_SCHEDULER
 
 
 def settings(config) -> dict:

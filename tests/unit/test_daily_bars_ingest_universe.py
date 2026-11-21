@@ -13,7 +13,7 @@ every run.
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import polars as pl
@@ -26,16 +26,10 @@ from cnequity.orchestrator.manifest import Manifest
 from cnequity.run_scope import set_backfill
 from cnequity.steps.bars import step_daily_bars
 from cnequity.steps.bars.bar_scope import _daily_fund_bar_symbols, _eligible_etf_bar_symbols
-from cnequity.steps.bars.etf_debts import (
-    _settle_official_etf_delisted_debts,
-    _settle_official_etf_prelisting_debts,
-)
 from cnequity.steps.bars.finish import _finish_daily_bars
-from cnequity.steps.common import load_negative_evidence
 from cnequity.steps.reference import _enrich_etf_list_dates_from_profiles
 from cnequity.storage import StagingWriter
 from cnequity.storage.layout import init_data_layout
-from cnequity.storage.state import StateStore
 
 D1 = date(2026, 7, 20)
 D2 = date(2026, 7, 21)
@@ -351,106 +345,6 @@ def test_official_etf_listing_date_fills_only_missing_fund_metadata(tmp_path, mo
     }
 
 
-def test_official_listing_proof_retires_only_prelisting_debts_with_receipt(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path, ingest_eligible_etfs=True)
-    store = StateStore(cfg.meta_root)
-    store.record_outstanding_keys(
-        "daily_bars",
-        [("512470.SH", D1), ("512470.SH", D3), ("600519.SH", D1)],
-        run_id="old-run",
-        reason="interior_gap",
-    )
-    monkeypatch.setattr(
-        "cnequity.query.load_with_receipt",
-        lambda *a, **k: SimpleNamespace(
-            frame=pl.DataFrame({"symbol": ["512470.SH"], "as_of_date": [D3], "list_date": [D2]}),
-            receipt={
-                "receipt_id": "evidence-id",
-                "dependencies": {"etf_profiles": {"revision_id": "revision-id"}},
-            },
-        ),
-    )
-
-    finding = _settle_official_etf_prelisting_debts(cfg, D3, "repair-run")
-
-    assert finding["keys_settled"] == 1
-    remaining = {
-        (row["symbol"], row["trade_date"]) for row in store.get_outstanding_keys("daily_bars")
-    }
-    assert remaining == {("512470.SH", D3.isoformat()), ("600519.SH", D1.isoformat())}
-    receipts = list((cfg.meta_root / "repairs" / "etf_prelisting_debts").glob("repair-run-*.json"))
-    assert len(receipts) == 1
-    receipt = json.loads(receipts[0].read_text())
-    assert receipt["profile_receipt_id"] == "evidence-id"
-    assert receipt["status"] == "settled"
-    assert receipt["resolved_keys"] == [
-        {
-            "symbol": "512470.SH",
-            "trade_date": D1.isoformat(),
-            "official_list_date": D2.isoformat(),
-        }
-    ]
-
-
-def test_delisted_etf_debts_retire_only_when_directory_and_instruments_agree(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path, ingest_eligible_etfs=True)
-    store = StateStore(cfg.meta_root)
-    store.record_outstanding_keys(
-        "daily_bars",
-        [("512390.SH", D3), ("512470.SH", D3), ("515470.SH", D3), ("165512.SZ", D3)],
-        run_id="old-run",
-        reason="unresolved_tip",
-    )
-    instruments = pl.DataFrame(
-        {
-            "symbol": ["512390.SH", "512470.SH", "515470.SH", "165512.SZ"],
-            "asset_type": ["etf"] * 4,
-            "delist_date": [D2, D2, None, D2],
-        },
-        schema_overrides={"delist_date": pl.Date},
-    )
-    monkeypatch.setattr(
-        "cnequity.storage.instrument_catalog.load_curated_instruments", lambda *_: instruments
-    )
-    # 512470 is still in the latest directory, 515470 has no delist date;
-    # 165512 is a LOF the directory never covered.
-    monkeypatch.setattr(
-        "cnequity.query.load_with_receipt",
-        lambda *a, **k: SimpleNamespace(
-            frame=pl.DataFrame(
-                {
-                    "symbol": ["512390.SH", "512470.SH", "515470.SH", "512470.SH"],
-                    "as_of_date": [D1, D1, D1, D3],
-                }
-            ),
-            receipt={
-                "receipt_id": "evidence-id",
-                "dependencies": {"etf_profiles": {"revision_id": "revision-id"}},
-            },
-        ),
-    )
-
-    finding = _settle_official_etf_delisted_debts(cfg, D3, "repair-run")
-
-    assert finding["keys_settled"] == 2
-    remaining = {row["symbol"] for row in store.get_outstanding_keys("daily_bars")}
-    assert remaining == {"512470.SH", "515470.SH"}
-    receipts = list((cfg.meta_root / "repairs" / "etf_delisted_debts").glob("repair-run-*.json"))
-    receipt = json.loads(receipts[0].read_text())
-    assert receipt["resolved_keys"] == [
-        {
-            "symbol": "165512.SZ",
-            "trade_date": D3.isoformat(),
-            "instrument_delist_date": D2.isoformat(),
-        },
-        {
-            "symbol": "512390.SH",
-            "trade_date": D3.isoformat(),
-            "instrument_delist_date": D2.isoformat(),
-        },
-    ]
-
-
 def test_a_security_listing_today_is_fetched_the_same_day(tmp_path, monkeypatch):
     """The universe comes from curated instruments, which only learn of a new
     listing at the wave's compact; the run context carries it until then."""
@@ -540,13 +434,12 @@ def _finish(cfg: Config, run_id: str, expected: list[str], no_data: list[str]) -
     )
 
 
-def test_certification_records_negative_evidence_even_when_the_gate_fires(tmp_path):
+def test_certification_still_runs_when_the_gate_fires(tmp_path):
     """An unfillable key must not cost the whole run its no-data evidence.
 
-    The gate used to raise first, so the certification below it never ran — and
-    since that certification is the only writer of daily-bar negative evidence,
-    one bad key kept the cache empty and every dead code was re-fetched from
-    every vendor on every run.
+    The gate used to raise first, so the certification below it never ran, and
+    one bad key left every dead code to be re-fetched from every vendor on
+    every run.
     """
     cfg = _cfg(tmp_path)
     instruments = cfg.curated_root / "instruments"
@@ -573,11 +466,11 @@ def test_certification_records_negative_evidence_even_when_the_gate_fires(tmp_pa
     result = _finish(cfg, run_id, ["600519.SH", "600000.SH", "600002.SH"], [])
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == ["600000.SH"]
 
-    evidence = load_negative_evidence(cfg, "daily_bars")
-    assert {record["symbol"] for record in evidence} == {"600002.SH"}
-    assert {record["reason"] for record in evidence} == {"verified_no_data"}
+    checks = {f["check"]: f for f in result["context_updates"]["audit_findings"]}
+    assert checks["daily_bars_expected_no_data"]["symbols"] == ["600002.SH"]
+    assert checks["daily_bars_interior_gap"]["missing_symbols"] == ["600000.SH"]
 
 
 def test_arbitrated_empty_symbol_is_not_reported_as_an_interior_gap(tmp_path):
@@ -609,7 +502,7 @@ def test_uncertified_interior_gap_still_refuses_to_checkpoint(tmp_path):
     result = _finish(cfg, run_id, ["600000.SH"], [])
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == ["600000.SH"]
 
 
 # --------------------------------------------------------------------------
@@ -624,7 +517,6 @@ def test_interior_gap_finding_is_written_before_the_step_raises(tmp_path):
     the missing symbols and sample keys — used to die with the exception and
     leave the operator grepping logs.
     """
-    import json
 
     cfg = _cfg(tmp_path)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
@@ -634,7 +526,7 @@ def test_interior_gap_finding_is_written_before_the_step_raises(tmp_path):
     result = _finish(cfg, run_id, ["600000.SH"], [])
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == ["600000.SH"]
 
     payload = json.loads((cfg.meta_root / "quality" / "findings" / f"{run_id}.json").read_text())
     gap = next(f for f in payload["findings"] if f["check"] == "daily_bars_interior_gap")
@@ -659,7 +551,7 @@ def test_persisting_findings_never_replaces_the_real_failure(tmp_path, monkeypat
     result = _finish(cfg, run_id, ["600000.SH"], [])
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == ["600000.SH"]
 
 
 # --------------------------------------------------------------------------
@@ -834,7 +726,7 @@ def test_gapfill_uses_the_legs_own_window_not_the_tdx_one(tmp_path, monkeypatch)
     )
     assert result["status"] == "warning"
     assert result["coverage_status"] == "partial"
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert result["unresolved_symbols"] == ["920184.BJ"]
 
     bj = [w for w in windows if w[0] == ("920184.BJ",)]
     assert bj, f"expected a gap-fill for the Beijing leg, saw {windows}"
@@ -1006,6 +898,21 @@ def test_an_ex_date_fund_code_cannot_re_enter_the_bar_fetch_scope(tmp_path, monk
     assert sorted(captured["all"]) == ["159118.SZ", "600519.SH", "920038.BJ"]
 
 
+def _caught_up_through(cfg: Config, monkeypatch, day: date) -> None:
+    """Published through *day*, with this week's deep sweep done: the run walks the tip."""
+    from tests.coverage_fakes import covered
+
+    from cnequity.quality.planned_coverage import recheck_finding, record_answers
+    from cnequity.storage.catalog_bridge import lake_root, prepare_record_tables
+    from equitylake_core.catalog import Catalog
+
+    covered(monkeypatch, "daily_bars", day)
+    with Catalog(lake_root(cfg), create=True) as catalog:
+        prepare_record_tables(catalog)
+    asked = datetime.combine(day, datetime.min.time(), timezone.utc)
+    record_answers(cfg, "deep", [recheck_finding("daily_bars", [day], "deep", asked)])
+
+
 def test_the_tip_tolerance_runs_on_the_real_tip_path(tmp_path, monkeypatch):
     """Exercise the branch, not just the budget arithmetic.
 
@@ -1016,6 +923,7 @@ def test_the_tip_tolerance_runs_on_the_real_tip_path(tmp_path, monkeypatch):
     """
     cfg = _instrument_lake(tmp_path)
     _capture_fetch_scope(monkeypatch)
+    _caught_up_through(cfg, monkeypatch, D2)
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
 
     # Nothing staged at all, which the tip gate treats as an outage rather than

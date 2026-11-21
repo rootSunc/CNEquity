@@ -176,13 +176,14 @@ def test_sessions_recompute_when_their_bars_are_rewritten(tmp_path):
 
 
 def test_rewriting_an_earlier_window_keeps_the_watermark(tmp_path):
-    from cnequity.storage.state import StateStore
+    from cnequity.quality.verify import covered_through
 
     config = _lake(tmp_path)
     derive_option_greeks(config)
     summary = derive_option_greeks(config, start=date(2026, 9, 23), end=date(2026, 9, 23))
     assert summary["sessions"] == 1
-    assert StateStore(config.meta_root).get_date("option_greeks") == DAY
+    # The watermark is read off the published rows; the later session's stay.
+    assert covered_through(config, "option_greeks") == DAY
 
 
 def test_contracts_rates_and_model_changes_invalidate_even_with_preserved_mtime(

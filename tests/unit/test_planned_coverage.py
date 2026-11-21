@@ -185,35 +185,16 @@ def test_a_derivation_is_owed_only_on_inputs_it_actually_reads():
         assert set(DATASETS[name].derived_from) <= set(MINUTE)
 
 
-def test_compact_reports_disagreements_and_never_fails_on_the_ledger(monkeypatch):
-    from cnequity.quality import planned_coverage
-    from cnequity.steps.finalize import _sync_attempts
-
-    monkeypatch.setattr(
-        planned_coverage,
-        "sync_attempts",
-        lambda *args: {"snapshot": 7, "recorded": 3, "disagreements": {"news": ["2026-11-10"]}},
-    )
-    (only,) = _sync_attempts(None, "run", TODAY, {"news"})
-    assert (only["check"], only["severity"], only["count"]) == (
-        "planner_state_disagreement",
-        "info",
-        1,
-    )
-
-    def broken(*args):
-        raise OSError("catalog busy")
-
-    monkeypatch.setattr(planned_coverage, "sync_attempts", broken)
-    (warning,) = _sync_attempts(None, "run", TODAY, {"news"})
-    assert (warning["check"], warning["severity"]) == ("attempts_ledger_sync", "warning")
-
-
 def test_a_part_answered_day_outside_the_sync_window_still_settles(tmp_path):
     from datetime import UTC, datetime
 
     from cnequity.config import Config
-    from cnequity.quality.planned_coverage import Seed, record_seeds, sync_attempts
+    from cnequity.quality.planned_coverage import (
+        Seed,
+        clean_answer,
+        record_answers,
+        record_seeds,
+    )
     from cnequity.storage.catalog_bridge import lake_root
     from equitylake_core import coverage as cov
     from equitylake_core.catalog import Catalog
@@ -224,8 +205,10 @@ def test_a_part_answered_day_outside_the_sync_window_still_settles(tmp_path):
         catalog.execute("CREATE TABLE corporate_actions AS SELECT DATE '2026-09-17' AS ex_date")
     old = datetime(2026, 11, 17, tzinfo=UTC)
     record_seeds(cfg, [Seed("corporate_actions", "short", ("2026-09-17",), old, "partial")])
-    # 2026-09-17 is more than SYNC_DAYS before the run, and the old ledger owes nothing.
-    sync_attempts(cfg, "r1", date(2026, 11, 19), ["corporate_actions"])
+    # 2026-09-17 is more than SYNC_DAYS before the run; a clean fetch of it still settles it.
+    settled = clean_answer(cfg, "corporate_actions", [date(2026, 9, 17)], datetime.now(UTC))
+    assert settled is not None and settled["outcome"] == "complete"
+    record_answers(cfg, "r1", [settled])
     with Catalog(lake_root(cfg), read_only=True) as catalog:
         latest = cov.attempted(catalog, "corporate_actions")
     assert latest.select("period", "outcome").rows() == [("2026-09-17", "complete")]

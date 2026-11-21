@@ -6,13 +6,13 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
 from cnequity.run_scope import set_backfill
 from cnequity.steps import commodity, macro_risk, newsboard, research, rotation
 from cnequity.steps.common import SnapshotBackfillError
-from cnequity.storage.state import StateStore
 
 
 @pytest.fixture
@@ -155,9 +155,9 @@ def test_macro_risk_guards_and_writes(cfg, monkeypatch):
         macro_risk.step_regulatory_events(cfg, date(2024, 6, 28), "r", {})
     cfg.sources["cninfo"] = True
 
-    StateStore(cfg.meta_root).set_date("macro_indicators", date(2024, 6, 27))
-    StateStore(cfg.meta_root).set_date("share_unlock_schedule", date(2024, 6, 27))
-    StateStore(cfg.meta_root).set_date("regulatory_events", date(2024, 6, 27))
+    covered(monkeypatch, "macro_indicators", date(2024, 6, 27))
+    covered(monkeypatch, "share_unlock_schedule", date(2024, 6, 27))
+    covered(monkeypatch, "regulatory_events", date(2024, 6, 27))
 
     monkeypatch.setattr(
         macro_risk,
@@ -203,7 +203,7 @@ def test_macro_risk_guards_and_writes(cfg, monkeypatch):
             "fetched_at": [datetime(2024, 6, 28, tzinfo=timezone.utc)],
         }
     ).write_parquet(announcements / "part-merged.parquet")
-    StateStore(cfg.meta_root).set_date("announcement_index", day)
+    covered(monkeypatch, "announcement_index", day)
 
     assert macro_risk.step_macro_indicators(cfg, day, "r", {})["rows_written"] == 1
     assert macro_risk.step_share_unlock_schedule(cfg, day, "r", {})["rows_written"] == 1
@@ -283,7 +283,7 @@ def test_sector_fund_flow_rejects_thin_board_category(cfg, monkeypatch):
     cfg.sources["eastmoney"] = True
     cfg.sources["sina"] = False
     # eastmoney still on → commodity ok path
-    StateStore(cfg.meta_root).set_date("commodity_bars", date(2024, 6, 27))
+    covered(monkeypatch, "commodity_bars", date(2024, 6, 27))
     monkeypatch.setattr(
         commodity,
         "fetch_commodity_bars",

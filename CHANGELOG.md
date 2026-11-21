@@ -45,22 +45,16 @@
 - 交易日历不再把 1990-12-19（上交所第一个交易日）之前的工作日当成交易日：日历不够、从种子重建时，此前会把 1990 年开市前的每个工作日都算成交易日。
 - `margin_trading` 声明源头起点 2010-03-31（融资融券开闸日），这一天之前不会去回补。
 - 新配置 `[datasets.history_from]`：按数据集写这个湖的历史从哪天开始，例如 `fund_flow = 2023-09-11`。覆盖规划不再把更早的日子算作缺口；想往前补，把日期改早即可。
-- 新配置 `[datasets] planned`：列出的按日抓取的数据集，除了按水位和缺失日期台账要抓的日子，也抓覆盖规划认为欠着的日子（两者取并集，只会多抓不会少抓）；两边不一致时在审计里报 `planner_fetch_split`，问到为空的日子记进覆盖台账。
 - 修复 `corporate_actions` 抓取失败过的日子永远留在缺失日期台账里：日更从东方财富补抓回来后从不清账，此后每次日更都重抓这些日子，数据集一直显示 `incomplete`。现在补抓成功、发布后（没有行时当场）就从台账去掉。
 - 修复 `corporate_actions` 把一次转增存成两条：通达信把送股和转增合记成“送”，东方财富分开记，两者不在同一次运行写入时（比如东方财富那天不通），“送 0.42”和“转 0.42”会同时留下，把送股和转增相加的研究会算出两倍的稀释。现在同一只股票同一除权日，另一来源的送加转等于通达信的合计时，只保留分开记的那几条，不论哪一边先写入；同一事件的行总在同一个文件里合并。复权因子不受影响。可用 `cne repair ex-dates` 处理已有记录。
 - 修复 `macro_indicators` 的 LPR 缺期：每次运行只按运行当天去查 LPR，发布日落在周末的一期（如 2026-09-20）永远查不到；5 年期 LPR 加进东方财富解析后，此前的各期也从没补上，可能触发 `lpr_5y` 停更提示。现在每次运行取最近一年的 LPR（不早于 2019-08-20 的报价改革），缺的期数下一次运行自动补齐。
 - 新配置 `[datasets.history_until]`：按数据集写这个湖的历史到哪天为止，用于唯一来源已经没有了的数据集。覆盖规划和审计不再把之后的日子算作欠着；接上新来源后删掉这一行即可。
 - 基金（ETF、LOF）某个交易日只有一行成交量和成交额都是 0 的日线时，这一行就算这一天的答复：日线覆盖检查（`cne verify --bars`）和覆盖规划不再把这一天算作缺日线，也不再要求交易所的“当天无成交”证明。股票不变，没有成交的股票日仍要停牌证据。
-- `[datasets] planned` 列出 `daily_bars` 时，`cne run daily` 在各调度组之后、审计之前，补抓最近 45 天里欠着的日线：覆盖规划认为欠着的和待补键台账里的一起，用的是 `cne backfill daily_bars --outstanding` 的同一套补抓，只是只管这 45 天，更早的欠账仍留给那个命令。补抓失败不影响当天的结果，欠着的留到下一次。
 - 修复退市后的日线欠账永远不清：股票的退市日在退市之后几天才进 `instruments` 时，此前记下的待补键（例如 002731.SZ 的 2026-11-13、11-16）一直留着，每次补抓都白跑。现在发布时，退市日之后的待补键直接去掉，除非退市日之后还有成交，说明退市日记错了。同样的情况也会留下数据源中断期间沿用旧读数写入、日期在退市之后的“交易中”状态行，迁移 `status-listing-window` 现在也删除这些行。
-- 新配置 `[datasets] planner_only`（试验）：列出的按日抓取的数据集只按覆盖规划决定抓哪些天，不再在 `meta/state` 里记水位、缺失日期和暂存标记：水位从已发布的行算，抓取失败的日子下次仍是缺口，回看窗口的深扫和尾扫记进覆盖台账。派生数据集暂不能列入。
-- `planner_only` 也覆盖 `daily_bars`、快照类数据集和按日回补：日线不再记待补键和“确认无数据”缓存，每天的补抓直接取规划器欠着的键；快照的最近一次采集从湖目录读；`cne backfill` 跳过规划器认为已覆盖、记为空或不到期的日子，记为空的日子写进覆盖台账。新参数 `cne backfill --redo empty|all`（仅 `planner_only` 的数据集）：连同记为空的日子一起再问，或范围内每天都问。
-- `planner_only` 现在也可以列入派生数据集（`industry_index`、`option_greeks`、`futures_continuous`、`adj_factors` 等）：它们的水位从已发布的行算，不再写进 `meta/state`；派生时判断输入是否完整，对 `planner_only` 的输入改看覆盖规划有没有欠着的格子。
 - **不兼容变更**：运行状态统一成一套词：`running`、`success`、`degraded`、`failed`、`skipped`、`blocked`、`interrupted`、`superseded`（批次另有 `queued`、`stale`）。`warning` 并入 `degraded`（都是“结果能用，但没有覆盖要求的全部范围”）；`skipped_non_trading_day`、`skipped_not_scheduled`、`skipped_locked`、`skipped_disabled` 改为 `skipped`，原因写进 `reason_code`（`non_trading_day`、`not_scheduled`、`locked`、`disabled`）。命令行 JSON、清单库的运行、批次和数据集结果都只出现这套词；清单库在新版本第一次打开时把旧记录改写过来，运行记录新增 `reason_code` 列。退出码不变：`degraded` 和非交易日、未到期、被占用、已关闭的跳过都是 0。按 `status` 判断的外部脚本要把 `warning` 当成 `degraded`，把 `skipped_*` 改成看 `reason_code`。
 - 数据集的修订号、修订 id、内容摘要等不再重复写进 `meta/state/<数据集>.json`：湖目录是它们唯一的记录，`dataset_state()`、`cne` 的数据集目录和各处读取都从湖目录取。旧版本留在状态文件里的这些字段，在该数据集下次发布时或由 `cne run maintain` 删除。
-- `planner_only` 的数据集也能表达“只抓到一部分的一天”：来源只答了一部分（`source_scope_incomplete`）或有行被隔离时，这一天在覆盖台账里记为 `partial`，仍算欠着，之后一次干净的抓取记为 `complete` 才算补齐；原来这些日子记在 `meta/state` 的缺失日期台账里。读旧台账的地方对这类数据集改看覆盖台账。
-- `daily_bars` 和 `index_bars` 也可以列入 `planner_only`：日线的来源对某只代码某天没有返回数据时，按（日期，代码）记进覆盖台账，过了 3 天确认期不再追问；抓取失败的格子不记，下次仍会补抓。停牌推断（`trading_status` 的派生行）改为排除没有任何回答的格子。指数日线某天缺了部分指数时，这一天记为 `partial`。迁移 `attempts-ledger` 现在也把旧台账视为已回答的日线格子（不在待补键、不在缺失日期里的无数据格子，多为没有成交的 LOF 和未报停牌的停牌日）写进覆盖台账，重跑 `cne migrate --only attempts-ledger --apply` 即可。
-- `planner_only` 的基本面回补（`financial_statement_items`、`top_holders`、`shareholder_counts`、`share_structure`）续跑时不再读写 `meta/state` 的 `staged_units`/`published_units`：已发布的回补单元在 compact 发布完这个数据集的整份暂存后记进湖目录的 `_resume_units` 表，同一范围的回补 7 天内跳过它们。此前 `planner_only` 下这些单元写进状态文件后不会被提交，中断的回补续跑时会从头再问。
+- **不兼容变更**：抓什么、补什么改由湖目录里的覆盖台账（`_attempts`）一处决定，`meta/state/<数据集>.json` 不再记覆盖。每个数据集的水位从已发布的行现算；来源问到为空的日子（日线按日期和代码）记进台账，过了确认期不再追问，抓取失败的格子不记、下次仍会补；来源只答一部分或有行被隔离的一天记为 `partial`，仍算欠着；回看窗口的深扫、尾扫也记进台账。随之去掉的旧台账：缺失日期、待补键、缺失单元、“确认无数据”缓存、暂存请求日和暂存单元。`cne run daily` 在各调度组之后补抓最近 45 天欠着的日线；`cne backfill` 跳过已覆盖、记为空或不到期的日子，新参数 `--redo empty|all` 连同记为空的日子再问或每天都问；基本面回补的续跑点记在湖目录的 `_resume_units` 表（7 天）。停牌推断排除没有任何回答的日线格子。试验期的配置 `[datasets] planned`、`planner_only` 不再起作用，配置里留着只会告警。`attempts-ledger` 迁移把旧台账里的欠账和已回答的格子灌进覆盖台账（`cne upgrade` 会运行）。
+- **不兼容变更**：`meta/state/` 退役，其中不是覆盖的记录搬到各自的目录：`meta/lake.json`（迁移记录）、`meta/scheduler/`（调度标记、看板定时器、软失败计数）、`meta/checkpoints/`（回补和扫描的续跑点）、`meta/source_cache/`（退市清单、同花顺板块、来源证据等缓存）、`meta/decisions/`（复权因子的来源裁决）。新迁移 `meta-layout`（`cne upgrade` 会运行，排在最后）先把整个 `meta/state/` 打包到 `meta/repair_backups/`，再搬家并删掉各数据集的旧状态文件；已安装的看板定时器仍往原处写日志，重装定时器前那两个日志文件留在原处。直接读 `meta/state/` 的外部脚本要改用 `cne status`、`dataset_state()` 或新路径。
 - 湖只有一把写锁：`lake/write.lock`。每个可写的湖目录连接打开期间都持有它，compact、保留策略（过期快照、删旧文件、删孤儿文件全程）、修复发布和覆盖台账写入也都取这把锁，同一线程内可重入，其他线程和进程等待。原来 compact 持 `meta/locks/compact.lock`、内核提交持 `lake/write.lock`，保留策略只有删孤儿文件那一步取应用层锁，几条路径可以同时改同一个湖。派生和修复的检出改用只读连接，只在发布那一刻取锁。升级时先停掉正在跑的旧版本进程，新旧版本不认对方的锁。
 
 ## [0.24.0] — 2026-11-13 · 最低要求升到 Python 3.11 与 DuckDB 2.0，新增实验性的湖目录

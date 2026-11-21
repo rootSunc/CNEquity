@@ -86,7 +86,7 @@ python scripts/delisted_ops.py coverage --start 2016-01-01 --universe all_a_sh_s
 `reconcile --apply` 不以单一供应商返回的「最后一条记录」为真相：必须有 curated 正成交量终点，
 且该终点不晚于 `instruments.delist_date`，同时旧目录日期还必须落在正式退市日之后或非交易日，
 才允许自动修改。检测到任何 active ingestion run 都会拒绝执行；修改前的目录保存在
-`meta/state/history/`，质量回执写入 `meta/quality/`。
+`meta/source_cache/delisted_catalog_history/`，质量回执写入 `meta/quality/`。
 
 原为 `cne delisted discover / reconcile / repair / coverage`。
 

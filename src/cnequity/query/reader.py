@@ -1477,32 +1477,22 @@ def list_datasets(
     ever reach (None = no source-imposed limit).
     """
     from cnequity.domain.datasets import history_mode_for, is_dataset_enabled
-    from cnequity.storage.state import StateStore
+    from cnequity.quality.verify import covered_through
 
     cfg = resolve_config(config=config, data_root=data_root)
-    state = StateStore(cfg.meta_root)
     rows = []
     for name, spec in sorted(DATASETS.items()):
-        # One damaged state file must not take the whole catalog down. Its
+        # One unreadable dataset must not take the whole catalog down. Its
         # watermark is unknown, not absent, so say so rather than show null.
         state_error = watermark = snapshot_date = None
         try:
-            state_payload = state.get_payload(name)
-            if spec.watermark and name in getattr(cfg, "planner_only", ()):
-                from cnequity.quality.verify import covered_through
-
+            if spec.watermark:
                 watermark = covered_through(cfg, name)
-            elif spec.watermark:
-                watermark = _payload_date(state_payload, "last_success_trade_date")
-            elif spec.fetch_semantics == "snapshot" and name in getattr(cfg, "planner_only", ()):
-                from cnequity.quality.verify import covered_through
-
-                snapshot_date = covered_through(cfg, name)
             elif spec.fetch_semantics == "snapshot":
-                snapshot_date = _payload_date(state_payload, "last_snapshot_date")
-        except (OSError, ValueError) as exc:
-            logger.warning("state for %s is unreadable: %s", name, exc)
-            state_payload, state_error = {}, f"{type(exc).__name__}: {exc}"
+                snapshot_date = covered_through(cfg, name)
+        except (OSError, ValueError, pl.exceptions.PolarsError) as exc:
+            logger.warning("coverage of %s is unreadable: %s", name, exc)
+            state_error = f"{type(exc).__name__}: {exc}"
         root = logical_root(cfg, spec)
         has_data = dataset_has_parquet(
             root,

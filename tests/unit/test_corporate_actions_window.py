@@ -25,9 +25,7 @@ def test_one_query_serves_the_whole_window(tmp_path, monkeypatch):
         return _rows([date(2026, 9, 22), date(2026, 9, 24)])
 
     monkeypatch.setattr(events, "fetch_corporate_actions_eastmoney", _fetch)
-    monkeypatch.setattr(
-        "cnequity.steps.common.incremental_trade_dates", lambda config, ds, td: list(_WINDOW)
-    )
+    monkeypatch.setattr(events, "incremental_trade_dates", lambda config, ds, td: list(_WINDOW))
     fetch = events._window_fetcher(Config(data_root=tmp_path / "data"), _D, "run-1")
     got = [fetch(d).height for d in _WINDOW]
     assert got == [1, 0, 1]
@@ -44,9 +42,7 @@ def test_a_failed_window_query_falls_back_to_one_query_per_day(tmp_path, monkeyp
         return _rows([d])
 
     monkeypatch.setattr(events, "fetch_corporate_actions_eastmoney", _fetch)
-    monkeypatch.setattr(
-        "cnequity.steps.common.incremental_trade_dates", lambda config, ds, td: list(_WINDOW)
-    )
+    monkeypatch.setattr(events, "incremental_trade_dates", lambda config, ds, td: list(_WINDOW))
     fetch = events._window_fetcher(Config(data_root=tmp_path / "data"), _D, "run-1")
     assert [fetch(d).height for d in _WINDOW] == [1, 1, 1]
     assert calls == _WINDOW

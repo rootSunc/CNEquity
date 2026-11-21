@@ -10,7 +10,6 @@ import cnequity.steps  # noqa: F401
 from cnequity.config import Config
 from cnequity.steps.finalize import step_compact
 from cnequity.storage import StagingWriter
-from cnequity.storage.state import StateStore
 
 DAY = date(2024, 6, 28)
 RUN = "run-commit-failure"
@@ -56,13 +55,10 @@ def _stage(cfg: Config) -> None:
             }
         ),
     )
-    state = StateStore(cfg.meta_root)
-    for dataset in ("fund_flow", "margin_trading"):
-        state.record_missing_dates(dataset, [DAY], reason="test_gap")
-        state.mark_staged_request_days(dataset, RUN, [DAY])
 
 
 def test_a_successful_compact_settles_every_dataset(tmp_path):
+    from cnequity.quality.verify import covered_through
     from cnequity.query.state import dataset_state
 
     cfg = Config(data_root=tmp_path / "data")
@@ -70,9 +66,6 @@ def test_a_successful_compact_settles_every_dataset(tmp_path):
 
     step_compact(cfg, DAY, RUN, {})
 
-    state = StateStore(cfg.meta_root)
     for dataset in ("fund_flow", "margin_trading"):
         assert dataset_state(dataset, config=cfg).revision == 1
-        assert DAY not in state.get_missing_dates(dataset)
-        assert "staged_request_days" not in state.get_payload(dataset)
-        assert state.get_date(dataset) == DAY
+        assert covered_through(cfg, dataset) == DAY

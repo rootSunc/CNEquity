@@ -131,7 +131,9 @@ def groups_for(names: Sequence[str]) -> list[str]:
 
 
 def packs_path(config) -> Path:
-    return Path(config.meta_root) / "state" / "research_packs.json"
+    from cnequity.meta_layout import CHECKPOINTS
+
+    return Path(config.meta_root) / CHECKPOINTS / "research_packs.json"
 
 
 def load_packs(config) -> tuple[str, ...] | None:

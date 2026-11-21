@@ -68,7 +68,9 @@ def source_overrides(config: Config) -> dict[str, dict]:
     receipt = store.latest("adj_factors")
     if receipt is not None and "factor_source_overrides" in receipt.metadata:
         return receipt.metadata["factor_source_overrides"]
-    path = config.meta_root / "state" / "adj_factors.json"
+    from cnequity.meta_layout import DECISIONS
+
+    path = config.meta_root / DECISIONS / "adj_factors.json"
     payload = json.loads(path.read_text()) if path.exists() else {}
     overrides = payload.get(SOURCE_OVERRIDES_FIELD) or {}
     return overrides if isinstance(overrides, dict) else {}

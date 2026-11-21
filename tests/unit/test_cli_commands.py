@@ -116,7 +116,7 @@ def test_backfill_recovers_terminal_staging_before_new_run(tmp_path):
             self.manifest = manifest
             self.calls = []
 
-        def run_step(self, name, trade_date, recovered_run_id):
+        def run_step(self, name, trade_date, recovered_run_id, context=None):
             self.calls.append((name, trade_date, recovered_run_id))
             return {"status": "success"}
 
@@ -216,7 +216,7 @@ def test_backfill_recovers_staging_from_a_degraded_run(tmp_path):
             self.manifest = manifest
             self.calls = []
 
-        def run_step(self, name, trade_date, recovered_run_id):
+        def run_step(self, name, trade_date, recovered_run_id, context=None):
             self.calls.append((name, trade_date, recovered_run_id))
             return {"status": "success"}
 
@@ -267,7 +267,7 @@ def test_backfill_reconciles_orphaned_running_staging_before_recovery(tmp_path):
             self.manifest = manifest
             self.calls = []
 
-        def run_step(self, name, trade_date, recovered_run_id):
+        def run_step(self, name, trade_date, recovered_run_id, context=None):
             self.calls.append((name, trade_date, recovered_run_id))
             return {"status": "success"}
 
@@ -645,9 +645,17 @@ def test_a_code_the_probe_found_unlisted_is_not_owed_a_bar(tmp_path):
         if dataset == "trading_status":
             frame["is_trading"] = [True] * 3
         pl.DataFrame(frame).write_parquet(part / "part-0.parquet")
+    from cnequity.quality.planned_coverage import answered_cells
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import Catalog
+
+    with Catalog(lake_root(cfg), create=True):
+        pass
+    # The probe's empty answer is a cell of the coverage ledger.
     record_negative_evidence(
         cfg, "daily_bars", ["001246.SZ"], tip, tip, reason="not_yet_listed", source="probe"
     )
+    assert (tip.isoformat(), "001246.SZ") in answered_cells(cfg, "daily_bars")
 
     for dataset in ("daily_bars", "trading_status"):
         catalog = pl.DataFrame(
@@ -1737,22 +1745,20 @@ def test_shfe_annual_plan_is_offline_and_requires_partial_fields(cfg_path, tmp_p
 
 
 def test_backfill_explains_a_watermark_it_pulled_back(cfg_path, monkeypatch):
-    from cnequity.config import load_config
-    from cnequity.storage.state import StateStore
+    from tests.coverage_fakes import covered
 
-    state = StateStore(load_config(cfg_path).meta_root)
-    state.set_date("margin_trading", date(2024, 3, 29))
+    covered(monkeypatch, "margin_trading", date(2024, 3, 29))
 
     class FakeEngine:
         def __init__(self, cfg):
             self.manifest = SimpleNamespace(finish_run=lambda *a, **k: None)
 
         def run_job(self, *a, **k):
-            # An older window left a hole, so finalize pulled the watermark back.
-            state.set_date("margin_trading", date(2024, 1, 5))
+            # An older window left a hole, so the published rows now cover less.
+            covered(monkeypatch, "margin_trading", date(2024, 1, 5))
             return {"run_id": "bf", "status": "success", "rows_read": 1, "rows_written": 1}
 
-        def run_step(self, name, trade_date, run_id):
+        def run_step(self, name, trade_date, run_id, context=None):
             return {"rows_written": 1}
 
     monkeypatch.setattr("cnequity.cli.backfill_cmds.JobEngine", FakeEngine)
@@ -1798,7 +1804,7 @@ def test_backfill_trading_status_uses_dedicated_history_path(cfg_path, monkeypat
                 "rows_written": 1,
             }
 
-        def run_step(self, name, trade_date, run_id):
+        def run_step(self, name, trade_date, run_id, context=None):
             assert name == "compact"
             return {"rows_written": 1}
 
@@ -1861,7 +1867,7 @@ def test_backfill_success_compacts(cfg_path, monkeypatch):
                 "rows_written": 1,
             }
 
-        def run_step(self, name, trade_date, run_id):
+        def run_step(self, name, trade_date, run_id, context=None):
             assert name == "compact"
             return {"rows_written": 1}
 
@@ -2552,15 +2558,14 @@ def _tip_scope_lake(tmp_path, *, missing: int = 1):
     return cfg, tip, symbols, catalog
 
 
-def test_a_key_the_ingest_side_already_tolerated_is_not_a_second_failure(tmp_path):
+def test_a_key_the_ingest_side_already_tolerated_is_not_a_second_failure(tmp_path, monkeypatch):
     """`daily_bars` carries an explicit unresolved-key budget — refusing a
     checkpoint over 14 of 5,500 threw away two hours of `cne init` — and every
-    key it lets through is written to the outstanding ledger and reported
+    key it lets through stays a gap the coverage planner owes, reported
     separately. Failing the status gate for those same keys would be the two
     halves of one system contradicting each other, with the operator between.
     """
     from cnequity.cli.quality_cmds import _tip_scope
-    from cnequity.storage.state import StateStore
 
     cfg, tip, symbols, catalog = _tip_scope_lake(tmp_path)
     cfg.meta_root.mkdir(parents=True, exist_ok=True)
@@ -2569,11 +2574,10 @@ def test_a_key_the_ingest_side_already_tolerated_is_not_a_second_failure(tmp_pat
     assert before["state"] == "incomplete"
     assert before["missing"] == [symbols[-1]]
 
-    StateStore(cfg.meta_root).record_outstanding_keys(
-        "daily_bars",
-        [(symbols[-1], tip)],
-        run_id="run-1",
-        reason="unresolved_tip",
+    # The fetch left the key unanswered, so the planner owes it.
+    monkeypatch.setattr(
+        "cnequity.quality.planned_coverage.gap_keys",
+        lambda config, dataset, day: [(symbols[-1], tip)] if dataset == "daily_bars" else [],
     )
 
     after = _tip_scope(cfg, catalog)
@@ -2582,17 +2586,14 @@ def test_a_key_the_ingest_side_already_tolerated_is_not_a_second_failure(tmp_pat
     assert after["owed"] == 1
 
 
-def test_an_owed_key_for_a_different_day_does_not_excuse_this_one(tmp_path):
+def test_an_owed_key_for_a_different_day_does_not_excuse_this_one(tmp_path, monkeypatch):
     from cnequity.cli.quality_cmds import _tip_scope
-    from cnequity.storage.state import StateStore
 
     cfg, tip, symbols, catalog = _tip_scope_lake(tmp_path)
     cfg.meta_root.mkdir(parents=True, exist_ok=True)
-    StateStore(cfg.meta_root).record_outstanding_keys(
-        "daily_bars",
-        [(symbols[-1], date(2024, 6, 27))],
-        run_id="run-1",
-        reason="unresolved_tip",
+    monkeypatch.setattr(
+        "cnequity.quality.planned_coverage.gap_keys",
+        lambda config, dataset, day: [(symbols[-1], date(2024, 6, 27))],
     )
 
     assert _tip_scope(cfg, catalog)["state"] == "incomplete"

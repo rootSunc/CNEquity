@@ -17,12 +17,12 @@ from cnequity.domain.schemas import with_provenance
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.outcomes import SourceUnavailableError
 from cnequity.orchestrator.registry import StepEntry
+from cnequity.quality.planned_coverage import partial_days, settled_days
 from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.run_scope import backfill_of, set_backfill
 from cnequity.steps.common import walk_day_backfill
 from cnequity.storage.parquet import StagingWriter
 from cnequity.storage.revisions import RevisionStore
-from cnequity.storage.state import StateStore
 
 DAY = date(2024, 6, 28)
 
@@ -68,7 +68,8 @@ def test_date_walk_publishes_before_an_outage_and_clears_the_gap_after_repair(
     assert result["publication_status"] == "partial"
     assert result["usable_result"] is True
     assert result["fallback"][0]["retry_command"]
-    assert StateStore(cfg.meta_root).get_missing_dates("market_breadth") == {end}
+    # The failed day was not answered: the planner still owes it.
+    assert settled_days(cfg, "market_breadth", start, end) == {start}
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("market_breadth")
     assert pl.read_parquet(root_parquet_files(root)).get_column("trade_date").to_list() == [start]
 
@@ -77,7 +78,7 @@ def test_date_walk_publishes_before_an_outage_and_clears_the_gap_after_repair(
     assert calls == [start, end, end]
     assert again["execution_status"] == "completed"
     assert again["status"] == "success"
-    assert StateStore(cfg.meta_root).get_missing_dates("market_breadth") == set()
+    assert settled_days(cfg, "market_breadth", start, end) == {start, end}
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("market_breadth")
     assert set(pl.read_parquet(root_parquet_files(root))["trade_date"]) == {start, end}
 
@@ -157,8 +158,8 @@ def test_valid_days_publish_when_remaining_days_are_unavailable(tmp_path, monkey
     assert result["publication_status"] == "partial"
     root = RevisionStore(cfg.meta_root, cfg.curated_root).current_root("market_breadth")
     assert pl.read_parquet(root_parquet_files(root)).height == 1
-    gaps = StateStore(cfg.meta_root).get_payload("market_breadth")["missing_ranges"]
-    assert [row["start"] for row in gaps] == [f"2024-06-{day}" for day in (25, 26, 27, 28)]
+    # Only the published day is settled; the unavailable ones stay owed.
+    assert settled_days(cfg, "market_breadth", date(2024, 6, 24), DAY) == {date(2024, 6, 24)}
 
 
 def test_all_unavailable_chunks_finish_and_keep_each_recovery_scope(tmp_path, monkeypatch):
@@ -334,10 +335,10 @@ def test_partial_index_bars_publish_without_advancing_complete_coverage(tmp_path
     assert result["publication_status"] == "partial"
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
     assert pl.read_parquet(root_parquet_files(store.current_root("index_bars"))).height == 1
-    state = StateStore(cfg.meta_root).get_payload("index_bars")
-    assert len(state["outstanding_keys"]) == len(INDEX_SYMBOLS) - 1
-    assert state["coverage_status"] == "incomplete"
-    assert not state.get("complete_through") or state["complete_through"] < DAY.isoformat()
+    assert result["results"][0]["missing_keys"] == len(INDEX_SYMBOLS) - 1
+    # The session some index is missing from is answered in part: it stays owed.
+    assert partial_days(cfg, "index_bars") == {DAY}
+    assert DAY not in settled_days(cfg, "index_bars", DAY, DAY)
 
 
 def test_partial_scope_rows_publish_but_do_not_clear_date_debt(tmp_path, monkeypatch):
@@ -351,9 +352,7 @@ def test_partial_scope_rows_publish_but_do_not_clear_date_debt(tmp_path, monkeyp
         record_source_gap(
             "market_breadth", "source returned only part of the requested metrics", frame=frame
         )
-        result = write_simple(config, run_id, "market_breadth", frame)
-        StateStore(config.meta_root).mark_staged_request_days("market_breadth", run_id, [DAY])
-        return result
+        return write_simple(config, run_id, "market_breadth", frame)
 
     _entries(monkeypatch, {"market_breadth": StepEntry(fn=step, group="core")})
     result = _backfill_once(cfg, "market_breadth")
@@ -361,9 +360,9 @@ def test_partial_scope_rows_publish_but_do_not_clear_date_debt(tmp_path, monkeyp
     assert result["publication_status"] == "partial"
     assert result["rows_written"] == 1
     assert result["fallback"][0]["available_data"] is True
-    payload = StateStore(cfg.meta_root).get_payload("market_breadth")
-    assert payload["missing_ranges"][0]["start"] == DAY.isoformat()
-    assert payload["coverage_status"] == "incomplete"
+    # The day holds rows but not all of them: recorded partial, it stays owed.
+    assert partial_days(cfg, "market_breadth") == {DAY}
+    assert DAY not in settled_days(cfg, "market_breadth", DAY, DAY)
 
 
 def test_partial_scope_does_not_bypass_schema_validation(tmp_path, monkeypatch):

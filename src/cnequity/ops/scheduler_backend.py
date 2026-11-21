@@ -17,6 +17,7 @@ from xml.parsers.expat import ExpatError
 
 from cnequity.file_lock import LockUnavailable, exclusive_lock
 from cnequity.i18n import _
+from cnequity.meta_layout import WEB_SCHEDULER
 from cnequity.ops.catalog import OpsError
 from cnequity.ops.environment import command_environment
 
@@ -94,12 +95,8 @@ class SchedulerBackend:
                 "StartCalendarInterval": [{"Minute": minute} for minute in range(60)],
                 "AbandonProcessGroup": True,
                 "EnvironmentVariables": {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
-                "StandardOutPath": str(
-                    self.meta_root / "state" / "web_scheduler" / "timer.out.log"
-                ),
-                "StandardErrorPath": str(
-                    self.meta_root / "state" / "web_scheduler" / "timer.err.log"
-                ),
+                "StandardOutPath": str(self.meta_root / WEB_SCHEDULER / "timer.out.log"),
+                "StandardErrorPath": str(self.meta_root / WEB_SCHEDULER / "timer.err.log"),
             }
             return plistlib.dumps(job).decode()
         if self.platform == "win32":

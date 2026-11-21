@@ -10,6 +10,7 @@ from tests.catalog_seed import publish_rows
 from tests.unit.test_lake_write import _bars
 
 from cnequity.config import Config
+from cnequity.quality.verify import covered_through
 from cnequity.storage.snapshots import FORMAT_VERSION, SnapshotStore
 from cnequity.storage.state import StateStore
 
@@ -52,7 +53,6 @@ def test_snapshot_create_verify_and_restore(tmp_path):
 
     cfg = Config(data_root=tmp_path / "lake")
     _write_bars(cfg)
-    StateStore(cfg.meta_root).set_date("daily_bars", date(2024, 6, 18))
     store = SnapshotStore(cfg)
     manifest_path = store.create("research-2024", ["daily_bars"])
     manifest = json.loads(manifest_path.read_text())
@@ -72,7 +72,7 @@ def test_snapshot_create_verify_and_restore(tmp_path):
     assert _load(restored_cfg)["close"].to_list() == [10.0]
     assert not (restored / "curated").exists() and not (restored / ".restore").exists()
     assert (restored / "meta" / "restored-snapshot.json").exists()
-    assert StateStore(restored / "meta").get_date("daily_bars") == date(2024, 6, 18)
+    assert covered_through(restored_cfg, "daily_bars") == covered_through(cfg, "daily_bars")
     # A lake on its catalog that owes nothing it did not owe before.
     assert json.loads((restored / "meta" / "storage.json").read_text())["publish"] == "catalog"
     storage = {"lake-catalog", "revision-records", "drop-generations"}

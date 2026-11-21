@@ -355,12 +355,9 @@ def derive_industry_index(
     change, not for routine catch-up.
     """
     from cnequity.domain.schemas import with_provenance
-    from cnequity.quality.verify import covered_through, last_contiguous_dense_date
+    from cnequity.quality.verify import covered_through
     from cnequity.storage.parquet import write_partition_rows
-    from cnequity.storage.state import StateStore
 
-    state = StateStore(config.meta_root)
-    alone = "industry_index" in getattr(config, "planner_only", ())
     if start is None:
         watermark = None if full else covered_through(config, "industry_index")
         start = (
@@ -426,13 +423,6 @@ def derive_industry_index(
             merged_name="part-000.parquet",
         )
         written += group.height
-    # This derive writes directly to the derived tree instead of going through
-    # the generic compact step. Do not advance past an interior session gap:
-    # the next incremental run starts at watermark + 1, so a raw max would make
-    # a missing day permanently invisible.
-    safe_watermark = last_contiguous_dense_date(config, DATASETS["industry_index"])
-    if safe_watermark is not None and not alone:
-        state.set_date("industry_index", safe_watermark)
     return {
         "rows": frame.height,
         "rows_on_disk": written,

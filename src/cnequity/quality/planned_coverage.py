@@ -13,10 +13,13 @@ already say about that, and :func:`record_seeds` writes it there once.
 
 from __future__ import annotations
 
+import tempfile
 from bisect import bisect_left, bisect_right
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -25,13 +28,11 @@ from cnequity.domain.datasets import (
     DATASETS,
     DatasetSpec,
     history_mode_for,
-    is_dataset_enabled,
-    removed_from_schedule,
 )
 from cnequity.domain.symbols import filter_ingest_universe, is_subscription_placeholder
 from cnequity.domain.trading_status import independent_suspension_keys
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.quality.freshness import freshness_owed
+from cnequity.quality.freshness import freshness_mark
 from cnequity.query.calendar import list_trading_dates
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.storage.catalog_bridge import lake_root, revision_snapshots
@@ -41,12 +42,33 @@ from cnequity.storage.instrument_catalog import (
     load_curated_instruments,
     load_curated_trading_status,
 )
-from cnequity.storage.observation import freshness_mark
 from cnequity.storage.state import StateStore
 from equitylake_core import coverage as cov
 from equitylake_core.catalog import ALIAS, Catalog, quote_literal
 from equitylake_core.coverage import Coverage
 from equitylake_core.plan import Declared, Scope, plan_all, plan_dataset
+
+_EMPTY_LAKE: Path | None = None
+
+
+@contextmanager
+def ledger(config) -> Iterator[Catalog]:
+    """The lake's catalog, read-only; an empty lake's for a lake that has none yet.
+
+    A lake writes its catalog with its first publish. Until then nothing is
+    stored and nothing was asked: every cell is owed, which is what planning
+    against an empty catalog says.
+    """
+    global _EMPTY_LAKE
+    root = lake_root(config)
+    if not (root / "catalog.sqlite").exists():
+        if _EMPTY_LAKE is None or not (_EMPTY_LAKE / "catalog.sqlite").exists():
+            made = Path(tempfile.mkdtemp(prefix="cnequity-empty-lake-")) / "lake"
+            Catalog(made, create=True).close()
+            _EMPTY_LAKE = made
+        root = _EMPTY_LAKE
+    with Catalog(root, read_only=True) as catalog:
+        yield catalog
 
 
 def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
@@ -161,7 +183,7 @@ class BarUniverse:
             .select(
                 pl.col("symbol").alias("entity"),
                 pl.col("list_date").alias("first"),
-                (pl.col("delist_date") - timedelta(days=1)).alias("last"),
+                (pl.col("delist_date").cast(pl.Date) - timedelta(days=1)).alias("last"),
             )
             .cast(schema)
             .unique()
@@ -212,88 +234,6 @@ def planned(config, catalog: Catalog, scope: Scope, wanted: Iterable[str] | None
         written=last_written(catalog),
         zone=MARKET_ZONE,
     )
-
-
-@dataclass(frozen=True)
-class Comparison:
-    dataset: str
-    basis: str
-    covered: int
-    #: Cells waiting for an input of a derived dataset.
-    blocked: int
-    #: Periods with a gap; ``period:entity`` for a dataset owed per entity.
-    gaps: tuple[str, ...]
-    #: Whether the dataset is supposed to keep up: enabled, scheduled, and its source usable.
-    scheduled: bool
-    #: The latest of the watermark, the last clean look at the source and the last snapshot.
-    mark: date | None
-    #: Days the missing-date ledger owes, inside the window.
-    owed: tuple[date, ...]
-    #: Gaps the state files also hold to be missing: owed, or after the mark.
-    agreed: tuple[str, ...]
-    #: Gaps the state files count as asked and empty: at or before the mark and not owed.
-    asked_empty: tuple[str, ...]
-    #: Cells that hold rows though the ledger still owes their day.
-    owed_but_stored: tuple[str, ...]
-
-
-def compare(
-    config, start: date, end: date, *, datasets: Iterable[str] | None = None
-) -> list[Comparison]:
-    """The planner's gaps from *start* to *end* beside the state files', dataset by dataset."""
-    state = StateStore(config.meta_root)
-    scope = Scope(start, end)
-    found = []
-    with Catalog(lake_root(config), read_only=True) as catalog:
-        plans = planned(config, catalog, scope, datasets)
-        for name, item in plans.items():
-            coverage = coverage_of(DATASETS[name], end, config)
-            cells = item.cells
-            gap_cells = cells.filter(pl.col("state") == "gap")
-            if coverage.entity is not None:
-                states = {}
-                gaps = tuple(
-                    f"{p}:{e}" for p, e in gap_cells.select("period", "entity").iter_rows()
-                )
-            else:
-                states = dict(cells.select("period", "state").iter_rows())
-                gaps = tuple(gap_cells["period"].to_list())
-            mark = freshness_mark(config, name, state.get_date(name))
-            snapshot = state.get_date(name, field="last_snapshot_date")
-            mark = max((day for day in (mark, snapshot) if day is not None), default=None)
-            owed = tuple(
-                sorted(day for day in state.get_missing_dates(name) if start <= day <= end)
-            )
-            by_day = coverage.grain in ("session", "day") and coverage.entity is None
-            owed_labels = {day.isoformat() for day in owed}
-            asked = tuple(
-                period
-                for period in gaps
-                if by_day
-                and mark is not None
-                and period <= mark.isoformat()
-                and period not in owed_labels
-            )
-            found.append(
-                Comparison(
-                    dataset=name,
-                    basis=f"{coverage.grain}/{coverage.by}",
-                    scheduled=is_dataset_enabled(name, config)
-                    and not removed_from_schedule(config, name)
-                    and freshness_owed(config, name),
-                    covered=int((cells["state"] == "covered").sum()),
-                    blocked=int((cells["state"] == "blocked").sum()),
-                    gaps=gaps,
-                    mark=mark,
-                    owed=owed,
-                    agreed=tuple(period for period in gaps if period not in asked),
-                    asked_empty=asked,
-                    owed_but_stored=tuple(
-                        period for period in sorted(owed_labels) if states.get(period) == "covered"
-                    ),
-                )
-            )
-    return found
 
 
 def last_written(catalog: Catalog) -> dict[str, datetime]:
@@ -538,7 +478,7 @@ def entity_seeds(config, end: date) -> dict[str, list[tuple[str, str]]]:
     ]
     if not names:
         return found
-    with Catalog(lake_root(config), read_only=True) as catalog:
+    with ledger(config) as catalog:
         plans = planned(config, catalog, Scope(HISTORY_START, end), names)
     for name in names:
         coverage = coverage_of(DATASETS[name], end, config)
@@ -569,7 +509,7 @@ def _collect(config, scope: Scope, names: Iterable[str], asked: dict[str, dateti
     wanted = [
         name for name in names if coverage_of(DATASETS[name], scope.end, config).entity is None
     ]
-    with Catalog(lake_root(config), read_only=True) as catalog:
+    with ledger(config) as catalog:
         written = last_written(catalog)
         plans = planned(config, catalog, scope, wanted)
         whole = scope.start <= HISTORY_START
@@ -610,46 +550,27 @@ def _collect(config, scope: Scope, names: Iterable[str], asked: dict[str, dateti
 SYNC_DAYS = 45
 
 
-def sync_attempts(config, run_id: str, trade_date: date, datasets: Iterable[str]) -> dict:
-    """Bring ``_attempts`` up to what the old ledgers say after run *run_id* settled.
+def record_refreshes(config, run_id: str) -> int | None:
+    """Record the whole-dataset refreshes run *run_id* made, from the run records.
 
-    While the daily run still decides from ``meta/state``, this keeps the
-    planner's ledger beside it: the same rules as :func:`seeds`, over the
-    last ``SYNC_DAYS`` (and a backfill's whole window), for the datasets the
-    run touched. Returns what it recorded and, per dataset, the gaps the
-    planner sees that the state files hold done.
+    A dataset refreshed as a whole (``by="write"``) is covered by a refresh
+    that published or found nothing new; the run manifest is where that is
+    said. Returns the ledger snapshot, or ``None`` when there was nothing new.
     """
-    from cnequity.run_scope import backfill_of
-
-    window = backfill_of(config)
-    start = trade_date - timedelta(days=SYNC_DAYS)
-    if window.active and window.start is not None:
-        start = min(start, window.start)
-    end = max(trade_date, window.end) if window.active and window.end else trade_date
     asked = refreshes(config.manifest_path, run_id=run_id)
-    names = sorted((set(datasets) | set(asked)) & set(DATASETS))
-    scope = Scope(start, end)
-    found = _collect(config, scope, names, asked)
-    snapshot = record_seeds(config, found, run=f"run:{run_id}") if found else None
-    state = StateStore(config.meta_root)
-    disagree: dict[str, list[str]] = {}
-    with Catalog(lake_root(config), read_only=True) as catalog:
-        plans = planned(config, catalog, scope, [n for n in names if _by_day(config, n, end)])
-        for name, item in plans.items():
-            mark = freshness_mark(config, name, state.get_date(name))
-            owed = {day.isoformat() for day in state.get_missing_dates(name)}
-            gaps = [
-                period
-                for period in item.cells.filter(pl.col("state") == "gap")["period"].to_list()
-                if mark is not None and period <= mark.isoformat() and period not in owed
-            ]
-            if gaps:
-                disagree[name] = gaps
-    return {
-        "snapshot": snapshot,
-        "recorded": sum(len(seed.periods) for seed in found),
-        "disagreements": disagree,
-    }
+    found: list[Seed] = []
+    with ledger(config) as catalog:
+        written = last_written(catalog)
+        for name, at in sorted(asked.items()):
+            if name not in DATASETS or not refreshed(name):
+                continue
+            coverage = coverage_of(DATASETS[name], at.date(), config)
+            known = [written.get(name), *cov.attempted(catalog, name)["at"].to_list()]
+            latest = max((moment for moment in known if moment is not None), default=None)
+            if latest is None or at > latest:
+                day = at.astimezone(MARKET_ZONE).date()
+                found.append(Seed(name, "refresh", (cov.label(coverage.grain, day),), at))
+    return record_seeds(config, found, run=f"run:{run_id}") if found else None
 
 
 def _by_day(config, name: str, end: date) -> bool:
@@ -669,20 +590,13 @@ def refreshed(dataset: str) -> bool:
 
 
 def ledger_view(config, dataset: str) -> dict:
-    """*dataset*'s owed-work fields, as the old ledgers' readers expect them.
+    """*dataset*'s owed-work fields, in the shape gap reports read.
 
-    A planner-only dataset keeps no ledger in ``meta/state``: a day it holds
-    only in part is its ``partial`` answer in ``_attempts``, reported here as
-    a ``missing_ranges`` row (``source_scope_incomplete``), and it owes no
-    units or keys. Any other dataset reads its state file as before.
+    A day held only in part is its ``partial`` answer in ``_attempts``,
+    reported here as a ``missing_ranges`` row (``source_scope_incomplete``);
+    keys a fetch could not settle are gaps the planner asks again, not a list.
     """
-    if dataset not in getattr(config, "planner_only", ()):
-        return StateStore(config.meta_root).get_payload(dataset)
-    root = lake_root(config)
-    if not (root / "catalog.sqlite").exists():
-        return {"missing_ranges": [], "missing_units": {}, "outstanding_keys": []}
-    with Catalog(root, read_only=True) as catalog:
-        short = cov.partial(cov.attempted(catalog, dataset))["period"].to_list()
+    short = [day.isoformat() for day in partial_days(config, dataset)]
     return {
         "missing_ranges": [
             {"start": period, "end": period, "last_failure": "source_scope_incomplete"}
@@ -691,6 +605,21 @@ def ledger_view(config, dataset: str) -> dict:
         "missing_units": {},
         "outstanding_keys": [],
     }
+
+
+def partial_days(config, dataset: str) -> set[date]:
+    """The days *dataset*'s ledger holds as answered only in part: a clean answer settles them."""
+    with ledger(config) as catalog:
+        short = cov.partial(cov.attempted(catalog, dataset))["period"].to_list()
+    return {date.fromisoformat(period) for period in short if len(period) == 10}
+
+
+def clean_answer(config, dataset: str, days, asked_at: datetime) -> dict | None:
+    """The ``complete`` answer for the *days* fetched cleanly that the ledger held partial."""
+    from cnequity.orchestrator.source_gaps import source_gap_dates
+
+    settled = (set(days) & partial_days(config, dataset)) - source_gap_dates(dataset)
+    return answer_finding(dataset, settled, asked_at, "complete") if settled else None
 
 
 def gap_days(config, dataset: str, trade_date: date) -> list[date]:
@@ -705,7 +634,7 @@ def gap_days(config, dataset: str, trade_date: date) -> list[date]:
     ):
         return []
     scope = Scope(trade_date - timedelta(days=SYNC_DAYS), trade_date)
-    with Catalog(lake_root(config), read_only=True) as catalog:
+    with ledger(config) as catalog:
         cells = planned(config, catalog, scope, [dataset])[dataset].cells
     return sorted(
         date.fromisoformat(period)
@@ -723,13 +652,40 @@ def gap_keys(config, dataset: str, trade_date: date) -> list[tuple[str, date]]:
     if not (coverage.by == "rows" and coverage.entity is not None and coverage.grain == "session"):
         return []
     scope = Scope(trade_date - timedelta(days=SYNC_DAYS), trade_date)
-    with Catalog(lake_root(config), read_only=True) as catalog:
+    with ledger(config) as catalog:
         cells = planned(config, catalog, scope, [dataset])[dataset].cells
     gaps = cells.filter(pl.col("state") == "gap")
     return sorted(
         (entity, date.fromisoformat(period))
         for period, entity in gaps.select("period", "entity").iter_rows()
     )
+
+
+def owed_cells(config, dataset: str, start: date, end: date) -> list[tuple[str, date]]:
+    """The (entity, day) cells *dataset* owes per entity in [*start*, *end*]."""
+    with ledger(config) as catalog:
+        cells = planned(config, catalog, Scope(start, end), [dataset])[dataset].cells
+    gaps = cells.filter(pl.col("state") == "gap")
+    return sorted(
+        (entity, date.fromisoformat(period))
+        for period, entity in gaps.select("period", "entity").iter_rows()
+    )
+
+
+def last_answered(config, dataset: str) -> date | None:
+    """The latest day the source answered *dataset* cleanly: empty, or with every row.
+
+    Only cells kept per day (not per entity) count: a day a fetch walked and
+    the sweeps it ran (``:recheck:``), and refreshes of a whole dataset.
+    """
+    with ledger(config) as catalog:
+        rows = cov.attempted(catalog, dataset)
+    days = rows.filter(
+        (pl.col("entity") == "")
+        & pl.col("outcome").is_in(["empty", "complete"])
+        & pl.col("period").str.contains(r"^\d{4}-\d{2}-\d{2}$")
+    )["period"]
+    return None if days.is_empty() else date.fromisoformat(days.max())
 
 
 def unanswered_keys(config, dataset: str, start: date, end: date) -> pl.DataFrame:
@@ -740,10 +696,7 @@ def unanswered_keys(config, dataset: str, start: date, end: date) -> pl.DataFram
     without any answer is a fetch that failed, and says nothing.
     """
     keys = {"symbol": pl.String, "trade_date": pl.Date}
-    root = lake_root(config)
-    if not (root / "catalog.sqlite").exists():
-        return pl.DataFrame(schema=keys)
-    with Catalog(root, read_only=True) as catalog:
+    with ledger(config) as catalog:
         cells = planned(config, catalog, Scope(start, end), [dataset])[dataset].cells
         answered = cov.attempted(catalog, dataset).filter(pl.col("outcome") == "empty")
     gaps = cells.filter(pl.col("state") == "gap").select("period", "entity")
@@ -762,12 +715,11 @@ def settled_days(config, dataset: str, start: date, end: date, *, redo: str = "g
     What a planner-only backfill skips; everything else is asked. *redo* as
     in :class:`Scope`: ``empty`` asks recorded-empty days again, ``all`` every day.
     """
-    with Catalog(lake_root(config), read_only=True) as catalog:
+    with ledger(config) as catalog:
         cells = planned(config, catalog, Scope(start, end, redo=redo), [dataset])[dataset].cells
-    return {
-        date.fromisoformat(period)
-        for period in cells.filter(pl.col("state") != "gap")["period"].unique().to_list()
-    }
+    # A blocked day (its inputs are not in yet) is not settled: the backfill asks.
+    settled = cells.filter(pl.col("state").is_in(["covered", "empty", "not_due"]))
+    return {date.fromisoformat(period) for period in settled["period"].unique().to_list()}
 
 
 def answer_finding(
@@ -814,23 +766,27 @@ def recheck_finding(dataset: str, days: Iterable[date], depth: str, asked_at: da
 
 
 def last_recheck(config, dataset: str, depth: str) -> date | None:
-    """The market day *dataset*'s last clean *depth* sweep ran on, from ``_attempts``."""
-    with Catalog(lake_root(config), read_only=True) as catalog:
+    """The run day of *dataset*'s last clean *depth* sweep, from ``_attempts``.
+
+    A sweep walks its window up to the day it runs for, so that day is the
+    latest one it recorded; a catch-up run for an earlier day dates its sweep
+    by that day, not by when it ran.
+    """
+    with ledger(config) as catalog:
         if not catalog.has_table(cov.ATTEMPTS):
             return None
-        rows = catalog.records(cov.ATTEMPTS, "dataset, run, asked_at").filter(
+        rows = catalog.records(cov.ATTEMPTS, "dataset, run, period").filter(
             (pl.col("dataset") == dataset) & pl.col("run").str.ends_with(f":recheck:{depth}")
         )
     if rows.is_empty():
         return None
-    latest = rows.cast({"asked_at": pl.Datetime("us", "UTC")})["asked_at"].max()
-    return latest.astimezone(MARKET_ZONE).date()
+    return date.fromisoformat(rows["period"].max())
 
 
 def seed_rechecks(config, datasets: Iterable[str]) -> int:
     """Carry ``meta/state``'s last deep and tail sweep days into ``_attempts``, once.
 
-    Run when a dataset joins ``planner_only``: without it the first run would
+    Part of the ``attempts-ledger`` migration: without it the first run would
     sweep deep (``daily_bars``: half an hour) only because nothing is on
     record. A dataset already holding a recheck is left alone. Returns the
     rows recorded.
@@ -931,10 +887,7 @@ def record_cell_answers(
 
 def answered_cells(config, dataset: str, *, outcome: str = "empty") -> set[tuple[str, str]]:
     """The (period, entity) cells of *dataset* whose latest answer is *outcome*."""
-    root = lake_root(config)
-    if not (root / "catalog.sqlite").exists():
-        return set()
-    with Catalog(root, read_only=True) as catalog:
+    with ledger(config) as catalog:
         latest = cov.attempted(catalog, dataset)
     return set(latest.filter(pl.col("outcome") == outcome).select("period", "entity").iter_rows())
 

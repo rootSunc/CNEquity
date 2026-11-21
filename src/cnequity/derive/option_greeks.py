@@ -399,9 +399,7 @@ def _derive_option_greeks(
     from cnequity.domain.market_time import shanghai_today
     from cnequity.domain.schemas import validate_dataframe, with_provenance
     from cnequity.storage.derived_output import DerivedOutput
-    from cnequity.storage.state import StateStore
 
-    state = StateStore(config.meta_root)
     context = _pin_inputs(config)
     sessions: list[date] | None = None
     if start is None and not full:
@@ -451,11 +449,6 @@ def _derive_option_greeks(
                 dependencies, digests, day, frame_day_digests(group, "option_greeks").get(day)
             ),
         )
-    # Rewriting an earlier window must not pull the watermark back.
-    latest = frame["trade_date"].max()
-    if "option_greeks" not in getattr(config, "planner_only", ()):
-        previous = state.get_date("option_greeks")
-        state.set_date("option_greeks", latest if previous is None else max(previous, latest))
     counts = frame["status"].value_counts().sort("status")
     return {
         "rows": frame.height,

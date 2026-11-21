@@ -3,7 +3,7 @@
 ``domain.datasets.stale_between`` is the registry's tolerance rule and stays
 pure. Judging a lake also needs two facts only the lake and the schedule hold:
 
-* the last clean look at the source (``storage/observation.py``): an event
+* the last clean look at the source (the coverage ledger's answers): an event
   dataset's newest row is its newest event, and a quiet window has none;
 * the schedule's cadence (``orchestrator/cadence.py``): a history dataset a
   weekly group fetches is due through that group's last session, not today.
@@ -29,7 +29,24 @@ from cnequity.domain.datasets import (
 )
 from cnequity.orchestrator.cadence import freshness_anchor
 from cnequity.storage.key_checks import key_rejected
-from cnequity.storage.observation import freshness_mark
+
+
+def freshness_mark(config, dataset: str, mark: date | None) -> date | None:
+    """The later of the data watermark and the last day the source answered cleanly.
+
+    An event dataset's newest row is its newest event: a quiet window has
+    none, so its watermark stops while the lake keeps asking. The days the
+    source answered (empty, or with every row) are on the coverage ledger.
+    """
+    from cnequity.quality.planned_coverage import last_answered
+
+    try:
+        seen = last_answered(config, dataset)
+    except (OSError, ValueError):
+        seen = None
+    if mark is None or seen is None:
+        return mark or seen
+    return max(mark, seen)
 
 
 def freshness_owed(config, dataset: str) -> bool:

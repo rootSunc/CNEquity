@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 import cnequity.steps  # noqa: F401
 from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError
@@ -297,7 +298,6 @@ def test_backfill_with_a_window_after_the_run_day_fetches_no_history(cfg, monkey
 
 
 def test_daily_run_reads_only_a_short_recent_window(cfg, monkeypatch):
-    from cnequity.storage.state import StateStore
 
     calls: list[tuple[date, date]] = []
 
@@ -308,7 +308,7 @@ def test_daily_run_reads_only_a_short_recent_window(cfg, monkeypatch):
         )
 
     day = date(2024, 6, 28)
-    StateStore(cfg.meta_root).set_date("macro_indicators", date(2024, 6, 27))
+    covered(monkeypatch, "macro_indicators", date(2024, 6, 27))
     monkeypatch.setattr(macro_risk, "fetch_daily_rates_range", _range)
     monkeypatch.setattr(
         macro_risk, "list_trading_dates", lambda _cfg, _s, _e: [date(2024, 6, 27), day]

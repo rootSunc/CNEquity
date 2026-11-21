@@ -125,66 +125,50 @@ def _scope_exit_code(
 
 
 def _owed_symbols_on(cfg, dataset: str, day: date) -> set[str]:
-    """Symbols the outstanding-key ledger already owes for *day*."""
-    from cnequity.storage.state import StateStore
+    """Symbols the coverage planner already owes for *day*: a fetch left them, a retry asks."""
+    from cnequity.quality.planned_coverage import gap_keys
 
     try:
-        rows = StateStore(cfg.meta_root).get_outstanding_keys(dataset)
-    except Exception:  # noqa: BLE001 — a missing/garbled state file owes nothing
+        keys = gap_keys(cfg, dataset, day)
+    except Exception:  # noqa: BLE001 — a planner that cannot plan owes nothing here
         return set()
-    wanted = day.isoformat()
-    return {
-        str(row["symbol"])
-        for row in rows
-        if isinstance(row, dict) and row.get("symbol") and row.get("trade_date") == wanted
-    }
+    return {symbol for symbol, owed_on in keys if owed_on == day}
 
 
 def _proven_absent_on(
     cfg, dataset: str, day: date, *, undated: set[str] | frozenset[str] = frozenset()
 ) -> set[str]:
-    """Symbols with live no-data evidence covering *day*.
+    """Symbols the source answered empty for *day*: daily_bars cells on the coverage ledger.
 
-    The ingest side already routes these out of the expected key set
-    (``classify_daily_bar_ownership``); the proof has to honour the same
-    evidence or the two contradict each other. A code the daily_bars probe
-    found not yet listed has no trading status to publish either, so that
-    claim also answers for ``trading_status``.
+    The ingest side records these answers and the planner stops owing them;
+    the proof has to honour the same answers or the two contradict each other.
 
-    So does any other no-data record for a code in *undated* (no listing
-    date) that has never printed a traded bar: such a code cannot be
-    suspended, only not yet listed. The probe writes ``not_yet_listed`` for
-    the one day it asks; the next runs reuse that cached absence under a
-    generic ``source_empty`` instead of asking again, and 001381.SZ read as a
-    missing active stock on 2026-10-26, three days after its IPO allotment.
+    For ``trading_status`` only a code in *undated* (no listing date) that has
+    never printed a traded bar counts: it cannot be suspended, only not yet
+    listed, so it has no status to publish either. 001381.SZ read as a missing
+    active stock on 2026-10-26, three days after its IPO allotment.
     """
-    from cnequity.steps.common import (
-        load_bar_universe,
-        load_negative_evidence,
-        negative_evidence_covers,
-    )
+    from cnequity.quality.planned_coverage import answered_cells
+    from cnequity.steps.common import load_bar_universe
 
     try:
-        evidence = list(load_negative_evidence(cfg, "daily_bars"))
-    except Exception:  # noqa: BLE001 — missing/garbled evidence proves nothing
+        answered = {
+            entity
+            for period, entity in answered_cells(cfg, "daily_bars")
+            if period == day.isoformat()
+        }
+    except Exception:  # noqa: BLE001 — an unreadable ledger proves nothing
         return set()
-    covering = {
-        str(item["symbol"]).strip().upper(): item
-        for item in evidence
-        if item.get("symbol") and negative_evidence_covers(item, str(item["symbol"]), day, day)
-    }
     if dataset == "daily_bars":
-        return set(covering)
-    proven = {symbol for symbol, item in covering.items() if item.get("reason") == "not_yet_listed"}
-    candidates = (set(covering) & set(undated)) - proven
-    if candidates:
-        try:
-            traded = load_bar_universe(cfg)
-        except Exception:  # noqa: BLE001 — without the universe nothing is proven
-            traded = None
-        if traded is not None:
-            proven |= candidates - traded
-    return proven
+        return answered
+    candidates = answered & set(undated)
+    if not candidates:
+        return set()
+    try:
+        traded = load_bar_universe(cfg)
+    except Exception:  # noqa: BLE001 — without the universe nothing is proven
+        return set()
+    return candidates - traded if traded is not None else set()
 
 
 def _tip_scope(cfg, catalog: pl.DataFrame, dataset: str = "daily_bars") -> dict | None:
@@ -309,11 +293,10 @@ def _tip_scope(cfg, catalog: pl.DataFrame, dataset: str = "daily_bars") -> dict 
         excused |= _proven_absent_on(cfg, dataset, tip, undated=undated)
         covered = expected & (observed | excused)
         ratio = len(covered) / len(expected)
-        # Keys the ingest side already judged, tolerated and wrote down are
-        # not news. `daily_bars` carries an explicit unresolved-key budget —
-        # refusing a checkpoint over 14 of 5,500 threw away two hours of
-        # `cne init` — and every key it lets through is recorded in the
-        # outstanding ledger and reported separately below. Failing here for
+        # Keys the ingest side already judged and tolerated are not news.
+        # `daily_bars` carries an explicit unresolved-key budget — refusing a
+        # checkpoint over 14 of 5,500 threw away two hours of `cne init` — and
+        # every key it lets through is a gap the planner owes, reported below. Failing here for
         # those same keys would be the two halves of one system contradicting
         # each other, with the operator in between.
         owed = _owed_symbols_on(cfg, dataset, tip)
@@ -1381,9 +1364,7 @@ def status(
                     err=True,
                 )
             # A tolerated gap is invisible in freshness: the watermark moved over
-            # the hole, so the dataset reads FRESH while still owing keys. The
-            # ledger is the only place that knows, and nobody reads a json file
-            # they were not told about.
+            # the hole, so the dataset reads FRESH while still owing keys.
             _report_outstanding_keys(cfg, df["dataset"].to_list())
             stale_rows = df.filter(pl_mod.col("freshness") == "STALE")
             if core_only:
@@ -1844,38 +1825,26 @@ def sources_substitutes(config_path: str, vantage: str | None, probe: bool, as_j
 
 
 def _report_outstanding_keys(cfg, datasets: list[str]) -> None:
-    """Name the datasets carrying a debt a tolerated gap left behind."""
-    from cnequity.storage.state import StateStore
+    """Name the datasets owing keys a tolerated gap left, as the coverage planner sees them."""
+    from cnequity.domain.market_time import shanghai_today
+    from cnequity.quality.planned_coverage import gap_keys
 
-    store = StateStore(cfg.meta_root)
     owed = []
     for dataset in datasets:
         try:
-            rows = store.get_outstanding_keys(dataset)
-        except Exception:  # noqa: BLE001 — a missing/garbled state file is not a status failure
+            keys = gap_keys(cfg, dataset, shanghai_today())
+        except Exception:  # noqa: BLE001 — a planner that cannot plan is not a status failure
             continue
-        if rows:
-            stubborn = sum(1 for row in rows if int(row.get("attempts", 0) or 0) >= 3)
-            owed.append((dataset, len(rows), stubborn))
+        if keys:
+            owed.append((dataset, len(keys)))
     if not owed:
         return
-    summary = ", ".join(f"{dataset} {count}" for dataset, count, _ in sorted(owed))
+    summary = ", ".join(f"{dataset} {count}" for dataset, count in sorted(owed))
     click.echo(
         _(
-            "\nKeys owed by tolerated gaps: {summary}\nThese sessions are already past the watermark, and no incremental run will ask for them again; fill them with `cne backfill <dataset> --outstanding`."
+            "\nKeys owed by tolerated gaps: {summary}\nThe daily run asks the last 45 days of them again; fill older ones with `cne backfill <dataset> --outstanding`."
         ).format(summary=summary)
     )
-    # Separated because they need a different decision. A key three repairs
-    # could not fill is not backlog, it is a key no configured source serves,
-    # and re-running the repair will not change that.
-    stuck = [(dataset, n) for dataset, _count, n in sorted(owed) if n]
-    if stuck:
-        detail = ", ".join(f"{dataset} {n}" for dataset, n in stuck)
-        click.echo(
-            _(
-                "Of these, still unfilled after 3 or more repair attempts: {detail}. No configured source provides them; check `cne sources probe`, or accept the gap."
-            ).format(detail=detail)
-        )
 
 
 @cli.command("check")

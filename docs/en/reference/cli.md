@@ -485,7 +485,7 @@ Historical reference replay and request bounds of derivatives contract backfills
 
 ### sector_bars
 
-It resumes from the checkpoint by default, skipping finished boards; `--refetch` clears the checkpoint and refetches everything. Checkpoint: `meta/state/sector_bars_backfill.json`. When more than 50% fail the step status is `degraded`, but the successful part is still written.
+It resumes from the checkpoint by default, skipping finished boards; `--refetch` clears the checkpoint and refetches everything. Checkpoint: `meta/checkpoints/sector_bars_backfill.json`. When more than 50% fail the step status is `degraded`, but the successful part is still written.
 
 **Network**: goes through THS `d.10jqka.com.cn` (the same source for daily and history), rate-limited under `[sources.ths]`.
 It has nothing to do with EastMoney; `[sources.eastmoney] proxy` does not apply to it.
@@ -540,7 +540,7 @@ The pass claim of `coverage` is deliberately narrow: it proves that the delistin
 `reconcile --apply` does not take the "last record" returned by a single vendor as the truth: automatic changes are allowed only when there is a curated
 positive-volume end point, that end point is no later than `instruments.delist_date`, and the old directory date also falls
 after the formal delisting date or on a non-trading day. The command refuses to run if it detects any active ingestion run;
-the directory before modification is saved in `meta/state/history/`, the quality receipt is written to
+the directory before modification is saved in `meta/source_cache/delisted_catalog_history/`, the quality receipt is written to
 `meta/quality/`, and the SHA-256 of the pre-modification backup and the modified directory are recorded.
 
 ## cne derive [name]
@@ -570,7 +570,7 @@ cne upgrade             # preview: what this version does to the lake and whethe
 cne upgrade --apply     # back up the lake's records, then do all of it in order
 ```
 
-The preview lists the steps still owed (each is a migration, see [`cne migrate`](#cne-migrate)) and runs two checks: whether the DuckDB extensions the lake catalog needs are available, and whether there is enough disk space. If either fails nothing is changed and the output says how to fix it. `--apply` first copies the lake's records (each dataset's current revision pointer, the catalog database, `meta/state/lake.json`, `meta/storage.json`; a few MB) to `backups/upgrade-<time>/`, then runs each step and reports progress. Data files are linked, not copied, so the time taken depends little on the size of the lake.
+The preview lists the steps still owed (each is a migration, see [`cne migrate`](#cne-migrate)) and runs two checks: whether the DuckDB extensions the lake catalog needs are available, and whether there is enough disk space. If either fails nothing is changed and the output says how to fix it. `--apply` first copies the lake's records (each dataset's current revision pointer, the catalog database, `meta/lake.json`, `meta/storage.json`; a few MB) to `backups/upgrade-<time>/`, then runs each step and reports progress. Data files are linked, not copied, so the time taken depends little on the size of the lake.
 
 Reading the lake keeps working during the upgrade and `cne serve` can stay up. Jobs that write (the scheduled daily run, backfills, derives, repairs) are refused with a pointer to the upgrade, and resume on their next run once it is done. A run that stops can be started again; finished steps are not repeated.
 
@@ -583,7 +583,7 @@ Reading the lake keeps working during the upgrade and `cne serve` can stay up. J
 
 ## cne migrate
 
-Fixes data that older versions wrote, after an upgrade. When a release fixes a writer, rows the old writer stored still need a one-off correction; each such correction is a migration. `meta/state/lake.json` records the version that built the lake (migrations introduced earlier do not apply) and every migration this lake has run or checked and found nothing to do.
+Fixes data that older versions wrote, after an upgrade. When a release fixes a writer, rows the old writer stored still need a one-off correction; each such correction is a migration. `meta/lake.json` records the version that built the lake (migrations introduced earlier do not apply) and every migration this lake has run or checked and found nothing to do.
 
 ```bash
 cne migrate             # preview: how many rows each migration would change; writes nothing
@@ -592,7 +592,7 @@ cne migrate --apply     # runs them in order and records the results
 
 | Option | Description |
 |------|------|
-| `--apply` | Run the owed migrations and write the results to `meta/state/lake.json` |
+| `--apply` | Run the owed migrations and write the results to `meta/lake.json` |
 | `--only` | Comma-separated migration ids; runs them even when already recorded |
 | `--json` | Machine-readable output |
 

@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
 import pytest
 from click.testing import CliRunner
 from tests.catalog_seed import publish_rows
+from tests.coverage_fakes import covered
 
 from cnequity.cli.main import cli
 from cnequity.config import Config
@@ -27,11 +28,19 @@ from cnequity.orchestrator.outcomes import (
     step_outcome,
 )
 from cnequity.orchestrator.registry import StepEntry
+from cnequity.quality.planned_coverage import (
+    ANSWER_CHECK,
+    answer_finding,
+    answered_cells,
+    partial_days,
+    record_answers,
+    record_cell_answers,
+    settled_days,
+)
 from cnequity.run_scope import set_backfill
 from cnequity.storage.derived_output import DerivedOutput
 from cnequity.storage.parquet import StagingWriter
 from cnequity.storage.revisions import RevisionStore
-from cnequity.storage.state import StateStore
 
 DAY = date(2024, 6, 28)
 
@@ -57,6 +66,16 @@ def _bars(symbol="600519.SH", day=DAY):
 
 def _config(tmp_path):
     return Config(data_root=tmp_path / "data", publication_gate="off", audit_gate="off")
+
+
+def _lake(cfg):
+    """A lake with a catalog, for a test that records answers before its first publish."""
+    breadth = pl.DataFrame(
+        {"trade_date": [date(2020, 1, 2)], "metric_id": ["advance_ratio"], "value": [0.5]}
+    )
+    publish_rows(
+        cfg, "market_breadth", with_provenance(breadth, source="derived", data_version="v1")
+    )
 
 
 @pytest.mark.parametrize(
@@ -146,9 +165,10 @@ def test_source_cooling_defers_unswept_days_without_failed_request_counts(tmp_pa
     assert result["failed_days"] == 0
     assert result["days_deferred"] == 4
     assert result["days_fetched"] == 1
-    gaps = StateStore(cfg.meta_root).get_payload("market_breadth")["missing_ranges"]
-    assert [row["start"] for row in gaps] == [f"2024-06-{day}" for day in (25, 26, 27, 28)]
-    assert all(row["last_failure"] == "source_cooling_down" for row in gaps)
+    # A deferred day is not an answer: nothing is recorded, so the planner still owes it.
+    findings = result.get("context_updates", {}).get("audit_findings", [])
+    assert not [item for item in findings if item["check"] == ANSWER_CHECK]
+    assert settled_days(cfg, "market_breadth", date(2024, 6, 24), DAY) == set()
 
 
 @pytest.mark.parametrize(
@@ -233,7 +253,7 @@ def test_old_receipts_migrate_without_inventing_completion(tmp_path):
         assert len(manifest.get_dataset_results("old")) == 1
 
 
-def test_partial_publication_keeps_missing_keys_and_retry_attempts(tmp_path):
+def test_partial_publication_keeps_the_failed_batch_and_settles_nothing(tmp_path):
     cfg = _config(tmp_path)
     engine = JobEngine(cfg)
     run = engine.manifest.start_run("backfill")
@@ -253,10 +273,6 @@ def test_partial_publication_keeps_missing_keys_and_retry_attempts(tmp_path):
         rows_written=1,
         reason_code="source_unavailable",
     )
-    state = StateStore(cfg.meta_root)
-    state.record_outstanding_keys(
-        "daily_bars", [("000001.SZ", DAY)], run_id=run, reason="source_unavailable"
-    )
     writer = StagingWriter(cfg.staging_root)
     sealed = writer.write_batch("daily_bars", run, "valid", _bars())
     unsealed = sealed.with_name("part-unknown.parquet")
@@ -268,12 +284,12 @@ def test_partial_publication_keeps_missing_keys_and_retry_attempts(tmp_path):
     assert receipt["publication_status"] == "partial"
     assert receipt["revision_id"]
     assert engine.manifest.get_batch(run, "source")["status"] == "failed"
-    assert len(state.get_outstanding_keys("daily_bars")) == 1
     from cnequity.query import catalog_read, load
 
     catalog_read.close_all()
     assert load("daily_bars", config=cfg)["symbol"].to_list() == ["600519.SH"]
-    assert state.get_payload("daily_bars")["complete_through"] < DAY.isoformat()
+    # The failed fetch answered nothing, so the ledger holds no answer for it.
+    assert answered_cells(cfg, "daily_bars", outcome="complete") == set()
 
 
 def test_active_and_unsealed_legacy_units_stay_blocked(tmp_path):
@@ -301,44 +317,43 @@ def test_corrupt_sealed_bytes_never_replace_current(tmp_path):
     assert RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars") is None
 
 
-def test_published_repair_clears_only_matching_keys(tmp_path):
+def test_published_repair_settles_only_the_days_answered_cleanly(tmp_path):
     cfg = _config(tmp_path)
     engine = JobEngine(cfg)
     run = engine.manifest.start_run("backfill")
-    state = StateStore(cfg.meta_root)
-    state.record_outstanding_keys(
-        "daily_bars",
-        [("600519.SH", DAY), ("000001.SZ", DAY)],
-        run_id=run,
-        reason="source_unavailable",
-    )
+    earlier = date(2024, 6, 27)
+    short = answer_finding("daily_bars", [earlier, DAY], datetime.now(UTC), "partial")
+    _lake(cfg)
+    record_answers(cfg, "earlier", [short])
     StagingWriter(cfg.staging_root).write_batch("daily_bars", run, "valid", _bars())
-    engine.run_step("compact", DAY, run)
-    assert [(r["symbol"], r["trade_date"]) for r in state.get_outstanding_keys("daily_bars")] == [
-        ("000001.SZ", DAY.isoformat())
-    ]
+    clean = answer_finding("daily_bars", [DAY], datetime.now(UTC), "complete")
+    engine.run_step("compact", DAY, run, {"audit_findings": [clean]})
+    assert partial_days(cfg, "daily_bars") == {earlier}
     latest = RevisionStore(cfg.meta_root, cfg.curated_root).latest("daily_bars")
     coverage = latest.metadata["coverage"]
-    assert coverage["resolved_outstanding_keys"] == 1
-    assert coverage["gaps_source"] == "dataset_state"
-    assert coverage["gaps"]["counts"]["outstanding_keys"] == 1
-    assert [r["symbol"] for r in coverage["gaps"]["sample"]["outstanding_keys"]] == ["000001.SZ"]
+    assert coverage["status"] == "partial"
+    assert coverage["gaps_source"] == "coverage_ledger"
+    assert coverage["gaps"]["counts"]["missing_ranges"] == 1
+    assert [r["start"] for r in coverage["gaps"]["sample"]["missing_ranges"]] == [
+        earlier.isoformat()
+    ]
 
 
 def test_receipt_bounds_the_gap_index_it_records(tmp_path):
     cfg = _config(tmp_path)
     engine = JobEngine(cfg)
     run = engine.manifest.start_run("backfill")
-    keys = [(f"{index:06d}.SZ", DAY) for index in range(1, 501)]
-    StateStore(cfg.meta_root).record_outstanding_keys(
-        "daily_bars", keys, run_id=run, reason="source_unavailable"
+    days = [DAY - timedelta(days=offset) for offset in range(1, 501)]
+    _lake(cfg)
+    record_answers(
+        cfg, "earlier", [answer_finding("daily_bars", days, datetime.now(UTC), "partial")]
     )
     StagingWriter(cfg.staging_root).write_batch("daily_bars", run, "valid", _bars())
     engine.run_step("compact", DAY, run)
     latest = RevisionStore(cfg.meta_root, cfg.curated_root).latest("daily_bars")
     gaps = latest.metadata["coverage"]["gaps"]
-    assert gaps["counts"]["outstanding_keys"] == 500
-    assert len(gaps["sample"]["outstanding_keys"]) == 20
+    assert gaps["counts"]["missing_ranges"] == 500
+    assert len(gaps["sample"]["missing_ranges"]) == 20
     assert gaps["truncated"] is True
 
 
@@ -449,14 +464,13 @@ def _derive_factors(cfg, inputs):
         )
 
 
-def test_derived_publication_records_partial_input_identity(tmp_path):
+def test_derived_publication_records_partial_input_identity(tmp_path, monkeypatch):
     from cnequity.steps.finalize import _capture_derive_inputs
 
     cfg = _config(tmp_path)
     publish_rows(cfg, "daily_bars", _bars())
-    StateStore(cfg.meta_root).record_outstanding_keys(
-        "daily_bars", [("000001.SZ", DAY)], run_id="source", reason="source_unavailable"
-    )
+    # The planner still owes daily_bars a day, so the input is only partial.
+    covered(monkeypatch, "daily_bars", DAY, gaps=[DAY])
     inputs = _capture_derive_inputs(cfg, "adj_factors")
     result = _derive_factors(cfg, inputs)
     assert result["coverage_status"] == "partial"
@@ -526,6 +540,7 @@ def test_unknown_missing_bar_key_is_not_a_suspension_fact(tmp_path):
 
     cfg = _config(tmp_path)
     days = [date(2024, 6, d) for d in (26, 27, 28)]
+    _lake(cfg)
     for dataset in ("daily_bars", "instruments", "trading_calendar"):
         (cfg.curated_root / dataset).mkdir(parents=True)
     bars = pl.concat(
@@ -538,40 +553,17 @@ def test_unknown_missing_bar_key_is_not_a_suspension_fact(tmp_path):
     pl.DataFrame(
         {
             "symbol": ["600519.SH", "000001.SZ"],
+            "name": ["贵州茅台", "平安银行"],
             "list_date": [date(2010, 1, 1)] * 2,
             "delist_date": [None] * 2,
         },
         schema_overrides={"delist_date": pl.Date},
     ).write_parquet(cfg.curated_root / "instruments" / "part.parquet")
-    StateStore(cfg.meta_root).record_outstanding_keys(
-        "daily_bars", [("600519.SH", days[1])], run_id="fetch", reason="source_unavailable"
-    )
+    # The source answered 000001.SZ empty that day; no fetch answered 600519.SH.
+    record_cell_answers(cfg, "daily_bars", [(days[1].isoformat(), "000001.SZ")], run="fetch")
     assert _suspended_pairs(cfg).rows() == [("000001.SZ", days[1])]
     with pytest.raises(InputUnavailableError, match="no daily bars in the requested window"):
         derive_suspension_history(cfg, "derive", start=days[1], end=days[1])
-
-
-def test_monthly_repair_does_not_count_other_scopes_as_attempted(tmp_path):
-    from cnequity.cli.backfill_cmds import _settle_outstanding
-
-    cfg = _config(tmp_path)
-    root = cfg.curated_root / "daily_bars"
-    root.mkdir(parents=True)
-    _bars().write_parquet(root / "part.parquet")
-    state = StateStore(cfg.meta_root)
-    state.record_outstanding_keys(
-        "daily_bars",
-        [("000001.SZ", DAY), ("000001.SZ", date(2024, 5, 28))],
-        run_id="fetch",
-        reason="source_unavailable",
-    )
-    result = _settle_outstanding(
-        cfg, "daily_bars", attempted_scope=({"000001.SZ"}, "2024-06-01", "2024-06-30")
-    )
-    assert result["still_owed"] == 2
-    rows = {row["trade_date"]: row for row in state.get_outstanding_keys("daily_bars")}
-    assert rows[DAY.isoformat()]["attempts"] == 1
-    assert rows["2024-05-28"].get("attempts", 0) == 0
 
 
 def test_share_structure_change_blocks_adj_factors_publication(tmp_path):

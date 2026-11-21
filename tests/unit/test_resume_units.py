@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
@@ -13,7 +12,6 @@ from cnequity.config import Config
 from cnequity.run_scope import set_backfill
 from cnequity.steps import fundamentals as fund
 from cnequity.storage import resume_units
-from cnequity.storage.state import StateStore
 
 
 @pytest.fixture
@@ -25,7 +23,7 @@ def cfg(tmp_path):
     c.staging_root.mkdir(parents=True)
     with Catalog(lake_root(c), create=True):
         pass
-    return replace(c, planner_only=frozenset({"top_holders", "financial_statement_items"}))
+    return c
 
 
 def _sweep(cfg, monkeypatch, run_id):
@@ -65,7 +63,7 @@ def test_a_backfill_names_its_units_and_skips_them_once_compact_records_them(cfg
     ]
     assert len(named) == 1 and len(named[0]["units"]) == 4
     # Nothing in meta/state.
-    assert not StateStore(cfg.meta_root).get_payload("top_holders").get("staged_units")
+    assert not (cfg.meta_root / "state" / "top_holders.json").exists()
     # Before compact records them, a new run asks every window again.
     assert len(_sweep(cfg, monkeypatch, "run-2")[1]) == 4
     assert resume_units.record(cfg, "run-1", named, {"top_holders"}) == 4

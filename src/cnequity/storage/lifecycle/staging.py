@@ -24,7 +24,6 @@ from cnequity.storage.lifecycle.resources import resource_holds
 from cnequity.storage.revisions import _reject_symlink_path, sha256_file
 from cnequity.storage.staging_cleanup import (
     preview_staging_cleanup,
-    prune_stale_staged_ledgers,
     run_ready_for_staging_cleanup,
     staging_run_paths,
 )
@@ -276,11 +275,4 @@ class StagingRetirement:
                     journal["status"] = "error"
                     write_json_atomic(event_path, journal)
                     raise
-                # The purged runs' staged-ledger entries can no longer be
-                # published. Housekeeping only: the purge itself is complete
-                # and journalled, so a failure here must not report it failed.
-                try:
-                    prune_stale_staged_ledgers(self.config)
-                except Exception:  # noqa: BLE001
-                    logger.exception("staging purge %s: could not prune staged ledgers", plan_id)
                 return journal

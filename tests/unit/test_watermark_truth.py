@@ -1,4 +1,8 @@
-"""The watermark must answer "through what date do we have data", not "when did we run"."""
+"""The watermark answers "through what date do we have data", not "when did we run".
+
+It is computed from the published rows whenever it is read, so there is no
+stored claim that could run ahead of the data or need pulling back.
+"""
 
 from datetime import date
 
@@ -6,8 +10,7 @@ import polars as pl
 
 import cnequity.steps  # noqa: F401 — register steps
 from cnequity.config import Config
-from cnequity.steps.finalize import _max_partition_date, _reconcile_watermarks, _update_watermarks
-from cnequity.storage.state import StateStore
+from cnequity.quality.verify import max_published_date, watermark_date
 
 _VAL_SCHEMA_ROWS = ("pe_ttm", "pb", "ps_ttm", "total_mv", "float_mv")
 
@@ -31,9 +34,7 @@ def test_snapshot_watermark_follows_the_data_not_the_run_date(tmp_path):
     _write_valuation(cfg, date(2026, 7, 20))
 
     # valuation_metrics is a snapshot dataset; the run happens on the 21st.
-    _update_watermarks(cfg, frozenset({"valuation_metrics"}), date(2026, 7, 21))
-
-    assert StateStore(cfg.meta_root).get_date("valuation_metrics") == date(2026, 7, 20)
+    assert watermark_date(cfg, "valuation_metrics", "trade_date") == date(2026, 7, 20)
 
 
 def test_watermark_advances_when_the_day_actually_landed(tmp_path):
@@ -41,54 +42,7 @@ def test_watermark_advances_when_the_day_actually_landed(tmp_path):
     _write_valuation(cfg, date(2026, 7, 20))
     _write_valuation(cfg, date(2026, 7, 21))
 
-    _update_watermarks(cfg, frozenset({"valuation_metrics"}), date(2026, 7, 21))
-
-    assert StateStore(cfg.meta_root).get_date("valuation_metrics") == date(2026, 7, 21)
-
-
-def test_watermark_never_moves_backward_while_advancing(tmp_path):
-    """Advancing is monotonic; only reconciliation may pull a watermark back."""
-    cfg = Config(data_root=tmp_path / "data")
-    state = StateStore(cfg.meta_root)
-    state.set_date("valuation_metrics", date(2026, 7, 21))
-    _write_valuation(cfg, date(2026, 7, 20))
-
-    _update_watermarks(cfg, frozenset({"valuation_metrics"}), date(2026, 7, 21))
-
-    assert state.get_date("valuation_metrics") == date(2026, 7, 21)
-
-
-def test_reconcile_pulls_back_a_watermark_that_claims_missing_data(tmp_path):
-    """The outage case: the source went dark, so nothing compacts and nothing advances."""
-    cfg = Config(data_root=tmp_path / "data")
-    state = StateStore(cfg.meta_root)
-    state.set_date("valuation_metrics", date(2026, 7, 21))
-    _write_valuation(cfg, date(2026, 7, 20))
-
-    findings = _reconcile_watermarks(cfg)
-
-    assert state.get_date("valuation_metrics") == date(2026, 7, 20)
-    assert len(findings) == 1
-    assert findings[0]["check"] == "valuation_watermark_coverage_gate"
-    assert findings[0]["claimed"] == "2026-07-21"
-    assert findings[0]["actual"] == "2026-07-20"
-
-
-def test_reconcile_leaves_an_honest_watermark_alone(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    state = StateStore(cfg.meta_root)
-    _write_valuation(cfg, date(2026, 7, 21))
-    state.set_date("valuation_metrics", date(2026, 7, 21))
-
-    assert _reconcile_watermarks(cfg) == []
-    assert state.get_date("valuation_metrics") == date(2026, 7, 21)
-
-
-def test_reconcile_ignores_a_dataset_with_no_watermark_yet(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    _write_valuation(cfg, date(2026, 7, 20))
-
-    assert _reconcile_watermarks(cfg) == []
+    assert watermark_date(cfg, "valuation_metrics", "trade_date") == date(2026, 7, 21)
 
 
 def test_valuation_watermark_does_not_cross_a_sparse_tip(tmp_path):
@@ -113,40 +67,7 @@ def test_valuation_watermark_does_not_cross_a_sparse_tip(tmp_path):
     ).write_parquet(bars / "part-0.parquet")
     _write_valuation(cfg, date(2026, 7, 20), symbols=1)
 
-    _update_watermarks(cfg, frozenset({"valuation_metrics"}), date(2026, 7, 20))
-
-    assert StateStore(cfg.meta_root).get_date("valuation_metrics") is None
-
-
-def test_reconcile_clears_old_sparse_valuation_watermark(tmp_path):
-    """A watermark created before the coverage gate must be removed safely."""
-    cfg = Config(data_root=tmp_path / "data")
-    state = StateStore(cfg.meta_root)
-    state.set_date("valuation_metrics", date(2026, 7, 20))
-    bars = cfg.curated_root / "daily_bars" / "trade_date=2026-07-20"
-    bars.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(
-        {
-            "symbol": ["600000.SH", "600001.SH", "600002.SH"],
-            "trade_date": [date(2026, 7, 20)] * 3,
-        }
-    ).write_parquet(bars / "part-0.parquet")
-    _write_valuation(cfg, date(2026, 7, 20), symbols=1)
-
-    findings = _reconcile_watermarks(cfg)
-
-    assert state.get_date("valuation_metrics") is None
-    assert findings[0]["check"] == "valuation_watermark_coverage_gate"
-
-
-def test_reconcile_ignores_a_dataset_with_no_data_at_all(tmp_path):
-    """An empty dataset is reported by the existence check, not by rewinding."""
-    cfg = Config(data_root=tmp_path / "data")
-    state = StateStore(cfg.meta_root)
-    state.set_date("valuation_metrics", date(2026, 7, 21))
-
-    assert _reconcile_watermarks(cfg) == []
-    assert state.get_date("valuation_metrics") == date(2026, 7, 21)
+    assert watermark_date(cfg, "valuation_metrics", "trade_date") is None
 
 
 def test_an_outage_accumulates_staleness_instead_of_being_masked(tmp_path):
@@ -160,7 +81,6 @@ def test_an_outage_accumulates_staleness_instead_of_being_masked(tmp_path):
     from cnequity.quality.freshness import is_stale
 
     cfg = Config(data_root=tmp_path / "data")
-    state = StateStore(cfg.meta_root)
     last_good = date(2026, 7, 20)
     _write_valuation(cfg, last_good)
 
@@ -168,9 +88,7 @@ def test_an_outage_accumulates_staleness_instead_of_being_masked(tmp_path):
     for day in (21, 22, 23, 25):
         anchor = date(2026, 7, day)
         # Source is dark: nothing new lands, so nothing compacts.
-        state.set_date("valuation_metrics", anchor)  # what the old code did
-        _reconcile_watermarks(cfg)
-        mark = state.get_date("valuation_metrics")
+        mark = watermark_date(cfg, "valuation_metrics", "trade_date")
         lags.append((anchor - mark).days)
 
     assert lags == [1, 2, 3, 5], "lag must grow with the outage"
@@ -209,9 +127,7 @@ def test_dense_watermark_stops_before_an_interior_trading_day_gap(tmp_path):
             }
         ).write_parquet(part / "part-merged.parquet")
 
-    _update_watermarks(cfg, frozenset({"daily_bars"}), date(2026, 7, 22))
-
-    assert StateStore(cfg.meta_root).get_date("daily_bars") == date(2026, 7, 20)
+    assert watermark_date(cfg, "daily_bars", "trade_date") == date(2026, 7, 20)
 
 
 def test_max_partition_date_keeps_root_legacy_files_in_mixed_layout(tmp_path):
@@ -222,13 +138,12 @@ def test_max_partition_date_keeps_root_legacy_files_in_mixed_layout(tmp_path):
     pl.DataFrame({"trade_date": [date(2026, 7, 20)]}).write_parquet(part / "part-0.parquet")
     pl.DataFrame({"trade_date": [date(2026, 7, 21)]}).write_parquet(root / "part-legacy.parquet")
 
-    assert _max_partition_date(cfg, "valuation_metrics", "trade_date") == date(2026, 7, 21)
+    assert max_published_date(cfg, "valuation_metrics", "trade_date") == date(2026, 7, 21)
 
 
 def test_daily_bars_dense_prefix_starts_at_the_backfill_floor(tmp_path, monkeypatch):
     """A lone recovered 1990s delisting must not pin the live watermark."""
     from cnequity.steps.common import BACKFILL_START
-    from cnequity.steps.finalize import _watermark_date_for
 
     seen = {}
 
@@ -239,70 +154,5 @@ def test_daily_bars_dense_prefix_starts_at_the_backfill_floor(tmp_path, monkeypa
     monkeypatch.setattr("cnequity.quality.verify.last_contiguous_dense_date", fake)
     cfg = Config(data_root=tmp_path / "data")
 
-    assert _watermark_date_for(cfg, "daily_bars", "trade_date") == date(2026, 10, 28)
+    assert watermark_date(cfg, "daily_bars", "trade_date") == date(2026, 10, 28)
     assert seen == {"daily_bars": BACKFILL_START}
-
-
-def test_compact_replays_no_print_proofs_only_when_daily_bars_publish(tmp_path, monkeypatch):
-    """A backfill that refetches what the lake holds publishes nothing new to check."""
-    from cnequity.steps import finalize
-    from cnequity.storage import StagingWriter
-
-    cfg = Config(data_root=tmp_path / "data")
-    day = date(2024, 6, 28)
-    replays: list[str] = []
-    reconciles: list[str] = []
-    monkeypatch.setattr(
-        "cnequity.storage.fund_no_print.reconcile_no_print_coverage",
-        lambda config: replays.append("replay") or {},
-    )
-    real_reconcile = finalize._reconcile_watermarks
-    monkeypatch.setattr(
-        finalize,
-        "_reconcile_watermarks",
-        lambda config: reconciles.append("reconcile") or real_reconcile(config),
-    )
-    bar = pl.DataFrame(
-        [
-            {
-                "symbol": "600519.SH",
-                "trade_date": day,
-                "open": 10.0,
-                "high": 11.0,
-                "low": 9.0,
-                "close": 10.5,
-                "volume": 1000,
-                "amount": 10_500.0,
-                "source": "mock",
-                "data_version": "v1",
-                "fetched_at": "2024-06-28T00:00:00+00:00",
-            }
-        ]
-    )
-    writer = StagingWriter(cfg.staging_root)
-
-    writer.write_batch("daily_bars", "first", "batch", bar)
-    first = finalize.step_compact(cfg, day, "first", {})
-    writer.write_batch("daily_bars", "again", "batch", bar)
-    again = finalize.step_compact(cfg, day, "again", {})
-
-    assert "daily_bars" in first["dataset_revisions"]
-    assert "dataset_revisions" not in again
-    assert replays == ["replay"]
-    # The reconcile guards runs that publish nothing because a source went dark.
-    assert reconciles == ["reconcile", "reconcile"]
-    assert StateStore(cfg.meta_root).get_date("daily_bars") == day
-
-
-def test_update_watermarks_replays_no_print_proofs_by_default(tmp_path, monkeypatch):
-    """Repair callers rely on the default replaying the proofs."""
-    cfg = Config(data_root=tmp_path / "data")
-    replays: list[str] = []
-    monkeypatch.setattr(
-        "cnequity.storage.fund_no_print.reconcile_no_print_coverage",
-        lambda config: replays.append("replay") or {},
-    )
-
-    _update_watermarks(cfg, frozenset({"daily_bars"}), date(2024, 6, 28))
-
-    assert replays == ["replay"]

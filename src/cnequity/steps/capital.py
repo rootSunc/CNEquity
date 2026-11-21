@@ -35,7 +35,6 @@ from cnequity.steps.common import (
     BACKFILL_START,
     incremental_trade_dates,
     list_trading_dates,
-    planner_only,
 )
 from cnequity.steps.http_common import (
     call_with_run_id,
@@ -429,15 +428,10 @@ def _existing_margin_dates(
     scan = scan_parquet_root(root)
     if "symbol" not in scan.collect_schema().names():
         return set()
-    from cnequity.storage.state import StateStore
+    from cnequity.quality.planned_coverage import partial_days
 
-    # A planner-only lake keeps no missing-date ledger: a partial day is a
-    # ``partial`` answer the backfill's planner already counts as owed.
-    owed = (
-        set()
-        if planner_only(config, "margin_trading")
-        else StateStore(config.meta_root).get_missing_dates("margin_trading")
-    )
+    # A day the ledger holds answered only in part is owed whatever its rows say.
+    owed = partial_days(config, "margin_trading")
     return set(
         scan.group_by("trade_date")
         .agg(
@@ -565,7 +559,6 @@ def _backfill_margin_trading(config: Config, trade_date: date, run_id: str) -> d
     from cnequity.domain.schemas import with_provenance
     from cnequity.steps.common import _backfill_empty_day_finding
     from cnequity.storage import StagingWriter
-    from cnequity.storage.state import StateStore
 
     source = _margin_source(config)
     fetch_day = _margin_fetcher(source)
@@ -593,10 +586,6 @@ def _backfill_margin_trading(config: Config, trade_date: date, run_id: str) -> d
             pl.concat(frames, how="diagonal_relaxed"), source=source, data_version="v1"
         )
         writer.write_batch("margin_trading", run_id, f"bf-{n_parts:04d}", part)
-        if not planner_only(config, "margin_trading"):
-            StateStore(config.meta_root).mark_staged_request_days(
-                "margin_trading", run_id, part.get_column("trade_date").unique().to_list()
-            )
         n_parts += 1
         total_rows += part.height
         frames = []
@@ -723,6 +712,16 @@ def _backfill_margin_trading(config: Config, trade_date: date, run_id: str) -> d
         # physical batch so compact may publish those snapshots.  A later
         # backfill will still retry every absent day.
         result["batch_settled"] = True
+    from datetime import UTC, datetime
+
+    from cnequity.quality.planned_coverage import clean_answer
+
+    # A day an earlier answer left partial, fetched whole now, is settled.
+    whole = set(todo) - set(empty_days) - {day for day, _count in incomplete_days}
+    settled = clean_answer(config, "margin_trading", whole, datetime.now(UTC))
+    if settled is not None:
+        updates = result.setdefault("context_updates", {})
+        updates["audit_findings"] = [*(updates.get("audit_findings") or []), settled]
     return result
 
 

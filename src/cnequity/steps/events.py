@@ -37,7 +37,7 @@ from cnequity.domain.symbols import filter_ingest_universe
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.orchestrator.registry import register_step
-from cnequity.orchestrator.source_gaps import record_source_gap, source_gap_dates
+from cnequity.orchestrator.source_gaps import record_source_gap
 from cnequity.progress import sweep_progress
 from cnequity.quality.ex_events import (
     EX_EVENT_LOOKBACK_SESSIONS,
@@ -54,11 +54,8 @@ from cnequity.steps.common import (
     incremental_trade_dates,
     instrument_metadata,
     load_symbols,
-    planner_only,
 )
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
-from cnequity.storage.observation import note_observation
-from cnequity.storage.state import StateStore
 
 # TDX xdxr is per-symbol (backfill); EastMoney datacenter supports ex-date filter (daily).
 _CANONICAL_BACKFILL = "tdx_protocol"
@@ -1048,7 +1045,6 @@ def _window_fetcher(config: Config, trade_date: date, run_id: str):
     single ``in``-list request and later days are sliced from it; if that
     request fails, each day falls back to its own exact-date query as before.
     """
-    from cnequity.steps.common import incremental_trade_dates
 
     state: dict = {}
 
@@ -1115,12 +1111,6 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
     failed_symbols: list[str] = []
     heal_written = 0
     em_ok = False
-    # The [start, through] window this run asked of the whole lake and got a
-    # clean answer for; None when it did not (see storage/observation.py).
-    observed: tuple[date | None, date] | None = None
-    # Days the EastMoney window answered; they leave the missing-dates ledger
-    # once their rows are published (or now, when there were none).
-    answered: set[date] = set()
 
     if backfill:
         symbols = list(
@@ -1582,13 +1572,32 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             )
         swept = set(symbols) | completed_symbols
         scoped = context.get("_retry_symbols") or backfill_of(config).symbol_list()
-        # A `--symbols` sweep answers for those names only; it counts as a look
-        # at the lake when, with this run's earlier chunks, it covered them all.
+        # A `--symbols` sweep answers for those names only; it is a clean look
+        # at the lake's days when, with this run's earlier chunks, it covered
+        # them all. An event feed's newest row is its newest event, so this is
+        # what keeps a quiet window fresh.
         if swept and not failed_symbols and (not scoped or swept >= set(_sweep_universe(config))):
-            observed = (
-                backfill_of(config).start,
-                min(backfill_of(config).end or trade_date, trade_date),
+            from datetime import UTC, datetime
+
+            from cnequity.quality.planned_coverage import answer_finding
+            from cnequity.steps.common import list_trading_dates
+
+            first = backfill_of(config).start or CORPORATE_ACTIONS_BACKFILL_START
+            through = min(backfill_of(config).end or trade_date, trade_date)
+            # A lake with no calendar yet still records how far it looked.
+            sessions = set(list_trading_dates(config, first, through) or [through])
+            with_rows = (
+                set(df.get_column("ex_date").cast(pl.Date, strict=False).drop_nulls().to_list())
+                if not df.is_empty() and "ex_date" in df.columns
+                else set()
             )
+            asked = datetime.now(UTC)
+            for outcome, days in (
+                ("complete", sessions & with_rows),
+                ("empty", sessions - with_rows),
+            ):
+                if days:
+                    findings.append(answer_finding("corporate_actions", days, asked, outcome))
         canonical_source = _CANONICAL_BACKFILL
     else:
         # TDX first: the exchange's adjusted previous close names the session's
@@ -1608,16 +1617,9 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             except Exception as exc:  # noqa: BLE001 — EastMoney still answers for the day
                 tdx_error = f"{type(exc).__name__}: {exc}"[:200]
                 logger.warning("corporate_actions: TDX primary unavailable (%s)", tdx_error)
-        window: list[date] = []
         df, findings = pl.DataFrame(), []
         if config.sources.get("eastmoney", True):
-            window = incremental_trade_dates(config, "corporate_actions", trade_date)
-            window_fetch = _window_fetcher(config, trade_date, run_id)
-
-            def fetch_day(d: date) -> pl.DataFrame:
-                part = window_fetch(d)
-                answered.add(d)
-                return part
+            fetch_day = _window_fetcher(config, trade_date, run_id)
 
             try:
                 df, findings = fetch_incremental_daily(
@@ -1690,15 +1692,6 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 )
                 heal_written += int(written.get("rows_written", primary.height))
         canonical_source = _CANONICAL_DAILY
-        # The EastMoney ex-date query is market-wide, so a window with no
-        # failed or source-gapped day is a clean look at the whole lake.
-        if (
-            em_ok
-            and window
-            and not any(f.get("check") == "fetch_failed_days" for f in findings)
-            and not set(window) & source_gap_dates("corporate_actions")
-        ):
-            observed = (min(window), max(window))
         if config.failover_enabled and not tdx_ok:
             failover = failover_spec(config, "corporate_actions")
             if failover is not None and failover.snapshot_cadence == "daily":
@@ -1783,18 +1776,6 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             )
         df = df.with_columns(parsed_dates.alias("ex_date"))
 
-    if observed is not None and not planner_only(config, "corporate_actions"):
-        # Fetched rows count once compaction publishes them (finalize commits
-        # the claim); an empty answer has nothing to publish and counts now.
-        note_observation(
-            config,
-            "corporate_actions",
-            run_id,
-            start=observed[0],
-            through=observed[1],
-            pending_publish=not df.is_empty(),
-        )
-
     context_updates: dict = {"symbols_to_rebackfill": []}
     if findings:
         context_updates["audit_findings"] = findings
@@ -1810,11 +1791,6 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 run_id,
                 source=_CANONICAL_DAILY,
                 request_scope=f"daily:{trade_date.isoformat()}",
-            )
-        if answered and not planner_only(config, "corporate_actions"):
-            # Nothing to publish, so the empty answers count now.
-            StateStore(config.meta_root).clear_missing_dates(
-                "corporate_actions", answered - source_gap_dates("corporate_actions")
             )
         result = {
             "rows_read": heal_written,
@@ -1868,11 +1844,6 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 else None
             ),
         )
-        if answered and not planner_only(config, "corporate_actions"):
-            rejected = {date.fromisoformat(day) for day in result.get("rejected_dates", [])}
-            StateStore(config.meta_root).mark_staged_request_days(
-                "corporate_actions", run_id, answered - rejected
-            )
         if heal_written:
             # Staged under their own batch, but still rows this step wrote.
             result["rows_read"] = int(result.get("rows_read", 0)) + heal_written

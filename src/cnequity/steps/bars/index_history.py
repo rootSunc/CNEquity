@@ -23,8 +23,6 @@ from cnequity.steps.common import (
     list_trading_dates,
     load_curated_instruments,
     load_symbols,
-    owe_keys,
-    planner_only,
 )
 
 
@@ -69,21 +67,19 @@ def step_index_bars(config: Config, trade_date: date, run_id: str, context: dict
     from cnequity.steps.common import write_simple
 
     result = write_simple(config, run_id, "index_bars", df)
-    if planner_only(config, "index_bars"):
-        from cnequity.quality.planned_coverage import answer_finding
+    from cnequity.quality.planned_coverage import answer_finding
 
-        # A session some index is missing from is answered in part and stays
-        # owed; a clean one settles what an earlier run left partial.
-        short = {session for _, session in missing}
-        clean = set(list_trading_dates(config, start, end)) - short
-        findings = result.setdefault("context_updates", {}).setdefault("audit_findings", [])
-        asked = datetime.now(UTC)
-        if short:
-            findings.append(answer_finding("index_bars", short, asked, "partial"))
-        if clean:
-            findings.append(answer_finding("index_bars", clean, asked, "complete"))
+    # A session some index is missing from is answered in part and stays
+    # owed; a clean one settles what an earlier run left partial.
+    short = {session for _, session in missing}
+    clean = set(list_trading_dates(config, start, end)) - short
+    findings = result.setdefault("context_updates", {}).setdefault("audit_findings", [])
+    asked = datetime.now(UTC)
+    if short:
+        findings.append(answer_finding("index_bars", short, asked, "partial"))
+    if clean:
+        findings.append(answer_finding("index_bars", clean, asked, "complete"))
     if missing:
-        owe_keys(config, "index_bars", missing, run_id=run_id, reason="source_scope_incomplete")
         result.update(
             status="warning",
             coverage_status="partial",

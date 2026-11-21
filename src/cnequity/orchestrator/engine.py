@@ -379,6 +379,9 @@ class JobEngine:
                     "results": results,
                     "rows_read": total_read,
                     "rows_written": total_written,
+                    # A caller that compacts the run itself (`cne backfill`)
+                    # hands these on: compact records the answers in them.
+                    "audit_findings": list(context.get("audit_findings") or ()),
                 }
             except (KeyboardInterrupt, SystemExit):
                 # Independent of `finalize_run`. That flag says who closes the

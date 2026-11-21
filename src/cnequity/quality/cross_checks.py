@@ -779,9 +779,10 @@ def adj_factor_coverage_findings(config: Config, trade_date: date) -> list[dict]
         .alias("missing_factor_days")
     )
 
+    from cnequity.meta_layout import DECISIONS
     from cnequity.storage.state import StateStore
 
-    source_unavailable = StateStore(config.meta_root).get_string_set(
+    source_unavailable = StateStore(config.meta_root, DECISIONS).get_string_set(
         "adj_factors", "source_unavailable_symbols"
     )
     findings: list[dict] = []

@@ -8,11 +8,11 @@ import cnequity.steps  # noqa: F401
 from cnequity.config import Config, FailoverDatasetSpec
 from cnequity.orchestrator.compact_gate import compact_allowed
 from cnequity.orchestrator.manifest import Manifest
+from cnequity.quality.verify import covered_through
 from cnequity.steps.finalize import step_audit, step_compact
 from cnequity.storage import StagingWriter
 from cnequity.storage.revisions import RevisionStore
 from cnequity.storage.source_snapshots import SnapshotStore
-from cnequity.storage.state import StateStore
 
 
 def test_cross_source_correction_retains_parent_and_records_changed_keys(tmp_path):
@@ -97,14 +97,11 @@ def test_compact_skips_dataset_with_failed_batches(tmp_path):
     for path in writer.list_run_files("daily_bars", run_id):
         path.with_suffix(".sealed.json").unlink()
 
-    state = StateStore(cfg.meta_root)
-    state.set_date("daily_bars", date(2024, 6, 27))
-
     result = step_compact(cfg, trade_date, run_id, {})
     assert result["status"] == "warning"
     skipped = result.get("context_updates", {}).get("compact_skipped_datasets", [])
     assert skipped == [{"dataset": "daily_bars", "incomplete_batches": 1}]
-    assert state.get_date("daily_bars") == date(2024, 6, 27)
+    assert covered_through(cfg, "daily_bars") is None
     assert not (cfg.curated_root / "daily_bars" / "trade_date=2024-06-28").exists()
 
 
@@ -127,13 +124,10 @@ def test_compact_skips_dataset_with_running_batches(tmp_path):
         pl.DataFrame([_daily_bar_row("000001.SZ", trade_date)]),
     )
 
-    state = StateStore(cfg.meta_root)
-    state.set_date("daily_bars", date(2024, 6, 27))
-
     result = step_compact(cfg, trade_date, run_id, {})
     skipped = result.get("context_updates", {}).get("compact_skipped_datasets", [])
     assert skipped == [{"dataset": "daily_bars", "incomplete_batches": 1}]
-    assert state.get_date("daily_bars") == date(2024, 6, 27)
+    assert covered_through(cfg, "daily_bars") is None
     assert not (cfg.curated_root / "daily_bars" / "trade_date=2024-06-28").exists()
 
 
@@ -155,11 +149,8 @@ def test_compact_advances_watermark_when_all_batches_succeed(tmp_path):
         pl.DataFrame([_daily_bar_row("000001.SZ", trade_date)]),
     )
 
-    state = StateStore(cfg.meta_root)
-    state.set_date("daily_bars", date(2024, 6, 27))
-
     step_compact(cfg, trade_date, run_id, {})
-    assert state.get_date("daily_bars") == trade_date
+    assert covered_through(cfg, "daily_bars") == trade_date
     from cnequity.query import catalog_read, load
 
     catalog_read.close_all()
@@ -168,7 +159,6 @@ def test_compact_advances_watermark_when_all_batches_succeed(tmp_path):
 
 def test_partial_by_date_publication_keeps_the_missing_day_outstanding(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    state = StateStore(cfg.meta_root)
     writer = StagingWriter(cfg.staging_root)
 
     def breadth(day):
@@ -193,21 +183,16 @@ def test_partial_by_date_publication_keeps_the_missing_day_outstanding(tmp_path)
         )
 
     day_26, day_27, day_28 = (date(2024, 6, d) for d in (26, 27, 28))
-    state.record_missing_dates("market_breadth", [day_27], reason="timeout")
     for day in (day_26, day_28):
         writer.write_batch("market_breadth", "partial", f"day-{day}", breadth(day))
-    state.mark_staged_request_days("market_breadth", "partial", [day_26, day_28])
 
+    # The hole on the 27th holds the watermark back though the 28th is published.
     step_compact(cfg, day_28, "partial", {})
-    assert state.get_missing_dates("market_breadth") == {day_27}
-    payload = state.get_payload("market_breadth")
-    assert payload["observed_max"] == "2024-06-28"
-    assert payload["coverage_status"] == "incomplete"
+    assert covered_through(cfg, "market_breadth") == day_26
 
     writer.write_batch("market_breadth", "repair", f"day-{day_27}", breadth(day_27))
-    state.mark_staged_request_days("market_breadth", "repair", [day_27])
     step_compact(cfg, day_28, "repair", {})
-    assert state.get_missing_dates("market_breadth") == set()
+    assert covered_through(cfg, "market_breadth") == day_28
 
 
 def test_source_diff_gate_rolls_back_mutable_candidate_before_next_partition(tmp_path):
@@ -315,11 +300,8 @@ def test_compact_snapshot_watermark_uses_run_date_not_max_partition(tmp_path):
         ),
     )
 
-    state = StateStore(cfg.meta_root)
-    state.set_date("fund_flow", date(2024, 6, 25))
-
     step_compact(cfg, trade_date, run_id, {})
-    assert state.get_date("fund_flow") == trade_date
+    assert covered_through(cfg, "fund_flow") == trade_date
 
 
 def test_audit_emits_compact_skipped_warning(tmp_path):

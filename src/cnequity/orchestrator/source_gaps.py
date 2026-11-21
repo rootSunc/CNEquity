@@ -43,7 +43,6 @@ def record_source_gap(dataset: str, message: str, *, frame=None, dates=()) -> No
     if current is None:
         raise SourceUnavailableError(message)
     from cnequity.domain.datasets import DATASETS
-    from cnequity.storage.state import StateStore
 
     config, findings = current
     days = set(dates)
@@ -60,7 +59,7 @@ def record_source_gap(dataset: str, message: str, *, frame=None, dates=()) -> No
             "dates": sorted(day.isoformat() for day in days),
         }
     )
-    if days and dataset in getattr(config, "planner_only", ()):
+    if days:
         from datetime import UTC, datetime
 
         # The day has rows but not all of them: recorded partial, it stays owed.
@@ -76,8 +75,4 @@ def record_source_gap(dataset: str, message: str, *, frame=None, dates=()) -> No
                 "outcome": "partial",
                 "asked_at": datetime.now(UTC).isoformat(),
             }
-        )
-    elif days:
-        StateStore(config.meta_root).record_missing_dates(
-            dataset, days, reason="source_scope_incomplete"
         )

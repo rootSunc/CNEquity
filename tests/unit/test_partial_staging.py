@@ -8,11 +8,11 @@ import pytest
 from cnequity.config import Config
 from cnequity.domain import datasets as dataset_registry
 from cnequity.domain.schemas import SchemaValidationError, with_provenance
+from cnequity.quality.planned_coverage import ANSWER_CHECK, partial_days
 from cnequity.query import load
 from cnequity.steps.common import write_simple
 from cnequity.steps.finalize import step_compact
 from cnequity.storage.parquet import StagingWriter
-from cnequity.storage.state import StateStore
 
 
 def _bars(day: date, closes: list[float]) -> pl.DataFrame:
@@ -44,12 +44,14 @@ def test_bad_row_is_quarantined_without_losing_valid_rows_or_claiming_coverage(t
     assert quarantine.parent == tmp_path / "_quarantine"
     assert pl.read_parquet(quarantine / "input.parquet").height == 101
     assert pl.read_parquet(quarantine / "rejected.parquet").height == 1
-    state = StateStore(cfg.meta_root)
-    state.mark_staged_request_days("daily_bars", "partial", [day])
-    step_compact(cfg, day, "partial", {})
+    (answer,) = [
+        f for f in result["context_updates"]["audit_findings"] if f["check"] == ANSWER_CHECK
+    ]
+    assert answer["outcome"] == "partial"
+    assert answer["periods"] == [day.isoformat()]
+    step_compact(cfg, day, "partial", result["context_updates"])
     assert load("daily_bars", config=cfg).height == 100
-    assert day in state.get_missing_dates("daily_bars")
-    assert state.get_payload("daily_bars")["coverage_status"] == "incomplete"
+    assert partial_days(cfg, "daily_bars") == {day}
     writer = StagingWriter(cfg.staging_root)
     assert len(writer.list_run_files("daily_bars", "partial")) == 1
     assert [r["rows_rejected"] for r in writer.quality_receipts("daily_bars", "partial")] == [1]

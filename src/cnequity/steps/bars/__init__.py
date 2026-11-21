@@ -6,7 +6,7 @@ already had. Each module calls a sibling's helpers through the module
 is defined. Only the public step and repair entry points are re-exported here;
 reach private helpers through their module.
 
-* ``bar_scope``, ``etf_debts`` — which symbols a run owes, and ownership;
+* ``bar_scope`` — which symbols a run owes, and ownership;
 * ``daily``, ``finish``, ``admission``, ``staging`` — the ``daily_bars`` step;
 * ``tip_fetch``, ``gapfill``, ``gapfill_chain``, ``sina_bars`` — fetching the
   newest session and filling gaps;
@@ -30,7 +30,6 @@ from cnequity.steps.bars import (  # noqa: F401
     amounts,
     bar_scope,
     daily,
-    etf_debts,
     finish,
     gapfill,
     gapfill_chain,

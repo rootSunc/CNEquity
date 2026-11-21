@@ -2,6 +2,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 import cnequity.steps  # noqa: F401
 from cnequity.adapters.eastmoney.datacenter import EastMoneyDatacenterError
@@ -124,11 +125,10 @@ def test_macro_indicators_skips_nonfinite_source_values(monkeypatch):
 
 def test_macro_indicators_rejects_empty_fetch(monkeypatch, tmp_path):
     from cnequity.steps import macro_risk
-    from cnequity.storage.state import StateStore
 
     cfg = Config(data_root=tmp_path / "data")
     cfg.staging_root.mkdir(parents=True)
-    StateStore(cfg.meta_root).set_date("macro_indicators", date(2024, 6, 27))
+    covered(monkeypatch, "macro_indicators", date(2024, 6, 27))
     monkeypatch.setattr(
         macro_risk,
         "fetch_macro_indicators",
@@ -155,11 +155,10 @@ def _only_treasury(start, end, *, client=None, config=None):
 
 def test_macro_indicators_warns_when_one_daily_series_is_missing(monkeypatch, tmp_path):
     from cnequity.steps import macro_risk
-    from cnequity.storage.state import StateStore
 
     cfg = Config(data_root=tmp_path / "data")
     cfg.staging_root.mkdir(parents=True)
-    StateStore(cfg.meta_root).set_date("macro_indicators", date(2024, 6, 27))
+    covered(monkeypatch, "macro_indicators", date(2024, 6, 27))
     monkeypatch.setattr(macro_risk, "fetch_daily_rates_range", _only_treasury)
     monkeypatch.setattr(
         macro_risk,
@@ -192,12 +191,11 @@ def test_a_rate_not_yet_published_on_the_run_day_does_not_hold_the_run(monkeypat
     step returned `warning`, and that batch kept every other row out of the
     lake for three days. The next run's lookback reads the late value."""
     from cnequity.steps import macro_risk
-    from cnequity.storage.state import StateStore
 
     cfg = Config(data_root=tmp_path / "data")
     cfg.staging_root.mkdir(parents=True)
     run_day = date(2024, 6, 28)
-    StateStore(cfg.meta_root).set_date("macro_indicators", date(2024, 6, 27))
+    covered(monkeypatch, "macro_indicators", date(2024, 6, 27))
 
     def _range(start, end, *, client=None, config=None):
         days = [d for d in pl.date_range(start, end, eager=True).to_list() if d.weekday() < 5]
@@ -459,16 +457,22 @@ def test_pboc_year_failure_retains_other_year_rows_and_records_specific_gap(monk
     assert "pboc:social_financing" not in completed
 
 
-def test_pboc_failure_keeps_eastmoney_rows_and_a_durable_unit_gap(tmp_path, monkeypatch):
+def test_pboc_failure_keeps_eastmoney_rows_and_reports_the_failed_unit(tmp_path, monkeypatch):
+    from tests.coverage_fakes import covered
+
+    from cnequity.query.reader import load
     from cnequity.steps import macro_risk
     from cnequity.steps.finalize import step_compact
-    from cnequity.storage.state import StateStore
 
     cfg = Config(data_root=tmp_path / "data", raw_archive_enabled=False)
     day = date(2024, 6, 28)
+    # Covered through the day before: the run asks only for the run day.
+    covered(monkeypatch, "macro_indicators", date(2024, 6, 27))
     monkeypatch.setattr(macro_risk, "_recent_daily_rates", lambda *a, **k: (pl.DataFrame(), {}))
+    calls = []
 
     def partial(day, *, config=None, failures=None, completed_units=None):
+        calls.append(day)
         failures.append(("pboc:social_financing", "2023 workbook unavailable"))
         completed_units.add("eastmoney:shibor_3m")
         return pl.DataFrame(
@@ -485,14 +489,21 @@ def test_pboc_failure_keeps_eastmoney_rows_and_a_durable_unit_gap(tmp_path, monk
     result = macro_risk.step_macro_indicators(cfg, day, "macro-partial", {})
     assert result["status"] == "degraded"
     assert result["batch_settled"] is True
-    state = StateStore(cfg.meta_root)
-    assert "pboc:social_financing" in state.get_payload("macro_indicators")["missing_units"]
+    (failed,) = [
+        item
+        for item in result["context_updates"]["audit_findings"]
+        if item["check"] == "macro_source_units_failed"
+    ]
+    assert [unit["unit"] for unit in failed["units"]] == ["pboc:social_financing"]
     assert list((cfg.staging_root / "macro_indicators").rglob("*.parquet"))
 
-    step_compact(cfg, day, "macro-partial", {})
-    payload = state.get_payload("macro_indicators")
-    assert payload["coverage_status"] == "incomplete"
-    assert "pboc:social_financing" in payload["missing_units"]
+    step_compact(cfg, day, "macro-partial", result["context_updates"])
+    published = load("macro_indicators", config=cfg)
+    assert published["indicator_id"].to_list() == ["shibor_3m"]
+
+    # No unit ledger: the next run reads every source again, PBOC included.
+    macro_risk.step_macro_indicators(cfg, day, "macro-next", {})
+    assert calls == [day, day]
 
 
 @pytest.mark.parametrize("enabled", [False])

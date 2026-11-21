@@ -12,7 +12,6 @@ from cnequity.adapters.tdx_protocol.client import INDEX_SYMBOLS, TdxSourceError,
 from cnequity.config import Config
 from cnequity.steps.bars import step_index_bars
 from cnequity.storage import StagingWriter
-from cnequity.storage.state import StateStore
 
 
 @pytest.mark.parametrize("allow_partial", [False, True])
@@ -120,10 +119,14 @@ def test_index_bar_step_stages_valid_rows_and_records_interior_symbol_session_ga
     assert set(staged.select("symbol", "trade_date").iter_rows()) == {
         (row["symbol"], row["trade_date"]) for row in rows
     }
-    outstanding = StateStore(cfg.meta_root).get_outstanding_keys("index_bars")
-    assert [(row["symbol"], row["trade_date"]) for row in outstanding] == [
-        ("000300.SH", "2024-06-04")
-    ]
+    # The short day goes to the coverage ledger as partial (compact records
+    # the finding); the planner asks it again until a clean answer settles it.
+    answers = {
+        item["outcome"]: item["periods"]
+        for item in result["context_updates"]["audit_findings"]
+        if item["check"] == "planner_empty_answer"
+    }
+    assert answers == {"partial": ["2024-06-04"], "complete": ["2024-06-03", "2024-06-05"]}
 
 
 def test_step_index_bars_applies_finality_guard_before_fetch(config, monkeypatch):

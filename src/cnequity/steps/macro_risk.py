@@ -19,9 +19,8 @@ from cnequity.orchestrator.outcomes import InputUnavailableError, SourceUnavaila
 from cnequity.orchestrator.registry import register_step
 from cnequity.quality.macro_checks import macro_revision_findings
 from cnequity.run_scope import backfill_of
-from cnequity.steps.common import BACKFILL_START, list_trading_dates, planner_only
+from cnequity.steps.common import BACKFILL_START, list_trading_dates
 from cnequity.steps.http_common import run_incremental_fetched
-from cnequity.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -284,26 +283,18 @@ def step_macro_indicators(config: Config, trade_date: date, run_id: str, context
         revisions.extend(macro_revision_findings(config, df, day))
         return df
 
-    try:
-        result = run_incremental_fetched(
-            config,
-            trade_date,
-            run_id,
-            "macro_indicators",
-            _fetch,
-            # Adapter rows retain their own EastMoney/PBOC provenance.
-            source="eastmoney",
-            allow_empty=False,
-        )
-    finally:
-        # A planner-only run keeps no unit ledger: every source is read again
-        # on the next run, so a failed one is simply asked again.
-        if source_failures and not planner_only(config, "macro_indicators"):
-            StateStore(config.meta_root).record_missing_units("macro_indicators", source_failures)
-    if not config.sources.get("pboc", True):
-        completed_units.discard("pboc:social_financing")
-    if not planner_only(config, "macro_indicators"):
-        StateStore(config.meta_root).mark_staged_units("macro_indicators", run_id, completed_units)
+    # No unit ledger: every source is read again on the next run, so a failed
+    # one is simply asked again.
+    result = run_incremental_fetched(
+        config,
+        trade_date,
+        run_id,
+        "macro_indicators",
+        _fetch,
+        # Adapter rows retain their own EastMoney/PBOC provenance.
+        source="eastmoney",
+        allow_empty=False,
+    )
     if revisions:
         updates = result.setdefault("context_updates", {})
         updates["audit_findings"] = [*(updates.get("audit_findings") or []), *revisions]

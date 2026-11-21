@@ -9,6 +9,29 @@ from cnequity.query.parquet_scan import scan_parquet_root
 from cnequity.run_scope import set_backfill
 from cnequity.storage.parquet import compact_dataset
 
+_KEYS = {"symbol": pl.String, "trade_date": pl.Date}
+
+
+@pytest.fixture(autouse=True)
+def bar_cells_answered(monkeypatch):
+    """Every bar gap in these lakes is one the source answered empty (a halt).
+
+    The derive leaves out cells no fetch answered (``unanswered_keys``); a
+    test lake has no coverage ledger, so it says which cells those are.
+    *unanswered* is the set a test may add to.
+    """
+    from cnequity.quality import planned_coverage
+
+    unanswered: list[tuple[str, date]] = []
+    monkeypatch.setattr(
+        planned_coverage,
+        "unanswered_keys",
+        lambda config, dataset, start, end: pl.DataFrame(
+            [{"symbol": s, "trade_date": d} for s, d in unanswered], schema=_KEYS
+        ),
+    )
+    return unanswered
+
 
 def _derive_and_publish(cfg, *, run_id: str = "run-derive", **window) -> int:
     """Stage the derive and compact it, the way the daily run does.
@@ -685,9 +708,7 @@ def test_backfill_mode_drops_the_daily_tail_window(tmp_path, monkeypatch):
     assert seen == {"start": None, "end": None}
 
 
-def test_a_session_the_bar_feed_missed_is_not_inferred_as_a_halt(tmp_path):
-    from cnequity.storage.state import StateStore
-
+def test_a_session_the_bar_feed_missed_is_not_inferred_as_a_halt(tmp_path, bar_cells_answered):
     root = tmp_path / "data"
     cfg = Config(data_root=root)
     days = [date(2024, 6, 26), date(2024, 6, 27), date(2024, 6, 28)]
@@ -748,11 +769,8 @@ def test_a_session_the_bar_feed_missed_is_not_inferred_as_a_halt(tmp_path):
     ).write_parquet(root / "curated" / "instruments" / "part-merged.parquet")
 
     assert derive_suspension_history(cfg, "probe") == 1
-    # Once the session is known to be missing from the feed, the hole is a
-    # failed fetch waiting for a refetch, not a halt.
-    StateStore(cfg.meta_root).record_missing_dates(
-        "daily_bars", [days[1]], reason="bj_session_incomplete"
-    )
+    # A cell no fetch answered is a failed fetch waiting for a refetch, not a halt.
+    bar_cells_answered.append(("920001.BJ", days[1]))
     assert derive_suspension_history(cfg, "after-ledger") == 0
 
 

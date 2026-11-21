@@ -8,6 +8,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 from cnequity.adapters.futures_exchange.cffex import parse_daily_csv
 from cnequity.adapters.futures_exchange.common import ExchangeDay, FuturesDayUnavailable
@@ -74,11 +75,13 @@ def test_the_family_is_off_until_configured(tmp_path):
     assert not is_dataset_enabled("option_bars", config)
 
 
-def test_daily_run_writes_the_reconciliation_tail(cfg, reader):
+def test_daily_run_writes_the_reconciliation_tail(cfg, reader, monkeypatch):
     calls, _missing = reader
+    # A lake already covered through the run day: the planner owes nothing older.
+    covered(monkeypatch, "futures_bars", date(2026, 9, 24))
     result = derivatives.step_futures_bars(cfg, date(2026, 9, 24), "run", {})
     staged = _staged(cfg, "futures_bars")
-    # Three sessions: the lookback includes the run day.
+    # Three sessions: the lookback includes the watermark, here the run day.
     assert sorted(set(calls)) == [date(2026, 9, 22), date(2026, 9, 23), date(2026, 9, 24)]
     assert result["rows_written"] == staged.height == 7 * 3
     assert set(staged["source"]) == {"futures_exchange"}
@@ -456,10 +459,12 @@ def test_pre_ine_route_receipt_requires_refresh_only_for_2018_shf_futures(cfg):
             assert not session_matches(cfg, "futures_bars", day, exchange, frame)
 
 
-def test_failed_session_remains_retryable_outside_reconciliation_tail(cfg, reader):
+def test_failed_session_remains_retryable_outside_reconciliation_tail(cfg, reader, monkeypatch):
     from cnequity.storage.derivative_evidence import owed_sessions
 
     calls, missing = reader
+    # Only the exchange receipt keeps the old session owed, not a planner gap.
+    covered(monkeypatch, "futures_bars", date(2026, 9, 23))
     old = date(2026, 9, 1)
     missing.add(old)
     derivatives.fetch_session(cfg, old, "futures", findings=[], raise_when_empty=False)

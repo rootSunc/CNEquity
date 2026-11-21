@@ -252,7 +252,6 @@ def derive_futures_continuous(config, *, output=None) -> dict:
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.schemas import validate_dataframe, with_provenance
     from cnequity.storage.derived_output import DerivedOutput
-    from cnequity.storage.state import StateStore
 
     bars = _curated(config, "futures_bars")
     if bars is None or bars.is_empty():
@@ -295,8 +294,6 @@ def derive_futures_continuous(config, *, output=None) -> dict:
     for stale in output.labels():
         if stale not in keep:
             output.remove(stale)
-    if "futures_continuous" not in getattr(config, "planner_only", ()):
-        StateStore(config.meta_root).set_date("futures_continuous", frame["trade_date"].max())
     return {
         "rows": frame.height,
         "products": frame["symbol"].n_unique(),

@@ -50,13 +50,14 @@ from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.orchestrator.registry import STEP_REGISTRY, StepEntry
 from cnequity.quality.dataset_checks import audit_curated_dataset
+from cnequity.quality.verify import covered_through
 from cnequity.query.reader import load
+from cnequity.query.state import dataset_state
 from cnequity.steps.finalize import step_compact
 from cnequity.storage.layout import init_data_layout
 from cnequity.storage.parquet import StagingWriter
 from cnequity.storage.revisions import RevisionStore
 from cnequity.storage.snapshots import SnapshotStore
-from cnequity.storage.state import StateStore
 
 DAY0 = dt.date(2024, 6, 26)
 DAY1 = dt.date(2024, 6, 27)
@@ -279,8 +280,6 @@ def _fixture_pipeline(root: Path) -> dict[str, Any]:
     """Exercise fail-closed staging, retry, compact, revision, query and audit."""
 
     cfg = _config(root)
-    state = StateStore(cfg.meta_root)
-    state.set_date("daily_bars", DAY0)
     attempts = {"count": 0}
 
     def fixture_step(
@@ -316,7 +315,7 @@ def _fixture_pipeline(root: Path) -> dict[str, Any]:
         failed = engine.run_job("fixture", DAY1, steps=["daily_bars"])
         run_id = str(failed["run_id"])
         _assert(failed["status"] == "failed", f"expected fixture failure: {failed}")
-        _assert(state.get_date("daily_bars") == DAY0, "failed fetch advanced daily watermark")
+        _assert(covered_through(cfg, "daily_bars") is None, "failed fetch published rows")
         failed_batches = Manifest(cfg.manifest_path).get_failed_batches(run_id)
         _assert(failed_batches, "failed fixture did not leave a retryable batch")
 
@@ -326,7 +325,7 @@ def _fixture_pipeline(root: Path) -> dict[str, Any]:
         # finalization disabled, then invoke the real compact and audit below.
         retried = engine._retry_run(run_id, DAY1, auto_finalize=False)
         _assert(retried["status"] == "success", f"fixture retry failed: {retried}")
-        _assert(state.get_date("daily_bars") == DAY0, "retry advanced watermark before compact")
+        _assert(covered_through(cfg, "daily_bars") is None, "retry published rows before compact")
 
         compact = engine.run_job(
             "fixture", DAY1, steps=["compact"], run_id=run_id, finalize_run=False
@@ -336,7 +335,8 @@ def _fixture_pipeline(root: Path) -> dict[str, Any]:
             f"fixture compact failed: {compact}",
         )
         _assert(
-            state.get_date("daily_bars") == DAY1, "successful compact did not advance watermark"
+            covered_through(cfg, "daily_bars") == DAY1,
+            "successful compact did not advance watermark",
         )
         pointer = RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars")
         _assert(
@@ -424,7 +424,7 @@ def _snapshot_and_delta(source_cfg: Config, work: Path) -> dict[str, Any]:
     _assert(store.verify("baseline-imported").passed, "imported baseline failed verification")
     restored = store.restore("baseline-imported", work / "restored")
     restored_cfg = _config(restored)
-    base_state = StateStore(restored_cfg.meta_root).get_payload("daily_bars")
+    base_state = dataset_state("daily_bars", config=restored_cfg).revision
     _assert(
         load("daily_bars", config=restored_cfg, start=DAY1, end=DAY1).height == len(SYMBOLS),
         "restored query failed",
@@ -478,7 +478,7 @@ def _snapshot_and_delta(source_cfg: Config, work: Path) -> dict[str, Any]:
         "applied delta hash/index differs from source",
     )
     _assert(
-        base_state != StateStore(restored_cfg.meta_root).get_payload("daily_bars"),
+        base_state != dataset_state("daily_bars", config=restored_cfg).revision,
         "delta did not update state",
     )
     _assert(

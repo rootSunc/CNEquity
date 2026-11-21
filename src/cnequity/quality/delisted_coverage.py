@@ -23,7 +23,9 @@ LIVE_RECENCY_DAYS = 30
 
 
 def catalog_path(config: Config) -> Path:
-    return config.meta_root / "state" / _CATALOG_FILE
+    from cnequity.meta_layout import SOURCE_CACHE
+
+    return config.meta_root / SOURCE_CACHE / _CATALOG_FILE
 
 
 def _read_catalog(config: Config) -> dict:

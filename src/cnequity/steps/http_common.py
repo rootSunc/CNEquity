@@ -17,7 +17,7 @@ from cnequity.domain.datasets import DATASETS, fetch_semantics
 from cnequity.domain.schemas import data_version_for, validate_dataframe, with_provenance
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.run_scope import backfill_of
-from cnequity.steps.common import fetch_incremental_daily, planner_only, write_simple
+from cnequity.steps.common import fetch_incremental_daily, write_simple
 from cnequity.storage import StagingWriter
 from cnequity.storage.raw_archive import (
     _RAW_ARCHIVE_EVIDENCE_SEAL,
@@ -36,7 +36,6 @@ from cnequity.storage.raw_archive import (
 # Moved to storage.raw_archive so adapters can verify a capture without the
 # step layer; steps keep importing it from here.
 from cnequity.storage.raw_archive import verify_raw_archive as verify_raw_archive
-from cnequity.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -194,19 +193,6 @@ def call_with_run_id(
     return fetch_fn(value, run_id=run_id, **kwargs)
 
 
-def _mark_snapshot_capture(config: Config, dataset: str, snapshot_date: date) -> None:
-    """Record a live-window capture without turning future dates into a watermark."""
-    spec = DATASETS.get(dataset)
-    if planner_only(config, dataset):
-        return  # the capture is the revision it publishes
-    if spec is not None and not spec.watermark and spec.fetch_semantics == "snapshot":
-        StateStore(config.meta_root).update_max_date(
-            dataset,
-            snapshot_date,
-            field="last_snapshot_date",
-        )
-
-
 def _archive_fetched_payload(
     config: Config,
     run_id: str,
@@ -341,8 +327,6 @@ def write_fetched(
                 )
         except (OSError, ValueError, TypeError) as exc:
             logger.warning("%s: could not save passive source evidence: %s", dataset, exc)
-    if snapshot_date is not None:
-        _mark_snapshot_capture(config, dataset, snapshot_date)
     return result
 
 
@@ -491,7 +475,6 @@ def run_incremental_fetched(
                     source=source,
                     df=df,
                 )
-            _mark_snapshot_capture(config, dataset, trade_date)
         if findings:
             out["context_updates"] = {"audit_findings": findings}
             # Snapshot coverage gaps are deliberately not promoted here: those
@@ -533,11 +516,6 @@ def run_incremental_fetched(
             request_params=request_params,
             url=url,
         )
-        rejected_days = {date.fromisoformat(day) for day in result.get("rejected_dates", [])}
-        successful_days = [day for day in successful_days if day not in rejected_days]
-    if not planner_only(config, dataset):
-        StateStore(config.meta_root).mark_staged_request_days(dataset, run_id, successful_days)
-    _mark_snapshot_capture(config, dataset, trade_date)
     if findings:
         existing = result.get("context_updates", {}).get("audit_findings", [])
         result["context_updates"] = {"audit_findings": [*existing, *findings]}
@@ -545,8 +523,8 @@ def run_incremental_fetched(
         if status is not None:
             result["status"] = status
         if checkpoint_days and status == "degraded":
-            # The missing date is in StateStore and its neighbours are durable
-            # individual files. The batch may settle while coverage remains
+            # The missing date is a gap the planner retries and its neighbours
+            # are durable individual files. The batch may settle while coverage remains
             # explicitly incomplete and the next plan retries that date.
             result["batch_settled"] = True
     return result

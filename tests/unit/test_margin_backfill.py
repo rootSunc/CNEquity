@@ -112,8 +112,6 @@ def test_skips_dates_already_curated(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("count", [1, 60])
 def test_partial_existing_day_is_not_considered_complete(tmp_path, monkeypatch, count):
-    from cnequity.storage.state import StateStore
-
     cfg = Config(data_root=tmp_path / "data")
     set_backfill(cfg, start=date(2026, 6, 1), end=date(2026, 6, 2))
     fetched = _setup(monkeypatch, cfg)
@@ -122,8 +120,10 @@ def test_partial_existing_day_is_not_considered_complete(tmp_path, monkeypatch, 
     curated.mkdir(parents=True)
     _fake_rows(date(2026, 6, 2), count=count).write_parquet(curated / "partial.parquet")
     if count >= 50:
-        StateStore(cfg.meta_root).record_missing_dates(
-            "margin_trading", [date(2026, 6, 2)], reason="source_scope_incomplete"
+        # Enough rows to look whole; the ledger holds the day answered only in part.
+        monkeypatch.setattr(
+            "cnequity.quality.planned_coverage.partial_days",
+            lambda config, dataset: {date(2026, 6, 2)},
         )
 
     out = _backfill_margin_trading(cfg, date(2026, 7, 1), "run-1")

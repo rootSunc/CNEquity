@@ -15,10 +15,19 @@ from datetime import date, timedelta
 
 import polars as pl
 import pytest
+from tests.catalog_seed import publish_rows
 
 from cnequity.config import Config
 from cnequity.run_scope import set_backfill
 from cnequity.steps.common import walk_day_backfill
+
+
+def _published(cfg, dataset: str, rows: list[dict]) -> None:
+    """Rows the lake already holds, published into its catalog."""
+    from cnequity.domain.schemas import with_provenance
+
+    frame = with_provenance(pl.DataFrame(rows), source="derived", data_version="v1")
+    publish_rows(cfg, dataset, frame)
 
 
 def _fake_row(d: date, date_col: str) -> dict:
@@ -58,11 +67,7 @@ def test_skips_dates_already_curated(tmp_path):
         fetched.append(d)
         return pl.DataFrame([_fake_row(d, "trade_date")])
 
-    curated = cfg.curated_root / "market_breadth" / "trade_date=2026-06-02"
-    curated.mkdir(parents=True)
-    pl.DataFrame([_fake_row(date(2026, 6, 2), "trade_date")]).write_parquet(
-        curated / "part-0.parquet"
-    )
+    _published(cfg, "market_breadth", [_fake_row(date(2026, 6, 2), "trade_date")])
 
     out = walk_day_backfill(
         cfg, date(2026, 7, 1), "run-1", "market_breadth", fetch_one, source="derived"
@@ -73,18 +78,18 @@ def test_skips_dates_already_curated(tmp_path):
     assert out["days_skipped"] == 1
 
 
-@pytest.mark.parametrize("reason", ["quarantined_rows", "source_unavailable"])
-def test_existing_rows_do_not_hide_a_date_gap_or_clear_it_before_publication(tmp_path, reason):
-    from cnequity.storage.state import StateStore
+def test_existing_rows_do_not_hide_a_partial_day(tmp_path):
+    """A day held only in part (quarantined rows, a source that answered half) is asked again."""
+    from datetime import UTC, datetime
+
+    from cnequity.quality import planned_coverage
 
     cfg = Config(data_root=tmp_path / "data")
     day = date(2026, 6, 2)
     set_backfill(cfg, start=day, end=day)
-    root = cfg.curated_root / "market_breadth" / f"trade_date={day}"
-    root.mkdir(parents=True)
-    pl.DataFrame([_fake_row(day, "trade_date")]).write_parquet(root / "part-0.parquet")
-    state = StateStore(cfg.meta_root)
-    state.record_missing_dates("market_breadth", [day], reason=reason)
+    _published(cfg, "market_breadth", [_fake_row(day, "trade_date")])
+    short = planned_coverage.answer_finding("market_breadth", [day], datetime.now(UTC), "partial")
+    planned_coverage.record_answers(cfg, "earlier", [short])
     calls = []
 
     def fetch(d):
@@ -95,7 +100,6 @@ def test_existing_rows_do_not_hide_a_date_gap_or_clear_it_before_publication(tmp
     assert calls == [day]
     assert result["days_skipped"] == 0
     assert result["rows_written"] == 1
-    assert state.get_missing_dates("market_breadth") == {day}
 
 
 def test_resume_check_uses_the_configured_date_column(tmp_path):
@@ -119,9 +123,7 @@ def test_resume_check_uses_the_configured_date_column(tmp_path):
         fetched.append(d)
         return pl.DataFrame([_row(d)])
 
-    curated = cfg.curated_root / "regulatory_events" / "event_date=2026-06-01"
-    curated.mkdir(parents=True)
-    pl.DataFrame([_row(date(2026, 6, 1))]).write_parquet(curated / "part-0.parquet")
+    _published(cfg, "regulatory_events", [_row(date(2026, 6, 1))])
 
     out = walk_day_backfill(
         cfg,

@@ -34,7 +34,6 @@ from cnequity.storage.atomic import (
 from cnequity.storage.lake_record import read_lake
 from cnequity.storage.provenance import runtime_lineage
 from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
-from cnequity.storage.state import StateStore
 
 #: What a snapshot keeps of each dataset's revision (the rest named files it no longer has).
 _REVISION_FIELDS = (
@@ -1052,7 +1051,6 @@ class SnapshotStore:
             raise FileExistsError(f"snapshot already exists: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         temp = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=destination.parent))
-        state = StateStore(self.config.meta_root)
         dataset_states: dict[str, dict] = {}
         records: list[SnapshotFile] = []
         copies: list[_PlannedCopy] = []
@@ -1075,17 +1073,14 @@ class SnapshotStore:
                         sha256=_sha256(stored),
                     )
                 )
-            dataset_states = {dataset: state.get_payload(dataset) for dataset in selected}
-            for payload in dataset_states.values():
-                # The catalog is each revision's record; it has no receipt or pointer file.
-                payload.pop("revision_receipt", None)
-                payload.pop("revision_pointer", None)
+            # A dataset's coverage is the lake catalog's ledger, which the
+            # snapshot carries; its state is the revision it holds.
+            dataset_states = {dataset: {} for dataset in selected}
             from cnequity.storage.lake_write import export_tree, published_layout
 
             revisions = self._current_revisions(selected)
             for dataset in selected:
-                # The state file no longer repeats the revision; the snapshot
-                # keeps it beside the manifest's copy so verify can cross-check.
+                # Kept beside the manifest's copy so verify can cross-check.
                 dataset_states[dataset].update(
                     {key: revisions[dataset][key] for key in _STATE_REVISION_KEYS}
                 )

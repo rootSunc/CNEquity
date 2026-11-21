@@ -175,7 +175,9 @@ def step_sector_bars(config: Config, trade_date: date, run_id: str, context: dic
 
 
 def _sector_bars_backfill_state_path(config: Config):
-    return config.meta_root / "state" / f"{_SECTOR_BARS_BACKFILL_STATE}.json"
+    from cnequity.meta_layout import sector_bars_backfill_path
+
+    return sector_bars_backfill_path(config.meta_root)
 
 
 def _read_sector_bars_checkpoint(config: Config) -> dict:
@@ -263,7 +265,9 @@ def clear_sector_bars_backfill_state(config: Config) -> None:
         path.unlink()
     # Drop hybrid-era split checkpoints so a fresh EM sweep starts clean.
     for track in ("tdx", "em"):
-        hybrid = config.meta_root / "state" / f"sector_bars_backfill_{track}.json"
+        from cnequity.meta_layout import sector_bars_backfill_path
+
+        hybrid = sector_bars_backfill_path(config.meta_root, track)
         if hybrid.exists():
             hybrid.unlink()
 

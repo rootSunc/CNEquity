@@ -25,7 +25,7 @@ The timer belongs to the current user: launchd on macOS, the crontab on Linux, T
 
 The timer runs `cne run maintain` once after each trading day's update; you can also run it by hand:
 
-1. the last closed session's daily group runs: a failed `[job.maintenance] gate_groups` group (default `core`) fails at once; any other failed group is reported and fails after `soft_fail_max_days` (default 3) sessions in a row, counted under `meta/state/soft_streak/` (the shell pipeline's counts carry over);
+1. the last closed session's daily group runs: a failed `[job.maintenance] gate_groups` group (default `core`) fails at once; any other failed group is reported and fails after `soft_fail_max_days` (default 3) sessions in a row, counted under `meta/scheduler/soft_streak/` (the shell pipeline's counts carry over);
 2. the run audit; on `[job.maintenance] full_audit_weekday` (Saturday by default) the whole-lake `audit --full --quality-only` instead, which reads every Parquet file and can take hours on a large lake;
 3. the freshness gate `status --datasets --gate`, failing only on the schedule groups the timer actually runs (`--groups` overrides);
 4. source probes `sources probe --stale-only` (labelled with the `[source_health] vantage` egress) and `sources slo`;

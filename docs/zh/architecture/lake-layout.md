@@ -7,7 +7,7 @@
 | `staging/` | 尚待合并的批次数据；失败恢复可能依赖它 |
 | `curated/`、`derived/` | 合并工作副本及兼容布局；直接扫描不固定已发布版本 |
 | `meta/revisions/` | 数据版本收据、当前版本指针与不可变数据文件 |
-| `meta/state/` | 更新水位与覆盖状态 |
+| `meta/lake.json`、`meta/scheduler/`、`meta/checkpoints/`、`meta/source_cache/`、`meta/decisions/` | 迁移记录、调度标记、续跑点、来源缓存、来源裁决。覆盖记在湖目录里 |
 | `meta/quality/` | 质量检查与来源差异报告 |
 | `meta/raw/` | 原始响应归档 |
 | `meta/raw_storage.json` | 可选的外置原文位置登记；来源记录仍在 `meta/raw/`，快照会包含外置原文而不依赖本机路径 |

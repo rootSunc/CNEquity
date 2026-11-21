@@ -18,7 +18,6 @@ from cnequity.config import Config
 from cnequity.run_scope import set_backfill
 from cnequity.steps import bars
 from cnequity.storage.layout import init_data_layout
-from cnequity.storage.state import StateStore
 
 LISTED = date(2026, 8, 12)
 ADMITTED = date(2026, 9, 7)
@@ -93,15 +92,18 @@ def _spans(monkeypatch, spans: dict):
     monkeypatch.setattr(bars.bar_scope, "_instrument_spans", lambda _c: spans)
 
 
-def test_the_sessions_before_admission_land_on_the_ledger(lake, monkeypatch):
+def test_the_sessions_before_admission_are_owed(lake, monkeypatch):
     _spans(monkeypatch, {"920138.BJ": (LISTED, None, "stock")})
     _write_bars(lake, [("920138.BJ", ADMITTED), ("920138.BJ", END)])
+    owed = []
+    monkeypatch.setattr(
+        bars.admission,
+        "owe_keys",
+        lambda _c, dataset, pairs, **kw: owed.extend(sorted(pairs)) or len(owed),
+    )
 
     assert bars.admission._record_late_admissions(lake, "r1", ["920138.BJ"], END) == 3
-
-    owed = StateStore(lake.meta_root).get_outstanding_keys("daily_bars")
-    assert [r["trade_date"] for r in owed] == ["2026-08-12", "2026-08-13", "2026-08-14"]
-    assert {r["reason"] for r in owed} == {"late_admission"}
+    assert owed == [("920138.BJ", day) for day in SESSIONS[:3]]
 
 
 def test_a_security_with_no_bar_at_all_owes_from_its_listing(lake, monkeypatch):

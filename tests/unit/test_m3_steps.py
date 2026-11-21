@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 import pytest
+from tests.coverage_fakes import covered
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config, ScheduleGroup, WaveConfig, validate_config
@@ -39,9 +40,8 @@ def cfg(tmp_path):
 
 def test_step_fund_flow_writes_staging(cfg, monkeypatch):
     from cnequity.steps import capital as cap
-    from cnequity.storage.state import StateStore
 
-    StateStore(cfg.meta_root).set_date("fund_flow", date(2024, 6, 27))
+    covered(monkeypatch, "fund_flow", date(2024, 6, 27))
 
     def fake_fetch(trade_date, **kwargs):
         return pl.DataFrame(
@@ -75,9 +75,8 @@ def test_capital_steps_reject_empty_canonical_feeds(
     cfg, monkeypatch, dataset, step_name, fetch_name
 ):
     from cnequity.steps import capital as cap
-    from cnequity.storage.state import StateStore
 
-    StateStore(cfg.meta_root).set_date(dataset, date(2024, 6, 27))
+    covered(monkeypatch, dataset, date(2024, 6, 27))
     # These assert the empty-feed guard, not the vendor. margin_trading now
     # defaults to the exchange path, so pin the source the fetch is patched on.
     cfg.margin_trading_source = "eastmoney"
@@ -88,9 +87,8 @@ def test_capital_steps_reject_empty_canonical_feeds(
 
 def test_margin_trading_rejects_partial_daily_feed(cfg, monkeypatch):
     from cnequity.steps import capital as cap
-    from cnequity.storage.state import StateStore
 
-    StateStore(cfg.meta_root).set_date("margin_trading", date(2024, 6, 27))
+    covered(monkeypatch, "margin_trading", date(2024, 6, 27))
     cfg.margin_trading_source = "eastmoney"
     monkeypatch.setattr(
         cap,
@@ -530,7 +528,6 @@ def test_valuation_snapshot_filters_to_bar_universe(cfg, monkeypatch):
     must drop them so valuation stays in lock-step with daily_bars (audit:
     valuation_bars_orphan_symbol)."""
     from cnequity.steps import fundamentals as fund
-    from cnequity.storage.state import StateStore
 
     # Bar universe: only 600519.SH has ever traded.
     bars_part = cfg.curated_root / "daily_bars" / "trade_date=2024-06-28"
@@ -539,7 +536,7 @@ def test_valuation_snapshot_filters_to_bar_universe(cfg, monkeypatch):
         bars_part / "part-merged.parquet"
     )
 
-    StateStore(cfg.meta_root).set_date("valuation_metrics", date(2024, 6, 27))
+    covered(monkeypatch, "valuation_metrics", date(2024, 6, 27))
 
     def fake_fetch(trade_date, **kwargs):
         return pl.DataFrame(

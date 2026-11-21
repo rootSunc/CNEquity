@@ -147,7 +147,7 @@ from cnequity.run_scope import backfill_of, run_flags_of, set_backfill, set_run_
     default="gaps",
     show_default=True,
     help=N_(
-        "Datasets in [datasets] planner_only: ask only what the coverage planner says is owed (gaps), also the days it recorded as empty (empty), or every day in the range (all)."
+        "Ask only what the coverage planner says is owed (gaps), also the days it recorded as empty (empty), or every day in the range (all)."
     ),
 )
 def backfill(
@@ -214,12 +214,6 @@ def run_backfill(config_path: str, request: BackfillRequest) -> None:
     spec = get_dataset(dataset)
     derivatives = dataset in DERIVATIVE_DATASETS
     cfg = _cfg(config_path)
-    if request.redo != "gaps" and dataset not in getattr(cfg, "planner_only", ()):
-        raise click.UsageError(
-            _("--redo applies to datasets in [datasets] planner_only; {dataset} is not").format(
-                dataset=dataset
-            )
-        )
     scope = request_window(request)
     set_backfill(cfg, refetch=scope.pop("refetch"), redo=scope.pop("redo"))
     flags = run_flags(request)
@@ -382,17 +376,12 @@ def _explain_fetched_nothing() -> None:
 
 def _watermark(cfg, dataset: str) -> date | None:
     """Current watermark, or None; this feeds an advisory note and must not fail a backfill."""
-    from cnequity.storage.state import StateStore
-
-    meta_root = getattr(cfg, "meta_root", None)
-    if meta_root is None:
+    if getattr(cfg, "meta_root", None) is None:
         return None
     from cnequity.quality.verify import covered_through
 
     try:
-        if dataset in getattr(cfg, "planner_only", ()):
-            return covered_through(cfg, dataset)
-        return StateStore(meta_root).get_date(dataset)
+        return covered_through(cfg, dataset)
     except (OSError, ValueError):
         return None
 
@@ -635,7 +624,6 @@ def _backfill_plan(cfg, dataset, start, end, symbols, workers, repair_modes) -> 
     from cnequity.diagnostics.source_limits import effective_source_policy
     from cnequity.domain.datasets import history_mode_for
     from cnequity.domain.http_policy import cooldown_status, source_family
-    from cnequity.domain.rate_limit import _read_json
 
     spec = get_dataset(dataset)
     registered = {
@@ -684,8 +672,6 @@ def _backfill_plan(cfg, dataset, start, end, symbols, workers, repair_modes) -> 
         }
     else:
         routing = {"confidence": "actual source depends on gaps, route policy and responses"}
-    state = _read_json(cfg.meta_root / "state" / f"{dataset}.json")
-    outstanding = state.get("outstanding_keys")
     cold_minimum = None
     broad_tip = None
     if dataset == "daily_bars" and symbols:
@@ -724,10 +710,7 @@ def _backfill_plan(cfg, dataset, start, end, symbols, workers, repair_modes) -> 
         "routing": routing,
         "repair_modes": repair_modes,
         "workers": workers,
-        "checkpoint": {
-            "watermark": state.get("watermark"),
-            "outstanding_keys": len(outstanding) if isinstance(outstanding, list) else 0,
-        },
+        "checkpoint": {"watermark": _watermark(cfg, dataset)},
         "margin_source": cfg.margin_trading_source if dataset == "margin_trading" else None,
         "source_note": "The registered source describes capability; per-market routing and explicit repair modes are in the fetch guide, and the actual source is written into the data rows",
         "chunk_symbols": spec.backfill_chunk_symbols,
@@ -852,53 +835,21 @@ def _degraded(status) -> bool:
 def retry_recent_owed(cfg, dataset: str, trade_date: date) -> dict:
     """The daily run's pass over *dataset*'s recently owed keys.
 
-    The coverage planner's gaps over the last ``SYNC_DAYS`` join the old
-    owed-key ledger first, so either side can only add work, then the same
-    repair as ``cne backfill --outstanding`` runs over the keys of those days.
+    The coverage planner's gaps over the last ``SYNC_DAYS`` are repaired the
+    way ``cne backfill --outstanding`` repairs them.
     Older debt is left to that command: a backlog must never make the daily
     run take hours. The config's backfill window is put back afterwards.
     """
     from datetime import timedelta
 
     from cnequity.quality import planned_coverage
-    from cnequity.storage.state import StateStore
 
     since = trade_date - timedelta(days=planned_coverage.SYNC_DAYS)
-    if dataset in getattr(cfg, "planner_only", ()):
-        return _retry_planned_keys(cfg, dataset, trade_date, since)
-    store = StateStore(cfg.meta_root)
-    try:
-        planner = planned_coverage.gap_keys(cfg, dataset, trade_date)
-    except Exception as exc:  # noqa: BLE001 — the old ledger still decides
-        logging.getLogger(__name__).warning(
-            "%s: the planner could not list owed keys (%s)", dataset, exc
-        )
-        planner = []
-    owed = {
-        (row.get("symbol"), row.get("trade_date")) for row in store.get_outstanding_keys(dataset)
-    }
-    added = [(symbol, day) for symbol, day in planner if (symbol, day.isoformat()) not in owed]
-    if added:
-        store.record_outstanding_keys(dataset, added, run_id="planner", reason="planner_gap")
-    previous = backfill_of(cfg)
-    try:
-        result = _repair_outstanding(cfg, dataset, 1, since=since)
-    finally:
-        object.__setattr__(cfg, "backfill_window", previous)
-    return {
-        **result,
-        "since": since.isoformat(),
-        "planner_keys": len(planner),
-        "planner_added": len(added),
-    }
+    return _retry_planned_keys(cfg, dataset, trade_date, since)
 
 
 def _retry_planned_keys(cfg, dataset: str, trade_date: date, since: date) -> dict:
-    """A planner-only dataset's daily retry: the planner's owed keys, no ledger.
-
-    The keys come straight from the planner and what is still owed after the
-    passes is planned again, so nothing is written to ``meta/state``.
-    """
+    """The daily retry: the planner's owed keys, planned again after the passes."""
     from cnequity.quality import planned_coverage
 
     keys = planned_coverage.gap_keys(cfg, dataset, trade_date)
@@ -932,23 +883,17 @@ def _repair_outstanding(
 ) -> dict:
     """Repair monthly key scopes and close with truthful remaining coverage.
 
-    With *since*, only keys of that day or later are repaired; earlier ones
-    stay owed. *owed_rows* names the keys instead of the owed-key ledger (a
-    planner-only dataset); nothing is then settled against the ledger.
+    The keys are what the coverage planner owes (*owed_rows* names them
+    instead). With *since*, only keys of that day or later are repaired;
+    earlier ones stay owed. What is still owed afterwards is planned again.
     """
     from collections import defaultdict
 
     from cnequity.orchestrator.manifest import Manifest
     from cnequity.steps.bars.bar_scope import _last_final_session
-    from cnequity.storage.state import StateStore
 
-    # A later ordinary run may already have published many owed keys. Reconcile
-    # against committed rows before grouping months, or those keys would drive
-    # unnecessary source requests. This is not a repair attempt for missing keys.
-    ledger = owed_rows is None
-    if ledger:
-        _settle_outstanding(cfg, dataset, note_missing_attempt=False)
-    owed = StateStore(cfg.meta_root).get_outstanding_keys(dataset) if ledger else owed_rows
+    planned = owed_rows is None
+    owed = _planned_owed_rows(cfg, dataset, since) if planned else owed_rows
     if since is not None:
         owed = [row for row in owed if str(row.get("trade_date") or "") >= since.isoformat()]
     if not owed:
@@ -1037,28 +982,24 @@ def _repair_outstanding(
         passes += 1
         if out.get("status") not in ("success", "degraded"):
             failures.append(f"{month}: {out.get('status')}")
-        # Settle after each pass, not once at the end. A repair of a real
-        # backlog runs for hours — the first version reached pass 30 of 37 over
-        # three hours and, killed there, had struck nothing off: every row it
-        # had fetched was still owed. Interrupting this now costs the pass in
-        # flight, not the run.
-        settled = (
-            _settle_outstanding(cfg, dataset, attempted_scope=(set(symbols), lo, hi))
-            if ledger
-            else {"before": len(owed), "filled": 0, "still_owed": len(owed)}
-        )
-        filled += settled["filled"]
+        # Each pass publishes what it fetched, so interrupting this costs only
+        # the pass in flight; the planner owes what is still missing.
         if out.get("status") == "failed" and out.get("run_id"):
             aggregate = Manifest(cfg.manifest_path).aggregate_run_status(out["run_id"])
             if aggregate["core_failures"] or not aggregate["source_failures"]:
                 fatal = True
                 break
 
-    if not ledger:
+    if planned:
+        wanted = {(row["symbol"], row["trade_date"]) for row in owed}
+        left = {
+            (row["symbol"], row["trade_date"]) for row in _planned_owed_rows(cfg, dataset, since)
+        }
+        filled = len(wanted - left)
+        settled = {"before": len(wanted), "filled": filled, "still_owed": len(wanted & left)}
+    else:
         # The caller plans again for what is still owed.
         settled = {"before": len(owed), "filled": 0, "still_owed": 0}
-    elif not buckets:
-        settled = _settle_outstanding(cfg, dataset)
     return {
         "dataset": dataset,
         "status": "failed"
@@ -1084,80 +1025,14 @@ def _repair_outstanding(
     }
 
 
-def _settle_outstanding(
-    cfg,
-    dataset: str,
-    *,
-    note_missing_attempt: bool = True,
-    attempted_scope: tuple[set[str], str, str] | None = None,
-) -> dict:
-    """Strike off the owed keys that are now in the lake, and report the rest.
+def _planned_owed_rows(cfg, dataset: str, since: date | None = None) -> list[dict]:
+    """The (symbol, trade_date) keys the coverage planner owes, from *since* to today."""
+    from cnequity.quality.planned_coverage import HISTORY_START, owed_cells
 
-    Checked against what actually landed rather than against the run's exit
-    status: a repair that reaches some of the keys should shrink the debt by
-    exactly those, and a key the vendor still does not serve must stay owed
-    rather than be quietly forgotten by a successful-looking run.
-    """
-    import polars as pl
-
-    from cnequity.domain.datasets import get_dataset as _spec
-    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
-    from cnequity.storage.state import StateStore
-
-    store = StateStore(cfg.meta_root)
-    owed = store.get_outstanding_keys(dataset)
-    if not owed:
-        return {"before": 0, "filled": 0, "still_owed": 0}
-    root = cfg.curated_root / dataset
-    if not dataset_has_parquet(root):
-        return {"before": len(owed), "filled": 0, "still_owed": len(owed)}
-    date_col = _spec(dataset).partition_col
-    # Pushed down to the owed scope. Collecting the whole dataset to check a
-    # handful of keys reads 14GB to answer a question about 5,000 rows, and a
-    # settle that costs more than the repair will not get run.
-    wanted_symbols = sorted({row["symbol"] for row in owed if row.get("symbol")})
-    wanted_days = sorted({row["trade_date"] for row in owed if row.get("trade_date")})
-    present = set(
-        scan_parquet_root(root, partition_col=date_col)
-        .select("symbol", pl.col(date_col).cast(pl.Utf8).alias("_d"))
-        .filter(
-            pl.col("symbol").is_in(wanted_symbols)
-            & pl.col("_d").is_between(pl.lit(wanted_days[0]), pl.lit(wanted_days[-1]))
-        )
-        .unique()
-        .collect()
-        .iter_rows()
-    )
-    filled = [
-        (row["symbol"], row["trade_date"])
-        for row in owed
-        if (row.get("symbol"), row.get("trade_date")) in present
+    return [
+        {"symbol": symbol, "trade_date": day.isoformat()}
+        for symbol, day in owed_cells(cfg, dataset, since or HISTORY_START, shanghai_today())
     ]
-    missed = [
-        (row["symbol"], row["trade_date"])
-        for row in owed
-        if (row.get("symbol"), row.get("trade_date")) not in present
-    ]
-    left = store.clear_outstanding_keys(dataset, filled) if filled else len(owed)
-    # A key this repair reached for and still did not get is worth counting:
-    # nothing here expires, so the attempt count is the only thing that will
-    # ever distinguish last night's blip from a vendor that has stopped
-    # serving the symbol at all.
-    if note_missing_attempt:
-        attempted = missed
-        if attempted_scope is not None:
-            symbols, start, end = attempted_scope
-            attempted = [
-                (symbol, day) for symbol, day in missed if symbol in symbols and start <= day <= end
-            ]
-        store.note_repair_attempt(dataset, attempted)
-    stubborn = sum(
-        1 for row in store.get_outstanding_keys(dataset) if int(row.get("attempts", 0) or 0) >= 3
-    )
-    out = {"before": len(owed), "filled": len(filled), "still_owed": left}
-    if stubborn:
-        out["unfilled_after_3_attempts"] = stubborn
-    return out
 
 
 # Datasets whose universe comes from a config block rather than from
@@ -1232,7 +1107,12 @@ def _finish_backfill_run(engine, result: dict) -> dict:
     # under this run_id), so there is no cost to always trying.
     # Through the engine, not step_compact directly: the recorded compact
     # batch is what later lets `cne run clean` release this run's staging.
-    result["compact"] = engine.run_step("compact", shanghai_today(), run_id)
+    result["compact"] = engine.run_step(
+        "compact",
+        shanghai_today(),
+        run_id,
+        {"audit_findings": list(result.pop("audit_findings", None) or ())},
+    )
     compact_status = result["compact"].get("status", "success")
     aggregate = (
         engine.manifest.aggregate_run_status(run_id)

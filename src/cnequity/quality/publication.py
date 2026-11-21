@@ -55,16 +55,6 @@ def _forget(view: Config) -> None:
     forget(view.meta_root)
 
 
-def _reset_state(config: Config, view: Config, name: str) -> None:
-    real_state = config.meta_root / "state" / f"{name}.json"
-    view_state = view.meta_root / "state" / real_state.name
-    if real_state.is_file():
-        view_state.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(real_state, view_state)
-    else:
-        view_state.unlink(missing_ok=True)
-
-
 def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> None:
     """Give *view* a lake catalog of its own that holds what *config*'s publishes.
 
@@ -90,15 +80,11 @@ def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> Non
         write_json_atomic(
             view.meta_root / "storage.json", {"publish": "catalog", "revisions": "catalog"}
         )
-        # A rehearsed publish leaves its state in the view.
-        for name in DATASETS:
-            _reset_state(config, view, name)
         return
-    # A rehearsed publish leaves its pointer and state in the view; drop them,
-    # so a dataset the real lake keeps as a generation is read as one again.
+    # A rehearsed publish leaves its pointer in the view; drop it, so a
+    # dataset the real lake keeps as a generation is read as one again.
     for stale in (view.meta_root / "revisions").glob("*/current.json"):
         stale.unlink()
-        _reset_state(config, view, stale.parent.name)
     for name in sorted(catalog_datasets):
         pointer = config.meta_root / "revisions" / name / "current.json"
         if not pointer.is_file():
@@ -109,10 +95,6 @@ def _clone_lake(config: Config, view: Config, catalog_datasets: set[str]) -> Non
                 stored = view.meta_root / relative
                 stored.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(config.meta_root / relative, stored)
-        state = config.meta_root / "state" / f"{name}.json"
-        if state.is_file():
-            (view.meta_root / "state").mkdir(parents=True, exist_ok=True)
-            shutil.copy2(state, view.meta_root / "state" / state.name)
 
 
 def _has_catalog(config: Config) -> bool:

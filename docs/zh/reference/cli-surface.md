@@ -25,7 +25,7 @@
 | `cne import shfe-archive` | 无 | 默认只读预览；--apply 校验本地上期所年度包后写入缺字段的日线行，不覆盖已有主键，保存原包证据 |
 | `cne init` | 条件 | sample 离线；demo/quick/full 取数；layout-only 创建目录 |
 | `cne mcp` | 条件 | 默认读湖；--live 可取源数据；--http 监听本地端口 |
-| `cne migrate` | 条件 | 默认只读预览；--apply 按顺序运行还欠的迁移，经修复门禁发布并保留旧版本，结果写入 meta/state/lake.json；fund-listing-dates 读交易所基金列表，misdated-valuation 有待替换行时读东财数据中心 |
+| `cne migrate` | 条件 | 默认只读预览；--apply 按顺序运行还欠的迁移，经修复门禁发布并保留旧版本，结果写入 meta/lake.json；fund-listing-dates 读交易所基金列表，misdated-valuation 有待替换行时读东财数据中心 |
 | `cne profile list` | 无 | 列出内置范围 |
 | `cne profile show` | 无 | 显示内置范围 |
 | `cne query` | 条件 | SQL 读湖；按需数据缓存未命中或刷新时取数 |

@@ -147,7 +147,7 @@ def _fake_engine(monkeypatch, ops, manifest):
         def __init__(self, cfg):
             self.manifest = manifest
 
-        def run_step(self, name, trade_date, run_id):
+        def run_step(self, name, trade_date, run_id, context=None):
             return {"rows_written": 1, "status": "success"}
 
     monkeypatch.setattr(ops, "JobEngine", FakeEngine)

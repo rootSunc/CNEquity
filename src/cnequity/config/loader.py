@@ -221,13 +221,6 @@ class Config:
     #: dataset runs to, when its only source is gone (EastMoney push2 for
     #: ``fund_flow``). Later days are not owed until a new source is set up.
     history_until: dict[str, date] = field(default_factory=dict)
-    #: ``[datasets] planned``: datasets whose dates to fetch the coverage
-    #: planner adds to, beside the watermark and the missing-dates ledger.
-    planned_datasets: frozenset[str] = frozenset()
-    #: ``[datasets] planner_only``: datasets whose days to fetch come from the
-    #: coverage planner alone; their coverage is not read from or written to
-    #: ``meta/state`` (stage 3's switch, one family at a time).
-    planner_only: frozenset[str] = frozenset()
     init_phases: list[str] = field(default_factory=list)
     on_demand_enabled: bool = True
     on_demand_datasets: list[str] = field(default_factory=list)
@@ -919,16 +912,21 @@ def _warn_renamed_keys(raw: Mapping) -> None:
         )
 
 
-def _planned(listed, key: str = "planned") -> frozenset[str]:
-    """``[datasets] <key>``: a list of datasets the coverage planner decides for."""
-    from cnequity.domain.datasets import DATASETS
+#: ``[datasets]`` keys of the switch from ``meta/state`` to the coverage planner
+#: (0.25). Every dataset now plans from the coverage ledger; a config that still
+#: names them loads, and is told the keys do nothing.
+RETIRED_DATASET_KEYS = ("planned", "planner_only")
 
-    if not isinstance(listed, list) or not all(isinstance(name, str) for name in listed):
-        raise ConfigError(f"datasets.{key} must be a list of dataset names")
-    unknown = sorted(set(listed) - set(DATASETS))
-    if unknown:
-        raise ConfigError(f"datasets.{key} names unknown datasets: " + ", ".join(unknown))
-    return frozenset(listed)
+
+def _warn_retired_dataset_keys(datasets_raw: Mapping) -> None:
+    for key in RETIRED_DATASET_KEYS:
+        if key in datasets_raw and ("datasets", key) not in _WARNED_RENAMES:
+            _WARNED_RENAMES.add(("datasets", key))
+            logger.warning(
+                "[datasets] %s no longer does anything: every dataset's coverage comes from "
+                "the coverage planner; remove the key.",
+                key,
+            )
 
 
 def _dataset_dates(section, key: str) -> dict[str, date]:
@@ -966,8 +964,7 @@ def load_config(path: str | Path) -> Config:
     for name in history_from.keys() & history_until.keys():
         if history_until[name] < history_from[name]:
             raise ConfigError(f"datasets.history_until.{name} is before its history_from")
-    planned_datasets = _planned(datasets_raw.get("planned", []))
-    planner_only = _planned(datasets_raw.get("planner_only", []), "planner_only")
+    _warn_retired_dataset_keys(datasets_raw)
     _warn_renamed_keys(raw)
 
     data_root = _data_root(raw, config_path.parent)
@@ -1380,8 +1377,6 @@ def load_config(path: str | Path) -> Config:
         best_effort_enabled=best_effort_enabled,
         history_from=history_from,
         history_until=history_until,
-        planned_datasets=planned_datasets,
-        planner_only=planner_only,
         init_phases=init_phases,
         on_demand_enabled=bool(on_demand.get("enabled", True)),
         on_demand_datasets=list(on_demand.get("datasets", [])),

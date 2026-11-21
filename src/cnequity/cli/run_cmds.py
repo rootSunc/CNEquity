@@ -419,7 +419,7 @@ def _run_all_groups(
             worst = exit_code
     payload: dict = {"groups": results, "repairs": repairs}
     ran = [r for r in results if not str(r.get("status", "")).startswith("skipped")]
-    if ran and not backfill and "daily_bars" in getattr(cfg, "planned_datasets", ()):
+    if ran and not backfill:
         payload["owed_bars"] = _retry_owed_bars(cfg, schedule_date)
     if audit_after and ran:
         try:

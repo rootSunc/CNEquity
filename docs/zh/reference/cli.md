@@ -482,7 +482,7 @@ cne repair bse-tip-turnover --date 2026-08-21 --symbols 920000.BJ,920001.BJ --ap
 
 ### sector_bars
 
-默认从 checkpoint 续跑，跳过已完成的板块；`--refetch` 清空 checkpoint 后全量重拉。Checkpoint：`meta/state/sector_bars_backfill.json`。失败超过 50% 时 step 状态为 `degraded` 但仍写入已成功部分。
+默认从 checkpoint 续跑，跳过已完成的板块；`--refetch` 清空 checkpoint 后全量重拉。Checkpoint：`meta/checkpoints/sector_bars_backfill.json`。失败超过 50% 时 step 状态为 `degraded` 但仍写入已成功部分。
 
 **网络**：走同花顺 `d.10jqka.com.cn`（日更与历史同源），限速在 `[sources.ths]`。
 与东财无关，`[sources.eastmoney] proxy` 对它不生效。
@@ -537,7 +537,7 @@ python scripts/delisted_ops.py coverage --start 2016-01-01 --universe all_a_sh_s
 `reconcile --apply` 不以单一供应商返回的“最后一条记录”为真相：必须有 curated
 正成交量终点，且该终点不晚于 `instruments.delist_date`，同时旧目录日期还必须落在
 正式退市日之后或非交易日，才允许自动修改。命令检测到任何 active ingestion run
-都会拒绝执行；修改前的目录保存在 `meta/state/history/`，质量回执写入
+都会拒绝执行；修改前的目录保存在 `meta/source_cache/delisted_catalog_history/`，质量回执写入
 `meta/quality/`，并记录修改前备份和修改后目录的 SHA-256。
 
 ## cne derive [name]
@@ -567,7 +567,7 @@ cne upgrade             # 预览：这个版本要对湖做什么，这台机器
 cne upgrade --apply     # 备份湖的记录，然后按顺序全部做完
 ```
 
-预览列出还欠的步骤（每一步就是一个迁移，见 [`cne migrate`](#cne-migrate)），并做两项检查：湖目录需要的 DuckDB 扩展能否取得、磁盘空间够不够。任何一项不通过就什么都不做，并说明怎么解决。`--apply` 先把湖的记录（各数据集的当前版本指针、湖目录库、`meta/state/lake.json`、`meta/storage.json`，几 MB）备份到 `backups/upgrade-<时间>/`，再逐步执行并显示进度；数据文件只做链接，不复制，所以耗时与数据量关系不大。
+预览列出还欠的步骤（每一步就是一个迁移，见 [`cne migrate`](#cne-migrate)），并做两项检查：湖目录需要的 DuckDB 扩展能否取得、磁盘空间够不够。任何一项不通过就什么都不做，并说明怎么解决。`--apply` 先把湖的记录（各数据集的当前版本指针、湖目录库、`meta/lake.json`、`meta/storage.json`，几 MB）备份到 `backups/upgrade-<时间>/`，再逐步执行并显示进度；数据文件只做链接，不复制，所以耗时与数据量关系不大。
 
 升级期间读取不受影响，`cne serve` 可以开着；写入的任务（定时日更、回填、派生、修复）会被拒绝并提示先升级，升级完成后下次运行自动恢复。中途停下可以重新运行，已完成的步骤不会重做。
 
@@ -580,7 +580,7 @@ cne upgrade --apply     # 备份湖的记录，然后按顺序全部做完
 
 ## cne migrate
 
-升级后修复旧版本写下的数据。新版本修好写入逻辑后，旧版本存下的行仍需一次性修正；每个修正是一个迁移。`meta/state/lake.json` 记录建湖的版本（早于它引入的迁移不需要运行）和这个湖已经运行过、或检查后无需运行的迁移。
+升级后修复旧版本写下的数据。新版本修好写入逻辑后，旧版本存下的行仍需一次性修正；每个修正是一个迁移。`meta/lake.json` 记录建湖的版本（早于它引入的迁移不需要运行）和这个湖已经运行过、或检查后无需运行的迁移。
 
 ```bash
 cne migrate             # 预览：每个迁移会改多少行，不写任何东西
@@ -589,7 +589,7 @@ cne migrate --apply     # 按顺序运行并记录结果
 
 | 选项 | 说明 |
 |------|------|
-| `--apply` | 运行还欠的迁移，并把结果写进 `meta/state/lake.json` |
+| `--apply` | 运行还欠的迁移，并把结果写进 `meta/lake.json` |
 | `--only` | 逗号分隔的迁移 id；即使已记录也重新运行 |
 | `--json` | 机器可读输出 |
 

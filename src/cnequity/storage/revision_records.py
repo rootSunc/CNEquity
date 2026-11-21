@@ -223,7 +223,9 @@ def enabled(meta_root: Path | str) -> bool:
 
 def _enabled(meta: Path) -> bool:
     """Whether *meta*'s lake publishes into its catalog and its receipts are all in it."""
-    storage, lake = meta / "storage.json", meta / "state" / "lake.json"
+    from cnequity.storage.lake_record import lake_file
+
+    storage, lake = meta / "storage.json", lake_file(meta)
     stamps = (_stamp(storage), _stamp(lake))
     known = _settings.get(meta)
     if known is not None and known[0] == stamps:

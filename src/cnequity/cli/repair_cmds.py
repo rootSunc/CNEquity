@@ -29,7 +29,7 @@ def _emit(value: dict) -> None:
 @click.option(
     "--apply",
     is_flag=True,
-    help=N_("Run the owed migrations and record each result in meta/state/lake.json."),
+    help=N_("Run the owed migrations and record each result in meta/lake.json."),
 )
 @comma_option(
     "--only",
@@ -45,7 +45,7 @@ def migrate(config_path: str, apply: bool, only: str | None, as_json: bool):
 
     
     A release that fixes a writer can leave rows the old writer stored. Each such fix is a
-    migration; meta/state/lake.json records the version that built the lake (it owes nothing
+    migration; meta/lake.json records the version that built the lake (it owes nothing
     introduced earlier) and every migration it has applied or found nothing to do.
     A preview reports how many rows each would change. --apply runs them in order: each takes the
     lake lock, publishes through the repair gate and keeps the previous revision readable.
@@ -77,7 +77,7 @@ def migrate(config_path: str, apply: bool, only: str | None, as_json: bool):
                 "Nothing owed: the lake was built by {version}, or every migration is recorded."
             ).format(version=created)
             if created
-            else _("Nothing owed: every migration is recorded in meta/state/lake.json.")
+            else _("Nothing owed: every migration is recorded in meta/lake.json.")
         )
         return
     for migration in chosen:

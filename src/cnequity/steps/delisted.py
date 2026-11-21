@@ -42,6 +42,7 @@ from cnequity.domain.rate_limit import (
     sina_retry,
 )
 from cnequity.domain.symbols import is_cdr_symbol, issued_code_space, parse_symbol
+from cnequity.meta_layout import CHECKPOINTS, SOURCE_CACHE  # noqa: E402
 from cnequity.quality.delisted_coverage import (
     _bar_spans as _bar_spans,
 )
@@ -317,14 +318,14 @@ def _recovery_symbol_hash(symbols: list[str] | set[str]) -> str:
 
 
 def _ingested_symbols(config: Config) -> set[str]:
-    path = config.meta_root / "state" / f"{_INGESTED_STATE}.json"
+    path = config.meta_root / CHECKPOINTS / f"{_INGESTED_STATE}.json"
     if not path.exists():
         return set()
     return set(json.loads(path.read_text(encoding="utf-8")).get("completed", []))
 
 
 def _mark_ingested(config: Config, symbols: list[str]) -> None:
-    path = config.meta_root / "state" / f"{_INGESTED_STATE}.json"
+    path = config.meta_root / CHECKPOINTS / f"{_INGESTED_STATE}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     completed = sorted(_ingested_symbols(config) | set(symbols))
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp")
@@ -467,7 +468,7 @@ def _recovery_scope(start: date, end: date, targets: dict[str, dict[str, str]]) 
 def _recovery_checkpoint_path(config: Config, scope_id: str) -> Path:
     return (
         config.meta_root
-        / "state"
+        / SOURCE_CACHE
         / _RECOVERY_CLAIM
         / f"v{_RECOVERY_EVIDENCE_VERSION}"
         / f"{scope_id}.json"
@@ -542,7 +543,7 @@ def _publish_recovery_receipt(config: Config, checkpoint: dict) -> Path:
 
 def publish_delisted_receipts_for_compacted_run(config: Config, run_id: str) -> list[Path]:
     """Publish recovery authority only after the completing run was compacted."""
-    root = config.meta_root / "state" / _RECOVERY_CLAIM / f"v{_RECOVERY_EVIDENCE_VERSION}"
+    root = config.meta_root / SOURCE_CACHE / _RECOVERY_CLAIM / f"v{_RECOVERY_EVIDENCE_VERSION}"
     if not root.exists():
         return []
     published: list[Path] = []
@@ -973,7 +974,12 @@ def reconcile_delisted_catalog(config: Config, *, sample: int = 15, probe=None) 
         if not source.exists():
             raise RuntimeError("delisted catalogue does not exist")
 
-        backup = config.meta_root / "state" / "history" / f"delisted_catalog-{stamp}.json"
+        backup = (
+            config.meta_root
+            / SOURCE_CACHE
+            / "delisted_catalog_history"
+            / f"delisted_catalog-{stamp}.json"
+        )
         backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, backup)
         before_sha256 = _file_sha256(backup)

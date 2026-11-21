@@ -139,7 +139,8 @@ def back_up(config) -> Path:
     meta = Path(config.meta_root)
     for source in (
         meta / "storage.json",
-        meta / "state" / "lake.json",
+        meta / "lake.json",
+        meta / "state" / "lake.json",  # a lake from before 0.25 that has not read it since
         *sorted((meta / "revisions").glob("*/current.json")),
     ):
         if source.is_file():

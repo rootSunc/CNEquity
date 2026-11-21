@@ -76,7 +76,9 @@ def reusable(captured_at: datetime, now: datetime) -> bool:
 
 
 def _path(config: Any) -> Path:
-    return Path(config.meta_root) / "state" / "push2_snapshots" / "all_a.json.gz"
+    from cnequity.meta_layout import SOURCE_CACHE
+
+    return Path(config.meta_root) / SOURCE_CACHE / "push2_snapshots" / "all_a.json.gz"
 
 
 def _load(path: Path) -> dict | None:

@@ -224,12 +224,17 @@ def build_source_limits(config) -> dict:
             "request_events_today": _request_events_today(config, family),
         }
     outstanding = {}
+    from cnequity.domain.market_time import shanghai_today
+    from cnequity.quality.planned_coverage import gap_keys
+
     for dataset in DATASETS:
-        state = _read_json(config.meta_root / "state" / f"{dataset}.json")
-        rows = state.get("outstanding_keys")
-        if isinstance(rows, list) and rows:
+        try:
+            keys = gap_keys(config, dataset, shanghai_today())
+        except Exception:  # noqa: BLE001 — a planner that cannot plan owes nothing here
+            keys = []
+        if keys:
             outstanding[dataset] = {
-                "keys": len(rows),
+                "keys": len(keys),
                 "repair_command": f"cne backfill {dataset} --outstanding",
             }
     guard = host_guard.status(config)

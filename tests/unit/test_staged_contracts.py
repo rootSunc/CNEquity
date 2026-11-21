@@ -184,8 +184,8 @@ def test_a_session_missing_listed_names_is_short():
     assert bj_session_shortfall([day], nearly, roster, none).is_empty()
 
 
-def test_a_run_whose_beijing_leg_failed_records_the_session(tmp_path):
-    from cnequity.storage.state import StateStore
+def test_a_run_whose_beijing_leg_failed_leaves_the_session_owed(tmp_path):
+    from cnequity.quality.planned_coverage import answered_cells, unanswered_keys
 
     cfg = Config(data_root=tmp_path)
     instruments = cfg.curated_root / "instruments"
@@ -208,6 +208,6 @@ def test_a_run_whose_beijing_leg_failed_records_the_session(tmp_path):
     )
     (finding,) = [f for f in findings if f["check"] == "daily_bars_bj_session_incomplete"]
     assert finding["sessions"][0]["missing"] == 20
-    ranges = StateStore(cfg.meta_root).get_payload("daily_bars")["missing_ranges"]
-    assert ranges[0]["start"] == DAYS[0].isoformat()
-    assert ranges[0]["last_failure"] == "bj_session_incomplete"
+    assert answered_cells(cfg, "daily_bars") == set()
+    owed = unanswered_keys(cfg, "daily_bars", DAYS[0], DAYS[0])
+    assert set(_roster(20)["symbol"]) <= set(owed["symbol"])

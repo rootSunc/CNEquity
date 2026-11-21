@@ -13,15 +13,12 @@ from cnequity.config import Config
 from cnequity.derive.adj_factors import INPUTS as ADJ_FACTOR_INPUTS
 from cnequity.derive.minute_resample import INPUTS as MINUTE_RESAMPLE_INPUTS
 from cnequity.derive.option_greeks import INPUTS as OPTION_GREEK_INPUTS
-from cnequity.domain.datasets import PARTITION_COLS, RESAMPLED_MINUTE_DATASETS, WATERMARK_SKIP
+from cnequity.domain.datasets import PARTITION_COLS, RESAMPLED_MINUTE_DATASETS
 from cnequity.orchestrator.registry import register_step
 from cnequity.progress import sweep_progress
-from cnequity.steps.common import planner_only
 from cnequity.steps.compact_hooks import hooks_for
 from cnequity.storage import StagingWriter, compact_dataset
 from cnequity.storage.instruments import compact_instruments
-from cnequity.storage.observation import commit_observation
-from cnequity.storage.state import StateStore
 
 logger = logging.getLogger(__name__)
 
@@ -85,26 +82,6 @@ def _dataset_criticality(dataset: str) -> str:
     return "advisory"
 
 
-def _max_partition_date(config: Config, dataset: str, partition_col: str) -> date | None:
-    from cnequity.quality.verify import max_published_date
-
-    return max_published_date(config, dataset, partition_col)
-
-
-def _watermark_date_for(config: Config, dataset: str, partition_col: str) -> date | None:
-    from cnequity.quality.verify import watermark_date
-
-    return watermark_date(config, dataset, partition_col)
-
-
-def _watermarked_datasets() -> list[tuple[str, str]]:
-    return [
-        (dataset, pcol)
-        for dataset, pcol in PARTITION_COLS.items()
-        if pcol is not None and dataset not in WATERMARK_SKIP
-    ]
-
-
 DERIVE_INPUTS = {
     "adj_factors": ADJ_FACTOR_INPUTS,
     "industry_index": ("daily_bars", "industry_members", "adj_factors", "trading_calendar"),
@@ -115,7 +92,7 @@ DERIVE_INPUTS = {
 
 
 def _planner_owes(config: Config, dataset: str) -> bool:
-    """Whether the planner sees a gap in *dataset*'s recent cells (its state keeps none)."""
+    """Whether the planner sees a gap in *dataset*'s recent cells."""
     from cnequity.domain.market_time import shanghai_today
     from cnequity.quality.planned_coverage import gap_days, gap_keys
 
@@ -128,23 +105,15 @@ def _capture_derive_inputs(config: Config, dataset: str) -> dict:
     from cnequity.storage.revisions import RevisionStore
 
     store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
-    state = StateStore(config.meta_root)
     inputs = {}
     for name in DERIVE_INPUTS.get(dataset, ()):
         pointer = store.current_pointer(name) or {}
-        gaps = state.get_payload(name)
         latest = store.latest(name) if pointer.get("receipt") else None
         metadata = {} if latest is None else latest.metadata
         inputs[name] = {
             key: pointer.get(key) for key in ("revision", "revision_id", "content_digest")
         }
-        owed = (
-            _planner_owes(config, name)
-            if planner_only(config, name)
-            else any(
-                gaps.get(key) for key in ("missing_ranges", "missing_units", "outstanding_keys")
-            )
-        )
+        owed = _planner_owes(config, name)
         inputs[name]["coverage_status"] = (
             "partial"
             if owed
@@ -269,226 +238,20 @@ def _publish_derived_revision(
     }
 
 
-def _update_watermarks(
-    config: Config,
-    datasets: frozenset[str] | None,
-    trade_date: date,
-    *,
-    reconcile_no_print: bool = True,
-) -> None:
-    """Advance each compacted dataset's watermark to the freshest date it holds.
-
-    The watermark answers "through what date do we have data", so it is read
-    back from the lake rather than assumed from the run date. Snapshot datasets
-    used to be stamped with ``trade_date`` unconditionally, which made the
-    watermark lie whenever a snapshot produced nothing: a partial baostock
-    valuation backfill writing rows for an *earlier* day still pushed the
-    watermark to today, so lake_health called valuation_metrics fresh on a day
-    it had zero rows, and the missed days never showed up as coverage gaps.
-    Snapshot fetching only ever requests trade_date, so a truthful (possibly
-    older) watermark cannot trigger a re-fetch storm — it just surfaces the hole.
-
-    ``reconcile_no_print=False`` skips replaying the fund no-print proofs. They
-    depend only on published daily_bars / instruments and the proof files, so
-    a compact that republished neither has nothing new to check; the replay
-    verifies every archived payload and costs ~3.4 s on a full lake.
-    """
-    state = StateStore(config.meta_root)
-    from cnequity.domain.datasets import fetch_semantics
-
-    for dataset, pcol in _watermarked_datasets():
-        if datasets is not None and dataset not in datasets:
-            continue
-        if planner_only(config, dataset):
-            # Its coverage is read off the published rows; nothing to cache.
-            continue
-        if dataset == "daily_bars":
-            if reconcile_no_print:
-                from cnequity.storage.fund_no_print import reconcile_no_print_coverage
-
-                reconcile_no_print_coverage(config)
-            from cnequity.storage.coverage import (
-                resolved_bj_session_dates,
-                resolved_postdelisting_keys,
-                resolved_prelisting_keys,
-            )
-
-            state.clear_missing_dates(
-                dataset, resolved_bj_session_dates(config, state.get_payload(dataset))
-            )
-            owed = state.get_outstanding_keys(dataset)
-            state.clear_outstanding_keys(
-                dataset,
-                resolved_prelisting_keys(config, owed) | resolved_postdelisting_keys(config, owed),
-            )
-        max_dt = _watermark_date_for(config, dataset, pcol)
-        if max_dt is not None:
-            state.update_max_date(dataset, max_dt)
-        if fetch_semantics(dataset) == "by_date":
-            observed = _max_partition_date(config, dataset, pcol)
-            with state.transaction(dataset) as payload:
-                missing = {
-                    date.fromisoformat(row["start"]) for row in payload.get("missing_ranges", [])
-                }
-                missing.update(
-                    date.fromisoformat(row["trade_date"])
-                    for row in payload.get("outstanding_keys", [])
-                )
-                if observed is not None:
-                    payload["observed_max"] = observed.isoformat()
-                complete = max_dt
-                if complete is not None and missing:
-                    complete = min(complete, min(missing) - timedelta(days=1))
-                if complete is not None:
-                    payload["complete_through"] = complete.isoformat()
-                else:
-                    payload.pop("complete_through", None)
-                payload["coverage_status"] = (
-                    "incomplete"
-                    if missing
-                    or payload.get("missing_units")
-                    or (observed is not None and (complete is None or observed > complete))
-                    else "complete"
-                )
-
-
-def _reconcile_watermarks(config: Config) -> list[dict]:
-    """Pull back any watermark that claims data the lake does not have.
-
-    Advancing only covers datasets that compacted this run, so a dataset whose
-    source went dark — writing nothing, therefore never compacting — would keep
-    a stale-but-fresh-looking watermark forever, which is exactly the case that
-    hides an outage. This runs over every watermarked dataset and only ever
-    corrects downward, so it cannot mask a real advance.
-    """
-    state = StateStore(config.meta_root)
-    from cnequity.query.parquet_scan import dataset_has_parquet
-
-    findings: list[dict] = []
-    for dataset, pcol in _watermarked_datasets():
-        if planner_only(config, dataset):
-            continue
-        current = state.get_date(dataset)
-        if current is None:
-            continue
-        max_dt = _watermark_date_for(config, dataset, pcol)
-        if (
-            max_dt is None
-            and dataset == "valuation_metrics"
-            and dataset_has_parquet(config.curated_root / "daily_bars")
-        ):
-            # A pre-existing watermark can itself have been written by the old
-            # raw-max fallback. Once daily bars are available and no valuation
-            # day clears the coverage gate, remove that unsafe claim so the
-            # next run cannot skip the missing snapshot window.
-            state.clear_date(dataset)
-            findings.append(
-                {
-                    "dataset": dataset,
-                    "severity": "warning",
-                    "check": "valuation_watermark_coverage_gate",
-                    "message": (
-                        f"valuation watermark {current.isoformat()} was cleared: no day "
-                        "reaches the 70% coverage gate against daily_bars"
-                    ),
-                    "claimed": current.isoformat(),
-                    "actual": None,
-                }
-            )
-            logger.warning(
-                "%s: watermark %s cleared because no dense valuation day exists",
-                dataset,
-                current.isoformat(),
-            )
-            continue
-        if max_dt is None or current <= max_dt:
-            continue
-        claimed = current
-        state.set_date(dataset, max_dt)
-        check = (
-            "valuation_watermark_coverage_gate"
-            if dataset == "valuation_metrics"
-            else "watermark_ahead_of_data"
-        )
-        findings.append(
-            {
-                "dataset": dataset,
-                "severity": "warning",
-                "check": check,
-                "message": (
-                    f"watermark claimed {claimed.isoformat()} but the freshest "
-                    f"complete {pcol} in curated is {max_dt.isoformat()}; corrected"
-                    + (
-                        " (coverage below 70% of daily_bars on newer tip days)"
-                        if dataset == "valuation_metrics"
-                        else ". The source produced nothing for the days in between"
-                    )
-                ),
-                "claimed": claimed.isoformat(),
-                "actual": max_dt.isoformat(),
-            }
-        )
-        logger.warning(
-            "%s: watermark %s ahead of complete data %s; corrected",
-            dataset,
-            claimed.isoformat(),
-            max_dt.isoformat(),
-        )
-    return findings
-
-
 def _settle_published_datasets(
-    config: Config,
-    datasets: set[str],
-    *,
-    run_id: str,
-    trade_date: date,
-    fully_selected: set[str],
-    resolved_keys: dict[str, set[tuple[str, str]]],
-    reconcile_no_print: bool = True,
+    config: Config, datasets: set[str], *, run_id: str, fully_selected: set[str]
 ) -> None:
-    """Advance the coverage ledgers and watermarks of datasets compact published.
+    """Settle what the datasets compact published leave behind outside the lake.
 
     Runs once per compact after every revision commit, and — when a later
-    commit fails — for the datasets committed before it, so a dataset whose
-    generation is already current never keeps reporting its published days
-    as missing.
+    commit fails — for the datasets committed before it.
     """
-    for published_dataset in datasets:
-        published_state = StateStore(config.meta_root)
-        if published_dataset in fully_selected:
-            if not planner_only(config, published_dataset):
-                published_state.commit_staged_request_days(published_dataset, run_id)
-                published_state.commit_staged_units(published_dataset, run_id)
-                commit_observation(config, published_dataset, run_id)
-            if published_dataset == "sector_bars":
-                from cnequity.steps.rotation import commit_sector_bars_staged
+    # Coverage is the planner's, read off the published rows and the ledger:
+    # a quarantined day has no published row, so it is simply a gap.
+    if "sector_bars" in datasets and "sector_bars" in fully_selected:
+        from cnequity.steps.rotation import commit_sector_bars_staged
 
-                commit_sector_bars_staged(config, run_id)
-        if planner_only(config, published_dataset):
-            # No ledger: a quarantined day has no published row, so it is a gap.
-            continue
-        if resolved_keys.get(published_dataset):
-            published_state.clear_outstanding_keys(
-                published_dataset, resolved_keys[published_dataset]
-            )
-        # Committing staged request days marks them covered; a partially
-        # accepted batch must leave its rejected dates in the missing ledger.
-        writer = StagingWriter(config.staging_root)
-        for report in writer.quality_receipts(published_dataset, run_id):
-            if report.get("rows_rejected"):
-                published_state.record_missing_dates(
-                    published_dataset,
-                    [date.fromisoformat(day) for day in report.get("rejected_dates", [])],
-                    reason="quarantined_rows",
-                )
-    if datasets:
-        _update_watermarks(
-            config,
-            frozenset(datasets),
-            trade_date,
-            reconcile_no_print=reconcile_no_print,
-        )
+        commit_sector_bars_staged(config, run_id)
 
 
 def _record_resume_units(
@@ -518,59 +281,30 @@ def _record_resume_units(
     return []
 
 
-def _sync_attempts(
-    config: Config,
-    run_id: str,
-    trade_date: date,
-    datasets: set[str],
-    answers: list[dict] = (),
-) -> list[dict]:
-    """Keep the planner's ledger beside ``meta/state``; never fails a compact.
+def _record_answers(config: Config, run_id: str, answers: list[dict] = ()) -> list[dict]:
+    """Record this run's answers in the coverage ledger; never fails a compact.
 
-    *answers* are the findings in which this run's fetch steps reported the
-    days they asked about and found empty; they are recorded first, so the
-    projection from the state files does not record them again.
-
-    Info findings name the gaps the planner sees that the state files hold
-    done, so the two can be watched agreeing before the planner decides.
+    *answers* are the findings in which this run's fetch steps reported what
+    they asked about and how it was answered. Refreshes of datasets refreshed
+    as a whole come from the run records and are recorded beside them.
     """
     from cnequity.domain.findings import finding
-    from cnequity.quality.planned_coverage import record_answers, refreshed, sync_attempts
+    from cnequity.quality.planned_coverage import record_answers, record_refreshes
 
     try:
         record_answers(config, run_id, answers)
-        # A planner-only dataset keeps no state files to project; its
-        # refreshes come from the run records and are still projected.
-        report = sync_attempts(
-            config,
-            run_id,
-            trade_date,
-            {name for name in datasets if not planner_only(config, name) or refreshed(name)},
-        )
-    except Exception as exc:  # the ledger is a shadow while meta/state decides
-        logger.warning("attempts ledger not synced for %s: %s", run_id, exc)
+        record_refreshes(config, run_id)
+    except Exception as exc:  # a lost answer is only asked again
+        logger.warning("coverage ledger not updated for %s: %s", run_id, exc)
         return [
             finding(
                 dataset="",
                 check="attempts_ledger_sync",
                 severity="warning",
-                message=f"the planner's ledger was not brought up to date: {exc}",
+                message=f"the coverage ledger was not brought up to date: {exc}",
             )
         ]
-    return [
-        finding(
-            dataset=dataset,
-            check="planner_state_disagreement",
-            severity="info",
-            message=(
-                f"{len(gaps)} period(s) the state files hold done have no rows and no "
-                "recorded empty answer"
-            ),
-            periods=gaps[:20],
-            count=len(gaps),
-        )
-        for dataset, gaps in sorted(report["disagreements"].items())
-    ]
+    return []
 
 
 @register_step("compact", group="finalize", parallelizable=False)
@@ -607,9 +341,7 @@ def _compact_datasets(
     from cnequity.orchestrator.compact_gate import compact_allowed, publication_files
     from cnequity.orchestrator.manifest import Manifest
     from cnequity.storage.coverage import (
-        candidate_gaps,
         gap_summary,
-        resolved_outstanding_keys,
     )
     from cnequity.storage.provenance import runtime_lineage
     from cnequity.storage.revisions import RevisionStore
@@ -622,7 +354,6 @@ def _compact_datasets(
     committed_revisions: dict[str, dict] = {}
     partial_datasets: set[str] = set()
     coverage_by_dataset: dict[str, dict] = {}
-    resolved_keys: dict[str, set[tuple[str, str]]] = {}
     fully_selected: set[str] = set()
     pending: list[tuple] = []
     skipped: list[dict] = []
@@ -671,7 +402,7 @@ def _compact_datasets(
             fully_selected.add(ds)
         receipts = [r for r in manifest.get_dataset_results(run_id) if r["dataset"] == ds]
         dataset_coverage = {r["coverage_status"] for r in receipts} - {"not_applicable"}
-        gaps = _ledger_view(config, ds)
+        gaps = _ledger_view(config, ds, context)
         if (
             incomplete_count
             or "partial" in dataset_coverage
@@ -762,11 +493,7 @@ def _compact_datasets(
             rows_written=rows,
         )
 
-        payload = _ledger_view(config, ds)
-        resolved_keys[ds] = resolved_outstanding_keys(
-            ds, candidate_root, payload.get("outstanding_keys", []), committed=False
-        )
-        remaining = candidate_gaps(payload, run_id, resolved_keys[ds], full_staging=full_staging)
+        remaining = _ledger_view(config, ds, context)
         is_partial = (
             incomplete_count > 0
             or not full_staging
@@ -791,8 +518,7 @@ def _compact_datasets(
                 "universe": config.ingest_universe,
             },
             "gaps": gap_summary(remaining),
-            "gaps_source": "dataset_state",
-            "resolved_outstanding_keys": len(resolved_keys[ds]),
+            "gaps_source": "coverage_ledger",
         }
 
         if changed_files:
@@ -987,38 +713,17 @@ def _compact_datasets(
                 criticality=_dataset_criticality(ds),
                 rows_written=rows,
             )
-    # A dataset can compact rows without publishing anything: a backfill that
-    # refetches what the lake already holds rewrites nothing. The no-print
-    # replay reads only published content, so it then has nothing new to check.
-    # The watermark reconcile still runs: it exists for runs that publish
-    # nothing because a source went dark.
-    published = frozenset(committed_revisions)
-    _settle_published_datasets(
-        config,
-        compacted,
-        run_id=run_id,
-        trade_date=trade_date,
-        fully_selected=fully_selected,
-        resolved_keys=resolved_keys,
-        reconcile_no_print=bool({"daily_bars", "instruments"} & published),
-    )
-    audit_findings.extend(_reconcile_watermarks(config))
+    _settle_published_datasets(config, compacted, run_id=run_id, fully_selected=fully_selected)
     audit_findings.extend(
         _record_resume_units(
             config,
             run_id,
             list(context.get("audit_findings") or ()),
-            {ds for ds in compacted & fully_selected if planner_only(config, ds)},
+            compacted & fully_selected,
         )
     )
     audit_findings.extend(
-        _sync_attempts(
-            config,
-            run_id,
-            trade_date,
-            set(staged) | compacted,
-            answers=list(context.get("audit_findings") or ()),
-        )
+        _record_answers(config, run_id, answers=list(context.get("audit_findings") or ()))
     )
 
     from cnequity.query.views import ensure_duckdb_views
@@ -1535,7 +1240,21 @@ def step_ths_official_snapshot(
     return out
 
 
-def _ledger_view(config, dataset: str) -> dict:
-    from cnequity.quality.planned_coverage import ledger_view
+def _ledger_view(config, dataset: str, context: dict | None = None) -> dict:
+    """*dataset*'s owed work, less the days this run's answers settle (recorded after compact)."""
+    from cnequity.quality.planned_coverage import ANSWER_CHECK, ledger_view
 
-    return ledger_view(config, dataset)
+    view = ledger_view(config, dataset)
+    settled = {
+        day
+        for item in (context or {}).get("audit_findings") or ()
+        if item.get("dataset") == dataset
+        and item.get("check") == ANSWER_CHECK
+        and item.get("outcome") == "complete"
+        for day in item.get("periods") or ()
+    }
+    if settled:
+        view["missing_ranges"] = [
+            row for row in view.get("missing_ranges", []) if row.get("start") not in settled
+        ]
+    return view

@@ -18,10 +18,10 @@ from cnequity.adapters.exchange.fund_quotes import (
 from cnequity.config import Config
 from cnequity.steps.common import classify_daily_bar_ownership
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.fund_no_print import approved_no_print_keys, reconcile_no_print_coverage
+from cnequity.storage.fund_no_print import approved_no_print_keys
 from cnequity.storage.raw_archive import RawPayloadArchive
+from cnequity.storage.repairs import fund_no_print as repair_module
 from cnequity.storage.repairs.fund_no_print import repair_fund_no_print
-from cnequity.storage.state import StateStore
 
 DAY = date(2026, 9, 28)
 SYMBOL = "160515.SZ"
@@ -139,16 +139,13 @@ def test_sse_rejects_misrouted_identity(changes):
 
 def test_sse_owed_key_application_is_replayable_and_retains_sz_proof(lake, monkeypatch):
     cfg, _ = lake
-    monkeypatch.setattr("cnequity.steps.finalize._update_watermarks", lambda *args: None)
     repair_fund_no_print(cfg, apply=True)
     catalog = cfg.curated_root / "instruments" / "part.parquet"
     original = pl.read_parquet(catalog)
     pl.concat([original, original.with_columns(pl.lit(SH_SYMBOL).alias("symbol"))]).write_parquet(
         catalog
     )
-    StateStore(cfg.meta_root).record_outstanding_keys(
-        "daily_bars", [(SH_SYMBOL, DAY)], run_id="sh-fixture", reason="interior_gap"
-    )
+    _OWED.append((SH_SYMBOL, DAY))
     archive = RawPayloadArchive(cfg.meta_root, enabled=True, datasets=["daily_bars"])
     record = archive.archive(
         "daily_bars",
@@ -167,12 +164,36 @@ def test_sse_owed_key_application_is_replayable_and_retains_sz_proof(lake, monke
     assert repair_fund_no_print(cfg, apply=True)["remaining_keys"] == 0
     assert approved_no_print_keys(cfg) == {(SYMBOL, DAY), (SH_SYMBOL, DAY)}
     cfg.meta_root.joinpath(record.payload_path).unlink()
-    reconcile_no_print_coverage(cfg)
-    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")[0]["symbol"] == SH_SYMBOL
+    assert owed(cfg) == [(SH_SYMBOL, DAY)]
+
+
+def owed(cfg) -> list[tuple[str, date]]:
+    """What the coverage planner owes: the cells without a bar, less those a proof excuses."""
+    return [(row["symbol"], date.fromisoformat(row["trade_date"])) for row in _planned(cfg)]
+
+
+_OWED: list[tuple[str, date]] = []
+
+
+def _planned(cfg) -> list[dict]:
+    root = cfg.curated_root / "daily_bars"
+    stored = (
+        set(pl.read_parquet(sorted(root.rglob("*.parquet"))).select("symbol", "trade_date").rows())
+        if any(root.rglob("*.parquet"))
+        else set()
+    )
+    excused = approved_no_print_keys(cfg)
+    return [
+        {"symbol": symbol, "trade_date": day.isoformat()}
+        for symbol, day in _OWED
+        if (symbol, day) not in stored and (symbol, day) not in excused
+    ]
 
 
 @pytest.fixture
-def lake(tmp_path):
+def lake(tmp_path, monkeypatch):
+    _OWED[:] = [(SYMBOL, DAY)]
+    monkeypatch.setattr(repair_module, "_owed_fund_sessions", _planned)
     cfg = Config(data_root=tmp_path / "lake")
     root = cfg.curated_root / "instruments"
     root.mkdir(parents=True)
@@ -181,9 +202,6 @@ def lake(tmp_path):
         schema_overrides={"delist_date": pl.Date},
     ).write_parquet(root / "part.parquet")
     cfg.curated_root.joinpath("daily_bars").mkdir()
-    StateStore(cfg.meta_root).record_outstanding_keys(
-        "daily_bars", [(SYMBOL, DAY)], run_id="fixture", reason="interior_gap"
-    )
     archive = RawPayloadArchive(cfg.meta_root, enabled=True, datasets=["daily_bars"])
     record = archive.archive(
         "daily_bars",
@@ -202,10 +220,9 @@ def lake(tmp_path):
 
 def test_preview_does_not_certify_and_apply_is_replayable(lake, monkeypatch):
     cfg, record = lake
-    monkeypatch.setattr("cnequity.steps.finalize._update_watermarks", lambda *args: None)
     assert repair_fund_no_print(cfg)["proved_keys"] == 1
     assert not approved_no_print_keys(cfg)
-    assert len(StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")) == 1
+    assert owed(cfg) == [(SYMBOL, DAY)]
     assert repair_fund_no_print(cfg, apply=True)["remaining_keys"] == 0
     assert approved_no_print_keys(cfg) == {(SYMBOL, DAY)}
     assert not cfg.curated_root.joinpath("trading_status").exists()
@@ -214,13 +231,11 @@ def test_preview_does_not_certify_and_apply_is_replayable(lake, monkeypatch):
     # Missing retained bytes revoke coverage and reopen the exact obligation.
     cfg.meta_root.joinpath(record.payload_path).unlink()
     assert not approved_no_print_keys(cfg)
-    assert reconcile_no_print_coverage(cfg)["invalidated_keys"] == 1
-    assert len(StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")) == 1
+    assert owed(cfg) == [(SYMBOL, DAY)]
 
 
 def test_actual_trade_and_catalog_changes_override_no_print(lake, monkeypatch):
     cfg, _ = lake
-    monkeypatch.setattr("cnequity.steps.finalize._update_watermarks", lambda *args: None)
     repair_fund_no_print(cfg, apply=True)
     root = cfg.curated_root / "daily_bars" / f"trade_date={DAY}"
     root.mkdir()
@@ -228,8 +243,8 @@ def test_actual_trade_and_catalog_changes_override_no_print(lake, monkeypatch):
         {"symbol": [SYMBOL], "trade_date": [DAY], "volume": [1], "amount": [1]}
     ).write_parquet(root / "part.parquet")
     assert not approved_no_print_keys(cfg)
-    reconcile_no_print_coverage(cfg)
-    assert not StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    # The stored bar covers the session.
+    assert owed(cfg) == []
     root.joinpath("part.parquet").unlink()
     catalog = cfg.curated_root / "instruments" / "part.parquet"
     pl.read_parquet(catalog).with_columns(
@@ -240,7 +255,6 @@ def test_actual_trade_and_catalog_changes_override_no_print(lake, monkeypatch):
 
 def test_positive_amount_also_overrides_absence_even_with_bad_zero_volume(lake, monkeypatch):
     cfg, _ = lake
-    monkeypatch.setattr("cnequity.steps.finalize._update_watermarks", lambda *args: None)
     repair_fund_no_print(cfg, apply=True)
     root = cfg.curated_root / "daily_bars" / f"trade_date={DAY}"
     root.mkdir()
@@ -248,14 +262,12 @@ def test_positive_amount_also_overrides_absence_even_with_bad_zero_volume(lake, 
         {"symbol": [SYMBOL], "trade_date": [DAY], "volume": [0], "amount": [10.0]}
     ).write_parquet(root / "part.parquet")
     assert not approved_no_print_keys(cfg)
-    reconcile_no_print_coverage(cfg)
     # A stored bar resolves coverage; its bad quantity remains a quality issue.
-    assert not StateStore(cfg.meta_root).get_payload("daily_bars")["verified_no_print_keys"]
+    assert owed(cfg) == []
 
 
 def test_second_apply_retains_existing_selections(lake, monkeypatch):
     cfg, _ = lake
-    monkeypatch.setattr("cnequity.steps.finalize._update_watermarks", lambda *args: None)
     repair_fund_no_print(cfg, apply=True)
     another = "160516.SZ"
     catalog = cfg.curated_root / "instruments" / "part.parquet"
@@ -279,16 +291,13 @@ def test_second_apply_retains_existing_selections(lake, monkeypatch):
     write_json_atomic(
         cfg.meta_root / "source_cache" / "fund_no_print" / f"{DAY}.json", record.to_dict()
     )
-    StateStore(cfg.meta_root).record_outstanding_keys(
-        "daily_bars", [(another, DAY)], run_id="fixture-second", reason="interior_gap"
-    )
+    _OWED.append((another, DAY))
     repair_fund_no_print(cfg, apply=True)
     assert approved_no_print_keys(cfg) == {(SYMBOL, DAY), (another, DAY)}
 
 
 def test_bad_workbook_revokes_proof_and_reopens_debt(lake, monkeypatch):
     cfg, _ = lake
-    monkeypatch.setattr("cnequity.steps.finalize._update_watermarks", lambda *args: None)
     repair_fund_no_print(cfg, apply=True)
     archive = RawPayloadArchive(cfg.meta_root, enabled=True, datasets=["daily_bars"])
     record = archive.archive(
@@ -310,8 +319,7 @@ def test_bad_workbook_revokes_proof_and_reopens_debt(lake, monkeypatch):
         },
     )
     assert not approved_no_print_keys(cfg)
-    assert reconcile_no_print_coverage(cfg)["invalidated_keys"] == 1
-    assert len(StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")) == 1
+    assert owed(cfg) == [(SYMBOL, DAY)]
 
 
 def test_normal_tradability_is_compatible_with_no_print_but_not_stock_exemption():

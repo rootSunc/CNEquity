@@ -27,12 +27,35 @@ def _cfg(tmp_path, **kwargs) -> Config:
     return Config(data_root=tmp_path / "data", **kwargs)
 
 
+def _ledger(cfg: Config) -> None:
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core import coverage as cov
+    from equitylake_core.catalog import Catalog
+
+    with Catalog(lake_root(cfg), create=True) as catalog:
+        cov.prepare(catalog)
+
+
+def _swept(cfg: Config, dataset: str, day: date, depth: str) -> None:
+    """Record a clean *depth* sweep run on *day*, as compact records it."""
+    from datetime import datetime, time
+    from zoneinfo import ZoneInfo
+
+    from cnequity.quality import planned_coverage
+
+    _ledger(cfg)
+    asked = datetime.combine(day, time(12), ZoneInfo("Asia/Shanghai"))
+    finding = planned_coverage.recheck_finding(dataset, [day], depth, asked)
+    planned_coverage.record_answers(cfg, f"sweep-{day}", [finding])
+
+
 def _deep_done(cfg: Config, dataset: str = "announcement_index", day: date = date(2026, 9, 12)):
     """The previous Saturday's deep sweep, so a weekday run is an ordinary one."""
-    from cnequity.steps.common import _DEEP_RECONCILED_FIELD
-    from cnequity.storage.state import StateStore
+    _swept(cfg, dataset, day, "deep")
 
-    StateStore(cfg.meta_root).set_date(dataset, day, field=_DEEP_RECONCILED_FIELD)
+
+def _watermark(monkeypatch, value: date) -> None:
+    monkeypatch.setattr("cnequity.quality.verify.covered_through", lambda config, ds: value)
 
 
 def test_announcement_index_declares_both_windows():
@@ -50,6 +73,7 @@ def test_the_near_tail_is_walked_on_an_ordinary_run(tmp_path):
 
 def test_the_deep_tail_is_walked_on_its_own_day(tmp_path):
     cfg = _cfg(tmp_path)
+    _deep_done(cfg)
     window = incremental_window(cfg, "announcement_index", SATURDAY)
     assert (SATURDAY - window).days + 1 == 30
 
@@ -91,16 +115,26 @@ def test_the_weekday_knob_is_validated(tmp_path):
 
 
 def _sweep(cfg, day, fetch):
+    """One run: the fetch, then what compact records from its findings."""
+    from cnequity.quality import planned_coverage
     from cnequity.steps.common import fetch_incremental_daily
 
-    return fetch_incremental_daily(cfg, "announcement_index", day, fetch, allow_empty=True)
+    _ledger(cfg)
+    frame, findings = fetch_incremental_daily(
+        cfg, "announcement_index", day, fetch, allow_empty=True
+    )
+    planned_coverage.record_answers(cfg, f"run-{day}-{len(findings)}", findings)
+    return frame, findings
 
 
-def test_the_deep_tail_is_walked_once_per_deep_day(tmp_path):
+def test_the_deep_tail_is_walked_once_per_deep_day(tmp_path, monkeypatch):
     """The 6-hourly events job used to repeat the 30-day sweep on every Saturday run."""
     import polars as pl
 
     cfg = _cfg(tmp_path)
+    _deep_done(cfg)
+    # This is about the window; the planner's own gaps are another test's.
+    monkeypatch.setattr("cnequity.quality.planned_coverage.gap_days", lambda *a: [])
     asked: list[date] = []
 
     def _fetch(d):
@@ -121,6 +155,7 @@ def test_the_deep_tail_is_walked_once_per_deep_day(tmp_path):
 
 def test_a_failed_deep_sweep_is_retried_deep(tmp_path):
     cfg = _cfg(tmp_path)
+    _deep_done(cfg)
 
     def _boom(d):
         raise RuntimeError("cninfo 502")
@@ -130,12 +165,14 @@ def test_a_failed_deep_sweep_is_retried_deep(tmp_path):
     assert (SATURDAY - incremental_window(cfg, "announcement_index", SATURDAY)).days + 1 == 30
 
 
-def test_the_near_tail_is_walked_once_a_day_then_only_the_tip(tmp_path):
+def test_the_near_tail_is_walked_once_a_day_then_only_the_tip(tmp_path, monkeypatch):
     """The events job re-walked 7 days on each of its four daily runs."""
     import polars as pl
 
     cfg = _cfg(tmp_path)
     _deep_done(cfg)
+    # This is about the window; the planner's own gaps are another test's.
+    monkeypatch.setattr("cnequity.quality.planned_coverage.gap_days", lambda *a: [])
     asked: list[date] = []
 
     def _fetch(d):
@@ -165,12 +202,13 @@ def test_a_failed_tail_is_walked_again(tmp_path):
     assert (TUESDAY - incremental_window(cfg, "announcement_index", TUESDAY)).days + 1 == 7
 
 
-def test_a_fresh_lake_keeps_the_weekly_rhythm(tmp_path):
-    """No record yet: an ordinary weekday stays shallow, the deep day goes deep."""
+def test_a_lake_with_no_sweep_on_record_goes_deep_once(tmp_path):
+    """Waiting for the deep weekday would never come for a feed that does not run on it."""
     cfg = _cfg(tmp_path)
-    assert (TUESDAY - incremental_window(cfg, "announcement_index", TUESDAY)).days + 1 == 7
-    fresh = _cfg(tmp_path / "other")
-    assert (SATURDAY - incremental_window(fresh, "announcement_index", SATURDAY)).days + 1 == 30
+    assert (TUESDAY - incremental_window(cfg, "announcement_index", TUESDAY)).days + 1 == 30
+    _swept(cfg, "announcement_index", TUESDAY, "deep")
+    wednesday = date(2026, 9, 16)
+    assert (wednesday - incremental_window(cfg, "announcement_index", wednesday)).days + 1 == 7
 
 
 def test_a_sessions_only_feed_goes_deep_on_its_first_run_after_the_deep_day(tmp_path):
@@ -183,33 +221,30 @@ def test_a_sessions_only_feed_goes_deep_on_its_first_run_after_the_deep_day(tmp_
     assert _deep_reconciliation_due(cfg, "daily_bars", date(2026, 9, 21))  # next Monday
 
 
-def test_the_daily_bar_tip_does_not_re_read_the_settled_session(tmp_path):
+def test_the_daily_bar_tip_does_not_re_read_the_settled_session(tmp_path, monkeypatch):
     """shallow=1 is the tip alone: the window starts after the watermark."""
-    from cnequity.storage.state import StateStore
-
     cfg = _cfg(tmp_path)
     _deep_done(cfg, "daily_bars", date(2026, 9, 14))
-    StateStore(cfg.meta_root).set_date("daily_bars", date(2026, 9, 17))
+    _watermark(monkeypatch, date(2026, 9, 17))
     assert incremental_window(cfg, "daily_bars", date(2026, 9, 18)) == date(2026, 9, 18)
     # Behind by a few sessions: every missed session is still in the window.
-    StateStore(cfg.meta_root).set_date("daily_bars", date(2026, 9, 15))
+    _watermark(monkeypatch, date(2026, 9, 15))
     assert incremental_window(cfg, "daily_bars", date(2026, 9, 18)) == date(2026, 9, 16)
 
 
-def test_a_finished_daily_bar_deep_sweep_lets_the_next_session_go_tip_only(tmp_path):
+def test_a_finished_daily_bar_deep_sweep_lets_the_next_session_go_tip_only(tmp_path, monkeypatch):
     """daily_bars has its own fetch path and never recorded its deep sweep, so
     from 2026-10-08 every daily run was a deep day (~30 min, not ~8)."""
-    from cnequity.steps.common import mark_reconciled, reconciliation_depth
-    from cnequity.storage.state import StateStore
+    from cnequity.steps.common import reconciliation_depth
 
     cfg = _cfg(tmp_path)
     _deep_done(cfg, "daily_bars", date(2026, 9, 14))
-    StateStore(cfg.meta_root).set_date("daily_bars", date(2026, 9, 18))
+    _watermark(monkeypatch, date(2026, 9, 18))
     monday = date(2026, 9, 21)
     assert reconciliation_depth(cfg, "daily_bars", monday) == "deep"
 
-    mark_reconciled(cfg, "daily_bars", monday, "deep")
-    StateStore(cfg.meta_root).set_date("daily_bars", monday)
+    _swept(cfg, "daily_bars", monday, "deep")
+    _watermark(monkeypatch, monday)
     tuesday = date(2026, 9, 22)
     assert reconciliation_depth(cfg, "daily_bars", tuesday) == "tail"
     assert incremental_window(cfg, "daily_bars", tuesday) == tuesday
@@ -217,8 +252,7 @@ def test_a_finished_daily_bar_deep_sweep_lets_the_next_session_go_tip_only(tmp_p
 
 def test_the_daily_bar_step_records_its_deep_sweep(tmp_path, monkeypatch):
     import cnequity.steps.bars as bars
-    from cnequity.steps.common import _DEEP_RECONCILED_FIELD
-    from cnequity.storage.state import StateStore
+    from cnequity.quality.planned_coverage import RECHECK_CHECK
 
     cfg = _cfg(tmp_path)
     monday = date(2026, 9, 21)
@@ -248,11 +282,14 @@ def test_the_daily_bar_step_records_its_deep_sweep(tmp_path, monkeypatch):
     monkeypatch.setattr(bars.finish, "_finish_daily_bars", lambda *_a, **_k: {"status": "warning"})
     monkeypatch.setattr(bars.bar_scope, "_merge_ownership_result", lambda out, *_a: out)
 
-    bars.daily._step_daily_bars(cfg, monday, "run-1", {})
-    assert StateStore(cfg.meta_root).get_date("daily_bars", field=_DEEP_RECONCILED_FIELD) == monday
+    def sweeps(out):
+        found = (out.get("context_updates") or {}).get("audit_findings") or []
+        return [item for item in found if item["check"] == RECHECK_CHECK]
+
+    out = bars.daily._step_daily_bars(cfg, monday, "run-1", {})
+    assert [item["depth"] for item in sweeps(out)] == ["deep"]
 
     # An execution failure leaves the deep sweep owed.
     later = date(2026, 9, 28)
     monkeypatch.setattr(bars.finish, "_finish_daily_bars", lambda *_a, **_k: {"status": "failed"})
-    bars.daily._step_daily_bars(cfg, later, "run-2", {})
-    assert StateStore(cfg.meta_root).get_date("daily_bars", field=_DEEP_RECONCILED_FIELD) == monday
+    assert sweeps(bars.daily._step_daily_bars(cfg, later, "run-2", {})) == []

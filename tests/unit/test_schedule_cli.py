@@ -345,12 +345,14 @@ def test_the_shell_pipelines_streak_carries_over(grouped):
     assert problems == ["daily group fundamentals failed 3 session(s) in a row"]
 
 
-def test_maintain_retries_the_debt_ledger_without_failing_on_it(maintain_env):
-    from cnequity.storage.state import StateStore
-
+def test_maintain_retries_the_owed_keys_without_failing_on_them(maintain_env, monkeypatch):
     config, calls, failing = maintain_env
-    StateStore(config.meta_root).record_outstanding_keys(
-        "daily_bars", [("600000.SH", date(2026, 10, 19))], run_id="r1", reason="test"
+    # The planner owes one daily_bars key (a source could not answer it yet).
+    monkeypatch.setattr(
+        "cnequity.quality.planned_coverage.owed_cells",
+        lambda cfg, dataset, start, end: (
+            [("600000.SH", date(2026, 10, 19))] if dataset == "daily_bars" else []
+        ),
     )
     failing.add("backfill")
 
