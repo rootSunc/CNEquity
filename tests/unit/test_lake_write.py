@@ -301,8 +301,9 @@ def test_a_publish_writes_no_pointer_or_receipt_file(cfg):
     assert after["revision_id"] == receipt.revision_id and after["storage"] == "catalog"
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
     assert store.latest("daily_bars").metadata["base_revision_id"] == before["revision_id"]
+    # The state file keeps no copy of the revision the catalog records.
     state = json.loads((cfg.meta_root / "state" / "daily_bars.json").read_text())
-    assert state["revision_id"] == receipt.revision_id
+    assert "revision_id" not in state
     assert "revision_receipt" not in state and "revision_pointer" not in state
 
 
@@ -325,13 +326,16 @@ def test_a_publish_that_stops_before_the_state_file_is_still_published(cfg, monk
     # The catalog committed the rows and the revision together.
     after = _pointer(cfg)
     assert after["revision"] == before["revision"] + 1 and after["storage"] == "catalog"
+    # A copy an older release left in the state file is now stale; the sweep
+    # removes it, and the catalog alone names the revision.
     state_path = cfg.meta_root / "state" / "daily_bars.json"
     assert json.loads(state_path.read_text())["revision_id"] == before["revision_id"]
 
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
     assert store.sweep()["state_synced"] == ["daily_bars"]
     assert store.sweep(apply=True)["state_synced"] == ["daily_bars"]
-    assert json.loads(state_path.read_text())["revision_id"] == after["revision_id"]
+    assert "revision_id" not in json.loads(state_path.read_text())
+    assert store.latest("daily_bars").revision_id == after["revision_id"]
     assert store.sweep(apply=True)["state_synced"] == []
 
 

@@ -1440,6 +1440,22 @@ def dataset_schema(dataset: str) -> dict[str, pl.DataType]:
     return dict(DATASET_SCHEMAS[dataset])
 
 
+def _revision_identity(cfg, dataset: str) -> dict:
+    """A dataset's current revision as the catalog records it (``dataset_state``)."""
+    from cnequity.query.state import dataset_state
+
+    try:
+        state = dataset_state(dataset, config=cfg)
+    except (OSError, ValueError):
+        state = None
+    return {
+        "revision": None if state is None else state.revision,
+        "revision_id": None if state is None else state.revision_id,
+        "schema_version": None if state is None else state.schema_version,
+        "contract_fingerprint": None if state is None else state.contract_fingerprint,
+    }
+
+
 def _payload_date(payload: dict, field: str) -> date | None:
     value = payload.get(field)
     return date.fromisoformat(str(value)) if value else None
@@ -1532,10 +1548,7 @@ def list_datasets(
                 # observed so stale scheduling can recover a missed day
                 # without pretending that a future event is historical data.
                 "snapshot_date": snapshot_date,
-                "revision": state_payload.get("revision"),
-                "revision_id": state_payload.get("revision_id"),
-                "schema_version": state_payload.get("schema_version"),
-                "contract_fingerprint": state_payload.get("contract_fingerprint"),
+                **_revision_identity(cfg, name),
                 "state_error": state_error,
             }
         )

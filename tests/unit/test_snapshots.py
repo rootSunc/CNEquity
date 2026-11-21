@@ -334,18 +334,20 @@ def test_snapshot_verify_rejects_dataset_contract_and_revision_tampering(tmp_pat
     assert "revisions" in store.verify("revision-semantic").mismatched
 
 
-def test_snapshot_create_refuses_a_state_that_names_another_revision(tmp_path):
+def test_a_snapshot_takes_the_revision_from_the_catalog_not_a_stale_state_copy(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
     revision = _write_bars(cfg)
     state = StateStore(cfg.meta_root)
     payload = state.get_payload("daily_bars")
+    # A copy an older release left in the state file, one revision off.
     payload["revision"] = revision.revision + 1
     state._write_payload(state._path("daily_bars"), payload)
 
     store = SnapshotStore(cfg, tmp_path / "snapshots")
-    with pytest.raises(ValueError, match="consistency check"):
-        store.create("inconsistent", ["daily_bars"])
-    assert not store.path("inconsistent").exists()
+    store.create("catalog", ["daily_bars"])
+    manifest = json.loads((store.path("catalog") / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["dataset_states"]["daily_bars"]["revision"] == revision.revision
+    assert store.verify("catalog").passed
 
 
 def test_snapshot_files_are_copies_the_lake_can_retire(tmp_path):

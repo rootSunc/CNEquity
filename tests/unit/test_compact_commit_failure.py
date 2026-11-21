@@ -63,6 +63,8 @@ def _stage(cfg: Config) -> None:
 
 
 def test_a_successful_compact_settles_every_dataset(tmp_path):
+    from cnequity.query.state import dataset_state
+
     cfg = Config(data_root=tmp_path / "data")
     _stage(cfg)
 
@@ -70,7 +72,7 @@ def test_a_successful_compact_settles_every_dataset(tmp_path):
 
     state = StateStore(cfg.meta_root)
     for dataset in ("fund_flow", "margin_trading"):
-        assert state.get_revision(dataset) == 1
+        assert dataset_state(dataset, config=cfg).revision == 1
         assert DAY not in state.get_missing_dates(dataset)
         assert "staged_request_days" not in state.get_payload(dataset)
         assert state.get_date(dataset) == DAY

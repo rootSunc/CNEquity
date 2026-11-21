@@ -970,6 +970,16 @@ class SnapshotVerification:
     mismatched: tuple[str, ...]
 
 
+#: Revision identity a snapshot's per-dataset state carries.
+_STATE_REVISION_KEYS = (
+    "revision",
+    "revision_id",
+    "content_digest",
+    "schema_version",
+    "contract_fingerprint",
+)
+
+
 class SnapshotStore:
     """Create and restore snapshots below ``meta/snapshots`` or an explicit root."""
 
@@ -1073,6 +1083,12 @@ class SnapshotStore:
             from cnequity.storage.lake_write import export_tree, published_layout
 
             revisions = self._current_revisions(selected)
+            for dataset in selected:
+                # The state file no longer repeats the revision; the snapshot
+                # keeps it beside the manifest's copy so verify can cross-check.
+                dataset_states[dataset].update(
+                    {key: revisions[dataset][key] for key in _STATE_REVISION_KEYS}
+                )
             for dataset in selected:
                 layer = str(DATASETS[dataset].layer)
                 layout = published_layout(self.config.data_root, dataset)

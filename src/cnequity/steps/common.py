@@ -938,11 +938,13 @@ class _NegativeEvidenceIdentity:
         return self._spans.get(symbol)
 
     def _status_identity(self) -> dict:
+        from cnequity.query.state import dataset_state
+
         if self._status is None:
             self._status = {
-                "trading_status_revision": StateStore(self._config.meta_root).get_revision(
-                    "trading_status"
-                ),
+                "trading_status_revision": dataset_state(
+                    "trading_status", config=self._config
+                ).revision,
                 "trading_status_files": _status_files_identity(self._config),
             }
         return self._status

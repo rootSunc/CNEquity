@@ -626,6 +626,11 @@ class RevisionStore:
         self._index_state(receipt, None)
 
     def _index_state(self, receipt: DatasetRevision, receipt_relative: str | None) -> None:
+        if receipt_relative is None:
+            # The catalog is this revision's only record; a copy in the state
+            # file would only go stale. Drop one a release before this left.
+            self._drop_state_revision(receipt.dataset)
+            return
         with self.state.transaction(receipt.dataset) as state:
             state.update(
                 {
@@ -806,6 +811,13 @@ class RevisionStore:
             current = self._load_receipt(previous)
         return tuple(reversed(out))
 
+    def _drop_state_revision(self, dataset: str) -> None:
+        if not any(key in self.state.get_payload(dataset) for key in STATE_REVISION_FIELDS):
+            return
+        with self.state.transaction(dataset) as state:
+            for key in STATE_REVISION_FIELDS:
+                state.pop(key, None)
+
     def sync_state(self, dataset: str) -> None:
         """Repair the denormalised state file from the current revision."""
         receipt = self.latest(dataset)
@@ -838,11 +850,28 @@ class RevisionStore:
             for dataset, record in sorted((records.current if records else {}).items()):
                 if record is None or record.revision == 0:
                     continue
-                if self.state.get_payload(dataset).get("revision_id") != record.revision_id:
+                # The catalog keeps the revision; only a stale copy left in
+                # the state file by an older release needs removing.
+                if any(key in self.state.get_payload(dataset) for key in STATE_REVISION_FIELDS):
                     report["state_synced"].append(dataset)
                     if apply:
                         self.sync_state(dataset)
         return report
+
+
+#: Revision identity the state file once repeated from the catalog.
+STATE_REVISION_FIELDS = (
+    "revision",
+    "revision_id",
+    "revision_at",
+    "revision_run_id",
+    "schema_version",
+    "contract_fingerprint",
+    "content_digest",
+    "changed_partitions",
+    "revision_receipt",
+    "revision_pointer",
+)
 
 
 def resolve_committed_root(
