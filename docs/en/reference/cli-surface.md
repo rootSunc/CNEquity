@@ -1,6 +1,6 @@
 # Network and write inventory
 
-Checked against the Click command registry by `scripts/dev/sync_docs.py`. “When run” means when the command body executes; `--help` executes nothing. For source selection and limits, see [Fetching and source protection](../operations/fetch-policy.md).
+Checked against the Click command registry by `scripts/dev/sync_docs.py`. “When run” means when the command body executes; `--help` executes nothing. Run `cne <command> --help` for options. See [Update and troubleshoot](../operations/runbook.md) for common tasks.
 
 | Command | Third-party fetching | Local effects |
 |---|---|---|
@@ -25,7 +25,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne import shfe-archive` | none | Read-only preview by default; --apply verifies a local SHFE annual package and writes its partial-field daily rows without overwriting existing keys, keeping the package as evidence |
 | `cne init` | conditional | sample is offline; demo/quick/full fetch data; layout-only creates directories |
 | `cne mcp` | conditional | Reads the lake by default; --live may fetch source data; --http listens on a local port |
-| `cne migrate` | conditional | Read-only preview by default; --apply runs the owed migrations in order, publishes through the repair gate keeping the old version, and writes the results to meta/lake.json; fund-listing-dates reads the exchanges' fund lists, misdated-valuation reads the EastMoney datacenter when it has rows to replace |
+| `cne migrate` | conditional | Previews pending migrations by default; --only selects migrations; --apply runs them and records results. Selected migrations can contact sources or remove superseded data files |
 | `cne profile list` | none | Lists built-in scopes |
 | `cne profile show` | none | Shows a built-in scope |
 | `cne query` | conditional | SQL reads the lake; fetches data on an on-demand cache miss or refresh |
@@ -41,9 +41,9 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne repair fund-volume` | only with --refresh-sources | Offline preview by default; online refresh archives historical K-lines from the SSE quote service and reuses or collects EastMoney evidence when turnover conflicts; --apply repairs verified Shanghai and Shenzhen fund volume, passes publication checks and retains old revisions |
 | `cne repair index-history` | --refresh-sources only | Replays the reviewed official attachment catalog for the selected SZSE Component or STAR 50 index offline by default; --apply replaces whole books on effective dates, retaining official dated weights and old revisions; unknown historical weights remain null |
 | `cne repair index-snapshots` | --refresh-sources only | Replays official files offline by default; --apply replaces complete dated constituent snapshots and real weights, publishes through the repair gate and retains old revisions |
-| `cne repair layout` | none | No longer does anything and only prints a note; removed in 0.27.0 |
+| `cne repair layout` | none | No longer does anything and only prints a note; removed in 0.26.0 |
 | `cne repair payment-dates` | only with --apply | Read-only preview by default; --apply repairs cash payment dates from reviewed issuer announcements (CNINFO, BSE) and Baostock, published through the backfill gate |
-| `cne repair repartition` | none | No longer does anything and only prints a note; removed in 0.27.0 |
+| `cne repair repartition` | none | No longer does anything and only prints a note; removed in 0.26.0 |
 | `cne repair status-traded` | none | Read-only preview by default; --apply fills missing status keys from committed positive-volume bars, leaves ST unknown, publishes a new version and keeps the old one |
 | `cne repair stock-listing-dates` | --refresh-sources only | Replays IPO calendars offline by default; --apply fills stock listing dates confirmed by official listed events, publishes through the repair gate and retains old revisions |
 | `cne repair valuation-outage` | only with --apply | Read-only preview by default; --apply requests the EastMoney datacenter valuation report for the outage window and writes only when the whole market is retrieved |
@@ -51,7 +51,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne run compact` | none | Publishes finished, unpublished staging data to the lake |
 | `cne run daily` | when run | Fetches incrementally and writes the lake; includes all schedule groups and event streams by default |
 | `cne run events` | when run | Fetches events and writes the lake |
-| `cne run maintain` | when run | Post-update maintenance: audit, freshness gate, source probes and SLO, run-evidence check (read-only); writes a metadata backup and rotates old ones by retention; expired files are only previewed |
+| `cne run maintain` | when run | Post-update maintenance: retries older outstanding keys, checks audit and freshness, probes sources, applies catalog retention, rotates metadata backups, and previews routine cleanup |
 | `cne run retry` | when run | Retries failed scopes and writes the lake |
 | `cne schedule install` | none | After confirmation, registers the current user's system timer (launchd/cron/Task Scheduler) and writes schedule settings; keeps the backup and event schedules set on the dashboard; --events runs event streams on the config's [[job.events.schedules]] |
 | `cne schedule remove` | none | After confirmation, pauses scheduling and unregisters the system task; jobs already running continue |
@@ -79,16 +79,28 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne storage hold` | none | Adds object protection; automatic retention no longer deletes it |
 | `cne storage import` | none | Validates and registers a reference manifest; only adds protection |
 | `cne storage inspect` | none | Reads versions and retention reasons |
-| `cne storage merge-files` | none | No longer does anything and only prints a note; removed in 0.27.0 |
+| `cne storage merge-files` | none | No longer does anything and only prints a note; removed in 0.26.0 |
 | `cne storage plan` | none | Previews which generations retention would delete now; deletes no data |
 | `cne storage raw-external` | none | Registers external payload storage; retains local source sidecars and does not move or delete files |
 | `cne storage refresh` | none | Re-scans the reference roots and adds holds for the versions they cite; never releases a hold |
 | `cne storage release` | none | Drops manual holds and stale references on the named versions; case dependencies and live references stay |
-| `cne storage sync-catalog` | none | No longer does anything and only prints a note; removed in 0.27.0 |
+| `cne storage sync-catalog` | none | No longer does anything and only prints a note; removed in 0.26.0 |
 | `cne storage verify-catalog` | none | Read-only; checks that each revision published into the lake catalog still holds, at its snapshot, the rows whose digest was recorded at publish |
 | `cne ths-official backfill` | when run | Calls the credentialed source and fills gaps |
 | `cne ths-official capture` | when run | Calls the credentialed source and writes comparison evidence |
 | `cne ths-official repair-bars` | when run | Fetches even in a dry run; --apply writes repairs |
 | `cne ths-official resource-sectors` | when run | Fetches even in a dry run; --apply writes staging |
-| `cne upgrade` | conditional | Read-only preview that also checks extensions and disk space by default; --apply backs up the lake's records, then runs every owed migration in order (including the move onto the lake catalog), linking data files instead of copying them; the migrations it runs read the same sources as migrate |
+| `cne upgrade` | conditional | Preview checks extensions and disk and can download missing extensions; --apply backs up lake records by default, then runs owed migrations and clears superseded files. Migrations can fetch data |
 | `cne verify` | conditional | Local validation by default; --repair accesses sources and repairs |
+
+## Renamed commands
+
+| Previous command | Current command |
+|---|---|
+| `cne clean` | `cne run clean` |
+| `cne compact` | `cne run compact` |
+| `cne demo` | `cne init --profile demo` |
+| `cne retry` | `cne run retry` |
+| `cne servers` | `cne sources probe --only tdx_protocol` |
+| `cne stability` | `cne verify --runs` |
+| `cne verify-bars` | `cne verify --bars --start <date>` |

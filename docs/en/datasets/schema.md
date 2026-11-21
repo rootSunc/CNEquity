@@ -1,99 +1,11 @@
 # Fields and units
 
-This page is for looking up columns, types and units. For what each dataset is for, see the [catalog](catalog.md); for how to read data, see the [query guide](query-guide.md); for compatibility and versioning, see the [data contract](contract.md). Column names and types are synced by `scripts/dev/sync_docs.py`; the explanatory text is maintained by hand.
+Look up column names, types, units, and data semantics. Use `cne contract show <dataset>` for keys, versions, partition fields, and history capabilities. See [data and coverage](catalog.md) and [query and research](query-guide.md).
 
-### Find by layer
+- A-share stock daily volume is in shares. Consult the [relevant release notes](https://github.com/rootSunc/CNEquity/releases) for old data.
+- `fetched_at` is the UTC fetch time. See [point-in-time financial statements](query-guide.md#pit) for optional time fields and visibility rules.
 
-Ordered by [research layer](catalog.md#data-tiers); click a name to jump to its column definitions.
-
-| Layer | Datasets |
-|------|--------|
-| **L0** Reference | [instruments](#instruments), [etf_profiles](#etf_profiles), [trading_calendar](#trading_calendar), [trading_status](#trading_status) |
-| **L1** Prices | [daily_bars](#daily_bars), [index_bars](#index_bars), [minute_bars](#minute_bars--minute_bars_5m), [minute_bars_5m](#minute_bars--minute_bars_5m), [trade_ticks](#trade_ticks), [adj_factors](#adj_factors), [minute_bars_15m](#minute_bars_15m--minute_bars_30m--minute_bars_60m), [minute_bars_30m](#minute_bars_15m--minute_bars_30m--minute_bars_60m), [minute_bars_60m](#minute_bars_15m--minute_bars_30m--minute_bars_60m), [delisting_events](#delisting_events) |
-| **L2** Corporate events | [corporate_actions](#corporate_actions), [announcement_index](#announcement_index), [earnings_disclosure_schedule](#earnings_disclosure_schedule) |
-| **L3** Fundamentals | [financial_statement_items](#financial_statement_items), [share_structure](#share_structure), [shareholder_counts](#shareholder_counts), [top_holders](#top_holders), [valuation_metrics](#valuation_metrics), [analyst_consensus](#analyst_consensus) |
-| **L4** Capital flows | [fund_flow](#fund_flow), [margin_trading](#margin_trading), [northbound_holdings](#northbound_holdings), [northbound_flows](#northbound_flows), [dragon_tiger](#dragon_tiger), [block_trades](#block_trades), [institutional_holdings](#institutional_holdings), [fund_flow_ths](#fund_flow_ths) |
-| **L5** Industry structure | [sector_members](#sector_members), [index_constituents](#index_constituents), [industry_members](#industry_members), [industry_index](#industry_index) |
-| **L6** Macro | [macro_indicators](#macro_indicators), [market_breadth](#market_breadth) |
-| **L7** Sentiment / rotation | [sentiment_scores](#sentiment_scores), [hot_rank](#hot_rank), [sector_bars](#sector_bars), [sector_fund_flow](#sector_fund_flow), [sector_fund_flow_ths](#sector_fund_flow_ths), [news_headlines](#news_headlines), [flash_news_wire](#flash_news_wire), [economic_calendar](#economic_calendar) |
-| **L8** Risk and compliance | [share_unlock_schedule](#share_unlock_schedule), [regulatory_events](#regulatory_events) |
-| **L9** Derivatives | [commodity_bars](#commodity_bars), [futures_contracts](#futures_contracts), [option_contracts](#option_contracts), [futures_bars](#futures_bars), [futures_minute_bars](#futures_minute_bars), [option_bars](#option_bars), [futures_continuous](#futures_continuous), [option_greeks](#option_greeks) |
-
-### Global conventions
-
-| Rule | Value |
-|------|-------|
-| Time zone | All `trade_date` values and business timestamps use `Asia/Shanghai` |
-| Stock symbol | `{code}.{SH\|SZ\|BJ}`, e.g. `600519.SH`; derivatives use their own contract codes and exchange suffixes |
-| Stock exchange column | `SH` / `SZ` / `BJ`; for derivatives, see the corresponding schema |
-| Provenance columns | Every row has `source`, `data_version` and `fetched_at` (UTC timestamp) |
-| Null semantics | On suspension days OHLCV still has values, with `volume=0` and `amount=0` |
-| Volume unit | A-share single-stock volume is always in **shares**; for vendors that report lots (TDX daily bars, EastMoney), the adapter multiplies by 100 at the boundary |
-| Schema evolution | Compatible new columns may be added directly; breaking changes must bump `schema_version` and come with migration notes |
-| `data_version` | Bumped only for semantic changes (not for added columns); see "Volume unit" below |
-
-### PIT bitemporal extension columns
-
-Apply only to the PIT datasets: `announcement_index`, `financial_statement_items`, `share_structure`, `shareholder_counts`, `top_holders`. **They do not apply to any other dataset.**
-
-The four columns are optional storage columns and are not part of the required shape in `DATASET_SCHEMAS`: old Parquet files without them are still readable,
-and the read side fills them in. Compact writes them to disk; old partitions without these columns get them written once at their next compact.
-
-| Column | Type | Description |
-|--------|------|-------|
-| available_at | timestamp, nullable | When the fact became available at the source; must be null when unknown, and must not be replaced by the report period during backfill |
-| source_published_at | timestamp, nullable | When the source actually published it; usually unknown for the current EastMoney historical backfill |
-| observed_at | timestamp, nullable | When the lake actually observed the row; for old files it is derived from `fetched_at` for compatibility |
-| revision_id | string, nullable | Stable fact/version identity; a SHA-256 truncated to 96 bits (24 hex characters), derived deterministically from the business fields and provenance, **without** the observation timestamp |
-
-`observed_at` and `fetched_at` are two names for the same thing, so neither takes part in compact's
-business digest comparison. Otherwise every reconciliation refetch would be judged a business change and mint a new revision,
-and each revision copies the whole dataset.
-
-### Partition keys (curated)
-
-| Dataset | Partition |
-|---------|-----------|
-| daily_bars | `trade_date` (monthly) |
-| index_bars | `trade_date` (yearly) |
-| minute_bars / minute_bars_5m | `trade_date` (daily) |
-| minute_bars_15m / minute_bars_30m / minute_bars_60m | `trade_date` (daily) |
-| trade_ticks | `trade_date` (daily) |
-| trading_status | `trade_date` (monthly) |
-| corporate_actions | `ex_date` (yearly) |
-| adj_factors | `trade_date` (monthly) |
-| financial_statement_items | `report_period` |
-| industry_members | `as_of_date` |
-| northbound_flows | `trade_date` |
-
-Multi-source snapshot path: `meta/source_snapshots/{dataset}/source={source}/data_version={ver}/`
-
-### Primary keys
-
-| Dataset | Primary key |
-|---------|-------------|
-| instruments | `(symbol)` |
-| etf_profiles | `(symbol, as_of_date)` |
-| trading_calendar | `(trade_date)` |
-| trading_status | `(symbol, trade_date)` |
-| daily_bars | `(symbol, trade_date)` |
-| index_bars | `(symbol, trade_date, frequency)` |
-| minute_bars / minute_bars_5m | `(symbol, trade_date, bar_time, frequency)` |
-| minute_bars_15m / minute_bars_30m / minute_bars_60m | `(symbol, trade_date, bar_time, frequency)` |
-| trade_ticks | `(symbol, trade_date, tick_seq)` |
-| corporate_actions | `(symbol, ex_date, action_type)` |
-| adj_factors | `(symbol, trade_date, adjust_type)` |
-| fund_flow | `(symbol, trade_date)` |
-| northbound_holdings | `(symbol, trade_date, channel)` |
-| northbound_flows | `(trade_date, channel)` |
-| margin_trading | `(symbol, trade_date)` |
-| sector_members | `(symbol, sector_code, as_of_date)` |
-| valuation_metrics | `(symbol, trade_date)` |
-| announcement_index | `(announcement_id)` |
-| financial_statement_items | `(symbol, report_period, statement_type, item_code, announce_date)` |
-| industry_members | `(symbol, classification_system, as_of_date)` |
-
-### MVP-P0 column definitions
+## Dataset fields
 
 #### instruments
 
@@ -295,7 +207,7 @@ Bars outside the session are filtered out, and the audit check `minute_bars_off_
 
 #### minute_bars_15m / minute_bars_30m / minute_bars_60m
 
-Derived datasets resampled from the 1m and 5m data in the lake (`derive/minute_resample.py`). **Not computed by default**: neither the daily update nor `cne init` produces them; to put them in the lake, run `cne derive minute_bars_15m` manually (likewise for 30m and 60m). Without putting them in the lake, you can also compute them at query time with `resample_minute_history` using the same rules.
+Derived datasets resampled from the 1m and 5m data in the lake (`derive/minute_resample.py`). To store a frequency for the first time, run `cne derive minute_bars_15m` (likewise for 30m and 60m). The intraday group then maintains it after publishing the minute inputs. Without putting them in the lake, you can also compute them at query time with `resample_minute_history` using the same rules.
 
 For a given stock and day, 1m is used if present, otherwise 5m; if that day has 1m but some interval is missing a component bar, the whole day is skipped rather than falling back to 5m. Suspended stocks often have one 1m bar missing: days with no trades at all are counted in `skipped_halted_1m`, intraday halts and resumptions (bars unbroken, missing only at the start or end) in `skipped_partial_session_1m`; days with trades but a gap in the middle of the bars are counted in `skipped_incomplete_1m`, and the run is recorded as degraded. Without a window, only trading days not yet computed, or whose 1m / 5m content or computation rules have changed, are recomputed (judged by content, so rollbacks and restores also trigger it); this means 1m data filled in later makes the corresponding trading days get recomputed from 1m. `--start` / `--end` limit the window, and `--full` recomputes everything.
 
@@ -367,7 +279,7 @@ This is `history_floor_date`, a different mechanism from the minute bars' `histo
 
 #### futures_bars
 
-Per-**contract** daily bars for futures and options, taken from the daily market data files the exchanges publish themselves ([product boundary](../architecture/overview.md)). Each file lists every contract listed that day, **with a settlement price even when there was no trade**. Futures and options are split into two datasets, `futures_bars` / `option_bars`, whose shared columns have the same definitions.
+Per-**contract** daily bars for futures and options, taken from the daily market data files the exchanges publish themselves ([product boundary](catalog.md#derivative-coverage)). Each file lists every contract listed that day, **with a settlement price even when there was no trade**. Futures and options are split into two datasets, `futures_bars` / `option_bars`, whose shared columns have the same definitions.
 
 | Column | Type | Description |
 |--------|------|-------|
@@ -532,7 +444,7 @@ This lake's own option implied volatility and Greeks (derived, `derive/option_gr
 | data_version | string |  |
 | fetched_at | timestamp |  |
 
-Primary key `(symbol, trade_date)`, partitioned daily. Content fingerprints of market data, contracts, rates, model code and output are stored; a change in any dependency, a missing receipt or a stale result triggers recomputation. `--start/--end` specify a window and `--full` forces a full recompute; a partial recompute does not wrongly mark other dates as updated and does not move the watermark back. See the [derivatives research guide](../recipes/derivatives.md) for details.
+Primary key `(symbol, trade_date)`, partitioned daily. Content fingerprints of market data, contracts, rates, model code and output are stored; a change in any dependency, a missing receipt or a stale result triggers recomputation. `--start/--end` specify a window and `--full` forces a full recompute; a partial recompute does not wrongly mark other dates as updated and does not move the watermark back. See the [derivatives research guide](query-guide.md#intraday-and-derivatives) for details.
 
 #### futures_minute_bars
 
@@ -610,7 +522,7 @@ Daily update: `macro_risk` group. History: `cne backfill commodity_bars [--start
 > "4 capitalization shares per 10" → 0.4, "3 rights shares per 10" → 0.3). TDX sends these amounts as single-precision floats, so they are half-up rounded to 6 decimal places before that division (the tail is at most 4e-8); the rights price and the unit-split factor are rounded the same way and are not divided by 10. Downstream accounting works on actual holdings with no further division by 10:
 > `shares_after = shares × (1 + bonus_ratio + transfer_ratio) × split_factor`,
 > `cash = shares × cash_dividend`. `allotment_price` is a per-share price, not a ratio, and is not divided by 10.
-> `cash_dividend` is the declared per-share amount. When a company holds repurchased shares, the exchange computes the ex-rights reference price from a virtual per-share amount spread over total shares, which is smaller, so the adjustment factor steps slightly less (up to about 0.5% observed).
+> `cash_dividend` is the declared per-share amount. When a company holds repurchased shares, the exchange computes the ex-rights reference price from a virtual per-share amount spread over total shares, which is smaller, so the adjustment factor steps slightly less.
 > Note: TDX `xdxr` does not split bonus and capitalization shares; it writes their sum to `bonus_ratio` (`transfer_ratio=0`);
 > the total multiplier is correct, but the bonus/capitalization split is distinguishable only on the EastMoney daily path. An EastMoney plan that
 > includes a cash dividend, bonus shares and capitalization shares together is split into several `(symbol, ex_date, action_type)` records, so that a single `action_type`
@@ -1846,28 +1758,6 @@ Tushare `stk_rewards` executive pay and holdings. Needs your own Tushare token i
 | data_version | string | Provenance |
 | fetched_at | timestamp | Provenance |
 
-### Compact deduplication
+### Export Parquet
 
-During compact, rows are grouped by primary key and the row with the largest `fetched_at` is kept.
-
-### DuckDB views
-
-Prefer the views in `{data_root}/duckdb/cnequity.duckdb` generated by `cne init` / compact
-over hand-written globs over a whole layer. `hive_partitioning=true` applies **only** to datasets partitioned by day
-(directory values `YYYY-MM-DD`); yearly/monthly partitions must use `hive_partitioning=false` (the real date is in a file column).
-See [lake-layout](../architecture/lake-layout.md).
-
-```sql
--- daily_bars / adj_factors are partitioned by month (directories trade_date=YYYY-MM), so hive must be off
-CREATE VIEW daily_bars_view AS
-SELECT * FROM read_parquet('{root}/curated/daily_bars/**/*.parquet', hive_partitioning=false);
-
-CREATE VIEW daily_bars_adj AS
-SELECT b.*, b.close * a.factor AS adj_close
-FROM daily_bars_view b
-LEFT JOIN read_parquet('{root}/derived/adj_factors/**/*.parquet', hive_partitioning=false) a
-  ON b.symbol = a.symbol AND b.trade_date = a.trade_date AND a.adjust_type = 'qfq';
-
--- Counterexample: for yearly-partitioned datasets such as index_bars, hive must be off, or the directory "1993" pollutes the DATE column
--- SELECT * FROM read_parquet('.../index_bars/**/*.parquet', hive_partitioning=false);
-```
+To access published data as standalone files, see [export Parquet](query-guide.md#parquet).

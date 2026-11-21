@@ -1,18 +1,11 @@
-# The English documentation site, built into site/en/ after the Chinese site:
-#
-#   mkdocs build --strict && mkdocs build --strict -f mkdocs.en.yml
-#
-# Everything not set here (markdown extensions, validation, theme features,
-# shared overrides and CSS) comes from mkdocs.yml. docs/en/ is an independent
-# page tree: its pages link only to each other.
+# Build after the Chinese site so the two output directories can coexist.
 INHERIT: mkdocs.yml
 
-site_description: Open-source local China A-share data lake for quant research and backtesting - stock prices, financials, futures and fund flow, daily-updated, traceable, MCP-ready
+site_description: Local China-market data lake for quantitative research with Python, SQL, and MCP
 site_url: https://rootsunc.github.io/CNEquity/en/
 edit_uri: edit/main/docs/en/
 docs_dir: docs/en
 site_dir: site/en
-exclude_docs: ""
 
 theme:
   language: en
@@ -30,49 +23,17 @@ theme:
 
 nav:
   - Home: index.md
-  - Getting started:
-      - Quickstart: getting-started/quickstart.md
-      - Installation and upgrades: getting-started/installation.md
-      - Initialization, scope and resume: getting-started/initialization.md
-      - Configuration reference: getting-started/configuration.md
-  - FAQ:
-      - Free China A-share historical data: guides/free-a-share-data.md
-      - AKShare, Tushare or Baostock: architecture/comparison.md
-      - Avoiding look-ahead bias in backtests: guides/avoid-look-ahead-bias.md
-      - Ask Claude or ChatGPT about A-shares: guides/ai-query-a-shares.md
-  - Research and data:
-      - Recipes:
-          - Recipe index: recipes/README.md
-          - Price adjustment research baseline: recipes/research-baseline.md
-          - PIT rebalance cross-section: recipes/pit-rebalance.md
-          - DuckDB and Polars: recipes/duckdb-polars.md
-          - Commodity futures and options: recipes/derivatives.md
-          - 15 / 30 / 60-minute bars: recipes/minute-bars-15-30-60.md
-      - Data reference:
-          - Dataset catalog: datasets/catalog.md
-          - Query guide: datasets/query-guide.md
-          - Fields and units: datasets/schema.md
-          - Data contract: datasets/contract.md
-          - Sources and history limits: datasets/sources.md
-          - Universe profiles: reference/universe-profiles.md
-  - Commands and API:
-      - CLI reference: reference/cli.md
-      - CLI options and defaults: reference/cli-options.md
-      - Network and write inventory: reference/cli-surface.md
+  - Quickstart: getting-started/quickstart.md
+  - Design: architecture/overview.md
+  - Data and coverage: datasets/catalog.md
+  - Query and research: datasets/query-guide.md
+  - Reference:
       - Python API: reference/python-api.md
-      - MCP integration: reference/mcp.md
+      - MCP: reference/mcp.md
+      - Configuration: getting-started/configuration.md
+      - Commands and side effects: reference/cli-surface.md
   - Operations:
-      - Runbook: operations/runbook.md
+      - Daily updates: operations/runbook.md
       - Troubleshooting: operations/troubleshooting.md
-      - Fetching, speed and source protection: operations/fetch-policy.md
-      - Source health: operations/source-health.md
-      - Repository scripts: operations/scripts.md
-  - Product design:
-      - Product direction and scope: architecture/overview.md
-      - Design principles: architecture/design-principles.md
-      - From collection to query: architecture/data-flow.md
-      - Lake layout: architecture/lake-layout.md
-  - Project and maintenance:
-      - Changelog: changelog.md
-      - License, sources and citation: legal-and-data-sources.md
-      - Maintainer release checklist: operations/releasing.md
+  - Install and upgrade: getting-started/installation.md
+  - License, sources, and citation: legal-and-data-sources.md

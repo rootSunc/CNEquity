@@ -16,8 +16,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 ZH = ROOT / "docs" / "zh"
 EN = ROOT / "docs" / "en"
-# Kept so old links to it still resolve; excluded from the site.
-ZH_ONLY = {"datasets/README.md"}
 _LINK = re.compile(r"\]\(([^)\s]+)\)")
 _FENCE = re.compile(r"```.*?```", re.S)
 
@@ -49,7 +47,7 @@ def _nav_pages(config: str) -> set[str]:
 
 
 def test_every_page_exists_in_both_languages():
-    zh, en = _pages(ZH) - ZH_ONLY, _pages(EN)
+    zh, en = _pages(ZH), _pages(EN)
     assert zh - en == set(), f"no English page for {sorted(zh - en)}"
     assert en - zh == set(), f"no Chinese page for {sorted(en - zh)}"
 
@@ -91,7 +89,7 @@ def test_english_generated_pages_match_the_code():
     sync_docs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sync_docs)
 
-    for target in ("cli-options-en", "cli-surface-en", "schema-en", "derivatives-en"):
+    for target in ("cli-surface-en", "schema-en", "catalog-en"):
         path, expected, _ = sync_docs.TARGETS[target]()
         assert path.read_text(encoding="utf-8") == expected, f"{target} is stale"
 

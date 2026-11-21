@@ -1,11 +1,4 @@
-"""The published catalog must list what the registry actually holds.
-
-``docs/zh/datasets/catalog.md`` carries per-dataset prose (主源, 备注) that has no
-home in ``DatasetSpec``, so the document is written by hand rather than
-generated. That leaves it free to drift: before this guard existed the L7 table
-was missing ``flash_news_wire`` and ``economic_calendar``, and ``industry_index``
-appeared in no tier table at all.
-"""
+"""Check that the published catalog and configured sources match the registry."""
 
 from __future__ import annotations
 
@@ -14,18 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from cnequity.domain.datasets import DATASETS, datasets_by_support, datasets_by_tier
+from cnequity.domain.datasets import DATASETS, datasets_by_tier
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 CATALOG = DOCS / "zh" / "datasets" / "catalog.md"
 # The English catalog is a translation of the same tables; it drifts the same way.
 CATALOGS = [CATALOG, DOCS / "en" / "datasets" / "catalog.md"]
-# Where the measured source-history table starts and ends, per language.
-_HISTORY_BOUNDS = {
-    CATALOGS[0]: ("### 历史视野", "### `trade_ticks` 的容量"),
-    CATALOGS[1]: ("### History horizon", "### `trade_ticks` capacity"),
-}
-
 _SECTION = re.compile(r"^##\s+(L[0-9])\b")
 _ROW = re.compile(r"^\|\s*([a-z][a-z0-9_]*)\s*\|")
 
@@ -37,8 +24,6 @@ def _documented_by_tier(catalog: Path) -> dict[str, list[str]]:
     for line in catalog.read_text(encoding="utf-8").splitlines():
         if line.startswith("## "):
             match = _SECTION.match(line)
-            # Any other h2 (采集模式, 主备配置, Step → 数据集映射) closes the
-            # tier section; those tables mention datasets too.
             tier = match.group(1) if match else None
             if tier:
                 documented.setdefault(tier, [])
@@ -60,73 +45,6 @@ def test_catalog_tier_tables_match_the_registry(catalog):
             f"{tier}: catalog lists {sorted(documented[tier])}, "
             f"registry has {sorted(registered[tier])}"
         )
-
-
-@pytest.mark.parametrize("catalog", CATALOGS, ids=["zh", "en"])
-def test_catalog_history_floor_table_has_no_duplicate_datasets(catalog):
-    """The measured source-history table must not repeat a dataset row."""
-    start, end = _HISTORY_BOUNDS[catalog]
-    text = catalog.read_text(encoding="utf-8")
-    history = text.split(start, 1)[1].split(end, 1)[0]
-    names = [
-        match.group(1) for match in re.finditer(r"^\|\s*([a-z][a-z0-9_]*)\s*\|", history, re.M)
-    ]
-    assert len(names) == len(set(names)), f"duplicate history-floor rows: {names}"
-
-
-# --- sources.md group labels -------------------------------------------------
-# Same failure mode, different file: sources.md tags each dataset with the
-# schedule group and start time it runs in. Both drifted — fund_flow was labelled
-# core@16:30 and margin_trading signals@17:00 when both run in capital — and one
-# of them had been wrong since before the start times moved at all.
-
-SOURCES = Path(__file__).resolve().parents[2] / "docs" / "zh" / "datasets" / "sources.md"
-_GROUP_ROW = re.compile(r"\|\s*分组\s*\|\s*([^|]+?)\s*\|")
-
-
-def _shipped_step_groups() -> dict[str, str]:
-    import sys
-    from unittest.mock import patch
-
-    from cnequity.config import load_config
-
-    example = Path(__file__).resolve().parents[2] / "configs" / "cnequity.example.toml"
-    with patch.object(sys, "platform", "linux"):
-        cfg = load_config(example)
-    # Events groups are scheduled the same way and documented in the same
-    # column; leaving them out here is how a doc row would quietly stop being
-    # checked the moment a feed moved between the two jobs.
-    groups = {**cfg.schedule_groups, **cfg.events_groups}
-    return {
-        step: f"{name}@{group.at}"
-        for name, group in groups.items()
-        for step in group.steps
-        if step != "compact"
-    }
-
-
-def test_sources_group_labels_match_the_shipped_schedule():
-    step_groups = _shipped_step_groups()
-    mismatches = []
-    for block in SOURCES.read_text(encoding="utf-8").split("\n#### ")[1:]:
-        heading = block.split("\n", 1)[0].strip()
-        row = _GROUP_ROW.search(block)
-        if row is None:
-            continue
-        for dataset in (part.strip() for part in heading.split("/")):
-            if dataset in step_groups:
-                if row.group(1) != step_groups[dataset]:
-                    mismatches.append(
-                        f"{dataset}: doc={row.group(1)} config={step_groups[dataset]}"
-                    )
-                break
-    assert mismatches == []
-
-
-# --- failover / primary_source -----------------------------------------------
-# Primary and backup used to be duplicated in a README details table; the
-# landing page no longer lists them. Failover config and the registry remain
-# the contract — catalog tier tables still name 主源 in prose.
 
 
 def test_failover_sources_match_the_registry():
@@ -157,71 +75,3 @@ def test_failover_sources_match_the_registry():
 def test_every_dataset_declares_a_primary_source():
     """An empty primary_source would leave the catalog 主源 cell without a feed."""
     assert [n for n, s in DATASETS.items() if not s.primary_source] == []
-
-
-_SUPPORT_ROW = re.compile(
-    r"^\|\s*`(core|extended|best_effort|optional)`[^|]*\|(?:[^|]*\|){2}([^|]*)\|"
-)
-
-
-@pytest.mark.parametrize("catalog", CATALOGS, ids=["zh", "en"])
-def test_catalog_support_table_matches_the_registry(catalog):
-    documented = {}
-    for line in catalog.read_text(encoding="utf-8").splitlines():
-        row = _SUPPORT_ROW.match(line)
-        if row:
-            documented[row.group(1)] = sorted(re.findall(r"`([a-z0-9_]+)`", row.group(2)))
-    registered = {level: sorted(names) for level, names in datasets_by_support().items()}
-    assert documented == registered
-
-
-# --- dataset counts in prose --------------------------------------------------
-# README, home pages, guides, comparison and runbooks quote how many datasets
-# there are. Two pages still said 55 at 86; sync_docs.py now writes them.
-
-
-def _sync_docs():
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "sync_docs", Path(__file__).resolve().parents[2] / "scripts/dev/sync_docs.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_quoted_dataset_counts_follow_the_registry():
-    sync_docs = _sync_docs()
-    counts = sync_docs.dataset_counts()
-    assert counts["total"] == len(DATASETS) == counts["curated"] + counts["derived"]
-    stale = [
-        name
-        for name, render in sync_docs.TARGETS.items()
-        if name.startswith("counts:")
-        and (lambda path, text, _: path.read_text(encoding="utf-8") != text)(*render())
-    ]
-    assert not stale, f"run python scripts/dev/sync_docs.py: {stale}"
-
-
-def test_count_patterns_rewrite_the_number_only():
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/dev"))
-    import doc_counts
-
-    text = (
-        "支持 **86 个数据集**（78 个 curated、8 个 derived），只判 12 个核心档数据集。"
-        " 86 datasets (78 curated, 8 derived); the 12 core datasets."
-        " <strong>55</strong><span>registered datasets: 47 collected + 8 derived</span>"
-        " 86 industry boards; 2.86 datasets"
-    )
-    counts = {"total": 90, "curated": 81, "derived": 9, "core": 13}
-    out, found = doc_counts.render(text, counts)
-    assert found == 11
-    assert out == (
-        "支持 **90 个数据集**（81 个 curated、9 个 derived），只判 13 个核心档数据集。"
-        " 90 datasets (81 curated, 9 derived); the 13 core datasets."
-        " <strong>90</strong><span>registered datasets: 81 collected + 9 derived</span>"
-        " 86 industry boards; 2.86 datasets"
-    )

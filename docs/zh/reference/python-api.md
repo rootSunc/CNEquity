@@ -1,308 +1,122 @@
 # Python API
 
-模块：`cnequity.query`。先看[查询指南](../datasets/query-guide.md)理解口径；本页用于查参数、返回值和版本边界。
+模块：`cnequity.query`。口径说明先看[查询与研究](../datasets/query-guide.md)，本页查参数、返回值和版本边界。所有函数都接受 `config=` 或 `data_root=` 指定湖；都不给时按 `CNE_CONFIG` → 当前目录的 `configs/cnequity.toml` → 用户级配置查找，与 CLI 相同。
 
 ```python
-from cnequity.query import load, scan, list_datasets, dataset_schema
+from cnequity.query import load, scan, read_scope, list_datasets, dataset_state
 ```
 
-## load()
+## load() {#load}
 
 ```python
-def load(
-    dataset: str,
-    *,
-    start: str | date | None = None,
-    end: str | date | None = None,
-    adjust: Literal["qfq", "hfq", "total_return"] | None = None,
-    universe: Literal["all_a", "all_a_sh_sz"] | None = None,
-    profile: UniverseProfileLike | None = None,
-    universe_profile: UniverseProfileLike | None = None,
-    as_of: str | date | None = None,
-    items: list[str] | None = None,
-    symbols: list[str] | None = None,
-    strict_adj: bool = False,
-    strict_universe: bool = False,
-    all_vintages: bool = False,
-    pit_mode: Literal["strict", "best_effort"] | None = None,
-    include_otc: bool = False,
-    config: Config | None = None,
-    data_root: str | Path | None = None,
-    revision: RevisionSelection | None = None,
-    revision_map: Mapping[str, int | str] | None = None,
-) -> pl.DataFrame
+load(
+    dataset, *, start=None, end=None,
+    adjust=None,            # "qfq" | "hfq" | "total_return"
+    profile=None,           # 版本化股票池，别名 universe_profile
+    universe=None,          # 兼容参数："all_a" | "all_a_sh_sz"
+    as_of=None, pit_mode=None, all_vintages=False,
+    items=None, symbols=None,
+    strict_adj=False, strict_universe=False, include_otc=False,
+    revision=None, revision_map=None,
+    config=None, data_root=None,
+) -> polars.DataFrame
 ```
-
-### 参数
 
 | 参数 | 说明 |
-|------|------|
-| `dataset` | 注册数据集名 |
-| `start`, `end` | 含边界日期窗口（数据集主日期列） |
-| `adjust` | `hfq` / `qfq`；适用于 `daily_bars`、`minute_bars`、`minute_bars_5m` 等价量数据集。`total_return` 仅用于 `daily_bars`：基金现金分配再投资，股票同 `hfq`，见[查询指南](../datasets/query-guide.md#总收益复权total_return) |
-| `universe` | 兼容参数：`"all_a"` 沪深北全 A（已弃用，发出警告，0.25.0 移除；`profile="legacy_all_a"` 返回同样的行）；`"all_a_sh_sz"` 沪深子集。新研究应选版本化 `profile` |
-| `as_of` | PIT 截止日；可见性规则由 `pit_mode` 决定。严格模式核验公告、可用/发布时间及观察时间，随后按事实键选有效版本 |
-| `items` | 财报科目 code 列表 |
-| `symbols` | symbol 白名单 |
-| `strict_adj` | True 时缺复权因子抛 `ReaderError` |
-| `strict_universe` | True 时支持的 universe 缺少 instruments、逐日 trading_status 覆盖或版本化历史 ST 证据收据会抛错；适合研究读取 |
-| `all_vintages` | True 时返回 `as_of` 前的**全部**版本（研究财报修订用）；截面选股勿开，会重复计同一事实 |
-| `pit_mode` | PIT 证据模式：省略或传 `None` 默认为 `best_effort`，保留在 `as_of` 之后采集的历史回填，并返回 `pit_is_exact=False`；公告及已知可用/发布时间仍受截止日约束。`strict` 排除 reconstructed 回填，只返回湖在截止日已有的证据 |
-| `include_otc` | 默认 False：`daily_bars`、`adj_factors` 排除北交所证券进入交易所市场之前的场外报价；设为 True 保留这些报价。交易所起点取上市日和 2020-07-27 中的较晚者 |
-| `config` / `data_root` | 湖位置；省略时按 `CNE_CONFIG` → 当前目录的 `configs/cnequity.toml` → 用户级配置查找 |
-| `profile` / `universe_profile` | 版本化股票池策略，二者为别名；官方研究画像自动启用严格证据校验 |
-| `revision` | revision 数字或 ID 固定主数据集；也支持按数据集映射。单个数字不固定因子或股票池依赖 |
-| `revision_map` | 固定各依赖数据集的 retained revision；显式缺失版本抛 `RevisionConsistencyError`，不退回 latest |
+|---|---|
+| `start`、`end` | 含边界的日期窗口，作用于数据集的主日期列 |
+| `adjust` | `qfq` 前复权、`hfq` 后复权，用于日线、分钟线等价量数据。`total_return` 只用于 `daily_bars`：基金现金分配再投资，股票同 `hfq`。结果附加 `adj_open`、`adj_high`、`adj_low`、`adj_close` 和 `adj_is_exact` |
+| `strict_adj` | 缺复权因子时报错，而不是返回 `adj_is_exact=False`。它只检查因子覆盖，不能证明历史因子正确 |
+| `profile` | 版本化股票池，如 `cn_a_sh_sz_research_v1`。用 `cne profile list` 或 `list_universe_profiles()` 查看；研究画像自动启用严格证据校验 |
+| `universe` | 旧参数。`all_a` 已弃用，`profile="legacy_all_a"` 返回同样的行；`all_a_sh_sz` 为沪深子集 |
+| `strict_universe` | 股票池缺少证券主数据、逐日交易状态或历史 ST 证据时报错 |
+| `as_of`、`pit_mode` | PIT 截止日。`best_effort`（默认）保留事后回填但在截止日前已披露的值，标 `pit_is_exact=False`；`strict` 只返回湖在截止日已观察到的版本 |
+| `all_vintages` | 返回截止日前的全部版本，用于研究财报修订；截面选股不要开，会重复计同一事实 |
+| `items` | 财报科目代码 |
+| `include_otc` | 默认排除北交所证券进入交易所市场之前的场外报价 |
+| `revision`、`revision_map` | 固定修订，见下文 |
 
-初始化尚未结束时，`load("daily_bars", symbols=[...])` 可以读到已经封存的未复权日线。不写 `symbols` 的查询、`scan()` 和不带标的的 SQL 仍只看已发布数据。复权因子在 `adj_factors` 发布之后才可用。
+PIT 数据集另返回 `available_at`、`source_published_at`、`observed_at`、`revision_id`、`pit_is_exact`、`pit_quality`。未知数据集、无数据或严格校验失败时抛 `ReaderError`（`ValueError` 的子类）。
 
-### 固定组合读取的数据版本
+## 固定修订 {#revisions}
 
-复权股票池查询可能依赖 `daily_bars`、`adj_factors`、`instruments`、`trading_status`、
-`trading_calendar`。`revision_map` 使用各数据集自身的 revision，数字不必相同；只填
-主表并不能固定整个结果。一次 `load()` 为所用依赖各选择一次 generation，后续股票池
-和覆盖数据读取复用该选择。未指定的依赖选当前版本，不提供全湖原子事务。
+一次复权或股票池查询可能依赖 `daily_bars`、`adj_factors`、`instruments`、`trading_status`、`trading_calendar` 等多个数据集。`revision` 只固定主数据集；`revision_map={"daily_bars": 12, "adj_factors": 7}` 固定各依赖，各数据集用自己的修订号或修订 id。指定的修订已被保留策略清理时抛 `RevisionConsistencyError`，不会退回最新修订。没写到的依赖读当前修订。
 
-这只固定数据。长期研究使用 `SnapshotStore.create(name, datasets, research=True)`
-或 CLI `snapshot create --research`，将完整依赖、ST/退市证据、目录、日历种子和非敏感读取配置一起封装。快照不包含 API token，恢复后可以离线解释原来的来源能力。
-读取时检查冻结的 canonical 策略与所请求内置 profile，版本不一致报错；快照不打包可执行软件。
-长期研究还应保存依赖版本映射、查询参数、profile、配置和软件版本；旧 generation
-受保留期限制。不要以水位或 `fetched_at` 代替完整依赖的 revision 身份。
-
-### 带读取凭证的查询
+### load_with_receipt() {#load-with-receipt}
 
 ```python
 from cnequity.query import load_with_receipt
 
 result = load_with_receipt(
-    "daily_bars",
-    start="2024-01-01",
-    end="2024-12-31",
-    symbols=["600519.SH"],
-    adjust="hfq",
-    require_replayable=True,
-    data_root="/path/to/lake",
+    "daily_bars", start="2024-01-01", end="2024-12-31",
+    symbols=["600519.SH"], adjust="hfq", require_replayable=True,
 )
 bars, receipt = result.frame, result.receipt
 ```
 
-`load_with_receipt()` 使用与 `load()` 相同的筛选参数，先捕获各依赖数据集的已提交
-修订，再以该映射读取。凭证记录实际选中的修订与合同指纹、返回行的来源和采集时间、
-PIT 模式/质量、请求窗口与实际行的日期边界。`receipt_id` 是这些内容的稳定摘要。
-`coverage.completeness="not_assessed"` 明确表示行的起止日期**不能**证明全市场或逐日完整。
-旧湖缺少修订时 `replayable=false` 并列出 `unpinned_datasets`；设置
-`require_replayable=True` 会在扫描前拒绝。此凭证固定数据版本，但不会冻结质量报告、
-操作配置或软件版本；长期复现仍需研究快照及研究产物清单。
+参数与 `load()` 相同。它先取得各依赖的已提交修订，再按这组修订读取，凭证记录选中的修订与契约指纹、返回行的来源和采集时间、PIT 模式、请求窗口与实际日期边界。`receipt_id` 是这些内容的稳定摘要。`coverage.completeness` 为 `not_assessed`，表示起止日期不能证明逐日完整。`require_replayable=True` 时，有依赖无法固定修订就在读取前拒绝。凭证只固定数据，不冻结质量报告、配置或软件版本。
 
-本地 HTTP 服务也提供 `GET /api/read/{dataset}`：传入 `start`、`end` 和通常所需的
-`symbol`，返回 `rows` 与同一次读取的 `receipt`。PIT 数据还须传 `as_of`，默认使用
-严格模式。HTTP 窗口最长 366 天、多日查询必须给出证券代码，超过 1000 行会拒绝；
-批量研究仍使用 Python API。该接口要求所有读取依赖有可重放修订，不会默默降级。
+本地 `cne serve` 也提供 `GET /api/read/{dataset}`，返回行和同一次读取的凭证；窗口最长 366 天、超过 1000 行拒绝，批量研究用 Python。
 
-### 返回
+## scan() 与 read_scope() {#scan}
 
-- 未复权数据集：原始列
-- PIT `load()` 还会返回可选双时态列 `available_at`、`source_published_at`、
-  `observed_at`、`revision_id`，以及 `pit_is_exact` / `pit_quality` 质量标记；
-  旧 Parquet 缺列时读侧补齐
-- `adjust` 非空：附加 `adj_open`, `adj_high`, `adj_low`, `adj_close`, `adj_is_exact`
+```python
+import polars as pl
+from cnequity.query import read_scope, scan
 
-### 异常
+with read_scope():
+    lf = scan("daily_bars", start="2020-01-01", symbols=["600519.SH"])
+    df = lf.filter(pl.col("close") > 0).collect()
+```
 
-`strict_adj` 和 `adj_is_exact` 仅描述因子覆盖，不能证明历史因子正确。`load_with_receipt()` 的 `adjustment` 摘要提供所读版本的来源与非阻断历史诊断；无诊断时标为未评估。
+`scan()` 返回原始的 `polars.LazyFrame`，只做日期分区与代码过滤，不执行复权、股票池或 PIT。参数为 `start`、`end`、`symbols`、`revision`、`revision_map`、`config`、`data_root`。
 
-`ReaderError`（`ValueError` 子类）：未知数据集、无数据、strict_adj 失败等。
+延迟查询在 `collect()` 时才读文件。在 `read_scope()` 里构建并收集，保留清理就不会在这期间删除它要读的文件；在作用域外收集可能读到已被清理的文件而失败。
 
-## load_profile()
+## load_profile() {#load-profile}
 
-一次取多只证券、多个截至日、多个字段在当时能知道的值，返回长表，每行是 `(symbol, as_of, field)`。
-每个源数据集只读一次，按证券做截至日连接，所以多加截至日只多一次连接。
+一次取多只证券、多个截止日、多个字段在当时能知道的值，返回长表，每行是 `(symbol, as_of, field)`。
 
 ```python
 from datetime import date
 from cnequity.query import load_profile
 
 p = load_profile(
-    ["listed", "status.trading", "status.st", "shares.total", "holders.count",
-     "fsi:net_profit", "industry.sw.l1", "industry.eastmoney.l3"],
-    symbols=["600519.SH"],
-    as_of_dates=[date(2024, 4, 30)],
-    pit_mode="best_effort",   # 或 "strict"
+    ["listed", "status.st", "shares.total", "fsi:net_profit", "industry.sw.l1"],
+    symbols=["600519.SH"], as_of_dates=[date(2024, 4, 30)],
+    pit_mode="best_effort",    # 或 "strict"、"published"
 )
 ```
 
-| 字段 | 来源 | 说明 |
-|---|---|---|
-| `listed` | instruments | 截至日在上市期内为 1 |
-| `status.trading` / `status.st` | trading_status | 截至日及之前最近一行；ST 为空表示未知，不是“非 ST” |
-| `shares.total` / `shares.float` / `shares.free_float` | share_structure | 变动日和公告日都过了才可知 |
-| `holders.count` | shareholder_counts | 公告后可知 |
-| `fsi:<item_code>` | financial_statement_items | 截至日可见的最新报告期；`value_str` 为报告期，`field_date` 为期末日 |
-| `industry.<sw\|eastmoney>.l<1\|2\|3>` | industry_members | 截至日及之前最近快照中该层级的行业代码，`label` 为名称 |
+| 字段 | 来源 |
+|---|---|
+| `listed` | `instruments`：截止日在上市期内为 1 |
+| `status.trading`、`status.st` | `trading_status`：截止日及之前最近一行；ST 为空表示未知 |
+| `shares.total`、`shares.float`、`shares.free_float` | `share_structure`：变动日与公告日都已过 |
+| `holders.count` | `shareholder_counts`：公告后可知 |
+| `fsi:<科目代码>` | `financial_statement_items`：截止日可见的最新报告期 |
+| `industry.<sw\|eastmoney>.l<1\|2\|3>` | `industry_members`：截止日及之前最近的快照 |
 
-返回列：`value_num`、`value_str`、`label`、`field_date`（值描述的日期）、`visible_from`（最早可知日）、`source`、
-`pit_quality`（`strict` 一手来源且本湖在截至日前已观察到；`reconstructed` 按公告日可知但事后补录；`snapshot_only` 只有快照日）、
-`age_days`、`missing_reason`。
+返回列有 `value_num`、`value_str`、`label`、`field_date`、`visible_from`、`source`、`pit_quality`、`age_days`、`missing_reason`。`missing_reason` 区分上市前、退市后、覆盖之外、尚未披露、值未知、缺少 PIT 证据和无记录。`pit_mode="published"` 只认记录了发布时间的值，`cutoff=time(15)` 要求发布时间在截止日北京时间 15:00 之前；`canonical=True` 先把代码换成当日实际生效的代码。
 
-`missing_reason`：`before_listing`、`after_delisting`、`outside_coverage`（截至日早于该数据集最早记录）、`not_yet_published`、
-`value_unknown`（有记录但值未知，如派生状态行的 ST）、`no_pit_evidence`（只在 `strict` 下）、`no_record`；
-值比该字段的时效上限更旧时照常返回值并标 `stale`。上市期外不返回任何值。
+## 湖的状态 {#lake-state}
 
-`pit_mode="published"` 只认记录了发布时间（`available_at`）的值，公告日和入湖日都不算；同时不早于值生效的日期
-（如股本变动日）。`cutoff=time(15)` 表示发布时间须在截至日北京时间 15:00 之前，否则从下一天起才可见；不给则整天都算。
-行业快照没有发布时间，在该模式下为 `no_pit_evidence`；上市与交易状态是当日事实，各模式相同。
-`canonical=True` 先把每行换到当日实际生效的代码（同 `canonicalize_dated_identifiers`）；`data_root`、`revision_map` 传给每次读取。
+| 函数 | 返回 |
+|---|---|
+| `list_datasets()` | 每个数据集一行：层级、主日期列、历史模式、回填来源、PIT 声明、是否有数据、覆盖起止、水位、当前修订和契约指纹。日期边界不证明中间没有缺口 |
+| `dataset_state(dataset)` | `DatasetState`：当前修订号、修订 id、提交时间、运行 id、schema 版本、契约指纹、内容摘要、变化的分区。下游缓存用它判断数据是否变化，不要只看最大日期 |
+| `dataset_revisions(dataset, after=修订id)` | 该修订之后的已提交修订，从旧到新；之后的历史不完整时抛 `ValueError`，调用方应按「已变化」处理 |
+| `dataset_attempt(dataset)` | 最近一次采集中该数据集最严重的步骤结果（阶段、状态、原因、运行 id）。采集失败不会删除上一份可读数据，展示时应同时给出数据日期和失败原因 |
+| `dataset_schema(dataset)` | 登记的列和 Polars 类型 |
 
-## scan()
+## 分钟重采样 {#resample}
 
-返回原始 `pl.LazyFrame`，适合大窗口的自定义 lazy 管道。它只做日期分区和
-symbol 过滤，不执行 `load()` 的复权、universe、PIT 或严格覆盖语义；需要这些
-语义时应使用 `load()`。当前参数如下：
+`resample_trade_bars(frame, "5m")` 把完整的 1m 成交数据重采样为 5m、15m、30m、60m，也可以从 5m 重采样为 15m、30m、60m；按上午、下午分别对齐，组成分钟不完整时报错。`resample_minute_history(minute_1m, minute_5m, "15m")` 按股票和交易日优先用 1m、否则用 5m，`resampled_from` 列标明来源。它们不写湖；要存进湖用 `cne derive minute_bars_15m`。
 
-```python
-def scan(
-    dataset: str,
-    *,
-    start: str | date | None = None,
-    end: str | date | None = None,
-    symbols: list[str] | None = None,
-    config: Config | None = None,
-    data_root: str | Path | None = None,
-    revision: RevisionSelection | None = None,
-    revision_map: Mapping[str, int | str] | None = None,
-) -> pl.LazyFrame
-```
+## 证券代码延续 {#identifiers}
 
-```python
-import polars as pl
+`cnequity.domain.security_identifiers` 是公开的读取契约，提供 `canonical_symbol`、`canonicalize_dated_identifiers`、`identifier_aliases`、`identifier_changes`、`transitions_on`。登记表只收录生效日和换股比例都有公告佐证的代码变更。`canonicalize_dated_identifiers(frame, date_col=..., key_columns=...)` 把带日期的行换成当日有效的代码。删除或改名这些函数须先经过弃用周期。
 
-lf = scan("daily_bars", start="2020-01-01", symbols=["600519.SH"])
-df = lf.filter(pl.col("close") > 0).collect()
-```
+## SQL {#sql}
 
-## list_datasets()
-
-```python
-def list_datasets(
-    *,
-    config: Config | None = None,
-    data_root: str | Path | None = None,
-) -> pl.DataFrame
-```
-
-主要列：`dataset`、`layer`、`date_col`、`fetch_semantics`、`history_mode`、`backfill_source`、`history_horizon_days`、`pit`、`pit_quality`、`pit_storage_columns`、`has_data`、`coverage_start`、`coverage_end`、`watermarked`、`watermark`。另返回 `snapshot_date`、`revision`、`revision_id`、`schema_version`、`contract_fingerprint`。
-
-日期边界用于发现数据，不等于窗口完整性证明；版本字段来自 state，读取提交版本仍以 revision pointer 为准。
-
-`history_mode` ∈ `by_date` / `snapshot_with_backfill` / `snapshot_only`；与 `coverage_*` 一起构成可用起点合同。
-
-## historical_universe_validity()
-
-历史研究门禁位于 `cnequity.quality.historical_validity`，默认验证沪深北全 A：
-
-```python
-from cnequity.quality.historical_validity import historical_universe_validity
-from datetime import date
-
-report = historical_universe_validity(
-    cfg,
-    start=date(2020, 1, 1),
-    end=date(2024, 12, 31),
-    universe="all_a_sh_sz",
-)
-assert report["universe_ready"]
-```
-
-`universe="all_a_sh_sz"` 会让日线区间、历史 ST 证据和退市覆盖都只按沪深
-子集核验；它不会把全 A (`all_a`) 的 BJ 历史证据缺口隐藏掉。`universe_ready`
-为真才表示该明确口径可以进入历史研究。
-
-## dataset_state() 与分钟重采样
-
-`dataset_state(dataset, config=..., data_root=...)` 返回 `DatasetState`，用于取得下游缓存身份。字段见 `query/state.py`，可用标准库 `dataclasses.asdict()` 转为字典；不要只用最大日期判断数据是否变化。
-
-`dataset_attempt(dataset, config=..., data_root=...)` 只读最近一次采集运行中该数据集最严重的步骤收据（阶段、状态、时间、错误原因和 run ID）。它与已发布修订是两个维度：采集失败不会删除上一份可读快照，消费端应同时显示快照日期与失败原因。旧湖没有采集收据时返回 `None`。
-
-`resample_trade_bars(frame, "5m")` 从完整 1m 成交数据重采样，支持 5m / 15m / 30m / 60m；也可以从 5m 重采样出 15m / 30m / 60m，用于 1m 覆盖不到的历史。按上午和下午分别对齐。`resample_minute_history(minute_1m, minute_5m, "15m")` 按股票和交易日优先用 1m、否则用 5m，输出 15m / 30m / 60m，并用 `resampled_from` 列标明来源。它不覆写原始湖，缺组成分钟会报错，详见[查询指南](../datasets/query-guide.md#成交口径的分钟重采样)。
-
-## dataset_schema()
-
-```python
-def dataset_schema(dataset: str) -> dict[str, pl.DataType]
-```
-
-返回 `domain/schemas.py` 中注册的 Polars 类型映射。
-
-## 证券代码延续
-
-模块：`cnequity.domain.security_identifiers`。这是公开的读取契约，下游（如 EquityLab 的回测账本和研究样本）直接导入；删除或改名须先经弃用周期。
-
-```python
-from cnequity.domain.security_identifiers import (
-    canonical_symbol,
-    canonicalize_dated_identifiers,
-    identifier_aliases,
-    identifier_changes,
-    transitions_on,
-)
-```
-
-注册表只收录生效日和换股比例都有存档公告佐证的代码变更；不能按相近的价格或名称推断变更。`canonicalize_dated_identifiers(frame, date_col=..., key_columns=...)` 把带日期的行改回当日有效的代码，同一业务键同时有原生行和厂商回溯行时保留原生行。下游可以对模块源文件取哈希，作为冻结样本的身份，因此修改注册表会让这些样本失效。
-
-## 配置解析
-
-```python
-from cnequity.query.reader import resolve_config
-
-cfg = resolve_config(config=my_cfg)
-cfg = resolve_config(data_root="/path/to/lake")
-```
-
-优先级：`config` > `data_root` > 默认 toml 路径。
-
-## 示例
-
-### 后复权沪深研究范围
-
-```python
-bars = load(
-    "daily_bars",
-    start="2024-01-01",
-    end="2024-12-31",
-    adjust="hfq",
-    profile="cn_a_sh_sz_research_v1",
-    strict_adj=True,
-)
-```
-
-### PIT 财报
-
-```python
-roe = load(
-    "financial_statement_items",
-    items=["roe"],
-    as_of="2024-04-30",
-    pit_mode="strict",
-)
-```
-
-### 指数行情
-
-```python
-idx = load("index_bars", start="2024-01-01", symbols=["000300.SH"])
-```
-
-### 显式 data_root（无需 toml）
-
-```python
-bars = load("daily_bars", start="2024-06-01", data_root="/data/cnequity")
-```
-
-## DuckDB 入口
-
-视图由 `query/views.py` 维护，复权列见 `daily_bars_adj`。SQL 不会自动替普通表查询附加 `load()` 的 strict PIT、股票池或缺因子拒绝逻辑；需要自行表达并验证，或优先用 `load()`。示例见 [DuckDB 与 Polars](../recipes/duckdb-polars.md)。
-
-## 相关文档
-
-- [查询指南](../datasets/query-guide.md)
-- [产品边界](../architecture/overview.md)
+`cne query --sql` 和 DuckDB 视图库读的是已发布数据，每个数据集一个同名视图。`daily_bars_adj` 带复权列，其前复权以每个标的在湖内的最新一根为锚；有明确窗口的前复权聚合用 `daily_bars_qfq(DATE '2020-01-01', DATE '2020-12-31')`。SQL 不会替普通表执行 `load()` 的严格 PIT、股票池或缺因子校验。

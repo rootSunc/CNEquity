@@ -6,13 +6,10 @@ page changes, the digests differ and the English page is reported stale until
 someone updates the translation and marks it:
 
     python scripts/dev/doc_translations.py                      # list stale pages
-    python scripts/dev/doc_translations.py --mark reference/mcp.md
+    python scripts/dev/doc_translations.py --mark datasets/query-guide.md
 
-The digest skips what code generates on both sides, so a code change that
-re-renders a table does not ask for a translation: the CLI option and
-side-effect pages entirely, the derivative capability table in sources.md, the
-column names and types in schema.md (its hand-written descriptions count), and
-the dataset counts ``sync_docs.py`` keeps in step with the registry.
+The digest skips generated catalog blocks, the command effects inventory,
+and schema column names and types. Hand-written descriptions count.
 ``tests/unit/test_docs_i18n.py`` runs the check.
 """
 
@@ -22,31 +19,22 @@ import argparse
 import hashlib
 import json
 import re
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import doc_counts  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ZH = REPO_ROOT / "docs" / "zh"
 EN = REPO_ROOT / "docs" / "en"
 MANIFEST = Path(__file__).resolve().parent / "i18n" / "doc_sources.json"
 
-# Generated from code in both languages; nothing to translate by hand.
-GENERATED = {"reference/cli-options.md", "reference/cli-surface.md"}
-# Not a translation: the Chinese page includes CHANGELOG.md, the English one points to it.
-UNPAIRED = {"changelog.md", "datasets/README.md"}
-_DERIVATIVES = re.compile(
-    r"<!-- derivative-capabilities:start -->.*?<!-- derivative-capabilities:end -->", re.S
+GENERATED = {"reference/cli-surface.md"}
+_CATALOG_BLOCK = re.compile(
+    r"<!-- (dataset-catalog|derivative-capabilities):start -->.*?<!-- \1:end -->", re.S
 )
 
 
 def _translatable(page: str, text: str) -> str:
-    text = doc_counts.mask(text)
-    if page == "datasets/sources.md":
-        text = _DERIVATIVES.sub("", text)
+    if page == "datasets/catalog.md":
+        text = _CATALOG_BLOCK.sub("", text)
     if page == "datasets/schema.md":
         # Column tables: keep only the hand-written description cells.
         kept = []
@@ -73,7 +61,7 @@ def digest(page: str) -> str:
 
 def pages() -> list[str]:
     found = {p.relative_to(EN).as_posix() for p in EN.rglob("*.md")}
-    return sorted(found - GENERATED - UNPAIRED)
+    return sorted(found - GENERATED)
 
 
 def load() -> dict[str, str]:
@@ -86,9 +74,10 @@ def stale() -> list[str]:
 
 
 def mark(targets: list[str]) -> None:
-    recorded = load()
+    active = set(pages())
+    recorded = {page: value for page, value in load().items() if page in active}
     for page in targets:
-        if page not in pages():
+        if page not in active:
             raise SystemExit(f"{page}: not a translated page under docs/en")
         recorded[page] = digest(page)
     MANIFEST.write_text(

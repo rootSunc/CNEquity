@@ -56,37 +56,15 @@ def test_mcp_registry_metadata_tracks_the_package():
     assert scripts["cnequity"] == scripts["cne"]
 
 
-def test_documented_counts_match_the_registries():
-    """Counts in prose rot silently; nothing else reads them.
-
-    Found stale in one sweep: the steps module page said 40 registered steps
-    when there were 47, and the contract page still described `pit_quality`
-    falling back to the literal `strict` — a convergence that had already
-    shipped as `not_applicable`.
-    """
+def test_non_pit_datasets_do_not_advertise_strict_pit():
     from cnequity.domain.datasets import DATASETS
 
-    claims = [
-        (ROOT / "README.md", f"**{len(DATASETS)} 个数据集"),
-        (ROOT / "README.en.md", f"**{len(DATASETS)} datasets"),
-        (ROOT / "README.pypi.md", f"**{len(DATASETS)} 个数据集"),
-    ]
-    for path, needle in claims:
-        assert needle in path.read_text(encoding="utf-8"), (
-            f"{path.name} no longer states {needle!r}"
-        )
-
-    # `pit_quality` no longer falls back to a literal "strict" for non-PIT
-    # tables; the contract page must not describe it as if it did.
     placeholders = [
         n
         for n, spec in DATASETS.items()
         if not getattr(spec, "pit", False) and getattr(spec, "pit_quality", None) == "strict"
     ]
-    assert not placeholders, (
-        f"{placeholders} are non-PIT but still carry pit_quality='strict'; "
-        "docs/zh/datasets/contract.md says that fallback is gone"
-    )
+    assert not placeholders, f"{placeholders} are non-PIT but still carry pit_quality='strict'."
 
 
 def test_the_lockfile_records_the_current_version():

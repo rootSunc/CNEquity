@@ -1,99 +1,11 @@
 # 字段与单位
 
-本页用于查字段、类型和单位。数据集用途见[目录](catalog.md)，读取方式见[查询指南](query-guide.md)，兼容性与版本见[数据契约](contract.md)。列名与类型由 `scripts/dev/sync_docs.py` 同步，解释文字人工维护。
+此页用于查列名、类型、单位与数据语义。主键、版本、分区字段和历史能力可用 `cne contract show <数据集>` 查阅。见[数据与覆盖](catalog.md)和[查询与研究](query-guide.md)。
 
-### 按层查找
+- A 股个股日线成交量单位为股。使用旧版数据时查阅[目标版本说明](https://github.com/rootSunc/CNEquity/releases)。
+- `fetched_at` 是 UTC 抓取时间。PIT 数据集的可选时间列和可见性规则见[财报的时点口径](query-guide.md#pit)。
 
-按[研究分层](catalog.md#数据分层)排列，点名字跳到该数据集的列定义。
-
-| 层次 | 数据集 |
-|------|--------|
-| **L0** 基础参考 | [instruments](#instruments), [etf_profiles](#etf_profiles), [trading_calendar](#trading_calendar), [trading_status](#trading_status) |
-| **L1** 行情 | [daily_bars](#daily_bars), [index_bars](#index_bars), [minute_bars](#minute_bars--minute_bars_5m), [minute_bars_5m](#minute_bars--minute_bars_5m), [trade_ticks](#trade_ticks), [adj_factors](#adj_factors), [minute_bars_15m](#minute_bars_15m--minute_bars_30m--minute_bars_60m), [minute_bars_30m](#minute_bars_15m--minute_bars_30m--minute_bars_60m), [minute_bars_60m](#minute_bars_15m--minute_bars_30m--minute_bars_60m), [delisting_events](#delisting_events) |
-| **L2** 公司事件 | [corporate_actions](#corporate_actions), [announcement_index](#announcement_index), [earnings_disclosure_schedule](#earnings_disclosure_schedule) |
-| **L3** 基本面 | [financial_statement_items](#financial_statement_items), [share_structure](#share_structure), [shareholder_counts](#shareholder_counts), [top_holders](#top_holders), [valuation_metrics](#valuation_metrics), [analyst_consensus](#analyst_consensus) |
-| **L4** 资金面 | [fund_flow](#fund_flow), [margin_trading](#margin_trading), [northbound_holdings](#northbound_holdings), [northbound_flows](#northbound_flows), [dragon_tiger](#dragon_tiger), [block_trades](#block_trades), [institutional_holdings](#institutional_holdings), [fund_flow_ths](#fund_flow_ths) |
-| **L5** 结构行业 | [sector_members](#sector_members), [index_constituents](#index_constituents), [industry_members](#industry_members), [industry_index](#industry_index) |
-| **L6** 宏观 | [macro_indicators](#macro_indicators), [market_breadth](#market_breadth) |
-| **L7** 舆情 / 轮动 | [sentiment_scores](#sentiment_scores), [hot_rank](#hot_rank), [sector_bars](#sector_bars), [sector_fund_flow](#sector_fund_flow), [sector_fund_flow_ths](#sector_fund_flow_ths), [news_headlines](#news_headlines), [flash_news_wire](#flash_news_wire), [economic_calendar](#economic_calendar) |
-| **L8** 风险合规 | [share_unlock_schedule](#share_unlock_schedule), [regulatory_events](#regulatory_events) |
-| **L9** 衍生品 | [commodity_bars](#commodity_bars), [futures_contracts](#futures_contracts), [option_contracts](#option_contracts), [futures_bars](#futures_bars), [futures_minute_bars](#futures_minute_bars), [option_bars](#option_bars), [futures_continuous](#futures_continuous), [option_greeks](#option_greeks) |
-
-### 全局约定
-
-| 规则 | 取值 |
-|------|-------|
-| 时区 | 所有 `trade_date` 与业务时间戳使用 `Asia/Shanghai` |
-| 股票 Symbol | `{code}.{SH\|SZ\|BJ}`，如 `600519.SH`；衍生品使用各自合约代码与交易所后缀 |
-| 股票交易所列 | `SH` / `SZ` / `BJ`；衍生品见对应 schema |
-| 溯源列 | 每行必有 `source`、`data_version`、`fetched_at`（UTC 时间戳） |
-| 空值语义 | 停牌日：OHLCV 仍有值，`volume=0`、`amount=0` |
-| 成交量单位 | A 股个股成交量一律 **股**；供应商报「手」的（TDX 日线、东财）由 adapter 在边界 ×100 |
-| Schema 演进 | 兼容新增列可直接演进；破坏性变更须提升 `schema_version` 并附迁移说明 |
-| `data_version` | 语义变更（不是加列）才提升；见下「成交量单位」 |
-
-### PIT 双时态扩展列
-
-仅适用于 PIT 数据集：`announcement_index`、`financial_statement_items`、`share_structure`、`shareholder_counts`、`top_holders`。**不适用于其他数据集**。
-
-四列是可选存储列，不进 `DATASET_SCHEMAS` 的必需形状：旧 Parquet 没有它们照样可读，
-读侧会补齐。compact 时会写入磁盘，没有这些列的旧分区在下次 compact 时补写一次。
-
-| 列 | 类型 | 说明 |
-|--------|------|-------|
-| available_at | timestamp, nullable | 该事实在源端可用的时间；未知时必须为 null，不能用回填时的报告期代替 |
-| source_published_at | timestamp, nullable | 源端实际发布时间；当前东财历史回填通常未知 |
-| observed_at | timestamp, nullable | 湖实际观察到该行的时间；旧文件由 `fetched_at` 兼容补出 |
-| revision_id | string, nullable | 稳定的事实/版本身份；96 bit（24 位十六进制）截断 SHA-256，由业务字段和溯源确定性导出，**不含**观察时间戳 |
-
-`observed_at` 与 `fetched_at` 是同一件事的两个名字，因此二者都不参与 compact 的
-业务摘要比对——否则每次对账重抓都会被判成业务变更，铸出一个新 revision，
-而每个 revision 会整份复制该数据集。
-
-### 分区键（curated）
-
-| 数据集 | 分区 |
-|---------|-----------|
-| daily_bars | `trade_date`（按月） |
-| index_bars | `trade_date`（按年） |
-| minute_bars / minute_bars_5m | `trade_date`（按日） |
-| minute_bars_15m / minute_bars_30m / minute_bars_60m | `trade_date`（按日） |
-| trade_ticks | `trade_date`（按日） |
-| trading_status | `trade_date`（按月） |
-| corporate_actions | `ex_date`（按年） |
-| adj_factors | `trade_date`（按月） |
-| financial_statement_items | `report_period` |
-| industry_members | `as_of_date` |
-| northbound_flows | `trade_date` |
-
-多源快照路径：`meta/source_snapshots/{dataset}/source={source}/data_version={ver}/`
-
-### 主键
-
-| 数据集 | 主键 |
-|---------|-------------|
-| instruments | `(symbol)` |
-| etf_profiles | `(symbol, as_of_date)` |
-| trading_calendar | `(trade_date)` |
-| trading_status | `(symbol, trade_date)` |
-| daily_bars | `(symbol, trade_date)` |
-| index_bars | `(symbol, trade_date, frequency)` |
-| minute_bars / minute_bars_5m | `(symbol, trade_date, bar_time, frequency)` |
-| minute_bars_15m / minute_bars_30m / minute_bars_60m | `(symbol, trade_date, bar_time, frequency)` |
-| trade_ticks | `(symbol, trade_date, tick_seq)` |
-| corporate_actions | `(symbol, ex_date, action_type)` |
-| adj_factors | `(symbol, trade_date, adjust_type)` |
-| fund_flow | `(symbol, trade_date)` |
-| northbound_holdings | `(symbol, trade_date, channel)` |
-| northbound_flows | `(trade_date, channel)` |
-| margin_trading | `(symbol, trade_date)` |
-| sector_members | `(symbol, sector_code, as_of_date)` |
-| valuation_metrics | `(symbol, trade_date)` |
-| announcement_index | `(announcement_id)` |
-| financial_statement_items | `(symbol, report_period, statement_type, item_code, announce_date)` |
-| industry_members | `(symbol, classification_system, as_of_date)` |
-
-### MVP-P0 列定义
+## 数据集字段
 
 #### instruments
 
@@ -288,7 +200,7 @@
 
 #### minute_bars_15m / minute_bars_30m / minute_bars_60m
 
-由湖里的 1m 和 5m 重采样得到的派生数据集（`derive/minute_resample.py`）。**默认不计算**，日更和 `cne init` 都不会生成；需要入湖时手动运行 `cne derive minute_bars_15m`（30m、60m 同理）。不入湖时也可以在查询时用 `resample_minute_history` 按同一规则现算。
+由湖里的 1m 和 5m 重采样得到的派生数据集（`derive/minute_resample.py`）。需要首次入湖时运行 `cne derive minute_bars_15m`（30m、60m 同理）。此后盘中组在发布分钟线输入后增量维护。不入湖时也可以在查询时用 `resample_minute_history` 按同一规则现算。
 
 某只股票某天有 1m 就用 1m，否则用 5m；那一天有 1m 但某个区间缺组成 K 线时整天跳过，不改用 5m。停牌股的 1m 常少一根，整天无成交的跳过计入 `skipped_halted_1m`，盘中停复牌（K 线不间断、只缺开头或结尾）计入 `skipped_partial_session_1m`；有成交而 K 线中间断档的计入 `skipped_incomplete_1m`，运行记为降级。不给窗口时只重算还没算过、或 1m / 5m 内容与计算规则有变化的交易日（按内容判断，回滚和恢复也会触发），所以后来补回的 1m 会让对应交易日改用 1m 重算；`--start` / `--end` 限定窗口，`--full` 重算全部。
 
@@ -360,7 +272,7 @@
 
 #### futures_bars
 
-期货、期权**逐合约**日线，取自交易所自己发布的每日行情文件（[产品边界](../architecture/overview.md)）。每个文件列出当天所有在市合约，**没成交也有结算价**。期货与期权分成 `futures_bars` / `option_bars` 两个数据集，共有列口径相同。
+期货、期权**逐合约**日线，取自交易所自己发布的每日行情文件（[产品边界](catalog.md#derivative-coverage)）。每个文件列出当天所有在市合约，**没成交也有结算价**。期货与期权分成 `futures_bars` / `option_bars` 两个数据集，共有列口径相同。
 
 | 列 | 类型 | 说明 |
 |--------|------|-------|
@@ -525,7 +437,7 @@
 | data_version | string |  |
 | fetched_at | timestamp |  |
 
-主键 `(symbol, trade_date)`，按日分区。保存行情、合约、利率、模型代码与输出内容指纹；任一依赖改变、收据缺失或结果过旧均触发重算。`--start/--end` 指定窗口，`--full` 强制全量；局部重算不把其他日期错误标为已更新，也不回拨水位。详见 [衍生品研究指南](../recipes/derivatives.md)。
+主键 `(symbol, trade_date)`，按日分区。保存行情、合约、利率、模型代码与输出内容指纹；任一依赖改变、收据缺失或结果过旧均触发重算。`--start/--end` 指定窗口，`--full` 强制全量；局部重算不把其他日期错误标为已更新，也不回拨水位。详见 [衍生品研究指南](query-guide.md#intraday-and-derivatives)。
 
 #### futures_minute_bars
 
@@ -603,7 +515,7 @@
 > 「10 转 4 股」→ 0.4，「10 配 3 股」→ 0.3）。通达信这些数是单精度浮点，除以 10 之前先四舍五入到 6 位小数（尾巴不超过 4e-8）；配股价和份额折算比例同样收到 6 位小数，但不除以 10。下游按真实持股统一核算，无需再除 10：
 > `shares_after = shares × (1 + bonus_ratio + transfer_ratio) × split_factor`，
 > `cash = shares × cash_dividend`。`allotment_price` 是每股价格而非比率，不做除 10。
-> `cash_dividend` 是方案公告的每股派现。公司持有回购专户股份时，交易所按总股本折算的「虚拟分派」计算除权参考价，比公告金额小，复权因子的跳变会相应略小（实测最多约 0.5%）。
+> `cash_dividend` 是方案公告的每股派现。公司持有回购专户股份时，交易所按总股本折算的「虚拟分派」计算除权参考价，比公告金额小，复权因子的跳变会相应略小。
 > 注意：TDX `xdxr` 不拆分送/转，会把送转合计写入 `bonus_ratio`（`transfer_ratio=0`）；
 > 总乘数正确，但送/转拆分仅在东财日更路径可区分。东财一条同时包含派息、送股、
 > 转增的方案会拆成多条 `(symbol, ex_date, action_type)` 记录，避免单一 `action_type`
@@ -1839,28 +1751,6 @@ Tushare `stk_rewards` 高管薪酬与持股；需在 `[sources.tushare]` 配置�
 | data_version | string | 溯源 |
 | fetched_at | timestamp | 溯源 |
 
-### Compact 去重
+### 导出 Parquet
 
-Compact 时按主键分组，保留 `fetched_at` 最大的一行。
-
-### DuckDB 视图
-
-优先用 `cne init` / compact 生成的 `{data_root}/duckdb/cnequity.duckdb` 视图，
-不要手写整层 glob。`hive_partitioning=true` **仅**适用于按日分区的数据集
-（目录值为 `YYYY-MM-DD`）；年/月分区必须 `hive_partitioning=false`（真实日期在文件列里）。
-见 [lake-layout](../architecture/lake-layout.md)。
-
-```sql
--- daily_bars / adj_factors 为按月分区（目录 trade_date=YYYY-MM），必须关掉 hive
-CREATE VIEW daily_bars_view AS
-SELECT * FROM read_parquet('{root}/curated/daily_bars/**/*.parquet', hive_partitioning=false);
-
-CREATE VIEW daily_bars_adj AS
-SELECT b.*, b.close * a.factor AS adj_close
-FROM daily_bars_view b
-LEFT JOIN read_parquet('{root}/derived/adj_factors/**/*.parquet', hive_partitioning=false) a
-  ON b.symbol = a.symbol AND b.trade_date = a.trade_date AND a.adjust_type = 'qfq';
-
--- 反例：index_bars 等按年分区时必须关掉 hive，否则目录 "1993" 会污染 DATE 列
--- SELECT * FROM read_parquet('.../index_bars/**/*.parquet', hive_partitioning=false);
-```
+从已发布的数据导出，见[导出 Parquet](query-guide.md#parquet)。

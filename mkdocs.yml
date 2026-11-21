@@ -1,17 +1,11 @@
 site_name: CNEquity
-site_description: 开源 A 股本地数据湖：面向量化研究与回测的股票行情、财务、期货与资金流数据，可日更、可溯源，支持 MCP
+site_description: 面向量化研究的中国市场本地数据湖，支持行情、财报、SQL 和 MCP 查询
 site_url: https://rootsunc.github.io/CNEquity/
 repo_name: rootSunc/CNEquity
 repo_url: https://github.com/rootSunc/CNEquity
 edit_uri: edit/main/docs/zh/
-# Chinese and English are two independent sites. This one is the Chinese site
-# at the root; mkdocs.en.yml builds the English site into site/en/.
 docs_dir: docs/zh
 site_dir: site
-# Keep the remaining dataset redirect out of site search.
-# index.md is the single documentation entry point.
-exclude_docs: |
-  /datasets/README.md
 
 theme:
   name: material
@@ -22,15 +16,11 @@ theme:
     logo: material/chart-box-outline
   features:
     - navigation.instant
-    - navigation.sections
-    - navigation.tabs
-    - navigation.tabs.sticky
     - navigation.top
     - navigation.footer
     - search.highlight
     - search.suggest
     - content.code.copy
-    - content.code.annotate
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -44,107 +34,45 @@ theme:
         name: 切换浅色模式
 
 plugins:
-  # jieba (docs/requirements.txt) segments Chinese at build time; without it a
-  # whole clause is one search token and most CJK queries miss. The user
-  # dictionary keeps project terms such as 负缓存 or 复权因子 in one piece.
   - search:
       jieba_dict_user: docs/search-terms.txt
 
-# Shared by both language sites: files under the theme custom_dir
-# (docs/overrides) are copied into each site as static files.
-extra_css:
-  - stylesheets/extra.css
+hooks:
+  - docs/site.py
 
-# The repository also keeps links to root-level contributor/legal files and
-# source paths that are intentionally outside the published docs tree. MkDocs
-# should preserve those links while still failing on broken entries in `nav`.
-#
-# `anchors` is deliberately NOT ignored: with the Unicode slugifier configured
-# below, in-page anchors are checkable, and `mkdocs build --strict` is what
-# keeps a renamed Chinese heading from silently orphaning every link to it.
-# `not_found` stays ignored only because of the out-of-tree links above.
 validation:
   nav:
     omitted_files: ignore
   links:
-    absolute_links: ignore
-    unrecognized_links: ignore
-    not_found: ignore
+    not_found: warn
     anchors: warn
 
 markdown_extensions:
   - admonition
   - attr_list
-  # `docs/changelog.md` pulls in the repo-root CHANGELOG.md rather than
-  # copying it: the release notes are the first thing a reader wants after
-  # an upgrade, and a second copy would be the one that goes stale.
-  # `check_paths` makes a missing or moved source fail the build instead of
-  # publishing an empty page.
-  - pymdownx.snippets:
-      base_path: ['.']
-      check_paths: true
-  - md_in_html
-  - pymdownx.details
   - pymdownx.highlight
   - pymdownx.superfences
   - tables
   - toc:
       permalink: true
-      # Python-Markdown's default slugifier strips every non-ASCII character,
-      # so a pure-CJK heading collapses to a positional `_1` and a mixed one
-      # loses its Chinese entirely (`## 调度组` -> `_1`). Every in-repo anchor
-      # link was written against pymdownx's Unicode slugifier, which is what
-      # this restores: `## 调度组` -> `#调度组`.
       slugify: !!python/object/apply:pymdownx.slugs.slugify {kwds: {case: lower}}
 
 nav:
-  - 文档首页: index.md
-  - 开始使用:
-      - 快速开始: getting-started/quickstart.md
-      - 安装与升级: getting-started/installation.md
-      - 初始化、范围与续跑: getting-started/initialization.md
-      - 配置参考: getting-started/configuration.md
-  - 常见问题:
-      - A股历史数据免费获取: guides/free-a-share-data.md
-      - AKShare、Tushare、Baostock 怎么选: architecture/comparison.md
-      - 回测怎么避免未来函数: guides/avoid-look-ahead-bias.md
-      - 用 Claude、ChatGPT 查 A 股: guides/ai-query-a-shares.md
-  - 研究与数据:
-      - 研究示例:
-          - 示例索引: recipes/README.md
-          - 复权研究基线: recipes/research-baseline.md
-          - PIT 财报调仓截面: recipes/pit-rebalance.md
-          - DuckDB 与 Polars: recipes/duckdb-polars.md
-          - 商品期货与期权: recipes/derivatives.md
-          - 15 / 30 / 60 分钟线: recipes/minute-bars-15-30-60.md
-      - 数据参考:
-          - 数据集目录: datasets/catalog.md
-          - 查询指南: datasets/query-guide.md
-          - 字段与单位: datasets/schema.md
-          - 数据契约: datasets/contract.md
-          - 数据源与历史限制: datasets/sources.md
-          - 股票池画像: reference/universe-profiles.md
-  - 命令与 API:
-      - CLI 参考: reference/cli.md
-      - CLI 参数与默认值: reference/cli-options.md
-      - 联网与写入清单: reference/cli-surface.md
+  - 首页: index.md
+  - 快速开始: getting-started/quickstart.md
+  - 整体设计: architecture/overview.md
+  - 数据与覆盖: datasets/catalog.md
+  - 查询与研究: datasets/query-guide.md
+  - 参考:
       - Python API: reference/python-api.md
-      - MCP 接入: reference/mcp.md
-  - 日常运维:
-      - 运行手册: operations/runbook.md
+      - MCP: reference/mcp.md
+      - 配置: getting-started/configuration.md
+      - 命令与副作用: reference/cli-surface.md
+  - 运行与维护:
+      - 日常更新: operations/runbook.md
       - 故障排查: operations/troubleshooting.md
-      - 取数、速度与源保护: operations/fetch-policy.md
-      - 数据源健康度: operations/source-health.md
-      - 仓库脚本: operations/scripts.md
-  - 产品设计:
-      - 产品方向与边界: architecture/overview.md
-      - 设计原则: architecture/design-principles.md
-      - 从采集到查询: architecture/data-flow.md
-      - 数据湖目录: architecture/lake-layout.md
-  - 项目与维护:
-      - 更新日志: changelog.md
-      - 许可、来源与引用: legal-and-data-sources.md
-      - 维护者发布清单: operations/releasing.md
+  - 安装与升级: getting-started/installation.md
+  - 许可、来源与引用: legal-and-data-sources.md
 
 extra:
   social:
@@ -152,7 +80,6 @@ extra:
       link: https://github.com/rootSunc/CNEquity
       name: GitHub
   generator: false
-  # Language switcher in the header; each entry is the other site's root.
   alternate:
     - name: 中文
       link: /CNEquity/

@@ -27,7 +27,7 @@
         {
           "type": "named",
           "name": "--config",
-          "description": "Absolute path to the lake's cnequity.toml. Run `cne init --profile demo` for a one-minute sample lake, or `cne init` for the full market.",
+          "description": "Absolute path to the lake's cnequity.toml. Use `cne init --profile sample` for synthetic data, `cne init --profile demo` for a small live lake, or `cne init` for the full market.",
           "isRequired": true,
           "format": "filepath",
           "placeholder": "/abs/path/to/configs/cnequity.toml"

@@ -39,3 +39,11 @@
   </script>
   {% endif %}
 {% endblock %}
+
+{% block announce %}
+  {% if config.theme.language == "zh" %}
+    文档版本 {{ config.extra.doc_version }}
+  {% else %}
+    Documentation for {{ config.extra.doc_version }}
+  {% endif %}
+{% endblock %}

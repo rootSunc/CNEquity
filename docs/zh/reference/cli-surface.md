@@ -1,6 +1,6 @@
 # 联网与写入清单
 
-由 `scripts/dev/sync_docs.py` 从 Click 命令注册表核对。‘执行时’指运行命令主体；`--help` 不执行。详细源选择与限制见[取数策略](../operations/fetch-policy.md)。
+由 `scripts/dev/sync_docs.py` 从 Click 命令注册表核对。‘执行时’指运行命令主体；`--help` 不执行。参数以 `cne <命令> --help` 为准，常见操作见[更新与排障](../operations/runbook.md)。
 
 | 命令 | 第三方取数 | 本地效果 |
 |---|---|---|
@@ -25,7 +25,7 @@
 | `cne import shfe-archive` | 无 | 默认只读预览；--apply 校验本地上期所年度包后写入缺字段的日线行，不覆盖已有主键，保存原包证据 |
 | `cne init` | 条件 | sample 离线；demo/quick/full 取数；layout-only 创建目录 |
 | `cne mcp` | 条件 | 默认读湖；--live 可取源数据；--http 监听本地端口 |
-| `cne migrate` | 条件 | 默认只读预览；--apply 按顺序运行还欠的迁移，经修复门禁发布并保留旧版本，结果写入 meta/lake.json；fund-listing-dates 读交易所基金列表，misdated-valuation 有待替换行时读东财数据中心 |
+| `cne migrate` | 条件 | 默认预览待执行的迁移；--only 指定迁移；--apply 执行并记录结果。所选迁移可访问来源或清理被取代的数据文件 |
 | `cne profile list` | 无 | 列出内置范围 |
 | `cne profile show` | 无 | 显示内置范围 |
 | `cne query` | 条件 | SQL 读湖；按需数据缓存未命中或刷新时取数 |
@@ -51,7 +51,7 @@
 | `cne run compact` | 无 | 将已结束、未发布的暂存数据发布到湖 |
 | `cne run daily` | 执行时 | 增量取数并写湖；默认含全部调度组与事件流 |
 | `cne run events` | 执行时 | 事件取数并写湖 |
-| `cne run maintain` | 执行时 | 日更后的维护：审计、新鲜度门禁、源探针与 SLO、运行证据核验（只读），写元数据备份并按保留期轮换旧备份，过期文件仅预览 |
+| `cne run maintain` | 执行时 | 日更后的维护：重试旧欠账、检查审计与新鲜度、探测源、应用湖目录保留策略、轮换元数据备份，并预览常规清理 |
 | `cne run retry` | 执行时 | 重试失败范围并写湖 |
 | `cne schedule install` | 无 | 确认后为当前用户注册系统定时任务（launchd/cron/任务计划），写定时设置；保留面板设置的备份与事件流；--events 按配置的 [[job.events.schedules]] 运行事件流 |
 | `cne schedule remove` | 无 | 确认后停用定时并注销系统任务；正在运行的任务继续 |
@@ -90,5 +90,17 @@
 | `cne ths-official capture` | 执行时 | 调用凭证源并写对照证据 |
 | `cne ths-official repair-bars` | 执行时 | 预演也取数；--apply 写修复 |
 | `cne ths-official resource-sectors` | 执行时 | 预演也取数；--apply 写暂存 |
-| `cne upgrade` | 条件 | 默认只读预览并检查扩展与磁盘；--apply 先备份湖的记录，再按顺序运行还欠的全部迁移（含搬到湖目录），数据文件只链接不复制；所含迁移读取的数据源同 migrate |
+| `cne upgrade` | 条件 | 预览检查扩展和磁盘，可能下载缺少的扩展；--apply 默认先备份湖的记录，再运行所欠迁移并清理已被取代的旧文件。迁移可能取数 |
 | `cne verify` | 条件 | 默认本地校验；--repair 访问源并修复 |
+
+## 改名对照
+
+| 旧命令 | 当前命令 |
+|---|---|
+| `cne clean` | `cne run clean` |
+| `cne compact` | `cne run compact` |
+| `cne demo` | `cne init --profile demo` |
+| `cne retry` | `cne run retry` |
+| `cne servers` | `cne sources probe --only tdx_protocol` |
+| `cne stability` | `cne verify --runs` |
+| `cne verify-bars` | `cne verify --bars --start <date>` |
