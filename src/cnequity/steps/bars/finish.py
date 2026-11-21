@@ -13,8 +13,8 @@ from cnequity.steps.bars import admission, gapfill, gapfill_chain, staging
 from cnequity.steps.bars._base import logger
 from cnequity.steps.common import (
     list_trading_dates,
+    owe_keys,
 )
-from cnequity.storage.state import StateStore
 
 
 def _finish_daily_bars(
@@ -373,7 +373,8 @@ def _finish_daily_bars(
                     }
                 )
                 if not tolerated:
-                    StateStore(config.meta_root).record_outstanding_keys(
+                    owe_keys(
+                        config,
                         "daily_bars",
                         {(symbol, end) for symbol in unknown},
                         run_id=run_id,
@@ -383,7 +384,8 @@ def _finish_daily_bars(
                     raise SourceUnavailableError(
                         f"daily_bars {end}: no usable rows after permitted failover." + remedy
                     )
-                owed = StateStore(config.meta_root).record_outstanding_keys(
+                owed = owe_keys(
+                    config,
                     "daily_bars",
                     {(symbol, end) for symbol in unknown},
                     run_id=run_id,
@@ -488,7 +490,8 @@ def _finish_daily_bars(
                     }
                 )
                 if not tolerated:
-                    StateStore(config.meta_root).record_outstanding_keys(
+                    owe_keys(
+                        config,
                         "daily_bars",
                         admission._owed_keys_for_symbols(config, unknown, start, end),
                         run_id=run_id,
@@ -503,8 +506,8 @@ def _finish_daily_bars(
                 # would owe sessions that never existed, and a debt nothing can
                 # ever pay off is worse than no ledger at all.
                 owed_pairs = admission._owed_keys_for_symbols(config, unknown, start, end)
-                owed = StateStore(config.meta_root).record_outstanding_keys(
-                    "daily_bars", owed_pairs, run_id=run_id, reason="unresolved_symbol"
+                owed = owe_keys(
+                    config, "daily_bars", owed_pairs, run_id=run_id, reason="unresolved_symbol"
                 )
                 unresolved_tolerated.update(unknown)
                 logger.warning(
@@ -591,8 +594,8 @@ def _finish_daily_bars(
             # for these sessions again — the watermark has moved over them. The
             # ledger is the only thing that remembers, and `cne backfill
             # daily_bars --outstanding` is what works it off.
-            outstanding = StateStore(config.meta_root).record_outstanding_keys(
-                "daily_bars", missing_pairs, run_id=run_id, reason="interior_gap"
+            outstanding = owe_keys(
+                config, "daily_bars", missing_pairs, run_id=run_id, reason="interior_gap"
             )
             _mark_unresolved_daily_bar_batches(config, run_id, missing_pairs)
             unresolved_tolerated.update(missing_symbols)

@@ -54,6 +54,7 @@ from cnequity.steps.common import (
     incremental_trade_dates,
     instrument_metadata,
     load_symbols,
+    planner_only,
 )
 from cnequity.steps.http_common import run_incremental_fetched, verify_raw_archive, write_fetched
 from cnequity.storage.observation import note_observation
@@ -1782,7 +1783,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
             )
         df = df.with_columns(parsed_dates.alias("ex_date"))
 
-    if observed is not None:
+    if observed is not None and not planner_only(config, "corporate_actions"):
         # Fetched rows count once compaction publishes them (finalize commits
         # the claim); an empty answer has nothing to publish and counts now.
         note_observation(
@@ -1810,7 +1811,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 source=_CANONICAL_DAILY,
                 request_scope=f"daily:{trade_date.isoformat()}",
             )
-        if answered:
+        if answered and not planner_only(config, "corporate_actions"):
             # Nothing to publish, so the empty answers count now.
             StateStore(config.meta_root).clear_missing_dates(
                 "corporate_actions", answered - source_gap_dates("corporate_actions")
@@ -1867,7 +1868,7 @@ def step_corporate_actions(config: Config, trade_date: date, run_id: str, contex
                 else None
             ),
         )
-        if answered:
+        if answered and not planner_only(config, "corporate_actions"):
             rejected = {date.fromisoformat(day) for day in result.get("rejected_dates", [])}
             StateStore(config.meta_root).mark_staged_request_days(
                 "corporate_actions", run_id, answered - rejected

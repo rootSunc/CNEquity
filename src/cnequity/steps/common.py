@@ -13,7 +13,12 @@ import polars as pl
 
 from cnequity.adapters.tdx_protocol.client import fetch_instruments
 from cnequity.config import Config
-from cnequity.domain.datasets import DATASETS, calendar_scope_datasets, fetch_semantics
+from cnequity.domain.datasets import (
+    BACKFILL_START,
+    DATASETS,
+    calendar_scope_datasets,
+    fetch_semantics,
+)
 from cnequity.domain.frames import with_columns_unless_blank
 from cnequity.domain.schemas import data_version_for, with_provenance
 from cnequity.domain.symbols import is_subscription_placeholder
@@ -36,7 +41,6 @@ from cnequity.storage.state import StateStore
 logger = logging.getLogger(__name__)
 
 INCREMENTAL_LOOKBACK_DAYS = 5
-BACKFILL_START = date(2016, 1, 1)
 
 # These feeds are rolling *calendar*-date disclosures.  A weekend or exchange
 # holiday can still contain a publication, so using ``list_trading_dates``
@@ -114,6 +118,25 @@ _DEEP_RECONCILED_FIELD = "deep_reconciled_on"
 _TAIL_RECONCILED_FIELD = "tail_reconciled_on"
 
 
+def planner_only(config: Config, dataset: str) -> bool:
+    """Whether *dataset*'s coverage comes from the planner alone, with no ``meta/state``."""
+    return dataset in getattr(config, "planner_only", ())
+
+
+def owe_keys(config: Config, dataset: str, pairs, *, run_id: str, reason: str) -> int:
+    """Record (symbol, day) keys *dataset* still owes; returns how many are owed.
+
+    A planner-only dataset records nothing: a key without a published row is
+    a gap the planner sees, and the daily retry and ``cne backfill`` ask it.
+    """
+    pairs = set(pairs)
+    if planner_only(config, dataset):
+        return len(pairs)
+    return StateStore(config.meta_root).record_outstanding_keys(
+        dataset, pairs, run_id=run_id, reason=reason
+    )
+
+
 def _deep_reconciliation_due(config: Config, dataset: str, trade_date: date) -> bool:
     """Whether this run of a tiered feed should walk its full window."""
     spec = DATASETS.get(dataset)
@@ -127,6 +150,14 @@ def _deep_reconciliation_due(config: Config, dataset: str, trade_date: date) -> 
     # day; one that runs only on sessions (daily_bars, Saturday never trades)
     # goes deep on its first session after it — before this, never.
     last_deep_day = trade_date - timedelta(days=(trade_date.isoweekday() - dow) % 7)
+    if planner_only(config, dataset):
+        from cnequity.quality.planned_coverage import last_recheck
+
+        done = last_recheck(config, dataset, "deep")
+        # Nothing swept deep on record: due now (once), then weekly from the
+        # record. Waiting for the deep weekday itself would never come for a
+        # feed that does not run on it (daily_bars on Saturday).
+        return done is None or done < last_deep_day
     state = StateStore(config.meta_root)
     done = state.get_date(dataset, field=_DEEP_RECONCILED_FIELD)
     if done is None:
@@ -148,6 +179,11 @@ def _reconciliation_depth(config: Config, dataset: str, trade_date: date) -> str
         return None
     if _deep_reconciliation_due(config, dataset, trade_date):
         return "deep"
+    if planner_only(config, dataset):
+        from cnequity.quality.planned_coverage import last_recheck
+
+        swept = {last_recheck(config, dataset, depth) for depth in ("deep", "tail")}
+        return "tip" if trade_date in swept else "tail"
     state = StateStore(config.meta_root)
     if state.get_date(dataset, field=_TAIL_RECONCILED_FIELD) == trade_date:
         return "tip"
@@ -168,6 +204,9 @@ def mark_reconciled(config: Config, dataset: str, trade_date: date, depth: str |
     over a week of sessions on each daily run (~30 min) instead of answering
     the new session from the whole-board quotes (~8 min).
     """
+    if planner_only(config, dataset):
+        # The sweep is recorded with its answers (``recheck_finding``).
+        return
     state = StateStore(config.meta_root)
     if depth == "deep":
         state.set_date(dataset, trade_date, field=_DEEP_RECONCILED_FIELD)
@@ -188,8 +227,11 @@ def incremental_window(config: Config, dataset: str, trade_date: date) -> date:
     so a value of five fetches the latest five observations and then any new
     sessions after the watermark.
     """
-    state = StateStore(config.meta_root)
-    watermark = state.get_date(dataset)
+    # A planner-only dataset's watermark is read off its published rows (the
+    # same rule compaction caches), not out of ``meta/state``.
+    from cnequity.quality.verify import covered_through
+
+    watermark = covered_through(config, dataset)
     spec = DATASETS.get(dataset)
     lookback = max(int(getattr(spec, "reconciliation_lookback_days", 0) or 0), 0)
     shallow = max(int(getattr(spec, "shallow_reconciliation_lookback_days", 0) or 0), 0)
@@ -296,6 +338,12 @@ def incremental_trade_dates(config: Config, dataset: str, trade_date: date) -> l
         ]
     else:
         current = list_trading_dates(config, start, trade_date)
+    if fetch_semantics(dataset) == "by_date" and planner_only(config, dataset):
+        from cnequity.quality.planned_coverage import gap_days
+
+        # The tail, and every day the planner says is owed (a failed day is
+        # simply still a gap).
+        return sorted(set(current) | set(gap_days(config, dataset, trade_date)))
     if fetch_semantics(dataset) == "by_date":
         # A max watermark can move beyond a failed interior day. The durable
         # ledger keeps that day in the plan even after the normal tail expires.
@@ -584,12 +632,14 @@ def fetch_incremental_daily(
     if split is not None:
         findings.append(split)
     # A dataset owed per entity (daily_bars) answers per key, not per day.
+    alone = planner_only(config, dataset)
     planned = (
         semantics == "by_date"
-        and dataset in getattr(config, "planned_datasets", ())
+        and (alone or dataset in getattr(config, "planned_datasets", ()))
         and (spec is None or spec.cells_by is None)
     )
     answered_empty: list[date] = []
+    answered_rows: list[date] = []
 
     frames: list[pl.DataFrame] = []
     empty_days: list[date] = []
@@ -621,7 +671,7 @@ def fetch_incremental_daily(
                 "capability_limit",
             }:
                 raise
-            if semantics == "by_date":
+            if semantics == "by_date" and not alone:
                 StateStore(config.meta_root).record_missing_dates(dataset, [d], reason=str(exc))
             if not tolerate_failed_day:
                 raise
@@ -640,7 +690,7 @@ def fetch_incremental_daily(
                 logger.debug("%s: %s is not a session and returned no rows", dataset, d)
                 continue
             if not allow_empty:
-                if semantics == "by_date":
+                if semantics == "by_date" and not alone:
                     StateStore(config.meta_root).record_missing_dates(
                         dataset, [d], reason="unexpected empty response"
                     )
@@ -656,6 +706,7 @@ def fetch_incremental_daily(
         if on_day is not None and not (recovered_days and d in recovered_days):
             on_day(d, part)
         frames.append(part)
+        answered_rows.append(d)
     if first_failure is not None and fetched_days == 0:
         # Nothing was readable: that is a source outage, not one bad day, and
         # there is no partial result worth keeping.
@@ -668,6 +719,11 @@ def fetch_incremental_daily(
         findings.append(_dense_empty_day_finding(dataset, empty_days))
     if failed_days:
         findings.append(_fetch_failed_day_finding(dataset, failed_days))
+    elif depth in {"deep", "tail"} and not source_gap_dates(dataset) and alone:
+        from cnequity.quality.planned_coverage import recheck_finding
+
+        # Only a clean sweep counts; a partial one is retried at the same depth.
+        findings.append(recheck_finding(dataset, answered_rows, depth, datetime.now(UTC)))
     elif depth in {"deep", "tail"} and not source_gap_dates(dataset):
         # Only a clean sweep counts; a partial one is retried at the same depth.
         state = StateStore(config.meta_root)
@@ -774,6 +830,10 @@ def load_negative_evidence(
     Read-only apart from expiry: a claim whose basis changed is left out, not
     deleted, so ``cne check`` reading the cache cannot rewrite it.
     """
+    if planner_only(config, dataset):
+        # The listing spans already route every code these claims named
+        # (0 of 1,741 excused anything on 2026-11-19); nothing is cached.
+        return []
     store = StateStore(config.meta_root)
     # No absence claims means no identity can affect the routing decision.
     # Check live entries first, avoiding a full trading-status scan on the
@@ -800,7 +860,7 @@ def record_negative_evidence(
 ) -> None:
     """Persist a source-empty/no-data claim for each symbol in a window."""
     unique = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
-    if not unique:
+    if not unique or planner_only(config, dataset):
         return
     entries = [
         {
@@ -1179,11 +1239,17 @@ def walk_day_backfill(
         )
     else:
         days = list_trading_dates(config, start, bounded_end)
-    have = (
-        existing_dates_fn(days)
-        if existing_dates_fn is not None
-        else _existing_dates(config, dataset, date_col)
-    )
+    alone = planner_only(config, dataset)
+    if existing_dates_fn is not None:
+        have = existing_dates_fn(days)
+    elif alone:
+        from cnequity.quality.planned_coverage import settled_days
+
+        # Covered, answered empty or not due: the planner's, not the rows'.
+        redo = backfill_of(config).redo
+        have = settled_days(config, dataset, start, bounded_end, redo=redo) if days else set()
+    else:
+        have = _existing_dates(config, dataset, date_col)
     # A failed attempt can already have durable, validated chunks in this
     # run.  Curated-only resume would fetch them again; worse, the old
     # bf-0000 name would replace a longer successful chunk on the next
@@ -1203,7 +1269,8 @@ def walk_day_backfill(
         have.update(staged_dates.to_list())
     # Rows already present can still represent an incomplete or quarantined
     # day. Every recorded date gap must remain eligible for a fresh request.
-    have.difference_update(StateStore(config.meta_root).get_missing_dates(dataset))
+    if not alone:
+        have.difference_update(StateStore(config.meta_root).get_missing_dates(dataset))
     todo = [d for d in days if d not in have]
     if not todo:
         return {
@@ -1244,9 +1311,10 @@ def walk_day_backfill(
             # The callback owns the complete staging boundary.  In particular
             # it must validate any source evidence before writing ``part``.
             publish_fn(part, batch_id)
-        StateStore(config.meta_root).mark_staged_request_days(
-            dataset, run_id, part.get_column(date_col).cast(pl.Date).unique().to_list()
-        )
+        if not alone:
+            StateStore(config.meta_root).mark_staged_request_days(
+                dataset, run_id, part.get_column(date_col).cast(pl.Date).unique().to_list()
+            )
         n_parts += 1
         rows_written += part.height
         frames = []
@@ -1305,12 +1373,14 @@ def walk_day_backfill(
 
             if isinstance(exc, SourceCoolingDown):
                 deferred_days = todo[i - 1 :]
-                StateStore(config.meta_root).record_missing_dates(
-                    dataset, deferred_days, reason="source_cooling_down"
-                )
+                if not alone:
+                    StateStore(config.meta_root).record_missing_dates(
+                        dataset, deferred_days, reason="source_cooling_down"
+                    )
                 break
             failed_days.append((d, str(exc)))
-            StateStore(config.meta_root).record_missing_dates(dataset, [d], reason=kind)
+            if not alone:
+                StateStore(config.meta_root).record_missing_dates(dataset, [d], reason=kind)
             continue
         if i % flush_days == 0:
             flush()
@@ -1330,7 +1400,7 @@ def walk_day_backfill(
         and not (allow_empty_days and empty_days)
     ):
         raise first_failure
-    if empty_days and not allow_empty_days:
+    if empty_days and not allow_empty_days and not alone:
         StateStore(config.meta_root).record_missing_dates(
             dataset, empty_days, reason="source_empty"
         )
@@ -1378,6 +1448,13 @@ def walk_day_backfill(
     if deferred_days:
         result.update(
             status="warning", coverage_status="partial", reason_code="source_cooling_down"
+        )
+    if alone and allow_empty_days and empty_days:
+        from cnequity.quality.planned_coverage import answer_finding
+
+        # Confirmed empty days go to the ledger, so the next backfill skips them.
+        result.setdefault("context_updates", {}).setdefault("audit_findings", []).append(
+            answer_finding(dataset, empty_days, datetime.now(UTC))
         )
     return result
 

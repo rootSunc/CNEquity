@@ -97,6 +97,11 @@ TIER_LABELS: dict[Tier, str] = {
 }
 
 
+#: Where the lake's live history begins: the default backfill floor, and
+#: where a dense dataset's watermark looks for its first hole.
+BACKFILL_START = date(2016, 1, 1)
+
+
 @dataclass(frozen=True)
 class DatasetSpec:
     """Orchestration/query metadata for one dataset.

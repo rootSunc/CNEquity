@@ -1472,8 +1472,16 @@ def list_datasets(
         state_error = watermark = snapshot_date = None
         try:
             state_payload = state.get_payload(name)
-            if spec.watermark:
+            if spec.watermark and name in getattr(cfg, "planner_only", ()):
+                from cnequity.quality.verify import covered_through
+
+                watermark = covered_through(cfg, name)
+            elif spec.watermark:
                 watermark = _payload_date(state_payload, "last_success_trade_date")
+            elif spec.fetch_semantics == "snapshot" and name in getattr(cfg, "planner_only", ()):
+                from cnequity.quality.verify import covered_through
+
+                snapshot_date = covered_through(cfg, name)
             elif spec.fetch_semantics == "snapshot":
                 snapshot_date = _payload_date(state_payload, "last_snapshot_date")
         except (OSError, ValueError) as exc:

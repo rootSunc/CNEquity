@@ -10,6 +10,7 @@ import polars as pl
 
 from cnequity.config import Config
 from cnequity.steps.bars._base import logger
+from cnequity.steps.common import planner_only
 from cnequity.storage.state import StateStore
 
 
@@ -23,6 +24,8 @@ def _settle_official_etf_prelisting_debts(config: Config, on: date, run_id: str)
     """
     if not (config.ingest_eligible_etfs or config.ingest_listed_funds):
         return None
+    if planner_only(config, "daily_bars"):
+        return None  # no owed-key ledger to settle; the planner reads the spans
     from cnequity.query import load_with_receipt
     from cnequity.query.receipt import ReadReceiptError
     from cnequity.storage.atomic import write_json_atomic
@@ -114,6 +117,8 @@ def _settle_official_etf_delisted_debts(config: Config, on: date, run_id: str) -
     """
     if not (config.ingest_eligible_etfs or config.ingest_listed_funds):
         return None
+    if planner_only(config, "daily_bars"):
+        return None  # no owed-key ledger to settle; the planner reads the spans
     from cnequity.query import load_with_receipt
     from cnequity.query.receipt import ReadReceiptError
     from cnequity.storage.atomic import write_json_atomic

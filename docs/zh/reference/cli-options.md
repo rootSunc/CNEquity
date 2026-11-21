@@ -31,6 +31,7 @@
 | `--outstanding` | `False` | 只修复被容忍缺口欠下的那些 key，范围和窗口都取自欠账台账，不看 --symbols/--start/--end。补上的 key 会销账，仍然缺的继续欠着。 |
 | `--symbols` | `—` | 限定范围的标的列表，逗号分隔：用于 intraday、trading_status、corporate_actions 的限定回填，以及 financial_statement_items、daily_bars、share_structure 的限定修复。trading_status 的 checkpoint 与覆盖证据会记下确切范围；daily_bars 会把这个显式范围写进 backfill 元数据。 |
 | `--workers` | `1` | 仅 margin_trading 的日期推进并发数。每个请求仍然走配置里共享的源限流器；其它数据集必须为 1。 |
+| `--redo` | `gaps` | [datasets] planner_only 里的数据集：只问覆盖规划认为欠着的日子（gaps），连同记为空的日子一起问（empty），或范围内每一天都问（all）。 |
 
 ## `cne check`
 

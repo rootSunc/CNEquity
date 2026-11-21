@@ -22,10 +22,10 @@ from cnequity.steps.common import (
     list_trading_dates,
     load_curated_trading_status,
     load_negative_evidence,
+    owe_keys,
     record_negative_evidence,
 )
 from cnequity.storage.fund_no_print import approved_no_print_keys
-from cnequity.storage.state import StateStore
 
 
 def _owed_keys_for_symbols(
@@ -120,9 +120,7 @@ def _record_late_admissions(config: Config, run_id: str, symbols: Iterable[str],
         owed |= _owed_keys_for_symbols(config, [symbol], listed, cutoff - timedelta(days=1))
     if not owed:
         return 0
-    recorded = StateStore(config.meta_root).record_outstanding_keys(
-        "daily_bars", owed, run_id=run_id, reason="late_admission"
-    )
+    recorded = owe_keys(config, "daily_bars", owed, run_id=run_id, reason="late_admission")
     logger.warning(
         "%d securit(y/ies) listed before the universe carried them owe %d session(s) "
         "(`cne backfill daily_bars --outstanding`)",

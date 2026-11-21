@@ -19,7 +19,7 @@ from cnequity.orchestrator.outcomes import InputUnavailableError, SourceUnavaila
 from cnequity.orchestrator.registry import register_step
 from cnequity.quality.macro_checks import macro_revision_findings
 from cnequity.run_scope import backfill_of
-from cnequity.steps.common import BACKFILL_START, list_trading_dates
+from cnequity.steps.common import BACKFILL_START, list_trading_dates, planner_only
 from cnequity.steps.http_common import run_incremental_fetched
 from cnequity.storage.state import StateStore
 
@@ -296,11 +296,14 @@ def step_macro_indicators(config: Config, trade_date: date, run_id: str, context
             allow_empty=False,
         )
     finally:
-        if source_failures:
+        # A planner-only run keeps no unit ledger: every source is read again
+        # on the next run, so a failed one is simply asked again.
+        if source_failures and not planner_only(config, "macro_indicators"):
             StateStore(config.meta_root).record_missing_units("macro_indicators", source_failures)
     if not config.sources.get("pboc", True):
         completed_units.discard("pboc:social_financing")
-    StateStore(config.meta_root).mark_staged_units("macro_indicators", run_id, completed_units)
+    if not planner_only(config, "macro_indicators"):
+        StateStore(config.meta_root).mark_staged_units("macro_indicators", run_id, completed_units)
     if revisions:
         updates = result.setdefault("context_updates", {})
         updates["audit_findings"] = [*(updates.get("audit_findings") or []), *revisions]
@@ -533,10 +536,10 @@ def _announcement_coverage(config: Config, start: date, end: date) -> tuple[date
     *inside* it still is one, which is why the derive keeps refusing an empty
     result there rather than recording a clean-looking zero.
     """
+    from cnequity.quality.verify import covered_through
     from cnequity.query.universe import coverage_start_date
-    from cnequity.storage.state import StateStore
 
-    watermark = StateStore(config.meta_root).get_date("announcement_index")
+    watermark = covered_through(config, "announcement_index")
     if watermark is None:
         raise InputUnavailableError(
             "regulatory_events is derived from announcement_index, which has no "

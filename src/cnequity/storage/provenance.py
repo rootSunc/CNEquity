@@ -43,6 +43,8 @@ _NOT_DATA_FIELDS = frozenset(
         "history_until",
         # Adds dates to fetch; the rows a fetch writes are the same.
         "planned_datasets",
+        # Where fetch decisions come from; the rows a fetch writes are the same.
+        "planner_only",
         "eastmoney_proxy_hosts",
         "storage_publish",
     }

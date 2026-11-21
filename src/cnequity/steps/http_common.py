@@ -17,7 +17,7 @@ from cnequity.domain.datasets import DATASETS, fetch_semantics
 from cnequity.domain.schemas import data_version_for, validate_dataframe, with_provenance
 from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailableError
 from cnequity.run_scope import backfill_of
-from cnequity.steps.common import fetch_incremental_daily, write_simple
+from cnequity.steps.common import fetch_incremental_daily, planner_only, write_simple
 from cnequity.storage import StagingWriter
 from cnequity.storage.raw_archive import (
     _RAW_ARCHIVE_EVIDENCE_SEAL,
@@ -197,6 +197,8 @@ def call_with_run_id(
 def _mark_snapshot_capture(config: Config, dataset: str, snapshot_date: date) -> None:
     """Record a live-window capture without turning future dates into a watermark."""
     spec = DATASETS.get(dataset)
+    if planner_only(config, dataset):
+        return  # the capture is the revision it publishes
     if spec is not None and not spec.watermark and spec.fetch_semantics == "snapshot":
         StateStore(config.meta_root).update_max_date(
             dataset,
@@ -533,7 +535,8 @@ def run_incremental_fetched(
         )
         rejected_days = {date.fromisoformat(day) for day in result.get("rejected_dates", [])}
         successful_days = [day for day in successful_days if day not in rejected_days]
-    StateStore(config.meta_root).mark_staged_request_days(dataset, run_id, successful_days)
+    if not planner_only(config, dataset):
+        StateStore(config.meta_root).mark_staged_request_days(dataset, run_id, successful_days)
     _mark_snapshot_capture(config, dataset, trade_date)
     if findings:
         existing = result.get("context_updates", {}).get("audit_findings", [])

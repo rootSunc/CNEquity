@@ -16,7 +16,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -617,6 +617,11 @@ def _by_day(config, name: str, end: date) -> bool:
 ANSWER_CHECK = "planner_empty_answer"
 
 
+def refreshed(dataset: str) -> bool:
+    """Whether *dataset* is owed by write (refreshed whole), not row by row."""
+    return coverage_of(DATASETS[dataset], date.today()).by == "write"
+
+
 def gap_days(config, dataset: str, trade_date: date) -> list[date]:
     """The days *dataset* owes and does not have, over the last ``SYNC_DAYS``.
 
@@ -656,6 +661,20 @@ def gap_keys(config, dataset: str, trade_date: date) -> list[tuple[str, date]]:
     )
 
 
+def settled_days(config, dataset: str, start: date, end: date, *, redo: str = "gaps") -> set[date]:
+    """The days in [*start*, *end*] *dataset* does not owe: covered, answered empty or not due.
+
+    What a planner-only backfill skips; everything else is asked. *redo* as
+    in :class:`Scope`: ``empty`` asks recorded-empty days again, ``all`` every day.
+    """
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        cells = planned(config, catalog, Scope(start, end, redo=redo), [dataset])[dataset].cells
+    return {
+        date.fromisoformat(period)
+        for period in cells.filter(pl.col("state") != "gap")["period"].unique().to_list()
+    }
+
+
 def answer_finding(dataset: str, empty: Iterable[date], asked_at: datetime) -> dict:
     """What a fetch step says it asked about and found empty, for compact to record."""
     days = sorted({day.isoformat() for day in empty})
@@ -669,21 +688,96 @@ def answer_finding(dataset: str, empty: Iterable[date], asked_at: datetime) -> d
     }
 
 
-def record_answers(config, run_id: str, findings: Iterable[dict]) -> int:
-    """Record the empty answers fetch steps reported in *findings*; returns the cells recorded."""
-    rows = [
+#: The finding a fetch step reports a clean sweep of its reconcile window in.
+RECHECK_CHECK = "planner_recheck"
+
+
+def recheck_finding(dataset: str, days: Iterable[date], depth: str, asked_at: datetime) -> dict:
+    """What a fetch step re-asked and got rows for, sweeping its *depth* window cleanly.
+
+    Recorded as ``complete`` answers, so when the window was last swept at
+    each depth is read off ``_attempts`` rather than kept in ``meta/state``.
+    """
+    periods = sorted({day.isoformat() for day in days})
+    return {
+        "dataset": dataset,
+        "check": RECHECK_CHECK,
+        "severity": "info",
+        "message": f"{len(periods)} day(s) re-asked in a clean {depth} sweep",
+        "periods": periods,
+        "depth": depth,
+        "asked_at": asked_at.isoformat(),
+    }
+
+
+def last_recheck(config, dataset: str, depth: str) -> date | None:
+    """The market day *dataset*'s last clean *depth* sweep ran on, from ``_attempts``."""
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        if not catalog.has_table(cov.ATTEMPTS):
+            return None
+        rows = catalog.records(cov.ATTEMPTS, "dataset, run, asked_at").filter(
+            (pl.col("dataset") == dataset) & pl.col("run").str.ends_with(f":recheck:{depth}")
+        )
+    if rows.is_empty():
+        return None
+    latest = rows.cast({"asked_at": pl.Datetime("us", "UTC")})["asked_at"].max()
+    return latest.astimezone(MARKET_ZONE).date()
+
+
+def seed_rechecks(config, datasets: Iterable[str]) -> int:
+    """Carry ``meta/state``'s last deep and tail sweep days into ``_attempts``, once.
+
+    Run when a dataset joins ``planner_only``: without it the first run would
+    sweep deep (``daily_bars``: half an hour) only because nothing is on
+    record. A dataset already holding a recheck is left alone. Returns the
+    rows recorded.
+    """
+    state = StateStore(config.meta_root)
+    rows = []
+    for name in datasets:
+        for depth in ("deep", "tail"):
+            day = state.get_date(name, field=f"{depth}_reconciled_on")
+            if day is None or last_recheck(config, name, depth) is not None:
+                continue
+            asked = datetime.combine(day, time(12), MARKET_ZONE).astimezone(UTC)
+            rows += _answer_rows("seed", recheck_finding(name, [day], depth, asked))
+    if not rows:
+        return 0
+    with lake_mutation_lock(config.meta_root, blocking=True):
+        with Catalog(lake_root(config)) as catalog:
+            cov.record(catalog, pl.DataFrame(rows), message="seed:rechecks")
+    return len(rows)
+
+
+def _answer_rows(run_id: str, item: dict) -> list[dict]:
+    if item.get("dataset") not in DATASETS:
+        return []
+    if item.get("check") == ANSWER_CHECK:
+        run, outcome = f"run:{run_id}:step", "empty"
+    elif item.get("check") == RECHECK_CHECK:
+        run, outcome = f"run:{run_id}:recheck:{item.get('depth')}", "complete"
+    else:
+        return []
+    asked = datetime.fromisoformat(item["asked_at"])
+    return [
         {
             "dataset": item["dataset"],
             "period": period,
             "entity": "",
-            "run": f"run:{run_id}:step",
-            "asked_at": datetime.fromisoformat(item["asked_at"]),
-            "outcome": "empty",
+            "run": run,
+            "asked_at": asked,
+            "outcome": outcome,
         }
-        for item in findings
-        if item.get("check") == ANSWER_CHECK and item.get("dataset") in DATASETS
         for period in item.get("periods") or ()
     ]
+
+
+def record_answers(config, run_id: str, findings: Iterable[dict]) -> int:
+    """Record the answers fetch steps reported in *findings*; returns the cells recorded.
+
+    Empty answers, and the days a clean reconcile sweep re-asked and got rows for.
+    """
+    rows = [row for item in findings for row in _answer_rows(run_id, item)]
     if not rows:
         return 0
     frame = pl.DataFrame(rows).unique()

@@ -16,6 +16,7 @@ from cnequity.derive.option_greeks import INPUTS as OPTION_GREEK_INPUTS
 from cnequity.domain.datasets import PARTITION_COLS, RESAMPLED_MINUTE_DATASETS, WATERMARK_SKIP
 from cnequity.orchestrator.registry import register_step
 from cnequity.progress import sweep_progress
+from cnequity.steps.common import planner_only
 from cnequity.steps.compact_hooks import hooks_for
 from cnequity.storage import StagingWriter, compact_dataset
 from cnequity.storage.instruments import compact_instruments
@@ -85,23 +86,15 @@ def _dataset_criticality(dataset: str) -> str:
 
 
 def _max_partition_date(config: Config, dataset: str, partition_col: str) -> date | None:
-    """Freshest date the published rows hold, for the watermark.
+    from cnequity.quality.verify import max_published_date
 
-    Reads the column rather than trusting the partition name: under month/year
-    granularity a ``trade_date=2026`` partition says nothing about how far into
-    the year the data goes, and taking the period start as the watermark would
-    rewind it by up to a year and re-fetch everything since.
-    """
-    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
-    from cnequity.storage.read_context import read_root
+    return max_published_date(config, dataset, partition_col)
 
-    root = Path(read_root(config, dataset))
-    if not dataset_has_parquet(root):
-        return None
-    scan = scan_parquet_root(root)
-    if partition_col not in scan.collect_schema().names():
-        return None
-    return scan.select(pl.col(partition_col).max()).collect().item()
+
+def _watermark_date_for(config: Config, dataset: str, partition_col: str) -> date | None:
+    from cnequity.quality.verify import watermark_date
+
+    return watermark_date(config, dataset, partition_col)
 
 
 def _watermarked_datasets() -> list[tuple[str, str]]:
@@ -260,51 +253,6 @@ def _publish_derived_revision(
     }
 
 
-def _watermark_date_for(config: Config, dataset: str, partition_col: str) -> date | None:
-    """Freshest date that is safe to claim as covered.
-
-    For ``valuation_metrics`` a sparse tip (partial baostock refill at 20% of
-    bars) must not advance the watermark — walk back to the last dense day.
-    For session-dense datasets, also stop before the first interior trading-day
-    hole so the next incremental window retries the missing session instead of
-    starting after the raw maximum.
-    """
-    if dataset == "valuation_metrics":
-        from cnequity.quality.cross_checks import last_dense_valuation_date
-
-        dense = last_dense_valuation_date(config)
-        if dense is not None:
-            return dense
-        # Once daily bars exist, an undense valuation tip is not a safe
-        # watermark. Falling back to its raw maximum would let a partial
-        # snapshot make the next incremental run start after an unobserved
-        # valuation day. A bars-less first run has no independent universe to
-        # reconcile against, so it may still establish an initial watermark.
-        from cnequity.query.parquet_scan import dataset_has_parquet
-
-        if dataset_has_parquet(config.curated_root / "daily_bars"):
-            return None
-        # No dense day yet — fall through to raw max so a brand-new lake can
-        # still establish a watermark from its first complete EM snapshot.
-    from cnequity.domain.datasets import DATASETS
-    from cnequity.quality.verify import last_contiguous_dense_date
-
-    spec = DATASETS.get(dataset)
-    if spec is not None and spec.coverage_mode == "session_dense":
-        if dataset in ("index_bars", "daily_bars"):
-            # THS supplies legacy index history before the reliable TDX daily
-            # source begins. The old history contains source/calendar holes
-            # (for example 1991 Saturdays), which must remain audit findings
-            # but must not pin the live incremental watermark in 2000. Delisted
-            # recovery likewise lands lone 1990s stock histories (000508.SZ
-            # pinned daily_bars at 1993-09-16).
-            from cnequity.steps.common import BACKFILL_START
-
-            return last_contiguous_dense_date(config, spec, start=BACKFILL_START)
-        return last_contiguous_dense_date(config, spec)
-    return _max_partition_date(config, dataset, partition_col)
-
-
 def _update_watermarks(
     config: Config,
     datasets: frozenset[str] | None,
@@ -334,6 +282,9 @@ def _update_watermarks(
 
     for dataset, pcol in _watermarked_datasets():
         if datasets is not None and dataset not in datasets:
+            continue
+        if planner_only(config, dataset):
+            # Its coverage is read off the published rows; nothing to cache.
             continue
         if dataset == "daily_bars":
             if reconcile_no_print:
@@ -399,6 +350,8 @@ def _reconcile_watermarks(config: Config) -> list[dict]:
 
     findings: list[dict] = []
     for dataset, pcol in _watermarked_datasets():
+        if planner_only(config, dataset):
+            continue
         current = state.get_date(dataset)
         if current is None:
             continue
@@ -488,13 +441,17 @@ def _settle_published_datasets(
     for published_dataset in datasets:
         published_state = StateStore(config.meta_root)
         if published_dataset in fully_selected:
-            published_state.commit_staged_request_days(published_dataset, run_id)
-            published_state.commit_staged_units(published_dataset, run_id)
-            commit_observation(config, published_dataset, run_id)
+            if not planner_only(config, published_dataset):
+                published_state.commit_staged_request_days(published_dataset, run_id)
+                published_state.commit_staged_units(published_dataset, run_id)
+                commit_observation(config, published_dataset, run_id)
             if published_dataset == "sector_bars":
                 from cnequity.steps.rotation import commit_sector_bars_staged
 
                 commit_sector_bars_staged(config, run_id)
+        if planner_only(config, published_dataset):
+            # No ledger: a quarantined day has no published row, so it is a gap.
+            continue
         if resolved_keys.get(published_dataset):
             published_state.clear_outstanding_keys(
                 published_dataset, resolved_keys[published_dataset]
@@ -535,11 +492,18 @@ def _sync_attempts(
     done, so the two can be watched agreeing before the planner decides.
     """
     from cnequity.domain.findings import finding
-    from cnequity.quality.planned_coverage import record_answers, sync_attempts
+    from cnequity.quality.planned_coverage import record_answers, refreshed, sync_attempts
 
     try:
         record_answers(config, run_id, answers)
-        report = sync_attempts(config, run_id, trade_date, datasets)
+        # A planner-only dataset keeps no state files to project; its
+        # refreshes come from the run records and are still projected.
+        report = sync_attempts(
+            config,
+            run_id,
+            trade_date,
+            {name for name in datasets if not planner_only(config, name) or refreshed(name)},
+        )
     except Exception as exc:  # the ledger is a shadow while meta/state decides
         logger.warning("attempts ledger not synced for %s: %s", run_id, exc)
         return [

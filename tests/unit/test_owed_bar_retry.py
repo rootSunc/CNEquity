@@ -117,3 +117,43 @@ def _day_with(tmp_path, monkeypatch, planned):
 def test_the_daily_run_retries_owed_bars_only_when_daily_bars_is_planned(tmp_path, monkeypatch):
     assert _day_with(tmp_path, monkeypatch, {"daily_bars"})["owed_bars"]["day"] == DAY
     assert "owed_bars" not in _day_with(tmp_path, monkeypatch, {"margin_trading"})
+
+
+def _bars_alone(tmp_path) -> Config:
+    from dataclasses import replace
+
+    return replace(_lake(tmp_path), planner_only=frozenset({"daily_bars"}))
+
+
+def test_planner_only_bars_owe_no_ledger_and_cache_no_absence(tmp_path):
+    from cnequity.steps.common import load_negative_evidence, owe_keys, record_negative_evidence
+
+    cfg = _bars_alone(tmp_path)
+    before = StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    assert owe_keys(cfg, "daily_bars", {("600000.SH", DAY)}, run_id="r", reason="x") == 1
+    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars") == before
+    record_negative_evidence(
+        cfg, "daily_bars", ["000003.SZ"], RECENT, DAY, reason="verified_no_data", source="t"
+    )
+    assert StateStore(cfg.meta_root).get_negative_evidence("daily_bars") == []
+    assert load_negative_evidence(cfg, "daily_bars") == []
+
+
+def test_planner_only_bars_retry_the_planner_s_keys_and_plan_again(tmp_path, monkeypatch):
+    cfg = _bars_alone(tmp_path)
+    plans = iter([[("600000.SH", RECENT), ("600001.SH", RECENT)], [("600001.SH", RECENT)]])
+    monkeypatch.setattr(planned_coverage, "gap_keys", lambda c, ds, day: next(plans))
+    seen = {}
+
+    def repair(c, dataset, workers, *, since=None, owed_rows=None):
+        seen["rows"] = owed_rows
+        return {"status": "warning"}
+
+    monkeypatch.setattr(backfill_cmds, "_repair_outstanding", repair)
+    before = StateStore(cfg.meta_root).get_outstanding_keys("daily_bars")
+    out = backfill_cmds.retry_recent_owed(cfg, "daily_bars", DAY)
+    assert [row["symbol"] for row in seen["rows"]] == ["600000.SH", "600001.SH"]
+    assert out["outstanding"] == {"before": 2, "filled": 1, "still_owed": 1}
+    assert out["status"] == "warning"
+    # The ledger was neither read for keys nor written.
+    assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars") == before

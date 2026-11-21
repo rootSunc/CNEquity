@@ -427,6 +427,7 @@ diff 会把删列、改类型、改主键、单位/PIT/历史语义变化识别�
 | `--symbols` | 日内、`daily_bars`、`trading_status`、`corporate_actions`、`share_structure` 的临时标的范围（`share_structure` 按证券一次取回全部股本变动，用于审计提示的股本滞后）；其他数据集仍使用配置中的范围 |
 | `--outstanding` | 精确修复被容忍缺口记下的欠账键：作用域与窗口取自 ledger，而不是 `--symbols`/`--start`/`--end`。补上的键即刻销账，仍缺的继续欠着 |
 | `--refetch` | 忽略完成收据和 checkpoint，重取整个范围（`sector_bars`、`futures_bars`、`option_bars`），仍遵守熔断。不加时回填从断点续跑 |
+| `--redo gaps\|empty\|all` | 只用于 `[datasets] planner_only` 里的数据集：默认只问覆盖规划认为欠着的日子；`empty` 连同记为空的日子一起再问，`all` 范围内每天都问 |
 | `--source` | 本次改用的来源，不改配置；目前用于 `margin_trading`（`exchange` / `eastmoney`） |
 | `--workers` | 仅 `margin_trading`：按日期推进的并发数，每个请求仍走共享限速 |
 | `--exchange` | 衍生品：限定发布者，可重复 |

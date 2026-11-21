@@ -224,6 +224,10 @@ class Config:
     #: ``[datasets] planned``: datasets whose dates to fetch the coverage
     #: planner adds to, beside the watermark and the missing-dates ledger.
     planned_datasets: frozenset[str] = frozenset()
+    #: ``[datasets] planner_only``: datasets whose days to fetch come from the
+    #: coverage planner alone; their coverage is not read from or written to
+    #: ``meta/state`` (stage 3's switch, one family at a time).
+    planner_only: frozenset[str] = frozenset()
     init_phases: list[str] = field(default_factory=list)
     on_demand_enabled: bool = True
     on_demand_datasets: list[str] = field(default_factory=list)
@@ -915,16 +919,27 @@ def _warn_renamed_keys(raw: Mapping) -> None:
         )
 
 
-def _planned(listed) -> frozenset[str]:
-    """``[datasets] planned``: the datasets the coverage planner helps decide."""
+def _planned(listed, key: str = "planned") -> frozenset[str]:
+    """``[datasets] <key>``: a list of datasets the coverage planner decides for."""
     from cnequity.domain.datasets import DATASETS
 
     if not isinstance(listed, list) or not all(isinstance(name, str) for name in listed):
-        raise ConfigError("datasets.planned must be a list of dataset names")
+        raise ConfigError(f"datasets.{key} must be a list of dataset names")
     unknown = sorted(set(listed) - set(DATASETS))
     if unknown:
-        raise ConfigError("datasets.planned names unknown datasets: " + ", ".join(unknown))
+        raise ConfigError(f"datasets.{key} names unknown datasets: " + ", ".join(unknown))
     return frozenset(listed)
+
+
+def _refuse_derived(names: frozenset[str]) -> None:
+    """A derived dataset decides what to compute in its derive step, not by the fetch path."""
+    from cnequity.domain.datasets import DATASETS
+
+    derived = sorted(name for name in names if DATASETS[name].derived_from)
+    if derived:
+        raise ConfigError(
+            "datasets.planner_only cannot list derived datasets yet: " + ", ".join(derived)
+        )
 
 
 def _dataset_dates(section, key: str) -> dict[str, date]:
@@ -963,6 +978,8 @@ def load_config(path: str | Path) -> Config:
         if history_until[name] < history_from[name]:
             raise ConfigError(f"datasets.history_until.{name} is before its history_from")
     planned_datasets = _planned(datasets_raw.get("planned", []))
+    planner_only = _planned(datasets_raw.get("planner_only", []), "planner_only")
+    _refuse_derived(planner_only)
     _warn_renamed_keys(raw)
 
     data_root = _data_root(raw, config_path.parent)
@@ -1376,6 +1393,7 @@ def load_config(path: str | Path) -> Config:
         history_from=history_from,
         history_until=history_until,
         planned_datasets=planned_datasets,
+        planner_only=planner_only,
         init_phases=init_phases,
         on_demand_enabled=bool(on_demand.get("enabled", True)),
         on_demand_datasets=list(on_demand.get("datasets", [])),

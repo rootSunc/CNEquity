@@ -34,6 +34,7 @@ from cnequity.steps.common import (
     load_negative_evidence,
     load_symbols,
     mark_reconciled,
+    planner_only,
     reconciliation_depth,
 )
 from cnequity.storage.fund_no_print import approved_no_print_keys
@@ -474,4 +475,15 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
         # the outstanding-key ledger and retried on their own; holding the
         # weekly marker back for them only made every day a deep day.
         mark_reconciled(config, "daily_bars", trade_date, depth)
+        if planner_only(config, "daily_bars") and depth in {"deep", "tail"}:
+            from datetime import UTC, datetime
+
+            from cnequity.quality.planned_coverage import recheck_finding
+
+            # The sweep is the ledger's record; its days are the window walked.
+            swept = list_trading_dates(config, start, end)
+            context = merged.setdefault("context_updates", {})
+            context.setdefault("audit_findings", []).append(
+                recheck_finding("daily_bars", swept, depth, datetime.now(UTC))
+            )
     return merged

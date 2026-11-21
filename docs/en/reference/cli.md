@@ -430,6 +430,7 @@ The result JSON also has `adj_factors_sync` / `trading_status_derive` fields. Se
 | `--symbols` | A temporary symbol scope for intraday, `daily_bars`, `trading_status`, `corporate_actions` and `share_structure` (`share_structure` fetches every share change of a security at once, for the share lag the audit reports); other datasets keep the configured scope |
 | `--outstanding` | Repair exactly the keys tolerated gaps left owed: scope and window come from the ledger, not from `--symbols`/`--start`/`--end`. Filled keys are cleared at once; keys still missing stay owed |
 | `--refetch` | Ignore completion receipts and checkpoints and fetch the whole range again (`sector_bars`, `futures_bars`, `option_bars`); circuit breakers still apply. Without it a backfill resumes |
+| `--redo gaps\|empty\|all` | Only for datasets in `[datasets] planner_only`: by default ask only the days the coverage planner says are owed; `empty` also asks the days it recorded as empty again, `all` asks every day in the range |
 | `--source` | Source to use this time, without editing the config; currently for `margin_trading` (`exchange` / `eastmoney`) |
 | `--workers` | `margin_trading` only: concurrency of the date walk; each request still goes through the shared rate limiter |
 | `--exchange` | Derivatives: restrict to a publisher; repeatable |

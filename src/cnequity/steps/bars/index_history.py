@@ -23,8 +23,8 @@ from cnequity.steps.common import (
     list_trading_dates,
     load_curated_instruments,
     load_symbols,
+    owe_keys,
 )
-from cnequity.storage.state import StateStore
 
 
 def _index_bar_missing_keys(config: Config, df, start: date, end: date) -> list[tuple[str, date]]:
@@ -69,9 +69,7 @@ def step_index_bars(config: Config, trade_date: date, run_id: str, context: dict
 
     result = write_simple(config, run_id, "index_bars", df)
     if missing:
-        StateStore(config.meta_root).record_outstanding_keys(
-            "index_bars", missing, run_id=run_id, reason="source_scope_incomplete"
-        )
+        owe_keys(config, "index_bars", missing, run_id=run_id, reason="source_scope_incomplete")
         result.update(
             status="warning",
             coverage_status="partial",

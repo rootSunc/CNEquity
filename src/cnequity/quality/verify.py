@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 import polars as pl
 import pyarrow as pa
@@ -459,9 +460,6 @@ def verify_lake(
     datasets: list[str] | None = None,
 ) -> list[Gap]:
     """Coverage gaps across the lake, ordered by dataset name. Read-only."""
-    from cnequity.storage.state import StateStore
-
-    state = StateStore(config.meta_root)
     names = datasets or sorted(DATASETS)
     out: list[Gap] = []
     for name in names:
@@ -472,6 +470,114 @@ def verify_lake(
         if not is_dataset_enabled(name, config):
             logger.info("verify: %s is disabled in config; skipping coverage checks", name)
             continue
-        watermark = state.get_date(name) if spec.watermark else None
+        watermark = covered_through(config, name) if spec.watermark else None
         out.extend(verify_dataset(config, spec, anchor=anchor, watermark=watermark))
     return out
+
+
+def max_published_date(config: Config, dataset: str, partition_col: str) -> date | None:
+    """Freshest date the published rows hold, for the watermark.
+
+    Reads the column rather than trusting the partition name: under month/year
+    granularity a ``trade_date=2026`` partition says nothing about how far into
+    the year the data goes, and taking the period start as the watermark would
+    rewind it by up to a year and re-fetch everything since.
+    """
+    from cnequity.query.parquet_scan import dataset_has_parquet, scan_parquet_root
+    from cnequity.storage.read_context import read_root
+
+    root = Path(read_root(config, dataset))
+    if not dataset_has_parquet(root):
+        return None
+    scan = scan_parquet_root(root)
+    if partition_col not in scan.collect_schema().names():
+        return None
+    return scan.select(pl.col(partition_col).max()).collect().item()
+
+
+def watermark_date(config: Config, dataset: str, partition_col: str) -> date | None:
+    """Freshest date that is safe to claim as covered.
+
+    For ``valuation_metrics`` a sparse tip (partial baostock refill at 20% of
+    bars) must not advance the watermark — walk back to the last dense day.
+    For session-dense datasets, also stop before the first interior trading-day
+    hole so the next incremental window retries the missing session instead of
+    starting after the raw maximum.
+    """
+    if dataset == "valuation_metrics":
+        from cnequity.quality.cross_checks import last_dense_valuation_date
+
+        dense = last_dense_valuation_date(config)
+        if dense is not None:
+            return dense
+        # Once daily bars exist, an undense valuation tip is not a safe
+        # watermark. Falling back to its raw maximum would let a partial
+        # snapshot make the next incremental run start after an unobserved
+        # valuation day. A bars-less first run has no independent universe to
+        # reconcile against, so it may still establish an initial watermark.
+        from cnequity.query.parquet_scan import dataset_has_parquet
+
+        if dataset_has_parquet(config.curated_root / "daily_bars"):
+            return None
+        # No dense day yet — fall through to raw max so a brand-new lake can
+        # still establish a watermark from its first complete EM snapshot.
+    from cnequity.domain.datasets import DATASETS
+
+    spec = DATASETS.get(dataset)
+    if spec is not None and spec.coverage_mode == "session_dense":
+        if dataset in ("index_bars", "daily_bars"):
+            # THS supplies legacy index history before the reliable TDX daily
+            # source begins. The old history contains source/calendar holes
+            # (for example 1991 Saturdays), which must remain audit findings
+            # but must not pin the live incremental watermark in 2000. Delisted
+            # recovery likewise lands lone 1990s stock histories (000508.SZ
+            # pinned daily_bars at 1993-09-16).
+            from cnequity.domain.datasets import BACKFILL_START
+
+            return last_contiguous_dense_date(config, spec, start=BACKFILL_START)
+        return last_contiguous_dense_date(config, spec)
+    return max_published_date(config, dataset, partition_col)
+
+
+def last_published_day(config, dataset: str) -> date | None:
+    """The market day *dataset*'s latest revision was published on, from the catalog.
+
+    A live snapshot covers the day it was captured; this is that day without
+    ``meta/state``'s ``last_snapshot_date``.
+    """
+    from cnequity.quality.planned_coverage import MARKET_ZONE, last_written
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import Catalog
+
+    root = lake_root(config)
+    if not (root / "catalog.sqlite").exists():
+        return None
+    from equitylake_core import coverage as cov
+
+    with Catalog(root, read_only=True) as catalog:
+        # A capture that found nothing new publishes no revision but is
+        # recorded as a refresh in ``_attempts``.
+        moments = [last_written(catalog).get(dataset)]
+        moments += cov.attempted(catalog, dataset)["at"].to_list()
+    latest = max((moment for moment in moments if moment is not None), default=None)
+    return latest.astimezone(MARKET_ZONE).date() if latest is not None else None
+
+
+def covered_through(config, dataset: str) -> date | None:
+    """The freshest date that is safe to call covered for *dataset*.
+
+    The date compaction caches as the watermark: for a planner-only dataset
+    it is computed from the published rows (and not cached), for any other
+    it is read from ``meta/state``.
+    """
+    if dataset in getattr(config, "planner_only", ()):
+        from cnequity.domain.datasets import PARTITION_COLS
+
+        spec = DATASETS.get(dataset)
+        if spec is not None and not spec.watermark and spec.fetch_semantics == "snapshot":
+            return last_published_day(config, dataset)
+        column = PARTITION_COLS.get(dataset)
+        return watermark_date(config, dataset, column) if column else None
+    from cnequity.storage.state import StateStore
+
+    return StateStore(config.meta_root).get_date(dataset)

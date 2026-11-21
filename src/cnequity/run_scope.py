@@ -72,6 +72,9 @@ class BackfillWindow:
     workers: int = 1
     #: Re-request days the lake already holds.
     refetch: bool = False
+    #: What a planner-only backfill asks again: ``gaps`` (only what is owed),
+    #: ``empty`` (also days answered empty) or ``all`` (every day in range).
+    redo: str = "gaps"
 
     def symbol_list(self) -> list[str] | None:
         """``symbols`` as a fresh list, for callers that build on it."""
@@ -87,6 +90,7 @@ LEGACY_BACKFILL_ATTRS: dict[str, str] = {
     "_backfill_symbols": "symbols",
     "_backfill_workers": "workers",
     "_backfill_refetch": "refetch",
+    "_backfill_redo": "redo",
 }
 
 _DEFAULT_WINDOW = BackfillWindow()

@@ -95,6 +95,8 @@ class BackfillRequest:
     ex_dates: tuple[date, ...] = ()
     #: ``bar-turnover`` repair: review price conflicts against peers.
     peer_review: bool = False
+    #: Planner-only datasets: ``gaps``, ``empty`` or ``all`` (``BackfillWindow.redo``).
+    redo: str = "gaps"
 
 
 def _spec(request: BackfillRequest):
@@ -224,6 +226,7 @@ def window(request: BackfillRequest) -> dict[str, Any]:
     values: dict[str, Any] = {
         "refetch": bool(request.refetch and spec.backfill_refetch == "scope"),
         "workers": request.workers,
+        "redo": request.redo,
     }
     if request.symbols is not None and spec.backfill_symbols_in_window:
         values["symbols"] = list(request.symbols)

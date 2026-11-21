@@ -31,7 +31,12 @@ from cnequity.orchestrator.outcomes import SourcePayloadError, SourceUnavailable
 from cnequity.orchestrator.registry import register_step
 from cnequity.orchestrator.source_gaps import record_source_gap, source_gap_dates
 from cnequity.run_scope import backfill_of
-from cnequity.steps.common import BACKFILL_START, incremental_trade_dates, list_trading_dates
+from cnequity.steps.common import (
+    BACKFILL_START,
+    incremental_trade_dates,
+    list_trading_dates,
+    planner_only,
+)
 from cnequity.steps.http_common import (
     call_with_run_id,
     run_incremental_fetched,
@@ -581,9 +586,10 @@ def _backfill_margin_trading(config: Config, trade_date: date, run_id: str) -> d
             pl.concat(frames, how="diagonal_relaxed"), source=source, data_version="v1"
         )
         writer.write_batch("margin_trading", run_id, f"bf-{n_parts:04d}", part)
-        StateStore(config.meta_root).mark_staged_request_days(
-            "margin_trading", run_id, part.get_column("trade_date").unique().to_list()
-        )
+        if not planner_only(config, "margin_trading"):
+            StateStore(config.meta_root).mark_staged_request_days(
+                "margin_trading", run_id, part.get_column("trade_date").unique().to_list()
+            )
         n_parts += 1
         total_rows += part.height
         frames = []

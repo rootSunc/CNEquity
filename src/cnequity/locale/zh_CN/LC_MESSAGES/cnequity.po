@@ -1127,6 +1127,11 @@ msgstr "--profile delisted 只适用于 daily_bars"
 msgid "--quality-only needs --full"
 msgstr "--quality-only 需要配合 --full"
 
+#: cnequity/cli/backfill_cmds.py
+#, python-brace-format
+msgid "--redo applies to datasets in [datasets] planner_only; {dataset} is not"
+msgstr "--redo 只用于 [datasets] planner_only 里的数据集；{dataset} 不在其中"
+
 #: cnequity/orchestrator/backfill_request.py
 #, python-brace-format
 msgid "--refetch applies to {datasets}"
@@ -2296,6 +2301,10 @@ msgstr "要包含的数据集（可重复）。快照永远是显式指定的，
 #, python-brace-format
 msgid "Dataset {dataset!r} has no stats rows"
 msgstr "数据集 {dataset!r} 没有统计行"
+
+#: cnequity/cli/backfill_cmds.py
+msgid "Datasets in [datasets] planner_only: ask only what the coverage planner says is owed (gaps), also the days it recorded as empty (empty), or every day in the range (all)."
+msgstr "[datasets] planner_only 里的数据集：只问覆盖规划认为欠着的日子（gaps），连同记为空的日子一起问（empty），或范围内每一天都问（all）。"
 
 #: cnequity/cli/run_cmds.py
 #, python-brace-format
