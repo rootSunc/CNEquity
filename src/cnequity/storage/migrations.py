@@ -87,15 +87,23 @@ def _revision_records(config, *, apply: bool) -> dict:
 def _attempts_ledger(config, *, apply: bool) -> dict:
     from datetime import date
 
-    from cnequity.quality.planned_coverage import record_seeds, seeds
+    from cnequity.quality.planned_coverage import (
+        entity_seeds,
+        record_cell_answers,
+        record_seeds,
+        seeds,
+    )
 
     found = seeds(config, date.today())
+    per_entity = entity_seeds(config, date.today())
+    entity_cells = sum(len(cells) for cells in per_entity.values())
     report = {
         "applied": apply,
-        "datasets": len({seed.dataset for seed in found}),
+        "datasets": len({seed.dataset for seed in found} | set(per_entity)),
         "cells": sum(len(seed.periods) for seed in found),
+        "entity_cells": {name: len(cells) for name, cells in sorted(per_entity.items())},
         # Ledger rows it adds: what `cne migrate` counts as affected.
-        "rows_changed": sum(len(seed.periods) for seed in found),
+        "rows_changed": sum(len(seed.periods) for seed in found) + entity_cells,
         "by_reason": {
             reason: sum(len(seed.periods) for seed in found if seed.reason == reason)
             for reason in sorted({seed.reason for seed in found})
@@ -103,6 +111,9 @@ def _attempts_ledger(config, *, apply: bool) -> dict:
     }
     if apply and found:
         report["snapshot"] = record_seeds(config, found)
+    if apply:
+        for name, cells in per_entity.items():
+            record_cell_answers(config, name, cells, run="seed:meta-state:answered")
     return report
 
 

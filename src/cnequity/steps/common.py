@@ -876,7 +876,25 @@ def record_negative_evidence(
 ) -> None:
     """Persist a source-empty/no-data claim for each symbol in a window."""
     unique = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()})
-    if not unique or planner_only(config, dataset):
+    if not unique:
+        return
+    if planner_only(config, dataset):
+        # The planner already excuses what listings and trading status prove;
+        # an answer the source gave (nothing for this code that session) is
+        # recorded per cell, so it is not asked again as if the fetch had failed.
+        if reason in {"source_empty", "not_yet_listed"}:
+            from cnequity.quality.planned_coverage import record_cell_answers
+
+            sessions = list_trading_dates(config, start, end)
+            try:
+                record_cell_answers(
+                    config,
+                    dataset,
+                    [(day.isoformat(), symbol) for day in sessions for symbol in unique],
+                    run=f"step:{reason}",
+                )
+            except Exception as exc:  # noqa: BLE001 - an unrecorded answer is only asked again
+                logger.warning("%s: could not record %s answers: %s", dataset, reason, exc)
         return
     entries = [
         {

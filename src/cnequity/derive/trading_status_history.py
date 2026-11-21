@@ -158,6 +158,14 @@ def _suspended_pairs(
         .select(["symbol", "trade_date"])
     )
     gaps = expected.join(bars, on=["symbol", "trade_date"], how="anti")
+    if "daily_bars" in getattr(config, "planner_only", ()):
+        # A cell no fetch answered is a failed fetch, not a halt; one the
+        # source answered empty, or one the ledger long holds answered, is.
+        from cnequity.quality.planned_coverage import unanswered_keys
+
+        days = cal["trade_date"]
+        unknown = unanswered_keys(config, "daily_bars", days.min(), days.max())
+        return gaps.join(unknown, on=["symbol", "trade_date"], how="anti")
     # A session the bar feed is known to have missing is a failed fetch, not
     # a market fact: inferring halts from it would label the gap "suspended"
     # and hide it from the refetch (2026-08-07, 223 Beijing names).

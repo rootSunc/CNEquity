@@ -58,6 +58,7 @@
 - **不兼容变更**：运行状态统一成一套词：`running`、`success`、`degraded`、`failed`、`skipped`、`blocked`、`interrupted`、`superseded`（批次另有 `queued`、`stale`）。`warning` 并入 `degraded`（都是“结果能用，但没有覆盖要求的全部范围”）；`skipped_non_trading_day`、`skipped_not_scheduled`、`skipped_locked`、`skipped_disabled` 改为 `skipped`，原因写进 `reason_code`（`non_trading_day`、`not_scheduled`、`locked`、`disabled`）。命令行 JSON、清单库的运行、批次和数据集结果都只出现这套词；清单库在新版本第一次打开时把旧记录改写过来，运行记录新增 `reason_code` 列。退出码不变：`degraded` 和非交易日、未到期、被占用、已关闭的跳过都是 0。按 `status` 判断的外部脚本要把 `warning` 当成 `degraded`，把 `skipped_*` 改成看 `reason_code`。
 - 数据集的修订号、修订 id、内容摘要等不再重复写进 `meta/state/<数据集>.json`：湖目录是它们唯一的记录，`dataset_state()`、`cne` 的数据集目录和各处读取都从湖目录取。旧版本留在状态文件里的这些字段，在该数据集下次发布时或由 `cne run maintain` 删除。
 - `planner_only` 的数据集也能表达“只抓到一部分的一天”：来源只答了一部分（`source_scope_incomplete`）或有行被隔离时，这一天在覆盖台账里记为 `partial`，仍算欠着，之后一次干净的抓取记为 `complete` 才算补齐；原来这些日子记在 `meta/state` 的缺失日期台账里。读旧台账的地方对这类数据集改看覆盖台账。
+- `daily_bars` 和 `index_bars` 也可以列入 `planner_only`：日线的来源对某只代码某天没有返回数据时，按（日期，代码）记进覆盖台账，过了 3 天确认期不再追问；抓取失败的格子不记，下次仍会补抓。停牌推断（`trading_status` 的派生行）改为排除没有任何回答的格子。指数日线某天缺了部分指数时，这一天记为 `partial`。迁移 `attempts-ledger` 现在也把旧台账视为已回答的日线格子（不在待补键、不在缺失日期里的无数据格子，多为没有成交的 LOF 和未报停牌的停牌日）写进覆盖台账，重跑 `cne migrate --only attempts-ledger --apply` 即可。
 
 ## [0.24.0] — 2026-11-13 · 最低要求升到 Python 3.11 与 DuckDB 2.0，新增实验性的湖目录
 

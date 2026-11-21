@@ -516,6 +516,52 @@ def seeds(config, end: date, *, start: date = HISTORY_START) -> list[Seed]:
     return _collect(config, Scope(start, end), DATASETS, refreshes(config.manifest_path))
 
 
+def _range_days(row: dict) -> list[date]:
+    first = date.fromisoformat(str(row["start"]))
+    last = date.fromisoformat(str(row.get("end") or row["start"]))
+    return [first + timedelta(days=n) for n in range((last - first).days + 1)]
+
+
+def entity_seeds(config, end: date) -> dict[str, list[tuple[str, str]]]:
+    """The (period, entity) cells the old ledgers hold answered, per dataset owed per entity.
+
+    ``meta/state`` asks a security's session again only while it is an
+    outstanding key or its day a missing range; every other session without
+    a bar (a halt no board reported, a fund that never prints) it counts as
+    answered. Those are the cells returned here, once past the dataset's
+    settle, so the planner does not owe them; running it again finds none.
+    """
+    state = StateStore(config.meta_root)
+    found: dict[str, list[tuple[str, str]]] = {}
+    names = [
+        name for name, spec in DATASETS.items() if coverage_of(spec, end, config).entity is not None
+    ]
+    if not names:
+        return found
+    with Catalog(lake_root(config), read_only=True) as catalog:
+        plans = planned(config, catalog, Scope(HISTORY_START, end), names)
+    for name in names:
+        coverage = coverage_of(DATASETS[name], end, config)
+        settled = (end - coverage.settle - timedelta(days=1)).isoformat()
+        owed_days = {
+            day.isoformat()
+            for row in state.get_payload(name).get("missing_ranges", [])
+            for day in _range_days(row)
+        }
+        owed_keys = {
+            (str(row["trade_date"]), str(row["symbol"])) for row in state.get_outstanding_keys(name)
+        }
+        gaps = plans[name].cells.filter((pl.col("state") == "gap") & (pl.col("period") <= settled))
+        cells = [
+            (period, entity)
+            for period, entity in gaps.select("period", "entity").iter_rows()
+            if period not in owed_days and (period, entity) not in owed_keys
+        ]
+        if cells:
+            found[name] = cells
+    return found
+
+
 def _collect(config, scope: Scope, names: Iterable[str], asked: dict[str, datetime]) -> list[Seed]:
     state = StateStore(config.meta_root)
     now = datetime.now(UTC)
@@ -686,6 +732,30 @@ def gap_keys(config, dataset: str, trade_date: date) -> list[tuple[str, date]]:
     )
 
 
+def unanswered_keys(config, dataset: str, start: date, end: date) -> pl.DataFrame:
+    """The (symbol, trade_date) cells *dataset* owes in [*start*, *end*] that no fetch answered.
+
+    A cell the source answered empty is a fact about the market (nothing
+    printed), even while it is still asked again until it settles; one left
+    without any answer is a fetch that failed, and says nothing.
+    """
+    keys = {"symbol": pl.String, "trade_date": pl.Date}
+    root = lake_root(config)
+    if not (root / "catalog.sqlite").exists():
+        return pl.DataFrame(schema=keys)
+    with Catalog(root, read_only=True) as catalog:
+        cells = planned(config, catalog, Scope(start, end), [dataset])[dataset].cells
+        answered = cov.attempted(catalog, dataset).filter(pl.col("outcome") == "empty")
+    gaps = cells.filter(pl.col("state") == "gap").select("period", "entity")
+    return (
+        gaps.join(answered.select("period", "entity"), on=["period", "entity"], how="anti")
+        .select(
+            pl.col("entity").alias("symbol"), pl.col("period").str.to_date().alias("trade_date")
+        )
+        .cast(keys)
+    )
+
+
 def settled_days(config, dataset: str, start: date, end: date, *, redo: str = "gaps") -> set[date]:
     """The days in [*start*, *end*] *dataset* does not owe: covered, answered empty or not due.
 
@@ -829,6 +899,44 @@ def record_answers(config, run_id: str, findings: Iterable[dict]) -> int:
                 return 0
             cov.record(catalog, frame, message=f"run:{run_id}:answers")
     return frame.height
+
+
+def record_cell_answers(
+    config, dataset: str, cells: Iterable[tuple[str, str]], *, run: str, outcome: str = "empty"
+) -> int:
+    """Record (period, entity) answers for a dataset owed per entity; returns the rows.
+
+    A fetch that asked a symbol for a session and got nothing back records it
+    here, so the planner tells it apart from a fetch that failed (still a gap).
+    """
+    asked = datetime.now(UTC)
+    rows = [
+        {
+            "dataset": dataset,
+            "period": period,
+            "entity": entity,
+            "run": run,
+            "asked_at": asked,
+            "outcome": outcome,
+        }
+        for period, entity in sorted(set(cells))
+    ]
+    if not rows:
+        return 0
+    with lake_mutation_lock(config.meta_root, blocking=True):
+        with Catalog(lake_root(config)) as catalog:
+            cov.record(catalog, pl.DataFrame(rows), message=f"{run}:answers")
+    return len(rows)
+
+
+def answered_cells(config, dataset: str, *, outcome: str = "empty") -> set[tuple[str, str]]:
+    """The (period, entity) cells of *dataset* whose latest answer is *outcome*."""
+    root = lake_root(config)
+    if not (root / "catalog.sqlite").exists():
+        return set()
+    with Catalog(root, read_only=True) as catalog:
+        latest = cov.attempted(catalog, dataset)
+    return set(latest.filter(pl.col("outcome") == outcome).select("period", "entity").iter_rows())
 
 
 def record_seeds(config, found: Iterable[Seed], *, run: str = "seed:meta-state") -> int | None:

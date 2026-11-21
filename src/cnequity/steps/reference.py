@@ -68,6 +68,7 @@ from cnequity.steps.common import (
     load_bar_universe,
     load_curated_instruments,
     load_symbols,
+    planner_only,
     write_simple,
 )
 from cnequity.steps.http_common import write_fetched
@@ -1539,8 +1540,16 @@ def step_trading_status_derive(
         # staging file overwrite the other.
         batch_id=str(context.get("_batch_id") or "derive-0"),
     )
-    gaps = StateStore(config.meta_root).get_payload("daily_bars")
-    partial = any(gaps.get(key) for key in ("missing_ranges", "missing_units", "outstanding_keys"))
+    if planner_only(config, "daily_bars"):
+        from cnequity.quality.planned_coverage import HISTORY_START, unanswered_keys
+
+        first = start or HISTORY_START
+        partial = not unanswered_keys(config, "daily_bars", first, end or trade_date).is_empty()
+    else:
+        gaps = StateStore(config.meta_root).get_payload("daily_bars")
+        partial = any(
+            gaps.get(key) for key in ("missing_ranges", "missing_units", "outstanding_keys")
+        )
     return {
         "rows_read": rows,
         "rows_written": rows,
