@@ -7044,6 +7044,11 @@ msgstr "个数据集"
 msgid "dedicated history source: {backfill_source}"
 msgstr "专用历史源：{backfill_source}"
 
+#: cnequity/orchestrator/engine.py
+msgctxt "step status"
+msgid "degraded"
+msgstr "部分完成"
+
 #: cnequity/steps/reference.py
 msgid "delisted directory (Baostock)"
 msgstr "退市名录（Baostock）"
@@ -7493,11 +7498,6 @@ msgstr "vantage 必须是 1–64 位字母/数字/点/下划线/连字符，且�
 #: cnequity/cli/repair_cmds.py
 msgid "verifying"
 msgstr "核对"
-
-#: cnequity/orchestrator/engine.py
-msgctxt "step status"
-msgid "warning"
-msgstr "有警告"
 
 #: cnequity/cli/quality_cmds.py
 msgid "whole-lake audit"

@@ -235,7 +235,7 @@ def test_finish_backfill_run_surfaces_compact_warning():
 
     out = backfill_cmds._finish_backfill_run(engine, result)
 
-    assert out["status"] == "warning"
+    assert out["status"] == "degraded"
     assert engine.compacted == ["run-warning"]
 
 
@@ -505,7 +505,7 @@ def test_chunked_backfill_keeps_a_warning_status_across_later_successes(monkeypa
     )
     # A warning does not stop the sweep, and a later success must not paper
     # over the earlier warning.
-    assert result["status"] == "warning"
+    assert result["status"] == "degraded"
     assert len(result["slices"]) == 3
 
 

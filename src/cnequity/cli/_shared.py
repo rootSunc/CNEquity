@@ -337,11 +337,11 @@ def attach_revision_retention(config, payload: dict) -> None:
         )
 
 
-def _run_status_exit_code(status: str) -> int:
+def _run_status_exit_code(status: str, reason: str | None = None) -> int:
     """Coverage limitations remain visible without failing usable execution."""
     from cnequity.orchestrator.outcomes import execution_exit_code
 
-    return execution_exit_code(status)
+    return execution_exit_code(status, reason)
 
 
 STAR_URL = "https://github.com/rootSunc/CNEquity"

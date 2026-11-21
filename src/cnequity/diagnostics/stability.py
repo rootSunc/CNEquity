@@ -159,14 +159,6 @@ def _evaluate_run(manifest: Manifest, trade_date: date, run: Any | None) -> Stab
     elif status == "degraded" and result_count:
         passed = True
         reason = "only non-core dataset stages degraded"
-    elif status == "warning" and result_count:
-        # Transitional spelling for a run produced while the new table was
-        # already available. Core failures above still fail closed.
-        passed = True
-        reason = "legacy warning with dataset receipts proving no core failure"
-    elif status == "warning":
-        passed = False
-        reason = "legacy warning has no dataset receipts; core safety is unproven"
     else:
         passed = False
         reason = f"run status is {status}"

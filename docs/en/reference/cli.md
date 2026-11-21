@@ -345,7 +345,7 @@ Derived datasets are not included: they are recomputed from curated, so what sho
 
 `--core-only` runs the `[[job.daily.waves]]` DAG, which is only the core skeleton; when the configuration has no schedule groups, running without arguments also takes this path, and with no waves it fails outright instead of pretending to succeed. The `intraday` group requires `[minute_bars].enabled` first; when its datasets are disabled, the whole group is skipped automatically.
 
-Success, a valid partial result, or `skipped_non_trading_day` exits 0; execution failure returns 1.
+Success, a valid partial result (`degraded`), or a non-trading-day `skipped` (`reason_code` `non_trading_day`) exits 0; execution failure returns 1.
 
 ## cne run maintain
 
@@ -485,7 +485,7 @@ Historical reference replay and request bounds of derivatives contract backfills
 
 ### sector_bars
 
-It resumes from the checkpoint by default, skipping finished boards; `--refetch` clears the checkpoint and refetches everything. Checkpoint: `meta/state/sector_bars_backfill.json`. When more than 50% fail the step status is `warning`, but the successful part is still written.
+It resumes from the checkpoint by default, skipping finished boards; `--refetch` clears the checkpoint and refetches everything. Checkpoint: `meta/state/sector_bars_backfill.json`. When more than 50% fail the step status is `degraded`, but the successful part is still written.
 
 **Network**: goes through THS `d.10jqka.com.cn` (the same source for daily and history), rate-limited under `[sources.ths]`.
 It has nothing to do with EastMoney; `[sources.eastmoney] proxy` does not apply to it.
@@ -739,7 +739,7 @@ When fetching, initialization, backfill, retry and derivation finish an attempt,
 
 `completed + partial` can be a normal final state. Verified facts can be published, while missing ranges, unscanned securities, cooldowns and retry evidence stay in the ledger. A derivation missing inputs explains the skip; derived versions record input versions and coverage evidence and require a recompute when inputs change. When all sources are unavailable and this run has no valid request result, it also ends normally as insufficient coverage and keeps the existing lake (see below for the exit code of `cne backfill`); program, configuration, storage and integrity errors are still reported as failures.
 
-Fetch / write commands: `success` and source-limited `warning` / `degraded` (including 0 rows) return 0, `failed` returns 1. The exception is `cne backfill` (including `--outstanding`): it returns 1 when the status is not `success`, `usable_result` is false and this run wrote 0 rows, because a backfill exists to fill that range and filling none of it is a failure. Unavailable sources and sources that cannot serve the range (`capability_limit`) both count; the JSON result and `fallback` are unchanged. Explicit quality checks (`audit`, `verify`, `status --gate`) continue to return non-zero according to their own quality rules. Read-only reports return 0 once they have read and displayed successfully, regardless of whether the data in the report is fully healthy.
+Fetch / write commands: `success` and source-limited `degraded` (including 0 rows) return 0, `failed` returns 1. The exception is `cne backfill` (including `--outstanding`): it returns 1 when the status is not `success`, `usable_result` is false and this run wrote 0 rows, because a backfill exists to fill that range and filling none of it is a failure. Unavailable sources and sources that cannot serve the range (`capability_limit`) both count; the JSON result and `fallback` are unchanged. Explicit quality checks (`audit`, `verify`, `status --gate`) continue to return non-zero according to their own quality rules. Read-only reports return 0 once they have read and displayed successfully, regardless of whether the data in the report is fully healthy.
 
 **Upgrading scheduling scripts:** if you previously relied on the exit code of `status --datasets` to trigger alerts, switch to `status --datasets --gate` (also add `--groups` when scheduling by group). Scripts that depend on daily-update / backfill exit code 2 should read `coverage_status`, or run an explicit quality gate separately. Existing data directories, manifests, checkpoints and successful batches do not need to be deleted; old metadata is migrated incrementally. Old partial staging without a verified seal stays under the conservative gate and is published after a retry over the original range.
 

@@ -242,7 +242,7 @@ def run_backfill(config_path: str, request: BackfillRequest) -> None:
         if _fetched_nothing(result):
             _explain_fetched_nothing()
             raise SystemExit(1)
-        if code := _run_status_exit_code(result["status"]):
+        if code := _run_status_exit_code(result["status"], result.get("reason_code")):
             raise SystemExit(code)
         return
     if symbols is not None:
@@ -321,7 +321,7 @@ def run_backfill(config_path: str, request: BackfillRequest) -> None:
     if fetched_nothing:
         _explain_fetched_nothing()
         raise SystemExit(1)
-    code = _run_status_exit_code(result["status"])
+    code = _run_status_exit_code(result["status"], result.get("reason_code"))
     if code:
         raise SystemExit(code)
 
@@ -350,7 +350,7 @@ def _run_delisted_backfill(config_path: str, request: BackfillRequest) -> None:
     if result.get("status") != "failed":
         _follow_lineage(result, lambda: _after_daily_bars(cfg, bars_before, window_, result))
     emit_json(result, indent=2, default=str)
-    if _run_status_exit_code(result["status"]):
+    if _run_status_exit_code(result["status"], result.get("reason_code")):
         raise click.ClickException("delisted recovery execution or publication failed")
 
 
@@ -443,8 +443,7 @@ def _follow_lineage(result: dict, derive) -> dict:
         )
         summary = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     if (
-        summary.get("status") in {"failed", "degraded", "warning"}
-        or summary.get("synchronized") is False
+        summary.get("status") in {"failed", "degraded"} or summary.get("synchronized") is False
     ) and result.get("status") == "success":
         result["status"] = "degraded"
     return summary
@@ -840,6 +839,16 @@ def _derivatives_plan(cfg, dataset, start_str, end_str, symbols_str) -> dict:
     }
 
 
+def _degraded(status) -> bool:
+    """Whether *status* is ``degraded`` in any spelling a result may carry."""
+    from cnequity.orchestrator.outcomes import RunStatus, run_status
+
+    try:
+        return run_status(status)[0] == RunStatus.DEGRADED
+    except ValueError:
+        return False
+
+
 def retry_recent_owed(cfg, dataset: str, trade_date: date) -> dict:
     """The daily run's pass over *dataset*'s recently owed keys.
 
@@ -903,7 +912,7 @@ def _retry_planned_keys(cfg, dataset: str, trade_date: date, since: date) -> dic
     filled = len(keys) - len(left)
     status = result.get("status")
     if status != "failed" or filled:
-        status = "warning" if left else "success"
+        status = "degraded" if left else "success"
     return {
         **result,
         "status": status,
@@ -1024,9 +1033,9 @@ def _repair_outstanding(
                 out, lambda b=before, w=window, o=out: _after_daily_bars(cfg, b, w, o)
             )
             followups.append({"month": month, **summary})
-            lineage_degraded |= summary.get("status") in {"failed", "warning", "degraded"}
+            lineage_degraded |= summary.get("status") in {"failed", "degraded"}
         passes += 1
-        if out.get("status") not in ("success", "warning", "degraded"):
+        if out.get("status") not in ("success", "degraded"):
             failures.append(f"{month}: {out.get('status')}")
         # Settle after each pass, not once at the end. A repair of a real
         # backlog runs for hours — the first version reached pass 30 of 37 over
@@ -1054,7 +1063,7 @@ def _repair_outstanding(
         "dataset": dataset,
         "status": "failed"
         if fatal or (failures and not filled)
-        else "warning"
+        else "degraded"
         if settled["still_owed"]
         else "degraded"
         if lineage_degraded
@@ -1234,8 +1243,8 @@ def _finish_backfill_run(engine, result: dict) -> dict:
         result["status"] = aggregate["status"]
     if compact_status == "failed" or result["status"] == "failed":
         result["status"] = "failed"
-    elif compact_status == "warning" or result["status"] == "warning":
-        result["status"] = "warning"
+    elif _degraded(compact_status) or _degraded(result["status"]):
+        result["status"] = "degraded"
     engine.manifest.finish_run(
         run_id,
         result["status"],
@@ -1330,7 +1339,7 @@ def _recover_compactable_backfill_staging(engine: JobEngine, dataset: str) -> li
         # Reading only ``success`` replayed such runs' staging on every later
         # backfill and republished rows a repair had since removed (920021.BJ).
         if any(
-            batch["dataset"] == "compact" and batch["status"] in ("success", "warning")
+            batch["dataset"] == "compact" and batch["status"] in ("success", "degraded")
             for batch in batches
         ):
             continue
@@ -1395,7 +1404,7 @@ def _run_delisted_profile(cfg, since: date) -> dict:
         result.get("status", "success") == "success"
         and compact_out.get("status", "success") == "success"
     )
-    run_status = "success" if complete else "warning"
+    run_status = "success" if complete else "degraded"
     if compact_out.get("status") in {"failed", "blocked"} or step_outcome(
         result.get("status", "success"), result
     ).execution_status in {"failed", "interrupted"}:
@@ -1461,8 +1470,8 @@ def _run_shfe_annual_archive(
         status = result["status"]
         if compact.get("status") == "failed":
             status = "failed"
-        elif compact.get("status") == "warning" and status == "success":
-            status = "warning"
+        elif _degraded(compact.get("status")) and status == "success":
+            status = "degraded"
     except Exception as exc:
         engine.manifest.finish_run(run_id, "failed", error_message=str(exc))
         raise
@@ -1624,13 +1633,13 @@ def _backfill_symbol_chunked(cfg, dataset: str, start: date, end: date, chunk_sy
             if result["status"] == "failed":
                 if _source_limited_slice(engine, result["run_id"]):
                     failed_scopes.append(chunks[-1])
-                    status = "warning"
+                    status = "degraded"
                     continue
                 status = "failed"
                 break
-            if result["status"] in {"warning", "degraded"} and status == "success":
-                status = result["status"]
-            if result["status"] in {"warning", "degraded"}:
+            if _degraded(result["status"]) and status == "success":
+                status = "degraded"
+            if _degraded(result["status"]):
                 failed_scopes.append(chunks[-1])
     finally:
         cfg.minute_bars_scope = original_scope
@@ -1709,16 +1718,16 @@ def _backfill_chunked(cfg, dataset: str, start: date, end: date, chunk_days: int
         if result["status"] == "failed":
             if _source_limited_slice(engine, result["run_id"]):
                 failed_scopes.append(slices[-1])
-                status = "warning"
+                status = "degraded"
                 cursor = slice_end + timedelta(days=1)
                 continue
             status = "failed"
             break
         # `degraded` is an outcome, not a synonym for success: a slice the
         # source could not supply must not leave the sweep claiming it did.
-        if result["status"] in {"warning", "degraded"} and status == "success":
-            status = result["status"]
-        if result["status"] in {"warning", "degraded"}:
+        if _degraded(result["status"]) and status == "success":
+            status = "degraded"
+        if _degraded(result["status"]):
             failed_scopes.append(slices[-1])
         cursor = slice_end + timedelta(days=1)
     return {

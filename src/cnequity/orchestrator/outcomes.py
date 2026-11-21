@@ -6,9 +6,72 @@ import socket
 import ssl
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from typing import Any, TypedDict
 
 RESULT_SCHEMA_VERSION = 2
+
+
+class RunStatus(StrEnum):
+    """The one word a run, a batch, a step or a dataset result ends in.
+
+    The engine, the manifest and every command's JSON use these and only
+    these. Why a result is degraded or skipped is its ``reason_code``, not a
+    word of its own: ``warning`` was a second spelling of ``degraded`` (a
+    usable result that covers less than it was asked to), and each
+    ``skipped_<why>`` is ``skipped`` with that reason.
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    STALE = "stale"
+    SUCCESS = "success"
+    DEGRADED = "degraded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    BLOCKED = "blocked"
+    INTERRUPTED = "interrupted"
+    SUPERSEDED = "superseded"
+
+
+#: Words the engine wrote before :class:`RunStatus`, and the reason each
+#: implied. Still accepted from a step, read back from an old manifest row,
+#: and rewritten by the manifest's schema upgrade.
+LEGACY_STATUSES: dict[str, tuple[RunStatus, str | None]] = {
+    "warning": (RunStatus.DEGRADED, None),
+    "skipped_non_trading_day": (RunStatus.SKIPPED, "non_trading_day"),
+    "skipped_not_scheduled": (RunStatus.SKIPPED, "not_scheduled"),
+    "skipped_locked": (RunStatus.SKIPPED, "locked"),
+    "skipped_disabled": (RunStatus.SKIPPED, "disabled"),
+    "skipped_long_window": (RunStatus.SKIPPED, "long_window"),
+}
+
+
+def run_status(value: str | RunStatus, reason: str | None = None) -> tuple[RunStatus, str | None]:
+    """*value* as a :class:`RunStatus`, and the reason it carries (*reason* wins).
+
+    Raises ``ValueError`` for a word that is neither a status nor a legacy one.
+    """
+    if isinstance(value, RunStatus):
+        return value, reason
+    text = str(value)
+    if text in LEGACY_STATUSES:
+        status, implied = LEGACY_STATUSES[text]
+        return status, reason or implied
+    return RunStatus(text), reason
+
+
+def status_word(value: str | RunStatus) -> str:
+    """The :class:`RunStatus` value for *value*, legacy words mapped."""
+    return run_status(value)[0].value
+
+
+#: What a step may end in.
+STEP_STATUSES = frozenset(
+    {RunStatus.SUCCESS, RunStatus.DEGRADED, RunStatus.FAILED, RunStatus.SKIPPED, RunStatus.BLOCKED}
+)
+#: Skips that are the run doing its job, not failing at it (exit 0).
+QUIET_SKIP_REASONS = frozenset({"non_trading_day", "not_scheduled", "disabled", "locked"})
 EXECUTION_STATUSES = frozenset(
     {"queued", "running", "completed", "skipped", "failed", "interrupted"}
 )
@@ -179,7 +242,8 @@ def step_outcome(
 ) -> Outcome:
     """Normalize receipts without treating row counts as coverage evidence."""
     result = result or {}
-    reason = result.get("reason_code")
+    status, implied = run_status(status)
+    reason = result.get("reason_code") or implied
     if error is not None:
         reason = error_kind(error)
     execution = result.get("execution_status")
@@ -197,7 +261,7 @@ def step_outcome(
     if coverage is None:
         coverage = (
             "partial"
-            if status in {"warning", "degraded"}
+            if status == RunStatus.DEGRADED
             or result.get("coverage_complete") is False
             or reason in SOURCE_LIMIT_REASONS | {"input_unavailable"}
             else "complete"
@@ -217,7 +281,7 @@ def step_outcome(
             if stage == "publish_revision" and status == "success"
             else "none"
         )
-    if reason is None and status in {"warning", "degraded"}:
+    if reason is None and status == RunStatus.DEGRADED:
         reason = "coverage_limited"
     if reason is None and status == "failed":
         reason = "execution_error"
@@ -246,6 +310,15 @@ def result_is_usable(result: Mapping[str, Any]) -> bool:
     )
 
 
-def execution_exit_code(status: str) -> int:
-    """Mutation/report commands report coverage separately from execution."""
-    return 0 if status in {"success", "warning", "degraded", "skipped_non_trading_day"} else 1
+def execution_exit_code(status: str, reason: str | None = None) -> int:
+    """0 for a usable result, or a skip that is the run doing its job; 1 otherwise.
+
+    Coverage is reported separately from execution, so ``degraded`` exits 0.
+    """
+    try:
+        word, reason = run_status(status, reason)
+    except ValueError:
+        return 1
+    if word in {RunStatus.SUCCESS, RunStatus.DEGRADED}:
+        return 0
+    return 0 if word == RunStatus.SKIPPED and reason in QUIET_SKIP_REASONS else 1

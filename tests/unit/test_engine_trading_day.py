@@ -38,7 +38,7 @@ def test_run_job_skips_non_trading_day(tmp_path):
     )
     engine = JobEngine(cfg)
     result = engine.run_job("daily", date(2024, 6, 29))
-    assert result["status"] == "skipped_non_trading_day"
+    assert (result["status"], result["reason_code"]) == ("skipped", "non_trading_day")
     assert result["trade_date"] == "2024-06-29"
     assert not list(cfg.staging_root.glob("**/*.parquet"))
 

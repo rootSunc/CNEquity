@@ -454,7 +454,7 @@ def test_status_run_degraded_exits_two_and_lists_dataset_stages(tmp_path, cfg_pa
     assert any(
         item["dataset"] == "adj_factors"
         and item["stage"] == "derive"
-        and item["status"] == "warning"
+        and item["status"] == "degraded"
         for item in payload["dataset_results"]
     )
 
@@ -2316,7 +2316,7 @@ def test_all_groups_honors_weekly_history_but_keeps_snapshots(
     else:
         assert "daily:signals" not in seen
         assert seen["daily:capital"] == ["fund_flow", "compact"]
-        assert "skipped_not_scheduled" in result.output
+        assert '"reason_code": "not_scheduled"' in result.output
 
 
 _DAY_GROUPS = (
@@ -2475,7 +2475,7 @@ def test_run_daily_leaves_a_running_event_stream_alone(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli, ["run", "daily", "--config", cfg])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output[result.output.index("{") :])
-    assert payload["events"]["status"] == "skipped_locked"
+    assert (payload["events"]["status"], payload["events"]["reason_code"]) == ("skipped", "locked")
 
 
 def test_run_daily_reports_a_failed_event_stream(tmp_path, monkeypatch):

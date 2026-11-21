@@ -264,7 +264,7 @@ def test_partial_publication_keeps_missing_keys_and_retry_attempts(tmp_path):
     assert publication_files(engine.manifest, run, "daily_bars") == [sealed]
     result = engine.run_step("compact", DAY, run)
     receipt = engine.manifest.get_dataset_result(run, "daily_bars", "publish_revision")
-    assert result["status"] == "warning"
+    assert result["status"] == "degraded"
     assert receipt["publication_status"] == "partial"
     assert receipt["revision_id"]
     assert engine.manifest.get_batch(run, "source")["status"] == "failed"

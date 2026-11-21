@@ -334,7 +334,7 @@ def refreshes(manifest_path, *, run_id: str | None = None) -> dict[str, datetime
         rows = connection.execute(
             "SELECT d.dataset, max(COALESCE(r.finished_at, r.started_at)) "
             "FROM dataset_results d JOIN ingestion_runs r USING (run_id) "
-            "WHERE d.stage = 'fetch' AND d.status IN ('success', 'warning') "
+            "WHERE d.stage = 'fetch' AND d.status IN ('success', 'degraded') "
             + ("AND d.run_id = ? " if run_id else "")
             + "GROUP BY d.dataset",
             [run_id] if run_id else [],

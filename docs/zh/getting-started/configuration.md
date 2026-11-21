@@ -305,7 +305,7 @@ weekday = 5          # 每周组在哪天之前的最后一个交易日跑，ISO
   漏一天就永久缺一天）；它们依赖的同组步骤（如 `trading_status` 需要当天的 `instruments`）也一起跑。
   哪些是快照类看[数据源说明](../datasets/sources.md)或 `DatasetSpec.fetch_semantics`。
 - 每周组在当周最后一个交易日跑（不晚于 `weekday`）：周五休市就提前到周四，不会整周跳过。
-- 休息日整组没有要跑的步骤时，`cne run daily --group` 输出 `skipped_not_scheduled`，日更脚本记为 SKIPPED。
+- 休息日整组没有要跑的步骤时，`cne run daily --group` 输出 `skipped`（`reason_code` 为 `not_scheduled`），日更脚本记为 SKIPPED。
 - 新鲜度跟着频率走：只由每周组负责的历史数据集，按该组上次应跑的交易日判断是否过期，
   所以 `cne status`、`[job.stale].run_at`（默认北京时间 21:00）的补跑和健康门禁不会在休息日把它当成落后、再去抓一遍。
 - 一个数据集同时在每天和每周的组里时，按每天算。
@@ -335,7 +335,7 @@ weekday = 5          # 每周组在哪天之前的最后一个交易日跑，ISO
 另一个任务族——`cne run events`。区别只有两点，都是必需的：
 
 - **不看交易日历。** 上市公司周六也发公告，资讯源全天候更新；`daily*` 任务在非交易日
-  直接 `skipped_non_trading_day`，事件流不会。
+  直接 `skipped`（`reason_code` 为 `non_trading_day`），事件流不会。
 - **另一把锁。** 事件流拿 `events_ingestion`，不是 `daily_ingestion`，所以晚间批处理
   跑到一半时事件流照样能跑，反之亦然。
 

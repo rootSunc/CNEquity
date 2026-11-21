@@ -305,7 +305,7 @@ weekday = 5          # A weekly group runs on the last trading day on or before 
   missing a day means that day is missing forever); the same-group steps they depend on (for example, `trading_status` needs that day's `instruments`) run too.
   To see which are snapshot-type, check the [sources page](../datasets/sources.md) or `DatasetSpec.fetch_semantics`.
 - A weekly group runs on the last trading day of the week (no later than `weekday`): if Friday is a market holiday it moves up to Thursday, and the week is never skipped entirely.
-- On a rest day, when the whole group has no steps to run, `cne run daily --group` outputs `skipped_not_scheduled`, and the daily update script records SKIPPED.
+- On a rest day, when the whole group has no steps to run, `cne run daily --group` outputs `skipped` (`reason_code` `not_scheduled`), and the daily update script records SKIPPED.
 - Freshness follows the frequency: a historical dataset owned only by a weekly group is judged stale against the trading day that group was last due to run,
   so `cne status`, the catch-up at `[job.stale].run_at` (default 21:00 Beijing time) and the health gate do not treat it as behind on rest days and fetch it again.
 - When a dataset is in both a daily and a weekly group, daily wins.
@@ -335,7 +335,7 @@ Settings of `cne run maintain`, which the timer `cne schedule install` installs 
 a different task family — `cne run events`. There are only two differences, both required:
 
 - **It ignores the trading calendar.** Listed companies publish announcements on Saturdays too, and news sources update around the clock; `daily*` tasks
-  return `skipped_non_trading_day` directly on non-trading days, but event streams do not.
+  return `skipped` (`reason_code` `non_trading_day`) directly on non-trading days, but event streams do not.
 - **A different lock.** Event streams take `events_ingestion`, not `daily_ingestion`, so event streams can still run while the evening batch
   is halfway through, and vice versa.
 

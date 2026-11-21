@@ -464,7 +464,9 @@ def derive(
     elif name == "trading_status":
         summary = _derive_trading_status(cfg, start=start, end=end)
         emit_json(summary, indent=2, default=str)
-        exit_code = _run_status_exit_code(str(summary.get("status", "failed")))
+        exit_code = _run_status_exit_code(
+            str(summary.get("status", "failed")), summary.get("reason_code")
+        )
         if exit_code:
             raise SystemExit(exit_code)
     elif name == "sector_routing":

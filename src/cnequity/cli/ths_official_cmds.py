@@ -75,7 +75,7 @@ def _run_outcome(result: dict) -> tuple[str, int, int]:
         status = "success"
     failures = int(result.get("failed_symbols") or 0) + int(result.get("failed") or 0)
     if status == "success" and failures:
-        status = "warning"
+        status = "degraded"
     rows_written = int(result.get("rows_written") or 0)
     rows_read = int(result.get("rows_read") or result.get("rows_fetched") or rows_written)
     return status, rows_read, rows_written

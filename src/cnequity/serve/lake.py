@@ -79,24 +79,22 @@ RUN_STATUSES = frozenset(
         "success",
         "failed",
         "degraded",
-        "warning",
         "interrupted",
         "skipped",
-        "skipped_non_trading_day",
     }
 )
 # The runs page "needs attention" count. A later attempt of the same job
 # replaces an older one, so only the latest non-skip run of each scope can
 # still be open, and only when it is one of these.
-_OPEN_ATTENTION_STATUSES = ("failed", "degraded", "warning", "interrupted")
+_OPEN_ATTENTION_STATUSES = ("failed", "degraded", "interrupted")
 # A skip is not an attempt. It must not hide the failure that came before it.
-_NON_ATTEMPT_STATUSES = ("skipped", "skipped_non_trading_day")
+_NON_ATTEMPT_STATUSES = ("skipped",)
 # These job names are shared across datasets. The first planned step is the
 # scope, so a later backfill of one dataset does not close another.
 _STEP_SCOPED_JOBS = ("backfill", "derivatives-rebuild")
 # Batch rows that still need an operator. Success (including a recovered
 # attempt that kept its error text), superseded, and stale are closed.
-_ACTIONABLE_BATCH_STATUSES = ("failed", "warning", "degraded", "interrupted", "blocked")
+_ACTIONABLE_BATCH_STATUSES = ("failed", "degraded", "interrupted", "blocked")
 
 
 def _launch_id(metadata_json: str | None) -> str | None:

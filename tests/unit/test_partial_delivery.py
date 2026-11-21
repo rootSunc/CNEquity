@@ -110,7 +110,7 @@ def test_empty_source_backfill_cli_finishes_with_truthful_fallback(tmp_path, mon
     assert "fetched nothing usable" in result.stderr
     assert "✓" not in result.stderr
     assert payload["publication_status"] == "none"
-    assert payload["results"][0]["status"] == "warning"
+    assert payload["results"][0]["status"] == "degraded"
     fallback = payload["fallback"][0]
     assert fallback["available_data"] is False
     assert fallback["scope"]["start"] == DAY.isoformat()

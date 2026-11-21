@@ -55,6 +55,8 @@
 - 新配置 `[datasets] planner_only`（试验）：列出的按日抓取的数据集只按覆盖规划决定抓哪些天，不再在 `meta/state` 里记水位、缺失日期和暂存标记：水位从已发布的行算，抓取失败的日子下次仍是缺口，回看窗口的深扫和尾扫记进覆盖台账。派生数据集暂不能列入。
 - `planner_only` 也覆盖 `daily_bars`、快照类数据集和按日回补：日线不再记待补键和“确认无数据”缓存，每天的补抓直接取规划器欠着的键；快照的最近一次采集从湖目录读；`cne backfill` 跳过规划器认为已覆盖、记为空或不到期的日子，记为空的日子写进覆盖台账。新参数 `cne backfill --redo empty|all`（仅 `planner_only` 的数据集）：连同记为空的日子一起再问，或范围内每天都问。
 - `planner_only` 现在也可以列入派生数据集（`industry_index`、`option_greeks`、`futures_continuous`、`adj_factors` 等）：它们的水位从已发布的行算，不再写进 `meta/state`；派生时判断输入是否完整，对 `planner_only` 的输入改看覆盖规划有没有欠着的格子。
+- **不兼容变更**：运行状态统一成一套词：`running`、`success`、`degraded`、`failed`、`skipped`、`blocked`、`interrupted`、`superseded`（批次另有 `queued`、`stale`）。`warning` 并入 `degraded`（都是“结果能用，但没有覆盖要求的全部范围”）；`skipped_non_trading_day`、`skipped_not_scheduled`、`skipped_locked`、`skipped_disabled` 改为 `skipped`，原因写进 `reason_code`（`non_trading_day`、`not_scheduled`、`locked`、`disabled`）。命令行 JSON、清单库的运行、批次和数据集结果都只出现这套词；清单库在新版本第一次打开时把旧记录改写过来，运行记录新增 `reason_code` 列。退出码不变：`degraded` 和非交易日、未到期、被占用、已关闭的跳过都是 0。按 `status` 判断的外部脚本要把 `warning` 当成 `degraded`，把 `skipped_*` 改成看 `reason_code`。
+- 数据集的修订号、修订 id、内容摘要等不再重复写进 `meta/state/<数据集>.json`：湖目录是它们唯一的记录，`dataset_state()`、`cne` 的数据集目录和各处读取都从湖目录取。旧版本留在状态文件里的这些字段，在该数据集下次发布时或由 `cne run maintain` 删除。
 
 ## [0.24.0] — 2026-11-13 · 最低要求升到 Python 3.11 与 DuckDB 2.0，新增实验性的湖目录
 

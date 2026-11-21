@@ -130,7 +130,7 @@ and are not requested again within the TTL; the gate only errors on keys still m
 
 ### Watermark behind after a weekend / missed run
 
-- **Observation**: when today is not a trading day, `cne run daily` → `skipped_non_trading_day`; the `daily_bars`
+- **Observation**: when today is not a trading day, `cne run daily` → `skipped` (`reason_code` `non_trading_day`); the `daily_bars`
   watermark stays at the trading day before last; downstream freshness gates fail.
 - **Fix** (catch up core + `market_breadth`):
 
@@ -166,7 +166,7 @@ A proxy is network configuration, not a way to lift a ban. Do not rotate egress 
   `d.10jqka.com.cn` rate-limits or even bans dense requests.
 - **Fix**: after the cooldown, raise `[sources.ths] min_interval_seconds` (default 1.0, not a guaranteed safe threshold), then `cne backfill sector_bars`;
   it resumes from the checkpoint by default; after switching sources, use `--refetch` for a full refetch. Checkpoint: `meta/state/sector_bars_backfill.json`.
-  When the failure rate exceeds 50% the step status is `warning`, and sectors that succeeded are still written.
+  When the failure rate exceeds 50% the step status is `degraded`, and sectors that succeeded are still written.
 
 ### Deploying on another machine
 

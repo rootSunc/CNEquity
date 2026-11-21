@@ -355,7 +355,7 @@ def test_init_recovers_and_publishes_delisted_bars_before_legacy_ownership_retry
     assert calls == ["600070.SH"]
     assert delisted_recovery_covers(cfg, start, end, ["600070.SH"])
     # Recovery's compact must not overwrite or bypass the parent's old warning.
-    assert engine.manifest.get_batch(run_id, "ownership")["status"] == "warning"
+    assert engine.manifest.get_batch(run_id, "ownership")["status"] == "degraded"
     engine._recover_init_delisted_bars(run_id, end, {})
     assert calls == ["600070.SH"]
 

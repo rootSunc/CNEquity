@@ -73,12 +73,13 @@ def test_degraded_non_core_passes_but_core_failure_does_not(tmp_path):
 def test_legacy_warning_without_receipts_is_not_evidence(tmp_path):
     manifest = Manifest(tmp_path / "manifest.db")
     day = _days(1)[0]
+    # The old spelling is stored as ``degraded``; with no receipts it proves nothing.
     _run(manifest, day, "warning")
 
     report = evaluate_stability(manifest, [day], required_days=1, as_of=day)
 
     assert report.passed is False
-    assert "unproven" in report.days[0].reason
+    assert report.days[0].reason == "run status is degraded"
 
 
 def test_latest_attempt_wins_and_report_is_persisted(tmp_path):

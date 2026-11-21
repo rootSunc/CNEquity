@@ -71,7 +71,7 @@ def test_a_daily_job_is_still_gated_on_the_trading_calendar(tmp_path, monkeypatc
         waves=[WaveConfig(name="group:capital", parallel=True, steps=["fund_flow"])],
     )
 
-    assert result["status"] == "skipped_non_trading_day"
+    assert (result["status"], result["reason_code"]) == ("skipped", "non_trading_day")
     assert ran == []
 
 

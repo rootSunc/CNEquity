@@ -99,12 +99,12 @@ def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> li
         manifest = Manifest(manifest_path)
         for past in manifest.list_runs():
             for receipt in manifest.get_dataset_results(past["run_id"], dataset=dataset):
-                if receipt["status"] in {"failed", "warning", "degraded", "blocked"}:
+                if receipt["status"] in {"failed", "degraded", "blocked"}:
                     return True
             for batch in manifest.get_batches_for_run(past["run_id"]):
                 if batch["dataset"] == dataset and batch["status"] in {
                     "failed",
-                    "warning",
+                    "degraded",
                     "stale",
                 }:
                     return True
@@ -363,12 +363,17 @@ def _run_all_groups(
                 ),
                 err=True,
             )
-            results.append({"group": name, "status": "skipped_disabled"})
+            results.append({"group": name, "status": "skipped", "reason_code": "disabled"})
             continue
         steps = group.steps if backfill else due_steps(group, schedule_date)
         if not steps:
             results.append(
-                {"group": name, "status": "skipped_not_scheduled", "cadence": group.cadence}
+                {
+                    "group": name,
+                    "status": "skipped",
+                    "reason_code": "not_scheduled",
+                    "cadence": group.cadence,
+                }
             )
             click.echo(
                 _("Schedule group {name}: skipped (not yet a {cadence} collection day)").format(
@@ -407,7 +412,7 @@ def _run_all_groups(
         status = result["status"]
         results.append({"group": name, **result})
         click.echo(_("Schedule group {name}: {status}").format(name=name, status=status), err=True)
-        exit_code = _run_status_exit_code(status)
+        exit_code = _run_status_exit_code(status, result.get("reason_code"))
         # Exit 1 is a terminal/core failure; 2 is usable but degraded.
         # Numeric max would hide a core failure behind a later advisory one.
         if exit_code == 1 or worst == 0:
@@ -431,7 +436,7 @@ def _run_all_groups(
             audit = {"status": "failed", "error": str(exc)}
         payload["audit"] = audit
         click.echo(_("Audit: {status}").format(status=audit["status"]), err=True)
-        exit_code = _run_status_exit_code(audit["status"])
+        exit_code = _run_status_exit_code(audit["status"], audit.get("reason_code"))
         if exit_code == 1 or worst == 0:
             worst = exit_code
     if include_events and cfg.events_groups:
@@ -440,7 +445,7 @@ def _run_all_groups(
         except RunLockError as exc:
             # A separately scheduled `cne run events` is already covering it.
             click.echo(_("Event streams: skipped ({exc})").format(exc=exc), err=True)
-            events = {"status": "skipped_locked", "error": str(exc)}
+            events = {"status": "skipped", "reason_code": "locked", "error": str(exc)}
         except Exception as exc:  # noqa: BLE001 — the groups already ran
             click.echo(
                 _("Event streams: {name}: {exc}").format(name=type(exc).__name__, exc=exc), err=True
@@ -448,9 +453,7 @@ def _run_all_groups(
             events = {"status": "failed", "error": str(exc)}
         payload["events"] = events
         click.echo(_("Event streams: {status}").format(status=events["status"]), err=True)
-        exit_code = (
-            0 if events["status"] == "skipped_locked" else _run_status_exit_code(events["status"])
-        )
+        exit_code = _run_status_exit_code(events["status"], events.get("reason_code"))
         if exit_code == 1 or worst == 0:
             worst = exit_code
     attach_revision_retention(cfg, payload)
@@ -585,7 +588,7 @@ def _run_stale_only(
     }
     attach_revision_retention(cfg, payload)
     emit_json(payload, indent=2)
-    exit_code = _run_status_exit_code(result["status"])
+    exit_code = _run_status_exit_code(result["status"], result.get("reason_code"))
     if exit_code:
         raise SystemExit(exit_code)
 
@@ -884,7 +887,8 @@ def run_daily(
                 emit_json(
                     {
                         "run_id": None,
-                        "status": "skipped_not_scheduled",
+                        "status": "skipped",
+                        "reason_code": "not_scheduled",
                         "group": group_name,
                         "cadence": group.cadence,
                     },
@@ -927,7 +931,7 @@ def run_daily(
             # not cover would put this note in every weekend cron mail.
             uncovered = (
                 datasets_outside_the_daily_waves(cfg)
-                if result["status"] != "skipped_non_trading_day"
+                if result.get("reason_code") != "non_trading_day"
                 else []
             )
             if uncovered:
@@ -951,7 +955,7 @@ def run_daily(
     emit_json(result, indent=2, default=str)
     # Exit non-zero on failure so schedulers (launchd/cron) and the daily
     # pipeline can detect it; a non-trading-day skip is a success (exit 0).
-    exit_code = _run_status_exit_code(result["status"])
+    exit_code = _run_status_exit_code(result["status"], result.get("reason_code"))
     if exit_code:
         raise SystemExit(exit_code)
 
@@ -1008,7 +1012,7 @@ def run_events(config_path: str, group_name: str | None, trade_date_str: str | N
     except RunLockError as exc:
         raise click.ClickException(str(exc)) from exc
     emit_json(result, indent=2, default=str)
-    exit_code = _run_status_exit_code(result["status"])
+    exit_code = _run_status_exit_code(result["status"], result.get("reason_code"))
     if exit_code:
         raise SystemExit(exit_code)
 
@@ -1132,6 +1136,8 @@ def retry(config_path: str, run_id: str | None, failed_groups: bool):
     if not run_id:
         raise click.ClickException(_("Give --run-id or --failed-groups"))
     result = _retry_single_run(engine, run_id)
-    exit_code = _run_status_exit_code(str(result.get("status", "failed")))
+    exit_code = _run_status_exit_code(
+        str(result.get("status", "failed")), result.get("reason_code")
+    )
     if exit_code:
         raise SystemExit(exit_code)

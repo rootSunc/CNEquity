@@ -130,7 +130,7 @@ EOF
 
 ### 周末 / 漏跑后水位落后
 
-- **现象**：今天非交易日时 `cne run daily` → `skipped_non_trading_day`；`daily_bars`
+- **现象**：今天非交易日时 `cne run daily` → `skipped`（`reason_code` 为 `non_trading_day`）；`daily_bars`
   水位停在上上个交易日；下游 freshness 门禁不过。
 - **处理**（补 core + `market_breadth`）：
 
@@ -166,7 +166,7 @@ EOF
   `d.10jqka.com.cn` 对密集请求会限速甚至封禁。
 - **处理**：冷却后提高 `[sources.ths] min_interval_seconds`（默认 1.0，不是安全阈值保证），再 `cne backfill sector_bars`；
   默认从断点续跑；换源后全量重拉用 `--refetch`。Checkpoint：`meta/state/sector_bars_backfill.json`。
-  失败率超过 50% 时 step 状态为 `warning`，已成功的板块仍会写入。
+  失败率超过 50% 时 step 状态为 `degraded`，已成功的板块仍会写入。
 
 ### 在另一台机器部署
 

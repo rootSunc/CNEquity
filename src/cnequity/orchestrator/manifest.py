@@ -10,7 +10,13 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from cnequity.orchestrator.outcomes import step_outcome
+from cnequity.orchestrator.outcomes import (
+    LEGACY_STATUSES,
+    STEP_STATUSES,
+    run_status,
+    status_word,
+    step_outcome,
+)
 
 
 def _utcnow() -> str:
@@ -47,9 +53,7 @@ UNLOCKED_RUN_GRACE_SECONDS = 60.0
 DATASET_RESULT_STAGES = frozenset(
     {"fetch", "stage", "compact", "derive", "audit", "publish_revision"}
 )
-DATASET_RESULT_STATUSES = frozenset(
-    {"success", "warning", "failed", "skipped", "blocked", "degraded"}
-)
+DATASET_RESULT_STATUSES = frozenset(status.value for status in STEP_STATUSES)
 DATASET_RESULT_CRITICALITIES = frozenset({"core", "research", "advisory"})
 
 # A batch that a step has planned but no worker has picked up yet.
@@ -72,7 +76,32 @@ ACTIVE_BATCH_STATUSES = ("running", "stale", QUEUED_BATCH_STATUS)
 # Statuses a retry may pick a batch up from. ``queued`` belongs here because
 # such a row carries its full symbol list and window: it is work this run
 # planned and can still perform, not a failure needing diagnosis.
-RETRYABLE_BATCH_STATUSES = ("failed", "warning", QUEUED_BATCH_STATUS)
+RETRYABLE_BATCH_STATUSES = ("failed", "degraded", QUEUED_BATCH_STATUS)
+
+
+def _rewrite_legacy_statuses(conn: sqlite3.Connection) -> None:
+    """Rewrite statuses stored before :class:`RunStatus` into it, once per word.
+
+    ``warning`` and ``partial`` become ``degraded``; ``skipped_<why>`` becomes
+    ``skipped`` with ``<why>`` as the reason. Idempotent: nothing matches the
+    second time.
+    """
+    for word, (status, reason) in LEGACY_STATUSES.items():
+        conn.execute(
+            "UPDATE ingestion_runs SET status = ?, reason_code = COALESCE(reason_code, ?) "
+            "WHERE status = ?",
+            (status.value, reason, word),
+        )
+        conn.execute(
+            "UPDATE ingestion_batches SET status = ?, reason_code = COALESCE(reason_code, ?) "
+            "WHERE status = ?",
+            (status.value, reason, word),
+        )
+        conn.execute(
+            "UPDATE dataset_results SET status = ?, reason_code = COALESCE(reason_code, ?) "
+            "WHERE status = ?",
+            (status.value, reason, word),
+        )
 
 
 def _sql_tuple(values: tuple[str, ...]) -> str:
@@ -257,6 +286,7 @@ class Manifest:
                 ("coverage_status", "TEXT NOT NULL DEFAULT 'unknown'"),
                 ("publication_status", "TEXT NOT NULL DEFAULT 'none'"),
                 ("result_schema_version", "INTEGER NOT NULL DEFAULT 1"),
+                ("reason_code", "TEXT"),
             ):
                 if name not in run_cols:
                     conn.execute(f"ALTER TABLE ingestion_runs ADD COLUMN {name} {definition}")
@@ -311,6 +341,7 @@ class Manifest:
                 "CREATE INDEX IF NOT EXISTS idx_dataset_results_dataset "
                 "ON dataset_results(dataset, stage, status)"
             )
+            _rewrite_legacy_statuses(conn)
 
     @staticmethod
     def _batch_activity_at(row: sqlite3.Row) -> datetime | None:
@@ -378,18 +409,21 @@ class Manifest:
         rows_read: int = 0,
         rows_written: int = 0,
         error_message: str | None = None,
+        *,
+        reason_code: str | None = None,
     ) -> None:
-        # A caller may still pass the legacy ``warning`` spelling or may
-        # finalize a run without first asking for its aggregate.  Once logical
-        # receipts exist, make the persisted run status obey the same
-        # execution/coverage policy as ``aggregate_run_status``. Runs from before
-        # this table was introduced retain their original status.
+        # A caller may finalize a run without first asking for its aggregate.
+        # Once logical receipts exist, make the persisted run status obey the
+        # same execution/coverage policy as ``aggregate_run_status``. Runs from
+        # before this table was introduced retain their original status.
+        status, reason_code = run_status(status, reason_code)
+        status = status.value
         aggregate = self.aggregate_run_status(run_id)
-        if status in {"success", "warning", "degraded", "failed"}:
+        if status in {"success", "degraded", "failed"}:
             if aggregate["results"]:
                 if aggregate["status"] == "failed" or status == "failed":
                     status = "failed"
-                elif aggregate["status"] == "degraded" or status in {"warning", "degraded"}:
+                elif aggregate["status"] == "degraded" or status == "degraded":
                     status = "degraded"
                 else:
                     status = "success"
@@ -398,7 +432,8 @@ class Manifest:
                 """
                 UPDATE ingestion_runs
                 SET status = ?, finished_at = ?, rows_read = ?, rows_written = ?, error_message = ?,
-                    execution_status = ?, coverage_status = ?, publication_status = ?
+                    execution_status = ?, coverage_status = ?, publication_status = ?,
+                    reason_code = ?
                 WHERE run_id = ?
                 """,
                 (
@@ -410,6 +445,7 @@ class Manifest:
                     "failed" if status == "failed" else aggregate["execution_status"],
                     aggregate["coverage_status"],
                     aggregate["publication_status"],
+                    reason_code,
                     run_id,
                 ),
             )
@@ -573,6 +609,7 @@ class Manifest:
                 raise ValueError("request_retry_count must be an integer") from exc
             if request_retry_count < 0:
                 raise ValueError("request_retry_count must be non-negative")
+        status = status_word(status)
         with self._connect() as conn:
             conn.execute(
                 """
@@ -586,7 +623,7 @@ class Manifest:
                     execution_status = ?,
                     reason_code = ?,
                     blocks_compaction = CASE
-                        WHEN ? IN ('warning', 'failed', 'stale') THEN 1
+                        WHEN ? IN ('degraded', 'failed', 'stale') THEN 1
                         ELSE blocks_compaction
                     END
                 WHERE run_id = ? AND batch_id = ? AND status = 'running'
@@ -772,7 +809,7 @@ class Manifest:
                 UPDATE ingestion_batches
                 SET status = 'superseded', error_message = ?
                 WHERE run_id = ? AND batch_id IN ({placeholders})
-                  AND status IN ('failed', 'warning', 'stale')
+                  AND status IN ('failed', 'degraded', 'stale')
                 """,
                 (message, run_id, *ids),
             )
@@ -790,7 +827,7 @@ class Manifest:
                 UPDATE ingestion_batches
                 SET retry_count = retry_count + 1
                 WHERE run_id = ? AND batch_id IN ({placeholders})
-                  AND status IN ('failed', 'warning')
+                  AND status IN ('failed', 'degraded')
                 """,
                 (run_id, *ids),
             )
@@ -1188,6 +1225,7 @@ class Manifest:
         """Upsert a versioned result, preserving detailed retry attempts."""
         if stage not in DATASET_RESULT_STAGES:
             raise ValueError(f"invalid dataset result stage: {stage!r}")
+        status = status_word(status)
         if status not in DATASET_RESULT_STATUSES:
             raise ValueError(f"invalid dataset result status: {status!r}")
         if criticality not in DATASET_RESULT_CRITICALITIES:
@@ -1322,12 +1360,12 @@ class Manifest:
             ) or (criticality == "core" and status in {"failed", "blocked"}):
                 core_failures.append(item)
             elif (
-                status in {"warning", "degraded", "failed", "blocked"}
+                status in {"degraded", "failed", "blocked"}
                 or row["reason_code"] == "input_unavailable"
             ):
                 degraded_results.append(item)
         usable = any(
-            row["status"] in {"success", "warning", "degraded"}
+            row["status"] in {"success", "degraded"}
             and row["stage"] not in {"audit", "compact"}
             and (row["usable_result"] or row["rows_written"] > 0)
             for row in rows

@@ -461,7 +461,7 @@ def _run_intraday_demo(cfg: Config, engine, symbols: list[str], end: date, days:
         waves=[WaveConfig(name="intraday", parallel=False, steps=["minute_bars", "compact"])],
         backfill=True,
     )
-    if _run_status_exit_code(result.get("status")):
+    if _run_status_exit_code(result.get("status"), result.get("reason_code")):
         raise click.ClickException(_("minute_bars failed: {result}").format(result=result))
 
     from cnequity.query.reader import load
@@ -776,7 +776,7 @@ def run_demo(
         waves=[WaveConfig(name="calendar", parallel=False, steps=["trading_calendar", "compact"])],
         backfill=True,
     )
-    if _run_status_exit_code(cal.get("status")):
+    if _run_status_exit_code(cal.get("status"), cal.get("reason_code")):
         raise click.ClickException(_("trading_calendar failed: {cal}").format(cal=cal))
     end = _last_trading_day(cfg, as_of)
     window_days = max(days, RESEARCH_MIN_DAYS) if research else days
@@ -807,7 +807,7 @@ def run_demo(
         waves=[WaveConfig(name="bars", parallel=False, steps=["daily_bars", "compact"])],
         backfill=True,
     )
-    if _run_status_exit_code(bars.get("status")):
+    if _run_status_exit_code(bars.get("status"), bars.get("reason_code")):
         # Name the step's own reason rather than guessing one. This blamed TDX
         # connectivity for every failure, sending people to debug a network
         # that was fine.

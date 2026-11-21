@@ -54,7 +54,14 @@ EXTRA_GROUPS_DEFAULT = (
     "research",
 )
 
-OK_STATUSES = ("success", "skipped_non_trading_day", "skipped_already_fresh")
+OK_STATUSES = ("success", "skipped_already_fresh")
+
+
+def _moved_past(result: dict) -> bool:
+    """A run the catch-up may move past: it succeeded, or a non-trading day skipped it."""
+    if result["status"] in OK_STATUSES:
+        return True
+    return result["status"] == "skipped" and result.get("reason_code") == "non_trading_day"
 
 
 class CatchupError(RuntimeError):
@@ -179,8 +186,12 @@ def run_catchup(
             results["core"] = {"run_id": "", "status": "skipped_already_fresh"}
         else:
             core = _run("daily:core", "group:core", group.steps)
-            results["core"] = {"run_id": core["run_id"], "status": core["status"]}
-            if core["status"] not in OK_STATUSES:
+            results["core"] = {
+                "run_id": core["run_id"],
+                "status": core["status"],
+                "reason_code": core.get("reason_code"),
+            }
+            if not _moved_past(results["core"]):
                 print(json.dumps(results, indent=2))
                 return 1
 
@@ -192,8 +203,9 @@ def run_catchup(
                 results["market_breadth"] = {
                     "run_id": breadth["run_id"],
                     "status": breadth["status"],
+                    "reason_code": breadth.get("reason_code"),
                 }
-                if breadth["status"] not in OK_STATUSES:
+                if not _moved_past(results["market_breadth"]):
                     print(json.dumps(results, indent=2))
                     return 1
 
@@ -210,10 +222,10 @@ def run_catchup(
     print(json.dumps(results, indent=2))
 
     # Gate decides the exit code; extra-group failures are advisory.
-    if results["core"]["status"] not in OK_STATUSES:
+    if not _moved_past(results["core"]):
         return 1
     mb = results.get("market_breadth")
-    if mb and mb["status"] not in OK_STATUSES:
+    if mb and not _moved_past(mb):
         return 1
     return 0
 

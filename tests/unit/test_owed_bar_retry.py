@@ -154,6 +154,6 @@ def test_planner_only_bars_retry_the_planner_s_keys_and_plan_again(tmp_path, mon
     out = backfill_cmds.retry_recent_owed(cfg, "daily_bars", DAY)
     assert [row["symbol"] for row in seen["rows"]] == ["600000.SH", "600001.SH"]
     assert out["outstanding"] == {"before": 2, "filled": 1, "still_owed": 1}
-    assert out["status"] == "warning"
+    assert out["status"] == "degraded"
     # The ledger was neither read for keys nor written.
     assert StateStore(cfg.meta_root).get_outstanding_keys("daily_bars") == before

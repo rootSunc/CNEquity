@@ -177,7 +177,7 @@ def dataset_attempt(
                 ORDER BY r.started_at DESC, r.run_id DESC,
                     CASE d.status
                         WHEN 'failed' THEN 5 WHEN 'blocked' THEN 4
-                        WHEN 'degraded' THEN 3 WHEN 'warning' THEN 2
+                        WHEN 'degraded' THEN 3
                         WHEN 'success' THEN 1 ELSE 0
                     END DESC
                 LIMIT 1

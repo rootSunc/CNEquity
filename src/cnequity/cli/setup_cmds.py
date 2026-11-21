@@ -508,7 +508,9 @@ def init(
     result_path = save_init_result(
         log_path.parent if log_path is not None else cfg.data_root / "logs", result
     )
-    exit_code = _run_status_exit_code(str(result.get("status", "failed")))
+    exit_code = _run_status_exit_code(
+        str(result.get("status", "failed")), result.get("reason_code")
+    )
     if exit_code and result.get("lake_usable"):
         # Bars are published; what is owed resumes with the next `cne init`.
         exit_code = 0

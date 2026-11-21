@@ -31,10 +31,10 @@ def test_warning_batch_is_retryable_and_not_success(tmp_path, monkeypatch):
 
     result = engine._run_step("trading_status", date(2024, 6, 28), run_id, {})
 
-    assert result["status"] == "warning"
+    assert result["status"] == "degraded"
     retryable = engine.manifest.get_retryable_batches(run_id)
     assert len(retryable) == 1
-    assert retryable[0]["status"] == "warning"
+    assert retryable[0]["status"] == "degraded"
     assert engine.manifest.incomplete_batch_count(run_id) == 1
     assert engine.manifest.incomplete_batch_counts_by_dataset(run_id) == {"trading_status": 1}
 
@@ -59,7 +59,7 @@ def test_partial_failure_fields_are_promoted_to_warning(tmp_path, monkeypatch):
 
     result = engine._run_step("trade_ticks", date(2024, 6, 28), run_id, {})
 
-    assert result["status"] == "warning"
+    assert result["status"] == "degraded"
     assert engine.manifest.incomplete_batch_counts_by_dataset(run_id) == {"trade_ticks": 1}
 
 
@@ -80,7 +80,7 @@ def test_incomplete_completion_flags_are_promoted_to_warning(tmp_path, monkeypat
 
     result = engine._run_step("trading_status", date(2024, 6, 28), run_id, {})
 
-    assert result["status"] == "warning"
+    assert result["status"] == "degraded"
     assert engine.manifest.incomplete_batch_counts_by_dataset(run_id) == {"trading_status": 1}
 
 

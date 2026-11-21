@@ -73,18 +73,22 @@ def _group_failures(cfg, session) -> tuple[dict[str, str], set[str]]:
     path = Path(cfg.manifest_path)
     if not path.exists():
         return {}, set()
-    query = (
-        "SELECT job_name, status FROM ingestion_runs "
-        "WHERE job_name LIKE 'daily:%' AND json_extract(metadata_json, '$.trade_date') = ? "
-        "ORDER BY started_at"
-    )
-    latest: dict[str, str] = {}
+    latest: dict[str, tuple[str, str | None]] = {}
     with closing(connect_readonly(path)) as conn:
-        for job_name, status in conn.execute(query, (session.isoformat(),)):
+        # A manifest the current release has not opened yet has no reason column.
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(ingestion_runs)")}
+        reason = "reason_code" if "reason_code" in columns else "NULL"
+        query = (
+            f"SELECT job_name, status, {reason} FROM ingestion_runs "
+            "WHERE job_name LIKE 'daily:%' AND json_extract(metadata_json, '$.trade_date') = ? "
+            "ORDER BY started_at"
+        )
+        for job_name, status, why in conn.execute(query, (session.isoformat(),)):
             group = job_name.removeprefix("daily:")
             if group in cfg.schedule_groups:
-                latest[group] = str(status)
-    return {g: s for g, s in latest.items() if execution_exit_code(s)}, set(latest)
+                latest[group] = (str(status), why)
+    failing = {g: s for g, (s, why) in latest.items() if execution_exit_code(s, why)}
+    return failing, set(latest)
 
 
 def _streak_path(cfg, group: str) -> Path:

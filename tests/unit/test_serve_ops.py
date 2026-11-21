@@ -292,7 +292,7 @@ def test_a_stub_command_reports_success_partial_failure_and_findings(config, mon
     partial = _launch(client, headers, _preview(client, headers, "daily.full"))
     assert partial["state"] == "partial", partial
     assert partial["runs"]
-    assert partial["runs"][0]["status"] == "warning"
+    assert partial["runs"][0]["status"] == "degraded"
     stored = Manifest(config.manifest_path).get_run(partial["runs"][0]["run_id"])
     assert json.loads(stored["metadata_json"])["launch"]["id"] == partial["job_id"]
     listed = client.get("/api/runs?limit=10").json()

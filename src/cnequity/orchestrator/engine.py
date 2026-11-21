@@ -50,10 +50,12 @@ from cnequity.orchestrator.outcomes import (
     COMPLETION_FLAGS,
     PARTIAL_FAILURE_KEYS,
     SOURCE_LIMIT_REASONS,
+    STEP_STATUSES,
     CapabilityLimitError,
     InputUnavailableError,
     execution_settled,
     result_is_usable,
+    status_word,
     step_outcome,
 )
 from cnequity.orchestrator.registry import get_step, receipt_dataset
@@ -74,7 +76,7 @@ logger = logging.getLogger(__name__)
 # Step outcomes as the terminal names them; the log file keeps these words.
 STEP_STATUS_WORDS = (
     NP_("step status", "success"),
-    NP_("step status", "warning"),
+    NP_("step status", "degraded"),
     NP_("step status", "failed"),
     NP_("step status", "skipped"),
 )
@@ -245,10 +247,11 @@ class JobEngine:
                 job_name,
                 {"trade_date": trade_date.isoformat(), "backfill": backfill},
             )
-            self.manifest.finish_run(skip_run_id, "skipped_non_trading_day")
+            self.manifest.finish_run(skip_run_id, "skipped", reason_code="non_trading_day")
             return {
                 "run_id": skip_run_id,
-                "status": "skipped_non_trading_day",
+                "status": "skipped",
+                "reason_code": "non_trading_day",
                 "trade_date": trade_date.isoformat(),
             }
 
@@ -354,9 +357,7 @@ class JobEngine:
                 if had_error:
                     fallback_status = "failed"
                 elif had_warning:
-                    # Step-level ``warning`` remains the retry/batch spelling;
-                    # the public run contract calls this usable-but-degraded.
-                    fallback_status = "warning"
+                    fallback_status = "degraded"
                 else:
                     fallback_status = "success"
                 status = self._overall_status(run_id, fallback_status)
@@ -598,7 +599,11 @@ class JobEngine:
         error_code = type(error).__name__ if error is not None else None
         error_message = str(error) if error is not None else None
         raw_status = status
-        if status not in {"success", "warning", "failed", "skipped", "blocked", "degraded"}:
+        try:
+            status = status_word(status)
+        except ValueError:
+            status = "failed"
+        if status not in STEP_STATUSES:
             status = "failed"
             error_code = error_code or "InvalidStepStatus"
             error_message = error_message or f"invalid step status {raw_status!r}"
@@ -629,13 +634,8 @@ class JobEngine:
         if aggregate["results"]:
             return aggregate["status"]
         # Runs created before ``dataset_results`` was introduced have no
-        # logical receipts. Preserve their outcome while translating the old
-        # warning spelling to the public degraded spelling.
-        if fallback == "warning":
-            return "degraded"
-        if fallback in {"success", "failed", "degraded"}:
-            return fallback
-        return fallback
+        # logical receipts; their own outcome stands.
+        return status_word(fallback)
 
     @contextlib.contextmanager
     def _optional_job_lock(self, lock_name: str | None):
@@ -674,7 +674,7 @@ class JobEngine:
             total_written += result.get("rows_written", 0)
             step_status = result.get("status", "success")
             had_error = had_error or step_status == "failed"
-            had_warning = had_warning or step_status == "warning"
+            had_warning = had_warning or step_status == "degraded"
             updates = result.get("context_updates")
             if updates:
                 with context_lock:
@@ -770,18 +770,16 @@ class JobEngine:
                 reported.setdefault("requests", request_meter.requests)
                 if request_meter.request_retries:
                     reported.setdefault("request_retries", request_meter.request_retries)
-            step_status = out.pop("status", "success")
-            if step_status not in {
-                "success",
-                "warning",
-                "failed",
-                "skipped",
-                "blocked",
-                "degraded",
-            }:
+            # A step may still say ``warning`` (``degraded``'s old spelling).
+            returned = out.pop("status", "success")
+            try:
+                step_status = status_word(returned)
+            except ValueError:
+                raise ValueError(f"step {name} returned invalid status {returned!r}") from None
+            if step_status not in STEP_STATUSES:
                 raise ValueError(f"step {name} returned invalid status {step_status!r}")
             can_degrade = (
-                step_status in {"success", "warning", "degraded"}
+                step_status in {"success", "degraded"}
                 and step_outcome(step_status, out).execution_status == "completed"
             )
             if scope_limit:
@@ -789,7 +787,7 @@ class JobEngine:
                 out["requested_scope"] = scope_limit["requested_scope"]
                 out["effective_scope"] = scope_limit["effective_scope"]
                 if can_degrade:
-                    step_status = "warning"
+                    step_status = "degraded"
                     out["reason_code"] = "capability_limit"
                 out.setdefault("context_updates", {}).setdefault("audit_findings", []).append(
                     scope_limit
@@ -797,7 +795,7 @@ class JobEngine:
             if source_gaps:
                 out["coverage_status"] = "partial"
                 if can_degrade:
-                    step_status = "warning"
+                    step_status = "degraded"
                     out["reason_code"] = "source_scope_incomplete"
                 out.setdefault("context_updates", {}).setdefault("audit_findings", []).extend(
                     source_gaps
@@ -806,12 +804,12 @@ class JobEngine:
             if recovery and recovery.get("coverage_status") == "partial":
                 out["coverage_status"] = "partial"
                 if can_degrade:
-                    step_status = "warning"
+                    step_status = "degraded"
                     out["reason_code"] = "delisted_source_unavailable"
                 out.setdefault("context_updates", {})["init_delisted_recovery"] = recovery
             elapsed = time.perf_counter() - t0
             if step_status == "success" and _has_partial_failures(out):
-                step_status = "warning"
+                step_status = "degraded"
             step_metrics = self._step_metrics(out)
             outcome = step_outcome(
                 step_status,
@@ -820,7 +818,7 @@ class JobEngine:
             )
             out.update(outcome.to_dict())
             if step_status == "failed" and outcome.reason_code in SOURCE_LIMIT_REASONS:
-                step_status = "warning"
+                step_status = "degraded"
             request_retry_count = self._request_retry_count(step_metrics)
             if not uses_worker_batches:
                 physical_dataset = out.get("dataset")
@@ -943,7 +941,7 @@ class JobEngine:
             if outcome.execution_status == "skipped":
                 status = "skipped"
             elif outcome.reason_code in SOURCE_LIMIT_REASONS:
-                status = "warning"
+                status = "degraded"
             else:
                 status = "failed"
             return {
@@ -1133,7 +1131,7 @@ class JobEngine:
                 )
                 self.manifest.finish_run(
                     child_id,
-                    "success" if complete else "warning",
+                    "success" if complete else "degraded",
                     rows_read=result.get("rows_read", 0),
                     rows_written=result.get("rows_written", 0),
                     error_message=None if complete else "init delisted recovery incomplete",
@@ -1404,8 +1402,8 @@ class JobEngine:
             return aggregate["status"]
         if counts.get("failed"):
             return "failed"
-        if counts.get("warning"):
-            return "warning"
+        if counts.get("degraded"):
+            return "degraded"
         return "failed"
 
     def _pending_retry_payload(
@@ -1547,7 +1545,7 @@ class JobEngine:
                 total_timeout[key] += int(result.get("batch_timeout", {}).get(key, 0))
             if result.get("retried", 0):
                 retry_passes += 1
-            if result["status"] not in {"failed", "warning", "degraded"}:
+            if result["status"] not in {"failed", "degraded"}:
                 break
 
             remaining = self._retryable_batches_with_worker_budget(run_id)
@@ -1634,7 +1632,7 @@ class JobEngine:
                 settled = all(
                     execution_settled(b) for b in self.manifest.get_batches_for_run(run_id)
                 )
-                if settled or (exhausted and status in {"failed", "warning", "degraded"}):
+                if settled or (exhausted and status in {"failed", "degraded"}):
                     if auto_finalize:
                         self.manifest.finish_run(run_id, status)
                     return {
@@ -1657,7 +1655,7 @@ class JobEngine:
                 # worker failures while a non-transient failure remains in the
                 # run. Preserve that overall failure instead of relabeling it
                 # as pending merely because this pass had nothing to retry.
-                if retry_batch_ids is not None and status in {"failed", "warning", "degraded"}:
+                if retry_batch_ids is not None and status in {"failed", "degraded"}:
                     pending["status"] = status
                     pending["retry_exhausted"] = exhausted
                 return pending
@@ -2123,7 +2121,11 @@ class JobEngine:
                 run_id, trade_date, context, force=True, steps=("compact",)
             )
             phase_results.append(
-                {"phase": "phase4_partial_compact", "status": "warning", "results": compact_results}
+                {
+                    "phase": "phase4_partial_compact",
+                    "status": "degraded",
+                    "results": compact_results,
+                }
             )
 
         status = self._finalize_init_run(

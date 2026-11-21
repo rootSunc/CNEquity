@@ -231,7 +231,7 @@ def test_incomplete_delisted_ownership_blocks_compaction_and_retries(tmp_path, m
     )
     manifest = Manifest(cfg.manifest_path)
     first = manifest.get_batch(run_id, batch_id)
-    assert first["status"] == "warning"
+    assert first["status"] == "degraded"
     assert first["blocks_compaction"] == 1
 
     monkeypatch.setattr("cnequity.steps.delisted.delisted_recovery_covers", lambda *args: True)

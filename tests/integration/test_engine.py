@@ -98,7 +98,7 @@ def test_daily_job_source_outage_finishes_without_fabricated_data(config, monkey
     assert result["coverage_status"] == "partial"
     assert result["fallback"]
     fetch_results = {r["step"]: r for r in result["results"] if r["step"] == "instruments"}
-    assert fetch_results["instruments"]["status"] == "warning"
+    assert fetch_results["instruments"]["status"] == "degraded"
     # Nothing fabricated may reach staging.
     staged = list(config.staging_root.glob("instruments/**/*.parquet"))
     assert staged == []
