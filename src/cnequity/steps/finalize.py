@@ -114,6 +114,15 @@ DERIVE_INPUTS = {
 }
 
 
+def _planner_owes(config: Config, dataset: str) -> bool:
+    """Whether the planner sees a gap in *dataset*'s recent cells (its state keeps none)."""
+    from cnequity.domain.market_time import shanghai_today
+    from cnequity.quality.planned_coverage import gap_days, gap_keys
+
+    today = shanghai_today()
+    return bool(gap_days(config, dataset, today) or gap_keys(config, dataset, today))
+
+
 def _capture_derive_inputs(config: Config, dataset: str) -> dict:
     """Record immutable input identities and the available coverage evidence."""
     from cnequity.storage.revisions import RevisionStore
@@ -129,9 +138,16 @@ def _capture_derive_inputs(config: Config, dataset: str) -> dict:
         inputs[name] = {
             key: pointer.get(key) for key in ("revision", "revision_id", "content_digest")
         }
+        owed = (
+            _planner_owes(config, name)
+            if planner_only(config, name)
+            else any(
+                gaps.get(key) for key in ("missing_ranges", "missing_units", "outstanding_keys")
+            )
+        )
         inputs[name]["coverage_status"] = (
             "partial"
-            if any(gaps.get(key) for key in ("missing_ranges", "missing_units", "outstanding_keys"))
+            if owed
             or metadata.get("coverage_status") == "partial"
             or metadata.get("coverage", {}).get("status") == "partial"
             else "unknown"

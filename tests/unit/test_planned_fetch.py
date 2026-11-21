@@ -191,7 +191,7 @@ def test_compact_keeps_no_watermark_for_a_planner_only_dataset(tmp_path):
     assert StateStore(cfg.meta_root).get_date("margin_trading") == date(2025, 9, 1)
 
 
-def test_planner_only_names_known_datasets_that_are_not_derived(tmp_path):
+def test_planner_only_names_known_datasets(tmp_path):
     from cnequity.config import load_config
     from cnequity.config.bootstrap import path_for_toml
     from cnequity.config.errors import ConfigError
@@ -199,13 +199,13 @@ def test_planner_only_names_known_datasets_that_are_not_derived(tmp_path):
     path = tmp_path / "c.toml"
     data = tmp_path / "data"
     path.write_text(
-        f'[data]\nroot = "{path_for_toml(data)}"\n[datasets]\nplanner_only = ["margin_trading"]\n'
+        f'[data]\nroot = "{path_for_toml(data)}"\n[datasets]\nplanner_only = ["industry_index"]\n'
     )
-    assert load_config(path).planner_only == {"margin_trading"}
+    assert load_config(path).planner_only == {"industry_index"}
     path.write_text(
-        f'[data]\nroot = "{path_for_toml(data)}"\n[datasets]\nplanner_only = ["adj_factors"]\n'
+        f'[data]\nroot = "{path_for_toml(data)}"\n[datasets]\nplanner_only = ["nope"]\n'
     )
-    with pytest.raises(ConfigError, match="derived datasets"):
+    with pytest.raises(ConfigError, match="unknown datasets"):
         load_config(path)
 
 

@@ -931,17 +931,6 @@ def _planned(listed, key: str = "planned") -> frozenset[str]:
     return frozenset(listed)
 
 
-def _refuse_derived(names: frozenset[str]) -> None:
-    """A derived dataset decides what to compute in its derive step, not by the fetch path."""
-    from cnequity.domain.datasets import DATASETS
-
-    derived = sorted(name for name in names if DATASETS[name].derived_from)
-    if derived:
-        raise ConfigError(
-            "datasets.planner_only cannot list derived datasets yet: " + ", ".join(derived)
-        )
-
-
 def _dataset_dates(section, key: str) -> dict[str, date]:
     """``[datasets.<key>]``: dataset name to a date this lake bounds its history by."""
     from cnequity.domain.datasets import DATASETS
@@ -979,7 +968,6 @@ def load_config(path: str | Path) -> Config:
             raise ConfigError(f"datasets.history_until.{name} is before its history_from")
     planned_datasets = _planned(datasets_raw.get("planned", []))
     planner_only = _planned(datasets_raw.get("planner_only", []), "planner_only")
-    _refuse_derived(planner_only)
     _warn_renamed_keys(raw)
 
     data_root = _data_root(raw, config_path.parent)

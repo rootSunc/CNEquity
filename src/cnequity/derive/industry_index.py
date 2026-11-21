@@ -355,13 +355,14 @@ def derive_industry_index(
     change, not for routine catch-up.
     """
     from cnequity.domain.schemas import with_provenance
-    from cnequity.quality.verify import last_contiguous_dense_date
+    from cnequity.quality.verify import covered_through, last_contiguous_dense_date
     from cnequity.storage.parquet import write_partition_rows
     from cnequity.storage.state import StateStore
 
     state = StateStore(config.meta_root)
+    alone = "industry_index" in getattr(config, "planner_only", ())
     if start is None:
-        watermark = None if full else state.get_date("industry_index")
+        watermark = None if full else covered_through(config, "industry_index")
         start = (
             date(2020, 1, 1) if watermark is None else date.fromordinal(watermark.toordinal() + 1)
         )
@@ -430,7 +431,7 @@ def derive_industry_index(
     # the next incremental run starts at watermark + 1, so a raw max would make
     # a missing day permanently invisible.
     safe_watermark = last_contiguous_dense_date(config, DATASETS["industry_index"])
-    if safe_watermark is not None:
+    if safe_watermark is not None and not alone:
         state.set_date("industry_index", safe_watermark)
     return {
         "rows": frame.height,

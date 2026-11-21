@@ -576,7 +576,9 @@ def covered_through(config, dataset: str) -> date | None:
         spec = DATASETS.get(dataset)
         if spec is not None and not spec.watermark and spec.fetch_semantics == "snapshot":
             return last_published_day(config, dataset)
-        column = PARTITION_COLS.get(dataset)
+        column = PARTITION_COLS.get(dataset) or (
+            spec.partition_col or spec.query_date_col if spec is not None else None
+        )
         return watermark_date(config, dataset, column) if column else None
     from cnequity.storage.state import StateStore
 

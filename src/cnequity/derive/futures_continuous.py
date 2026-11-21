@@ -295,7 +295,8 @@ def derive_futures_continuous(config, *, output=None) -> dict:
     for stale in output.labels():
         if stale not in keep:
             output.remove(stale)
-    StateStore(config.meta_root).set_date("futures_continuous", frame["trade_date"].max())
+    if "futures_continuous" not in getattr(config, "planner_only", ()):
+        StateStore(config.meta_root).set_date("futures_continuous", frame["trade_date"].max())
     return {
         "rows": frame.height,
         "products": frame["symbol"].n_unique(),

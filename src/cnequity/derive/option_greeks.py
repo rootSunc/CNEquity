@@ -453,8 +453,9 @@ def _derive_option_greeks(
         )
     # Rewriting an earlier window must not pull the watermark back.
     latest = frame["trade_date"].max()
-    previous = state.get_date("option_greeks")
-    state.set_date("option_greeks", latest if previous is None else max(previous, latest))
+    if "option_greeks" not in getattr(config, "planner_only", ()):
+        previous = state.get_date("option_greeks")
+        state.set_date("option_greeks", latest if previous is None else max(previous, latest))
     counts = frame["status"].value_counts().sort("status")
     return {
         "rows": frame.height,
