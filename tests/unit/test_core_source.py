@@ -178,8 +178,12 @@ def test_several_requests_are_in_flight_but_their_starts_keep_their_distance():
         f"https://example.test/{i}".encode() for i in range(12) if i != 7
     ]
     assert isinstance(answers[7], FetchError) and answers[7].status == 404
-    gaps = [b - a for a, b in zip(sorted(starts), sorted(starts)[1:], strict=False)]
-    assert min(gaps) >= 0.045
+    # Starts are booked min_interval apart and none begins before its slot, so
+    # the k-th is never sooner than k intervals after the first. A thread that
+    # wakes a few ms late narrows one measured gap (42 ms seen) without the
+    # rate ever running ahead; the allowance is for the first start's wake-up.
+    starts.sort()
+    assert all(at - starts[0] >= k * 0.05 - 0.01 for k, at in enumerate(starts))
     # One at a time this is 12 x 0.25 s; four in flight finish in well under half.
     assert took < 1.2
     assert fetcher.requests == {"vendor": 12}
