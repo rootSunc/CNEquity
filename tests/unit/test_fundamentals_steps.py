@@ -581,6 +581,18 @@ def test_shareholder_programming_error_is_not_a_retryable_source_gap(cfg):
     assert not StateStore(cfg.meta_root).get_payload("share_structure").get("missing_units")
 
 
+def test_daily_top_holders_follows_notices_from_the_last_30_days(cfg, monkeypatch):
+    calls = []
+
+    def fetch(start, end, **kwargs):
+        calls.append((start, end, kwargs.get("by")))
+        return pl.DataFrame()
+
+    monkeypatch.setattr("cnequity.adapters.eastmoney.shareholders.fetch_noticed_top_holders", fetch)
+    fund.step_top_holders(cfg, date(2026, 11, 13), "run-daily", {})
+    assert calls == [(date(2026, 10, 14), date(2026, 11, 13), "notice_date")]
+
+
 def test_top_holders_quarter_slices_resume_without_reasking_completed_windows(cfg, monkeypatch):
     set_backfill(cfg, active=True, start=date(2024, 1, 1), end=date(2024, 12, 31))
     calls = []

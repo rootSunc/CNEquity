@@ -26,6 +26,7 @@
 - `cne storage catalog-retention` 报告的删除文件数改为清理前后实际减少的文件数。
 - 每周维护的元数据备份（`backups/meta-*.tar.gz`）现在包含湖目录数据库，存为 `lake/catalog.sqlite`：它记录着发布进湖目录的每个修订，此前不在备份里。用 SQLite 备份接口复制，运行中写入也能得到一致的副本；数据文件不在其中。
 - `cne storage catalog-retention --apply`（每周维护会运行）也删除写入中途崩溃留下、没有登记进湖目录的数据文件，同样等过 24 小时宽限期；只在已切换到湖目录的湖上、持湖锁时进行，输出新增 `orphans_deleted`。
+- `top_holders` 的日更不再按记录日回看 240 天。流通股东按公告日回看 30 天，全口径只取这些公告对应的记录日；回填仍按记录日分季扫描。取数时会记下每次请求、每 20 页的进度，以及每个记录日保留和因没有披露日而丢弃的行数。
 - 新迁移 `drop-generations`（`cne upgrade` 会运行，排在最后，**不可恢复**）：删除旧发布方式留下、湖目录已经取代的文件，即 `curated/` 和 `derived/` 下各数据集的目录、`meta/revisions/data` 下的代目录、`meta/revisions/<数据集>/` 下的指针和回执。先用 `cne migrate` 预览要删的目录和释放的空间。被持有的修订（`cne storage hold`、案例依赖、引用文件提到的修订号）连同回执保留，仍可按修订号读取；`curated/` 下不是数据集的目录、湖目录没有记录的数据集原样留下并列出。仍在直接读 `curated/`、`derived/` 的外部工具必须先改用 `cne storage export`。
 - 修复 `cne storage verify-catalog` 在还没有任何发布进湖目录的修订时报错（`_revisions` 表还没有摘要列）；现在返回 0 个修订。
 - 新迁移 `revision-records`（`cne upgrade` 会运行；完成前 `cne run`、`cne backfill`、`cne derive`、`cne repair --apply` 拒绝写入）：把每个已发布修订的回执记进湖目录，核对每个数据集的当前修订与指针一致后，读取修订改以湖目录为准，不再读 `meta/revisions` 下的指针和回执文件。

@@ -312,11 +312,11 @@ Historical event contradictions never block `audit_gate`, `publication_gate` or 
 | Item | Value |
 |------|-------|
 | Primary | eastmoney (`RPT_F10_EH_HOLDERS` total basis + `RPT_F10_EH_FREEHOLDERS` float basis) |
-| Group | **Not in the daily waves**. Two reports × about 110 pages × two reporting periods ≈ 440 pages, 40 times the two above; putting it in fundamentals would crowd out the whole macro_risk group. Run it separately with `cne backfill top_holders` |
+| Group | **Not in the default daily waves**. Add `top_holders` to a schedule group when it should run, or fill history with `cne backfill top_holders` |
 | Primary key | (symbol, record_date, holder_scope, holder_rank, holder_name, announce_date). **holder_name must be part of the primary key**: shareholders with the same number of shares share a rank, and deduplicating without the name would simply delete one of them |
 | Basis | One table with two bases, distinguished by `holder_scope`: `total` = top ten shareholders, `float` = top ten float shareholders. `holding_pct` has different denominators on the two sides (share of total shares vs share of float shares) and is **not directly comparable** |
 | PIT | `RPT_F10_EH_HOLDERS` has no `NOTICE_DATE`; its disclosure date is borrowed from FREEHOLDERS by (symbol, report_period); rows that cannot borrow one are **dropped** rather than padded with the period-end date |
-| Collection method | Scanned by `END_DATE` range (the total-basis report has no `NOTICE_DATE`; if the two reports were windowed on different columns, the borrowed disclosure dates would have nothing to match). The daily update looks back 240 days |
+| Collection method | A daily run scans the float report by `NOTICE_DATE` over the last 30 days, then scans the total report once per record date those notices name (the total report has no `NOTICE_DATE`; disclosure dates are still borrowed from the float rows of the same filing, rows that cannot borrow one are dropped, and previously published rows stay). A backfill still scans `END_DATE` a quarter at a time |
 | Source history floor | Currently supported from 2003. Earlier total-basis records lack a linkable disclosure date, and the reporting period is not passed off as PIT time. A backfill starting before 2003 fetches from 2003-01-01 and reports a `source_scope_incomplete` warning; one that lies entirely before 2003 is rejected. |
 | Pagination | A single period exceeds EastMoney's 100-page limit, so `keyset_column="SECUCODE"` switches anchors to page past it (see `datacenter.py`) |
 

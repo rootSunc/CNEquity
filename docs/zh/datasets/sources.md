@@ -312,11 +312,11 @@
 | 项 | 值 |
 |------|-------|
 | 主源 | eastmoney（`RPT_F10_EH_HOLDERS` 全口径 + `RPT_F10_EH_FREEHOLDERS` 流通口径） |
-| 分组 | **不在日更波次**。两张报表 × 约 110 页 × 两个报告期 ≈ 440 页，是上面两个的 40 倍；放进 fundamentals 会挤掉 macro_risk 整组。用 `cne backfill top_holders` 单独跑 |
+| 分组 | **默认不在日更波次**。需要时把 `top_holders` 加进某个调度组，或用 `cne backfill top_holders` 补历史 |
 | 主键 | (symbol, record_date, holder_scope, holder_rank, holder_name, announce_date)。**holder_name 必须进主键**：持股数相同的股东共用一个 rank，不带名字去重会把其中一家直接删掉 |
 | 口径 | 一张表两个口径，靠 `holder_scope` 区分：`total`=前十大股东，`float`=前十大流通股东。`holding_pct` 两边分母不同（占总股本 vs 占流通股），**不可直接比较** |
 | PIT | `RPT_F10_EH_HOLDERS` 没有 `NOTICE_DATE`，其披露日按 (symbol, report_period) 从 FREEHOLDERS 借；借不到的行**丢弃**而不是拿期末日期充数 |
-| 采集方式 | 按 `END_DATE` 区间扫（全口径报表没有 `NOTICE_DATE`，两张报表若按不同列开窗，借披露日就没得匹配）。日更回看 240 天 |
+| 采集方式 | 日更先按 `NOTICE_DATE` 回看 30 天扫流通口径，再对其中出现的每个记录日单独扫全口径（全口径没有 `NOTICE_DATE`，披露日仍从同一次公告的流通口径借；借不到的行丢弃，已发布的旧行保留）。回填仍按 `END_DATE` 分季整段扫描 |
 | 源端历史底 | 当前支持 2003 年起。更早的全口径记录缺少可关联的披露日期，不用报告期冒充 PIT 时间。回填起点早于 2003 年时从 2003-01-01 开始取，并报 `source_scope_incomplete` 警告；整段都早于 2003 年的回填会被拒绝。 |
 | 分页 | 单期超过 EastMoney 的 100 页上限，靠 `keyset_column="SECUCODE"` 换锚点翻过去（见 `datacenter.py`） |
 

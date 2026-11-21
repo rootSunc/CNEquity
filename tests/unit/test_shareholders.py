@@ -264,6 +264,96 @@ def test_total_scope_borrows_its_disclosure_date_from_the_float_report(monkeypat
     assert total["announce_date"].to_list() == [date(2025, 8, 23)] * 2
 
 
+def test_noticed_holders_read_the_total_report_once_per_record_date(monkeypatch):
+    """A daily run follows announcement dates, then one exact record date each."""
+    june = _holder("600519", 1, name="A", pct_field="FREE_HOLDNUM_RATIO", pct=1.0, notice=NOTICE)
+    september = _holder(
+        "000001", 1, name="B", pct_field="FREE_HOLDNUM_RATIO", pct=1.0, notice="2025-10-28 00:00:00"
+    )
+    september["END_DATE"] = "2025-09-30 00:00:00"
+    september["SECUCODE"] = "000001.SZ"
+    total_june = _holder("600519", 1, name="集团", pct_field="HOLD_NUM_RATIO", pct=50.0)
+    total_other = _holder("600000", 1, name="别人", pct_field="HOLD_NUM_RATIO", pct=10.0)
+    calls: list[tuple[str, str]] = []
+
+    def _fake(_client, report, _columns, **kwargs):
+        expr = kwargs.get("filter_expr", "")
+        calls.append((report, expr))
+        if report == sh._FREEHOLDERS_REPORT:
+            return [june, september]
+        if "2025-06-30" in expr:
+            return [total_june, total_other]
+        if "2025-09-30" in expr:
+            return []
+        raise AssertionError(expr)
+
+    monkeypatch.setattr(sh, "fetch_datacenter", _fake)
+    df = sh.fetch_noticed_top_holders(WIN_START, WIN_END, client=_Client())
+
+    assert calls[0] == (
+        sh._FREEHOLDERS_REPORT,
+        "(NOTICE_DATE>='2025-01-01')(NOTICE_DATE<='2025-12-31')",
+    )
+    assert [expr for report, expr in calls if report == sh._HOLDERS_REPORT] == [
+        "(END_DATE>='2025-06-30')(END_DATE<='2025-06-30')",
+        "(END_DATE>='2025-09-30')(END_DATE<='2025-09-30')",
+    ]
+    total = df.filter(pl.col("holder_scope") == sh.SCOPE_TOTAL)
+    assert total["symbol"].to_list() == ["600519.SH"]
+    assert total["announce_date"].to_list() == [date(2025, 8, 23)]
+    assert "600000.SH" not in df["symbol"].to_list()
+    assert set(df.filter(pl.col("holder_scope") == sh.SCOPE_FLOAT)["symbol"].to_list()) == {
+        "000001.SZ",
+        "600519.SH",
+    }
+
+
+def test_incomplete_notice_sweep_does_not_read_record_dates(monkeypatch):
+    calls = []
+
+    def page_then_fail(_client, report, _columns, **kwargs):
+        calls.append(report)
+        kwargs["on_valid_page"](
+            [_holder("600519", 1, name="A", pct_field="FREE_HOLDNUM_RATIO", pct=1.0, notice=NOTICE)]
+        )
+        raise EastMoneyDatacenterError("later page timed out")
+
+    monkeypatch.setattr(sh, "fetch_datacenter", page_then_fail)
+    progress = sh.ShareholderProgress()
+    frame = sh.fetch_noticed_top_holders(WIN_START, WIN_END, client=_Client(), progress=progress)
+    assert calls == [sh._FREEHOLDERS_REPORT]
+    assert frame.height == 1
+    assert frame["holder_scope"].to_list() == [sh.SCOPE_FLOAT]
+    assert progress.failed_report == sh._FREEHOLDERS_REPORT
+
+
+def test_a_failed_record_date_keeps_dates_already_read(monkeypatch):
+    june = _holder("600519", 1, name="A", pct_field="FREE_HOLDNUM_RATIO", pct=1.0, notice=NOTICE)
+    september = dict(june)
+    september["END_DATE"] = "2025-09-30 00:00:00"
+    total_june = _holder("600519", 1, name="集团", pct_field="HOLD_NUM_RATIO", pct=50.0)
+    calls = []
+
+    def _fake(_client, report, _columns, **kwargs):
+        calls.append(report)
+        if report == sh._FREEHOLDERS_REPORT:
+            return [june, september]
+        expr = kwargs.get("filter_expr", "")
+        if "2025-06-30" in expr:
+            return [total_june]
+        raise EastMoneyDatacenterError("2025-09-30 timed out")
+
+    monkeypatch.setattr(sh, "fetch_datacenter", _fake)
+    progress = sh.ShareholderProgress()
+    frame = sh.fetch_noticed_top_holders(WIN_START, WIN_END, client=_Client(), progress=progress)
+    assert calls == [sh._FREEHOLDERS_REPORT, sh._HOLDERS_REPORT, sh._HOLDERS_REPORT]
+    assert set(frame["holder_scope"].to_list()) == {sh.SCOPE_FLOAT, sh.SCOPE_TOTAL}
+    assert frame.filter(pl.col("holder_scope") == sh.SCOPE_TOTAL)["record_date"].to_list() == [
+        date(2025, 6, 30)
+    ]
+    assert progress.failed_report == sh._HOLDERS_REPORT
+
+
 def test_partial_float_holder_pages_do_not_start_a_second_report(monkeypatch):
     calls = []
 

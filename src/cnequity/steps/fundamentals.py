@@ -974,11 +974,6 @@ HISTORY_START = date(2001, 1, 1)
 # was broken for a week — is silent.
 DAILY_LOOKBACK_DAYS = 30
 
-# top_holders windows on the record date instead (its total-scope report has no
-# NOTICE_DATE), so its daily window has to be wide enough to still cover the
-# last period end when that period's filings arrive months later.
-TOP_HOLDERS_DAILY_LOOKBACK_DAYS = 240
-
 
 def _quarter_windows(start: date, end: date) -> list[tuple[date, date]]:
     """Stable, bounded report-date slices for large paged shareholder sweeps."""
@@ -1249,18 +1244,27 @@ def step_shareholder_counts(config: Config, trade_date: date, run_id: str, conte
 
 @register_step("top_holders", group="fundamentals", depends_on=["instruments"])
 def step_top_holders(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    from cnequity.adapters.eastmoney.shareholders import fetch_top_holders
+    from cnequity.adapters.eastmoney.shareholders import (
+        fetch_noticed_top_holders,
+        fetch_top_holders,
+    )
 
+    # Backfill walks record dates, one quarter at a time: that is how history
+    # is filled. A daily run asks which filings were announced in the last 30
+    # days and reads the total report only for those record dates. The total
+    # report has no announcement date, so it cannot be windowed on one itself.
+    if backfill_of(config).active:
+        fetch, by = fetch_top_holders, CHANGE_DATE
+    else:
+        fetch, by = fetch_noticed_top_holders, NOTICE_DATE
     return _run_shareholder_step(
         config,
         trade_date,
         run_id,
         "top_holders",
-        fetch_top_holders,
-        # Its total-scope report has no NOTICE_DATE, so the daily path windows
-        # on the record date like the backfill does — just a narrower window.
-        daily_by=CHANGE_DATE,
-        daily_lookback_days=TOP_HOLDERS_DAILY_LOOKBACK_DAYS,
+        fetch,
+        daily_by=by,
+        daily_lookback_days=DAILY_LOOKBACK_DAYS,
     )
 
 

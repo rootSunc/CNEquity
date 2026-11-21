@@ -181,6 +181,9 @@ def _rows_in_date_window(raw: list[dict], field: str, start: date, end: date) ->
     return rows
 
 
+_PAGE_LOG_EVERY = 20
+
+
 def _fetch_filtered(
     client: EastMoneyClient,
     report: str,
@@ -190,6 +193,7 @@ def _fetch_filtered(
     config: Config | None,
     archive_context: ShareholderCapture | None = None,
     progress: ShareholderProgress | None = None,
+    label: str | None = None,
 ) -> list[dict]:
     rate_limit_if_unconfigured(client, config)
     archive = None
@@ -209,14 +213,21 @@ def _fetch_filtered(
             capture_nonce=archive_context.nonce,
         )
     valid_rows: list[dict] = []
+    pages = 0
+    if label:
+        logger.info("%s: requesting", label)
 
     def _page(batch: list[dict]) -> None:
+        nonlocal pages
         valid_rows.extend(batch)
+        pages += 1
         if progress is not None:
             progress.valid_pages += 1
+        if label and (pages == 1 or pages % _PAGE_LOG_EVERY == 0):
+            logger.info("%s: page %d, %d row(s)", label, pages, len(valid_rows))
 
     try:
-        return fetch_datacenter(
+        fetched = fetch_datacenter(
             client,
             report,
             columns,
@@ -227,7 +238,7 @@ def _fetch_filtered(
             keyset_column=_KEYSET_COLUMN,
             max_retries=_SWEEP_RETRIES,
             retry_backoff_seconds=_SWEEP_BACKOFF_SECONDS,
-            on_valid_page=_page if progress is not None else None,
+            on_valid_page=_page if progress is not None or label else None,
             archive=archive,
             archive_dataset=archive_context.dataset if archive_context else None,
             archive_run_id=archive_context.run_id if archive_context else None,
@@ -246,6 +257,11 @@ def _fetch_filtered(
             exc,
         )
         return valid_rows
+    if label and pages % _PAGE_LOG_EVERY != 0 and pages != 1:
+        logger.info("%s: %d page(s), %d row(s)", label, pages, len(fetched))
+    elif label and pages == 0:
+        logger.info("%s: no rows", label)
+    return fetched
 
 
 def fetch_share_structure(
@@ -443,76 +459,8 @@ def _holder_rows(
     return rows
 
 
-def fetch_top_holders(
-    start: date,
-    end: date,
-    *,
-    by: str = CHANGE_DATE,
-    client: EastMoneyClient | None = None,
-    config: Config | None = None,
-    archive_context: ShareholderCapture | None = None,
-    progress: ShareholderProgress | None = None,
-) -> pl.DataFrame:
-    """前十大股东 + 前十大流通股东 over a record-date window, one frame.
-
-    Mostly quarter-ends but not only — 2025 Q3 has 10,749 total-scope rows dated
-    to something else (prospectuses, 权益变动), so this windows on END_DATE
-    rather than naming periods.
-
-    The window is always on END_DATE, never the announcement date: the total
-    report carries no ``NOTICE_DATE`` at all, and windowing the two reports on
-    different columns would leave total rows with no float row to borrow a
-    disclosure date from. The float report is fetched first for that reason.
-
-    *by* exists only to keep the three fetchers callable the same way; anything
-    but ``change_date`` is refused rather than silently ignored.
-    """
-    if by != CHANGE_DATE:
-        raise ValueError(
-            f"fetch_top_holders cannot window on {by!r}: {_HOLDERS_REPORT} has no NOTICE_DATE, "
-            "so the two reports would cover different rows and the disclosure-date borrow "
-            "would have nothing to match against"
-        )
-    owns = client is None
-    if client is None:
-        client = EastMoneyClient(config=config)
-    try:
-        free_raw = _fetch_filtered(
-            client,
-            _FREEHOLDERS_REPORT,
-            _FREEHOLDERS_COLUMNS,
-            _range_filter("END_DATE", start, end),
-            config=config,
-            archive_context=archive_context,
-            progress=progress,
-        )
-        total_raw = (
-            _fetch_filtered(
-                client,
-                _HOLDERS_REPORT,
-                _HOLDERS_COLUMNS,
-                _range_filter("END_DATE", start, end),
-                config=config,
-                archive_context=archive_context,
-                progress=progress,
-            )
-            if progress is None or progress.failed_report is None
-            else []
-        )
-        free_raw = _rows_in_date_window(free_raw, "END_DATE", start, end)
-        total_raw = _rows_in_date_window(total_raw, "END_DATE", start, end)
-    finally:
-        if owns:
-            client.close()
-
-    label = f"{start.isoformat()}..{end.isoformat()}"
-    free_rows = _holder_rows(
-        free_raw, scope=SCOPE_FLOAT, pct_field="FREE_HOLDNUM_RATIO", window_label=label
-    )
-    total_rows = _holder_rows(
-        total_raw, scope=SCOPE_TOTAL, pct_field="HOLD_NUM_RATIO", window_label=label
-    )
-
+def _combine_holders(free_rows: list[dict], total_rows: list[dict], label: str) -> pl.DataFrame:
+    """One frame of both scopes; total rows borrow a disclosure date or drop."""
     frames: list[pl.DataFrame] = []
     if free_rows:
         frames.append(pl.DataFrame(free_rows))
@@ -581,3 +529,201 @@ def fetch_top_holders(
             combined.height - deduped.height,
         )
     return deduped.sort(["record_date", "symbol", "holder_scope", "holder_rank"])
+
+
+def fetch_top_holders(
+    start: date,
+    end: date,
+    *,
+    by: str = CHANGE_DATE,
+    client: EastMoneyClient | None = None,
+    config: Config | None = None,
+    archive_context: ShareholderCapture | None = None,
+    progress: ShareholderProgress | None = None,
+) -> pl.DataFrame:
+    """前十大股东 + 前十大流通股东 over a record-date window, one frame.
+
+    Mostly quarter-ends but not only — 2025 Q3 has 10,749 total-scope rows dated
+    to something else (prospectuses, 权益变动), so this windows on END_DATE
+    rather than naming periods.
+
+    The window is always on END_DATE, never the announcement date: the total
+    report carries no ``NOTICE_DATE`` at all, and windowing the two reports on
+    different columns would leave total rows with no float row to borrow a
+    disclosure date from. The float report is fetched first for that reason.
+
+    *by* exists only to keep the three fetchers callable the same way; anything
+    but ``change_date`` is refused rather than silently ignored.
+    """
+    if by != CHANGE_DATE:
+        raise ValueError(
+            f"fetch_top_holders cannot window on {by!r}: {_HOLDERS_REPORT} has no NOTICE_DATE, "
+            "so the two reports would cover different rows and the disclosure-date borrow "
+            "would have nothing to match against"
+        )
+    label = f"{start.isoformat()}..{end.isoformat()}"
+    owns = client is None
+    if client is None:
+        client = EastMoneyClient(config=config)
+    try:
+        free_raw = _fetch_filtered(
+            client,
+            _FREEHOLDERS_REPORT,
+            _FREEHOLDERS_COLUMNS,
+            _range_filter("END_DATE", start, end),
+            config=config,
+            archive_context=archive_context,
+            progress=progress,
+            label=f"top_holders float {label}",
+        )
+        total_raw = (
+            _fetch_filtered(
+                client,
+                _HOLDERS_REPORT,
+                _HOLDERS_COLUMNS,
+                _range_filter("END_DATE", start, end),
+                config=config,
+                archive_context=archive_context,
+                progress=progress,
+                label=f"top_holders total {label}",
+            )
+            if progress is None or progress.failed_report is None
+            else []
+        )
+        free_raw = _rows_in_date_window(free_raw, "END_DATE", start, end)
+        total_raw = _rows_in_date_window(total_raw, "END_DATE", start, end) if total_raw else []
+    finally:
+        if owns:
+            client.close()
+
+    free_rows = _holder_rows(
+        free_raw, scope=SCOPE_FLOAT, pct_field="FREE_HOLDNUM_RATIO", window_label=label
+    )
+    total_rows = _holder_rows(
+        total_raw, scope=SCOPE_TOTAL, pct_field="HOLD_NUM_RATIO", window_label=label
+    )
+    return _combine_holders(free_rows, total_rows, label)
+
+
+def fetch_noticed_top_holders(
+    start: date,
+    end: date,
+    *,
+    by: str = NOTICE_DATE,
+    client: EastMoneyClient | None = None,
+    config: Config | None = None,
+    archive_context: ShareholderCapture | None = None,
+    progress: ShareholderProgress | None = None,
+) -> pl.DataFrame:
+    """Float holders announced in ``[start, end]``, plus the total-scope rows of those filings.
+
+    The daily path. The total report has no ``NOTICE_DATE``, so it cannot be
+    windowed on the announcement; reading every record date in a 240-day tail
+    re-fetches quarters that were published weeks ago. The float report does
+    carry ``NOTICE_DATE``. Its rows name the record dates that actually had a
+    new filing, and the total report is read once per such date. A total row
+    with no float row in this notice window has nothing to borrow a disclosure
+    date from and is dropped; rows already published for that record date stay
+    in the lake, because compact merges by primary key.
+
+    A failed notice sweep does not start any record-date read. A failed record
+    date keeps the dates already read and is reported on *progress*, so the
+    caller publishes the positive rows without treating the window as done.
+    """
+    if by != NOTICE_DATE:
+        raise ValueError(
+            f"fetch_noticed_top_holders windows on {NOTICE_DATE!r}, not {by!r}; "
+            "record-date ranges belong to fetch_top_holders"
+        )
+    notice_label = f"{start.isoformat()}..{end.isoformat()}"
+    owns = client is None
+    if client is None:
+        client = EastMoneyClient(config=config)
+    total_rows: list[dict] = []
+    try:
+        free_raw = _fetch_filtered(
+            client,
+            _FREEHOLDERS_REPORT,
+            _FREEHOLDERS_COLUMNS,
+            _range_filter("NOTICE_DATE", start, end),
+            config=config,
+            archive_context=archive_context,
+            progress=progress,
+            label=f"top_holders float notices {notice_label}",
+        )
+        if not free_raw:
+            free_rows = []
+            dates: list[date] = []
+        else:
+            free_raw = _rows_in_date_window(free_raw, "NOTICE_DATE", start, end)
+            free_rows = _holder_rows(
+                free_raw,
+                scope=SCOPE_FLOAT,
+                pct_field="FREE_HOLDNUM_RATIO",
+                window_label=f"notices {notice_label}",
+            )
+            dates = sorted({row["record_date"] for row in free_rows})
+        if progress is not None and progress.failed_report is not None:
+            logger.warning(
+                "top_holders: float notices %s incomplete; not reading record dates",
+                notice_label,
+            )
+        elif not dates:
+            logger.info("top_holders: no float notices %s", notice_label)
+        else:
+            shown = ", ".join(day.isoformat() for day in dates[:12])
+            more = f" and {len(dates) - 12} more" if len(dates) > 12 else ""
+            logger.info(
+                "top_holders: %d float row(s) noticed %s on %d record date(s): %s%s",
+                len(free_rows),
+                notice_label,
+                len(dates),
+                shown,
+                more,
+            )
+            for index, record_date in enumerate(dates, start=1):
+                child = ShareholderProgress()
+                date_label = record_date.isoformat()
+                part: list[dict] = []
+                try:
+                    part = _fetch_filtered(
+                        client,
+                        _HOLDERS_REPORT,
+                        _HOLDERS_COLUMNS,
+                        _range_filter("END_DATE", record_date, record_date),
+                        config=config,
+                        archive_context=archive_context,
+                        progress=child,
+                        label=f"top_holders total {date_label} ({index}/{len(dates)})",
+                    )
+                except (EastMoneyDatacenterError, SourceCoolingDown) as exc:
+                    child.failed_report = child.failed_report or _HOLDERS_REPORT
+                    child.failure = child.failure or str(exc)
+                if child.failed_report is not None:
+                    if progress is None:
+                        raise EastMoneyDatacenterError(child.failure or "record date failed")
+                    progress.failed_report = child.failed_report
+                    progress.failure = child.failure
+                    logger.warning(
+                        "top_holders: stopped at record date %s (%d/%d); "
+                        "later record dates are read on the next run",
+                        date_label,
+                        index,
+                        len(dates),
+                    )
+                if part:
+                    part = _rows_in_date_window(part, "END_DATE", record_date, record_date)
+                    total_rows.extend(
+                        _holder_rows(
+                            part,
+                            scope=SCOPE_TOTAL,
+                            pct_field="HOLD_NUM_RATIO",
+                            window_label=date_label,
+                        )
+                    )
+                if child.failed_report is not None:
+                    break
+    finally:
+        if owns:
+            client.close()
+    return _combine_holders(free_rows, total_rows, f"notices {notice_label}")

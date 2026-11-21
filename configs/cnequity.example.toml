@@ -657,9 +657,9 @@ parallel = true
 # after each period end, so a daily re-sweep of the two most recent periods is
 # how newly-disclosed ones get picked up.
 #
-# top_holders is deliberately NOT here: its page walk is far larger than those
-# two and can overrun the gap to the next group. Run it on its own cadence:
-# `cne backfill top_holders --start ... --end ...`.
+# top_holders is deliberately NOT here. A run reads float notices from the
+# last 30 days and the total report only for those record dates; add the step
+# to a group, or fill history with `cne backfill top_holders --start ... --end ...`.
 steps = [
   "earnings_disclosure_schedule",
   "index_constituents", "industry_members",
