@@ -53,7 +53,7 @@ from equitylake_core.catalog import (
     quote_literal,
 )
 from equitylake_core.coverage import ATTEMPT_COLUMNS, ATTEMPTS, Cell, cell_keys
-from equitylake_core.lock import exclusive
+from equitylake_core.lock import LAKE_LOCK_FILE, lake_lock
 from equitylake_core.read import load
 from equitylake_core.spec import DatasetSpec, Registry
 from equitylake_core.write import Write, WriteRejected, files_digest
@@ -63,7 +63,8 @@ REVISIONS = "_revisions"
 #: Rows a write left out, counted by reason, with a few of them as JSON.
 REJECTS = "_rejects"
 STAGING_DIR = "staging"
-LOCK_FILE = "write.lock"
+#: The lake lock (:func:`equitylake_core.lock.lake_lock`); its writable catalog holds it.
+LOCK_FILE = LAKE_LOCK_FILE
 
 _RECORD_TABLES = {
     REVISIONS: (
@@ -591,7 +592,7 @@ class LakeWrite:
                 return None
             write = Write(catalog)
             rows: dict[str, int] = {}
-            with exclusive(self.lake.root / LOCK_FILE):
+            with lake_lock(self.lake.root):
                 for dataset in plans:
                     if _head(catalog, dataset) != bases[dataset]:
                         raise WriteRejected(

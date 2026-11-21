@@ -284,9 +284,15 @@ def hints(config, spec: OpSpec, params: dict) -> list[str]:
                     "An init did not finish ({run_id}). Continuing init from the dashboard resumes it; this operation can still go ahead."
                 ).format(run_id=pending["run_id"])
             )
-    if lock_class_waits_for_compact(spec) and is_run_locked(config.meta_root, "compact"):
+    if lock_class_waits_for_compact(spec) and _lake_locked(config.meta_root):
         notes.append(_("The publish lock is held; the publish phase will queue and wait."))
     return notes
+
+
+def _lake_locked(meta_root) -> bool:
+    from cnequity.file_lock import is_locked, lake_lock_file
+
+    return is_locked(lake_lock_file(meta_root))
 
 
 def lock_class_waits_for_compact(spec: OpSpec) -> bool:

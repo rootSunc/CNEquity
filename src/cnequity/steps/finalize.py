@@ -575,11 +575,12 @@ def _sync_attempts(
 
 @register_step("compact", group="finalize", parallelizable=False)
 def step_compact(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
-    from cnequity.orchestrator.run_lock import run_lock
+    from cnequity.file_lock import lake_mutation_lock
 
-    # Compact does read-merge-write on shared curated partitions; overlapping
-    # runs (cron group + manual run) must serialize here or lose rows.
-    with run_lock(config.meta_root, "compact", blocking=True):
+    # Compact does read-merge-write on shared partitions; overlapping runs
+    # (cron group + manual run), retention and repairs serialize on the one
+    # lake lock, which every writable catalog connection also holds.
+    with lake_mutation_lock(config.meta_root, blocking=True):
         return _compact_locked(config, trade_date, run_id, context)
 
 

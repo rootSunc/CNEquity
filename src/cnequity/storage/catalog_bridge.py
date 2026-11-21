@@ -1036,17 +1036,18 @@ def catalog_retention(config, *, apply: bool) -> dict | None:
     keep = keep if isinstance(keep, int) and not isinstance(keep, bool) and keep >= 1 else 5
     registry = LifecycleStore(config.meta_root).registry() or {}
     held = set(registry.get("holds") or {})
+    from cnequity.file_lock import lake_mutation_lock
+
     orphans = 0
-    with Catalog(root) as catalog:
+    # Expiring snapshots and deleting files change the lake: the whole of it
+    # runs under the lake lock, as a writable catalog connection must.
+    with lake_mutation_lock(config.meta_root, blocking=True), Catalog(root) as catalog:
         result = apply_retention(catalog, keep=keep, held=held, apply=apply)
         switched = RevisionStore(
             config.meta_root, config.curated_root, config.derived_root, create=False
         ).publishes_to_catalog()
         if apply and switched:
-            from cnequity.file_lock import lake_mutation_lock
-
-            with lake_mutation_lock(config.meta_root, blocking=True):
-                orphans = delete_orphans(catalog)
+            orphans = delete_orphans(catalog)
     return {
         "keep_revisions": keep,
         "snapshots_kept": result.snapshots_kept,

@@ -513,10 +513,19 @@ def _hms(seconds: float) -> str:
     return f"{total}s"
 
 
-#: Relative to a lake ``meta`` directory. Archive walks that directory while
-#: holding the lock; the path is shared so the walk can skip the file it cannot
-#: re-open. On Windows the lock is mandatory, and a second handle's read fails.
-MUTATION_LOCK_RELATIVE = Path("locks") / "compact.lock"
+#: The lake lock: ``equitylake_core.lock.lake_lock`` on ``<data>/lake/write.lock``.
+#: Every writable catalog connection holds it, and so does every read-modify-write
+#: of the lake from here (compact, retention, repairs, ledger records), so no
+#: path can count itself the lake's writer without it.
+def lake_lock_root(meta_root: Path) -> Path:
+    """The lake directory beside a data root's ``meta`` directory."""
+    return Path(meta_root).parent / "lake"
+
+
+def lake_lock_file(meta_root: Path) -> Path:
+    from equitylake_core.lock import lake_lock_path
+
+    return lake_lock_path(lake_lock_root(meta_root))
 
 
 @contextlib.contextmanager
@@ -525,20 +534,45 @@ def lake_mutation_lock(
     *,
     blocking: bool = True,
     timeout: float | None = DEFAULT_LOCK_WAIT_SECONDS,
-) -> Iterator[IO]:
-    """Serialize every curated/derived read-modify-write operation.
+) -> Iterator[None]:
+    """Hold the lake lock for a read-modify-write of the lake.
 
-    The orchestrator's ``compact`` step already uses this exact lock path via
-    ``run_lock``.  Exposing the path from the low-level lock module lets
-    maintenance and derive code participate without importing the orchestrator
-    package (which would introduce a dependency cycle).
+    Re-entrant for the thread holding it (a writable catalog opened inside
+    takes the same lock). The outermost holder leaves a holder note beside
+    the lock, so a queued writer can say who it waits for.
     """
-    path = meta_root / MUTATION_LOCK_RELATIVE
-    if _held_count(path):
-        # ``run_lock(..., "compact")`` uses the same path.  Reuse that outer
-        # process-local lock; other threads/processes still contend in the
-        # kernel through ``exclusive_lock``.
-        yield None
-        return
-    with exclusive_lock(path, blocking=blocking, timeout=timeout, record_holder=True) as handle:
-        yield handle
+    from equitylake_core.lock import LockTimeout, lake_lock
+
+    root = lake_lock_root(meta_root)
+    path = lake_lock_file(meta_root)
+    queued: list[float] = []
+
+    def announce(_path: Path) -> None:
+        queued.append(time.monotonic())
+        logger.info(
+            "waiting for the lake lock — %s (up to %s)",
+            _held_by(path),
+            _hms(timeout) if timeout is not None else "indefinitely",
+        )
+
+    wait = 0.0 if not blocking else (timeout if timeout is not None else float("inf"))
+    with contextlib.ExitStack() as stack:
+        try:
+            took = stack.enter_context(
+                lake_lock(root, timeout=wait, on_wait=announce if blocking else None)
+            )
+        except LockTimeout as exc:
+            raise LockUnavailable(
+                f"{path}: timed out acquiring lock ({exc}); {_held_by(path)}"
+            ) from exc
+        if queued:
+            logger.info(
+                "acquired the lake lock after waiting %s", _hms(time.monotonic() - queued[0])
+            )
+        if took:
+            _write_holder(path)
+        try:
+            yield None
+        finally:
+            if took:
+                _clear_holder(path)

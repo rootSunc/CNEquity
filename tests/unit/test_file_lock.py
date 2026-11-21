@@ -83,14 +83,35 @@ def test_is_locked_reports_holder_state(tmp_path):
     assert is_locked(path) is False
 
 
-def test_lake_mutation_lock_shares_compact_lock_with_run_lock(tmp_path):
-    """Maintenance must contend with the orchestrator's compact lock."""
-    from cnequity.orchestrator.run_lock import RunLockError, run_lock
+def test_a_writable_catalog_and_the_mutation_lock_are_one_lock(tmp_path):
+    """Compact, retention and every writable catalog connection contend on one lock."""
+    from equitylake_core.catalog import Catalog
 
-    with lake_mutation_lock(tmp_path):
-        with pytest.raises(RunLockError):
-            with run_lock(tmp_path, "compact", blocking=False):
+    meta = tmp_path / "meta"
+    lake = file_lock.lake_lock_root(meta)
+    Catalog(lake, create=True).close()
+    taken = threading.Event()
+    release = threading.Event()
+
+    def _write():
+        with Catalog(lake):
+            taken.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=_write)
+    thread.start()
+    try:
+        assert taken.wait(10)
+        with pytest.raises(LockUnavailable):
+            with lake_mutation_lock(meta, blocking=False):
                 pass
+    finally:
+        release.set()
+        thread.join(10)
+    # The thread that holds it opens writable connections inside, as compact does.
+    with lake_mutation_lock(meta):
+        with Catalog(lake) as catalog:
+            assert not catalog.read_only
 
 
 def _hold_lock(path: str, seconds: float) -> bool:
@@ -502,9 +523,9 @@ def test_the_lake_lock_keeps_a_holder_note_only_while_held(tmp_path):
 
     from cnequity.progress import step_scope
 
-    lock = tmp_path / file_lock.MUTATION_LOCK_RELATIVE
+    lock = file_lock.lake_lock_file(tmp_path / "meta")
     note = file_lock.holder_path(lock)
-    with step_scope("compact"), lake_mutation_lock(tmp_path):
+    with step_scope("compact"), lake_mutation_lock(tmp_path / "meta"):
         record = json.loads(note.read_text(encoding="utf-8"))
         assert record["pid"] == os.getpid()
         assert record["activity"] == "compact"
@@ -532,7 +553,7 @@ def test_a_wait_names_the_thread_and_step_that_hold_the_lock(tmp_path, caplog, m
     release = threading.Event()
 
     def _hold():
-        with step_scope("derive_industry_index"), lake_mutation_lock(tmp_path):
+        with step_scope("derive_industry_index"), lake_mutation_lock(tmp_path / "meta"):
             holding.set()
             release.wait(10)
 
@@ -542,7 +563,7 @@ def test_a_wait_names_the_thread_and_step_that_hold_the_lock(tmp_path, caplog, m
         assert holding.wait(10)
         with caplog.at_level(logging.INFO, logger="cnequity.file_lock"):
             with pytest.raises(LockUnavailable) as exc:
-                with lake_mutation_lock(tmp_path, timeout=0.3):
+                with lake_mutation_lock(tmp_path / "meta", timeout=0.3):
                     pass
     finally:
         release.set()
@@ -563,7 +584,7 @@ def test_a_queued_acquire_reports_how_long_it_waited(tmp_path, caplog, monkeypat
     holding = threading.Event()
 
     def _hold():
-        with lake_mutation_lock(tmp_path):
+        with lake_mutation_lock(tmp_path / "meta"):
             holding.set()
             time.sleep(0.3)
 
@@ -571,16 +592,16 @@ def test_a_queued_acquire_reports_how_long_it_waited(tmp_path, caplog, monkeypat
     thread.start()
     assert holding.wait(10)
     with caplog.at_level(logging.INFO, logger="cnequity.file_lock"):
-        with lake_mutation_lock(tmp_path, timeout=10):
+        with lake_mutation_lock(tmp_path / "meta", timeout=10):
             pass
     thread.join(10)
-    assert any("acquired compact.lock after waiting" in r.getMessage() for r in caplog.records)
+    assert any("acquired the lake lock after waiting" in r.getMessage() for r in caplog.records)
 
 
 def test_another_process_is_named_by_pid_step_and_command(tmp_path):
-    lock = tmp_path / file_lock.MUTATION_LOCK_RELATIVE
+    lock = file_lock.lake_lock_file(tmp_path / "meta")
     with ProcessPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_hold_mutation_lock, str(tmp_path), 1.0)
+        future = pool.submit(_hold_mutation_lock, str(tmp_path / "meta"), 1.0)
         _wait_for_note(lock)
         described = file_lock.describe_holder(lock)
         child = future.result(timeout=20)
@@ -624,9 +645,9 @@ def test_a_note_that_cannot_be_written_does_not_affect_the_lock(tmp_path, monkey
         return real_write(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "write_text", _fail)
-    with lake_mutation_lock(tmp_path):
-        assert is_locked(tmp_path / file_lock.MUTATION_LOCK_RELATIVE)
-    assert not file_lock.holder_path(tmp_path / file_lock.MUTATION_LOCK_RELATIVE).exists()
+    with lake_mutation_lock(tmp_path / "meta"):
+        assert is_locked(file_lock.lake_lock_file(tmp_path / "meta"))
+    assert not file_lock.holder_path(file_lock.lake_lock_file(tmp_path / "meta")).exists()
 
 
 def test_a_busy_run_lock_names_its_holder(tmp_path):
@@ -666,7 +687,7 @@ def test_a_stalled_run_lock_names_its_holder(tmp_path, monkeypatch):
     def _hold():
         from cnequity.progress import step_scope
 
-        with step_scope("ths_official_snapshot"), lake_mutation_lock(tmp_path):
+        with step_scope("ths_official_snapshot"), run_lock_mod.run_lock(tmp_path, "compact"):
             holding.set()
             release.wait(10)
 

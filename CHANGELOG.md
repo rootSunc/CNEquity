@@ -61,6 +61,7 @@
 - `planner_only` 的数据集也能表达“只抓到一部分的一天”：来源只答了一部分（`source_scope_incomplete`）或有行被隔离时，这一天在覆盖台账里记为 `partial`，仍算欠着，之后一次干净的抓取记为 `complete` 才算补齐；原来这些日子记在 `meta/state` 的缺失日期台账里。读旧台账的地方对这类数据集改看覆盖台账。
 - `daily_bars` 和 `index_bars` 也可以列入 `planner_only`：日线的来源对某只代码某天没有返回数据时，按（日期，代码）记进覆盖台账，过了 3 天确认期不再追问；抓取失败的格子不记，下次仍会补抓。停牌推断（`trading_status` 的派生行）改为排除没有任何回答的格子。指数日线某天缺了部分指数时，这一天记为 `partial`。迁移 `attempts-ledger` 现在也把旧台账视为已回答的日线格子（不在待补键、不在缺失日期里的无数据格子，多为没有成交的 LOF 和未报停牌的停牌日）写进覆盖台账，重跑 `cne migrate --only attempts-ledger --apply` 即可。
 - `planner_only` 的基本面回补（`financial_statement_items`、`top_holders`、`shareholder_counts`、`share_structure`）续跑时不再读写 `meta/state` 的 `staged_units`/`published_units`：已发布的回补单元在 compact 发布完这个数据集的整份暂存后记进湖目录的 `_resume_units` 表，同一范围的回补 7 天内跳过它们。此前 `planner_only` 下这些单元写进状态文件后不会被提交，中断的回补续跑时会从头再问。
+- 湖只有一把写锁：`lake/write.lock`。每个可写的湖目录连接打开期间都持有它，compact、保留策略（过期快照、删旧文件、删孤儿文件全程）、修复发布和覆盖台账写入也都取这把锁，同一线程内可重入，其他线程和进程等待。原来 compact 持 `meta/locks/compact.lock`、内核提交持 `lake/write.lock`，保留策略只有删孤儿文件那一步取应用层锁，几条路径可以同时改同一个湖。派生和修复的检出改用只读连接，只在发布那一刻取锁。升级时先停掉正在跑的旧版本进程，新旧版本不认对方的锁。
 
 ## [0.24.0] — 2026-11-13 · 最低要求升到 Python 3.11 与 DuckDB 2.0，新增实验性的湖目录
 

@@ -29,6 +29,7 @@ from typing import Any
 import duckdb
 
 from equitylake_core.extensions import ensure_extensions
+from equitylake_core.lock import LAKE_LOCK_TIMEOUT, lake_lock
 
 CATALOG_FILE = "catalog.sqlite"
 DATA_DIR = "data"
@@ -151,11 +152,31 @@ class Catalog:
         temp_directory: str | Path | None = None,
         extension_dir: str | Path | None = None,
         extension_mirror: str | None = None,
+        lock_timeout: float = LAKE_LOCK_TIMEOUT,
     ):
         if create and read_only:
             raise ValueError("a read-only catalog cannot be created")
         self.root = Path(root).expanduser().resolve()
         self.read_only = read_only
+        # A writer holds the lake's one lock for as long as it is open.
+        self._lock = None
+        if not read_only:
+            self._lock = lake_lock(self.root, timeout=lock_timeout)
+            self._lock.__enter__()
+        try:
+            self._open(
+                create=create,
+                memory_limit=memory_limit,
+                temp_directory=temp_directory,
+                extension_dir=extension_dir,
+                extension_mirror=extension_mirror,
+            )
+        except BaseException:
+            self._release()
+            raise
+
+    def _open(self, *, create, memory_limit, temp_directory, extension_dir, extension_mirror):
+        read_only = self.read_only
         link = self.root / DATA_LINK
         #: True for a copy of another lake's catalog that reads that lake's files.
         self.borrows_data = link.is_file()
@@ -204,7 +225,15 @@ class Catalog:
             raise
 
     def close(self) -> None:
-        self.con.close()
+        try:
+            self.con.close()
+        finally:
+            self._release()
+
+    def _release(self) -> None:
+        lock, self._lock = self._lock, None
+        if lock is not None:
+            lock.__exit__(None, None, None)
 
     def __enter__(self) -> Catalog:
         return self

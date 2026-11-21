@@ -560,9 +560,15 @@ class LakeWrite:
         self.root = Path(config.staging_root) / CHECKOUT_DIR / run_id
         self.store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         root = lake_root(config)
-        # The first write to a lake that publishes into its catalog creates it.
-        self.catalog = Catalog(root, create=True, memory_limit="4GB", temp_directory=root / "tmp")
-        prepare_record_tables(self.catalog)
+        if not (root / CATALOG_FILE).exists():
+            # The first write to a lake that publishes into its catalog creates it.
+            with Catalog(root, create=True) as created:
+                prepare_record_tables(created)
+        # Checkouts only read: the lake lock is taken at publish, not for the
+        # whole of a derive or a compact's merge.
+        self.catalog = Catalog(
+            root, read_only=True, memory_limit="4GB", temp_directory=root / "tmp"
+        )
         self._checkouts: dict[str, Checkout] = {}
         # Files placed in the lake for a rehearsal on a copy of its catalog.
         self._rehearsed: list[Path] = []
@@ -672,8 +678,11 @@ class LakeWrite:
         changes = self._changes(datasets)
         if not changes:
             return {}
+        root = lake_root(self.config)
         with lake_mutation_lock(self.config.meta_root, blocking=True):
-            return self._commit(self.catalog, self.store, changes, datasets, message, advance=True)
+            with Catalog(root, memory_limit="4GB", temp_directory=root / "tmp") as catalog:
+                prepare_record_tables(catalog)
+                return self._commit(catalog, self.store, changes, datasets, message, advance=True)
 
     def rehearse(
         self, config, datasets: dict[str, DatasetPublish], *, message: str | None = None
