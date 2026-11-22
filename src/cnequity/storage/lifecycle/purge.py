@@ -119,7 +119,8 @@ def prepare_selected(store, report: dict, object_ids: list[str]) -> dict:
                     "retained, or has no receipt."
                 ).format(oid=oid)
             )
-        verify_content(store, obj, store.meta / obj["path"])
+        if obj.get("storage") != "catalog":
+            verify_content(store, obj, store.meta / obj["path"])
         selected.append(obj)
     report["purge_ids"] = [o["object_id"] for o in selected]
     report["logical_bytes_to_purge"] = sum(o["logical_bytes"] for o in selected)
@@ -188,13 +189,17 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
         removed_from_source = set()
         for obj in selected:
             oid = obj["object_id"]
-            source = store.meta / obj["path"]
-            target = trash / digest(oid)
             state = journal["items"].get(oid)
-            _reject_symlink_path(source)
-            _reject_symlink_path(target)
             if state not in (None, "moving", "deleting", "deleted"):
                 raise LifecycleError("Invalid purge item state")
+            if obj.get("storage") == "catalog":
+                if state == "deleted":
+                    removed_from_source.add(oid)
+                continue
+            source = store.meta / obj["path"]
+            target = trash / digest(oid)
+            _reject_symlink_path(source)
+            _reject_symlink_path(target)
             if target.exists():
                 if source.exists() or state not in ("moving", "deleting"):
                     raise LifecycleError("Conflicting quarantine/source state")
@@ -234,7 +239,9 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
             raise LifecycleError("Purge plan is stale; protections or contents changed")
         # A plan of the retired mark-and-wait phase selected generations with
         # no protection at all, so the same check covers it.
-        for obj in selected:
+        legacy_selected = [o for o in selected if o.get("storage") != "catalog"]
+        catalog_selected = [o for o in selected if o.get("storage") == "catalog"]
+        for obj in legacy_selected:
             if not explicit_deletable(obj):
                 raise LifecycleError(
                     _("Cannot delete {oid}: its protection has changed.").format(
@@ -243,12 +250,22 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
                 )
             if obj["object_id"] not in removed_from_source:
                 verify_content(store, obj, store.meta / obj["path"])
+        for obj in catalog_selected:
+            if not explicit_deletable(obj):
+                raise LifecycleError(
+                    _("Cannot delete {oid}: its protection has changed.").format(
+                        oid=obj["object_id"]
+                    )
+                )
         # All candidates are validated before the first destructive operation.
-        trash.mkdir(parents=True, exist_ok=True)
-        if trash.stat().st_dev != store.meta.stat().st_dev:
-            raise LifecycleError("Quarantine must be on the same filesystem")
-        if any(o["directory_identity"][0] != trash.stat().st_dev for o in selected):
-            raise LifecycleError("All selected generations must share the quarantine filesystem")
+        if legacy_selected:
+            trash.mkdir(parents=True, exist_ok=True)
+            if trash.stat().st_dev != store.meta.stat().st_dev:
+                raise LifecycleError("Quarantine must be on the same filesystem")
+            if any(o["directory_identity"][0] != trash.stat().st_dev for o in legacy_selected):
+                raise LifecycleError(
+                    "All selected generations must share the quarantine filesystem"
+                )
 
         def save() -> None:
             _reject_symlink_path(event_path)
@@ -256,7 +273,7 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
 
         save()
         try:
-            for obj in selected:
+            for obj in legacy_selected:
                 oid = obj["object_id"]
                 source, target = store.meta / obj["path"], trash / digest(oid)
                 if journal["items"].get(oid) == "deleted":
@@ -270,6 +287,41 @@ def execute(store, plan_id: str, *, maintenance: bool, manifest: Path | None = N
                 if target.exists():
                     shutil.rmtree(target)
                 journal["items"][oid] = "deleted"
+                journal["logical_bytes_deleted"] = sum(
+                    objects[key]["logical_bytes"]
+                    for key, status in journal["items"].items()
+                    if status == "deleted"
+                )
+                save()
+            pending_catalog = [
+                obj
+                for obj in catalog_selected
+                if journal["items"].get(obj["object_id"]) != "deleted"
+            ]
+            if pending_catalog:
+                from cnequity.meta_layout import LAKE_DIR
+                from cnequity.storage.catalog_bridge import FILE_GRACE_HOURS
+                from equitylake_core.catalog import ALIAS, Catalog
+                from equitylake_core.lock import lake_files
+
+                lake_dir = store.meta.parent / LAKE_DIR
+                for obj in pending_catalog:
+                    journal["items"][obj["object_id"]] = "deleting"
+                save()
+                snapshots = sorted({int(obj["snapshot"]) for obj in pending_catalog})
+                with lake_files(lake_dir, shared=False, timeout=0), Catalog(lake_dir) as catalog:
+                    versions = "[" + ", ".join(map(str, snapshots)) + "]"
+                    catalog.execute(
+                        f"CALL ducklake_expire_snapshots('{ALIAS}', versions => {versions})"
+                    )
+                    catalog.con.abort()
+                    catalog.execute(
+                        f"CALL ducklake_cleanup_old_files('{ALIAS}', "
+                        f"older_than => now() - INTERVAL ({int(FILE_GRACE_HOURS)}) HOUR)"
+                    )
+                    catalog.con.abort()
+                for obj in pending_catalog:
+                    journal["items"][obj["object_id"]] = "deleted"
                 journal["logical_bytes_deleted"] = sum(
                     objects[key]["logical_bytes"]
                     for key, status in journal["items"].items()

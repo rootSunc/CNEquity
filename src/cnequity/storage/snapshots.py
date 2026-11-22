@@ -1083,6 +1083,7 @@ class SnapshotStore:
                 )
             # A dataset's coverage is the lake catalog's ledger, which the
             # snapshot carries; its state is the revision it holds.
+            self._capture_catalog_ledger(temp, selected, records)
             dataset_states = {dataset: {} for dataset in selected}
             from cnequity.storage.lake_write import export_tree, published_layout
 
@@ -1903,14 +1904,15 @@ class SnapshotStore:
                 report(index)
             meta = temp / "meta"
             meta.mkdir(parents=True, exist_ok=True)
-            for dataset, state in manifest.get("dataset_states", {}).items():
-                if state:
-                    write_json_atomic(
-                        meta / "state" / f"{dataset}.json",
-                        state,
-                        indent=2,
-                        ensure_ascii=False,
-                    )
+            if not current:
+                for dataset, state in manifest.get("dataset_states", {}).items():
+                    if state:
+                        write_json_atomic(
+                            meta / "state" / f"{dataset}.json",
+                            state,
+                            indent=2,
+                            ensure_ascii=False,
+                        )
             self._rebuild_runtime_state(temp, manifest, data_root=temp / landing)
             if current:
                 self._start_restored_lake(temp, manifest)
@@ -1999,7 +2001,84 @@ class SnapshotStore:
                     identity=identity,
                 )
             write.publish(publishes, message=f"restore snapshot {manifest.get('name')}")
+        self._restore_catalog_ledger(config, target)
         shutil.rmtree(landing, ignore_errors=True)
+
+    def _capture_catalog_ledger(
+        self, temp: Path, selected: list[str], records: list[SnapshotFile]
+    ) -> None:
+        """Export the catalog's coverage ledger (``_attempts`` and ``_resume_units``)."""
+        import polars as pl
+
+        from cnequity.storage.catalog_bridge import lake_root
+        from cnequity.storage.resume_units import TABLE as RESUME_UNITS_TABLE
+        from equitylake_core import coverage as cov
+        from equitylake_core.catalog import CATALOG_FILE, Catalog
+        from equitylake_core.lock import lake_read
+
+        root = lake_root(self.config)
+        if not (root / CATALOG_FILE).is_file():
+            return
+        ledger_dir = temp / "meta" / "catalog_ledger"
+        with lake_read(root), Catalog(root, read_only=True) as catalog:
+            for table in (cov.ATTEMPTS, RESUME_UNITS_TABLE):
+                if not catalog.has_table(table):
+                    continue
+                frame = catalog.records(table)
+                if frame.is_empty():
+                    continue
+                if "dataset" in frame.columns:
+                    frame = frame.filter(pl.col("dataset").is_in(selected))
+                if frame.is_empty():
+                    continue
+                ledger_dir.mkdir(parents=True, exist_ok=True)
+                stored = ledger_dir / f"{table}.parquet"
+                frame.write_parquet(stored, compression="zstd")
+                records.append(
+                    SnapshotFile(
+                        dataset=selected[0],
+                        layer="meta",
+                        path=stored.relative_to(temp).as_posix(),
+                        size_bytes=stored.stat().st_size,
+                        sha256=_sha256(stored),
+                    )
+                )
+
+    def _restore_catalog_ledger(self, config: Config, target: Path) -> None:
+        """Restore exported ``_attempts`` and ``_resume_units`` into the new lake's catalog."""
+        import polars as pl
+
+        from cnequity.storage.catalog_bridge import lake_root
+        from cnequity.storage.resume_units import TABLE as RESUME_UNITS_TABLE
+        from cnequity.storage.resume_units import _prepare as prepare_resume_units
+        from equitylake_core import coverage as cov
+        from equitylake_core.catalog import Catalog
+        from equitylake_core.write import Write
+
+        ledger_dir = target / "meta" / "catalog_ledger"
+        if not ledger_dir.is_dir():
+            return
+        attempts_path = ledger_dir / f"{cov.ATTEMPTS}.parquet"
+        resume_path = ledger_dir / f"{RESUME_UNITS_TABLE}.parquet"
+        if attempts_path.is_file() or resume_path.is_file():
+            with Catalog(lake_root(config), create=True) as catalog:
+                write = Write(catalog)
+                wrote = False
+                if attempts_path.is_file():
+                    frame = pl.read_parquet(attempts_path)
+                    if not frame.is_empty():
+                        cov.prepare(catalog)
+                        write.record_frame(cov.ATTEMPTS, frame)
+                        wrote = True
+                if resume_path.is_file():
+                    frame = pl.read_parquet(resume_path)
+                    if not frame.is_empty():
+                        prepare_resume_units(catalog)
+                        write.record_frame(RESUME_UNITS_TABLE, frame)
+                        wrote = True
+                if wrote:
+                    write.commit(message="restore snapshot ledger")
+        shutil.rmtree(ledger_dir, ignore_errors=True)
 
     def _upgrade_restored(self, target: Path) -> None:
         """Move a restored pre-0.25 lake onto its catalog, as `cne upgrade` would.

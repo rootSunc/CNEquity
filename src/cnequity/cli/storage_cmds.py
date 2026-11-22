@@ -229,17 +229,21 @@ def verify_catalog(config_path: str, dataset: str | None):
     from cnequity.storage.catalog_bridge import lake_root
     from cnequity.storage.lake_write import verify_revisions
     from equitylake_core.catalog import CATALOG_FILE, Catalog
+    from equitylake_core.lock import lake_read
 
     config = _cfg(config_path)
     attach_log_file(config, "storage-verify-catalog")
     root = lake_root(config)
     if not (root / CATALOG_FILE).exists():
         raise click.ClickException(_("This lake has no lake catalog."))
-    with Catalog(
-        root,
-        read_only=True,
-        **resources_for(config, "maintenance").options(scratch=root / "tmp"),
-    ) as catalog:
+    with (
+        lake_read(root),
+        Catalog(
+            root,
+            read_only=True,
+            **resources_for(config, "maintenance").options(scratch=root / "tmp"),
+        ) as catalog,
+    ):
         checks = verify_revisions(catalog, dataset)
     counts: dict[str, int] = {}
     for check in checks:

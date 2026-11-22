@@ -13,8 +13,11 @@ what ``cne upgrade`` runs instead:
   records each one, so a run that stops can simply be started again.
 
 The data itself is never copied by the upgrade: generations stay where they
-are, and their files are linked into the lake. Until the first publish after
-the upgrade, going back means restoring the backup.
+are while their files are linked into the lake, and ``drop-generations`` then
+removes the retired ``curated/``, ``derived/`` and ``meta/revisions/data``
+trees once verified. :func:`back_up` saves the pre-upgrade pointers, receipts
+and catalog database; once ``drop-generations`` runs, rolling back to an
+earlier release requires a full copy of ``data_root`` taken beforehand.
 """
 
 from __future__ import annotations
@@ -56,9 +59,13 @@ def _tree_bytes(root: Path) -> int:
 
 def _can_link(folder: Path) -> bool:
     """Whether a file under *folder* can be hard-linked there (same volume, a filesystem that links)."""
-    folder.mkdir(parents=True, exist_ok=True)
-    source = folder / f".link-probe-{os.getpid()}"
-    target = folder / f".link-probe-{os.getpid()}-2"
+    probe_dir = folder
+    while not probe_dir.is_dir() and probe_dir.parent != probe_dir:
+        probe_dir = probe_dir.parent
+    if not probe_dir.is_dir():
+        return False
+    source = probe_dir / f".link-probe-{os.getpid()}"
+    target = probe_dir / f".link-probe-{os.getpid()}-2"
     try:
         source.write_bytes(b"")
         os.link(source, target)
@@ -175,11 +182,11 @@ def run(config, progress: Callable[[str, str, str], None] | None = None) -> dict
     are not repeated when the upgrade is started again.
     """
     from cnequity.storage.catalog_bridge import lake_root
-    from cnequity.storage.catalog_migration import migrate_to_catalog
+    from cnequity.storage.catalog_migration import migrate_to_catalog, upgrade_in_progress
     from cnequity.storage.migrations import affected, owed, record
     from equitylake_core.lock import lake_maintenance
 
-    with lake_maintenance(lake_root(config)):
+    with lake_maintenance(lake_root(config)), upgrade_in_progress():
         results: list[dict] = []
         for migration in owed(config):
             started = datetime.now(timezone.utc)

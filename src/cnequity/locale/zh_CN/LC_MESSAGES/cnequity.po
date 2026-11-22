@@ -2520,6 +2520,11 @@ msgstr "删除落在证券上市窗口之外的 trading_status 行"
 msgid "Drop zero-volume daily bars dated after a security's delisting"
 msgstr "删除退市日之后的零成交量日线"
 
+#: cnequity/diagnostics/report.py
+#, python-format
+msgid "DuckDB catalog extensions not installed locally yet: %s"
+msgstr "DuckDB 湖目录扩展尚未在本地安装：%s"
+
 #: cnequity/ops/settings.py
 msgid "EastMoney"
 msgstr "东财"
@@ -6000,6 +6005,10 @@ msgstr "密钥须为 8–512 个可见字符，不能含空格。"
 #: cnequity/diagnostics/source_health.py
 msgid "The kline response has no data field"
 msgstr "kline 响应里没有 data 字段"
+
+#: cnequity/diagnostics/report.py
+msgid "The lake catalog downloads these DuckDB extensions on first publish. If the official DuckDB extension repository is unreachable from your network, first publish or upgrade will fail."
+msgstr "湖目录会在首次发布时下载这些 DuckDB 扩展。若当前网络无法访问 DuckDB 官方扩展源，首次发布或升级将会失败。"
 
 #: cnequity/ops/settings.py
 msgid "The local environment variable CNE_PUSH2_PAUSED is on, so turning off the pause in config has no effect; push2 still sends no requests."

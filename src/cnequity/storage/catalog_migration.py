@@ -19,6 +19,8 @@ comparing it too.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 from cnequity.config.resources import resources_for
@@ -37,6 +39,18 @@ from cnequity.storage.lake_record import LakeMigrationRequired
 from cnequity.storage.revisions import STORAGE_CATALOG, RevisionStore
 from equitylake_core.catalog import CATALOG_FILE, Catalog
 
+_UPGRADE_IN_PROGRESS: ContextVar[bool] = ContextVar("cne_upgrade_in_progress", default=False)
+
+
+@contextmanager
+def upgrade_in_progress():
+    """Allow mid-upgrade repair migrations to write while `cne upgrade` is running."""
+    token = _UPGRADE_IN_PROGRESS.set(True)
+    try:
+        yield
+    finally:
+        _UPGRADE_IN_PROGRESS.reset(token)
+
 
 class CatalogMigrationError(RuntimeError):
     """The lake was not switched; the catalog may hold copies, which a rerun reuses."""
@@ -54,13 +68,30 @@ def require_catalog_lake(config) -> None:
     if store.publishes_to_catalog():
         from cnequity.storage.revision_records import enabled
 
-        if enabled(config.meta_root):
-            return
-        raise LakeMigrationRequired(
-            "this lake keeps revision receipts its catalog does not record yet, and the catalog "
-            "is where a publish records its revision; run `cne upgrade` to see what importing "
-            "them does and `cne upgrade --apply` to do it, then run this again"
-        )
+        if not enabled(config.meta_root):
+            raise LakeMigrationRequired(
+                "this lake keeps revision receipts its catalog does not record yet, and the catalog "
+                "is where a publish records its revision; run `cne upgrade` to see what importing "
+                "them does and `cne upgrade --apply` to do it, then run this again"
+            )
+        if not _UPGRADE_IN_PROGRESS.get():
+            from cnequity.storage.lake_record import _parse, read_lake
+
+            record = read_lake(config)
+            created = record.get("created_with")
+            done = record.get("migrations") or {}
+            started_pre_025_upgrade = (
+                created is not None and _parse(created) < _parse("0.25.0")
+            ) or (created is None and "lake-catalog" in done)
+            required = {"attempts-ledger", "meta-layout"}
+            missing = sorted(required - set(done))
+            if started_pre_025_upgrade and missing:
+                raise LakeMigrationRequired(
+                    "this lake's 0.25.0 upgrade did not finish "
+                    f"(missing {', '.join(missing)}); run `cne upgrade --apply` "
+                    "to complete it before writing to the lake"
+                )
+        return
     if not _holds_data(config):
         from cnequity.storage.lake_record import start_on_catalog
 

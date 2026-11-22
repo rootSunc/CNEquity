@@ -519,8 +519,21 @@ class LifecycleStore:
         if not reason.strip():
             raise LifecycleError("A hold requires a reason")
         with lake_mutation_lock(self.meta):
-            value = self.registry(required=True)
-            assert value is not None
+            value = self.registry()
+            if value is None:
+                from cnequity.storage.lifecycle.snapshot import read_dependencies
+
+                restored = read_dependencies(self.meta)
+                inherited = restored["protection"] if restored else {}
+                value = {
+                    "schema_version": 1,
+                    "lake_id": uuid.uuid4().hex,
+                    "meta_root": str(self.meta),
+                    "holds": inherited.get("holds", {}),
+                    "cases": inherited.get("cases", []),
+                    "reference_roots": [],
+                    "reference_fingerprint": digest([]),
+                }
             known = {o["object_id"] for o in self.inventory()}
             known |= {f"revision/{d}/{rid}" for d, rid in self._catalog_revisions()}
             from cnequity.storage.lifecycle.resources import resource_exists
@@ -629,95 +642,161 @@ class LifecycleStore:
             value["cases"] = list(cases.values())
             self._save(value)
 
+    def _catalog_inventory(self, seen: set[tuple[str, str]]) -> list[dict]:
+        """Live revisions stored in the lake catalog (not legacy generation directories)."""
+        from cnequity.meta_layout import LAKE_DIR
+        from cnequity.storage import revision_records
+        from cnequity.storage.catalog_bridge import revision_snapshots
+        from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog
+        from equitylake_core.lock import lake_read
+
+        if not revision_records.enabled(self.meta):
+            return []
+        lake_dir = self.meta.parent / LAKE_DIR
+        if not (lake_dir / CATALOG_FILE).is_file():
+            return []
+        records = revision_records.records_for(self.meta)
+        if records is None:
+            return []
+        with lake_read(lake_dir), Catalog(lake_dir, read_only=True) as catalog:
+            live_snaps = {
+                int(row[0])
+                for row in catalog.execute(
+                    f"SELECT snapshot_id FROM ducklake_snapshots('{ALIAS}')"
+                ).fetchall()
+            }
+            snap_by_rev: dict[tuple[str, str], int] = {}
+            for dataset, rid, snap, _unique in revision_snapshots(catalog):
+                if int(snap) in live_snaps:
+                    snap_by_rev[(dataset, rid)] = int(snap)
+        items: list[dict] = []
+        for dataset in sorted({ds for ds, _ in snap_by_rev}):
+            current = records.current.get(dataset)
+            pointer = current.pointer() if current is not None else None
+            history_by_id = {rec.revision_id: rec for rec in records.history(dataset)}
+            for (ds, rid), snap in sorted(
+                ((k, v) for k, v in snap_by_rev.items() if k[0] == dataset),
+                key=lambda kv: (
+                    history_by_id[kv[0][1]].revision if kv[0][1] in history_by_id else 0,
+                    kv[1],
+                ),
+            ):
+                if (ds, rid) in seen:
+                    continue
+                rec = history_by_id.get(rid)
+                meta = (rec.metadata or {}) if rec is not None else {}
+                items.append(
+                    {
+                        "object_id": f"revision/{ds}/{rid}",
+                        "dataset": ds,
+                        "revision_id": rid,
+                        "revision": rec.revision if rec is not None else 0,
+                        "storage": "catalog",
+                        "snapshot": snap,
+                        "path": f"lake/catalog.sqlite@{snap}",
+                        "receipt_digest": None,
+                        "directory_identity": None,
+                        "logical_bytes": int(meta.get("total_bytes") or 0),
+                        "exclusive_bytes": 0,
+                        "current": bool(current and current.revision_id == rid),
+                        "content_changed": meta.get("content_changed") is not False,
+                        "pointer_digest": digest(pointer),
+                        "blocked_reasons": [],
+                    }
+                )
+        return items
+
     def inventory(self) -> list[dict]:
         root = self.meta / "revisions"
         _reject_symlink_path(root)
-        if not root.exists():
-            return []
-        store = RevisionStore(self.meta, self.meta.parent / "curated", create=False)
-        data = root / "data"
-        _reject_symlink_path(data)
-        datasets = {p.name for p in root.iterdir() if p.name != "data" and p.is_dir()}
-        if data.exists():
-            datasets.update(p.name for p in data.iterdir() if p.is_dir())
         result = []
-        for dataset in sorted(datasets):
-            if not _TOKEN.fullmatch(dataset):
-                raise LifecycleError(f"Invalid dataset directory: {dataset}")
-            _reject_symlink_path(root / dataset)
-            generation_root = data / dataset
-            _reject_symlink_path(generation_root)
-            pointer = store.current_pointer(dataset)
-            receipts = {}
-            for path in sorted((root / dataset).glob("*.json")):
-                if path.name == "current.json":
-                    continue
-                record = _read(path)
-                rid, number = record.get("revision_id"), record.get("revision")
-                if (
-                    not isinstance(rid, str)
-                    or not _TOKEN.fullmatch(rid)
-                    or type(number) is not int
-                    or number < 1
-                    or record.get("dataset") != dataset
-                    or path.name != f"{number:08d}-{rid}.json"
-                ):
-                    raise LifecycleError(f"Invalid revision receipt: {path}")
-                # Receipts without retained bytes remain provenance only.
-                receipts[rid] = (record, sha256_file(path))
-            if not generation_root.exists():
-                continue
-            for path in sorted(generation_root.iterdir()):
-                _reject_symlink_path(path)
-                if not path.is_dir():
-                    raise LifecycleError(f"Unexpected generation entry: {path}")
-                rid = path.name
-                record, receipt_digest = receipts.get(rid, ({}, None))
-                relative = path.relative_to(self.meta).as_posix()
-                reasons = []
-                if not pointer:
-                    reasons.append("missing_current_pointer")
-                if not record:
-                    reasons.append("unreceipted_generation")
-                elif record.get("generation_path") != relative:
-                    raise LifecycleError(f"Generation path disagrees with receipt: {path}")
-                files = record.get("generation_files")
-                if not isinstance(files, list):
-                    reasons.append("missing_file_manifest")
-                    files = []
-                for item in files:
-                    file_path = Path(item["path"])
+        seen: set[tuple[str, str]] = set()
+        if root.exists():
+            store = RevisionStore(self.meta, self.meta.parent / "curated", create=False)
+            data = root / "data"
+            _reject_symlink_path(data)
+            datasets = {p.name for p in root.iterdir() if p.name != "data" and p.is_dir()}
+            if data.exists():
+                datasets.update(p.name for p in data.iterdir() if p.is_dir())
+            for dataset in sorted(datasets):
+                if not _TOKEN.fullmatch(dataset):
+                    raise LifecycleError(f"Invalid dataset directory: {dataset}")
+                _reject_symlink_path(root / dataset)
+                generation_root = data / dataset
+                _reject_symlink_path(generation_root)
+                pointer = store.current_pointer(dataset)
+                receipts = {}
+                for path in sorted((root / dataset).glob("*.json")):
+                    if path.name == "current.json":
+                        continue
+                    record = _read(path)
+                    rid, number = record.get("revision_id"), record.get("revision")
                     if (
-                        file_path.is_absolute()
-                        or ".." in file_path.parts
-                        or len(file_path.parts) < 2
-                        or file_path.parts[0] != dataset
-                        or type(item.get("size_bytes")) is not int
-                        or item["size_bytes"] < 0
-                        or not re.fullmatch(r"[0-9a-f]{64}", item.get("sha256", ""))
+                        not isinstance(rid, str)
+                        or not _TOKEN.fullmatch(rid)
+                        or type(number) is not int
+                        or number < 1
+                        or record.get("dataset") != dataset
+                        or path.name != f"{number:08d}-{rid}.json"
                     ):
-                        raise LifecycleError(f"Invalid generation file manifest: {path}")
-                info = path.stat()
-                result.append(
-                    {
-                        "object_id": f"revision/{dataset}/{rid}",
-                        "dataset": dataset,
-                        "revision_id": rid,
-                        "revision": record.get("revision", 0),
-                        "path": relative,
-                        "receipt_digest": receipt_digest,
-                        "directory_identity": [info.st_dev, info.st_ino, info.st_mtime_ns],
-                        "logical_bytes": sum(f["size_bytes"] for f in files),
-                        "exclusive_bytes": _exclusive_tree_bytes(path),
-                        "current": bool(pointer and pointer["revision_id"] == rid),
-                        # A merge that rewrote files without changing a row
-                        # says so in its receipt; see `inspect`.
-                        "content_changed": (record.get("metadata") or {}).get("content_changed")
-                        is not False,
-                        "pointer_digest": digest(pointer),
-                        "blocked_reasons": reasons,
-                    }
-                )
+                        raise LifecycleError(f"Invalid revision receipt: {path}")
+                    # Receipts without retained bytes remain provenance only.
+                    receipts[rid] = (record, sha256_file(path))
+                if not generation_root.exists():
+                    continue
+                for path in sorted(generation_root.iterdir()):
+                    _reject_symlink_path(path)
+                    if not path.is_dir():
+                        raise LifecycleError(f"Unexpected generation entry: {path}")
+                    rid = path.name
+                    record, receipt_digest = receipts.get(rid, ({}, None))
+                    relative = path.relative_to(self.meta).as_posix()
+                    reasons = []
+                    if not pointer:
+                        reasons.append("missing_current_pointer")
+                    if not record:
+                        reasons.append("unreceipted_generation")
+                    elif record.get("generation_path") != relative:
+                        raise LifecycleError(f"Generation path disagrees with receipt: {path}")
+                    files = record.get("generation_files")
+                    if not isinstance(files, list):
+                        reasons.append("missing_file_manifest")
+                        files = []
+                    for item in files:
+                        file_path = Path(item["path"])
+                        if (
+                            file_path.is_absolute()
+                            or ".." in file_path.parts
+                            or len(file_path.parts) < 2
+                            or file_path.parts[0] != dataset
+                            or type(item.get("size_bytes")) is not int
+                            or item["size_bytes"] < 0
+                            or not re.fullmatch(r"[0-9a-f]{64}", item.get("sha256", ""))
+                        ):
+                            raise LifecycleError(f"Invalid generation file manifest: {path}")
+                    info = path.stat()
+                    seen.add((dataset, rid))
+                    result.append(
+                        {
+                            "object_id": f"revision/{dataset}/{rid}",
+                            "dataset": dataset,
+                            "revision_id": rid,
+                            "revision": record.get("revision", 0),
+                            "path": relative,
+                            "receipt_digest": receipt_digest,
+                            "directory_identity": [info.st_dev, info.st_ino, info.st_mtime_ns],
+                            "logical_bytes": sum(f["size_bytes"] for f in files),
+                            "exclusive_bytes": _exclusive_tree_bytes(path),
+                            "current": bool(pointer and pointer["revision_id"] == rid),
+                            # A merge that rewrote files without changing a row
+                            # says so in its receipt; see `inspect`.
+                            "content_changed": (record.get("metadata") or {}).get("content_changed")
+                            is not False,
+                            "pointer_digest": digest(pointer),
+                            "blocked_reasons": reasons,
+                        }
+                    )
+        result.extend(self._catalog_inventory(seen))
         return result
 
     def inspect(self, *, keep: int = DEFAULT_KEEP_GENERATIONS) -> dict:
@@ -792,7 +871,10 @@ class LifecycleStore:
         report = self.inspect(keep=keep)
         candidates = [o for o in report["objects"] if not o["blocked_reasons"]]
         for obj in candidates:
-            obj["tree_signature"] = _tree_signature(self.meta / obj["path"])
+            if obj.get("storage") == "catalog":
+                obj["tree_signature"] = f"catalog-snapshot:{obj['snapshot']}"
+            else:
+                obj["tree_signature"] = _tree_signature(self.meta / obj["path"])
         report["candidate_ids"] = [o["object_id"] for o in candidates]
         report["logical_bytes_selected"] = sum(o["logical_bytes"] for o in candidates)
         return report

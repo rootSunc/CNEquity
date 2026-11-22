@@ -1082,6 +1082,8 @@ def retain_revision_generations(
                 protected.add(raw_path)
         chosen: dict[str, list[dict]] = {}
         for obj in report["objects"]:
+            if obj.get("storage") == "catalog":
+                continue
             if obj["blocked_reasons"] or obj["current"] or obj["path"] in protected:
                 continue
             relative = Path(obj["path"])
@@ -1142,6 +1144,13 @@ def apply_configured_revision_retention(config) -> dict[str, Any] | None:
 
     try:
         removed = retain_revision_generations(config.meta_root, keep=keep)
+        cat_report: dict[str, Any] | None = None
+        if RevisionStore(
+            config.meta_root, config.curated_root, config.derived_root, create=False
+        ).publishes_to_catalog():
+            from cnequity.storage.catalog_bridge import catalog_retention
+
+            cat_report = catalog_retention(config, apply=True)
     except (LifecycleError, RevisionConsistencyError, OSError, ValueError) as exc:
         logger.warning("revision retention failed: %s", exc)
         return {
@@ -1161,10 +1170,14 @@ def apply_configured_revision_retention(config) -> dict[str, Any] | None:
         }
         for item in removed
     ]
-    return {
+    out: dict[str, Any] = {
         "status": "ok",
         "keep": keep,
-        "removed": sum(len(item.removed_revision_ids) for item in removed),
+        "removed": sum(len(item.removed_revision_ids) for item in removed)
+        + (int(cat_report.get("snapshots_expired", 0)) if cat_report else 0),
         "freed_bytes": sum(item.freed_bytes for item in removed),
         "datasets": datasets,
     }
+    if cat_report is not None:
+        out["catalog"] = cat_report
+    return out

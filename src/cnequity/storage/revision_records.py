@@ -183,14 +183,17 @@ class CatalogRecords:
             # Every dataset in one query: each filtered query costs a full
             # scan of the union (~0.17 s on a real lake), and the storage
             # inventory asks for every dataset in turn.
-            rows = _query(self.root, _all_records_sql() + " ORDER BY dataset, revision")
-            for row in rows:
-                self._history.setdefault(row[0], []).append(_record(row))
+            if _has_tables(self.root, REVISIONS_TABLE, HISTORY_TABLE):
+                rows = _query(self.root, _all_records_sql() + " ORDER BY dataset, revision")
+                for row in rows:
+                    self._history.setdefault(row[0], []).append(_record(row))
             self._history_loaded = True
         return self._history.get(dataset, [])
 
     def revision_ids(self) -> set[tuple[str, str]]:
         """``(dataset, revision id)`` of every revision the catalog still holds rows for."""
+        if not _has_tables(self.root, REVISIONS_TABLE, HISTORY_TABLE):
+            return set()
         rows = _query(
             self.root,
             "SELECT dataset, revision_id FROM (" + _all_records_sql() + ") "
@@ -287,8 +290,26 @@ def _enabled(meta: Path) -> bool:
     return enabled
 
 
+def _has_tables(root: Path, *names: str) -> bool:
+    with _lock:
+        for attempt in (0, 1):
+            catalog = _readers.get(root)
+            if catalog is None:
+                catalog = _readers[root] = Catalog(root, read_only=True)
+            try:
+                return all(catalog.has_table(name) for name in names)
+            except Exception:
+                _readers.pop(root, None)
+                catalog.close()
+                if attempt:
+                    raise
+    raise AssertionError("unreachable")
+
+
 def _load_current(root: Path) -> dict[str, RevisionRecord | None]:
     """Each dataset's current revision as the catalog records it; ``None`` where it has no record."""
+    if not _has_tables(root, SYNC_TABLE, REVISIONS_TABLE, HISTORY_TABLE):
+        return {}
     columns = ", ".join(f"r.{column}" for column in _COLUMNS.split(", "))
     rows = _query(
         root,

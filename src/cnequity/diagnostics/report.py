@@ -270,12 +270,59 @@ def _check_data_root(data_root: Path, findings: list[Finding]) -> None:
         )
 
 
+def _check_duckdb_extensions(findings: list[Finding]) -> None:
+    """Report offline whether DuckDB already has the lake catalog extensions installed."""
+    import os
+
+    try:
+        import duckdb
+    except ImportError:
+        return
+    from equitylake_core.extensions import (
+        CATALOG_EXTENSIONS,
+        LOCAL_DIR_ENV,
+        MIRROR_ENV,
+        _local_file,
+    )
+
+    local_raw = os.environ.get(LOCAL_DIR_ENV)
+    local_dir = Path(local_raw).expanduser() if local_raw else None
+    missing: list[str] = []
+    with duckdb.connect(":memory:") as con:
+        for name in CATALOG_EXTENSIONS:
+            try:
+                con.execute(f"LOAD {name}")
+                continue
+            except Exception:
+                pass
+            if _local_file(name, local_dir) is not None:
+                continue
+            missing.append(name)
+    if missing:
+        findings.append(
+            Finding(
+                severity=Severity.WARN,
+                title=Message(
+                    N_("DuckDB catalog extensions not installed locally yet: %s"),
+                    ", ".join(missing),
+                ),
+                detail=N_(
+                    "The lake catalog downloads these DuckDB extensions on first publish. "
+                    "If the official DuckDB extension repository is unreachable from your network, "
+                    "first publish or upgrade will fail."
+                ),
+                fix=f"Set {LOCAL_DIR_ENV} (local .duckdb_extension directory) or {MIRROR_ENV}",
+            )
+        )
+
+
 def build_report(config=None, config_path: Path | None = None) -> Report:
     """Collect environment, package probes, and (when available) config checks."""
     statuses = probe_packages()
     findings: list[Finding] = []
 
     _check_packages(statuses, findings)
+    _check_duckdb_extensions(findings)
 
     if config is None:
         findings.append(

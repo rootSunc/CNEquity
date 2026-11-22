@@ -105,6 +105,8 @@ def _plan(config, *, refresh_holds: bool) -> dict[str, Any]:
 
     generations, kept_generations = [], []
     for obj in LifecycleStore(meta).inventory():
+        if obj.get("storage") == "catalog":
+            continue
         reasons = [r for r in obj["blocked_reasons"] if r != "missing_current_pointer"]
         if obj["revision_id"] == _BASELINE:
             # The copy of the dataset from before it had revisions: it never had a receipt.
