@@ -5,8 +5,10 @@ optional in one place: with no token (or ``[sources.tushare]`` disabled)
 ``tushare_enabled`` is false and nothing sends a request. The endpoint is
 ``[sources.tushare].api_url`` (default ``api.tushare.pro``); any server that
 speaks the same protocol works, and its rows are still Tushare's, stamped
-``tushare``. Requests go to ``{api_url}/{api_name}``, the path the official
-SDK uses and the official server also accepts.
+``tushare``. Requests POST to ``{api_url}`` itself with ``api_name`` in the
+body, the official protocol. The path form ``{api_url}/{api_name}`` answers a
+bare 404 for a valid token; a bad token is refused before that, which is why
+the path form once looked like it worked.
 
 A refusal in a 200 envelope is deterministic and raised at once: a bad token
 or a missing permission never improves on retry, and a quota or rate refusal
@@ -152,7 +154,7 @@ class TushareClient:
                 with source_request(config, SOURCE):
                     if attempt:
                         record_request_event(config, SOURCE, "retry")
-                    response = self._client.post(f"{self.url}/{api}", json=payload)
+                    response = self._client.post(self.url, json=payload)
                     record_http_response(config, SOURCE, response)
                     response.raise_for_status()
                     body = response.json()

@@ -8,6 +8,7 @@
 - **不兼容变更**：直接读 `curated/`、`derived/` 目录的外部工具请改用 `cne storage export`。升级会删除这两个目录下各数据集的文件。`[storage].publish` 不再决定发布方式（由湖自己的 `meta/storage.json` 决定），配置里保留它不会报错。
 - **不兼容变更**：快照（`cne snapshot create`）改为新格式：每个数据集只存一份当前修订的文件，修订号和修订 id 写进 manifest，不再附带指针、回执和一份代目录副本（此前湖目录里的数据集在快照里存了两份）。只能对已在湖目录上的湖建快照，旧湖先运行 `cne upgrade --apply`。`cne snapshot restore` 恢复出的是能直接写入的湖目录湖，每个数据集保留原来的修订号和修订 id，研究里按 `revision_map` 固定的读取在恢复后的湖上照样读得到。0.25.0 之前做的快照仍能校验和恢复：恢复后自动运行 `lake-catalog`、`revision-records`、`drop-generations` 三个迁移，其余欠下的迁移（有的要联网）留给 `cne upgrade`。
 - **不兼容变更**：删除增量包命令 `cne snapshot delta create`、`verify`、`apply`。它逐字节比对 `curated/` 目录并读 `meta/revisions` 下的回执，这些在湖目录上都已不存在，在任何已升级的湖上都用不了；有保留登记的湖上它本来就拒绝运行。同步一个湖改用完整快照或 `cne storage export`。
+- 修复：配置了有效 Tushare 令牌后，所有 Tushare 数据集的回补逐日返回 404、一行都写不进（[#64](https://github.com/rootSunc/CNEquity/issues/64)）。请求改为按官方协议 POST 到 `api_url` 根地址、`api_name` 放在请求体里；此前请求 `{api_url}/{api_name}`，官方服务器对有效令牌返回 404，无效令牌则在认证这一步先被拒，所以一直看起来可用。自定义 `[sources.tushare].api_url` 的兼容中继不受影响。
 - 修复：按报告期（文本列）记水位的数据集（如 `financial_statement_items`）建快照时，校验把水位日期和文本报告期直接比较，报成“水位超过数据”而拒绝建快照。
 - 新增 `cne upgrade`：把较早版本建的湖一步升级到当前版本，取代「读更新日志、按顺序跑若干命令」。`cne doctor` 发现湖还欠迁移时也指向它。`cne migrate` 保留，用于单独预览或重跑某一个迁移；`lake-catalog` 迁移排在所有迁移最前面，不再是可选。
 - 所有写入都发布进湖目录（`lake/`），存储方式为「文件即分区」：湖里的数据文件就是写入方按数据集分区产出的文件，放在 `lake/data/main/<数据集>/<分区值>/` 下，一个文件只属于一个分区。发布时只登记新写的文件、整文件删除被替换的旧文件；取出分区是把现有文件硬链接出来，不复制。一个改动的分区在 0.24.0 的实验性湖目录里要写 3 到 4 遍（取出、合并、发布门预演、正式发布），现在只在合并时写一遍，分区里没被改到的文件原样保留。

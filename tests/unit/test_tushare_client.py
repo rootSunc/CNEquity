@@ -49,7 +49,7 @@ def test_disabled_or_tokenless_source_never_builds_a_client(tmp_path):
     assert probe_permissions(Config(data_root=tmp_path), {"daily": {}}) == {}
 
 
-def test_requests_go_to_the_configured_endpoint_with_the_api_path(tmp_path):
+def test_requests_post_to_the_endpoint_with_api_name_in_the_body(tmp_path):
     seen = []
 
     def respond(request):
@@ -60,7 +60,7 @@ def test_requests_go_to_the_configured_endpoint_with_the_api_path(tmp_path):
     cfg.tushare_api_url = "https://relay.example/"
     with httpx.Client(transport=httpx.MockTransport(respond)) as http:
         frame = TushareClient(cfg, client=http).query("daily", {"trade_date": "20261030"})
-    assert seen[0][0] == "https://relay.example/daily"
+    assert seen[0][0] == "https://relay.example"
     assert seen[0][1]["api_name"] == "daily" and seen[0][1]["token"] == "tok"
     assert frame.to_dicts() == [{"ts_code": "600036.SH", "close": 43.55}]
     assert api_url(_cfg(tmp_path)) == TUSHARE_API_URL
