@@ -1007,11 +1007,12 @@ def delete_orphans(catalog: Catalog, *, grace_hours: int = FILE_GRACE_HOURS) -> 
     return catalog.delete_orphaned_files(grace_hours=grace_hours)
 
 
-def catalog_retention(config, *, apply: bool) -> dict | None:
+def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict | None:
     """Apply revision retention to the lake catalog; ``None`` for a lake without one.
 
-    Keeps ``[storage.retention].keep_generations`` revisions of every dataset,
-    like the revision store, and every revision a lifecycle hold protects.
+    Keeps ``keep`` (or ``[storage.retention].keep_generations``) revisions of
+    every dataset, like the revision store, and every revision a lifecycle hold
+    protects.
     """
     from cnequity.storage.lifecycle import LifecycleStore
     from equitylake_core.catalog import CATALOG_FILE
@@ -1019,7 +1020,7 @@ def catalog_retention(config, *, apply: bool) -> dict | None:
     root = lake_root(config)
     if not (root / CATALOG_FILE).exists():
         return None
-    keep = revision_keep(config)
+    keep = revision_keep(config, keep)
     apply = apply and keep > 0
     from cnequity.file_lock import lake_mutation_lock
 

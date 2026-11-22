@@ -975,7 +975,9 @@ def preview_revision_retention(meta_root: Path | str, *, keep: int) -> list[Gene
     store = LifecycleStore(meta_root)
     store.retention_registry()
     report = store.inspect(keep=keep)
-    candidates = [o for o in report["objects"] if not o["blocked_reasons"]]
+    candidates = [
+        o for o in report["objects"] if not o["blocked_reasons"] and o.get("storage") != "catalog"
+    ]
     results = []
     for dataset in sorted({o["dataset"] for o in candidates}):
         selected = [o for o in candidates if o["dataset"] == dataset]

@@ -2671,6 +2671,11 @@ msgstr "即使发现破坏性变更也返回退出码 0。"
 msgid "Expire old catalog snapshots and delete files past the grace period; without it, only report."
 msgstr "让湖目录过期旧快照，并删除超过宽限期的文件；不加时只报告。"
 
+#: cnequity/cli/maintain_cmds.py
+#, python-brace-format
+msgid "Expire {snapshots} historical catalog snapshots from this preview? Current data, retained revisions, and held revisions stay."
+msgstr "按这份预览让 {snapshots} 个历史湖目录快照过期？当前数据、保留的版本和被 hold 保护的版本会保留。"
+
 #: cnequity/cli/schedule_cmds.py
 msgid "Expiry preview"
 msgstr "过期预览"
@@ -4188,6 +4193,10 @@ msgstr "逐数据集的新鲜度：覆盖区间、水位，以及相对最后交
 #: cnequity/cli/maintain_cmds.py
 msgid "Per-partition detail for one dataset."
 msgstr "某一个数据集的逐分区明细。"
+
+#: cnequity/cli/repair_cmds.py
+msgid "Permanently removes retired curated/, derived/, and meta/revisions/data directories; the automatic backup saves only lake records, so copy data_root first if you need a full rollback."
+msgstr "会永久删除已退役的 curated/、derived/ 和 meta/revisions/data 目录；自动备份只保存湖记录，如需完整回滚请先自行复制 data_root。"
 
 #: cnequity/cli/setup_cmds.py
 #, python-brace-format

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import polars as pl
 import pytest
@@ -491,3 +492,173 @@ def test_redo_modes_respected_by_daily_bars_sector_bars_and_trading_status(tmp_p
         source="baostock",
     )
     assert fetched_batches == [["600001.SH"], ["600000.SH", "600001.SH"]]
+
+
+def test_attempted_breaks_same_timestamp_ties_by_snapshot_id(tmp_path):
+    same_time = datetime(2024, 6, 28, 12, 0, 0, tzinfo=UTC)
+    with Catalog(tmp_path / "lake", create=True) as catalog:
+        for run, outcome in [("r1", "partial"), ("r2", "complete"), ("r3", "empty")]:
+            cov.record(
+                catalog,
+                pl.DataFrame(
+                    [
+                        {
+                            "dataset": "daily_bars",
+                            "period": "2024-06-28",
+                            "entity": "",
+                            "run": run,
+                            "asked_at": same_time,
+                            "outcome": outcome,
+                        }
+                    ]
+                ),
+                message=run,
+            )
+            latest = cov.attempted(catalog, "daily_bars")
+            assert latest.height == 1
+            assert latest["outcome"].to_list() == [outcome]
+
+
+def test_revision_records_guards_queries_with_lake_read_and_cleans_up(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from equitylake_core.lock import lake_maintenance, lake_read
+
+    cfg = Config(data_root=tmp_path / "rev-lake")
+    init_data_layout(cfg)
+    publish_rows(cfg, "daily_bars", _bars(date(2024, 6, 28)), run_id="rr1")
+    revision_records.forget(cfg.meta_root)
+
+    entered: list[Path] = []
+
+    @contextmanager
+    def tracked_read(root):
+        entered.append(Path(root))
+        with lake_read(root):
+            yield
+
+    monkeypatch.setattr(revision_records, "lake_read", tracked_read)
+    with lake_maintenance(lake_root(cfg)):
+        recs = revision_records.records_for(cfg.meta_root)
+    assert recs is not None
+    assert recs.pointer("daily_bars") is not None
+    assert entered and all(p == lake_root(cfg).resolve() for p in entered)
+    revision_records.forget(cfg.meta_root)
+    assert lake_root(cfg).resolve() not in revision_records._readers
+
+
+def test_step_compact_folds_whole_dataset_refreshes_into_single_snapshot(tmp_path):
+    from cnequity.orchestrator.manifest import Manifest
+    from cnequity.steps.finalize import step_compact
+    from cnequity.storage import StagingWriter
+
+    cfg = Config(data_root=tmp_path / "compact-refresh")
+    init_data_layout(cfg)
+    day = date(2024, 6, 28)
+
+    # Seed the lake and prepare _attempts so we count steady-state commit snapshots cleanly.
+    publish_rows(cfg, "daily_bars", _bars(date(2024, 6, 27)), run_id="seed-run")
+    with Catalog(lake_root(cfg)) as catalog:
+        cov.prepare(catalog)
+
+    manifest = Manifest(cfg.manifest_path)
+    run_id = manifest.start_run("daily", {"trade_date": day.isoformat()})
+    manifest.record_dataset_result(run_id, "instruments", "fetch", "success", rows_written=0)
+    manifest.record_dataset_result(run_id, "daily_bars", "fetch", "success", rows_written=1)
+    StagingWriter(cfg.staging_root).write_batch("daily_bars", run_id, "b1", _bars(day))
+
+    with Catalog(lake_root(cfg), read_only=True) as catalog:
+        before_snap = catalog.snapshot()
+
+    step_compact(cfg, day, run_id, {"audit_findings": []})
+
+    with Catalog(lake_root(cfg), read_only=True) as catalog:
+        after_snap = catalog.snapshot()
+        refreshes = cov.attempted(catalog, "instruments")
+
+    assert after_snap == before_snap + 1
+    assert refreshes.height == 1
+
+    # No-op run: answers + refreshes still share a single snapshot.
+    run2 = manifest.start_run("daily", {"trade_date": date(2024, 7, 1).isoformat()})
+    manifest.record_dataset_result(run2, "sector_members", "fetch", "success", rows_written=0)
+    finding = planned_coverage.answer_finding(
+        "market_breadth", [date(2024, 7, 1)], datetime(2024, 7, 1, 12, 0, tzinfo=UTC)
+    )
+    count = planned_coverage.record_run_answers(cfg, run2, [finding])
+    assert count == 2
+    with Catalog(lake_root(cfg), read_only=True) as catalog:
+        assert catalog.snapshot() == after_snap + 1
+
+
+def test_upgrade_preview_warns_about_drop_generations_rollback(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cnequity.config.bootstrap import path_for_toml
+    from cnequity.ops import upgrade as upgrading
+
+    cfg_path = tmp_path / "cnequity.toml"
+    cfg_path.write_text(
+        f'[data]\nroot = "{path_for_toml(tmp_path / "data")}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        upgrading,
+        "plan",
+        lambda _cfg: {
+            "needed": True,
+            "ready": True,
+            "version": "0.25.0",
+            "created_with": "0.24.0",
+            "migrations": ["drop-generations"],
+            "catalog": {"to_copy": [], "to_lay_out": [], "datasets": 0},
+            "checks": [SimpleNamespace(ok=True, detail="ready")],
+        },
+    )
+    result = CliRunner().invoke(cli, ["upgrade", "--config", str(cfg_path)])
+    assert result.exit_code == 0, result.output
+    assert "drop-generations" in result.output
+    assert "curated/" in result.output and "data_root" in result.output
+
+
+def test_run_clean_previews_and_applies_catalog_retention(tmp_path, monkeypatch):
+    from cnequity.config.bootstrap import path_for_toml
+
+    cfg_path = tmp_path / "cnequity.toml"
+    data_root = tmp_path / "data"
+    cfg_path.write_text(f'[data]\nroot = "{path_for_toml(data_root)}"\n', encoding="utf-8")
+    cfg = Config(data_root=data_root)
+    init_data_layout(cfg)
+    for idx, day in enumerate((date(2024, 6, 26), date(2024, 6, 27), date(2024, 6, 28)), 1):
+        publish_rows(cfg, "daily_bars", _bars(day), run_id=f"clean-rev-{idx}")
+
+    dry = CliRunner().invoke(
+        cli,
+        [
+            "run",
+            "clean",
+            "--dry-run",
+            "--config",
+            str(cfg_path),
+            "--keep-revision-generations",
+            "1",
+        ],
+    )
+    assert dry.exit_code == 0, dry.output
+    preview = json.loads(dry.stdout)
+    assert preview["catalog_retention"] is not None
+    assert preview["catalog_retention"]["snapshots_expired"] >= 2
+
+    monkeypatch.setattr("cnequity.cli.maintain_cmds._stdin_is_tty", lambda: True)
+    applied = CliRunner().invoke(
+        cli,
+        ["run", "clean", "--config", str(cfg_path), "--keep-revision-generations", "1"],
+        input="y\n",
+    )
+    assert applied.exit_code == 0, applied.output
+    decoder = json.JSONDecoder()
+    first, offset = decoder.raw_decode(applied.stdout.lstrip())
+    second, _ = decoder.raw_decode(applied.stdout.lstrip()[offset:].lstrip())
+    assert first["catalog_retention"]["snapshots_expired"] >= 2
+    assert second["catalog_retention"]["applied"] is True
+    assert second["catalog_retention"]["snapshots_expired"] >= 2

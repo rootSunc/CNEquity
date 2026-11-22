@@ -224,6 +224,15 @@ def upgrade(config_path: str, apply: bool, no_backup: bool, as_json: bool):
                     "{layout} table(s) to lay out by partition"
                 ).format(copy=len(catalog["to_copy"]), layout=len(catalog["to_lay_out"]))
             )
+        elif name == "drop-generations":
+            say(
+                "     "
+                + _(
+                    "Permanently removes retired curated/, derived/, and meta/revisions/data "
+                    "directories; the automatic backup saves only lake records, so copy "
+                    "data_root first if you need a full rollback."
+                )
+            )
     for check in plan["checks"]:
         say(f"  [{_('ok') if check.ok else _('BLOCKED')}] {check.detail}")
     if not plan["ready"]:

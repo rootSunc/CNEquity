@@ -33,6 +33,7 @@ from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
 from cnequity.query.parquet_scan import scan_parquet_files
+from cnequity.storage.catalog_bridge import catalog_retention
 from cnequity.storage.revisions import preview_revision_retention, retain_revision_generations
 from cnequity.storage.source_snapshots import (
     DEFAULT_SNAPSHOT_RETENTION_DAYS,
@@ -607,6 +608,8 @@ def clean(
     )
     keep = revision_keep(cfg, keep_revision_generations)
     generations = preview_revision_retention(cfg.meta_root, keep=keep)
+    catalog_ret = catalog_retention(cfg, apply=False, keep=keep) if keep > 0 else None
+    catalog_snapshots = int(catalog_ret["snapshots_expired"]) if catalog_ret else 0
     reconciled: dict[str, int] | None = None
     if reconcile_runs:
         manifest = Manifest(cfg.manifest_path)
@@ -637,6 +640,7 @@ def clean(
         snapshot_run_dirs=len(snaps.removed_run_dirs),
         lock_retention_days=orphan_retention_days,
         stale_locks=stale_locks,
+        catalog_snapshots=catalog_snapshots,
     )
     will_ask = not dry_run and _stdin_is_tty() and selection.any()
     payload = {
@@ -685,6 +689,7 @@ def clean(
             }
             for item in generations
         ],
+        "catalog_retention": catalog_ret,
     }
     emit_json(payload, indent=2)
     if will_ask:
@@ -704,10 +709,12 @@ class _Selection:
     snapshot_run_dirs: int
     lock_retention_days: int
     stale_locks: int
+    catalog_snapshots: int = 0
 
     def any(self) -> bool:
         return bool(
             self.generations
+            or self.catalog_snapshots
             or self.staging_run_ids
             or self.logs
             or self.snapshot_run_dirs
@@ -791,6 +798,17 @@ def _delete_preview_selection(cfg, selection: _Selection) -> None:
                 }
                 for item in removed
             ]
+    if selection.catalog_snapshots and selection.keep_revision_generations > 0:
+        agreed = _confirm(
+            _(
+                "Expire {snapshots} historical catalog snapshots from this preview? "
+                "Current data, retained revisions, and held revisions stay."
+            ).format(snapshots=selection.catalog_snapshots)
+        )
+        if agreed:
+            outcome = catalog_retention(cfg, apply=True, keep=selection.keep_revision_generations)
+            if outcome is not None:
+                deleted["catalog_retention"] = outcome
     if idle:
         agreed = _confirm(
             _(
