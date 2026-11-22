@@ -214,6 +214,10 @@ def run_backfill(config_path: str, request: BackfillRequest) -> None:
     spec = get_dataset(dataset)
     derivatives = dataset in DERIVATIVE_DATASETS
     cfg = _cfg(config_path)
+    if not plan:
+        from cnequity.storage.free_space import require_free_space
+
+        require_free_space(cfg)
     scope = request_window(request)
     set_backfill(cfg, refetch=scope.pop("refetch"), redo=scope.pop("redo"))
     flags = run_flags(request)

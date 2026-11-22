@@ -101,6 +101,7 @@ Tushare is used only for on-demand backfill by default (`[sources.tushare].daily
 |---|---|
 | `[quality]` | `publication_gate`: audit candidate data before publishing, `off` (default), `shadow`, or `block`. `audit_gate`: what a run does when the post-publication audit reports `error`, `off`, `shadow` (default; records to `meta/quality/audit_gate.jsonl`), or `block` (the run fails, but published data is not retracted). `run_failure_window_hours` (default 24) and `run_failure_streak` (default 3, 0 turns it off): report when this many consecutive runs inside the window are unhealthy |
 | `[storage.retention]` | `keep_generations` (default 5): the latest revisions kept per dataset, 0 for no automatic cleanup. `keep_days` (default 7, 0 for no limit): a replaced revision is kept only if it was current within this many days. The current revision and revisions registered with `cne storage hold` are always kept |
+| `[storage.free_space]` | Free space on the lake's disk, in GB. Below `warn_gb` (default 50), retention keeps replaced revisions for one day and `cne run maintain` fails; below `stop_gb` (default 10), runs, backfills, derives and repairs refuse to start. 0 turns either check off |
 | `[research]` | `holdout_start`: `cne decision-data` refuses windows reaching this date, keeping out-of-sample data hidden from evidence inventories |
 
 See [Design](../architecture/overview.md#quality) for how the two gates divide the work. Before switching to `block`, read the shadow-mode records to learn how often the gate would fire.

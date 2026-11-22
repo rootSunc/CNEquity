@@ -3,13 +3,13 @@
   "datasets/catalog.md": "aec62284debefd67d6c97ee43ed5fd0b92391df496a981a469af3f169b06b84e",
   "datasets/query-guide.md": "e445dfcd237450be73073cd81cfdee67c14fe9aa45c4043f00246a103d6a4f34",
   "datasets/schema.md": "4657cf7e928e0e1c7a0af50edabfcbe52be55f8e2922552413e8f604b23bfa77",
-  "getting-started/configuration.md": "38b73c75e392b41c442cb1d2c1e1965a80d218a5c032d9fba63e493bf7dc470c",
+  "getting-started/configuration.md": "ebd35d7fe1251ab9a1e6ffd742f097d0c05266158a9c62dc0ae5787e8ad39edc",
   "getting-started/installation.md": "5450b9e98d17d02ea9a6e79f0ffc7a0a66831c81e2b56ed8ca738c1a680e59ac",
   "getting-started/quickstart.md": "824f2bdd77865bf449768ede7bb961c9cff7c93b99cb2752a8d5b7ceeac82213",
   "index.md": "3f8348f4bb82b8d04a8b6f751e730741d3980606a476927cae8882dc12fb985a",
   "legal-and-data-sources.md": "8a6dadfc683a43dc3b95727ba0129ee9b2727abdf1103237bd81ec7a3d4fd968",
   "operations/runbook.md": "8b3131832e09665301f98a6dbada138936d604c31289c32a79228f1ff1dfb0e0",
-  "operations/troubleshooting.md": "7efae1639ac43f57f100f8be0019b1e215b9b5297f595e5fddce735b20adf4c0",
+  "operations/troubleshooting.md": "ecf3491690ffad848a07b87aee7e7a9405e8b5f61884b24c81977c158ea90c1d",
   "reference/mcp.md": "17346903d3f5a5ec95e87f7f39a5cb6a81832b719dae3c02b202ae3d2f0769e5",
   "reference/python-api.md": "6200004497215dc8f5dc288edcd993594dd1e69d0d1c98fdc9a53508381c50e7"
 }

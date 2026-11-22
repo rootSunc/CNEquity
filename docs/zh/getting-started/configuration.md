@@ -101,6 +101,7 @@ Tushare 默认只用于按需回填（`[sources.tushare].daily = false`）。设
 |---|---|
 | `[quality]` | `publication_gate`：发布前审计候选数据，`off`（默认）、`shadow`、`block`。`audit_gate`：发布后审计报 `error` 时运行怎么办，`off`、`shadow`（默认，只记录到 `meta/quality/audit_gate.jsonl`）、`block`（运行失败，但不撤回已发布数据）。`run_failure_window_hours`（默认 24）和 `run_failure_streak`（默认 3，0 关闭）：窗口内连续这么多次运行不健康时报告 |
 | `[storage.retention]` | `keep_generations`（默认 5）：每个数据集保留的最近修订数，0 不自动清理。`keep_days`（默认 7，0 为不限）：被替换的修订只有在这么多天内当过当前修订才保留。当前修订和 `cne storage hold` 登记过的修订始终保留 |
+| `[storage.free_space]` | 湖所在磁盘的可用空间（GB）。低于 `warn_gb`（默认 50）时，保留策略对被替换的修订只保留一天，`cne run maintain` 判为失败；低于 `stop_gb`（默认 10）时，运行、回补、派生和修复都拒绝开始。0 关闭对应检查 |
 | `[research]` | `holdout_start`：`cne decision-data` 拒绝触及这一天的窗口，让留作样本外检验的数据不被证据盘点看到 |
 
 两种门禁的分工见[整体设计](../architecture/overview.md#quality)。切换到 `block` 之前，先读 shadow 模式的记录，了解它会多频繁触发。

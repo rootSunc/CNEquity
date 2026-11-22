@@ -564,6 +564,11 @@ class LakeWrite:
     """One run's write to the lake: checkouts now, one catalog commit at :meth:`publish`."""
 
     def __init__(self, config, run_id: str):
+        from cnequity.storage.free_space import require_free_space
+
+        # A publish that ran the disk full would leave a checkout or the
+        # catalog database half written ([storage.free_space].stop_gb).
+        require_free_space(config)
         self.config = config
         self.run_id = run_id
         self.root = Path(config.staging_root) / CHECKOUT_DIR / run_id

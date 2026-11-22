@@ -223,6 +223,10 @@ class JobEngine:
         from cnequity.storage.catalog_migration import require_catalog_lake
 
         require_catalog_lake(self.config)
+        # Nor fetch into a disk below [storage.free_space].stop_gb.
+        from cnequity.storage.free_space import require_free_space
+
+        require_free_space(self.config)
 
         if run_id and retry_failed_only:
             return self._retry_run(run_id, trade_date)

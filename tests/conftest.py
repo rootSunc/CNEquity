@@ -187,6 +187,22 @@ def _no_outbound_network(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _plenty_of_disk_space(monkeypatch):
+    """Tests see an ample disk, so [storage.free_space] never depends on the machine.
+
+    Below the default warn_gb (50 GB) retention would keep one day, and below
+    stop_gb every write would be refused, on a nearly full laptop or CI runner.
+    tests/unit/test_free_space.py sets the free space it tests.
+    """
+    from collections import namedtuple
+
+    from cnequity.storage import free_space
+
+    usage = namedtuple("usage", "total used free")(10**13, 0, 10**13)
+    monkeypatch.setattr(free_space, "_disk_usage", lambda _path: usage)
+
+
+@pytest.fixture(autouse=True)
 def _private_user_config_home(tmp_path_factory, monkeypatch):
     """A fresh per-user config directory for every test.
 

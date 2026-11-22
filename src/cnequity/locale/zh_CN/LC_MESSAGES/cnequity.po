@@ -1687,6 +1687,16 @@ msgstr "在 daily / stale 跑之前，先修复已验证、且有诚实来源的
 msgid "Beijing board"
 msgstr "北交所"
 
+#: cnequity/cli/schedule_cmds.py
+#, python-brace-format
+msgid "Below [storage.free_space].stop_gb ({stop:g} GB): runs, backfills, derives and repairs refuse to start. `cne storage usage` shows where the space goes."
+msgstr "低于 [storage.free_space].stop_gb（{stop:g} GB）：运行、回补、派生和修复都拒绝开始。`cne storage usage` 可查看空间用在哪里。"
+
+#: cnequity/cli/schedule_cmds.py
+#, python-brace-format
+msgid "Below [storage.free_space].warn_gb ({warn:g} GB): retention keeps replaced revisions for one day. `cne storage usage` shows where the space goes."
+msgstr "低于 [storage.free_space].warn_gb（{warn:g} GB）：保留策略对被替换的修订只保留一天。`cne storage usage` 可查看空间用在哪里。"
+
 #: cnequity/domain/datasets.py
 msgid "Best effort"
 msgstr "尽力而为"
@@ -1861,7 +1871,8 @@ msgid ""
 "Checks daily group results, retries outstanding keys, runs the audit and freshness\n"
 "gate, probes sources, and checks run evidence. If a catalog exists, maintenance\n"
 "applies retention and can delete expired snapshots and files. It also writes\n"
-"and rotates metadata backups and previews routine cleanup.\n"
+"and rotates metadata backups, previews routine cleanup, and fails when free\n"
+"disk space is below [storage.free_space].warn_gb.\n"
 "The timer schedules the weekly whole-lake audit separately. Use --full-audit-only\n"
 "to run just the audit when it is due."
 msgstr ""
@@ -1870,7 +1881,7 @@ msgstr ""
 "\n"
 "检查分组结果、重试覆盖欠账、运行审计与新鲜度门禁，并探测来源和检查运行证据。\n"
 "有湖目录时，维护会应用保留策略，可能清理到期快照与文件。\n"
-"维护也会写入和轮换元数据备份，并预览常规清理。\n"
+"维护也会写入和轮换元数据备份、预览常规清理；磁盘可用空间低于 [storage.free_space].warn_gb 时维护判为失败。\n"
 "全湖审计每周独立调度。用 --full-audit-only 仅执行已到期的全湖审计。"
 
 #: cnequity/cli/setup_cmds.py
@@ -2937,6 +2948,10 @@ msgstr ""
 #, python-brace-format
 msgid "Found an unfinished init run {run_id} whose process is gone; resuming it rather than starting over (finished batches are kept)."
 msgstr "发现一个没跑完的 init run {run_id}，它的进程已经不在了 —— 直接续跑而不是从头再来（已完成的批次会保留）。"
+
+#: cnequity/cli/schedule_cmds.py
+msgid "Free space"
+msgstr "磁盘可用空间"
 
 #: cnequity/cli/storage_cmds.py
 msgid "Frees at least"
@@ -7666,6 +7681,11 @@ msgstr "{flag} 属于 {hint}"
 #, python-brace-format
 msgid "{flag} does not apply to --profile {profile}"
 msgstr "{flag} 对 --profile {profile} 不适用"
+
+#: cnequity/cli/schedule_cmds.py
+#, python-brace-format
+msgid "{free:.1f} GB free of {total:.1f} GB."
+msgstr "共 {total:.1f} GB，可用 {free:.1f} GB。"
 
 #: cnequity/cli/demo.py
 #, python-brace-format

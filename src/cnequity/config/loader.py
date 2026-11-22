@@ -443,6 +443,10 @@ class Config:
     # A superseded revision is kept only if it was current within this many
     # days (0: no limit). The current revision and held ones always stay.
     revision_keep_days: int = DEFAULT_KEEP_DAYS
+    # [storage.free_space]: below warn_gb retention keeps one day and `run
+    # maintain` reports it; below stop_gb nothing is fetched or published. 0 is off.
+    free_space_warn_gb: float = 50.0
+    free_space_stop_gb: float = 10.0
     # Hosts that use ``eastmoney_proxy`` (a name also covers its subdomains);
     # the others connect directly. Empty sends every EastMoney host through it.
     eastmoney_proxy_hosts: tuple[str, ...] = ()
@@ -1350,6 +1354,17 @@ def load_config(path: str | Path) -> Config:
     revision_keep_days_value = revision_keep_days(
         None, retention_raw.get("keep_days", DEFAULT_KEEP_DAYS)
     )
+    free_space_raw = storage_raw.get("free_space") or {}
+    if not isinstance(free_space_raw, dict):
+        raise ValueError("[storage.free_space] must be a table")
+    free_space_gb = {}
+    for key, default in (("warn_gb", 50.0), ("stop_gb", 10.0)):
+        value = free_space_raw.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+            raise ValueError(f"[storage.free_space].{key} must be a number >= 0")
+        free_space_gb[key] = float(value)
+    if free_space_gb["warn_gb"] and free_space_gb["stop_gb"] > free_space_gb["warn_gb"]:
+        raise ValueError("[storage.free_space].stop_gb must not be above warn_gb")
     storage_publish = storage_raw.get("publish", "generation")
     if storage_publish not in ("generation", "catalog"):
         raise ValueError('[storage].publish must be "generation" or "catalog"')
@@ -1426,6 +1441,8 @@ def load_config(path: str | Path) -> Config:
         ths_js_runtime=ths_js_runtime,
         revision_keep_generations=revision_keep_generations,
         revision_keep_days=revision_keep_days_value,
+        free_space_warn_gb=free_space_gb["warn_gb"],
+        free_space_stop_gb=free_space_gb["stop_gb"],
         storage_publish=storage_publish,
         eastmoney_timeout_sec=eastmoney_timeout_sec,
         baostock_batch_size=baostock_batch_size,

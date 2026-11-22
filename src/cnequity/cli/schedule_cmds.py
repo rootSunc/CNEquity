@@ -246,7 +246,8 @@ def maintain(config_path: str, groups: str | None, notify: bool, full_audit_only
     Checks daily group results, retries outstanding keys, runs the audit and freshness
     gate, probes sources, and checks run evidence. If a catalog exists, maintenance
     applies retention and can delete expired snapshots and files. It also writes
-    and rotates metadata backups and previews routine cleanup.
+    and rotates metadata backups, previews routine cleanup, and fails when free
+    disk space is below [storage.free_space].warn_gb.
     The timer schedules the weekly whole-lake audit separately. Use --full-audit-only
     to run just the audit when it is due.
 
@@ -346,6 +347,35 @@ def maintain(config_path: str, groups: str | None, notify: bool, full_audit_only
         N_("Expiry preview"), _cne("run", "clean", "--dry-run", "--config", path)
     ):
         notes.append(_("Expiry preview"))
+
+    click.echo(f"--- {_('Free space')} ---", err=True)
+    from cnequity.storage.free_space import free_space
+
+    space = free_space(cfg)
+    click.echo(
+        _("{free:.1f} GB free of {total:.1f} GB.").format(
+            free=space.free_bytes / 1e9, total=space.total_bytes / 1e9
+        ),
+        err=True,
+    )
+    if space.critical:
+        click.echo(
+            _(
+                "Below [storage.free_space].stop_gb ({stop:g} GB): runs, backfills, derives and "
+                "repairs refuse to start. `cne storage usage` shows where the space goes."
+            ).format(stop=space.stop_bytes / 1e9),
+            err=True,
+        )
+        problems.append(_("Free space"))
+    elif space.low:
+        click.echo(
+            _(
+                "Below [storage.free_space].warn_gb ({warn:g} GB): retention keeps replaced "
+                "revisions for one day. `cne storage usage` shows where the space goes."
+            ).format(warn=space.warn_bytes / 1e9),
+            err=True,
+        )
+        problems.append(_("Free space"))
 
     if notes:
         click.echo(_("Reported, not failing: {names}").format(names=", ".join(notes)), err=True)

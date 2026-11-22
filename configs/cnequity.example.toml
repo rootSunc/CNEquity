@@ -508,6 +508,14 @@ keep_generations = 5
 # for one dataset keeps every other table's replaced files of that time too.
 keep_days = 7
 
+[storage.free_space]
+# Free space on the lake's disk, in GB. Below warn_gb, catalog retention keeps
+# replaced revisions for one day instead of keep_days (current and held ones
+# stay) and `cne run maintain` reports a problem. Below stop_gb, runs, backfills,
+# derives and repairs refuse to fetch or publish anything. 0 turns either off.
+warn_gb = 50
+stop_gb = 10
+
 [universe]
 # Which instrument classes the daily fetch covers. The security master also
 # contains subscription placeholders and unverified quote codes; listed funds

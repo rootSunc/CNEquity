@@ -1231,7 +1231,10 @@ def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict |
     if not (root / CATALOG_FILE).exists():
         return None
     keep = revision_keep(config, keep)
-    keep_days = revision_keep_days(config)
+    from cnequity.storage.free_space import effective_keep_days
+
+    # One day while the disk is low on space ([storage.free_space].warn_gb).
+    keep_days = effective_keep_days(config, revision_keep_days(config))
     apply = apply and keep > 0
     from cnequity.file_lock import lake_mutation_lock
 

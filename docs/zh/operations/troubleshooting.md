@@ -48,7 +48,7 @@
 | 非交易日 `cne run daily` 显示 `skipped` | `reason_code` 为 `non_trading_day`，正常。漏跑的交易日用 `cne run daily --trade-date <日期>` 补 |
 | 历史有缺口 | `cne backfill <数据集> --start ... --end ... --plan` 先看计划，再去掉 `--plan` 执行。已确认为空的日子默认跳过，`--redo empty` 再问一次。只有快照的数据集补不回过去 |
 | 某数据集的来源已经停止 | 用 `[datasets.history_until]` 写明历史到哪天为止，之后不再算欠着 |
-| 磁盘不足 | 先用 `cne storage usage` 看空间用在哪里、删除各部分至少能释放多少（快照和演练副本是 APFS 克隆，`du` 会多算）。`cne run clean` 先列出可清理的旧修订、已合并的 staging、过期日志和来源快照，交互确认后删除；未完成的运行默认保留供续跑。小磁盘可以调小 `[storage.retention].keep_generations` |
+| 磁盘不足 | 可用空间低于 `[storage.free_space].stop_gb` 时写入会拒绝开始并提示原因。先用 `cne storage usage` 看空间用在哪里、删除各部分至少能释放多少（快照和演练副本是 APFS 克隆，`du` 会多算）。`cne run clean` 先列出可清理的旧修订、已合并的 staging、过期日志和来源快照，交互确认后删除；未完成的运行默认保留供续跑。小磁盘可以调小 `[storage.retention].keep_generations` |
 
 ## 审计结果 {#audit}
 
