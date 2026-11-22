@@ -113,6 +113,48 @@ def test_a_changed_layout_fails_loudly():
         ths.parse_stock_page(_STOCK_PAGE.replace("净额(元)", "净流入(元)"), _D)
 
 
+# The empty table 同花顺 served for stock page 83/105 on 2026-11-23.
+_PLACEHOLDER_PAGE = """
+<table class="m-table J-ajax-table"><thead><tr>
+<th>序号</th><th>股票代码</th><th>股票简称</th><th>最新价</th><th>阶段涨跌幅</th>
+<th>连续换手率</th><th>资金流入净额(元)</th>
+</tr></thead><tbody> </tbody></table><div class="m-page J-ajax-page"> </div>
+"""
+
+
+def test_the_empty_placeholder_is_not_a_layout_change():
+    with pytest.raises(ths.ThsEmptyPage):
+        ths.parse_stock_page(_PLACEHOLDER_PAGE, _D)
+    with pytest.raises(ths.ThsEmptyPage):
+        ths.parse_board_page(_PLACEHOLDER_PAGE, _D, "industry")
+
+
+def _sweep_with(monkeypatch, pages):
+    served = []
+
+    def fake_get_page(client, kind, page, config, *, recorder=None):
+        served.append(page)
+        return pages[len(served) - 1]
+
+    monkeypatch.setattr(ths, "_get_page", fake_get_page)
+    monkeypatch.setattr(ths, "_EMPTY_PAGE_RETRY_SECONDS", 0)
+    rows = ths._sweep("stock", lambda text: ths.parse_stock_page(text, _D), None)
+    return rows, served
+
+
+def test_a_placeholder_page_is_asked_for_once_more(monkeypatch):
+    two = _STOCK_PAGE.replace("1/105", "1/2")
+    pages = [two, _PLACEHOLDER_PAGE, two]
+    rows, served = _sweep_with(monkeypatch, pages)
+    assert served == [1, 2, 2] and len(rows) == 4
+
+
+def test_a_placeholder_twice_still_fails_the_sweep(monkeypatch):
+    two = _STOCK_PAGE.replace("1/105", "1/2")
+    with pytest.raises(ths.ThsEmptyPage):
+        _sweep_with(monkeypatch, [two, _PLACEHOLDER_PAGE, _PLACEHOLDER_PAGE])
+
+
 # ---- session guard ----------------------------------------------------------------------
 
 

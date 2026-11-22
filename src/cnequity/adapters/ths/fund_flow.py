@@ -59,6 +59,7 @@ _BOARD_HEADER = [
     "净额(亿)", "公司家数", "领涨股", "涨跌幅", "当前价(元)",
 ]  # fmt: skip
 _MAX_PAGES = 200
+_EMPTY_PAGE_RETRY_SECONDS = 10.0
 
 FUND_FLOW_THS_COLUMNS = {
     "symbol": pl.Utf8,
@@ -86,6 +87,15 @@ SECTOR_FUND_FLOW_THS_COLUMNS = {
 
 class ThsFundFlowError(RuntimeError):
     """A 同花顺 money-flow sweep could not produce a whole, dated snapshot."""
+
+
+class ThsEmptyPage(ThsFundFlowError):
+    """同花顺 served its empty placeholder table instead of the requested page.
+
+    Seen 2026-11-23 at stock page 83/105: no rows, no pager, and the multi-day
+    ranking's default header (阶段涨跌幅 …). It is a transient answer, not a
+    layout change, so the sweep asks for that page again.
+    """
 
 
 # ---- session guard ---------------------------------------------------------------
@@ -166,8 +176,14 @@ def _split(page_html: str) -> tuple[list[str], list[list[str]], tuple[int, int] 
     )
 
 
+def _reject_placeholder(rows: list, info: tuple[int, int] | None, kind: str) -> None:
+    if not rows and info is None:
+        raise ThsEmptyPage(f"同花顺 {kind} page came back as the empty placeholder table")
+
+
 def parse_stock_page(page_html: str, trade_date: date) -> tuple[list[dict], int | None]:
     header, rows, info = _split(page_html)
+    _reject_placeholder(rows, info, "stock")
     if header != _STOCK_HEADER:
         raise ThsFundFlowError(f"同花顺 stock money-flow columns changed: {header}")
     out: list[dict] = []
@@ -197,6 +213,7 @@ def parse_board_page(
     page_html: str, trade_date: date, board_type: str
 ) -> tuple[list[dict], int | None]:
     header, rows, info = _split(page_html)
+    _reject_placeholder(rows, info, board_type)
     if header != _BOARD_HEADER:
         raise ThsFundFlowError(f"同花顺 {board_type} money-flow columns changed: {header}")
     out: list[dict] = []
@@ -308,7 +325,11 @@ def _sweep(kind: str, parse, config, *, recorder=None) -> list[dict]:
         while pages is None or page <= pages:
             if page > _MAX_PAGES:
                 raise ThsFundFlowError(f"同花顺 {kind} pagination exceeded {_MAX_PAGES} pages")
-            got, total = parse(_get_page(client, kind, page, config, recorder=recorder))
+            try:
+                got, total = parse(_get_page(client, kind, page, config, recorder=recorder))
+            except ThsEmptyPage:
+                time.sleep(_EMPTY_PAGE_RETRY_SECONDS)
+                got, total = parse(_get_page(client, kind, page, config, recorder=recorder))
             if pages is None:
                 if total is None:
                     raise ThsFundFlowError(f"同花顺 {kind} page 1 has no page count")
