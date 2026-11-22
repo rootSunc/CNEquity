@@ -2452,6 +2452,11 @@ msgstr "写入的目录；每个数据集写进各自的空子目录。"
 msgid "Disabled in the config"
 msgstr "配置里已关闭"
 
+#: cnequity/cli/storage_cmds.py
+#, python-brace-format
+msgid "Disk: {free} free of {total}"
+msgstr "磁盘：共 {total}，可用 {free}"
+
 #: cnequity/cli/schedule_cmds.py
 msgid "Do not retry missed snapshots after [job.stale].run_at."
 msgstr "不在 [job.stale].run_at 之后重试缺失的快照。"
@@ -2653,6 +2658,11 @@ msgstr "让湖目录过期旧快照，并删除超过宽限期的文件；不加
 msgid "Expire {snapshots} historical catalog snapshots from this preview? Current data, retained revisions, and held revisions stay."
 msgstr "按这份预览让 {snapshots} 个历史湖目录快照过期？当前数据、保留的版本和被 hold 保护的版本会保留。"
 
+#: cnequity/cli/storage_cmds.py
+#, python-brace-format
+msgid "Expired between {first} and {last}; `cne storage catalog-retention --apply` deletes each file once {hours} hours have passed since it expired."
+msgstr "这些文件在 {first} 到 {last} 之间过期；每个文件过期满 {hours} 小时后，`cne storage catalog-retention --apply` 会删除它。"
+
 #: cnequity/cli/schedule_cmds.py
 msgid "Expiry preview"
 msgstr "过期预览"
@@ -2722,6 +2732,10 @@ msgstr "取官方成分和权重文件；默认离线回放。"
 #, python-brace-format
 msgid "Fetching the full symbol list, then keeping only the {value} demo symbols…"
 msgstr "拉取完整标的清单，然后只保留 {value} 只 demo 标的…"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Files"
+msgstr "文件数"
 
 #: cnequity/diagnostics/source_health.py
 msgid "Files the exchange publishes itself; a non-trading day returns a 302 rather than an empty file, so the probe walks back to the latest trading day."
@@ -2923,6 +2937,10 @@ msgstr ""
 #, python-brace-format
 msgid "Found an unfinished init run {run_id} whose process is gone; resuming it rather than starting over (finished batches are kept)."
 msgstr "发现一个没跑完的 init run {run_id}，它的进程已经不在了 —— 直接续跑而不是从头再来（已完成的批次会保留）。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Frees at least"
+msgstr "删除至少释放"
 
 #: cnequity/cli/decision_data_cmds.py
 msgid "Freeze missing cash-payment dates, split by tradable span and ex-date rule."
@@ -3432,6 +3450,10 @@ msgstr "要探测的 key，逗号分隔；高成本/已受挑战的端点仅在�
 msgid "Lake catalog retention"
 msgstr "湖目录保留"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Lake data files by catalog state:"
+msgstr "湖数据文件按目录状态："
+
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
 msgid "Lake health @ last trading day {last_trading_day}"
@@ -3908,6 +3930,10 @@ msgstr "离线样例：生成的是合成价格，不是市场数据。"
 msgid "On"
 msgstr "开"
 
+#: cnequity/cli/storage_cmds.py
+msgid "On disk"
+msgstr "占用"
+
 #: cnequity/cli/schedule_cmds.py
 msgid "On problems, also show a desktop notification (macOS)."
 msgstr "有问题时同时弹出桌面通知（macOS）。"
@@ -4052,6 +4078,7 @@ msgstr "输出机器可读的 JSON（默认）。"
 #: cnequity/cli/govern_cmds.py cnequity/cli/maintain_cmds.py
 #: cnequity/cli/quality_cmds.py cnequity/cli/repair_cmds.py
 #: cnequity/cli/schedule_cmds.py cnequity/cli/setup_cmds.py
+#: cnequity/cli/storage_cmds.py
 msgid "Output machine-readable JSON."
 msgstr "输出机器可读的 JSON。"
 
@@ -4097,6 +4124,10 @@ msgstr "付费数据源"
 #: cnequity/cli/ths_official_cmds.py
 msgid "Parquet of (symbol, trade_date, close) from an independent source."
 msgstr "来自独立源的 (symbol, trade_date, close) parquet。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Part"
+msgstr "部分"
 
 #: cnequity/serve/lake.py
 #, python-brace-format
@@ -5220,6 +5251,10 @@ msgstr "设置 [data].root（默认 ./data/cnequity，解析为绝对路径）�
 msgid "Shanghai and Shenzhen A shares (config excludes Beijing)"
 msgstr "沪深 A 股（配置排除北交所）"
 
+#: cnequity/cli/storage_cmds.py
+msgid "Shared clone blocks cannot be seen here; what deletion frees may be less."
+msgstr "这里看不出克隆共享的数据块，删除实际释放的空间可能更少。"
+
 #: cnequity/diagnostics/health_page.py
 #, python-brace-format
 msgid "Shared risk-control surface: {radius} (the {count} endpoints below go down together)"
@@ -5314,6 +5349,10 @@ msgstr "显示版本并退出。"
 #: cnequity/cli/_root.py
 msgid "Show this message and exit."
 msgstr "显示帮助并退出。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Show where the lake's disk space goes and what deleting each part would free; reads only."
+msgstr "显示湖的磁盘空间用在哪里、删除各部分能释放多少；只读。"
 
 #: cnequity/cli/schedule_cmds.py
 msgid "Show whether the timer is installed and active, what it runs, and when it last checked."
@@ -7101,6 +7140,10 @@ msgstr "instruments 全部场内标的（含 ETF/LOF）"
 msgid "every supported route"
 msgstr "全部已支持的路由"
 
+#: cnequity/cli/storage_cmds.py
+msgid "expired, deleted by retention after the grace period"
+msgstr "已过期，宽限期后由保留清理删除"
+
 #: cnequity/orchestrator/engine.py
 msgctxt "step status"
 msgid "failed"
@@ -7171,6 +7214,10 @@ msgstr "估值 / ST / 退市行情的历史回填"
 msgid "history too shallow"
 msgstr "历史偏浅"
 
+#: cnequity/cli/storage_cmds.py
+msgid "in the current snapshot"
+msgstr "当前快照在用"
+
 #: cnequity/diagnostics/substitutes.py
 msgid "independent"
 msgstr "独立"
@@ -7190,6 +7237,10 @@ msgstr "industry_index / trading_status / option_greeks / minute_bars_15m|30m|60
 #: cnequity/cli/maintain_cmds.py
 msgid "industry_index / trading_status / option_greeks / minute_bars_15m|30m|60m: derive only this date (YYYY-MM-DD) and later."
 msgstr "industry_index / trading_status / option_greeks / minute_bars_15m|30m|60m：只派生这个日期（YYYY-MM-DD）及之后的。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "kept for older revisions"
+msgstr "为旧修订保留"
 
 #: cnequity/diagnostics/source_health.py
 msgid "kline returned nothing"
@@ -7352,6 +7403,10 @@ msgstr "由已发布的数据重算"
 #: cnequity/diagnostics/source_health.py
 msgid "refused"
 msgstr "被拒"
+
+#: cnequity/cli/storage_cmds.py
+msgid "registered nowhere"
+msgstr "未登记"
 
 #: cnequity/cli/repair_cmds.py
 msgid "registering"
@@ -7547,6 +7602,11 @@ msgstr "{config} 里没有 [job.daily.groups] —— `cne config create` 生成�
 msgid "{copy} dataset(s) to register in the lake catalog, {layout} table(s) to lay out by partition"
 msgstr "{copy} 个数据集要登记进湖目录，{layout} 张表要按分区重排"
 
+#: cnequity/cli/storage_cmds.py
+#, python-brace-format
+msgid "{count} smaller parts"
+msgstr "其余 {count} 个较小部分"
+
 #: cnequity/cli/demo.py
 #, python-brace-format
 msgid "{data_root} holds the synthetic sample lake (source=mock). Real data is not written over it: pass another --data-root, or delete that directory first."
@@ -7679,6 +7739,11 @@ msgstr "{path} 与打包的示例配置一致。"
 #, python-brace-format
 msgid "{pending} sessions of input have not been recomputed yet"
 msgstr "输入有 {pending} 个交易日尚未重算"
+
+#: cnequity/cli/storage_cmds.py
+#, python-brace-format
+msgid "{root}: {files} files, {allocated} on disk"
+msgstr "{root}：{files} 个文件，占用 {allocated}"
 
 #: cnequity/cli/demo.py
 #, python-brace-format

@@ -138,6 +138,81 @@ def catalog_retention_cmd(config_path: str, apply: bool):
     _emit(result)
 
 
+#: Parts under this size share one line of the table; ``--json`` lists every part.
+_SMALL_PART = 10_000_000
+
+
+def _gb(value: int) -> str:
+    return f"{value / 1e9:,.2f} GB"
+
+
+@storage.command("usage")
+@config_option
+@click.option("--json", "as_json", is_flag=True, help=N_("Output machine-readable JSON."))
+def usage_cmd(config_path: str, as_json: bool):
+    """Show where the lake's disk space goes and what deleting each part would free; reads only."""
+    from cnequity.storage.usage import storage_usage
+
+    report = storage_usage(_cfg(config_path))
+    if as_json:
+        _emit(report)
+        return
+    say = click.echo
+    disk = report["disk"]
+    say(
+        _("Disk: {free} free of {total}").format(
+            free=_gb(disk["free_bytes"]), total=_gb(disk["total_bytes"])
+        )
+    )
+    total = report["total"]
+    say(
+        _("{root}: {files} files, {allocated} on disk").format(
+            root=report["data_root"],
+            files=f"{total['files']:,}",
+            allocated=_gb(total["allocated_bytes"]),
+        )
+    )
+    if not report["clone_aware"]:
+        say(_("Shared clone blocks cannot be seen here; what deletion frees may be less."))
+    say("")
+    say(f"{_('Part'):<36} {_('Files'):>10} {_('On disk'):>12} {_('Frees at least'):>15}")
+    small = [p for p in report["parts"].values() if p["allocated_bytes"] < _SMALL_PART]
+    for name, part in report["parts"].items():
+        if part["allocated_bytes"] >= _SMALL_PART:
+            say(
+                f"{name:<36} {part['files']:>10,} {_gb(part['allocated_bytes']):>12} "
+                f"{_gb(part['freeable_bytes']):>15}"
+            )
+    if small:
+        label = _("{count} smaller parts").format(count=len(small))
+        files = sum(p["files"] for p in small)
+        allocated = sum(p["allocated_bytes"] for p in small)
+        freeable = sum(p["freeable_bytes"] for p in small)
+        say(f"{label:<36} {files:>10,} {_gb(allocated):>12} {_gb(freeable):>15}")
+    lake = report.get("lake_files")
+    if lake:
+        say("")
+        say(_("Lake data files by catalog state:"))
+        labels = {
+            "current": _("in the current snapshot"),
+            "history": _("kept for older revisions"),
+            "expired": _("expired, deleted by retention after the grace period"),
+            "unregistered": _("registered nowhere"),
+        }
+        for state, label in labels.items():
+            say(
+                f"  {label:<54} {lake[state]['files']:>8,} {_gb(lake[state]['allocated_bytes']):>12}"
+            )
+        first, last = lake["expired_between"]
+        if first:
+            say(
+                _(
+                    "Expired between {first} and {last}; `cne storage catalog-retention --apply` "
+                    "deletes each file once {hours} hours have passed since it expired."
+                ).format(hours=lake["grace_hours"], first=first, last=last)
+            )
+
+
 @storage.command("export")
 @config_option
 @click.argument("datasets", nargs=-1, required=True)

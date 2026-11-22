@@ -69,6 +69,7 @@ storage hold: ["none", "Adds object protection, with --until for its last day; a
 storage import: ["none", "Validates and registers reviewed holds and cases; only adds protection"]
 storage inspect: ["none", "Reads versions and retention reasons"]
 storage plan: ["none", "Previews which generations retention would delete now; deletes no data"]
+storage usage: ["none", "Reads disk use: each part's files, space on disk and what deleting it frees at least (APFS clones seen), and the lake data files by catalog state"]
 storage release: ["none", "Drops manual holds on the named versions; case dependencies stay"]
 storage raw-external: ["none", "Registers external payload storage; retains local source sidecars and does not move or delete files"]
 storage catalog-retention: ["none", "Read-only preview; --apply expires old lake catalog snapshots and deletes files past the grace period"]

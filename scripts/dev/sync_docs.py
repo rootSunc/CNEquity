@@ -369,6 +369,10 @@ EFFECTS: dict[str, tuple[str, str]] = {
     "storage release": ("无", "解除指定版本的手动保留；案例依赖保留不变"),
     "storage import": ("无", "校验并登记已审核的保留与案例；只增加保护"),
     "storage inspect": ("无", "读取版本与保留原因"),
+    "storage usage": (
+        "无",
+        "读取磁盘占用：各部分的文件数、占用和删除至少能释放的空间（识别 APFS 克隆），以及湖数据文件的目录状态",
+    ),
     "storage plan": ("无", "预览自动清理现在会删除哪些代；不删除数据"),
     "storage raw-external": ("无", "登记外置原文目录；本地保留来源记录，不移动或删除文件"),
     "storage catalog-retention": (

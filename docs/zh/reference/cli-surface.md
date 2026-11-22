@@ -79,6 +79,7 @@
 | `cne storage plan` | 无 | 预览自动清理现在会删除哪些代；不删除数据 |
 | `cne storage raw-external` | 无 | 登记外置原文目录；本地保留来源记录，不移动或删除文件 |
 | `cne storage release` | 无 | 解除指定版本的手动保留；案例依赖保留不变 |
+| `cne storage usage` | 无 | 读取磁盘占用：各部分的文件数、占用和删除至少能释放的空间（识别 APFS 克隆），以及湖数据文件的目录状态 |
 | `cne storage verify-catalog` | 无 | 只读；核对发布进湖目录的每个修订，其快照里的行与发布时记录的摘要是否一致 |
 | `cne ths-official backfill` | 执行时 | 调用凭证源并补缺 |
 | `cne ths-official capture` | 执行时 | 调用凭证源并写对照证据 |

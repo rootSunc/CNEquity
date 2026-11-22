@@ -79,6 +79,7 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne storage plan` | none | Previews which generations retention would delete now; deletes no data |
 | `cne storage raw-external` | none | Registers external payload storage; retains local source sidecars and does not move or delete files |
 | `cne storage release` | none | Drops manual holds on the named versions; case dependencies stay |
+| `cne storage usage` | none | Reads disk use: each part's files, space on disk and what deleting it frees at least (APFS clones seen), and the lake data files by catalog state |
 | `cne storage verify-catalog` | none | Read-only; checks that each revision published into the lake catalog still holds, at its snapshot, the rows whose digest was recorded at publish |
 | `cne ths-official backfill` | when run | Calls the credentialed source and fills gaps |
 | `cne ths-official capture` | when run | Calls the credentialed source and writes comparison evidence |
