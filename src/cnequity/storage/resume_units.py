@@ -81,7 +81,7 @@ def record(config, run_id: str, findings: Iterable[dict], datasets: Iterable[str
     findings = list(findings)
     if not any(item.get("check") == CHECK for item in findings):
         return 0
-    with lake_mutation_lock(config.meta_root), Catalog(lake_root(config)) as catalog:
+    with lake_mutation_lock(config.meta_root), Catalog(lake_root(config), create=True) as catalog:
         write = Write(catalog)
         count = attach(write, run_id, findings, datasets)
         if count:

@@ -180,7 +180,7 @@ def inputs_covered(monkeypatch):
     """The one-session test lake: the planner owes the minute inputs nothing else."""
     import cnequity.steps.finalize as finalize
 
-    monkeypatch.setattr(finalize, "_planner_owes", lambda _config, _dataset: False)
+    monkeypatch.setattr(finalize, "_planner_owes", lambda _config, _dataset, **_kw: False)
 
 
 def _cli_config(tmp_path, *, intraday: bool = False) -> str:

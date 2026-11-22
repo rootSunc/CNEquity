@@ -574,6 +574,8 @@ def covered_through(config, dataset: str) -> date | None:
         return _COVERED[key]
     value = _covered_through(config, dataset)
     if key is not None:
+        if len(_COVERED) >= 512:
+            _COVERED.pop(next(iter(_COVERED)))
         _COVERED[key] = value
     return value
 
@@ -589,12 +591,17 @@ def _covered_key(config, dataset: str) -> tuple | None:
     try:
         own = dataset_state(dataset, config=config).revision_id
         calendar = dataset_state("trading_calendar", config=config).revision_id
+        bars = (
+            dataset_state("daily_bars", config=config).revision_id
+            if dataset == "valuation_metrics"
+            else None
+        )
     except (OSError, ValueError):
         return None
     if own is None or _is_snapshot(DATASETS.get(dataset)):
         # A snapshot's capture also moves with a refresh that publishes nothing.
         return None
-    return (str(config.data_root), dataset, own, calendar)
+    return (str(config.data_root), dataset, own, calendar, bars)
 
 
 def _covered_through(config, dataset: str) -> date | None:

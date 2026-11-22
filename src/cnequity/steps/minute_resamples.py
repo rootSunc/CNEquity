@@ -25,7 +25,7 @@ def _reconcile(
         if store.current_pointer(dataset) is None:
             return {"status": "skipped", "note": f"{dataset} has not been materialized"}
         with DerivedOutput(config, dataset, run_id) as output:
-            inputs = capture_derive_inputs(config, dataset)
+            inputs = capture_derive_inputs(config, dataset, trade_date=trade_date)
             summary = derive_minute_resample(config, dataset, output=output)
             partial_coverage = resample_has_gaps(summary)
             revision = publish_derived_revision(

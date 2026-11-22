@@ -92,16 +92,16 @@ DERIVE_INPUTS = {
 }
 
 
-def _planner_owes(config: Config, dataset: str) -> bool:
+def _planner_owes(config: Config, dataset: str, trade_date: date | None = None) -> bool:
     """Whether the planner sees a gap in *dataset*'s recent cells."""
     from cnequity.domain.market_time import shanghai_today
     from cnequity.quality.planned_coverage import gap_days, gap_keys
 
-    today = shanghai_today()
-    return bool(gap_days(config, dataset, today) or gap_keys(config, dataset, today))
+    day = trade_date or shanghai_today()
+    return bool(gap_days(config, dataset, day) or gap_keys(config, dataset, day))
 
 
-def capture_derive_inputs(config: Config, dataset: str) -> dict:
+def capture_derive_inputs(config: Config, dataset: str, *, trade_date: date | None = None) -> dict:
     """Record immutable input identities and the available coverage evidence."""
     from cnequity.storage.revisions import RevisionStore
 
@@ -114,7 +114,11 @@ def capture_derive_inputs(config: Config, dataset: str) -> dict:
         inputs[name] = {
             key: pointer.get(key) for key in ("revision", "revision_id", "content_digest")
         }
-        owed = _planner_owes(config, name)
+        owed = (
+            _planner_owes(config, name)
+            if trade_date is None
+            else _planner_owes(config, name, trade_date=trade_date)
+        )
         inputs[name]["coverage_status"] = (
             "partial"
             if owed
@@ -830,7 +834,7 @@ def step_derive_adj_factors(config: Config, trade_date: date, run_id: str, conte
 
     try:
         with DerivedOutput(config, "adj_factors", run_id) as output:
-            input_revisions = capture_derive_inputs(config, "adj_factors")
+            input_revisions = capture_derive_inputs(config, "adj_factors", trade_date=trade_date)
             result = compute_adj_factors(config, refresh_symbols=rebackfill, output=output)
             published_revision = publish_derived_revision(
                 config,
@@ -987,7 +991,7 @@ def step_derive_futures_continuous(
             "note": "futures_continuous disabled ([futures].enabled = false)",
         }
     with DerivedOutput(config, "futures_continuous", run_id) as output:
-        inputs = capture_derive_inputs(config, "futures_continuous")
+        inputs = capture_derive_inputs(config, "futures_continuous", trade_date=trade_date)
         summary = derive_futures_continuous(config, output=output)
         published = publish_derived_revision(
             config, "futures_continuous", run_id, trade_date, output, input_revisions=inputs
@@ -1021,7 +1025,7 @@ def step_derive_option_greeks(config: Config, trade_date: date, run_id: str, con
             "note": "option_greeks disabled ([futures].enabled / options = false)",
         }
     with DerivedOutput(config, "option_greeks", run_id) as output:
-        inputs = capture_derive_inputs(config, "option_greeks")
+        inputs = capture_derive_inputs(config, "option_greeks", trade_date=trade_date)
         summary = derive_option_greeks(config, output=output)
         published = publish_derived_revision(
             config, "option_greeks", run_id, trade_date, output, input_revisions=inputs
@@ -1051,7 +1055,7 @@ def step_derive_industry_index(
 
     try:
         with DerivedOutput(config, "industry_index", run_id) as output:
-            inputs = capture_derive_inputs(config, "industry_index")
+            inputs = capture_derive_inputs(config, "industry_index", trade_date=trade_date)
             summary = derive_industry_index(config, output=output)
             published_revision = publish_derived_revision(
                 config,

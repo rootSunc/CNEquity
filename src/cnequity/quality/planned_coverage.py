@@ -13,6 +13,8 @@ already say about that, and :func:`record_seeds` writes it there once.
 
 from __future__ import annotations
 
+import atexit
+import shutil
 import tempfile
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Iterator, Sequence
@@ -47,9 +49,22 @@ from cnequity.storage.state import StateStore
 from equitylake_core import coverage as cov
 from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog, quote_literal
 from equitylake_core.coverage import Coverage
+from equitylake_core.market import Calendar, Universe
 from equitylake_core.plan import Declared, Scope, plan_all, plan_dataset
 
 _EMPTY_LAKE: Path | None = None
+_EMPTY_LAKE_PARENT: Path | None = None
+
+
+def _cleanup_empty_lake() -> None:
+    global _EMPTY_LAKE, _EMPTY_LAKE_PARENT
+    if _EMPTY_LAKE_PARENT is not None:
+        shutil.rmtree(_EMPTY_LAKE_PARENT, ignore_errors=True)
+        _EMPTY_LAKE_PARENT = None
+        _EMPTY_LAKE = None
+
+
+atexit.register(_cleanup_empty_lake)
 
 
 @contextmanager
@@ -60,12 +75,14 @@ def ledger(config) -> Iterator[Catalog]:
     stored and nothing was asked: every cell is owed, which is what planning
     against an empty catalog says.
     """
-    global _EMPTY_LAKE
+    global _EMPTY_LAKE, _EMPTY_LAKE_PARENT
     root = lake_root(config)
     if not (root / CATALOG_FILE).exists():
         if _EMPTY_LAKE is None or not (_EMPTY_LAKE / CATALOG_FILE).exists():
-            made = Path(tempfile.mkdtemp(prefix="cnequity-empty-lake-")) / LAKE_DIR
+            parent = Path(tempfile.mkdtemp(prefix="cnequity-empty-lake-"))
+            made = parent / LAKE_DIR
             Catalog(made, create=True).close()
+            _EMPTY_LAKE_PARENT = parent
             _EMPTY_LAKE = made
         root = _EMPTY_LAKE
     with Catalog(root, read_only=True) as catalog:
@@ -106,11 +123,11 @@ def coverage_of(spec: DatasetSpec, today: date, config=None) -> Coverage:
         grain = "day" if spec.session_scope == "calendar" else "session"
         return Coverage(grain, column=spec.query_date_col, **shared)
     if spec.partition_col is not None and spec.partition_granularity == "quarter":
-        return Coverage("quarter", column=spec.partition_col, labelled=True, start=start, end=end)
+        return Coverage("quarter", column=spec.partition_col, labelled=True, **shared)
     return Coverage("session", by="write", start=start, end=end)
 
 
-class LakeCalendar:
+class LakeCalendar(Calendar):
     """The exchange sessions the lake's own trading calendar names.
 
     Read once and widened when a longer range is asked for: every dataset
@@ -132,7 +149,7 @@ class LakeCalendar:
         return self._days[first:after]
 
 
-class BarUniverse:
+class BarUniverse(Universe):
     """The securities owed a daily bar, and the days they are excused one.
 
     The same scope ``quality.bar_coverage`` checks: listed securities in the
@@ -145,12 +162,14 @@ class BarUniverse:
     def __init__(self, config):
         self._config = config
         self._members: pl.DataFrame | None = None
+        self._members_end: date | None = None
 
     def members(self, dataset: str, start: date, end: date) -> pl.DataFrame:
         if dataset != "daily_bars":
             raise ValueError(f"no universe is declared for {dataset}")
-        if self._members is None:
+        if self._members is None or (self._members_end is not None and end > self._members_end):
             self._members = self._load(end)
+            self._members_end = end
         return self._members
 
     def _load(self, end: date) -> pl.DataFrame:
@@ -437,6 +456,25 @@ def _answers(
 HISTORY_START = date(1990, 1, 1)
 
 
+def lake_history_start(config, catalog: Catalog, dataset: str, end: date) -> date | None:
+    """Where this lake's history of *dataset* begins, or ``None`` if none is established.
+
+    An explicit ``[datasets.history_from]`` setting defines the lake's intent
+    even before rows arrive. Otherwise a lake built with ``--profile quick`` or
+    ``full`` starts where its stored rows begin; a dataset with neither holds
+    no established history window yet.
+    """
+    spec = DATASETS[dataset]
+    coverage = coverage_of(spec, end, config)
+    configured = getattr(config, "history_from", {}).get(dataset)
+    if configured is not None:
+        return coverage.start or configured
+    first = cov.first_stored(catalog, dataset, spec.query_date_col) if spec.query_date_col else None
+    if first is None:
+        return None
+    return max(first, coverage.start) if coverage.start is not None else first
+
+
 def seeds(config, end: date, *, start: date = HISTORY_START) -> list[Seed]:
     """What ``meta/state`` and the run manifest say was asked and how it was answered, to *end*.
 
@@ -464,7 +502,9 @@ def entity_seeds(config, end: date) -> dict[str, list[tuple[str, str]]]:
     outstanding key or its day a missing range; every other session without
     a bar (a halt no board reported, a fund that never prints) it counts as
     answered. Those are the cells returned here, once past the dataset's
-    settle, so the planner does not owe them; running it again finds none.
+    settle and never before this lake's history starts, so the planner does
+    not owe them and uncollected early history is not marked empty; running it
+    again finds none.
     """
     state = StateStore(config.meta_root)
     found: dict[str, list[tuple[str, str]]] = {}
@@ -474,8 +514,16 @@ def entity_seeds(config, end: date) -> dict[str, list[tuple[str, str]]]:
     if not names:
         return found
     with ledger(config) as catalog:
-        plans = planned(config, catalog, Scope(HISTORY_START, end), names)
-    for name in names:
+        plans = {}
+        for name in names:
+            floor = lake_history_start(config, catalog, name, end)
+            if floor is None and not state.get_payload(name):
+                continue
+            start = floor if floor is not None else HISTORY_START
+            if start > end:
+                continue
+            plans.update(planned(config, catalog, Scope(start, end), [name]))
+    for name, plan in plans.items():
         coverage = coverage_of(DATASETS[name], end, config)
         settled = (end - coverage.settle - timedelta(days=1)).isoformat()
         owed_days = {
@@ -486,7 +534,12 @@ def entity_seeds(config, end: date) -> dict[str, list[tuple[str, str]]]:
         owed_keys = {
             (str(row["trade_date"]), str(row["symbol"])) for row in state.get_outstanding_keys(name)
         }
-        gaps = plans[name].cells.filter((pl.col("state") == "gap") & (pl.col("period") <= settled))
+        covered = plan.cells.filter(pl.col("state") == "covered")
+        first_covered = covered["period"].min() if not covered.is_empty() else None
+        gap_filter = (pl.col("state") == "gap") & (pl.col("period") <= settled)
+        if first_covered is not None:
+            gap_filter = gap_filter & (pl.col("period") >= first_covered)
+        gaps = plan.cells.filter(gap_filter)
         cells = [
             (period, entity)
             for period, entity in gaps.select("period", "entity").iter_rows()
@@ -656,10 +709,17 @@ def gap_keys(config, dataset: str, trade_date: date) -> list[tuple[str, date]]:
     )
 
 
-def owed_cells(config, dataset: str, start: date, end: date) -> list[tuple[str, date]]:
-    """The (entity, day) cells *dataset* owes per entity in [*start*, *end*]."""
+def owed_cells(config, dataset: str, start: date | None, end: date) -> list[tuple[str, date]]:
+    """The (entity, day) cells *dataset* owes per entity in [*start*, *end*].
+
+    When *start* is ``None``, the window starts at :func:`lake_history_start`
+    so lakes built with a bounded profile never plan back to 1990.
+    """
     with ledger(config) as catalog:
-        cells = planned(config, catalog, Scope(start, end), [dataset])[dataset].cells
+        first = lake_history_start(config, catalog, dataset, end) if start is None else start
+        if first is None or first > end:
+            return []
+        cells = planned(config, catalog, Scope(first, end), [dataset])[dataset].cells
     gaps = cells.filter(pl.col("state") == "gap")
     return sorted(
         (entity, date.fromisoformat(period))
@@ -683,7 +743,7 @@ def last_answered(config, dataset: str) -> date | None:
     return None if days.is_empty() else date.fromisoformat(days.max())
 
 
-def unanswered_keys(config, dataset: str, start: date, end: date) -> pl.DataFrame:
+def unanswered_keys(config, dataset: str, start: date | None, end: date) -> pl.DataFrame:
     """The (symbol, trade_date) cells *dataset* owes in [*start*, *end*] that no fetch answered.
 
     A cell the source answered empty is a fact about the market (nothing
@@ -692,7 +752,10 @@ def unanswered_keys(config, dataset: str, start: date, end: date) -> pl.DataFram
     """
     keys = {"symbol": pl.String, "trade_date": pl.Date}
     with ledger(config) as catalog:
-        cells = planned(config, catalog, Scope(start, end), [dataset])[dataset].cells
+        first = lake_history_start(config, catalog, dataset, end) if start is None else start
+        if first is None or first > end:
+            return pl.DataFrame(schema=keys)
+        cells = planned(config, catalog, Scope(first, end), [dataset])[dataset].cells
         answered = cov.attempted(catalog, dataset).filter(pl.col("outcome") == "empty")
     gaps = cells.filter(pl.col("state") == "gap").select("period", "entity")
     return (
@@ -798,7 +861,7 @@ def seed_rechecks(config, datasets: Iterable[str]) -> int:
     if not rows:
         return 0
     with lake_mutation_lock(config.meta_root, blocking=True):
-        with Catalog(lake_root(config)) as catalog:
+        with Catalog(lake_root(config), create=True) as catalog:
             cov.record(catalog, pl.DataFrame(rows), message="seed:rechecks")
     return len(rows)
 
@@ -850,7 +913,7 @@ def record_answers(config, run_id: str, findings: Iterable[dict]) -> int:
     findings = list(findings)
     if not any(item.get("check") in {ANSWER_CHECK, RECHECK_CHECK} for item in findings):
         return 0
-    with lake_mutation_lock(config.meta_root), Catalog(lake_root(config)) as catalog:
+    with lake_mutation_lock(config.meta_root), Catalog(lake_root(config), create=True) as catalog:
         write = Write(catalog)
         count = attach_answers(write, run_id, findings)
         if count:
@@ -881,7 +944,7 @@ def record_cell_answers(
     if not rows:
         return 0
     with lake_mutation_lock(config.meta_root, blocking=True):
-        with Catalog(lake_root(config)) as catalog:
+        with Catalog(lake_root(config), create=True) as catalog:
             cov.record(catalog, pl.DataFrame(rows), message=f"{run}:answers")
     return len(rows)
 
@@ -910,5 +973,5 @@ def record_seeds(config, found: Iterable[Seed], *, run: str = "seed:meta-state")
     if not rows:
         return None
     with lake_mutation_lock(config.meta_root, blocking=True):
-        with Catalog(lake_root(config)) as catalog:
+        with Catalog(lake_root(config), create=True) as catalog:
             return cov.record(catalog, pl.DataFrame(rows), message=run)

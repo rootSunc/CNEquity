@@ -1038,11 +1038,11 @@ def _repair_outstanding(
 
 def _planned_owed_rows(cfg, dataset: str, since: date | None = None) -> list[dict]:
     """The (symbol, trade_date) keys the coverage planner owes, from *since* to today."""
-    from cnequity.quality.planned_coverage import HISTORY_START, owed_cells
+    from cnequity.quality.planned_coverage import owed_cells
 
     return [
         {"symbol": symbol, "trade_date": day.isoformat()}
-        for symbol, day in owed_cells(cfg, dataset, since or HISTORY_START, shanghai_today())
+        for symbol, day in owed_cells(cfg, dataset, since, shanghai_today())
     ]
 
 

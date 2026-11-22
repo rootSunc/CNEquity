@@ -12,7 +12,7 @@ import os
 import tempfile
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import IO
 
@@ -179,7 +179,15 @@ class StateStore:
         rows = self.get_payload(dataset).get("missing_ranges", [])
         if not isinstance(rows, list):
             raise ValueError(f"state field {dataset}.missing_ranges must be a list")
-        return {date.fromisoformat(row["start"]) for row in rows}
+        days: set[date] = set()
+        for row in rows:
+            start = date.fromisoformat(str(row["start"]))
+            end = date.fromisoformat(str(row.get("end") or row["start"]))
+            if end < start:
+                start, end = end, start
+            for offset in range((end - start).days + 1):
+                days.add(start + timedelta(days=offset))
+        return days
 
     # Read once, from an older lake, by the ``attempts-ledger`` migration.
     def get_outstanding_keys(self, dataset: str) -> list[dict]:

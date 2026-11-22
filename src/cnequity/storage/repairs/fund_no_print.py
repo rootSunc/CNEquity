@@ -26,11 +26,11 @@ from cnequity.storage.raw_archive import RawArchiveError, RawPayloadArchive
 
 def _owed_fund_sessions(config) -> list[dict]:
     """The (symbol, trade_date) daily-bar cells the coverage planner still owes."""
-    from cnequity.quality.planned_coverage import HISTORY_START, owed_cells
+    from cnequity.quality.planned_coverage import owed_cells
 
     return [
         {"symbol": symbol, "trade_date": day.isoformat()}
-        for symbol, day in owed_cells(config, "daily_bars", HISTORY_START, shanghai_today())
+        for symbol, day in owed_cells(config, "daily_bars", None, shanghai_today())
     ]
 
 

@@ -172,14 +172,13 @@ def _owed_datasets(cfg) -> list[str]:
     """Datasets owed per key that the coverage planner says still owe some."""
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.market_time import shanghai_today
-    from cnequity.quality.planned_coverage import HISTORY_START, coverage_of, owed_cells
+    from cnequity.quality.planned_coverage import coverage_of, owed_cells
 
     today = shanghai_today()
     return sorted(
         name
         for name, spec in DATASETS.items()
-        if coverage_of(spec, today, cfg).entity is not None
-        and owed_cells(cfg, name, HISTORY_START, today)
+        if coverage_of(spec, today, cfg).entity is not None and owed_cells(cfg, name, None, today)
     )
 
 
