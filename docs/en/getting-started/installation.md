@@ -16,7 +16,7 @@ Check the installed version with `cne --version`. Read the target version's [rel
 | Target | Lake upgrade entry point |
 |---|---|
 | 0.24.0 | See the [0.24.0 release notes](https://github.com/rootSunc/CNEquity/releases/tag/v0.24.0). This release added no required routine data migrations. Use `cne migrate` to preview any migrations the lake still owes from older releases. |
-| 0.25.0 | Use `cne upgrade` as described below. An existing lake may refuse write commands until it is upgraded. New production lakes use the lake catalog from the start. |
+| 0.25.0 | Use `cne upgrade` as described below. An existing lake may refuse write commands until it is upgraded. New production lakes use the lake catalog from the start. The 0.25.x series is the last that upgrades lakes built by 0.24.0 or earlier. |
 | Other versions | Use the matching release notes. When skipping releases, check each intervening version for compatibility changes. |
 
 ## Upgrade to 0.25.0 {#cne-upgrade}
@@ -29,5 +29,8 @@ Check the installed version with `cne --version`. Read the target version's [rel
 
 !!! warning "Old layout cleanup"
     The 0.25.0 upgrade removes old layout files superseded by the lake catalog. The default upgrade backup contains lake records. Downgrading the software or restoring metadata cannot reconstruct removed data files. Use the pre-upgrade data copy to roll back.
+
+!!! note "Lakes built before 0.25.0 upgrade through 0.25.x"
+    Releases after 0.25.x no longer upgrade lakes built before 0.25.0. For a lake built by 0.24.0 or earlier, install 0.25.x and complete `cne upgrade --apply` first, then upgrade to a newer release.
 
 To preview a single migration, use `cne migrate --only <migration ID>`. Adding `--apply` runs the selected migration even if it has already been recorded.
