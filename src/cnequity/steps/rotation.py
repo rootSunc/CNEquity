@@ -402,7 +402,8 @@ def _sweep_sector_bars(
 
 def _backfill_sector_bars(config: Config, trade_date: date, run_id: str) -> dict:
     """Historical board bars from 同花顺. Partial sweeps surface as an audit finding."""
-    if run_flags_of(config).sector_bars_force:
+    redo = backfill_of(config).redo
+    if run_flags_of(config).sector_bars_force or redo == "all":
         clear_sector_bars_backfill_state(config)
 
     # `--start/--end` narrow the sweep so filling a small hole does not re-fetch
@@ -414,7 +415,9 @@ def _backfill_sector_bars(config: Config, trade_date: date, run_id: str) -> dict
         run_id,
         start=start,
         end=end,
-        skip_sectors=_sector_bars_completed(config, (start, end), run_id=run_id),
+        skip_sectors=set()
+        if redo == "all"
+        else _sector_bars_completed(config, (start, end), run_id=run_id),
         mark_completed=True,
     )
 

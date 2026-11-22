@@ -793,10 +793,15 @@ def step_financial_statement_items(
     # is compacted by the next one) are skipped too; their rows are in the lake.
     resume_scope = _resume_scope("financial_statement_items", backfill_of(config).symbol_list())
     marks = _StagedUnits(config, "financial_statement_items", run_id, resume_scope)
+    redo = backfill_of(config).redo
     published_units = (
-        _reusable_units(config, "financial_statement_items", resume_scope) - recoverable_units
-        if backfill
-        else set()
+        set()
+        if redo == "all"
+        else (
+            _reusable_units(config, "financial_statement_items", resume_scope) - recoverable_units
+            if backfill
+            else set()
+        )
     )
 
     def _stage_unit(unit: str, scope: str, rows: list[dict]) -> None:
@@ -1081,7 +1086,9 @@ def _run_shareholder_step(
     # interrupted sweep resumes after them instead of starting over.
     resume_scope = _resume_scope(dataset, symbols) if backfill_of(config).active else None
     published_units = (
-        _reusable_units(config, dataset, resume_scope) if resume_scope is not None else set()
+        set()
+        if backfill_of(config).redo == "all"
+        else (_reusable_units(config, dataset, resume_scope) if resume_scope is not None else set())
     )
     marks = _StagedUnits(config, dataset, run_id, resume_scope)
     windows_reused = 0

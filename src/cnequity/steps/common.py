@@ -1037,13 +1037,15 @@ def walk_day_backfill(
         )
     else:
         days = list_trading_dates(config, start, bounded_end)
-    if existing_dates_fn is not None:
+    redo = backfill_of(config).redo
+    if redo == "all":
+        have = set()
+    elif existing_dates_fn is not None:
         have = existing_dates_fn(days)
     else:
         from cnequity.quality.planned_coverage import settled_days
 
         # Covered, answered empty or not due: the planner's, not the rows'.
-        redo = backfill_of(config).redo
         have = settled_days(config, dataset, start, bounded_end, redo=redo) if days else set()
     # A failed attempt can already have durable, validated chunks in this
     # run.  Curated-only resume would fetch them again; worse, the old

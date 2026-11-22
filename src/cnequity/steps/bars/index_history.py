@@ -154,7 +154,7 @@ def step_daily_bars_history(config: Config, trade_date: date, run_id: str, conte
     # "a session with no rows" in the next.
     end = last_session_on_or_before(config, backfill_of(config).end or date(2015, 12, 31))
     plan = _history_plan(config, start, end)
-    resume = set(context.get("_history_done") or [])
+    resume = set() if backfill_of(config).redo == "all" else set(context.get("_history_done") or [])
     if resume:
         plan = [p for p in plan if p[0] not in resume]
 

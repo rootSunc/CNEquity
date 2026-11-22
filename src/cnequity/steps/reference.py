@@ -1541,10 +1541,9 @@ def step_trading_status_derive(
         # staging file overwrite the other.
         batch_id=str(context.get("_batch_id") or "derive-0"),
     )
-    from cnequity.quality.planned_coverage import HISTORY_START, unanswered_keys
+    from cnequity.quality.planned_coverage import unanswered_keys
 
-    first = start or HISTORY_START
-    partial = not unanswered_keys(config, "daily_bars", first, end or trade_date).is_empty()
+    partial = not unanswered_keys(config, "daily_bars", start, end or trade_date).is_empty()
     return {
         "rows_read": rows,
         "rows_written": rows,
@@ -1623,14 +1622,22 @@ def _backfill_trading_status_st_source(
 
     start = backfill_of(config).start or BACKFILL_START
     end = backfill_of(config).end or trade_date
+    redo = backfill_of(config).redo
     scope = build_st_scope(universe, start, end, universe=universe_name, source=source)
     checkpoint = load_st_checkpoint(config, scope)
-    completed = reusable_st_checkpoint_symbols(config, checkpoint, run_id)
+    raw_completed = (
+        set() if redo == "all" else reusable_st_checkpoint_symbols(config, checkpoint, run_id)
+    )
     evidence_rows = {
         symbol: int(count)
         for symbol, count in (checkpoint.get("evidence_rows_by_symbol") or {}).items()
-        if symbol in completed
+        if symbol in raw_completed
     }
+    completed = (
+        {symbol for symbol in raw_completed if evidence_rows.get(symbol, 0) > 0}
+        if redo == "empty"
+        else raw_completed
+    )
     unresolved = set(checkpoint.get("unresolved_symbols", []))
     todo = [symbol for symbol in universe if symbol not in completed]
     if not todo:

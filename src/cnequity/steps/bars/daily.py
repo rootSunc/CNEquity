@@ -333,6 +333,7 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
                 row["symbol"], (row.get("list_date"), row.get("delist_date"), row.get("asset_type"))
             )
         symbols = list(dict.fromkeys([*symbols, *(row["symbol"] for row in discovered)]))
+    redo = backfill_of(config).redo if backfill_of(config).active else "gaps"
     metadata = instrument_metadata(config)
     ownership = classify_daily_bar_ownership(
         symbols,
@@ -347,7 +348,11 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
             symbols=symbols,
         ),
         trading_sessions=list_trading_dates(config, start, end),
-        negative_evidence=load_negative_evidence(config, "daily_bars", metadata=metadata),
+        negative_evidence=(
+            {}
+            if redo in {"empty", "all"}
+            else load_negative_evidence(config, "daily_bars", metadata=metadata)
+        ),
         no_print_keys=approved_no_print_keys(config, start=start, end=end),
     )
     bar_scope._record_delegated_ownership_batch(
@@ -366,7 +371,11 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
     # (ADR-0005): EastMoney clist.
     fetch_scope = list(dict.fromkeys(ownership.generic + ownership.unknown + ownership.probe))
     tdx_symbols, fallback_symbols = split_by_quote_source(fetch_scope)
-    reused_symbols = bar_scope._reuse_successful_daily_bars(config, run_id, fetch_scope, start, end)
+    reused_symbols = (
+        set()
+        if redo == "all"
+        else bar_scope._reuse_successful_daily_bars(config, run_id, fetch_scope, start, end)
+    )
     fetch_tdx_symbols = [symbol for symbol in tdx_symbols if symbol not in reused_symbols]
     fetch_fallback_symbols = [symbol for symbol in fallback_symbols if symbol not in reused_symbols]
     # Each exchange publishes its whole board for the session it is currently
