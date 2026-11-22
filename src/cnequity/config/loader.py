@@ -24,7 +24,12 @@ from cnequity.config.resources import (
     DuckDBResources,
     parse_resources,
 )
-from cnequity.config.retention import DEFAULT_KEEP_GENERATIONS, revision_keep
+from cnequity.config.retention import (
+    DEFAULT_KEEP_DAYS,
+    DEFAULT_KEEP_GENERATIONS,
+    revision_keep,
+    revision_keep_days,
+)
 from cnequity.domain.rate_limit import RateLimitSpec
 from cnequity.domain.symbols import INGEST_UNIVERSES
 from cnequity.meta_layout import MANIFEST_FILE, META_DIR
@@ -435,6 +440,9 @@ class Config:
     # Generations kept after ``cne backfill`` and ``cne run daily``. Matches
     # the existing retention count of 5. 0 keeps every generation.
     revision_keep_generations: int = DEFAULT_KEEP_GENERATIONS
+    # A superseded revision is kept only if it was current within this many
+    # days (0: no limit). The current revision and held ones always stay.
+    revision_keep_days: int = DEFAULT_KEEP_DAYS
     # Hosts that use ``eastmoney_proxy`` (a name also covers its subdomains);
     # the others connect directly. Empty sends every EastMoney host through it.
     eastmoney_proxy_hosts: tuple[str, ...] = ()
@@ -1339,6 +1347,9 @@ def load_config(path: str | Path) -> Config:
     revision_keep_generations = revision_keep(
         None, retention_raw.get("keep_generations", DEFAULT_KEEP_GENERATIONS)
     )
+    revision_keep_days_value = revision_keep_days(
+        None, retention_raw.get("keep_days", DEFAULT_KEEP_DAYS)
+    )
     storage_publish = storage_raw.get("publish", "generation")
     if storage_publish not in ("generation", "catalog"):
         raise ValueError('[storage].publish must be "generation" or "catalog"')
@@ -1414,6 +1425,7 @@ def load_config(path: str | Path) -> Config:
         eastmoney_daily_budget=eastmoney_daily_budget,
         ths_js_runtime=ths_js_runtime,
         revision_keep_generations=revision_keep_generations,
+        revision_keep_days=revision_keep_days_value,
         storage_publish=storage_publish,
         eastmoney_timeout_sec=eastmoney_timeout_sec,
         baostock_batch_size=baostock_batch_size,

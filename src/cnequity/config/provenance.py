@@ -7,7 +7,7 @@ from hashlib import sha256
 from cnequity import __version__
 from cnequity.config.logging import logging_settings
 from cnequity.config.resources import DEFAULT_RESOURCES, resources_for
-from cnequity.config.retention import revision_keep
+from cnequity.config.retention import revision_keep, revision_keep_days
 from cnequity.domain.rate_limit import DEFAULT_SOURCE_INTERVALS
 
 _RECORDED_SOURCES = frozenset(DEFAULT_SOURCE_INTERVALS) | {
@@ -57,6 +57,7 @@ def run_configuration(config) -> dict:
         "tushare_configured": bool(getattr(config, "tushare_token", None)),
         "eastmoney_push2_paused": bool(getattr(config, "eastmoney_push2_paused", False)),
         "keep_generations": revision_keep(config),
+        "keep_days": revision_keep_days(config),
         "duckdb": resources,
         "query_scan_budget_rows": getattr(config, "query_scan_budget_rows", None),
         "logging": asdict(logging_settings(config)),

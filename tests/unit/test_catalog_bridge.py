@@ -525,3 +525,123 @@ def test_retention_deletes_files_no_snapshot_registers_once_past_the_grace(cfg, 
     assert result["orphans_deleted"] == 1
     assert not old.exists() and fresh.exists()
     assert all(path.exists() for path in registered)
+
+
+def _factors(day: date, factor: float) -> pl.DataFrame:
+    from cnequity.domain.schemas import ADJ_FACTORS_SCHEMA
+
+    return pl.DataFrame(
+        [
+            {
+                "symbol": "600000.SH",
+                "trade_date": day,
+                "adjust_type": "hfq",
+                "factor": factor,
+                "source": "test",
+                "data_version": "v1",
+                "fetched_at": FETCHED,
+            }
+        ],
+        schema=ADJ_FACTORS_SCHEMA,
+    )
+
+
+def _factor_at(root, revision_id: str) -> tuple[int, list]:
+    from cnequity.storage.catalog_bridge import revision_snapshot
+
+    with Catalog(root, read_only=True) as catalog:
+        version, _ = revision_snapshot(catalog, "adj_factors", revision_id)
+        rows = catalog.execute(f"SELECT factor FROM adj_factors AT (VERSION => {version})")
+        return version, rows.fetchall()
+
+
+def _live(root) -> set[int]:
+    with Catalog(root, read_only=True) as catalog:
+        rows = catalog.execute("SELECT snapshot_id FROM ducklake_snapshots('lake')").fetchall()
+    return {int(row[0]) for row in rows}
+
+
+def test_retention_keeps_no_old_snapshot_for_a_dataset_that_has_not_changed(tmp_path):
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.storage.catalog_bridge import apply_retention, plan_retention
+
+    config = Config(data_root=tmp_path)
+    root = lake_root(config)
+    day = date(2024, 1, 2)
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 10.0}), run_id="bars-0")
+    factors = publish_rows(config, "adj_factors", _factors(day, 1.0), run_id="factors")
+    for close in (11.0, 12.0, 13.0):
+        publish_rows(config, "daily_bars", _rows(day, {"600000.SH": close}), run_id=f"{close}")
+    recorded, _ = _factor_at(root, factors.revision_id)
+
+    with Catalog(root) as catalog:
+        # Each dataset keeps only its current revision: the latest snapshot holds both.
+        assert plan_retention(catalog, keep=1).keep == {catalog.snapshot()}
+        preview = apply_retention(catalog, keep=1)
+        assert preview.bytes_freed > 0 and preview.snapshots_expired > 0
+        result = apply_retention(catalog, keep=1, apply=True, grace_hours=-1)
+    assert result.applied and result.files_deleted > 0
+    assert recorded not in _live(root)
+    version, rows = _factor_at(root, factors.revision_id)
+    assert version != recorded and rows == [(1.0,)]
+
+
+def test_retention_moves_a_kept_revision_to_a_later_snapshot_with_the_same_rows(tmp_path):
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.storage.catalog_bridge import apply_retention
+
+    config = Config(data_root=tmp_path)
+    root = lake_root(config)
+    day = date(2024, 1, 2)
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 10.0}), run_id="bars-0")
+    first = publish_rows(config, "adj_factors", _factors(day, 1.0), run_id="f1")
+    first_recorded, _ = _factor_at(root, first.revision_id)
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 11.0}), run_id="bars-1")
+    second = publish_rows(config, "adj_factors", _factors(day, 2.0), run_id="f2")
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 12.0}), run_id="bars-2")
+
+    with Catalog(root) as catalog:
+        assert apply_retention(catalog, keep=2, apply=True).applied
+    assert first_recorded not in _live(root)
+    assert _factor_at(root, first.revision_id)[1] == [(1.0,)]
+
+    # The revision that was current when retention ran stays readable once replaced.
+    publish_rows(config, "adj_factors", _factors(day, 3.0), run_id="f3")
+    assert _factor_at(root, second.revision_id)[1] == [(2.0,)]
+    with Catalog(root) as catalog:
+        assert apply_retention(catalog, keep=2, apply=True).applied
+    assert _factor_at(root, second.revision_id)[1] == [(2.0,)]
+    with Catalog(root, read_only=True) as catalog:
+        from cnequity.storage.catalog_bridge import revision_snapshot
+
+        # Out of the newest two: no longer readable, and no longer pointed at.
+        version, _ = revision_snapshot(catalog, "adj_factors", first.revision_id)
+    assert version not in _live(root)
+
+
+def test_retention_keeps_a_replaced_revision_only_within_the_days_unless_held(tmp_path):
+    import time
+
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.storage.catalog_bridge import plan_retention
+
+    config = Config(data_root=tmp_path)
+    root = lake_root(config)
+    day = date(2024, 1, 2)
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 10.0}), run_id="bars")
+    first = publish_rows(config, "adj_factors", _factors(day, 1.0), run_id="f1")
+    publish_rows(config, "adj_factors", _factors(day, 2.0), run_id="f2")
+    first_recorded, _ = _factor_at(root, first.revision_id)
+    later = time.time() + 3 * 86400
+    held = {f"revision/adj_factors/{first.revision_id}"}
+    with Catalog(root, read_only=True) as catalog:
+        assert first_recorded in plan_retention(catalog, keep=5, keep_days=7, now=later).keep
+        assert first_recorded not in plan_retention(catalog, keep=5, keep_days=1, now=later).keep
+        assert first_recorded in plan_retention(catalog, keep=5, keep_days=0, now=later).keep
+        assert (
+            first_recorded
+            in plan_retention(catalog, keep=5, held=held, keep_days=1, now=later).keep
+        )

@@ -26,6 +26,7 @@
 - `cne storage catalog-retention` 报告的删除文件数改为清理前后实际减少的文件数。
 - 日更维护的元数据备份（`backups/meta-*.tar.gz`）现在包含湖目录数据库，存为 `lake/catalog.sqlite`：它记录着发布进湖目录的每个修订，此前不在备份里。用 SQLite 备份接口复制，运行中写入也能得到一致的副本；数据文件不在其中。
 - `cne storage catalog-retention --apply`（日更维护会运行）也删除写入中途崩溃留下、没有登记进湖目录的数据文件，同样等过 24 小时宽限期；只在已切换到湖目录的湖上、持湖锁时进行，输出新增 `orphans_deleted`。
+- 修复湖目录保留从不过期快照、旧文件越积越多：快照是全湖共享的，此前给每个数据集各留一个快照保住它最近的修订，一个很少更新的数据集会因此一直留着旧快照，连带别的表被替换掉的文件都删不掉，实际上一个快照都不过期。现在一个修订从发布起到它的表下一次变化之间的任一快照都能读它，保留时为尽量多的保留修订共用最新的那一个，并把这些修订的读取移过去（记在湖目录的 `_revision_reads` 里），按修订号固定的读取照常可用。新增 `[storage.retention].keep_days`（默认 7，0 为不限）：被替换的修订只有在这么多天内当过当前修订才保留，当前修订和被持有的修订始终保留。`cne storage catalog-retention` 输出新增 `keep_days` 和 `bytes_freed`（宽限期过后可删除的字节数）。
 - `top_holders` 的日更不再按记录日回看 240 天。流通股东按公告日回看 30 天，全口径只取这些公告对应的记录日；回填仍按记录日分季扫描。取数时会记下每次请求、每 20 页的进度，以及每个记录日保留和因没有披露日而丢弃的行数。
 - 新迁移 `drop-generations`（由 `cne upgrade` 执行，**不可恢复**）：删除旧发布方式留下、湖目录已经取代的文件，即 `curated/` 和 `derived/` 下各数据集的目录、`meta/revisions/data` 下的代目录、`meta/revisions/<数据集>/` 下的指针和回执。用 `cne migrate --only drop-generations` 单独预览清理范围。被持有的修订（`cne storage hold`、案例依赖、引用文件提到的修订号）连同回执保留，仍可按修订号读取；`curated/` 下不是数据集的目录、湖目录没有记录的数据集原样留下并列出。仍在直接读 `curated/`、`derived/` 的外部工具必须先改用 `cne storage export`。
 - 修复 `cne storage verify-catalog` 在还没有任何发布进湖目录的修订时报错（`_revisions` 表还没有摘要列）；现在返回 0 个修订。

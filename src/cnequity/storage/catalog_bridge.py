@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from cnequity.config.resources import resources_for
-from cnequity.config.retention import revision_keep
+from cnequity.config.retention import revision_keep, revision_keep_days
 from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.meta_layout import LAKE_DIR
@@ -30,6 +30,8 @@ from cnequity.storage.revision_records import (
 from cnequity.storage.revisions import RevisionStore
 from equitylake_core.catalog import (
     ALIAS,
+    KNOWN_METADATA_FORMATS,
+    METADATA,
     REVISIONS_TABLE,
     Catalog,
     ImportResult,
@@ -127,6 +129,9 @@ class SyncResult:
 
 
 SYNC_FILES_TABLE = "_sync_files"
+#: Where retention moved a kept revision's reads: a later snapshot holding the
+#: same rows of that dataset, kept in place of the one the revision was recorded at.
+READS_TABLE = "_revision_reads"
 #: The record an earlier release kept: the same rows, each carrying its file list.
 LEGACY_SYNC_TABLE = "_revision_sync"
 
@@ -263,6 +268,8 @@ def _records(catalog: Catalog) -> _Records | None:
             if old is None or int(snapshot) > old[0]:
                 latest[(dataset, revision_id)] = (int(snapshot), bool(flag))
         snapshots.update(latest)
+    if READS_TABLE in tables:
+        snapshots.update(_read_overrides(catalog))
     found = _Records(synced, snapshots)
     with _records_lock:
         catalog._cnequity_records = (current, found)
@@ -635,6 +642,31 @@ def revision_snapshots(catalog: Catalog) -> list[tuple[str, str, int, bool]]:
     return [(d, r, int(s), bool(u)) for d, r, s, u in rows]
 
 
+def _read_overrides(catalog: Catalog) -> dict[tuple[str, str], tuple[int, bool]]:
+    return {
+        (dataset, revision_id): (int(snapshot), bool(flag))
+        for dataset, revision_id, snapshot, flag in catalog.execute(
+            f"SELECT dataset, revision_id, snapshot, unique_keys FROM {READS_TABLE}"
+        ).fetchall()
+    }
+
+
+def revision_read_snapshots(catalog: Catalog) -> list[tuple[str, str, int, bool]]:
+    """Like :func:`revision_snapshots`, but each revision at the snapshot it is read from.
+
+    That is the recorded one unless retention moved the revision's reads to a
+    later snapshot holding the same rows (:data:`READS_TABLE`).
+    """
+    moved = _read_overrides(catalog) if catalog.has_table(READS_TABLE) else {}
+    found: dict[tuple[str, str], tuple[int, bool]] = {}
+    for dataset, revision_id, snapshot, flag in revision_snapshots(catalog):
+        key = (dataset, revision_id)
+        if key not in found or snapshot > found[key][0]:
+            found[key] = (snapshot, flag)
+    found.update(moved)
+    return [(d, r, s, u) for (d, r), (s, u) in found.items()]
+
+
 def revision_snapshot(catalog: Catalog, dataset: str, revision_id: str) -> tuple[int, bool] | None:
     """The catalog snapshot that holds *dataset* at *revision_id*, with its unique-keys flag.
 
@@ -644,6 +676,14 @@ def revision_snapshot(catalog: Catalog, dataset: str, revision_id: str) -> tuple
     records = _records(catalog)
     if records is not None:
         return records.snapshots.get((dataset, revision_id))
+    if catalog.has_table(READS_TABLE):
+        row = catalog.execute(
+            f"SELECT snapshot, unique_keys FROM {READS_TABLE} "
+            "WHERE dataset = ? AND revision_id = ?",
+            [dataset, revision_id],
+        ).fetchone()
+        if row:
+            return int(row[0]), bool(row[1])
     if catalog.has_table(REVISIONS_TABLE):
         row = catalog.execute(
             f"SELECT snapshot_id, unique_keys FROM {REVISIONS_TABLE} "
@@ -914,27 +954,188 @@ class RetentionResult:
     files_deleted: int
     applied: bool
     active_readers: bool = False
+    #: Bytes of data files no kept snapshot uses; deleted once past the grace.
+    #: ``None`` where the catalog's layout is not one this code reads.
+    bytes_freed: int | None = None
 
 
-def retained_snapshots(catalog: Catalog, *, keep: int, held: set[str]) -> set[int]:
-    """Snapshots to keep: each dataset's ``keep`` newest revisions, held ones, and the latest.
+@dataclass(frozen=True)
+class RetentionPlan:
+    #: Snapshots that stay: the latest and one per group of kept revisions.
+    keep: set[int]
+    #: (dataset, revision_id) -> (snapshot, unique_keys) for each kept
+    #: revision now read from a snapshot other than the one it was recorded at.
+    reads: dict[tuple[str, str], tuple[int, bool]]
+    #: Every snapshot the catalog has now, with its time (epoch seconds).
+    snapshots: dict[int, float]
 
-    A snapshot is lake-wide, so keeping one keeps every table's files as of it.
-    ``held`` are lifecycle object ids (``revision/<dataset>/<revision_id>``).
+
+_NEVER = 1 << 62
+
+
+def _table_changes(catalog: Catalog) -> dict[str, list[int]] | None:
+    """Snapshots that changed each table, by table name; ``None`` without a known layout.
+
+    The catalog keeps this log for expired snapshots too, so it says whether
+    a table stayed the same between two snapshots even when the ones in
+    between are gone. Every kind of change counts, a file rewrite included:
+    keeping one snapshot more is the only cost of counting too much.
     """
-    keep_ids = {catalog.snapshot()}
-    rows = sorted(
-        ((d, r, s) for d, r, s, _ in revision_snapshots(catalog)), key=lambda row: -row[2]
-    )
-    per_dataset: dict[str, int] = {}
-    for dataset, revision_id, snapshot in rows:
-        newest = per_dataset.get(dataset, 0)
-        if newest < keep:
-            keep_ids.add(int(snapshot))
-            per_dataset[dataset] = newest + 1
-        elif f"revision/{dataset}/{revision_id}" in held:
-            keep_ids.add(int(snapshot))
-    return keep_ids
+    import re
+
+    if catalog.metadata_format() not in KNOWN_METADATA_FORMATS:
+        return None
+    names: dict[int, str] = {
+        int(table_id): name
+        for table_id, name in catalog.execute(
+            f"SELECT table_id, table_name FROM {METADATA}.ducklake_table"
+        ).fetchall()
+    }
+    changed: dict[str, set[int]] = {}
+    for snapshot, made in catalog.execute(
+        f"SELECT snapshot_id, changes_made FROM {METADATA}.ducklake_snapshot_changes"
+    ).fetchall():
+        for table_id in re.findall(r"[a-z_]+:(\d+)", made or ""):
+            name = names.get(int(table_id))
+            if name is not None:
+                changed.setdefault(name, set()).add(int(snapshot))
+    return {name: sorted(snapshots) for name, snapshots in changed.items()}
+
+
+def plan_retention(
+    catalog: Catalog,
+    *,
+    keep: int,
+    held: set[str] = frozenset(),
+    keep_days: int = 0,
+    now: float | None = None,
+) -> RetentionPlan:
+    """Which snapshots retention keeps, and where each kept revision is read from.
+
+    A revision is kept when it is one of its dataset's ``keep`` newest and was
+    current at some time in the last ``keep_days`` days (0: at any time), or
+    when a hold protects it (``held`` are ``revision/<dataset>/<revision_id>``).
+
+    A snapshot is lake-wide: keeping one keeps every table's files as of it.
+    So a kept revision is not tied to the snapshot it was recorded at. Its
+    rows stay the same from that snapshot until the next change to its table,
+    and any snapshot in between serves it. One snapshot is chosen for as many
+    kept revisions as it can serve, the latest such: an old snapshot kept for
+    a dataset that rarely changes would keep every other table's replaced
+    files with it. Without the catalog's change log, each revision is read
+    from its recorded snapshot only.
+    """
+    import time
+
+    snapshots = {
+        int(snapshot): float(stamp)
+        for snapshot, stamp in catalog.execute(
+            f"SELECT snapshot_id, epoch(snapshot_time) FROM ducklake_snapshots('{ALIAS}')"
+        ).fetchall()
+    }
+    live = sorted(snapshots)
+    latest = live[-1]
+    now = time.time() if now is None else now
+    changes = _table_changes(catalog)
+
+    recorded: dict[tuple[str, str], tuple[int, bool]] = {}
+    for dataset, revision_id, snapshot, flag in revision_snapshots(catalog):
+        key = (dataset, revision_id)
+        if key not in recorded or snapshot > recorded[key][0]:
+            recorded[key] = (snapshot, flag)
+
+    def end_of(dataset: str, start: int) -> int:
+        """The first snapshot after *start* that changed *dataset*'s table."""
+        if changes is None:
+            return start + 1
+        from bisect import bisect_right
+
+        changed = changes.get(dataset, [])
+        at = bisect_right(changed, start)
+        return changed[at] if at < len(changed) else _NEVER
+
+    def time_of(snapshot: int) -> float:
+        """When *snapshot* was taken, or if it expired, an upper bound: the next one kept."""
+        from bisect import bisect_left
+
+        if snapshot in snapshots:
+            return snapshots[snapshot]
+        at = bisect_left(live, snapshot)
+        return snapshots[live[at]] if at < len(live) else now
+
+    by_dataset: dict[str, list[tuple[int, str, bool]]] = {}
+    for (dataset, revision_id), (snapshot, flag) in recorded.items():
+        by_dataset.setdefault(dataset, []).append((snapshot, revision_id, flag))
+    cutoff = now - keep_days * 86400 if keep_days else None
+    wanted: list[tuple[int, int, str, str, bool]] = []
+    for dataset, revisions in by_dataset.items():
+        for rank, (start, revision_id, flag) in enumerate(sorted(revisions, reverse=True)):
+            end = end_of(dataset, start)
+            recent = rank < keep and (cutoff is None or end == _NEVER or time_of(end) >= cutoff)
+            if recent or f"revision/{dataset}/{revision_id}" in held:
+                wanted.append((end, start, dataset, revision_id, flag))
+
+    from bisect import bisect_left
+
+    chosen = {latest}
+    reads: dict[tuple[str, str], tuple[int, bool]] = {}
+    for end, start, dataset, revision_id, flag in sorted(wanted):
+        # The latest live snapshot in [start, end): the greedy choice for
+        # covering intervals with the fewest points, and the newest files.
+        at = bisect_left(live, min(end, latest + 1)) - 1
+        if at < 0 or live[at] < start:
+            continue  # Nothing left to read it from.
+        taken = [s for s in chosen if start <= s < end]
+        snapshot = max(taken) if taken else live[at]
+        chosen.add(snapshot)
+        if snapshot != start:
+            reads[(dataset, revision_id)] = (snapshot, flag)
+    return RetentionPlan(chosen, reads, snapshots)
+
+
+def retained_snapshots(
+    catalog: Catalog, *, keep: int, held: set[str], keep_days: int = 0
+) -> set[int]:
+    """The snapshots :func:`plan_retention` keeps."""
+    return plan_retention(catalog, keep=keep, held=held, keep_days=keep_days).keep
+
+
+def _bytes_freed(catalog: Catalog, keep: set[int]) -> int | None:
+    """Bytes of the data files that no snapshot in *keep* uses."""
+    if catalog.metadata_format() not in KNOWN_METADATA_FORMATS:
+        return None
+    rows = catalog.execute(
+        f"SELECT begin_snapshot, end_snapshot, file_size_bytes FROM {METADATA}.ducklake_data_file "
+        "WHERE end_snapshot IS NOT NULL"
+    ).fetchall()
+    kept = sorted(keep)
+    from bisect import bisect_left
+
+    freed = 0
+    for begin, end, size in rows:
+        at = bisect_left(kept, int(begin))
+        if at == len(kept) or kept[at] >= int(end):
+            freed += int(size or 0)
+    return freed
+
+
+def _write_reads(catalog: Catalog, reads: dict[tuple[str, str], tuple[int, bool]]) -> None:
+    """Replace :data:`READS_TABLE` with *reads*, in one snapshot."""
+    if not catalog.has_table(READS_TABLE):
+        catalog.execute(
+            f"CREATE TABLE {READS_TABLE} "
+            "(dataset VARCHAR, revision_id VARCHAR, snapshot BIGINT, unique_keys BOOLEAN)"
+        )
+    catalog.keep_rows_inline(READS_TABLE)
+    if _read_overrides(catalog) == reads:
+        return
+    with catalog.transaction(message="retention: read kept revisions from kept snapshots"):
+        catalog.execute(f"DELETE FROM {READS_TABLE}")
+        for (dataset, revision_id), (snapshot, flag) in sorted(reads.items()):
+            catalog.execute(
+                f"INSERT INTO {READS_TABLE} VALUES (?, ?, ?, ?)",
+                [dataset, revision_id, snapshot, flag],
+            )
 
 
 def apply_retention(
@@ -942,13 +1143,16 @@ def apply_retention(
     *,
     keep: int,
     held: set[str] = frozenset(),
+    keep_days: int = 0,
     apply: bool = False,
     grace_hours: int = FILE_GRACE_HOURS,
 ) -> RetentionResult:
-    """Expire every snapshot :func:`retained_snapshots` does not keep, then delete their files.
+    """Expire every snapshot :func:`plan_retention` does not keep, then delete their files.
 
-    Files are deleted only once they have waited ``grace_hours`` since the
-    snapshot that last used them expired. Without *apply* nothing changes.
+    Before anything expires, each kept revision's reads move to the snapshot
+    kept for it, in a commit of their own. Files are deleted only once they
+    have waited ``grace_hours`` since the snapshot that last used them
+    expired. Without *apply* nothing changes.
 
     The DuckLake maintenance functions apply only as ``CALL``; inside a
     ``SELECT`` they report what they would do and change nothing. Their result
@@ -957,18 +1161,18 @@ def apply_retention(
     effect is counted from the files in the lake before and after.
     """
     keep = revision_keep(None, keep)
-    every = {
-        int(row[0])
-        for row in catalog.execute(
-            f"SELECT snapshot_id FROM ducklake_snapshots('{ALIAS}')"
-        ).fetchall()
-    }
+    keep_days = revision_keep_days(None, keep_days)
     if keep == 0:
-        return RetentionResult(len(every), 0, 0, False)
-    keep_ids = retained_snapshots(catalog, keep=keep, held=held)
-    expire = sorted(every - keep_ids)
+        every = int(
+            catalog.execute(f"SELECT count(*) FROM ducklake_snapshots('{ALIAS}')").fetchone()[0]
+        )
+        return RetentionResult(every, 0, 0, False)
+    plan = plan_retention(catalog, keep=keep, held=held, keep_days=keep_days)
+    every = set(plan.snapshots)
+    expire = sorted(every - plan.keep)
+    freed = _bytes_freed(catalog, plan.keep)
     if not apply:
-        return RetentionResult(len(every & keep_ids), len(expire), 0, False)
+        return RetentionResult(len(every & plan.keep), len(expire), 0, False, bytes_freed=freed)
     if catalog.borrows_data:
         raise RuntimeError("a copy of a lake's catalog never deletes the lake's files")
     with ExitStack() as locks:
@@ -976,17 +1180,22 @@ def apply_retention(
             locks.enter_context(lake_files(catalog.root, shared=False, timeout=0))
         except LockTimeout:
             return RetentionResult(len(every), 0, 0, False, active_readers=True)
+        _write_reads(catalog, plan.reads)
         _expired_count, locked_any = catalog.expire_snapshots(expire)
-        remaining = int(
-            catalog.execute(f"SELECT count(*) FROM ducklake_snapshots('{ALIAS}')").fetchone()[0]
-        )
+        remaining = {
+            int(row[0])
+            for row in catalog.execute(
+                f"SELECT snapshot_id FROM ducklake_snapshots('{ALIAS}')"
+            ).fetchall()
+        }
         files_deleted = catalog.cleanup_old_files(grace_hours=grace_hours)
     return RetentionResult(
-        remaining,
-        len(every) - remaining,
+        len(remaining),
+        len(every - remaining),
         files_deleted,
         True,
         locked_any,
+        freed,
     )
 
 
@@ -1010,9 +1219,10 @@ def delete_orphans(catalog: Catalog, *, grace_hours: int = FILE_GRACE_HOURS) -> 
 def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict | None:
     """Apply revision retention to the lake catalog; ``None`` for a lake without one.
 
-    Keeps ``keep`` (or ``[storage.retention].keep_generations``) revisions of
-    every dataset, like the revision store, and every revision a lifecycle hold
-    protects.
+    Keeps, of every dataset, the revisions among its ``keep`` (or
+    ``[storage.retention].keep_generations``) newest that were current within
+    ``[storage.retention].keep_days``, and every revision a lifecycle hold
+    protects (see :func:`plan_retention`).
     """
     from cnequity.storage.lifecycle import LifecycleStore
     from equitylake_core.catalog import CATALOG_FILE
@@ -1021,6 +1231,7 @@ def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict |
     if not (root / CATALOG_FILE).exists():
         return None
     keep = revision_keep(config, keep)
+    keep_days = revision_keep_days(config)
     apply = apply and keep > 0
     from cnequity.file_lock import lake_mutation_lock
 
@@ -1038,7 +1249,9 @@ def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict |
             read_only=not apply,
             **resources_for(config, "maintenance").options(scratch=root / "tmp"),
         ) as catalog:
-            result = apply_retention(catalog, keep=keep, held=held, apply=apply)
+            result = apply_retention(
+                catalog, keep=keep, held=held, keep_days=keep_days, apply=apply
+            )
             switched = RevisionStore(
                 config.meta_root, config.curated_root, config.derived_root, create=False
             ).publishes_to_catalog()
@@ -1052,8 +1265,10 @@ def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict |
                         orphans = delete_orphans(catalog)
     return {
         "keep_revisions": keep,
+        "keep_days": keep_days,
         "snapshots_kept": result.snapshots_kept,
         "snapshots_expired": result.snapshots_expired,
+        "bytes_freed": result.bytes_freed,
         "files_deleted": result.files_deleted,
         "orphans_deleted": orphans,
         "applied": result.applied,

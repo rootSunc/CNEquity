@@ -325,6 +325,18 @@ def test_keep_generations_loads_from_config_and_rejects_a_boolean(tmp_path):
         load_config(path)
 
 
+def test_keep_days_loads_from_config_defaults_to_seven_and_rejects_negative(tmp_path):
+    path = tmp_path / "cnequity.toml"
+    head = f'extends = "builtin"\n[data]\nroot = "{path_for_toml(tmp_path / "lake")}"\n'
+    path.write_text(head, encoding="utf-8")
+    assert load_config(path).revision_keep_days == 7
+    path.write_text(head + "[storage.retention]\nkeep_days = 0\n", encoding="utf-8")
+    assert load_config(path).revision_keep_days == 0
+    path.write_text(head + "[storage.retention]\nkeep_days = -1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="keep_days"):
+        load_config(path)
+
+
 def test_a_snapshot_copy_of_the_raw_archive_is_not_scanned_for_references(tmp_path):
     """A research snapshot copies meta/raw; its archive cites nothing and is skipped."""
     from cnequity.storage.lifecycle import reference_files

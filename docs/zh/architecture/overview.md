@@ -104,7 +104,7 @@ flowchart LR
 
 每个数据集的每次发布产生一个修订（修订号和修订 id），记在湖目录里。读取时可以用 `revision` 或 `revision_map` 固定各依赖数据集的修订；`load_with_receipt()` 返回这次读取实际用到的修订和数据范围。见[Python API](../reference/python-api.md)。
 
-`cne backfill` 和 `cne run daily` 结束时，每个数据集保留最近 `keep_generations` 个修订（默认 5），`cne storage hold` 登记过的修订一直保留。被清理的修订仍有记录，但再读会明确失败，不会改读更新的修订。正在进行的长查询、导出和快照创建期间，清理会避开它们读着的文件；Python 的延迟扫描用 `read_scope()` 保护。
+`cne backfill` 和 `cne run daily` 结束时，每个数据集保留最近 `keep_generations` 个修订（默认 5）中、`keep_days` 天内（默认 7）当过当前修订的那些，`cne storage hold` 登记过的修订一直保留。湖目录的快照是全湖共享的：一个修订从发布起到它的表下一次变化之间的任一快照都能读它，保留时让尽量多的修订共用同一个较新的快照，只留这些快照。被清理的修订仍有记录，但再读会明确失败，不会改读更新的修订。正在进行的长查询、导出和快照创建期间，清理会避开它们读着的文件；Python 的延迟扫描用 `read_scope()` 保护。
 
 长期复现保存研究快照（`cne snapshot create --research`），连同查询参数、配置和软件版本。快照不含凭证。
 

@@ -688,7 +688,7 @@ class LifecycleStore:
         """Live revisions stored in the lake catalog (not legacy generation directories)."""
         from cnequity.meta_layout import LAKE_DIR
         from cnequity.storage import revision_records
-        from cnequity.storage.catalog_bridge import revision_snapshots
+        from cnequity.storage.catalog_bridge import revision_read_snapshots
         from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog
         from equitylake_core.lock import lake_read
 
@@ -708,7 +708,7 @@ class LifecycleStore:
                 ).fetchall()
             }
             snap_by_rev: dict[tuple[str, str], int] = {}
-            for dataset, rid, snap, _unique in revision_snapshots(catalog):
+            for dataset, rid, snap, _unique in revision_read_snapshots(catalog):
                 if int(snap) in live_snaps:
                     snap_by_rev[(dataset, rid)] = int(snap)
         items: list[dict] = []

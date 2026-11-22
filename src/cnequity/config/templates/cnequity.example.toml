@@ -503,6 +503,10 @@ max_payload_bytes = 33554432
 # files no kept generation still shares. An interactive `cne run clean` can
 # delete after its preview; a scheduled run only previews.
 keep_generations = 5
+# A superseded revision is kept only if it was current within this many days;
+# 0 sets no limit. The lake's history is lake-wide, so an old revision kept
+# for one dataset keeps every other table's replaced files of that time too.
+keep_days = 7
 
 [universe]
 # Which instrument classes the daily fetch covers. The security master also
