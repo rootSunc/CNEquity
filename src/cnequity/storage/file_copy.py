@@ -26,10 +26,43 @@ def _clonefile():
     return function
 
 
+#: Linux ``FICLONE`` ioctl (``_IOW(0x94, 9, int)``). btrfs, XFS with reflink
+#: and bcachefs share the source's blocks copy-on-write; ext4 refuses it.
+_FICLONE = 0x40049409
+_UNSUPPORTED = {
+    errno.EXDEV,
+    errno.ENOTSUP,
+    errno.EOPNOTSUPP,
+    errno.EINVAL,
+    errno.ENOSYS,
+    errno.ENOTTY,
+}
+
+
+def _ficlone(src: str | Path, dst: str | Path) -> bool:
+    """Reflink *src* to a new *dst* on Linux; False when the filesystem cannot."""
+    if not sys.platform.startswith("linux"):
+        return False
+    import fcntl
+
+    with open(src, "rb") as source:
+        fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            fcntl.ioctl(fd, _FICLONE, source.fileno())
+        except OSError as exc:
+            os.close(fd)
+            os.unlink(dst)
+            if exc.errno in _UNSUPPORTED:
+                return False
+            raise
+        os.close(fd)
+    return True
+
+
 def copy2_isolated(src: str | Path, dst: str | Path) -> str | Path:
     """Copy to a fresh path with independent writes and copy2 metadata.
 
-    APFS clones have separate inodes and share storage until either file is
+    APFS clones and Linux reflinks have separate inodes and share storage until either file is
     written. Hard links would let a mutable writer corrupt retained revisions
     and are never used. Unsupported filesystems fall back to a byte copy.
     The copy is synced before returning: a revision pointer published after
@@ -42,8 +75,12 @@ def copy2_isolated(src: str | Path, dst: str | Path) -> str | Path:
             fsync_file(dst)
             return dst
         error = ctypes.get_errno()
-        if error not in {errno.EXDEV, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EINVAL, errno.ENOSYS}:
+        if error not in _UNSUPPORTED:
             raise OSError(error, os.strerror(error), os.fspath(dst))
+    elif _ficlone(src, dst):
+        shutil.copystat(src, dst)
+        fsync_file(dst)
+        return dst
     copied = shutil.copy2(src, dst)
     fsync_file(copied)
     return copied

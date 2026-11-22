@@ -1,7 +1,8 @@
 """Where a lake's disk space goes, and how much deleting each part would free.
 
 File sizes overstate what a deletion frees. A lake snapshot and a rehearsal
-copy are APFS clones of the lake's files (``file_copy`` uses ``clonefile``)
+copy are clones of the lake's files (``file_copy`` uses APFS ``clonefile``, or
+a ``FICLONE`` reflink on Linux file systems that support it)
 and share their blocks; a hard-linked file frees nothing until its last link
 goes. Adding up ``st_size`` (what ``du`` does, near enough) reported 99 GB for
 two rehearsal copies that freed under 7 GB.
@@ -14,8 +15,9 @@ So each part of the lake is reported three ways:
   lies in the same part. On macOS this is the file system's own count of a
   file's unshared bytes (``ATTR_CMNEXT_PRIVATESIZE``); elsewhere clones cannot
   be seen, and a file's allocated bytes count. Blocks two files of the same
-  part share count in neither, so this is a lower bound: what deleting the
-  part frees at least.
+  part share count in neither, so on macOS this is a lower bound: what
+  deleting the part frees at least. On a reflink file system (btrfs, XFS) it
+  can overstate a part that shares blocks with another.
 
 The lake's data files are also split by what the catalog says of them: in the
 current snapshot, kept only for older revisions, expired and waiting out the
