@@ -58,6 +58,26 @@ def _lake(tmp_path) -> Config:
     return config
 
 
+def _publish_output(config: Config, dataset: str) -> None:
+    """Publish what a derive called without a run id left in its folder, removals included."""
+    root = config.derived_root / dataset
+    commit_tree(
+        RevisionStore(config.meta_root, config.curated_root, config.derived_root),
+        dataset,
+        run_id=f"derive-{dataset}",
+        changed_files=sorted(root.rglob("*.parquet")),
+        schema_version=1,
+        contract_fingerprint="seed",
+        removed_partitions=True,
+    )
+
+
+def _derive(config: Config, dataset: str, **kwargs) -> dict:
+    summary = derive_minute_resample(config, dataset, **kwargs)
+    _publish_output(config, dataset)
+    return summary
+
+
 def _age(path, seconds: float) -> None:
     for file in path.rglob("*.parquet"):
         stat = file.stat()
@@ -118,19 +138,19 @@ def test_derive_writes_each_session_from_its_best_input(tmp_path):
 
 def test_later_one_minute_backfill_makes_the_session_stale(tmp_path):
     config = _lake(tmp_path)
-    derive_minute_resample(config, "minute_bars_15m")
+    _derive(config, "minute_bars_15m")
     assert stale_sessions(config, "minute_bars_15m") == []
-    assert derive_minute_resample(config, "minute_bars_15m")["rows"] == 0
+    assert _derive(config, "minute_bars_15m")["rows"] == 0
     _write(config, "minute_bars", OLD, _bars("603869.SH", OLD, 1, 30))
     assert stale_sessions(config, "minute_bars_15m") == [OLD]
-    summary = derive_minute_resample(config, "minute_bars_15m")
+    summary = _derive(config, "minute_bars_15m")
     assert summary["sessions"] == 1
     assert summary["symbol_days_from_1m"] == 1
 
 
 def test_restored_input_with_an_older_mtime_is_still_detected(tmp_path):
     config = _lake(tmp_path)
-    derive_minute_resample(config, "minute_bars_15m")
+    _derive(config, "minute_bars_15m")
     # A rollback or backup restore: different content, preserved older mtime.
     _write(config, "minute_bars_5m", OLD, _bars("603869.SH", OLD, 5, 6, volume=50))
     _age(config.curated_root / "minute_bars_5m" / f"trade_date={OLD.isoformat()}", 3600)
@@ -141,9 +161,10 @@ def test_changed_output_or_build_code_makes_sessions_stale(tmp_path, monkeypatch
     import cnequity.derive.minute_resample as module
 
     config = _lake(tmp_path)
-    derive_minute_resample(config, "minute_bars_15m")
+    _derive(config, "minute_bars_15m")
     part = config.derived_root / "minute_bars_15m" / f"trade_date={NEW.isoformat()}"
     pl.read_parquet(part / "part-000.parquet").head(1).write_parquet(part / "part-000.parquet")
+    _publish_output(config, "minute_bars_15m")
     assert stale_sessions(config, "minute_bars_15m") == [NEW]
     monkeypatch.setattr(module, "_derivation_identity", lambda: "new rules")
     assert stale_sessions(config, "minute_bars_15m") == [OLD, NEW]
@@ -151,9 +172,9 @@ def test_changed_output_or_build_code_makes_sessions_stale(tmp_path, monkeypatch
 
 def test_rebuild_that_leaves_nothing_removes_the_old_session(tmp_path):
     config = _lake(tmp_path)
-    derive_minute_resample(config, "minute_bars_15m")
+    _derive(config, "minute_bars_15m")
     _write(config, "minute_bars", NEW, _bars("603869.SH", NEW, 1, 29))
-    summary = derive_minute_resample(config, "minute_bars_15m")
+    summary = _derive(config, "minute_bars_15m")
     assert (summary["sessions_cleared"], summary["skipped_partial_session_1m"]) == (1, 1)
     part = config.derived_root / "minute_bars_15m" / f"trade_date={NEW.isoformat()}"
     assert pl.read_parquet(part / "part-000.parquet").is_empty()

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from tests.catalog_seed import commit_tree
+from tests.catalog_seed import commit_tree, publish_folders
 
 from cnequity.config import Config
 from cnequity.quality.publication import check_repair_publication, evaluate_publication
@@ -200,6 +200,7 @@ def test_repair_reports_a_new_factor_action_contradiction_without_blocking(tmp_p
         schema_version=1,
         contract_fingerprint="test",
     )
+    publish_folders(cfg, "adj_factors")
     old_id = revisions.latest("corporate_actions").revision_id
     monkeypatch.setattr("cnequity.quality.publication._errors", lambda *args: [])
     from cnequity.domain.datasets import granularity_for_dataset

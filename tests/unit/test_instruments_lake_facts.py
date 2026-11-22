@@ -11,6 +11,7 @@ re-running the migration by hand.
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import publish_folders
 
 from cnequity.config import Config
 from cnequity.steps.reference import _carry_lake_facts
@@ -25,6 +26,7 @@ def _lake(tmp_path, rows: list[dict]) -> Config:
     root = cfg.curated_root / "instruments"
     root.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(rows).write_parquet(root / "part-merged.parquet")
+    publish_folders(cfg, "instruments")
     return cfg
 
 

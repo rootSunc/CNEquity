@@ -925,7 +925,32 @@ def resolve_committed_root(
     resolved = store.current_root(name, revision=revision)
     if resolved is None and revision is not None:
         raise RevisionConsistencyError(f"no retained revision {revision!r} for {name}")
-    return logical if resolved is None else resolved
+    if resolved is not None:
+        return resolved
+    # A lake that keeps its revisions in its catalog reads only the catalog:
+    # a dataset it records no revision for has no rows, whatever a folder
+    # under curated/ or derived/ may still hold.
+    return logical / UNPUBLISHED if catalog_only(meta) else logical
+
+
+#: What a dataset without a revision resolves to on a lake that reads only its
+#: catalog: a path that is never created, so every scan of it finds nothing.
+UNPUBLISHED = ".unpublished"
+
+
+def catalog_only(meta_root: Path | str) -> bool:
+    """Whether the lake at *meta_root* reads its published rows only from its catalog.
+
+    True once the catalog is the record of the lake's revisions (a new lake,
+    or one past the ``revision-records`` migration). Before that, an earlier
+    release's lake is still read from its folders, which needs no upgrade.
+    """
+    from cnequity.storage.revision_records import enabled
+
+    try:
+        return enabled(Path(meta_root))
+    except (OSError, ValueError):
+        return False
 
 
 def committed_revision(

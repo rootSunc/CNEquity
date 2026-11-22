@@ -10,6 +10,7 @@ import duckdb
 import polars as pl
 import pytest
 from click.testing import CliRunner
+from tests.catalog_seed import publish_folders
 
 from cnequity.cli.main import cli
 from cnequity.config import load_config, validate_config
@@ -740,6 +741,8 @@ def test_cne_demo_intraday_offline(tmp_path, monkeypatch):
         out = config.curated_root / "trading_calendar" / "trade_date=2024"
         out.mkdir(parents=True, exist_ok=True)
         write_parquet_atomic(out / "part-000.parquet", df)
+        # The lake reads only its catalog: publish what the fake wrote.
+        publish_folders(config, "trading_calendar")
         return {"rows_read": df.height, "rows_written": df.height}
 
     def fake_daily_bars(config, trade_date, run_id, context):
@@ -766,7 +769,11 @@ def test_cne_demo_intraday_offline(tmp_path, monkeypatch):
 
         total = 0
         for dataset in ("daily_bars", "minute_bars"):
-            total += compact_dataset(config.staging_root, config.curated_root, dataset, run_id)
+            rows = compact_dataset(config.staging_root, config.curated_root, dataset, run_id)
+            if rows:
+                # The lake reads only its catalog: publish what the fake compacted.
+                publish_folders(config, dataset)
+            total += rows
         return {"rows_read": total, "rows_written": total}
 
     names = ("trading_calendar", "daily_bars", "minute_bars", "compact")

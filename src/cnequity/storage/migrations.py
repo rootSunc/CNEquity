@@ -122,6 +122,12 @@ def _attempts_ledger(config, *, apply: bool) -> dict:
     return report
 
 
+def _legacy_datasets(config, *, apply: bool) -> dict:
+    from cnequity.storage.legacy_datasets import adopt_legacy_datasets
+
+    return adopt_legacy_datasets(config, apply=apply)
+
+
 def _drop_generations(config, *, apply: bool) -> dict:
     from cnequity.storage.drop_generations import drop_generations
 
@@ -161,6 +167,17 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         "0.25.0",
         _revision_records,
+    ),
+    # Third: folders an earlier release read without a revision (the sample
+    # lake, the demo lake's instruments), so the repairs below see their rows.
+    Migration(
+        "legacy-datasets",
+        N_(
+            "Publish into the lake catalog the dataset folders an earlier release wrote "
+            "without a revision, then delete those folders"
+        ),
+        "0.25.0",
+        _legacy_datasets,
     ),
     Migration(
         "orphan-symbols",

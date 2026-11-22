@@ -13,6 +13,7 @@ from datetime import date, timedelta
 
 import polars as pl
 import pytest
+from tests.catalog_seed import publish_folders
 
 from cnequity.config import Config
 from cnequity.run_scope import set_backfill
@@ -86,6 +87,7 @@ def _write_bars(cfg, rows: list[tuple[str, date]]) -> None:
         pl.DataFrame({"symbol": [symbol], "trade_date": [day]}).write_parquet(
             part / f"{symbol}.parquet"
         )
+    publish_folders(cfg, "daily_bars")
 
 
 def _spans(monkeypatch, spans: dict):

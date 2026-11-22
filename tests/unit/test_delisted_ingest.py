@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import polars as pl
 import pytest
-from tests.catalog_seed import commit_tree
+from tests.catalog_seed import commit_tree, publish_folders
 
 from cnequity.config import Config
 from cnequity.domain.schemas import DAILY_BARS_SCHEMA, with_provenance
@@ -139,6 +139,7 @@ def test_existing_curated_terminal_is_reused_without_provider_fetch(tmp_path):
     anchor = cfg.curated_root / "daily_bars" / f"trade_date={anchor_day.isoformat()}"
     anchor.mkdir(parents=True, exist_ok=True)
     _bars("600519.SH", anchor_day, anchor_day).write_parquet(anchor / "anchor.parquet")
+    publish_folders(cfg, "daily_bars")
     fetched: list[str] = []
 
     def fetch(symbol, client):

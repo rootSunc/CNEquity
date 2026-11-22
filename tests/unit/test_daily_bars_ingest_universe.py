@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
+from tests.catalog_seed import publish_folders
 
 from cnequity.config import Config, load_config, validate_config
 from cnequity.domain.schemas import with_provenance
@@ -135,6 +136,7 @@ def _instrument_lake(tmp_path, **kwargs) -> Config:
             "delist_date": [None] * 4,
         }
     ).write_parquet(instruments / "part-merged.parquet")
+    publish_folders(cfg, "instruments")
     return cfg
 
 
@@ -454,6 +456,7 @@ def test_certification_still_runs_when_the_gate_fires(tmp_path):
             "delist_date": [None, None, date(2015, 12, 31)],
         }
     ).write_parquet(instruments / "part-merged.parquet")
+    publish_folders(cfg, "instruments")
 
     run_id = Manifest(cfg.manifest_path).start_run("daily:core")
     for day in (D1, D2, D3):

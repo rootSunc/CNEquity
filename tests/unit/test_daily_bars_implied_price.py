@@ -11,6 +11,7 @@ implied 0.0183 per share.
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import publish_folders
 
 from cnequity.config import Config
 from cnequity.quality.unit_checks import daily_bars_implied_price_findings
@@ -62,6 +63,7 @@ def _lake(tmp_path, bars: list[dict], classes: dict[str, str] | None = None) -> 
                 for symbol, asset_type in classes.items()
             ]
         ).write_parquet(root / "part-merged.parquet")
+    publish_folders(cfg, "daily_bars", *(["instruments"] if classes else []))
     return cfg
 
 
@@ -172,6 +174,7 @@ def _blocks(cfg: Config, rows: list[tuple[str, float, float]]) -> None:
         ],
         schema_overrides={"premium_ratio": pl.Float64},
     ).write_parquet(part / "part-merged.parquet")
+    publish_folders(cfg, "block_trades")
 
 
 def test_a_beijing_day_is_judged_net_of_its_block_trades(tmp_path):
@@ -226,6 +229,7 @@ def test_a_beijing_day_past_block_trade_coverage_is_awaiting_not_broken(tmp_path
             "fetched_at": [datetime(2026, 1, 1, tzinfo=timezone.utc)],
         }
     ).write_parquet(part / "part.parquet")
+    publish_folders(cfg, "block_trades")
     (finding,) = daily_bars_implied_price_findings(cfg, DAY)
     assert finding["check"] == "daily_bars_implied_price_awaiting_blocks"
     assert finding["severity"] == "info"

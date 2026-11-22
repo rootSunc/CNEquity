@@ -7,6 +7,7 @@ from datetime import date, timedelta
 
 import polars as pl
 import pytest
+from tests.catalog_seed import publish_folders
 
 from cnequity.adapters.eastmoney.bars import fetch_daily_bars_clist
 from cnequity.config import Config, FailoverDatasetSpec
@@ -1448,6 +1449,7 @@ def test_multiday_partial_symbol_respects_listing_and_delisting_edges(tmp_path):
             "delist_date": [date(2024, 6, 24)],
         }
     ).write_parquet(instruments / "part-merged.parquet")
+    publish_folders(cfg, "instruments")
     StagingWriter(cfg.staging_root).write_batch(
         "daily_bars", run_id, "tdx-listing", _bar_frame([symbol], date(2024, 6, 21))
     )

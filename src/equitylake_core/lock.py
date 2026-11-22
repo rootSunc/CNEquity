@@ -264,9 +264,15 @@ def snapshot_lock(
 
 @contextmanager
 def lake_read(root: str | Path) -> Iterator[None]:
-    """Protect managed file readers for the duration of the actual scan or copy."""
+    """Protect managed file readers for the duration of the actual scan or copy.
+
+    A lake without its directory yet (one an earlier release built, or one
+    nothing has published to) has no catalog files to keep in place, and a
+    read must not create that directory or its lock files: it is left to the
+    first write, or to ``cne upgrade``, which asks readers to stop first.
+    """
     root = Path(root)
-    if not root.parent.is_dir():
+    if not root.is_dir():
         yield
         return
     with lake_operation(root):

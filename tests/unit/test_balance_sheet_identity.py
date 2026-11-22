@@ -9,6 +9,7 @@ as a 2024 one buries the handful somebody could actually act on.
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import publish_folders
 
 from cnequity.config import Config
 from cnequity.quality.cross_checks import MODERN_STATEMENT_YEAR, balance_sheet_identity_findings
@@ -46,6 +47,7 @@ def _lake(tmp_path, rows: list[dict]) -> Config:
         part = cfg.curated_root / "financial_statement_items" / f"report_period={period}"
         part.mkdir(parents=True, exist_ok=True)
         frame.filter(pl.col("report_period") == period).write_parquet(part / "part-0.parquet")
+    publish_folders(cfg, "financial_statement_items")
     return cfg
 
 
@@ -101,6 +103,7 @@ def test_a_prospectus_period_before_listing_is_counted_not_chased(tmp_path):
     pl.DataFrame(
         {"symbol": ["301665.SZ", "600000.SH"], "list_date": [date(2025, 4, 11), date(1999, 11, 10)]}
     ).write_parquet(path)
+    publish_folders(cfg, "instruments")
 
     findings = {f["check"]: f for f in balance_sheet_identity_findings(cfg)}
     assert findings["balance_sheet_identity"]["periods"] == ["600000.SH:2024Q3"]

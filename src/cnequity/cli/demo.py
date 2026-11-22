@@ -212,9 +212,15 @@ def _publish_demo_frames(
     message: str,
 ) -> dict[str, object]:
     """Publish demo/sample DataFrames through the lake catalog like any real run."""
+    from cnequity.query import catalog_read
     from cnequity.storage.lake_write import publish_frames
 
-    return publish_frames(cfg, frames, run_id=run_id, message=message)
+    # A cached read connection would keep answering from before this publish.
+    catalog_read.close(cfg)
+    try:
+        return publish_frames(cfg, frames, run_id=run_id, message=message)
+    finally:
+        catalog_read.close(cfg)
 
 
 def _holds_sample_lake(data_root: Path) -> bool:

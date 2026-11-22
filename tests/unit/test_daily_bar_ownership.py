@@ -2,6 +2,7 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import publish_folders
 
 from cnequity.config import Config
 from cnequity.orchestrator.manifest import Manifest
@@ -117,6 +118,7 @@ def _etf_retry_lake(tmp_path, **config_kwargs) -> tuple[Config, str]:
             "volume": [100],
         }
     ).write_parquet(bars / "part-0.parquet")
+    publish_folders(cfg, "instruments", "daily_bars")
 
     manifest = Manifest(cfg.manifest_path)
     run_id = manifest.start_run("daily:core")

@@ -290,8 +290,14 @@ def _missing_dataset_message(dataset: str, root, config) -> str:
     # command fills the one dataset that is missing.
     demo = getattr(config, "lake_profile", None) in {"demo", "sample"}
     remedy = direct if demo else (next_command_for_dataset(dataset) or direct)
+    # A lake on its catalog reads no folder: naming one sends the reader
+    # looking at a directory that does not decide anything.
+    from cnequity.storage.revisions import catalog_only
+
+    on_catalog = catalog_only(config.meta_root) or not Path(root).exists()
+    where = "in this lake" if on_catalog else f"under {root}"
     return (
-        f"no parquet data for dataset {dataset!r} under {root} (data_root={config.data_root}); "
+        f"no parquet data for dataset {dataset!r} {where} (data_root={config.data_root}); "
         f"build it with `{remedy}`"
     )
 

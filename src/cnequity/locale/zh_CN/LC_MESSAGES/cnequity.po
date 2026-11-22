@@ -2144,10 +2144,6 @@ msgstr "创建数据备份"
 msgid "Create only directories, the manifest and DuckDB views; skip the init stages."
 msgstr "只建目录、manifest 和 DuckDB 视图，跳过 init 各阶段。"
 
-#: cnequity/cli/storage_cmds.py
-msgid "Create the lake catalog when it does not exist yet; the first run copies every dataset."
-msgstr "湖目录不存在时先创建；首次运行会复制全部数据集。"
-
 #: cnequity/cli/govern_cmds.py
 msgid "Create, verify and safely restore portable lake snapshots."
 msgstr "创建、校验并安全恢复可移植的湖快照。"
@@ -2633,10 +2629,6 @@ msgstr "事件流：{name}: {exc}"
 msgid "Event streams: {status}"
 msgstr "事件流：{status}"
 
-#: cnequity/cli/repair_cmds.py
-msgid "Every dataset whose layout needs it."
-msgstr "所有布局需要改写的数据集。"
-
 #: cnequity/diagnostics/substitutes.py
 msgid "Every probed endpoint is available; no source needs replacing."
 msgstr "每个被探测的端点都可用，没有需要替换的源。"
@@ -3025,10 +3017,6 @@ msgstr "请给出 --run-id 或 --failed-groups"
 #: cnequity/cli/govern_cmds.py
 msgid "Give OLD_CONTRACT or --old/--from"
 msgstr "请给出 OLD_CONTRACT 或 --old/--from"
-
-#: cnequity/cli/repair_cmds.py
-msgid "Give a dataset or --all, not both."
-msgstr "给出数据集或 --all，不能同时给。"
 
 #: cnequity/cli/_shared.py
 msgid "Give at least one item; an empty string or only commas is not allowed"
@@ -3602,10 +3590,6 @@ msgstr "每批最多检查的证券数；应用后保存历史进度。"
 msgid "Measure now instead of reading the stored report. Makes the same requests as `sources probe`."
 msgstr "现在实测，而不是读已存的报告。请求和 `sources probe` 相同。"
 
-#: cnequity/cli/storage_cmds.py
-msgid "Merge partitions with at least this many files (default 4)."
-msgstr "合并文件数不少于这个值的分区（默认 4）。"
-
 #: cnequity/cli/schedule_cmds.py
 msgid "Metadata backup"
 msgstr "元数据备份"
@@ -3745,14 +3729,6 @@ msgstr "没有致命问题，{warnings} 个警告。"
 msgid "No futures daily quote file was fetched for either of the last two weekdays"
 msgstr "最近两个工作日都没有取到期货日行情文件"
 
-#: cnequity/cli/storage_cmds.py
-msgid "No longer does anything: every write publishes into the lake catalog. Removed in 0.26.0."
-msgstr "已不做任何事：每次写入都直接发布到湖目录。0.26.0 删除。"
-
-#: cnequity/cli/repair_cmds.py cnequity/cli/storage_cmds.py
-msgid "No longer does anything: the lake catalog lays out each partition's files. Removed in 0.26.0."
-msgstr "已不做任何事：每个分区的文件由湖目录安排。0.26.0 删除。"
-
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
 msgid "No probe report for vantage {vantage!r} under {path}. Run `cne sources probe` first, or add --probe to measure now."
@@ -3870,25 +3846,9 @@ msgstr "没有欠下的迁移：这个湖由 {version} 建立，或全部迁移�
 msgid "Nothing to execute this time."
 msgstr "本次没有可执行的对象。"
 
-#: cnequity/cli/storage_cmds.py
-msgid "Nothing to merge: the lake catalog lays out each partition's files. This command is removed in 0.26.0."
-msgstr "无需合并：每个分区的文件由湖目录安排。此命令在 0.26.0 删除。"
-
-#: cnequity/cli/repair_cmds.py
-msgid "Nothing to repair: the lake catalog lays out each partition's files. This command is removed in 0.26.0."
-msgstr "无需修复：每个分区的文件由湖目录安排。此命令在 0.26.0 删除。"
-
-#: cnequity/cli/repair_cmds.py
-msgid "Nothing to repartition: the lake catalog lays out each partition's files. This command is removed in 0.26.0."
-msgstr "无需重新分区：每个分区的文件由湖目录安排。此命令在 0.26.0 删除。"
-
 #: cnequity/ops/job.py
 msgid "Nothing to run, or the day is not a trading day."
 msgstr "没有要跑的内容，或当天不是交易日。"
-
-#: cnequity/cli/storage_cmds.py
-msgid "Nothing to sync: every write publishes into the lake catalog. This command is removed in 0.26.0."
-msgstr "无需同步：每次写入都直接发布到湖目录。此命令在 0.26.0 删除。"
 
 #: cnequity/cli/repair_cmds.py
 msgid "Nothing was changed. Fix what is blocked above, then run this again."
@@ -4388,6 +4348,10 @@ msgstr "问题：{names}"
 msgid "Publish a new version after verification; by default only prints the plan."
 msgstr "核验后发布新版本；默认只输出计划。"
 
+#: cnequity/storage/migrations.py
+msgid "Publish into the lake catalog the dataset folders an earlier release wrote without a revision, then delete those folders"
+msgstr "把旧版本未登记版本号直接写下的数据集目录发布进湖目录，再删除这些目录"
+
 #: cnequity/cli/maintain_cmds.py
 msgid "Publish only this run; by default handles all runs pending publication."
 msgstr "只发布这一次 run；默认处理所有待发布的 run。"
@@ -4407,10 +4371,6 @@ msgstr "应用可确定的因子修正并保留旧版本；未解决项只作提
 #: cnequity/ops/catalog.py
 msgid "Publish the finished data this run left in staging to the lake."
 msgstr "把这次 run 留在 staging 里、已经结束的数据发布到湖里。"
-
-#: cnequity/cli/storage_cmds.py
-msgid "Publish the merge; without it, only report what would merge."
-msgstr "发布合并结果；不加这个参数时只报告会合并哪些分区。"
 
 #: cnequity/cli/init_summary.py
 msgid "Python:"
@@ -4644,10 +4604,6 @@ msgstr "不询问确认直接移除。"
 #: cnequity/cli/schedule_cmds.py
 msgid "Removed. Nothing runs on a schedule for this lake now."
 msgstr "已移除。这个湖现在没有任何定时任务。"
-
-#: cnequity/cli/storage_cmds.py
-msgid "Removed: marking versions for a waiting period."
-msgstr "已移除：标记版本并等待观察期。"
 
 #: cnequity/cli/setup_cmds.py
 #, python-brace-format
@@ -4939,10 +4895,6 @@ msgstr "把完整配置改写为继承内置默认值，只保留不同的设置
 #: cnequity/cli/maintain_cmds.py
 msgid "Rewrite all partitions of adj_factors / industry_index / option_greeks / minute_bars_15m|30m|60m (default: incremental only)."
 msgstr "重写 adj_factors / industry_index / option_greeks / minute_bars_15m|30m|60m 的全部分区（默认只补增量）。"
-
-#: cnequity/cli/repair_cmds.py
-msgid "Rewrite and swap the partitions; by default only previews."
-msgstr "改写并换上分区；默认只预览。"
 
 #: cnequity/domain/datasets.py
 msgid "Risk and compliance"
@@ -6289,7 +6241,7 @@ msgstr ""
 msgid "This lake is up to date with cnequity {version}; nothing to upgrade."
 msgstr "这个湖已经是 cnequity {version} 的格式，不需要升级。"
 
-#: cnequity/diagnostics/report.py
+#: cnequity/cli/quality_cmds.py cnequity/diagnostics/report.py
 msgid "This lake was built by an earlier version. `cne upgrade` shows what it still needs; `cne upgrade --apply` does all of it in one step."
 msgstr "这个湖是较早的版本建的。`cne upgrade` 列出还需要做什么，`cne upgrade --apply` 一步做完。"
 
@@ -6837,10 +6789,6 @@ msgstr "没有配置就无法检查 data.root 是否可用。"
 msgid "Write a short config that extends the built-in defaults."
 msgstr "写一个继承内置默认值的简短配置。"
 
-#: cnequity/cli/repair_cmds.py
-msgid "Write and publish a new version; by default only prints the plan."
-msgstr "写入并发布新版本；默认只输出计划。"
-
 #: cnequity/cli/ths_official_cmds.py
 msgid "Write disputed rows here."
 msgstr "把有争议的行写到这里。"
@@ -6942,10 +6890,6 @@ msgstr "[{table}] enabled = false（这份配置目前不调度它）"
 #, python-brace-format
 msgid "[{table}] steps_add = {added}; steps_remove = {removed}"
 msgstr "[{table}] steps_add = {added}；steps_remove = {removed}"
-
-#: cnequity/cli/storage_cmds.py
-msgid "`cne storage apply` was removed with the mark-and-wait phase: backfill and the daily run already delete generations beyond [storage.retention].keep_generations. Keep a version with `cne storage hold`; delete chosen history earlier on the storage page of `cne serve`."
-msgstr "`cne storage apply` 已随标记观察期一起移除：回补和日更已经会删除超出 [storage.retention].keep_generations 的代。要留住某个版本用 `cne storage hold`；要提前删除选定的历史，在 `cne serve` 的存储页操作。"
 
 #: cnequity/cli/_root.py cnequity/cli/setup_cmds.py
 #, python-brace-format

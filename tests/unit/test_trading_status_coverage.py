@@ -94,14 +94,7 @@ def test_receipt_integrity_uses_selected_status_generation(tmp_path):
     _write_st_receipt(cfg, day, day)
     store = RevisionStore(cfg.meta_root, cfg.curated_root)
     path = cfg.curated_root / "trading_status" / f"trade_date={day}" / "part-0.parquet"
-    commit_tree(
-        store,
-        "trading_status",
-        run_id="evidence",
-        changed_files=[path],
-        schema_version=1,
-        contract_fingerprint="test",
-    )
+    _publish_trees(cfg)
     selected = ReadContext.capture(
         cfg, {"daily_bars", "instruments", "trading_status"}, {"trading_status": 1}
     )

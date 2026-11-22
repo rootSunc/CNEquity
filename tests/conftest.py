@@ -222,6 +222,24 @@ def _no_leaked_heartbeat():
     stop_heartbeat()
 
 
+@pytest.fixture(autouse=True)
+def _close_cached_catalog_reads():
+    """Close the catalogs a test left open in the per-lake read caches.
+
+    ``catalog_read`` and ``revision_records`` each keep one open catalog per
+    lake root, which in a CLI or dashboard process is one lake. A test run
+    makes a lake per test, and each open catalog keeps DuckDB's threads (about
+    70 here): left open, a few thousand tests exhaust the process's threads,
+    and DuckDB aborts the interpreter when it next cannot start one.
+    """
+    yield
+    from cnequity.query import catalog_read
+    from cnequity.storage import revision_records
+
+    catalog_read.close_all()
+    revision_records.forget()
+
+
 @pytest.fixture
 def config(tmp_path):
     """Minimal offline config wiring a daily Wave over mock adapters."""

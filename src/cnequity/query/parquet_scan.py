@@ -26,7 +26,7 @@ from cnequity.domain.partitions import (
     parse_partition,
     partition_value,
 )
-from cnequity.storage.revisions import resolve_committed_root
+from cnequity.storage.revisions import catalog_only, resolve_committed_root
 
 # Re-exported for callers that reach for it here; it is dataset registry
 # metadata and lives in the domain layer so `storage` can read it without
@@ -50,6 +50,22 @@ def _resolved_root(
     )
 
 
+def _current_from_catalog_only(resolved: Path, *, meta_root: Path | None, current: bool) -> bool:
+    """Whether a read of *resolved* may only be answered by the lake catalog.
+
+    The current revision of a lake that reads only its catalog comes from the
+    catalog or not at all: a generation folder left on disk is never read in
+    its place. A read pinned to a revision (``revision=``, a read context) may
+    still read a generation kept on disk: a held revision from before the
+    catalog has no other copy.
+    """
+    from cnequity.query.catalog_read import generation_identity
+
+    if not current or generation_identity(resolved) is None:
+        return False
+    return catalog_only(Path(meta_root) if meta_root is not None else Path(resolved).parents[3])
+
+
 def dataset_has_parquet(
     root: Path,
     *,
@@ -63,11 +79,15 @@ def dataset_has_parquet(
         if committed
         else Path(root)
     )
-    if resolved.exists() and any(resolved.rglob("*.parquet")):
-        return True
     # A published revision the lake catalog holds has data whether or not its
     # generation directory is on disk.
-    return _scan_catalog_files(resolved, config_root=meta_root) is not None
+    if _scan_catalog_files(resolved, config_root=meta_root) is not None:
+        return True
+    if _current_from_catalog_only(
+        resolved, meta_root=meta_root, current=committed and revision is None
+    ):
+        return False
+    return resolved.exists() and any(resolved.rglob("*.parquet"))
 
 
 def parquet_glob(root: Path) -> str:
@@ -392,6 +412,7 @@ def scan_parquet_root(
     # concurrent compact publishes another revision; retaining this concrete
     # generation path makes the whole query internally consistent.
     logical_dataset = dataset or root.name
+    current = committed and revision is None
     if committed:
         root = _resolved_root(
             root,
@@ -421,6 +442,8 @@ def scan_parquet_root(
             traded_only=traded_only,
             logical_dataset=logical_dataset,
         )
+    if _current_from_catalog_only(root, meta_root=meta_root, current=current):
+        raise FileNotFoundError(f"the lake catalog does not hold the current revision under {root}")
 
     partitioned = uses_hive_partitions(root, partition_col, resolve=False)
     use_hive = (

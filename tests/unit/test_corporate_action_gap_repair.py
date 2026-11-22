@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 import pytest
-from tests.catalog_seed import commit_tree
+from tests.catalog_seed import commit_tree, publish_folders
 
 from cnequity.config import Config
 from cnequity.query import load
@@ -110,6 +110,7 @@ def lake(tmp_path) -> Config:
         schema_version=1,
         contract_fingerprint="contract",
     )
+    publish_folders(cfg, "daily_bars", "adj_factors")
     evidence = cfg.meta_root / "quality" / "evidence"
     evidence.mkdir(parents=True)
     (evidence / "adj_factor_source_arbitration-20260929T000000Z.json").write_text(

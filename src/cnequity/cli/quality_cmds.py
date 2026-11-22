@@ -1829,6 +1829,10 @@ def _report_outstanding_keys(cfg, datasets: list[str]) -> None:
     from cnequity.domain.market_time import shanghai_today
     from cnequity.quality.planned_coverage import gap_keys
 
+    # Synthetic rows are dated in 2024 and no source can answer for them: a
+    # sample lake owes nothing, and `cne backfill` would only fail there.
+    if getattr(cfg, "lake_profile", None) == "sample":
+        return
     owed = []
     for dataset in datasets:
         try:
@@ -1932,6 +1936,18 @@ def check(ctx: click.Context, config_path: str, full: bool, pack_names: tuple[st
 
     worst = 1 if 1 in codes else max(codes, default=0)
     click.echo(_("\n== Verdict =="))
+    # Reads need no upgrade, so the verdict stands; but every write is refused
+    # until the lake is upgraded, and the next daily run would be the first to say so.
+    from cnequity.storage.migrations import owed
+
+    if Path(cfg.meta_root).is_dir() and owed(cfg):
+        click.echo(
+            "! "
+            + _(
+                "This lake was built by an earlier version. `cne upgrade` shows what it "
+                "still needs; `cne upgrade --apply` does all of it in one step."
+            )
+        )
     if worst == 0:
         if getattr(cfg, "lake_profile", None) == "sample":
             click.echo(

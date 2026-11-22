@@ -23,7 +23,7 @@ from cnequity.domain.schemas import DATASET_SCHEMAS, OPTIONAL_COLUMNS, PRIMARY_K
 from cnequity.meta_layout import LAKE_DIR
 from cnequity.storage.atomic import replace_with_retry
 from cnequity.storage.locator import layer_name, logical_root
-from cnequity.storage.revisions import resolve_committed_root
+from cnequity.storage.revisions import catalog_only, resolve_committed_root
 from equitylake_core.catalog import DATA_DIR
 
 logger = logging.getLogger(__name__)
@@ -353,6 +353,8 @@ def _views_inputs(config: Config, *, require_data: bool) -> dict:
         ).encode()
     )
     datasets: dict[str, str] = {}
+    # A lake that reads only its catalog never reads a folder: none can change its views.
+    catalog_lake = catalog_only(config.meta_root)
     for name, spec in sorted(DATASETS.items()):
         digest = hashlib.sha256()
         pointer = _current_pointer(config.data_root / "meta", name)
@@ -361,7 +363,7 @@ def _views_inputs(config: Config, *, require_data: bool) -> dict:
             published = _catalog_table(config, name)
             if published is not None:
                 digest.update(repr((published.files, published.unique_keys)).encode())
-        else:
+        elif not catalog_lake:
             root = logical_root(config, spec)
             if root.is_dir():
                 for path in sorted(root.rglob("*.parquet")):
@@ -482,6 +484,9 @@ def _define_views(
     root = config.data_root.resolve().as_posix()
 
     resources_for(config, "read").apply(con)
+    # On a lake that reads only its catalog, a dataset the catalog does not
+    # hold is empty, whatever a folder under curated/ or derived/ still holds.
+    catalog_lake = catalog_only(config.meta_root)
 
     for name, spec in sorted(DATASETS.items()):
         if only is not None and name not in only:
@@ -511,7 +516,7 @@ def _define_views(
                 }
                 """
             )
-        elif _glob_has_files(glob_path) or require_data:
+        elif not catalog_lake and (_glob_has_files(glob_path) or require_data):
             source = (
                 f"read_parquet({_sql_literal(glob_path)}, "
                 f"hive_partitioning={str(hive).lower()}, union_by_name=true)"

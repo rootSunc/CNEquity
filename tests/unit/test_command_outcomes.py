@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 import polars as pl
 import pytest
 from click.testing import CliRunner
-from tests.catalog_seed import publish_rows
+from tests.catalog_seed import publish_folders, publish_rows
 from tests.coverage_fakes import covered
 
 from cnequity.cli.main import cli
@@ -581,6 +581,7 @@ def test_unknown_missing_bar_key_is_not_a_suspension_fact(tmp_path):
         },
         schema_overrides={"delist_date": pl.Date},
     ).write_parquet(cfg.curated_root / "instruments" / "part.parquet")
+    publish_folders(cfg, "daily_bars", "instruments", "trading_calendar")
     # The source answered 000001.SZ empty that day; no fetch answered 600519.SH.
     record_cell_answers(cfg, "daily_bars", [(days[1].isoformat(), "000001.SZ")], run="fetch")
     assert _suspended_pairs(cfg).rows() == [("000001.SZ", days[1])]

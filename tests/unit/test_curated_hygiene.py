@@ -80,7 +80,7 @@ def test_flags_a_dataset_that_is_almost_all_parquet_footer(tmp_path):
     assert finding["check"] == "partition_fragmentation"
     assert finding["partitions"] == 60
     assert finding["rows_per_partition"] == 1.0
-    assert "cne repair repartition trading_calendar --apply" in finding["message"]
+    assert "republish the dataset" in finding["message"]
 
 
 def test_a_well_filled_dataset_is_not_flagged(tmp_path):
@@ -143,7 +143,7 @@ def test_mixed_day_and_year_partitions_are_an_error(tmp_path):
     assert finding["configured_granularity"] == "year"
     assert finding["stale_partitions"] == 1
     assert finding["pk_duplicate_rows"] == 1
-    assert "cne repair repartition trading_calendar --apply" in finding["message"]
+    assert "republish the dataset" in finding["message"]
 
 
 def test_year_only_layout_matching_registry_is_clean(tmp_path):

@@ -1066,3 +1066,39 @@ def catalog_revision(store: RevisionStore, dataset: str) -> str | None:
         return None
     with Catalog(root, read_only=True) as catalog:
         return _catalog_revision(catalog, dataset)
+
+
+def publish_frames(config, frames: dict[str, pl.DataFrame], *, run_id: str, message: str) -> dict:
+    """Publish whole datasets held in memory as one catalog commit.
+
+    Each frame replaces its dataset, partition by partition. For the small
+    lakes and one-off moves that have no staging run: the demo and sample
+    lakes, and the ``legacy-datasets`` migration.
+    """
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.domain.datasets import granularity_for_dataset
+    from cnequity.storage import revision_records
+    from cnequity.storage.parquet import _partition_values
+
+    publishes: dict[str, DatasetPublish] = {}
+    with LakeWrite(config, run_id) as write:
+        for dataset, rows in frames.items():
+            column = DATASETS[dataset].partition_col
+            contract = dataset_contract(dataset)
+            publishes[dataset] = DatasetPublish(
+                int(contract["schema_version"]), contract_fingerprint(contract)
+            )
+            checkout = write.checkout(dataset)
+            if column is None:
+                checkout.rewrite("", rows)
+                continue
+            labels = _partition_values(rows, column, granularity_for_dataset(dataset))
+            for (value,), group in (
+                rows.with_columns(labels.alias("__label__"))
+                .partition_by("__label__", as_dict=True, maintain_order=True)
+                .items()
+            ):
+                checkout.rewrite(f"{column}={value}", group.drop("__label__"))
+        published = write.publish(publishes, message=message)
+    revision_records.forget(config.meta_root)
+    return published

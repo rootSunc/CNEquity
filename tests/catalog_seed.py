@@ -157,3 +157,31 @@ def commit_tree(
         )
     catalog_read.close(roots)
     return published.get(dataset)
+
+
+def publish_folders(config, *datasets: str) -> list[str]:
+    """Publish what a test wrote by hand under ``curated/`` or ``derived/``; returns the datasets.
+
+    A lake on its catalog reads only the catalog, so a fixture written as
+    Parquet folders is invisible until published. Each named dataset (every
+    dataset with a folder when none is named) is published with all of its
+    folder's rows; the folder stays, and is never read.
+    """
+    import polars as pl
+
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.storage.locator import logical_root
+
+    names = datasets or tuple(sorted(DATASETS))
+    published = []
+    for name in names:
+        folder = logical_root(config, name)
+        files = sorted(folder.rglob("*.parquet")) if folder.is_dir() else []
+        if not files:
+            if datasets:
+                raise ValueError(f"no Parquet under {folder}")
+            continue
+        rows = pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
+        publish_rows(config, name, rows, run_id=f"seed-folder-{name}")
+        published.append(name)
+    return published

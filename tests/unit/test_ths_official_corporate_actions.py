@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import publish_folders
 
 from cnequity.adapters.ths_official.corporate_actions import (
     ThsOfficialDumpError,
@@ -149,6 +150,7 @@ def _lake_with_one_confirmed_gap(
         },
         schema_overrides={"allotment_ratio": pl.Float64, "allotment_price": pl.Float64},
     ).write_parquet(actions / "part-0.parquet")
+    publish_folders(cfg, "adj_factors", "corporate_actions")
     SnapshotStore(cfg.meta_root).write(
         "corporate_actions",
         pl.DataFrame(
@@ -299,6 +301,7 @@ def test_a_fund_payout_with_a_still_factor_is_convention_not_contradiction(tmp_p
             "fetched_at": [fetched, fetched],
         }
     ).write_parquet(instruments)
+    publish_folders(cfg, "adj_factors", "corporate_actions", "instruments")
 
     findings = {f["check"]: f for f in adj_factor_arbitration_findings(cfg)}
     assert findings["adj_factor_fund_payout_unadjusted"]["rows"] == 1

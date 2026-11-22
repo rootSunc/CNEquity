@@ -10,6 +10,7 @@ symbol. The factor series names the day and the ratio the very next session.
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import publish_folders
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
@@ -84,6 +85,7 @@ def _lake(
                 }
             ],
         )
+    publish_folders(cfg)
     return cfg
 
 
@@ -284,6 +286,7 @@ def _closes(cfg: Config, symbol: str, closes: list[float]) -> None:
                 "amount": [close * 100],
             }
         ).write_parquet(part / f"{symbol}.parquet")
+    publish_folders(cfg, "daily_bars")
 
 
 def test_a_proven_miss_switches_the_stock_onto_baostock(tmp_path):

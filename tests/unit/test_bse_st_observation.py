@@ -10,6 +10,7 @@ and still be told its BJ status was unverifiable.
 from datetime import date, datetime, timezone
 
 import polars as pl
+from tests.catalog_seed import publish_folders
 
 from cnequity.config import Config
 from cnequity.quality.st_coverage import (
@@ -97,6 +98,7 @@ def _lake(tmp_path, *, answered: dict[date, list[str]]) -> Config:
                 f"trade_date={session.isoformat()}",
                 rows,
             )
+    publish_folders(cfg)
     return cfg
 
 
@@ -259,6 +261,7 @@ def test_every_source_interval_is_reported_even_when_one_cannot_back_its_symbols
         ).write_parquet(
             cfg.curated_root / "daily_bars" / f"trade_date={session.isoformat()}" / "part-1.parquet"
         )
+    publish_folders(cfg, "instruments", "daily_bars")
 
     supported = st_evidence_supported_window(cfg, universe="all_a")
 
