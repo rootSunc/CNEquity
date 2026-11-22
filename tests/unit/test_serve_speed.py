@@ -303,6 +303,64 @@ def test_a_page_that_could_not_register_references_tries_again_next_view(config,
     assert builds == [1, "later"]
 
 
+def test_a_storage_build_scans_the_references_once(tmp_path, monkeypatch):
+    from cnequity.storage import lifecycle
+
+    root = tmp_path / "refs"
+    root.mkdir()
+    (root / "note.md").write_text("x")
+    roots = [{"path": str(root), "exclude": []}]
+    scans = []
+    real = lifecycle.reference_files
+    monkeypatch.setattr(
+        lifecycle, "reference_files", lambda *a, **kw: scans.append(1) or real(*a, **kw)
+    )
+    with lifecycle.reusing_reference_fingerprints():
+        first = lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta")
+        assert lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta") == first
+    assert len(scans) == 1
+    # Outside the block (deletion, holds) every check scans again.
+    lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta")
+    assert len(scans) == 2
+
+
+def test_the_page_inventory_does_not_measure_generation_trees(config, monkeypatch):
+    from cnequity.serve.storage import StorageMaintenance
+
+    seen = {}
+
+    def inspect(*, keep, measure=True):
+        seen["measure"] = measure
+        return {"objects": []}
+
+    maintenance = StorageMaintenance(config)
+    monkeypatch.setattr(maintenance.store, "inspect", inspect)
+    monkeypatch.setattr(maintenance.store, "registry", lambda: None)
+    monkeypatch.setattr("cnequity.serve.storage.StagingRetirement.inspect", lambda self: [])
+    maintenance._summary()
+    assert seen == {"measure": False}
+
+
+def test_a_restarted_server_shows_its_last_inventory_while_it_rebuilds(config, monkeypatch):
+    from cnequity.serve.storage import StorageMaintenance
+
+    first = StorageMaintenance(config, persist=True)
+    built = {"references_changed": False, "objects": [{"object_id": "revision/a/1"}]}
+    monkeypatch.setattr(first, "_summary", lambda: dict(built))
+    assert first.summary()["objects"] == built["objects"]
+
+    later = StorageMaintenance(config, persist=True)
+    rebuilds = []
+    monkeypatch.setattr(later, "_rebuild_later", lambda key: rebuilds.append(key))
+    answer = later.summary()
+    assert answer["objects"] == built["objects"]
+    assert answer["refreshing"], "a copy from disk is never taken as current"
+    assert len(rebuilds) == 1
+
+    # Only a serving process keeps one.
+    assert StorageMaintenance(config)._kept is None
+
+
 # --- one snapshot per summary -------------------------------------------
 
 

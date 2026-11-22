@@ -543,6 +543,7 @@ def activate_lake(app: FastAPI, config: Config) -> None:
         invalidate=view.invalidate,
         csrf=app.state.csrf,
         sync_references=not getattr(app.state, "read_only", False),
+        persist=getattr(app.state, "watch", False),
     )
     view.maintenance_gate = maintenance.gate
     if getattr(app.state, "watch", False):
@@ -672,6 +673,7 @@ def create_app(
             invalidate=app.state.view.invalidate,
             csrf=app.state.csrf,
             sync_references=not read_only,
+            persist=watch,
         )
         app.state.storage_maintenance = maintenance
         app.state.view.maintenance_gate = maintenance.gate

@@ -24,6 +24,7 @@ from cnequity.storage.lifecycle.staging import StagingRetirement
 Kind = Literal["revisions", "staging"]
 Phase = Literal["purge"]
 APPROVAL_SECONDS = 600
+_DISK_FORMAT = 1
 
 
 class MaintenanceGate:
@@ -73,6 +74,7 @@ class StorageMaintenance:
         invalidate=lambda: None,
         csrf: str | None = None,
         sync_references: bool = True,
+        persist: bool = False,
     ):
         self.config = config
         # A read-only server never writes the registry, so it can only report
@@ -90,6 +92,53 @@ class StorageMaintenance:
         self._kept: tuple[tuple | None, dict] | None = None
         self._rebuilding = False
         self._rebuilt = threading.Condition(self.lock)
+        # The serving process keeps its last inventory in the user's cache, so
+        # the first view after a restart shows it at once, marked as updating.
+        self.persist = persist
+        if persist:
+            self._load_disk()
+
+    def _disk_path(self):
+        from cnequity.serve.lake import _disk_cache_path
+
+        path = _disk_cache_path(self.config)
+        return path.with_name(f"{path.stem}-storage.json")
+
+    def _load_disk(self) -> None:
+        import json
+
+        try:
+            stored = json.loads(self._disk_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(stored, dict) or stored.get("format") != _DISK_FORMAT:
+            return
+        summary = stored.get("summary")
+        if not isinstance(summary, dict) or summary.get("references_changed"):
+            return
+        # Never current: a restart may follow any change, so the first view
+        # answers it marked as updating and a fresh inventory replaces it.
+        with self.lock:
+            self._kept = (None, summary)
+            self.last_summary = copy.deepcopy(summary)
+
+    def _save_disk(self, summary: dict) -> None:
+        import json
+        import os
+
+        from cnequity.file_replace import replace_with_retry
+
+        path = self._disk_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(
+                json.dumps({"format": _DISK_FORMAT, "summary": summary}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            replace_with_retry(tmp, path, sync_dir=False)
+        except OSError:
+            pass
 
     def _summary_key(self) -> tuple:
         """What the inventory depends on: the lake, the revision tree and the lifecycle records."""
@@ -164,6 +213,8 @@ class StorageMaintenance:
         with self.lock:
             self._kept = (key, result)
             self.last_summary = copy.deepcopy(result)
+        if self.persist and key is not None:
+            self._save_disk(result)
 
     def warm(self) -> None:
         """Build the inventory in the background, so the first visit does not wait for it."""
@@ -240,6 +291,14 @@ class StorageMaintenance:
             self.gate.leave()
 
     def _summary(self) -> dict:
+        from cnequity.storage.lifecycle import reusing_reference_fingerprints
+
+        # One reference scan per build: the staging preview checks the same
+        # fingerprint this build has just brought up to date.
+        with reusing_reference_fingerprints():
+            return self._build_summary()
+
+    def _build_summary(self) -> dict:
         now = datetime.now(timezone.utc)
         keep = revision_keep(self.config)
         automatic = keep > 0
@@ -266,7 +325,8 @@ class StorageMaintenance:
                 "automatic_retention": automatic,
                 "generated_at": now.isoformat(),
             }
-        report = self.store.inspect(keep=keep)
+        # The page shows logical sizes; plans measure what a deletion frees.
+        report = self.store.inspect(keep=keep, measure=False)
         objects = []
         for obj in report["objects"]:
             # Unprotected history is deleted by the next backfill or daily run

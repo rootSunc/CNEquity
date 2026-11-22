@@ -20,6 +20,9 @@ import os
 import re
 import stat
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -163,11 +166,12 @@ RUNTIME_META_PATHS = (
 )
 
 
-def _snapshot_runtime() -> tuple[str, ...]:
-    return tuple(Path(p).as_posix() for p in RUNTIME_META_PATHS if p != "revisions")
+#: The runtime paths inside a research snapshot's meta copy; built once, since
+#: the reference scan asks for every one of several hundred thousand entries.
+_SNAPSHOT_RUNTIME = tuple(Path(p).as_posix() for p in RUNTIME_META_PATHS if p != "revisions")
 
 
-def _in_snapshot_runtime(relative: Path) -> bool:
+def _in_snapshot_runtime(relative: Path | str) -> bool:
     """Whether *relative* (to the lake's meta) is a runtime path inside a research snapshot.
 
     A snapshot under ``meta/snapshots/<name>/meta/`` carries a copy of the
@@ -175,10 +179,10 @@ def _in_snapshot_runtime(relative: Path) -> bool:
     lake itself is never scanned for. Its runtime paths are skipped the same
     way, except its revision records, which name the revisions it captured.
     """
-    parts = relative.parts
+    parts = relative.split("/") if isinstance(relative, str) else relative.parts
     if len(parts) < 4 or parts[0] != "snapshots" or parts[2] != "meta":
         return False
-    return _under("/".join(parts[3:]), _snapshot_runtime())
+    return _under("/".join(parts[3:]), _SNAPSHOT_RUNTIME)
 
 
 def _under(relative: str, prefixes: tuple[str, ...]) -> bool:
@@ -226,7 +230,7 @@ def reference_files(roots: list[dict], *, meta_root: Path | None = None) -> list
                 raise LifecycleError(f"Reference scan failed: {error}") from error
             for entry in listed:
                 relative = prefix + entry.name
-                if lake_root_meta and _in_snapshot_runtime(Path(relative)):
+                if lake_root_meta and _in_snapshot_runtime(relative):
                     continue
                 if _under(relative, skipped):
                     continue
@@ -244,13 +248,41 @@ def reference_files(roots: list[dict], *, meta_root: Path | None = None) -> list
     return sorted(found)
 
 
+#: Fingerprints already taken inside :func:`reusing_reference_fingerprints`.
+_FINGERPRINTS: ContextVar[dict | None] = ContextVar("reference_fingerprints", default=None)
+
+
+@contextmanager
+def reusing_reference_fingerprints() -> Iterator[None]:
+    """Take each reference fingerprint once inside this block.
+
+    For a read-only summary only: one storage page view used to scan the
+    reference roots twice (its own check and the staging preview's hold
+    check). Anything that deletes or records holds runs outside the block
+    and scans again under the lake lock.
+    """
+    token = _FINGERPRINTS.set({}) if _FINGERPRINTS.get() is None else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            _FINGERPRINTS.reset(token)
+
+
 def reference_fingerprint(roots: list[dict], *, meta_root: Path | None = None) -> str:
+    taken = _FINGERPRINTS.get()
+    key = (json.dumps(roots, sort_keys=True), str(meta_root))
+    if taken is not None and key in taken:
+        return taken[key]
     files = reference_files(roots, meta_root=meta_root)
     memo = _HashMemo.for_meta(meta_root)
     try:
-        return digest([(str(p), memo.sha256(p)) for p in files])
+        value = digest([(str(p), memo.sha256(p)) for p in files])
     finally:
         memo.save()
+    if taken is not None:
+        taken[key] = value
+    return value
 
 
 class _HashMemo:
@@ -544,7 +576,7 @@ class LifecycleStore:
                     "reference_roots": [],
                     "reference_fingerprint": digest([]),
                 }
-            known = {o["object_id"] for o in self.inventory()}
+            known = {o["object_id"] for o in self.inventory(measure=False)}
             known |= {f"revision/{d}/{rid}" for d, rid in self._catalog_revisions()}
             from cnequity.storage.lifecycle.resources import resource_exists
 
@@ -716,7 +748,13 @@ class LifecycleStore:
                 )
         return items
 
-    def inventory(self) -> list[dict]:
+    def inventory(self, *, measure: bool = True) -> list[dict]:
+        """Every retained revision; *measure* False leaves ``exclusive_bytes`` as None.
+
+        Measuring walks every file of every legacy generation directory (a
+        third of a storage page's build on a real lake) for a figure only the
+        raw ``cne storage inspect`` report shows; plans measure it again.
+        """
         root = self.meta / "revisions"
         _reject_symlink_path(root)
         result = []
@@ -796,7 +834,7 @@ class LifecycleStore:
                             "receipt_digest": receipt_digest,
                             "directory_identity": [info.st_dev, info.st_ino, info.st_mtime_ns],
                             "logical_bytes": sum(f["size_bytes"] for f in files),
-                            "exclusive_bytes": _exclusive_tree_bytes(path),
+                            "exclusive_bytes": _exclusive_tree_bytes(path) if measure else None,
                             "current": bool(pointer and pointer["revision_id"] == rid),
                             # A merge that rewrote files without changing a row
                             # says so in its receipt; see `inspect`.
@@ -809,10 +847,10 @@ class LifecycleStore:
         result.extend(self._catalog_inventory(seen))
         return result
 
-    def inspect(self, *, keep: int = DEFAULT_KEEP_GENERATIONS) -> dict:
+    def inspect(self, *, keep: int = DEFAULT_KEEP_GENERATIONS, measure: bool = True) -> dict:
         keep = revision_keep(None, keep)
         registry = self.registry()
-        objects = self.inventory()
+        objects = self.inventory(measure=measure)
         for dataset in {o["dataset"] for o in objects}:
             valid = sorted(
                 (o for o in objects if o["dataset"] == dataset and not o["blocked_reasons"]),
