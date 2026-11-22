@@ -302,11 +302,10 @@ def _record_answers(config: Config, run_id: str, answers: list[dict]) -> list[di
     as a whole come from the run records and are recorded beside them.
     """
     from cnequity.domain.findings import finding
-    from cnequity.quality.planned_coverage import record_answers, record_refreshes
+    from cnequity.quality.planned_coverage import record_run_answers
 
     try:
-        record_answers(config, run_id, answers)
-        record_refreshes(config, run_id)
+        record_run_answers(config, run_id, answers)
     except Exception as exc:  # a lost answer is only asked again
         logger.warning("coverage ledger not updated for %s: %s", run_id, exc)
         return [
@@ -680,16 +679,18 @@ def _compact_datasets(
 
     findings = list(context.get("audit_findings") or ())
     resume_datasets = compacted & fully_selected
+    catalog_pending = [item for item in pending if lake_write.has(item[0])]
+    catalog_published = {item[0] for item in catalog_pending}
 
     def add_publication_records(write) -> None:
-        from cnequity.quality.planned_coverage import attach_answers
+        from cnequity.quality.planned_coverage import attach_answers, attach_refreshes
         from cnequity.storage.resume_units import attach
 
         attach_answers(write, run_id, findings)
+        attach_refreshes(write, config, run_id, published=catalog_published)
         attach(write, run_id, findings, resume_datasets)
 
     catalog_revisions: dict = {}
-    catalog_pending = [item for item in pending if lake_write.has(item[0])]
     if catalog_pending:
         from cnequity.storage.lake_write import DatasetPublish
 
@@ -764,7 +765,7 @@ def _compact_datasets(
     _settle_published_datasets(config, compacted, run_id=run_id, fully_selected=fully_selected)
     if not catalog_revisions:
         audit_findings.extend(_record_resume_units(config, run_id, findings, resume_datasets))
-    audit_findings.extend(_record_answers(config, run_id, [] if catalog_revisions else findings))
+        audit_findings.extend(_record_answers(config, run_id, findings))
 
     from cnequity.query.views import ensure_duckdb_views
 

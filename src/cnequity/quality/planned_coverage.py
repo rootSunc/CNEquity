@@ -598,6 +598,56 @@ def _collect(config, scope: Scope, names: Iterable[str], asked: dict[str, dateti
 SYNC_DAYS = 45
 
 
+def _refresh_seeds(
+    catalog: Catalog, config, run_id: str, *, published: Iterable[str] = ()
+) -> list[Seed]:
+    asked = refreshes(config.manifest_path, run_id=run_id)
+    if not asked:
+        return []
+    published_set = set(published)
+    written = last_written(catalog)
+    found: list[Seed] = []
+    for name, at in sorted(asked.items()):
+        if name in published_set or name not in DATASETS or not refreshed(name):
+            continue
+        coverage = coverage_of(DATASETS[name], at.date(), config)
+        known = [written.get(name), *cov.attempted(catalog, name)["at"].to_list()]
+        latest = max((moment for moment in known if moment is not None), default=None)
+        if latest is None or at > latest:
+            day = at.astimezone(MARKET_ZONE).date()
+            found.append(Seed(name, "refresh", (cov.label(coverage.grain, day),), at))
+    return found
+
+
+def attach_refreshes(write, config, run_id: str, *, published: Iterable[str] = ()) -> int:
+    """Add whole-dataset refreshes run *run_id* made to this publication."""
+    found = _refresh_seeds(write.catalog, config, run_id, published=published)
+    if not found:
+        return 0
+    rows = [
+        {
+            "dataset": seed.dataset,
+            "period": period,
+            "entity": "",
+            "run": f"run:{run_id}:{seed.reason}",
+            "asked_at": seed.asked_at,
+            "outcome": seed.outcome,
+        }
+        for seed in found
+        for period in seed.periods
+    ]
+    catalog = write.catalog
+    frame = pl.DataFrame(rows).unique().cast({"asked_at": pl.Datetime("us", "UTC")})
+    cov.prepare(catalog)
+    keys = ["dataset", "period", "run", "asked_at"]
+    seen = catalog.records(cov.ATTEMPTS, ", ".join(keys)).cast(
+        {"asked_at": pl.Datetime("us", "UTC")}
+    )
+    frame = frame.join(seen, on=keys, how="anti")
+    write.record_frame(cov.ATTEMPTS, frame)
+    return frame.height
+
+
 def record_refreshes(config, run_id: str) -> int | None:
     """Record the whole-dataset refreshes run *run_id* made, from the run records.
 
@@ -605,19 +655,8 @@ def record_refreshes(config, run_id: str) -> int | None:
     that published or found nothing new; the run manifest is where that is
     said. Returns the ledger snapshot, or ``None`` when there was nothing new.
     """
-    asked = refreshes(config.manifest_path, run_id=run_id)
-    found: list[Seed] = []
     with ledger(config) as catalog:
-        written = last_written(catalog)
-        for name, at in sorted(asked.items()):
-            if name not in DATASETS or not refreshed(name):
-                continue
-            coverage = coverage_of(DATASETS[name], at.date(), config)
-            known = [written.get(name), *cov.attempted(catalog, name)["at"].to_list()]
-            latest = max((moment for moment in known if moment is not None), default=None)
-            if latest is None or at > latest:
-                day = at.astimezone(MARKET_ZONE).date()
-                found.append(Seed(name, "refresh", (cov.label(coverage.grain, day),), at))
+        found = _refresh_seeds(catalog, config, run_id)
     return record_seeds(config, found, run=f"run:{run_id}") if found else None
 
 
@@ -904,6 +943,26 @@ def attach_answers(write, run_id: str, findings: Iterable[dict]) -> int:
     frame = frame.join(seen, on=keys, how="anti")
     write.record_frame(cov.ATTEMPTS, frame)
     return frame.height
+
+
+def record_run_answers(config, run_id: str, findings: Iterable[dict]) -> int:
+    """Record fetch answers and whole-dataset refreshes in one snapshot."""
+    from equitylake_core.write import Write
+
+    findings = list(findings)
+    has_answers = any(item.get("check") in {ANSWER_CHECK, RECHECK_CHECK} for item in findings)
+    has_refreshes = bool(refreshes(config.manifest_path, run_id=run_id))
+    if not has_answers and not has_refreshes:
+        return 0
+    with lake_mutation_lock(config.meta_root, blocking=True):
+        with Catalog(lake_root(config), create=True) as catalog:
+            write = Write(catalog)
+            count = attach_answers(write, run_id, findings) if has_answers else 0
+            if has_refreshes:
+                count += attach_refreshes(write, config, run_id)
+            if count:
+                write.commit(message=f"run:{run_id}:answers")
+    return count
 
 
 def record_answers(config, run_id: str, findings: Iterable[dict]) -> int:

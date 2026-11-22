@@ -334,14 +334,14 @@ def attempted(catalog: Catalog, dataset: str) -> pl.DataFrame:
     schema = {**CELLS_SCHEMA, "at": pl.Datetime("us", "UTC"), "outcome": pl.String}
     if not catalog.has_table(ATTEMPTS):
         return pl.DataFrame(schema=schema)
-    rows = catalog.records(ATTEMPTS).filter(pl.col("dataset") == dataset)
+    rows = catalog.records(ATTEMPTS, "*, snapshot_id").filter(pl.col("dataset") == dataset)
     if rows.is_empty():
         return pl.DataFrame(schema=schema)
     # A row written before attempts carried an outcome said "empty".
     outcome = pl.col("outcome").fill_null("empty") if "outcome" in rows.columns else pl.lit("empty")
     return (
         rows.with_columns(outcome=outcome)
-        .sort("asked_at", maintain_order=True)
+        .sort(["asked_at", "snapshot_id"], nulls_last=True, maintain_order=True)
         .group_by("period", "entity", maintain_order=True)
         .agg(pl.col("asked_at").max().alias("at"), pl.col("outcome").last())
         .select("period", "entity", "at", "outcome")

@@ -21,6 +21,7 @@ connection this module keeps open, which sees every later commit: about
 
 from __future__ import annotations
 
+import atexit
 import json
 import threading
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ from typing import Any
 
 from cnequity.meta_layout import LAKE_DIR, REVISION_DATA, REVISION_RECORDS, STORAGE_RECORD
 from equitylake_core.catalog import ALIAS, CATALOG_FILE, REVISIONS_TABLE, Catalog
+from equitylake_core.lock import lake_read
 
 #: The migration that imports the receipts; until a lake has had it, its files are read.
 MIGRATION_ID = "revision-records"
@@ -218,7 +220,7 @@ _settings: dict[Path, tuple[tuple[int, int], bool]] = {}
 
 
 def _query(root: Path, sql: str, parameters: list | None = None) -> list:
-    with _lock:
+    with lake_read(root), _lock:
         for attempt in (0, 1):
             catalog = _readers.get(root)
             if catalog is None:
@@ -291,7 +293,7 @@ def _enabled(meta: Path) -> bool:
 
 
 def _has_tables(root: Path, *names: str) -> bool:
-    with _lock:
+    with lake_read(root), _lock:
         for attempt in (0, 1):
             catalog = _readers.get(root)
             if catalog is None:
@@ -357,6 +359,9 @@ def forget(meta_root: Path | None = None) -> None:
         if meta_root is None:
             _cache.clear()
             _settings.clear()
+
+
+atexit.register(forget)
 
 
 # --- the migration: bring every receipt into the catalog ------------------------------
