@@ -32,7 +32,8 @@ def _emit(value: dict) -> None:
 
 
 @contextmanager
-def _maintenance(config, *, apply: bool = True):
+def _maintenance(config, *, apply: bool = True, wait: float = 0):
+    """Hold the lake for a maintenance command, waiting up to *wait* seconds for its users."""
     if not apply:
         yield
         return
@@ -43,9 +44,15 @@ def _maintenance(config, *, apply: bool = True):
 
     with ExitStack() as stack:
         try:
-            stack.enter_context(lake_maintenance(lake_root(config)))
+            stack.enter_context(lake_maintenance(lake_root(config), timeout=wait))
         except LockUnavailable as exc:
-            raise click.ClickException(str(exc)) from exc
+            raise click.ClickException(
+                _(
+                    "Another cne process is reading or writing this lake ({detail}). Stop "
+                    "`cne serve`, `cne mcp` and any query or scheduled run using it, then run "
+                    "this again; nothing was changed."
+                ).format(detail=exc)
+            ) from exc
         yield
 
 
@@ -96,14 +103,17 @@ def migrate(config_path: str, apply: bool, only: str | None, as_json: bool):
     results: list[dict] = []
     failed = False
     if not chosen and not as_json:
-        created = read_lake(cfg).get("created_with")
-        click.echo(
-            _(
-                "Nothing owed: the lake was built by {version}, or every migration is recorded."
+        record_ = read_lake(cfg)
+        created = record_.get("created_with")
+        if created and not record_.get("migrations"):
+            message = _(
+                "Nothing owed: this lake was built by {version} and needs no migration."
             ).format(version=created)
-            if created
-            else _("Nothing owed: every migration is recorded in meta/lake.json.")
-        )
+        else:
+            message = _(
+                "Nothing owed: every migration this lake needs is recorded in meta/lake.json."
+            )
+        click.echo(message)
         return
     with _maintenance(cfg, apply=apply):
         for migration in chosen:
@@ -248,7 +258,7 @@ def upgrade(config_path: str, apply: bool, no_backup: bool, as_json: bool):
         )
         return
 
-    with _maintenance(cfg):
+    with _maintenance(cfg, wait=upgrading.READERS_WAIT_SECONDS):
         backup = None if no_backup else upgrading.back_up(cfg)
         if backup is not None:
             say(_("Backed up the lake's records to {path}").format(path=backup))

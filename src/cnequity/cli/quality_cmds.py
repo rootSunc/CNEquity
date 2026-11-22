@@ -366,12 +366,6 @@ def _tip_scope(cfg, catalog: pl.DataFrame, dataset: str = "daily_bars") -> dict 
         "Universe profile whose historical validity --full checks (see `cne profile list`); default legacy_all_a."
     ),
 )
-@click.option(
-    "--research-universe",
-    type=click.Choice(["all_a", "all_a_sh_sz"]),
-    default=None,
-    hidden=True,
-)
 def audit(
     config_path: str,
     run_id: tuple[str, ...],
@@ -379,7 +373,6 @@ def audit(
     research_start: str | None,
     research_end: str | None,
     universe_profile: str | None,
-    research_universe: str | None,
     quality_only: bool = False,
 ):
     """Run the quality audit; add --full for a health snapshot of the whole lake as it is now.
@@ -401,21 +394,6 @@ def audit(
         raise click.ClickException(_("--research-start needs --full"))
     if research_end and not research_start:
         raise click.ClickException(_("--research-end needs --research-start"))
-    if research_universe is not None:
-        legacy_profile = profile_for_legacy_universe(research_universe).name
-        if universe_profile is not None and universe_profile != legacy_profile:
-            raise click.ClickException(
-                _("--research-universe {old} conflicts with --universe-profile {new}").format(
-                    old=research_universe, new=universe_profile
-                )
-            )
-        click.echo(
-            _("--research-universe is deprecated; use --universe-profile {name}").format(
-                name=legacy_profile
-            ),
-            err=True,
-        )
-        universe_profile = legacy_profile
     research_profile = universe_profile or profile_for_legacy_universe("all_a").name
 
     if full:

@@ -283,11 +283,7 @@ def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
         run_id="demo-instruments",
         message="demo: publish instruments",
     )
-    click.echo(
-        _("Wrote {height} instruments → {out}").format(
-            height=df.height, out=cfg.data_root / "lake" / "data" / "main" / "instruments"
-        )
-    )
+    click.echo(_("Published {height} instruments to the demo lake").format(height=df.height))
     return df["symbol"].to_list()
 
 

@@ -1559,35 +1559,25 @@ def test_audit_full_defaults_to_the_legacy_all_a_profile(cfg_path, monkeypatch):
     assert observed["research_profile"] == "legacy_all_a"
 
 
-def test_audit_research_universe_maps_to_its_legacy_profile(cfg_path, monkeypatch):
-    observed = _capture_lake_health(monkeypatch)
+def test_audit_research_universe_was_removed_for_universe_profile(cfg_path, monkeypatch):
+    _capture_lake_health(monkeypatch)
     result = CliRunner().invoke(
         cli, ["audit", "--full", "--config", cfg_path, "--research-universe", "all_a_sh_sz"]
     )
 
-    assert result.exit_code == 0, result.output
-    assert observed["research_profile"] == "legacy_all_a_sh_sz"
-    assert "--universe-profile legacy_all_a_sh_sz" in result.output
+    assert result.exit_code == 2
+    assert "No such option" in result.output
 
 
-def test_audit_research_universe_conflicting_with_profile_is_refused(cfg_path, monkeypatch):
-    _capture_lake_health(monkeypatch)
+def test_audit_universe_profile_selects_the_legacy_shanghai_shenzhen_profile(cfg_path, monkeypatch):
+    observed = _capture_lake_health(monkeypatch)
     result = CliRunner().invoke(
         cli,
-        [
-            "audit",
-            "--full",
-            "--config",
-            cfg_path,
-            "--research-universe",
-            "all_a",
-            "--universe-profile",
-            "cn_a_sh_sz_research_v1",
-        ],
+        ["audit", "--full", "--config", cfg_path, "--universe-profile", "legacy_all_a_sh_sz"],
     )
 
-    assert result.exit_code != 0
-    assert "conflicts" in result.output
+    assert result.exit_code == 0, result.output
+    assert observed["research_profile"] == "legacy_all_a_sh_sz"
 
 
 def test_derive_trading_status_and_orphans(cfg_path, monkeypatch):

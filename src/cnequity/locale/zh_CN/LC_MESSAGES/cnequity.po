@@ -1148,16 +1148,6 @@ msgstr "--research-start 必须早于或等于 --research-end"
 msgid "--research-start needs --full"
 msgstr "--research-start 需要配合 --full"
 
-#: cnequity/cli/quality_cmds.py
-#, python-brace-format
-msgid "--research-universe is deprecated; use --universe-profile {name}"
-msgstr "--research-universe 已弃用；请改用 --universe-profile {name}"
-
-#: cnequity/cli/quality_cmds.py
-#, python-brace-format
-msgid "--research-universe {old} conflicts with --universe-profile {new}"
-msgstr "--research-universe {old} 与 --universe-profile {new} 冲突"
-
 #: cnequity/cli/demo.py
 msgid "--sample cannot be combined with --intraday or --research"
 msgstr "--sample 不能和 --intraday 或 --research 一起用"
@@ -1519,6 +1509,11 @@ msgstr "公告、财务和资金流。关掉后不再请求东财。"
 #: cnequity/ops/catalog.py
 msgid "Announcements, regulatory events and news. Also runs on weekends and holidays."
 msgstr "公告、监管事件和资讯。周末和节假日也会跑。"
+
+#: cnequity/cli/repair_cmds.py
+#, python-brace-format
+msgid "Another cne process is reading or writing this lake ({detail}). Stop `cne serve`, `cne mcp` and any query or scheduled run using it, then run this again; nothing was changed."
+msgstr "另一个 cne 进程正在读取或写入这个湖（{detail}）。先停掉使用它的 `cne serve`、`cne mcp` 以及正在运行的查询或定时任务，再重新运行；这次什么都没有改动。"
 
 #: cnequity/ops/scheduler_backend.py
 msgid "Another lake of the current user is changing the system scheduler; try again shortly."
@@ -3834,13 +3829,13 @@ msgid "Nothing in staging to publish: every finished run has been compacted."
 msgstr "没有待发布的 staging：所有已结束的 run 都已经 compact。"
 
 #: cnequity/cli/repair_cmds.py
-msgid "Nothing owed: every migration is recorded in meta/lake.json."
-msgstr "没有欠下的迁移：全部迁移已记录在 meta/lake.json。"
+msgid "Nothing owed: every migration this lake needs is recorded in meta/lake.json."
+msgstr "没有欠下的迁移：这个湖需要的迁移都已记录在 meta/lake.json。"
 
 #: cnequity/cli/repair_cmds.py
 #, python-brace-format
-msgid "Nothing owed: the lake was built by {version}, or every migration is recorded."
-msgstr "没有欠下的迁移：这个湖由 {version} 建立，或全部迁移已记录。"
+msgid "Nothing owed: this lake was built by {version} and needs no migration."
+msgstr "没有欠下的迁移：这个湖由 {version} 建立，不需要迁移。"
 
 #: cnequity/serve/storage.py
 msgid "Nothing to execute this time."
@@ -4371,6 +4366,11 @@ msgstr "应用可确定的因子修正并保留旧版本；未解决项只作提
 #: cnequity/ops/catalog.py
 msgid "Publish the finished data this run left in staging to the lake."
 msgstr "把这次 run 留在 staging 里、已经结束的数据发布到湖里。"
+
+#: cnequity/cli/demo.py
+#, python-brace-format
+msgid "Published {height} instruments to the demo lake"
+msgstr "已发布 {height} 条 instruments 到 demo 湖"
 
 #: cnequity/cli/init_summary.py
 msgid "Python:"
@@ -6824,11 +6824,6 @@ msgstr "已写入 {out}"
 #, python-brace-format
 msgid "Wrote {archive} ({size:,} bytes); {kept} archives kept, {removed} removed."
 msgstr "已写入 {archive}（{size:,} 字节）；保留 {kept} 份，删除 {removed} 份。"
-
-#: cnequity/cli/demo.py
-#, python-brace-format
-msgid "Wrote {height} instruments → {out}"
-msgstr "已写入 {height} 条 instruments → {out}"
 
 #: cnequity/diagnostics/source_health.py
 msgid "XLS download; an HTML answer is a risk-control page."

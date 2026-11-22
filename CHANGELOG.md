@@ -36,7 +36,7 @@
 - 修复：`cne backfill --profile delisted` 把 `delisting_events` 直接写进 `derived/delisting_events/` 目录，湖目录湖从不读那里，这一步的结果此前一直没有发布出去。现在它在自己的检出里合并（同一代码以新的分类为准）并发布进湖目录。
 - 已切换到湖目录的湖里，`curated/`、`derived/` 下不能再写入任何数据文件：写到那里的文件读不到，此前会静默"写成功"。写入方一律写进检出再发布；Python 里直接调用派生函数（`compute_adj_factors`、`derive_industry_index`、`derive_option_greeks`、`derive_futures_continuous`、`derive_minute_resample`）现在必须传入 `output`（运行 id 打开的 `DerivedOutput`），不再默认写进无人发布的目录。
 - 长时间运行的进程（`cne serve`、`cne mcp`）读多个湖时，只保留最近用到的少数几个湖目录连接，不再每读一个湖就多留一个（每个约占几十个线程）；修订记录的读取只用一个 DuckDB 线程。
-- 读取不再在尚未升级、或还没有任何发布的湖里建出 `lake/` 目录和 `lake/maintenance.lock`（此前 `cne query`、`cne status` 等只读命令都会建）。
+- 读取不再在尚未升级、或还没有任何发布的湖里建出 `lake/` 目录和 `lake/maintenance.lock`（此前 `cne query`、`cne status` 等只读命令都会建）；这类湖的读取改为锁住数据目录旁的 `lake.readers.lock`。`cne upgrade --apply` 会等正在进行的读取最多 30 秒，仍有进程在读写这个湖（`cne serve`、`cne mcp`、查询或定时任务）就停下并说明，什么都不改；升级完成后删掉这个锁文件。
 - `cne check` 在湖还欠升级时于结论处提示 `cne upgrade --apply`：读取不受影响，但写入（包括下一次日更）在升级前都会被拒绝。离线样例湖不再列出“欠着的键”并建议回补。
 - 发布不再写 `meta/revisions/<数据集>/` 下的指针（`current.json`）和回执文件：修订只记在湖目录里，和这次发布的数据在同一个事务里提交。此前发布要先写回执、提交目录、再移动指针，中途停下会留下没有发布的回执或落后的指针，要靠维护任务修正；现在发布要么完整生效，要么不留痕迹。已有的指针和回执文件由 `drop-generations` 迁移删除。
 - **不兼容变更**：`load_with_receipt()` 返回的 `revision_receipt` 和 `dataset_state()` 的 `revision_receipt`，对发布进湖目录的修订为 `None`（没有回执文件可指向）；修订号、修订 id、内容摘要等字段不变。`meta/state/<数据集>.json` 里不再有 `revision_receipt`、`revision_pointer` 两个字段。
@@ -47,6 +47,8 @@
 - 发布门的预演视图不再靠复制指针文件决定读哪份数据：视图直接读自己那份目录库副本里的修订记录，预演发布后读到的就是预演结果。
 - 所有写入只走湖目录：删除了把数据集还原成工作目录、写代目录的旧发布路径，修复、派生和日更都只取出要改的分区。环境变量 `CNE_READ_CATALOG` 不再起作用。
 - **不兼容变更**：删除 `cne storage sync-catalog`、`cne storage merge-files`、`cne repair layout`、`cne repair repartition` 和只用来报错的 `cne storage apply`：湖目录的发布本身保证文件布局，它们已无事可做。脚本或定时任务里还调用它们的，直接去掉即可。`cne run maintain` 不再运行文件合并和湖目录同步。七个 `*-month-partitions` 迁移已移除，它们在湖目录上本就不做事。
+- **不兼容变更**：删除 `cne audit` 已弃用的隐藏选项 `--research-universe`，改用 `--universe-profile legacy_all_a` 或 `legacy_all_a_sh_sz`。
+- `cne migrate` 在没有欠下的迁移时说清楚原因：新建的湖不需要迁移，升级过的湖需要的迁移都已记录；此前升级后仍写「湖由 0.24.0 建立」，读起来像没升级。`cne init --profile demo` 不再打印湖目录的内部路径。
 - 修复：从湖目录起步的新湖（没有 `curated/` 目录）发布后水位不前进，下次运行会重抓同一段；审计把这类湖的每个数据集报成“没有数据”。
 - 修复：只存在湖目录里的修订没有目录，按目录找文件的检查什么也看不到：`cne audit --full` 的列结构和占位值检查跳过了这些数据集，ST 覆盖证据得到空的股票池，按日回补判断“哪些日期已有”时读的是 0.25.0 起不再更新的 `curated/`。现在都读已发布的文件。
 - 修复：按报告期分区的数据集（如 `financial_statement_items`）在新湖上第一次发布时，分区校验把字符串的报告期当成日期而失败。

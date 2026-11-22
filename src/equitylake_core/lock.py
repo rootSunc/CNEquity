@@ -226,6 +226,18 @@ def lake_operation(root: str | Path, *, timeout: float = LAKE_LOCK_TIMEOUT) -> I
             yield
 
 
+def early_readers_path(root: str | Path) -> Path:
+    """The lock readers hold while the lake has no directory yet: ``<parent>/<name>.readers.lock``.
+
+    A lake an earlier release built, or one nothing has published to, has no
+    lake directory, and a read must not create one. Its readers lock this file
+    beside it instead, so the operation that creates the directory (an
+    upgrade) can still wait for them to finish.
+    """
+    root = Path(root).expanduser().resolve()
+    return root.with_name(f"{root.name}.readers.lock")
+
+
 @contextmanager
 def lake_maintenance(root: str | Path, *, timeout: float = 0) -> Iterator[None]:
     """Exclude managed readers and writers during operations requiring an idle lake.
@@ -233,7 +245,8 @@ def lake_maintenance(root: str | Path, *, timeout: float = 0) -> Iterator[None]:
     Only the holding thread passes. Other threads of the same process wait like
     other processes, which keeps a dashboard's request threads out of a purge
     it runs in the background; work done under maintenance must not hand lake
-    reads or writes to worker threads.
+    reads or writes to worker threads. Readers that started before the lake
+    had its directory (see :func:`early_readers_path`) are excluded too.
     """
     path = lake_lock_path(root).with_name("maintenance.lock")
     if not hasattr(_HELD, "maintenance"):
@@ -242,7 +255,13 @@ def lake_maintenance(root: str | Path, *, timeout: float = 0) -> Iterator[None]:
     if path in active:
         yield
         return
-    with file_lock(path, timeout=timeout):
+    with ExitStack() as stack:
+        stack.enter_context(file_lock(path, timeout=timeout))
+        # Taken after the lake lock exists: a reader that creates the early
+        # lock from here on finds the lake directory and waits on that lock.
+        early = early_readers_path(root)
+        if early.is_file():
+            stack.enter_context(file_lock(early, timeout=timeout))
         active.add(path)
         try:
             yield
@@ -273,14 +292,48 @@ def lake_read(root: str | Path) -> Iterator[None]:
     """
     root = Path(root)
     if not root.is_dir():
-        yield
-        return
+        with _early_read(root) as early:
+            if early:
+                yield
+                return
     with lake_operation(root):
         if not (root / "catalog.sqlite").is_file():
             yield
         else:
             with lake_files(root, shared=True):
                 yield
+
+
+@contextmanager
+def _early_read(root: Path) -> Iterator[bool]:
+    """Hold the early readers' lock while *root* has no directory; yields whether it still has none.
+
+    ``False`` means the directory appeared while the lock was being taken (an
+    upgrade or a first publish started): the caller reads under the lake's own
+    locks instead, which wait for that operation. A lake on a read-only
+    filesystem cannot get the lock file, and cannot be upgraded or written
+    either, so it is read without one.
+    """
+    if not root.parent.is_dir():
+        # No lake here at all: nothing to read, and nothing to create.
+        yield True
+        return
+    try:
+        lock = file_lock(early_readers_path(root), shared=True)
+        lock.__enter__()
+    except LockIOError:
+        yield not root.is_dir()
+        return
+    try:
+        if root.is_dir():
+            lock.__exit__(None, None, None)
+            lock = None
+            yield False
+        else:
+            yield True
+    finally:
+        if lock is not None:
+            lock.__exit__(None, None, None)
 
 
 def holds_lake_lock(root: str | Path) -> bool:

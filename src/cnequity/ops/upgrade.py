@@ -174,6 +174,10 @@ def back_up(config) -> Path:
     return target
 
 
+#: How long ``cne upgrade --apply`` waits for reads already under way.
+READERS_WAIT_SECONDS = 30.0
+
+
 def run(config, progress: Callable[[str, str, str], None] | None = None) -> dict:
     """Apply every migration the lake owes, in order; returns what each did.
 
@@ -182,37 +186,54 @@ def run(config, progress: Callable[[str, str, str], None] | None = None) -> dict
     are not repeated when the upgrade is started again.
     """
     from cnequity.storage.catalog_bridge import lake_root
-    from cnequity.storage.catalog_migration import migrate_to_catalog, upgrade_in_progress
-    from cnequity.storage.migrations import affected, owed, record
-    from equitylake_core.lock import lake_maintenance
+    from cnequity.storage.catalog_migration import upgrade_in_progress
+    from equitylake_core.lock import early_readers_path, lake_maintenance
 
-    with lake_maintenance(lake_root(config)), upgrade_in_progress():
-        results: list[dict] = []
-        for migration in owed(config):
-            started = datetime.now(timezone.utc)
-            try:
-                if migration.id == "lake-catalog":
-                    report = migrate_to_catalog(
-                        config,
-                        apply=True,
-                        progress=None
-                        if progress is None
-                        else lambda stage, dataset: progress("lake-catalog", stage, dataset),
-                    )
-                else:
-                    if progress is not None:
-                        progress(migration.id, "repair", "")
-                    report = migration.apply(config, apply=True)
-            except Exception as exc:  # noqa: BLE001 — reported; later ones may depend on it
-                results.append({"id": migration.id, "error": f"{type(exc).__name__}: {exc}"})
-                return {"done": False, "migrations": results}
-            record(config, migration, report)
-            results.append(
-                {
-                    "id": migration.id,
-                    "affected": affected(report),
-                    "seconds": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
-                    "report": report,
-                }
-            )
-        return {"done": True, "migrations": results}
+    root = lake_root(config)
+    # A scan that is running gets a little time to finish; anything that keeps
+    # reading (`cne serve`, `cne mcp`) has to be stopped first.
+    with lake_maintenance(root, timeout=READERS_WAIT_SECONDS), upgrade_in_progress():
+        result = _run(config, progress)
+        # Held exclusively here, so no reader is using it; readers of the lake
+        # lock the lake's own files from now on. A busy attempt leaves it: it
+        # is how the next attempt sees the readers still running.
+        try:
+            early_readers_path(root).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return result
+
+
+def _run(config, progress) -> dict:
+    from cnequity.storage.catalog_migration import migrate_to_catalog
+    from cnequity.storage.migrations import affected, owed, record
+
+    results: list[dict] = []
+    for migration in owed(config):
+        started = datetime.now(timezone.utc)
+        try:
+            if migration.id == "lake-catalog":
+                report = migrate_to_catalog(
+                    config,
+                    apply=True,
+                    progress=None
+                    if progress is None
+                    else lambda stage, dataset: progress("lake-catalog", stage, dataset),
+                )
+            else:
+                if progress is not None:
+                    progress(migration.id, "repair", "")
+                report = migration.apply(config, apply=True)
+        except Exception as exc:  # noqa: BLE001 — reported; later ones may depend on it
+            results.append({"id": migration.id, "error": f"{type(exc).__name__}: {exc}"})
+            return {"done": False, "migrations": results}
+        record(config, migration, report)
+        results.append(
+            {
+                "id": migration.id,
+                "affected": affected(report),
+                "seconds": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
+                "report": report,
+            }
+        )
+    return {"done": True, "migrations": results}

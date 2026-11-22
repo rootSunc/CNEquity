@@ -175,3 +175,58 @@ def test_the_commands_that_did_nothing_are_gone():
     root = runner.invoke(cli, ["--help"])
     assert root.exit_code == 0
     assert "storage" in root.output
+
+
+def test_an_upgrade_waits_for_a_read_of_the_old_lake_then_refuses(tmp_path, monkeypatch):
+    """A read of a lake without its directory blocks the upgrade, and creates no lake directory."""
+    import threading
+
+    import pytest
+
+    from equitylake_core.lock import LockUnavailable, early_readers_path, lake_read
+
+    cfg = _pre_025_sample_lake(tmp_path / "lake")
+    monkeypatch.setattr(upgrade_ops, "READERS_WAIT_SECONDS", 0.2)
+    reading, release = threading.Event(), threading.Event()
+
+    def reader():
+        with lake_read(lake_root(cfg)):
+            reading.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=reader)
+    thread.start()
+    try:
+        assert reading.wait(10)
+        assert early_readers_path(lake_root(cfg)).is_file()
+        with pytest.raises(LockUnavailable):
+            upgrade_ops.run(cfg)
+        assert owed(cfg)[0].id == "lake-catalog", "nothing was applied"
+    finally:
+        release.set()
+        thread.join()
+
+    assert upgrade_ops.run(cfg)["done"]
+    assert not early_readers_path(lake_root(cfg)).exists()
+    assert load("daily_bars", config=cfg, symbols=["600519.SH"]).height == 3
+
+
+def test_a_read_that_finds_the_lake_directory_appearing_uses_the_lake_lock(tmp_path):
+    from equitylake_core.lock import lake_maintenance, lake_read
+
+    cfg = _pre_025_sample_lake(tmp_path / "lake")
+    with lake_maintenance(lake_root(cfg)):
+        # The upgrade created the directory; a new reader waits on its lock.
+        import threading
+
+        entered = threading.Event()
+
+        def reader():
+            with lake_read(lake_root(cfg)):
+                entered.set()
+
+        thread = threading.Thread(target=reader)
+        thread.start()
+        assert not entered.wait(0.3)
+    thread.join(10)
+    assert entered.is_set()
