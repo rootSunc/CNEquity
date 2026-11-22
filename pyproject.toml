@@ -155,7 +155,6 @@ where = ["src"]
 [tool.setuptools.package-data]
 cnequity = [
     "py.typed",
-    "adapters/calendar/seeds/*.csv",
     "adapters/cni/seeds/*.json",
     "adapters/exchange/seeds/*.json",
     # Required by BSE symbol migration and full-lake audits on installed wheels.

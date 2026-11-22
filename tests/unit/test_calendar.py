@@ -1,13 +1,24 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
+import pytest
 
 from cnequity.adapters.calendar.exchange_calendar import (
     build_trading_calendar,
     calendar_forward_coverage_days,
     calendar_seed_end,
+    load_seed_calendar,
 )
-from cnequity.domain.holidays_cn import EXTRA_TRADING_DATES
+from cnequity.domain import holidays_cn
+from cnequity.domain.holidays_cn import (
+    CLOSED_DATES,
+    EXTRA_TRADING_DATES,
+    HOLIDAY_SCHEDULES,
+    HOLIDAY_TABLE_END,
+    HOLIDAY_TABLE_START,
+    HolidaySchedule,
+    exchange_may_open,
+)
 
 
 def test_cny_holiday_not_trading():
@@ -157,3 +168,62 @@ def test_calendar_forward_coverage_days():
     assert calendar_forward_coverage_days(date(2027, 10, 2)) == 90
     assert calendar_forward_coverage_days(date(2027, 10, 3)) == 89
     assert calendar_forward_coverage_days(date(2024, 6, 28)) > 90
+
+
+def test_2027_follows_the_state_council_notice():
+    """国办发明电〔2026〕10号 replaced a guessed 2027 that missed five closures
+    and closed two sessions."""
+    closures = [date(2027, 2, 5), date(2027, 5, 4), date(2027, 5, 5), date(2027, 6, 9)]
+    closures.append(date(2027, 9, 15))
+    sessions = [date(2027, 6, 14), date(2027, 9, 20)]
+    cal = build_trading_calendar(date(2027, 1, 1), date(2027, 12, 31))
+    is_trading = dict(cal.select("trade_date", "is_trading").iter_rows())
+    for day in closures + sessions:
+        assert day.weekday() < 5, day  # a weekend would pass for the wrong reason
+    assert not any(is_trading[day] for day in closures)
+    assert all(is_trading[day] for day in sessions)
+    assert len(HOLIDAY_SCHEDULES[2027].closed) == 18
+    assert sum(is_trading.values()) == 243
+
+
+def test_the_seed_is_the_holiday_table():
+    """No second copy: the seed covers exactly the scheduled years, by the same rule."""
+    seed = load_seed_calendar()
+    assert seed["trade_date"].min() == HOLIDAY_TABLE_START == date(min(HOLIDAY_SCHEDULES), 1, 1)
+    assert seed["trade_date"].max() == HOLIDAY_TABLE_END == date(max(HOLIDAY_SCHEDULES), 12, 31)
+    assert seed.height == (HOLIDAY_TABLE_END - HOLIDAY_TABLE_START).days + 1
+    assert all(exchange_may_open(day) == flag for day, flag in seed.iter_rows())
+    assert max(CLOSED_DATES) <= HOLIDAY_TABLE_END.isoformat()
+
+
+def test_a_pinned_seed_file_overrides_the_table(tmp_path):
+    seed_path = tmp_path / "trading_calendar.csv"
+    seed_path.write_text("trade_date,is_trading\n2024-06-27,false\n", encoding="utf-8")
+    cal = build_trading_calendar(date(2024, 6, 27), date(2024, 6, 27), seed_path=seed_path)
+    assert cal["is_trading"][0] is False
+
+
+@pytest.mark.parametrize(
+    ("schedules", "message"),
+    [
+        (
+            {2016: HolidaySchedule("x", frozenset()), 2018: HolidaySchedule("x", frozenset())},
+            "consecutive",
+        ),
+        ({2016: HolidaySchedule("", frozenset())}, "no source"),
+        ({2016: HolidaySchedule("x", frozenset({"2016-01-02"}))}, "not a weekday"),
+        ({2016: HolidaySchedule("x", frozenset({"2017-01-02"}))}, "not a weekday"),
+    ],
+)
+def test_holiday_schedules_reject_unsourced_or_misplaced_years(monkeypatch, schedules, message):
+    monkeypatch.setattr(holidays_cn, "HOLIDAY_SCHEDULES", schedules)
+    with pytest.raises(ValueError, match=message):
+        holidays_cn._check_schedules()
+
+
+def test_the_year_after_the_table_is_refused_not_guessed():
+    first_unscheduled = HOLIDAY_TABLE_END + timedelta(days=1)
+    while first_unscheduled.weekday() >= 5:
+        first_unscheduled += timedelta(days=1)
+    with pytest.raises(RuntimeError, match="official holiday schedule"):
+        build_trading_calendar(first_unscheduled, first_unscheduled)

@@ -399,9 +399,10 @@ def _collect_lake_findings(
                 "severity": "warning",
                 "check": "calendar_forward_coverage",
                 "message": (
-                    f"holiday seed hardcoded through {seed_end.isoformat()}; "
+                    f"holiday table covers through {seed_end.isoformat()}; "
                     f"only {forward_days} day(s) forward from {trade_date.isoformat()}; "
-                    "extend holidays_cn.py before calendar goes stale"
+                    "extend holidays_cn.py with the next year's official schedule "
+                    "before calendar goes stale"
                 ),
                 "seed_end": seed_end.isoformat(),
                 "forward_days": forward_days,

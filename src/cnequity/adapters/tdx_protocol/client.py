@@ -12,10 +12,7 @@ from pathlib import Path
 
 import polars as pl
 
-from cnequity.adapters.calendar.exchange_calendar import (
-    build_trading_calendar,
-    ensure_seed_csv,
-)
+from cnequity.adapters.calendar.exchange_calendar import build_trading_calendar
 from cnequity.adapters.eastmoney.corporate_actions import fetch_corporate_actions_eastmoney
 from cnequity.adapters.eastmoney.trading_status import fetch_trading_status_eastmoney
 from cnequity.adapters.tdx_protocol.bars import fetch_bars_paginated
@@ -667,7 +664,6 @@ def fetch_trading_calendar(
 ) -> pl.DataFrame:
     wait_spec(rate_limit)
     try:
-        ensure_seed_csv(seed_path)
         return build_trading_calendar(
             start,
             end,

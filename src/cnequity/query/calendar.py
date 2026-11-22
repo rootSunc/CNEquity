@@ -125,17 +125,13 @@ def list_trading_dates(
         )
     else:
         cal = None
-    from cnequity.adapters.calendar.exchange_calendar import (
-        build_trading_calendar,
-        ensure_seed_csv,
-    )
+    from cnequity.adapters.calendar.exchange_calendar import build_trading_calendar
 
     seed_path = config.meta_root / "seeds" / "trading_calendar.csv"
-    effective_seed = seed_path if seed_path.exists() else ensure_seed_csv()
     calendar = build_trading_calendar(
         start,
         end,
-        seed_path=effective_seed,
+        seed_path=seed_path if seed_path.exists() else None,
         curated_root=config.curated_root,
         known=cal,
     )

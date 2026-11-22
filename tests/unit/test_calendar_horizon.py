@@ -70,16 +70,13 @@ def test_fires_once_the_calendar_outruns_the_table(tmp_path):
 def test_holidays_past_the_table_really_are_marked_as_sessions():
     """The failure the check exists to catch, demonstrated rather than asserted
     in prose: 2028-01-26 is 春节 and the builder calls it a trading day."""
-    from cnequity.adapters.calendar.exchange_calendar import (
-        build_trading_calendar,
-        ensure_seed_csv,
-    )
+    from cnequity.adapters.calendar.exchange_calendar import build_trading_calendar
     from cnequity.domain.holidays_cn import CLOSED_DATES
 
     spring_festival = date(2028, 1, 26)
     assert spring_festival > date.fromisoformat(max(CLOSED_DATES))
     with pytest.raises(RuntimeError, match="holiday seed ends"):
-        build_trading_calendar(spring_festival, spring_festival, seed_path=ensure_seed_csv())
+        build_trading_calendar(spring_festival, spring_festival)
 
 
 def test_earliest_bar_date_considers_index_bars_too(tmp_path):

@@ -1,6 +1,6 @@
 from cnequity.adapters.calendar.exchange_calendar import (
     build_trading_calendar,
-    ensure_seed_csv,
+    load_seed_calendar,
 )
 
-__all__ = ["build_trading_calendar", "ensure_seed_csv"]
+__all__ = ["build_trading_calendar", "load_seed_calendar"]

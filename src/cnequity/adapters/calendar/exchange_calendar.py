@@ -1,25 +1,28 @@
-"""Exchange trading calendar: bundled seed CSV + bar-derived fallback."""
+"""Exchange trading calendar: holiday-table seed + bar-derived fallback."""
 
 from __future__ import annotations
 
-import csv
 import logging
 from datetime import date, timedelta
-from importlib import resources
+from functools import cache
 from pathlib import Path
 
 import polars as pl
 
 from cnequity.domain.holidays_cn import (
     CLOSED_DATES,
+    HOLIDAY_TABLE_END,
+    HOLIDAY_TABLE_START,
     exchange_may_open,
     exchange_may_open_expr,
 )
 
 logger = logging.getLogger(__name__)
 
-_SEED_START = date(2016, 1, 1)
-_SEED_END = date(2027, 12, 31)
+# The seed is the holiday table itself: it covers exactly the years whose
+# official schedule is entered, and nothing past them.
+_SEED_START = HOLIDAY_TABLE_START
+_SEED_END = HOLIDAY_TABLE_END
 CALENDAR_FORWARD_COVERAGE_WARN_DAYS = 90
 
 
@@ -49,29 +52,28 @@ def _generate_seed_rows(start: date, end: date) -> list[tuple[str, bool]]:
     return rows
 
 
-def _default_seed_path() -> Path:
-    return Path(resources.files("cnequity.adapters.calendar") / "seeds" / "trading_calendar.csv")
-
-
-def ensure_seed_csv(path: Path | None = None) -> Path:
-    """Write bundled seed CSV if missing (idempotent)."""
-    target = path or _default_seed_path()
-    if target.exists():
-        return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["trade_date", "is_trading"])
-        writer.writerows(_generate_seed_rows(_SEED_START, _SEED_END))
-    return target
+@cache
+def _table_seed() -> pl.DataFrame:
+    return pl.DataFrame(
+        _generate_seed_rows(_SEED_START, _SEED_END),
+        schema={"trade_date": pl.Utf8, "is_trading": pl.Boolean},
+        orient="row",
+    ).with_columns(pl.col("trade_date").str.to_date())
 
 
 def load_seed_calendar(path: Path | None = None) -> pl.DataFrame:
-    seed_path = path or ensure_seed_csv()
-    if not seed_path.exists():
-        raise FileNotFoundError(f"trading calendar seed not found: {seed_path}")
+    """Seed calendar rows: generated from the holiday table, or read from *path*.
+
+    *path* is a pinned seed CSV (``trade_date,is_trading``), such as the one a
+    restored research snapshot carries in ``meta/seeds``. Without it the seed
+    is the holiday table, so there is no second copy to fall out of step.
+    """
+    if path is None:
+        return _table_seed()
+    if not path.exists():
+        raise FileNotFoundError(f"trading calendar seed not found: {path}")
     df = pl.read_csv(
-        seed_path,
+        path,
         schema={"trade_date": pl.Utf8, "is_trading": pl.Boolean},
     )
     return df.with_columns(pl.col("trade_date").str.to_date(strict=False))
@@ -195,7 +197,8 @@ def build_trading_calendar(
             raise CalendarCoverageError(
                 "trading calendar holiday seed ends at "
                 f"{_SEED_END.isoformat()}; cannot classify {unknown_weekdays[0].isoformat()} "
-                "without refreshed holidays_cn.py or published bar evidence"
+                "until that year's official holiday schedule is added to holidays_cn.py, "
+                "or published bar evidence covers it"
             )
 
     # Before the seed and the holiday table begin, bars are the only evidence

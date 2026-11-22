@@ -251,8 +251,8 @@ def trading_calendar_horizon_findings(config: Config, trade_date: date) -> list[
             "message": (
                 f"calendar marks trading days through {last_written.isoformat()} but the "
                 f"bundled holiday table ends {table_end.isoformat()}; dates past it only "
-                "drop weekends, so public holidays are marked as sessions — refresh "
-                "domain/holidays_cn.py and the seed CSV"
+                "drop weekends, so public holidays are marked as sessions — add the "
+                "next year's official schedule to domain/holidays_cn.py"
             ),
             "calendar_last_trading_day": last_written.isoformat(),
             "holiday_table_end": table_end.isoformat(),
