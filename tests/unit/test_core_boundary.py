@@ -52,6 +52,10 @@ CORE: tuple[str, ...] = (
     "cnequity.storage.read_context",
     "cnequity.storage.partition_cache",
     "cnequity.storage.snapshots",
+    "cnequity.storage.lake_write",
+    "cnequity.storage.catalog_bridge",
+    "cnequity.storage.revision_records",
+    "cnequity.storage.resume_units",
     # Scheduling: the step registry, the run ledger, the job engine.
     "cnequity.orchestrator.registry",
     "cnequity.orchestrator.manifest",
@@ -60,6 +64,7 @@ CORE: tuple[str, ...] = (
     "cnequity.orchestrator.engine",
     "cnequity.orchestrator.worker_pool",
     # Reading: partition scans, the load() core, SQL views.
+    "cnequity.query.catalog_read",
     "cnequity.query.parquet_scan",
     "cnequity.query.reader",
     "cnequity.query.views",

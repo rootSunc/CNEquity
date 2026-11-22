@@ -347,7 +347,9 @@ def plan_all(
                 begins = cov.first_stored(catalog, source, given.column) if given.column else None
                 if begins is None:
                     continue
-                periods = owed(name, coverage, scope, calendar=calendar)["period"].to_list()
+                periods = owed(name, coverage, scope, calendar=calendar, universe=universe)[
+                    "period"
+                ].to_list()
                 sets.append({p for p in periods if cov.span(coverage.grain, p)[1] >= begins})
                 continue
             sets.append(set(answered(one(source).cells, coverage.grain)["period"].to_list()))

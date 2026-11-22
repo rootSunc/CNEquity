@@ -55,6 +55,7 @@ def load(
     columns: Sequence[str] | None = None,
     snapshot: int | None = None,
     where: pl.Expr | None = None,
+    sort: bool = True,
 ) -> pl.DataFrame:
     """The rows of *spec*'s dataset, in its declared order.
 
@@ -110,7 +111,9 @@ def load(
             frame = frame.filter(moment < high)
     if where is not None:
         frame = frame.filter(where)
-    return frame.sort(list(spec.order), maintain_order=True).select(wanted).collect()
+    if sort:
+        frame = frame.sort(list(spec.order), maintain_order=True)
+    return frame.select(wanted).collect()
 
 
 def _through_catalog(catalog: Catalog, spec: DatasetSpec, snapshot: int | None) -> pl.LazyFrame:

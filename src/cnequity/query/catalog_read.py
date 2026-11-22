@@ -105,6 +105,34 @@ def read_published(
                     return None
             table = quote_identifier(dataset)
             types = {row[0]: row[1] for row in catalog.execute(f"DESCRIBE {table}").fetchall()}
+            unique = bool(keys_unique(catalog, dataset))
+            from cnequity.domain.core_registry import core_spec
+            from cnequity.domain.datasets import DATASETS
+            from equitylake_core import read as core_read
+
+            if dataset in DATASETS:
+                spec = core_spec(dataset, columns=types)
+                date_bounds = start is not None or end is not None
+                can_use_core = (not date_bounds) or (
+                    partition_col == spec.time
+                    and spec.time is not None
+                    and types.get(spec.time) != "VARCHAR"
+                )
+                if can_use_core:
+                    where = (
+                        pl.col("symbol").is_in(symbols)
+                        if (symbols and "symbol" in spec.columns)
+                        else None
+                    )
+                    frame = core_read.load(
+                        catalog,
+                        spec,
+                        start=start if date_bounds else None,
+                        end=end if date_bounds else None,
+                        where=where,
+                        sort=False,
+                    )
+                    return CatalogRows(frame, unique)
             clauses: list[str] = []
             values: list[object] = []
             if partition_col and partition_col in types and (start is not None or end is not None):
@@ -123,9 +151,8 @@ def read_published(
             if symbols and "symbol" in types:
                 clauses.append("symbol IN (" + ", ".join("?" for _ in symbols) + ")")
                 values.extend(symbols)
-            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-            unique = bool(keys_unique(catalog, dataset))
-            relation = catalog.relation(f"SELECT * FROM {ALIAS}.{table}{where}", values)
+            where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            relation = catalog.relation(f"SELECT * FROM {ALIAS}.{table}{where_sql}", values)
             return CatalogRows(relation.pl(), unique)
     except Exception as exc:  # noqa: BLE001 - the scan is always a correct answer
         logger.warning("catalog read of %s failed, scanning instead: %s", dataset, exc)

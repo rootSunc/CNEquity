@@ -98,14 +98,17 @@ def _try_posix(handle: BinaryIO, *, shared: bool) -> bool:
 
 
 _try_lock = _try_windows if os.name == "nt" else _try_posix
+_HANDLES_LOCK = threading.Lock()
 _HANDLES: set[BinaryIO] = set()
 _HELD = threading.local()
 
 
 def _reset_after_fork() -> None:
+    global _HANDLES_LOCK
     # Close the inherited descriptors without unlocking the parent's flock.
     # Lock handles are unbuffered, so there is no inherited buffer lock to take.
-    for handle in _HANDLES:
+    _HANDLES_LOCK = threading.Lock()
+    for handle in list(_HANDLES):
         handle.close()
     _HANDLES.clear()
     _HELD.lakes = {}
@@ -128,11 +131,13 @@ def open_lock_file(path: str | Path, *, shared: bool = False) -> Iterator[Binary
     except OSError as exc:
         raise LockIOError(target, exc) from exc
     with handle:
-        _HANDLES.add(handle)
+        with _HANDLES_LOCK:
+            _HANDLES.add(handle)
         try:
             yield handle
         finally:
-            _HANDLES.discard(handle)
+            with _HANDLES_LOCK:
+                _HANDLES.discard(handle)
 
 
 def acquire_handle(

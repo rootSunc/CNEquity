@@ -36,7 +36,7 @@ from equitylake_core.catalog import (
     quote_identifier,
     quote_literal,
 )
-from equitylake_core.lock import LockTimeout, lake_files, lake_read, snapshot_lock
+from equitylake_core.lock import LockTimeout, lake_files, lake_read
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,14 @@ class Comparison:
 
 def lake_root(config) -> Path:
     return Path(config.data_root) / LAKE_DIR
+
+
+def open_lake(config):
+    """Open *config*'s lake through the market-neutral :class:`equitylake_core.lake.Lake`."""
+    from cnequity.domain.core_registry import core_registry
+    from equitylake_core.lake import Lake
+
+    return Lake(lake_root(config), core_registry())
 
 
 def committed_source(config, dataset: str) -> tuple[str, str] | None:
@@ -968,30 +976,17 @@ def apply_retention(
             locks.enter_context(lake_files(catalog.root, shared=False, timeout=0))
         except LockTimeout:
             return RetentionResult(len(every), 0, 0, False, active_readers=True)
-        can_expire = []
-        for snapshot in expire:
-            try:
-                locks.enter_context(snapshot_lock(catalog.root, snapshot, shared=False, timeout=0))
-            except LockTimeout:
-                continue
-            can_expire.append(snapshot)
-        if can_expire:
-            versions = "[" + ", ".join(map(str, can_expire)) + "]"
-            catalog.execute(f"CALL ducklake_expire_snapshots('{ALIAS}', versions => {versions})")
-            catalog.con.abort()
+        _expired_count, locked_any = catalog.expire_snapshots(expire)
         remaining = int(
             catalog.execute(f"SELECT count(*) FROM ducklake_snapshots('{ALIAS}')").fetchone()[0]
         )
-        data = catalog.data_root
-        before = sum(1 for _ in data.rglob("*.parquet"))
-        catalog.execute(
-            f"CALL ducklake_cleanup_old_files('{ALIAS}', "
-            f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
-        )
-        catalog.con.abort()
-        after = sum(1 for _ in data.rglob("*.parquet"))
+        files_deleted = catalog.cleanup_old_files(grace_hours=grace_hours)
     return RetentionResult(
-        remaining, len(every) - remaining, before - after, True, len(can_expire) < len(expire)
+        remaining,
+        len(every) - remaining,
+        files_deleted,
+        True,
+        locked_any,
     )
 
 
@@ -1009,16 +1004,7 @@ def delete_orphans(catalog: Catalog, *, grace_hours: int = FILE_GRACE_HOURS) -> 
     on a lake that has switched to its catalog: before that, the migration
     places generation files without the lock.
     """
-    if catalog.borrows_data:
-        raise RuntimeError("a copy of a lake's catalog never deletes the lake's files")
-    data = catalog.data_root
-    before = sum(1 for _ in data.rglob("*.parquet"))
-    catalog.execute(
-        f"CALL ducklake_delete_orphaned_files('{ALIAS}', "
-        f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
-    )
-    catalog.con.abort()
-    return before - sum(1 for _ in data.rglob("*.parquet"))
+    return catalog.delete_orphaned_files(grace_hours=grace_hours)
 
 
 def catalog_retention(config, *, apply: bool) -> dict | None:

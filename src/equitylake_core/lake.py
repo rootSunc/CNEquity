@@ -224,13 +224,35 @@ class Lake:
         with self.catalog() as catalog:
             if not catalog.has_table(REVISIONS):
                 return []
+            cols = {row[0] for row in catalog.execute(f"DESCRIBE {REVISIONS}").fetchall()}
             scope = "" if dataset is None else "WHERE r.dataset = ?"
+            if {"run", "partitions", "rows", "rejected"}.issubset(cols):
+                select = (
+                    "SELECT r.dataset, r.snapshot_id AS snapshot, "
+                    "(s.snapshot_time AT TIME ZONE 'UTC') AS committed_at, "
+                    "r.run, r.partitions, r.rows, r.rejected "
+                )
+            else:
+                run_col = "r.run_id AS run" if "run_id" in cols else "NULL AS run"
+                part_col = (
+                    "r.changed_partitions AS partitions"
+                    if "changed_partitions" in cols
+                    else "NULL AS partitions"
+                )
+                rev_col = (
+                    ", r.revision_id, r.revision"
+                    if {"revision_id", "revision"}.issubset(cols)
+                    else ""
+                )
+                select = (
+                    f"SELECT r.dataset, r.snapshot_id AS snapshot, "
+                    f"(s.snapshot_time AT TIME ZONE 'UTC') AS committed_at, "
+                    f"{run_col}, {part_col}{rev_col} "
+                )
             cursor = catalog.execute(
-                "SELECT r.dataset, r.snapshot_id AS snapshot, "
-                "(s.snapshot_time AT TIME ZONE 'UTC') AS committed_at, "
-                "r.run, r.partitions, r.rows, r.rejected "
-                f"FROM {REVISIONS} r JOIN ducklake_snapshots('lake') s "
-                f"ON s.snapshot_id = r.snapshot_id {scope} ORDER BY r.snapshot_id, r.dataset",
+                select
+                + f"FROM {REVISIONS} r JOIN ducklake_snapshots('lake') s "
+                + f"ON s.snapshot_id = r.snapshot_id {scope} ORDER BY r.snapshot_id, r.dataset",
                 [dataset] if dataset is not None else None,
             )
             names = [column[0] for column in cursor.description]

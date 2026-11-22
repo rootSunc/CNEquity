@@ -19,9 +19,9 @@ from typing import Literal
 
 from equitylake_core.coverage import Coverage
 
-Partition = Literal["none", "year", "month", "day"]
+Partition = Literal["none", "year", "quarter", "month", "day"]
 
-PARTITIONS: tuple[Partition, ...] = ("none", "year", "month", "day")
+PARTITIONS: tuple[Partition, ...] = ("none", "year", "quarter", "month", "day")
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 #: ``strftime`` format of a partition's label, by granularity.
@@ -145,20 +145,36 @@ class DatasetSpec:
         """The partition a row dated *day* belongs to; ``""`` for an unpartitioned dataset."""
         if self.partition == "none":
             return ""
+        if self.partition == "quarter":
+            return f"{day.year}Q{(day.month - 1) // 3 + 1}"
         return day.strftime(_LABEL_FORMAT[self.partition])
 
     def label_sql(self) -> str:
         """SQL: the partition label of a row, from its time column."""
         if self.partition == "none":
             return "''"
+        if self.partition == "quarter":
+            return f'concat(year("{self.time}"), \'Q\', quarter("{self.time}"))'
         return f"strftime(\"{self.time}\", '{_LABEL_FORMAT[self.partition]}')"
 
     def period(self, label: str) -> tuple[date, date] | None:
         """The first and last day partition *label* covers, or ``None`` if it is not a label."""
         if self.partition == "none":
             return None
+        value = label.rsplit("=", 1)[-1] if "=" in label else label
         try:
-            parts = [int(part) for part in label.split("-")]
+            if self.partition == "quarter" and "Q" in value:
+                year_str, q_str = value.split("Q", 1)
+                year, quarter = int(year_str), int(q_str)
+                if 1 <= quarter <= 4:
+                    first_month = (quarter - 1) * 3 + 1
+                    last_month = first_month + 2
+                    return (
+                        date(year, first_month, 1),
+                        date(year, last_month, monthrange(year, last_month)[1]),
+                    )
+                return None
+            parts = [int(part) for part in value.split("-")]
             if self.partition == "year" and len(parts) == 1:
                 return date(parts[0], 1, 1), date(parts[0], 12, 31)
             if self.partition == "month" and len(parts) == 2:

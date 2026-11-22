@@ -155,7 +155,11 @@ class Fetcher:
     def fetch(self, request: Request) -> bytes:
         """The body of a successful answer to *request*; raises :class:`FetchError` otherwise."""
         policy = self.policies[request.source]
-        url = request.url + ("?" + urllib.parse.urlencode(request.params) if request.params else "")
+        if request.params:
+            sep = "&" if "?" in request.url else "?"
+            url = request.url + sep + urllib.parse.urlencode(request.params)
+        else:
+            url = request.url
         reason, status = "no attempt made", None
         for attempt in range(policy.attempts):
             if attempt:

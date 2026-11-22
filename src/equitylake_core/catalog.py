@@ -78,14 +78,14 @@ def copy_catalog(source: str | Path, target: str | Path) -> None:
     """
     import sqlite3
     from contextlib import closing
+    from urllib.parse import quote
 
     source, target = Path(source), Path(target)
     target.mkdir(parents=True, exist_ok=True)
     (target / CATALOG_FILE).unlink(missing_ok=True)
+    source_uri = f"file:{quote((source / CATALOG_FILE).as_posix(), safe='/:')}?mode=ro"
     with (
-        closing(
-            sqlite3.connect(f"file:{(source / CATALOG_FILE).as_posix()}?mode=ro", uri=True)
-        ) as original,
+        closing(sqlite3.connect(source_uri, uri=True)) as original,
         closing(sqlite3.connect(target / CATALOG_FILE)) as copied,
     ):
         original.backup(copied)
@@ -755,3 +755,82 @@ class Catalog:
 
     def merge_small_files(self) -> None:
         self.con.execute(f"CALL ducklake_merge_adjacent_files({quote_literal(ALIAS)})")
+
+    def expire_snapshots(
+        self, versions: Sequence[int], *, batch_size: int = 32
+    ) -> tuple[int, bool]:
+        """Expire *versions* in bounded batches, respecting any active snapshot locks.
+
+        Returns ``(expired_count, any_locked)``. Only touches lock files that
+        already exist on disk (created by ``pin_snapshot`` readers), so large
+        expiry sets never exhaust open-file limits or leak empty lock files.
+        """
+        from contextlib import ExitStack
+
+        from equitylake_core.lock import LockTimeout
+
+        if self.borrows_data:
+            raise RuntimeError("a copy of a lake's catalog never expires the lake's snapshots")
+        targets = sorted({int(v) for v in versions})
+        if not targets:
+            return 0, False
+        lock_dir = self.root / "snapshot-locks"
+        expired = 0
+        locked_any = False
+        for offset in range(0, len(targets), max(1, int(batch_size))):
+            batch = targets[offset : offset + max(1, int(batch_size))]
+            with ExitStack() as snap_locks:
+                can_expire: list[int] = []
+                locked_files: list[Path] = []
+                for version in batch:
+                    lock_file = lock_dir / f"{version}.lock"
+                    if lock_file.is_file():
+                        try:
+                            snap_locks.enter_context(
+                                snapshot_lock(self.root, version, shared=False, timeout=0)
+                            )
+                        except LockTimeout:
+                            locked_any = True
+                            continue
+                        locked_files.append(lock_file)
+                    can_expire.append(version)
+                if can_expire:
+                    listed = "[" + ", ".join(map(str, can_expire)) + "]"
+                    self.con.execute(
+                        f"CALL ducklake_expire_snapshots({quote_literal(ALIAS)}, "
+                        f"versions => {listed})"
+                    )
+                    self.con.abort()
+                    expired += len(can_expire)
+                for lock_file in locked_files:
+                    try:
+                        lock_file.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+        return expired, locked_any
+
+    def cleanup_old_files(self, *, grace_hours: int = 24) -> int:
+        """Delete files orphaned by expired snapshots once older than *grace_hours*."""
+        if self.borrows_data:
+            raise RuntimeError("a copy of a lake's catalog never deletes the lake's files")
+        data = self.data_root
+        before = sum(1 for _ in data.rglob("*.parquet"))
+        self.con.execute(
+            f"CALL ducklake_cleanup_old_files({quote_literal(ALIAS)}, "
+            f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
+        )
+        self.con.abort()
+        return before - sum(1 for _ in data.rglob("*.parquet"))
+
+    def delete_orphaned_files(self, *, grace_hours: int = 24) -> int:
+        """Delete Parquet files not registered by any snapshot once older than *grace_hours*."""
+        if self.borrows_data:
+            raise RuntimeError("a copy of a lake's catalog never deletes the lake's files")
+        data = self.data_root
+        before = sum(1 for _ in data.rglob("*.parquet"))
+        self.con.execute(
+            f"CALL ducklake_delete_orphaned_files({quote_literal(ALIAS)}, "
+            f"older_than => now() - INTERVAL ({int(grace_hours)}) HOUR)"
+        )
+        self.con.abort()
+        return before - sum(1 for _ in data.rglob("*.parquet"))

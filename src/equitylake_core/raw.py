@@ -15,9 +15,13 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
+import uuid
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+
+from equitylake_core.lock import file_lock
 
 INDEX = "index.jsonl"
 
@@ -44,10 +48,14 @@ class RawArchive:
         digest = hashlib.sha256(body).hexdigest()
         target = directory / f"{digest}.gz"
         if not target.exists():
-            partial = target.with_suffix(".part")
-            with gzip.open(partial, "wb", compresslevel=6) as handle:
-                handle.write(body)
-            partial.replace(target)
+            partial = directory / f".{digest}.{os.getpid()}.{uuid.uuid4().hex[:8]}.part"
+            try:
+                with gzip.open(partial, "wb", compresslevel=6) as handle:
+                    handle.write(body)
+                partial.replace(target)
+            except BaseException:
+                partial.unlink(missing_ok=True)
+                raise
         entry = {
             "key": key,
             "url": url,
@@ -57,8 +65,9 @@ class RawArchive:
             "sha256": digest,
             "fetched_at": at.isoformat(timespec="seconds"),
         }
-        with open(directory / INDEX, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        with file_lock(directory / f"{INDEX}.lock"):
+            with open(directory / INDEX, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
         return target
 
     def entries(self, source: str) -> Iterator[dict]:

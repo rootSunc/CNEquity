@@ -341,7 +341,7 @@ def attempted(catalog: Catalog, dataset: str) -> pl.DataFrame:
     outcome = pl.col("outcome").fill_null("empty") if "outcome" in rows.columns else pl.lit("empty")
     return (
         rows.with_columns(outcome=outcome)
-        .sort("asked_at")
+        .sort("asked_at", maintain_order=True)
         .group_by("period", "entity", maintain_order=True)
         .agg(pl.col("asked_at").max().alias("at"), pl.col("outcome").last())
         .select("period", "entity", "at", "outcome")
