@@ -106,8 +106,8 @@ def explain(config_path: str, object_id: str):
 @click.option(
     "--manifest", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True
 )
-def import_references(config_path: str, manifest: Path):
-    """Import a reviewed reference list; only adds protection and never releases old holds automatically."""
+def import_holds(config_path: str, manifest: Path):
+    """Import reviewed holds and cases; only adds protection and never releases old holds."""
     value = _store(config_path).import_manifest(json.loads(manifest.read_text(encoding="utf-8")))
     _emit(
         {
@@ -115,18 +115,6 @@ def import_references(config_path: str, manifest: Path):
             "held_objects": len(value["holds"]),
         }
     )
-
-
-@storage.command("refresh")
-@config_option
-def refresh_references(config_path: str):
-    """Re-scan the registered reference roots and hold every version they now cite; never releases a hold."""
-    config = _cfg(config_path)
-    attach_log_file(config, "storage-refresh")
-    summary = LifecycleStore(config.meta_root).refresh_references()
-    if summary is None:
-        raise click.ClickException("No reference inventory has been imported for this lake.")
-    _emit(summary)
 
 
 @storage.command("catalog-retention")
@@ -240,10 +228,23 @@ def verify_catalog(config_path: str, dataset: str | None):
 @config_option
 @click.argument("object_id")
 @click.option("--reason", required=True)
-def hold(config_path: str, object_id: str, reason: str):
-    """Retain a version or an existing cleanup resource; retention then never deletes it."""
-    _store(config_path).hold(object_id, reason)
-    _emit({"object_id": object_id, "held": True})
+@click.option(
+    "--until",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help=N_("Last day the hold protects (YYYY-MM-DD); without it the hold stays until released."),
+)
+def hold(config_path: str, object_id: str, reason: str, until):
+    """Retain a version or an existing cleanup resource; retention does not delete it while held."""
+    last_day = until.date() if until is not None else None
+    _store(config_path).hold(object_id, reason, until=last_day)
+    _emit(
+        {
+            "object_id": object_id,
+            "held": True,
+            "until": last_day.isoformat() if last_day else None,
+        }
+    )
 
 
 @storage.command("release")
@@ -251,7 +252,7 @@ def hold(config_path: str, object_id: str, reason: str):
 @click.argument("object_ids", nargs=-1, required=True)
 @click.option("--note", required=True, help=N_("Why the protection is no longer needed."))
 def release(config_path: str, object_ids: tuple[str, ...], note: str):
-    """Drop manual holds and stale references on versions; case dependencies and live references stay."""
+    """Drop manual holds on versions; case dependencies stay."""
     store = _store(config_path)
     _emit({"released": [store.release(object_id, note) for object_id in object_ids]})
 

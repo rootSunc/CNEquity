@@ -1157,42 +1157,6 @@ def test_clean_previews_the_configured_retention_unless_overridden(
     assert observed == [keep]
 
 
-def test_clean_with_changed_references_refuses_without_traceback(cfg_path, tmp_path, caplog):
-    from cnequity.config import load_config
-    from cnequity.storage.lifecycle import LifecycleStore, reference_fingerprint
-
-    cfg = load_config(cfg_path)
-    evidence = tmp_path / "references"
-    evidence.mkdir()
-    roots = [{"path": str(evidence)}]
-    store = LifecycleStore(cfg.meta_root)
-    store.import_manifest(
-        {
-            "schema_version": 1,
-            "meta_root": str(store.meta),
-            "holds": {},
-            "reference_roots": roots,
-            "reference_fingerprint": reference_fingerprint(roots),
-        }
-    )
-    (evidence / "new.json").write_text("{}")
-    registry_before = store.registry_path.read_bytes()
-    staged = cfg.staging_root / "daily_bars/run_id=kept/input.parquet"
-    staged.parent.mkdir(parents=True)
-    staged.write_bytes(b"must survive the refusal")
-
-    result = CliRunner().invoke(cli, ["run", "clean", "--config", cfg_path])
-
-    assert result.exit_code == 1
-    assert "References changed; refresh the lifecycle import before cleanup" in result.output
-    assert "Traceback" not in result.output
-    records = [record for record in caplog.records if record.name == "cnequity.cli"]
-    assert len(records) == 1
-    assert records[0].exc_info is None
-    assert staged.read_bytes() == b"must survive the refusal"
-    assert store.registry_path.read_bytes() == registry_before
-
-
 def test_stats_show_scans_curated_when_no_stats_exist(tmp_path, cfg_path):
     """The former `cne catalog`. A lake that has never run `stats rebuild` must
     still be able to answer what is in it, without a build step first."""

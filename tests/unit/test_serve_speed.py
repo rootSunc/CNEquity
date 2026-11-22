@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import stat
 import threading
 import time
@@ -167,163 +166,6 @@ def test_the_lake_version_never_opens_the_catalog_duckdb_is_reading(config, monk
     assert all(Path(p).name != CATALOG_FILE for p in opened)
 
 
-# --- the reference scan -------------------------------------------------
-
-
-def test_the_reference_scan_skips_exclusions_and_refuses_links(tmp_path):
-    from cnequity.storage.lifecycle import LifecycleError, reference_files
-
-    root = tmp_path / "refs"
-    (root / "keep" / "deep").mkdir(parents=True)
-    (root / "skip" / "inner").mkdir(parents=True)
-    (root / "skipped-not").mkdir()
-    (root / "keep" / "a.json").write_text("{}")
-    (root / "keep" / "deep" / "b.md").write_text("x")
-    (root / "keep" / "c.parquet").write_bytes(b"x")
-    (root / "skip" / "inner" / "d.json").write_text("{}")
-    (root / "skipped-not" / "e.json").write_text("{}")
-    found = reference_files([{"path": str(root), "exclude": ["skip"]}])
-    assert sorted(p.relative_to(root).as_posix() for p in found) == [
-        "keep/a.json",
-        "keep/deep/b.md",
-        "skipped-not/e.json",
-    ]
-    os.symlink(root / "keep" / "a.json", root / "keep" / "link.json")
-    with pytest.raises(LifecycleError, match="link"):
-        reference_files([{"path": str(root), "exclude": ["skip"]}])
-
-
-def test_an_unchanged_reference_file_is_not_read_again(tmp_path, monkeypatch):
-    from cnequity.storage import lifecycle
-
-    root = tmp_path / "refs"
-    root.mkdir()
-    note = root / "note.md"
-    note.write_text("revision abc")
-    roots = [{"path": str(root), "exclude": []}]
-    lifecycle._HashMemo._memos.clear()
-    first = lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta")
-    reads = []
-    real = lifecycle.sha256_file
-    monkeypatch.setattr(lifecycle, "sha256_file", lambda p: reads.append(p) or real(p))
-    lifecycle._HashMemo._memos.clear()  # a new process: the memo comes from disk
-    assert lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta") == first
-    assert reads == []
-    note.write_text("revision abd")
-    assert lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta") != first
-    assert reads == [note]
-
-
-def test_the_storage_page_registers_edited_references_itself(tmp_path):
-    # Editing a note under a reference root used to stop the page until someone
-    # pressed a button; the refresh only adds holds, so the page does it.
-    from cnequity.config import Config
-    from cnequity.file_lock import lake_mutation_lock
-    from cnequity.serve.storage import StorageMaintenance
-    from cnequity.storage.lifecycle import LifecycleStore, reference_fingerprint
-
-    cfg = Config(data_root=tmp_path / "lake")
-    notes = tmp_path / "notes"
-    notes.mkdir()
-    note = notes / "pin.md"
-    note.write_text("pinned\n", encoding="utf-8")
-    store = LifecycleStore(cfg.meta_root)
-    roots = [{"path": str(notes.resolve())}]
-    store.import_manifest(
-        {
-            "schema_version": 1,
-            "meta_root": str(store.meta),
-            "holds": {},
-            "reference_roots": roots,
-            "reference_fingerprint": reference_fingerprint(roots, meta_root=store.meta),
-        }
-    )
-    note.write_text("edited\n", encoding="utf-8")
-
-    read_only = StorageMaintenance(cfg, sync_references=False)
-    assert not read_only._references_current(store.registry())
-
-    writable = StorageMaintenance(cfg)
-    held, release = threading.Event(), threading.Event()
-
-    def hold_lock():
-        with lake_mutation_lock(store.meta):
-            held.set()
-            release.wait(10)
-
-    runner = threading.Thread(target=hold_lock)
-    runner.start()
-    held.wait(10)
-    try:
-        assert not writable._references_current(store.registry()), "a run holds the lake"
-    finally:
-        release.set()
-        runner.join()
-
-    assert writable._references_current(store.registry())
-    registry = store.registry()
-    assert registry["reference_fingerprint"] == reference_fingerprint(roots, meta_root=store.meta)
-
-
-def test_records_the_lake_rewrites_on_its_own_are_not_references(tmp_path):
-    # The dashboard timer rewrote meta/scheduler/web/last_tick.json every
-    # minute, so the registered references were "changed" every minute.
-    from cnequity.storage.lifecycle import reference_fingerprint
-
-    meta = tmp_path / "meta"
-    note = meta / "notes" / "pin.md"
-    note.parent.mkdir(parents=True)
-    note.write_text("pinned\n", encoding="utf-8")
-    roots = [{"path": str(meta), "exclude": []}]
-    before = reference_fingerprint(roots, meta_root=meta)
-    for relative in (
-        "scheduler/web/last_tick.json",
-        "sources/key-checks.json",
-        "derivatives/references/SHF/cu.json",
-        "lake.json",
-    ):
-        path = meta / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{"at": "now"}', encoding="utf-8")
-    assert reference_fingerprint(roots, meta_root=meta) == before
-    note.write_text("edited\n", encoding="utf-8")
-    assert reference_fingerprint(roots, meta_root=meta) != before
-
-
-def test_a_page_that_could_not_register_references_tries_again_next_view(config, monkeypatch):
-    from cnequity.serve.storage import StorageMaintenance
-
-    maintenance = StorageMaintenance(config)
-    pending = {"references_changed": True, "objects": []}
-    builds = []
-    monkeypatch.setattr(maintenance, "_summary", lambda: builds.append(1) or dict(pending))
-    monkeypatch.setattr(maintenance, "_rebuild_later", lambda key: builds.append("later"))
-    assert maintenance.summary()["references_changed"]
-    assert maintenance.summary()["refreshing"], "kept, but not as current"
-    assert builds == [1, "later"]
-
-
-def test_a_storage_build_scans_the_references_once(tmp_path, monkeypatch):
-    from cnequity.storage import lifecycle
-
-    root = tmp_path / "refs"
-    root.mkdir()
-    (root / "note.md").write_text("x")
-    roots = [{"path": str(root), "exclude": []}]
-    scans = []
-    real = lifecycle.reference_files
-    monkeypatch.setattr(
-        lifecycle, "reference_files", lambda *a, **kw: scans.append(1) or real(*a, **kw)
-    )
-    with lifecycle.reusing_reference_fingerprints():
-        first = lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta")
-        assert lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta") == first
-    assert len(scans) == 1
-    # Outside the block (deletion, holds) every check scans again.
-    lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta")
-    assert len(scans) == 2
-
-
 def test_the_page_inventory_does_not_measure_generation_trees(config, monkeypatch):
     from cnequity.serve.storage import StorageMaintenance
 
@@ -335,7 +177,6 @@ def test_the_page_inventory_does_not_measure_generation_trees(config, monkeypatc
 
     maintenance = StorageMaintenance(config)
     monkeypatch.setattr(maintenance.store, "inspect", inspect)
-    monkeypatch.setattr(maintenance.store, "registry", lambda: None)
     monkeypatch.setattr("cnequity.serve.storage.StagingRetirement.inspect", lambda self: [])
     maintenance._summary()
     assert seen == {"measure": False}
@@ -345,7 +186,7 @@ def test_a_restarted_server_shows_its_last_inventory_while_it_rebuilds(config, m
     from cnequity.serve.storage import StorageMaintenance
 
     first = StorageMaintenance(config, persist=True)
-    built = {"references_changed": False, "objects": [{"object_id": "revision/a/1"}]}
+    built = {"objects": [{"object_id": "revision/a/1"}]}
     monkeypatch.setattr(first, "_summary", lambda: dict(built))
     assert first.summary()["objects"] == built["objects"]
 

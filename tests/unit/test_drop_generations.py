@@ -60,9 +60,7 @@ def test_a_held_generation_stays_with_its_receipt_and_reads_by_revision(cfg, mon
 
     first = _store(cfg).pointer_file("daily_bars")["revision_id"]
     _publish(cfg, 12.0)
-    monkeypatch.setattr(
-        module, "_held_revisions", lambda meta, refresh: {f"revision/daily_bars/{first}"}
-    )
+    monkeypatch.setattr(module, "_held_revisions", lambda meta: {f"revision/daily_bars/{first}"})
 
     report = drop_generations(cfg, apply=True)
 

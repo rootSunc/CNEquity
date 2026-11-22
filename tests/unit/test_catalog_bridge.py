@@ -368,8 +368,6 @@ def test_retention_reads_holds_after_entering_the_writer_lock(tmp_path, monkeypa
             "meta_root": str(store.meta),
             "lake_id": "test-lake",
             "holds": {},
-            "reference_roots": [],
-            "reference_fingerprint": "",
         }
     )
     lock = file_lock.lake_mutation_lock
@@ -389,42 +387,36 @@ def test_retention_reads_holds_after_entering_the_writer_lock(tmp_path, monkeypa
         ).fetchall() == [(10.0,)]
 
 
-def test_catalog_retention_refreshes_edited_references_before_expiring(tmp_path):
+def test_catalog_retention_ignores_a_note_citing_a_revision_and_keeps_a_hold(tmp_path):
     from tests.catalog_seed import publish_rows
 
     from cnequity.storage.catalog_bridge import catalog_retention, revision_snapshot
-    from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, reference_fingerprint
+    from cnequity.storage.lifecycle import LifecycleStore
 
     config = Config(data_root=tmp_path / "lake", revision_keep_generations=1)
     day = date(2024, 1, 2)
-    older = publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 10.0}), run_id="old")
-    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 11.0}), run_id="new")
-    assert older is not None
-    notes = tmp_path / "research"
+    cited = publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 10.0}), run_id="a")
+    held = publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 11.0}), run_id="b")
+    publish_rows(config, "daily_bars", _rows(day, {"600000.SH": 12.0}), run_id="c")
+    notes = config.meta_root / "research"
     notes.mkdir()
-    evidence = notes / "report.md"
-    evidence.write_text("draft", encoding="utf-8")
-    store = LifecycleStore(config.meta_root)
-    roots = [{"path": str(notes)}]
-    store.import_manifest(
-        {
-            "schema_version": 1,
-            "meta_root": str(store.meta),
-            "holds": {},
-            "reference_roots": roots,
-            "reference_fingerprint": reference_fingerprint(roots, meta_root=store.meta),
-        }
+    (notes / "report.md").write_text(f"revision {cited.revision_id}", encoding="utf-8")
+    LifecycleStore(config.meta_root).hold(
+        f"revision/daily_bars/{held.revision_id}", "kept for review", until=date.today()
     )
-    evidence.write_text(f"revision {older.revision_id}", encoding="utf-8")
-    with pytest.raises(LifecycleError, match="References changed"):
-        catalog_retention(config, apply=False)
     catalog_retention(config, apply=True)
-    assert f"revision/daily_bars/{older.revision_id}" in store.registry()["holds"]
     with Catalog(lake_root(config), read_only=True) as catalog:
-        version, _ = revision_snapshot(catalog, "daily_bars", older.revision_id)
+        live = {
+            int(row[0])
+            for row in catalog.execute(
+                "SELECT snapshot_id FROM ducklake_snapshots('lake')"
+            ).fetchall()
+        }
+        assert revision_snapshot(catalog, "daily_bars", cited.revision_id)[0] not in live
+        version, _ = revision_snapshot(catalog, "daily_bars", held.revision_id)
         assert catalog.execute(
             f"SELECT close FROM daily_bars AT (VERSION => {version})"
-        ).fetchall() == [(10.0,)]
+        ).fetchall() == [(11.0,)]
 
 
 def _read_pinned_snapshot(root, channel):

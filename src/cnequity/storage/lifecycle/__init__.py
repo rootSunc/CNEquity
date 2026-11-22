@@ -4,7 +4,13 @@ One retention model: keep the newest N generations per dataset
 (``[storage.retention].keep_generations``). Backfill and the daily run delete
 the rest right away (``revisions.retain_revision_generations``); a person can
 also delete chosen history earlier, through an immutable plan and a journalled
-purge on the dashboard. Current versions, holds and references always stay.
+purge on the dashboard. Current versions and holds always stay.
+
+A hold is placed on purpose: ``cne storage hold`` (with an optional last day,
+after which it lapses) or a reviewed case's dependency. Releases before 0.25.0
+also held every revision whose id appeared in any text file under ``meta/`` or
+the operator's notes; those holds never lapsed, pinned most of the lake's old
+files, and are released by the ``explicit-holds`` migration.
 
 A seven-day mark-and-wait phase used to sit beside this. Automatic retention
 deleted the marked generations before their wait ended, so it protected
@@ -20,16 +26,12 @@ import os
 import re
 import stat
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from cnequity.config.retention import DEFAULT_KEEP_GENERATIONS, revision_keep
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.file_replace import replace_with_retry
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.revisions import (
     RevisionStore,
@@ -38,7 +40,6 @@ from cnequity.storage.revisions import (
     sha256_file,
 )
 
-TEXT_SUFFIXES = {".json", ".jsonl", ".md", ".py", ".toml", ".yaml", ".yml"}
 _TOKEN = re.compile(r"[a-zA-Z0-9_-]+\Z")
 
 
@@ -52,18 +53,34 @@ def digest(value: Any) -> str:
     ).hexdigest()
 
 
+#: Hold kinds releases before 0.25.0 derived from a revision id seen in a file.
+#: They protect until the ``explicit-holds`` migration releases them.
+RETIRED_HOLD_KINDS = frozenset({"reference", "unresolved_legacy_reference"})
+
+
+def retired_hold(reason) -> bool:
+    """Whether *reason* is one of :data:`RETIRED_HOLD_KINDS`."""
+    return isinstance(reason, dict) and reason.get("kind") in RETIRED_HOLD_KINDS
+
+
 def _releasable(reason: dict) -> bool:
-    """A manual hold, or a reference whose citing file no longer cites it."""
+    """A manual hold, or one of the retired kinds: anything but a case's dependency."""
+    if not isinstance(reason, dict):
+        return False
     if "reason" in reason and "kind" not in reason:
         return True
-    if reason.get("kind") != "reference":
+    return reason.get("kind") in RETIRED_HOLD_KINDS
+
+
+def _lapsed(reason: dict, today: date) -> bool:
+    """Whether a manual hold's last day (``expires_at``) has passed."""
+    until = reason.get("expires_at") if isinstance(reason, dict) else None
+    if until is None:
         return False
-    source = Path(reason.get("source", ""))
     try:
-        text = source.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return True
-    return reason.get("revision_id") not in set(_REVISION_ID.findall(text))
+        return date.fromisoformat(until) < today
+    except (TypeError, ValueError) as exc:
+        raise LifecycleError(f"Invalid hold expiry: {until!r}") from exc
 
 
 def case_holds(cases: list[dict]) -> dict[str, list[dict]]:
@@ -119,235 +136,6 @@ def _read(path: Path) -> dict:
         raise LifecycleError(f"Cannot read lifecycle metadata: {path}") from exc
 
 
-#: What the lake rewrites under its own ``meta`` on every run: source caches,
-#: watermarks and current-pointer mirrors, checkpoints, locks, health and
-#: quality reports, and the derivatives capture records. None of it is a
-#: reference a reviewer registered, and scanning it made every run invalidate
-#: the import, so cleanup refused from the first run after one.
-_REVISION_ID = re.compile(r"(?<![a-f0-9])[a-f0-9]{32}(?![a-f0-9])")
-
-RUNTIME_META_PATHS = (
-    "adj_factor_arbitration_cache",
-    "checkpoints",
-    "derivations",
-    "derivatives/annual_archives",
-    "derivatives/futures_bars",
-    "derivatives/greeks_dependencies",
-    "derivatives/http_cache",
-    "derivatives/option_bars",
-    # Contract reference data and rejected rows, rewritten by each capture.
-    "derivatives/quarantine",
-    "derivatives/references",
-    "instruments_absence_streak.json",
-    # The migration ledger `cne upgrade` keeps.
-    "lake.json",
-    "lifecycle",
-    "locks",
-    "payment_date_repairs",
-    "quality",
-    "rate_limits",
-    "raw",
-    "raw_storage.json",
-    "repairs",
-    "revisions",
-    # The dashboard timer's tick and schedule records (every minute), and the
-    # daily run's markers and streaks.
-    "scheduler",
-    "source_cache",
-    "source_health",
-    "source_snapshots",
-    # Key-check verdicts; the key itself is never written here.
-    "sources",
-    "stability",
-    "state",
-    "stats",
-    # Tushare's per-interface permission cache, rewritten by the peer audit.
-    "tushare",
-)
-
-
-#: The runtime paths inside a research snapshot's meta copy; built once, since
-#: the reference scan asks for every one of several hundred thousand entries.
-_SNAPSHOT_RUNTIME = tuple(Path(p).as_posix() for p in RUNTIME_META_PATHS if p != "revisions")
-
-
-def _in_snapshot_runtime(relative: Path | str) -> bool:
-    """Whether *relative* (to the lake's meta) is a runtime path inside a research snapshot.
-
-    A snapshot under ``meta/snapshots/<name>/meta/`` carries a copy of the
-    lake's metadata, raw archive included: hundreds of thousands of files the
-    lake itself is never scanned for. Its runtime paths are skipped the same
-    way, except its revision records, which name the revisions it captured.
-    """
-    parts = relative.split("/") if isinstance(relative, str) else relative.parts
-    if len(parts) < 4 or parts[0] != "snapshots" or parts[2] != "meta":
-        return False
-    return _under("/".join(parts[3:]), _SNAPSHOT_RUNTIME)
-
-
-def _under(relative: str, prefixes: tuple[str, ...]) -> bool:
-    """Whether the POSIX path *relative* is one of *prefixes* or inside one.
-
-    String tests rather than ``Path.parents``: a reference scan visits several
-    hundred thousand entries, and building every ancestor as a ``Path`` made
-    it take most of a minute.
-    """
-    return any(relative == p or relative.startswith(p + "/") for p in prefixes)
-
-
-def reference_files(roots: list[dict], *, meta_root: Path | None = None) -> list[Path]:
-    """Enumerate registered evidence roots, including newly added reports.
-
-    Exclusions are explicit root-relative paths, saved in the import report.
-    A root that is the lake's own *meta_root* also skips
-    :data:`RUNTIME_META_PATHS`. Missing roots, unreadable files and links never
-    mean 'no references'.
-    """
-    found: set[Path] = set()
-    lake_meta = Path(meta_root).resolve() if meta_root is not None else None
-    for spec in roots:
-        root = Path(spec["path"])
-        _reject_symlink_path(root)
-        if not root.is_absolute() or not root.is_dir():
-            raise LifecycleError(f"Reference root unavailable: {root}")
-        excluded = [Path(p) for p in spec.get("exclude", [])]
-        if any(p.is_absolute() or ".." in p.parts or not p.parts for p in excluded):
-            raise LifecycleError("Invalid reference exclusion")
-        lake_root_meta = lake_meta is not None and root.resolve() == lake_meta
-        if lake_root_meta:
-            excluded += [Path(p) for p in RUNTIME_META_PATHS]
-        skipped = tuple(p.as_posix() for p in excluded)
-
-        # os.scandir rather than os.walk: the entry's type comes with the
-        # listing, so the several hundred thousand entries need no lstat each.
-        pending = [(str(root), "")]
-        while pending:
-            directory, prefix = pending.pop()
-            try:
-                with os.scandir(directory) as entries:
-                    listed = list(entries)
-            except OSError as error:
-                raise LifecycleError(f"Reference scan failed: {error}") from error
-            for entry in listed:
-                relative = prefix + entry.name
-                if lake_root_meta and _in_snapshot_runtime(relative):
-                    continue
-                if _under(relative, skipped):
-                    continue
-                try:
-                    if entry.is_symlink():
-                        raise LifecycleError(f"Reference scan contains a link: {entry.path}")
-                    is_dir = entry.is_dir(follow_symlinks=False)
-                    is_file = not is_dir and entry.is_file(follow_symlinks=False)
-                except OSError as error:
-                    raise LifecycleError(f"Reference scan failed: {error}") from error
-                if is_dir:
-                    pending.append((entry.path, relative + "/"))
-                elif is_file and Path(entry.name).suffix in TEXT_SUFFIXES:
-                    found.add(Path(entry.path))
-    return sorted(found)
-
-
-#: Fingerprints already taken inside :func:`reusing_reference_fingerprints`.
-_FINGERPRINTS: ContextVar[dict | None] = ContextVar("reference_fingerprints", default=None)
-
-
-@contextmanager
-def reusing_reference_fingerprints() -> Iterator[None]:
-    """Take each reference fingerprint once inside this block.
-
-    For a read-only summary only: one storage page view used to scan the
-    reference roots twice (its own check and the staging preview's hold
-    check). Anything that deletes or records holds runs outside the block
-    and scans again under the lake lock.
-    """
-    token = _FINGERPRINTS.set({}) if _FINGERPRINTS.get() is None else None
-    try:
-        yield
-    finally:
-        if token is not None:
-            _FINGERPRINTS.reset(token)
-
-
-def reference_fingerprint(roots: list[dict], *, meta_root: Path | None = None) -> str:
-    taken = _FINGERPRINTS.get()
-    key = (json.dumps(roots, sort_keys=True), str(meta_root))
-    if taken is not None and key in taken:
-        return taken[key]
-    files = reference_files(roots, meta_root=meta_root)
-    memo = _HashMemo.for_meta(meta_root)
-    try:
-        value = digest([(str(p), memo.sha256(p)) for p in files])
-    finally:
-        memo.save()
-    if taken is not None:
-        taken[key] = value
-    return value
-
-
-class _HashMemo:
-    """File digests remembered by file identity, so an unchanged tree is not read again.
-
-    A reference inventory is hundreds of megabytes (snapshot manifests, audit
-    evidence); hashing it all took about a minute on every storage page view
-    and every retention run. A file whose device, inode, size, mtime and ctime
-    are unchanged has the same bytes: ctime cannot be set back by a writer, so
-    this does not trust a preserved mtime. Kept in the user's cache directory,
-    never in the lake or the reference roots it fingerprints.
-    """
-
-    _memos: dict[str, _HashMemo] = {}
-
-    def __init__(self, path: Path | None):
-        self.path = path
-        self.entries: dict[str, list] = {}
-        self.dirty = False
-        if path is not None:
-            try:
-                loaded = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    self.entries = loaded
-            except (OSError, ValueError):
-                pass
-
-    @classmethod
-    def for_meta(cls, meta_root: Path | None) -> _HashMemo:
-        key = str(Path(meta_root).resolve()) if meta_root is not None else ""
-        memo = cls._memos.get(key)
-        if memo is None:
-            path = None
-            if meta_root is not None:
-                base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-                name = hashlib.sha256(key.encode()).hexdigest()[:16]
-                path = Path(base).expanduser() / "cnequity" / "reference-hashes" / f"{name}.json"
-            memo = cls._memos[key] = cls(path)
-        return memo
-
-    def sha256(self, path: Path) -> str:
-        info = path.stat()
-        identity = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
-        key = str(path)
-        hit = self.entries.get(key)
-        if isinstance(hit, list) and hit[:-1] == identity:
-            return hit[-1]
-        value = sha256_file(path)
-        self.entries[key] = [*identity, value]
-        self.dirty = True
-        return value
-
-    def save(self) -> None:
-        if not self.dirty or self.path is None:
-            return
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
-            tmp.write_text(json.dumps(self.entries), encoding="utf-8")
-            replace_with_retry(tmp, self.path, sync_dir=False)
-            self.dirty = False
-        except OSError:
-            pass
-
-
 def _tree_signature(root: Path) -> str:
     """Bind a marking plan to the exact directory and file identities."""
     records = []
@@ -400,8 +188,6 @@ class LifecycleStore:
             or not isinstance(value.get("lake_id"), str)
             or not isinstance(value.get("holds"), dict)
             or not isinstance(value.get("pending", {}), dict)
-            or not isinstance(value.get("reference_roots"), list)
-            or not isinstance(value.get("reference_fingerprint"), str)
         ):
             raise LifecycleError("Invalid lifecycle registry or copied lake identity")
         for oid, reasons in value["holds"].items():
@@ -420,36 +206,55 @@ class LifecycleStore:
         # case manifests are immutable and still name them.
         for retired in ("pending", "experiments", "artifacts", "experiment_pending"):
             value.pop(retired, None)
+        # A hold past its last day protects nothing; the next save records its release.
+        today = date.today()
+        for oid in list(value["holds"]):
+            lapsed = [r for r in value["holds"][oid] if _lapsed(r, today)]
+            if lapsed:
+                self._drop(value, oid, "hold expired", lambda r, gone=lapsed: r in gone)
         return value
+
+    def _new_registry(self) -> dict:
+        """An empty registry, carrying the protection a restored snapshot brought.
+
+        Of a snapshot taken before 0.25.0, only manual holds and cases carry over:
+        the retired reference holds named files of the lake the snapshot came from.
+        """
+        from cnequity.storage.lifecycle.snapshot import read_dependencies
+
+        restored = read_dependencies(self.meta)
+        inherited = restored["protection"] if restored else {}
+        holds = {}
+        for oid, reasons in inherited.get("holds", {}).items():
+            kept = [r for r in reasons if not retired_hold(r)]
+            if kept:
+                holds[oid] = kept
+        return {
+            "schema_version": 1,
+            "lake_id": uuid.uuid4().hex,
+            "meta_root": str(self.meta),
+            "holds": holds,
+            "cases": inherited.get("cases", []),
+        }
 
     def _save(self, value: dict) -> None:
         _reject_symlink_path(self.registry_path)
         write_json_atomic(self.registry_path, value, indent=2, ensure_ascii=False)
 
     def import_manifest(self, manifest: dict) -> dict:
-        """Merge protection; imports never silently release an earlier hold."""
+        """Merge reviewed holds and cases; an import never releases an earlier hold."""
         if (
             manifest.get("schema_version") != 1
             or manifest.get("meta_root") != str(self.meta)
             or not isinstance(manifest.get("holds"), dict)
-            or not isinstance(manifest.get("reference_roots"), list)
         ):
-            raise LifecycleError("Invalid reference import manifest")
+            raise LifecycleError("Invalid hold import manifest")
+        if manifest.get("reference_roots"):
+            raise LifecycleError(
+                "Reference roots are retired: hold each revision with `cne storage hold`"
+            )
         with lake_mutation_lock(self.meta):
-            fingerprint = reference_fingerprint(manifest["reference_roots"], meta_root=self.meta)
-            if fingerprint != manifest.get("reference_fingerprint"):
-                raise LifecycleError("References changed since inventory; refresh the import")
-            from cnequity.storage.lifecycle.snapshot import read_dependencies
-
-            restored = read_dependencies(self.meta)
-            inherited = restored["protection"] if restored else {}
-            value = self.registry() or {
-                "schema_version": 1,
-                "lake_id": uuid.uuid4().hex,
-                "meta_root": str(self.meta),
-                "holds": inherited.get("holds", {}),
-                "cases": inherited.get("cases", []),
-            }
+            value = self.registry() or self._new_registry()
             cases = {case["case_id"]: case for case in value.get("cases", [])}
             incoming_cases = manifest.get("cases", [])
             if not isinstance(incoming_cases, list):
@@ -472,14 +277,16 @@ class LifecycleStore:
             for oid, reasons in imported_holds.items():
                 if not isinstance(oid, str) or not isinstance(reasons, list) or not reasons:
                     raise LifecycleError("Invalid imported hold")
+                if any(
+                    not isinstance(r, dict) or r.get("kind") in RETIRED_HOLD_KINDS for r in reasons
+                ):
+                    raise LifecycleError("Reference holds are retired; import explicit holds")
                 value["holds"].setdefault(oid, [])
                 for reason in reasons:
                     if reason not in value["holds"][oid]:
                         value["holds"][oid].append(reason)
             value.update(
                 {
-                    "reference_roots": manifest["reference_roots"],
-                    "reference_fingerprint": fingerprint,
                     "cases": list(cases.values()),
                     "imported_at": datetime.now(timezone.utc).isoformat(),
                     "import_digest": digest(manifest),
@@ -488,68 +295,6 @@ class LifecycleStore:
             self._save(value)
             return value
 
-    def refresh_references(self) -> dict | None:
-        """Re-scan the registered reference roots and hold what they now cite.
-
-        Every retained revision whose 32-hex id appears in a reference file is
-        held, exactly as a reviewed import would hold it, and the inventory
-        fingerprint is brought up to date. Imports only add protection, so
-        doing this automatically releases nothing: a revision a new note
-        cites becomes protected, and one a note stopped citing stays held
-        until someone releases it. Returns the summary, or None when no
-        reference inventory has ever been imported.
-
-        Without this, retention refused to run from the first edit to any
-        file under the roots — a note in ``private/``, a snapshot manifest —
-        until someone re-ran a manual import, and old generations piled up.
-        """
-        registry = self.registry()
-        if registry is None:
-            return None
-        known: dict[str, set[str]] = {}
-        revisions = self.meta / "revisions"
-        for path in revisions.glob("*/*.json") if revisions.is_dir() else ():
-            if path.name == "current.json":
-                continue
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if isinstance(record, dict) and record.get("revision_id") and record.get("dataset"):
-                known.setdefault(record["revision_id"], set()).add(
-                    f"revision/{record['dataset']}/{record['revision_id']}"
-                )
-        for dataset, revision_id in self._catalog_revisions():
-            known.setdefault(revision_id, set()).add(f"revision/{dataset}/{revision_id}")
-        roots = registry["reference_roots"]
-        holds: dict[str, list[dict]] = {}
-        fingerprints = []
-        for path in reference_files(roots, meta_root=self.meta):
-            raw = path.read_bytes()
-            fingerprints.append((str(path), hashlib.sha256(raw).hexdigest()))
-            cited = set(_REVISION_ID.findall(raw.decode("utf-8", errors="replace")))
-            for revision_id in sorted(cited & known.keys()):
-                # Stable across edits of the citing file, so a re-scan after
-                # an unrelated edit adds no duplicate reason.
-                reason = {"kind": "reference", "source": str(path), "revision_id": revision_id}
-                for object_id in known[revision_id]:
-                    holds.setdefault(object_id, []).append(reason)
-        before = set(registry["holds"])
-        self.import_manifest(
-            {
-                "schema_version": 1,
-                "meta_root": str(self.meta),
-                "reference_roots": roots,
-                "reference_fingerprint": digest(fingerprints),
-                "holds": holds,
-            }
-        )
-        return {
-            "reference_files": len(fingerprints),
-            "cited_revisions": len(holds),
-            "new_holds": sorted(set(holds) - before),
-        }
-
     def _catalog_revisions(self) -> set[tuple[str, str]]:
         """Revisions the lake catalog records and still holds: they have no receipt file."""
         from cnequity.storage.revision_records import records_for
@@ -557,46 +302,31 @@ class LifecycleStore:
         records = records_for(self.meta)
         return set() if records is None else records.revision_ids()
 
-    def hold(self, object_id: str, reason: str) -> None:
+    def hold(self, object_id: str, reason: str, *, until: date | None = None) -> None:
+        """Keep *object_id* from retention, until the end of *until* if given."""
         if not reason.strip():
             raise LifecycleError("A hold requires a reason")
+        if until is not None and until < date.today():
+            raise LifecycleError("A hold's last day cannot be in the past")
         with lake_mutation_lock(self.meta):
-            value = self.registry()
-            if value is None:
-                from cnequity.storage.lifecycle.snapshot import read_dependencies
-
-                restored = read_dependencies(self.meta)
-                inherited = restored["protection"] if restored else {}
-                value = {
-                    "schema_version": 1,
-                    "lake_id": uuid.uuid4().hex,
-                    "meta_root": str(self.meta),
-                    "holds": inherited.get("holds", {}),
-                    "cases": inherited.get("cases", []),
-                    "reference_roots": [],
-                    "reference_fingerprint": digest([]),
-                }
+            value = self.registry() or self._new_registry()
             known = {o["object_id"] for o in self.inventory(measure=False)}
             known |= {f"revision/{d}/{rid}" for d, rid in self._catalog_revisions()}
             from cnequity.storage.lifecycle.resources import resource_exists
 
             if object_id not in known and not resource_exists(self.meta, object_id):
                 raise LifecycleError(f"Unknown retained object: {object_id}")
-            value["holds"].setdefault(object_id, []).append(
-                {
-                    "reason": reason,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
+            entry = {"reason": reason, "created_at": datetime.now(timezone.utc).isoformat()}
+            if until is not None:
+                entry["expires_at"] = until.isoformat()
+            value["holds"].setdefault(object_id, []).append(entry)
             self._save(value)
 
     def release(self, object_id: str, note: str) -> dict:
-        """Drop the holds on one object that no longer protect anything real.
+        """Drop the manual holds on one object, and any retired reference holds.
 
-        Removes every manual hold, and every reference whose source file is
-        gone or no longer cites the revision. Case dependencies and live
-        references stay; they are reported so the caller sees why the object
-        is still kept. Each release is logged in the registry.
+        Case dependencies stay; they are reported so the caller sees why the
+        object is still kept. Each release is logged in the registry.
         """
         if not note.strip():
             raise LifecycleError("A release requires a note")
@@ -608,35 +338,6 @@ class LifecycleStore:
             kept, dropped = self._drop(value, object_id, note, _releasable)
             self._save(value)
         return {"object_id": object_id, "dropped": len(dropped), "still_held_by": kept}
-
-    def release_references_under(self, root: Path, note: str) -> list[dict]:
-        """Drop stale references whose citing file lay below ``root``.
-
-        Used after a snapshot directory is deleted: only the references it
-        contributed go, so manual holds and other citations are untouched.
-        """
-        root = Path(root).absolute()
-
-        def stale_below(reason: dict) -> bool:
-            if reason.get("kind") != "reference" or "reason" in reason:
-                return False
-            source = Path(reason.get("source", ""))
-            return source.is_relative_to(root) and _releasable(reason)
-
-        with lake_mutation_lock(self.meta):
-            value = self.registry()
-            if value is None:
-                return []
-            results = []
-            for object_id in sorted(value["holds"]):
-                if any(stale_below(r) for r in value["holds"][object_id]):
-                    kept, dropped = self._drop(value, object_id, note, stale_below)
-                    results.append(
-                        {"object_id": object_id, "dropped": len(dropped), "still_held": bool(kept)}
-                    )
-            if results:
-                self._save(value)
-        return results
 
     @staticmethod
     def _drop(value: dict, object_id: str, note: str, releasable) -> tuple[list, list]:
@@ -886,36 +587,15 @@ class LifecycleStore:
             "purge_available": True,
         }
 
-    def retention_registry(self, *, refresh: bool = False) -> dict | None:
-        """Protection for an expiry plan, with optional refresh under the mutation lock."""
+    def retention_registry(self) -> dict | None:
+        """The holds an expiry plan keeps; refused while a purge is unfinished."""
         from cnequity.storage.lifecycle.purge import unfinished
 
         if unfinished(self):
             raise LifecycleError("Resume unfinished purge before revision retention")
-        return self._checked_reference_registry(refresh=refresh)
-
-    def _checked_reference_registry(
-        self, *, refresh: bool = False, required: bool = False
-    ) -> dict | None:
-        registry = self.registry(required=required)
-        if registry is not None and (
-            reference_fingerprint(registry["reference_roots"], meta_root=self.meta)
-            != registry["reference_fingerprint"]
-        ):
-            if not refresh:
-                if required:
-                    raise LifecycleError(
-                        "Reference inventory changed; refresh holds before planning"
-                    )
-                raise LifecycleError(
-                    "References changed; refresh the lifecycle import before cleanup"
-                )
-            self.refresh_references()
-            registry = self.registry(required=True)
-        return registry
+        return self.registry()
 
     def _plan(self, keep: int) -> dict:
-        self._checked_reference_registry(required=True)
         report = self.inspect(keep=keep)
         candidates = [o for o in report["objects"] if not o["blocked_reasons"]]
         for obj in candidates:
@@ -934,6 +614,9 @@ class LifecycleStore:
         with lake_mutation_lock(self.meta):
             if unfinished(self):
                 raise LifecycleError("Resume unfinished purge before creating another plan")
+            if self.registry() is None:
+                # No hold was ever placed: an empty registry names the lake the plan binds to.
+                self._save(self._new_registry())
             report = prepare_selected(self, self._plan(keep), selected_ids)
             report["phase"] = "purge"
             report["created_at"] = datetime.now(timezone.utc).isoformat()

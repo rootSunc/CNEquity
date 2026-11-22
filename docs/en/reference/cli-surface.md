@@ -73,13 +73,12 @@ Checked against the Click command registry by `scripts/dev/sync_docs.py`. “Whe
 | `cne storage catalog-retention` | none | Read-only preview; --apply expires old lake catalog snapshots and deletes files past the grace period |
 | `cne storage explain` | none | Reads the retention reasons for versions |
 | `cne storage export` | none | Reads the lake only; exports published datasets from the lake catalog to plain Parquet and writes only under --out |
-| `cne storage hold` | none | Adds object protection; automatic retention no longer deletes it |
-| `cne storage import` | none | Validates and registers a reference manifest; only adds protection |
+| `cne storage hold` | none | Adds object protection, with --until for its last day; automatic retention does not delete it while held |
+| `cne storage import` | none | Validates and registers reviewed holds and cases; only adds protection |
 | `cne storage inspect` | none | Reads versions and retention reasons |
 | `cne storage plan` | none | Previews which generations retention would delete now; deletes no data |
 | `cne storage raw-external` | none | Registers external payload storage; retains local source sidecars and does not move or delete files |
-| `cne storage refresh` | none | Re-scans the reference roots and adds holds for the versions they cite; never releases a hold |
-| `cne storage release` | none | Drops manual holds and stale references on the named versions; case dependencies and live references stay |
+| `cne storage release` | none | Drops manual holds on the named versions; case dependencies stay |
 | `cne storage verify-catalog` | none | Read-only; checks that each revision published into the lake catalog still holds, at its snapshot, the rows whose digest was recorded at publish |
 | `cne ths-official backfill` | when run | Calls the credentialed source and fills gaps |
 | `cne ths-official capture` | when run | Calls the credentialed source and writes comparison evidence |

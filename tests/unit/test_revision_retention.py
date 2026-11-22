@@ -10,7 +10,7 @@ from tests.legacy_lake import commit_generation
 from cnequity.cli._shared import attach_revision_retention
 from cnequity.config import Config, load_config
 from cnequity.config.bootstrap import path_for_toml
-from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, reference_fingerprint
+from cnequity.storage.lifecycle import LifecycleError, LifecycleStore
 from cnequity.storage.revisions import (
     RevisionConsistencyError,
     RevisionStore,
@@ -117,8 +117,6 @@ def test_retention_keeps_a_held_generation_and_the_current_pointer(tmp_path):
             "schema_version": 1,
             "meta_root": str(lifecycle.meta),
             "holds": {},
-            "reference_roots": [],
-            "reference_fingerprint": reference_fingerprint([], meta_root=lifecycle.meta),
         }
     )
     lifecycle.hold(f"revision/daily_bars/{receipts[0].revision_id}", "pinned")
@@ -133,77 +131,38 @@ def test_retention_keeps_a_held_generation_and_the_current_pointer(tmp_path):
 
 
 def _imported_notes(tmp_path, cfg):
-    notes = tmp_path / "notes"
-    notes.mkdir()
+    notes = cfg.meta_root / "notes"
+    notes.mkdir(parents=True)
     evidence = notes / "pin.md"
     evidence.write_text("pinned\n", encoding="utf-8")
     lifecycle = LifecycleStore(cfg.meta_root)
-    roots = [{"path": str(notes.resolve())}]
-    lifecycle.import_manifest(
-        {
-            "schema_version": 1,
-            "meta_root": str(lifecycle.meta),
-            "holds": {},
-            "reference_roots": roots,
-            "reference_fingerprint": reference_fingerprint(roots, meta_root=lifecycle.meta),
-        }
-    )
+    lifecycle.import_manifest({"schema_version": 1, "meta_root": str(lifecycle.meta), "holds": {}})
     return lifecycle, evidence
 
 
-def test_a_stale_inventory_is_refreshed_and_what_it_now_cites_is_kept(tmp_path):
-    """Retention used to refuse from the first edit under a reference root
-    until someone re-ran a manual import; it never ran again on a live lake.
-    It now re-scans, holds every revision the roots cite, and proceeds."""
+def test_a_note_citing_a_revision_does_not_keep_it(tmp_path):
+    """Releases before 0.25.0 held every revision a file under meta/ cited."""
     cfg, _store, receipts = _lake(tmp_path)
     lifecycle, evidence = _imported_notes(tmp_path, cfg)
-    cited = receipts[0]
-    evidence.write_text(f"see revision {cited.revision_id}\n", encoding="utf-8")
+    evidence.write_text(f"see revision {receipts[0].revision_id}\n", encoding="utf-8")
 
     retain_revision_generations(cfg.meta_root, keep=1)
 
     # The revision-zero legacy baseline has no receipt and is always kept.
-    remaining = _generation_names(cfg) - {"legacy"}
-    assert remaining == {cited.revision_id, receipts[-1].revision_id}, (
-        "the cited revision and the current one survive; uncited old ones go"
-    )
-    registry = lifecycle.registry()
-    assert f"revision/daily_bars/{cited.revision_id}" in registry["holds"]
-    assert registry["reference_fingerprint"] == reference_fingerprint(
-        registry["reference_roots"], meta_root=lifecycle.meta
-    )
+    assert _generation_names(cfg) - {"legacy"} == {receipts[-1].revision_id}
+    assert lifecycle.registry()["holds"] == {}
 
 
-def test_refreshing_twice_adds_no_duplicate_reasons(tmp_path):
-    cfg, _store, receipts = _lake(tmp_path)
-    lifecycle, evidence = _imported_notes(tmp_path, cfg)
-    evidence.write_text(f"{receipts[0].revision_id}\n", encoding="utf-8")
-    lifecycle.refresh_references()
-    evidence.write_text(f"edited, still citing {receipts[0].revision_id}\n", encoding="utf-8")
-    lifecycle.refresh_references()
-    reasons = lifecycle.registry()["holds"][f"revision/daily_bars/{receipts[0].revision_id}"]
-    assert len(reasons) == 1
-
-
-def test_a_reference_that_disappears_keeps_its_hold(tmp_path):
-    """Refreshing only adds protection; releasing stays a deliberate act."""
-    cfg, _store, receipts = _lake(tmp_path)
-    lifecycle, evidence = _imported_notes(tmp_path, cfg)
-    evidence.write_text(f"{receipts[0].revision_id}\n", encoding="utf-8")
-    lifecycle.refresh_references()
-    evidence.write_text("no citation any more\n", encoding="utf-8")
-    retain_revision_generations(cfg.meta_root, keep=1)
-    assert receipts[0].revision_id in _generation_names(cfg)
-
-
-def test_release_drops_manual_and_stale_holds_and_retention_then_prunes(tmp_path):
+def test_release_drops_manual_and_retired_reference_holds_and_retention_then_prunes(tmp_path):
     cfg, _store, receipts = _lake(tmp_path)
     lifecycle, evidence = _imported_notes(tmp_path, cfg)
     oid = f"revision/daily_bars/{receipts[0].revision_id}"
-    evidence.write_text(f"{receipts[0].revision_id}\n", encoding="utf-8")
-    lifecycle.refresh_references()
     lifecycle.hold(oid, "rollback")
-    evidence.unlink()
+    registry = lifecycle.registry()
+    registry["holds"][oid].append(
+        {"kind": "reference", "source": str(evidence), "revision_id": receipts[0].revision_id}
+    )
+    lifecycle._save(registry)
 
     result = lifecycle.release(oid, "migration verified")
 
@@ -213,20 +172,6 @@ def test_release_drops_manual_and_stale_holds_and_retention_then_prunes(tmp_path
     assert registry["releases"][-1]["object_id"] == oid
     retain_revision_generations(cfg.meta_root, keep=1)
     assert receipts[0].revision_id not in _generation_names(cfg)
-
-
-def test_release_keeps_a_reference_that_still_cites_the_revision(tmp_path):
-    cfg, _store, receipts = _lake(tmp_path)
-    lifecycle, evidence = _imported_notes(tmp_path, cfg)
-    oid = f"revision/daily_bars/{receipts[0].revision_id}"
-    evidence.write_text(f"{receipts[0].revision_id}\n", encoding="utf-8")
-    lifecycle.refresh_references()
-
-    result = lifecycle.release(oid, "try")
-
-    assert result["dropped"] == 0
-    assert result["still_held_by"][0]["source"] == str(evidence.resolve())
-    assert oid in lifecycle.registry()["holds"]
 
 
 def test_release_requires_a_note_and_an_existing_hold(tmp_path):
@@ -335,21 +280,3 @@ def test_keep_days_loads_from_config_defaults_to_seven_and_rejects_negative(tmp_
     path.write_text(head + "[storage.retention]\nkeep_days = -1\n", encoding="utf-8")
     with pytest.raises(ValueError, match="keep_days"):
         load_config(path)
-
-
-def test_a_snapshot_copy_of_the_raw_archive_is_not_scanned_for_references(tmp_path):
-    """A research snapshot copies meta/raw; its archive cites nothing and is skipped."""
-    from cnequity.storage.lifecycle import reference_files
-
-    meta = tmp_path / "meta"
-    snapshot = meta / "snapshots" / "before-switch"
-    (snapshot / "meta" / "raw" / "daily_bars").mkdir(parents=True)
-    (snapshot / "meta" / "raw" / "daily_bars" / "page.json").write_text("{}")
-    (snapshot / "meta" / "revisions" / "daily_bars").mkdir(parents=True)
-    (snapshot / "meta" / "revisions" / "daily_bars" / "current.json").write_text("{}")
-    (snapshot / "manifest.json").write_text("{}")
-    found = reference_files([{"path": str(meta)}], meta_root=meta)
-    assert sorted(path.relative_to(meta).as_posix() for path in found) == [
-        "snapshots/before-switch/manifest.json",
-        "snapshots/before-switch/meta/revisions/daily_bars/current.json",
-    ]

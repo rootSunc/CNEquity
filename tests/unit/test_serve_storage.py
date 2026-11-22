@@ -234,7 +234,6 @@ def test_staging_browser_confirmation_is_selected_and_leaves_incomplete_batches(
         "resume",
         "run_lock",
         "symlink",
-        "reference",
         "lake_identity",
     ],
 )
@@ -258,13 +257,6 @@ def test_staging_rechecks_all_selected_objects_before_deletion(web, change):
         Manifest(cfg.manifest_path).resume_run(second)
     elif change == "symlink":
         (path / "link").symlink_to(first_path, target_is_directory=True)
-    elif change == "reference":
-        registered = cfg.data_root / "research"
-        registered.mkdir()
-        registry = store.registry()
-        registry["reference_roots"] = [{"path": str(registered), "exclude": []}]
-        store._save(registry)
-        (registered / "new-reference.json").write_text("{}")
     elif change == "lake_identity":
         registry = store.registry()
         registry["lake_id"] = "another-lake"

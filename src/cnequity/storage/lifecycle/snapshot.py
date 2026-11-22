@@ -18,7 +18,6 @@ def export_dependencies(store: LifecycleStore) -> dict | None:
         "origin_lake_id": registry["lake_id"],
         "holds": registry["holds"],
         "cases": registry.get("cases", []),
-        "reference_roots": registry["reference_roots"],
     }
     return {
         "schema_version": 1,
@@ -43,7 +42,6 @@ def read_dependencies(meta_root: Path) -> dict | None:
         or digest(protection) != value.get("protection_digest")
         or not isinstance(protection.get("holds"), dict)
         or not isinstance(protection.get("cases"), list)
-        or not isinstance(protection.get("reference_roots"), list)
     ):
         raise LifecycleError("Invalid snapshot lifecycle dependencies")
     for oid, reasons in protection["holds"].items():

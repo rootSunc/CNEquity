@@ -73,13 +73,9 @@ class StorageMaintenance:
         *,
         invalidate=lambda: None,
         csrf: str | None = None,
-        sync_references: bool = True,
         persist: bool = False,
     ):
         self.config = config
-        # A read-only server never writes the registry, so it can only report
-        # that the holds are behind the reference files.
-        self.sync_references = sync_references
         self.store = LifecycleStore(config.meta_root)
         self.gate = MaintenanceGate()
         self.csrf = csrf or secrets.token_urlsafe(32)
@@ -114,7 +110,7 @@ class StorageMaintenance:
         if not isinstance(stored, dict) or stored.get("format") != _DISK_FORMAT:
             return
         summary = stored.get("summary")
-        if not isinstance(summary, dict) or summary.get("references_changed"):
+        if not isinstance(summary, dict):
             return
         # Never current: a restart may follow any change, so the first view
         # answers it marked as updating and a fresh inventory replaces it.
@@ -206,10 +202,6 @@ class StorageMaintenance:
         threading.Thread(target=carry_language(run), name="storage-inventory", daemon=True).start()
 
     def _keep(self, key: tuple, result: dict) -> None:
-        # References this server could not register yet (a run held the lake
-        # lock) are not an answer to keep: the next view tries again.
-        if result.get("references_changed") and self.sync_references:
-            key = None
         with self.lock:
             self._kept = (key, result)
             self.last_summary = copy.deepcopy(result)
@@ -219,37 +211,6 @@ class StorageMaintenance:
     def warm(self) -> None:
         """Build the inventory in the background, so the first visit does not wait for it."""
         self._rebuild_later(self._summary_key())
-
-    def _references_current(self, registry: dict | None) -> bool:
-        """Bring the holds up to what the reference files cite; False when that has to wait.
-
-        The roots are the lake's meta and the operator's notes, so their bytes
-        change with every edited note and every finished job. A refresh only
-        adds holds and never releases one (see
-        :meth:`LifecycleStore.refresh_references`), which is why the daily
-        retention run does it unasked; the page does the same rather than
-        asking for a confirmation that changes nothing anyone could object to.
-        """
-        if registry is None:
-            return True
-        from cnequity.file_lock import LockUnavailable, lake_mutation_lock
-        from cnequity.storage.lifecycle import reference_fingerprint
-
-        if (
-            reference_fingerprint(registry["reference_roots"], meta_root=self.store.meta)
-            == registry["reference_fingerprint"]
-        ):
-            return True
-        if not self.sync_references:
-            return False
-        try:
-            # A run holding the lake lock refreshes on its own retention pass;
-            # the page does not wait behind it.
-            with lake_mutation_lock(self.store.meta, blocking=False):
-                self.store.refresh_references()
-        except LockUnavailable:
-            return False
-        return True
 
     def summary(self) -> dict:
         # A page reload during deletion must show progress without scanning a
@@ -291,18 +252,9 @@ class StorageMaintenance:
             self.gate.leave()
 
     def _summary(self) -> dict:
-        from cnequity.storage.lifecycle import reusing_reference_fingerprints
-
-        # One reference scan per build: the staging preview checks the same
-        # fingerprint this build has just brought up to date.
-        with reusing_reference_fingerprints():
-            return self._build_summary()
-
-    def _build_summary(self) -> dict:
         now = datetime.now(timezone.utc)
         keep = revision_keep(self.config)
         automatic = keep > 0
-        registry = self.store.registry()
         events = [
             {
                 "kind": "staging" if p.parent.name == "staging-purges" else "revisions",
@@ -310,21 +262,6 @@ class StorageMaintenance:
             }
             for p in unfinished(self.store)
         ]
-        if not self._references_current(registry):
-            # Nothing can be planned until the holds match the references
-            # again: a read-only server cannot record them, and a running job
-            # holds the lake lock. Say so instead of failing after an inventory.
-            return {
-                "mode": "web_confirmation_only",
-                "registered": True,
-                "references_changed": True,
-                "objects": [],
-                "unfinished": events,
-                "active_jobs": [],
-                "keep": keep,
-                "automatic_retention": automatic,
-                "generated_at": now.isoformat(),
-            }
         # The page shows logical sizes; plans measure what a deletion frees.
         report = self.store.inspect(keep=keep, measure=False)
         objects = []
@@ -350,8 +287,6 @@ class StorageMaintenance:
         objects.extend(StagingRetirement(self.config).inspect())
         return {
             "mode": "web_confirmation_only",
-            "registered": registry is not None,
-            "references_changed": False,
             "objects": objects,
             "unfinished": events,
             "active_jobs": [],
@@ -478,7 +413,6 @@ class StorageMaintenance:
                     for oid in object_ids
                 ):
                     raise LifecycleError(_("Invalid version number."))
-                self._references_current(self.store.registry())
                 plan = self.store.plan(selected_ids=object_ids, keep=revision_keep(self.config))
             else:
                 raise LifecycleError(_("Choose the versions to delete."))

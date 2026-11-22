@@ -1240,9 +1240,7 @@ def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict |
     # runs under the lake lock, as a writable catalog connection must.
     lock = lake_mutation_lock(config.meta_root, blocking=True) if apply else nullcontext()
     with lock:
-        registry = (
-            LifecycleStore(config.meta_root).retention_registry(refresh=apply) if keep else None
-        )
+        registry = LifecycleStore(config.meta_root).retention_registry() if keep else None
         held = set(registry["holds"]) if registry else set()
         with Catalog(
             root,

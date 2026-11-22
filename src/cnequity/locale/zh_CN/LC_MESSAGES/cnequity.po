@@ -2298,18 +2298,8 @@ msgid "Defaults to today; when [research] holdout_start is configured, defaults 
 msgstr "默认今天；配置了 [research] holdout_start 时默认其前一天。"
 
 #: cnequity/cli/govern_cmds.py
-msgid ""
-"Delete a snapshot and release the retention references it contributed.\n"
-"\n"
-"\n"
-"Manual holds and references from anywhere else stay. Old versions the snapshot\n"
-"kept become reclaimable by the next retention run; current data is untouched."
-msgstr ""
-"删除快照，并解除它带来的保留引用。\n"
-"\n"
-"\n"
-"手动保留和来自其他位置的引用照旧保留。快照曾保住的旧版本\n"
-"会在下次清理时可被回收；当前数据不受影响。"
+msgid "Delete a snapshot; the lake's current data and holds are untouched."
+msgstr "删除一个快照；湖的当前数据和保留不受影响。"
 
 #: cnequity/cli/govern_cmds.py
 #, python-format
@@ -2500,8 +2490,8 @@ msgid "Drop inferred suspensions that later evidence contradicts"
 msgstr "删除被后来证据否定的推断停牌"
 
 #: cnequity/cli/storage_cmds.py
-msgid "Drop manual holds and stale references on versions; case dependencies and live references stay."
-msgstr "解除版本上的手动保留与失效引用；案例依赖和仍有效的引用保留。"
+msgid "Drop manual holds on versions; case dependencies stay."
+msgstr "解除版本上的手动保留；案例依赖保留不变。"
 
 #: cnequity/storage/migrations.py
 msgid "Drop trading_status rows outside a security's listing window"
@@ -3118,13 +3108,13 @@ msgstr "忽略完成收据和 checkpoint，重新获取整个范围（sector_bar
 msgid "Import a Shanghai Futures Exchange annual ZIP of daily bars, offline and verified."
 msgstr "离线导入并校验上期所日线年度 ZIP 包。"
 
-#: cnequity/cli/storage_cmds.py
-msgid "Import a reviewed reference list; only adds protection and never releases old holds automatically."
-msgstr "导入已审核引用清单，只增加保护，不自动解除旧 hold。"
-
 #: cnequity/cli/backfill_cmds.py
 msgid "Import data from local files into the lake (offline)."
 msgstr "把本地文件中的数据导入湖（离线）。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Import reviewed holds and cases; only adds protection and never releases old holds."
+msgstr "导入已审核的保留和案例；只增加保护，不解除已有保留。"
 
 #: cnequity/diagnostics/report.py
 #, python-format
@@ -3464,6 +3454,10 @@ msgstr "数据湖：  {data_root}"
 #: cnequity/cli/storage_cmds.py
 msgid "Last date to export (inclusive), by the dataset's date column."
 msgstr "导出的结束日期（含），按数据集的日期列。"
+
+#: cnequity/cli/storage_cmds.py
+msgid "Last day the hold protects (YYYY-MM-DD); without it the hold stays until released."
+msgstr "保留生效的最后一天（YYYY-MM-DD）；不填则一直保留到手动解除。"
 
 #: cnequity/cli/quality_cmds.py
 #, python-brace-format
@@ -4413,10 +4407,6 @@ msgstr ""
 msgid "Re-run a specific day instead of the incremental window."
 msgstr "补跑某一天，不走增量窗口。"
 
-#: cnequity/cli/storage_cmds.py
-msgid "Re-scan the registered reference roots and hold every version they now cite; never releases a hold."
-msgstr "重新扫描已登记的引用目录，保留其中现在提到的每个版本；不会解除任何保留。"
-
 #: cnequity/cli/ths_official_cmds.py
 msgid ""
 "Re-source the deep history from the licensed API instead of the scraper.\n"
@@ -4583,6 +4573,10 @@ msgstr "登记外置原文存储；本地保留来源记录，不移动或删除
 #: cnequity/ops/records.py
 msgid "Rejected"
 msgstr "已拒绝"
+
+#: cnequity/storage/migrations.py
+msgid "Release the holds an earlier release derived from revision ids found in files under meta/ and the registered notes; manual holds and cases stay"
+msgstr "解除早期版本因 meta/ 和已登记笔记的文件里出现修订号而自动加上的保留；手动保留和案例保留不变"
 
 #: cnequity/serve/guard.py
 msgid "Remote access cannot start operations from the dashboard by default. Start serve with --allow-remote-ops to enable it."
@@ -4818,8 +4812,8 @@ msgid "Resuming init run %s"
 msgstr "续跑初始化 run %s"
 
 #: cnequity/cli/storage_cmds.py
-msgid "Retain a version or an existing cleanup resource; retention then never deletes it."
-msgstr "保留一个版本或已有的清理资源；自动清理不会再删除它。"
+msgid "Retain a version or an existing cleanup resource; retention does not delete it while held."
+msgstr "保留一个版本或已有的清理资源；保留期间自动清理不会删除它。"
 
 #: cnequity/ops/catalog.py
 msgid "Retry a run"

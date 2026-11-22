@@ -337,12 +337,7 @@ def snapshot_verify(name: str, config_path: str, snapshot_root: Path | None):
 )
 @click.option("--yes", is_flag=True, help=N_("Delete without asking for confirmation."))
 def snapshot_delete(name: str, config_path: str, snapshot_root: Path | None, yes: bool):
-    """Delete a snapshot and release the retention references it contributed.
-
-    \b
-    Manual holds and references from anywhere else stay. Old versions the snapshot
-    kept become reclaimable by the next retention run; current data is untouched.
-    """
+    """Delete a snapshot; the lake's current data and holds are untouched."""
     cfg = _cfg(config_path)
     from cnequity.storage.snapshots import SnapshotStore
 

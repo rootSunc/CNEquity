@@ -7,8 +7,7 @@ catalog reads and writes none of them: its rows are the catalog's files and
 its revisions the catalog's records. The ``drop-generations`` migration
 deletes them.
 
-A generation someone holds (``cne storage hold``, a case, a reference file
-that cites it) stays, with its receipt, and stays readable by revision id:
+A generation someone holds (``cne storage hold``, a case) stays, with its receipt, and stays readable by revision id:
 it is the only copy of that revision's rows. So does anything this module
 cannot account for: a generation without a receipt, a directory under
 ``curated/`` that is not a dataset, a dataset the catalog does not hold.
@@ -41,28 +40,13 @@ def _tree_size(root: Path) -> tuple[int, int]:
     return files, freed
 
 
-def _held_revisions(meta: Path, *, refresh: bool) -> set[str]:
-    """Object ids of the revisions a hold protects.
+def _held_revisions(meta: Path) -> set[str]:
+    """Object ids of the revisions a hold protects."""
+    from cnequity.storage.lifecycle import LifecycleStore
 
-    With *refresh*, the reference roots are read again first, so a revision a
-    file started citing since the holds were last derived is held too. That
-    hashes every reference file (minutes on a large lake), so a preview goes
-    by the holds as recorded.
-    """
-    from cnequity.storage.lifecycle import LifecycleStore, reference_fingerprint
-
-    store = LifecycleStore(meta)
-    registry = store.registry()
+    registry = LifecycleStore(meta).registry()
     if registry is None:
         return set()
-    if refresh and (
-        reference_fingerprint(registry["reference_roots"], meta_root=store.meta)
-        != registry["reference_fingerprint"]
-    ):
-        # A reference file changed since the holds were last derived; a
-        # refresh only adds holds.
-        store.refresh_references()
-        registry = store.registry() or registry
     return {
         key for key, holds in registry["holds"].items() if key.startswith("revision/") and holds
     }
@@ -93,7 +77,7 @@ def _mismatched(config) -> set[str]:
         return {c.dataset for c in verify_revisions(catalog) if c.status == "mismatch"}
 
 
-def _plan(config, *, refresh_holds: bool) -> dict[str, Any]:
+def _plan(config) -> dict[str, Any]:
     from cnequity.domain.datasets import DATASETS
     from cnequity.storage.lifecycle import LifecycleStore
     from cnequity.storage.locator import layer_name
@@ -101,7 +85,7 @@ def _plan(config, *, refresh_holds: bool) -> dict[str, Any]:
     meta = Path(config.meta_root)
     lake = Path(config.data_root)
     revisions = meta / "revisions"
-    held = _held_revisions(meta, refresh=refresh_holds)
+    held = _held_revisions(meta)
 
     generations, kept_generations = [], []
     for obj in LifecycleStore(meta).inventory():
@@ -174,7 +158,7 @@ def drop_generations(config, *, apply: bool) -> dict[str, Any]:
         return report
 
     with lake_mutation_lock(meta, blocking=True):
-        plan = _plan(config, refresh_holds=apply)
+        plan = _plan(config)
         datasets = {g["dataset"] for g in plan["generations"]} | {p.name for p in plan["trees"]}
         skipped = _uncatalogued(config, datasets)
         if apply and datasets:

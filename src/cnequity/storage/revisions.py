@@ -1110,9 +1110,7 @@ def retain_revision_generations(
     The current pointer, an explicit hold, and a generation whose receipt is
     missing or unusable are kept. Receipts stay, so the publication history
     remains; reading a removed generation fails instead of following a newer
-    one. Callers that have not imported a reference inventory are treated as
-    having no external references. A stale inventory or an unfinished purge
-    deletes nothing.
+    one. An unfinished purge deletes nothing.
     """
     keep = revision_keep(None, keep)
     if keep == 0:
@@ -1121,7 +1119,7 @@ def retain_revision_generations(
 
     store = LifecycleStore(meta_root)
     with lake_mutation_lock(store.meta):
-        store.retention_registry(refresh=True)
+        store.retention_registry()
         report = store.inspect(keep=keep)
         revision_store = RevisionStore(store.meta, store.meta.parent / "curated", create=False)
         protected = set()

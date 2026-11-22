@@ -7,7 +7,7 @@ import pytest
 
 from cnequity.config import Config
 from cnequity.storage.atomic import write_json_atomic
-from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, digest, reference_fingerprint
+from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, digest
 from cnequity.storage.lifecycle.snapshot import (
     DEPENDENCIES_PATH,
     export_dependencies,
@@ -42,7 +42,6 @@ def _seed(cfg) -> None:
 
 def imported_store(cfg, evidence):
     evidence.mkdir(exist_ok=True)
-    roots = [{"path": str(evidence)}]
     store = LifecycleStore(cfg.meta_root)
     store.import_manifest(
         {
@@ -51,8 +50,6 @@ def imported_store(cfg, evidence):
             "holds": {
                 "revision/daily_bars/previous": [{"reason": "historical verification"}],
             },
-            "reference_roots": roots,
-            "reference_fingerprint": reference_fingerprint(roots),
         }
     )
     return store
@@ -71,19 +68,8 @@ def test_snapshot_restores_protection_without_deletion_authority(tmp_path):
     dependencies = read_dependencies(restored.meta)
     assert dependencies["protection"]["holds"] == lifecycle.registry()["holds"]
     assert not restored.registry_path.exists()
-    with pytest.raises(LifecycleError, match="Import"):
-        restored.plan(selected_ids=["revision/daily_bars/any"])
     assert export_dependencies(restored) == dependencies
-    roots = [{"path": str(tmp_path / "evidence")}]
-    restored.import_manifest(
-        {
-            "schema_version": 1,
-            "meta_root": str(restored.meta),
-            "holds": {},
-            "reference_roots": roots,
-            "reference_fingerprint": reference_fingerprint(roots),
-        }
-    )
+    restored.import_manifest({"schema_version": 1, "meta_root": str(restored.meta), "holds": {}})
     assert restored.registry()["holds"] == lifecycle.registry()["holds"]
     assert restored.registry()["lake_id"] != lifecycle.registry()["lake_id"]
     assert "pending" not in restored.registry()
@@ -111,43 +97,34 @@ def test_digest_valid_but_missing_case_hold_rejected(tmp_path):
         read_dependencies(store.meta)
 
 
-def test_deleting_a_snapshot_releases_only_the_references_it_contributed(tmp_path):
+def test_deleting_a_snapshot_leaves_every_hold(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
     _seed(cfg)
     lifecycle = imported_store(cfg, tmp_path / "evidence")
     snapshots = SnapshotStore(cfg)
     path = snapshots.create("rollback", ["daily_bars"]).parent
-    rid = "a" * 32
-    note = tmp_path / "evidence" / "note.md"
-    note.write_text(f"{rid}\n", encoding="utf-8")
-    inside = {"kind": "reference", "source": str(path / "manifest.json"), "revision_id": rid}
-    outside = {"kind": "reference", "source": str(note), "revision_id": rid}
-    lifecycle.import_manifest(
-        {
-            "schema_version": 1,
-            "meta_root": str(lifecycle.meta),
-            "holds": {
-                "revision/daily_bars/aaa": [inside, outside],
-                "revision/daily_bars/bbb": [{**inside, "revision_id": "b" * 32}],
-            },
-            "reference_roots": [{"path": str(tmp_path / "evidence")}],
-            "reference_fingerprint": reference_fingerprint([{"path": str(tmp_path / "evidence")}]),
-        }
-    )
+    before = lifecycle.registry()["holds"]
 
-    result = snapshots.delete("rollback")
+    assert snapshots.delete("rollback") == {"snapshot": "rollback", "path": str(path.absolute())}
 
     assert not path.exists() and not list(path.parent.glob(".deleting-*"))
-    holds = lifecycle.registry()["holds"]
-    assert holds["revision/daily_bars/aaa"] == [outside], "a citation elsewhere still protects"
-    assert "revision/daily_bars/bbb" not in holds
-    assert holds["revision/daily_bars/previous"], "manual holds are never released here"
-    assert {r["object_id"] for r in result["released"]} == {
-        "revision/daily_bars/aaa",
-        "revision/daily_bars/bbb",
-    }
+    assert lifecycle.registry()["holds"] == before
     with pytest.raises(FileNotFoundError):
         snapshots.delete("rollback")
+
+
+def test_restoring_an_old_snapshot_carries_manual_holds_but_not_references(tmp_path):
+    cfg = Config(data_root=tmp_path / "lake")
+    store = imported_store(cfg, tmp_path / "evidence")
+    value = export_dependencies(store)
+    reference = {"kind": "reference", "source": "/old/note.md", "revision_id": "a" * 32}
+    value["protection"]["holds"]["revision/daily_bars/cited"] = [reference]
+    value["protection"]["reference_roots"] = [{"path": "/old"}]
+    value["protection_digest"] = digest(value["protection"])
+    restored = LifecycleStore(tmp_path / "restored/meta")
+    write_json_atomic(restored.meta / DEPENDENCIES_PATH, value)
+    restored.import_manifest({"schema_version": 1, "meta_root": str(restored.meta), "holds": {}})
+    assert set(restored.registry()["holds"]) == {"revision/daily_bars/previous"}
 
 
 def test_snapshot_delete_cli_names_a_missing_snapshot(tmp_path):

@@ -128,6 +128,12 @@ def _legacy_datasets(config, *, apply: bool) -> dict:
     return adopt_legacy_datasets(config, apply=apply)
 
 
+def _explicit_holds(config, *, apply: bool) -> dict:
+    from cnequity.storage.explicit_holds import release_reference_holds
+
+    return release_reference_holds(config, apply=apply)
+
+
 def _drop_generations(config, *, apply: bool) -> dict:
     from cnequity.storage.drop_generations import drop_generations
 
@@ -302,6 +308,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         "0.25.0",
         _attempts_ledger,
+    ),
+    # Before drop-generations, which keeps every held generation.
+    Migration(
+        "explicit-holds",
+        N_(
+            "Release the holds an earlier release derived from revision ids found in files "
+            "under meta/ and the registered notes; manual holds and cases stay"
+        ),
+        "0.25.0",
+        _explicit_holds,
     ),
     # Last: nothing above reads the directories it deletes, and it cannot be undone.
     Migration(

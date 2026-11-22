@@ -12,11 +12,7 @@ from tests.legacy_lake import commit_generation
 
 from cnequity.cli.main import cli
 from cnequity.config import Config
-from cnequity.storage.lifecycle import (
-    LifecycleError,
-    LifecycleStore,
-    reference_fingerprint,
-)
+from cnequity.storage.lifecycle import LifecycleError, LifecycleStore
 from cnequity.storage.revisions import (
     RevisionConsistencyError,
     RevisionStore,
@@ -44,16 +40,7 @@ def lake(tmp_path):
     evidence.mkdir()
     (evidence / "report.json").write_text("{}")
     store = LifecycleStore(cfg.meta_root)
-    roots = [{"path": str(evidence), "exclude": []}]
-    store.import_manifest(
-        {
-            "schema_version": 1,
-            "meta_root": str(store.meta),
-            "reference_roots": roots,
-            "reference_fingerprint": reference_fingerprint(roots),
-            "holds": {},
-        }
-    )
+    store.import_manifest({"schema_version": 1, "meta_root": str(store.meta), "holds": {}})
     return cfg, store, writer, evidence
 
 
@@ -96,9 +83,7 @@ def test_a_merge_that_changed_no_row_does_not_use_up_a_place(lake):
     assert len([o for o in report["objects"] if not o["blocked_reasons"]]) == 5
 
 
-@pytest.mark.parametrize(
-    "change", ["hold", "pointer", "content", "new_reference", "missing_reference"]
-)
+@pytest.mark.parametrize("change", ["hold", "pointer", "content"])
 def test_changes_invalidate_saved_plan(lake, change):
     cfg, store, writer, evidence = lake
     oid = candidates(store)[0]
@@ -116,31 +101,46 @@ def test_changes_invalidate_saved_plan(lake, change):
             schema_version=1,
             contract_fingerprint="test",
         )
-    elif change == "content":
+    else:
         rid = oid.rsplit("/", 1)[-1]
         path = cfg.meta_root / "revisions/data/daily_bars" / rid / "part.parquet"
         path.write_bytes(b"changed")
-    elif change == "new_reference":
-        (evidence / "new.json").write_text("{}")
-    else:
-        (evidence / "report.json").unlink()
     with pytest.raises(LifecycleError):
         store.purge(plan["plan_id"], maintenance=True, manifest=cfg.manifest_path)
     rid = oid.rsplit("/", 1)[-1]
     assert (cfg.meta_root / "revisions/data/daily_bars" / rid).exists()
 
 
-def test_missing_evidence_root_blocks_and_import_never_releases(lake):
+def test_import_never_releases_and_a_file_citing_an_id_holds_nothing(lake):
     _, store, _, evidence = lake
     oid = candidates(store)[0]
     store.hold(oid, "Explicit hold")
     registry = store.registry()
     store.import_manifest({**registry, "holds": {}})
     assert oid in store.registry()["holds"]
-    (evidence / "report.json").unlink()
-    evidence.rmdir()
-    with pytest.raises(LifecycleError, match="unavailable"):
-        store.plan(selected_ids=candidates(store))
+    cited = candidates(store)[0]
+    (evidence / "note.md").write_text(f"see {cited.rsplit('/', 1)[-1]}")
+    assert cited in candidates(store)
+    with pytest.raises(LifecycleError, match="retired"):
+        store.import_manifest({**registry, "reference_roots": [{"path": str(evidence)}]})
+
+
+def test_a_hold_lapses_after_its_last_day(lake):
+    from datetime import timedelta
+
+    _, store, _, _ = lake
+    oid = candidates(store)[0]
+    store.hold(oid, "Until tomorrow", until=date.today() + timedelta(days=1))
+    assert oid not in candidates(store)
+    with pytest.raises(LifecycleError, match="past"):
+        store.hold(oid, "Already over", until=date.today() - timedelta(days=1))
+    value = json.loads(store.registry_path.read_text())
+    value["holds"][oid][0]["expires_at"] = (date.today() - timedelta(days=1)).isoformat()
+    store.registry_path.write_text(json.dumps(value))
+    assert oid in candidates(store)
+    store.hold(candidates(store)[-1], "Another")  # a save records the lapsed hold's release
+    releases = store.registry()["releases"]
+    assert [r["object_id"] for r in releases if r["note"] == "hold expired"] == [oid]
 
 
 def test_corrupt_registry_or_pointer_fails_closed(lake):
@@ -167,18 +167,6 @@ def test_orphan_generation_and_legacy_are_blocked(lake):
         store.plan(selected_ids=["revision/daily_bars/orphan"])
 
 
-def test_symlinks_rejected(lake, tmp_path):
-    _, store, _, evidence = lake
-    target = tmp_path / "target.json"
-    target.write_text("{}")
-    try:
-        (evidence / "linked.json").symlink_to(target)
-    except OSError:
-        pytest.skip("Symlinks unavailable")
-    with pytest.raises(LifecycleError, match="link"):
-        store.plan(selected_ids=candidates(store))
-
-
 def test_plan_tampering_and_cross_lake_registry_rejected(lake):
     cfg, store, _, _ = lake
     plan = store.plan(selected_ids=candidates(store)[:1])
@@ -195,12 +183,12 @@ def test_plan_tampering_and_cross_lake_registry_rejected(lake):
         store.inspect()
 
 
-def test_preview_works_without_import_and_never_deletes(lake):
+def test_preview_and_plan_work_without_import_and_never_delete(lake):
     cfg, store, _, _ = lake
     store.registry_path.unlink()
     assert preview_revision_retention(cfg.meta_root, keep=2)
-    with pytest.raises(LifecycleError, match="Import"):
-        store.plan(selected_ids=candidates(store))
+    assert store.plan(selected_ids=candidates(store)[:1])["purge_ids"]
+    assert store.registry()["holds"] == {}
     assert len(list((cfg.meta_root / "revisions/data/daily_bars").iterdir())) == 8
 
 

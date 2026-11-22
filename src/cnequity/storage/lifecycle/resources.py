@@ -6,7 +6,7 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from cnequity.file_lock import lake_mutation_lock
-from cnequity.storage.lifecycle import LifecycleError, LifecycleStore, reference_fingerprint
+from cnequity.storage.lifecycle import LifecycleError, LifecycleStore
 from cnequity.storage.lifecycle.snapshot import read_dependencies
 from cnequity.storage.revisions import _reject_symlink_path
 
@@ -15,8 +15,8 @@ from cnequity.storage.revisions import _reject_symlink_path
 def resource_holds(meta_root: Path, *, dry_run: bool = False):
     """Coordinate protection registration and cleanup through the publication lock.
 
-    Existing age/readiness rules remain necessary. Holds never expire implicitly,
-    and force cleanup cannot bypass them. A failed reference scan stops cleanup.
+    Existing age/readiness rules remain necessary. A hold lapses only after the
+    last day it was given, and force cleanup cannot bypass it.
     """
     store = LifecycleStore(meta_root)
     with nullcontext() if dry_run else lake_mutation_lock(store.meta):
@@ -26,13 +26,6 @@ def resource_holds(meta_root: Path, *, dry_run: bool = False):
                 raise LifecycleError("Rebind imported lifecycle dependencies before cleanup")
             yield set()
         else:
-            if (
-                reference_fingerprint(registry["reference_roots"], meta_root=store.meta)
-                != registry["reference_fingerprint"]
-            ):
-                raise LifecycleError(
-                    "References changed; refresh the lifecycle import before cleanup"
-                )
             yield set(registry["holds"])
 
 
