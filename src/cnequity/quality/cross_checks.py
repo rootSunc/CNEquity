@@ -223,13 +223,14 @@ def trading_calendar_horizon_findings(config: Config, trade_date: date) -> list[
     The table's end is the seed's last covered date, not its last closure: the
     final holiday of a year is followed by weekdays that are real sessions.
     """
-    from cnequity.adapters.calendar.exchange_calendar import calendar_seed_end
+    from cnequity.adapters.calendar.exchange_calendar import calendar_coverage_end
     from cnequity.domain.holidays_cn import CLOSED_DATES
 
     cal_root = config.curated_root / "trading_calendar"
     if not dataset_has_parquet(cal_root) or not CLOSED_DATES:
         return []
-    table_end = calendar_seed_end()
+    # The holiday table, extended by whatever SZSE has published after it.
+    table_end = calendar_coverage_end(config.meta_root)
 
     written = (
         dedupe_lazy_by_primary_key(scan_parquet_root(cal_root), "trading_calendar")
@@ -257,6 +258,48 @@ def trading_calendar_horizon_findings(config: Config, trade_date: date) -> list[
             "calendar_last_trading_day": last_written.isoformat(),
             "holiday_table_end": table_end.isoformat(),
             "days_beyond": (last_written - table_end).days,
+        }
+    ]
+
+
+def trading_calendar_official_findings(config: Config) -> list[dict]:
+    """The holiday table against SZSE's own calendar, day by day.
+
+    The table decides inside its years, so a wrong entry there is silent: bars
+    on a day it wrongly closes are dropped on write and can never show up as
+    an orphan. SZSE's published months are the independent answer; any day
+    they disagree on needs a person to check the official notice.
+    """
+    from cnequity.adapters.calendar.exchange_calendar import load_official_calendar
+    from cnequity.domain.holidays_cn import (
+        HOLIDAY_TABLE_END,
+        HOLIDAY_TABLE_START,
+        exchange_may_open,
+    )
+
+    official = load_official_calendar(config.meta_root)
+    disagree = sorted(
+        day
+        for day, is_session in official.items()
+        if HOLIDAY_TABLE_START <= day <= HOLIDAY_TABLE_END and exchange_may_open(day) != is_session
+    )
+    if not disagree:
+        return []
+    sample = disagree[:_SAMPLE]
+    return [
+        {
+            "dataset": "trading_calendar",
+            "severity": "error",
+            "check": "trading_calendar_disagrees_with_szse",
+            "message": (
+                f"{len(disagree)} day(s) where domain/holidays_cn.py and SZSE's published "
+                f"calendar disagree (e.g. {', '.join(d.isoformat() for d in sample)}); "
+                "check the official holiday notice and correct the table"
+            ),
+            "disagree_count": len(disagree),
+            "disagree_sample": [
+                {"date": d.isoformat(), "szse_is_trading": official[d]} for d in sample
+            ],
         }
     ]
 

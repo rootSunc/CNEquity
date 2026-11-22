@@ -9,7 +9,13 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from cnequity.adapters.calendar.exchange_calendar import calendar_seed_end, curated_bar_dates
+from cnequity.adapters.calendar.exchange_calendar import (
+    calendar_seed_end,
+    confirmed_calendar_end,
+    curated_bar_dates,
+    load_official_calendar,
+    szse_calendar_month_path,
+)
 from cnequity.adapters.eastmoney.instruments import enrich_instrument_list_dates
 from cnequity.adapters.tdx_protocol.client import (
     fetch_instruments,
@@ -706,6 +712,33 @@ def _earliest_bar_date(config: Config) -> date | None:
     return earliest
 
 
+def _refresh_szse_calendar(config: Config, start: date, end: date) -> None:
+    """Cache SZSE's published months in [start, end]; best effort, one request per month.
+
+    Every month in the window is asked again on each run, since the exchange
+    can still change an announced month; months that are over keep their
+    cached copy. An unpublished month is not cached, so it stays unknown
+    rather than becoming closed.
+    """
+    from cnequity.adapters.exchange.szse_calendar import fetch_month, months_between, parse_month
+
+    if not config.sources.get("exchange", False):
+        return
+    for year, month in months_between(start, end):
+        path = szse_calendar_month_path(config.meta_root, year, month)
+        try:
+            payload = fetch_month(year, month, config=config)
+        except Exception as exc:
+            logger.warning("SZSE calendar %d-%02d unavailable: %s", year, month, exc)
+            continue
+        if not parse_month(payload, year, month):
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        staging = path.with_suffix(".json.tmp")
+        staging.write_bytes(payload)
+        staging.replace(path)
+
+
 @register_step("trading_calendar", group="core")
 def step_trading_calendar(config: Config, trade_date: date, run_id: str, context: dict) -> dict:
     if backfill_of(config).active:
@@ -716,13 +749,32 @@ def step_trading_calendar(config: Config, trade_date: date, run_id: str, context
             start = earliest
     else:
         start = trade_date - timedelta(days=30)
-    # A year ahead, but never past the bundled holiday table. Beyond it no
-    # weekday can be classified, and asking anyway failed this step — and so
-    # phase 1 of every `cne init` and the daily calendar — from the first day
-    # the year ahead crossed the table's end. Shrinking forward coverage is
-    # the audit's `calendar_forward_coverage` warning to report, not a reason
-    # to stop.
-    end = min(trade_date + timedelta(days=365), max(calendar_seed_end(), trade_date))
+    # A year ahead, but never past what can be classified: the holiday table,
+    # then the months SZSE has published after it. Asking beyond that failed
+    # this step — and so phase 1 of every `cne init` and the daily calendar —
+    # from the first day the year ahead crossed the table's end. Shrinking
+    # forward coverage is the audit's `calendar_forward_coverage` warning to
+    # report, not a reason to stop.
+    horizon = trade_date + timedelta(days=365)
+    _refresh_szse_calendar(config, trade_date, horizon)
+    official = load_official_calendar(config.meta_root)
+    coverage_end = confirmed_calendar_end(official)
+    end = min(horizon, max(coverage_end, trade_date))
+    # Inside the table the table decides (the audit reports any disagreement);
+    # after it, SZSE's published days are the official answer.
+    beyond = {
+        day: is_session
+        for day, is_session in official.items()
+        if calendar_seed_end() < day <= coverage_end
+    }
+    known = (
+        pl.DataFrame(
+            {"trade_date": list(beyond), "is_trading": list(beyond.values())},
+            schema={"trade_date": pl.Date, "is_trading": pl.Boolean},
+        )
+        if beyond
+        else None
+    )
     rl = config.tdx_rate_limit_spec()
     seed_path = config.meta_root / "seeds" / "trading_calendar.csv"
     df = fetch_trading_calendar(
@@ -732,8 +784,16 @@ def step_trading_calendar(config: Config, trade_date: date, run_id: str, context
         allow_mock=config.tdx_allow_mock,
         curated_root=config.curated_root,
         seed_path=seed_path if seed_path.exists() else None,
+        known=known,
     )
     df = normalize_with_source(df, source="exchange_calendar")
+    if beyond:
+        df = df.with_columns(
+            pl.when(pl.col("trade_date") > calendar_seed_end())
+            .then(pl.lit("szse_calendar"))
+            .otherwise(pl.col("source"))
+            .alias("source")
+        )
     return write_simple(config, run_id, "trading_calendar", df)
 
 

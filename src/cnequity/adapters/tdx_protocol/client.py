@@ -661,6 +661,7 @@ def fetch_trading_calendar(
     allow_mock: bool = False,
     curated_root: Path | None = None,
     seed_path: Path | None = None,
+    known: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     wait_spec(rate_limit)
     try:
@@ -669,6 +670,7 @@ def fetch_trading_calendar(
             end,
             seed_path=seed_path,
             curated_root=curated_root,
+            known=known,
         )
     except Exception as exc:
         reason = f"calendar seed load failed: {exc}"

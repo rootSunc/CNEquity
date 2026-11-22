@@ -9,8 +9,8 @@ import polars as pl
 
 from cnequity.adapters.calendar.exchange_calendar import (
     CALENDAR_FORWARD_COVERAGE_WARN_DAYS,
+    calendar_coverage_end,
     calendar_forward_coverage_days,
-    calendar_seed_end,
 )
 from cnequity.config import Config
 from cnequity.config.resources import resources_for
@@ -38,6 +38,7 @@ from cnequity.quality.cross_checks import (
     share_structure_vendor_findings,
     st_label_crosscheck_findings,
     trading_calendar_horizon_findings,
+    trading_calendar_official_findings,
     trading_status_bars_findings,
     undeclared_source_findings,
     universe_survivorship_findings,
@@ -390,8 +391,8 @@ def _collect_lake_findings(
         )
         return findings
 
-    seed_end = calendar_seed_end()
-    forward_days = calendar_forward_coverage_days(trade_date)
+    seed_end = calendar_coverage_end(config.meta_root)
+    forward_days = calendar_forward_coverage_days(trade_date, seed_end)
     if forward_days < CALENDAR_FORWARD_COVERAGE_WARN_DAYS:
         findings.append(
             {
@@ -399,10 +400,10 @@ def _collect_lake_findings(
                 "severity": "warning",
                 "check": "calendar_forward_coverage",
                 "message": (
-                    f"holiday table covers through {seed_end.isoformat()}; "
+                    f"trading calendar is confirmed through {seed_end.isoformat()}; "
                     f"only {forward_days} day(s) forward from {trade_date.isoformat()}; "
-                    "extend holidays_cn.py with the next year's official schedule "
-                    "before calendar goes stale"
+                    "SZSE has not published the next year yet, so extend holidays_cn.py "
+                    "with its official schedule before calendar goes stale"
                 ),
                 "seed_end": seed_end.isoformat(),
                 "forward_days": forward_days,
@@ -513,6 +514,7 @@ def _collect_lake_findings(
     if feeds("daily_bars"):
         findings.extend(daily_bar_finality_findings(config, trade_date))
     findings.extend(trading_calendar_horizon_findings(config, trade_date))
+    findings.extend(trading_calendar_official_findings(config))
     findings.extend(daily_bars_volume_unit_findings(config, trade_date))
     findings.extend(daily_bars_amount_completeness_findings(config, trade_date))
     if feeds("daily_bars"):

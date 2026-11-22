@@ -9,6 +9,7 @@ from pathlib import Path
 
 import polars as pl
 
+from cnequity.adapters.exchange.szse_calendar import month_days, parse_month
 from cnequity.domain.holidays_cn import (
     CLOSED_DATES,
     HOLIDAY_TABLE_END,
@@ -16,6 +17,7 @@ from cnequity.domain.holidays_cn import (
     exchange_may_open,
     exchange_may_open_expr,
 )
+from cnequity.meta_layout import SOURCE_CACHE
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +32,54 @@ class CalendarCoverageError(RuntimeError):
     """Raised when the calendar cannot safely classify a requested date."""
 
 
+#: Where the trading_calendar step keeps SZSE's published months, under ``meta/``.
+SZSE_CALENDAR_CACHE = SOURCE_CACHE / "szse_calendar"
+
+
 def calendar_seed_end() -> date:
     """Last calendar date covered by bundled holiday seed data."""
     return _SEED_END
 
 
-def calendar_forward_coverage_days(as_of: date) -> int:
-    """Days from *as_of* (inclusive) through the bundled seed end date."""
-    return (_SEED_END - as_of).days
+def calendar_forward_coverage_days(as_of: date, end: date | None = None) -> int:
+    """Days from *as_of* (inclusive) through *end*, the holiday table's end by default."""
+    return ((end or _SEED_END) - as_of).days
+
+
+def szse_calendar_month_path(meta_root: Path, year: int, month: int) -> Path:
+    return meta_root / SZSE_CALENDAR_CACHE / f"{year}-{month:02d}.json"
+
+
+def load_official_calendar(meta_root: Path) -> dict[date, bool]:
+    """``{day: is_session}`` from every cached SZSE month; a bad file is skipped."""
+    days: dict[date, bool] = {}
+    for path in sorted((meta_root / SZSE_CALENDAR_CACHE).glob("*.json")):
+        try:
+            year, month = (int(part) for part in path.stem.split("-"))
+            days.update(parse_month(path.read_bytes(), year, month))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            logger.warning("Skipping unreadable SZSE calendar cache %s: %s", path, exc)
+    return days
+
+
+def confirmed_calendar_end(official: dict[date, bool]) -> date:
+    """Last day the calendar can classify: the holiday table, then SZSE's published months.
+
+    Only whole months that follow the table without a gap extend it; a month
+    SZSE has not published yet ends the coverage there.
+    """
+    end = _SEED_END
+    while True:
+        following = end + timedelta(days=1)
+        days = month_days(following.year, following.month)
+        if not all(day in official for day in days):
+            return end
+        end = days[-1]
+
+
+def calendar_coverage_end(meta_root: Path) -> date:
+    """:func:`confirmed_calendar_end` over the lake's cached SZSE months."""
+    return confirmed_calendar_end(load_official_calendar(meta_root))
 
 
 _is_trading_day = exchange_may_open
@@ -197,8 +239,8 @@ def build_trading_calendar(
             raise CalendarCoverageError(
                 "trading calendar holiday seed ends at "
                 f"{_SEED_END.isoformat()}; cannot classify {unknown_weekdays[0].isoformat()} "
-                "until that year's official holiday schedule is added to holidays_cn.py, "
-                "or published bar evidence covers it"
+                "until SZSE publishes that year's calendar (the trading_calendar step "
+                "fetches it) or its official holiday schedule is added to holidays_cn.py"
             )
 
     # Before the seed and the holiday table begin, bars are the only evidence

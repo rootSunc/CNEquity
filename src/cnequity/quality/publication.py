@@ -465,6 +465,7 @@ def evaluate_publication(
                 "source_snapshots",
                 "research",
                 "seeds",
+                "source_cache/szse_calendar",
             ):
                 source = config.meta_root / relative
                 if source.is_dir():
