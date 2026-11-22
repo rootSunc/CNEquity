@@ -291,22 +291,3 @@ def test_case_registration_checks_evidence_and_holds(lake, monkeypatch, tmp_path
     evidence.write_text('{"changed": true}')
     with pytest.raises(LifecycleError, match="evidence"):
         store.register_case(case)
-
-
-@pytest.mark.usefixtures("chinese_output")
-def test_cli_cannot_bypass_web_confirmation(lake, monkeypatch):
-    from click.testing import CliRunner
-
-    from cnequity.cli.main import cli
-
-    cfg, store, _ = lake
-    plan = matured(store, monkeypatch)
-    monkeypatch.setattr("cnequity.cli.storage_cmds._cfg", lambda _: cfg)
-    runner = CliRunner()
-    for argv in (
-        ["storage", "apply", plan["plan_id"], "--phase", "purge"],
-        ["storage", "apply", plan["plan_id"], "--phase", "purge", "--maintenance-window"],
-    ):
-        denied = runner.invoke(cli, argv)
-        assert denied.exit_code == 1 and "存储页" in denied.output, denied.output
-    assert all((cfg.meta_root / o["path"]).exists() for o in plan["objects"])

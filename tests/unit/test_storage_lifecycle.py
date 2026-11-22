@@ -210,19 +210,6 @@ def test_preview_does_not_create_an_empty_lake(tmp_path):
     assert not meta.exists()
 
 
-def test_cli_storage_apply_is_retired():
-    result = CliRunner().invoke(cli, ["storage", "apply", "anything", "--phase", "mark"])
-    assert result.exit_code == 1
-    assert "keep_generations" in result.output
-    result = CliRunner().invoke(cli, ["storage", "--help"])
-    assert result.exit_code == 0
-    assert " apply" not in result.output
-    result = CliRunner().invoke(cli, ["--help"])
-    assert result.exit_code == 0
-    assert "storage" in result.output
-    assert "其它" not in result.output
-
-
 def test_cli_plan_previews_with_the_configured_keep(lake, monkeypatch):
     cfg, store, _, _ = lake
     monkeypatch.setattr("cnequity.cli.storage_cmds._cfg", lambda _: cfg)

@@ -27,7 +27,7 @@ from cnequity.cli._shared import (
 from cnequity.config.logging import logging_settings
 from cnequity.config.retention import revision_keep
 from cnequity.derive.adj_factors import compute_adj_factors
-from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
+from cnequity.domain.datasets import DATASETS, RESAMPLED_MINUTE_DATASETS
 from cnequity.domain.market_time import shanghai_today
 from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
@@ -974,24 +974,29 @@ def stats_rebuild(config_path: str, dataset_names: tuple[str, ...], if_stale: bo
 
 
 def _scan_curated_datasets(cfg) -> list[dict]:
-    """Count curated Parquet on the spot — the former `cne catalog`.
+    """Count each dataset's published Parquet on the spot — the former `cne catalog`.
 
-    Every call walks the whole tree, which is why `cne stats rebuild` exists.
+    Every call reads every dataset's file footers, which is why `cne stats rebuild` exists.
     It stays as the answer for a lake that has never built its stats tables:
-    "what is in here" should not require a build step first.
+    "what is in here" should not require a build step first. The files are the
+    published revision's (the catalog's on a lake that reads only its catalog).
     """
+    from cnequity.query.parquet_scan import root_parquet_files
+    from cnequity.storage.locator import logical_root
+    from cnequity.storage.revisions import resolve_committed_root
+
     entries = []
-    curated = cfg.curated_root
-    if not curated.exists():
-        return entries
-    for ds_dir in sorted(curated.iterdir()):
-        if not ds_dir.is_dir():
+    for name in sorted(DATASETS):
+        root = resolve_committed_root(
+            logical_root(cfg, name), dataset=name, meta_root=cfg.meta_root
+        )
+        files = root_parquet_files(root, resolve=False)
+        if not files:
             continue
-        files = list(ds_dir.glob("**/*.parquet"))
         # lazy count(*) resolves from parquet metadata without decoding data
         # pages — cheap even on a 10-year lake.
-        rows = int(scan_parquet_files(files).select(pl.len()).collect().item()) if files else 0
-        entries.append({"dataset": ds_dir.name, "files": len(files), "rows": rows})
+        rows = int(scan_parquet_files(files).select(pl.len()).collect().item())
+        entries.append({"dataset": name, "files": len(files), "rows": rows})
     return entries
 
 

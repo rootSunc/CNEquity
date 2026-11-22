@@ -129,28 +129,6 @@ def refresh_references(config_path: str):
     _emit(summary)
 
 
-@storage.command("sync-catalog")
-@config_option
-@click.option(
-    "--create",
-    is_flag=True,
-    help=N_(
-        "Create the lake catalog when it does not exist yet; the first run copies every dataset."
-    ),
-)
-def sync_catalog(config_path: str, create: bool):
-    """No longer does anything: every write publishes into the lake catalog. Removed in 0.26.0."""
-    _emit(
-        {
-            "applied": False,
-            "note": _(
-                "Nothing to sync: every write publishes into the lake catalog. "
-                "This command is removed in 0.26.0."
-            ),
-        }
-    )
-
-
 @storage.command("catalog-retention")
 @config_option
 @click.option(
@@ -302,41 +280,5 @@ def plan(config_path: str, keep: int | None, phase: str | None):
                 for rid in item.candidate_revision_ids
             ],
             "logical_bytes_selected": sum(item.logical_bytes_selected for item in preview),
-        }
-    )
-
-
-@storage.command("apply", hidden=True, context_settings={"ignore_unknown_options": True})
-@click.argument("args", nargs=-1, type=click.UNPROCESSED)
-def apply(args: tuple[str, ...]):
-    """Removed: marking versions for a waiting period."""
-    raise click.ClickException(
-        _(
-            "`cne storage apply` was removed with the mark-and-wait phase: backfill and the daily run already delete generations beyond [storage.retention].keep_generations. Keep a version with `cne storage hold`; delete chosen history earlier on the storage page of `cne serve`."
-        )
-    )
-
-
-@storage.command("merge-files")
-@config_option
-@click.argument("datasets", nargs=-1)
-@click.option(
-    "--min-files",
-    type=click.IntRange(min=2),
-    default=None,
-    help=N_("Merge partitions with at least this many files (default 4)."),
-)
-@click.option(
-    "--apply", is_flag=True, help=N_("Publish the merge; without it, only report what would merge.")
-)
-def merge_files(config_path: str, datasets: tuple[str, ...], min_files: int | None, apply: bool):
-    """No longer does anything: the lake catalog lays out each partition's files. Removed in 0.26.0."""
-    _emit(
-        {
-            "applied": False,
-            "note": _(
-                "Nothing to merge: the lake catalog lays out each partition's files. "
-                "This command is removed in 0.26.0."
-            ),
         }
     )

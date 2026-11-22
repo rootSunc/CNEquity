@@ -255,7 +255,6 @@ EFFECTS: dict[str, tuple[str, str]] = {
         "--apply 时",
         "默认离线预览；--apply 按缺口查询 Baostock 与巨潮资讯，核验后发布新版本并保留旧版本",
     ),
-    "repair layout": ("无", "不再做任何事，只输出说明；0.26.0 删除"),
     "repair status-traded": (
         "无",
         "默认只读预览；--apply 用已提交成交日线补缺失状态键，ST 保持未知，发布新版本并保留旧版本",
@@ -328,7 +327,6 @@ EFFECTS: dict[str, tuple[str, str]] = {
         "仅 --refresh-sources 联网",
         "默认离线预览；联网归档上交所行情服务的历史 K 线，金额冲突时复用或采集东财证据；--apply 核验后修复沪深场内基金成交量，经修复门禁发布并保留旧版",
     ),
-    "repair repartition": ("无", "不再做任何事，只输出说明；0.26.0 删除"),
     "run clean": (
         "无",
         "先预览过期文件；交互终端分两次确认历史版本和已合并且不在使用中的 staging；正在使用的数据和 staging 不自动删除；定时和非交互只预览；显式 --reconcile-runs 可修改运行状态",
@@ -366,21 +364,18 @@ EFFECTS: dict[str, tuple[str, str]] = {
     "stats rebuild": ("无", "重建本地统计"),
     "stats show": ("无", "读取本地统计；过期或明细视图需要时自动重算"),
     "status": ("无", "读取运行状态与数据集覆盖"),
-    "storage apply": ("无", "已移除（随标记观察期一起）；只报错并说明替代做法"),
     "storage explain": ("无", "读取版本保留依据"),
     "storage hold": ("无", "增加对象保护；自动清理不再删除它"),
     "storage release": ("无", "解除指定版本的手动保留与失效引用；案例依赖和仍有效的引用保留"),
     "storage refresh": ("无", "重新扫描引用目录，为其中提到的版本增加保留；不会解除保留"),
     "storage import": ("无", "校验并登记引用清单；只增加保护"),
     "storage inspect": ("无", "读取版本与保留原因"),
-    "storage merge-files": ("无", "不再做任何事，只输出说明；0.26.0 删除"),
     "storage plan": ("无", "预览自动清理现在会删除哪些代；不删除数据"),
     "storage raw-external": ("无", "登记外置原文目录；本地保留来源记录，不移动或删除文件"),
     "storage catalog-retention": (
         "无",
         "预演只读；--apply 让湖目录过期旧快照，并删除超过宽限期的文件",
     ),
-    "storage sync-catalog": ("无", "不再做任何事，只输出说明；0.26.0 删除"),
     "storage export": (
         "无",
         "只读湖；把湖目录里已发布的数据集导出成普通 Parquet，只写 --out 指定的目录",
