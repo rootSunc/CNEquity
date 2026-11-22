@@ -104,7 +104,7 @@ def _toml_paths(node: object, prefix: str = "") -> set[str]:
 
 
 def test_documented_config_sections_exist_in_example_toml():
-    """Every active `[section]` documented in configuration.md must exist in the template."""
+    """Every active `[section]` and `[section].key` in docs must exist in the template."""
     import re
 
     example_path = ROOT / "configs" / "cnequity.example.toml"
@@ -112,19 +112,67 @@ def test_documented_config_sections_exist_in_example_toml():
     valid_paths = _toml_paths(tomllib.loads(example_text)) | set(
         re.findall(r"^\s*#?\s*\[\[?([a-z0-9_.-]+)\]?\]\s*$", example_text, re.M)
     )
+    # Include commented-out `# key = ...` under their active or commented section in the template.
+    current_section = ""
+    for line in example_text.splitlines():
+        if sec := re.match(r"^\s*#?\s*\[\[?([a-z0-9_.-]+)\]?\]\s*$", line):
+            current_section = sec.group(1)
+        elif current_section and (kv := re.match(r"^\s*#\s*([a-z][a-z0-9_]*)\s*=", line)):
+            valid_paths.add(f"{current_section}.{kv.group(1)}")
 
-    pattern = re.compile(r"`\[\[?([a-z0-9_.<>一-鿿-]+)\]?\]`")
+    section_pattern = re.compile(r"`\[\[?([a-z0-9_.<>一-鿿-]+)\]?\]`")
+    key_pattern = re.compile(r"`\[([a-z0-9_.-]+)\]\.([a-z][a-z0-9_]*)`")
     for lang in ("zh", "en"):
-        page = (ROOT / "docs" / lang / "getting-started" / "configuration.md").read_text(
-            encoding="utf-8"
-        )
-        active = page.split("{#retired}", 1)[0]
-        for raw in pattern.findall(active):
-            cleaned = re.sub(r"\.<[^>]+>", "", raw)
-            assert cleaned in valid_paths, (
-                f"docs/{lang}/getting-started/configuration.md documents [{raw}], "
-                f"which is not in configs/cnequity.example.toml"
-            )
+        for doc_path in sorted((ROOT / "docs" / lang).rglob("*.md")):
+            page = doc_path.read_text(encoding="utf-8")
+            active = page.split("{#retired}", 1)[0]
+            if doc_path.name == "configuration.md":
+                for raw in section_pattern.findall(active):
+                    cleaned = re.sub(r"\.<[^>]+>", "", raw)
+                    assert cleaned in valid_paths, (
+                        f"{doc_path.relative_to(ROOT)} documents [{raw}], "
+                        f"which is not in configs/cnequity.example.toml"
+                    )
+            for sec, key in key_pattern.findall(active):
+                full_key = f"{sec}.{key}"
+                assert full_key in valid_paths, (
+                    f"{doc_path.relative_to(ROOT)} documents [{sec}].{key}, "
+                    f"which is not in configs/cnequity.example.toml"
+                )
+
+
+def test_quickstart_offline_sample_commands_execute(tmp_path, monkeypatch):
+    """The 3-line offline sample block in quickstart.md and index.md runs end-to-end."""
+    import re
+    import shlex
+
+    from click.testing import CliRunner
+
+    from cnequity.cli.main import cli
+
+    block_re = re.compile(r"```bash\n(.*?cne init --profile sample.*?)```", re.S)
+    blocks = []
+    for rel in (
+        "docs/zh/getting-started/quickstart.md",
+        "docs/en/getting-started/quickstart.md",
+        "docs/zh/index.md",
+        "docs/en/index.md",
+    ):
+        match = block_re.search((ROOT / rel).read_text(encoding="utf-8"))
+        assert match is not None, f"missing sample quickstart block in {rel}"
+        cne_lines = [
+            line.strip() for line in match.group(1).splitlines() if line.strip().startswith("cne ")
+        ]
+        blocks.append(cne_lines)
+
+    assert all(b == blocks[0] for b in blocks), "sample quickstart commands drifted across pages"
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    for cmd_line in blocks[0]:
+        args = shlex.split(cmd_line)[1:]
+        result = runner.invoke(cli, args)
+        assert result.exit_code == 0, f"`{cmd_line}` failed: {result.output}"
+    assert "mock" in result.output
 
 
 def test_documented_cli_commands_exist_in_click_registry():

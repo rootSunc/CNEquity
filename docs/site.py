@@ -244,13 +244,41 @@ def check_links(site: Path, site_url: str) -> list[str]:
     return broken
 
 
-def bundle_mike_version(site: Path, doc_version: str) -> None:
+def bundle_mike_version(site: Path, doc_version: str, preserve_from: Path | None = None) -> None:
     """Populate mike versioned directories (<major.minor>/ and latest/) alongside root."""
     import shutil
 
     entry = _version_entry(doc_version)
     short = str(entry["version"])
-    snapshot_items = [p for p in site.iterdir() if p.name not in {short, "latest", "versions.json"}]
+    prior_entries: list[dict[str, object]] = []
+    for candidate in filter(None, [preserve_from, site]):
+        vf = candidate / "versions.json"
+        if vf.is_file():
+            try:
+                loaded = json.loads(vf.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    prior_entries = [e for e in loaded if isinstance(e, dict)]
+                    break
+            except ValueError:
+                pass
+
+    merged_entries: list[dict[str, object]] = [entry]
+    preserved_dirs: set[str] = {short, "latest", "versions.json"}
+    for old in prior_entries:
+        old_ver = str(old.get("version", ""))
+        if not old_ver or old_ver == short:
+            continue
+        aliases = [a for a in old.get("aliases", []) if a != "latest"]
+        merged_entries.append(
+            {"version": old_ver, "title": old.get("title", old_ver), "aliases": aliases}
+        )
+        preserved_dirs.add(old_ver)
+        if preserve_from is not None and (preserve_from / old_ver).is_dir():
+            dest_old = site / old_ver
+            if not dest_old.exists():
+                shutil.copytree(preserve_from / old_ver, dest_old)
+
+    snapshot_items = [p for p in site.iterdir() if p.name not in preserved_dirs]
     for dest_name in (short, "latest"):
         dest_root = site / dest_name
         if dest_root.exists():
@@ -263,16 +291,20 @@ def bundle_mike_version(site: Path, doc_version: str) -> None:
             else:
                 shutil.copy2(item, target)
         # Allow /CNEquity/<ver>/en/ to resolve ../versions.json within its own version dir.
+        en_entries = [
+            {
+                "version": f"../{e['version']}/en",
+                "title": e["title"],
+                "aliases": e["aliases"],
+            }
+            for e in merged_entries
+        ]
         (dest_root / "versions.json").write_text(
-            json.dumps(
-                [{"version": f"../{short}/en", "title": doc_version, "aliases": ["latest"]}],
-                indent=2,
-            )
-            + "\n",
+            json.dumps(en_entries, indent=2) + "\n",
             encoding="utf-8",
         )
     (site / "versions.json").write_text(
-        json.dumps([entry], indent=2) + "\n",
+        json.dumps(merged_entries, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -284,6 +316,12 @@ def main() -> int:
         "--bundle-mike",
         action="store_true",
         help="also populate mike versioned directories (<major.minor>/ and latest/)",
+    )
+    parser.add_argument(
+        "--preserve-from",
+        type=Path,
+        default=None,
+        help="optional directory containing previously deployed mike versions to retain",
     )
     args = parser.parse_args()
     if not (args.site / "en" / "index.html").is_file() or not (args.site / "index.html").is_file():
@@ -298,7 +336,7 @@ def main() -> int:
     if args.bundle_mike:
         pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
         doc_version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
-        bundle_mike_version(args.site, doc_version)
+        bundle_mike_version(args.site, doc_version, args.preserve_from)
     print("Rendered documentation links passed.")
     return 0
 

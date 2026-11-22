@@ -1193,7 +1193,7 @@ Tushare `report_rc` broker forecasts; needs your own Tushare token in `[sources.
 | org_name | string | Broker |
 | author_name | string | Analysts |
 | quarter | string | Forecast period, e.g. 2024Q4 |
-| rating | string | Rating, e.g. 买入/增持 |
+| rating | string | Rating, e.g. `买入` (Buy) / `增持` (Overweight) |
 | op_rt | float64 | Revenue, 10k CNY |
 | op_pr | float64 | Operating profit, 10k CNY |
 | tp | float64 | Total profit, 10k CNY |
@@ -1668,7 +1668,7 @@ Tushare `limit_cpt_list` strongest boards, from 2023-11. Needs your own Tushare 
 | sector_name | string | Board name |
 | rank | int64 | Rank |
 | days_listed | int64 | Days on the list |
-| limit_stat | string | Limit-up summary (source text, e.g. 7天4板) |
+| limit_stat | string | Limit-up summary (source text, e.g. `7天4板` for 4 limit-ups in 7 sessions) |
 | consecutive_limit_stocks | int64 | Stocks on a streak |
 | limit_up_stocks | int64 | Limit-up stocks |
 | pct_change | float64 | Change (%) |
@@ -1678,7 +1678,7 @@ Tushare `limit_cpt_list` strongest boards, from 2023-11. Needs your own Tushare 
 
 #### kpl_limit_ups
 
-Tushare `kpl_list` 开盘啦 limit-up list, from 2018-01. Needs your own Tushare token in `[sources.tushare]`.
+Tushare `kpl_list` Kaipanla (`开盘啦`) limit-up list, from 2018-01. Needs your own Tushare token in `[sources.tushare]`.
 
 | Column | Type | Description |
 |--------|------|-------|
