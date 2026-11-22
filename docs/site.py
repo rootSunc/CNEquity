@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import posixpath
+import re
 from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -74,6 +75,82 @@ def on_config(config):
     return config
 
 
+def on_files(files, config):
+    from mkdocs.structure.files import File
+
+    assets = Path(__file__).resolve().parent / "assets"
+    for path in sorted(assets.glob("cne-serve-sample.*.png")):
+        files.append(
+            File(
+                f"assets/{path.name}",
+                src_dir=str(assets.parent),
+                dest_dir=config.site_dir,
+                use_directory_urls=config.use_directory_urls,
+            )
+        )
+    return files
+
+
+_H4_RE = re.compile(
+    r'<h4 id="([^"]+)">(.*?)<a class="headerlink" href="#[^"]+" title="[^"]+">[^<]*</a></h4>',
+    re.S,
+)
+
+
+def _dataset_support(docs_dir: str) -> dict[str, str]:
+    catalog = Path(docs_dir) / "datasets" / "catalog.md"
+    support: dict[str, str] = {}
+    if catalog.is_file():
+        for line in catalog.read_text(encoding="utf-8").splitlines():
+            if match := re.match(
+                r"^\|\s*([a-z][a-z0-9_]*)\s*\|\s*(core|extended|best_effort|optional)\s*\|",
+                line,
+            ):
+                support[match.group(1)] = match.group(2)
+    return support
+
+
+def on_page_content(html, page, config, files):
+    if page.file.src_uri != "datasets/schema.md":
+        return html
+    support_map = _dataset_support(config.docs_dir)
+    matches = list(_H4_RE.finditer(html))
+    if not matches:
+        return html
+
+    chunks: list[str] = [html[: matches[0].start()]]
+    for idx, match in enumerate(matches):
+        anchor, title = match.group(1), match.group(2).strip()
+        next_start = matches[idx + 1].start() if idx + 1 < len(matches) else len(html)
+        body = html[match.end() : next_start]
+        names = [w for w in re.findall(r"[a-z][a-z0-9_]*", title) if w in support_map]
+        if not names:
+            tier = "on_demand"
+        elif any(support_map[n] == "core" for n in names):
+            tier = "core"
+        else:
+            tier = support_map[names[0]]
+
+        if tier == "core":
+            heading = match.group(0).replace(
+                '<a class="headerlink"',
+                ' <code class="schema-tier-badge schema-tier-core">core</code><a class="headerlink"',
+                1,
+            )
+            chunks.append(heading + body)
+        else:
+            chunks.append(
+                f'<details class="note schema-details">'
+                f'<summary id="{escape(anchor)}">'
+                f'<span class="schema-summary-title">{title}</span> '
+                f'<code class="schema-tier-badge">{escape(tier)}</code>'
+                f"</summary>"
+                f"{body}"
+                f"</details>\n"
+            )
+    return "".join(chunks)
+
+
 def _relative(source: str, target: str) -> str:
     path, fragment, anchor = target.partition("#")
     if urlsplit(path).scheme:
@@ -81,10 +158,25 @@ def _relative(source: str, target: str) -> str:
     return posixpath.relpath(path or ".", source) + "/" + fragment + anchor
 
 
+def _version_entry(doc_version: str) -> dict[str, object]:
+    parts = doc_version.split(".")
+    short = ".".join(parts[:2]) if len(parts) >= 2 else doc_version
+    return {"version": short, "title": doc_version, "aliases": ["latest"]}
+
+
 def on_post_build(config):
+    site_dir = Path(config.site_dir)
+    if config.theme["language"] == "zh":
+        versions_file = site_dir / "versions.json"
+        if not versions_file.exists():
+            doc_version = config.extra.get("doc_version", "0.25.0")
+            versions_file.write_text(
+                json.dumps([_version_entry(doc_version)], indent=2) + "\n",
+                encoding="utf-8",
+            )
     for source, destination in REDIRECTS.items():
         target = _relative(source, destination)
-        file = Path(config.site_dir) / source / "index.html"
+        file = site_dir / source / "index.html"
         file.parent.mkdir(parents=True, exist_ok=True)
         link = escape(target)
         refresh = f'<meta http-equiv="refresh" content="0; url={link}">'
@@ -152,19 +244,61 @@ def check_links(site: Path, site_url: str) -> list[str]:
     return broken
 
 
+def bundle_mike_version(site: Path, doc_version: str) -> None:
+    """Populate mike versioned directories (<major.minor>/ and latest/) alongside root."""
+    import shutil
+
+    entry = _version_entry(doc_version)
+    short = str(entry["version"])
+    snapshot_items = [p for p in site.iterdir() if p.name not in {short, "latest", "versions.json"}]
+    for dest_name in (short, "latest"):
+        dest_root = site / dest_name
+        if dest_root.exists():
+            shutil.rmtree(dest_root)
+        dest_root.mkdir(parents=True, exist_ok=True)
+        for item in snapshot_items:
+            target = dest_root / item.name
+            if item.is_dir():
+                shutil.copytree(item, target)
+            else:
+                shutil.copy2(item, target)
+        # Allow /CNEquity/<ver>/en/ to resolve ../versions.json within its own version dir.
+        (dest_root / "versions.json").write_text(
+            json.dumps(
+                [{"version": f"../{short}/en", "title": doc_version, "aliases": ["latest"]}],
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    (site / "versions.json").write_text(
+        json.dumps([entry], indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check links in both built documentation trees.")
     parser.add_argument("site", type=Path)
+    parser.add_argument(
+        "--bundle-mike",
+        action="store_true",
+        help="also populate mike versioned directories (<major.minor>/ and latest/)",
+    )
     args = parser.parse_args()
     if not (args.site / "en" / "index.html").is_file() or not (args.site / "index.html").is_file():
         parser.error("build both language sites before checking links")
     from mkdocs.config import load_config
 
-    site_url = load_config(config_file="mkdocs.yml").site_url
-    broken = check_links(args.site, site_url)
+    cfg = load_config(config_file="mkdocs.yml")
+    broken = check_links(args.site, cfg.site_url)
     if broken:
         print("\n".join(broken))
         return 1
+    if args.bundle_mike:
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        doc_version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+        bundle_mike_version(args.site, doc_version)
     print("Rendered documentation links passed.")
     return 0
 

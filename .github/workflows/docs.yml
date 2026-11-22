@@ -1,6 +1,6 @@
 # Documentation site. A pull request that touches the site must build both
-# languages in strict mode. GitHub Pages updates only after Release publishes
-# a stable tag, and only from that tag's commit.
+# languages in strict mode. GitHub Pages updates automatically after Release
+# publishes a stable tag, or manually via workflow_dispatch with deploy=true.
 
 name: Docs
 
@@ -23,6 +23,17 @@ on:
       - "pyproject.toml"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy built site to GitHub Pages"
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: "Git ref to deploy (empty = latest release tag; or set e.g. main)"
+        required: false
+        default: ""
+        type: string
   workflow_run:
     workflows: [Release]
     types: [completed]
@@ -31,7 +42,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: docs-${{ github.event_name == 'workflow_run' && 'published' || github.ref }}
+  group: docs-${{ (github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.deploy)) && 'published' || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -45,19 +56,26 @@ jobs:
     outputs:
       release: ${{ steps.release.outputs.tag }}
     steps:
-      - name: Resolve the latest published release
+      - name: Resolve the target release or ref for deployment
         id: release
-        if: github.event_name == 'workflow_run'
+        if: github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_REF: ${{ inputs.ref }}
         run: |
-          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
-          if [[ "$sha" == "$RELEASE_SHA" ]]; then
-            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "$INPUT_REF" ]]; then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$INPUT_REF" --jq .sha)
+            echo "tag=$INPUT_REF" >> "$GITHUB_OUTPUT"
             echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          else
+            tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$sha" == "$RELEASE_SHA" ]]; then
+              echo "tag=$tag" >> "$GITHUB_OUTPUT"
+              echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            fi
           fi
       - uses: actions/checkout@v4
         if: github.event_name != 'workflow_run' || steps.release.outputs.tag != ''
@@ -78,7 +96,7 @@ jobs:
         run: |
           mkdocs build --strict
           mkdocs build --strict -f mkdocs.en.yml
-          python docs/site.py site
+          python docs/site.py --bundle-mike site
       - name: Upload GitHub Pages artifact
         if: steps.release.outputs.tag != ''
         uses: actions/upload-pages-artifact@v3

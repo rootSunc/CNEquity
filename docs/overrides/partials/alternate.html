@@ -1,7 +1,8 @@
 {#-
-  Material's alternate.html with one change: each language link keeps the
-  current page path. docs/zh and docs/en mirror each other's paths, so
-  /CNEquity/<page> and /CNEquity/en/<page> are the same page.
+  Material's alternate.html with version-safe relative links: each language link
+  keeps the current page path relative to base_url so switching languages stays
+  within the active mike version directory (/CNEquity/<ver>/ <-> /CNEquity/<ver>/en/)
+  as well as at the site root (/CNEquity/ <-> /CNEquity/en/).
 -#}
 <div class="md-header__option">
   <div class="md-select">
@@ -11,9 +12,16 @@
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
+        {% set page_path = page.url if page else '' %}
+        {% set root = base_url.rstrip("/") %}
         {% for alt in config.extra.alternate %}
+          {% if config.theme.language == "en" %}
+            {% set prefix = (root ~ "/../") if alt.lang == "zh" else (root ~ "/") %}
+          {% else %}
+            {% set prefix = (root ~ "/en/") if alt.lang == "en" else (root ~ "/") %}
+          {% endif %}
           <li class="md-select__item">
-            <a href="{{ alt.link ~ (page.url if page else '') }}" hreflang="{{ alt.lang }}" class="md-select__link">
+            <a href="{{ prefix ~ page_path }}" hreflang="{{ alt.lang }}" class="md-select__link">
               {{ alt.name }}
             </a>
           </li>
