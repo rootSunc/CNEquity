@@ -531,17 +531,28 @@ def _quarantine_probe_placeholders(
     return placeholders
 
 
-def _reject_preopen_placeholder(config: Config, run_id: str, trade_date: date) -> None:
+def _reject_preopen_placeholder(
+    config: Config, run_id: str, trade_date: date, *, today: date | None = None
+) -> None:
     """Fail the step if the freshest staged day is mostly pre-open placeholders.
 
     Checked against staging, before compact promotes anything, so a mis-timed
     run stays quarantined in staging instead of overwriting a good curated
     partition. `by_date` semantics mean the fix is simply to re-run after the
     close, which a failed step invites rather than hides.
+
+    Only a session of the current Shanghai day can have been captured before
+    it opened. An earlier day's flat zero-volume bars are what the vendor
+    holds for it (1992-02-25 answers that way for its few listed shares), so
+    a backfill ending there is never judged.
     """
     import polars as pl
 
+    from cnequity.domain.market_time import shanghai_today
     from cnequity.storage import StagingWriter
+
+    if trade_date < (today or shanghai_today()):
+        return
 
     files = StagingWriter(config.staging_root).list_run_files("daily_bars", run_id)
     if not files:

@@ -55,7 +55,7 @@ def _bar(sym: str, *, flat: bool) -> dict:
 def test_all_placeholder_day_is_rejected(tmp_path):
     _write(tmp_path, [_bar(f"{i:06d}.SZ", flat=True) for i in range(50)])
     with pytest.raises(RuntimeError, match="pre-open placeholder"):
-        _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD)
+        _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD, today=TD)
 
 
 def test_a_few_suspensions_pass(tmp_path):
@@ -63,7 +63,7 @@ def test_a_few_suspensions_pass(tmp_path):
     rows += [_bar("900001.SZ", flat=True), _bar("900002.SZ", flat=True)]
     _write(tmp_path, rows)
     # 2/50 flat — normal suspensions, must not raise.
-    _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD)
+    _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD, today=TD)
 
 
 def test_half_placeholder_trips_the_guard(tmp_path):
@@ -71,12 +71,12 @@ def test_half_placeholder_trips_the_guard(tmp_path):
     rows += [_bar(f"{i:06d}.SH", flat=False) for i in range(25)]
     _write(tmp_path, rows)
     with pytest.raises(RuntimeError, match="50%"):
-        _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD)
+        _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD, today=TD)
 
 
 def test_no_staged_rows_is_noop(tmp_path):
     (tmp_path / "daily_bars").mkdir(parents=True)
-    _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD)
+    _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD, today=TD)
 
 
 def test_only_the_target_day_is_judged(tmp_path):
@@ -94,4 +94,12 @@ def test_only_the_target_day_is_judged(tmp_path):
         }
     ]
     _write(tmp_path, rows)
-    _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD)
+    _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD, today=TD)
+
+
+def test_an_earlier_session_is_never_judged(tmp_path):
+    # A backfill of history can stage a whole day of flat, zero-volume bars:
+    # 1992-02-25's few listed shares answer that way. No pre-open capture of
+    # a past session is possible, so the guard must not fail the backfill.
+    _write(tmp_path, [_bar(f"{i:06d}.SZ", flat=True) for i in range(50)])
+    _reject_preopen_placeholder(_Staging(tmp_path), "r1", TD, today=date(2026, 11, 23))

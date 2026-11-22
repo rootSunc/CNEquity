@@ -498,9 +498,23 @@ def _after_daily_bars(cfg, before, window: tuple[date, date], result: dict) -> d
     no daily step re-derives suspensions at all.
     """
     from cnequity.derive.lineage import changed_bar_scope
-    from cnequity.steps.reference import DERIVE_TAIL_DAYS
 
     affected, first, last = changed_bar_scope(before, _bar_fingerprint(cfg, window))
+    spans = [(first, last, window[1])] if affected else []
+    return _bar_lineage(cfg, result, affected, spans)
+
+
+def _bar_lineage(
+    cfg, result: dict, affected: list[str], spans: list[tuple[date, date, date]]
+) -> dict:
+    """Realign *affected* symbols' factors once, then re-derive each changed span.
+
+    *spans* are ``(first changed month, last changed month, window end)``.
+    One factor sync covers every span: its cost is mostly fixed, so a repair
+    that changed bars in twelve separate months must not pay it twelve times.
+    """
+    from cnequity.steps.reference import DERIVE_TAIL_DAYS
+
     click.echo(_("\nDaily bars backfill finished"), err=True)
     click.echo(
         _("  Written:            {value:,} rows").format(
@@ -517,6 +531,8 @@ def _after_daily_bars(cfg, before, window: tuple[date, date], result: dict) -> d
         summary = {"affected_symbols": 0, "synchronized": True}
         result["adj_factors_sync"] = summary
         return summary
+    first = min(span[0] for span in spans)
+    last = max(span[1] for span in spans)
     click.echo(
         _("  Months changed:     {first:%Y-%m} .. {last:%Y-%m}").format(first=first, last=last),
         err=True,
@@ -531,15 +547,34 @@ def _after_daily_bars(cfg, before, window: tuple[date, date], result: dict) -> d
             rerun="cne backfill daily_bars --symbols",
         ),
     )
-    # A halt shows only as a gap between two traded bars, so the window reaches
-    # back past the first changed month by the derive's own tail.
-    month_end = (last.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-    start = first - timedelta(days=DERIVE_TAIL_DAYS)
-    end = min(month_end, window[1])
-    result["trading_status_derive"] = _follow_lineage(
-        result, lambda: _derive_suspensions(cfg, start, end)
+    derives = [
+        _follow_lineage(result, lambda s=start, e=end: _derive_suspensions(cfg, s, e))
+        for start, end in _suspension_windows(spans, DERIVE_TAIL_DAYS)
+    ]
+    result["trading_status_derive"] = (
+        derives[0] if len(derives) == 1 else {"windows": derives, "status": result.get("status")}
     )
     return {"affected_symbols": len(affected), "status": result.get("status")}
+
+
+def _suspension_windows(
+    spans: list[tuple[date, date, date]], tail_days: int
+) -> list[tuple[date, date]]:
+    """The suspension re-derive windows for changed month spans, overlaps merged.
+
+    A halt shows only as a gap between two traded bars, so each window reaches
+    back past its first changed month by the derive's own tail, and ends with
+    its last changed month (never past the backfill window).
+    """
+    windows: list[tuple[date, date]] = []
+    for first, last, window_end in sorted(spans):
+        month_end = (last.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        start, end = first - timedelta(days=tail_days), min(month_end, window_end)
+        if windows and start <= windows[-1][1]:
+            windows[-1] = (windows[-1][0], max(windows[-1][1], end))
+        else:
+            windows.append((start, end))
+    return windows
 
 
 def _sync_adj_factors(
@@ -956,6 +991,11 @@ def _repair_outstanding(
     failures: list[str] = []
     followups: list[dict] = []
     lineage_degraded = False
+    # Bars changed by the passes; their factors and suspensions are derived
+    # once after the last pass rather than after each month.
+    changed: set[str] = set()
+    spans: list[tuple[date, date, date]] = []
+    rows_written = 0
     passes = 0
     filled = 0
     fatal = False
@@ -984,12 +1024,16 @@ def _repair_outstanding(
         window = (backfill_of(cfg).start, backfill_of(cfg).end)
         before = _bar_fingerprint(cfg, window) if dataset == "daily_bars" else None
         out = _backfill_once(cfg, dataset)
-        if before is not None and out.get("status") != "failed":
-            summary = _follow_lineage(
-                out, lambda b=before, w=window, o=out: _after_daily_bars(cfg, b, w, o)
-            )
-            followups.append({"month": month, **summary})
-            lineage_degraded |= summary.get("status") in {"failed", "degraded"}
+        rows_written += int(out.get("rows_written") or 0)
+        if before is not None:
+            # Judged by what was published, not by the pass's status: a failed
+            # pass can still have published the rows it fetched.
+            from cnequity.derive.lineage import changed_bar_scope
+
+            affected, first, last = changed_bar_scope(before, _bar_fingerprint(cfg, window))
+            if affected:
+                changed.update(affected)
+                spans.append((first, last, window[1]))
         passes += 1
         if out.get("status") not in ("success", "degraded"):
             failures.append(f"{month}: {out.get('status')}")
@@ -1001,6 +1045,23 @@ def _repair_outstanding(
                 fatal = True
                 break
 
+    if changed:
+        lineage: dict = {"status": "success", "rows_written": rows_written}
+        summary = _follow_lineage(
+            lineage, lambda: _bar_lineage(cfg, lineage, sorted(changed), spans)
+        )
+        followups.append(
+            {
+                "months": sorted({f"{span[0]:%Y-%m}" for span in spans}),
+                **summary,
+                **{
+                    k: lineage[k]
+                    for k in ("adj_factors_sync", "trading_status_derive")
+                    if k in lineage
+                },
+            }
+        )
+        lineage_degraded = lineage.get("status") in {"failed", "degraded"}
     if planned:
         wanted = {(row["symbol"], row["trade_date"]) for row in owed}
         left = {

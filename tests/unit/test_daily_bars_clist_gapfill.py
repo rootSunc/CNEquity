@@ -1524,7 +1524,7 @@ def test_preopen_placeholder_still_rejects_clist_flat_zeros(tmp_path):
     )
     StagingWriter(cfg.staging_root).write_batch("daily_bars", run_id, "em-clist-gapfill", flat)
     with pytest.raises(RuntimeError, match="pre-open placeholders"):
-        _reject_preopen_placeholder(cfg, run_id, tip)
+        _reject_preopen_placeholder(cfg, run_id, tip, today=tip)
 
 
 def test_baostock_rescues_keys_when_eastmoney_history_is_unreachable(tmp_path, monkeypatch):

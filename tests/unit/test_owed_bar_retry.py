@@ -104,3 +104,70 @@ def test_owed_keys_are_counted_not_recorded_and_no_absence_is_cached(tmp_path):
     )
     assert load_negative_evidence(cfg, "daily_bars") == []
     assert not (cfg.meta_root / "state" / "daily_bars.json").exists()
+
+
+def test_the_repair_derives_factors_once_after_every_monthly_pass(tmp_path, monkeypatch):
+    """2026-11-23: twelve 1991-94 months each paid a ~4-minute factor sync.
+
+    The passes now only note what changed; factors are realigned once for the
+    union of symbols, and suspensions once per window, overlapping months
+    merged. A pass that failed but published bars still gets its lineage.
+    """
+    from cnequity.derive import lineage
+
+    cfg = _lake(tmp_path)
+    monkeypatch.setattr("cnequity.steps.bars.bar_scope._last_final_session", lambda *a, **k: DAY)
+    owed = [
+        ("000004.SZ", date(1991, 10, 9)),
+        ("000003.SZ", date(1991, 11, 7)),
+        ("600652.SH", date(1994, 4, 4)),
+    ]
+    monkeypatch.setattr(
+        planned_coverage, "owed_cells", lambda c, ds, start, end: owed if start is None else []
+    )
+    monkeypatch.setattr(backfill_cmds, "_bar_fingerprint", lambda *a, **k: object())
+    statuses = iter(["success", "failed", "success"])
+    monkeypatch.setattr(
+        backfill_cmds, "_backfill_once", lambda c, ds: {"status": next(statuses), "rows_written": 1}
+    )
+    scopes = iter(
+        [
+            (["000004.SZ"], date(1991, 10, 1), date(1991, 10, 1)),
+            (["000003.SZ"], date(1991, 11, 1), date(1991, 11, 1)),
+            (["600652.SH"], date(1994, 4, 1), date(1994, 4, 1)),
+        ]
+    )
+    monkeypatch.setattr(lineage, "changed_bar_scope", lambda before, after: next(scopes))
+    synced, derived = [], []
+
+    def sync(c, affected, **kwargs):
+        synced.append(sorted(affected))
+        return {"synchronized": True}
+
+    def derive(c, start, end):
+        derived.append((start, end))
+        return {"status": "success"}
+
+    monkeypatch.setattr(backfill_cmds, "_sync_adj_factors", sync)
+    monkeypatch.setattr(backfill_cmds, "_derive_suspensions", derive)
+    out = backfill_cmds._repair_outstanding(cfg, "daily_bars", 1)
+
+    assert synced == [["000003.SZ", "000004.SZ", "600652.SH"]]
+    assert derived == [
+        (date(1991, 7, 3), date(1991, 11, 7)),  # 1991-10 and 1991-11 overlap: one window
+        (date(1994, 1, 1), date(1994, 4, 4)),
+    ]
+    assert out["passes"] == 3
+    assert out["followups"][0]["months"] == ["1991-10", "1991-11", "1994-04"]
+
+
+def test_suspension_windows_merge_only_when_they_overlap():
+    spans = [
+        (date(2020, 3, 1), date(2020, 3, 1), date(2020, 3, 31)),
+        (date(2020, 1, 1), date(2020, 1, 1), date(2020, 1, 31)),
+        (date(2024, 6, 1), date(2024, 7, 1), date(2024, 7, 15)),
+    ]
+    assert backfill_cmds._suspension_windows(spans, 90) == [
+        (date(2019, 10, 3), date(2020, 3, 31)),
+        (date(2024, 3, 3), date(2024, 7, 15)),
+    ]
