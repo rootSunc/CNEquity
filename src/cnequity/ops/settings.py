@@ -210,7 +210,19 @@ SETTINGS: tuple[Setting, ...] = (
         "bool",
         N_("Tushare"),
         N_(
-            "Off by default. Needs your own token; the token stays in the config file. When off, no Tushare request is sent, and its datasets are not listed as stale."
+            "Off by default. Needs your own token. A token entered here is kept in its own key file on this machine; the config file names only that file. When off, no Tushare request is sent."
+        ),
+        False,
+    ),
+    Setting(
+        "tushare_daily",
+        "licensed",
+        "sources.tushare",
+        "daily",
+        "bool",
+        N_("Tushare in the daily update"),
+        N_(
+            "Off by default: Tushare only backfills history. When on, the daily update also fetches Tushare datasets, but only while the key passes its check; the daily run checks it again first."
         ),
         False,
     ),
@@ -222,7 +234,7 @@ SETTINGS: tuple[Setting, ...] = (
         "bool",
         N_("THS official API"),
         N_(
-            "Off by default. A licensed API; the key stays in the config file. When off, no request is sent."
+            "Off by default. A licensed API. A key entered here is kept in its own key file on this machine; the config file names only that file. When off, no request is sent."
         ),
         False,
     ),

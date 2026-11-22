@@ -846,6 +846,9 @@ a.ops-cell:hover { outline: 1.5px solid var(--fg); outline-offset: 1px; }
 .ops-source-row > small { grid-column: 1; }
 .ops-source-status { display: contents; }
 .ops-source-state .button { margin-left: 8px; min-height: 0; padding: 2px 8px; font-size: var(--text-sm); }
+.ops-source-row .ops-key-editor:not([hidden]) { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ops-key-editor input { flex: 1 1 240px; min-width: 0; font-family: var(--mono, ui-monospace, monospace); }
+.data-refresh { font-size: var(--text-sm); }
 .ops-source-row small.ops-source-facts { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ops-source-state { grid-column: 2; grid-row: 1; display: inline-flex; align-items: center; color: var(--muted); font-size: var(--text-sm); white-space: nowrap; }
 .ops-drawer-backdrop { position: fixed; inset: 0; z-index: 40; background: rgb(0 0 0 / 24%); }

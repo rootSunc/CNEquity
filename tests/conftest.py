@@ -56,6 +56,9 @@ os.environ["CNE_LANG"] = "en"
 _USER_CONFIG_HOME = tempfile.mkdtemp(prefix="cne-test-config-")
 os.environ["XDG_CONFIG_HOME"] = _USER_CONFIG_HOME
 os.environ["APPDATA"] = _USER_CONFIG_HOME
+# The dashboard and the reference fingerprint keep caches in the user's cache
+# directory; tests must never read or write the developer's.
+os.environ["XDG_CACHE_HOME"] = tempfile.mkdtemp(prefix="cne-test-cache-")
 os.environ.pop("CNE_CONFIG", None)
 # Credentials in the developer's shell would outrank the config under test
 # (environment first, see `config.loader._credential`).
@@ -194,6 +197,7 @@ def _private_user_config_home(tmp_path_factory, monkeypatch):
     home = str(tmp_path_factory.mktemp("user-config"))
     monkeypatch.setenv("XDG_CONFIG_HOME", home)
     monkeypatch.setenv("APPDATA", home)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("user-cache")))
 
 
 @pytest.fixture(autouse=True)

@@ -38,12 +38,17 @@ def test_a_token_without_a_schedule_is_still_a_one_time_pull(config):
     assert not is_stale("chip_distribution", _OLD, _ANCHOR, config)
 
 
-def test_scheduling_the_step_makes_it_due(config):
+def test_scheduling_the_step_makes_it_due_once_the_key_passed(config):
+    from cnequity.storage.key_checks import save_check
+
     _token(config)
     config.schedule_groups = {
         "research": ScheduleGroup(at="18:00", steps=["limit_prices", "compact"])
     }
     assert daily_freshness_owed(config, "limit_prices")
+    # A key nobody has confirmed cannot be counted on to update anything.
+    assert freshness_state("limit_prices", _OLD, _ANCHOR, config) == "n/a"
+    save_check(config, "tushare", "ok", "", "2026-11-09T08:00:00+00:00")
     assert freshness_state("limit_prices", _OLD, _ANCHOR, config) == "stale"
     assert is_stale("limit_prices", _OLD, _ANCHOR, config)
 
@@ -80,9 +85,12 @@ def test_a_rejected_key_takes_a_scheduled_dataset_off_the_stale_list(config):
     assert daily_freshness_owed(config, "limit_prices"), "the registry rule alone"
     assert not freshness_owed(config, "limit_prices")
     assert freshness_state("limit_prices", _OLD, _ANCHOR, config) == "n/a"
-    # A new key has not been checked, so the old verdict does not stick to it.
+    # A new key has not been checked, so the old verdict does not stick to it;
+    # it is owed again once it passes.
     config.tushare_token = "another-token"
     assert last_check(config, "tushare") is None
+    assert not freshness_owed(config, "limit_prices")
+    save_check(config, "tushare", "limited", "", "2026-11-10T08:00:00+00:00")
     assert freshness_owed(config, "limit_prices")
 
 

@@ -49,6 +49,9 @@ _RANKS: dict[str, int] = {
     # raw-response archive. They import only root utilities, so adapters may
     # use them; ranked here, the test keeps them from growing lake knowledge.
     "cnequity.storage.atomic": 25,
+    # The last verdict on each paid source's key: a JSON beside the lake's
+    # metadata, read by the schedule policy; imports only config.
+    "cnequity.storage.key_checks": 25,
     # Outcome vocabulary (error types, reason codes) adapters raise and steps
     # report; no first-party imports. The run lock wraps file_lock only.
     "cnequity.orchestrator.outcomes": 25,

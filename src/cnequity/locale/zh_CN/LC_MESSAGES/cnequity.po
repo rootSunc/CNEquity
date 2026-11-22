@@ -1299,6 +1299,10 @@ msgstr "有日更正在运行（各调度组共用一把采集锁）。"
 msgid "A dashboard task is running; wait for it to finish before confirming the deletion."
 msgstr "面板有任务正在执行，请等它结束后再确认删除。"
 
+#: cnequity/serve/ops/routes.py
+msgid "A key can only be entered on this machine (localhost or 127.0.0.1)."
+msgstr "密钥只能在本机（localhost 或 127.0.0.1）填写。"
+
 #: cnequity/cli/consume_cmds.py
 msgid "A loopback address listens on both 127.0.0.1 and localhost. A non-loopback address requires --token."
 msgstr "回环地址会同时监听 127.0.0.1 和 localhost。非回环地址必须配 --token。"
@@ -3902,12 +3906,12 @@ msgid "Off"
 msgstr "关"
 
 #: cnequity/ops/settings.py
-msgid "Off by default. A licensed API; the key stays in the config file. When off, no request is sent."
-msgstr "默认关闭。需授权的接口，密钥仍留在配置文件里。关闭后不发请求。"
+msgid "Off by default. A licensed API. A key entered here is kept in its own key file on this machine; the config file names only that file. When off, no request is sent."
+msgstr "默认关闭。需授权的接口。在这里填写的密钥保存在本机单独的密钥文件里，配置文件只记录该文件路径。关闭后不发请求。"
 
 #: cnequity/ops/settings.py
-msgid "Off by default. Needs your own token; the token stays in the config file. When off, no Tushare request is sent, and its datasets are not listed as stale."
-msgstr "默认关闭。需要你自己的令牌，令牌仍留在配置文件里。关闭后不向 Tushare 发请求，它的数据集也不算落后。"
+msgid "Off by default. Needs your own token. A token entered here is kept in its own key file on this machine; the config file names only that file. When off, no Tushare request is sent."
+msgstr "默认关闭。需要你自己的令牌。在这里填写的令牌保存在本机单独的密钥文件里，配置文件只记录该文件路径。关闭后不向 Tushare 发请求。"
 
 #: cnequity/ops/settings.py
 msgid "Off by default. When on, the daily update fetches futures and options."
@@ -3920,6 +3924,10 @@ msgstr "默认关闭。打开后日更会抓取期货分钟线。"
 #: cnequity/ops/settings.py
 msgid "Off by default. When on, the daily update keeps fetching for the current scope."
 msgstr "默认关闭。打开后日更会按当前范围持续抓取。"
+
+#: cnequity/ops/settings.py
+msgid "Off by default: Tushare only backfills history. When on, the daily update also fetches Tushare datasets, but only while the key passes its check; the daily run checks it again first."
+msgstr "默认关闭：Tushare 只用于回填历史。开启后，日更也会抓取 Tushare 数据集，但仅在密钥检测通过时生效；日更开始前会先重新检测一次。"
 
 #: cnequity/cli/maintain_cmds.py
 msgid "Offer `logs/cne-*.log` older than this many days. Defaults to [logging].retention_days. 0 skips."
@@ -5675,7 +5683,7 @@ msgstr "通达信证券列表"
 msgid "THS d.10jqka (K-lines)"
 msgstr "同花顺 d.10jqka（K 线）"
 
-#: cnequity/ops/settings.py
+#: cnequity/config/keyed_sources.py cnequity/ops/settings.py
 msgid "THS official API"
 msgstr "同花顺官方接口"
 
@@ -5801,6 +5809,10 @@ msgstr "配置文件无法解析，请先修正 TOML。"
 msgid "The config file cannot be read right now, so a task would fail after starting. Fix the config file, then start it."
 msgstr "配置文件现在读不出来，任务启动后会失败。修好配置文件后再启动。"
 
+#: cnequity/ops/keys.py
+msgid "The config file cannot be read."
+msgstr "无法读取配置文件。"
+
 #: cnequity/diagnostics/report.py
 msgid "The config file gets copied, backed up and pasted into bug reports. An environment variable does not reach launchd/cron jobs, so a scheduled lake should read the credential from a file only you can read."
 msgstr "配置文件会被复制、备份，甚至贴进问题报告。环境变量到不了 launchd/cron 任务，所以定时运行的湖应从只有你能读的文件里读取凭证。"
@@ -5831,7 +5843,7 @@ msgstr "配置已经变了，请重新预览。"
 msgid "The config has no such entry."
 msgstr "配置里没有这一项。"
 
-#: cnequity/ops/settings.py
+#: cnequity/ops/keys.py cnequity/ops/settings.py
 msgid "The config is being changed; try again shortly."
 msgstr "配置正在被修改，请稍后重试。"
 
@@ -5980,6 +5992,10 @@ msgstr "指定的配置不存在：{path}"
 #: cnequity/diagnostics/source_health.py
 msgid "The industry directory page is not a directory (most likely a risk-control page)"
 msgstr "行业目录页返回的不是目录（多半是风控页）"
+
+#: cnequity/ops/keys.py
+msgid "The key must be 8–512 printable characters with no spaces."
+msgstr "密钥须为 8–512 个可见字符，不能含空格。"
 
 #: cnequity/diagnostics/source_health.py
 msgid "The kline response has no data field"
@@ -6163,7 +6179,7 @@ msgstr "写入后的配置和预览不一致。"
 msgid "The {name} circuit breaker already tripped today; related requests will fail until tomorrow."
 msgstr "{name} 熔断今天已经触发，相关请求会失败到明天。"
 
-#: cnequity/serve/app.py
+#: cnequity/serve/app.py cnequity/serve/ops/routes.py
 msgid "There is no config file to write."
 msgstr "没有可写入的配置文件。"
 
@@ -6346,13 +6362,26 @@ msgstr "把估值的零占位改为空值"
 msgid "Turn vendor zero placeholders into nulls, and convertible bond prices on sessions without a trade"
 msgstr "把供应商表示缺失的 0 改为空值，并把可转债无成交日的价格改为空值"
 
-#: cnequity/ops/settings.py
+#: cnequity/config/keyed_sources.py cnequity/ops/settings.py
 msgid "Tushare"
 msgstr "Tushare"
+
+#: cnequity/ops/settings.py
+msgid "Tushare in the daily update"
+msgstr "Tushare 进入日更"
 
 #: cnequity/diagnostics/report.py
 msgid "Tushare is enabled; its endpoint permissions are not probed yet"
 msgstr "Tushare 已启用，但还没有探测各接口权限"
+
+#: cnequity/cli/run_cmds.py
+msgid "Tushare is switched into the daily update, but its key did not pass the check; the tushare group is skipped."
+msgstr "已开启 Tushare 日更，但密钥未通过检测；本次跳过 tushare 分组。"
+
+#: cnequity/cli/run_cmds.py
+#, python-brace-format
+msgid "Tushare key check failed: {error}"
+msgstr "Tushare 密钥检测失败：{error}"
 
 #: cnequity/diagnostics/report.py
 #, python-format
@@ -6806,7 +6835,7 @@ msgstr "把 JSON 写到这个路径而不是标准输出；'-' 表示打印。"
 msgid "Writes to the current config after backing up the original file. Does not start fetching."
 msgstr "将写入当前配置，并先备份原文件。这次不会启动取数。"
 
-#: cnequity/ops/settings.py
+#: cnequity/ops/keys.py cnequity/ops/settings.py
 msgid "Writing the config failed; the original file was restored."
 msgstr "写入配置失败，已恢复原文件。"
 

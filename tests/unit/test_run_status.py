@@ -49,6 +49,8 @@ def test_the_manifest_rewrites_old_words_and_keeps_the_reason(tmp_path):
             (weekend,),
         )
         conn.execute("UPDATE ingestion_batches SET status = 'warning' WHERE run_id = ?", (old,))
+        # An older release never stamped a schema version.
+        conn.execute("PRAGMA user_version = 0")
     reopened = Manifest(tmp_path / "manifest.db")
     assert reopened.get_run(old)["status"] == "degraded"
     run = reopened.get_run(weekend)

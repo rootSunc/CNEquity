@@ -280,6 +280,7 @@ def serve(
                 allow_remote_ops=allow_remote_ops,
                 setup=setup,
                 config_path=config_file,
+                watch=True,
             ),
             host,
             port,

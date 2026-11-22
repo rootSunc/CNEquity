@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cnequity.config import Config
-from cnequity.i18n import _, normalize_language, use_language
+from cnequity.i18n import _, current_language, normalize_language, use_language
 from cnequity.serve.guard import LOOPBACK_HOSTS, client_host
 from cnequity.serve.lake import RUN_STATUSES, LakeView
 
@@ -219,6 +219,9 @@ class ResampleBacklog(BaseModel):
 
 
 class DatasetDetail(Dataset):
+    anchor: date | None = Field(
+        default=None, description="The last trading day freshness is judged against."
+    )
     partition_col: str | None
     max_staleness_days: int
     backfill_chunk_days: int | None
@@ -457,6 +460,65 @@ class Heatmap(BaseModel):
     rows: list[HeatmapRow]
 
 
+# Answers that depend only on the lake's version (see `lake_version`): the
+# browser may keep them and ask again with If-None-Match.
+_VERSIONED_PATHS = (
+    "/api/health",
+    "/api/tiers",
+    "/api/datasets",
+    "/api/heatmap",
+    "/api/coverage/recent",
+)
+
+
+def _new_view(config: Config, watch: bool) -> LakeView:
+    view = LakeView(config, persist=watch)
+    if watch:
+        view.start_watcher()
+    return view
+
+
+async def _versioned(request: Request, call_next):
+    """Answer 304 when the lake has not moved since the browser's copy.
+
+    A summary answered from an older build (the lake moved and the rebuild is
+    still running) carries ``X-CNE-Refreshing`` and no ETag, so the page knows
+    to ask again shortly and never keeps it as current.
+    """
+    import hashlib
+
+    from starlette.concurrency import run_in_threadpool
+    from starlette.responses import Response
+
+    from cnequity.serve.lake import STALE_KEYS
+
+    version = await run_in_threadpool(request.app.state.view.version)
+    digest = hashlib.sha1(
+        repr((version, current_language(), request.url.query)).encode()
+    ).hexdigest()[:20]
+    tag = f'W/"{digest}"'
+    if tag in request.headers.get("if-none-match", ""):
+        return Response(
+            status_code=304,
+            headers={"ETag": tag, "Cache-Control": "no-cache", "Vary": "X-CNE-Lang"},
+        )
+    stale: list = []
+    token = STALE_KEYS.set(stale)
+    try:
+        response = await call_next(request)
+    finally:
+        STALE_KEYS.reset(token)
+    # The answer is in the language the page asked for.
+    response.headers["Vary"] = "X-CNE-Lang"
+    if stale:
+        response.headers["X-CNE-Refreshing"] = "1"
+        response.headers["Cache-Control"] = "no-store"
+    elif response.status_code == 200:
+        response.headers["ETag"] = tag
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 def get_view(request: Request) -> LakeView:
     view = request.app.state.view
     if view is None:
@@ -472,9 +534,14 @@ def activate_lake(app: FastAPI, config: Config) -> None:
     """
     from cnequity.serve.storage import StorageMaintenance
 
-    view = LakeView(config)
+    previous = getattr(app.state, "view", None)
+    if previous is not None:
+        previous.stop_watcher()
+    view = _new_view(config, getattr(app.state, "watch", False))
     maintenance = StorageMaintenance(config, invalidate=view.invalidate, csrf=app.state.csrf)
     view.maintenance_gate = maintenance.gate
+    if getattr(app.state, "watch", False):
+        maintenance.warm()
     app.state.config = config
     app.state.view = view
     app.state.storage_maintenance = maintenance
@@ -502,7 +569,7 @@ def reload_lake_config(app: FastAPI) -> Config:
     if app.state.view is not None:
         app.state.view.config = config
         # A source switch changes which datasets count as stale.
-        app.state.view.invalidate()
+        app.state.view.mark_changed()
     if app.state.storage_maintenance is not None:
         app.state.storage_maintenance.config = config
     if config.config_path is not None:
@@ -543,6 +610,7 @@ def create_app(
     allow_remote_ops: bool = False,
     setup: bool = False,
     config_path: Path | None = None,
+    watch: bool = False,
 ) -> FastAPI:
     """Build the dashboard app for *config*.
 
@@ -554,6 +622,10 @@ def create_app(
     does not exist yet. ``read_only`` registers none of the write routes.
     Remote ingestion stays off unless ``allow_remote_ops`` is set; storage
     cleanup keeps its existing token rule.
+
+    ``watch`` (what ``cne serve`` passes) keeps the lake summaries built in a
+    background thread, and on disk across restarts, so pages answer from
+    memory instead of walking the lake while the reader waits.
     """
     if config is not None:
         setup = False
@@ -574,7 +646,8 @@ def create_app(
     app.state.setup = setup
     app.state.csrf = secrets.token_urlsafe(32)
     app.state.config = None if setup else config
-    app.state.view = None if setup or config is None else LakeView(config)
+    app.state.watch = watch
+    app.state.view = None if setup or config is None else _new_view(config, watch)
     if config is not None and config.config_path is not None:
         app.state.config_path = Path(config.config_path).resolve()
     elif config_path is not None:
@@ -594,6 +667,8 @@ def create_app(
         )
         app.state.storage_maintenance = maintenance
         app.state.view.maintenance_gate = maintenance.gate
+        if watch:
+            maintenance.warm()
     install_storage_routes(app, mutations=not read_only)
     app.state.ops = OpsService(
         None if setup else config,
@@ -666,6 +741,8 @@ def create_app(
                 status_code=503,
             )
         try:
+            if request.method == "GET" and path.startswith(_VERSIONED_PATHS):
+                return await _versioned(request, call_next)
             return await call_next(request)
         finally:
             maintenance.gate.leave()

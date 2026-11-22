@@ -22,6 +22,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -140,6 +141,29 @@ def _enable_wal(path: Path) -> None:
         con.close()
     if str(mode).lower() != "wal":
         raise CatalogError(f"could not switch {path} to WAL journal mode (got {mode})")
+
+
+#: Read-only catalogs whose latest snapshot is held for the current block; see
+#: :func:`pinned_snapshots`.
+_PINNED: ContextVar[dict | None] = ContextVar("equitylake_pinned_snapshots", default=None)
+
+
+@contextmanager
+def pinned_snapshots() -> Iterator[None]:
+    """Answer :meth:`Catalog.snapshot` once per read-only catalog inside this block.
+
+    A summary that walks every table asks for the latest snapshot hundreds of
+    times, each a query on the catalog database, only to confirm nothing moved.
+    Inside this block the first answer stands, so the whole walk also reads one
+    consistent snapshot. Writers are never pinned. Nested blocks share the
+    outer one.
+    """
+    token = _PINNED.set({}) if _PINNED.get() is None else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            _PINNED.reset(token)
 
 
 class Catalog:
@@ -280,10 +304,16 @@ class Catalog:
         return self.con.sql(query, params=parameters) if parameters else self.con.sql(query)
 
     def snapshot(self) -> int:
-        """The number of the latest committed snapshot."""
-        return self.con.execute(
+        """The number of the latest committed snapshot (held inside :func:`pinned_snapshots`)."""
+        pinned = _PINNED.get() if self.read_only else None
+        if pinned is not None and self in pinned:
+            return pinned[self]
+        value = self.con.execute(
             f"SELECT max(snapshot_id) FROM ducklake_snapshots({quote_literal(ALIAS)})"
         ).fetchone()[0]
+        if pinned is not None:
+            pinned[self] = value
+        return value
 
     @contextmanager
     def pin_snapshot(self, snapshot: int | None = None) -> Iterator[int]:

@@ -266,6 +266,33 @@ def _retry_owed_bars(cfg, trade_date: date) -> dict:
     return result
 
 
+def _recheck_daily_keys(cfg, names: list[str]) -> None:
+    """Confirm Tushare's key before its opt-in group runs, at most twice a day.
+
+    The group joins the day only while the key passes (see
+    ``cadence.group_is_runnable``); a verdict from last week says nothing
+    about a relay key that lapsed yesterday.
+    """
+    from cnequity.config.keyed_sources import TUSHARE_DAILY_GROUP
+
+    if not getattr(cfg, "tushare_daily", False) or TUSHARE_DAILY_GROUP not in names:
+        return
+    from cnequity.ops.keys import ensure_recent_check
+
+    try:
+        record = ensure_recent_check(cfg, "tushare")
+    except Exception as exc:  # noqa: BLE001 - the group is then skipped, never the day
+        click.echo(_("Tushare key check failed: {error}").format(error=exc), err=True)
+        return
+    if record is None or record.get("state") not in ("ok", "limited"):
+        click.echo(
+            _(
+                "Tushare is switched into the daily update, but its key did not pass the check; the tushare group is skipped."
+            ),
+            err=True,
+        )
+
+
 def _group_is_runnable(cfg, group) -> bool:
     """False when every dataset the group would fetch is disabled.
 
@@ -355,6 +382,7 @@ def _run_all_groups(
         if not selected:
             emit_json({"groups": [], "repairs": repairs}, indent=2)
             return
+    _recheck_daily_keys(cfg, [name for name, _group in selected])
     for name, group in selected:
         if not _group_is_runnable(cfg, group):
             click.echo(

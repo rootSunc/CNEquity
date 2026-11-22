@@ -45,7 +45,20 @@ def group_is_runnable(config: Any, group: ScheduleGroup) -> bool:
     from cnequity.domain.datasets import DATASETS, is_dataset_enabled
 
     datasets = [step for step in group.steps if step in DATASETS]
-    return not datasets or any(is_dataset_enabled(name, config) for name in datasets)
+    return not datasets or any(
+        is_dataset_enabled(name, config) and _keyed_ready(config, name) for name in datasets
+    )
+
+
+def _keyed_ready(config: Any, dataset: str) -> bool:
+    """A Tushare dataset joins a daily group only while its key passed the last check."""
+    from cnequity.domain.datasets import keyed_source_ready, tushare_backfill_dataset
+
+    if config is None or not tushare_backfill_dataset(dataset):
+        return True
+    from cnequity.storage.key_checks import key_usable
+
+    return keyed_source_ready("tushare", config) and key_usable(config, "tushare")
 
 
 def scheduled_group_names(config: Any) -> list[str]:

@@ -76,6 +76,93 @@ class StorageMaintenance:
         self.busy = False
         self.invalidate = invalidate
         self.last_summary: dict | None = None
+        # (key, summary) of the last full inventory; see `summary`.
+        self._kept: tuple[tuple, dict] | None = None
+        self._rebuilding = False
+
+    def _summary_key(self) -> tuple:
+        """What the inventory depends on: the lake, the revision tree and the lifecycle records."""
+        from cnequity.storage.lake_version import lake_version
+
+        def _mtime(path) -> int | None:
+            try:
+                return path.stat().st_mtime_ns
+            except OSError:
+                return None
+
+        meta = self.config.meta_root
+        return (
+            lake_version(self.config),
+            _mtime(meta / "revisions"),
+            _mtime(meta / "revisions" / "data"),
+            _mtime(meta / "lifecycle"),
+            revision_keep(self.config),
+        )
+
+    def _live(self, result: dict) -> dict:
+        """A kept inventory with the parts that move by the second read now."""
+        out = copy.deepcopy(result)
+        root = self.config.data_root
+        while not root.exists() and root != root.parent:
+            root = root.parent
+        usage = shutil.disk_usage(root)
+        with self.lock:
+            out["active_jobs"] = [
+                self._public(j)
+                for j in self.jobs.values()
+                if j["status"] in {"checking", "executing"}
+            ]
+        out["disk_free_bytes"] = usage.free
+        out["disk_total_bytes"] = usage.total
+        out["csrf_token"] = self.csrf
+        return out
+
+    def _rebuild_later(self, key: tuple) -> None:
+        with self.lock:
+            if self._rebuilding:
+                return
+            self._rebuilding = True
+
+        def run() -> None:
+            try:
+                if not self.gate.enter():
+                    return
+                try:
+                    result = self._summary()
+                finally:
+                    self.gate.leave()
+                with self.lock:
+                    self._kept = (key, result)
+                    self.last_summary = copy.deepcopy(result)
+            except Exception:  # noqa: BLE001 - the next page view tries again in the foreground
+                import logging
+
+                logging.getLogger(__name__).exception("storage inventory rebuild failed")
+                with self.lock:
+                    self._kept = None
+            finally:
+                with self.lock:
+                    self._rebuilding = False
+
+        threading.Thread(target=carry_language(run), name="storage-inventory", daemon=True).start()
+
+    def warm(self) -> None:
+        """Build the inventory in the background, so the first visit does not wait for it."""
+        self._rebuild_later(self._summary_key())
+
+    def refresh_references(self) -> dict:
+        """Re-read the reference roots and hold what they cite now (adds holds, never releases)."""
+        if not self.gate.enter():
+            raise LifecycleError(
+                _("Maintenance is running; follow its progress in the operation records.")
+            )
+        try:
+            self.store.refresh_references()
+        finally:
+            self.gate.leave()
+        with self.lock:
+            self._kept = None
+        return self.summary()
 
     def summary(self) -> dict:
         # A page reload during deletion must show progress without scanning a
@@ -95,10 +182,22 @@ class StorageMaintenance:
                     "inventory_paused": True,
                 }
         try:
+            # The inventory walks every retained generation and costs tens of
+            # seconds on a full lake. Keep it until what it reads moves; then
+            # answer the kept one, marked, while a fresh one is built.
+            key = self._summary_key()
+            with self.lock:
+                kept = self._kept
+            if kept is not None and kept[0] == key:
+                return self._live(kept[1])
+            if kept is not None:
+                self._rebuild_later(key)
+                return self._live(kept[1]) | {"refreshing": True}
             result = self._summary()
             with self.lock:
+                self._kept = (key, result)
                 self.last_summary = copy.deepcopy(result)
-            return result
+            return self._live(result)
         finally:
             self.gate.leave()
 
@@ -106,8 +205,36 @@ class StorageMaintenance:
         now = datetime.now(timezone.utc)
         keep = revision_keep(self.config)
         automatic = keep > 0
-        report = self.store.inspect(keep=keep)
         registry = self.store.registry()
+        events = [
+            {
+                "kind": "staging" if p.parent.name == "staging-purges" else "revisions",
+                "plan_id": p.stem,
+            }
+            for p in unfinished(self.store)
+        ]
+        if registry is not None:
+            from cnequity.storage.lifecycle import reference_fingerprint
+
+            if (
+                reference_fingerprint(registry["reference_roots"], meta_root=self.store.meta)
+                != registry["reference_fingerprint"]
+            ):
+                # Nothing can be planned until the holds match the references
+                # again; say so, with the one action that fixes it, instead of
+                # failing the page after a full inventory.
+                return {
+                    "mode": "web_confirmation_only",
+                    "registered": True,
+                    "references_changed": True,
+                    "objects": [],
+                    "unfinished": events,
+                    "active_jobs": [],
+                    "keep": keep,
+                    "automatic_retention": automatic,
+                    "generated_at": now.isoformat(),
+                }
+        report = self.store.inspect(keep=keep)
         objects = []
         for obj in report["objects"]:
             # Unprotected history is deleted by the next backfill or daily run
@@ -129,32 +256,13 @@ class StorageMaintenance:
                 }
             )
         objects.extend(StagingRetirement(self.config).inspect())
-        events = [
-            {
-                "kind": "staging" if p.parent.name == "staging-purges" else "revisions",
-                "plan_id": p.stem,
-            }
-            for p in unfinished(self.store)
-        ]
-        root = self.config.data_root
-        while not root.exists() and root != root.parent:
-            root = root.parent
-        usage = shutil.disk_usage(root)
-        with self.lock:
-            active = [
-                self._public(j)
-                for j in self.jobs.values()
-                if j["status"] in {"checking", "executing"}
-            ]
         return {
             "mode": "web_confirmation_only",
             "registered": registry is not None,
-            "csrf_token": self.csrf,
+            "references_changed": False,
             "objects": objects,
             "unfinished": events,
-            "active_jobs": active,
-            "disk_free_bytes": usage.free,
-            "disk_total_bytes": usage.total,
+            "active_jobs": [],
             "keep": keep,
             "automatic_retention": automatic,
             "generated_at": now.isoformat(),
@@ -211,6 +319,7 @@ class StorageMaintenance:
                 with self.lock:
                     try:
                         if state["status"] == "executing":
+                            self._kept = None
                             self.invalidate()
                     finally:
                         self.gate.reopen()

@@ -12,10 +12,11 @@ import hashlib
 import json
 from pathlib import Path
 
+from cnequity.config.keyed_sources import KEYED_SOURCES
 from cnequity.file_replace import replace_with_retry
 
 # The credential attribute on ``Config`` for each paid source.
-KEY_ATTRS = {"tushare": "tushare_token", "ths_official": "ths_official_api_key"}
+KEY_ATTRS = {keyed.id: keyed.attr for keyed in KEYED_SOURCES.values()}
 # ok: accepted. limited: the key is valid but the probe endpoint is outside its
 # plan. rejected: the provider refused the key. error: no verdict (network,
 # rate limit, unexpected reply).
@@ -76,7 +77,7 @@ def save_check(config, source: str, state: str, message: str, checked_at: str) -
     return {"state": state, "message": message, "checked_at": checked_at}
 
 
-def key_rejected(config, source: str) -> bool:
-    """Whether the last check of the configured key was refused by the provider."""
+def key_usable(config, source: str) -> bool:
+    """Whether the configured key passed its last check (accepted, or valid on a narrower plan)."""
     record = last_check(config, source)
-    return bool(record and record["state"] == "rejected")
+    return bool(record and record["state"] in ("ok", "limited"))

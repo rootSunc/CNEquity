@@ -59,6 +59,8 @@ def close(config) -> None:
     """Close the cached connection to *config*'s lake, so the next read sees it as it is now."""
     root = lake_root(config).resolve()
     with _lock:
+        _tables.clear()
+        _schemas.clear()
         cached = _open.pop(root, None)
         if cached is not None:
             cached[1].close()
@@ -66,6 +68,8 @@ def close(config) -> None:
 
 def close_all() -> None:
     with _lock:
+        _tables.clear()
+        _schemas.clear()
         for _, catalog in _open.values():
             catalog.close()
         _open.clear()
@@ -158,6 +162,32 @@ class PublishedTable(NamedTuple):
     unique_keys: bool
 
 
+_MEMO_LIMIT = 2048
+# (open catalog, snapshot, dataset, revision) -> PublishedTable or None; only
+# the latest snapshot's answers are kept. Keyed on the connection, not the
+# path: two copies of a catalog at one path can share a snapshot number.
+_tables: dict[tuple[Catalog, int, str, str], PublishedTable | None] = {}
+_schemas: dict[tuple[Catalog, int, str, str], pl.Schema] = {}
+# (files, column, label SQL) -> partition labels. Data files never change once
+# written, so the same files always hold the same labels.
+_labels: dict[tuple[tuple[str, ...], str, str], list[str]] = {}
+
+
+def _published_table(catalog, dataset: str, revision_id: str) -> PublishedTable | None:
+    resolved = _resolve_revision(catalog, dataset, revision_id)
+    if resolved is None:
+        return None
+    snapshot, unique = resolved
+    files = catalog.data_files(dataset, snapshot)
+    if not files:
+        return None
+    described = catalog.execute(
+        f"DESCRIBE SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)}"
+    ).fetchall()
+    columns = {row[0]: row[1] for row in described}
+    return PublishedTable(files, columns, unique)
+
+
 def published_table(config, dataset: str, revision_id: str) -> PublishedTable | None:
     """The catalog's data files for exactly that revision of *dataset*.
 
@@ -169,18 +199,16 @@ def published_table(config, dataset: str, revision_id: str) -> PublishedTable | 
             catalog = _catalog(config)
             if catalog is None:
                 return None
-            resolved = _resolve_revision(catalog, dataset, revision_id)
-            if resolved is None:
-                return None
-            snapshot, unique = resolved
-            files = catalog.data_files(dataset, snapshot)
-            if not files:
-                return None
-            described = catalog.execute(
-                f"DESCRIBE SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)}"
-            ).fetchall()
-            columns = {row[0]: row[1] for row in described}
-            return PublishedTable(files, columns, unique)
+            # Determined by the catalog's snapshot and the revision: a summary
+            # asks the same question several times per dataset per page.
+            key = (catalog, catalog.snapshot(), dataset, revision_id)
+            if key in _tables:
+                return _tables[key]
+            table = _published_table(catalog, dataset, revision_id)
+            if len(_tables) >= _MEMO_LIMIT or any(k[:2] != key[:2] for k in _tables):
+                _tables.clear()
+            _tables[key] = table
+            return table
     except Exception as exc:  # noqa: BLE001 - the generation is always a correct answer
         logger.warning("catalog files of %s unavailable, reading the generation: %s", dataset, exc)
         return None
@@ -194,11 +222,17 @@ def published_files(config, dataset: str, revision_id: str) -> tuple[list[str], 
     try:
         with _lock:
             catalog = _catalog(config)
-            snapshot, _ = _resolve_revision(catalog, dataset, revision_id) or (None, False)
-            relation = catalog.relation(
-                f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)} LIMIT 0"
-            )
-            schema = relation.pl().schema
+            key = (catalog, catalog.snapshot(), dataset, revision_id)
+            schema = _schemas.get(key)
+            if schema is None:
+                snapshot, _ = _resolve_revision(catalog, dataset, revision_id) or (None, False)
+                relation = catalog.relation(
+                    f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)} LIMIT 0"
+                )
+                schema = relation.pl().schema
+                if len(_schemas) >= _MEMO_LIMIT or any(k[:2] != key[:2] for k in _schemas):
+                    _schemas.clear()
+                _schemas[key] = schema
     except Exception as exc:  # noqa: BLE001
         logger.warning("catalog schema of %s unavailable, scanning instead: %s", dataset, exc)
         return None
@@ -282,6 +316,11 @@ def catalog_partition_values(
             return None
     else:
         label = f"CAST({name} AS VARCHAR)"
+    memo = (tuple(table.files), column, label)
+    with _lock:
+        hit = _labels.get(memo)
+    if hit is not None:
+        return list(hit)
     import duckdb
 
     con = duckdb.connect()
@@ -293,4 +332,9 @@ def catalog_partition_values(
         ).fetchall()
     finally:
         con.close()
-    return sorted(str(row[0]) for row in rows if row[0] is not None)
+    labels = sorted(str(row[0]) for row in rows if row[0] is not None)
+    with _lock:
+        if len(_labels) >= _MEMO_LIMIT:
+            _labels.clear()
+        _labels[memo] = labels
+    return list(labels)

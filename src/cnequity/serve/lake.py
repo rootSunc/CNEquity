@@ -19,13 +19,18 @@ Two things this deliberately does *not* do:
 
 from __future__ import annotations
 
+import contextvars
+import hashlib
 import json
 import logging
+import os
+import pickle
 import threading
 import time
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -39,10 +44,12 @@ from cnequity.domain.datasets import (
 )
 from cnequity.domain.market_time import shanghai_today
 from cnequity.domain.partitions import parse_partition
+from cnequity.file_replace import replace_with_retry
 from cnequity.i18n import _, current_language
 from cnequity.orchestrator.run_window import current_anchor
 from cnequity.quality.freshness import dataset_freshness
 from cnequity.sqlite_readonly import connect_readonly
+from cnequity.storage.lake_version import lake_version
 from cnequity.storage.stats import (
     load_partition_stats,
     load_provenance_stats,
@@ -52,9 +59,38 @@ from cnequity.storage.stats import (
 
 logger = logging.getLogger(__name__)
 
-# The catalog walks partition directories. Cheap, but the overview page fans out
-# to several endpoints at once and they would each redo it.
-_CACHE_TTL_SECONDS = 30.0
+# Summaries are kept until the lake moves (see `lake_version`), not for a fixed
+# time: building the dataset catalog walks every table and costs tens of
+# seconds on a full lake, while the lake changes only when a run publishes.
+# How long one `lake_version` answer is reused: a page fans out to several
+# endpoints at once, and each would otherwise reopen the catalog database.
+_VERSION_REUSE_SECONDS = 1.0
+# A background rebuild of one summary starts at most this often while the lake
+# keeps moving (a running backfill publishes every few seconds).
+_REBUILD_MIN_INTERVAL = 30.0
+# How often the warm-up thread looks at the lake.
+_WATCH_INTERVAL_SECONDS = 5.0
+# Bump when a persisted summary's shape changes, so an old file is ignored.
+_DISK_FORMAT = 1
+# Summaries kept on disk so a restarted server answers from its last build.
+_PERSISTED_KEYS = ("dataset-rows-raw", "bar-coverage")
+
+# Per thread. ``force``: set in the warm-up and background rebuilds, where an
+# out-of-date input is rebuilt rather than reused, since nobody is waiting.
+# ``tainted``: a build in this thread used an out-of-date input, so its own
+# result must not be taken as current.
+_building = threading.local()
+# Keys served stale in the current request; the app turns it into a header.
+STALE_KEYS: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "cne_serve_stale_keys", default=None
+)
+
+
+def _disk_cache_path(config: Config) -> Path:
+    """Where this lake's last summaries are kept: the user's cache, never the lake."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    digest = hashlib.sha256(str(Path(config.data_root).resolve()).encode()).hexdigest()[:16]
+    return Path(base).expanduser() / "cnequity" / "serve" / f"{digest}.pkl"
 
 
 # Heatmap cell alphabet. One char per (dataset, day) keeps a 40x250 grid a few
@@ -68,6 +104,7 @@ CELL_UNPARTITIONED = "-"
 @dataclass
 class _Cached:
     value: Any
+    version: tuple
     at: float
 
 
@@ -166,33 +203,70 @@ def _next_period_start(day: date, granularity: str) -> date:
 class LakeView:
     """Answers the dashboard's questions about one lake. Thread-safe."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, *, persist: bool = False):
         self.config = config
         self._lock = threading.Lock()
         self._cache: dict[str, _Cached] = {}
         self._inflight: dict[str, threading.Event] = {}
+        self._background: set[str] = set()
         self._cache_generation = 0
+        self._version: tuple | None = None
+        self._version_at = 0.0
         self._session_days_cache: dict[str, tuple[object, frozenset[date]]] = {}
         self._refresh_lock = threading.Lock()
         self._refreshing = False
+        self._watcher: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._persist = persist
         self.maintenance_gate = None
+        if persist:
+            self._load_disk_cache()
 
     # --- caching -----------------------------------------------------------
 
-    def _cached(self, key: str, build):
-        # Cached payloads carry display text, so one per language.
-        key = f"{key}@{current_language()}"
+    def version(self) -> tuple:
+        """:func:`lake_version` plus this view's own generation, reused for a second."""
         now = time.monotonic()
         with self._lock:
+            if self._version is not None and now - self._version_at < _VERSION_REUSE_SECONDS:
+                return self._version
+            generation = self._cache_generation
+        version = (*lake_version(self.config), generation)
+        with self._lock:
+            if generation == self._cache_generation:
+                self._version, self._version_at = version, time.monotonic()
+        return version
+
+    def _cached(self, key: str, build, *, localized: bool = True):
+        """The summary *key* for the lake as it is now.
+
+        Built once per lake version. When the lake has moved since the last
+        build, the last value is answered at once and a rebuild runs in the
+        background (stale-while-revalidate): a page never waits tens of
+        seconds because a run published a row. Only a summary never built
+        before is built while the request waits.
+        """
+        if localized:
+            # Cached payloads carry display text, so one per language.
+            key = f"{key}@{current_language()}"
+        version = self.version()
+        force = getattr(_building, "force", False)
+        with self._lock:
             hit = self._cache.get(key)
-            if hit is not None and now - hit.at < _CACHE_TTL_SECONDS:
+            if hit is not None and hit.version == version:
+                return hit.value
+            if hit is not None and not force:
+                self._rebuild_later(key, build, hit)
+                stale = STALE_KEYS.get()
+                if stale is not None:
+                    stale.append(key)
+                _building.tainted = True
                 return hit.value
             event = self._inflight.get(key)
             if event is None:
                 event = threading.Event()
                 self._inflight[key] = event
                 leader = True
-                generation = self._cache_generation
             else:
                 leader = False
         if not leader:
@@ -202,27 +276,175 @@ class LakeView:
             event.wait()
             with self._lock:
                 hit = self._cache.get(key)
-            if hit is not None and time.monotonic() - hit.at < _CACHE_TTL_SECONDS:
+            if hit is not None:
                 return hit.value
-            return self._cached(key, build)
+            return self._cached(key, build, localized=False)
+        return self._build(key, build, version, event)
+
+    def _build(self, key: str, build, version: tuple, event: threading.Event):
+        from equitylake_core.catalog import pinned_snapshots
+
+        outer_tainted = getattr(_building, "tainted", False)
+        _building.tainted = False
         try:
-            value = build()
+            with pinned_snapshots():
+                value = build()
         except BaseException:
             with self._lock:
                 self._inflight.pop(key, None)
             event.set()
+            _building.tainted = outer_tainted
             raise
+        tainted = _building.tainted
+        _building.tainted = outer_tainted or tainted
         with self._lock:
-            if generation == self._cache_generation:
-                self._cache[key] = _Cached(value, time.monotonic())
+            # A build that raced an invalidate() is not kept; one that raced
+            # the lake moving is kept with the version it started from, and
+            # the next request refreshes it in the background. One made from
+            # an out-of-date input is kept as out of date for the same reason.
+            if version[-1] == self._cache_generation:
+                kept = ("stale", *version) if tainted else version
+                self._cache[key] = _Cached(value, kept, 0.0 if tainted else time.monotonic())
             self._inflight.pop(key, None)
         event.set()
+        if self._persist and key.split("@", 1)[0] in _PERSISTED_KEYS:
+            self._save_disk_cache()
         return value
 
+    def _rebuild_later(self, key: str, build, hit: _Cached) -> None:
+        """Start one background rebuild of *key*; called with ``self._lock`` held."""
+        if key in self._inflight or key in self._background:
+            return
+        if time.monotonic() - hit.at < _REBUILD_MIN_INTERVAL and hit.at > 0:
+            return
+        self._background.add(key)
+        context = contextvars.copy_context()  # keeps the request's language
+
+        def _run() -> None:
+            _building.force = True
+            try:
+                with self._lock:
+                    if key in self._inflight:
+                        return
+                    event = threading.Event()
+                    self._inflight[key] = event
+                self._build(key, build, self.version(), event)
+            except Exception:
+                logger.exception("background rebuild of %s failed", key)
+            finally:
+                with self._lock:
+                    self._background.discard(key)
+
+        threading.Thread(target=context.run, args=(_run,), name=f"serve-{key}", daemon=True).start()
+
+    def summary(self, key: str, build):
+        """Any other per-language payload that depends only on the lake, cached like the rest."""
+        return self._cached(f"extra:{key}", build)
+
     def invalidate(self) -> None:
+        """Forget every summary: the next request builds it again while waiting."""
         with self._lock:
             self._cache_generation += 1
+            self._version = None
             self._cache.clear()
+
+    def mark_changed(self) -> None:
+        """The lake or the config moved: keep answering the old summaries, rebuild them."""
+        with self._lock:
+            self._cache_generation += 1
+            self._version = None
+            for entry in self._cache.values():
+                entry.at = 0.0
+
+    # --- warm-up -----------------------------------------------------------
+
+    def warm(self) -> None:
+        """Build the summaries every page opens with, for the lake as it is now."""
+        from cnequity.i18n import use_language
+
+        # Built here, in this thread, even when an older answer exists: the
+        # point is that no request finds the summary out of date.
+        _building.force = True
+        try:
+            for language in ("zh_CN", "en"):
+                with use_language(language):
+                    for build in (
+                        self.health,
+                        self.recent_bar_coverage,
+                        lambda: self.heatmap(days=90),
+                    ):
+                        build()
+        except Exception:
+            logger.exception("warming the dashboard failed")
+        finally:
+            _building.force = False
+
+    def start_watcher(self) -> None:
+        """Keep the summaries current in the background while the server runs."""
+        if self._watcher is not None:
+            return
+
+        def _loop() -> None:
+            seen = None
+            warmed_at = float("-inf")
+            while not self._stop.is_set():
+                try:
+                    version = self.version()
+                    # A running backfill publishes every few seconds; rebuilding
+                    # after each publish would keep a core busy for nothing.
+                    due = time.monotonic() - warmed_at >= _REBUILD_MIN_INTERVAL
+                    if version != seen and due:
+                        self.refresh_stats_in_background()
+                        self.warm()
+                        seen, warmed_at = version, time.monotonic()
+                except Exception:
+                    logger.exception("dashboard watcher failed")
+                self._stop.wait(_WATCH_INTERVAL_SECONDS)
+
+        self._watcher = threading.Thread(target=_loop, name="serve-watcher", daemon=True)
+        self._watcher.start()
+
+    def stop_watcher(self) -> None:
+        self._stop.set()
+
+    def _load_disk_cache(self) -> None:
+        path = _disk_cache_path(self.config)
+        try:
+            with open(path, "rb") as handle:
+                stored = pickle.load(handle)
+        except (OSError, EOFError, pickle.UnpicklingError, AttributeError, ImportError):
+            return
+        if not isinstance(stored, dict) or stored.get("format") != _DISK_FORMAT:
+            return
+        if stored.get("data_root") != str(self.config.data_root):
+            return
+        for key, (value, version) in (stored.get("entries") or {}).items():
+            # Loaded as old: answered at once, rebuilt in the background.
+            self._cache[key] = _Cached(value, (*version[:-1], -1), 0.0)
+
+    def _save_disk_cache(self) -> None:
+        with self._lock:
+            entries = {
+                key: (entry.value, entry.version)
+                for key, entry in self._cache.items()
+                if key.split("@", 1)[0] in _PERSISTED_KEYS
+            }
+        path = _disk_cache_path(self.config)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            with open(tmp, "wb") as handle:
+                pickle.dump(
+                    {
+                        "format": _DISK_FORMAT,
+                        "data_root": str(self.config.data_root),
+                        "entries": entries,
+                    },
+                    handle,
+                )
+            replace_with_retry(tmp, path, sync_dir=False)
+        except OSError:
+            logger.debug("could not keep the dashboard summaries on disk", exc_info=True)
 
     # --- background stats refresh -----------------------------------------
 
@@ -257,7 +479,7 @@ class LakeView:
                         len(result.datasets),
                         result.rows,
                     )
-                    self.invalidate()
+                    self.mark_changed()
             except Exception:
                 logger.exception("background stats refresh failed")
             finally:
@@ -283,7 +505,7 @@ class LakeView:
 
     def anchor(self) -> date:
         """Last trading day, the date freshness is judged against (``current_anchor``)."""
-        return self._cached("anchor", lambda: current_anchor(self.config))
+        return self._cached("anchor", lambda: current_anchor(self.config), localized=False)
 
     def recent_bar_coverage(self) -> dict:
         """Summarize the same recent coverage window that drives bar catch-up."""
@@ -326,7 +548,7 @@ class LakeView:
                 )
             return {**result, "status": "planned"}
 
-        return self._cached("bar-coverage", _build)
+        return self._cached("bar-coverage", _build, localized=False)
 
     def _catalog(self) -> pl.DataFrame:
         """``list_datasets()`` joined with the measured rows and bytes."""
@@ -349,7 +571,7 @@ class LakeView:
             )
             return catalog.join(rollup, on="dataset", how="left")
 
-        return self._cached("catalog", _build)
+        return self._cached("catalog", _build, localized=False)
 
     def _health_findings(self) -> dict:
         """The audit's last written health snapshot, or an empty stand-in."""
@@ -364,7 +586,7 @@ class LakeView:
             except (OSError, json.JSONDecodeError):
                 return {}
 
-        return self._cached("health_findings", _build)
+        return self._cached("health_findings", _build, localized=False)
 
     def _freshness_of(self, row: dict, anchor: date) -> str:
         """The label ``cne status --datasets`` prints, in lower case."""
@@ -372,7 +594,18 @@ class LakeView:
 
     def _rows(self) -> list[dict]:
         """One enriched dict per registered dataset."""
-        return self._cached("dataset-rows", self._build_rows)
+
+        def _label(row: dict) -> str:
+            tier = row.get("tier")
+            return _(TIER_LABELS[tier])
+
+        def _build() -> list[dict]:
+            return [
+                {**row, "tier_label": _label(row)}
+                for row in self._cached("dataset-rows-raw", self._build_rows, localized=False)
+            ]
+
+        return self._cached("dataset-rows", _build)
 
     def _build_rows(self) -> list[dict]:
         anchor = self.anchor()
@@ -383,7 +616,6 @@ class LakeView:
                 {
                     **row,
                     "tier": spec.tier,
-                    "tier_label": _(TIER_LABELS[spec.tier]),
                     "required": spec.required,
                     "intraday": spec.intraday_frequency,
                     # What one row covers. Carried separately from `intraday`
@@ -1318,6 +1550,9 @@ class LakeView:
 
         return {
             **row,
+            # The day freshness is judged against, so the page needs no
+            # second request (it used to wait on /api/health for this alone).
+            "anchor": self.anchor(),
             "layer": spec.layer,
             "partition_col": spec.partition_col,
             "max_staleness_days": spec.max_staleness_days,
@@ -1582,6 +1817,10 @@ class LakeView:
         )
 
     def heatmap(self, *, days: int = 90) -> dict:
+        """Coverage grid: see :meth:`_build_heatmap`; built once per lake version."""
+        return self._cached(f"heatmap-{int(days)}", lambda: self._build_heatmap(days=days))
+
+    def _build_heatmap(self, *, days: int = 90) -> dict:
         """Coverage grid: one row per dataset, one cell per recent trading day.
 
         Cells answer "does a partition covering this day exist", which for a

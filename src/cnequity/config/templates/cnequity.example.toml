@@ -281,6 +281,9 @@ enabled = false
 min_interval_seconds = 1.0
 # token_file = "~/.config/cnequity/tushare_token"
 # api_url = "https://api.tushare.pro"
+# Backfill-only by default. `daily = true` adds a `tushare` group to the daily
+# run, which runs only while the key passes its check (`cne serve` can check it).
+# daily = false
 
 # Optional 同花顺 official API (fuyao.aicubes.cn) — a licensed peer source, never
 # a primary. With no key every path that uses it degrades to silence and the lake

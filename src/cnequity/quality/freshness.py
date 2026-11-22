@@ -28,7 +28,7 @@ from cnequity.domain.datasets import (
     tushare_backfill_dataset,
 )
 from cnequity.orchestrator.cadence import freshness_anchor
-from cnequity.storage.key_checks import key_rejected
+from cnequity.storage.key_checks import key_usable
 
 
 def freshness_mark(config, dataset: str, mark: date | None) -> date | None:
@@ -50,16 +50,18 @@ def freshness_mark(config, dataset: str, mark: date | None) -> date | None:
 
 
 def freshness_owed(config, dataset: str) -> bool:
-    """``daily_freshness_owed``, and not a Tushare dataset whose key was refused.
+    """``daily_freshness_owed``, and for Tushare only while its key is known to work.
 
-    A key the provider rejected cannot update anything, so its datasets'
-    watermarks are not shown as stale. The verdict comes from the last key
-    check (see ``cnequity.storage.key_checks``).
+    Tushare is backfill-only by default. Its datasets are owed a daily update
+    only when the daily run includes them (``[sources.tushare].daily`` or a
+    schedule group listing the step) and the last key check passed: a key that
+    was refused, or never confirmed, cannot be counted on to update anything.
+    The verdict comes from ``cnequity.storage.key_checks``.
     """
     if not daily_freshness_owed(config, dataset):
         return False
     if config is not None and tushare_backfill_dataset(dataset):
-        return not key_rejected(config, "tushare")
+        return key_usable(config, "tushare")
     return True
 
 

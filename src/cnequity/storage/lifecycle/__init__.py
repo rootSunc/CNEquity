@@ -26,6 +26,7 @@ from typing import Any
 
 from cnequity.config.retention import DEFAULT_KEEP_GENERATIONS, revision_keep
 from cnequity.file_lock import lake_mutation_lock
+from cnequity.file_replace import replace_with_retry
 from cnequity.storage.atomic import write_json_atomic
 from cnequity.storage.revisions import (
     RevisionStore,
@@ -152,6 +153,10 @@ RUNTIME_META_PATHS = (
 )
 
 
+def _snapshot_runtime() -> tuple[str, ...]:
+    return tuple(Path(p).as_posix() for p in RUNTIME_META_PATHS if p != "revisions")
+
+
 def _in_snapshot_runtime(relative: Path) -> bool:
     """Whether *relative* (to the lake's meta) is a runtime path inside a research snapshot.
 
@@ -163,10 +168,17 @@ def _in_snapshot_runtime(relative: Path) -> bool:
     parts = relative.parts
     if len(parts) < 4 or parts[0] != "snapshots" or parts[2] != "meta":
         return False
-    inner = Path(*parts[3:])
-    return any(
-        inner == Path(p) or Path(p) in inner.parents for p in RUNTIME_META_PATHS if p != "revisions"
-    )
+    return _under("/".join(parts[3:]), _snapshot_runtime())
+
+
+def _under(relative: str, prefixes: tuple[str, ...]) -> bool:
+    """Whether the POSIX path *relative* is one of *prefixes* or inside one.
+
+    String tests rather than ``Path.parents``: a reference scan visits several
+    hundred thousand entries, and building every ancestor as a ``Path`` made
+    it take most of a minute.
+    """
+    return any(relative == p or relative.startswith(p + "/") for p in prefixes)
 
 
 def reference_files(roots: list[dict], *, meta_root: Path | None = None) -> list[Path]:
@@ -190,32 +202,108 @@ def reference_files(roots: list[dict], *, meta_root: Path | None = None) -> list
         lake_root_meta = lake_meta is not None and root.resolve() == lake_meta
         if lake_root_meta:
             excluded += [Path(p) for p in RUNTIME_META_PATHS]
+        skipped = tuple(p.as_posix() for p in excluded)
 
-        def onerror(error: OSError) -> None:
-            raise LifecycleError(f"Reference scan failed: {error}") from error
-
-        for directory, dirs, names in os.walk(root, followlinks=False, onerror=onerror):
-            parent = Path(directory)
-            for name in list(dirs) + names:
-                path = parent / name
-                relative = path.relative_to(root)
-                if lake_root_meta and _in_snapshot_runtime(relative):
-                    if name in dirs:
-                        dirs.remove(name)
+        # os.scandir rather than os.walk: the entry's type comes with the
+        # listing, so the several hundred thousand entries need no lstat each.
+        pending = [(str(root), "")]
+        while pending:
+            directory, prefix = pending.pop()
+            try:
+                with os.scandir(directory) as entries:
+                    listed = list(entries)
+            except OSError as error:
+                raise LifecycleError(f"Reference scan failed: {error}") from error
+            for entry in listed:
+                relative = prefix + entry.name
+                if lake_root_meta and _in_snapshot_runtime(Path(relative)):
                     continue
-                if any(relative == p or p in relative.parents for p in excluded):
-                    if name in dirs:
-                        dirs.remove(name)
+                if _under(relative, skipped):
                     continue
-                if path.is_symlink():
-                    raise LifecycleError(f"Reference scan contains a link: {path}")
-                if name in names and path.suffix in TEXT_SUFFIXES:
-                    found.add(path)
+                try:
+                    if entry.is_symlink():
+                        raise LifecycleError(f"Reference scan contains a link: {entry.path}")
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    is_file = not is_dir and entry.is_file(follow_symlinks=False)
+                except OSError as error:
+                    raise LifecycleError(f"Reference scan failed: {error}") from error
+                if is_dir:
+                    pending.append((entry.path, relative + "/"))
+                elif is_file and Path(entry.name).suffix in TEXT_SUFFIXES:
+                    found.add(Path(entry.path))
     return sorted(found)
 
 
 def reference_fingerprint(roots: list[dict], *, meta_root: Path | None = None) -> str:
-    return digest([(str(p), sha256_file(p)) for p in reference_files(roots, meta_root=meta_root)])
+    files = reference_files(roots, meta_root=meta_root)
+    memo = _HashMemo.for_meta(meta_root)
+    try:
+        return digest([(str(p), memo.sha256(p)) for p in files])
+    finally:
+        memo.save()
+
+
+class _HashMemo:
+    """File digests remembered by file identity, so an unchanged tree is not read again.
+
+    A reference inventory is hundreds of megabytes (snapshot manifests, audit
+    evidence); hashing it all took about a minute on every storage page view
+    and every retention run. A file whose device, inode, size, mtime and ctime
+    are unchanged has the same bytes: ctime cannot be set back by a writer, so
+    this does not trust a preserved mtime. Kept in the user's cache directory,
+    never in the lake or the reference roots it fingerprints.
+    """
+
+    _memos: dict[str, _HashMemo] = {}
+
+    def __init__(self, path: Path | None):
+        self.path = path
+        self.entries: dict[str, list] = {}
+        self.dirty = False
+        if path is not None:
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    self.entries = loaded
+            except (OSError, ValueError):
+                pass
+
+    @classmethod
+    def for_meta(cls, meta_root: Path | None) -> _HashMemo:
+        key = str(Path(meta_root).resolve()) if meta_root is not None else ""
+        memo = cls._memos.get(key)
+        if memo is None:
+            path = None
+            if meta_root is not None:
+                base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+                name = hashlib.sha256(key.encode()).hexdigest()[:16]
+                path = Path(base).expanduser() / "cnequity" / "reference-hashes" / f"{name}.json"
+            memo = cls._memos[key] = cls(path)
+        return memo
+
+    def sha256(self, path: Path) -> str:
+        info = path.stat()
+        identity = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        key = str(path)
+        hit = self.entries.get(key)
+        if isinstance(hit, list) and hit[:-1] == identity:
+            return hit[-1]
+        value = sha256_file(path)
+        self.entries[key] = [*identity, value]
+        self.dirty = True
+        return value
+
+    def save(self) -> None:
+        if not self.dirty or self.path is None:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(self.entries), encoding="utf-8")
+            replace_with_retry(tmp, self.path, sync_dir=False)
+            self.dirty = False
+        except OSError:
+            pass
 
 
 def _tree_signature(root: Path) -> str:

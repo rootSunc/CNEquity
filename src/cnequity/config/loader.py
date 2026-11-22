@@ -174,6 +174,11 @@ class Config:
     ths_official_api_key: str | None = field(default=None, repr=False)
     #: Dotted keys of credentials written inline in the config file (`cne doctor` warns).
     inline_credentials: tuple[str, ...] = ()
+    #: Where each keyed source's credential came from: env, file, inline or none.
+    credential_origins: dict[str, str] = field(default_factory=dict)
+    #: ``[sources.tushare].daily``: the user asked for Tushare datasets in the
+    #: daily run. They join it only while the last key check passed.
+    tushare_daily: bool = False
     ths_official_timeout_sec: float = 30.0
     # Verification (arbitration, cross-checks) is safe to run whenever a key is
     # present — it writes source snapshots and findings, never curated rows.
@@ -750,6 +755,18 @@ def _credential(
     return value or inline, inline is not None
 
 
+def _credential_origin(sources_raw: dict, keyed, value: str | None) -> str:
+    """``env``, ``file``, ``inline`` or ``none``, in the order ``_credential`` prefers them."""
+    if value is None:
+        return "none"
+    if os.environ.get(keyed.env, "").strip():
+        return "env"
+    section = sources_raw.get(keyed.id)
+    if isinstance(section, dict) and section.get(f"{keyed.key}_file"):
+        return "file"
+    return "inline"
+
+
 def _absolute(path: Path) -> Path:
     """Normalize a path to an absolute lexical path without following links."""
     return Path(os.path.abspath(os.fspath(path)))
@@ -1075,22 +1092,27 @@ def load_config(path: str | Path) -> Config:
     eastmoney_timeout_sec = 15.0
     baostock_batch_size = 20
     baostock_batch_rest_seconds = 120.0
-    tushare_token, tushare_inline = _credential(
-        sources_raw, "tushare", "token", "TUSHARE_TOKEN", config_path.parent
+    from cnequity.config.keyed_sources import (
+        KEYED_SOURCES,
+        TUSHARE_DAILY_GROUP,
+        tushare_daily_steps,
     )
+
+    credentials: dict[str, str | None] = {}
+    credential_origins: dict[str, str] = {}
+    inline_names: list[str] = []
+    for keyed in KEYED_SOURCES.values():
+        value, inline = _credential(sources_raw, keyed.id, keyed.key, keyed.env, config_path.parent)
+        credentials[keyed.attr] = value
+        if inline:
+            inline_names.append(f"sources.{keyed.id}.{keyed.key}")
+        credential_origins[keyed.id] = _credential_origin(sources_raw, keyed, value)
+    inline_credentials = tuple(inline_names)
+    tushare_token = credentials["tushare_token"]
+    ths_official_api_key = credentials["ths_official_api_key"]
     tushare_timeout_sec = 30.0
     tushare_api_url: str | None = None
-    ths_official_api_key, ths_official_inline = _credential(
-        sources_raw, "ths_official", "api_key", "HITHINK_FINANCE_API_KEY", config_path.parent
-    )
-    inline_credentials = tuple(
-        name
-        for name, inline in (
-            ("sources.tushare.token", tushare_inline),
-            ("sources.ths_official.api_key", ths_official_inline),
-        )
-        if inline
-    )
+    tushare_daily = False
     ths_official_timeout_sec = 30.0
     ths_official_verify_enabled = True
     ths_official_backfill_enabled = False
@@ -1162,6 +1184,7 @@ def load_config(path: str | Path) -> Config:
                     tushare_timeout_sec = float(val["timeout_sec"])
                 if val.get("api_url"):
                     tushare_api_url = str(val["api_url"]).strip().rstrip("/") or None
+                tushare_daily = bool(val.get("daily", False))
             if name == "ths_official":
                 if val.get("timeout_sec") is not None:
                     ths_official_timeout_sec = float(val["timeout_sec"])
@@ -1216,6 +1239,13 @@ def load_config(path: str | Path) -> Config:
             parallel=bool(group.get("parallel", True)),
             cadence=str(group.get("cadence", "daily")).strip().lower(),
             weekday=int(group.get("weekday", 5)),
+        )
+
+    if tushare_daily and TUSHARE_DAILY_GROUP not in schedule_groups:
+        # The user's switch, not a default: the group runs only while the
+        # Tushare key passes its check (see `cadence.group_is_runnable`).
+        schedule_groups[TUSHARE_DAILY_GROUP] = ScheduleGroup(
+            at=daily_run_at, steps=tushare_daily_steps(), parallel=True
         )
 
     events_groups: dict[str, ScheduleGroup] = {}
@@ -1393,6 +1423,8 @@ def load_config(path: str | Path) -> Config:
         tushare_api_url=tushare_api_url,
         ths_official_api_key=ths_official_api_key,
         inline_credentials=inline_credentials,
+        credential_origins=credential_origins,
+        tushare_daily=tushare_daily,
         ths_official_timeout_sec=ths_official_timeout_sec,
         ths_official_verify_enabled=ths_official_verify_enabled,
         ths_official_backfill_enabled=ths_official_backfill_enabled,

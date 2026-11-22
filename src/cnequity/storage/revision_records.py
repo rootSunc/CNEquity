@@ -171,6 +171,7 @@ class CatalogRecords:
     #: Each dataset's current revision; a dataset whose record is missing maps to ``None``.
     current: dict[str, RevisionRecord | None]
     _history: dict[str, list[RevisionRecord]] = field(default_factory=dict)
+    _history_loaded: bool = False
 
     def pointer(self, dataset: str) -> dict[str, Any] | None:
         record = self.current.get(dataset)
@@ -178,14 +179,15 @@ class CatalogRecords:
 
     def history(self, dataset: str) -> list[RevisionRecord]:
         """Every recorded revision of *dataset*, oldest first."""
-        if dataset not in self._history:
-            rows = _query(
-                self.root,
-                _all_records_sql("WHERE dataset = ?") + " ORDER BY revision",
-                [dataset],
-            )
-            self._history[dataset] = [_record(row) for row in rows]
-        return self._history[dataset]
+        if not self._history_loaded:
+            # Every dataset in one query: each filtered query costs a full
+            # scan of the union (~0.17 s on a real lake), and the storage
+            # inventory asks for every dataset in turn.
+            rows = _query(self.root, _all_records_sql() + " ORDER BY dataset, revision")
+            for row in rows:
+                self._history.setdefault(row[0], []).append(_record(row))
+            self._history_loaded = True
+        return self._history.get(dataset, [])
 
     def revision_ids(self) -> set[tuple[str, str]]:
         """``(dataset, revision id)`` of every revision the catalog still holds rows for."""

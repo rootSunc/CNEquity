@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import duckdb
 
+from cnequity.config.keyed_sources import KEYED_SOURCES
 from cnequity.domain.market_time import shanghai_now, shanghai_today
 from cnequity.i18n import N_, _
 from cnequity.ops.catalog import OpSpec
@@ -35,7 +38,7 @@ from cnequity.orchestrator.run_window import (
 from cnequity.orchestrator.scheduler_lock import lock_directory, scheduler_lock_holder
 from cnequity.serve.display import en, local
 from cnequity.sqlite_readonly import connect_readonly
-from cnequity.storage.key_checks import last_check
+from cnequity.storage.key_checks import key_usable, last_check
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +165,14 @@ def blockers(config, spec: OpSpec, *, storage_busy: bool, lock_class: str) -> li
     return found
 
 
+def _key_hint(key: str | None) -> str | None:
+    """The last four characters, enough to tell two keys apart and no more."""
+    if not key:
+        return None
+    key = str(key).strip()
+    return "…" + key[-4:] if len(key) >= 12 else "…"
+
+
 def source_status(config) -> dict:
     """push2 pause, today's breakers, request counts, keys and failures per source.
 
@@ -181,11 +192,21 @@ def source_status(config) -> dict:
         "readable": True,
         "requests": {},
         "keys": {
-            "tushare": bool(getattr(config, "tushare_token", None)),
-            "ths_official": bool(getattr(config, "ths_official_api_key", None)),
+            keyed.id: bool(getattr(config, keyed.attr, None)) for keyed in KEYED_SOURCES.values()
         },
-        "key_checks": {
-            source: last_check(config, source) for source in ("tushare", "ths_official")
+        "key_checks": {source: last_check(config, source) for source in KEYED_SOURCES},
+        # env / file / inline / none — never the credential itself.
+        "key_origins": dict(getattr(config, "credential_origins", {}) or {}),
+        "key_hints": {
+            keyed.id: _key_hint(getattr(config, keyed.attr, None))
+            for keyed in KEYED_SOURCES.values()
+        },
+        "key_files": {keyed.id: str(keyed.default_key_file()) for keyed in KEYED_SOURCES.values()},
+        # Tushare's daily switch, and whether it is in effect right now.
+        "tushare_daily": {
+            "requested": bool(getattr(config, "tushare_daily", False)),
+            "active": bool(getattr(config, "tushare_daily", False))
+            and key_usable(config, "tushare"),
         },
         "failures": _failures_today(config),
     }
@@ -374,6 +395,51 @@ def schedule_view(config) -> dict:
     }
 
 
+_settled_lock = threading.Lock()
+_settled: dict[str, tuple[tuple, tuple]] = {}
+
+
+def _settled_state(config, engines: tuple[str, ...]) -> tuple:
+    """``lake_empty``, ``incomplete_init`` and ``schedule_view``, kept per lake version.
+
+    Each reads the catalog, the manifest or the trading calendar, about a
+    second together, and every dashboard page asks for them. They change only
+    when the lake moves, an engine starts or stops, or the clock ticks over a
+    minute (the daily window), so that is the key.
+    """
+    key: tuple | None = None
+    if config is not None:
+        from cnequity.storage.lake_version import lake_version
+
+        version = lake_version(config)
+        # A lake without a catalog yet changes without moving any of it.
+        if version[0] is not None:
+            key = (
+                str(config.data_root),
+                config.daily_run_at,
+                config.stale_run_at,
+                version,
+                engines,
+                int(time.time() // 60),
+            )
+            with _settled_lock:
+                hit = _settled.get(key[0])
+            if hit is not None and hit[0] == key:
+                return hit[1]
+    try:
+        empty = lake_empty(config)
+    except (OSError, RuntimeError, duckdb.Error):
+        logger.exception("could not read published lake revisions")
+        empty = None
+    value = (empty, incomplete_init(config), schedule_view(config))
+    if key is not None:
+        with _settled_lock:
+            if len(_settled) > 8:
+                _settled.clear()
+            _settled[key[0]] = (key, value)
+    return value
+
+
 def occupancy(config, *, storage_busy: bool) -> dict:
     holder = live_holder(config)
     engines = []
@@ -386,11 +452,7 @@ def occupancy(config, *, storage_busy: bool) -> dict:
         ]
         root = lock_directory(config)
         schedulers = [name for name in ("daily", "events") if scheduler_lock_holder(root, name)]
-    try:
-        empty = lake_empty(config)
-    except (OSError, RuntimeError, duckdb.Error):
-        logger.exception("could not read published lake revisions")
-        empty = None
+    empty, init, schedule = _settled_state(config, tuple(engines))
     # push2 pausing is reported once, through ``sources``; the status bar shows it.
     notes: list[str] = []
     return {
@@ -410,9 +472,9 @@ def occupancy(config, *, storage_busy: bool) -> dict:
         "scheduler_locks": schedulers,
         "lake_write_locked": config is not None and _lake_locked(config.meta_root),
         "storage_busy": storage_busy,
-        "incomplete_init": incomplete_init(config),
+        "incomplete_init": init,
         "lake_empty": empty,
-        "schedule": schedule_view(config),
+        "schedule": schedule,
         "sources": source_status(config),
         "hints": notes,
     }

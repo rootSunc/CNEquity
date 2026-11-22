@@ -47,8 +47,91 @@ export async function renderSettings(ctx, home, alive, flash = "") {
   const form = document.getElementById("settings-fields");
   const target = document.getElementById("settings-preview");
   const specById = Object.fromEntries((value.sections || []).flatMap((section) => section.settings || []).map((spec) => [spec.id, spec]));
+  const repaint = (source) => {
+    const slot = document.getElementById(`source-state-${source}`);
+    if (slot && specById[source]) slot.innerHTML = sourceState(specById[source], sources, esc, writable);
+  };
+  form.onkeydown = (event) => {
+    // Enter in a key box saves that key; it must not submit the settings preview.
+    const input = event.target?.closest?.("[data-key-input]");
+    if (input && event.key === "Enter") {
+      event.preventDefault();
+      document.querySelector(`[data-save-key="${input.dataset.keyInput}"]`)?.click();
+    }
+  };
   form.onclick = async (event) => {
-    const button = event.target.closest?.("[data-check-key]");
+    const hit = event.target.closest?.("[data-check-key], [data-edit-key], [data-save-key], [data-remove-key]");
+    const data = hit?.dataset || {};
+    const edit = data.editKey ? hit : null;
+    if (edit && writable) {
+      const editor = document.getElementById(`key-editor-${edit.dataset.editKey}`);
+      if (editor) {
+        editor.hidden = !editor.hidden;
+        if (!editor.hidden) editor.querySelector("input")?.focus();
+      }
+      return;
+    }
+    const save = data.saveKey ? hit : null;
+    if (save && writable) {
+      const source = save.dataset.saveKey;
+      const input = document.querySelector(`[data-key-input="${source}"]`);
+      const note = document.getElementById(`key-note-${source}`);
+      const key = (input?.value || "").trim();
+      if (!key) return;
+      save.disabled = true;
+      if (note) note.textContent = tr("正在保存并检测…", "Saving and checking…");
+      try {
+        const saved = await api(`/api/ops/sources/${encodeURIComponent(source)}/key`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-CNE-CSRF": home.csrf_token },
+          body: JSON.stringify({ key }),
+        });
+        if (input) input.value = "";
+        if (!alive() || !sources) return;
+        sources.keys = { ...(sources.keys || {}), [source]: true };
+        sources.key_origins = { ...(sources.key_origins || {}), [source]: saved.overridden_by_env ? "env" : "file" };
+        sources.key_hints = { ...(sources.key_hints || {}), [source]: key.length >= 12 ? `…${key.slice(-4)}` : "…" };
+        sources.key_checks = { ...(sources.key_checks || {}), [source]: saved.check };
+        repaint(source);
+        repaint("tushare_daily");
+        const after = document.getElementById(`key-note-${source}`);
+        if (after) {
+          after.textContent = saved.overridden_by_env
+            ? tr(`已写入 ${saved.key_file}；但环境变量 ${saved.env} 仍然优先生效。`, `Written to ${saved.key_file}, but the environment variable ${saved.env} still takes precedence.`)
+            : tr(`已写入 ${saved.key_file}（仅本机用户可读），配置文件只记录这个路径。`, `Written to ${saved.key_file} (readable by you only); the config file records only that path.`);
+        }
+      } catch (err) {
+        if (note && alive()) note.textContent = err.message;
+      } finally {
+        save.disabled = false;
+      }
+      return;
+    }
+    const remove = data.removeKey ? hit : null;
+    if (remove && writable) {
+      const source = remove.dataset.removeKey;
+      remove.disabled = true;
+      try {
+        const removed = await api(`/api/ops/sources/${encodeURIComponent(source)}/key`, {
+          method: "DELETE",
+          headers: { "X-CNE-CSRF": home.csrf_token },
+        });
+        if (!alive() || !sources) return;
+        const status = await api("/api/ops/status");
+        if (!alive()) return;
+        Object.assign(sources, status.occupancy?.sources || {});
+        repaint(source);
+        repaint("tushare_daily");
+        const note = document.getElementById(`key-note-${source}`);
+        if (note && removed.overridden_by_env) note.textContent = tr(`环境变量 ${removed.env} 仍提供密钥。`, `The environment variable ${removed.env} still provides a key.`);
+      } catch (err) {
+        const note = document.getElementById(`key-note-${source}`);
+        if (note && alive()) note.textContent = err.message;
+        remove.disabled = false;
+      }
+      return;
+    }
+    const button = data.checkKey ? hit : null;
     if (!button || !writable) return;
     const source = button.dataset.checkKey;
     button.disabled = true;
@@ -64,12 +147,14 @@ export async function renderSettings(ctx, home, alive, flash = "") {
     }
     if (!alive()) return;
     if (sources) sources.key_checks = { ...(sources.key_checks || {}), [source]: result };
-    const slot = document.getElementById(`source-state-${source}`);
-    if (slot) slot.innerHTML = sourceState(specById[source], sources, esc, writable);
+    repaint(source);
+    repaint("tushare_daily");
   };
   const specs = (value.sections || []).flatMap((section) => section.settings || []);
   let previewGeneration = 0;
-  form.oninput = () => {
+  form.oninput = (event) => {
+    // Typing a key is not a settings edit; it must not drop the preview.
+    if (event?.target?.closest?.("[data-key-input]")) return;
     previewGeneration += 1;
     target.innerHTML = "";
   };
@@ -186,11 +271,47 @@ export function paidSourceState(spec, sources, esc, writable = false) {
     const names = failed.datasets.slice(0, 3).map((name) => ds(name)).join(tr("、", ", "));
     facts.push(tr(`今日失败 ${failed.batches} 批：${names}`, `${failed.batches} failed ${failed.batches === 1 ? "batch" : "batches"} today: ${names}`));
   }
-  const button = configured && writable
-    ? `<button class="button button-ghost" type="button" data-check-key="${esc(spec.id)}">${check ? tr("重新检测", "Check again") : tr("检测密钥", "Check key")}</button>`
+  if (configured) {
+    const origin = sources?.key_origins?.[spec.id];
+    const hint = sources?.key_hints?.[spec.id];
+    const where = {
+      env: tr("来自环境变量", "from an environment variable"),
+      file: tr("来自密钥文件", "from a key file"),
+      inline: tr("明文写在配置文件里，建议改存密钥文件", "written inline in the config file; a key file is safer"),
+    }[origin];
+    if (where) facts.unshift(hint ? `${hint} · ${where}` : where);
+  }
+  const buttons = [];
+  if (configured && writable) {
+    buttons.push(`<button class="button button-ghost" type="button" data-check-key="${esc(spec.id)}">${check ? tr("重新检测", "Check again") : tr("检测密钥", "Check key")}</button>`);
+  }
+  if (writable) {
+    buttons.push(`<button class="button button-ghost" type="button" data-edit-key="${esc(spec.id)}">${configured ? tr("更换密钥", "Replace key") : tr("填写密钥", "Enter key")}</button>`);
+    if (configured && sources?.key_origins?.[spec.id] === "file") {
+      buttons.push(`<button class="button button-ghost" type="button" data-remove-key="${esc(spec.id)}">${tr("移除", "Remove")}</button>`);
+    }
+  }
+  const editor = writable
+    ? `<span class="ops-key-editor" id="key-editor-${esc(spec.id)}" hidden><input type="password" autocomplete="off" spellcheck="false" data-key-input="${esc(spec.id)}" aria-label="${esc(tr("密钥", "Key"))}" placeholder="${esc(tr("粘贴密钥；只保存在本机密钥文件", "Paste the key; kept only in a local key file"))}"><button class="button button-primary" type="button" data-save-key="${esc(spec.id)}">${tr("保存并检测", "Save and check")}</button></span>`
     : "";
   const detail = facts.length ? `<small class="ops-source-facts">${esc(facts.join(tr("；", "; ")))}</small>` : "";
-  return `<span class="ops-source-state"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${esc(word)}${button}</span>${detail}`;
+  return `<span class="ops-source-state"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${esc(word)}${buttons.join("")}</span>${detail}${editor}<small class="ops-source-facts" id="key-note-${esc(spec.id)}"></small>`;
+}
+
+// Tushare's daily switch: asked for, and whether the key lets it happen today.
+function tushareDailyState(spec, sources, esc) {
+  const check = sources?.key_checks?.tushare;
+  const usable = check && (check.state === "ok" || check.state === "limited");
+  let tone = "muted";
+  let word = tr("关闭 · 只用于回填", "Off · backfill only");
+  if (spec.value && usable) {
+    tone = "ok";
+    word = tr("开启 · 日更包含 Tushare 数据集", "On · the daily update includes Tushare datasets");
+  } else if (spec.value) {
+    tone = "warn";
+    word = tr("已开启，但密钥未通过检测，日更暂不包含", "On, but the key has not passed its check; not in the daily update yet");
+  }
+  return `<span class="ops-source-state"><i class="ops-dot tone-${tone}" aria-hidden="true"></i>${esc(word)}</span>`;
 }
 
 function checkedAt(iso) {
@@ -204,6 +325,7 @@ function checkedAt(iso) {
 // its key, or on — plus today's requests and failed batches where known.
 function sourceState(spec, sources, esc, writable = false) {
   if (spec.kind !== "bool") return "";
+  if (spec.id === "tushare_daily") return tushareDailyState(spec, sources, esc);
   if (spec.id in PAID) return paidSourceState(spec, sources, esc, writable);
   const breakers = sources?.breakers || [];
   let tone = "ok";

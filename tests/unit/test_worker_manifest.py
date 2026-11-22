@@ -422,6 +422,7 @@ def test_dataset_results_schema_migrates_and_round_trips(tmp_path):
             )
             """
         )
+        conn.execute("PRAGMA user_version = 0")
 
     migrated = Manifest(db)
     run_id = migrated.start_run("daily")
@@ -478,6 +479,7 @@ def test_batch_request_retry_column_migrates_old_manifest(tmp_path):
             """
         )
         conn.execute("DROP TABLE ingestion_batches_new")
+        conn.execute("PRAGMA user_version = 0")
 
     migrated = Manifest(db)
     with migrated._connect() as conn:

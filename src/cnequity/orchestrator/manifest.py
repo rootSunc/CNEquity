@@ -84,6 +84,11 @@ ACTIVE_BATCH_STATUSES = ("running", "stale", QUEUED_BATCH_STATUS)
 RETRYABLE_BATCH_STATUSES = ("failed", "degraded", QUEUED_BATCH_STATUS)
 
 
+#: Bump whenever ``Manifest._ensure_schema`` changes, so existing databases
+#: run it once more; a current database skips it on open.
+SCHEMA_VERSION = 1
+
+
 def _rewrite_legacy_statuses(conn: sqlite3.Connection) -> None:
     """Rewrite statuses stored before :class:`RunStatus` into it, once per word.
 
@@ -216,6 +221,11 @@ class Manifest:
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
+            # Every reader opens a Manifest; the DDL and the legacy status
+            # rewrite below are full-table writes that would take the write
+            # lock on each open. Once a database is current, skip them.
+            if conn.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
+                return
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS ingestion_runs (
@@ -351,6 +361,7 @@ class Manifest:
                 "ON dataset_results(dataset, stage, status)"
             )
             _rewrite_legacy_statuses(conn)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod
     def _batch_activity_at(row: sqlite3.Row) -> datetime | None:

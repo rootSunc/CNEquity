@@ -161,7 +161,45 @@ async function api(path, options) {
     }
     throw new Error(detail);
   }
+  if (res.headers?.get?.("X-CNE-Refreshing")) noteRefreshing();
   return res.json();
+}
+
+// The server answered from its previous build while the lake moved under it.
+// Say so in the top bar, and once the rebuild lands offer a one-click reload
+// rather than repainting under the reader.
+let refreshWatch = null;
+function noteRefreshing() {
+  if (refreshWatch) return;
+  const show = (html) => {
+    const meta = document.querySelector(".topbar-meta");
+    if (!meta) return;
+    let slot = meta.querySelector(".data-refresh");
+    if (!slot) {
+      slot = document.createElement("span");
+      slot.className = "data-refresh muted";
+      meta.prepend(slot);
+    }
+    slot.innerHTML = html;
+    slot.querySelector("button")?.addEventListener("click", () => {
+      slot.remove();
+      route();
+    });
+  };
+  show(tr("数据后台更新中…", "Updating in the background…"));
+  refreshWatch = setInterval(async () => {
+    try {
+      const sep = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
+      const res = await fetch(`/api/health${sep}`, { headers: { "X-CNE-Lang": getLang() === "en" ? "en" : "zh-CN" } });
+      if (res.ok && !res.headers?.get?.("X-CNE-Refreshing")) {
+        clearInterval(refreshWatch);
+        refreshWatch = null;
+        show(`<button class="button button-ghost" type="button">${tr("数据已更新 · 刷新", "Updated · Reload")}</button>`);
+      }
+    } catch {
+      /* try again on the next tick */
+    }
+  }, 5000);
 }
 
 const fmt = (n) => (n ?? 0).toLocaleString(getLang() === "en" ? "en" : "zh-CN");
@@ -1150,12 +1188,11 @@ async function dataTab(d, host, view) {
 async function renderDetail(name, tab, view) {
   view.setPage(`<div class="loading-state"><span>${tr(`加载 ${esc(ds(name))}…`, `Loading ${esc(ds(name))}…`)}</span></div>`, "datasets");
   const enc = encodeURIComponent(name);
-  const [d, series, prov, parts, health] = await Promise.all([
+  const [d, series, prov, parts] = await Promise.all([
     api(`/api/datasets/${enc}`),
     api(`/api/datasets/${enc}/provenance/series`),
     api(`/api/datasets/${enc}/provenance`),
     api(`/api/datasets/${enc}/partitions`).catch(() => []),
-    api("/api/health").catch(() => null),
   ]);
   if (!view.live()) return;
   const cls = d.freshness === "fresh" ? "fresh" : d.freshness === "stale" ? "stale" : "empty";
@@ -1183,7 +1220,7 @@ async function renderDetail(name, tab, view) {
         )
         .join("")}
     </nav>
-    <div id="tabbody" class="tab-body">${tab === "meta" ? metaTab(d) : tab === "data" ? "" : stateTab(d, prov, health?.anchor || "")}</div>
+    <div id="tabbody" class="tab-body">${tab === "meta" ? metaTab(d) : tab === "data" ? "" : stateTab(d, prov, d.anchor || "")}</div>
     </section>`, "datasets");
 
   if (tab === "state") {

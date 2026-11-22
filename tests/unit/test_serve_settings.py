@@ -83,6 +83,7 @@ def test_the_whitelist_is_the_page_and_daily_has_no_range():
         "ths",
         "cninfo",
         "tushare",
+        "tushare_daily",
         "ths_official",
         "minute_bars",
         "trade_ticks",
@@ -102,6 +103,7 @@ def test_the_whitelist_is_the_page_and_daily_has_no_range():
 def test_a_config_without_paid_sources_reads_them_off():
     values = read_values('[data]\nroot = "/tmp/lake"\n')
     assert values["tushare"] is False
+    assert values["tushare_daily"] is False
     assert values["ths_official"] is False
 
 
@@ -114,6 +116,7 @@ def test_paid_sources_default_off_and_a_toggle_keeps_the_token(tmp_path):
     licensed = next(section for section in body["sections"] if section["id"] == "licensed")
     assert [(item["id"], item["value"]) for item in licensed["settings"]] == [
         ("tushare", False),
+        ("tushare_daily", False),
         ("ths_official", False),
     ]
     assert "付费数据源" in licensed["title"]

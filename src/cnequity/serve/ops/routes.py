@@ -64,6 +64,11 @@ class ScheduleApplyBody(BaseModel):
     acknowledged: bool = False
 
 
+class KeyBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(min_length=1, max_length=512)
+
+
 class SettingsBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     values: dict[str, Any]
@@ -106,6 +111,47 @@ def config_drift(state) -> dict | None:
     if state.setup or state.config is None:
         return None
     return drift(state.config)
+
+
+def _fallback(part) -> list[dict]:
+    items = part.get("fallback") if isinstance(part, dict) else None
+    return [
+        {"dataset": item.get("dataset"), "reason_codes": item.get("reason_codes") or []}
+        for item in (items if isinstance(items, list) else [])
+        if isinstance(item, dict)
+    ]
+
+
+def _list_item(job: dict) -> dict:
+    """A job as the lists show it: the full result and config stay on ``/api/ops/jobs/{id}``.
+
+    A daily job's result runs to several kilobytes and its effective config to
+    one or two more; five hundred of them made the operations page fetch
+    megabytes to draw one line each.
+    """
+    item = {k: v for k, v in job.items() if k not in {"result", "effective_config"}}
+    result = job.get("result")
+    if isinstance(result, dict):
+        summary = result.get("summary")
+        brief = None
+        if isinstance(summary, dict):
+            brief = {"fallback": _fallback(summary)}
+            if isinstance(summary.get("groups"), list):
+                brief["groups"] = [
+                    {"group": g.get("group"), "status": g.get("status"), "fallback": _fallback(g)}
+                    for g in summary["groups"]
+                    if isinstance(g, dict)
+                ]
+            if isinstance(summary.get("events"), dict):
+                brief["events"] = {"fallback": _fallback(summary["events"])}
+            if isinstance(summary.get("findings"), list):
+                brief["findings"] = summary["findings"]
+        item["result"] = {
+            "status": result.get("status"),
+            "run_ids": result.get("run_ids"),
+            "summary": brief,
+        }
+    return item
 
 
 def _service(request: Request) -> OpsService:
@@ -217,7 +263,12 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
         check_browser(request, mutation=False, scope="ops")
         from cnequity.research.packs import readiness_payload
 
-        return readiness_payload(request.app.state.config)
+        view = request.app.state.view
+        if view is None:
+            return readiness_payload(request.app.state.config)
+        # Checks every research pack against the lake: seconds, and the same
+        # answer until the lake moves.
+        return view.summary("readiness", lambda: readiness_payload(view.config))
 
     @app.get("/api/ops/settings")
     def ops_settings(request: Request) -> dict:
@@ -265,9 +316,10 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
         ] = "",
     ) -> list[dict]:
         check_browser(request, mutation=False, scope="ops")
-        return _service(request).list_jobs(
+        jobs = _service(request).list_jobs(
             limit, since=since, ops=_id_list(op), exclude_ops=_id_list(exclude_op)
         )
+        return [_list_item(job) for job in jobs]
 
     @app.get("/api/ops/jobs/{job_id}")
     def ops_job(job_id: str, request: Request) -> dict:
@@ -354,8 +406,54 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
             raise HTTPException(422, str(exc)) from exc
         # A refused Tushare key changes which datasets count as stale.
         if request.app.state.view is not None:
-            request.app.state.view.invalidate()
+            request.app.state.view.mark_changed()
         return result
+
+    def _key_route_guard(request: Request, source: str) -> None:
+        """A credential is typed only on this machine: never over a LAN, even with a token."""
+        from cnequity.ops.keys import PAID_SOURCES
+
+        check_browser(request, mutation=True, scope="ops")
+        if client_host(request) not in LOOPBACK_HOSTS:
+            raise HTTPException(
+                403, _("A key can only be entered on this machine (localhost or 127.0.0.1).")
+            )
+        if source not in PAID_SOURCES:
+            raise HTTPException(404, f"{source} is not a paid source")
+        if request.app.state.config_path is None:
+            raise HTTPException(409, _("There is no config file to write."))
+
+    @app.put("/api/ops/sources/{source}/key")
+    def source_save_key(source: str, body: KeyBody, request: Request) -> dict:
+        """Store a key in its own file (0600), name that file in the config, then check it."""
+        _key_route_guard(request, source)
+        from cnequity.ops.keys import check_key, save_key
+        from cnequity.serve.app import reload_lake_config
+
+        try:
+            where = save_key(request.app.state.config_path, source, body.key)
+            config = reload_lake_config(request.app)
+        except (OpsError, OSError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        try:
+            check = check_key(config, source)
+        except (OSError, ValueError) as exc:
+            check = {"state": "error", "message": str(exc), "checked_at": None}
+        return {**where, "check": check}
+
+    @app.delete("/api/ops/sources/{source}/key")
+    def source_remove_key(source: str, request: Request) -> dict:
+        """Forget a key this page stored. Keys given another way are left alone."""
+        _key_route_guard(request, source)
+        from cnequity.ops.keys import remove_key
+        from cnequity.serve.app import reload_lake_config
+
+        try:
+            where = remove_key(request.app.state.config_path, source)
+            reload_lake_config(request.app)
+        except (OpsError, OSError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return where
 
     @app.post("/api/ops/schedule/preview")
     def schedule_preview(body: ScheduleBody, request: Request) -> dict:

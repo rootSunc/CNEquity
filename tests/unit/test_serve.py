@@ -656,6 +656,9 @@ def test_only_storage_review_and_confirmation_allow_post(client):
         ("/api/ops/settings/preview", "POST"),
         ("/api/ops/settings/apply", "POST"),
         ("/api/ops/sources/{source}/check-key", "POST"),
+        ("/api/ops/sources/{source}/key", "PUT"),
+        ("/api/ops/sources/{source}/key", "DELETE"),
+        ("/api/storage/references/refresh", "POST"),
         ("/api/setup/config", "POST"),
     }
 
