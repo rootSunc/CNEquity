@@ -20,16 +20,27 @@ fi
 floor="3.11"
 local_mm="$("$py" -c 'import sys; print("%d.%d" % sys.version_info[:2])')" || exit 1
 
-"$py" -m pytest tests/unit -q -x -p no:cacheprovider >"$logs/main.txt" 2>&1 &
+# Both runs use pytest-xdist; when the floor run happens too, each gets half the cores.
+cores="$("$py" -c 'import os; print(os.cpu_count() or 2)')" || cores=2
+run_floor=""
+if [ "$local_mm" != "$floor" ] && command -v uv >/dev/null 2>&1; then
+  run_floor=1
+elif [ "$local_mm" != "$floor" ]; then
+  echo "pre-push: uv not found, skipping the Python ${floor} run" >&2
+fi
+workers="auto"
+if [ -n "$run_floor" ]; then
+  workers=$(( cores / 2 > 1 ? cores / 2 : 1 ))
+fi
+
+"$py" -m pytest tests/unit -q -x -n "$workers" -p no:cacheprovider >"$logs/main.txt" 2>&1 &
 main_pid=$!
 
 floor_pid=""
-if [ "$local_mm" != "$floor" ] && command -v uv >/dev/null 2>&1; then
+if [ -n "$run_floor" ]; then
   UV_PROJECT_ENVIRONMENT=.venv-py311 uv run --frozen --quiet --python "$floor" --group dev \
-    python -m pytest tests/unit -q -x -p no:cacheprovider >"$logs/floor.txt" 2>&1 &
+    python -m pytest tests/unit -q -x -n "$workers" -p no:cacheprovider >"$logs/floor.txt" 2>&1 &
   floor_pid=$!
-elif [ "$local_mm" != "$floor" ]; then
-  echo "pre-push: uv not found, skipping the Python ${floor} run" >&2
 fi
 
 status=0

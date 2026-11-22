@@ -125,7 +125,7 @@ jobs:
           python -c "import httpx; print('httpx', httpx.__version__)"
 
       - name: Test
-        run: pytest -q
+        run: pytest -q -n auto
 
   install:
     name: install (${{ matrix.python-version }})
@@ -178,7 +178,7 @@ jobs:
         # successful session. Preserve pytest's exit code here so interruption
         # or an internal error cannot pass on a partial "N passed" summary.
         shell: bash
-        run: pytest tests/unit -q
+        run: pytest tests/unit -q -n auto
 
   # Same unit suite as Windows. The tests that call plutil, clonefile and the
   # Darwin open-file limit do not run on Linux.
@@ -200,7 +200,7 @@ jobs:
           pip install -e . --group dev
 
       - name: Test
-        run: pytest tests/unit -q
+        run: pytest tests/unit -q -n auto
 
   secret-scan:
     runs-on: ubuntu-latest

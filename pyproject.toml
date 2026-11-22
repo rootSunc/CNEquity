@@ -122,6 +122,9 @@ dev = [
   # `pre-commit install` once per clone; see .pre-commit-config.yaml.
   "pre-commit>=3.5",
   "pytest-randomly>=5.0.0",
+  # Runs the unit suite on every core (`pytest tests/unit -n auto`): serially it
+  # takes about 40 minutes, which is too slow to run before every commit.
+  "pytest-xdist>=3.6",
   # Extracts and compiles the translation catalog (scripts/dev/i18n_catalog.py);
   # the installed package reads the compiled .mo with the standard library.
   "babel>=2.14",

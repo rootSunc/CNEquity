@@ -213,18 +213,20 @@ def test_shared_egress_keeps_stricter_concurrency_cap(tmp_path):
 
 
 def _worker_wait(state_dir: str) -> float:
-    t0 = time.perf_counter()
     wait_source(state_dir, "test", INTERVAL)
-    return time.perf_counter() - t0
+    # Wall-clock time, comparable across the two processes.
+    return time.time()
 
 
 def test_rate_limiter_serializes_cross_process_requests(tmp_path):
     state_dir = tmp_path / "rate_limits"
     with ProcessPoolExecutor(max_workers=2) as pool:
-        durations = list(pool.map(_worker_wait, [str(state_dir), str(state_dir)]))
-    # One of the two must have waited: whichever lost the lock race sees the
-    # other's timestamp already written.
-    assert max(durations) >= MIN_OBSERVED
+        released = sorted(pool.map(_worker_wait, [str(state_dir), str(state_dir)]))
+    # Whatever order and timing the two processes start in (a busy machine can
+    # start the second long after the first), the shared limiter spaces the two
+    # requests at least one interval apart. Asserting that one of them *waited*
+    # assumed they started together.
+    assert released[1] - released[0] >= MIN_OBSERVED
 
 
 def test_corrupt_rate_state_is_replaced_atomically(tmp_path):

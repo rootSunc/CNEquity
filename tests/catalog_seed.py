@@ -167,6 +167,8 @@ def publish_folders(config, *datasets: str) -> list[str]:
     dataset with a folder when none is named) is published with all of its
     folder's rows; the folder stays, and is never read.
     """
+    import hashlib
+
     import polars as pl
 
     from cnequity.domain.datasets import DATASETS
@@ -183,8 +185,9 @@ def publish_folders(config, *datasets: str) -> list[str]:
             continue
         # A folder unchanged since it was last published is already in the
         # catalog; publishing it again would also undo what a writer under
-        # test published over it since.
-        stamp = tuple((str(path), path.stat().st_size, path.stat().st_mtime_ns) for path in files)
+        # test published over it since. Compared by content: tests rewrite
+        # files and keep their modification time on purpose.
+        stamp = tuple((str(path), hashlib.sha256(path.read_bytes()).hexdigest()) for path in files)
         key = folder.resolve()
         if _published_folders.get(key) == stamp:
             continue

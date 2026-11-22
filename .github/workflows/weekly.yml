@@ -68,4 +68,4 @@ jobs:
           pip install -e . --group dev
 
       - name: Unit tests in random order
-        run: pytest tests/unit -q -p randomly
+        run: pytest tests/unit -q -n auto -p randomly
