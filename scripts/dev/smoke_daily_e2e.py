@@ -14,7 +14,7 @@ import argparse
 import json
 import socket
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,8 +23,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from cnequity.config import load_config
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.manifest import Manifest
+from cnequity.query.reader import load
+from cnequity.query.state import dataset_state
+from cnequity.run_scope import set_backfill
 from cnequity.steps.finalize import step_compact
-from cnequity.storage.state import StateStore
 
 TRADE_DATE = date(2026, 6, 26)
 
@@ -46,13 +48,10 @@ def _check_success_run(cfg, run_id: str) -> list[str]:
     if summary.get("batch_counts", {}).get("failed", 0):
         errors.append(f"failed batches: {summary['batch_counts']}")
 
-    for ds, part in (
-        ("daily_bars", f"trade_date={TRADE_DATE.isoformat()}"),
-        ("trading_status", f"trade_date={TRADE_DATE.isoformat()}"),
-    ):
-        part_path = cfg.curated_root / ds / part / "part-merged.parquet"
-        if not part_path.exists():
-            errors.append(f"missing curated partition: {part_path}")
+    for ds in ("daily_bars", "trading_status"):
+        frame = load(ds, start=TRADE_DATE, end=TRADE_DATE, config=cfg)
+        if frame.is_empty():
+            errors.append(f"missing published rows for {ds} on {TRADE_DATE.isoformat()}")
 
     findings_path = cfg.meta_root / "quality" / "findings" / f"{run_id}.json"
     if not findings_path.exists():
@@ -81,12 +80,10 @@ def main() -> int:
     args = parser.parse_args()
     cfg = load_config(args.config)
     engine = JobEngine(cfg)
-    state = StateStore(cfg.meta_root)
 
     _print("Phase 1", "reference wave")
-    curated_inst = cfg.curated_root / "instruments" / "part-merged.parquet"
-    if curated_inst.exists():
-        _print("Phase 1", "skipped (instruments already in curated)")
+    if dataset_state("instruments", config=cfg).revision_id is not None:
+        _print("Phase 1", "skipped (instruments already published)")
         ref = {"run_id": "skipped", "status": "success"}
     else:
         ref = engine.run_job(
@@ -99,12 +96,8 @@ def main() -> int:
             return 1
         step_compact(cfg, TRADE_DATE, ref["run_id"], {})
 
-    # True single-day incremental (skip 5-day cold-start window).
-    prev = TRADE_DATE - timedelta(days=1)
-    state.set_date("daily_bars", prev)
-    state.set_date("index_bars", prev)
-
     _print("Phase 2", f"daily job for {TRADE_DATE} (1-day bar window)")
+    set_backfill(cfg, active=True, start=TRADE_DATE, end=TRADE_DATE, redo="all")
     daily = engine.run_job("daily", TRADE_DATE)
     _print("daily status", Manifest(cfg.manifest_path).run_summary(daily["run_id"]))
     ok_errors = _check_success_run(cfg, daily["run_id"])
@@ -113,11 +106,11 @@ def main() -> int:
         return 1
     _print("SUCCESS CHECK", "passed")
 
-    wm_before_fail = state.get_date("daily_bars")
-    _print("watermark before failure test", wm_before_fail)
+    rev_before_fail = dataset_state("daily_bars", config=cfg).revision_id
+    _print("revision before failure test", rev_before_fail)
 
     _print("Phase 3", "blocked network during daily_bars (new run)")
-    state.set_date("daily_bars", prev)
+    set_backfill(cfg, active=True, start=TRADE_DATE, end=TRADE_DATE, redo="all")
     real_socket = socket.socket
 
     def _blocked(*args, **kwargs):
@@ -137,7 +130,7 @@ def main() -> int:
     summary_fail = Manifest(cfg.manifest_path).run_summary(fail_id)
     _print("failure run status", summary_fail)
 
-    wm_after_fail = state.get_date("daily_bars")
+    rev_after_fail = dataset_state("daily_bars", config=cfg).revision_id
     findings = json.loads(
         (cfg.meta_root / "quality" / "findings" / f"{fail_id}.json").read_text(encoding="utf-8")
     )
@@ -146,8 +139,8 @@ def main() -> int:
     fail_errors: list[str] = []
     if summary_fail.get("batch_counts", {}).get("failed", 0) == 0:
         fail_errors.append("expected failed daily_bars batches")
-    if wm_after_fail != prev:
-        fail_errors.append(f"watermark moved to {wm_after_fail!r}, expected {prev!r}")
+    if rev_after_fail != rev_before_fail:
+        fail_errors.append(f"revision moved to {rev_after_fail!r}, expected {rev_before_fail!r}")
     if not skipped:
         fail_errors.append("expected compact_skipped audit warning")
     if fail_errors:
@@ -166,8 +159,8 @@ def main() -> int:
         retry_errors.append(f"retry status={retry.get('status')!r}")
     if final.get("batch_counts", {}).get("failed", 0):
         retry_errors.append("batches still failed after retry")
-    if state.get_date("daily_bars") != TRADE_DATE:
-        retry_errors.append(f"watermark={state.get_date('daily_bars')!r}, expected {TRADE_DATE!r}")
+    if load("daily_bars", start=TRADE_DATE, end=TRADE_DATE, config=cfg).is_empty():
+        retry_errors.append(f"daily_bars missing for {TRADE_DATE!r} after retry")
     if retry_errors:
         _print("RETRY CHECK FAILED", retry_errors)
         return 1

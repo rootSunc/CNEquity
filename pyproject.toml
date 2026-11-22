@@ -64,7 +64,7 @@ dependencies = [
   "httpx>=0.25",
   # Chrome TLS impersonation for push2his (plain httpx often gets Empty reply overseas).
   "curl_cffi>=0.7",
-  "polars>=1.0",
+  "polars>=1.32",
   # Option pricing (domain/option_pricing.py) vectorises Black-76 and BAW over
   # a session's strikes. Already present through pandas; declared because the
   # lake now imports it directly.
@@ -93,8 +93,6 @@ dependencies = [
   "pandas>=2.0",
   "openpyxl>=3.0",
   "xlrd>=2.0",
-  # stdlib tomllib is 3.11+; config loader falls back to tomli on 3.10.
-  "tomli>=2; python_version < '3.11'",
   # `cne serve` — the read-only lake dashboard. FastAPI earns its ~8 packages on
   # the response models and the OpenAPI page they generate: /api/docs is the
   # API reference, so it cannot drift from the handlers, and the same models are
@@ -232,9 +230,10 @@ ignore = ["E501"]
 "scripts/**/*.py" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["cnequity"]
+known-first-party = ["cnequity", "equitylake_core"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 testpaths = ["tests"]
 # Network probes run only with `-m network`.
 # Random order is opt-in (`-p randomly`). The weekly workflow runs one shuffled
@@ -250,14 +249,9 @@ markers = [
   "network: tests that require outbound network access",
 ]
 # A warning in the run output should mean something went unexpectedly wrong.
-# Two kinds were drowning that signal: ~30 tests exercise the deprecated
-# `universe="all_a"` alias *on purpose* — that is what they are for, so the
-# warning they raise is the expected result, not a defect — and starlette's
-# TestClient announces an httpx2 preference on import. Silence both by name,
-# never broadly: anything else still surfaces, and an unexpected
-# DeprecationWarning is still visible.
+# Starlette's TestClient announces an httpx2 preference on import; silence it by
+# message, never broadly, so anything unexpected still surfaces.
 filterwarnings = [
-  "ignore:universe='all_a' is a deprecated compatibility alias:DeprecationWarning",
   # Starlette raises its own warning class, not DeprecationWarning, and does so
   # at import time — match on the message alone.
   "ignore:Using `httpx` with `starlette.testclient` is deprecated",

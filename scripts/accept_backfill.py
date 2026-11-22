@@ -125,7 +125,7 @@ def spot_check_symbol(
 
 def load_universe_smoke(cfg, start: str, end: str) -> tuple[int, int, list[str]]:
     raw = load("daily_bars", start=start, end=end, config=cfg)
-    filtered = load("daily_bars", start=start, end=end, universe="all_a", config=cfg)
+    filtered = load("daily_bars", start=start, end=end, profile="legacy_all_a", config=cfg)
     removed = sorted(
         set(raw.get_column("symbol").to_list()) - set(filtered.get_column("symbol").to_list())
     )
@@ -204,7 +204,7 @@ def cmd_check(cfg, compare_path: Path | None, start: str, end: str, symbol: str)
             start=start,
             end=end,
             adjust="hfq",
-            universe="all_a",
+            profile="legacy_all_a",
             symbols=[symbol],
             config=cfg,
         )

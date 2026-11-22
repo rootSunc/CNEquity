@@ -238,12 +238,11 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "openpyxl", specifier = ">=3.0" },
     { name = "pandas", specifier = ">=2.0" },
-    { name = "polars", specifier = ">=1.0" },
+    { name = "polars", specifier = ">=1.32" },
     { name = "pyarrow", specifier = ">=15.0" },
     { name = "pypdf", extras = ["crypto"], specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "snownlp", specifier = ">=0.12" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
     { name = "uvicorn", specifier = ">=0.27" },
     { name = "xlrd", specifier = ">=2.0" },
 ]

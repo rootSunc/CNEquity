@@ -153,10 +153,10 @@ def test_cne_demo_offline(tmp_path, monkeypatch):
         assert "探测 TDX" in result.output
         assert "600519.SH" in result.output
         assert config_out.exists()
-        assert (data_root / "curated" / "instruments" / "part-merged.parquet").exists()
         # Only the source steps are mocked. The demo must exercise the same
         # catalog publication and SQL read as an ordinary run.
         assert (data_root / "lake" / "catalog.sqlite").is_file()
+        assert list((data_root / "lake" / "data" / "main" / "instruments").rglob("*.parquet"))
         assert list((data_root / "lake" / "data" / "main" / "trading_calendar").rglob("*.parquet"))
         _assert_query_keeps_daily_dates(config_out)
     finally:
@@ -344,15 +344,17 @@ def test_cne_demo_sample_needs_no_network(tmp_path, monkeypatch):
     assert "离线样例" in result.output
     assert "source=mock" in result.output
     assert config_out.exists()
-    dataset = data_root / "curated" / "daily_bars"
-    sample_file = dataset / "part-sample.parquet"
-    bars = pl.read_parquet(sample_file)
+    assert (data_root / "lake" / "catalog.sqlite").is_file()
+    dataset = data_root / "lake" / "data" / "main" / "daily_bars"
+    sample_files = sorted(dataset.rglob("*.parquet"))
+    assert sample_files
+    bars = pl.concat([pl.read_parquet(path) for path in sample_files])
     assert bars.height == 10
     assert bars["source"].unique().to_list() == ["mock"]
     with duckdb.connect() as con:
         dates = con.execute(
-            "SELECT DISTINCT trade_date FROM read_parquet(?, hive_partitioning = true) ORDER BY 1",
-            [(dataset / "**" / "*.parquet").as_posix()],
+            "SELECT DISTINCT trade_date FROM read_parquet(?, hive_partitioning = false) ORDER BY 1",
+            [[path.as_posix() for path in sample_files]],
         ).fetchall()
     assert dates == [(date(2024, 6, day),) for day in range(24, 29)]
     _assert_query_keeps_daily_dates(config_out)

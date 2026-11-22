@@ -356,8 +356,8 @@ def _fixture_pipeline(root: Path) -> dict[str, Any]:
         STEP_REGISTRY["daily_bars"] = original
 
 
-def _next_day_update(root: Path, packages: Path, baseline: Path) -> dict[str, Any]:
-    """Create a revision-2 next-day lake and return its snapshot identity."""
+def _next_day_update(root: Path) -> dict[str, Any]:
+    """Publish a revision-2 next-day update on *root* and return its pointer."""
 
     cfg = _config(root)
     manifest = Manifest(cfg.manifest_path)
@@ -387,15 +387,11 @@ def _next_day_update(root: Path, packages: Path, baseline: Path) -> dict[str, An
     manifest.finish_run(run_id, "success", rows_written=frame.height)
     pointer = RevisionStore(cfg.meta_root, cfg.curated_root).current_pointer("daily_bars")
     _assert(pointer is not None and pointer["revision"] == 2, f"unexpected next pointer: {pointer}")
-    packages_store = SnapshotStore(cfg, packages)
-    packages_store.create_delta(
-        "after-baseline", baseline=baseline, datasets=["daily_bars"], target=root
-    )
     return {"config": cfg, "run_id": run_id, "pointer": pointer}
 
 
 def _snapshot_and_delta(source_cfg: Config, work: Path) -> dict[str, Any]:
-    """Round-trip a baseline, apply next-day delta, and test rollback/idempotency."""
+    """Round-trip a baseline snapshot, apply a next-day publish, and verify time travel."""
 
     packages = work / "packages"
     store = SnapshotStore(source_cfg, packages)
@@ -421,7 +417,8 @@ def _snapshot_and_delta(source_cfg: Config, work: Path) -> dict[str, Any]:
     _assert(not store.path("damaged").exists(), "corrupt archive published a snapshot")
 
     store.import_archive(archive, name="baseline-imported")
-    _assert(store.verify("baseline-imported").passed, "imported baseline failed verification")
+    verification = store.verify("baseline-imported")
+    _assert(verification.passed, "imported baseline failed verification")
     restored = store.restore("baseline-imported", work / "restored")
     restored_cfg = _config(restored)
     base_state = dataset_state("daily_bars", config=restored_cfg).revision
@@ -430,56 +427,10 @@ def _snapshot_and_delta(source_cfg: Config, work: Path) -> dict[str, Any]:
         "restored query failed",
     )
 
-    updated = work / "updated"
-    shutil.copytree(restored, updated)
-    update = _next_day_update(updated, packages, restored)
-    update_cfg = update["config"]
-    delta = SnapshotStore(update_cfg, packages)
-    verification = delta.verify_delta("after-baseline")
-    _assert(verification.passed, f"delta verification failed: {verification}")
-
-    # A publish failure after file replacement must restore every overwritten
-    # file and leave the baseline fingerprint/state untouched.
-    rollback = work / "rollback"
-    shutil.copytree(restored, rollback)
-    before_rollback = delta._lake_index(rollback, ["daily_bars"])
-    import cnequity.storage.snapshots as snapshot_module
-
-    original_write_json = snapshot_module.write_json_atomic
-
-    def fail_receipt(path: Path, payload: Any, **kwargs: Any) -> Any:
-        if Path(path).parent.name == "applied-deltas":
-            raise OSError("injected delta publish failure")
-        return original_write_json(path, payload, **kwargs)
-
-    snapshot_module.write_json_atomic = fail_receipt  # type: ignore[assignment]
-    try:
-        try:
-            delta.apply_delta("after-baseline", rollback)
-        except OSError as exc:
-            _assert("injected" in str(exc), f"unexpected rollback error: {exc}")
-        else:
-            _fail("injected delta publish failure did not fail")
-    finally:
-        snapshot_module.write_json_atomic = original_write_json  # type: ignore[assignment]
-    _assert(
-        delta._lake_index(rollback, ["daily_bars"]) == before_rollback,
-        "delta rollback changed target",
-    )
-
-    delta.apply_delta("after-baseline", restored)
-    after_first = delta._lake_index(restored, ["daily_bars"])
-    delta.apply_delta("after-baseline", restored)
-    _assert(
-        delta._lake_index(restored, ["daily_bars"]) == after_first, "delta retry was not idempotent"
-    )
-    _assert(
-        after_first == delta._lake_index(updated, ["daily_bars"]),
-        "applied delta hash/index differs from source",
-    )
+    _next_day_update(restored)
     _assert(
         base_state != dataset_state("daily_bars", config=restored_cfg).revision,
-        "delta did not update state",
+        "next-day publish did not advance revision",
     )
     _assert(
         load("daily_bars", config=restored_cfg, start=DAY2, end=DAY2).height == len(SYMBOLS),
@@ -496,16 +447,19 @@ def _snapshot_and_delta(source_cfg: Config, work: Path) -> dict[str, Any]:
         "current revision query is wrong",
     )
     findings = audit_curated_dataset(
-        "daily_bars", "trade_date", restored_cfg.curated_root / "daily_bars", DAY2, full=True
+        "daily_bars",
+        "trade_date",
+        restored_cfg.curated_root / "daily_bars",
+        DAY2,
+        full=True,
     )
     errors = [item for item in findings if item.get("severity") == "error"]
-    _assert(not errors, f"post-delta audit errors: {errors}")
+    _assert(not errors, f"post-update audit errors: {errors}")
     return {
         "archive": str(archive),
         "restored": str(restored),
-        "updated": str(updated),
-        "delta_verified_files": verification.verified_files,
-        "rows_after_delta": load("daily_bars", config=restored_cfg).height,
+        "verified_files": verification.verified_files,
+        "rows_after_update": load("daily_bars", config=restored_cfg).height,
     }
 
 

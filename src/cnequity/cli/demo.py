@@ -32,7 +32,7 @@ from cnequity.domain.schemas import validate_dataframe, with_provenance
 from cnequity.i18n import _
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.run_scope import set_backfill
-from cnequity.storage.atomic import replace_with_retry, write_parquet_atomic
+from cnequity.storage.atomic import replace_with_retry
 from cnequity.storage.layout import init_data_layout
 from equitylake_core.lock import LockIOError, LockUnavailable
 
@@ -48,7 +48,7 @@ DEFAULT_SYMBOLS = (
 DEFAULT_DAYS = 30
 RESEARCH_MIN_DAYS = 756  # roughly three trading years; enough to cross corporate actions
 
-MCP_GUIDE_URL = "https://rootsunc.github.io/CNEquity/datasets/query-guide/#mcp"
+MCP_GUIDE_URL = "https://rootsunc.github.io/CNEquity/reference/mcp/"
 
 
 def _banner(step: str, title: str) -> None:
@@ -204,6 +204,39 @@ def _probe_tdx(cfg: Config) -> None:
         close_quotes_client(client)
 
 
+def _publish_demo_frames(
+    cfg: Config,
+    frames: dict[str, pl.DataFrame],
+    *,
+    run_id: str,
+    message: str,
+) -> dict[str, object]:
+    """Publish demo/sample DataFrames through the lake catalog like any real run."""
+    from cnequity.storage.lake_write import publish_frames
+
+    return publish_frames(cfg, frames, run_id=run_id, message=message)
+
+
+def _holds_sample_lake(data_root: Path) -> bool:
+    """Whether *data_root* already holds a synthetic sample lake (catalog or legacy)."""
+    if any((data_root / "curated").rglob("part-sample.parquet")):
+        return True
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import CATALOG_FILE
+
+    cfg = Config(data_root=data_root)
+    if not (lake_root(cfg) / CATALOG_FILE).is_file():
+        return False
+    from cnequity.storage import revision_records
+
+    records = revision_records.records_for(cfg.meta_root)
+    if records is not None and any(
+        getattr(rev, "run_id", None) == "sample" for rev in records.current.values()
+    ):
+        return True
+    return False
+
+
 def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
     from cnequity.adapters.tdx_protocol.client import fetch_instruments, normalize_with_source
 
@@ -238,9 +271,17 @@ def _write_demo_instruments(cfg: Config, symbols: list[str]) -> list[str]:
         with_provenance(kept, source="tdx_protocol", data_version="v1"),
         "instruments",
     )
-    out = cfg.curated_root / "instruments" / "part-merged.parquet"
-    write_parquet_atomic(out, df, compression="zstd")
-    click.echo(_("Wrote {height} instruments → {out}").format(height=df.height, out=out))
+    _publish_demo_frames(
+        cfg,
+        {"instruments": df},
+        run_id="demo-instruments",
+        message="demo: publish instruments",
+    )
+    click.echo(
+        _("Wrote {height} instruments → {out}").format(
+            height=df.height, out=cfg.data_root / "lake" / "data" / "main" / "instruments"
+        )
+    )
     return df["symbol"].to_list()
 
 
@@ -322,12 +363,37 @@ def _run_research_demo(
     from cnequity.query.reader import MissingAdjustmentError, load
 
     click.echo(_("Deriving hfq adjustment factors for the demo symbols from Sina…"))
-    result = compute_adj_factors(
-        cfg,
-        adjust_type="hfq",
-        refresh_symbols=symbols,
-        full=True,
-    )
+    if isinstance(cfg, Config):
+        from cnequity.steps.finalize import capture_derive_inputs, publish_derived_revision
+        from cnequity.storage.derived_output import DerivedOutput
+
+        with DerivedOutput(cfg, "adj_factors", "demo-research") as output:
+            input_revisions = capture_derive_inputs(cfg, "adj_factors", trade_date=end)
+            result = compute_adj_factors(
+                cfg,
+                adjust_type="hfq",
+                refresh_symbols=symbols,
+                full=True,
+                output=output,
+            )
+            if output.changed():
+                publish_derived_revision(
+                    cfg,
+                    "adj_factors",
+                    "demo-research",
+                    end,
+                    output,
+                    input_revisions=input_revisions,
+                    coverage_status="partial" if result.failed else "unknown",
+                    factor_findings=result.findings,
+                )
+    else:
+        result = compute_adj_factors(
+            cfg,
+            adjust_type="hfq",
+            refresh_symbols=symbols,
+            full=True,
+        )
     # A vendor gap on one of five symbols is not a reason to abandon the whole
     # demonstration: Sina serves the factor series per symbol, and the point
     # here is to show one raw-vs-adjusted comparison. Name what was missed and
@@ -652,18 +718,11 @@ def run_sample_demo(
         ),
     )
     instruments, bars = _sample_frames(symbols, sessions)
-    write_parquet_atomic(
-        cfg.curated_root / "instruments" / "part-sample.parquet",
-        instruments,
-        compression="zstd",
-    )
-    # The offline fixture is small enough for one file. A Hive-style
-    # trade_date=YYYY-MM directory would overwrite the DATE column in some
-    # external readers even though the values inside the file are correct.
-    write_parquet_atomic(
-        cfg.curated_root / "daily_bars" / "part-sample.parquet",
-        bars,
-        compression="zstd",
+    _publish_demo_frames(
+        cfg,
+        {"instruments": instruments, "daily_bars": bars},
+        run_id="sample",
+        message="sample: publish synthetic instruments and daily_bars",
     )
     ensure_duckdb_views(cfg)
     _rebuild_demo_stats(cfg)
@@ -717,7 +776,7 @@ def run_demo(
     if days < 1:
         raise click.ClickException(_("--days must be >= 1"))
 
-    if any((data_root / "curated").rglob("part-sample.parquet")):
+    if _holds_sample_lake(data_root):
         raise click.ClickException(
             _(
                 "{data_root} holds the synthetic sample lake (source=mock). Real data is not written over it: pass another --data-root, or delete that directory first."
