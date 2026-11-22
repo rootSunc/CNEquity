@@ -16,7 +16,7 @@ from typing import NamedTuple
 
 import polars as pl
 
-from cnequity.config.resources import DuckDBResources, resources_for
+from cnequity.config.resources import resources_for
 from cnequity.domain.datasets import granularity_for_dataset
 from cnequity.domain.partitions import partition_value
 from cnequity.storage.catalog_bridge import (
@@ -27,11 +27,15 @@ from cnequity.storage.catalog_bridge import (
     synced_revision_id,
 )
 from equitylake_core.catalog import ALIAS, CATALOG_FILE, Catalog, quote_identifier
+from equitylake_core.catalog_cache import OpenCatalogs
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_open: dict[Path, tuple[DuckDBResources, Catalog]] = {}
+#: One open catalog per lake read lately. Each holds DuckDB's scan threads (one
+#: per core by default), so a process reading many lakes keeps two open, not one
+#: per lake it ever read (see OpenCatalogs); a third lake costs a reopen.
+_open = OpenCatalogs(limit=2)
 
 
 class CatalogRows(NamedTuple):
@@ -45,13 +49,9 @@ def _catalog(config) -> Catalog | None:
     if not (root / CATALOG_FILE).exists():
         return None
     budget = resources_for(config, "read")
-    cached = _open.get(root)
-    if cached is not None and cached[0] == budget:
-        return cached[1]
-    catalog = Catalog(root, read_only=True, **budget.options())
-    _open[root] = (budget, catalog)
-    if cached is not None:
-        cached[1].close()
+    catalog = _open.get(root, budget)
+    if catalog is None:
+        catalog = _open.put(root, Catalog(root, read_only=True, **budget.options()), budget)
     return catalog
 
 
@@ -61,18 +61,14 @@ def close(config) -> None:
     with _lock:
         _tables.clear()
         _schemas.clear()
-        cached = _open.pop(root, None)
-        if cached is not None:
-            cached[1].close()
+        _open.close(root)
 
 
 def close_all() -> None:
     with _lock:
         _tables.clear()
         _schemas.clear()
-        for _, catalog in _open.values():
-            catalog.close()
-        _open.clear()
+        _open.close()
 
 
 def read_published(

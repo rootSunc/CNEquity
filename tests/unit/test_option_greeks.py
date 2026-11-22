@@ -7,6 +7,7 @@ from datetime import date
 
 import numpy as np
 import polars as pl
+from tests.catalog_seed import derive_into_lake, publish_folders
 
 from cnequity.config import Config
 from cnequity.derive.option_greeks import (
@@ -16,6 +17,8 @@ from cnequity.derive.option_greeks import (
 )
 from cnequity.domain.option_pricing import baw, black76
 from cnequity.domain.schemas import validate_dataframe, with_provenance
+from cnequity.query.parquet_scan import root_parquet_files
+from cnequity.storage.lake_record import start_on_catalog
 
 DAY = date(2026, 9, 24)
 EXPIRY = date(2026, 12, 18)
@@ -143,11 +146,18 @@ def _lake(tmp_path) -> Config:
     contracts = config.curated_root / "option_contracts"
     contracts.mkdir(parents=True)
     _contracts(["M2612C3100.DCE"], "american").write_parquet(contracts / "part-000.parquet")
+    config.meta_root.mkdir(parents=True, exist_ok=True)
+    start_on_catalog(config)
+    publish_folders(config, "option_bars", "futures_bars", "option_contracts")
     return config
 
 
-def _age(path, seconds: float) -> None:
-    for file in path.glob("*.parquet"):
+def _derive(config, **kwargs) -> dict:
+    return derive_into_lake(config, "option_greeks", derive_option_greeks, **kwargs)
+
+
+def _age(files, seconds: float) -> None:
+    for file in files:
         stat = file.stat()
         os.utime(file, (stat.st_atime - seconds, stat.st_mtime - seconds))
 
@@ -155,13 +165,14 @@ def _age(path, seconds: float) -> None:
 def test_sessions_recompute_when_their_bars_are_rewritten(tmp_path):
     config = _lake(tmp_path)
     assert stale_sessions(config) == [date(2026, 9, 23), DAY]
-    assert derive_option_greeks(config)["sessions"] == 2
+    assert _derive(config)["sessions"] == 2
     assert stale_sessions(config) == []
-    assert derive_option_greeks(config)["rows"] == 0
+    assert _derive(config)["rows"] == 0
     # Touching files without changing rows is not a reason to recompute.
-    greeks = config.derived_root / "option_greeks"
-    for day in (date(2026, 9, 23), DAY):
-        _age(greeks / f"trade_date={day.isoformat()}", 60)
+    greeks = root_parquet_files(config.derived_root / "option_greeks")
+    held = pl.concat([pl.read_parquet(file, columns=["trade_date"]) for file in greeks])
+    assert set(held["trade_date"]) == {date(2026, 9, 23), DAY}
+    _age(greeks, 60)
     assert stale_sessions(config) == []
     # A backfill rewrites the month's futures: both sessions read it.
     month = config.curated_root / "futures_bars" / "trade_date=2026-09"
@@ -172,6 +183,7 @@ def test_sessions_recompute_when_their_bars_are_rewritten(tmp_path):
             "settle": [3001.0, 3010.0],
         }
     ).write_parquet(month / "part-000.parquet")
+    publish_folders(config, "futures_bars")
     assert stale_sessions(config) == [date(2026, 9, 23), DAY]
 
 
@@ -179,8 +191,8 @@ def test_rewriting_an_earlier_window_keeps_the_watermark(tmp_path):
     from cnequity.quality.verify import covered_through
 
     config = _lake(tmp_path)
-    derive_option_greeks(config)
-    summary = derive_option_greeks(config, start=date(2026, 9, 23), end=date(2026, 9, 23))
+    _derive(config)
+    summary = _derive(config, start=date(2026, 9, 23), end=date(2026, 9, 23))
     assert summary["sessions"] == 1
     # The watermark is read off the published rows; the later session's stay.
     assert covered_through(config, "option_greeks") == DAY
@@ -192,23 +204,25 @@ def test_contracts_rates_and_model_changes_invalidate_even_with_preserved_mtime(
     from cnequity.derive import option_greeks as module
 
     cfg = _lake(tmp_path)
-    derive_option_greeks(cfg)
+    _derive(cfg)
     contract = next((cfg.curated_root / "option_contracts").glob("*.parquet"))
     before = contract.stat()
     pl.read_parquet(contract).with_columns(pl.lit(DAY).alias("expiry_date")).write_parquet(contract)
     os.utime(contract, (before.st_atime, before.st_mtime))
+    publish_folders(cfg, "option_contracts")
     assert stale_sessions(cfg) == [date(2026, 9, 23), DAY]
-    derive_option_greeks(cfg, start=DAY, end=DAY)
+    _derive(cfg, start=DAY, end=DAY)
     assert stale_sessions(cfg) == [date(2026, 9, 23)]
-    derive_option_greeks(cfg)
+    _derive(cfg)
     rates = cfg.curated_root / "macro_indicators"
     rates.mkdir()
     pl.DataFrame({"indicator_id": ["shibor_3m"], "obs_date": [DAY], "value": [1.5]}).write_parquet(
         rates / "rates.parquet"
     )
+    publish_folders(cfg, "macro_indicators")
     # Only a session on or after the new observation applies it.
     assert stale_sessions(cfg) == [DAY]
-    derive_option_greeks(cfg)
+    _derive(cfg)
     original = module._dependency_identity
     monkeypatch.setattr(
         module, "_dependency_identity", lambda config: {**original(config), "model": "changed"}
@@ -231,7 +245,7 @@ def test_a_newly_listed_contract_leaves_settled_sessions_alone(tmp_path):
     """Whole-table fingerprints made every session stale whenever a contract
     was listed, so the full history was recomputed daily (~50 min)."""
     cfg = _lake(tmp_path)
-    derive_option_greeks(cfg)
+    _derive(cfg)
     contracts = cfg.curated_root / "option_contracts"
     pl.concat(
         [
@@ -240,6 +254,7 @@ def test_a_newly_listed_contract_leaves_settled_sessions_alone(tmp_path):
         ],
         how="diagonal_relaxed",
     ).write_parquet(contracts / "part-000.parquet")
+    publish_folders(cfg, "option_contracts")
     assert stale_sessions(cfg) == []
 
 
@@ -269,5 +284,5 @@ def test_the_derive_does_not_hold_the_lake_lock_while_computing(tmp_path, monkey
         return original(*args, **kwargs)
 
     monkeypatch.setattr(module, "compute_option_greeks", probe)
-    derive_option_greeks(cfg)
+    _derive(cfg)
     assert seen == [True], "another job's compact can run while Greeks compute"

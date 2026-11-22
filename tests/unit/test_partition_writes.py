@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 
 import polars as pl
-from tests.catalog_seed import commit_tree
+from tests.catalog_seed import compact_into_lake
 
 from cnequity.config import Config
 from cnequity.meta_layout import SOURCE_CACHE
@@ -25,7 +25,6 @@ from cnequity.storage.parquet import (
     compact_dataset,
     write_partition_rows,
 )
-from cnequity.storage.revisions import RevisionStore
 
 _DATASET = "index_bars"
 _YEAR = "trade_date=2024"
@@ -56,10 +55,22 @@ def _bars(
     ).with_columns(pl.col("fetched_at").str.to_datetime(time_unit="us", time_zone="UTC"))
 
 
+def _out(cfg: Config) -> Path:
+    """A scratch layer the merge writes into, as a run's checkout would be."""
+    return cfg.data_root.parent / "out" / "curated"
+
+
 def _compact(cfg: Config, run_id: str, frame: pl.DataFrame) -> list:
     StagingWriter(cfg.staging_root).write_batch(_DATASET, run_id, "batch-0", frame)
     changed: list = []
-    compact_dataset(cfg.staging_root, cfg.curated_root, _DATASET, run_id, changed_files=changed)
+    compact_dataset(
+        cfg.staging_root,
+        cfg.curated_root,
+        _DATASET,
+        run_id,
+        changed_files=changed,
+        out_root=_out(cfg),
+    )
     return changed
 
 
@@ -70,7 +81,7 @@ def _stamp(path):
 
 def test_new_keys_land_in_a_new_file_and_leave_the_old_one_untouched(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    part = cfg.curated_root / _DATASET / _YEAR
+    part = _out(cfg) / _DATASET / _YEAR
     _compact(cfg, "run-1", _bars(["000001.SH", "000016.SH"]))
     base = part / MERGED_FILE
     before = _stamp(base)
@@ -79,13 +90,13 @@ def test_new_keys_land_in_a_new_file_and_leave_the_old_one_untouched(tmp_path):
 
     assert _stamp(base) == before  # never read in full, never rewritten
     assert len(changed) == 1 and changed[0] != base
-    rows = collect_parquet_root(cfg.curated_root / _DATASET, partition_col="trade_date")
+    rows = collect_parquet_root(_out(cfg) / _DATASET, partition_col="trade_date")
     assert sorted(rows["symbol"].to_list()) == ["000001.SH", "000016.SH", "000300.SH"]
 
 
 def test_an_update_rewrites_only_the_file_holding_its_key(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    part = cfg.curated_root / _DATASET / _YEAR
+    part = _out(cfg) / _DATASET / _YEAR
     _compact(cfg, "run-1", _bars(["000001.SH"]))
     _compact(cfg, "run-2", _bars(["000300.SH"]))
     other = next(path for path in part.glob("*.parquet") if path.name != MERGED_FILE)
@@ -106,21 +117,21 @@ def test_an_unchanged_refetch_writes_nothing(tmp_path):
 
 def test_a_key_split_across_files_is_repaired_when_its_partition_is_written(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    part = cfg.curated_root / _DATASET / _YEAR
+    part = _out(cfg) / _DATASET / _YEAR
     part.mkdir(parents=True)
     _bars(["000001.SH"], close=1.0).write_parquet(part / MERGED_FILE)
     _bars(["000001.SH"], close=1.0).write_parquet(part / "part-legacy.parquet")
 
     _compact(cfg, "run-1", _bars(["000300.SH"]))
 
-    rows = collect_parquet_root(cfg.curated_root / _DATASET, partition_col="trade_date")
+    rows = collect_parquet_root(_out(cfg) / _DATASET, partition_col="trade_date")
     assert sorted(rows["symbol"].to_list()) == ["000001.SH", "000300.SH"]
     assert [path.name for path in part.glob("*.parquet")] == [MERGED_FILE]
 
 
 def test_a_partition_past_the_file_cap_folds_its_small_files(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    part = cfg.curated_root / _DATASET / _YEAR
+    part = _out(cfg) / _DATASET / _YEAR
     _compact(cfg, "run-0", _bars([f"{i:06d}.SH" for i in range(50)]))
     base = part / MERGED_FILE
     before = _stamp(base)
@@ -130,7 +141,7 @@ def test_a_partition_past_the_file_cap_folds_its_small_files(tmp_path):
     files = list(part.glob("*.parquet"))
     assert len(files) <= MAX_PARTITION_FILES
     assert _stamp(base) == before  # the big file is never part of the fold
-    rows = collect_parquet_root(cfg.curated_root / _DATASET, partition_col="trade_date")
+    rows = collect_parquet_root(_out(cfg) / _DATASET, partition_col="trade_date")
     assert rows.height == 50 + MAX_PARTITION_FILES + 2
 
 
@@ -157,18 +168,9 @@ def test_replace_by_drops_stored_rows_the_recompute_no_longer_has(tmp_path):
     assert rows.rows() == [("a", 1, 9), ("a", 2, 1)]  # "b" left day 1 with the recompute
 
 
-def _publish(cfg: Config, store: RevisionStore, run_id: str, frame: pl.DataFrame):
-    changed = _compact(cfg, run_id, frame)
-    if not changed:
-        return None
-    return commit_tree(
-        store,
-        _DATASET,
-        run_id=run_id,
-        changed_files=changed,
-        schema_version=1,
-        contract_fingerprint="test",
-    )
+def _publish(cfg: Config, run_id: str, frame: pl.DataFrame) -> int:
+    StagingWriter(cfg.staging_root).write_batch(_DATASET, run_id, "batch-0", frame)
+    return compact_into_lake(cfg, _DATASET, run_id)
 
 
 def test_a_large_partition_is_bucketed_and_an_update_rewrites_one_bucket(tmp_path, monkeypatch):
@@ -176,7 +178,7 @@ def test_a_large_partition_is_bucketed_and_an_update_rewrites_one_bucket(tmp_pat
 
     monkeypatch.setattr(storage, "BUCKET_ROWS", 10)
     cfg = Config(data_root=tmp_path / "data")
-    part = cfg.curated_root / _DATASET / _YEAR
+    part = _out(cfg) / _DATASET / _YEAR
     symbols = [f"{i:06d}.SH" for i in range(50)]
     _compact(cfg, "run-1", _bars(symbols))
     files = sorted(part.glob("*.parquet"))
@@ -187,7 +189,7 @@ def test_a_large_partition_is_bucketed_and_an_update_rewrites_one_bucket(tmp_pat
 
     moved = [p.name for p in part.glob("*.parquet") if _stamp(p) != stamps.get(p.name)]
     assert len(moved) == 1  # one bucket, not the partition
-    rows = collect_parquet_root(cfg.curated_root / _DATASET, partition_col="trade_date")
+    rows = collect_parquet_root(_out(cfg) / _DATASET, partition_col="trade_date")
     assert rows.height == 50
     assert rows.filter(pl.col("symbol") == "000007.SH")["close"].to_list() == [3.0]
 
@@ -196,14 +198,13 @@ def test_views_are_rebuilt_only_when_a_pointer_moves(tmp_path):
     from cnequity.query.views import ensure_duckdb_views
 
     cfg = Config(data_root=tmp_path / "data")
-    store = RevisionStore(cfg.meta_root, cfg.curated_root)
-    _publish(cfg, store, "run-1", _bars(["000001.SH"]))
+    _publish(cfg, "run-1", _bars(["000001.SH"]))
     db = ensure_duckdb_views(cfg)
     built = _stamp(db)
 
     assert _stamp(ensure_duckdb_views(cfg)) == built  # nothing moved
 
-    _publish(cfg, store, "run-2", _bars(["000002.SH"]))
+    _publish(cfg, "run-2", _bars(["000002.SH"]))
     db = ensure_duckdb_views(cfg)  # only index_bars is redefined
     assert _stamp(db) != built
     import duckdb

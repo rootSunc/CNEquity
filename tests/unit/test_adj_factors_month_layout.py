@@ -13,11 +13,15 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import derive_into_lake, publish_folders
 
 from cnequity.config import Config
 from cnequity.derive import adj_factors as derive
 from cnequity.domain import datasets as registry
 from cnequity.domain.schemas import with_provenance
+from cnequity.query.parquet_scan import root_parquet_files
+from cnequity.storage.derived_output import DerivedOutput
+from cnequity.storage.lake_record import start_on_catalog
 
 JUNE = [date(2024, 6, 3), date(2024, 6, 4), date(2024, 6, 5)]
 
@@ -52,7 +56,21 @@ def month_cfg(tmp_path, monkeypatch):
         [_factors(JUNE[:2], ["600519.SH", "000001.SZ"]), _factors(JUNE[2:], ["600519.SH"])]
     )
     frame.write_parquet(part / "part-0.parquet")
+    cfg.meta_root.mkdir(parents=True)
+    start_on_catalog(cfg)
+    publish_folders(cfg, "adj_factors")
     return cfg
+
+
+def _labels(cfg) -> list[str]:
+    """The adj_factors partitions the lake publishes."""
+    with DerivedOutput(cfg, "adj_factors", "inspect") as output:
+        return sorted(output.labels())
+
+
+def _stored(cfg) -> pl.DataFrame:
+    files = root_parquet_files(cfg.derived_root / "adj_factors")
+    return pl.concat([pl.read_parquet(f) for f in files])
 
 
 def test_the_watermark_is_the_newest_session_inside_the_month(month_cfg):
@@ -69,25 +87,32 @@ def test_partition_symbols_are_read_per_day_inside_a_month(month_cfg):
 
 
 def test_an_append_lands_in_the_month_and_keeps_its_earlier_sessions(month_cfg):
-    root = month_cfg.derived_root / "adj_factors"
-    derive._write_adj_partitions(
-        month_cfg, _factors([date(2024, 6, 6)], ["600519.SH", "000001.SZ"]), replace=False
+    derive_into_lake(
+        month_cfg,
+        "adj_factors",
+        derive._write_adj_partitions,
+        _factors([date(2024, 6, 6)], ["600519.SH", "000001.SZ"]),
+        replace=False,
     )
-    assert sorted(p.name for p in root.iterdir()) == ["trade_date=2024-06"]
-    stored = pl.concat([pl.read_parquet(f) for f in root.rglob("*.parquet")])
+    assert _labels(month_cfg) == ["trade_date=2024-06"]
+    stored = _stored(month_cfg)
     assert stored.height == 5 + 2
     assert sorted(set(stored["trade_date"].to_list())) == [*JUNE, date(2024, 6, 6)]
     assert derive._adj_factors_watermark(month_cfg) == date(2024, 6, 6)
 
 
 def test_a_full_replace_writes_whole_months(month_cfg):
-    root = month_cfg.derived_root / "adj_factors"
     july = [date(2024, 7, 1), date(2024, 7, 2)]
-    derive._write_adj_partitions(
-        month_cfg, _factors(JUNE + july, ["600519.SH"], factor=2.0), replace=True
+    derive_into_lake(
+        month_cfg,
+        "adj_factors",
+        derive._write_adj_partitions,
+        _factors(JUNE + july, ["600519.SH"], factor=2.0),
+        replace=True,
     )
-    assert sorted(p.name for p in root.iterdir()) == ["trade_date=2024-06", "trade_date=2024-07"]
-    june = pl.concat([pl.read_parquet(f) for f in (root / "trade_date=2024-06").rglob("*.parquet")])
+    assert _labels(month_cfg) == ["trade_date=2024-06", "trade_date=2024-07"]
+    stored = _stored(month_cfg)
+    june = stored.filter(pl.col("trade_date") < date(2024, 7, 1))
     assert june.height == 3 and set(june["factor"].to_list()) == {2.0}
 
 

@@ -1399,7 +1399,7 @@ def backfill_delisted_bars(
     instruments = _instruments_rows(config, spans)
     if not instruments.is_empty():
         write_fetched(config, run_id, "instruments", instruments, source="sina")
-    write_delisting_events(config, events)
+    write_delisting_events(config, run_id, events)
 
     resolved = set(recovered_spans) | expected_no_data
     all_targets = set(targets)
@@ -1522,11 +1522,16 @@ def classify_ending(bars: pl.DataFrame) -> dict:
     return out
 
 
-def write_delisting_events(config: Config, events: list[dict]) -> int:
-    """Merge *events* into ``derived/delisting_events`` (one row per symbol)."""
+def write_delisting_events(config: Config, run_id: str, events: list[dict]) -> int:
+    """Merge *events* into ``delisting_events`` and publish it (one row per symbol).
+
+    A later classification of a symbol replaces the earlier one; symbols this
+    run did not classify keep theirs. Returns the rows the dataset holds.
+    """
     from cnequity.domain.canonical import dedupe_by_primary_key
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
     from cnequity.domain.schemas import DELISTING_EVENTS_SCHEMA, with_provenance
-    from cnequity.storage.atomic import write_parquet_atomic
+    from cnequity.storage.lake_write import DatasetPublish, LakeWrite
 
     if not events:
         return 0
@@ -1542,19 +1547,21 @@ def write_delisting_events(config: Config, events: list[dict]) -> int:
         source="sina",
         data_version="v1",
     )
-    out_dir = config.derived_root / "delisting_events"
-    out_path = out_dir / "part-merged.parquet"
-    frames = [incoming]
-    if out_dir.exists():
-        frames.extend(pl.read_parquet(path) for path in sorted(out_dir.rglob("*.parquet")))
-    merged = (
-        pl.concat(frames, how="diagonal_relaxed")
-        .pipe(dedupe_by_primary_key, "delisting_events")
-        .sort("last_trade_date", descending=True)
-    )
-    out_dir.mkdir(parents=True, exist_ok=True)
-    write_parquet_atomic(out_path, merged, compression="zstd")
-    for stale in out_dir.rglob("*.parquet"):
-        if stale != out_path:
-            stale.unlink()
+    contract = dataset_contract("delisting_events")
+    with LakeWrite(config, run_id) as write:
+        checkout = write.checkout("delisting_events")
+        merged = (
+            pl.concat([incoming, checkout.rows("")], how="diagonal_relaxed")
+            .pipe(dedupe_by_primary_key, "delisting_events")
+            .sort("last_trade_date", descending=True)
+        )
+        checkout.rewrite("", merged)
+        write.publish(
+            {
+                "delisting_events": DatasetPublish(
+                    int(contract["schema_version"]), contract_fingerprint(contract)
+                )
+            },
+            message=f"delisting_events from run {run_id}",
+        )
     return merged.height

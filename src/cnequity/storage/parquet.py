@@ -30,7 +30,7 @@ from cnequity.domain.schemas import (
 )
 from cnequity.storage.atomic import write_json_atomic, write_parquet_atomic
 from cnequity.storage.changes import summarize_changes
-from cnequity.storage.revisions import sha256_file
+from cnequity.storage.revisions import refuse_lake_folder_write, sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +315,10 @@ class StagingWriter:
 
 
 class CuratedWriter:
+    """Writes partitions below *curated_root*: a checkout's layer, never a lake's own folder."""
+
     def __init__(self, curated_root: Path):
+        refuse_lake_folder_write(curated_root)
         self.curated_root = curated_root
 
     def partition_path(self, dataset: str, partition_col: str, partition_value: str) -> Path:
@@ -431,6 +434,7 @@ def emit_partition(
     partition each row goes to its bucket unless that bucket exists and was
     not loaded, in which case it joins one new appended file instead.
     """
+    refuse_lake_folder_write(out_dir)
     merged = key_ordered(merged, dataset)
     names = {path.name for path in affected}
     buckets = {parsed: path for path in existing if (parsed := parse_bucket(path.name)) is not None}
@@ -556,6 +560,7 @@ def write_partition_rows(
     same file names. *load* reads and normalizes one stored file, *dedupe*
     applies storage dedupe, *finish* runs after dedupe on what is written.
     """
+    refuse_lake_folder_write(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     existing = (
         sorted(read_dir.rglob("*.parquet")) if read_dir is not None and read_dir.exists() else []
@@ -767,12 +772,16 @@ def compact_dataset(
     change_log: list[dict] | None = None,
     staging_files: list[Path] | None = None,
     partitionwise_min_bytes: int | None = -1,
-    out_root: Path | None = None,
+    *,
+    out_root: Path,
 ) -> int:
     """Merge staging batches into curated partitions, dedupe by PK.
 
     *curated_root* is the lake the staged rows are checked against; the merged
-    partitions are written below *out_root* (a run's checkout) when given.
+    partitions are written below *out_root*, a run's checkout
+    (``Checkout.layer_root``), which the run then publishes. *base_root* is
+    the checkout's own copy of what is published (``Checkout.root``), or
+    ``None`` when nothing is.
 
     Granularity decides how many dates share one partition directory; it comes
     from the dataset's registry entry unless overridden. See
@@ -786,13 +795,13 @@ def compact_dataset(
     if granularity is None:
         granularity = granularity_for_dataset(dataset)
     staging = StagingWriter(staging_root)
-    curated = CuratedWriter(out_root if out_root is not None else curated_root)
+    curated = CuratedWriter(out_root)
     # ``base_root`` is the immutable committed generation selected before the
     # write.  It is optional for backwards compatibility with direct callers;
     # finalize passes it so a retry after a crash cannot merge from a half-
     # rewritten mutable compatibility directory.
     base_root = resolve_merge_base(base_root, dataset)
-    read_root = Path(base_root) if base_root is not None else curated_root / dataset
+    read_root = Path(base_root) if base_root is not None else Path(out_root) / dataset
     files = staging.list_run_files(dataset, run_id) if staging_files is None else staging_files
     if not files:
         return 0

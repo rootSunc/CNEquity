@@ -369,37 +369,29 @@ def _run_research_demo(
     from cnequity.query.reader import MissingAdjustmentError, load
 
     click.echo(_("Deriving hfq adjustment factors for the demo symbols from Sina…"))
-    if isinstance(cfg, Config):
-        from cnequity.steps.finalize import capture_derive_inputs, publish_derived_revision
-        from cnequity.storage.derived_output import DerivedOutput
+    from cnequity.steps.finalize import capture_derive_inputs, publish_derived_revision
+    from cnequity.storage.derived_output import DerivedOutput
 
-        with DerivedOutput(cfg, "adj_factors", "demo-research") as output:
-            input_revisions = capture_derive_inputs(cfg, "adj_factors", trade_date=end)
-            result = compute_adj_factors(
-                cfg,
-                adjust_type="hfq",
-                refresh_symbols=symbols,
-                full=True,
-                output=output,
-            )
-            if output.changed():
-                publish_derived_revision(
-                    cfg,
-                    "adj_factors",
-                    "demo-research",
-                    end,
-                    output,
-                    input_revisions=input_revisions,
-                    coverage_status="partial" if result.failed else "unknown",
-                    factor_findings=result.findings,
-                )
-    else:
+    with DerivedOutput(cfg, "adj_factors", "demo-research") as output:
+        input_revisions = capture_derive_inputs(cfg, "adj_factors", trade_date=end)
         result = compute_adj_factors(
             cfg,
             adjust_type="hfq",
             refresh_symbols=symbols,
             full=True,
+            output=output,
         )
+        if output.changed():
+            publish_derived_revision(
+                cfg,
+                "adj_factors",
+                "demo-research",
+                end,
+                output,
+                input_revisions=input_revisions,
+                coverage_status="partial" if result.failed else "unknown",
+                factor_findings=result.findings,
+            )
     # A vendor gap on one of five symbols is not a reason to abandon the whole
     # demonstration: Sina serves the factor series per symbol, and the point
     # here is to show one raw-vs-adjusted comparison. Name what was missed and

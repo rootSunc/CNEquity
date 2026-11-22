@@ -6,7 +6,7 @@ from datetime import date
 
 import polars as pl
 import pytest
-from tests.catalog_seed import commit_tree
+from tests.catalog_seed import compact_into_lake
 
 from cnequity.config import Config
 from cnequity.domain.schemas import validate_dataframe, with_provenance
@@ -15,8 +15,9 @@ from cnequity.quality.derivative_checks import (
     derivative_tip_scope,
     exchange_session_gaps,
 )
+from cnequity.query import catalog_read
+from cnequity.storage.lake_write import LakeWrite
 from cnequity.storage.parquet import StagingWriter, compact_dataset
-from cnequity.storage.revisions import RevisionStore
 
 
 @pytest.fixture
@@ -48,21 +49,18 @@ def _bar(symbol: str, day: date) -> dict:
     }
 
 
-def _write(cfg: Config, dataset: str, rows: list[dict], granularity="month") -> None:
+def _stage(cfg: Config, dataset: str, rows: list[dict], granularity="month") -> dict:
     frame = with_provenance(
         pl.DataFrame(rows, infer_schema_length=None), source="futures_exchange", data_version="v1"
     )
     frame = validate_dataframe(frame, dataset)
     StagingWriter(cfg.staging_root).write_batch(dataset, "r1", "b0", frame)
     partition = None if dataset.endswith("_contracts") else "trade_date"
-    compact_dataset(
-        cfg.staging_root,
-        cfg.curated_root,
-        dataset,
-        "r1",
-        partition_col=partition,
-        granularity=granularity if partition else None,
-    )
+    return {"partition_col": partition, "granularity": granularity if partition else None}
+
+
+def _write(cfg: Config, dataset: str, rows: list[dict], granularity="month") -> None:
+    compact_into_lake(cfg, dataset, "r1", **_stage(cfg, dataset, rows, granularity))
 
 
 def test_a_live_contract_missing_from_the_tip_is_incomplete(cfg):
@@ -245,15 +243,24 @@ def test_unpublished_mutable_rows_do_not_change_coverage_evidence(cfg):
         _bar("IF2610.CFE", date(2026, 9, 24)),
     ]
     _write(cfg, "futures_bars", rows)
-    commit_tree(
-        RevisionStore(cfg.meta_root, cfg.curated_root, cfg.derived_root),
-        "futures_bars",
-        run_id="published",
-        changed_files=sorted((cfg.curated_root / "futures_bars").rglob("*.parquet")),
-        schema_version=1,
-        contract_fingerprint="seed",
-    )
-    _write(cfg, "futures_bars", [_bar("IF2611.CFE", date(2026, 9, 24))])
+    # A run merges the missing row into its checkout but never publishes it.
+    kwargs = _stage(cfg, "futures_bars", [_bar("IF2611.CFE", date(2026, 9, 24))])
+    staged = StagingWriter(cfg.staging_root).list_run_files("futures_bars", "r1")
+    catalog_read.close(cfg)
+    with LakeWrite(cfg, "unpublished") as write:
+        checkout = write.checkout_staged("futures_bars", staged)
+        written = compact_dataset(
+            cfg.staging_root,
+            cfg.curated_root,
+            "futures_bars",
+            "r1",
+            base_root=checkout.root,
+            staging_files=staged,
+            out_root=checkout.layer_root,
+            **kwargs,
+        )
+        assert written and checkout.changed()
+        assert derivative_tip_scope(cfg, "futures_bars")["missing"] == ["IF2611.CFE"]
     assert derivative_tip_scope(cfg, "futures_bars")["missing"] == ["IF2611.CFE"]
 
 

@@ -257,7 +257,7 @@ def derive_minute_resample(
     start: date | None = None,
     end: date | None = None,
     full: bool = False,
-    output=None,
+    output,
 ) -> dict:
     """Compute and write one of the ``minute_bars_{15,30,60}m`` datasets.
 
@@ -267,7 +267,6 @@ def derive_minute_resample(
     """
     from cnequity.domain.schemas import validate_dataframe, with_provenance
     from cnequity.storage.atomic import write_json_atomic
-    from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.published import frame_day_digests
 
     frequency = FREQUENCY_BY_DATASET[dataset]
@@ -283,7 +282,7 @@ def derive_minute_resample(
         if not sessions:
             return {"rows": 0, "note": f"{dataset}：所选窗口内没有 1m 或 5m 数据"}
     derivation = _derivation_identity()
-    out = output or DerivedOutput(config, dataset)
+    out = output
     rows = 0
     built = {"1m": 0, "5m": 0}
     skipped = {(reason, source): 0 for reason in GAP_REASONS for source in ("1m", "5m")}

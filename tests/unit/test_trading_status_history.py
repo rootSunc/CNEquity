@@ -2,12 +2,14 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import compact_into_lake, publish_folders
 
 from cnequity.config import Config
 from cnequity.derive.trading_status_history import derive_suspension_history
-from cnequity.query.parquet_scan import scan_parquet_root
+from cnequity.query.parquet_scan import root_parquet_files, scan_parquet_root
 from cnequity.run_scope import set_backfill
-from cnequity.storage.parquet import compact_dataset
+from cnequity.storage.lake_record import start_on_catalog
+from cnequity.storage.lake_write import LakeWrite
 
 _KEYS = {"symbol": pl.String, "trade_date": pl.Date}
 
@@ -33,22 +35,48 @@ def bar_cells_answered(monkeypatch):
     return unanswered
 
 
+def _publish_fixtures(cfg) -> None:
+    """Put the lake on its catalog and publish the curated folders a test wrote by hand."""
+    cfg.meta_root.mkdir(parents=True, exist_ok=True)
+    start_on_catalog(cfg)
+    root = cfg.curated_root
+    held = (
+        sorted(p.name for p in root.iterdir() if any(p.rglob("*.parquet"))) if root.is_dir() else []
+    )
+    if held:
+        publish_folders(cfg, *held)
+
+
 def _derive_and_publish(cfg, *, run_id: str = "run-derive", **window) -> int:
     """Stage the derive and compact it, the way the daily run does.
 
     The staged rows are worthless until compact merges and publishes them, so
-    every assertion below is made against the compacted partition rather than
+    every assertion below is made against the published partition rather than
     against a directory the derive wrote behind compact's back.
     """
+    _publish_fixtures(cfg)
     rows = derive_suspension_history(cfg, run_id, **window)
-    compact_dataset(
-        cfg.staging_root,
-        cfg.curated_root,
-        "trading_status",
-        run_id,
-        partition_col="trade_date",
-    )
+    compact_into_lake(cfg, "trading_status", run_id, partition_col="trade_date")
     return rows
+
+
+def _status_files(cfg) -> list:
+    """The files of the published trading_status."""
+    return root_parquet_files(cfg.curated_root / "trading_status")
+
+
+def _status(cfg, month: str) -> pl.DataFrame:
+    """The published trading_status rows of *month* (``YYYY-MM``)."""
+    frame = pl.concat(
+        [pl.read_parquet(path) for path in _status_files(cfg)], how="diagonal_relaxed"
+    )
+    return frame.filter(pl.col("trade_date").dt.strftime("%Y-%m") == month)
+
+
+def _status_labels(cfg) -> list[str]:
+    """The trading_status partitions the lake publishes."""
+    with LakeWrite(cfg, "inspect") as write:
+        return sorted(write.checkout("trading_status").labels())
 
 
 def test_derive_suspension_tie_break_is_not_file_order_dependent(tmp_path):
@@ -124,9 +152,7 @@ def test_derive_suspension_tie_break_is_not_file_order_dependent(tmp_path):
     )
 
     assert _derive_and_publish(cfg) == 1
-    out = pl.read_parquet(
-        root / "curated" / "trading_status" / "trade_date=2024-06" / "part-merged.parquet"
-    )
+    out = _status(cfg, "2024-06")
     assert out.filter(pl.col("symbol") == "600519.SH")["status"].to_list() == ["suspended"]
 
 
@@ -310,18 +336,17 @@ def test_derive_suspension_from_bar_gaps(tmp_path):
     assert n == 1  # only 000001 on 2024-06-27
 
     # trading_status is month-partitioned (DatasetSpec); never write day dirs.
-    month_dir = root / "curated" / "trading_status" / "trade_date=2024-06"
-    assert month_dir.is_dir()
-    assert not (root / "curated" / "trading_status" / "trade_date=2024-06-27").exists()
+    assert _status_labels(cfg) == ["trade_date=2024-06"]
 
-    ts = pl.read_parquet(month_dir / "part-merged.parquet")
+    ts = _status(cfg, "2024-06")
     assert (
         ts.filter(
             (pl.col("symbol") == "600519.SH") & (pl.col("trade_date") == date(2024, 6, 26))
         ).height
         == 1
     )
-    assert [path.name for path in month_dir.rglob("*.parquet")] == ["part-merged.parquet"]
+    # The nested fragment's row and the derived row, each once.
+    assert ts.height == 2
     susp = ts.filter(pl.col("status") == "suspended")
     assert susp.height == 1
     assert susp["symbol"][0] == "000001.SZ"
@@ -397,9 +422,7 @@ def test_derive_suspension_treats_zero_volume_placeholder_as_missing(tmp_path):
     ).write_parquet(root / "curated" / "instruments" / "part-merged.parquet")
 
     assert _derive_and_publish(cfg) == 1
-    status = pl.read_parquet(
-        root / "curated" / "trading_status" / "trade_date=2024-06" / "part-merged.parquet"
-    )
+    status = _status(cfg, "2024-06")
     assert status.filter(pl.col("status") == "suspended")["trade_date"].to_list() == [
         date(2024, 6, 27)
     ]
@@ -538,13 +561,11 @@ def test_derive_suspension_respects_end_window(tmp_path):
 
     n = _derive_and_publish(cfg, start=date(2015, 1, 1), end=date(2015, 12, 31))
     assert n == 1
-    ts = pl.read_parquet(
-        root / "curated" / "trading_status" / "trade_date=2015-12" / "part-merged.parquet"
-    )
+    ts = _status(cfg, "2015-12")
     assert ts.filter(pl.col("status") == "suspended")["trade_date"].to_list() == [
         date(2015, 12, 31)
     ]
-    assert not (root / "curated" / "trading_status" / "trade_date=2016-01").exists()
+    assert "trade_date=2016-01" not in _status_labels(cfg)
 
 
 def test_the_derive_batch_does_not_overwrite_the_vendor_batch(tmp_path):
@@ -576,18 +597,15 @@ def test_the_derive_batch_does_not_overwrite_the_vendor_batch(tmp_path):
         source="eastmoney",
         data_version="v1",
     )
+    _publish_fixtures(cfg)
     write_simple(cfg, run_id, "trading_status", vendor)
     assert derive_suspension_history(cfg, run_id, batch_id="derive-0") == 1
 
     staged = StagingWriter(cfg.staging_root).list_run_files("trading_status", run_id)
     assert len(staged) == 2
 
-    compact_dataset(
-        cfg.staging_root, cfg.curated_root, "trading_status", run_id, partition_col="trade_date"
-    )
-    published = pl.read_parquet(
-        root / "curated" / "trading_status" / "trade_date=2024-06" / "part-merged.parquet"
-    )
+    compact_into_lake(cfg, "trading_status", run_id, partition_col="trade_date")
+    published = _status(cfg, "2024-06")
     assert set(published["source"].to_list()) == {"eastmoney", "derived_bar_gap"}
 
 

@@ -9,32 +9,19 @@ ones already there. A :class:`DerivedOutput` gives it one shape for that:
 * ``remove(label)`` deletes one;
 * ``layer_root`` goes where a writer expects ``derived_root``.
 
-Opened with a run id by the step that publishes the result
-(``steps.finalize``), which reads :meth:`changed_files` afterwards. Without a
-run id it is a plain directory under the dataset's layer root that nothing
-publishes: what a derivation called on its own writes.
+Opened with the run id of the step that publishes the result
+(``steps.finalize``, ``cne derive``), which reads :meth:`changed_files`
+afterwards. There is no other kind: a lake on its catalog reads nothing
+else, so a derivation written anywhere but a checkout would be lost.
 """
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import polars as pl
 
 from cnequity.domain.datasets import DATASETS
-from cnequity.storage.locator import layer_root
-from cnequity.storage.revisions import RevisionStore, sha256_file
-
-
-def _identity(root: Path) -> dict[str, tuple[int, str]]:
-    """Every file under *root* with its size and digest, without following links."""
-    if not root.exists():
-        return {}
-    return {
-        path.relative_to(root).as_posix(): (path.stat().st_size, sha256_file(path))
-        for path in RevisionStore._walk_files(root)
-    }
 
 
 def _same_facts(stored: pl.DataFrame, rows: pl.DataFrame) -> bool:
@@ -51,24 +38,28 @@ def _same_facts(stored: pl.DataFrame, rows: pl.DataFrame) -> bool:
 
 
 class DerivedOutput:
-    def __init__(self, config, dataset: str, run_id: str | None = None):
+    def __init__(self, config, dataset: str, run_id: str):
         self.config, self.dataset, self.run_id = config, dataset, run_id
         self.spec = DATASETS[dataset]
-        self.layer_root = Path(layer_root(config, dataset))
-        #: The catalog write and the checkout, when the lake publishes into its catalog.
+        #: The catalog write and the checkout, set on entering.
         self.lake_write = None
         self.checkout = None
-        self._before: dict[str, tuple[int, str]] | None = None
+        self.layer_root: Path | None = None
         self._labels: set[str] | None = None
 
     @property
     def root(self) -> Path:
-        return self.layer_root / self.dataset
+        return self._checkout.root
+
+    @property
+    def _checkout(self):
+        if self.checkout is None:
+            raise RuntimeError(
+                f"{self.dataset}: a DerivedOutput is written inside its `with` block"
+            )
+        return self.checkout
 
     def __enter__(self) -> DerivedOutput:
-        if self.run_id is None:
-            self._before = _identity(self.root)
-            return self
         from cnequity.storage.catalog_migration import require_catalog_lake
         from cnequity.storage.lake_write import LakeWrite
 
@@ -93,82 +84,53 @@ class DerivedOutput:
     def partition(self, label: str) -> Path:
         """The directory of partition *label*, holding its published rows."""
         self._label(label)
-        if self.checkout is not None:
-            return self.checkout.partition(label)
-        target = self.root / label
-        target.mkdir(parents=True, exist_ok=True)
-        return target
+        return self._checkout.partition(label)
 
     def rows(self, label: str) -> pl.DataFrame | None:
         """The rows partition *label* holds, read without checking it out; ``None`` if none."""
         self._label(label)
-        if self.checkout is not None:
-            if label in self.checkout._checked:
-                files = sorted((self.checkout.root / label).rglob("*.parquet"))
-            else:
-                stored = self.checkout.rows(label)
-                return None if stored.is_empty() else stored
-        else:
-            files = sorted((self.root / label).rglob("*.parquet"))
+        checkout = self._checkout
+        if label not in checkout._checked:
+            stored = checkout.rows(label)
+            return None if stored.is_empty() else stored
+        files = sorted((checkout.root / label).rglob("*.parquet"))
         if not files:
             return None
         return pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
 
     def labels(self) -> list[str]:
         """Every published partition, as ``<column>=<value>``."""
-        if self.checkout is not None:
-            return self.checkout.labels()
-        if not self.root.is_dir():
-            return []
-        return sorted(
-            path.name
-            for path in self.root.iterdir()
-            if path.is_dir() and any(path.rglob("*.parquet"))
-        )
+        return self._checkout.labels()
 
     def write(self, label: str, rows: pl.DataFrame, name: str) -> bool:
-        """Replace *label* and report whether anything was written."""
-        value = self._label(label)
-        if self.checkout is not None:
-            # A rebuild that computes what is already published changes nothing:
-            # only the time it was computed differs, and that is not a restatement.
-            if _same_facts(self.checkout.rows(label), rows):
-                return False
-            self.checkout.rewrite(label, rows)
-            return True
-        from cnequity.storage.parquet import CuratedWriter
+        """Replace *label* and report whether anything was written.
 
-        CuratedWriter(self.layer_root).write_partition(
-            self.dataset, self.spec.partition_col, value, rows, name
-        )
+        *name* is kept for callers that named the partition file; a checkout
+        lays out a partition's files itself.
+        """
+        self._label(label)
+        # A rebuild that computes what is already published changes nothing:
+        # only the time it was computed differs, and that is not a restatement.
+        if _same_facts(self._checkout.rows(label), rows):
+            return False
+        self._checkout.rewrite(label, rows)
         return True
 
     def exists(self, label: str) -> bool:
         """Whether partition *label* is published."""
         self._label(label)
-        if self.checkout is not None:
-            if self._labels is None:
-                self._labels = set(self.checkout.labels())
-            return label in self._labels
-        return (self.root / label).exists()
+        if self._labels is None:
+            self._labels = set(self._checkout.labels())
+        return label in self._labels
 
     def remove(self, label: str) -> None:
         self._label(label)
-        if self.checkout is not None:
-            self.checkout.rewrite(label, pl.DataFrame())
-            return
-        shutil.rmtree(self.root / label, ignore_errors=True)
+        self._checkout.rewrite(label, pl.DataFrame())
 
     def changed_files(self) -> list[Path]:
         """The files this derivation wrote or changed."""
-        if self.checkout is not None:
-            return [path for files in self.checkout.changed().values() for path in files]
-        after = _identity(self.root)
-        before = self._before or {}
-        return [self.root / name for name, found in after.items() if before.get(name) != found]
+        return [path for files in self._checkout.changed().values() for path in files]
 
     def changed(self) -> bool:
         """Whether there is anything to publish, a removed partition included."""
-        if self.checkout is not None:
-            return bool(self.checkout.changed())
-        return bool(self.changed_files())
+        return bool(self._checkout.changed())

@@ -118,8 +118,14 @@ def test_retrying_old_staging_cannot_restore_zero_weights(tmp_path):
         data_version="v1",
     )
     StagingWriter(cfg.staging_root).write_batch("index_constituents", "old", "batch", staged)
+    out = tmp_path / "out" / "curated"
     compact_dataset(
-        cfg.staging_root, cfg.curated_root, "index_constituents", "old", partition_col="as_of_date"
+        cfg.staging_root,
+        cfg.curated_root,
+        "index_constituents",
+        "old",
+        partition_col="as_of_date",
+        out_root=out,
     )
-    result = pl.read_parquet(list((cfg.curated_root / "index_constituents").rglob("*.parquet")))
+    result = pl.read_parquet(list((out / "index_constituents").rglob("*.parquet")))
     assert result["weight"].to_list() == [None]

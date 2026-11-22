@@ -181,7 +181,113 @@ def publish_folders(config, *datasets: str) -> list[str]:
             if datasets:
                 raise ValueError(f"no Parquet under {folder}")
             continue
+        # A folder unchanged since it was last published is already in the
+        # catalog; publishing it again would also undo what a writer under
+        # test published over it since.
+        stamp = tuple((str(path), path.stat().st_size, path.stat().st_mtime_ns) for path in files)
+        key = folder.resolve()
+        if _published_folders.get(key) == stamp:
+            continue
         rows = pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
         publish_rows(config, name, rows, run_id=f"seed-folder-{name}")
+        _published_folders[key] = stamp
         published.append(name)
     return published
+
+
+#: What each folder held when :func:`publish_folders` last published it.
+_published_folders: dict = {}
+
+
+def compact_into_lake(config, dataset: str, run_id: str, **kwargs) -> int:
+    """Compact *run_id*'s staged *dataset* into the lake and publish it, as the compact step does.
+
+    The merge runs in a checkout of the published partitions and the result
+    is published; *kwargs* go to ``compact_dataset`` (``instruments`` goes to
+    ``compact_instruments``, whose ``trade_date`` defaults to today). Returns
+    the rows the merge wrote.
+    """
+    from datetime import date
+
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.query import catalog_read
+    from cnequity.storage.lake_record import start_on_catalog
+    from cnequity.storage.lake_write import DatasetPublish, LakeWrite
+    from cnequity.storage.parquet import StagingWriter, compact_dataset
+
+    Path(config.meta_root).mkdir(parents=True, exist_ok=True)
+    start_on_catalog(config)
+    staged = kwargs.pop("staging_files", None) or StagingWriter(config.staging_root).list_run_files(
+        dataset, run_id
+    )
+    catalog_read.close(config)
+    with LakeWrite(config, run_id) as write:
+        checkout = write.checkout_staged(dataset, staged)
+        if dataset == "instruments":
+            from cnequity.storage.instruments import compact_instruments
+
+            rows, _findings = compact_instruments(
+                config.staging_root,
+                config.curated_root,
+                run_id,
+                kwargs.pop("trade_date", date.today()),
+                base_root=checkout.root,
+                staging_files=staged,
+                out_root=checkout.layer_root,
+                **kwargs,
+            )
+        else:
+            rows = compact_dataset(
+                config.staging_root,
+                config.curated_root,
+                dataset,
+                run_id,
+                base_root=checkout.root,
+                staging_files=staged,
+                out_root=checkout.layer_root,
+                **kwargs,
+            )
+        if checkout.changed():
+            contract = dataset_contract(dataset)
+            write.publish(
+                {
+                    dataset: DatasetPublish(
+                        int(contract["schema_version"]), contract_fingerprint(contract)
+                    )
+                },
+                message=f"{dataset} compacted by {run_id}",
+            )
+    catalog_read.close(config)
+    return rows
+
+
+def derive_into_lake(config, dataset: str, derive, *args, run_id: str = "test-derive", **kwargs):
+    """Run *derive* (a ``derive_*``/``compute_adj_factors`` function) and publish what it wrote.
+
+    The derivation writes into a ``DerivedOutput`` checkout, as ``cne derive``
+    and the finalize steps give it, and the checkout is published when it
+    changed anything. Returns what *derive* returned.
+    """
+    from cnequity.domain.contracts import contract_fingerprint, dataset_contract
+    from cnequity.query import catalog_read
+    from cnequity.storage.derived_output import DerivedOutput
+    from cnequity.storage.lake_record import start_on_catalog
+    from cnequity.storage.lake_write import DatasetPublish
+
+    Path(config.meta_root).mkdir(parents=True, exist_ok=True)
+    start_on_catalog(config)
+    catalog_read.close(config)
+    with DerivedOutput(config, dataset, run_id) as output:
+        result = derive(config, *args, output=output, **kwargs)
+        if output.changed():
+            contract = dataset_contract(dataset)
+            output.lake_write.publish(
+                {
+                    dataset: DatasetPublish(
+                        int(contract["schema_version"]), contract_fingerprint(contract)
+                    )
+                },
+                message=f"{dataset} derived by {run_id}",
+            )
+    catalog_read.close(config)
+    return result

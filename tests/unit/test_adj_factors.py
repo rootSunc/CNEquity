@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
-from tests.catalog_seed import commit_tree
+from tests.catalog_seed import commit_tree, derive_into_lake, publish_folders
 
 from cnequity.adapters.sina.adj_factors import (
     SinaAdjFactorUnavailableError,
@@ -20,6 +20,8 @@ from cnequity.derive.adj_factors import (
     _write_adj_partitions,
     compute_adj_factors,
 )
+from cnequity.query.parquet_scan import root_parquet_files
+from cnequity.storage.lake_record import start_on_catalog
 from cnequity.storage.revisions import RevisionStore
 
 
@@ -41,6 +43,48 @@ def _day_partitioned_factors(monkeypatch):
         "adj_factors",
         dataclasses.replace(registry.DATASETS["adj_factors"], partition_granularity="day"),
     )
+
+
+def _publish(cfg, *datasets: str) -> None:
+    """Put the lake on its catalog and publish the fixture folders of *datasets* into it."""
+    cfg.meta_root.mkdir(parents=True, exist_ok=True)
+    start_on_catalog(cfg)
+    publish_folders(cfg, *datasets)
+
+
+def _publish_curated(cfg) -> None:
+    """Publish the curated fixtures a test wrote by hand, so the lake's catalog holds them."""
+    root = cfg.curated_root
+    held = sorted(p.name for p in root.iterdir() if any(p.rglob("*.parquet")))
+    if held:
+        _publish(cfg, *held)
+
+
+def _derive(cfg, **kwargs):
+    """Derive adj_factors into the lake, the curated fixtures written so far published first."""
+    _publish_curated(cfg)
+    return derive_into_lake(cfg, "adj_factors", compute_adj_factors, **kwargs)
+
+
+def _factor_files(cfg, day: date | None = None) -> list:
+    """The published adj_factors files, only those holding *day*'s rows when given."""
+    files = root_parquet_files(cfg.derived_root / "adj_factors")
+    if day is None:
+        return files
+    return [
+        path
+        for path in files
+        if not pl.read_parquet(path, columns=["trade_date"])
+        .filter(pl.col("trade_date") == day)
+        .is_empty()
+    ]
+
+
+def _factors(cfg, day: date | None = None) -> pl.DataFrame:
+    """The published adj_factors rows, only *day*'s when given."""
+    files = _factor_files(cfg)
+    frame = pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
+    return frame if day is None else frame.filter(pl.col("trade_date") == day)
 
 
 def test_to_sina_symbol():
@@ -416,12 +460,11 @@ steps = ["derive_adj_factors"]
 
 
 def test_compute_adj_factors_writes_derived(adj_config):
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
     assert result.rows == 1
     assert result.failed == []
-    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
-    assert out.exists()
-    df = pl.read_parquet(out)
+    df = _factors(adj_config, date(2024, 6, 28))
+    assert df.height == 1
     assert df["factor"][0] == 0.5
     assert df["adjust_type"][0] == "hfq"
     assert df["source"][0] == "sina"
@@ -440,13 +483,11 @@ def test_compute_adj_factors_includes_etf_bars(adj_config, monkeypatch):
         fake_fetch,
     )
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
 
     assert result.failed == []
     assert "510300.SH" in calls
-    out = pl.read_parquet(
-        adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
-    )
+    out = _factors(adj_config, date(2024, 6, 28))
     assert out.filter(pl.col("symbol") == "510300.SH")["factor"].to_list() == [2.0]
 
 
@@ -473,8 +514,12 @@ def test_write_adj_partitions_merges_all_shards_and_cleans_stale_siblings(tmp_pa
         }
     ).write_parquet(fragments / "part-001.parquet")
 
-    _write_adj_partitions(
+    _publish(cfg, "adj_factors")
+
+    derive_into_lake(
         cfg,
+        "adj_factors",
+        _write_adj_partitions,
         pl.DataFrame(
             {
                 "symbol": ["600519.SH"],
@@ -486,8 +531,8 @@ def test_write_adj_partitions_merges_all_shards_and_cleans_stale_siblings(tmp_pa
         replace=False,
     )
 
-    files = sorted(part.rglob("*.parquet"))
-    assert [path.name for path in files] == ["part-0.parquet"]
+    files = _factor_files(cfg, date(2024, 6, 28))
+    assert len(files) == 1, "both shards are merged into one file"
     written = pl.read_parquet(files[0])
     assert written.height == 2
     assert dict(zip(written["symbol"], written["factor"], strict=True)) == {
@@ -544,12 +589,11 @@ def test_compute_adj_factors_skips_cdr(adj_config, monkeypatch):
         fake_fetch,
     )
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
     assert calls == ["600519.SH"]
     assert result.failed == []
     assert result.findings == []
-    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
-    df = pl.read_parquet(out)
+    df = _factors(adj_config, date(2024, 6, 28))
     assert set(df["symbol"].to_list()) == {"600519.SH"}
 
 
@@ -567,14 +611,12 @@ def test_compute_adj_factors_fetches_uncached_beijing_symbols(adj_config, monkey
         fake_fetch,
     )
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
 
     assert result.failed == []
     assert set(calls) == {"600519.SH", "920001.BJ"}
     assert result.findings == []
-    out = pl.read_parquet(
-        adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
-    )
+    out = _factors(adj_config, date(2024, 6, 28))
     assert set(out["symbol"].to_list()) == {"600519.SH", "920001.BJ"}
 
 
@@ -606,7 +648,7 @@ def test_compute_adj_factors_persists_delisted_source_gap_without_retrying(adj_c
         fake_fetch,
     )
 
-    first = compute_adj_factors(adj_config)
+    first = _derive(adj_config)
     assert first.failed == []
     assert [finding["check"] for finding in first.findings] == ["adj_factor_source_unavailable"]
     assert (
@@ -618,7 +660,7 @@ def test_compute_adj_factors_persists_delisted_source_gap_without_retrying(adj_c
     ) == {"830799.BJ"}
 
     calls.clear()
-    second = compute_adj_factors(adj_config)
+    second = _derive(adj_config)
     assert second.failed == []
     assert calls == []
 
@@ -639,7 +681,7 @@ def test_compute_adj_factors_parallel_tracks_success_by_future_symbol(adj_config
         "cnequity.derive.adj_factors.fetch_adj_factor_series",
         fake_fetch,
     )
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
 
     assert result.failed == ["600519.SH:hfq"]
     assert StateStore(adj_config.meta_root, DECISIONS).get_string_set(
@@ -687,7 +729,7 @@ def test_compute_adj_factors_uses_independent_source_capped_workers(adj_config, 
         fake_fetch,
     )
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
 
     assert result.failed == []
     assert result.rows == 3
@@ -708,11 +750,11 @@ def test_compute_adj_factors_reuses_cache_on_non_event_day(adj_config, monkeypat
         fake_fetch,
     )
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
     assert calls == []
     assert result.rows == 2
-    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-29" / "part-0.parquet"
-    df = pl.read_parquet(out)
+    df = _factors(adj_config, date(2024, 6, 29))
+    assert df.height == 1
     assert df["factor"][0] == 0.5
 
 
@@ -737,7 +779,7 @@ def test_compute_adj_factors_event_refresh_uses_latest_traded_day(adj_config, mo
         lambda config, trade_date: seen.append(trade_date) or set(),
     )
 
-    compute_adj_factors(adj_config)
+    _derive(adj_config)
 
     assert seen == [date(2024, 6, 28)]
 
@@ -765,7 +807,7 @@ def test_compute_adj_factors_refreshes_corporate_action_symbol(adj_config, monke
         fake_fetch,
     )
 
-    compute_adj_factors(adj_config)
+    _derive(adj_config)
     assert calls == ["600519.SH"]
 
 
@@ -773,10 +815,11 @@ def test_compute_adj_factors_append_only_skips_existing_partitions(adj_config, m
     """With a derived watermark, only new trade_dates are written (ADR-0004)."""
     _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
     # Seed derived watermark at 2024-06-28.
-    seed = compute_adj_factors(adj_config)
+    seed = _derive(adj_config)
     assert seed.rows == 1
-    old_path = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
-    old_bytes = old_path.read_bytes()
+    old_files = _factor_files(adj_config, date(2024, 6, 28))
+    assert old_files
+    old_bytes = [path.read_bytes() for path in old_files]
 
     _write_bar(adj_config, "600519.SH", date(2024, 6, 29))
     calls: list[str] = []
@@ -790,12 +833,13 @@ def test_compute_adj_factors_append_only_skips_existing_partitions(adj_config, m
         fake_fetch,
     )
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
     assert calls == []  # cache reused; no event
     assert result.rows == 1  # only the new date
-    assert old_path.read_bytes() == old_bytes  # prior partition untouched
-    new_path = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-29" / "part-0.parquet"
-    assert pl.read_parquet(new_path)["factor"][0] == 0.5
+    # prior partition untouched
+    assert _factor_files(adj_config, date(2024, 6, 28)) == old_files
+    assert [path.read_bytes() for path in old_files] == old_bytes
+    assert _factors(adj_config, date(2024, 6, 29))["factor"].to_list() == [0.5]
 
 
 def test_compute_adj_factors_event_refresh_merges_into_existing(adj_config, monkeypatch):
@@ -803,7 +847,7 @@ def test_compute_adj_factors_event_refresh_merges_into_existing(adj_config, monk
     _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
     _write_bar(adj_config, "000001.SZ", date(2024, 6, 28))
     _write_factor_cache(adj_config, "000001.SZ", date(2024, 6, 28), factor=1.0)
-    compute_adj_factors(adj_config)
+    _derive(adj_config)
 
     _write_bar(adj_config, "600519.SH", date(2024, 6, 29))
     _write_bar(adj_config, "000001.SZ", date(2024, 6, 29))
@@ -831,17 +875,13 @@ def test_compute_adj_factors_event_refresh_merges_into_existing(adj_config, monk
         fake_fetch,
     )
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
     # New date for both symbols + refreshed history for 600519 on 06-28.
     assert result.rows >= 2
-    d28 = pl.read_parquet(
-        adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "part-0.parquet"
-    )
+    d28 = _factors(adj_config, date(2024, 6, 28))
     # Untouched peer symbol retained via merge.
     assert set(d28["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
-    d29 = pl.read_parquet(
-        adj_config.derived_root / "adj_factors" / "trade_date=2024-06-29" / "part-0.parquet"
-    )
+    d29 = _factors(adj_config, date(2024, 6, 29))
     mouti = d29.filter(pl.col("symbol") == "600519.SH")["factor"][0]
     assert mouti == 0.8
 
@@ -869,7 +909,7 @@ def test_compute_adj_factors_refreshes_new_listing(adj_config, monkeypatch):
         fake_fetch,
     )
 
-    compute_adj_factors(adj_config)
+    _derive(adj_config)
     assert calls == ["000001.SZ"]
 
 
@@ -906,7 +946,7 @@ def test_compute_adj_factors_fails_over_threshold(adj_config, monkeypatch):
         "cnequity.derive.adj_factors.fetch_adj_factor_series",
         boom,
     )
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
     assert len(result.failed) == 1
     assert result.fail_ratio > FAIL_RATIO_THRESHOLD
     assert result.findings[0]["check"] == "adj_factor_fetch_failed"
@@ -940,7 +980,7 @@ def test_failed_symbol_is_retried_after_global_watermark_advances(adj_config, mo
         "cnequity.derive.adj_factors.fetch_adj_factor_series",
         flaky_fetch,
     )
-    first = compute_adj_factors(adj_config)
+    first = _derive(adj_config)
     assert first.failed == ["600519.SH:hfq"]
     assert StateStore(adj_config.meta_root, DECISIONS).get_string_set(
         "adj_factors", "retry_symbols"
@@ -954,17 +994,14 @@ def test_failed_symbol_is_retried_after_global_watermark_advances(adj_config, mo
         "cnequity.derive.adj_factors.fetch_adj_factor_series",
         recovered_fetch,
     )
-    second = compute_adj_factors(adj_config)
+    second = _derive(adj_config)
     assert second.failed == []
     assert second.rows == 1
     assert (
         StateStore(adj_config.meta_root, DECISIONS).get_string_set("adj_factors", "retry_symbols")
         == set()
     )
-    written = pl.read_parquet(
-        # The retried symbol is new to the partition, so it lands in a file of its own.
-        adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28" / "*.parquet"
-    )
+    written = _factors(adj_config, date(2024, 6, 28))
     assert written.filter(pl.col("symbol") == "600519.SH")["factor"].to_list() == [0.7]
 
 
@@ -974,6 +1011,7 @@ def test_compute_adj_factors_fills_partial_watermark_partition(adj_config, monke
     _write_factor_cache(adj_config, "000001.SZ", date(2024, 6, 27), factor=1.0)
     _write_adj_partition(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
     _write_adj_partition(adj_config, "000001.SZ", date(2024, 6, 27), factor=1.0)
+    _publish(adj_config, "adj_factors")
     _write_bar(adj_config, "000001.SZ", date(2024, 6, 28))
 
     calls: list[str] = []
@@ -987,16 +1025,13 @@ def test_compute_adj_factors_fills_partial_watermark_partition(adj_config, monke
         fake_fetch,
     )
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
 
     assert result.rows == 1
     assert calls == []
-    # The late symbol joins the partition in a file of its own, beside the
-    # legacy file whose narrower schema it does not share.
-    out = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-28"
-    df = pl.concat(
-        [pl.read_parquet(path) for path in sorted(out.glob("*.parquet"))], how="diagonal_relaxed"
-    )
+    # The late symbol joins the partition beside the published row, whose
+    # narrower schema it does not share.
+    df = _factors(adj_config, date(2024, 6, 28))
     assert set(df["symbol"].to_list()) == {"600519.SH", "000001.SZ"}
     assert df.filter(pl.col("symbol") == "600519.SH")["factor"][0] == 0.5
 
@@ -1373,7 +1408,7 @@ def test_compute_adj_factors_surfaces_crosscheck_findings(adj_config, monkeypatc
     )
     _write_bars(adj_config, "600519.SH", [date(2024, 6, 27)], 1.0)
 
-    result = compute_adj_factors(adj_config)
+    result = _derive(adj_config)
     checks = {f["check"] for f in result.findings}
     assert "adj_factor_corporate_action_divergence" in checks
 
@@ -1809,18 +1844,9 @@ def test_beijing_factors_are_computed_from_actions_and_sina_is_the_alarm(adj_con
         return pl.DataFrame({"trade_date": [days[0], days[-1]], "factor": [1.0, 1.0]})
 
     monkeypatch.setattr("cnequity.derive.adj_factors.fetch_adj_factor_series", flat_sina)
-    result = compute_adj_factors(adj_config, full=True)
+    result = _derive(adj_config, full=True)
 
-    stored = (
-        pl.concat(
-            [
-                pl.read_parquet(p)
-                for p in (adj_config.derived_root / "adj_factors").rglob("*.parquet")
-            ]
-        )
-        .filter(pl.col("symbol") == "920001.BJ")
-        .sort("trade_date")
-    )
+    stored = _factors(adj_config).filter(pl.col("symbol") == "920001.BJ").sort("trade_date")
     close = stored.select("trade_date", "factor", "source").rows()
     prev_close = 1.0  # _write_bar's close
     step = prev_close / (prev_close - 0.05)
@@ -1964,7 +1990,7 @@ def test_pre_close_check_is_silent_on_a_lake_without_the_column(crosscheck_confi
 @pytest.mark.parametrize(("mode", "fetched"), [("realign", []), ("refresh", ["600519.SH"])])
 def test_backfilled_older_bars_are_realigned_from_cache(adj_config, monkeypatch, mode, fetched):
     """A bar backfill changes dates, not factors: realign keeps the cache."""
-    compute_adj_factors(adj_config)
+    _derive(adj_config)
     _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28))
     _write_bar(adj_config, "600519.SH", date(2024, 6, 27))
     calls: list[str] = []
@@ -1976,11 +2002,11 @@ def test_backfilled_older_bars_are_realigned_from_cache(adj_config, monkeypatch,
     monkeypatch.setattr("cnequity.derive.adj_factors.fetch_adj_factor_series", fake_fetch)
     kwargs = {f"{mode}_symbols": ["600519.SH"]}
 
-    compute_adj_factors(adj_config, **kwargs)
+    _derive(adj_config, **kwargs)
 
     assert calls == fetched
-    older = adj_config.derived_root / "adj_factors" / "trade_date=2024-06-27"
-    assert list(older.glob("*.parquet")), "the older bar date now has a factor row"
+    older = _factors(adj_config, date(2024, 6, 27))
+    assert older["symbol"].to_list() == ["600519.SH"], "the older bar date now has a factor row"
 
 
 def _factor_row(symbol: str, factor: float, *, source: str = "sina", fetched: int = 1):
@@ -1998,32 +2024,28 @@ def _factor_row(symbol: str, factor: float, *, source: str = "sina", fetched: in
 def test_an_unchanged_factor_partition_is_not_rewritten(tmp_path):
     """Restamping `fetched_at` republished every partition on every derive."""
     cfg = Config(data_root=tmp_path / "data")
-    part = cfg.derived_root / "adj_factors" / "trade_date=2024-06-28"
-    _write_adj_partitions(
-        cfg,
-        pl.DataFrame([_factor_row("600519.SH", 0.8), _factor_row("000001.SZ", 0.9)]),
-        replace=False,
-    )
-    stored = part / "part-0.parquet"
+
+    def write(frame: pl.DataFrame) -> None:
+        derive_into_lake(cfg, "adj_factors", _write_adj_partitions, frame, replace=False)
+
+    write(pl.DataFrame([_factor_row("600519.SH", 0.8), _factor_row("000001.SZ", 0.9)]))
+    (stored,) = _factor_files(cfg, date(2024, 6, 28))
     before = stored.read_bytes()
 
-    _write_adj_partitions(
-        cfg, pl.DataFrame([_factor_row("600519.SH", 0.8, fetched=9)]), replace=False
-    )
+    write(pl.DataFrame([_factor_row("600519.SH", 0.8, fetched=9)]))
+    assert _factor_files(cfg, date(2024, 6, 28)) == [stored]
     assert stored.read_bytes() == before
 
     # A changed value or a changed source still lands.
-    _write_adj_partitions(
-        cfg,
+    write(
         pl.DataFrame(
             [
                 _factor_row("600519.SH", 0.81, fetched=9),
                 _factor_row("000001.SZ", 0.9, source="derived_stock_actions", fetched=9),
             ]
-        ),
-        replace=False,
+        )
     )
-    written = pl.read_parquet(stored)
+    written = _factors(cfg, date(2024, 6, 28))
     assert dict(zip(written["symbol"], written["factor"], strict=True)) == {
         "600519.SH": 0.81,
         "000001.SZ": 0.9,
@@ -2058,22 +2080,16 @@ def _write_suspended_bar(cfg, symbol: str, trade_date: date) -> None:
 
 
 def _factor_dates(cfg, symbol: str) -> list[date]:
-    root = cfg.derived_root / "adj_factors"
-    frame = pl.concat(
-        [
-            pl.read_parquet(path, columns=["symbol", "trade_date"])
-            for path in root.rglob("*.parquet")
-        ]
-    )
+    frame = _factors(cfg)
     return sorted(frame.filter(pl.col("symbol") == symbol)["trade_date"].to_list())
 
 
 def test_daily_runs_keep_carrying_the_factor_through_a_suspension(adj_config):
     _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
-    compute_adj_factors(adj_config)
+    _derive(adj_config)
     for day in (date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3)):
         _write_suspended_bar(adj_config, "600519.SH", day)
-        compute_adj_factors(adj_config)
+        _derive(adj_config)
 
     assert _factor_dates(adj_config, "600519.SH") == [
         date(2024, 6, 28),
@@ -2134,8 +2150,9 @@ def test_one_incremental_derive_heals_a_suspension_hole_and_settles(adj_config):
         _write_bar(adj_config, "000001.SZ", day)
         _write_adj_partition(adj_config, "000001.SZ", day, factor=1.0)
     _write_factor_cache(adj_config, "000001.SZ", date(2024, 7, 1), factor=1.0)
+    _publish(adj_config, "adj_factors")
 
-    compute_adj_factors(adj_config)
+    _derive(adj_config)
 
     assert date(2024, 7, 1) in _factor_dates(adj_config, "600519.SH")
     # A healed symbol must not be refetched again on every later run.

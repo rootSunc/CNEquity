@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
-from tests.catalog_seed import commit_tree
+from tests.catalog_seed import commit_tree, compact_into_lake, publish_rows
 
 import cnequity.steps  # noqa: F401
 from cnequity.config import Config
@@ -40,14 +40,46 @@ def _instrument(
     }
 
 
+def _compact(cfg, run_id: str, trade_date: date, **kwargs):
+    """Compact *run_id*'s instruments into the lake and publish; returns ``(rows, findings)``."""
+    import cnequity.storage.instruments as module
+
+    original = module.compact_instruments
+    results: list = []
+
+    def capture(*args, **kw):
+        results.append(original(*args, **kw))
+        return results[-1]
+
+    module.compact_instruments = capture
+    try:
+        compact_into_lake(cfg, "instruments", run_id, trade_date=trade_date, **kwargs)
+    finally:
+        module.compact_instruments = original
+    (result,) = results
+    return result
+
+
+def _seed(cfg, rows: list[dict]) -> None:
+    """Publish *rows* as the lake's instruments, typed as the dataset stores them."""
+    frame = pl.DataFrame(rows).with_columns(
+        pl.col("list_date", "delist_date").cast(pl.Date), pl.col("prev_symbol").cast(pl.Utf8)
+    )
+    publish_rows(cfg, "instruments", frame)
+
+
+def _published(cfg) -> pl.DataFrame:
+    """The instruments the lake publishes."""
+    files = root_parquet_files(cfg.curated_root / "instruments")
+    return pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
+
+
 def test_compact_instruments_preserves_missing_symbols_and_marks_delist(tmp_path):
     root = tmp_path / "data"
     cfg = Config(data_root=root)
     run_id = "run-inst"
     trade_date = date(2024, 6, 28)
 
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
     existing_rows = [
         _instrument("600519.SH", list_date=date(2001, 8, 27)),
         _instrument("000001.SZ", list_date=date(1991, 4, 3)),
@@ -57,7 +89,7 @@ def test_compact_instruments_preserves_missing_symbols_and_marks_delist(tmp_path
             _instrument(f"600{i:03d}.SH", list_date=date(2000, 1, 1)),
         )
     existing_rows.append(_instrument("600000.SH", list_date=date(1999, 11, 10)))
-    pl.DataFrame(existing_rows).write_parquet(curated_path)
+    _seed(cfg, existing_rows)
 
     writer = StagingWriter(cfg.staging_root)
     incoming_rows = [r for r in existing_rows if r["symbol"] != "600000.SH"]
@@ -68,11 +100,11 @@ def test_compact_instruments_preserves_missing_symbols_and_marks_delist(tmp_path
         pl.DataFrame(incoming_rows),
     )
 
-    rows, findings = compact_instruments(cfg.staging_root, cfg.curated_root, run_id, trade_date)
+    rows, findings = _compact(cfg, run_id, trade_date)
     assert rows == 100
     assert findings and findings[0]["check"] == "instruments_delist_pending"
 
-    merged = pl.read_parquet(curated_path)
+    merged = _published(cfg)
     delisted = merged.filter(pl.col("symbol") == "600000.SH")
     assert delisted.height == 1
     assert delisted["delist_date"][0] is None
@@ -83,12 +115,10 @@ def test_compact_instruments_preserves_missing_symbols_and_marks_delist(tmp_path
         "batch-0",
         pl.DataFrame(incoming_rows),
     )
-    rows, findings = compact_instruments(
-        cfg.staging_root, cfg.curated_root, "run-inst-2", date(2024, 7, 1)
-    )
+    rows, findings = _compact(cfg, "run-inst-2", date(2024, 7, 1))
     assert rows == 100
     assert findings == []
-    merged = pl.read_parquet(curated_path)
+    merged = _published(cfg)
     delisted = merged.filter(pl.col("symbol") == "600000.SH")
     assert delisted["delist_date"][0] == date(2024, 7, 1)
 
@@ -98,43 +128,35 @@ def test_compact_instruments_preserves_missing_symbols_and_marks_delist(tmp_path
 
 def test_recompacting_one_snapshot_counts_its_absence_once(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    path.parent.mkdir(parents=True)
     rows = [_instrument(f"600{i:03d}.SH", list_date=date(2000, 1, 1)) for i in range(100)]
-    pl.DataFrame(rows).write_parquet(path)
+    _seed(cfg, rows)
     writer = StagingWriter(cfg.staging_root)
     writer.write_batch("instruments", "run-a", "batch-0", pl.DataFrame(rows[1:]))
     writer.write_batch("instruments", "run-b", "batch-0", pl.DataFrame(rows[1:]))
 
     # A retry of run-a and a second run on the same day are the same evidence.
     for run_id in ("run-a", "run-a", "run-b"):
-        _, findings = compact_instruments(
-            cfg.staging_root, cfg.curated_root, run_id, date(2024, 6, 28)
-        )
+        _, findings = _compact(cfg, run_id, date(2024, 6, 28))
         assert findings and findings[0]["check"] == "instruments_delist_pending"
-    missing = pl.read_parquet(path).filter(pl.col("symbol") == "600000.SH")
+    missing = _published(cfg).filter(pl.col("symbol") == "600000.SH")
     assert missing["delist_date"][0] is None
 
     writer.write_batch("instruments", "run-c", "batch-0", pl.DataFrame(rows[1:]))
-    compact_instruments(cfg.staging_root, cfg.curated_root, "run-c", date(2024, 7, 1))
-    missing = pl.read_parquet(path).filter(pl.col("symbol") == "600000.SH")
+    _compact(cfg, "run-c", date(2024, 7, 1))
+    missing = _published(cfg).filter(pl.col("symbol") == "600000.SH")
     assert missing["delist_date"][0] is not None
 
 
 def test_partial_instrument_snapshots_do_not_accumulate_delist_evidence(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    path.parent.mkdir(parents=True)
     rows = [_instrument(f"600{i:03d}.SH", list_date=date(2000, 1, 1)) for i in range(100)]
-    pl.DataFrame(rows).write_parquet(path)
+    _seed(cfg, rows)
     writer = StagingWriter(cfg.staging_root)
     for day in (date(2024, 6, 27), date(2024, 6, 28)):
         run_id = day.isoformat()
         writer.write_batch("instruments", run_id, "partial", pl.DataFrame(rows[1:]))
-        compact_instruments(
-            cfg.staging_root, cfg.curated_root, run_id, day, allow_delist_inference=False
-        )
-    missing = pl.read_parquet(path).filter(pl.col("symbol") == "600000.SH")
+        _compact(cfg, run_id, day, allow_delist_inference=False)
+    missing = _published(cfg).filter(pl.col("symbol") == "600000.SH")
     assert missing.height == 1
     assert missing["delist_date"][0] is None
 
@@ -145,15 +167,13 @@ def test_compact_instruments_suppresses_delist_when_absent_ratio_exceeds_thresho
     run_id = "run-circuit"
     trade_date = date(2024, 6, 28)
 
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
     existing_rows = [
         _instrument("600519.SH", list_date=date(2001, 8, 27)),
         _instrument("000001.SZ", list_date=date(1991, 4, 3)),
     ]
     for i in range(8):
         existing_rows.append(_instrument(f"600{i:03d}.SH", list_date=date(2000, 1, 1)))
-    pl.DataFrame(existing_rows).write_parquet(curated_path)
+    _seed(cfg, existing_rows)
 
     writer = StagingWriter(cfg.staging_root)
     writer.write_batch(
@@ -163,13 +183,13 @@ def test_compact_instruments_suppresses_delist_when_absent_ratio_exceeds_thresho
         pl.DataFrame([_instrument("600519.SH", list_date=date(2001, 8, 27))]),
     )
 
-    rows, findings = compact_instruments(cfg.staging_root, cfg.curated_root, run_id, trade_date)
+    rows, findings = _compact(cfg, run_id, trade_date)
     assert rows == 10
     assert len(findings) == 1
     assert findings[0]["check"] == "instruments_delist_suppressed"
     assert findings[0]["severity"] == "error"
 
-    merged = pl.read_parquet(curated_path)
+    merged = _published(cfg)
     absent = merged.filter(pl.col("symbol") == "000001.SZ")
     assert absent.height == 1
     assert absent["delist_date"][0] is None
@@ -177,8 +197,6 @@ def test_compact_instruments_suppresses_delist_when_absent_ratio_exceeds_thresho
 
 def test_compact_instruments_ignores_known_delisted_symbols_for_absence_circuit(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
     existing_rows = [
         _instrument("600519.SH", list_date=date(2001, 8, 27)),
         _instrument("000001.SZ", list_date=date(1991, 4, 3)),
@@ -193,7 +211,7 @@ def test_compact_instruments_ignores_known_delisted_symbols_for_absence_circuit(
             delist_date=date(2002, 6, 14),
         ),
     ]
-    pl.DataFrame(existing_rows).write_parquet(curated_path)
+    _seed(cfg, existing_rows)
 
     writer = StagingWriter(cfg.staging_root)
     writer.write_batch(
@@ -203,16 +221,15 @@ def test_compact_instruments_ignores_known_delisted_symbols_for_absence_circuit(
         pl.DataFrame(existing_rows[:2]),
     )
 
-    rows, findings = compact_instruments(
-        cfg.staging_root,
-        cfg.curated_root,
+    rows, findings = _compact(
+        cfg,
         "run-known-delisted",
         date(2024, 6, 28),
     )
 
     assert rows == 4
     assert findings == []
-    merged = pl.read_parquet(curated_path)
+    merged = _published(cfg)
     assert merged.filter(pl.col("symbol") == "600001.SH")["delist_date"].item() == date(
         2009, 12, 25
     )
@@ -222,9 +239,8 @@ def test_compact_instruments_ignores_known_delisted_symbols_for_absence_circuit(
 
 def test_compact_instruments_removes_padded_subscription_placeholders(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
-    pl.DataFrame(
+    _seed(
+        cfg,
         [
             _instrument("600519.SH"),
             {
@@ -232,8 +248,8 @@ def test_compact_instruments_removes_padded_subscription_placeholders(tmp_path):
                 "name": "认购款\x00\x00",
                 "asset_type": "etf",
             },
-        ]
-    ).write_parquet(curated_path)
+        ],
+    )
 
     writer = StagingWriter(cfg.staging_root)
     writer.write_batch(
@@ -243,16 +259,15 @@ def test_compact_instruments_removes_padded_subscription_placeholders(tmp_path):
         pl.DataFrame([_instrument("600519.SH")]),
     )
 
-    rows, findings = compact_instruments(
-        cfg.staging_root,
-        cfg.curated_root,
+    rows, findings = _compact(
+        cfg,
         "run-padded-placeholder",
         date(2026, 8, 21),
     )
 
     assert rows == 1
     assert findings == []
-    assert pl.read_parquet(curated_path)["symbol"].to_list() == ["600519.SH"]
+    assert _published(cfg)["symbol"].to_list() == ["600519.SH"]
 
 
 def test_compact_instruments_via_step_respects_manifest_gate(tmp_path):
@@ -284,8 +299,11 @@ def test_compact_instruments_removes_stale_siblings(tmp_path):
         pl.DataFrame([_instrument("600519.SH", list_date=date(2001, 8, 27))]),
     )
 
-    compact_instruments(cfg.staging_root, cfg.curated_root, run_id, date(2024, 6, 28))
-    canonical = cfg.curated_root / "instruments" / "part-merged.parquet"
+    layer = tmp_path / "out" / "curated"
+    compact_instruments(
+        cfg.staging_root, cfg.curated_root, run_id, date(2024, 6, 28), out_root=layer
+    )
+    canonical = layer / "instruments" / "part-merged.parquet"
     canonical.with_name("part-old.parquet").write_bytes(canonical.read_bytes())
     nested = canonical.parent / ".old-fragments"
     nested.mkdir()
@@ -302,6 +320,7 @@ def test_compact_instruments_removes_stale_siblings(tmp_path):
         cfg.curated_root,
         "run-inst-fragments-2",
         date(2024, 6, 29),
+        out_root=layer,
     )
 
     assert [p.name for p in canonical.parent.rglob("*.parquet")] == ["part-merged.parquet"]
@@ -314,6 +333,7 @@ def test_compact_instruments_does_not_rewrite_mutable_file_for_immutable_base_re
     writer = StagingWriter(cfg.staging_root)
     first = _instrument("600519.SH", list_date=date(2001, 8, 27))
     writer.write_batch("instruments", "run-instruments-v1", "batch-0", pl.DataFrame([first]))
+    layer = tmp_path / "out" / "curated"
     changed: list = []
     compact_instruments(
         cfg.staging_root,
@@ -321,8 +341,9 @@ def test_compact_instruments_does_not_rewrite_mutable_file_for_immutable_base_re
         "run-instruments-v1",
         date(2024, 6, 28),
         changed_files=changed,
+        out_root=layer,
     )
-    mutable = cfg.curated_root / "instruments" / "part-merged.parquet"
+    mutable = layer / "instruments" / "part-merged.parquet"
     immutable = tmp_path / "immutable"
     immutable.mkdir(parents=True)
     shutil.copy2(mutable, immutable / mutable.name)
@@ -340,6 +361,7 @@ def test_compact_instruments_does_not_rewrite_mutable_file_for_immutable_base_re
         date(2024, 6, 29),
         changed_files=second_changed,
         base_root=immutable,
+        out_root=layer,
     )
 
     assert second_changed == []
@@ -349,7 +371,8 @@ def test_compact_instruments_does_not_rewrite_mutable_file_for_immutable_base_re
 
 def test_compact_instruments_preserves_rows_from_nested_legacy_fragments(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    root = cfg.curated_root / "instruments"
+    layer = tmp_path / "out" / "curated"
+    root = layer / "instruments"
     root.mkdir(parents=True)
     pl.DataFrame([_instrument("600519.SH")]).write_parquet(root / "part-merged.parquet")
     nested = root / ".old-fragments"
@@ -369,6 +392,7 @@ def test_compact_instruments_preserves_rows_from_nested_legacy_fragments(tmp_pat
         cfg.curated_root,
         "run-legacy-fragments",
         date(2024, 6, 28),
+        out_root=layer,
     )
 
     merged = pl.read_parquet(root / "part-merged.parquet")
@@ -759,7 +783,8 @@ def test_absence_does_not_delist_a_security_that_never_traded(tmp_path, pending_
     writer = StagingWriter(staging)
     for run, day in (("run-nt-1", date(2026, 9, 10)), ("run-nt-2", date(2026, 9, 11))):
         writer.write_batch("instruments", run, "batch-0", pl.DataFrame(filler))
-        compact_instruments(staging, curated, run, day)
+        # A scratch layer, not a lake: each run merges into what the last one wrote.
+        compact_instruments(staging, curated, run, day, out_root=curated)
 
     out = pl.read_parquet(curated / "instruments" / "part-merged.parquet")
     marks = dict(zip(out["symbol"].to_list(), out["delist_date"].to_list(), strict=True))
@@ -780,9 +805,8 @@ def test_a_relisted_symbol_drops_the_inferred_delist_date_that_predates_it(tmp_p
     happened.
     """
     cfg = Config(data_root=tmp_path / "data")
-    curated_path = cfg.curated_root / "instruments" / "part-merged.parquet"
-    curated_path.parent.mkdir(parents=True)
-    pl.DataFrame(
+    _seed(
+        cfg,
         [
             # Buried by a prior run while it had no listing date of its own.
             _instrument("159025.SZ", list_date=None, delist_date=date(2026, 9, 1)),
@@ -793,8 +817,8 @@ def test_a_relisted_symbol_drops_the_inferred_delist_date_that_predates_it(tmp_p
             # A genuine retirement: listed first, delisted after.
             _instrument("600001.SH", list_date=date(2000, 1, 1), delist_date=date(2026, 9, 1)),
             _instrument("600519.SH", list_date=date(2001, 8, 27)),
-        ]
-    ).write_parquet(curated_path)
+        ],
+    )
 
     StagingWriter(cfg.staging_root).write_batch(
         "instruments",
@@ -809,9 +833,9 @@ def test_a_relisted_symbol_drops_the_inferred_delist_date_that_predates_it(tmp_p
         ),
     )
 
-    compact_instruments(cfg.staging_root, cfg.curated_root, "run-relist", date(2026, 9, 15))
+    _compact(cfg, "run-relist", date(2026, 9, 15))
 
-    merged = pl.read_parquet(curated_path)
+    merged = _published(cfg)
     relisted = merged.filter(pl.col("symbol") == "159025.SZ").to_dicts()[0]
     assert relisted["list_date"] == date(2026, 9, 14)
     assert relisted["delist_date"] is None, "a live listing refutes the earlier inference"
@@ -902,7 +926,8 @@ def test_inferred_delist_date_is_the_last_bar_before_the_first_absence(tmp_path)
     writer = StagingWriter(staging)
     for run, day in (("run-1", date(2026, 10, 19)), ("run-2", date(2026, 10, 20))):
         writer.write_batch("instruments", run, "batch-0", pl.DataFrame(filler))
-        compact_instruments(staging, curated, run, day)
+        # A scratch layer, not a lake: each run merges into what the last one wrote.
+        compact_instruments(staging, curated, run, day, out_root=curated)
 
     out = pl.read_parquet(curated / "instruments" / "part-merged.parquet")
     marks = dict(zip(out["symbol"].to_list(), out["delist_date"].to_list(), strict=True))

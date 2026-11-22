@@ -32,6 +32,9 @@
 - 新迁移 `revision-records`（`cne upgrade` 会运行；完成前 `cne run`、`cne backfill`、`cne derive`、`cne repair --apply` 拒绝写入）：把每个已发布修订的回执记进湖目录，核对每个数据集的当前修订与指针一致后，读取修订改以湖目录为准，不再读 `meta/revisions` 下的指针和回执文件。
 - 新迁移 `legacy-datasets`（`cne upgrade` 会运行，排在 `revision-records` 之后）：0.24.0 及更早的离线样例湖、演示湖把数据直接写在 `curated/<数据集>/` 下、没有修订号，此前升级不登记它们，升级后读取仍能读到，但 `cne storage export`、快照和之后的写入都看不到这些数据。现在升级把这些目录发布进湖目录、核对行数后删除；已经升级过的湖再运行一次 `cne upgrade --apply` 即可补上。
 - **不兼容变更**：已切换到湖目录的湖（新建的湖，或升级完成 `revision-records` 的湖）只从湖目录读取已发布的数据：`load()`、`cne query` 与 MCP 的 SQL 视图、质量检查和派生都不再扫描 `curated/`、`derived/` 下的目录。湖目录没有记录的数据集一律视为没有数据，那里残留或手工放进去的文件不会再被读到；读取当前版本时湖目录答不出来就报错，不再退回旧的代目录。按修订号固定读取（`revision=`、研究里的 `revision_map`）仍可读到升级前被持有、只在磁盘上的旧修订。尚未升级的 0.24 湖照旧从目录读取。
+- 修复：`cne backfill --profile delisted` 把 `delisting_events` 直接写进 `derived/delisting_events/` 目录，湖目录湖从不读那里，这一步的结果此前一直没有发布出去。现在它在自己的检出里合并（同一代码以新的分类为准）并发布进湖目录。
+- 已切换到湖目录的湖里，`curated/`、`derived/` 下不能再写入任何数据文件：写到那里的文件读不到，此前会静默"写成功"。写入方一律写进检出再发布；Python 里直接调用派生函数（`compute_adj_factors`、`derive_industry_index`、`derive_option_greeks`、`derive_futures_continuous`、`derive_minute_resample`）现在必须传入 `output`（运行 id 打开的 `DerivedOutput`），不再默认写进无人发布的目录。
+- 长时间运行的进程（`cne serve`、`cne mcp`）读多个湖时，只保留最近用到的少数几个湖目录连接，不再每读一个湖就多留一个（每个约占几十个线程）；修订记录的读取只用一个 DuckDB 线程。
 - 读取不再在尚未升级、或还没有任何发布的湖里建出 `lake/` 目录和 `lake/maintenance.lock`（此前 `cne query`、`cne status` 等只读命令都会建）。
 - `cne check` 在湖还欠升级时于结论处提示 `cne upgrade --apply`：读取不受影响，但写入（包括下一次日更）在升级前都会被拒绝。离线样例湖不再列出“欠着的键”并建议回补。
 - 发布不再写 `meta/revisions/<数据集>/` 下的指针（`current.json`）和回执文件：修订只记在湖目录里，和这次发布的数据在同一个事务里提交。此前发布要先写回执、提交目录、再移动指针，中途停下会留下没有发布的回执或落后的指针，要靠维护任务修正；现在发布要么完整生效，要么不留痕迹。已有的指针和回执文件由 `drop-generations` 迁移删除。

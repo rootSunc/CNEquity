@@ -345,7 +345,7 @@ def derive_industry_index(
     start: date | None = None,
     end: date | None = None,
     full: bool = False,
-    output=None,
+    output,
 ) -> dict:
     """Compute and write ``industry_index``, partitioned by year.
 
@@ -382,9 +382,6 @@ def derive_industry_index(
     frame = with_provenance(frame, source="derived", data_version="v1")
     frame = dedupe_by_primary_key(frame, "industry_index")
 
-    from cnequity.storage.derived_output import DerivedOutput
-
-    output = output or DerivedOutput(config, "industry_index")
     written = 0
     spec = DATASETS["industry_index"]
     for (period,), group in (

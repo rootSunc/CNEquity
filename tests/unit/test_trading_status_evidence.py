@@ -181,6 +181,7 @@ def test_an_authority_still_corrects_a_derived_halt():
 
 def test_derived_rows_survive_the_next_compact(tmp_path):
     """The regression: a second compact used to rebuild the day without them."""
+    # A scratch layer, not a lake: each compact merges into what the last one wrote.
     staging, curated = tmp_path / "staging", tmp_path / "curated"
     writer = StagingWriter(staging)
 
@@ -199,13 +200,13 @@ def test_derived_rows_survive_the_next_compact(tmp_path):
             ]
         ),
     )
-    assert compact_dataset(staging, curated, "trading_status", "run-1") == 1
+    assert compact_dataset(staging, curated, "trading_status", "run-1", out_root=curated) == 1
 
     # The next day's ordinary EastMoney sweep restates the same session.
     writer.write_batch(
         "trading_status", "run-2", "batch-0", _frame([_status_row("eastmoney", RESTATED)])
     )
-    compact_dataset(staging, curated, "trading_status", "run-2")
+    compact_dataset(staging, curated, "trading_status", "run-2", out_root=curated)
 
     published = pl.read_parquet(
         curated / "trading_status" / "trade_date=2024-06" / "part-merged.parquet"

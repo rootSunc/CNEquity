@@ -4,10 +4,12 @@ from datetime import date
 
 import polars as pl
 import pytest
+from tests.catalog_seed import compact_into_lake
 
 from cnequity.config import Config
 from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.query import load, load_with_receipt
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.query.reader import ReaderError
 from cnequity.storage.parquet import StagingWriter, compact_dataset
 
@@ -39,8 +41,9 @@ def _frame(rows: list[dict]) -> pl.DataFrame:
     )
 
 
-def _write_curated(cfg: Config, rows: list[dict]) -> None:
-    part = cfg.curated_root / _DATASET / "report_period=2024Q1"
+def _write_curated(cfg: Config, rows: list[dict], layer=None) -> None:
+    """Write *rows* as the 2024Q1 partition of *layer* (the lake's curated folder by default)."""
+    part = (cfg.curated_root if layer is None else layer) / _DATASET / "report_period=2024Q1"
     part.mkdir(parents=True, exist_ok=True)
     _frame(rows).write_parquet(part / "part-merged.parquet")
 
@@ -64,13 +67,17 @@ def test_compact_keeps_both_vintages(tmp_path):
         ),
     )
 
+    layer = tmp_path / "out" / "curated"
     compact_dataset(
-        cfg.staging_root, cfg.curated_root, _DATASET, "run-1", partition_col="report_period"
+        cfg.staging_root,
+        cfg.curated_root,
+        _DATASET,
+        "run-1",
+        partition_col="report_period",
+        out_root=layer,
     )
 
-    out = pl.read_parquet(
-        cfg.curated_root / _DATASET / "report_period=2024Q1" / "part-merged.parquet"
-    )
+    out = pl.read_parquet(layer / _DATASET / "report_period=2024Q1" / "part-merged.parquet")
     assert sorted(out["announce_date"].to_list()) == [_ORIGINAL, _RESTATED]
 
 
@@ -253,7 +260,8 @@ def test_compact_persists_pit_columns_without_minting_a_revision(tmp_path):
     from cnequity.domain.pit import PIT_STORAGE_COLUMNS
 
     cfg = Config(data_root=tmp_path / "data")
-    _write_curated(cfg, [_row(_ORIGINAL, 100.0, "2024-04-20T09:00:00+00:00")])
+    layer = tmp_path / "out" / "curated"
+    _write_curated(cfg, [_row(_ORIGINAL, 100.0, "2024-04-20T09:00:00+00:00")], layer)
     StagingWriter(cfg.staging_root).write_batch(
         _DATASET, "run-1", "batch-0", _frame([_row(_ORIGINAL, 100.0, "2024-04-20T09:00:00+00:00")])
     )
@@ -265,8 +273,9 @@ def test_compact_persists_pit_columns_without_minting_a_revision(tmp_path):
         "run-1",
         partition_col="report_period",
         changed_files=changed,
+        out_root=layer,
     )
-    out = cfg.curated_root / _DATASET / "report_period=2024Q1" / "part-merged.parquet"
+    out = layer / _DATASET / "report_period=2024Q1" / "part-merged.parquet"
     stored = pl.read_parquet(out)
     assert set(PIT_STORAGE_COLUMNS).issubset(stored.columns)
     assert stored["revision_id"].null_count() == 0
@@ -281,8 +290,9 @@ def test_refetch_with_new_fetched_at_stays_a_physical_no_op(tmp_path):
     generation.
     """
     cfg = Config(data_root=tmp_path / "data")
-    _write_curated(cfg, [_row(_ORIGINAL, 100.0, "2024-04-20T09:00:00+00:00")])
-    out = cfg.curated_root / _DATASET / "report_period=2024Q1" / "part-merged.parquet"
+    layer = tmp_path / "out" / "curated"
+    _write_curated(cfg, [_row(_ORIGINAL, 100.0, "2024-04-20T09:00:00+00:00")], layer)
+    out = layer / _DATASET / "report_period=2024Q1" / "part-merged.parquet"
 
     StagingWriter(cfg.staging_root).write_batch(
         _DATASET, "run-1", "batch-0", _frame([_row(_ORIGINAL, 100.0, "2024-04-20T09:00:00+00:00")])
@@ -294,6 +304,7 @@ def test_refetch_with_new_fetched_at_stays_a_physical_no_op(tmp_path):
         "run-1",
         partition_col="report_period",
         changed_files=[],
+        out_root=layer,
     )
     inode = out.stat().st_ino
 
@@ -309,6 +320,7 @@ def test_refetch_with_new_fetched_at_stays_a_physical_no_op(tmp_path):
         "run-2",
         partition_col="report_period",
         changed_files=changed,
+        out_root=layer,
     )
     assert changed == []
     assert out.stat().st_ino == inode
@@ -325,6 +337,7 @@ def test_refetch_with_new_fetched_at_stays_a_physical_no_op(tmp_path):
         "run-3",
         partition_col="report_period",
         changed_files=real,
+        out_root=layer,
     )
     assert real, "a restatement must mint a revision"
 
@@ -370,24 +383,21 @@ def test_same_announce_date_correction_preserves_original_and_first_observation(
     for index, rows in enumerate(batches):
         run = f"run-{index}"
         StagingWriter(cfg.staging_root).write_batch(_DATASET, run, "batch", _frame(rows))
-        compact_dataset(
-            cfg.staging_root, cfg.curated_root, _DATASET, run, partition_col="report_period"
-        )
+        compact_into_lake(cfg, _DATASET, run, partition_col="report_period")
     early = load(_DATASET, config=cfg, as_of="2024-04-30", items=["revenue"], pit_mode="strict")
     assert early["item_value"].to_list() == [100.0]
     later = load(_DATASET, config=cfg, as_of="2024-07-01", items=["revenue"])
     assert later["item_value"].to_list() == [90.0]
     all_rows = load(_DATASET, config=cfg, as_of="2024-07-01", items=["revenue"], all_vintages=True)
     assert sorted(all_rows["item_value"].to_list()) == [90.0, 100.0]
-    from cnequity.quality.dataset_checks import _partitioned_pk_duplicate_count
-
-    root = cfg.curated_root / _DATASET
-    assert (
-        _partitioned_pk_duplicate_count(
-            list(root.rglob("*.parquet")), _DATASET, "report_period", root
-        )
-        == 0
+    published = pl.concat(
+        [pl.read_parquet(path) for path in root_parquet_files(cfg.curated_root / _DATASET)],
+        how="diagonal_relaxed",
     )
+    # No physical vintage (the primary key plus `revision_id`) is stored twice.
+    assert published.height == 3
+    vintage = [*PRIMARY_KEYS[_DATASET], "revision_id"]
+    assert published.select(vintage).is_duplicated().sum() == 0
 
 
 def test_source_times_are_dated_in_shanghai_not_utc():

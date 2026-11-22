@@ -10,13 +10,14 @@ import duckdb
 import polars as pl
 import pytest
 from click.testing import CliRunner
-from tests.catalog_seed import publish_folders
+from tests.catalog_seed import compact_into_lake, publish_folders
 
 from cnequity.cli.main import cli
 from cnequity.config import load_config, validate_config
 from cnequity.config.bootstrap import path_for_toml
 from cnequity.domain.schemas import validate_dataframe, with_provenance
 from cnequity.orchestrator.registry import STEP_REGISTRY, StepEntry
+from cnequity.query.parquet_scan import root_parquet_files
 
 
 def _inst_frame(symbols: list[str]) -> pl.DataFrame:
@@ -581,8 +582,16 @@ def test_return_summary_compares_raw_and_adjusted_series():
     assert result["rows"] == 2
 
 
-def test_research_demo_derives_factors_and_requires_exact_rows(monkeypatch):
+def _research_config(tmp_path):
+    """An empty lake for a research demo whose factor derivation and reads are faked."""
+    from cnequity.config import Config
+
+    return Config(data_root=tmp_path / "lake")
+
+
+def test_research_demo_derives_factors_and_requires_exact_rows(tmp_path, monkeypatch):
     from cnequity.cli.demo import _run_research_demo
+    from cnequity.storage.derived_output import DerivedOutput
 
     calls: dict[str, object] = {}
 
@@ -613,13 +622,16 @@ def test_research_demo_derives_factors_and_requires_exact_rows(monkeypatch):
     monkeypatch.setattr("cnequity.query.reader.load", fake_load)
 
     result = _run_research_demo(
-        object(),
+        _research_config(tmp_path),
         ["600519.SH"],
         date(2024, 6, 27),
         date(2024, 6, 28),
     )
 
-    assert calls["derive"] == {
+    derive = dict(calls["derive"])
+    # The factors are derived into a checkout of the lake, never its folders.
+    assert isinstance(derive.pop("output"), DerivedOutput)
+    assert derive == {
         "adjust_type": "hfq",
         "refresh_symbols": ["600519.SH"],
         "full": True,
@@ -765,15 +777,9 @@ def test_cne_demo_intraday_offline(tmp_path, monkeypatch):
         return {"rows_read": df.height, "rows_written": df.height}
 
     def fake_compact(config, trade_date, run_id, context):
-        from cnequity.storage.parquet import compact_dataset
-
         total = 0
         for dataset in ("daily_bars", "minute_bars"):
-            rows = compact_dataset(config.staging_root, config.curated_root, dataset, run_id)
-            if rows:
-                # The lake reads only its catalog: publish what the fake compacted.
-                publish_folders(config, dataset)
-            total += rows
+            total += compact_into_lake(config, dataset, run_id)
         return {"rows_read": total, "rows_written": total}
 
     names = ("trading_calendar", "daily_bars", "minute_bars", "compact")
@@ -809,7 +815,7 @@ def test_cne_demo_intraday_offline(tmp_path, monkeypatch):
         assert "是完整的 240 根/日" in result.output
         assert "bar_time 是这一分钟的**收盘**时刻" in result.output
         assert 'load("minute_bars"' in result.output
-        assert list((data_root / "curated" / "minute_bars").glob("**/*.parquet"))
+        assert root_parquet_files(data_root / "curated" / "minute_bars")
     finally:
         STEP_REGISTRY.update(originals)
 
@@ -913,7 +919,7 @@ def test_demo_enables_sina_only_for_the_research_view(tmp_path, monkeypatch, res
 
 
 @pytest.mark.usefixtures("chinese_output")
-def test_research_demo_keeps_bars_when_no_factor_source_is_available(monkeypatch):
+def test_research_demo_keeps_bars_when_no_factor_source_is_available(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     from cnequity.cli.demo import _run_research_demo
@@ -925,14 +931,16 @@ def test_research_demo_keeps_bars_when_no_factor_source_is_available(monkeypatch
             findings=[{"severity": "error", "check": "adj_factor_fetch_failed"}],
         ),
     )
-    result = _run_research_demo(None, ["600519.SH"], date(2024, 6, 27), date(2024, 6, 28))
+    result = _run_research_demo(
+        _research_config(tmp_path), ["600519.SH"], date(2024, 6, 27), date(2024, 6, 28)
+    )
     assert result["execution_status"] == "completed"
     assert result["rows"] == 0
     assert "unadjusted daily bars" in result["fallback"]
 
 
 @pytest.mark.usefixtures("chinese_output")
-def test_research_demo_does_not_hide_factor_integrity_errors(monkeypatch):
+def test_research_demo_does_not_hide_factor_integrity_errors(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     from cnequity.cli.demo import _run_research_demo
@@ -944,11 +952,13 @@ def test_research_demo_does_not_hide_factor_integrity_errors(monkeypatch):
         ),
     )
     with pytest.raises(click.ClickException, match="因子校验失败"):
-        _run_research_demo(None, ["600519.SH"], date(2024, 6, 27), date(2024, 6, 28))
+        _run_research_demo(
+            _research_config(tmp_path), ["600519.SH"], date(2024, 6, 27), date(2024, 6, 28)
+        )
 
 
 @pytest.mark.parametrize("missing", ["bars", "factors"])
-def test_research_demo_uses_a_later_symbol_with_exact_inputs(monkeypatch, missing):
+def test_research_demo_uses_a_later_symbol_with_exact_inputs(tmp_path, monkeypatch, missing):
     from types import SimpleNamespace
 
     from cnequity.cli.demo import _run_research_demo
@@ -980,14 +990,16 @@ def test_research_demo_uses_a_later_symbol_with_exact_inputs(monkeypatch, missin
 
     monkeypatch.setattr("cnequity.query.reader.load", load)
     result = _run_research_demo(
-        None, ["600519.SH", "000001.SZ"], date(2024, 6, 27), date(2024, 6, 28)
+        _research_config(tmp_path), ["600519.SH", "000001.SZ"], date(2024, 6, 27), date(2024, 6, 28)
     )
     assert result["symbol"] == "000001.SZ"
     assert result["exact"] is True
 
 
 @pytest.mark.usefixtures("chinese_output")
-def test_research_demo_finishes_when_derived_factors_do_not_cover_requested_bars(monkeypatch):
+def test_research_demo_finishes_when_derived_factors_do_not_cover_requested_bars(
+    tmp_path, monkeypatch
+):
     from types import SimpleNamespace
 
     from cnequity.cli.demo import _run_research_demo
@@ -1004,13 +1016,15 @@ def test_research_demo_finishes_when_derived_factors_do_not_cover_requested_bars
         return pl.DataFrame({"trade_date": [date(2024, 6, 28)], "close": [10.0]})
 
     monkeypatch.setattr("cnequity.query.reader.load", load)
-    result = _run_research_demo(None, ["600519.SH"], date(2024, 6, 27), date(2024, 6, 28))
+    result = _run_research_demo(
+        _research_config(tmp_path), ["600519.SH"], date(2024, 6, 27), date(2024, 6, 28)
+    )
     assert result["execution_status"] == "completed"
     assert result["status"] == "degraded"
     assert "unadjusted daily bars" in result["fallback"]
 
 
-def test_research_demo_does_not_hide_other_reader_errors(monkeypatch):
+def test_research_demo_does_not_hide_other_reader_errors(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     from cnequity.cli.demo import _run_research_demo
@@ -1026,7 +1040,9 @@ def test_research_demo_does_not_hide_other_reader_errors(monkeypatch):
 
     monkeypatch.setattr("cnequity.query.reader.load", load)
     with pytest.raises(ReaderError, match="invalid adjustment dataset"):
-        _run_research_demo(None, ["600519.SH"], date(2024, 6, 27), date(2024, 6, 28))
+        _run_research_demo(
+            _research_config(tmp_path), ["600519.SH"], date(2024, 6, 27), date(2024, 6, 28)
+        )
 
 
 def test_run_intraday_demo_displays_an_available_symbol_from_partial_scope(tmp_path, monkeypatch):

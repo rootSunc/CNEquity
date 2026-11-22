@@ -12,6 +12,18 @@ import polars as pl
 from cnequity.config import Config
 from cnequity.query import load
 from cnequity.steps.delisted import classify_ending, write_delisting_events
+from cnequity.storage.lake_record import start_on_catalog
+
+
+def _lake(tmp_path) -> Config:
+    cfg = Config(data_root=tmp_path / "data")
+    cfg.meta_root.mkdir(parents=True)
+    start_on_catalog(cfg)
+    return cfg
+
+
+def _publish(cfg: Config, run_id: str, events: list[dict]) -> None:
+    write_delisting_events(cfg, run_id, events)
 
 
 def _series(closes: list[float], gaps: dict[int, int] | None = None) -> pl.DataFrame:
@@ -105,9 +117,10 @@ def _event(symbol: str, pattern: str, last: date) -> dict:
 
 
 def test_events_are_queryable_through_load(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    write_delisting_events(
+    cfg = _lake(tmp_path)
+    _publish(
         cfg,
+        "run-1",
         [
             _event("600608.SH", "consolidation", date(2026, 6, 29)),
             _event("600355.SH", "abrupt_decline", date(2026, 4, 3)),
@@ -122,9 +135,9 @@ def test_events_are_queryable_through_load(tmp_path):
 
 
 def test_rerunning_updates_rather_than_duplicates(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    write_delisting_events(cfg, [_event("600608.SH", "abrupt_decline", date(2026, 6, 29))])
-    write_delisting_events(cfg, [_event("600608.SH", "consolidation", date(2026, 6, 29))])
+    cfg = _lake(tmp_path)
+    _publish(cfg, "run-1", [_event("600608.SH", "abrupt_decline", date(2026, 6, 29))])
+    _publish(cfg, "run-2", [_event("600608.SH", "consolidation", date(2026, 6, 29))])
 
     df = load("delisting_events", config=cfg)
 
@@ -132,28 +145,22 @@ def test_rerunning_updates_rather_than_duplicates(tmp_path):
     assert df["ending_pattern"][0] == "consolidation", "the later classification wins"
 
 
-def test_merge_preserves_nested_fragments_and_cleans_them(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    write_delisting_events(cfg, [_event("600608.SH", "consolidation", date(2026, 6, 29))])
-
-    canonical = cfg.derived_root / "delisting_events" / "part-merged.parquet"
-    nested = canonical.parent / ".old-fragments"
-    nested.mkdir()
-    pl.read_parquet(canonical).with_columns(pl.lit("600355.SH").alias("symbol")).write_parquet(
-        nested / "part-old.parquet"
-    )
-
-    write_delisting_events(cfg, [_event("600001.SH", "abrupt_stable", date(2026, 4, 3))])
+def test_a_later_run_keeps_the_symbols_it_did_not_classify(tmp_path):
+    cfg = _lake(tmp_path)
+    _publish(cfg, "run-1", [_event("600608.SH", "consolidation", date(2026, 6, 29))])
+    _publish(cfg, "run-2", [_event("600001.SH", "abrupt_stable", date(2026, 4, 3))])
 
     df = load("delisting_events", config=cfg)
-    assert set(df["symbol"]) == {"600001.SH", "600355.SH", "600608.SH"}
-    assert [path.name for path in canonical.parent.rglob("*.parquet")] == ["part-merged.parquet"]
+    assert set(df["symbol"]) == {"600001.SH", "600608.SH"}
+    # Published into the catalog, never written as a folder the lake does not read.
+    assert not (cfg.derived_root / "delisting_events").exists()
 
 
 def test_date_window_filters_on_last_trade_date(tmp_path):
-    cfg = Config(data_root=tmp_path / "data")
-    write_delisting_events(
+    cfg = _lake(tmp_path)
+    _publish(
         cfg,
+        "run-1",
         [
             _event("600001.SH", "consolidation", date(2009, 12, 15)),
             _event("600608.SH", "consolidation", date(2026, 6, 29)),

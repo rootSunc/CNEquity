@@ -373,7 +373,7 @@ def derive_option_greeks(
     start: date | None = None,
     end: date | None = None,
     full: bool = False,
-    output=None,
+    output,
 ) -> dict:
     # Not under the lake lock: the inputs are pinned generations, and only the
     # write section mutates the lake. Holding the lock for the whole compute
@@ -387,7 +387,7 @@ def _derive_option_greeks(
     start: date | None = None,
     end: date | None = None,
     full: bool = False,
-    output=None,
+    output,
 ) -> dict:
     """Compute and write ``option_greeks``.
 
@@ -398,7 +398,6 @@ def _derive_option_greeks(
     """
     from cnequity.domain.market_time import shanghai_today
     from cnequity.domain.schemas import validate_dataframe, with_provenance
-    from cnequity.storage.derived_output import DerivedOutput
 
     context = _pin_inputs(config)
     sessions: list[date] | None = None
@@ -440,7 +439,6 @@ def _derive_option_greeks(
     from cnequity.storage.atomic import write_json_atomic
     from cnequity.storage.published import frame_day_digests
 
-    output = output or DerivedOutput(config, "option_greeks")
     for (day,), group in frame.partition_by("trade_date", as_dict=True).items():
         output.write(f"trade_date={day.isoformat()}", group, "part-000.parquet")
         write_json_atomic(

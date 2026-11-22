@@ -71,6 +71,7 @@ def test_staging_writer_lists_nested_run_fragments(tmp_path):
 
 def test_compact_merge_style_dataset_preserves_prior_runs(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
+    out = tmp_path / "out" / "curated"
     dataset = "regulatory_events"
     first = "run-regulatory-1"
     second = "run-regulatory-2"
@@ -97,9 +98,10 @@ def test_compact_merge_style_dataset_preserves_prior_runs(tmp_path):
         dataset,
         first,
         partition_col=None,
+        out_root=out,
     )
 
-    canonical = cfg.curated_root / dataset / "part-merged.parquet"
+    canonical = out / dataset / "part-merged.parquet"
     nested = canonical.parent / ".old-fragments"
     nested.mkdir()
     pl.read_parquet(canonical).write_parquet(nested / "part-old.parquet")
@@ -111,6 +113,7 @@ def test_compact_merge_style_dataset_preserves_prior_runs(tmp_path):
         dataset,
         second,
         partition_col=None,
+        out_root=out,
     )
 
     assert pl.read_parquet(canonical)["event_id"].sort().to_list() == ["e-1", "e-2"]
@@ -121,6 +124,7 @@ def test_unpartitioned_reconciliation_from_committed_root_is_physical_noop(tmp_p
     import shutil
 
     cfg = Config(data_root=tmp_path)
+    out = tmp_path / "out" / "curated"
     writer = StagingWriter(cfg.staging_root)
     frame = pl.DataFrame(
         {
@@ -134,9 +138,14 @@ def test_unpartitioned_reconciliation_from_committed_root_is_physical_noop(tmp_p
     )
     writer.write_batch("trading_calendar", "first", "one", frame)
     compact_dataset(
-        cfg.staging_root, cfg.curated_root, "trading_calendar", "first", partition_col=None
+        cfg.staging_root,
+        cfg.curated_root,
+        "trading_calendar",
+        "first",
+        partition_col=None,
+        out_root=out,
     )
-    canonical = cfg.curated_root / "trading_calendar/part-merged.parquet"
+    canonical = out / "trading_calendar/part-merged.parquet"
     base = tmp_path / "committed"
     shutil.copytree(canonical.parent, base)
     original = canonical.stat()
@@ -155,6 +164,7 @@ def test_unpartitioned_reconciliation_from_committed_root_is_physical_noop(tmp_p
         partition_col=None,
         base_root=base,
         changed_files=changed,
+        out_root=out,
     )
     assert changed == []
     assert canonical.stat().st_ino == original.st_ino

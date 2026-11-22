@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import derive_into_lake, publish_folders
 from tests.coverage_fakes import covered
 
 from cnequity.config import Config
@@ -23,6 +24,20 @@ from cnequity.derive.industry_index import (
     derive_industry_index,
 )
 from cnequity.quality.verify import covered_through
+from cnequity.query.parquet_scan import root_parquet_files
+from cnequity.storage.lake_record import start_on_catalog
+
+
+def _publish(cfg: Config, *datasets: str) -> None:
+    """Put the lake on its catalog and publish the fixture folders of *datasets* into it."""
+    cfg.meta_root.mkdir(parents=True, exist_ok=True)
+    start_on_catalog(cfg)
+    publish_folders(cfg, *datasets)
+
+
+def _index_files(cfg: Config) -> list:
+    """The published industry_index files."""
+    return root_parquet_files(cfg.derived_root / "industry_index")
 
 
 def _members(rows: list[tuple[str, str, date]]) -> pl.DataFrame:
@@ -386,14 +401,19 @@ def test_derive_industry_index_writes_and_watermarks(tmp_path, monkeypatch):
         "cnequity.derive.industry_index.compute_industry_index",
         lambda *a, **k: frame,
     )
-    summary = derive_industry_index(cfg, start=date(2026, 5, 15), end=date(2026, 5, 15))
+    summary = derive_into_lake(
+        cfg, "industry_index", derive_industry_index, start=date(2026, 5, 15), end=date(2026, 5, 15)
+    )
     assert summary["rows"] == 2
-    out = list((cfg.derived_root / "industry_index").glob("**/part-000.parquet"))
+    out = _index_files(cfg)
     assert out
+    assert pl.concat([pl.read_parquet(path) for path in out]).height == 2
     assert covered_through(cfg, "industry_index") == date(2026, 5, 15)
 
     # Already current → no-op note.
-    again = derive_industry_index(cfg, start=date(2026, 5, 16), end=date(2026, 5, 15))
+    again = derive_into_lake(
+        cfg, "industry_index", derive_industry_index, start=date(2026, 5, 16), end=date(2026, 5, 15)
+    )
     assert again["rows"] == 0
     assert "already current" in again["note"]
 
@@ -411,6 +431,7 @@ def test_derive_industry_index_watermark_stops_before_interior_gap(tmp_path, mon
             "fetched_at": ["2026-08-05T00:00:00+00:00"] * 3,
         }
     ).write_parquet(calendar / "part-000.parquet")
+    _publish(cfg, "trading_calendar")
     frame = pl.DataFrame(
         {
             "trade_date": [
@@ -434,7 +455,9 @@ def test_derive_industry_index_watermark_stops_before_interior_gap(tmp_path, mon
         lambda *a, **k: frame,
     )
 
-    derive_industry_index(cfg, start=date(2026, 8, 3), end=date(2026, 8, 5))
+    derive_into_lake(
+        cfg, "industry_index", derive_industry_index, start=date(2026, 8, 3), end=date(2026, 8, 5)
+    )
 
     assert covered_through(cfg, "industry_index") == date(2026, 8, 3)
 
@@ -495,13 +518,18 @@ def test_derive_industry_index_cleans_duplicate_existing_rows(tmp_path, monkeypa
         lambda *a, **k: new,
     )
 
-    derive_industry_index(cfg, start=date(2026, 5, 15), end=date(2026, 5, 15))
-    written = pl.read_parquet(part / "part-000.parquet")
+    _publish(cfg, "industry_index")
+
+    derive_into_lake(
+        cfg, "industry_index", derive_industry_index, start=date(2026, 5, 15), end=date(2026, 5, 15)
+    )
+    files = _index_files(cfg)
+    assert len(files) == 1
+    written = pl.read_parquet(files[0])
     assert written.height == 4
     assert written.filter(pl.col("trade_date") == date(2026, 5, 14))["ret"].to_list() == [0.02]
     assert written.filter(pl.col("trade_date") == date(2026, 5, 13))["ret"].to_list() == [0.01]
     assert written.filter(pl.col("trade_date") == date(2026, 5, 12))["ret"].to_list() == [0.005]
-    assert [path.name for path in part.rglob("*.parquet")] == ["part-000.parquet"]
 
 
 def test_derive_industry_index_aligns_new_schema_with_existing_partition(tmp_path, monkeypatch):
@@ -525,6 +553,7 @@ def test_derive_industry_index_aligns_new_schema_with_existing_partition(tmp_pat
             "fetched_at": [datetime(2026, 5, 14, tzinfo=timezone.utc)],
         }
     ).write_parquet(part / "part-000.parquet")
+    _publish(cfg, "industry_index")
     incoming = pl.DataFrame(
         {
             "trade_date": [date(2026, 5, 15), date(2026, 5, 15)],
@@ -543,10 +572,12 @@ def test_derive_industry_index_aligns_new_schema_with_existing_partition(tmp_pat
         lambda *a, **k: incoming,
     )
 
-    derive_industry_index(cfg, start=date(2026, 5, 15), end=date(2026, 5, 15))
+    derive_into_lake(
+        cfg, "industry_index", derive_industry_index, start=date(2026, 5, 15), end=date(2026, 5, 15)
+    )
 
     # The new date is a file of its own, typed like the file beside it.
-    files = sorted(part.glob("*.parquet"))
+    files = _index_files(cfg)
     assert all(pl.read_parquet_schema(path)["n_priced"] == pl.UInt32 for path in files)
     assert sum(pl.read_parquet(path).height for path in files) == 3
 
@@ -600,6 +631,7 @@ def test_catchup_after_watermark_keeps_first_day(tmp_path, monkeypatch):
             "fetched_at": ["2026-08-03T00:00:00+00:00"] * 3,
         }
     ).write_parquet(cal_part / "part-000.parquet")
+    _publish(cfg, "industry_members", "adj_factors", "trading_calendar")
 
     bars = pl.DataFrame(
         [
@@ -620,14 +652,12 @@ def test_catchup_after_watermark_keeps_first_day(tmp_path, monkeypatch):
     monkeypatch.setattr("cnequity.query.reader.load", lambda *a, **k: bars)
     covered(monkeypatch, "industry_index", date(2026, 7, 31))
 
-    summary = derive_industry_index(cfg, end=date(2026, 8, 3))
+    summary = derive_into_lake(cfg, "industry_index", derive_industry_index, end=date(2026, 8, 3))
     assert summary["rows"] > 0
     assert summary["first"] == "2026-08-03"
     assert summary["last"] == "2026-08-03"
 
-    written = pl.read_parquet(
-        next((cfg.derived_root / "industry_index").glob("**/part-000.parquet"))
-    )
+    written = pl.concat([pl.read_parquet(path) for path in _index_files(cfg)])
     day = written.filter(
         (pl.col("trade_date") == date(2026, 8, 3)) & (pl.col("weighting") == "equal")
     )

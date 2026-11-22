@@ -97,12 +97,16 @@ def test_compact_reports_only_physical_dataset_changes(tmp_path):
     )
     writer.write_batch("daily_bars", "run-1", "batch-1", row)
     first_changes: list[Path] = []
-    compact_dataset(staging, curated, "daily_bars", "run-1", changed_files=first_changes)
+    compact_dataset(
+        staging, curated, "daily_bars", "run-1", changed_files=first_changes, out_root=curated
+    )
     assert len(first_changes) == 1
 
     writer.write_batch("daily_bars", "run-2", "batch-1", row)
     second_changes: list[Path] = []
-    compact_dataset(staging, curated, "daily_bars", "run-2", changed_files=second_changes)
+    compact_dataset(
+        staging, curated, "daily_bars", "run-2", changed_files=second_changes, out_root=curated
+    )
     assert second_changes == []
 
 
@@ -126,7 +130,9 @@ def test_compact_ignores_fetch_timestamp_churn_but_keeps_business_changes(tmp_pa
     first = pl.DataFrame({**base, "fetched_at": ["2024-06-18T10:00:00+00:00"]})
     writer.write_batch("daily_bars", "run-1", "batch-1", first)
     first_changes: list[Path] = []
-    compact_dataset(staging, curated, "daily_bars", "run-1", changed_files=first_changes)
+    compact_dataset(
+        staging, curated, "daily_bars", "run-1", changed_files=first_changes, out_root=curated
+    )
     assert len(first_changes) == 1
     path = first_changes[0]
     before = path.read_bytes()
@@ -146,7 +152,9 @@ def test_compact_ignores_fetch_timestamp_churn_but_keeps_business_changes(tmp_pa
     same_business = pl.DataFrame({**base, "fetched_at": ["2024-06-18T11:00:00+00:00"]})
     writer.write_batch("daily_bars", "run-2", "batch-1", same_business)
     second_changes: list[Path] = []
-    compact_dataset(staging, curated, "daily_bars", "run-2", changed_files=second_changes)
+    compact_dataset(
+        staging, curated, "daily_bars", "run-2", changed_files=second_changes, out_root=curated
+    )
     assert second_changes == []
     assert path.read_bytes() == before
     assert (
@@ -165,7 +173,9 @@ def test_compact_ignores_fetch_timestamp_churn_but_keeps_business_changes(tmp_pa
     changed_business = same_business.with_columns(pl.lit(10.3).alias("close"))
     writer.write_batch("daily_bars", "run-3", "batch-1", changed_business)
     third_changes: list[Path] = []
-    compact_dataset(staging, curated, "daily_bars", "run-3", changed_files=third_changes)
+    compact_dataset(
+        staging, curated, "daily_bars", "run-3", changed_files=third_changes, out_root=curated
+    )
     assert third_changes == [path]
     assert pl.read_parquet(path)["close"].item() == 10.3
     third_revision = commit_generation(

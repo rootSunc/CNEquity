@@ -242,7 +242,7 @@ def _curated(config, dataset: str) -> pl.DataFrame | None:
     return dedupe_by_primary_key(scan.collect(), dataset)
 
 
-def derive_futures_continuous(config, *, output=None) -> dict:
+def derive_futures_continuous(config, *, output) -> dict:
     """Rebuild ``futures_continuous`` from curated bars and contracts.
 
     A full rebuild, not an increment: the adjustment factors are cumulative
@@ -251,7 +251,6 @@ def derive_futures_continuous(config, *, output=None) -> dict:
     """
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.schemas import validate_dataframe, with_provenance
-    from cnequity.storage.derived_output import DerivedOutput
 
     bars = _curated(config, "futures_bars")
     if bars is None or bars.is_empty():
@@ -276,7 +275,6 @@ def derive_futures_continuous(config, *, output=None) -> dict:
     frame = validate_dataframe(
         with_provenance(frame, source="derived", data_version="v1"), "futures_continuous"
     )
-    output = output or DerivedOutput(config, "futures_continuous")
     keep: set[str] = set()
     for (period,), group in (
         frame.with_columns(

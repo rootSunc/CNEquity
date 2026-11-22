@@ -8,6 +8,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.catalog_seed import compact_into_lake
 from tests.coverage_fakes import covered
 
 from cnequity.adapters.futures_exchange.cffex import parse_daily_csv
@@ -18,7 +19,6 @@ from cnequity.domain.datasets import is_dataset_enabled
 from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.run_scope import set_backfill, set_run_flags
 from cnequity.steps import derivatives
-from cnequity.storage.parquet import compact_dataset
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "futures" / "cffex_20260924.csv"
 
@@ -124,9 +124,8 @@ def test_backfill_walks_sessions_and_resumes_by_exchange(cfg, reader):
     set_backfill(cfg, active=True, start=date(2026, 9, 21), end=date(2026, 9, 24))
     result = derivatives.step_option_bars(cfg, date(2026, 9, 24), "bf", {})
     assert result["rows_written"] == 5 * 4
-    compact_dataset(
-        cfg.staging_root,
-        cfg.curated_root,
+    compact_into_lake(
+        cfg,
         "option_bars",
         "bf",
         partition_col="trade_date",
@@ -474,9 +473,8 @@ def test_failed_session_remains_retryable_outside_reconciliation_tail(cfg, reade
     assert calls.count(old) == 2
     assert old in _staged(cfg, "futures_bars")["trade_date"]
     assert old in owed_sessions(cfg, "futures_bars", date(2026, 9, 24))
-    compact_dataset(
-        cfg.staging_root,
-        cfg.curated_root,
+    compact_into_lake(
+        cfg,
         "futures_bars",
         "repair",
         partition_col="trade_date",

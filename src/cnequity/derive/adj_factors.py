@@ -1971,7 +1971,7 @@ def _write_adj_partitions(
     out: pl.DataFrame,
     *,
     replace: bool,
-    output=None,
+    output,
 ) -> int:
     """Persist aligned factors. Append-only merges into existing partitions unless *replace*."""
     # query.__init__ imports this module for STORED_ADJUST_TYPE, so keep this
@@ -1979,10 +1979,8 @@ def _write_adj_partitions(
     from cnequity.domain.canonical import dedupe_by_primary_key
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.partitions import partition_value
-    from cnequity.storage.derived_output import DerivedOutput
     from cnequity.storage.parquet import write_partition_rows
 
-    output = output or DerivedOutput(config, "adj_factors")
     total = 0
     # One group per partition in the registry's period: a day directory per
     # session, or a month file holding every session of the month. Replace
@@ -2040,7 +2038,7 @@ def compute_adj_factors(
     refresh_symbols: list[str] | None = None,
     realign_symbols: list[str] | None = None,
     full: bool = False,
-    output=None,
+    output,
 ) -> AdjFactorsResult:
     """Derive hfq adj_factors (ADR-0004).
 

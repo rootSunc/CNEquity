@@ -938,6 +938,29 @@ def resolve_committed_root(
 UNPUBLISHED = ".unpublished"
 
 
+class LakeFolderWrite(RuntimeError):
+    """A write aimed at a dataset folder of a lake that reads only its catalog."""
+
+
+def refuse_lake_folder_write(path: Path | str) -> None:
+    """Raise :class:`LakeFolderWrite` when *path* is in a lake's ``curated/`` or ``derived/``.
+
+    A lake on its catalog never reads those folders, so a file written there is
+    lost without a word: the run reports rows written that no reader will see.
+    Writers put rows in a checkout (``LakeWrite.checkout``) and publish it.
+    Every other directory (a checkout, staging, a scratch folder, an earlier
+    release's lake, which nothing writes) passes.
+    """
+    target = Path(path).expanduser().absolute()
+    for folder in (target, *target.parents):
+        if folder.name in ("curated", "derived") and catalog_only(folder.parent / "meta"):
+            raise LakeFolderWrite(
+                f"{target} is under {folder}, which this lake never reads: it reads only "
+                "its catalog. Write into a checkout of the lake (LakeWrite.checkout) and "
+                "publish it."
+            )
+
+
 def catalog_only(meta_root: Path | str) -> bool:
     """Whether the lake at *meta_root* reads its published rows only from its catalog.
 

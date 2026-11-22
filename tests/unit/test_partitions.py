@@ -252,12 +252,13 @@ def _stage_bars(cfg, dataset, run_id, dates):
 
 def test_compact_groups_a_year_granularity_dataset_into_one_directory(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
+    out = tmp_path / "out" / "curated"
     dates = [date(2024, 1, 4), date(2024, 6, 3), date(2024, 12, 31), date(2025, 1, 6)]
     _stage_bars(cfg, "index_bars", "run-1", dates)
 
-    compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-1")
+    compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-1", out_root=out)
 
-    root = cfg.curated_root / "index_bars"
+    root = out / "index_bars"
     assert sorted(p.value for p in list_partitions(root, "trade_date")) == ["2024", "2025"]
     assert collect_parquet_root(root, partition_col="trade_date").height == 4
 
@@ -265,17 +266,19 @@ def test_compact_groups_a_year_granularity_dataset_into_one_directory(tmp_path):
 def test_compact_merges_into_an_existing_period_partition(tmp_path):
     """A second run in the same year must not drop the first run's rows."""
     cfg = Config(data_root=tmp_path / "data")
+    out = tmp_path / "out" / "curated"
     _stage_bars(cfg, "index_bars", "run-1", [date(2024, 1, 4)])
-    compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-1")
+    compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-1", out_root=out)
     _stage_bars(cfg, "index_bars", "run-2", [date(2024, 6, 3)])
-    compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-2")
+    compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-2", out_root=out)
 
-    df = collect_parquet_root(cfg.curated_root / "index_bars", partition_col="trade_date")
+    df = collect_parquet_root(out / "index_bars", partition_col="trade_date")
     assert sorted(df["trade_date"].to_list()) == [date(2024, 1, 4), date(2024, 6, 3)]
 
 
 def test_compact_prefers_primary_source_on_same_timestamp(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
+    out = tmp_path / "out" / "curated"
     frame = _bar_frame([date(2024, 6, 3), date(2024, 6, 3)]).with_columns(
         pl.Series("source", ["eastmoney", "tdx_protocol"]),
         pl.Series("open", [10.0, 20.0]),
@@ -286,12 +289,10 @@ def test_compact_prefers_primary_source_on_same_timestamp(tmp_path):
     )
     StagingWriter(cfg.staging_root).write_batch("daily_bars", "run-1", "batch-0", frame)
 
-    compact_dataset(cfg.staging_root, cfg.curated_root, "daily_bars", "run-1")
+    compact_dataset(cfg.staging_root, cfg.curated_root, "daily_bars", "run-1", out_root=out)
 
     rows = (
-        pl.read_parquet(
-            cfg.curated_root / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet"
-        )
+        pl.read_parquet(out / "daily_bars" / "trade_date=2024-06" / "part-merged.parquet")
         .select("source", "close")
         .to_dicts()
     )
@@ -300,14 +301,15 @@ def test_compact_prefers_primary_source_on_same_timestamp(tmp_path):
 
 def test_compact_removes_legacy_index_weekend_rows(tmp_path):
     cfg = Config(data_root=tmp_path / "data")
-    root = cfg.curated_root / "index_bars" / "trade_date=1991"
+    out = tmp_path / "out" / "curated"
+    root = out / "index_bars" / "trade_date=1991"
     root.mkdir(parents=True, exist_ok=True)
     _bar_frame([date(1991, 4, 5), date(1991, 4, 6)]).write_parquet(root / "part-merged.parquet")
     # Compaction cleans the files it rewrites: a staged row that shares a key
     # with the legacy file pulls that file into the write.
     _stage_bars(cfg, "index_bars", "run-clean", [date(1991, 4, 5), date(1991, 4, 8)])
 
-    compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-clean")
+    compact_dataset(cfg.staging_root, cfg.curated_root, "index_bars", "run-clean", out_root=out)
 
     assert [p.name for p in root.glob("*.parquet")] == ["part-merged.parquet"]
     dates = pl.read_parquet(root / "part-merged.parquet")["trade_date"].sort().to_list()

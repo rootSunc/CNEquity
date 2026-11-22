@@ -30,6 +30,7 @@ from typing import Any
 
 from cnequity.meta_layout import LAKE_DIR, REVISION_DATA, REVISION_RECORDS, STORAGE_RECORD
 from equitylake_core.catalog import ALIAS, CATALOG_FILE, REVISIONS_TABLE, Catalog
+from equitylake_core.catalog_cache import OpenCatalogs
 from equitylake_core.lock import lake_read
 
 #: The migration that imports the receipts; until a lake has had it, its files are read.
@@ -214,26 +215,33 @@ class CatalogRecords:
 
 
 _lock = threading.Lock()
-_readers: dict[Path, Catalog] = {}
+#: Revision records are small metadata reads: one DuckDB thread each, and only
+#: the few lakes this process reads lately stay open (see OpenCatalogs).
+_READER_THREADS = 1
+_readers = OpenCatalogs(limit=4)
 _cache: dict[Path, CatalogRecords] = {}
 _settings: dict[Path, tuple[tuple[int, int], bool]] = {}
 
 
-def _query(root: Path, sql: str, parameters: list | None = None) -> list:
+def _with_reader(root: Path, use):
+    """Call *use* with the open read-only catalog of *root*, reopening once if it went stale."""
     with lake_read(root), _lock:
         for attempt in (0, 1):
             catalog = _readers.get(root)
             if catalog is None:
-                catalog = _readers[root] = Catalog(root, read_only=True)
+                catalog = _readers.put(root, Catalog(root, read_only=True, threads=_READER_THREADS))
             try:
-                return catalog.execute(sql, parameters).fetchall()
+                return use(catalog)
             except Exception:
                 # A stale connection (the lake was moved or rebuilt): open it once more.
-                _readers.pop(root, None)
-                catalog.close()
+                _readers.close(root)
                 if attempt:
                     raise
     raise AssertionError("unreachable")
+
+
+def _query(root: Path, sql: str, parameters: list | None = None) -> list:
+    return _with_reader(root, lambda catalog: catalog.execute(sql, parameters).fetchall())
 
 
 def latest_snapshot(root: Path) -> int | None:
@@ -293,19 +301,7 @@ def _enabled(meta: Path) -> bool:
 
 
 def _has_tables(root: Path, *names: str) -> bool:
-    with lake_read(root), _lock:
-        for attempt in (0, 1):
-            catalog = _readers.get(root)
-            if catalog is None:
-                catalog = _readers[root] = Catalog(root, read_only=True)
-            try:
-                return all(catalog.has_table(name) for name in names)
-            except Exception:
-                _readers.pop(root, None)
-                catalog.close()
-                if attempt:
-                    raise
-    raise AssertionError("unreachable")
+    return _with_reader(root, lambda catalog: all(catalog.has_table(name) for name in names))
 
 
 def _load_current(root: Path) -> dict[str, RevisionRecord | None]:
@@ -349,13 +345,13 @@ def forget(meta_root: Path | None = None) -> None:
     """Drop cached records and close readers (all of them, or *meta_root*'s lake)."""
     with _lock:
         roots = (
-            list(_readers) if meta_root is None else [(Path(meta_root).parent / LAKE_DIR).resolve()]
+            _readers.roots()
+            if meta_root is None
+            else [(Path(meta_root).parent / LAKE_DIR).resolve()]
         )
         for root in roots:
             _cache.pop(root, None)
-            reader = _readers.pop(root, None)
-            if reader is not None:
-                reader.close()
+            _readers.close(root)
         if meta_root is None:
             _cache.clear()
             _settings.clear()

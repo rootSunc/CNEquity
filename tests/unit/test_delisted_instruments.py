@@ -4,13 +4,14 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
+from tests.catalog_seed import compact_into_lake
 
 from cnequity.adapters.baostock.instruments import fetch_instrument_basics
 from cnequity.config import Config
+from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.run_scope import set_backfill
 from cnequity.steps.delisted import known_delisted_instruments
 from cnequity.steps.reference import _merge_delisted_instruments
-from cnequity.storage.instruments import compact_instruments
 from cnequity.storage.parquet import StagingWriter
 
 
@@ -183,6 +184,12 @@ def _stage(cfg, run_id, df):
     StagingWriter(cfg.staging_root).write_batch("instruments", run_id, "batch-0", df)
 
 
+def _published(cfg) -> pl.DataFrame:
+    """The instruments the lake publishes."""
+    files = root_parquet_files(cfg.curated_root / "instruments")
+    return pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
+
+
 def test_compact_preserves_explicit_delist_date(tmp_path):
     """A baostock delist_date must survive compact, not be blanket-nulled."""
     cfg = Config(data_root=tmp_path / "data")
@@ -191,9 +198,9 @@ def test_compact_preserves_explicit_delist_date(tmp_path):
     )
     _stage(cfg, "run-1", df)
 
-    compact_instruments(cfg.staging_root, cfg.curated_root, "run-1", date(2026, 7, 21))
+    compact_into_lake(cfg, "instruments", "run-1", trade_date=date(2026, 7, 21))
 
-    out = pl.read_parquet(cfg.curated_root / "instruments" / "part-merged.parquet")
+    out = _published(cfg)
     assert out.filter(pl.col("symbol") == "600001.SH")["delist_date"].item() == date(2009, 12, 25)
     assert out.filter(pl.col("symbol") == "600519.SH")["delist_date"].item() is None
 
@@ -205,13 +212,13 @@ def test_compact_keeps_delist_date_sticky_across_runs(tmp_path):
         pl.Series("delist_date", [None, date(2009, 12, 25)], dtype=pl.Date)
     )
     _stage(cfg, "run-1", first)
-    compact_instruments(cfg.staging_root, cfg.curated_root, "run-1", date(2026, 7, 21))
+    compact_into_lake(cfg, "instruments", "run-1", trade_date=date(2026, 7, 21))
 
     # Second run re-reports both symbols with no delist information at all.
     _stage(cfg, "run-2", _live_snapshot(["600519.SH", "600001.SH"]))
-    compact_instruments(cfg.staging_root, cfg.curated_root, "run-2", date(2026, 7, 22))
+    compact_into_lake(cfg, "instruments", "run-2", trade_date=date(2026, 7, 22))
 
-    out = pl.read_parquet(cfg.curated_root / "instruments" / "part-merged.parquet")
+    out = _published(cfg)
     assert out.filter(pl.col("symbol") == "600001.SH")["delist_date"].item() == date(2009, 12, 25)
 
 

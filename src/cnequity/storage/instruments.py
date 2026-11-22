@@ -14,6 +14,7 @@ from cnequity.domain.schemas import INSTRUMENTS_SCHEMA, validate_dataframe
 from cnequity.domain.symbols import is_subscription_placeholder
 from cnequity.storage.atomic import replace_with_retry, write_parquet_atomic
 from cnequity.storage.parquet import StagingWriter, resolve_merge_base
+from cnequity.storage.revisions import refuse_lake_folder_write
 
 # Refuse delist inference when too many symbols vanish from a snapshot — usually
 # a partial TDX fetch, not a mass delisting event.
@@ -134,9 +135,16 @@ def compact_instruments(
     base_root: Path | None = None,
     staging_files: list[Path] | None = None,
     allow_delist_inference: bool = True,
-    out_root: Path | None = None,
+    *,
+    out_root: Path,
 ) -> tuple[int, list[dict]]:
-    """Merge staging instruments into curated, retaining symbols missing from TDX."""
+    """Merge staging instruments into a checkout, retaining symbols missing from TDX.
+
+    *curated_root* is the lake read for context (bars, the absence record);
+    the merged file is written below *out_root*, a run's checkout
+    (``Checkout.layer_root``).
+    """
+    refuse_lake_folder_write(out_root)
     staging = StagingWriter(staging_root)
     files = (
         staging.list_run_files("instruments", run_id) if staging_files is None else staging_files
@@ -151,9 +159,7 @@ def compact_instruments(
     incoming = _strip_subscription_placeholders(incoming)
     incoming = dedupe_by_primary_key(incoming, "instruments")
 
-    out_path = (
-        (out_root if out_root is not None else curated_root) / "instruments" / "part-merged.parquet"
-    )
+    out_path = Path(out_root) / "instruments" / "part-merged.parquet"
     base_root = resolve_merge_base(base_root, "instruments")
     read_dir = Path(base_root) if base_root is not None else out_path.parent
     curated_files = sorted(read_dir.rglob("*.parquet")) if read_dir.exists() else []

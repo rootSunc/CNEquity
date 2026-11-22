@@ -6,6 +6,7 @@ from zipfile import ZipFile
 
 import openpyxl
 import pytest
+from tests.catalog_seed import compact_into_lake
 
 from cnequity.adapters.futures_exchange import shfe_archive
 from cnequity.adapters.futures_exchange.common import FuturesPayloadError
@@ -14,7 +15,7 @@ from cnequity.cli.backfill_cmds import _run_shfe_annual_archive
 from cnequity.config import Config
 from cnequity.query.parquet_scan import root_parquet_files
 from cnequity.steps.derivative_archive import import_shfe_annual
-from cnequity.storage.parquet import StagingWriter, compact_dataset
+from cnequity.storage.parquet import StagingWriter
 
 
 def workbook(rows, header=HEADER):
@@ -199,7 +200,7 @@ def test_annual_import_retains_zip_and_protects_full_daily_rows(tmp_path):
         shfe_archive.pl.lit("v1").alias("data_version"),
     )
     StagingWriter(config.staging_root).write_batch(dataset, "daily", "one", full_daily)
-    compact_dataset(config.staging_root, config.curated_root, dataset, "daily")
+    compact_into_lake(config, dataset, "daily")
 
     path = tmp_path / "2026.zip"
     with ZipFile(path, "w") as archive:
@@ -214,12 +215,9 @@ def test_annual_import_retains_zip_and_protects_full_daily_rows(tmp_path):
     staged = StagingWriter(config.staging_root).list_run_files(dataset, "annual")
     assert len(staged) == 1
     assert shfe_archive.pl.read_parquet(staged[0])["symbol"].to_list() == ["AL2608.SHF"]
-    compact_dataset(config.staging_root, config.curated_root, dataset, "annual")
+    compact_into_lake(config, dataset, "annual")
     rows = shfe_archive.pl.concat(
-        [
-            shfe_archive.pl.read_parquet(p)
-            for p in (config.curated_root / dataset).rglob("*.parquet")
-        ]
+        [shfe_archive.pl.read_parquet(p) for p in root_parquet_files(config.curated_root / dataset)]
     )
     assert rows.height == 2
     assert rows.filter(shfe_archive.pl.col("symbol") == "CU2608.SHF")["oi_change"][0] == 7
@@ -232,12 +230,9 @@ def test_annual_import_retains_zip_and_protects_full_daily_rows(tmp_path):
         archive.writestr("august.xlsx", workbook([changed]))
     correction = import_shfe_annual(config, "revision", dataset, revised, year=2026)
     assert correction["rows_written"] == 1
-    compact_dataset(config.staging_root, config.curated_root, dataset, "revision")
+    compact_into_lake(config, dataset, "revision")
     rows = shfe_archive.pl.concat(
-        [
-            shfe_archive.pl.read_parquet(p)
-            for p in (config.curated_root / dataset).rglob("*.parquet")
-        ]
+        [shfe_archive.pl.read_parquet(p) for p in root_parquet_files(config.curated_root / dataset)]
     )
     assert rows.filter(shfe_archive.pl.col("symbol") == "AL2608.SHF")["close"][0] == 106
 

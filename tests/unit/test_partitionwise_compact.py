@@ -107,6 +107,7 @@ def _compact(tmp: Path, dataset: str, seed: int, *, partitionwise: bool):
         "base",
         partition_col=PARTITION_COLS[dataset],
         partitionwise_min_bytes=None,
+        out_root=curated,
     )
     for index in range(4):
         writer.write_batch(dataset, "run", f"b{index}", _rows(dataset, 50, rng))
@@ -121,6 +122,7 @@ def _compact(tmp: Path, dataset: str, seed: int, *, partitionwise: bool):
         changed_files=changed,
         change_log=log,
         partitionwise_min_bytes=0 if partitionwise else None,
+        out_root=curated,
     )
     root = curated / dataset
     return (
@@ -181,6 +183,7 @@ def test_a_column_only_some_files_carry_reaches_every_partition(tmp_path):
             partition_col=PARTITION_COLS[dataset],
             staging_files=staged,
             partitionwise_min_bytes=0 if partitionwise else None,
+            out_root=lake / "curated",
         )
         outputs[partitionwise] = _tree(lake / "curated" / dataset)
     assert outputs[True].keys() == outputs[False].keys()
@@ -212,8 +215,9 @@ def test_small_runs_keep_the_whole_run_merge(tmp_path, monkeypatch):
     StagingWriter(staging).write_batch(
         "fund_flow", "r2", "b0", _rows("fund_flow", 5, random.Random(9))
     )
+    curated = tmp_path / "whole" / "curated"
     compact_dataset(
-        staging, tmp_path / "whole" / "curated", "fund_flow", "r2", partition_col="trade_date"
+        staging, curated, "fund_flow", "r2", partition_col="trade_date", out_root=curated
     )
     assert called == [], "a few KB of staging is far below STREAMING_COMPACT_MIN_BYTES"
     assert parquet_module.STREAMING_COMPACT_MIN_BYTES >= 64 * 1024 * 1024

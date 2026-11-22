@@ -224,13 +224,11 @@ def _no_leaked_heartbeat():
 
 @pytest.fixture(autouse=True)
 def _close_cached_catalog_reads():
-    """Close the catalogs a test left open in the per-lake read caches.
+    """Start every test without the catalogs an earlier test left open in the read caches.
 
-    ``catalog_read`` and ``revision_records`` each keep one open catalog per
-    lake root, which in a CLI or dashboard process is one lake. A test run
-    makes a lake per test, and each open catalog keeps DuckDB's threads (about
-    70 here): left open, a few thousand tests exhaust the process's threads,
-    and DuckDB aborts the interpreter when it next cannot start one.
+    ``catalog_read`` and ``revision_records`` keep a few lake catalogs open
+    (bounded, see ``equitylake_core.catalog_cache``); a test should not see
+    records cached from another test's lake.
     """
     yield
     from cnequity.query import catalog_read
