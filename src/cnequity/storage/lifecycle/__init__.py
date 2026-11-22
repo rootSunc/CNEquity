@@ -132,7 +132,12 @@ RUNTIME_META_PATHS = (
     "derivatives/greeks_dependencies",
     "derivatives/http_cache",
     "derivatives/option_bars",
+    # Contract reference data and rejected rows, rewritten by each capture.
+    "derivatives/quarantine",
+    "derivatives/references",
     "instruments_absence_streak.json",
+    # The migration ledger `cne upgrade` keeps.
+    "lake.json",
     "lifecycle",
     "locks",
     "payment_date_repairs",
@@ -142,9 +147,14 @@ RUNTIME_META_PATHS = (
     "raw_storage.json",
     "repairs",
     "revisions",
+    # The dashboard timer's tick and schedule records (every minute), and the
+    # daily run's markers and streaks.
+    "scheduler",
     "source_cache",
     "source_health",
     "source_snapshots",
+    # Key-check verdicts; the key itself is never written here.
+    "sources",
     "stability",
     "state",
     "stats",

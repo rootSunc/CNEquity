@@ -538,7 +538,12 @@ def activate_lake(app: FastAPI, config: Config) -> None:
     if previous is not None:
         previous.stop_watcher()
     view = _new_view(config, getattr(app.state, "watch", False))
-    maintenance = StorageMaintenance(config, invalidate=view.invalidate, csrf=app.state.csrf)
+    maintenance = StorageMaintenance(
+        config,
+        invalidate=view.invalidate,
+        csrf=app.state.csrf,
+        sync_references=not getattr(app.state, "read_only", False),
+    )
     view.maintenance_gate = maintenance.gate
     if getattr(app.state, "watch", False):
         maintenance.warm()
@@ -663,7 +668,10 @@ def create_app(
         app.state.storage_maintenance = None
     else:
         maintenance = StorageMaintenance(
-            config, invalidate=app.state.view.invalidate, csrf=app.state.csrf
+            config,
+            invalidate=app.state.view.invalidate,
+            csrf=app.state.csrf,
+            sync_references=not read_only,
         )
         app.state.storage_maintenance = maintenance
         app.state.view.maintenance_gate = maintenance.gate

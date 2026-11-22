@@ -362,7 +362,7 @@ export async function renderStorage({ api, setPage, esc, dataTable }) {
       : tr("不自动删除", "No automatic deletion");
     setPage(`<section class="page-heading"><div class="heading-row"><h1>${tr("存储", "Storage")}</h1><span class="status-pill">${pill}</span></div></section>
       ${unfinished}
-      ${summary.references_changed ? `<section class="surface-panel report-panel storage-review"><h2>${tr("引用清单有变化", "The reference files changed")}</h2><p class="panel-note">${tr("登记的引用目录里有文件新增或修改，在重新登记之前无法列出可删除的版本。重新登记只会增加保护，不会删除或释放任何东西。", "Files under the registered reference folders were added or changed, so deletable versions cannot be listed until they are registered again. Registering only adds protection; it deletes and releases nothing.")}</p><div class="action-row"><button class="button button-primary" id="storage-refresh-references" data-storage-action type="button">${tr("重新登记引用", "Register references again")}</button></div></section>` : ""}
+      ${summary.references_changed ? `<section class="surface-panel report-panel storage-review"><h2>${tr("引用清单待重新登记", "References not registered yet")}</h2><p class="panel-note">${tr("登记的引用目录里有文件新增或修改。重新登记只会增加保护，下一次日更或回填会自动完成；只读模式下也可以运行 <code>cne storage refresh</code>。在此之前无法列出可删除的版本。", "Files under the registered reference folders were added or changed. Registering only adds protection, and the next daily or backfill run does it automatically; in read-only mode you can also run <code>cne storage refresh</code>. Deletable versions cannot be listed until then.")}</p></section>` : ""}
       ${summary.refreshing ? `<p class="panel-note muted" role="status">${tr("湖有变化，正在后台更新清单；下面是上一次的结果。", "The lake changed; the list is being rebuilt in the background. Showing the previous result.")}</p>` : ""}
       ${!summary.registered ? `<p class="panel-note err">${tr("尚未导入生命周期引用。删除历史版本前，先运行 <code>cne storage import</code>。", "Lifecycle references are not imported. Run <code>cne storage import</code> before deleting old versions.")}</p>` : ""}
       <div class="storage-metrics">${metric("deletable", tr("可删除", "Deletable"), deletable, size(bytesOf(deletable)))}${metric("current", tr("正在使用", "In use"), live, size(bytesOf(live)))}${metric("kept", tr("受保护", "Protected"), kept, size(bytesOf(kept)))}<div class="storage-metric is-static"><span class="metric-label">${tr("磁盘可用", "Disk free")}</span><span class="metric-value">${size(summary.disk_free_bytes)}</span><span class="metric-note">${tr("共", "of")} ${size(summary.disk_total_bytes)}</span></div></div>
@@ -372,20 +372,6 @@ export async function renderStorage({ api, setPage, esc, dataTable }) {
     document.getElementById("storage-query").oninput = event => { query = event.target.value; renderList(); };
     document.querySelectorAll("[data-view]").forEach(el => { el.onclick = () => setView(el.dataset.view); });
     document.querySelectorAll("[data-resume]").forEach(el => { el.onclick = () => resumeDeletion(summary.unfinished[Number(el.dataset.resume)]); });
-    const refreshReferences = document.getElementById("storage-refresh-references");
-    if (refreshReferences) {
-      refreshReferences.onclick = async () => {
-        if (running) return;
-        controls(true);
-        refreshReferences.disabled = true;
-        showMessage(tr("正在重新登记引用…", "Registering references…"));
-        try {
-          summary = await post("/api/storage/references/refresh", {});
-          if (alive()) paint();
-        } catch (err) { showMessage(err.message, true); refreshReferences.disabled = false; }
-        finally { if (alive()) controls(false); }
-      };
-    }
     renderList();
     if (summary.refreshing) followRebuild();
   }

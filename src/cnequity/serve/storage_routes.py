@@ -60,16 +60,6 @@ def install_storage_routes(app: FastAPI, *, mutations: bool = True) -> None:
     if not mutations:
         return
 
-    @app.post("/api/storage/references/refresh")
-    def storage_refresh_references(request: Request) -> dict:
-        """Hold what the reference roots cite now. Only adds holds; deletes nothing."""
-        check_browser(request, mutation=True, scope="storage")
-        service = _service(request)
-        try:
-            return service.refresh_references()
-        except (LifecycleError, LockUnavailable, RevisionConsistencyError, OSError) as exc:
-            raise HTTPException(409, str(exc)) from exc
-
     @app.post("/api/storage/reviews", status_code=202)
     def storage_review(body: ReviewRequest, request: Request) -> dict:
         check_browser(request, mutation=True, scope="storage")

@@ -144,6 +144,29 @@ def test_the_status_parts_that_read_the_lake_are_kept_per_version(config, monkey
     assert calls == ["empty"]
 
 
+def test_the_lake_version_never_opens_the_catalog_duckdb_is_reading(config, monkeypatch):
+    # A second SQLite library closing the catalog truncates the WAL and
+    # shared memory DuckDB's SQLite has mapped: the serve process died of SIGBUS.
+    from cnequity.storage import lake_version as module
+    from cnequity.storage.catalog_bridge import lake_root
+    from equitylake_core.catalog import CATALOG_FILE
+
+    catalog = lake_root(config) / CATALOG_FILE
+    assert module.lake_version(config)[0] is None
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    catalog.write_bytes(b"x")
+    opened = []
+    real = module.connect_readonly
+    monkeypatch.setattr(
+        module, "connect_readonly", lambda path, **kw: opened.append(path) or real(path, **kw)
+    )
+    before = module.lake_version(config)
+    assert before[0] is not None
+    Path(f"{catalog}-wal").write_bytes(b"frame")
+    assert module.lake_version(config)[0] != before[0]
+    assert all(Path(p).name != CATALOG_FILE for p in opened)
+
+
 # --- the reference scan -------------------------------------------------
 
 
@@ -189,6 +212,95 @@ def test_an_unchanged_reference_file_is_not_read_again(tmp_path, monkeypatch):
     note.write_text("revision abd")
     assert lifecycle.reference_fingerprint(roots, meta_root=tmp_path / "meta") != first
     assert reads == [note]
+
+
+def test_the_storage_page_registers_edited_references_itself(tmp_path):
+    # Editing a note under a reference root used to stop the page until someone
+    # pressed a button; the refresh only adds holds, so the page does it.
+    from cnequity.config import Config
+    from cnequity.file_lock import lake_mutation_lock
+    from cnequity.serve.storage import StorageMaintenance
+    from cnequity.storage.lifecycle import LifecycleStore, reference_fingerprint
+
+    cfg = Config(data_root=tmp_path / "lake")
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    note = notes / "pin.md"
+    note.write_text("pinned\n", encoding="utf-8")
+    store = LifecycleStore(cfg.meta_root)
+    roots = [{"path": str(notes.resolve())}]
+    store.import_manifest(
+        {
+            "schema_version": 1,
+            "meta_root": str(store.meta),
+            "holds": {},
+            "reference_roots": roots,
+            "reference_fingerprint": reference_fingerprint(roots, meta_root=store.meta),
+        }
+    )
+    note.write_text("edited\n", encoding="utf-8")
+
+    read_only = StorageMaintenance(cfg, sync_references=False)
+    assert not read_only._references_current(store.registry())
+
+    writable = StorageMaintenance(cfg)
+    held, release = threading.Event(), threading.Event()
+
+    def hold_lock():
+        with lake_mutation_lock(store.meta):
+            held.set()
+            release.wait(10)
+
+    runner = threading.Thread(target=hold_lock)
+    runner.start()
+    held.wait(10)
+    try:
+        assert not writable._references_current(store.registry()), "a run holds the lake"
+    finally:
+        release.set()
+        runner.join()
+
+    assert writable._references_current(store.registry())
+    registry = store.registry()
+    assert registry["reference_fingerprint"] == reference_fingerprint(roots, meta_root=store.meta)
+
+
+def test_records_the_lake_rewrites_on_its_own_are_not_references(tmp_path):
+    # The dashboard timer rewrote meta/scheduler/web/last_tick.json every
+    # minute, so the registered references were "changed" every minute.
+    from cnequity.storage.lifecycle import reference_fingerprint
+
+    meta = tmp_path / "meta"
+    note = meta / "notes" / "pin.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("pinned\n", encoding="utf-8")
+    roots = [{"path": str(meta), "exclude": []}]
+    before = reference_fingerprint(roots, meta_root=meta)
+    for relative in (
+        "scheduler/web/last_tick.json",
+        "sources/key-checks.json",
+        "derivatives/references/SHF/cu.json",
+        "lake.json",
+    ):
+        path = meta / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"at": "now"}', encoding="utf-8")
+    assert reference_fingerprint(roots, meta_root=meta) == before
+    note.write_text("edited\n", encoding="utf-8")
+    assert reference_fingerprint(roots, meta_root=meta) != before
+
+
+def test_a_page_that_could_not_register_references_tries_again_next_view(config, monkeypatch):
+    from cnequity.serve.storage import StorageMaintenance
+
+    maintenance = StorageMaintenance(config)
+    pending = {"references_changed": True, "objects": []}
+    builds = []
+    monkeypatch.setattr(maintenance, "_summary", lambda: builds.append(1) or dict(pending))
+    monkeypatch.setattr(maintenance, "_rebuild_later", lambda key: builds.append("later"))
+    assert maintenance.summary()["references_changed"]
+    assert maintenance.summary()["refreshing"], "kept, but not as current"
+    assert builds == [1, "later"]
 
 
 # --- one snapshot per summary -------------------------------------------

@@ -309,7 +309,6 @@ def test_normal_write_routes_are_exactly_the_whitelist(config):
         ("/api/ops/sources/{source}/check-key", "POST"),
         ("/api/ops/sources/{source}/key", "PUT"),
         ("/api/ops/sources/{source}/key", "DELETE"),
-        ("/api/storage/references/refresh", "POST"),
         ("/api/setup/config", "POST"),
     }
 

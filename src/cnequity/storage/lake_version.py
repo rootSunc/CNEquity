@@ -13,9 +13,15 @@ def lake_version(config) -> tuple:
     """What the dashboard's summaries depend on, read in milliseconds.
 
     Published rows and the coverage ledger both live in the DuckLake catalog,
-    so its latest snapshot moves whenever either changes. The rest are the
-    sidecars the summaries read, the newest finished run (stats freshness), and
-    the hour, because the freshness anchor follows the trading day.
+    and every commit to it writes its WAL, so the identity of the catalog file
+    and its WAL moves whenever either changes. The rest are the sidecars the
+    summaries read, the newest finished run (stats freshness), and the hour,
+    because the freshness anchor follows the trading day.
+
+    The catalog is never opened here. DuckDB reads it through its own bundled
+    SQLite; a second SQLite library in the same process does not see that
+    library's locks, so closing its connection can checkpoint and truncate the
+    WAL and shared-memory files under DuckDB, which then dies with SIGBUS.
     """
     from cnequity.storage.catalog_bridge import lake_root
     from cnequity.storage.stats import summary_path
@@ -40,9 +46,17 @@ def lake_version(config) -> tuple:
         except OSError:
             return None
 
-    snapshot = _scalar(
-        lake_root(config) / CATALOG_FILE, "SELECT max(snapshot_id) FROM ducklake_snapshot"
-    )
+    def _identity(path: Path):
+        try:
+            info = path.stat()
+        except OSError:
+            return None
+        return (info.st_ino, info.st_size, info.st_mtime_ns)
+
+    catalog = lake_root(config) / CATALOG_FILE
+    main = _identity(catalog)
+    # None while the lake has no catalog yet, which callers rely on.
+    snapshot = None if main is None else (main, _identity(Path(f"{catalog}-wal")))
     finished = _scalar(Path(config.manifest_path), "SELECT max(finished_at) FROM ingestion_runs")
     now = datetime.now(timezone.utc)
     return (
