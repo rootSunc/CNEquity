@@ -32,4 +32,6 @@ cne serve --read-only
 
 Open <http://127.0.0.1:8787> to inspect rows, coverage, and run status. Add the corresponding `--config` to open a sample or demo lake. After initializing a production lake, use `cne run daily` to update it.
 
+![The cne serve dashboard showing offline sample daily bars and their source](../assets/cne-serve-sample.en.png)
+
 Continue with [queries and research](../datasets/query-guide.md), [data coverage](../datasets/catalog.md), [daily updates](../operations/runbook.md), or the [design](../architecture/overview.md).

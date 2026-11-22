@@ -32,4 +32,6 @@ cne serve --read-only
 
 打开 <http://127.0.0.1:8787> 查看样例行、覆盖与运行状态。打开样例湖或演示湖时，添加对应的 `--config`。正式湖完成初始化后，可用 `cne run daily` 更新。
 
+![cne serve 控制台中的离线样例日线与数据来源](../assets/cne-serve-sample.zh.png)
+
 接下来查看[查询与研究](../datasets/query-guide.md)、[数据覆盖](../datasets/catalog.md)、[日常更新](../operations/runbook.md)或[整体设计](../architecture/overview.md)。

@@ -16,6 +16,7 @@ theme:
     logo: material/chart-box-outline
   features:
     - navigation.instant
+    - navigation.sections
     - navigation.top
     - navigation.footer
     - search.highlight
@@ -50,31 +51,42 @@ validation:
 markdown_extensions:
   - admonition
   - attr_list
+  - md_in_html
   - pymdownx.highlight
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - tables
   - toc:
       permalink: true
       slugify: !!python/object/apply:pymdownx.slugs.slugify {kwds: {case: lower}}
 
 nav:
-  - 首页: index.md
-  - 快速开始: getting-started/quickstart.md
-  - 整体设计: architecture/overview.md
-  - 数据与覆盖: datasets/catalog.md
-  - 查询与研究: datasets/query-guide.md
-  - 参考:
+  - 入门:
+      - 首页: index.md
+      - 快速开始: getting-started/quickstart.md
+      - 安装与升级: getting-started/installation.md
+  - 设计与数据:
+      - 整体设计: architecture/overview.md
+      - 数据集目录: datasets/catalog.md
+      - 字段与单位: datasets/schema.md
+  - 查询与研究:
+      - 查询指南: datasets/query-guide.md
       - Python API: reference/python-api.md
-      - MCP: reference/mcp.md
-      - 配置: getting-started/configuration.md
-      - 命令与副作用: reference/cli-surface.md
+      - MCP 接入: reference/mcp.md
   - 运行与维护:
       - 日常更新: operations/runbook.md
       - 故障排查: operations/troubleshooting.md
-  - 安装与升级: getting-started/installation.md
+      - 配置参考: getting-started/configuration.md
+      - 命令与副作用: reference/cli-surface.md
   - 许可、来源与引用: legal-and-data-sources.md
 
 extra:
+  version:
+    provider: mike
+    default: latest
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/rootSunc/CNEquity

@@ -28,12 +28,13 @@ MANIFEST = Path(__file__).resolve().parent / "i18n" / "doc_sources.json"
 
 GENERATED = {"reference/cli-surface.md"}
 _CATALOG_BLOCK = re.compile(
-    r"<!-- (dataset-catalog|derivative-capabilities):start -->.*?<!-- \1:end -->", re.S
+    r"<!-- (dataset-catalog|derivative-capabilities|schema-tier-index):start -->.*?<!-- \1:end -->",
+    re.S,
 )
 
 
 def _translatable(page: str, text: str) -> str:
-    if page == "datasets/catalog.md":
+    if page in {"datasets/catalog.md", "datasets/schema.md"}:
         text = _CATALOG_BLOCK.sub("", text)
     if page == "datasets/schema.md":
         # Column tables: keep only the hand-written description cells.

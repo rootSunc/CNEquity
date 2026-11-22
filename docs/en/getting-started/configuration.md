@@ -76,7 +76,9 @@ When several lakes or processes share one network egress, give them the same `CN
 
 ### Credentials {#credentials}
 
-Optional paid sources (the `[sources.tushare]` token and the `[sources.ths_official]` key) are read in this order: the environment variable `TUSHARE_TOKEN` / `HITHINK_FINANCE_API_KEY` → the file `token_file` / `api_key_file` (first line only) → a value written in the config. Timers do not see variables exported in your login shell, so a scheduled lake should use a file with mode 600. `cne doctor` warns when a credential is written in the config or the config file is readable by other users. Without credentials, these sources send no requests.
+Optional paid sources (the `[sources.tushare]` token and the `[sources.ths_official]` key) are read in this order: the environment variable `TUSHARE_TOKEN` / `HITHINK_FINANCE_API_KEY` → the file `token_file` / `api_key_file` (first line only) → a value written in the config. Timers do not see variables exported in your login shell, so a scheduled lake should use a file with mode 600. On loopback access, the `cne serve` settings page can also save, replace, or remove these keys directly: it writes the secret to a separate local file with mode 600, records only `token_file` / `api_key_file` in the config, and checks the key immediately. `cne doctor` warns when a credential is written in the config or the config file is readable by other users. Without credentials, these sources send no requests.
+
+Tushare is used only for on-demand backfill by default (`[sources.tushare].daily = false`). When set to `true` (or enabled in `cne serve` settings), the daily update runs the `tushare` group only while the token check passes, and Tushare-primary datasets count toward freshness only while daily collection is active and verified.
 
 ## Scheduling {#schedule}
 

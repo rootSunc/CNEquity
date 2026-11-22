@@ -22,18 +22,21 @@ theme:
         name: Switch to light mode
 
 nav:
-  - Home: index.md
-  - Quickstart: getting-started/quickstart.md
-  - Design: architecture/overview.md
-  - Data and coverage: datasets/catalog.md
-  - Query and research: datasets/query-guide.md
-  - Reference:
+  - Getting started:
+      - Home: index.md
+      - Quickstart: getting-started/quickstart.md
+      - Install and upgrade: getting-started/installation.md
+  - Design and data:
+      - Design: architecture/overview.md
+      - Dataset catalog: datasets/catalog.md
+      - Fields and units: datasets/schema.md
+  - Query and research:
+      - Query guide: datasets/query-guide.md
       - Python API: reference/python-api.md
       - MCP: reference/mcp.md
-      - Configuration: getting-started/configuration.md
-      - Commands and side effects: reference/cli-surface.md
   - Operations:
       - Daily updates: operations/runbook.md
       - Troubleshooting: operations/troubleshooting.md
-  - Install and upgrade: getting-started/installation.md
+      - Configuration: getting-started/configuration.md
+      - Commands and side effects: reference/cli-surface.md
   - License, sources, and citation: legal-and-data-sources.md

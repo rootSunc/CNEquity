@@ -5,6 +5,27 @@ Look up column names, types, units, and data semantics. Use `cne contract show <
 - A-share stock daily volume is in shares. Consult the [relevant release notes](https://github.com/rootSunc/CNEquity/releases) for old data.
 - `fetched_at` is the UTC fetch time. See [point-in-time financial statements](query-guide.md#pit) for optional time fields and visibility rules.
 
+## Quick jump by tier {#tier-index}
+
+Core (`core`) datasets are expanded below by default; other tiers (`extended`, `best_effort`, `optional`, `on_demand`) are collapsed into expandable boxes—click any link in the table, the right-hand TOC, or a summary bar to open it.
+
+<!-- schema-tier-index:start -->
+
+| Tier | Datasets |
+|---|---|
+| **L0 Reference** | [`instruments`](#instruments) · [`name_history`](#name_history) · [`convertible_bonds`](#convertible_bonds) · [`convertible_bond_coupons`](#convertible_bond_coupons) · [`executives`](#executives) · [`etf_profiles`](#etf_profiles) · [`trading_calendar`](#trading_calendar) · [`trading_status`](#trading_status) |
+| **L1 Prices** | [`convertible_bond_bars`](#convertible_bond_bars) · [`limit_prices`](#limit_prices) · [`daily_bars`](#daily_bars) · [`index_bars`](#index_bars) · [`minute_bars`](#minute_bars) · [`minute_bars_5m`](#minute_bars) · [`trade_ticks`](#trade_ticks) · [`adj_factors`](#adj_factors) · [`minute_bars_15m`](#minute_bars_15m) · [`minute_bars_30m`](#minute_bars_15m) · [`minute_bars_60m`](#minute_bars_15m) · [`delisting_events`](#delisting_events) |
+| **L2 Corporate events** | [`holder_trades`](#holder_trades) · [`share_repurchases`](#share_repurchases) · [`earnings_forecasts`](#earnings_forecasts) · [`investor_visits`](#investor_visits) · [`convertible_bond_calls`](#convertible_bond_calls) · [`convertible_bond_conversions`](#convertible_bond_conversions) · [`corporate_actions`](#corporate_actions) · [`announcement_index`](#announcement_index) · [`earnings_disclosure_schedule`](#earnings_disclosure_schedule) |
+| **L3 Fundamentals** | [`business_segments`](#business_segments) · [`executive_compensation`](#executive_compensation) · [`financial_statement_items`](#financial_statement_items) · [`share_structure`](#share_structure) · [`shareholder_counts`](#shareholder_counts) · [`top_holders`](#top_holders) · [`valuation_metrics`](#valuation_metrics) · [`analyst_consensus`](#analyst_consensus) · [`broker_forecasts`](#broker_forecasts) |
+| **L4 Capital flows** | [`fund_flow_tushare`](#fund_flow_tushare) · [`chip_distribution`](#chip_distribution) · [`northbound_top10`](#northbound_top10) · [`limit_events`](#limit_events) · [`hot_money_traders`](#hot_money_traders) · [`hot_money_trades`](#hot_money_trades) · [`limit_ladder`](#limit_ladder) · [`kpl_limit_ups`](#kpl_limit_ups) · [`fund_flow_ths_tushare`](#fund_flow_ths_tushare) · [`fund_flow`](#fund_flow) · [`margin_trading`](#margin_trading) · [`northbound_holdings`](#northbound_holdings) · [`northbound_flows`](#northbound_flows) · [`dragon_tiger`](#dragon_tiger) · [`block_trades`](#block_trades) · [`institutional_holdings`](#institutional_holdings) · [`fund_flow_ths`](#fund_flow_ths) |
+| **L5 Industry structure** | [`sector_members`](#sector_members) · [`index_constituents`](#index_constituents) · [`industry_members`](#industry_members) · [`industry_index`](#industry_index) |
+| **L6 Macro** | [`macro_indicators`](#macro_indicators) · [`market_breadth`](#market_breadth) |
+| **L7 Sentiment / rotation** | [`popularity_ranks`](#popularity_ranks) · [`strongest_sectors`](#strongest_sectors) · [`investor_qa`](#investor_qa) · [`sentiment_scores`](#sentiment_scores) · [`hot_rank`](#hot_rank) · [`sector_bars`](#sector_bars) · [`sector_fund_flow`](#sector_fund_flow) · [`sector_fund_flow_ths`](#sector_fund_flow_ths) · [`news_headlines`](#news_headlines) · [`flash_news_wire`](#flash_news_wire) · [`economic_calendar`](#economic_calendar) · [`economic_events`](#economic_events) · [`market_holidays`](#market_holidays) |
+| **L8 Risk and compliance** | [`pledge_stats`](#pledge_stats) · [`share_unlock_schedule`](#share_unlock_schedule) · [`regulatory_events`](#regulatory_events) |
+| **L9 Derivatives** | [`futures_member_positions`](#futures_member_positions) · [`commodity_bars`](#commodity_bars) · [`futures_contracts`](#futures_contracts) · [`option_contracts`](#option_contracts) · [`futures_bars`](#futures_bars) · [`futures_minute_bars`](#futures_minute_bars) · [`option_bars`](#option_bars) · [`futures_continuous`](#futures_continuous) · [`option_greeks`](#option_greeks) |
+
+<!-- schema-tier-index:end -->
+
 ## Dataset fields
 
 #### instruments
@@ -73,7 +94,7 @@ the [SZSE ETF list](https://fund.szse.cn/marketdata/etf/) and the [SZSE fund lis
 | trade_date | date |  |
 | is_trading | bool |  |
 | status | string | **Trading status**: `normal` / `suspended` / `delisted` |
-| risk_warning | bool | **Risk warning (ST/*ST)**, orthogonal to status; may be null (no evidence) |
+| risk_warning | bool | **Risk warning** (`ST` / `*ST`), orthogonal to status; may be null (no evidence) |
 | source | string | Delisted rows are determined from `instruments` and marked `derived_delisted` |
 | data_version | string |  |
 | fetched_at | timestamp |  |
@@ -168,7 +189,7 @@ Same structure as daily_bars, plus `frequency` (default `1d`).
 
 **Exception: `volume` is not in shares.** `index_bars` / `sector_bars` keep the raw value from the upstream index endpoint; the unit is unconfirmed, so it must not be used directly for single-stock turnover or summed with constituent volumes. Both datasets are still at `data_version=v1`.
 
-#### minute_bars / minute_bars_5m
+#### minute_bars / minute_bars_5m {#minute_bars}
 
 Intraday bars; the two datasets share one schema. **Optional**, off by default (`[minute_bars].enabled = false`), and not on the default daily wave.
 
@@ -205,7 +226,7 @@ Bars outside the session are filtered out, and the audit check `minute_bars_off_
 
 **Why each dataset holds only one frequency.** The 1m horizon is 95 days and the 5m horizon is 491 days, but a dataset has only one watermark, one `coverage_start` and one `history_horizon_days`. Mixed together, all three would be wrong for both frequencies. `frequency` is still in the schema and the primary key, so the two share the same column definition and the same quality checks.
 
-#### minute_bars_15m / minute_bars_30m / minute_bars_60m
+#### minute_bars_15m / minute_bars_30m / minute_bars_60m {#minute_bars_15m}
 
 Derived datasets resampled from the 1m and 5m data in the lake (`derive/minute_resample.py`). To store a frequency for the first time, run `cne derive minute_bars_15m` (likewise for 30m and 60m). The intraday group then maintains it after publishing the minute inputs. Without putting them in the lake, you can also compute them at query time with `resample_minute_history` using the same rules.
 
@@ -903,7 +924,7 @@ Two channels: ``announcement_keywords`` (announcement titles) and ``stock_news_n
 | data_version | string | Provenance |
 | fetched_at | timestamp | Provenance |
 
-#### stock_news (on-demand cache) {#stock_news按需缓存}
+#### stock_news (on-demand cache) {#stock_news}
 
 Cached JSON: ``meta/on_demand/stock_news/{symbol}.json``; fetched via ``cne query --dataset stock_news --symbol``.
 

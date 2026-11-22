@@ -88,3 +88,58 @@ def test_the_lockfile_records_the_current_version():
     assert locked == declared, (
         f"uv.lock says {locked}, pyproject.toml says {declared}; run `uv lock`"
     )
+
+
+def _toml_paths(node: object, prefix: str = "") -> set[str]:
+    paths: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else key
+            paths.add(path)
+            paths.update(_toml_paths(value, path))
+    elif isinstance(node, list):
+        for item in node:
+            paths.update(_toml_paths(item, prefix))
+    return paths
+
+
+def test_documented_config_sections_exist_in_example_toml():
+    """Every active `[section]` documented in configuration.md must exist in the template."""
+    import re
+
+    example_path = ROOT / "configs" / "cnequity.example.toml"
+    example_text = example_path.read_text(encoding="utf-8")
+    valid_paths = _toml_paths(tomllib.loads(example_text)) | set(
+        re.findall(r"^\s*#?\s*\[\[?([a-z0-9_.-]+)\]?\]\s*$", example_text, re.M)
+    )
+
+    pattern = re.compile(r"`\[\[?([a-z0-9_.<>一-鿿-]+)\]?\]`")
+    for lang in ("zh", "en"):
+        page = (ROOT / "docs" / lang / "getting-started" / "configuration.md").read_text(
+            encoding="utf-8"
+        )
+        active = page.split("{#retired}", 1)[0]
+        for raw in pattern.findall(active):
+            cleaned = re.sub(r"\.<[^>]+>", "", raw)
+            assert cleaned in valid_paths, (
+                f"docs/{lang}/getting-started/configuration.md documents [{raw}], "
+                f"which is not in configs/cnequity.example.toml"
+            )
+
+
+def test_documented_cli_commands_exist_in_click_registry():
+    """Every `cne <command>` mentioned in docs must be a registered Click command or moved alias."""
+    import re
+
+    from cnequity.cli._root import MOVED
+    from cnequity.cli.main import cli
+
+    valid_top = set(cli.commands) | {cmd.split()[0] for cmd in MOVED}
+    pattern = re.compile(r"`cne\s+([a-z][a-z0-9-]*)\b")
+    unknown: list[str] = []
+    for lang in ("zh", "en"):
+        for path in sorted((ROOT / "docs" / lang).rglob("*.md")):
+            for cmd in pattern.findall(path.read_text(encoding="utf-8")):
+                if cmd not in valid_top:
+                    unknown.append(f"{path.relative_to(ROOT)}: cne {cmd}")
+    assert unknown == []

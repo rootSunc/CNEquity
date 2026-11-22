@@ -76,7 +76,9 @@ enabled = false
 
 ### 凭证 {#credentials}
 
-可选的付费来源（`[sources.tushare]` 的令牌、`[sources.ths_official]` 的密钥）按以下顺序读取：环境变量 `TUSHARE_TOKEN` / `HITHINK_FINANCE_API_KEY` → 文件 `token_file` / `api_key_file`（只读第一行）→ 配置里直接写的值。定时任务读不到登录 shell 里 export 的变量，所以定时运行的湖建议用权限为 600 的文件。凭证写在配置里，或配置文件其他用户可读时，`cne doctor` 会提示。没有凭证时这些来源不发请求。
+可选的付费来源（`[sources.tushare]` 的令牌、`[sources.ths_official]` 的密钥）按以下顺序读取：环境变量 `TUSHARE_TOKEN` / `HITHINK_FINANCE_API_KEY` → 文件 `token_file` / `api_key_file`（只读第一行）→ 配置里直接写的值。定时任务读不到登录 shell 里 export 的变量，所以定时运行的湖建议用权限为 600 的文件。本机访问 `cne serve` 时，也可在设置页直接填写、更换或移除密钥：密钥写入本机权限为 600 的独立文件，配置只记录 `token_file` / `api_key_file` 路径，保存后立即检测一次。凭证写在配置里，或配置文件其他用户可读时，`cne doctor` 会提示。没有凭证时这些来源不发请求。
+
+Tushare 默认只用于按需回填（`[sources.tushare].daily = false`）。设为 `true`（或在 `cne serve` 设置页打开「Tushare 进入日更」）后，只有在密钥检测通过时，日更才会运行 `tushare` 分组；以 Tushare 为主来源的数据集也只在此时计入新鲜度。
 
 ## 调度 {#schedule}
 

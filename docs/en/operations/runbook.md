@@ -55,4 +55,4 @@ cne snapshot restore baseline /path/to/empty-restored-lake
 
 A snapshot contains the selected datasets. Restore into a new or empty directory, then point a separate config at it and verify your queries. A metadata backup preserves records. Recovering the data also requires the corresponding files. Updates and maintenance can remove old versions under the retention policy. Save a snapshot of the inputs you need to reproduce a result.
 
-Local `cne serve` can start supported jobs from its operations page. Use `--read-only` for browsing. Before an upgrade, keep an independently restorable data copy. See [install and upgrade](../getting-started/installation.md).
+Local `cne serve` can start supported jobs from its operations page and manage paid-source credentials and collection switches from its settings page (see [credentials](../getting-started/configuration.md#credentials)). Use `--read-only` for browsing. Before an upgrade, keep an independently restorable data copy. See [install and upgrade](../getting-started/installation.md).

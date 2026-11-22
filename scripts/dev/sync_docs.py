@@ -134,6 +134,30 @@ def _render_table(
     return rows
 
 
+SCHEMA_INDEX_START = "<!-- schema-tier-index:start -->"
+SCHEMA_INDEX_END = "<!-- schema-tier-index:end -->"
+
+
+def _heading_anchor(heading: str) -> str:
+    if match := re.search(r"\{#([^}]+)\}", heading):
+        return match.group(1)
+    return "-".join(re.findall(r"[a-z0-9_]+", heading.lower()))
+
+
+def _render_schema_tier_index(anchors: dict[str, str], lang: str = "zh") -> str:
+    locale = "zh_CN" if lang == "zh" else "en"
+    header = "| 分层 | 数据集 |" if lang == "zh" else "| Tier | Datasets |"
+    rows = [SCHEMA_INDEX_START, "", header, "|---|---|"]
+    for tier, names in datasets_by_tier().items():
+        if not names:
+            continue
+        label = translate_to(locale, TIER_LABELS[tier])
+        links = " · ".join(f"[`{name}`](#{anchors.get(name, name)})" for name in names)
+        rows.append(f"| **{tier} {label}** | {links} |")
+    rows.extend(["", SCHEMA_INDEX_END])
+    return "\n".join(rows)
+
+
 def sync(text: str, lang: str = "zh") -> tuple[str, list[str]]:
     labels = _SCHEMA_LABELS[lang]
     schemas = _schemas()
@@ -141,6 +165,7 @@ def sync(text: str, lang: str = "zh") -> tuple[str, list[str]]:
     lines = text.split("\n")
     notes: list[str] = []
     documented: set[str] = set()
+    anchors: dict[str, str] = {}
 
     index = 0
     while index < len(lines):
@@ -153,6 +178,9 @@ def sync(text: str, lang: str = "zh") -> tuple[str, list[str]]:
             index += 1
             continue
         documented.update(names)
+        anchor = _heading_anchor(heading)
+        for name in names:
+            anchors[name] = anchor
         table_start, table_end, descriptions = _split_table(lines, index + 1, labels["header"])
         if table_start < 0:
             notes.append(f"{heading}: no column table found, left alone")
@@ -166,7 +194,7 @@ def sync(text: str, lang: str = "zh") -> tuple[str, list[str]]:
 
     missing = [name for name in datasets if name not in documented]
     if missing:
-        anchor = next(
+        anchor_idx = next(
             (i for i, line in enumerate(lines) if line.startswith(labels["anchor"])),
             len(lines),
         )
@@ -177,9 +205,15 @@ def sync(text: str, lang: str = "zh") -> tuple[str, list[str]]:
             block.extend(_render_table(schemas[name], {}, lang))
             block.append("")
             notes.append(f"{name}: section added")
-        lines[anchor:anchor] = block
+            anchors[name] = name
+        lines[anchor_idx:anchor_idx] = block
 
-    return "\n".join(lines), notes
+    result = "\n".join(lines)
+    if SCHEMA_INDEX_START in result and SCHEMA_INDEX_END in result:
+        before, rest = result.split(SCHEMA_INDEX_START, 1)
+        _, after = rest.split(SCHEMA_INDEX_END, 1)
+        result = before + _render_schema_tier_index(anchors, lang) + after
+    return result, notes
 
 
 def _load_catalog(name: str) -> dict:

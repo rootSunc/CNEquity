@@ -24,10 +24,22 @@ The package ships no market data. You provide the disk, the scheduling, and acce
 
 ## Components {#components}
 
-```text
-source adapters → collection steps → staging → write validation → publish (one catalog transaction) → query: Python / SQL / dashboard / MCP
-                       ↑                                                  │
-                    planner ←──────────── coverage ledger ←────────────────┘
+```mermaid
+flowchart LR
+    subgraph cnequity["cnequity (China A-share package)"]
+        A["Source adapters"] --> B["Collection steps"]
+        G["Query layer: Python / SQL / dashboard / MCP"]
+    end
+    subgraph core["equitylake_core (market-neutral lake engine)"]
+        B --> C["staging/"]
+        C --> D["Checkout & write validation"]
+        D --> E["Publication gate rehearsal (optional)"]
+        E --> F["Atomic catalog commit (lake/catalog.sqlite)"]
+        F --> H["Coverage ledger (_attempts)"]
+        H --> I["Gap planner"]
+        I -. "Plans remaining gaps" .-> B
+    end
+    F --> G
 ```
 
 The code has two layers. `equitylake_core` is a market-neutral lake engine: the catalog, writes, the coverage ledger, the planner, and locks; it imports no market code. `cnequity` is the China A-share package: the dataset registry, source adapters, scheduling, quality checks, query semantics, and the CLI.

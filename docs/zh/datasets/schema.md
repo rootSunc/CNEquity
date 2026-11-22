@@ -5,6 +5,27 @@
 - A 股个股日线成交量单位为股。使用旧版数据时查阅[目标版本说明](https://github.com/rootSunc/CNEquity/releases)。
 - `fetched_at` 是 UTC 抓取时间。PIT 数据集的可选时间列和可见性规则见[财报的时点口径](query-guide.md#pit)。
 
+## 按分层速查 {#tier-index}
+
+核心（`core`）数据集在下方默认展开；其余档位（`extended`、`best_effort`、`optional`、`on_demand`）默认收起为折叠框，点击速查表链接、右侧目录或折叠栏即可展开。
+
+<!-- schema-tier-index:start -->
+
+| 分层 | 数据集 |
+|---|---|
+| **L0 基础参考** | [`instruments`](#instruments) · [`name_history`](#name_history) · [`convertible_bonds`](#convertible_bonds) · [`convertible_bond_coupons`](#convertible_bond_coupons) · [`executives`](#executives) · [`etf_profiles`](#etf_profiles) · [`trading_calendar`](#trading_calendar) · [`trading_status`](#trading_status) |
+| **L1 行情** | [`convertible_bond_bars`](#convertible_bond_bars) · [`limit_prices`](#limit_prices) · [`daily_bars`](#daily_bars) · [`index_bars`](#index_bars) · [`minute_bars`](#minute_bars) · [`minute_bars_5m`](#minute_bars) · [`trade_ticks`](#trade_ticks) · [`adj_factors`](#adj_factors) · [`minute_bars_15m`](#minute_bars_15m) · [`minute_bars_30m`](#minute_bars_15m) · [`minute_bars_60m`](#minute_bars_15m) · [`delisting_events`](#delisting_events) |
+| **L2 公司事件** | [`holder_trades`](#holder_trades) · [`share_repurchases`](#share_repurchases) · [`earnings_forecasts`](#earnings_forecasts) · [`investor_visits`](#investor_visits) · [`convertible_bond_calls`](#convertible_bond_calls) · [`convertible_bond_conversions`](#convertible_bond_conversions) · [`corporate_actions`](#corporate_actions) · [`announcement_index`](#announcement_index) · [`earnings_disclosure_schedule`](#earnings_disclosure_schedule) |
+| **L3 基本面** | [`business_segments`](#business_segments) · [`executive_compensation`](#executive_compensation) · [`financial_statement_items`](#financial_statement_items) · [`share_structure`](#share_structure) · [`shareholder_counts`](#shareholder_counts) · [`top_holders`](#top_holders) · [`valuation_metrics`](#valuation_metrics) · [`analyst_consensus`](#analyst_consensus) · [`broker_forecasts`](#broker_forecasts) |
+| **L4 资金面** | [`fund_flow_tushare`](#fund_flow_tushare) · [`chip_distribution`](#chip_distribution) · [`northbound_top10`](#northbound_top10) · [`limit_events`](#limit_events) · [`hot_money_traders`](#hot_money_traders) · [`hot_money_trades`](#hot_money_trades) · [`limit_ladder`](#limit_ladder) · [`kpl_limit_ups`](#kpl_limit_ups) · [`fund_flow_ths_tushare`](#fund_flow_ths_tushare) · [`fund_flow`](#fund_flow) · [`margin_trading`](#margin_trading) · [`northbound_holdings`](#northbound_holdings) · [`northbound_flows`](#northbound_flows) · [`dragon_tiger`](#dragon_tiger) · [`block_trades`](#block_trades) · [`institutional_holdings`](#institutional_holdings) · [`fund_flow_ths`](#fund_flow_ths) |
+| **L5 结构行业** | [`sector_members`](#sector_members) · [`index_constituents`](#index_constituents) · [`industry_members`](#industry_members) · [`industry_index`](#industry_index) |
+| **L6 宏观** | [`macro_indicators`](#macro_indicators) · [`market_breadth`](#market_breadth) |
+| **L7 舆情 / 轮动** | [`popularity_ranks`](#popularity_ranks) · [`strongest_sectors`](#strongest_sectors) · [`investor_qa`](#investor_qa) · [`sentiment_scores`](#sentiment_scores) · [`hot_rank`](#hot_rank) · [`sector_bars`](#sector_bars) · [`sector_fund_flow`](#sector_fund_flow) · [`sector_fund_flow_ths`](#sector_fund_flow_ths) · [`news_headlines`](#news_headlines) · [`flash_news_wire`](#flash_news_wire) · [`economic_calendar`](#economic_calendar) · [`economic_events`](#economic_events) · [`market_holidays`](#market_holidays) |
+| **L8 风险合规** | [`pledge_stats`](#pledge_stats) · [`share_unlock_schedule`](#share_unlock_schedule) · [`regulatory_events`](#regulatory_events) |
+| **L9 衍生品** | [`futures_member_positions`](#futures_member_positions) · [`commodity_bars`](#commodity_bars) · [`futures_contracts`](#futures_contracts) · [`option_contracts`](#option_contracts) · [`futures_bars`](#futures_bars) · [`futures_minute_bars`](#futures_minute_bars) · [`option_bars`](#option_bars) · [`futures_continuous`](#futures_continuous) · [`option_greeks`](#option_greeks) |
+
+<!-- schema-tier-index:end -->
+
 ## 数据集字段
 
 #### instruments
@@ -73,7 +94,7 @@
 | trade_date | date |  |
 | is_trading | bool |  |
 | status | string | **交易状态**：`normal` / `suspended` / `delisted` |
-| risk_warning | bool | **风险警示（ST/*ST）**，与 status 正交；可为 null（无证据） |
+| risk_warning | bool | **风险警示**（`ST` / `*ST`），与 status 正交；可为 null（无证据） |
 | source | string | 退市行由 `instruments` 判定，标 `derived_delisted` |
 | data_version | string |  |
 | fetched_at | timestamp |  |
@@ -161,7 +182,7 @@
 
 **例外：`volume` 不是股。** `index_bars` / `sector_bars` 保留上游指数接口原值，单位未确证，不可直接用于个股换手率或与成分股成交量相加。这两个数据集仍是 `data_version=v1`。
 
-#### minute_bars / minute_bars_5m
+#### minute_bars / minute_bars_5m {#minute_bars}
 
 日内 K 线，两个数据集共用同一份 schema。**可选**，默认关闭（`[minute_bars].enabled = false`），不在默认 daily wave 上。
 
@@ -198,7 +219,7 @@
 
 **为什么一个数据集只放一个频率。** 1m 视野 95 天、5m 视野 491 天，而一个数据集只有一个水位、一个 `coverage_start`、一个 `history_horizon_days`。混在一起，这三样对两个频率都是错的。`frequency` 仍在 schema 与主键里，所以两者共用同一份列定义、同一套质量检查。
 
-#### minute_bars_15m / minute_bars_30m / minute_bars_60m
+#### minute_bars_15m / minute_bars_30m / minute_bars_60m {#minute_bars_15m}
 
 由湖里的 1m 和 5m 重采样得到的派生数据集（`derive/minute_resample.py`）。需要首次入湖时运行 `cne derive minute_bars_15m`（30m、60m 同理）。此后盘中组在发布分钟线输入后增量维护。不入湖时也可以在查询时用 `resample_minute_history` 按同一规则现算。
 
@@ -896,7 +917,7 @@ PIT 查询过滤 `announce_date <= as_of`。
 | data_version | string | 溯源 |
 | fetched_at | timestamp | 溯源 |
 
-#### stock_news（按需缓存）
+#### stock_news（按需缓存） {#stock_news}
 
 缓存 JSON：``meta/on_demand/stock_news/{symbol}.json``；经 ``cne query --dataset stock_news --symbol`` 拉取。
 

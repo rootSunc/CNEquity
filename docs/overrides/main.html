@@ -21,6 +21,55 @@
   <meta name="twitter:title" content="{{ social_title | e }} · CNEquity">
   <meta name="twitter:description" content="{{ social_description | e }}">
   <meta name="twitter:image" content="https://raw.githubusercontent.com/rootSunc/CNEquity/main/docs/assets/cnequity-github-cover.png">
+  <style>
+    .md-typeset table:not([class]) td:first-child,
+    .md-typeset table:not([class]) td:first-child code {
+      white-space: nowrap;
+    }
+    .md-typeset img {
+      border-radius: 6px;
+      border: 1px solid var(--md-default-fg-color--lightest);
+    }
+    .md-typeset .schema-tier-badge {
+      font-size: 0.72em;
+      font-weight: 500;
+      vertical-align: middle;
+      margin-left: 0.35rem;
+      opacity: 0.85;
+    }
+    .md-typeset details.schema-details > summary {
+      font-weight: 600;
+    }
+  </style>
+  <script>
+    (function () {
+      function expandForHash(hash) {
+        if (!hash || hash.length < 2) return;
+        var id = decodeURIComponent(hash.slice(1));
+        var el = document.getElementById(id);
+        if (!el) return;
+        var details = el.closest("details");
+        if (details && !details.open) {
+          details.open = true;
+        }
+      }
+      window.addEventListener("hashchange", function () {
+        expandForHash(location.hash);
+      });
+      document.addEventListener("DOMContentLoaded", function () {
+        expandForHash(location.hash);
+      });
+      document.addEventListener("click", function (e) {
+        var a = e.target.closest && e.target.closest('a[href*="#"]');
+        if (!a) return;
+        var href = a.getAttribute("href") || "";
+        var idx = href.indexOf("#");
+        if (idx >= 0) {
+          expandForHash(href.slice(idx));
+        }
+      });
+    })();
+  </script>
   {% if page and page.is_homepage %}
   <script type="application/ld+json">
     {

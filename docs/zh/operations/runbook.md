@@ -55,4 +55,4 @@ cne snapshot restore baseline /path/to/empty-restored-lake
 
 快照包含选定数据集。恢复目标须为新目录或空目录，恢复后用独立配置指向该目录并验证查询。元数据备份只能恢复记录，完整的数据恢复还需数据文件。日更和维护可能按保留设置清理旧版本。需要长期重现研究结果时，提前保存对应快照。
 
-本机 `cne serve` 的操作页可以发起支持的维护任务；只查看时可以使用 `--read-only`。升级前保留可独立恢复的数据副本，参见[安装与升级](../getting-started/installation.md)。
+本机 `cne serve` 的操作页可以发起支持的维护任务，设置页可管理付费来源密钥与取数开关（见[凭证配置](../getting-started/configuration.md#credentials)）；只查看时可以使用 `--read-only`。升级前保留可独立恢复的数据副本，参见[安装与升级](../getting-started/installation.md)。
