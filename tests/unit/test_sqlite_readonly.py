@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from contextlib import closing
 from pathlib import Path
 
@@ -13,7 +14,11 @@ from cnequity.sqlite_readonly import connect_readonly
 SRC = Path(__file__).resolve().parents[2] / "src" / "cnequity"
 
 
-@pytest.mark.parametrize("directory", ["lake#1", "lake?x", "lake 2", "湖"])
+# "?" is not allowed in a Windows file name.
+_NAMES = ["lake#1", "lake 2", "湖"] + ([] if sys.platform == "win32" else ["lake?x"])
+
+
+@pytest.mark.parametrize("directory", _NAMES)
 def test_reads_the_file_it_was_given(tmp_path, directory):
     path = tmp_path / directory / "manifest.db"
     path.parent.mkdir()

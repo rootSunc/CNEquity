@@ -1,5 +1,8 @@
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+
+import pytest
 
 from cnequity.diagnostics.metrics import (
     check_offline_benchmark,
@@ -203,3 +206,10 @@ def test_offline_benchmark_manifest_persistence_keeps_full_source_breakdown(tmp_
     assert stage["bytes_read"] == result["totals"]["bytes_read"]
     assert stage["retries"] == result["totals"]["retries"]
     assert stage["concurrency_peak"] == 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows GetProcessMemoryInfo")
+def test_windows_reports_peak_memory():
+    from cnequity.diagnostics.metrics import _rss_bytes
+
+    assert _rss_bytes() > 10 * 1024 * 1024

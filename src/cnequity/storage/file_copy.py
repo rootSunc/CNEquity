@@ -64,7 +64,9 @@ def copy2_isolated(src: str | Path, dst: str | Path) -> str | Path:
 
     APFS clones and Linux reflinks have separate inodes and share storage until either file is
     written. Hard links would let a mutable writer corrupt retained revisions
-    and are never used. Unsupported filesystems fall back to a byte copy.
+    and are never used. Unsupported filesystems fall back to a byte copy; on
+    Windows that is ``CopyFile2`` (Python 3.12+), which itself block-clones on
+    ReFS and Dev Drive volumes from Windows 11 24H2.
     The copy is synced before returning: a revision pointer published after
     it must not survive a crash that the copy did not.
     """

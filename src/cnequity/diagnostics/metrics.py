@@ -90,17 +90,50 @@ def new_metrics() -> dict[str, Any]:
     }
 
 
-def _rss_bytes() -> int:
-    """Return process peak RSS in bytes on macOS and Linux."""
+def _windows_peak_bytes() -> int:
+    """The process's peak working set on Windows (``GetProcessMemoryInfo``)."""
+    import ctypes
+    from ctypes import wintypes
 
+    class _Counters(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    try:
+        counters = _Counters()
+        counters.cb = ctypes.sizeof(counters)
+        process = ctypes.windll.kernel32.GetCurrentProcess()
+        if not ctypes.windll.psapi.GetProcessMemoryInfo(
+            process, ctypes.byref(counters), counters.cb
+        ):
+            return 0
+    except (AttributeError, OSError):
+        return 0
+    return int(counters.PeakWorkingSetSize)
+
+
+def _rss_bytes() -> int:
+    """Return process peak RSS in bytes; 0 where the platform cannot say."""
+
+    if os.sys.platform == "win32":
+        return _windows_peak_bytes()
     if resource is None:
         return 0
     try:
         value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     except (AttributeError, OSError, ValueError):
         return 0
-    # macOS reports bytes; Linux reports KiB.  Windows may not expose
-    # ``resource`` at all, in which case the caller receives zero.
+    # macOS reports bytes; Linux reports KiB.
     return value if os.sys.platform == "darwin" else value * 1024
 
 

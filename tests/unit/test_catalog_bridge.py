@@ -256,7 +256,8 @@ def test_sql_views_read_the_catalog_files_and_stay_inside_the_sandbox(cfg, lake,
         sql = con.execute(
             "SELECT sql FROM duckdb_views() WHERE view_name = 'daily_bars_including_otc'"
         ).fetchone()[0]
-        assert (lake_root(cfg) / "data").as_posix() in sql
+        # Catalog file paths keep the platform's separator (backslashes on Windows).
+        assert (lake_root(cfg) / "data").as_posix() in sql.replace("\\", "/")
         _configure_sql_connection(con, cfg)
         rows = con.execute(
             "SELECT symbol, trade_date, pre_close FROM daily_bars ORDER BY trade_date, symbol"
