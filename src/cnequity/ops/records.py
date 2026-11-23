@@ -193,7 +193,15 @@ def effective(config, record: dict) -> dict:
     else:
         if latest.get("state") in TERMINAL:
             return effective(config, latest)
-    if state == "starting" and not record.get("pid") and _age_seconds(record) < 15:
+    # The child records its pid as soon as it runs, then loads the config and
+    # takes the slot; on a loaded machine that can outlast any fixed grace.
+    # The grace only covers interpreter startup, before the child can write.
+    child = record.get("child_pid")
+    if (
+        state == "starting"
+        and not record.get("pid")
+        and ((child and pid_alive(int(child))) or (not child and _age_seconds(record) < 60))
+    ):
         shown = dict(record)
         shown["label"] = zh(LABELS["starting"])
         return shown

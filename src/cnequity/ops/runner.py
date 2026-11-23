@@ -234,6 +234,7 @@ class OpsService:
             "finished_at": None,
             "pid": None,
             "process_created_at": None,
+            "child_pid": None,
             "exit_code": None,
             "outcome": None,
             "result": None,

@@ -471,6 +471,26 @@ def test_a_dead_running_record_is_reported_lost(config):
     assert client.get(f"/api/ops/jobs/{job_id}", headers=_csrf(client)).json()["state"] == "lost"
 
 
+@pytest.mark.parametrize(
+    ("child_pid", "state"),
+    [("self", "starting"), (2**31 - 1, "lost"), (None, "lost")],
+)
+def test_a_slow_starting_job_is_lost_only_when_its_child_is_gone(config, child_pid, state):
+    """A loaded machine can keep the child from the slot well past any fixed grace."""
+    from cnequity.serve.ops.records import jobs_dir, public_record
+
+    job_id = "ef" * 16
+    record = {
+        "job_id": job_id,
+        "state": "starting",
+        "pid": None,
+        "child_pid": os.getpid() if child_pid == "self" else child_pid,
+        "created_at": "2020-01-01T00:00:00+00:00",
+    }
+    jobs_dir(config).mkdir(parents=True, exist_ok=True)
+    assert public_record(config, record)["state"] == state
+
+
 def test_a_job_finishing_during_status_read_is_not_reported_lost(config):
     from cnequity.serve.ops.records import atomic_write, jobs_dir, public_record
 

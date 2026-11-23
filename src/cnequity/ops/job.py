@@ -22,7 +22,7 @@ from typing import Any
 from cnequity.file_lock import LockUnavailable, exclusive_lock
 from cnequity.i18n import _
 from cnequity.ops.preflight import engine_blockers, mark_due_daily_session, scheduler_names
-from cnequity.ops.records import read_record, update_record
+from cnequity.ops.records import update_record
 from cnequity.orchestrator.scheduler_lock import SchedulerLockError, lock_directory, scheduler_lock
 from cnequity.sqlite_readonly import connect_readonly
 from cnequity.terminal_log import configured_log_secrets, redact_log_text
@@ -355,7 +355,7 @@ def _run(argv: list[str], *, config=None) -> tuple[int | None, str | None, str]:
 
 
 def execute(path: Path) -> None:
-    record = read_record(path)
+    record = update_record(path, child_pid=os.getpid())
     os.environ["CNE_LAUNCH_ID"] = str(record["job_id"])
     slot = Path(record["slot_lock"])
     if slot.name != "serve_ops.lock":
