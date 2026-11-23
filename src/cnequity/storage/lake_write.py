@@ -1029,22 +1029,33 @@ def verify_revisions(catalog: Catalog, dataset: str | None = None) -> list[Revis
             f"SELECT snapshot_id FROM ducklake_snapshots('{ALIAS}')"
         ).fetchall()
     }
+    from cnequity.storage.catalog_bridge import READS_TABLE
+
+    overrides: dict[tuple[str, str], int] = {}
+    if catalog.has_table(READS_TABLE):
+        overrides = {
+            (str(d), str(r)): int(s)
+            for d, r, s in catalog.execute(
+                f"SELECT dataset, revision_id, snapshot FROM {READS_TABLE}"
+            ).fetchall()
+        }
     checks = []
     for name, revision_id, snapshot, rows, digest, algorithm, where in recorded:
         if dataset is not None and name != dataset:
             continue
-        if int(snapshot) not in kept:
+        read_snapshot = overrides.get((name, revision_id), int(snapshot))
+        if read_snapshot not in kept:
             status = "expired"
         elif algorithm != digest_algorithm():
             status = "other_algorithm"
         else:
             try:
-                now = rows_digest(catalog, name, where=where or None, snapshot=int(snapshot))
+                now = rows_digest(catalog, name, where=where or None, snapshot=read_snapshot)
             except Exception:  # the snapshot's files were already cleaned up
                 status = "expired"
             else:
                 status = "match" if now.digest == digest else "mismatch"
-        checks.append(RevisionCheck(name, revision_id, int(snapshot), status, int(rows)))
+        checks.append(RevisionCheck(name, revision_id, read_snapshot, status, int(rows)))
     return checks
 
 

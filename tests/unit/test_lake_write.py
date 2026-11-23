@@ -446,3 +446,41 @@ def test_the_first_publish_of_a_dataset_keyed_by_a_period_label_checks_its_rows(
     )
     revision = publish_rows(cfg, "financial_statement_items", pl.DataFrame([row], schema=schema))
     assert revision is not None and revision.changed_partitions
+
+
+def test_verify_revisions_follows_coalesced_read_snapshots(tmp_path):
+    """After retention moves an unchanged dataset's read snapshot, verify-catalog still matches."""
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.domain.schemas import DATASET_SCHEMAS
+    from cnequity.storage.catalog_bridge import catalog_retention, lake_root
+    from cnequity.storage.lake_write import verify_revisions
+    from equitylake_core.catalog import Catalog
+
+    cfg = Config(data_root=tmp_path / "coalesced")
+    # Publish instruments once, then daily_bars twice so retention coalesces instruments'
+    # read snapshot onto the latest snapshot and expires its original publish snapshot.
+    inst_schema = DATASET_SCHEMAS["instruments"]
+    inst_row = {name: None for name in inst_schema}
+    inst_row.update(
+        symbol="600519.SH",
+        name="贵州茅台",
+        exchange="SH",
+        asset_type="stock",
+        list_date=date(2001, 8, 27),
+        status="listed",
+        source="test",
+        data_version="v1",
+        fetched_at=FETCHED,
+    )
+    publish_rows(cfg, "instruments", pl.DataFrame([inst_row], schema=inst_schema))
+    publish_rows(cfg, "daily_bars", _bars(date(2024, 1, 2), {"600519.SH": 10.0}))
+    publish_rows(cfg, "daily_bars", _bars(date(2024, 1, 3), {"600519.SH": 11.0}))
+
+    catalog_retention(cfg, apply=True, keep=1)
+
+    with Catalog(lake_root(cfg), read_only=True) as catalog:
+        checks = verify_revisions(catalog)
+    by_dataset = {c.dataset: c.status for c in checks if c.status != "expired"}
+    assert by_dataset.get("instruments") == "match"
+    assert by_dataset.get("daily_bars") == "match"

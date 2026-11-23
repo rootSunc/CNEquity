@@ -433,14 +433,16 @@ def _committed_files(config, dataset: str) -> tuple[str, Path, dict[str, str]] |
     if pointer is None or root is None:
         return None
     files: dict[str, str] = {}
-    try:
-        receipt = json.loads((Path(config.meta_root) / pointer["receipt"]).read_text("utf-8"))
-        prefix = f"{dataset}/"
-        for entry in receipt["generation_files"]:
-            path = entry["path"]
-            files[path[len(prefix) :] if path.startswith(prefix) else path] = entry["sha256"]
-    except (KeyError, OSError, ValueError):
-        files = {}
+    receipt_rel = pointer.get("receipt")
+    if receipt_rel:
+        try:
+            receipt = json.loads((Path(config.meta_root) / receipt_rel).read_text("utf-8"))
+            prefix = f"{dataset}/"
+            for entry in receipt["generation_files"]:
+                path = entry["path"]
+                files[path[len(prefix) :] if path.startswith(prefix) else path] = entry["sha256"]
+        except (KeyError, OSError, TypeError, ValueError):
+            files = {}
     on_disk = {path.relative_to(root).as_posix() for path in root.rglob("*.parquet")}
     if set(files) != on_disk:
         # No usable receipt: identify a file by its size and modification time.

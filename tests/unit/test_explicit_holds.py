@@ -83,3 +83,33 @@ def test_apply_releases_only_derived_holds_logs_them_and_retires_the_roots(tmp_p
 def test_a_lake_without_a_registry_has_nothing_to_release(tmp_path):
     cfg = Config(data_root=tmp_path / "lake")
     assert release_reference_holds(cfg, apply=True)["skipped"]
+
+
+def test_release_reference_holds_reports_clear_path_mismatch_on_copied_lake(tmp_path):
+    """A copied lake's lifecycle registry fails fast with both the recorded and current paths."""
+    import json
+
+    import pytest
+
+    from cnequity.storage.explicit_holds import release_reference_holds
+    from cnequity.storage.lifecycle import LifecycleError
+
+    cfg = Config(data_root=tmp_path / "copied-lake")
+    reg_path = cfg.meta_root / "lifecycle" / "registry.json"
+    reg_path.parent.mkdir(parents=True, exist_ok=True)
+    reg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "lake_id": "lake-1",
+                "meta_root": "/old/original/path/meta",
+                "holds": {},
+                "cases": [],
+                "reference_roots": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LifecycleError, match="/old/original/path/meta"):
+        release_reference_holds(cfg, apply=True)

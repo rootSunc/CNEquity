@@ -324,3 +324,71 @@ def test_an_upgrade_this_machine_cannot_do_changes_nothing(lake, monkeypatch):
     assert "ducklake" in result.output
     assert not (lake.meta_root / "storage.json").exists()
     assert not (lake.data_root / "backups").exists()
+
+
+def test_migrate_to_catalog_handles_legacy_null_receipt_and_empty_legacy_pointers(tmp_path):
+    """Pre-0.25 lakes with revision=0 / receipt=None pointers (populated or empty) migrate cleanly."""
+    import json
+    from datetime import date, datetime, timezone
+
+    import polars as pl
+
+    from cnequity.domain.schemas import DATASET_SCHEMAS
+    from cnequity.storage.catalog_migration import migrate_to_catalog
+    from cnequity.storage.revisions import RevisionStore
+
+    lake = Config(data_root=tmp_path / "legacy-null-receipt")
+    # Populated legacy pointer (receipt: null), like 0.24.0 demo instruments.
+    inst_dir = lake.meta_root / "revisions" / "data" / "instruments" / "legacy"
+    inst_dir.mkdir(parents=True)
+    inst_schema = DATASET_SCHEMAS["instruments"]
+    inst_row = {name: None for name in inst_schema}
+    inst_row.update(
+        symbol="600519.SH",
+        name="贵州茅台",
+        exchange="SH",
+        asset_type="stock",
+        list_date=date(2001, 8, 27),
+        status="listed",
+        source="test",
+        data_version="v1",
+        fetched_at=datetime(2024, 6, 18, 8, 0, tzinfo=timezone.utc),
+    )
+    pl.DataFrame([inst_row], schema=inst_schema).write_parquet(inst_dir / "part-merged.parquet")
+    (lake.meta_root / "revisions" / "instruments").mkdir(parents=True)
+    (lake.meta_root / "revisions" / "instruments" / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dataset": "instruments",
+                "revision": 0,
+                "revision_id": "legacy",
+                "generation_path": "revisions/data/instruments/legacy",
+                "receipt": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Empty legacy pointer (receipt: null, 0 parquet files), like 0.24.0 untouched datasets.
+    (lake.meta_root / "revisions" / "data" / "corporate_actions" / "legacy").mkdir(parents=True)
+    (lake.meta_root / "revisions" / "corporate_actions").mkdir(parents=True)
+    (lake.meta_root / "revisions" / "corporate_actions" / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dataset": "corporate_actions",
+                "revision": 0,
+                "revision_id": "legacy",
+                "generation_path": "revisions/data/corporate_actions/legacy",
+                "receipt": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = migrate_to_catalog(lake, apply=True)
+    assert result["switched"] is True
+    store = RevisionStore(lake.meta_root, lake.curated_root, lake.derived_root, create=False)
+    assert store.publishes_to_catalog()
+    assert store.latest("instruments") is not None
+    assert store.latest("instruments").revision_id == "legacy"

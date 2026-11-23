@@ -184,12 +184,18 @@ class LifecycleStore:
         value = _read(self.registry_path)
         if (
             value.get("schema_version") != 1
-            or value.get("meta_root") != str(self.meta)
+            or not isinstance(value.get("meta_root"), str)
             or not isinstance(value.get("lake_id"), str)
             or not isinstance(value.get("holds"), dict)
             or not isinstance(value.get("pending", {}), dict)
         ):
             raise LifecycleError("Invalid lifecycle registry or copied lake identity")
+        if value["meta_root"] != str(self.meta):
+            raise LifecycleError(
+                f"Copied lake identity: {self.registry_path} records "
+                f"meta_root={value['meta_root']!r}, not {str(self.meta)!r}; "
+                "update meta_root there if you moved or copied this lake on purpose"
+            )
         for oid, reasons in value["holds"].items():
             if not isinstance(oid, str) or not isinstance(reasons, list) or not reasons:
                 raise LifecycleError("Invalid lifecycle hold")

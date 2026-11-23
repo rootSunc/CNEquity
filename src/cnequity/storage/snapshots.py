@@ -503,7 +503,7 @@ def _manifest_contract_issues(manifest: Mapping[str, Any]) -> list[str]:
     global_expected = manifest.get("contract_fingerprint")
     if not isinstance(global_expected, str) or not global_expected:
         issues.append("contract_fingerprint")
-    elif global_expected != contract_fingerprint():
+    elif manifest.get("format_version") != 1 and global_expected != contract_fingerprint():
         issues.append("contract_fingerprint")
 
     contracts = manifest.get("contracts")
@@ -730,7 +730,7 @@ def _manifest_state_issues(snapshot: Path, manifest: Mapping[str, Any]) -> list[
                 not isinstance(recorded, Mapping)
                 or isinstance(number, bool)
                 or not isinstance(number, int)
-                or number < 1
+                or number < 0
                 or not isinstance(recorded.get("revision_id"), str)
                 or not recorded["revision_id"]
             ):
@@ -1986,9 +1986,13 @@ class SnapshotStore:
                     # Facts about how the revision was written there, not here.
                     if key not in {"storage", "base_revision_id", "removed_partitions"}
                 }
+                schema_version = identity.get("schema_version")
+                if not schema_version or int(schema_version) < 1:
+                    schema_version = dataset_contract(dataset)["schema_version"]
+                fingerprint = identity.get("contract_fingerprint") or contract_fingerprint(dataset)
                 publishes[dataset] = DatasetPublish(
-                    schema_version=int(identity["schema_version"]),
-                    contract_fingerprint=str(identity["contract_fingerprint"]),
+                    schema_version=int(schema_version),
+                    contract_fingerprint=str(fingerprint),
                     metadata=metadata,
                     identity=identity,
                 )

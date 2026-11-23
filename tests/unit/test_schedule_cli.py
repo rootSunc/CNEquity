@@ -444,3 +444,23 @@ def test_maintain_retries_the_owed_keys_without_failing_on_them(maintain_env, mo
     assert ["backfill", "daily_bars", "--outstanding"] == calls[0][:3]
     assert calls[1][0] == "audit"  # the audit and gate see what the retry settled
     assert "Outstanding keys: daily_bars" in result.output
+
+
+def test_maintain_skips_outstanding_backfill_on_sample_lake(maintain_env, monkeypatch):
+    config, calls, _ = maintain_env
+    path = config.config_path
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("[data]\n", '[data]\nprofile = "sample"\n', 1),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cnequity.quality.planned_coverage.owed_cells",
+        lambda cfg, dataset, start, end: (
+            [("600000.SH", date(2026, 10, 19))] if dataset == "daily_bars" else []
+        ),
+    )
+
+    result = _maintain(config)
+
+    assert result.exit_code == 0, result.output
+    assert not any(c[:1] == ["backfill"] for c in calls)

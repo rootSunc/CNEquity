@@ -595,7 +595,11 @@ class RevisionStore:
         content_digest = self._content_digest(dataset, schema_version, contract_fingerprint, files)
         if identity is not None:
             revision, revision_id = int(identity["revision"]), str(identity["revision_id"])
-            if revision <= newest or any(r.revision_id == revision_id for r in history):
+            if (
+                revision < 0
+                or (history and revision <= newest)
+                or any(r.revision_id == revision_id for r in history)
+            ):
                 raise RevisionConsistencyError(
                     f"{dataset}: revision {revision} is not newer than this lake's {newest}"
                 )

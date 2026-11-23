@@ -486,10 +486,12 @@ def import_receipts(config, *, apply: bool) -> dict:
         current = synced_revision_ids(catalog)
         latest = catalog.snapshot()
         rows: list[dict[str, Any]] = []
+        checked_datasets: list[str] = []
         for dataset in datasets:
             pointer = store.pointer_file(dataset)
-            if pointer is None:
+            if pointer is None or _is_empty_legacy_pointer(store, dataset, pointer):
                 continue
+            checked_datasets.append(dataset)
             report["datasets"] += 1
             if pointer.get("revision") == 0:
                 chain = [{"dataset": dataset, "revision": 0, "revision_id": pointer["revision_id"]}]
@@ -544,8 +546,16 @@ def import_receipts(config, *, apply: bool) -> dict:
             catalog.execute(f"INSERT INTO {HISTORY_TABLE} BY NAME SELECT * FROM imported_receipts")
         catalog.con.unregister("imported_receipts")
     forget(meta)
-    _check_agreement(config, store, datasets)
+    _check_agreement(config, store, checked_datasets)
     return report
+
+
+def _is_empty_legacy_pointer(store, dataset: str, pointer: dict[str, Any]) -> bool:
+    """An empty revision-0 placeholder created before 0.25.0 when a dataset had no files."""
+    if pointer.get("revision") != 0:
+        return False
+    root = store.current_root(dataset)
+    return root is None or next(root.rglob("*.parquet"), None) is None
 
 
 def _check_agreement(config, store, datasets: list[str]) -> None:

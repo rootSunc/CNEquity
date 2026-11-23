@@ -170,6 +170,8 @@ def _check_daily_groups(cfg) -> tuple[list[str], list[str]]:
 
 def _owed_datasets(cfg) -> list[str]:
     """Datasets owed per key that the coverage planner says still owe some."""
+    if getattr(cfg, "lake_profile", None) == "sample":
+        return []
     from cnequity.domain.datasets import DATASETS
     from cnequity.domain.market_time import shanghai_today
     from cnequity.quality.planned_coverage import coverage_of, owed_cells

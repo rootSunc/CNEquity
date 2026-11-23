@@ -523,3 +523,75 @@ def test_a_snapshot_made_before_0_25_restores_onto_a_catalog(tmp_path):
     assert not any((restored.data_root / "curated").rglob("*.parquet"))
     assert not (restored.meta_root / "revisions" / "data" / "daily_bars").exists()
     assert _write_bars(restored, 11.0).revision == 2
+
+
+def test_pre_0_25_snapshot_restores_when_unrelated_dataset_contract_changed(tmp_path):
+    """A format_version=1 snapshot verifies and restores if its own datasets' contracts match."""
+    from tests.legacy_lake import publish_generation
+
+    old = Config(data_root=tmp_path / "old-lake")
+    publish_generation(old, "daily_bars", _bars(date(2024, 6, 18), {"600000.SH": 10.0}))
+    store = SnapshotStore(old, tmp_path / "snapshots")
+    _legacy_snapshot(store, "from-024", old, "daily_bars")
+
+    # Simulate an unrelated dataset changing the global registry fingerprint between 0.24 and 0.25.
+    manifest_path = store.path("from-024") / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["contract_fingerprint"] = "0.24.0-global-registry-fingerprint"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    verification = store.verify("from-024")
+    assert verification.passed, verification.mismatched
+
+    restored = replace(old, data_root=tmp_path / "restored-from-024")
+    store.restore("from-024", restored.data_root)
+    assert _load(restored)["close"].to_list() == [10.0]
+
+
+def test_v2_snapshot_create_and_restore_supports_migrated_revision_zero_dataset(tmp_path):
+    """Upgraded lakes holding a revision=0 legacy dataset can still snapshot and restore."""
+    from cnequity.domain.schemas import DATASET_SCHEMAS
+    from cnequity.storage.catalog_migration import migrate_to_catalog
+
+    lake = Config(data_root=tmp_path / "upgraded")
+    inst_dir = lake.meta_root / "revisions" / "data" / "instruments" / "legacy"
+    inst_dir.mkdir(parents=True)
+    inst_schema = DATASET_SCHEMAS["instruments"]
+    inst_row = {name: None for name in inst_schema}
+    inst_row.update(
+        symbol="600519.SH",
+        name="贵州茅台",
+        exchange="SH",
+        asset_type="stock",
+        list_date=date(2001, 8, 27),
+        status="listed",
+        source="test",
+        data_version="v1",
+        fetched_at=datetime(2024, 6, 18, 8, 0, tzinfo=timezone.utc),
+    )
+    pl.DataFrame([inst_row], schema=inst_schema).write_parquet(inst_dir / "part-merged.parquet")
+    (lake.meta_root / "revisions" / "instruments").mkdir(parents=True)
+    (lake.meta_root / "revisions" / "instruments" / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dataset": "instruments",
+                "revision": 0,
+                "revision_id": "legacy",
+                "generation_path": "revisions/data/instruments/legacy",
+                "receipt": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    migrate_to_catalog(lake, apply=True)
+
+    store = SnapshotStore(lake, tmp_path / "snapshots")
+    store.create("with-legacy", ["instruments"])
+    assert store.verify("with-legacy").passed
+
+    restored = replace(lake, data_root=tmp_path / "restored-legacy")
+    store.restore("with-legacy", restored.data_root)
+    from cnequity.query import load
+
+    assert load("instruments", config=restored)["symbol"].to_list() == ["600519.SH"]
