@@ -20,7 +20,7 @@ Each series carries two cumulative adjustment factors, updated on a roll from
 the two contracts' settlements on T-1 (both known at that close):
 ``adj_ratio`` multiplies raw prices, ``adj_diff`` is added to them, and either
 makes the series continuous across rolls while leaving the earliest prices as
-published — the same direction ADR-0004 takes for equities. Divide by (or
+published — the same direction taken for equities. Divide by (or
 subtract) the latest factor at query time for the back-adjusted view.
 
 ``roll_yield`` on the main series is ``ln(main / second)`` over the gap between

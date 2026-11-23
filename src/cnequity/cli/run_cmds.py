@@ -32,6 +32,7 @@ from cnequity.domain.market_time import is_session_final, shanghai_today
 from cnequity.i18n import N_, _
 from cnequity.orchestrator.engine import JobEngine
 from cnequity.orchestrator.run_lock import RunLockError
+from cnequity.orchestrator.run_window import current_anchor
 from cnequity.query.calendar import last_trading_day
 
 
@@ -71,7 +72,122 @@ def _stale_priority(spec, row: dict, anchor: date) -> tuple[int, int, int, str]:
     return (urgent, cost_class, -lag, spec.name)
 
 
-def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> list[dict]:
+def _validate_stale_filters(
+    cfg,
+    *,
+    groups: set[str] | None = None,
+    datasets: set[str] | None = None,
+) -> tuple[set[str] | None, set[str] | None]:
+    """Validate ``--groups`` and ``--datasets`` for ``--stale-only``.
+
+    Returns ``(daily_groups, event_groups)`` split by where each named group lives.
+    """
+    from cnequity.domain.datasets import DATASETS
+
+    schedule_groups = getattr(cfg, "schedule_groups", {}) or {}
+    events_groups = getattr(cfg, "events_groups", {}) or {}
+    if datasets is not None:
+        unknown_ds = datasets - DATASETS.keys()
+        if unknown_ds:
+            raise click.ClickException(
+                _("Unknown stale datasets: {value}").format(value=", ".join(sorted(unknown_ds)))
+            )
+    if groups is None:
+        return None, None
+    known = schedule_groups.keys() | events_groups.keys()
+    unknown = groups - known
+    if unknown:
+        raise click.ClickException(
+            _("Unknown stale schedule groups: {value}").format(value=", ".join(sorted(unknown)))
+        )
+    return groups & schedule_groups.keys(), groups & events_groups.keys()
+
+
+def _row_stale_mark(
+    cfg,
+    spec,
+    row: dict,
+    anchor: date,
+    has_failed_attempt,
+) -> tuple[bool, date | None]:
+    """Whether one ``list_datasets()`` row is stale as of *anchor*, with its latest mark."""
+    from cnequity.domain.datasets import removed_from_schedule
+    from cnequity.quality.freshness import dataset_freshness
+
+    if removed_from_schedule(cfg, spec.name):
+        return False, None
+
+    snapshot_live = not spec.watermark and spec.fetch_semantics == "snapshot"
+    if snapshot_live:
+        # There is no honest PIT watermark for a rolling live window.  A
+        # separate capture marker is written by the fetch step; missing
+        # marker/data is itself stale so a skipped first capture can be
+        # recovered on the next scheduler pass.  Unlike a normal EOD
+        # feed, a live snapshot has a same-day deadline: yesterday's
+        # marker must still be retried today even though the generic
+        # freshness tolerance allows one day of lag. ``coverage_end``
+        # keeps older lakes (before the marker was introduced) schedulable.
+        mark = row.get("snapshot_date") or row.get("coverage_end")
+        return mark is None or mark < anchor, mark
+    if (
+        spec.required
+        and spec.watermark
+        and spec.fetch_semantics == "snapshot"
+        and (not row.get("has_data") or not row.get("watermarked"))
+        and has_failed_attempt(spec.name)
+    ):
+        # The first failed required snapshot has no watermark to compare,
+        # but it is still an actionable stale obligation.  Without this
+        # branch the scheduler treats an empty/unwatermarked row as
+        # "never started" and permanently skips its retry.
+        mark = row.get("watermark") or row.get("coverage_end")
+        return True, mark
+    if not row.get("has_data") or not row.get("watermarked"):
+        return False, None
+    mark = row.get("watermark") or row.get("coverage_end")
+    return dataset_freshness(cfg, row, anchor) == "stale", mark
+
+
+def _make_failed_attempt_checker(cfg):
+    """Cached manifest lookup distinguishing a never-started empty dataset from a failed snapshot."""
+    cache: dict[str, bool] = {}
+
+    def has_failed_attempt(dataset: str) -> bool:
+        if dataset in cache:
+            return cache[dataset]
+        manifest_path = getattr(cfg, "manifest_path", None)
+        if manifest_path is None or not Path(manifest_path).exists():
+            cache[dataset] = False
+            return False
+        from cnequity.orchestrator.manifest import Manifest
+
+        manifest = Manifest(manifest_path)
+        for past in manifest.list_runs():
+            for receipt in manifest.get_dataset_results(past["run_id"], dataset=dataset):
+                if receipt["status"] in {"failed", "degraded", "blocked"}:
+                    cache[dataset] = True
+                    return True
+            for batch in manifest.get_batches_for_run(past["run_id"]):
+                if batch["dataset"] == dataset and batch["status"] in {
+                    "failed",
+                    "degraded",
+                    "stale",
+                }:
+                    cache[dataset] = True
+                    return True
+        cache[dataset] = False
+        return False
+
+    return has_failed_attempt
+
+
+def stale_fetch_plan(
+    cfg,
+    anchor: date,
+    *,
+    groups: set[str] | None = None,
+    rows: list[dict] | None = None,
+) -> list[dict]:
     """Return stale fetch steps with deterministic deadline/cost metadata.
 
     Registered fetch steps whose dataset is still behind *anchor*.
@@ -86,47 +202,26 @@ def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> li
     # Steps are registered by the module-level `import cnequity.steps`.
     from cnequity.domain.datasets import DATASETS, history_mode_for, is_dataset_enabled
     from cnequity.orchestrator.registry import STEP_REGISTRY
-    from cnequity.quality.freshness import is_stale
     from cnequity.query.reader import list_datasets
 
-    def has_failed_attempt(dataset: str) -> bool:
-        """Distinguish a never-started empty dataset from a failed snapshot."""
-        manifest_path = getattr(cfg, "manifest_path", None)
-        if manifest_path is None or not Path(manifest_path).exists():
-            return False
-        from cnequity.orchestrator.manifest import Manifest
-
-        manifest = Manifest(manifest_path)
-        for past in manifest.list_runs():
-            for receipt in manifest.get_dataset_results(past["run_id"], dataset=dataset):
-                if receipt["status"] in {"failed", "degraded", "blocked"}:
-                    return True
-            for batch in manifest.get_batches_for_run(past["run_id"]):
-                if batch["dataset"] == dataset and batch["status"] in {
-                    "failed",
-                    "degraded",
-                    "stale",
-                }:
-                    return True
-        return False
+    has_failed_attempt = _make_failed_attempt_checker(cfg)
 
     # `getattr`: the plan is also driven from lightweight stand-in configs
     # (tests, tooling) that carry only the fields it reads.
     events_owned = {
-        step for group in getattr(cfg, "events_groups", {}).values() for step in group.steps
+        step for group in (getattr(cfg, "events_groups", {}) or {}).values() for step in group.steps
     }
     allowed = None
     if groups is not None:
-        known = getattr(cfg, "schedule_groups", {})
-        unknown = groups - known.keys()
-        if unknown:
-            raise click.ClickException(
-                _("Unknown stale schedule groups: {value}").format(value=", ".join(sorted(unknown)))
-            )
-        allowed = {step for name in groups for step in known[name].steps}
+        daily_groups, _event_groups = _validate_stale_filters(cfg, groups=groups)
+        known = getattr(cfg, "schedule_groups", {}) or {}
+        allowed = {step for name in (daily_groups or set()) for step in known[name].steps}
 
+    dataset_rows = (
+        rows if rows is not None else list(list_datasets(config=cfg).iter_rows(named=True))
+    )
     out: list[dict] = []
-    for row in list_datasets(config=cfg).iter_rows(named=True):
+    for row in dataset_rows:
         name = row["dataset"]
         if allowed is not None and name not in allowed:
             continue
@@ -146,36 +241,7 @@ def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> li
             # window, which is what a stale-only pass is for.
             continue
         mode = history_mode_for(spec)
-        snapshot_live = not spec.watermark and spec.fetch_semantics == "snapshot"
-        if snapshot_live:
-            # There is no honest PIT watermark for a rolling live window.  A
-            # separate capture marker is written by the fetch step; missing
-            # marker/data is itself stale so a skipped first capture can be
-            # recovered on the next scheduler pass.  Unlike a normal EOD
-            # feed, a live snapshot has a same-day deadline: yesterday's
-            # marker must still be retried today even though the generic
-            # freshness tolerance allows one day of lag. ``coverage_end``
-            # keeps older lakes (before the marker was introduced) schedulable.
-            mark = row.get("snapshot_date") or row.get("coverage_end")
-            stale = mark is None or mark < anchor
-        elif (
-            spec.required
-            and spec.watermark
-            and spec.fetch_semantics == "snapshot"
-            and (not row.get("has_data") or not row.get("watermarked"))
-            and has_failed_attempt(name)
-        ):
-            # The first failed required snapshot has no watermark to compare,
-            # but it is still an actionable stale obligation.  Without this
-            # branch the scheduler treats an empty/unwatermarked row as
-            # "never started" and permanently skips its retry.
-            mark = row.get("watermark") or row.get("coverage_end")
-            stale = True
-        else:
-            if not row["has_data"] or not row["watermarked"]:
-                continue
-            mark = row["watermark"] or row["coverage_end"]
-            stale = is_stale(name, mark, anchor, cfg)
+        stale, mark = _row_stale_mark(cfg, spec, row, anchor, has_failed_attempt)
         if stale:
             priority = _stale_priority(spec, row, anchor)
             out.append(
@@ -201,6 +267,157 @@ def stale_fetch_plan(cfg, anchor: date, *, groups: set[str] | None = None) -> li
         )
     )
     return out
+
+
+def _stale_events_and_derived(
+    cfg,
+    anchor: date,
+    *,
+    rows: list[dict],
+    daily_steps: list[str],
+    daily_groups: set[str] | None,
+    event_groups: set[str] | None,
+    datasets: set[str] | None,
+    snapshots_only: bool,
+) -> tuple[list[dict], list[str]]:
+    """Lagging event-stream groups and derived steps for ``--stale-only``."""
+    import cnequity.steps  # noqa: F401
+    from cnequity.domain.datasets import DATASETS, is_dataset_enabled
+    from cnequity.orchestrator.registry import STEP_REGISTRY
+
+    has_failed_attempt = _make_failed_attempt_checker(cfg)
+    by_name = {row["dataset"]: row for row in rows}
+    schedule_groups = getattr(cfg, "schedule_groups", {}) or {}
+    events_groups = getattr(cfg, "events_groups", {}) or {}
+
+    events_plan: list[dict] = []
+    planned_events: set[str] = set()
+    for group_name, group in events_groups.items():
+        if event_groups is not None and group_name not in event_groups:
+            continue
+        lagging: list[str] = []
+        for step in group.steps:
+            if step == "flash_news_wire" or step not in DATASETS or step in planned_events:
+                continue
+            if step not in STEP_REGISTRY or not is_dataset_enabled(step, cfg):
+                continue
+            if datasets is not None and step not in datasets:
+                continue
+            spec = DATASETS[step]
+            if snapshots_only and spec.fetch_semantics != "snapshot":
+                continue
+            row = by_name.get(step)
+            if row is None:
+                continue
+            stale, _mark = _row_stale_mark(cfg, spec, row, anchor, has_failed_attempt)
+            if stale:
+                lagging.append(step)
+                planned_events.add(step)
+        if lagging:
+            events_plan.append({"group": group_name, "datasets": lagging})
+
+    # Repaired bars must reach the same derived outputs as the scheduled group.
+    # Otherwise a successful core retry leaves factors/industry indexes behind.
+    derived_steps: list[str] = list(
+        dict.fromkeys(
+            step
+            for name, group in schedule_groups.items()
+            if datasets is None
+            and (daily_groups is None or name in daily_groups)
+            and set(daily_steps).intersection(group.steps)
+            for step in group.steps
+            if step.startswith("derive_")
+        )
+    )
+    if not snapshots_only:
+        allowed_derived = (
+            {
+                step
+                for name in daily_groups
+                for step in schedule_groups[name].steps
+                if step.startswith("derive_")
+            }
+            if daily_groups is not None
+            else None
+        )
+        for row in rows:
+            name = row["dataset"]
+            spec = DATASETS.get(name)
+            if spec is None or spec.layer != "derived":
+                continue
+            step = f"derive_{name}"
+            if step not in STEP_REGISTRY or not is_dataset_enabled(name, cfg):
+                continue
+            if datasets is not None and name not in datasets:
+                continue
+            if allowed_derived is not None and step not in allowed_derived:
+                continue
+            stale, _mark = _row_stale_mark(cfg, spec, row, anchor, has_failed_attempt)
+            if stale and step not in derived_steps:
+                derived_steps.append(step)
+
+    return events_plan, derived_steps
+
+
+def stale_catchup_plan(
+    cfg,
+    anchor: date,
+    *,
+    groups: set[str] | None = None,
+    datasets: set[str] | None = None,
+    snapshots_only: bool = False,
+    rows: list[dict] | None = None,
+) -> dict:
+    """Full catch-up plan for ``cne run daily --stale-only`` across daily, derived and event feeds."""
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.query.reader import list_datasets
+
+    daily_groups, event_groups = _validate_stale_filters(cfg, groups=groups, datasets=datasets)
+    dataset_rows = (
+        rows if rows is not None else list(list_datasets(config=cfg).iter_rows(named=True))
+    )
+    if groups is None:
+        daily_plan = stale_fetch_plan(cfg, anchor, rows=dataset_rows)
+    elif daily_groups:
+        daily_plan = stale_fetch_plan(cfg, anchor, groups=daily_groups, rows=dataset_rows)
+    else:
+        daily_plan = []
+    if snapshots_only:
+        daily_plan = [
+            item for item in daily_plan if DATASETS[item["dataset"]].fetch_semantics == "snapshot"
+        ]
+    if datasets is not None:
+        daily_plan = [item for item in daily_plan if item["dataset"] in datasets]
+    # Older configs may have no event group for a calendar-scoped feed. It
+    # still needs the calendar date and the event lock when caught up manually.
+    calendar_steps = [
+        item["dataset"]
+        for item in daily_plan
+        if DATASETS[item["dataset"]].session_scope == "calendar"
+    ]
+    daily_plan = [item for item in daily_plan if item["dataset"] not in calendar_steps]
+    daily_steps = [item["dataset"] for item in daily_plan]
+    events_plan, derived_steps = _stale_events_and_derived(
+        cfg,
+        anchor,
+        rows=dataset_rows,
+        daily_steps=daily_steps,
+        daily_groups=daily_groups,
+        event_groups=event_groups,
+        datasets=datasets,
+        snapshots_only=snapshots_only,
+    )
+    # Compact each ungrouped feed before running the next. In registry order,
+    # regulatory_events can then read the freshly published announcements.
+    events_plan.extend(
+        {"group": None, "datasets": [name]} for name in DATASETS if name in calendar_steps
+    )
+    return {
+        "anchor": anchor,
+        "daily": daily_plan,
+        "derived": derived_steps,
+        "events": events_plan,
+    }
 
 
 def stale_fetch_steps(cfg, anchor: date) -> list[str]:
@@ -525,35 +742,45 @@ def _run_stale_only(
     backfill: bool,
     repair_gaps: bool = False,
     groups: set[str] | None = None,
+    datasets: set[str] | None = None,
     snapshots_only: bool = False,
 ) -> None:
-    """Second attempt, same day, for whatever the first attempt did not land.
+    """Catch up datasets still behind the last trading day (daily, derived and event feeds).
 
     The gap this closes: a ``snapshot`` dataset fetches only the run day, so a
     source outage during the one scheduled window loses that day permanently —
     ``valuation_metrics`` lost 2026-07-30 and 07-31 to a push2 clist outage and
     no later run could have recovered them. Per-host retries already exist and
-    were exhausted; what was missing was a second window.
+    were exhausted; what was missing was a second window. Lagging event streams
+    and derived datasets are caught up here too, each under its own lock.
     """
-    anchor = last_trading_day(cfg, trade_date or shanghai_today(), include_staging=True)
-    if groups is not None and repair_gaps:
+    anchor = (
+        current_anchor(cfg)
+        if trade_date is None
+        else last_trading_day(cfg, trade_date, include_staging=True)
+    )
+    if (groups is not None or datasets is not None) and repair_gaps:
         raise click.ClickException(
-            _("With --groups set, the lake-wide --repair-gaps cannot be used")
+            _("With --groups or --datasets set, the lake-wide --repair-gaps cannot be used")
         )
     repairs = _auto_repair_gaps(cfg, anchor) if repair_gaps else []
-    plan = (
-        stale_fetch_plan(cfg, anchor)
-        if groups is None
-        else stale_fetch_plan(cfg, anchor, groups=groups)
+    catchup = stale_catchup_plan(
+        cfg,
+        anchor,
+        groups=groups,
+        datasets=datasets,
+        snapshots_only=snapshots_only,
     )
-    if snapshots_only:
-        # History datasets catch up by date on the next daily run; only a
-        # snapshot's missed session is lost for good, so only those are retried.
-        from cnequity.domain.datasets import DATASETS
-
-        plan = [item for item in plan if DATASETS[item["dataset"]].fetch_semantics == "snapshot"]
+    plan = catchup["daily"]
+    derived_steps = catchup["derived"]
+    events_plan = catchup["events"]
     steps = [item["dataset"] for item in plan]
-    if not plan:
+    derived_names = [
+        step.removeprefix("derive_") for step in derived_steps if step.startswith("derive_")
+    ]
+    event_names = [name for item in events_plan for name in item["datasets"]]
+    all_targets = list(dict.fromkeys([*steps, *derived_names, *event_names]))
+    if not plan and not derived_steps and not events_plan:
         click.echo(_("No datasets lag as of {value}").format(value=anchor.isoformat()))
         emit_json(
             {"anchor": anchor.isoformat(), "repairs": repairs, "status": "nothing_stale"},
@@ -562,61 +789,97 @@ def _run_stale_only(
         return
     click.echo(
         _("Datasets lagging as of {value}: {value2}").format(
-            value=anchor.isoformat(), value2=", ".join(steps)
+            value=anchor.isoformat(), value2=", ".join(all_targets)
         ),
         err=True,
     )
-    # Run same-day snapshot-only feeds in an earlier wave. A large intraday or
-    # historical sweep can still run in parallel with peers of its own class,
-    # but it cannot delay the finite snapshot capture window.
-    urgent = [item["dataset"] for item in plan if item["priority"] == 0]
-    deferred = [item["dataset"] for item in plan if item["priority"] != 0]
-    waves: list[WaveConfig] = []
-    if urgent:
-        waves.append(WaveConfig(name="stale:snapshot", parallel=True, steps=urgent))
-    if deferred:
-        waves.append(WaveConfig(name="stale:deferred", parallel=True, steps=deferred))
-    waves.append(WaveConfig(name="stale:compact", parallel=True, steps=["compact"]))
-    # Repaired bars must reach the same derived outputs as the scheduled group.
-    # Otherwise a successful core retry leaves factors/industry indexes behind.
-    derived_steps = list(
-        dict.fromkeys(
-            step
-            for name, group in getattr(cfg, "schedule_groups", {}).items()
-            if (groups is None or name in groups) and set(steps).intersection(group.steps)
-            for step in group.steps
-            if step.startswith("derive_")
+
+    daily_result: dict | None = None
+    effective_backfill = False
+    if plan or derived_steps:
+        # Run same-day snapshot-only feeds in an earlier wave. A large intraday or
+        # historical sweep can still run in parallel with peers of its own class,
+        # but it cannot delay the finite snapshot capture window.
+        urgent = [item["dataset"] for item in plan if item["priority"] == 0]
+        deferred = [item["dataset"] for item in plan if item["priority"] != 0]
+        waves: list[WaveConfig] = []
+        if urgent:
+            waves.append(WaveConfig(name="stale:snapshot", parallel=True, steps=urgent))
+        if deferred:
+            waves.append(WaveConfig(name="stale:deferred", parallel=True, steps=deferred))
+        if plan:
+            waves.append(WaveConfig(name="stale:compact", parallel=True, steps=["compact"]))
+        if derived_steps:
+            waves.append(WaveConfig(name="stale:derive", parallel=False, steps=derived_steps))
+        # ``--backfill`` is a historical replay mode, but a stale-only retry must
+        # still capture snapshot-only feeds on today's window. Never pass the
+        # replay flag when that urgent class is present; otherwise the step would
+        # correctly reject the call as an attempt to manufacture PIT values.
+        effective_backfill = bool(backfill and not urgent)
+        try:
+            daily_result = engine.run_job(
+                "daily:stale",
+                # ``trade_date`` can be a weekend/holiday supplied by a timer.
+                # Fetches and snapshot markers must use the same executable
+                # trading-day anchor that produced the stale plan.
+                trade_date=anchor,
+                waves=waves,
+                backfill=effective_backfill,
+            )
+        except RunLockError as exc:
+            raise click.ClickException(str(exc)) from exc
+    events_results: list[dict] = []
+    for item in events_plan:
+        group_name = item["group"]
+        try:
+            ev_result = _run_events_job(
+                cfg, engine, trade_date, group_name, datasets=item["datasets"]
+            )
+        except RunLockError as exc:
+            click.echo(_("Event streams: skipped ({exc})").format(exc=exc), err=True)
+            ev_result = {"status": "skipped", "reason_code": "locked", "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — keep trying remaining stale event groups
+            click.echo(
+                _("Event streams: {name}: {exc}").format(name=type(exc).__name__, exc=exc),
+                err=True,
+            )
+            ev_result = {"status": "failed", "error": str(exc)}
+        events_results.append({"group": group_name, **ev_result})
+        click.echo(
+            _("Event streams: {status}").format(status=ev_result["status"]),
+            err=True,
         )
+    results = ([daily_result] if daily_result is not None else []) + events_results
+    statuses = {result["status"] for result in results}
+    exit_code = max(
+        _run_status_exit_code(result["status"], result.get("reason_code")) for result in results
     )
-    if derived_steps:
-        waves.append(WaveConfig(name="stale:derive", parallel=False, steps=derived_steps))
-    # ``--backfill`` is a historical replay mode, but a stale-only retry must
-    # still capture snapshot-only feeds on today's window. Never pass the
-    # replay flag when that urgent class is present; otherwise the step would
-    # correctly reject the call as an attempt to manufacture PIT values.
-    effective_backfill = bool(backfill and not urgent)
-    try:
-        result = engine.run_job(
-            "daily:stale",
-            # ``trade_date`` can be a weekend/holiday supplied by a timer.
-            # Fetches and snapshot markers must use the same executable
-            # trading-day anchor that produced the stale plan.
-            trade_date=anchor,
-            waves=waves,
-            backfill=effective_backfill,
-        )
-    except RunLockError as exc:
-        raise click.ClickException(str(exc)) from exc
-    payload = {
-        "run_id": result["run_id"],
-        "status": result["status"],
+    if exit_code:
+        overall_status = "failed"
+    elif "degraded" in statuses:
+        overall_status = "degraded"
+    elif "success" in statuses:
+        overall_status = "success"
+    else:
+        overall_status = results[0]["status"]
+
+    payload: dict = {
+        "run_id": (
+            daily_result["run_id"]
+            if daily_result is not None
+            else (events_results[0].get("run_id") if len(events_results) == 1 else None)
+        ),
+        "status": overall_status,
         "stale_plan": plan,
         "repairs": repairs,
         "backfill_applied": effective_backfill,
     }
+    if derived_steps:
+        payload["derived_steps"] = derived_steps
+    if events_results:
+        payload["events"] = events_results[0] if len(events_results) == 1 else events_results
     attach_revision_retention(cfg, payload)
     emit_json(payload, indent=2)
-    exit_code = _run_status_exit_code(result["status"], result.get("reason_code"))
     if exit_code:
         raise SystemExit(exit_code)
 
@@ -656,7 +919,15 @@ def datasets_outside_the_daily_waves(cfg) -> list[str]:
     "--groups",
     "stale_groups",
     default=None,
-    help=N_("Restrict --stale-only to these daily schedule groups (comma- or space-separated)."),
+    help=N_(
+        "Restrict --stale-only to these daily or event schedule groups (comma- or space-separated)."
+    ),
+)
+@click.option(
+    "--datasets",
+    "stale_datasets",
+    default=None,
+    help=N_("Restrict --stale-only to these datasets (comma- or space-separated)."),
 )
 @click.option(
     "--group",
@@ -754,6 +1025,7 @@ def run_daily(
     stale_only: bool,
     quiet: bool,
     stale_groups: str | None = None,
+    stale_datasets: str | None = None,
     snapshots_only: bool = False,
     core_only: bool = False,
     no_events: bool = False,
@@ -799,6 +1071,8 @@ def run_daily(
         raise click.ClickException(
             _("--groups only works with --stale-only; for an ordinary run use --group")
         )
+    if stale_datasets is not None and not stale_only:
+        raise click.ClickException(_("--datasets only works with --stale-only"))
     if all_groups and group_name:
         raise click.ClickException(_("--all-groups runs every schedule group; drop --group."))
     if core_only and (group_name or all_groups or stale_only):
@@ -829,6 +1103,11 @@ def run_daily(
             groups = set(stale_groups.replace(",", " ").split())
             if not groups:
                 raise click.ClickException(_("--groups cannot be empty"))
+        datasets = None
+        if stale_datasets is not None:
+            datasets = set(stale_datasets.replace(",", " ").split())
+            if not datasets:
+                raise click.ClickException(_("--datasets cannot be empty"))
         _run_stale_only(
             cfg,
             engine,
@@ -836,6 +1115,7 @@ def run_daily(
             backfill=backfill,
             repair_gaps=repair_gaps,
             groups=groups,
+            datasets=datasets,
             snapshots_only=snapshots_only,
         )
         return
@@ -1045,8 +1325,27 @@ def run_events(config_path: str, group_name: str | None, trade_date_str: str | N
         raise SystemExit(exit_code)
 
 
-def _run_events_job(cfg, engine: JobEngine, td: date | None, group_name: str | None = None) -> dict:
-    """One events run over *group_name*, or every events group in config order."""
+def _run_events_job(
+    cfg,
+    engine: JobEngine,
+    td: date | None,
+    group_name: str | None = None,
+    *,
+    datasets: list[str] | None = None,
+) -> dict:
+    """Run the configured event waves or catch up selected feeds under the event lock."""
+    if datasets is not None:
+        group = cfg.events_groups.get(group_name)
+        return engine.run_job(
+            f"events:{group_name}" if group_name else "events:stale",
+            trade_date=td,
+            waves=[
+                WaveConfig(
+                    name="events:stale", parallel=getattr(group, "parallel", True), steps=datasets
+                ),
+                WaveConfig(name="events:compact", parallel=False, steps=["compact"]),
+            ],
+        )
     selected = (
         [(group_name, cfg.events_groups[group_name])]
         if group_name

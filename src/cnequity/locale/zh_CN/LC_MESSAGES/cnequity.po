@@ -1021,6 +1021,14 @@ msgstr "--core-only 只跑核心骨架，不能和 --group / --all-groups / --st
 msgid "--dataset and --symbol must be given together"
 msgstr "--dataset 和 --symbol 必须一起给"
 
+#: cnequity/cli/run_cmds.py
+msgid "--datasets cannot be empty"
+msgstr "--datasets 不能为空"
+
+#: cnequity/cli/run_cmds.py
+msgid "--datasets only works with --stale-only"
+msgstr "--datasets 只能配合 --stale-only"
+
 #: cnequity/cli/demo.py
 msgid "--days must be >= 1"
 msgstr "--days 必须 >= 1"
@@ -3461,6 +3469,10 @@ msgstr "每个数据集保留最近 {keep} 代，删掉更早的 {removed} 代�
 msgid "Keys to probe, comma-separated; costly/challenged endpoints are probed only when listed explicitly."
 msgstr "要探测的 key，逗号分隔；高成本/已受挑战的端点仅在显式列出时探测。"
 
+#: cnequity/ops/catalog.py
+msgid "Lagging datasets"
+msgstr "落后的数据集"
+
 #: cnequity/cli/schedule_cmds.py
 msgid "Lake catalog retention"
 msgstr "湖目录保留"
@@ -4433,10 +4445,6 @@ msgstr "demo 写完之后查询失败：{exc}"
 msgid "Querying the sample through the public API"
 msgstr "通过公开 API 查询样例"
 
-#: cnequity/ops/catalog.py
-msgid "Re-fetch only datasets still behind the last trading day. Optionally limit to schedule groups or to snapshots."
-msgstr "只重抓仍然落后于最后交易日的数据集。可限定调度组，或只重抓快照。"
-
 #: cnequity/cli/govern_cmds.py
 msgid ""
 "Re-hash every file in a snapshot and reconcile it with the manifest.\n"
@@ -4828,8 +4836,12 @@ msgid "Restore directory (absolute path)"
 msgstr "恢复目录（绝对路径）"
 
 #: cnequity/cli/run_cmds.py
-msgid "Restrict --stale-only to these daily schedule groups (comma- or space-separated)."
-msgstr "把 --stale-only 限定在这些 daily 调度组内（逗号或空格分隔）。"
+msgid "Restrict --stale-only to these daily or event schedule groups (comma- or space-separated)."
+msgstr "把 --stale-only 限定在这些日更或事件流调度组内（逗号或空格分隔）。"
+
+#: cnequity/cli/run_cmds.py
+msgid "Restrict --stale-only to these datasets (comma- or space-separated)."
+msgstr "把 --stale-only 限定在这些数据集内（逗号或空格分隔）。"
 
 #: cnequity/cli/repair_cmds.py
 msgid "Resume from the previous next_cursor (YEAR:SYMBOL); retry failures without a cursor."
@@ -6489,6 +6501,11 @@ msgstr "未知的源政策 {source!r}"
 
 #: cnequity/cli/run_cmds.py
 #, python-brace-format
+msgid "Unknown stale datasets: {value}"
+msgstr "未知的补抓数据集：{value}"
+
+#: cnequity/cli/run_cmds.py
+#, python-brace-format
 msgid "Unknown stale schedule groups: {value}"
 msgstr "未知的 stale 调度组：{value}"
 
@@ -6501,6 +6518,10 @@ msgstr "无法识别的标的 {part}"
 #, python-brace-format
 msgid "Unscheduled steps ({count}) — installed but never run:"
 msgstr "未被调度的 step（{count}）—— 装了但从来不会跑："
+
+#: cnequity/ops/catalog.py
+msgid "Update lagging daily datasets and event streams, and recompute lagging derived datasets."
+msgstr "更新落后的日更数据和事件流，并重算落后的派生数据。"
 
 #: cnequity/cli/schedule_cmds.py
 msgid "Update only these research packs' schedule groups, without event streams. Repeatable. Default: keep the current selection (every schedule group on a first install)."
@@ -6801,8 +6822,8 @@ msgid "With --full: gate only on quality errors; check schedule freshness separa
 msgstr "配合 --full：只按质量 error 判门禁；调度新鲜度请另外用 status 检查。"
 
 #: cnequity/cli/run_cmds.py
-msgid "With --groups set, the lake-wide --repair-gaps cannot be used"
-msgstr "限定了 --groups 就不能再用全湖范围的 --repair-gaps"
+msgid "With --groups or --datasets set, the lake-wide --repair-gaps cannot be used"
+msgstr "指定 --groups 或 --datasets 时，不能用 --repair-gaps 修补全湖缺口"
 
 #: cnequity/cli/quality_cmds.py
 msgid "With --runs: cutoff date YYYY-MM-DD (inclusive)."

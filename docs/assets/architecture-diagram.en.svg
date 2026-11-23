@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 744" role="img" aria-labelledby="title description" lang="en">
+  <title id="title">CNEquity architecture</title>
+  <desc id="description">CNEquity plans collection and derivation from lake coverage. Validated partitions can go through a publication gate before the lake engine atomically records files, revisions, and coverage answers. Readers resolve a snapshot and scan its immutable Parquet files.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#345578"/>
+    </marker>
+    <marker id="feedback-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#087568"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #14253b; }
+    .title { font-size: 36px; font-weight: 750; }
+    .section { font-size: 23px; font-weight: 700; }
+    .heading { font-size: 21px; font-weight: 700; }
+    .detail { font-size: 18px; fill: #42556e; }
+    .label { font-size: 16px; font-weight: 600; fill: #345578; }
+    .mono { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+    .card { fill: #fff; stroke-width: 1.4; }
+    .flow { fill: none; stroke: #345578; stroke-width: 2.6; marker-end: url(#arrow); }
+    .feedback { stroke: #087568; stroke-dasharray: 6 5; marker-end: url(#feedback-arrow); }
+    .feedback-label { fill: #087568; }
+  </style>
+
+  <rect width="1200" height="744" rx="24" fill="#f8fafc"/>
+  <text class="title" x="32" y="56">CNEquity architecture</text>
+  <text class="detail" x="34" y="85">Plan from coverage, publish atomically, and read local Parquet by snapshot.</text>
+
+  <rect x="28" y="108" width="1144" height="239" rx="16" fill="#edf4ff" stroke="#bfd4ef"/>
+  <text class="section mono" x="48" y="143" fill="#234f86">cnequity</text>
+  <text class="detail" x="1152" y="143" text-anchor="end">China-market package · Dataset contracts and research semantics</text>
+  <g class="card" stroke="#bfd4ef">
+    <rect x="48" y="166" width="268" height="159" rx="12"/>
+    <rect x="438" y="166" width="324" height="68" rx="12"/>
+    <rect x="438" y="256" width="324" height="69" rx="12"/>
+    <rect x="876" y="166" width="276" height="159" rx="12"/>
+  </g>
+  <path class="flow" d="M316 200H438"/>
+  <text class="label" x="377" y="190" text-anchor="middle">Staged data</text>
+  <path class="flow" d="M600 234V256"/>
+  <text class="heading" x="64" y="199">Orchestrate and collect</text>
+  <text class="detail" x="64" y="231">Init · daily · backfill · repair</text>
+  <text class="detail" x="64" y="259">Adapters · derived data</text>
+  <text class="detail" x="64" y="287">staging/ · batch retries</text>
+  <text class="heading" x="454" y="194">Checkout, merge, validation</text>
+  <text class="detail" x="454" y="219">Keys, types, and dataset rules</text>
+  <text class="heading" x="454" y="284">Publication gate (optional)</text>
+  <text class="detail" x="454" y="309">Rehearse on a catalog copy</text>
+  <text class="heading" x="892" y="196">Research and serving</text>
+  <text class="detail" x="892" y="223">Python · SQL · dashboard</text>
+  <text class="detail" x="892" y="248">Read-only MCP · Export</text>
+  <path d="M892 262H1136" stroke="#bfd4ef"/>
+  <text class="heading" x="892" y="288">Post-publication audit</text>
+  <text class="detail" x="892" y="312">Audit gate can fail the run</text>
+
+  <rect x="28" y="361" width="1144" height="157" rx="16" fill="#e9f6f1" stroke="#a8d7c8"/>
+  <text class="section mono" x="48" y="394" fill="#086759">equitylake_core</text>
+  <text class="detail" x="328" y="394">Market-neutral lake engine</text>
+  <g class="card" stroke="#a8d7c8">
+    <rect x="48" y="420" width="268" height="79" rx="12"/>
+    <rect x="438" y="420" width="324" height="79" rx="12"/>
+    <rect x="876" y="420" width="276" height="79" rx="12"/>
+  </g>
+  <path class="flow feedback" d="M285 420V325"/>
+  <text class="label feedback-label" x="297" y="357">Remaining gaps</text>
+  <path class="flow" d="M600 325V420"/>
+  <text class="label" x="612" y="357">Publishable changes</text>
+  <path class="flow" d="M1014 420V325"/>
+  <text class="label" x="1026" y="357">Scan Parquet</text>
+  <text class="heading" x="64" y="451">Coverage planner</text>
+  <text class="detail" x="64" y="479">Lake rows and _attempts</text>
+  <text class="heading" x="454" y="451">Atomic publish</text>
+  <text class="detail" x="454" y="479">Brief write lock · recheck revisions</text>
+  <text class="heading" x="892" y="451">Resolve snapshot files</text>
+  <text class="detail" x="892" y="479">Resolve the catalog file list</text>
+
+  <rect x="28" y="532" width="1144" height="184" rx="16" fill="#f0f3f8" stroke="#cad5e2"/>
+  <text class="section" x="48" y="568">Local data lake</text>
+  <g class="card" stroke="#cad5e2">
+    <rect x="254" y="588" width="396" height="103" rx="12"/>
+    <rect x="760" y="588" width="392" height="103" rx="12"/>
+  </g>
+  <path class="flow feedback" d="M270 588V546H195V499"/>
+  <path class="flow" d="M600 499V588"/>
+  <text class="label" x="612" y="562">One catalog transaction</text>
+  <path class="flow" d="M650 640H760"/>
+  <text class="label" x="705" y="629" text-anchor="middle">File registry</text>
+  <path class="flow" d="M1014 588V499"/>
+  <text class="label" x="1026" y="553">Registered files</text>
+  <text class="heading" x="270" y="619">DuckLake catalog</text>
+  <text class="detail mono" x="270" y="643">lake/catalog.sqlite</text>
+  <text class="detail" x="270" y="670">Snapshots · dataset revisions · _attempts</text>
+  <text class="heading" x="776" y="619">Immutable Parquet</text>
+  <text class="detail mono" x="776" y="643">lake/data/main/</text>
+  <text class="detail" x="776" y="670">Organized by dataset and partition</text>
+</svg>

@@ -57,7 +57,7 @@ _REVISION_FIELDS = (
 FORMAT_VERSION = 2
 #: Where a restore puts the data files it then publishes into the new catalog.
 _RESTORE_DIR = ".restore"
-#: The migrations that move a lake onto its catalog; a restore does them itself.
+#: Migrations satisfied by restoring a current-format snapshot onto its catalog.
 _STORAGE_MIGRATIONS = ("lake-catalog", "revision-records", "drop-generations")
 
 _SNAPSHOT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
@@ -2088,19 +2088,21 @@ class SnapshotStore:
         from cnequity.storage.catalog_migration import migrate_to_catalog
         from cnequity.storage.drop_generations import drop_generations
         from cnequity.storage.lake_record import record_migration
+        from cnequity.storage.legacy_datasets import adopt_legacy_datasets
         from cnequity.storage.revision_records import import_receipts
 
         config = replace(self.config, data_root=target)
         steps = {
             "lake-catalog": migrate_to_catalog,
             "revision-records": import_receipts,
+            "legacy-datasets": adopt_legacy_datasets,
             "drop-generations": drop_generations,
         }
-        for migration_id in _STORAGE_MIGRATIONS:
+        for migration_id, migrate in steps.items():
             if migration_id in (read_lake(config).get("migrations") or {}):
                 continue
             try:
-                report = steps[migration_id](config, apply=True)
+                report = migrate(config, apply=True)
             except Exception as exc:
                 raise RuntimeError(
                     f"restored to {target}, but moving it onto its lake catalog failed "

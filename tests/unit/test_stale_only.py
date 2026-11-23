@@ -133,7 +133,7 @@ def test_nothing_stale_is_a_clean_no_op(config, monkeypatch):
     _snapshot_capture(config, "economic_calendar", ANCHOR)
     _snapshot_capture(config, "share_unlock_schedule", ANCHOR)
     _snapshot_capture(config, "etf_profiles", ANCHOR)
-    monkeypatch.setattr("cnequity.cli.run_cmds.last_trading_day", lambda *_a, **_k: ANCHOR)
+    monkeypatch.setattr("cnequity.cli.run_cmds.current_anchor", lambda _cfg: ANCHOR)
 
     result = CliRunner().invoke(
         cli, ["run", "daily", "--stale-only", "--config", str(config.config_path)]
@@ -179,3 +179,81 @@ def test_scoped_retry_derives_core_outputs_after_compaction(config, monkeypatch)
         ["compact"],
         ["derive_adj_factors", "derive_industry_index"],
     ]
+
+
+@pytest.mark.parametrize(
+    ("selection", "configured_events", "expected"),
+    [
+        ("news_headlines", True, [("events:news", [["news_headlines"], ["compact"]])]),
+        ("news_headlines", False, [("events:stale", [["news_headlines"], ["compact"]])]),
+        ("daily_bars", True, [("daily:stale", [["daily_bars"], ["compact"]])]),
+        ("adj_factors", True, [("daily:stale", [["derive_adj_factors"]])]),
+        (
+            "daily_bars,adj_factors,news_headlines",
+            True,
+            [
+                ("daily:stale", [["daily_bars"], ["compact"], ["derive_adj_factors"]]),
+                ("events:news", [["news_headlines"], ["compact"]]),
+            ],
+        ),
+        ("index_bars", True, []),
+    ],
+)
+def test_explicit_stale_datasets_control_executed_steps(
+    config, monkeypatch, selection, configured_events, expected
+):
+    from cnequity.config import ScheduleGroup
+
+    config.best_effort_enabled = frozenset({"news_headlines", "flash_news_wire"})
+    config.schedule_groups = {
+        "core": ScheduleGroup(at="16:00", steps=["daily_bars", "compact", "derive_adj_factors"])
+    }
+    if configured_events:
+        config.events_groups = {
+            "news": ScheduleGroup(
+                at="21:00",
+                steps=["news_headlines", "flash_news_wire", "announcement_index", "compact"],
+            )
+        }
+    names = ["daily_bars", "adj_factors", "news_headlines", "announcement_index", "index_bars"]
+    marks = [BEHIND] * 4 + [ANCHOR]
+    rows = pl.DataFrame(
+        {
+            "dataset": names,
+            "has_data": [True] * len(names),
+            "watermarked": [True] * len(names),
+            "watermark": marks,
+            "coverage_end": marks,
+        }
+    )
+    monkeypatch.setattr("cnequity.cli.run_cmds._cfg", lambda _path: config)
+    monkeypatch.setattr("cnequity.query.reader.list_datasets", lambda **_kwargs: rows)
+    monkeypatch.setattr("cnequity.cli.run_cmds.last_trading_day", lambda *_a, **_k: ANCHOR)
+
+    weekend = date(2026, 8, 2)
+    jobs = []
+
+    class Engine:
+        def __init__(self, _config):
+            pass
+
+        def run_job(self, name, *, trade_date, waves, **_kwargs):
+            assert trade_date == (weekend if name.startswith("events:") else ANCHOR)
+            jobs.append((name, [wave.steps for wave in waves]))
+            return {"run_id": name, "status": "success"}
+
+    monkeypatch.setattr("cnequity.cli.run_cmds.JobEngine", Engine)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "run",
+            "daily",
+            "--stale-only",
+            "--trade-date",
+            weekend.isoformat(),
+            "--datasets",
+            selection,
+        ],
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert jobs == expected

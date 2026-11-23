@@ -450,7 +450,7 @@ def test_snapshot_fails_when_a_listed_file_changes_before_it_is_copied(tmp_path,
 
 
 def _legacy_snapshot(store: SnapshotStore, name: str, lake: Config, dataset: str) -> None:
-    """A snapshot as releases before 0.25.0 made it: the tree, and the generation behind it."""
+    """A snapshot as releases before 0.25.0 made it: the tree and any revision files."""
     from cnequity.domain.contracts import contract_fingerprint, dataset_contract
     from cnequity.storage.revisions import sha256_file
 
@@ -477,7 +477,8 @@ def _legacy_snapshot(store: SnapshotStore, name: str, lake: Config, dataset: str
     for path in sorted((lake.meta_root / "revisions").rglob("*")):
         if path.is_file():
             add(path, f"meta/{path.relative_to(lake.meta_root).as_posix()}", "meta")
-    state = json.loads((lake.meta_root / "state" / f"{dataset}.json").read_text())
+    state_path = lake.meta_root / "state" / f"{dataset}.json"
+    state = json.loads(state_path.read_text()) if state_path.is_file() else {}
     manifest = {
         "format": "cnequity.lake-snapshot",
         "format_version": 1,
@@ -522,6 +523,29 @@ def test_a_snapshot_made_before_0_25_restores_onto_a_catalog(tmp_path):
     # The generation layout is gone: the catalog holds the rows.
     assert not any((restored.data_root / "curated").rglob("*.parquet"))
     assert not (restored.meta_root / "revisions" / "data" / "daily_bars").exists()
+    assert _write_bars(restored, 11.0).revision == 2
+
+
+def test_pre_0_25_snapshot_restores_data_without_revision_pointers(tmp_path):
+    from polars.testing import assert_frame_equal
+
+    from cnequity.storage.lake_record import read_lake
+
+    old = Config(data_root=tmp_path / "old-lake")
+    frame = _bars(date(2024, 6, 18), {"600000.SH": 10.0})
+    folder = old.curated_root / "daily_bars" / "trade_date=2024-06"
+    folder.mkdir(parents=True)
+    frame.write_parquet(folder / "part-sample.parquet")
+    store = SnapshotStore(old, tmp_path / "snapshots")
+    _legacy_snapshot(store, "sample-024", old, "daily_bars")
+    assert store.verify("sample-024").passed
+
+    restored = replace(old, data_root=tmp_path / "restored")
+    store.restore("sample-024", restored.data_root)
+
+    assert_frame_equal(_load(restored).select(frame.columns), frame)
+    assert "legacy-datasets" in read_lake(restored)["migrations"]
+    assert not any(restored.curated_root.rglob("*.parquet"))
     assert _write_bars(restored, 11.0).revision == 2
 
 

@@ -1365,7 +1365,7 @@ def backfill_statement_gap_ths_official(
 ) -> dict:
     """Fill the 2016-2024 balance-sheet and cash-flow hole from the licensed peer.
 
-    Routing, not switching (ADR-0005): those primary keys hold no rows today, so
+    Routing, not switching: those primary keys hold no rows today, so
     nothing canonical is overwritten and no repair flag is needed. It still
     requires ``[sources.ths_official].backfill`` because it changes what the lake
     holds, and a lake with no key keeps its existing sources untouched.

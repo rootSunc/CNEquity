@@ -310,7 +310,7 @@ class Config:
     # friction is the point, because the cost is theirs to accept.
     trade_ticks_max_symbols: int = 200
     trade_ticks_fetch_workers: int = 4
-    # Futures and options (ADR-0013). Off by default and outside `cne init`:
+    # Futures and options. Off by default and outside `cne init`:
     # the equity lake does not pay for a family nobody asked for. `exchanges`
     # empty means every exchange this release can read.
     futures_enabled: bool = False

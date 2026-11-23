@@ -29,7 +29,6 @@ from collections import Counter
 from pathlib import Path
 
 from babel.messages.catalog import Catalog
-from babel.messages.extract import extract_from_dir
 from babel.messages.mofile import write_mo
 from babel.messages.pofile import read_po, write_po
 
@@ -67,22 +66,58 @@ def mo_path(language: str) -> Path:
 def extract() -> Catalog:
     """Every marked message in the package, keyed as `cnequity.i18n` looks it up."""
     template = Catalog(domain=DOMAIN, project="CNEquity")
-    for filename, _lineno, message, comments, context in extract_from_dir(
-        str(PACKAGE),
-        method_map=[("**.py", "python")],
-        keywords=KEYWORDS,
-        comment_tags=("i18n:",),
-        strip_comment_tags=True,
-    ):
-        template.add(
-            message,
-            locations=[(f"cnequity/{filename}", None)],
-            auto_comments=comments,
-            context=context,
-        )
+    for filename, message, context in marked_calls():
+        template.add(message, locations=[(f"cnequity/{filename}", None)], context=context)
     for filename, message in command_docstrings():
         template.add(message, locations=[(f"cnequity/{filename}", None)])
     return template
+
+
+def _call_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def marked_calls():
+    """`(file, message, context)` for each keyword call with literal arguments.
+
+    Parsed with `ast` rather than Babel's tokenizer: before Python 3.12 an
+    f-string is one token, so a tokenizer misses `_()` calls inside it and the
+    catalog would depend on the interpreter. Calls whose message arguments are
+    not all string literals are runtime lookups and are skipped.
+    """
+    for path in sorted(PACKAGE.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = _call_name(node.func)
+            if name not in KEYWORDS:
+                continue
+            spec = KEYWORDS[name] or (1,)
+            literals = [
+                arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
+                for arg in node.args
+            ]
+            context = None
+            parts: list[str] = []
+            for index in spec:
+                is_context = isinstance(index, tuple)
+                position = index[0] if is_context else index
+                value = literals[position - 1] if position <= len(literals) else None
+                if value is None:
+                    break
+                if is_context:
+                    context = value
+                else:
+                    parts.append(value)
+            else:
+                if parts and parts[0]:
+                    message = parts[0] if len(parts) == 1 else tuple(parts)
+                    yield path.relative_to(PACKAGE).as_posix(), message, context
 
 
 def _is_command_decorator(decorator: ast.expr) -> bool:

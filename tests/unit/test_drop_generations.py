@@ -54,6 +54,20 @@ def test_a_preview_deletes_nothing_and_apply_leaves_only_the_catalog(cfg):
     assert drop_generations(cfg, apply=True)["rows_changed"] == 0
 
 
+def test_a_synced_current_generation_reads_by_revision_after_drop_generations(cfg):
+    from cnequity.domain.datasets import DATASETS
+    from cnequity.serve.lake import LakeView
+
+    first = _store(cfg).current_pointer("daily_bars")["revision_id"]
+    drop_generations(cfg, apply=True)
+
+    assert not (cfg.meta_root / "revisions" / "data" / "daily_bars" / first).exists()
+    assert sorted(_pinned(cfg, first)["close"].to_list()) == [9.0, 10.0, 11.0]
+    assert LakeView(cfg)._session_days(DATASETS["daily_bars"]) == frozenset(
+        {date(2024, 1, 2), date(2024, 2, 1)}
+    )
+
+
 def test_a_held_generation_stays_with_its_receipt_and_reads_by_revision(cfg, monkeypatch):
     from cnequity.query import catalog_read
     from cnequity.query.parquet_scan import scan_parquet_root

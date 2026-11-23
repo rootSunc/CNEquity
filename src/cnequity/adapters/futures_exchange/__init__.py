@@ -1,4 +1,4 @@
-"""Official daily files of the domestic futures exchanges (ADR-0013).
+"""Official daily files of the domestic futures exchanges.
 
 Kept free of heavy imports: config validation reads ``SUPPORTED_EXCHANGES``.
 """

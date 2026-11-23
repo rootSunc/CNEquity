@@ -812,7 +812,7 @@ def test_compute_adj_factors_refreshes_corporate_action_symbol(adj_config, monke
 
 
 def test_compute_adj_factors_append_only_skips_existing_partitions(adj_config, monkeypatch):
-    """With a derived watermark, only new trade_dates are written (ADR-0004)."""
+    """With a derived watermark, only new trade_dates are written."""
     _write_factor_cache(adj_config, "600519.SH", date(2024, 6, 28), factor=0.5)
     # Seed derived watermark at 2024-06-28.
     seed = _derive(adj_config)

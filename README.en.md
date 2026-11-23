@@ -16,9 +16,9 @@ CNEquity is an open-source local data lake for China A-share market data: Shangh
 [中文](README.md) · [Documentation](https://rootsunc.github.io/CNEquity/en/) · [Dataset catalog](docs/en/datasets/catalog.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/rootSunc/CNEquity/releases)
 </div>
 
-![cne serve dashboard tour: China A-share lake status, coverage heatmap, daily-bar detail and quality audits](docs/assets/cne-serve-tour.gif)
+![cne serve dashboard tour showing the coverage heatmap, dataset search, daily-bar queries, and provenance](docs/assets/cne-serve-tour.gif)
 
-*A real recording of the `cne serve` dashboard.*
+*The `cne serve` dashboard running on an offline lake with synthetic sample data across layers L0–L9.*
 
 ## Why CNEquity
 
@@ -103,7 +103,7 @@ Minutes, trade snapshots, futures/options, and [best-effort](docs/en/datasets/ca
 
 ## Architecture
 
-![CNEquity architecture from multiple sources through ingestion and a local Parquet lake catalog to research consumers](docs/assets/architecture-diagram-v3.png)
+![CNEquity architecture showing the market package, the lake engine, coverage planning, atomic publication, and snapshot reads](docs/assets/architecture-diagram.en.svg)
 
 The system is split into the market-neutral lake engine `equitylake_core` (the DuckLake catalog `lake/catalog.sqlite`, partition-per-file Parquet storage, lock-free partition checkout and merge, the coverage ledger `_attempts`, and gap planning) and the China-market package `cnequity` (L0–L9 contracts, source adapters, three-tier quality gates, research query semantics, and the CLI). External tools that read raw Parquet files directly can export standalone files with `cne storage export`. See the [design](docs/en/architecture/overview.md) for details.
 

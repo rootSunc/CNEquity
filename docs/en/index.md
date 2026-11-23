@@ -7,7 +7,7 @@ flowchart LR
     A["Init / daily / backfill"] --> B["Stage & validate"]
     B --> C["Atomic catalog publish"]
     C --> D["Python / SQL / dashboard / MCP"]
-    C -. "Record coverage & empty answers (_attempts)" .-> E["Coverage planner"]
+    C -. "Published rows and _attempts" .-> E["Coverage planner"]
     E -. "Resume remaining gaps" .-> A
 ```
 

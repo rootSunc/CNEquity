@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,7 +77,6 @@ def copy_catalog(source: str | Path, target: str | Path) -> None:
     or clean up files through the copy: the files are not its own.
     """
     import sqlite3
-    from contextlib import closing
     from urllib.parse import quote
 
     source, target = Path(source), Path(target)
@@ -130,6 +129,20 @@ def quote_identifier(name: str) -> str:
 
 def quote_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def catalog_needs_initialization(path: Path) -> bool:
+    """A missing database or an empty SQLite file from an interrupted first open."""
+    if not path.exists():
+        return True
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=0)) as con:
+            return con.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone() is None
+    except sqlite3.Error:
+        # Only a known empty database can be initialized. Attach will report
+        # any problem opening an existing catalog.
+        return False
 
 
 def _enable_wal(path: Path) -> None:
@@ -235,12 +248,9 @@ class Catalog:
         self._format: str | None = None
         self._records: dict[tuple[str, str], tuple[int, Any]] = {}
         catalog_path = self.root / CATALOG_FILE
-        created = not catalog_path.exists()
-        if created:
-            if not create:
-                raise CatalogError(f"no lake catalog at {catalog_path}")
-            (self.root / DATA_DIR).mkdir(parents=True, exist_ok=True)
-            _enable_wal(catalog_path)
+        if not create and not catalog_path.exists():
+            raise CatalogError(f"no lake catalog at {catalog_path}")
+        created = create and catalog_needs_initialization(catalog_path)
         self.con = duckdb.connect()
         try:
             # Instants read back in UTC whatever zone this machine is in, and a
@@ -257,6 +267,9 @@ class Catalog:
             if max_temp_directory_size is not None:
                 self.con.execute("SET max_temp_directory_size = ?", [max_temp_directory_size])
             ensure_extensions(self.con, local_dir=extension_dir, mirror=extension_mirror)
+            if created:
+                (self.root / DATA_DIR).mkdir(parents=True, exist_ok=True)
+                _enable_wal(catalog_path)
             # The catalog stores the absolute data path it was created with.
             # Always resolve files under this catalog's own directory instead,
             # so a lake that was moved, restored or cloned reads its own files

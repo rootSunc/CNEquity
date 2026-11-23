@@ -9,7 +9,7 @@ statistical table rather than from a republisher, for a reason measured on
 2026-04 while the PBOC had published through 2026-06. Summing the PBOC series
 for 2026-01..04 gives 154,500 — exactly the 15.45万亿 the PBOC states in prose —
 while the republisher's copy summed to 154,507. The intermediary was propagating
-a superseded vintage, so it is not a safe backup either (ADR-0003: a backup must
+a superseded vintage, so it is not a safe backup either (a backup must
 not silently write canonical).
 
 The table is an Excel attachment, not prose: bilingual headers, an explicit

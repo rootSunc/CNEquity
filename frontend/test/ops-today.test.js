@@ -85,7 +85,7 @@ test("the timeline places today's jobs by lane and marks the scheduled times", (
   assert.doesNotMatch(svg, /23:00<\/text>.*备份/);
 });
 
-test("stale datasets sort by lag and leave the backfill scope unset", () => {
+test("stale datasets sort by lag and link to a catch-up scoped to each dataset", () => {
   const rows = staleRows(
     { anchor: "2026-11-06", stale_datasets: ["news_headlines", "valuation_metrics"] },
     [
@@ -94,8 +94,8 @@ test("stale datasets sort by lag and leave the backfill scope unset", () => {
     ],
   );
   assert.deepEqual(rows.map((row) => [row.dataset, row.lag]), [["valuation_metrics", 3], ["news_headlines", 2]]);
-  assert.equal(rows[0].action.href, "#/ops?op=backfill.run&dataset=valuation_metrics");
-  assert.equal(rows[1].action.op, "daily.stale");
+  assert.equal(rows[0].action.href, "#/ops?op=daily.stale&datasets=valuation_metrics");
+  assert.equal(rows[1].action.href, "#/ops?op=daily.stale&datasets=news_headlines");
   const html = staleHtml(rows, "2026-11-06", () => true);
   assert.match(html, /落后 3 天/);
   assert.match(html, /水位 2026-11-03/);

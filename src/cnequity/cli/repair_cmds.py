@@ -244,7 +244,8 @@ def upgrade(config_path: str, apply: bool, no_backup: bool, as_json: bool):
                 )
             )
     for check in plan["checks"]:
-        say(f"  [{_('ok') if check.ok else _('BLOCKED')}] {check.detail}")
+        label = _("ok") if check.ok else _("BLOCKED")
+        say(f"  [{label}] {check.detail}")
     if not plan["ready"]:
         say(_("Nothing was changed. Fix what is blocked above, then run this again."))
         if as_json:

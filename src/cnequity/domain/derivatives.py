@@ -1,6 +1,6 @@
 """Futures and option contract identity, and the lake's counting basis for them.
 
-Derivatives live beside the equity universe rather than inside it (ADR-0013).
+Derivatives live beside the equity universe rather than inside it.
 The equity symbol grammar in ``domain/symbols.py`` is deliberately not widened:
 nothing here imports it, and nothing there knows these suffixes.
 

@@ -79,7 +79,11 @@ def on_files(files, config):
     from mkdocs.structure.files import File
 
     assets = Path(__file__).resolve().parent / "assets"
-    for path in sorted(assets.glob("cne-serve-sample.*.png")):
+    shared_assets = [
+        *assets.glob("architecture-diagram.*.svg"),
+        *assets.glob("cne-serve-sample.*.png"),
+    ]
+    for path in sorted(shared_assets):
         files.append(
             File(
                 f"assets/{path.name}",

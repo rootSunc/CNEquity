@@ -5,7 +5,7 @@ dayQuotes``, ``publicweb/quotesdata/dayQuotesCh.html``, the export form —
 answers with HTTP 412 and a JavaScript challenge, from browser and plain user
 agents alike (measured 2026-09-25, overseas egress). The project does not work
 around access controls, so DCE rows come from Sina, declared as a
-supplementary source with its gaps written down (ADR-0013).
+supplementary source with its gaps written down.
 
 Two Sina endpoints, measured 2026-09-25:
 

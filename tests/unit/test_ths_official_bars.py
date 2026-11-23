@@ -94,7 +94,7 @@ def test_duplicate_dates_across_windows_collapse():
 
 
 def test_the_repair_defaults_to_a_dry_run(tmp_path):
-    """Switching an existing canonical owner is never automatic (ADR-0005)."""
+    """Switching an existing canonical owner is never automatic."""
     import inspect
 
     from cnequity.steps.bars import repair_deep_history_ths_official

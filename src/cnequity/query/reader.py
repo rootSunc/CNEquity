@@ -974,9 +974,7 @@ def _apply_adjustment(
     if not factors.is_empty():
         factors = factors.filter(pl.col("adjust_type") == STORED_ADJUST_TYPE)
         if factors.is_empty():
-            raise ReaderError(
-                f"adj_factors has no {STORED_ADJUST_TYPE!r} rows; re-run derive (ADR-0004)"
-            )
+            raise ReaderError(f"adj_factors has no {STORED_ADJUST_TYPE!r} rows; re-run derive")
     # Historical factor diagnostics are advisory and belong to the read
     # receipt (load_with_receipt, MCP, serve), not to every adjusted load.
     # The window can also sit entirely inside a suspension whose last factor
@@ -1099,7 +1097,7 @@ def load(
         ``qfq`` or ``hfq`` — joins stored ``hfq`` ``adj_factors`` and adds
         ``adj_open`` … ``adj_close`` plus ``adj_is_exact``. ``qfq`` is derived
         at query time as ``hfq_factor / hfq_anchor`` (anchor = latest bar date
-        in scope); only ``hfq`` is persisted (ADR-0004).
+        in scope); only ``hfq`` is persisted.
         ``total_return`` (``daily_bars`` only) — hfq plus fund cash
         distributions reinvested at the close before each ex-date. A stock's
         hfq already reinvests dividends, so stocks read the same as ``hfq``;

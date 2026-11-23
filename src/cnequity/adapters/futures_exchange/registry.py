@@ -65,7 +65,7 @@ READERS: dict[str, ExchangeReader] = {
         reference_history=False,
     ),
     # DCE's own endpoints answer with an access challenge, so the default route
-    # is Sina: futures only, contracts listed from mid-2018 (ADR-0013).
+    # is Sina: futures only, contracts listed from mid-2018.
     "DCE": ExchangeReader(
         exchange="DCE",
         first_futures_session=dce_futures.FIRST_SESSION,

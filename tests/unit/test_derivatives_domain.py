@@ -1,4 +1,4 @@
-"""Contract identity and counting basis for futures and options (ADR-0013)."""
+"""Contract identity and counting basis for futures and options."""
 
 from __future__ import annotations
 

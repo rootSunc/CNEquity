@@ -35,7 +35,7 @@ PIT_MODES: tuple[PitMode, ...] = ("strict", "best_effort")
 # it read as the strongest possible claim on 29 of the 30 datasets carrying it
 # -- ``daily_bars`` included. A consumer reading the contract had no way to
 # tell "this source is exact as of that date" from "nobody has thought about
-# it for this table". See ADR-0011.
+# it for this table".
 PIT_QUALITIES: tuple[PitQuality, ...] = (
     "strict",
     "reconstructed",

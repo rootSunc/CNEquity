@@ -63,6 +63,7 @@ from equitylake_core.catalog import (
     CATALOG_FILE,
     REVISIONS_TABLE,
     Catalog,
+    catalog_needs_initialization,
     quote_identifier,
     quote_literal,
 )
@@ -574,7 +575,7 @@ class LakeWrite:
         self.root = Path(config.staging_root) / CHECKOUT_DIR / run_id
         self.store = RevisionStore(config.meta_root, config.curated_root, config.derived_root)
         root = lake_root(config)
-        if not (root / CATALOG_FILE).exists():
+        if catalog_needs_initialization(root / CATALOG_FILE):
             # The first write to a lake that publishes into its catalog creates it.
             with Catalog(root, create=True) as created:
                 prepare_record_tables(created)

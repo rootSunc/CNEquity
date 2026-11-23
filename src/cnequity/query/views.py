@@ -592,7 +592,7 @@ def _define_views(
 
     _define_central_bank_rates(con)
 
-    # Adjusted bars per ADR-0004: only hfq factors are stored.
+    # Adjusted bars: only hfq factors are stored.
     #   hfq price = raw * factor
     #   qfq price = raw * factor / anchor   (anchor = latest factor on a bar date)
     # The static view is anchored to each symbol's latest bar in the lake.  A

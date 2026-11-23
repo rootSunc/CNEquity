@@ -866,7 +866,7 @@ def _beijing_status(
       the SH/SZ rate roughly a dozen BJ halts were stored as normal
       sessions.
 
-    Not a source switch under ADR-0003: there is no competing answer to
+    Not a source switch: there is no competing answer to
     override, only two columns the primary leaves unserved by construction.
     Best effort in both directions — a board that fails, or a walk too
     incomplete to read an absence, leaves EastMoney's rows exactly as they

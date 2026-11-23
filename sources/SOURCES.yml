@@ -74,7 +74,7 @@ sources:
     rate_limit: unknown
     retained_payloads: unknown
     legal_status: unknown
-    notes: 期货交易所自行发布的逐合约日行情与合约参数文件，是 futures_bars、option_bars 与两张合约表的主源（ADR-0013）。
+    notes: 期货交易所自行发布的逐合约日行情与合约参数文件，是 futures_bars、option_bars 与两张合约表的主源。
       当前读取上期所（含上期能源品种）日行情与 ContractBaseInfo JSON、郑商所 datadaily 旧存档与 DFSStaticFiles 日行情及参考 XML、
       广期所 interfacesWebTiDayQuotes 与合约信息接口、中金所 sj/hqsj/rtj 日行情 CSV 与 sj/jycs 交易参数 XML。与 exchange 标签（沪深北证券交易所）是不同的
       发布方，命名也刻意避开 exchange_ 前缀，避免按前缀继承那一条政策。大商所官网所有端点返回 412 JS 挑战（2026-09-26 经大陆出口复测依旧），本项目

@@ -175,7 +175,8 @@ def usage_cmd(config_path: str, as_json: bool):
     if not report["clone_aware"]:
         say(_("Shared clone blocks cannot be seen here; what deletion frees may be less."))
     say("")
-    say(f"{_('Part'):<36} {_('Files'):>10} {_('On disk'):>12} {_('Frees at least'):>15}")
+    part, files, on_disk, frees = _("Part"), _("Files"), _("On disk"), _("Frees at least")
+    say(f"{part:<36} {files:>10} {on_disk:>12} {frees:>15}")
     small = [p for p in report["parts"].values() if p["allocated_bytes"] < _SMALL_PART]
     for name, part in report["parts"].items():
         if part["allocated_bytes"] >= _SMALL_PART:

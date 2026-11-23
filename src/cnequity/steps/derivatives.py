@@ -3,7 +3,7 @@
 Partial exchanges publish with degraded findings. Downloaded content is not a
 completion claim until the receipt matches committed rows. Old failures remain
 in durable debt beyond the three-session reconciliation tail. Contract builders
-consume their own run's validated staging plus canonical bars (ADR-0017).
+consume their own run's validated staging plus canonical bars.
 """
 
 from __future__ import annotations

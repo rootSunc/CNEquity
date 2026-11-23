@@ -167,7 +167,7 @@ COMMODITY_BARS_SCHEMA = {
     "fetched_at": FETCHED_AT_DTYPE,
 }
 
-# Futures and options (ADR-0013). Contracts live in their own tables rather
+# Futures and options. Contracts live in their own tables rather
 # than in `instruments`: CZCE's one-digit year codes repeat every decade, and
 # every equity path assumes a SH/SZ/BJ symbol. Symbols are the canonical form
 # in `domain/derivatives.py` (CU2511.SHF, TA2601.CZC, IO2512C4000.CFE);

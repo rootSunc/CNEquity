@@ -286,6 +286,48 @@ def test_sample_then_demo_with_defaults_do_not_collide(tmp_path, monkeypatch):
     assert seen["config_out"] == Path("configs/cnequity.demo.toml")
 
 
+@pytest.mark.parametrize("empty_catalog", [False, True])
+def test_sample_init_can_retry_after_an_extension_failure(tmp_path, monkeypatch, empty_catalog):
+    from cnequity.query import load
+    from equitylake_core.catalog import CATALOG_FILE, _enable_wal
+    from equitylake_core.extensions import ExtensionUnavailableError
+
+    root = tmp_path / "sample"
+    catalog_path = root / "lake" / CATALOG_FILE
+    if empty_catalog:
+        catalog_path.parent.mkdir(parents=True)
+        _enable_wal(catalog_path)
+    args = [
+        "init",
+        "--profile",
+        "sample",
+        "--days",
+        "2",
+        "--symbols",
+        "600519.SH",
+        "--data-root",
+        str(root),
+        "--config-out",
+        str(tmp_path / "sample.toml"),
+    ]
+
+    def unavailable(*args, **kwargs):
+        raise ExtensionUnavailableError("ducklake", [("official", "offline")])
+
+    with monkeypatch.context() as patch:
+        patch.setattr("equitylake_core.catalog.ensure_extensions", unavailable)
+        failed = CliRunner().invoke(cli, args)
+    assert failed.exit_code == 1
+    assert "EQUITYLAKE_EXTENSION_DIR" in failed.output
+    assert catalog_path.exists() == empty_catalog
+
+    retry = CliRunner().invoke(cli, args)
+    assert retry.exit_code == 0, (retry.output, retry.exception)
+    bars = load("daily_bars", data_root=root)
+    assert bars.height == 2
+    assert bars["source"].unique().to_list() == ["mock"]
+
+
 def test_demo_refuses_a_data_root_holding_the_sample(tmp_path, monkeypatch):
     from cnequity.cli.demo import run_demo, run_sample_demo
 

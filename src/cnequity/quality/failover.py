@@ -1,4 +1,4 @@
-"""Failover helpers — backup snapshots + tip routing support (ADR-0003 / 0005)."""
+"""Failover helpers — backup snapshots + tip routing support."""
 
 from __future__ import annotations
 

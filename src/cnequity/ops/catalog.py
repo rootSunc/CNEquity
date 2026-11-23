@@ -231,19 +231,26 @@ def _ops() -> tuple[OpSpec, ...]:
             id="daily.stale",
             title=N_("Catch up lagging datasets"),
             summary=N_(
-                "Re-fetch only datasets still behind the last trading day. Optionally limit to schedule groups or to snapshots."
+                "Update lagging daily datasets and event streams, and recompute lagging derived datasets."
             ),
             group=N_("Catch-up and recovery"),
             command=("run", "daily"),
             fixed=("--stale-only",),
             params=(
+                Param(
+                    "datasets",
+                    "multi",
+                    N_("Lagging datasets"),
+                    flag="--datasets",
+                    choice_source="catchup_datasets",
+                ),
                 Param("snapshots_only", "bool", N_("Snapshots only"), flag="--snapshots-only"),
                 Param(
                     "groups",
                     "multi",
                     N_("Limit to schedule groups"),
                     flag="--groups",
-                    choice_source="schedule_groups",
+                    choice_source="stale_groups",
                     help=N_("Leave empty for all enabled groups."),
                 ),
             ),
@@ -615,6 +622,22 @@ def backfill_datasets(config) -> list[str]:
     return sorted(names)
 
 
+def catchup_datasets(config) -> list[str]:
+    """Datasets a stale catch-up can run: enabled fetch steps and derived datasets with a step."""
+    import cnequity.steps  # noqa: F401 — registration is the import
+    from cnequity.domain.datasets import DATASETS, is_dataset_enabled
+    from cnequity.orchestrator.registry import STEP_REGISTRY
+
+    names = []
+    for name, dataset in DATASETS.items():
+        if name == "flash_news_wire" or not is_dataset_enabled(name, config):
+            continue
+        step = f"derive_{name}" if dataset.layer == "derived" else name
+        if step in STEP_REGISTRY:
+            names.append(name)
+    return sorted(names)
+
+
 def choices_for(source: str, config) -> list[str]:
     if config is None:
         return []
@@ -622,6 +645,13 @@ def choices_for(source: str, config) -> list[str]:
         return sorted(getattr(config, "schedule_groups", {}) or {})
     if source == "events_groups":
         return sorted(getattr(config, "events_groups", {}) or {})
+    if source == "stale_groups":
+        return sorted(
+            set(getattr(config, "schedule_groups", {}) or {})
+            | set(getattr(config, "events_groups", {}) or {})
+        )
+    if source == "catchup_datasets":
+        return catchup_datasets(config)
     if source == "datasets":
         return backfill_datasets(config)
     if source == "derive":
@@ -970,6 +1000,19 @@ def acknowledgements(spec: OpSpec, level: str) -> list[dict[str, str]]:
 
 
 def lock_class_for(spec: OpSpec, params: dict[str, Any], config) -> str:
+    if spec.id == "daily.stale" and params["datasets"]:
+        from cnequity.domain.datasets import DATASETS
+
+        event_steps = {step for group in config.events_groups.values() for step in group.steps}
+        event_targets = [
+            name
+            for name in params["datasets"]
+            if name in event_steps or DATASETS[name].session_scope == "calendar"
+        ]
+        if len(event_targets) == len(params["datasets"]):
+            return "ingest-events"
+        if event_targets:
+            return "lake-write"
     if spec.lock_class != "run":
         return spec.lock_class
     from cnequity.orchestrator.engine import job_family
@@ -1066,9 +1109,7 @@ def prepared(spec: OpSpec, raw: dict[str, Any] | None, config) -> dict[str, Any]
         "params": params,
         "argv": argv,
         "command": command_line(argv),
-        "lock_class": (
-            spec.lock_class if spec.lock_class != "run" else lock_class_for(spec, params, config)
-        ),
+        "lock_class": lock_class_for(spec, params, config),
         "confirm": level,
         "acknowledgements": acknowledgements(spec, level),
         "target_run_id": target_run_id(spec, params),

@@ -1,4 +1,4 @@
-# Pull requests and main.
+# Pull requests, main, and release validation branches.
 #
 # The offline suite takes long enough that running it on every claimed
 # interpreter is mostly wait. It runs on the floor (3.11) and the newest
@@ -19,7 +19,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'codex/release-*-validation']
   pull_request:
 
 permissions:

@@ -451,8 +451,11 @@ class RevisionStore:
         generation = self._safe_meta_path(
             self._safe_relative(record.generation_path), label="generation"
         )
-        in_catalog = record.metadata.get("storage") == STORAGE_CATALOG or (
-            (dataset, record.revision_id) in records.archived()
+        current = records.current.get(dataset)
+        in_catalog = (
+            (current is not None and current.revision_id == record.revision_id)
+            or record.metadata.get("storage") == STORAGE_CATALOG
+            or (dataset, record.revision_id) in records.archived()
         )
         if not generation.is_dir() and not in_catalog:
             raise RevisionConsistencyError(f"revision generation is missing: {generation}")

@@ -487,7 +487,7 @@ def fetch_daily_bars_parallel(
     """Fetch daily bars in symbol batches; each batch is recorded in manifest.
 
     Returns ``had_error`` / ``failed_symbols`` instead of raising so callers can
-    route tip gaps through EastMoney clist (ADR-0005) before failing the step.
+    route tip gaps through EastMoney clist before failing the step.
     While it runs, each "still working" heartbeat also names the batch that has
     been quiet longest, so a stuck sweep says where it is stuck.
     """

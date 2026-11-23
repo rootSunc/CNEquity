@@ -4,6 +4,8 @@
 
 在空的工作目录运行以下命令。系统要求见[安装](installation.md)。
 
+首次建湖时，DuckDB 会下载 `ducklake` 和 `sqlite_scanner` 扩展。完全离线时，先把与 DuckDB 版本和平台匹配的 `.duckdb_extension` 文件放进同一个目录，再将 `EQUITYLAKE_EXTENSION_DIR` 设置为该目录。缺扩展导致初始化失败时，补齐扩展后可在原目录重跑。
+
 ```bash
 python -m pip install cnequity
 cne init --profile sample

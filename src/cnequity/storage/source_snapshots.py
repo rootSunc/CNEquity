@@ -1,4 +1,4 @@
-"""Backup-source snapshot storage (ADR-0003 — never write to curated)."""
+"""Backup-source snapshot storage (never write to curated)."""
 
 from __future__ import annotations
 

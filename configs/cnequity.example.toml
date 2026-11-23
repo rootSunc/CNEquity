@@ -396,7 +396,7 @@ max_symbols = 200
 fetch_workers = 4
 
 [futures]
-# Per-contract futures and option chains (ADR-0013): futures_contracts,
+# Per-contract futures and option chains: futures_contracts,
 # option_contracts, futures_bars, option_bars. Off by default and not part of
 # `cne init`; nothing here costs anything until you turn it on.
 #

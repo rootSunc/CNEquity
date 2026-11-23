@@ -867,13 +867,65 @@ test("a form resolves its choices after opening and ignores a reply after closin
   assert.equal(ctx.node("ops-form").innerHTML, "");
 });
 
+test("the catch-up drawer preselects displayed datasets and previews only the checked scope", async (t) => {
+  const ctx = page(t);
+  const full = {
+    id: "daily.stale", title: "补抓落后的数据集", available: true,
+    stale_datasets: ["news_headlines", "valuation_metrics"],
+    params: [{ name: "datasets", kind: "multi", label: "落后的数据集", choices: ["daily_bars", "news_headlines", "valuation_metrics"] }],
+  };
+  const base = consoleApi({
+    csrf_token: "csrf",
+    mode: { ops_enabled: true },
+    operations: [{ ...full, choices_deferred: true }],
+    occupancy: { hints: [], lake_empty: false, schedule: {} },
+  });
+  const requests = [];
+  ctx.api = async (path, options) => {
+    if (path === "/api/ops/operations/daily.stale") return full;
+    if (path === "/api/ops/preview") {
+      requests.push(JSON.parse(options.body));
+      return { command: "cne run daily --stale-only --datasets news_headlines" };
+    }
+    return base(path);
+  };
+  const oldCSS = globalThis.CSS;
+  globalThis.CSS = { escape: (value) => value };
+  t.after(() => { globalThis.CSS = oldCSS; });
+  const form = ctx.node("ops-fields");
+  const html = () => ctx.node("ops-form").innerHTML;
+  form.querySelector = () => ({ type: "checkbox" });
+  form.querySelectorAll = () => [...html().matchAll(/name="datasets" value="([^"]+)" checked/g)]
+    .map((match) => ({ value: match[1] }));
+  form.addEventListener = () => {};
+
+  globalThis.location.hash = "#/ops?op=daily.stale";
+  await renderOps(ctx);
+  assert.deepEqual(requests.at(-1), { op: "daily.stale", params: { datasets: ["news_headlines", "valuation_metrics"] } });
+
+  globalThis.location.hash = "#/ops?op=daily.stale&datasets=news_headlines";
+  await renderOps(ctx);
+  assert.match(html(), /新闻标题/);
+  assert.match(html(), /value="news_headlines" checked/);
+  assert.match(html(), /value="valuation_metrics" >/);
+  assert.doesNotMatch(html(), /value="daily_bars"/);
+  assert.deepEqual(requests.at(-1), { op: "daily.stale", params: { datasets: ["news_headlines"] } });
+
+  form.querySelectorAll = () => [];
+  await form.onsubmit({ preventDefault() {} });
+  assert.equal(requests.length, 2);
+});
+
 test("the today panel shows gaps, freshness, and run history with one schedule read", async (t) => {
   const ctx = page(t);
   const html = capture(ctx);
   const base = consoleApi({
     csrf_token: "csrf",
     mode: { ops_enabled: true, label: "可发起取数" },
-    operations: [{ id: "backfill.run", title: "回填一个数据集", summary: "回填", available: true, params: [] }],
+    operations: [
+      { id: "backfill.run", title: "回填一个数据集", summary: "回填", available: true, params: [] },
+      { id: "daily.stale", title: "补抓落后", available: true, params: [] },
+    ],
     occupancy: { hints: [], lake_empty: false, lake_write_locked: true, schedule: { daily_run_at: "17:30" }, sources: { push2_paused: true, breakers: [] } },
   });
   const asked = [];
@@ -902,7 +954,7 @@ test("the today panel shows gaps, freshness, and run history with one schedule r
   assert.doesNotMatch(html(), /可以启动下一条命令/);
   assert.match(ctx.node("ops-coverage-body").innerHTML, /start=2026-11-04&amp;end=2026-11-04/);
   assert.match(ctx.node("ops-stale-body").innerHTML, /落后 3 天/);
-  assert.match(ctx.node("ops-stale-body").innerHTML, /op=backfill.run&amp;dataset=valuation_metrics|op=backfill.run&dataset=valuation_metrics/);
+  assert.match(ctx.node("ops-stale-body").innerHTML, /op=daily.stale&amp;datasets=valuation_metrics/);
   assert.match(ctx.node("ops-matrix-body").innerHTML, /href="#\/runs\/r1"/);
   assert.match(ctx.node("ops-timeline-body").innerHTML, /<svg class="ops-timeline-svg"/);
 

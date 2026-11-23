@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -165,6 +165,55 @@ def test_ops_status_defers_backup_choices_and_full_descriptions_reuse_them(confi
     full = client.get("/api/ops").json()
     assert next(card for card in full["operations"] if card["id"] == single["id"]) == single
     assert len(calls) == 2
+
+
+def test_stale_drawer_lists_displayed_datasets_and_previews_the_selected_scope(config, monkeypatch):
+    import polars as pl
+    from tests.catalog_seed import publish_rows
+
+    from cnequity.orchestrator.run_lock import DAILY_INGESTION_LOCK, run_lock
+
+    config.best_effort_enabled = frozenset({"news_headlines"})
+    anchor = date(2026, 11, 6)
+    behind = date(2026, 11, 3)
+    monkeypatch.setattr("cnequity.serve.lake.current_anchor", lambda _cfg: anchor)
+    publish_rows(
+        config, "news_headlines", pl.DataFrame({"publish_date": [behind], "news_id": ["1"]})
+    )
+    publish_rows(
+        config, "valuation_metrics", pl.DataFrame({"trade_date": [behind], "symbol": ["600519.SH"]})
+    )
+    publish_rows(
+        config, "daily_bars", pl.DataFrame({"trade_date": [anchor], "symbol": ["600519.SH"]})
+    )
+
+    client = _client(config)
+    health = client.get("/api/health").json()
+    card = client.get("/api/ops/operations/daily.stale").json()
+    assert (
+        card["stale_datasets"]
+        == health["stale_datasets"]
+        == ["news_headlines", "valuation_metrics"]
+    )
+    choices = next(param["choices"] for param in card["params"] if param["name"] == "datasets")
+    assert set(card["stale_datasets"]) <= set(choices)
+
+    headers = _csrf(client)
+    for name in card["stale_datasets"]:
+        detail = client.get(f"/api/datasets/{name}").json()
+        command = next(command for command in detail["commands"] if command["op"] == "daily.stale")
+        assert command["params"] == {"datasets": [name]}
+        preview = _preview(client, headers, command["op"], command["params"])
+        assert preview["launch_token"]
+        assert f"--stale-only --datasets {name} " in preview["command"]
+
+    with run_lock(config.meta_root, DAILY_INGESTION_LOCK):
+        assert _preview(client, headers, "daily.stale", {"datasets": ["news_headlines"]})[
+            "launch_token"
+        ]
+        assert not _preview(client, headers, "daily.stale", {"datasets": ["valuation_metrics"]})[
+            "launch_token"
+        ]
 
 
 def test_click_walk_is_isolated_from_the_helper_above(config):

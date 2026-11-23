@@ -239,7 +239,7 @@ function opNote(opId) {
     "events.run": tr("周末和节假日也可以。公告和资讯不在研究包日更里。", "Weekends and holidays are included. Announcements and news are not part of a research-pack daily update."),
     "backfill.run": tr("一段历史走回填。一次只能回填一个数据集。交易状态这类快照漏掉的日子，改一个旧日期也补不回来。", "A history range is a backfill, one dataset at a time. A missed snapshot day, such as trading status, cannot be recovered by picking an old date."),
     "derive.run": tr("从已发布的数据重算。全量会重写分区。15 / 30 / 60 分钟线也在这里入湖。", "Recompute from published data. A full range rewrites partitions. 15/30/60-minute bars are stored from here too."),
-    "daily.stale": tr("没有日期。只重抓仍然落后的数据集。快照漏掉的当天只在当天再试。", "No date. Refetch only datasets that are still stale. A missed snapshot day can only be retried that day."),
+    "daily.stale": tr("启动时会重新检查勾选项的时效。快照只能补抓源当前提供的数据。", "The selected datasets are checked again at launch. Snapshots can only capture the data currently available from the source."),
   }[opId] || "";
 }
 
@@ -795,7 +795,7 @@ function canRunSuggestion(home, { op, params }) {
   if (!home.mode.ops_enabled || home.mode.config_drift) return false;
   const card = home.operations.find((entry) => entry.id === op && entry.available);
   return Boolean(card && (card.params || []).every(({ name, choices }) => (
-    !Array.isArray(choices) || params[name] === undefined || choices.includes(params[name])
+    !Array.isArray(choices) || params[name] === undefined || [params[name]].flat().every((value) => choices.includes(value))
   )));
 }
 
@@ -943,6 +943,9 @@ async function loadDatasetFacts(ctx) {
  */
 export function fieldProblems(opId, params, { today = "", facts = new Map() } = {}) {
   const problems = [];
+  if (opId === "daily.stale" && !params.datasets?.length) {
+    problems.push({ blocking: true, text: tr("请选择至少一个要补抓的数据集。", "Select at least one dataset to catch up.") });
+  }
   const start = String(params.start || "");
   const end = String(params.end || "");
   const date = String(params.trade_date || "");
@@ -1000,6 +1003,14 @@ export function mountOpForm(ctx, home, opId, preset, host, current, options = {}
   let facts = datasetFacts || new Map();
   const problemsOf = (params) => fieldProblems(card.id, params, { today, facts });
   const blocked = (params) => problemsOf(params).some((item) => item.blocking);
+  const previewTarget = document.getElementById("ops-preview");
+  const formIsCurrent = () => current === generation && document.getElementById("ops-fields") === form;
+  let previewRevision = 0;
+  const runPreview = () => {
+    if (!formIsCurrent()) return;
+    const revision = ++previewRevision;
+    return previewCard(ctx, home, card, readForm(form, card.params), current, previewTarget, () => formIsCurrent() && revision === previewRevision);
+  };
   const paintProblems = (params) => {
     const list = document.getElementById("ops-field-problems");
     if (!list) return;
@@ -1009,6 +1020,8 @@ export function mountOpForm(ctx, home, opId, preset, host, current, options = {}
   };
   if (form && typeof form.querySelector === "function") {
     const paintSession = () => {
+      previewRevision++;
+      if (previewTarget) previewTarget.innerHTML = "";
       const params = readForm(form, card.params);
       const text = formNoteText(home.occupancy.schedule || {}, card.id, params);
       paintProblems(params);
@@ -1031,15 +1044,15 @@ export function mountOpForm(ctx, home, opId, preset, host, current, options = {}
     form.onsubmit = async (event) => {
       event.preventDefault();
       if (typeof form.querySelector === "function" && blocked(readForm(form, card.params))) return;
-      await preview(ctx, home, card, current);
+      if (typeof form.querySelector === "function") await runPreview();
     };
-    if (home.mode.ops_enabled) autoPreview(form, card.params, () => preview(ctx, home, card, current), blocked);
+    if (home.mode.ops_enabled) autoPreview(form, card.params, runPreview, blocked);
   }
   return card;
 }
 
 async function showForm(ctx, home, opId, preset, current) {
-  const card = home.operations.find((item) => item.id === opId);
+  let card = home.operations.find((item) => item.id === opId);
   const host = document.getElementById("ops-form");
   if (!card || !host || current !== generation) return;
   const revision = ++drawerRevision;
@@ -1047,12 +1060,12 @@ async function showForm(ctx, home, opId, preset, current) {
     document.querySelectorAll("details.ops-more[open]").forEach((menu) => { menu.open = false; });
   }
   setDrawer(true);
-  if (card.choices_deferred) {
-    const paintMessage = (message, failed = false) => {
-      host.innerHTML = `<section class="surface-panel report-panel ops-form"><div class="panel-header"><h2>${ctx.esc(pick(card, "title"))}</h2><button class="button button-ghost ops-drawer-close" id="ops-drawer-close" type="button">${tr("关闭", "Close")}</button></div><p class="panel-note${failed ? " err" : ""}" role="status">${ctx.esc(message)}</p></section>`;
-      const close = document.getElementById("ops-drawer-close");
-      if (close) close.onclick = closeDrawer;
-    };
+  const paintMessage = (message, failed = false) => {
+    host.innerHTML = `<section class="surface-panel report-panel ops-form"><div class="panel-header"><h2>${ctx.esc(pick(card, "title"))}</h2><button class="button button-ghost ops-drawer-close" id="ops-drawer-close" type="button">${tr("关闭", "Close")}</button></div><p class="panel-note${failed ? " err" : ""}" role="status">${ctx.esc(message)}</p></section>`;
+    const close = document.getElementById("ops-drawer-close");
+    if (close) close.onclick = closeDrawer;
+  };
+  if (card.choices_deferred || (opId === "daily.stale" && !card.stale_datasets)) {
     paintMessage(tr("正在读取可选项…", "Loading choices…"));
     try {
       const fullCard = await ctx.api(`/api/ops/operations/${encodeURIComponent(opId)}`);
@@ -1061,24 +1074,37 @@ async function showForm(ctx, home, opId, preset, current) {
         paintMessage(pick(fullCard, "unavailable_reason"), true);
         return;
       }
-      home = { ...home, operations: [fullCard] };
+      card = fullCard;
     } catch (err) {
       if (current === generation && revision === drawerRevision) paintMessage(err.message, true);
       return;
     }
   }
-  mountOpForm(ctx, home, opId, preset, host, current, { drawer: true, scroll: false });
+  if (opId === "daily.stale") {
+    const spec = card.params.find(({ name }) => name === "datasets");
+    const allowed = new Set(spec?.choices || []);
+    const stale = (card.stale_datasets || []).filter((name) => allowed.has(name));
+    const selected = preset.get("datasets")?.split(",").filter(Boolean) ?? stale;
+    if (selected.some((name) => !allowed.has(name))) {
+      paintMessage(tr("所选数据集当前无法补抓。", "The selected datasets cannot be caught up right now."), true);
+      return;
+    }
+    const choices = [...new Set([...stale, ...selected])];
+    if (!choices.length) {
+      paintMessage(tr("没有落后的数据集。", "No dataset is stale."));
+      return;
+    }
+    preset = new URLSearchParams(preset);
+    preset.set("datasets", selected.join(","));
+    card = { ...card, params: card.params.map((param) => param === spec ? { ...spec, choices } : param) };
+  }
+  mountOpForm(ctx, { ...home, operations: [card] }, opId, preset, host, current, { drawer: true, scroll: false });
   const close = document.getElementById("ops-drawer-close");
   if (close) close.onclick = closeDrawer;
   host.querySelector?.("input, select, button")?.focus?.();
 }
 
-async function preview(ctx, home, card, current) {
-  const params = readForm(document.getElementById("ops-fields"), card.params);
-  await previewCard(ctx, home, card, params, current, document.getElementById("ops-preview"));
-}
-
-async function previewCard(ctx, home, card, params, current, target) {
+async function previewCard(ctx, home, card, params, current, target, isCurrent = () => true) {
   const { api, esc } = ctx;
   if (!target) return;
   target.innerHTML = `<p class="panel-note">${tr("正在预览…", "Previewing…")}</p>`;
@@ -1093,10 +1119,10 @@ async function previewCard(ctx, home, card, params, current, target) {
       body: JSON.stringify({ op: card.id, params }),
     });
   } catch (err) {
-    if (current === generation) target.innerHTML = `<p class="panel-note err">${esc(err.message)}</p>`;
+    if (current === generation && isCurrent()) target.innerHTML = `<p class="panel-note err">${esc(err.message)}</p>`;
     return;
   }
-  if (current !== generation) return;
+  if (current !== generation || !isCurrent()) return;
   const blockers = (body.blockers || []).map((item) => `<li>${esc(item)}</li>`).join("");
   const hints = (body.hints || []).map((item) => `<li>${esc(item)}</li>`).join("");
   const ackItems = body.acknowledgements || [];

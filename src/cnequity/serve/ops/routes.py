@@ -254,9 +254,12 @@ def install_ops_routes(app: FastAPI, *, mutations: bool) -> None:
         check_browser(request, mutation=False, scope="ops")
         state = request.app.state
         try:
-            return describe(state.config, setup=state.setup, op_id=op_id)[0]
+            card = describe(state.config, setup=state.setup, op_id=op_id)[0]
         except UnknownOp as exc:
             raise _fail(exc) from exc
+        if op_id == "daily.stale" and state.view is not None:
+            card["stale_datasets"] = state.view.stale_datasets()
+        return card
 
     @app.get("/api/ops/readiness")
     def ops_readiness(request: Request) -> dict:

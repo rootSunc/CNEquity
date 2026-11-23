@@ -318,7 +318,7 @@ function overviewSummary(h, ops) {
       tone: "stale",
       title: tr(`${h.stale_datasets.length} 个数据集落后`, `${h.stale_datasets.length} stale ${h.stale_datasets.length === 1 ? "dataset" : "datasets"}`),
       chips: h.stale_datasets.map((d) => dsLink(d)).join(""),
-      action: { href: "#/ops?op=daily.stale", label: tr("补抓落后数据集", "Catch up stale datasets") },
+      action: { href: opsHref("daily.stale", { datasets: h.stale_datasets }), label: tr("补抓落后数据集", "Catch up stale datasets") },
     });
   }
   let primaryHref = "#/quality";
@@ -363,7 +363,7 @@ function overviewSummary(h, ops) {
     primaryHref = "#/ops?op=init.start";
     primaryLabel = tr("初始化数据湖", "Initialize the lake");
   } else if (h.stale_datasets.length) {
-    primaryHref = "#/ops?op=daily.stale";
+    primaryHref = opsHref("daily.stale", { datasets: h.stale_datasets });
     primaryLabel = tr("补抓落后数据集", "Catch up stale datasets");
   }
   if (h.empty_required.length) {
@@ -549,8 +549,8 @@ function datasetActionButtons(dataset) {
 }
 
 function datasetQuick(d) {
+  if (d.freshness === "stale") return `<a class="table-link" href="${opsHref("daily.stale", { datasets: [d.dataset] })}">${tr("补抓", "Catch up")}</a>`;
   if (d.history_mode === "derived") return `<a class="table-link" href="${opsHref("derive.run", { name: d.dataset })}">${tr("重算", "Recompute")}</a>`;
-  if (d.freshness === "stale") return `<a class="table-link" href="${opsHref("daily.stale")}">${tr("补抓", "Catch up")}</a>`;
   if (!d.has_data && d.history_mode !== "snapshot_only") return `<a class="table-link" href="${opsHref("backfill.run", { dataset: d.dataset })}">${tr("回填", "Backfill")}</a>`;
   return `<a class="table-link" href="#/dataset/${encodeURIComponent(d.dataset)}/data">${tr("数据", "Data")}</a>`;
 }
@@ -558,7 +558,8 @@ function datasetQuick(d) {
 async function renderDatasets(view) {
   const datasets = await api("/api/datasets");
   if (!view.live()) return;
-  const stale = datasets.filter((d) => d.freshness === "stale").length;
+  const lagging = datasets.filter((d) => d.freshness === "stale").map((d) => d.dataset);
+  const stale = lagging.length;
   const removed = datasets.some((d) => d.freshness === "removed");
   const filters = [
     ["all", tr("全部", "All")],
@@ -577,7 +578,7 @@ async function renderDatasets(view) {
       )
       .join("");
   setPage(`<section class="page-heading"><div class="heading-row"><h1>${tr("数据集", "Datasets")}</h1>
-    ${stale ? `<div class="action-row"><a class="button button-primary" href="#/ops?op=daily.stale">${tr(`补抓 ${stale} 个落后数据集`, `Catch up ${stale} stale ${stale === 1 ? "dataset" : "datasets"}`)}</a></div>` : ""}</div></section>
+    ${stale ? `<div class="action-row"><a class="button button-primary" href="${opsHref("daily.stale", { datasets: lagging })}">${tr(`补抓 ${stale} 个落后数据集`, `Catch up ${stale} stale ${stale === 1 ? "dataset" : "datasets"}`)}</a></div>` : ""}</div></section>
     <section class="surface-panel catalog-panel"><div class="catalog-toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><input id="dataset-search" type="search" placeholder="${tr("搜索数据集、层级或语义", "Search name, layer, or semantics")}" autocomplete="off"></label><span class="panel-meta" id="dataset-count">${datasets.length} ${tr("个结果", "results")}</span></div>
     <div class="catalog-filters" id="dataset-filters">${filters.map(([id, label]) => `<button type="button" class="button ${id === "all" ? "button-primary" : "button-ghost"}" data-freshness="${id}">${label}</button>`).join("")}</div>
     <div class="catalog-filters" id="dataset-tiers"><button type="button" class="button button-primary" data-tier="all">${tr("全部层级", "All layers")}</button>${tiers.map((code) => `<button type="button" class="button button-ghost" data-tier="${esc(code)}">${esc(tierText(code))}</button>`).join("")}</div>

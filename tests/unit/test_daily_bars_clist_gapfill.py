@@ -1,4 +1,4 @@
-"""TDX tip gaps use clist first, then bounded kline recovery (ADR-0005)."""
+"""TDX tip gaps use clist first, then bounded kline recovery."""
 
 from __future__ import annotations
 

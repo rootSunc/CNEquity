@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 744" role="img" aria-labelledby="title description" lang="zh-CN">
+  <title id="title">CNEquity 架构</title>
+  <desc id="description">CNEquity 市场层按覆盖缺口采集和派生数据。候选分区经校验及可选发布门后，由湖引擎原子提交文件登记、修订与覆盖答复。读取时由目录定位快照和文件，再扫描不可变的 Parquet。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#345578"/>
+    </marker>
+    <marker id="feedback-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#087568"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #14253b; }
+    .title { font-size: 36px; font-weight: 750; }
+    .section { font-size: 23px; font-weight: 700; }
+    .heading { font-size: 21px; font-weight: 700; }
+    .detail { font-size: 18px; fill: #42556e; }
+    .label { font-size: 16px; font-weight: 600; fill: #345578; }
+    .mono { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+    .card { fill: #fff; stroke-width: 1.4; }
+    .flow { fill: none; stroke: #345578; stroke-width: 2.6; marker-end: url(#arrow); }
+    .feedback { stroke: #087568; stroke-dasharray: 6 5; marker-end: url(#feedback-arrow); }
+    .feedback-label { fill: #087568; }
+  </style>
+
+  <rect width="1200" height="744" rx="24" fill="#f8fafc"/>
+  <text class="title" x="32" y="56">CNEquity 架构</text>
+  <text class="detail" x="34" y="85">按覆盖缺口采集，经湖目录原子发布，按快照读取本地 Parquet。</text>
+
+  <rect x="28" y="108" width="1144" height="239" rx="16" fill="#edf4ff" stroke="#bfd4ef"/>
+  <text class="section mono" x="48" y="143" fill="#234f86">cnequity</text>
+  <text class="detail" x="1152" y="143" text-anchor="end">中国市场层 · 数据集契约与研究口径</text>
+  <g class="card" stroke="#bfd4ef">
+    <rect x="48" y="166" width="268" height="159" rx="12"/>
+    <rect x="438" y="166" width="324" height="68" rx="12"/>
+    <rect x="438" y="256" width="324" height="69" rx="12"/>
+    <rect x="876" y="166" width="276" height="159" rx="12"/>
+  </g>
+  <path class="flow" d="M316 200H438"/>
+  <text class="label" x="377" y="190" text-anchor="middle">候选批次</text>
+  <path class="flow" d="M600 234V256"/>
+  <text class="heading" x="64" y="199">任务编排、采集与派生</text>
+  <text class="detail" x="64" y="231">初始化 · 日更 · 回补 · 修复</text>
+  <text class="detail" x="64" y="259">来源适配器 · 派生任务</text>
+  <text class="detail" x="64" y="287">暂存 staging/ · 批次续跑</text>
+  <text class="heading" x="454" y="194">分区检出、合并与校验</text>
+  <text class="detail" x="454" y="219">主键、字段类型和数据集规则</text>
+  <text class="heading" x="454" y="284">发布门（可选）</text>
+  <text class="detail" x="454" y="309">在目录副本预演，对照已发布基线</text>
+  <text class="heading" x="892" y="196">研究与服务</text>
+  <text class="detail" x="892" y="223">Python · SQL · 控制台</text>
+  <text class="detail" x="892" y="248">只读 MCP · Parquet 导出</text>
+  <path d="M892 262H1136" stroke="#bfd4ef"/>
+  <text class="heading" x="892" y="288">发布后审计</text>
+  <text class="detail" x="892" y="312">审计门可将运行标为失败</text>
+
+  <rect x="28" y="361" width="1144" height="157" rx="16" fill="#e9f6f1" stroke="#a8d7c8"/>
+  <text class="section mono" x="48" y="394" fill="#086759">equitylake_core</text>
+  <text class="detail" x="328" y="394">市场无关的湖引擎</text>
+  <g class="card" stroke="#a8d7c8">
+    <rect x="48" y="420" width="268" height="79" rx="12"/>
+    <rect x="438" y="420" width="324" height="79" rx="12"/>
+    <rect x="876" y="420" width="276" height="79" rx="12"/>
+  </g>
+  <path class="flow feedback" d="M285 420V325"/>
+  <text class="label feedback-label" x="297" y="357">待补范围</text>
+  <path class="flow" d="M600 325V420"/>
+  <text class="label" x="612" y="357">允许发布</text>
+  <path class="flow" d="M1014 420V325"/>
+  <text class="label" x="1026" y="357">扫描 Parquet</text>
+  <text class="heading" x="64" y="451">覆盖缺口规划</text>
+  <text class="detail" x="64" y="479">结合已发布行与 _attempts</text>
+  <text class="heading" x="454" y="451">原子发布</text>
+  <text class="detail" x="454" y="479">短时写锁 · 提交前复核修订</text>
+  <text class="heading" x="892" y="451">按快照定位文件</text>
+  <text class="detail" x="892" y="479">解析目录登记的文件清单</text>
+
+  <rect x="28" y="532" width="1144" height="184" rx="16" fill="#f0f3f8" stroke="#cad5e2"/>
+  <text class="section" x="48" y="568">本地数据湖</text>
+  <g class="card" stroke="#cad5e2">
+    <rect x="254" y="588" width="396" height="103" rx="12"/>
+    <rect x="760" y="588" width="392" height="103" rx="12"/>
+  </g>
+  <path class="flow feedback" d="M270 588V546H195V499"/>
+  <path class="flow" d="M600 499V588"/>
+  <text class="label" x="612" y="562">单个目录事务</text>
+  <path class="flow" d="M650 640H760"/>
+  <text class="label" x="705" y="629" text-anchor="middle">文件登记</text>
+  <path class="flow" d="M1014 588V499"/>
+  <text class="label" x="1026" y="553">已登记文件</text>
+  <text class="heading" x="270" y="619">DuckLake 湖目录</text>
+  <text class="detail mono" x="270" y="643">lake/catalog.sqlite</text>
+  <text class="detail" x="270" y="670">快照 · 数据集修订 · _attempts</text>
+  <text class="heading" x="776" y="619">不可变 Parquet</text>
+  <text class="detail mono" x="776" y="643">lake/data/main/</text>
+  <text class="detail" x="776" y="670">按数据集与分区存放</text>
+</svg>

@@ -166,7 +166,7 @@ def test_every_dataset_lands_in_exactly_one_tier():
 
 
 def test_futures_and_options_are_one_tier_beside_the_equity_spine():
-    """ADR-0013: derivatives sit beside the equity universe, so they are one family."""
+    """Derivatives sit beside the equity universe, so they are one family."""
     family = {
         "futures_contracts",
         "option_contracts",

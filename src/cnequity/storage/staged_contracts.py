@@ -7,8 +7,7 @@ to ``_quarantine`` and its staged part rewritten without it; the committed
 value for that key, if any, stays, and the date is recorded as missing so a
 later fetch can fill it. A row that is real but incomplete is reported.
 
-Only Beijing daily bars have contracts so far (see
-``private/designs/bj-market-profile-2026-09-30.md``, phase 2).
+Only Beijing daily bars have contracts so far.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 # Publish a tag that is already on main.
 #
-# Main has already run the suite. This workflow checks what a green checkout
+# A publishing tag requires successful CI on main for the same commit. This workflow checks what a green checkout
 # does not: the tag matches the package version, the dataset contract is the
 # one being shipped, a clean install of the built wheel can open the offline
 # sample, and that install has no known vulnerable dependency. PyPI and the
@@ -25,6 +25,9 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,6 +67,21 @@ jobs:
             echo "release tag must point to a commit already on main" >&2
             exit 1
           }
+
+      - name: Verify CI passed for this commit on main
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conclusion=$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f branch=main -f event=push -f head_sha="$GITHUB_SHA" -F per_page=1 \
+            --jq '.workflow_runs[0].conclusion // "missing or pending"')
+          if [[ "$conclusion" != success ]]; then
+            echo "CI on main for $GITHUB_SHA must pass before publishing (current conclusion: $conclusion)" >&2
+            exit 1
+          fi
 
       - name: Validate the dataset contract
         run: |

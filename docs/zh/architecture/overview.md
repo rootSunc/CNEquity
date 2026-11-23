@@ -24,23 +24,7 @@ CNEquity 是一个在本机运行的中国市场研究数据湖：持续从公�
 
 ## 组成 {#components}
 
-```mermaid
-flowchart LR
-    subgraph cnequity["cnequity（A 股市场层）"]
-        A["来源适配器"] --> B["采集步骤"]
-        G["查询层：Python / SQL / 控制台 / MCP"]
-    end
-    subgraph core["equitylake_core（市场无关湖引擎）"]
-        B --> C["staging 暂存"]
-        C --> D["取出分区与写入校验"]
-        D --> E["发布门预演（可选）"]
-        E --> F["湖目录原子提交 (lake/catalog.sqlite)"]
-        F --> H["覆盖台账 (_attempts)"]
-        H --> I["缺口规划器"]
-        I -. "驱动待补范围" .-> B
-    end
-    F --> G
-```
+![CNEquity 架构图，展示市场层、湖引擎，以及覆盖规划、原子发布和快照读取的关系](../assets/architecture-diagram.zh.svg)
 
 代码分两层。`equitylake_core` 是与市场无关的湖引擎：湖目录、写入、覆盖台账、规划器和锁，不引用任何市场代码。`cnequity` 是 A 股市场包：数据集登记、来源适配器、调度、质量检查、查询口径和 CLI。
 

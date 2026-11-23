@@ -4,6 +4,8 @@
 
 Run these commands in an empty working directory. See [installation](installation.md) for system requirements.
 
+DuckDB downloads `ducklake` and `sqlite_scanner` the first time you build a lake. For a fully offline setup, place the `.duckdb_extension` files for your DuckDB version and platform in one directory and set `EQUITYLAKE_EXTENSION_DIR` to that directory. If initialization fails because an extension is missing, supply it and rerun the command in the same directory.
+
 ```bash
 python -m pip install cnequity
 cne init --profile sample

@@ -59,8 +59,8 @@ DEFAULT_COMPATIBILITY = "additive"
 # Research-use classification, orthogonal to ``Layer`` (which is a storage
 # location). L0 is the reference spine everything joins on and L8 the risk
 # overlay; the ordering is roughly "how far from the price series". L9 holds
-# futures and options, which live beside the equity universe rather than in it
-# (ADR-0013), so their contracts, bars and derivations are managed as one family.
+# futures and options, which live beside the equity universe rather than in it,
+# so their contracts, bars and derivations are managed as one family.
 Tier = Literal["L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"]
 
 TIERS: tuple[Tier, ...] = ("L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9")
@@ -1508,7 +1508,7 @@ _SPECS = [
         required=False,
         max_staleness_days=2,
     ),
-    # Futures and options (ADR-0013). Off unless `[futures] enabled`; see
+    # Futures and options. Off unless `[futures] enabled`; see
     # `is_dataset_enabled`. The contract tables are rebuilt from what the
     # exchanges' daily files showed plus their reference files, so they carry
     # no watermark of their own.
@@ -1517,7 +1517,7 @@ _SPECS = [
         enable_switch="futures",
         support="optional",
         value_rules=ValueRules(non_null=("exchange", "exchange_code", "product", "dates_basis")),
-        # Derivatives (ADR-0013): prices in each product's quote unit, counts on
+        # Derivatives: prices in each product's quote unit, counts on
         # one side of the trade whatever the exchange published, turnover in 元.
         unit_contract={"multiplier": "quote_unit_to_CNY", "tick_size": "source_native"},
         primary_source="futures_exchange",
@@ -1579,7 +1579,7 @@ _SPECS = [
         backfill_refetch="derivatives",
         partial_rows=True,
         primary_source="futures_exchange",
-        # DCE, from mid-2018: no turnover, no-trade sessions absent (ADR-0013).
+        # DCE, from mid-2018: no turnover, no-trade sessions absent.
         supplementary_sources=("sina",),
         tier="L9",
         partition_col="trade_date",

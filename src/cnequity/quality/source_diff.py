@@ -1,4 +1,4 @@
-"""Cross-source diff engine — primary curated vs backup snapshots (ADR-0003)."""
+"""Cross-source diff engine — primary curated vs backup snapshots."""
 
 from __future__ import annotations
 

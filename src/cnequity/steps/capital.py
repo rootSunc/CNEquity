@@ -373,8 +373,8 @@ _MARGIN_EMPTY_GRACE_DAYS = {"eastmoney": 2, "exchange": 5}
 def _margin_source(config: Config) -> str:
     """The configured `margin_trading` vendor, refusing a disabled one.
 
-    Falling back on its own would be exactly the automatic source switching
-    ADR-0003 rules out: the choice of who owns these rows is an operator's, and
+    Falling back on its own would be automatic source switching:
+    the choice of who owns these rows is an operator's, and
     a silent switch would change what `source` means without anyone deciding it.
     """
     source = getattr(config, "margin_trading_source", "exchange")

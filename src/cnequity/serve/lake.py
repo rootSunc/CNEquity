@@ -630,6 +630,13 @@ class LakeView:
 
     # --- endpoint payloads -------------------------------------------------
 
+    def stale_datasets(self, rows: list[dict] | None = None) -> list[str]:
+        return sorted(
+            row["dataset"]
+            for row in (self._rows() if rows is None else rows)
+            if row["freshness"] == "stale"
+        )
+
     def health(self) -> dict:
         rows = self._rows()
         findings = self._health_findings()
@@ -659,7 +666,7 @@ class LakeView:
             "retired": counts.get("retired", 0),
             "removed": counts.get("removed", 0),
             "sample": counts.get("sample", 0),
-            "stale_datasets": sorted(r["dataset"] for r in rows if r["freshness"] == "stale"),
+            "stale_datasets": self.stale_datasets(rows),
             # Empty is not automatically a problem: an opt-in dataset nobody
             # enabled and a required one that failed look identical on disk.
             "empty_optional": sorted(
@@ -883,10 +890,19 @@ class LakeView:
     ) -> list[dict]:
         """What to run, and why. ``op`` is set only when the operations page can start it."""
         from cnequity.domain.datasets import RESAMPLED_MINUTE_DATASETS
-        from cnequity.ops.catalog import DERIVE_NAMES, backfill_datasets
+        from cnequity.ops.catalog import DERIVE_NAMES, backfill_datasets, catchup_datasets
 
         name = spec.name
         out: list[dict] = []
+        if freshness == "stale" and name in catchup_datasets(self.config):
+            out.append(
+                {
+                    "cmd": f"cne run daily --stale-only --datasets {name}",
+                    "why": _("re-fetch datasets that still lag"),
+                    "op": "daily.stale",
+                    "params": {"datasets": [name]},
+                }
+            )
         if spec.layer == "derived":
             why = _("recomputed from published data")
             if name in RESAMPLED_MINUTE_DATASETS:
@@ -922,15 +938,6 @@ class LakeView:
                 command["op"] = "backfill.run"
                 command["params"] = params
             out.append(command)
-        if freshness == "stale":
-            out.append(
-                {
-                    "cmd": "cne run daily --stale-only",
-                    "why": _("re-fetch datasets that still lag"),
-                    "op": "daily.stale",
-                    "params": {},
-                }
-            )
         out.append(
             {"cmd": f"cne stats show --dataset {name}", "why": _("rows and size per partition")}
         )

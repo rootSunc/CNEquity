@@ -4,7 +4,7 @@ A prior-session contract remains expected until an authoritative reference
 ends its life. Missing rows cannot create their own expiry evidence. Calendar
 sessions and exchange boundaries are checked independently of dense watermarks;
 without a full live universe, no missing known keys means unverified, not full
-market completeness (ADR-0017). The exchange's official contract file for the
+market completeness. The exchange's official contract file for the
 session itself is that universe: an exchange with one, and no contract on it
 missing, is proven complete.
 """

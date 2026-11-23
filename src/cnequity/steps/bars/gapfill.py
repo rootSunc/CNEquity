@@ -30,7 +30,7 @@ def _gapfill_tip_via_clist(
     *,
     expected_symbols: list[str],
 ) -> dict:
-    """Route missing tip keys through one EastMoney clist snapshot (ADR-0005)."""
+    """Route missing tip keys through one EastMoney clist snapshot."""
     import polars as pl
 
     from cnequity.adapters.eastmoney.bars import fetch_daily_bars_clist
@@ -210,7 +210,7 @@ def _gapfill_tip_via_clist(
                 "check": "daily_bars_clist_gapfill",
                 "message": (
                     f"routed {gap_df.height} tip key(s) through EastMoney clist "
-                    f"after TDX left {len(missing)} missing (ADR-0005 routing)"
+                    f"after TDX left {len(missing)} missing"
                 ),
                 "missing_requested": len(missing),
                 "rows_written": gap_df.height,

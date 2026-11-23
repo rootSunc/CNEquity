@@ -367,8 +367,8 @@ def _step_daily_bars(config: Config, trade_date: date, run_id: str, context: dic
     # rest of the pipeline reads `is_tdx_servable` as "Baostock serves this".
     # The protocol itself does carry Beijing daily bars under market id 2, so
     # the fallback leg below reaches for TDX before Sina — see
-    # `_fetch_bj_history_via_tdx`. Tip gaps after TDX are a second routing case
-    # (ADR-0005): EastMoney clist.
+    # `_fetch_bj_history_via_tdx`. Tip gaps after TDX are a second routing case:
+    # EastMoney clist.
     fetch_scope = list(dict.fromkeys(ownership.generic + ownership.unknown + ownership.probe))
     tdx_symbols, fallback_symbols = split_by_quote_source(fetch_scope)
     reused_symbols = (

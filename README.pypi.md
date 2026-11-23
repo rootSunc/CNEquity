@@ -17,9 +17,9 @@ CNEquity 是开源的中国 A 股本地数据湖：整理沪深京股票行情�
 [English](https://github.com/rootSunc/CNEquity/blob/main/README.en.md) · [完整文档](https://rootsunc.github.io/CNEquity/) · [数据集目录](https://rootsunc.github.io/CNEquity/datasets/catalog/) · [更新日志](https://github.com/rootSunc/CNEquity/blob/main/CHANGELOG.md) · [发布记录](https://github.com/rootSunc/CNEquity/releases)
 </div>
 
-![cne serve 控制台录屏：A股数据湖状态、覆盖热力、日线详情与质量审计](https://raw.githubusercontent.com/rootSunc/CNEquity/main/docs/assets/cne-serve-tour.zh.gif)
+![cne serve 控制台录屏，展示覆盖热图、数据集搜索、日线查询与溯源](https://raw.githubusercontent.com/rootSunc/CNEquity/main/docs/assets/cne-serve-tour.zh.gif)
 
-*`cne serve` 控制台真实录屏。*
+*`cne serve` 控制台录屏，使用覆盖 L0–L9 的离线合成样例数据。*
 
 ## 为什么用 CNEquity
 
@@ -104,7 +104,7 @@ print(bars.tail())
 
 ## 架构
 
-![CNEquity 从多源采集、编排到湖目录 Parquet 数据层及研究消费的架构图](https://raw.githubusercontent.com/rootSunc/CNEquity/main/docs/assets/architecture-diagram-v3.png)
+![CNEquity 架构图，展示市场层、湖引擎，以及覆盖规划、原子发布和快照读取的关系](https://raw.githubusercontent.com/rootSunc/CNEquity/main/docs/assets/architecture-diagram.zh.svg)
 
 代码分为市场无关的湖引擎 `equitylake_core`（DuckLake 湖目录 `lake/catalog.sqlite`、文件即分区 Parquet、无长锁分区检出合并、覆盖台账 `_attempts` 与缺口规划器）与 A 股市场层 `cnequity`（L0–L9 契约、多源适配器、三层质量门禁、查询语义与 CLI）。外部工具需要直接读 Parquet 文件时使用 `cne storage export` 导出。详见[整体设计](https://rootsunc.github.io/CNEquity/architecture/overview/)。
 

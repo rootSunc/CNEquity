@@ -516,11 +516,7 @@ export function staleRows(health, datasets) {
     const latest = item.watermark || item.coverage_end || "";
     const lag = latest && anchor ? daysBetween(latest, anchor) : null;
     const snapshot = item.history_mode === "snapshot_only";
-    const action = snapshot
-      ? opsAction("daily.stale", tr("补抓落后", "Catch up"))
-      : item.history_mode === "derived"
-        ? opsAction("derive.run", tr("重算", "Recompute"), { name })
-        : opsAction("backfill.run", tr("查看回填", "Open backfill"), { dataset: name });
+    const action = opsAction("daily.stale", tr("补抓", "Catch up"), { datasets: [name] });
     return { dataset: name, latest, watermarked: Boolean(item.watermark), lag, snapshot, action };
   }).sort((a, b) => (b.lag ?? -1) - (a.lag ?? -1));
 }

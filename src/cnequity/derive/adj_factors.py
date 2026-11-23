@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # here escapes the changed-during-calculation and partial-input guards.
 INPUTS = ("daily_bars", "corporate_actions", "instruments", "share_structure")
 
-# Only hfq is persisted; qfq is derived at query time (ADR-0004).
+# Only hfq is persisted; qfq is derived at query time.
 STORED_ADJUST_TYPE = "hfq"
 #: The declared backup vendor for this dataset. Rows it produced say so.
 BACKUP_SOURCE = "baostock"
@@ -2040,7 +2040,7 @@ def compute_adj_factors(
     full: bool = False,
     output,
 ) -> AdjFactorsResult:
-    """Derive hfq adj_factors (ADR-0004).
+    """Derive hfq adj_factors.
 
     Default path is append-only: only new trade_date partitions since the derived
     watermark are written, plus full-history merge for ex-date / new-listing /
@@ -2055,7 +2055,7 @@ def compute_adj_factors(
     if skipped:
         logger.warning(
             "adj_factors: ignoring non-persisted adjust_types %s (only %s is stored; "
-            "derive qfq via load(..., adjust='qfq') — ADR-0004)",
+            "derive qfq via load(..., adjust='qfq'))",
             skipped,
             STORED_ADJUST_TYPE,
         )
