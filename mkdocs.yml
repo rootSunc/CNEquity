@@ -68,6 +68,7 @@ nav:
       - 首页: index.md
       - 快速开始: getting-started/quickstart.md
       - 安装与升级: getting-started/installation.md
+      - 升级到 0.25.0: getting-started/upgrade-0.25.md
   - 设计与数据:
       - 整体设计: architecture/overview.md
       - 数据集目录: datasets/catalog.md

@@ -101,3 +101,77 @@ def test_a_lake_whose_catalog_does_not_record_revisions_is_left_alone(cfg):
 
     assert report["rows_changed"] == 0 and "skipped" in report
     assert (cfg.curated_root / "daily_bars").is_dir()
+
+
+def _hold_first(cfg, monkeypatch):
+    """Publish a second revision, hold the first, and let drop-generations keep only it."""
+    from cnequity.storage.lifecycle import LifecycleStore
+
+    first = _store(cfg).pointer_file("daily_bars")["revision_id"]
+    _publish(cfg, 12.0)
+    held = {f"revision/daily_bars/{first}": [{"kind": "case_dependency", "case_id": "c1"}]}
+    monkeypatch.setattr(module, "_held_revisions", lambda meta: set(held))
+    monkeypatch.setattr(LifecycleStore, "retention_registry", lambda self: {"holds": held})
+    drop_generations(cfg, apply=True)
+    return first
+
+
+def _pinned(cfg, revision):
+    from cnequity.query import catalog_read
+    from cnequity.query.parquet_scan import scan_parquet_root
+
+    catalog_read.close_all()
+    return scan_parquet_root(
+        cfg.curated_root / "daily_bars", meta_root=cfg.meta_root, revision=revision
+    ).collect()
+
+
+def test_a_held_generation_moves_into_the_catalog_and_still_reads_by_revision(cfg, monkeypatch):
+    from cnequity.storage.archive_held import archive_held_revisions
+
+    first = _hold_first(cfg, monkeypatch)
+    generation = cfg.meta_root / "revisions" / "data" / "daily_bars" / first
+    before = sorted(_pinned(cfg, first)["close"].to_list())
+    current = _rows(cfg)
+
+    preview = archive_held_revisions(cfg, apply=False)
+    assert preview["revisions"] == [f"daily_bars/{first}"] and generation.is_dir()
+
+    applied = archive_held_revisions(cfg, apply=True)
+
+    assert applied["rows"] == {f"daily_bars/{first}": 3}
+    assert not (cfg.meta_root / "revisions").exists(), "no generation or receipt is left"
+    assert sorted(_pinned(cfg, first)["close"].to_list()) == before == [9.0, 10.0, 11.0]
+    assert _rows(cfg) == current, "the current revision is untouched"
+    assert archive_held_revisions(cfg, apply=True)["rows_changed"] == 0
+
+
+def test_releasing_the_hold_lets_retention_drop_the_archive(cfg, monkeypatch):
+    import pytest
+
+    from cnequity.storage.archive_held import archive_held_revisions
+    from cnequity.storage.catalog_bridge import (
+        archive_table_name,
+        archived_revisions,
+        drop_released_archives,
+        lake_root,
+    )
+    from cnequity.storage.revisions import RevisionConsistencyError
+    from equitylake_core.catalog import Catalog
+
+    first = _hold_first(cfg, monkeypatch)
+    archive_held_revisions(cfg, apply=True)
+    with Catalog(lake_root(cfg)) as catalog:
+        held = {f"revision/daily_bars/{first}"}
+        assert drop_released_archives(catalog, held=held, apply=True) == []
+        assert drop_released_archives(catalog, held=set(), apply=False) == [
+            archive_table_name("daily_bars", first)
+        ]
+        drop_released_archives(catalog, held=set(), apply=True)
+        assert archived_revisions(catalog) == []
+        assert not catalog.has_table(archive_table_name("daily_bars", first))
+    from cnequity.storage import revision_records
+
+    revision_records.forget()
+    with pytest.raises((RevisionConsistencyError, FileNotFoundError)):
+        _pinned(cfg, first)

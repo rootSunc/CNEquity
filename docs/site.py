@@ -56,7 +56,7 @@ REDIRECTS = {
     "reference/universe-profiles/": QUERY + "#prices-and-universe",
 }
 CLI_ANCHORS = {
-    "cne-upgrade": INSTALL + "#cne-upgrade",
+    "cne-upgrade": "getting-started/upgrade-0.25/",
     "cne-init": QUICKSTART + "#init-scope",
     "cne-backfill": RUNBOOK + "#backfill",
     "cne-serve": QUICKSTART + "#browser",

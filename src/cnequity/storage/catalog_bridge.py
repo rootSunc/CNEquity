@@ -22,6 +22,7 @@ from cnequity.domain.datasets import DATASETS
 from cnequity.domain.schemas import PRIMARY_KEYS
 from cnequity.meta_layout import LAKE_DIR
 from cnequity.storage.revision_records import (
+    ARCHIVE_TABLE,
     HISTORY_TABLE,
     RECEIPT_COLUMNS,
     SYNC_TABLE,
@@ -1253,6 +1254,13 @@ def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict |
             result = apply_retention(
                 catalog, keep=keep, held=held, keep_days=keep_days, apply=apply
             )
+            # An archived pre-0.25 revision exists only for its hold. Without
+            # the hold registry (keep 0) nothing is known to be released.
+            archives = (
+                drop_released_archives(catalog, held=held, apply=apply)
+                if registry is not None
+                else []
+            )
             switched = RevisionStore(
                 config.meta_root, config.curated_root, config.derived_root, create=False
             ).publishes_to_catalog()
@@ -1272,7 +1280,136 @@ def catalog_retention(config, *, apply: bool, keep: int | None = None) -> dict |
         "bytes_freed": result.bytes_freed,
         "files_deleted": result.files_deleted,
         "orphans_deleted": orphans,
+        "archives_dropped": archives,
         "applied": result.applied,
         "active_readers": result.active_readers,
         "file_grace_hours": FILE_GRACE_HOURS,
     }
+
+
+_ARCHIVE_PREFIX = "_held_"
+
+
+def archive_table_name(dataset: str, revision_id: str) -> str:
+    """The catalog table holding the archived rows of *dataset*'s revision *revision_id*."""
+    return f"{_ARCHIVE_PREFIX}{dataset}_{revision_id}"
+
+
+def archived_revisions(catalog: Catalog) -> list[tuple[str, str, str]]:
+    """``(dataset, revision_id, table)`` of every revision archived into the catalog."""
+    if not catalog.has_table(ARCHIVE_TABLE):
+        return []
+    return [
+        (dataset, revision_id, table)
+        for dataset, revision_id, table in catalog.execute(
+            f"SELECT dataset, revision_id, table_name FROM {ARCHIVE_TABLE}"
+        ).fetchall()
+    ]
+
+
+def archived_revision(catalog: Catalog, dataset: str, revision_id: str) -> str | None:
+    """The table holding that archived revision, or ``None`` when it was not archived."""
+    if not catalog.has_table(ARCHIVE_TABLE):
+        return None
+    row = catalog.execute(
+        f"SELECT table_name FROM {ARCHIVE_TABLE} WHERE dataset = ? AND revision_id = ?",
+        [dataset, revision_id],
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+def archive_generation(catalog: Catalog, dataset: str, revision_id: str, root: Path) -> int:
+    """Move the generation at *root* into a catalog table of its own; returns its rows.
+
+    The files are linked into the lake (copied where links are not possible)
+    and registered as they are, a file whose column types differ from the
+    others written once more with the table's types. The table's rows are
+    compared with the generation's whole rows before the archive is recorded;
+    a difference rolls everything back. The generation itself is the caller's
+    to delete afterwards.
+    """
+    from cnequity.storage.lake_write import _place, _protect, lake_file_name
+    from equitylake_core.write import Swap, apply_swap
+
+    relatives = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.parquet"))
+    if not relatives:
+        raise ValueError(f"{dataset} revision {revision_id}: no Parquet under {root}")
+    table = archive_table_name(dataset, revision_id)
+    sources = [root / relative for relative in relatives]
+    types = catalog.file_types(sources)
+    folder = catalog.table_dir(table)
+    placed: list[Path] = []
+    if not catalog.has_table(ARCHIVE_TABLE):
+        catalog.execute(
+            f"CREATE TABLE {ARCHIVE_TABLE} "
+            "(dataset VARCHAR, revision_id VARCHAR, table_name VARCHAR, row_count BIGINT)"
+        )
+        catalog.keep_rows_inline(ARCHIVE_TABLE)
+    try:
+        with catalog.transaction(message=f"archive {dataset} revision {revision_id}"):
+            for relative, source in zip(relatives, sources, strict=True):
+                head, _, name = relative.rpartition("/")
+                target = (folder / head if head else folder) / lake_file_name(name)
+                placed.append(target)
+                if catalog.file_fits(table, source, types=types):
+                    _place(source, target)
+                else:
+                    catalog.conform_file(table, source, target, types=types)
+                _protect(target)
+            rows = apply_swap(catalog, Swap(table, tuple(p.as_posix() for p in placed), ()))
+            # Whole rows on both sides, the generation's read with the table's
+            # column types, so a file written again with wider types compares equal.
+            kinds = catalog.column_types(table)
+            cast = ", ".join(
+                f"CAST({quote_identifier(name)} AS {kind})" for name, kind in kinds.items()
+            )
+            digest = (
+                "SELECT count(*), bit_xor(h), sum(h::HUGEINT) FROM (SELECT hash({}) AS h FROM {})"
+            )
+            expected = catalog.execute(digest.format(cast, _scan_files(sources))).fetchone()
+            found = catalog.execute(digest.format(cast, quote_identifier(table))).fetchone()
+            if tuple(found) != tuple(expected):
+                raise CatalogArchiveError(
+                    f"{dataset} revision {revision_id}: the archived rows differ from the "
+                    f"generation's ({found[0]} rows against {expected[0]})"
+                )
+            catalog.execute(
+                f"INSERT INTO {ARCHIVE_TABLE} VALUES (?, ?, ?, ?)",
+                [dataset, revision_id, table, rows],
+            )
+    except BaseException:
+        for path in placed:
+            path.unlink(missing_ok=True)
+        raise
+    return rows
+
+
+class CatalogArchiveError(RuntimeError):
+    """A generation's rows did not arrive in its archive table unchanged; nothing was archived."""
+
+
+def _scan_files(paths: list[Path]) -> str:
+    listed = ", ".join(quote_literal(path.as_posix()) for path in paths)
+    return f"read_parquet([{listed}], union_by_name = true, hive_partitioning = false)"
+
+
+def drop_released_archives(catalog: Catalog, *, held: set[str], apply: bool) -> list[str]:
+    """Drop the archive tables of revisions no hold protects any more; returns them.
+
+    Holds are named ``revision/<dataset>/<revision id>``. The files go with
+    the catalog's own cleanup of dropped tables, after the grace period.
+    """
+    released = [
+        (dataset, revision_id, table)
+        for dataset, revision_id, table in archived_revisions(catalog)
+        if f"revision/{dataset}/{revision_id}" not in held
+    ]
+    if apply and released:
+        with catalog.transaction(message="drop archived revisions no hold protects"):
+            for dataset, revision_id, table in released:
+                catalog.execute(f"DROP TABLE {quote_identifier(table)}")
+                catalog.execute(
+                    f"DELETE FROM {ARCHIVE_TABLE} WHERE dataset = ? AND revision_id = ?",
+                    [dataset, revision_id],
+                )
+    return [table for _, _, table in released]

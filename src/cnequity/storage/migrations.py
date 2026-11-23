@@ -134,6 +134,12 @@ def _explicit_holds(config, *, apply: bool) -> dict:
     return release_reference_holds(config, apply=apply)
 
 
+def _archive_held(config, *, apply: bool) -> dict:
+    from cnequity.storage.archive_held import archive_held_revisions
+
+    return archive_held_revisions(config, apply=apply)
+
+
 def _drop_generations(config, *, apply: bool) -> dict:
     from cnequity.storage.drop_generations import drop_generations
 
@@ -328,6 +334,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         ),
         "0.25.0",
         _drop_generations,
+    ),
+    # After drop-generations, which keeps only the generations a hold protects.
+    Migration(
+        "archive-held-revisions",
+        N_(
+            "Move the revisions from before 0.25.0 that a hold keeps into the lake catalog, "
+            "then delete their old directories"
+        ),
+        "0.25.0",
+        _archive_held,
     ),
     # After every migration that reads meta/state (attempts-ledger seeds from it).
     Migration(

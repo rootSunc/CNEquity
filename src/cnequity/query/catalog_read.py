@@ -20,6 +20,7 @@ from cnequity.config.resources import resources_for
 from cnequity.domain.datasets import granularity_for_dataset
 from cnequity.domain.partitions import partition_value
 from cnequity.storage.catalog_bridge import (
+    archived_revision,
     catalog_is_current,
     keys_unique,
     lake_root,
@@ -167,11 +168,22 @@ def generation_identity(root: Path) -> tuple[str, str] | None:
     return None
 
 
-def _resolve_revision(catalog, dataset: str, revision_id: str) -> tuple[int | None, bool] | None:
-    """``(snapshot, unique_keys)`` holding *dataset* at *revision_id*; snapshot None = latest."""
+def _resolve_revision(
+    catalog, dataset: str, revision_id: str
+) -> tuple[str, int | None, bool] | None:
+    """``(table, snapshot, unique_keys)`` holding *dataset* at *revision_id*.
+
+    The dataset's own table at the revision's snapshot (``None`` = latest),
+    or, for a revision from before 0.25.0 that a hold kept, the archive table
+    it was moved into (whose keys are not known to be unique).
+    """
     if synced_revision_id(catalog, dataset) == revision_id:
-        return None, bool(keys_unique(catalog, dataset))
-    return revision_snapshot(catalog, dataset, revision_id)
+        return dataset, None, bool(keys_unique(catalog, dataset))
+    found = revision_snapshot(catalog, dataset, revision_id)
+    if found is not None:
+        return dataset, found[0], found[1]
+    archived = archived_revision(catalog, dataset, revision_id)
+    return None if archived is None else (archived, None, False)
 
 
 def _at(snapshot: int | None) -> str:
@@ -200,12 +212,12 @@ def _published_table(catalog, dataset: str, revision_id: str) -> PublishedTable 
     resolved = _resolve_revision(catalog, dataset, revision_id)
     if resolved is None:
         return None
-    snapshot, unique = resolved
-    files = catalog.data_files(dataset, snapshot)
+    table, snapshot, unique = resolved
+    files = catalog.data_files(table, snapshot)
     if not files:
         return None
     described = catalog.execute(
-        f"DESCRIBE SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)}"
+        f"DESCRIBE SELECT * FROM {ALIAS}.{quote_identifier(table)}{_at(snapshot)}"
     ).fetchall()
     columns = {row[0]: row[1] for row in described}
     return PublishedTable(files, columns, unique)
@@ -248,9 +260,13 @@ def published_files(config, dataset: str, revision_id: str) -> tuple[list[str], 
             key = (catalog, catalog.snapshot(), dataset, revision_id)
             schema = _schemas.get(key)
             if schema is None:
-                snapshot, _ = _resolve_revision(catalog, dataset, revision_id) or (None, False)
+                table_name, snapshot, _ = _resolve_revision(catalog, dataset, revision_id) or (
+                    dataset,
+                    None,
+                    False,
+                )
                 relation = catalog.relation(
-                    f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)} LIMIT 0"
+                    f"SELECT * FROM {ALIAS}.{quote_identifier(table_name)}{_at(snapshot)} LIMIT 0"
                 )
                 schema = relation.pl().schema
                 if len(_schemas) >= _MEMO_LIMIT or any(k[:2] != key[:2] for k in _schemas):
@@ -293,14 +309,14 @@ def published_stats(config, dataset: str, revision_id: str, *, column: str | Non
             resolved = _resolve_revision(catalog, dataset, revision_id)
             if resolved is None:
                 return None
-            snapshot, unique = resolved
+            table_name, snapshot, unique = resolved
             relation = catalog.relation(
-                f"SELECT * FROM {ALIAS}.{quote_identifier(dataset)}{_at(snapshot)} LIMIT 0"
+                f"SELECT * FROM {ALIAS}.{quote_identifier(table_name)}{_at(snapshot)} LIMIT 0"
             )
             schema = relation.pl().schema
             if column is not None and column not in schema.names():
                 column = None
-            stats = catalog.file_stats(dataset, column, snapshot)
+            stats = catalog.file_stats(table_name, column, snapshot)
             if stats is None:
                 return None
             return stats, unique, schema

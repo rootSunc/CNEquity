@@ -175,6 +175,7 @@ class CatalogRecords:
     current: dict[str, RevisionRecord | None]
     _history: dict[str, list[RevisionRecord]] = field(default_factory=dict)
     _history_loaded: bool = False
+    _archived: set[tuple[str, str]] | None = None
 
     def pointer(self, dataset: str) -> dict[str, Any] | None:
         record = self.current.get(dataset)
@@ -202,7 +203,22 @@ class CatalogRecords:
             "SELECT dataset, revision_id FROM (" + _all_records_sql() + ") "
             "WHERE snapshot IS NOT NULL",
         )
-        return {(dataset, revision_id) for dataset, revision_id in rows}
+        return {(dataset, revision_id) for dataset, revision_id in rows} | self.archived()
+
+    def archived(self) -> set[tuple[str, str]]:
+        """``(dataset, revision id)`` of every held pre-0.25 revision archived into the catalog."""
+        if self._archived is None:
+            self._archived = (
+                {
+                    (dataset, revision_id)
+                    for dataset, revision_id in _query(
+                        self.root, f"SELECT dataset, revision_id FROM {ARCHIVE_TABLE}"
+                    )
+                }
+                if _has_tables(self.root, ARCHIVE_TABLE)
+                else set()
+            )
+        return self._archived
 
     def find(self, dataset: str, revision: int | str) -> RevisionRecord | None:
         """The revision of *dataset* with this number or id."""
@@ -213,6 +229,10 @@ class CatalogRecords:
                 return record
         return None
 
+
+#: Revisions from before 0.25.0 that a hold kept, each moved into a catalog table of
+#: its own (``storage.catalog_bridge.archive_generation``).
+ARCHIVE_TABLE = "_archived_revisions"
 
 _lock = threading.Lock()
 #: Revision records are small metadata reads: one DuckDB thread each, and only

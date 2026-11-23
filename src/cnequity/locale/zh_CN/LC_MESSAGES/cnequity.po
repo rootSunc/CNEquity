@@ -3658,6 +3658,10 @@ msgid "Move it to a file and set [%s].%s = <path> (chmod 600), or export %s"
 msgstr "把它移到文件里并设置 [%s].%s = <路径>（chmod 600），或 export %s"
 
 #: cnequity/storage/migrations.py
+msgid "Move the revisions from before 0.25.0 that a hold keeps into the lake catalog, then delete their old directories"
+msgstr "把仍被保留的 0.25.0 之前的修订转进湖目录，再删除它们的旧目录"
+
+#: cnequity/storage/migrations.py
 msgid "Move what is left in meta/state to each record's own directory under meta/, and drop the coverage ledger and revision copies the lake catalog replaced"
 msgstr "把 meta/state 里剩下的记录搬到 meta/ 下各自的目录，并删掉已由湖目录取代的覆盖台账和修订副本"
 

@@ -7,7 +7,7 @@
 | 现象 | 原因与处理 |
 |---|---|
 | 查询不到新数据 | 先 `cne config path` 确认指向的湖。数据还在 `staging/` 没发布时，`cne run compact` 发布所有已结束但未发布的运行，或 `cne run retry --run-id <ID>` 续跑 |
-| 写入命令被拒绝，提示运行 `cne upgrade` | 湖由较早的版本建立，按[安装与升级](../getting-started/installation.md#cne-upgrade)升级；读取不受影响 |
+| 写入命令被拒绝，提示运行 `cne upgrade` | 湖由较早的版本建立，按[升级到 0.25.0](../getting-started/upgrade-0.25.md)升级；读取不受影响 |
 | 提交被拒绝，提示某个数据集的修订在这次运行期间变了 | 另一个写入先发布了这次读过或要发布的数据集。已发布数据没变，重跑同一条命令即可 |
 | 发布门拦下了候选数据 | 已发布数据不变，候选分区移到 `_quarantine/`。按报告里新增或加重的检查项定位来源问题，修复后重跑 |
 | `ReaderError`：缺复权因子、股票池证据不足 | 严格读取按设计拒绝返回。先补对应数据（如 `cne derive adj_factors`），或明确放宽口径 |

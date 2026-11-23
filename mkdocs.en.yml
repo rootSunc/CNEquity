@@ -26,6 +26,7 @@ nav:
       - Home: index.md
       - Quickstart: getting-started/quickstart.md
       - Install and upgrade: getting-started/installation.md
+      - Upgrade to 0.25.0: getting-started/upgrade-0.25.md
   - Design and data:
       - Design: architecture/overview.md
       - Dataset catalog: datasets/catalog.md

@@ -7,7 +7,7 @@ Find the scope of the failure before acting: `cne status` shows the latest run, 
 | Symptom | Cause and fix |
 |---|---|
 | New data does not show up | Check the lake with `cne config path` first. If the data is still unpublished in `staging/`, `cne run compact` publishes every finished but unpublished run, or `cne run retry --run-id <ID>` resumes one |
-| Write commands are refused with a prompt to run `cne upgrade` | The lake was built by an earlier version; upgrade as described in [Install and upgrade](../getting-started/installation.md#cne-upgrade). Reads are unaffected |
+| Write commands are refused with a prompt to run `cne upgrade` | The lake was built by an earlier version; upgrade as described in [Upgrade to 0.25.0](../getting-started/upgrade-0.25.md). Reads are unaffected |
 | A commit is refused because a dataset's revision changed during the run | Another write published a dataset this run read or meant to publish. Published data is unchanged; run the same command again |
 | The publication gate stopped candidate data | Published data is unchanged, and the candidate partitions move to `_quarantine/`. Use the new or worse checks in the report to find the source problem, fix it, and rerun |
 | `ReaderError`: missing adjustment factors or insufficient universe evidence | Strict reads refuse by design. Fill the data first (for example, `cne derive adj_factors`), or relax the semantics explicitly |

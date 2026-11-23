@@ -6,6 +6,8 @@
 
 - **升级步骤（不兼容变更）：** 升级后运行一条命令：`cne upgrade --apply`（不加 `--apply` 先预览）。它先检查这台机器能不能完成升级（湖目录需要的 DuckDB 扩展、磁盘空间），检查未通过时停止迁移并报告原因；然后把湖的记录备份到 `backups/upgrade-<时间>/`，把每个已发布的数据集登记进湖目录、逐行核对，全部一致后才切换，再运行其余还欠的迁移（其中 `revision-records` 把修订记录导入湖目录，`drop-generations` 删除旧发布方式留下的目录，不可恢复，见下），全程显示进度。支持硬链接时链接数据文件，否则需要空间复制；中途停下可以重跑，从停下的地方继续。升级完成前 `cne run`、`cne backfill`、`cne derive`、`cne repair --apply` 都拒绝写入并提示运行 `cne upgrade`，读取不受影响，定时任务在升级后的下一次运行自动恢复。升级会清理旧布局，需要回退时使用升级前的数据副本。扩展首次使用自动下载；官方扩展站点连不上时设置 `EQUITYLAKE_EXTENSION_DIR` 或 `EQUITYLAKE_EXTENSION_MIRROR`。
 - **升级路线**：0.25.x 是能升级 0.24.0 及更早湖的最后一个版本系列。之后的版本只升级 0.25.0 起的湖格式；更早的湖先装 0.25.x 并完成 `cne upgrade --apply`，再继续升级。
+- 新增[升级到 0.25.0](https://rootsunc.github.io/CNEquity/getting-started/upgrade-0.25/) 页面：是否需要升级、升级前准备、步骤、每个迁移做什么、升级后需要调整的用法和出问题时怎么办。
+- 新迁移 `archive-held-revisions`（`cne upgrade` 会运行，排在 `drop-generations` 之后）：仍被保留（`cne storage hold` 或案例依赖）的 0.25.0 之前的修订，各自转进湖目录里的一张表，文件链接而不复制，逐行核对一致后删除旧目录和回执；之后按修订号读取同样从湖目录读。保留解除后，湖目录的保留清理会删掉这张表。此前它们一直留在 `meta/revisions/data` 下，只能从磁盘目录读。
 - **不兼容变更**：直接读 `curated/`、`derived/` 目录的外部工具请改用 `cne storage export`。升级会删除这两个目录下各数据集的文件。`[storage].publish` 不再决定发布方式（由湖自己的 `meta/storage.json` 决定），配置里保留它不会报错。
 - **不兼容变更**：快照（`cne snapshot create`）改为新格式：每个数据集只存一份当前修订的文件，修订号和修订 id 写进 manifest，不再附带指针、回执和一份代目录副本（此前湖目录里的数据集在快照里存了两份）。只能对已在湖目录上的湖建快照，旧湖先运行 `cne upgrade --apply`。`cne snapshot restore` 恢复出的是能直接写入的湖目录湖，每个数据集保留原来的修订号和修订 id，研究里按 `revision_map` 固定的读取在恢复后的湖上照样读得到。0.25.0 之前做的快照仍能校验和恢复：恢复后自动运行 `lake-catalog`、`revision-records`、`drop-generations` 三个迁移，其余欠下的迁移（有的要联网）留给 `cne upgrade`。
 - **不兼容变更**：删除增量包命令 `cne snapshot delta create`、`verify`、`apply`。它逐字节比对 `curated/` 目录并读 `meta/revisions` 下的回执，这些在湖目录上都已不存在，在任何已升级的湖上都用不了；有保留登记的湖上它本来就拒绝运行。同步一个湖改用完整快照或 `cne storage export`。
