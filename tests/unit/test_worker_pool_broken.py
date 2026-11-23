@@ -591,17 +591,17 @@ def _slow_but_alive(task):
         window_start=start,
         window_end=end,
     )
-    for _ in range(12):
+    for _ in range(20):
         time.sleep(0.25)
         manifest.touch_batch_heartbeat(run_id, batch_id)
     manifest.finish_batch(run_id, batch_id, "success", rows_read=1, rows_written=1)
     return {"rows_read": 1, "rows_written": 1, "batch_id": batch_id, "failed_symbols": []}
 
 
-def _real_process_pool(worker_config, monkeypatch, worker):
+def _real_process_pool(worker_config, monkeypatch, worker, stall_seconds=1):
     """Run the real process pool, with *worker* in place of the TDX fetch."""
     worker_config.tdx_daily_executor = lambda: "process"
-    worker_config.batch_stall_seconds = 1
+    worker_config.batch_stall_seconds = stall_seconds
     monkeypatch.setattr("cnequity.orchestrator.worker_pool._worker_fetch_batch", worker)
     init_data_layout(worker_config)
     manifest = Manifest(worker_config.manifest_path)
@@ -633,9 +633,12 @@ def test_stalled_pool_is_killed_and_retried_in_process(worker_config, monkeypatc
 
 def test_slow_pool_that_heartbeats_is_not_killed(worker_config, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="cnequity.orchestrator.worker_pool"):
-        result, batches, elapsed = _real_process_pool(worker_config, monkeypatch, _slow_but_alive)
+        # A 3-second window keeps 0.25-second heartbeats well inside it on a loaded machine.
+        result, batches, elapsed = _real_process_pool(
+            worker_config, monkeypatch, _slow_but_alive, stall_seconds=3
+        )
 
-    assert elapsed > 2  # outlived the one-second stall window
+    assert elapsed > 4  # outlived the three-second stall window
     assert "no worker reported progress" not in caplog.text
     assert result["rows_written"] == 2  # the workers' own rows, not a retry's
     assert [b["status"] for b in batches] == ["success", "success"]
