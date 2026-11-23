@@ -2,7 +2,7 @@
 
 这里记录面向用户的主要功能、修复与兼容性变化。历史版本中的命令名反映当时的接口；当前用法以 [联网与写入清单](docs/zh/reference/cli-surface.md)为准。升级前阅读[升级与兼容性](docs/zh/getting-started/installation.md#升级与兼容性)。
 
-## [0.25.0] — 2026-11-15 · 湖目录成为唯一的存储方式，升级需运行一次 `cne upgrade`
+## [0.25.0] — 2026-11-24 · 数据、修订和抓取台账全部收进湖目录，旧目录布局退役，升级需运行一次 `cne upgrade --apply`
 
 - **升级步骤（不兼容变更）：** 升级后运行一条命令：`cne upgrade --apply`（不加 `--apply` 先预览）。它先检查这台机器能不能完成升级（湖目录需要的 DuckDB 扩展、磁盘空间），检查未通过时停止迁移并报告原因；然后把湖的记录备份到 `backups/upgrade-<时间>/`，把每个已发布的数据集登记进湖目录、逐行核对，全部一致后才切换，再运行其余还欠的迁移（其中 `revision-records` 把修订记录导入湖目录，`drop-generations` 删除旧发布方式留下的目录，不可恢复，见下），全程显示进度。支持硬链接时链接数据文件，否则需要空间复制；中途停下可以重跑，从停下的地方继续。升级完成前 `cne run`、`cne backfill`、`cne derive`、`cne repair --apply` 都拒绝写入并提示运行 `cne upgrade`，读取不受影响，定时任务在升级后的下一次运行自动恢复。升级会清理旧布局，需要回退时使用升级前的数据副本。扩展首次使用自动下载；官方扩展站点连不上时设置 `EQUITYLAKE_EXTENSION_DIR` 或 `EQUITYLAKE_EXTENSION_MIRROR`。
 - **升级路线**：0.25.x 是能升级 0.24.0 及更早湖的最后一个版本系列。之后的版本只升级 0.25.0 起的湖格式；更早的湖先装 0.25.x 并完成 `cne upgrade --apply`，再继续升级。
@@ -37,11 +37,11 @@
 - Windows 上运行指标记录进程的峰值内存，此前一直记为 0。
 - 配置文档新增[小内存和小磁盘的机器](https://rootsunc.github.io/CNEquity/getting-started/configuration/#small-machines)：4GB、8GB 内存和 50GB 左右磁盘上建议调整的设置，以及各文件系统上副本占用的空间。
 - `top_holders` 的日更不再按记录日回看 240 天。流通股东按公告日回看 30 天，全口径只取这些公告对应的记录日；回填仍按记录日分季扫描。取数时会记下每次请求、每 20 页的进度，以及每个记录日保留和因没有披露日而丢弃的行数。
-- 新迁移 `drop-generations`（由 `cne upgrade` 执行，**不可恢复**）：删除旧发布方式留下、湖目录已经取代的文件，即 `curated/` 和 `derived/` 下各数据集的目录、`meta/revisions/data` 下的代目录、`meta/revisions/<数据集>/` 下的指针和回执。用 `cne migrate --only drop-generations` 单独预览清理范围。被持有的修订（`cne storage hold`、案例依赖）连同回执保留，仍可按修订号读取；`curated/` 下不是数据集的目录、湖目录没有记录的数据集原样留下并列出。仍在直接读 `curated/`、`derived/` 的外部工具必须先改用 `cne storage export`。
+- 新迁移 `drop-generations`（由 `cne upgrade` 执行，**不可恢复**）：删除旧发布方式留下、湖目录已经取代的文件，即 `curated/` 和 `derived/` 下各数据集的目录、`meta/revisions/data` 下的代目录、`meta/revisions/<数据集>/` 下的指针和回执。用 `cne migrate --only drop-generations` 单独预览清理范围。被持有的修订（`cne storage hold`、案例依赖）的代目录和回执暂时留下，随后由 `archive-held-revisions` 转进湖目录并删除，按修订号读取不受影响；`curated/` 下不是数据集的目录、湖目录没有记录的数据集原样留下并列出。仍在直接读 `curated/`、`derived/` 的外部工具必须先改用 `cne storage export`。
 - 修复 `cne storage verify-catalog` 在还没有任何发布进湖目录的修订时报错（`_revisions` 表还没有摘要列）；现在返回 0 个修订。
 - 新迁移 `revision-records`（`cne upgrade` 会运行；完成前 `cne run`、`cne backfill`、`cne derive`、`cne repair --apply` 拒绝写入）：把每个已发布修订的回执记进湖目录，核对每个数据集的当前修订与指针一致后，读取修订改以湖目录为准，不再读 `meta/revisions` 下的指针和回执文件。
 - 新迁移 `legacy-datasets`（`cne upgrade` 会运行，排在 `revision-records` 之后）：0.24.0 及更早的离线样例湖、演示湖把数据直接写在 `curated/<数据集>/` 下、没有修订号，此前升级不登记它们，升级后读取仍能读到，但 `cne storage export`、快照和之后的写入都看不到这些数据。现在升级把这些目录发布进湖目录、核对行数后删除；已经升级过的湖再运行一次 `cne upgrade --apply` 即可补上。
-- **不兼容变更**：已切换到湖目录的湖（新建的湖，或升级完成 `revision-records` 的湖）只从湖目录读取已发布的数据：`load()`、`cne query` 与 MCP 的 SQL 视图、质量检查和派生都不再扫描 `curated/`、`derived/` 下的目录。湖目录没有记录的数据集一律视为没有数据，那里残留或手工放进去的文件不会再被读到；读取当前版本时湖目录答不出来就报错，不再退回旧的代目录。按修订号固定读取（`revision=`、研究里的 `revision_map`）仍可读到升级前被持有、只在磁盘上的旧修订。尚未升级的 0.24 湖照旧从目录读取。
+- **不兼容变更**：已切换到湖目录的湖（新建的湖，或升级完成 `revision-records` 的湖）只从湖目录读取已发布的数据：`load()`、`cne query` 与 MCP 的 SQL 视图、质量检查和派生都不再扫描 `curated/`、`derived/` 下的目录。湖目录没有记录的数据集一律视为没有数据，那里残留或手工放进去的文件不会再被读到；读取当前版本时湖目录答不出来就报错，不再退回旧的代目录。按修订号固定读取（`revision=`、研究里的 `revision_map`）仍可读到升级前被持有的旧修订：`archive-held-revisions` 完成后从湖目录读，此前从磁盘上的代目录读。尚未升级的 0.24 湖照旧从目录读取。
 - 修复：`cne backfill --profile delisted` 把 `delisting_events` 直接写进 `derived/delisting_events/` 目录，湖目录湖从不读那里，这一步的结果此前一直没有发布出去。现在它在自己的检出里合并（同一代码以新的分类为准）并发布进湖目录。
 - 已切换到湖目录的湖里，`curated/`、`derived/` 下不能再写入任何数据文件：写到那里的文件读不到，此前会静默"写成功"。写入方一律写进检出再发布；Python 里直接调用派生函数（`compute_adj_factors`、`derive_industry_index`、`derive_option_greeks`、`derive_futures_continuous`、`derive_minute_resample`）现在必须传入 `output`（运行 id 打开的 `DerivedOutput`），不再默认写进无人发布的目录。
 - 长时间运行的进程（`cne serve`、`cne mcp`）读多个湖时，只保留最近用到的少数几个湖目录连接，不再每读一个湖就多留一个（每个约占几十个线程）；修订记录的读取只用一个 DuckDB 线程。
