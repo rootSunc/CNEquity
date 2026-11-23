@@ -1,6 +1,6 @@
 # Install and upgrade
 
-Use Python 3.11 or newer on macOS, Linux, or Windows. The package installs DuckDB 2.0 or newer as a dependency. Real collection requires access to the configured upstream sources. The [offline sample](quickstart.md#offline-sample) verifies installation and querying.
+Use Python 3.11 or newer on macOS, Linux, or Windows. The package installs DuckDB 2.0 or newer as a dependency. Real collection requires access to the configured upstream sources. The [offline sample](quickstart.md#offline-sample) verifies installation and querying. On a machine with little memory or disk, read [Machines with little memory or disk](configuration.md#small-machines) first.
 
 ```bash
 python -m pip install cnequity

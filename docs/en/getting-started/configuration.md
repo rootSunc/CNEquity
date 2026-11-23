@@ -106,6 +106,42 @@ Tushare is used only for on-demand backfill by default (`[sources.tushare].daily
 
 See [Design](../architecture/overview.md#quality) for how the two gates divide the work. Before switching to `block`, read the shadow-mode records to learn how often the gate would fire.
 
+## Machines with little memory or disk {#small-machines}
+
+The defaults assume at least 16GB of memory and a few hundred GB of free disk. On a smaller machine, adjust the settings below first, start with a narrow collection scope, and widen it while watching `cne storage usage`.
+
+**Memory (4GB or 8GB).** Each DuckDB connection has its own memory limit: 2GB for queries, 4GB for writes and exports, 8GB for maintenance. On Linux, daily-bar collection also starts 4 processes by default, each with its own memory. On 8GB, lower at least the maintenance limit; on 4GB, lower all of them and cut concurrency to 1 or 2:
+
+```toml
+[orchestrator]
+workers = 2
+tdx_daily_workers = 1
+
+[duckdb]
+memory_limit = "1GB"
+threads = 2
+
+[duckdb.write]
+memory_limit = "1.5GB"
+
+[duckdb.export]
+memory_limit = "1.5GB"
+
+[duckdb.maintenance]
+memory_limit = "2GB"    # "4GB" on an 8GB machine
+```
+
+DuckDB spills what exceeds a limit to its temporary directory, which is slower but does not fail; `temp_directory` and `max_temp_directory_size` set where and how much. When memory runs out the system may end a process and the log shows `worker pool broke`; see [Troubleshooting](../operations/troubleshooting.md).
+
+**Disk (around 50GB).** The lake grows with the instrument scope, the datasets enabled, and the revisions kept. On a small disk:
+
+- Narrow the scope: `[universe].ingest = "all_a_sh_sz"`, and leave `[minute_bars]`, `[trade_ticks]` and `[futures]` off.
+- Keep fewer old revisions: set `[storage.retention].keep_generations` to 2 or 3.
+- Lower the space checks: `[storage.free_space].warn_gb` defaults to 50, which on a 50GB disk warns all the time and fails daily maintenance; use values such as `warn_gb = 10` and `stop_gb = 3`.
+- Run `cne run clean` regularly.
+
+**How much a copy takes depends on the file system.** Snapshots and rehearsal copies are clones on macOS APFS and on Linux btrfs and XFS (reflink), and take almost no extra space. On Windows with Python 3.12 or newer, ReFS and Dev Drive volumes (from Windows 11 24H2) clone as well. Linux ext4 and Windows NTFS cannot clone, so each copy takes its full size; on a tight disk, make fewer snapshots and rehearsal copies.
+
 ## Environment variables {#environment}
 
 | Variable | Purpose |

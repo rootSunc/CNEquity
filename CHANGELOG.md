@@ -33,6 +33,9 @@
 - **不兼容变更**：保留（hold）只能有意登记：`cne storage hold`（新增 `--until 日期`，过了这一天自动解除并记入解除记录）或案例依赖。此前 `meta/` 和登记的笔记目录里任何文本文件只要出现修订号，该修订就被永久保留，扫描只增不减，快照清单、缓存、校验报告和审计笔记因此把大部分旧文件一直留在湖里；这些目录里的文件变动还会让清理和保留预览拒绝运行，直到重新登记。现在不再扫描，删除 `cne storage refresh`，`cne storage import` 只登记保留和案例，不再接受引用目录。新迁移 `explicit-holds`（`cne upgrade` 会运行，排在 `drop-generations` 之前）解除这些由文件引用得来的保留并逐条记录，手动保留和案例依赖不变；预览列出失去保护的修订、引用它们的目录，以及之后保留清理和 `drop-generations` 能释放的字节数。解除后被删掉的数据无法恢复，研究里需要长期按修订号读取的数据请先用 `cne storage hold` 登记。
 - 新增 `cne storage usage`（只读，`--json` 输出完整明细）：按部分列出数据根下的文件数、占用空间和删除后至少能释放的空间，并把湖数据文件按目录状态分成当前快照在用、为旧修订保留、已过期待删除、未登记四类。快照和演练副本是 APFS 克隆、与湖共享数据块，按文件大小相加（`du`）会把能释放的空间算多；在 macOS 上这里用文件系统自己的未共享字节数，硬链接只在所有链接都在同一部分时才计入。
 - 新增 `[storage.free_space]`（`warn_gb` 默认 50，`stop_gb` 默认 10，单位 GB，0 关闭）：湖所在磁盘可用空间低于 `warn_gb` 时，日更、回补和 `cne run maintain` 里的保留清理对被替换的修订只保留一天（当前修订和被持有的修订不受影响），`cne run maintain` 新增“磁盘可用空间”一节并判为失败；低于 `stop_gb` 时，运行、回补、派生和修复在取数或发布前拒绝开始并说明原因，避免把磁盘写满留下写了一半的目录库或检出。
+- Linux 上快照和演练副本改用 reflink 克隆：btrfs、XFS 等支持的文件系统上几乎不占额外空间，ext4 等不支持的仍整份复制。此前 Linux 上一律整份复制。
+- Windows 上运行指标记录进程的峰值内存，此前一直记为 0。
+- 配置文档新增[小内存和小磁盘的机器](https://rootsunc.github.io/CNEquity/getting-started/configuration/#small-machines)：4GB、8GB 内存和 50GB 左右磁盘上建议调整的设置，以及各文件系统上副本占用的空间。
 - `top_holders` 的日更不再按记录日回看 240 天。流通股东按公告日回看 30 天，全口径只取这些公告对应的记录日；回填仍按记录日分季扫描。取数时会记下每次请求、每 20 页的进度，以及每个记录日保留和因没有披露日而丢弃的行数。
 - 新迁移 `drop-generations`（由 `cne upgrade` 执行，**不可恢复**）：删除旧发布方式留下、湖目录已经取代的文件，即 `curated/` 和 `derived/` 下各数据集的目录、`meta/revisions/data` 下的代目录、`meta/revisions/<数据集>/` 下的指针和回执。用 `cne migrate --only drop-generations` 单独预览清理范围。被持有的修订（`cne storage hold`、案例依赖）连同回执保留，仍可按修订号读取；`curated/` 下不是数据集的目录、湖目录没有记录的数据集原样留下并列出。仍在直接读 `curated/`、`derived/` 的外部工具必须先改用 `cne storage export`。
 - 修复 `cne storage verify-catalog` 在还没有任何发布进湖目录的修订时报错（`_revisions` 表还没有摘要列）；现在返回 0 个修订。

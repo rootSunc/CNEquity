@@ -1,6 +1,6 @@
 # 安装与升级
 
-需要 Python 3.11 或更高版本。安装包要求 DuckDB 2.0 或更高版本，随依赖安装。本项目在 macOS、Linux 和 Windows 上运行。真实采集需要访问配置的上游来源，[离线样例](quickstart.md#offline-sample)可用于检查安装和查询。
+需要 Python 3.11 或更高版本。安装包要求 DuckDB 2.0 或更高版本，随依赖安装。本项目在 macOS、Linux 和 Windows 上运行。真实采集需要访问配置的上游来源，[离线样例](quickstart.md#offline-sample)可用于检查安装和查询。内存或磁盘较小的机器先看[小内存和小磁盘的机器](configuration.md#small-machines)。
 
 ```bash
 python -m pip install cnequity

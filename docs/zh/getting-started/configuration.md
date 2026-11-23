@@ -106,6 +106,42 @@ Tushare 默认只用于按需回填（`[sources.tushare].daily = false`）。设
 
 两种门禁的分工见[整体设计](../architecture/overview.md#quality)。切换到 `block` 之前，先读 shadow 模式的记录，了解它会多频繁触发。
 
+## 小内存和小磁盘的机器 {#small-machines}
+
+默认值按至少 16GB 内存、几百 GB 空闲磁盘设定。内存或磁盘更小的机器先调下面几项，再从小范围开始采集，用 `cne storage usage` 观察占用后逐步放开。
+
+**内存（4GB 或 8GB）。** DuckDB 连接的内存上限是各自独立的：查询 2GB，写入和导出 4GB，维护 8GB。Linux 上日线采集默认还会起 4 个进程，每个进程各占一份内存。8GB 的机器至少把维护降下来；4GB 的机器把各项都降下来，并把并发减到 1 到 2：
+
+```toml
+[orchestrator]
+workers = 2
+tdx_daily_workers = 1
+
+[duckdb]
+memory_limit = "1GB"
+threads = 2
+
+[duckdb.write]
+memory_limit = "1.5GB"
+
+[duckdb.export]
+memory_limit = "1.5GB"
+
+[duckdb.maintenance]
+memory_limit = "2GB"    # 8GB 机器可用 "4GB"
+```
+
+超出上限的部分 DuckDB 写到临时目录，较慢但不会失败；也可以用 `temp_directory`、`max_temp_directory_size` 指定位置和上限。内存不足时进程可能被系统结束，日志里出现 `worker pool broke`，见[故障排查](../operations/troubleshooting.md)。
+
+**磁盘（50GB 左右）。** 湖的大小随标的范围、数据集和保留的修订数增长。小磁盘上：
+
+- 缩小范围：`[universe].ingest = "all_a_sh_sz"`，不开 `[minute_bars]`、`[trade_ticks]`、`[futures]`。
+- 少留旧修订：`[storage.retention]` 的 `keep_generations` 调到 2 到 3。
+- 调低空间检查：`[storage.free_space].warn_gb` 默认 50，在 50GB 的盘上会一直告警并让每日维护判为失败，改成 `warn_gb = 10`、`stop_gb = 3` 一类的值。
+- 定期运行 `cne run clean`。
+
+**副本占多少空间取决于文件系统。** 快照和演练副本在 macOS 的 APFS、Linux 的 btrfs 和 XFS（reflink）上是克隆，几乎不占额外空间；Windows 上用 Python 3.12 或更高版本时，ReFS 和开发驱动器（Dev Drive，Windows 11 24H2 起）同样克隆。Linux 的 ext4 和 Windows 的 NTFS 不支持克隆，每个副本占满整份空间，磁盘紧张时少建快照和演练副本。
+
 ## 环境变量 {#environment}
 
 | 变量 | 作用 |
