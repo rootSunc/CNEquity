@@ -140,7 +140,7 @@ def test_a_moved_lake_reads_its_own_files(lake, tmp_path):
     for read_only in (True, False):
         with Catalog(moved, read_only=read_only) as again:
             files = again.data_files("t")
-            assert files and all(str(moved) in path for path in files)
+            assert files and all(moved.as_posix() in path for path in files)
             assert again.execute("SELECT count(*) FROM t").fetchone()[0] == 1
 
 

@@ -228,6 +228,10 @@ def _walk(
         for entry in listed:
             try:
                 info = entry.stat(follow_symlinks=False)
+                if os.name == "nt" and not stat.S_ISDIR(info.st_mode):
+                    # A directory entry on Windows reports inode, device and
+                    # link count as 0, which would make every file one inode.
+                    info = os.stat(entry.path, follow_symlinks=False)
             except OSError:
                 continue
             if stat.S_ISDIR(info.st_mode):

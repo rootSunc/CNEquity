@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 
 import polars as pl
@@ -62,7 +63,8 @@ def test_a_checkout_is_the_published_files_and_a_publish_registers_what_was_writ
         january = write.checkout("daily_bars").partition(JAN)
         linked = january / "part-merged.parquet"
         lake_file = next(path for path in before if "/2024-01/" in path)
-        assert linked.stat().st_ino == type(linked)(lake_file).stat().st_ino
+        if os.name != "nt":  # Windows checks a partition out as a copy
+            assert linked.stat().st_ino == type(linked)(lake_file).stat().st_ino
         _replace(january, _bars(date(2024, 1, 2), {"600000.SH": 10.5}))
         written = linked.stat().st_ino
         write.publish({"daily_bars": PUBLISH})

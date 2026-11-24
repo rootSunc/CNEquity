@@ -91,6 +91,10 @@ def pytest_sessionfinish(session, exitstatus):
     status. Wait for the terminal summary, then skip those handlers.
     """
     yield
+    # Only the controlling process: an xdist worker that exits here never
+    # reports back, and the controller counts it as crashed.
+    if hasattr(session.config, "workerinput"):
+        return
     if sys.platform == "win32" and os.environ.get("CI") == "true" and int(exitstatus or 0) == 0:
         sys.stdout.flush()
         sys.stderr.flush()
