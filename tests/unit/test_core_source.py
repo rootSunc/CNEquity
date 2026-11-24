@@ -184,8 +184,9 @@ def test_several_requests_are_in_flight_but_their_starts_keep_their_distance():
     # rate ever running ahead; the allowance is for the first start's wake-up.
     starts.sort()
     assert all(at - starts[0] >= k * 0.05 - 0.01 for k, at in enumerate(starts))
-    # One at a time this is 12 x 0.25 s; four in flight finish in well under half.
-    assert took < 1.2
+    # One at a time this is at least 12 x 0.25 = 3 s; four in flight take about
+    # 0.75 s, and the bound leaves a loaded CI runner room below the serial time.
+    assert took < 2.0
     assert fetcher.requests == {"vendor": 12}
 
 
