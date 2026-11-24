@@ -194,13 +194,14 @@ def run(config, progress: Callable[[str, str, str], None] | None = None) -> dict
     # reading (`cne serve`, `cne mcp`) has to be stopped first.
     with lake_maintenance(root, timeout=READERS_WAIT_SECONDS), upgrade_in_progress():
         result = _run(config, progress)
-        # Held exclusively here, so no reader is using it; readers of the lake
-        # lock the lake's own files from now on. A busy attempt leaves it: it
-        # is how the next attempt sees the readers still running.
-        try:
-            early_readers_path(root).unlink(missing_ok=True)
-        except OSError:
-            pass
+    # Readers of the lake lock the lake's own files from now on, so nothing
+    # waits on this one. Removed once released: Windows cannot delete a file
+    # this process still holds open. A busy attempt leaves it: it is how the
+    # next attempt sees the readers still running.
+    try:
+        early_readers_path(root).unlink(missing_ok=True)
+    except OSError:
+        pass
     return result
 
 

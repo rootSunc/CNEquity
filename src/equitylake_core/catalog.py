@@ -131,6 +131,21 @@ def quote_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+#: A row's data file in the one spelling the lake compares: DuckLake on Windows
+#: reports a registered ``C:/lake/x.parquet`` back as ``C:\lake\x.parquet``.
+FILENAME = "replace(filename, '\\', '/')"
+
+
+def file_key(path: str | Path) -> str:
+    """*path* spelled as :data:`FILENAME` spells a data file."""
+    return str(path).replace("\\", "/")
+
+
+def files_literal(paths: Sequence[str | Path]) -> str:
+    """*paths* as a SQL list to compare with :data:`FILENAME`."""
+    return ", ".join(quote_literal(file_key(path)) for path in paths)
+
+
 def catalog_needs_initialization(path: Path) -> bool:
     """A missing database or an empty SQLite file from an interrupted first open."""
     if not path.exists():
@@ -578,7 +593,7 @@ class Catalog:
         ).fetchall()
         if any(delete is not None for _, delete in listed):
             return None
-        paths = [path for path, _ in listed]
+        paths = [file_key(path) for path, _ in listed]
         if snapshot is not None and not all(Path(path).is_file() for path in paths):
             return None
         return paths

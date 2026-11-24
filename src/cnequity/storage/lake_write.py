@@ -61,9 +61,11 @@ from cnequity.storage.revisions import DatasetRevision, RevisionFile, RevisionSt
 from equitylake_core.catalog import (
     ALIAS,
     CATALOG_FILE,
+    FILENAME,
     REVISIONS_TABLE,
     Catalog,
     catalog_needs_initialization,
+    files_literal,
     quote_identifier,
     quote_literal,
 )
@@ -291,7 +293,7 @@ class Checkout:
         return sorted(
             row[0]
             for row in catalog.execute(
-                f"SELECT DISTINCT filename FROM {quote_identifier(self.dataset)}{scope}"
+                f"SELECT DISTINCT {FILENAME} FROM {quote_identifier(self.dataset)}{scope}"
             ).fetchall()
         )
 
@@ -460,8 +462,8 @@ class Checkout:
             ]
             if not shared:
                 continue
-            listed = ", ".join(quote_literal(path) for path in shared)
-            for other in self._labels_where(f" WHERE filename IN ({listed})"):
+            listed = files_literal(shared)
+            for other in self._labels_where(f" WHERE {FILENAME} IN ({listed})"):
                 if other in self._checked:
                     continue
                 self._touch(other)

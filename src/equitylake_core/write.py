@@ -39,7 +39,15 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from equitylake_core.catalog import Catalog, TransactionOutcome, quote_identifier, quote_literal
+from equitylake_core.catalog import (
+    FILENAME,
+    Catalog,
+    TransactionOutcome,
+    file_key,
+    files_literal,
+    quote_identifier,
+    quote_literal,
+)
 
 
 class WriteRejected(RuntimeError):
@@ -319,10 +327,10 @@ def _apply(catalog: Catalog, item: Replacement) -> int:
     held = [
         row[0]
         for row in catalog.execute(
-            f"SELECT DISTINCT filename FROM {table} WHERE {item.where}"
+            f"SELECT DISTINCT {FILENAME} FROM {table} WHERE {item.where}"
         ).fetchall()
     ]
-    listed = ", ".join(quote_literal(path) for path in held)
+    listed = files_literal(held)
     if held:
         # Rows of those files outside the partition are written again, in the
         # order they already have (sorting them with the new rows would cost a
@@ -330,13 +338,13 @@ def _apply(catalog: Catalog, item: Replacement) -> int:
         # was never selected, so it stays.
         catalog.execute(
             f"INSERT INTO {table} SELECT * FROM {table} "
-            f"WHERE filename IN ({listed}) AND ({item.where}) IS NOT TRUE"
+            f"WHERE {FILENAME} IN ({listed}) AND ({item.where}) IS NOT TRUE"
         )
     if item.files:
         catalog.execute(f"INSERT INTO {table} BY NAME SELECT * FROM {_scan(item.files)}{order}")
     if held:
         # Every row of a file: the catalog drops the file, with no delete file.
-        catalog.execute(f"DELETE FROM {table} WHERE filename IN ({listed})")
+        catalog.execute(f"DELETE FROM {table} WHERE {FILENAME} IN ({listed})")
     selected = catalog.execute(f"SELECT count(*) FROM {table} WHERE {item.where}").fetchone()[0]
     if selected != incoming:
         raise WriteRejected(
@@ -364,17 +372,18 @@ def apply_swap(catalog: Catalog, item: Swap) -> int:
     elif item.add:
         _add_missing_columns(catalog, item.table, item.add)
     if item.remove:
-        listed = ", ".join(quote_literal(path) for path in item.remove)
+        listed = files_literal(item.remove)
+        wanted = len({file_key(path) for path in item.remove})
         known = catalog.execute(
-            f"SELECT count(DISTINCT filename) FROM {table} WHERE filename IN ({listed})"
+            f"SELECT count(DISTINCT {FILENAME}) FROM {table} WHERE {FILENAME} IN ({listed})"
         ).fetchone()[0]
-        if known != len(set(item.remove)):
+        if known != wanted:
             raise WriteRejected(
-                f"{item.table}: {len(set(item.remove)) - known} file(s) to drop are not "
+                f"{item.table}: {wanted - known} file(s) to drop are not "
                 "data files of the table any more"
             )
         # Every row of a file: the catalog drops the file, with no delete file.
-        catalog.execute(f"DELETE FROM {table} WHERE filename IN ({listed})")
+        catalog.execute(f"DELETE FROM {table} WHERE {FILENAME} IN ({listed})")
     for path in item.add:
         catalog.register_file(item.table, path)
     return added

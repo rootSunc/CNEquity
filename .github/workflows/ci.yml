@@ -173,6 +173,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e . --group dev
 
+      - name: Install DuckDB extensions
+        # Once, before the parallel workers: on a fresh runner they each
+        # download the same extension, and Windows refuses the second rename.
+        run: python -c "import duckdb; from equitylake_core.extensions import ensure_extensions; print(ensure_extensions(duckdb.connect()))"
+
       - name: Test
         # tests/conftest.py handles Windows atexit noise only after a fully
         # successful session. Preserve pytest's exit code here so interruption

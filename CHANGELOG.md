@@ -90,6 +90,7 @@
 - 节假日表改为每年一份、注明出处的官方安排，只录入已公布的年份，不再录入预估：日历只覆盖表里的年份，之后的日子拒绝判定，不再按预估当成事实。随包发布的 `trading_calendar.csv` 种子表已删除，改由节假日表直接生成，不再有两份要同步的副本；`cnequity.adapters.calendar.ensure_seed_csv` 随之移除。湖里 `meta/seeds/trading_calendar.csv`（研究快照恢复时带回）仍会优先使用。
 - 交易日历用深交所自己公布的日历核对和延伸：日更的 `trading_calendar` 步骤（`[sources].exchange` 打开时）每天向深交所取当月及之后 12 个月的日历，每月一次请求，存在 `meta/source_cache/szse_calendar/`。节假日表覆盖的年份里两者有任何一天不一致，`cne audit` 报错误 `trading_calendar_disagrees_with_szse`（节假日表照旧生效，需人工核对公告）；节假日表之后，深交所已公布的整月直接作为交易日历，不必等新版本，这些行的 `source` 为 `szse_calendar`。深交所尚未公布的月份仍视为未知，日历不会延伸过去。取数失败不影响这一步，只是不延伸。
 - 修复 `cne serve` 面板在机器繁忙时把刚启动的任务误报为“已终止”：任务进程启动后、取得面板锁之前超过 15 秒，此前就被当成进程已消失。现在任务进程一开始就记下自己的进程号，只要它还在就显示为启动中。
+- 修复 Windows 上湖目录的写入：DuckLake 在 Windows 上用反斜杠记录数据文件路径，此前替换已有文件的发布、整理和修复都因“要删除的文件不再是表的数据文件”被拒绝。另修复 Windows 上 `cne storage usage` 报错（没有 `st_blocks`），以及升级完成后 `<湖>.readers.lock` 留在磁盘上。
 
 ## [0.24.0] — 2026-11-13 · 最低要求升到 Python 3.11 与 DuckDB 2.0，新增实验性的湖目录
 

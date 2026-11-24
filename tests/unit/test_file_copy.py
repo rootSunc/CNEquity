@@ -64,6 +64,7 @@ def _as_linux(monkeypatch, ioctl):
     monkeypatch.setattr(fcntl, "ioctl", ioctl)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl and os.pread are POSIX only")
 def test_linux_reflink_is_used_and_keeps_metadata(tmp_path, monkeypatch):
     calls = []
 
@@ -82,6 +83,7 @@ def test_linux_reflink_is_used_and_keeps_metadata(tmp_path, monkeypatch):
     assert dst.stat().st_mtime_ns == src.stat().st_mtime_ns
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl and os.pread are POSIX only")
 @pytest.mark.parametrize("error", [errno.EOPNOTSUPP, errno.EXDEV, errno.EINVAL, errno.ENOTTY])
 def test_linux_without_reflink_falls_back_to_byte_copy(tmp_path, monkeypatch, error):
     def refuse(*args):
@@ -95,6 +97,7 @@ def test_linux_without_reflink_falls_back_to_byte_copy(tmp_path, monkeypatch, er
     assert src.stat().st_ino != dst.stat().st_ino
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl and os.pread are POSIX only")
 def test_linux_reflink_error_is_raised_and_leaves_no_file(tmp_path, monkeypatch):
     def denied(*args):
         raise OSError(errno.EIO, os.strerror(errno.EIO))

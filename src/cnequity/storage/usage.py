@@ -94,7 +94,9 @@ class Part:
         if seen is not None:
             seen[0] += 1
             return
-        allocated = info.st_blocks * 512
+        # Windows does not report allocated blocks; the size is the closest it says.
+        blocks = getattr(info, "st_blocks", None)
+        allocated = info.st_size if blocks is None else blocks * 512
         free = allocated if private is None else private
         self._inodes[key] = [1, info.st_nlink, allocated, free]
 

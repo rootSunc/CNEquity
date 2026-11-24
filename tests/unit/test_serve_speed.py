@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 import threading
 import time
@@ -261,7 +262,8 @@ def test_a_key_is_stored_in_its_own_file_and_the_config_names_only_the_file(tmp_
     where = save_key(path, "tushare", secret)
     key_file = Path(where["key_file"])
     assert key_file.read_text().strip() == secret
-    assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows has no owner-only file mode
+        assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
     text = path.read_text()
     assert secret not in text
     assert "token_file" in text

@@ -291,6 +291,24 @@ def test_a_swap_refuses_a_file_that_is_no_longer_the_tables(lake, tmp_path):
     assert _rows(lake) == [("A", date(2024, 1, 2), 1.0)]
 
 
+def test_a_swap_drops_a_file_named_with_either_separator(lake, tmp_path):
+    """DuckLake on Windows reports a registered file back with backslashes."""
+    jan = _placed(
+        lake, "bars", "2024-01/part.aaaaaaaa.parquet", [("'A'", "DATE '2024-01-02'", 1.0)]
+    )
+    write = Write(lake)
+    write.swap("bars", add=[jan])
+    write.commit()
+    again = _placed(
+        lake, "bars", "2024-01/part.cccccccc.parquet", [("'A'", "DATE '2024-01-02'", 1.5)]
+    )
+    write = Write(lake)
+    write.swap("bars", add=[again], remove=[jan.as_posix().replace("/", "\\")])
+    write.commit()
+    assert _rows(lake) == [("A", date(2024, 1, 2), 1.5)]
+    assert lake.data_files("bars") == [again.as_posix()]
+
+
 def test_a_directory_name_is_never_read_as_a_column_value(lake, tmp_path):
     odd = _placed(
         lake,

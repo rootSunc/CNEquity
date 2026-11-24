@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -267,8 +268,8 @@ def test_interrupted_upgrade_blocks_writes_and_preview_leaves_no_lake_tmp(tmp_pa
 
 
 def test_core_fixes_copy_catalog_plan_all_attempted_source_raw(tmp_path):
-    # 1. copy_catalog with `#` and `?` in path
-    weird = tmp_path / "lake#1?v=2" / "lake"
+    # 1. copy_catalog with `#` and `?` in path (Windows forbids `?` in a name)
+    weird = tmp_path / ("lake#1" if os.name == "nt" else "lake#1?v=2") / "lake"
     with Catalog(weird, create=True) as cat:
         cov.prepare(cat)
     copied = tmp_path / "copied" / "lake"

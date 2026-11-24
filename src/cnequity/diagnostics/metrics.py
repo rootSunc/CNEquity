@@ -110,12 +110,17 @@ def _windows_peak_bytes() -> int:
         ]
 
     try:
+        # Declared types: left to ctypes' int default, the pseudo-handle -1
+        # reaches the call truncated to 32 bits on x64 and the call fails.
+        kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetCurrentProcess.argtypes = []
+        query = kernel32.K32GetProcessMemoryInfo
+        query.restype = wintypes.BOOL
+        query.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Counters), wintypes.DWORD]
         counters = _Counters()
         counters.cb = ctypes.sizeof(counters)
-        process = ctypes.windll.kernel32.GetCurrentProcess()
-        if not ctypes.windll.psapi.GetProcessMemoryInfo(
-            process, ctypes.byref(counters), counters.cb
-        ):
+        if not query(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
             return 0
     except (AttributeError, OSError):
         return 0
