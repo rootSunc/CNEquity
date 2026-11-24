@@ -582,30 +582,30 @@ def test_sina_endpoint_aliases_share_one_vendor_cap(tmp_path):
         assert state["limit"] == 2
 
 
-def _hold_source_slot(args: tuple[str, float]) -> tuple[float, float]:
-    state_dir, delay = args
+def _hold_source_slot(args: tuple[str, float, float]) -> tuple[float, float, float]:
+    state_dir, delay, start_at = args
     limiter = SourceConcurrencyLimiter("tdx_protocol", 1, state_dir)
-    started = time.perf_counter()
+    # Both processes ask at the same moment, however late each one started.
+    time.sleep(max(0.0, start_at - time.time()))
+    started = time.time()
     with limiter.slot():
-        entered = time.perf_counter()
+        entered = time.time()
         time.sleep(delay)
-    return started, entered
+        left = time.time()
+    return started, entered, left
 
 
 def test_source_concurrency_is_cross_process_for_slow_requests(tmp_path):
     state_dir = str(tmp_path / "rate_limits")
     delay = 0.08
-    wall_started = time.perf_counter()
+    start_at = time.time() + 3
     with ProcessPoolExecutor(max_workers=2) as pool:
-        entries = list(pool.map(_hold_source_slot, [(state_dir, delay)] * 2))
-    elapsed = time.perf_counter() - wall_started
+        holds = sorted(pool.map(_hold_source_slot, [(state_dir, delay, start_at)] * 2))
 
-    # The second process must wait for the first lease. Wall time already
-    # requires the two holds not to overlap. The per-process wait uses the
-    # same 30% floor as MIN_OBSERVED: Windows CI measured 0.0527 against
-    # delay * 0.8 = 0.064, which is still several times a no-op acquire.
-    assert elapsed >= delay * 1.6
-    assert max(entered - started for started, entered in entries) >= delay * 0.3
+    # Both asked before either let go, so the limiter had to make one wait.
+    assert max(started for started, _, _ in holds) < min(left for _, _, left in holds)
+    (_, _, first_left), (_, second_entered, _) = sorted(holds, key=lambda hold: hold[1])
+    assert second_entered >= first_left
 
 
 def _write_foreign_lease(state_dir, pid: int) -> None:
